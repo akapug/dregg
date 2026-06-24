@@ -264,6 +264,73 @@ fn build_corpus() -> Vec<Case> {
         });
     }
 
+    // ── (2-mint-a) UNAUTHORIZED mint: no mint-cap (AUTHORITY parity) ──────────────────────────
+    // A mints into B with NO mint-cap over the asset's well. SUPPLY-MODEL Stage 2a: apply.rs's
+    // `apply_mint` gates on a CONTROL-GRADE `EFFECT_MINT` cap over the issuer well (the Rust image
+    // of Lean `mintAuthorizedB`); an empty c-list fails it ⇒ Rust REJECTS. Lean's `mintH`
+    // (`Handlers/StateSupply.lean:90`) likewise gates `mintAuthorizedB k.caps actor (issuerOf a)`;
+    // an empty c-list fails it ⇒ Lean REFUSES. Expected AGREE-both-reject — the verified
+    // `mintAuthorizedB` MATCHES the Rust rejection.
+    {
+        let (l, a, b) = two_open(100, 5);
+        cases.push(Case {
+            gate: "mint-unauthorized",
+            desc: "Mint 10 into B from A (no mint-cap over the issuer well)",
+            turn: single_effect_turn(
+                a,
+                b,
+                0,
+                Effect::Mint {
+                    target: b,
+                    slot: 0,
+                    amount: 10,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
+    // ── (2-mint-b) AUTHORIZED mint: control-grade EFFECT_MINT cap held ────────────────────────
+    // A holds a control-grade `EFFECT_MINT` cap over the asset's issuer well AND an access cap over
+    // recipient B. apply.rs `apply_mint` ACCEPTS (well→holder conserving move). On the wire the
+    // synthetic asset numbering (`asset: 0`, like burn) does not carry a faithful node cap over the
+    // marshalled issuer, so the verified `mintH` gate `mintAuthorizedB` is not satisfied on the
+    // wire ⇒ Lean refuses — the SAME synthetic-asset wire limitation `burn-no-well` documents
+    // (CHARACTERISED below). The Rust commit is the CORRECT supply entry; the wire cannot yet
+    // represent the issuer authority faithfully (it closes when the native asset carries a genesis
+    // issuer well numbered on the wire).
+    {
+        let well_pubkey = blake3::derive_key("dregg-issuer-well-key-v1", &[0u8; 32]);
+        let well_id = CellId::derive_raw(&well_pubkey, &[0u8; 32]);
+        let mut a = make_open_cell(1, 100);
+        let b = make_open_cell(2, 5);
+        let (ida, idb) = (a.id(), b.id());
+        a.capabilities
+            .grant_faceted(well_id, AuthRequired::None, dregg_cell::EFFECT_MINT)
+            .unwrap();
+        a.capabilities.grant(idb, AuthRequired::None).unwrap();
+        let mut l = Ledger::new();
+        l.insert_cell(a).unwrap();
+        l.insert_cell(b).unwrap();
+        cases.push(Case {
+            gate: "mint-authorized",
+            desc: "Mint 10 into B from A (control-grade EFFECT_MINT cap over the issuer well)",
+            turn: single_effect_turn(
+                ida,
+                idb,
+                0,
+                Effect::Mint {
+                    target: idb,
+                    slot: 0,
+                    amount: 10,
+                },
+            ),
+            ledger: l,
+            control: false,
+        });
+    }
+
     // ── (3) Permission lattice not consulted: NoteCreate on a LOCKED cell ─────────────────────
     // Cell A requires Signature for everything; the turn presents Unchecked. Lean's gate should
     // fail-closed; does apply.rs's determine_required_permissions even consult the lattice for
@@ -741,7 +808,21 @@ fn rejection_parity_differential() {
     //   * `self-transfer` — FIXED (apply.rs `apply_transfer` now rejects `from == to`, aligning with
     //     `Dregg2/Exec/RecordKernel.lean:495`); now AGREE-both-reject, no longer a hole. Removed from
     //     the allowlist (kept here as a record of the closed asymmetry).
-    let characterised_holes: &[&str] = &["burn-no-well"];
+    //   * `mint-authorized` — `Effect::Mint` with a control-grade `EFFECT_MINT` cap over the issuer
+    //     well (SUPPLY-MODEL Stage 2a, docs/SUPPLY-MODEL.md). apply.rs `apply_mint` ACCEPTS the
+    //     CORRECT supply entry (well→holder conserving move, cap-gated by the Rust image of
+    //     `mintAuthorizedB`). The asymmetry is PURELY a WIRE-FAITHFULNESS limit, NOT under-
+    //     enforcement: the shadow marshals `Mint` with the synthetic `asset: 0` (exactly as `Burn`,
+    //     because the native scalar asset has no genesis issuer well numbered on the wire), so the
+    //     verified `mintH` gate `mintAuthorizedB k.caps actor (issuerOf 0)` cannot see the held
+    //     node-cap over the marshalled issuer ⇒ Lean refuses. SAFE direction (Lean stricter, vetoes
+    //     the commit). The Rust gate IS the faithful image of the Lean predicate (the
+    //     `mint-unauthorized` case proves they AGREE-reject when the cap is absent); the wire closes
+    //     the same way `burn-no-well` does — when the native asset carries a genesis issuer well that
+    //     the marshaller numbers. The DEDICATED authorized-mint conservation+authority check lives in
+    //     `dregg-turn` tests (`conservation_mint_property.rs`), where the full cap graph is exercised
+    //     natively without the wire's asset-numbering limit.
+    let characterised_holes: &[&str] = &["burn-no-well", "mint-authorized"];
 
     let mut rows: Vec<String> = Vec::new();
     let mut holes: Vec<String> = Vec::new();

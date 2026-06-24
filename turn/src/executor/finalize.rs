@@ -60,6 +60,8 @@ impl TurnExecutor {
             // Burn: a balance mutation analogous to Transfer's effect_base
             // + transfer cost.
             Effect::Burn { .. } => self.costs.effect_base.saturating_add(self.costs.transfer),
+            // Mint: the dual balance mutation (well→holder), same cost shape.
+            Effect::Mint { .. } => self.costs.effect_base.saturating_add(self.costs.transfer),
             // AttenuateCapability: an in-place c-list mutation, like
             // GrantCapability.
             Effect::AttenuateCapability { .. } => self.costs.effect_base,

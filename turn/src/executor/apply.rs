@@ -246,6 +246,19 @@ impl TurnExecutor {
                 *slot,
                 *amount,
             ),
+            Effect::Mint {
+                target,
+                slot,
+                amount,
+            } => self.apply_mint(
+                ledger,
+                path,
+                actor,
+                journal,
+                target,
+                *slot,
+                *amount,
+            ),
             Effect::AttenuateCapability {
                 cell,
                 slot,
@@ -2694,6 +2707,248 @@ impl TurnExecutor {
                 ));
             }
             journal.record_set_balance(well_id, well_bal);
+        }
+        Ok(())
+    }
+
+    /// Whether `actor` holds MINT authority over the issuer `well` — the Rust
+    /// image of Lean `mintAuthorizedB` (`Generators.lean:36`). Mint authority is
+    /// a CONTROL-GRADE capability over the issuer cell (the well) carrying the
+    /// `EFFECT_MINT` facet, NOT bare ownership: a cell cannot coin its own
+    /// supply, so `actor == well` is deliberately INSUFFICIENT (Lean rejects the
+    /// self-cap likewise — the gate is a node/control cap on the issuer, which a
+    /// cell does not implicitly hold over itself for this verb).
+    ///
+    /// Concretely: the actor must hold a non-revoked, non-expired cap targeting
+    /// the well that BOTH (a) carries the `EFFECT_MINT` facet (its
+    /// `allowed_effects` permits `EFFECT_MINT`), AND (b) is CONTROL-GRADE — the
+    /// cap's own `permissions` are `AuthRequired::None` (a full, unencumbered
+    /// control cap, the node-cap analog the `SetVerificationKey` surface rides;
+    /// an attenuated `Signature`/`Proof`/`Impossible` cap is NOT control-grade
+    /// for this gate). A cap that does not carry the `EFFECT_MINT` facet (e.g. a
+    /// plain transfer/state cap) does NOT authorize minting.
+    ///
+    /// DECISION A (`docs/SUPPLY-MODEL.md`): this gates on the ACTOR's cap over
+    /// the issuer, not the well's own permission table — matching Lean, where
+    /// the authority is a cap the actor HOLDS, never a property of the issuer.
+    fn holds_mint_authority(&self, ledger: &Ledger, actor: &CellId, well: &CellId) -> bool {
+        // Bare ownership is NOT mint authority (Lean: no self-coin).
+        if actor == well {
+            return false;
+        }
+        let Some(actor_cell) = ledger.get(actor) else {
+            return false;
+        };
+        let height = self.block_height;
+        actor_cell
+            .capabilities
+            .capabilities_for(well)
+            .into_iter()
+            .chain(
+                actor_cell
+                    .delegation
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|d| d.capabilities_for(well)),
+            )
+            .any(|c| {
+                // (b) CONTROL-GRADE: a full open cap (the node-cap analog),
+                // not an attenuated weaker grant.
+                c.permissions == dregg_cell::AuthRequired::None
+                    && c.expires_at.map_or(true, |exp| height <= exp)
+                    // (a) the EFFECT_MINT facet.
+                    && dregg_cell::is_effect_permitted(c.allowed_effects, dregg_cell::EFFECT_MINT)
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_mint(
+        &self,
+        ledger: &mut Ledger,
+        path: &[usize],
+        actor: &CellId,
+        journal: &mut LedgerJournal,
+        target: &CellId,
+        slot: u32,
+        amount: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        // The sign-flipped DUAL of `apply_burn` (`docs/SUPPLY-MODEL.md` Stage
+        // 2a): well → holder. The well (carrying −supply) is DEBITED negative-
+        // capably (going more negative), the recipient `target` is CREDITED, and
+        // the verb conserves exactly (per-turn, per-asset Σδ=0). The one place
+        // mint ≠ burn is the AUTHORITY GATE: minting requires a control-grade
+        // mint-cap over the issuer well, the Rust image of Lean `mintAuthorizedB`
+        // (issuer authority, never bare ownership).
+
+        // Slot guard: only the canonical balance slot (sentinel 0), exactly as
+        // burn.
+        if slot != 0 {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: format!(
+                        "Mint slot {} is not a mintable balance slot (only slot 0 supported)",
+                        slot
+                    ),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // Resolve the target asset's ISSUER WELL (from `target`'s token_id, NOT
+        // a field — same resolution as burn).
+        let token_id = match ledger.get(target) {
+            Some(c) => *c.token_id(),
+            None => return Err((TurnError::CellNotFound { id: *target }, path.to_vec())),
+        };
+        let well_id = self
+            .issuer_well_for(ledger, target)
+            .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+
+        // DISTINCTNESS (Lean `issuerOf a ≠ dst`): the well cannot be its own
+        // recipient — a well→well "mint" is rejected.
+        if well_id == *target {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "Mint target must not be the asset's own issuer well".into(),
+                },
+                path.to_vec(),
+            ));
+        }
+        // SELF-MINT (Lean: a cell cannot coin its own supply): the actor minting
+        // INTO itself, or the actor being the well, is rejected. `actor == well`
+        // is also caught by `holds_mint_authority`, but reject early for a clear
+        // diagnostic.
+        if actor == target || actor == &well_id {
+            return Err((
+                TurnError::InvalidEffect {
+                    reason: "Mint is privileged: a cell cannot mint its own supply (self-mint \
+                             rejected — mint authority is a cap over the issuer, not ownership)"
+                        .into(),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // Lazily materialize the well if absent — journaled, rollback-safe;
+        // identical to burn's lazy-create (the derived id must match).
+        if !ledger.contains(&well_id) {
+            let (well_pubkey, derived_id) = Self::derive_issuer_well(&token_id);
+            if well_id != derived_id {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "registered issuer well {well_id} for the mint target's asset not found"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            let well_cell = Cell::with_balance(well_pubkey, token_id, 0);
+            ledger.insert_cell(well_cell).map_err(|e| {
+                (
+                    TurnError::InvalidEffect {
+                        reason: format!("{e}"),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+            journal.record_create_cell(well_id);
+        }
+
+        // AUTHORITY GATE (the one place mint ≠ burn): the actor must hold a
+        // control-grade mint-cap over the well. Checked AFTER lazy-create so the
+        // well's control permission can be read. Fail-closed.
+        if !self.holds_mint_authority(ledger, actor, &well_id) {
+            return Err((
+                TurnError::CapabilityNotHeld {
+                    actor: *actor,
+                    target: well_id,
+                },
+                path.to_vec(),
+            ));
+        }
+
+        // RECIPIENT LIVENESS (Lean `mintH` gates `acceptsEffects k cell` — Live-
+        // ONLY; STRICTER than burn, which does not liveness-gate the holder).
+        // Read it before mutating; a mint into a non-Live recipient is rejected.
+        {
+            let recip = ledger
+                .get(target)
+                .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+            if !recip.is_live() {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "Mint recipient cell {target} is not live (sealed/destroyed)"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
+
+        // WELL LIVENESS (Lean `cellLifecycleLive k (issuerOf a)`): a
+        // Sealed/Destroyed well refuses the mint. Read before mutating.
+        {
+            let well = ledger.get(&well_id).ok_or_else(|| {
+                (
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "issuer well {well_id} for the mint target's asset not found"
+                        ),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+            if !well.is_live() {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!(
+                            "issuer well {well_id} for the mint target's asset is not live \
+                             (sealed/destroyed)"
+                        ),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        }
+
+        // The CONSERVING move: debit the well (NEGATIVE-CAPABLE — the well
+        // carries −supply and goes MORE negative as supply enters), credit the
+        // holder. Both journaled; the per-turn delta nets to zero within the
+        // asset.
+        {
+            let well = ledger
+                .get_mut(&well_id)
+                .ok_or_else(|| (TurnError::CellNotFound { id: well_id }, path.to_vec()))?;
+            let well_bal = well.state.balance();
+            // `well_debit_balance` is the issuer-well verb that MAY go negative
+            // (vs the ordinary floor-at-zero `debit_balance`); fails only on i64
+            // overflow.
+            if !well.state.well_debit_balance(amount) {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!("issuer well {well_id} balance underflow on mint debit"),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            journal.record_set_balance(well_id, well_bal);
+        }
+        {
+            let recip = ledger
+                .get_mut(target)
+                .ok_or_else(|| (TurnError::CellNotFound { id: *target }, path.to_vec()))?;
+            let recip_bal = recip.state.balance();
+            if !recip.state.credit_balance(amount) {
+                return Err((
+                    TurnError::InvalidEffect {
+                        reason: format!("mint recipient {target} balance overflow on credit"),
+                    },
+                    path.to_vec(),
+                ));
+            }
+            journal.record_set_balance(*target, recip_bal);
         }
         Ok(())
     }

@@ -95,6 +95,16 @@ pub const EFFECT_SET_PROGRAM: EffectMask = 1 << 24;
 /// react (or a replayed hole-id) is rejected by the double-spend gate.
 pub const EFFECT_REACTIVE_OPS: EffectMask = 1 << 25;
 
+/// `Effect::Mint` — the cap-gated SUPPLY ENTRY (`docs/SUPPLY-MODEL.md` Stage 2).
+/// A cap bearing this bit, held over an asset's ISSUER WELL with control-grade
+/// permission, authorizes minting that asset (well → holder, well goes more
+/// negative). This is the Rust image of Lean `mintAuthorizedB`
+/// (`Generators.lean:36`): mint authority is a node/control cap over the
+/// issuer, NOT bare ownership — "a cell cannot coin its own supply." Distinct
+/// from `EFFECT_BURN` (the supply EXIT) because creating value is privileged
+/// while destroying your own value is permissionless-by-default.
+pub const EFFECT_MINT: EffectMask = 1 << 26;
+
 /// All effect kinds permitted (equivalent to no restriction).
 pub const EFFECT_ALL: EffectMask = 0xFFFF_FFFF;
 
@@ -206,6 +216,12 @@ pub fn describe_mask(mask: EffectMask) -> Vec<&'static str> {
     }
     if mask & EFFECT_SOVEREIGN_OPS != 0 {
         names.push("SovereignOps");
+    }
+    if mask & EFFECT_BURN != 0 {
+        names.push("Burn");
+    }
+    if mask & EFFECT_MINT != 0 {
+        names.push("Mint");
     }
     names
 }
@@ -604,6 +620,24 @@ mod tests {
         assert!(names.contains(&"SetField"));
         assert!(names.contains(&"EmitEvent"));
         assert!(!names.contains(&"Transfer"));
+    }
+
+    #[test]
+    fn test_mint_facet_distinct_and_attenuates() {
+        // EFFECT_MINT is its own bit, distinct from EFFECT_BURN and every other
+        // effect kind (the supply ENTRY is a separate authority surface from the
+        // supply EXIT).
+        assert_ne!(EFFECT_MINT, EFFECT_BURN);
+        assert_eq!(EFFECT_MINT & EFFECT_BURN, 0);
+        // A mint cap permits Mint and only Mint.
+        assert!(is_effect_permitted(Some(EFFECT_MINT), EFFECT_MINT));
+        assert!(!is_effect_permitted(Some(EFFECT_MINT), EFFECT_BURN));
+        assert!(!is_effect_permitted(Some(EFFECT_MINT), EFFECT_TRANSFER));
+        // Attenuation: a child may drop EFFECT_MINT, never add it.
+        let parent = EFFECT_MINT | EFFECT_BURN;
+        assert!(is_facet_attenuation(parent, EFFECT_BURN)); // drop mint: ok
+        assert!(!is_facet_attenuation(EFFECT_BURN, EFFECT_MINT)); // add mint: denied
+        assert!(describe_mask(EFFECT_MINT).contains(&"Mint"));
     }
 
     // ─── Extended Facet tests ───────────────────────────────────────────────

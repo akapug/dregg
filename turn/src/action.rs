@@ -1370,6 +1370,36 @@ pub enum Effect {
         /// turn so a react cannot spend one hole while resolving another.
         wake: Box<crate::turn::Turn>,
     },
+    /// Mint new supply of an asset into a holder's balance slot — the
+    /// cap-gated SUPPLY ENTRY (`docs/SUPPLY-MODEL.md` Stage 2, the dual
+    /// of `Burn`). The issuer WELL of `target`'s asset is DEBITED (going
+    /// more negative — the `−supply` account grows) and `target` is
+    /// CREDITED, so a mint CONSERVES exactly (`Σδ=0`, per-asset): supply
+    /// enters only through this authored verb. Unlike `Transfer`, the
+    /// source is the asset's well (resolved from `target`'s `token_id`,
+    /// never a field) rather than another holder.
+    ///
+    /// AUTHORITY (the one place mint ≠ burn): the actor must hold a
+    /// control-grade capability over the issuer WELL carrying the
+    /// `EFFECT_MINT` facet — the Rust image of Lean `mintAuthorizedB`
+    /// (issuer/node authority, NOT bare ownership: "a cell cannot coin
+    /// its own supply"). Burning your own value is permissionless;
+    /// minting is privileged.
+    ///
+    /// PLACED LAST in the enum so its serde discriminant does NOT shift
+    /// any existing variant's index — the durable `postcard` codec
+    /// (commit log / checkpoint) is index-sensitive, so a new variant
+    /// MUST append, never insert.
+    Mint {
+        /// The recipient cell whose balance is increased.
+        target: CellId,
+        /// Slot identifier. Sentinel `0` is the canonical cell-balance
+        /// slot (per `state.balance()`). Any other value is rejected,
+        /// exactly as `Burn`.
+        slot: u32,
+        /// Amount to mint (credited to `target`, debited from the well).
+        amount: u64,
+    },
 }
 
 /// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
@@ -1709,6 +1739,12 @@ impl Effect {
 
             // -- Annihilative: destroys a resource, operator-disclosed. --
             Effect::Burn { .. } => LinearityClass::Annihilative,
+
+            // Mint creates fresh supply (well → holder) — a resource
+            // produced without a paired consumer in the same turn (the
+            // well-debit is the conserving dual, but from the holder's
+            // POV value appears). The dual of Burn's Annihilative.
+            Effect::Mint { .. } => LinearityClass::Generative,
 
             // React consumes (spends) a promise-hole exactly once: a one-way
             // structural transition with no inverse — the hole is gone. The
@@ -2061,6 +2097,16 @@ impl Effect {
                 hasher.update(&slot.to_le_bytes());
                 hasher.update(&amount.to_le_bytes());
             }
+            Effect::Mint {
+                target,
+                slot,
+                amount,
+            } => {
+                hasher.update(&[63u8]);
+                hasher.update(target.as_bytes());
+                hasher.update(&slot.to_le_bytes());
+                hasher.update(&amount.to_le_bytes());
+            }
             Effect::AttenuateCapability {
                 cell,
                 slot,
@@ -2282,6 +2328,7 @@ impl Effect {
             Effect::CellUnseal { .. } => 32,    // target
             Effect::CellDestroy { .. } => 32 + 32, // target + cert hash
             Effect::Burn { .. } => 32 + 4 + 8,  // target + slot + amount
+            Effect::Mint { .. } => 32 + 4 + 8,  // target + slot + amount
             Effect::AttenuateCapability { .. } => 32 + 4 + 1 + 4 + 8, // cell + slot + perms + mask + expiry
             Effect::ReceiptArchive { .. } => 8 + 32,                  // height + checkpoint hash
             // cell + the program's canonical postcard length.
@@ -2370,6 +2417,7 @@ impl Effect {
             | Effect::CellDestroy { .. }
             | Effect::ReceiptArchive { .. } => dregg_cell::EFFECT_LIFECYCLE_OPS,
             Effect::Burn { .. } => dregg_cell::EFFECT_BURN,
+            Effect::Mint { .. } => dregg_cell::EFFECT_MINT,
             Effect::AttenuateCapability { .. } => dregg_cell::EFFECT_ATTENUATE_CAPABILITY,
             Effect::Promise { .. } | Effect::Notify { .. } | Effect::React { .. } => {
                 dregg_cell::EFFECT_REACTIVE_OPS

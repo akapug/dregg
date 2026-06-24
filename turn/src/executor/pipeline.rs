@@ -228,6 +228,11 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
                     *target = *resolved;
                 }
             }
+            Effect::Mint { target, .. } => {
+                if target == placeholder {
+                    *target = *resolved;
+                }
+            }
             Effect::AttenuateCapability { cell, .. } => {
                 if cell == placeholder {
                     *cell = *resolved;
