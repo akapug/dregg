@@ -30,7 +30,12 @@
 //!
 //! - **Soundness**: Storage operators (relay nodes) are bonded and subject to dispute
 //!   resolution. Content-addressing (BLAKE3 hashes) provides integrity -- any corruption
-//!   is detectable. Erasure coding provides availability even if some operators are offline.
+//!   is detectable. Erasure coding ([`erasure`] + [`availability`]) lets a client
+//!   reconstruct from *any* `n_data` of `n_total` chunks via [`retrieval::retrieve`], so a
+//!   withholding/offline subset up to `n_total - n_data` does not break retrieval. (The
+//!   node serving path that disseminates those chunks over HTTP lives in `dregg-node`'s
+//!   storage gateway; bond-slashing on *proven* withholding is the named economic floor,
+//!   not yet wired here.)
 //! - **Assumptions**: Relay operators honestly store data for the rental period. They are
 //!   economically incentivized (bond slashing on proven data withholding). Operators cannot
 //!   forge content (content-addressed), but CAN withhold it (availability fault).
@@ -57,7 +62,10 @@
 //! 2. Storage is RENTED (per-epoch cost), not purchased (one-time)
 //! 3. Deletion is incentivized (partial refund)
 //! 4. Relay buffering has explicit cost (prevents store-and-forward abuse)
-//! 5. Light clients can verify availability without full download (erasure sampling)
+//! 5. Light clients can sample availability and reconstruct k-of-n without a full
+//!    single-server download ([`retrieval::sample_das`] + [`retrieval::retrieve`] over an
+//!    untrusted [`retrieval::ChunkSource`] set, each chunk Merkle-verified against the
+//!    manifest root)
 //! 6. Content-addressing eliminates indirection (nameless writes = cheap proofs)
 //! 7. Quotas compose with computrons (quota IS a computron allocation)
 
@@ -81,6 +89,7 @@ pub mod pubsub;
 pub mod queue;
 pub mod quota;
 pub mod relay;
+pub mod retrieval;
 pub mod sharding;
 pub mod wal;
 

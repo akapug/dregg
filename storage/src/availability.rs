@@ -41,7 +41,7 @@ use crate::{ContentHash, StorageError};
 /// arbitrary (untrusted) operators for chunks, check each against its
 /// commitment, and reconstruct — confident the result is exactly the blob
 /// named by `content_hash`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AvailabilityManifest {
     /// BLAKE3 content hash of the *original* blob. A reconstruction is only
     /// accepted if it hashes to this.

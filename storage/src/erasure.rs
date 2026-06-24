@@ -44,7 +44,7 @@ pub struct ErasureEncoder {
 }
 
 /// A single erasure-coded chunk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ErasureChunk {
     /// Index of this chunk in the encoded set (`0..n_total`; data shards first,
     /// then parity shards).
@@ -69,7 +69,7 @@ pub struct ErasureChunk {
 /// on the left or right. The tree is the one built by [`merkle_root`] /
 /// [`crate::commitment::blake3_binary_root`]: leaves zero-padded to the next
 /// power of two, parents `= BLAKE3(left || right)`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MerkleProof {
     /// Position of the authenticated leaf in the (unpadded) leaf vector.
     pub leaf_index: usize,

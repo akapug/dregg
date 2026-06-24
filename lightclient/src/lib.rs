@@ -54,6 +54,27 @@
 //! circuit public vector. [`AttestedHistory`] is the `AggregateAttests` verdict under that named
 //! carrier, and [`verify_history`] is the light-client check.
 //!
+//! ## Retrieving the bytes behind a verified commitment (data availability)
+//!
+//! Verifying a commitment is not the same as being able to RETRIEVE the bytes
+//! behind it. A wallet/bridge that holds an [`AttestedHistory`] still needs the
+//! actual data (a receipt, a cell blob, a document) — and must not have to trust
+//! a single server to hand it over (a server can withhold). The DA retrieval
+//! side lives in `dregg_storage::retrieval` (kept there because it is light —
+//! no circuit/prover deps — and the heavy lightclient↔storage edge would close a
+//! workspace dependency cycle): a client holds a small
+//! `dregg_storage::availability::AvailabilityManifest` (binding the blob's
+//! content hash, erasure-set Merkle root, and `k`-of-`n` thresholds), then calls
+//! `dregg_storage::retrieval::retrieve` / `retrieve_via_http` to fetch `k`-of-`n`
+//! chunks from several (untrusted, possibly withholding) nodes, Merkle-verify
+//! each against the manifest root, and reconstruct the content-hash-bound blob.
+//! A node's `GET /storage/{manifest,chunk}` routes (`dregg-node`'s storage
+//! gateway) serve those records; withholding up to `n_total - n_data` chunks is
+//! survived (k-of-n) and a forged chunk is rejected by its Merkle path.
+//! `dregg_storage::retrieval::sample_das` is the live data-availability sampler
+//! (sample random chunks from peers → confidence the blob is available, without
+//! downloading it whole).
+//!
 //! ## Proofs are ADDITIVE ATTESTATION — and that is the POINT.
 //!
 //! The light client does NOT re-derive history. The succinct proof's validity IS the trust. A node
