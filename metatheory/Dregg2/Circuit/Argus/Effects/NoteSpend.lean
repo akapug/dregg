@@ -144,6 +144,56 @@ def kSpent : RecordKernelState :=
 #guard ((interp (noteSpendStmt 7) kSpent).isSome)   -- 7 ∉ {3,5} ⇒ commits
 #guard ((interp (noteSpendStmt 5) kSpent).isNone)   -- 5 ∈ {3,5} ⇒ rejected
 
+/-! ### keystone-audit companions (named `*_satisfiable` / `*_teeth`).
+
+The keystone-audit looks companions up BY NAME. The fresh spend of `7` on `kSpent` (= `{3,5}`) COMMITS
+(`interp … = some k'`), which is exactly the satisfiable hypothesis each `noteSpendStmt_*` keystone
+needs; the replay of a present nullifier (`5 ∈ {3,5}`) is REFUSED — the shared two-valued teeth. -/
+
+/-- The fresh spend of `7` on `kSpent` COMMITS — the named witness of the keystones' satisfiable
+hypothesis (`interp (noteSpendStmt nf) k = some k'`). -/
+theorem kSpent_fresh_commits : ∃ k', interp (noteSpendStmt 7) kSpent = some k' :=
+  Option.isSome_iff_exists.mp (by decide)
+
+/-- **`noteSpendStmt_no_double_spend_satisfiable`** — the keystone FIRES on the fresh commit: `7` was
+NOT already spent (`7 ∉ kSpent.nullifiers`). Non-vacuous. -/
+theorem noteSpendStmt_no_double_spend_satisfiable : (7 : Nat) ∉ kSpent.nullifiers := by
+  obtain ⟨k', h⟩ := kSpent_fresh_commits
+  exact noteSpendStmt_no_double_spend h
+
+/-- **`noteSpendStmt_inserts_satisfiable`** — the keystone FIRES: the fresh commit inserts `7` into the
+post-state's nullifier set. -/
+theorem noteSpendStmt_inserts_satisfiable :
+    ∃ k', interp (noteSpendStmt 7) kSpent = some k' ∧ (7 : Nat) ∈ k'.nullifiers := by
+  obtain ⟨k', h⟩ := kSpent_fresh_commits
+  exact ⟨k', h, noteSpendStmt_inserts h⟩
+
+/-- **`noteSpendStmt_then_reject_satisfiable`** — the keystone FIRES: after the fresh commit, the SAME
+spend on the result fails closed (the composed double-spend barrier, exercised). -/
+theorem noteSpendStmt_then_reject_satisfiable :
+    ∃ k', interp (noteSpendStmt 7) kSpent = some k' ∧ interp (noteSpendStmt 7) k' = none := by
+  obtain ⟨k', h⟩ := kSpent_fresh_commits
+  exact ⟨k', h, noteSpendStmt_then_reject h⟩
+
+/-- **`noteSpendStmt_teeth`** — the no-double-spend gate DISCRIMINATES: a nullifier ALREADY present
+(`5 ∈ kSpent.nullifiers = {3,5}`) is REFUSED (`interp … = none`). The gate is two-valued, not `:= True`
+— the shared teeth for the noteSpend keystone family. -/
+theorem noteSpendStmt_teeth : interp (noteSpendStmt 5) kSpent = none :=
+  noteSpendStmt_replay_rejected 5 kSpent (by decide)
+
+/-- **`noteSpendStmt_replay_rejected_satisfiable`** — the rejection keystone FIRES on a concrete present
+nullifier (`5 ∈ {3,5}`): the hypothesis `nf ∈ k.nullifiers` is jointly satisfiable, the `= none`
+conclusion is exercised. -/
+theorem noteSpendStmt_replay_rejected_satisfiable : interp (noteSpendStmt 5) kSpent = none :=
+  noteSpendStmt_teeth
+
+/-- **`noteSpendStmt_replay_rejected_teeth`** — the rejection is NOT `:= True`: a FRESH nullifier
+(`7 ∉ {3,5}`) is NOT rejected (`interp ≠ none` — it commits). So "replay rejected" discriminates the
+present-vs-fresh distinction. -/
+theorem noteSpendStmt_replay_rejected_teeth : interp (noteSpendStmt 7) kSpent ≠ none := by
+  obtain ⟨k', h⟩ := kSpent_fresh_commits
+  rw [h]; exact Option.some_ne_none k'
+
 /-! ## §2 — THE MATH CORE: sorted-neighbor non-membership (`lo < nf < hi` ⟺ `nf ∉ xs`).
 
 The new content. A nullifier set committed as a STRICT-ASCENDING list `xs` admits a
@@ -941,6 +991,14 @@ theorem noteSpend_runnable_full_sound_argus (hash : List ℤ → ℤ)
 #assert_axioms noteSpendStmt_inserts
 #assert_axioms noteSpendStmt_then_reject
 #assert_axioms noteSpendStmt_replay_rejected
+-- keystone-audit companions (named satisfiable + teeth), kernel-triple clean.
+#assert_axioms kSpent_fresh_commits
+#assert_axioms noteSpendStmt_no_double_spend_satisfiable
+#assert_axioms noteSpendStmt_inserts_satisfiable
+#assert_axioms noteSpendStmt_then_reject_satisfiable
+#assert_axioms noteSpendStmt_teeth
+#assert_axioms noteSpendStmt_replay_rejected_satisfiable
+#assert_axioms noteSpendStmt_replay_rejected_teeth
 
 -- Math core (the sorted-neighbor non-membership argument):
 #assert_axioms sortedAsc_head_lt_mem

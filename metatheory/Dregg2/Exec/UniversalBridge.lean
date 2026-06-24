@@ -1060,6 +1060,44 @@ private def ctr : List UOp := createTrace C0 s0 1 3 5
   (fun a => if a = 0 then some 7 else if a = 1 then some 9 else none)
   (indexRange 0 2)).map Prod.snd == [7, 9]
 
+/-! ### keystone-audit companions (named, CONCRETE `*_satisfiable` / `*_teeth`).
+
+The keystone-audit looks companions up BY NAME. Each verb-bridge keystone FIRES on its concrete committed
+run (the `s1`/`s2`/`s3` above): the keystone applied to the concrete `… = some sᵢ` proof yields the full
+`uproj sᵢ = trace.foldl step (uproj s₀)` function equality — a non-vacuous satisfiable. The shared teeth
+shows the emitted program is NON-TRIVIAL (it really MOVES state — the gwrite genuinely writes cell 1's
+"color" from `none` to `some 7`), so the "verb = its memory program" relation is not `:= True`. -/
+
+/-- **`gwrite_is_memory_program_satisfiable`** — the gwrite-bridge keystone FIRES on the concrete write
+(`s0 →"color"@1 7→ s1`): the projected post-state EQUALS the two-op trace folded onto the pre-state. -/
+theorem gwrite_is_memory_program_satisfiable :
+    uproj C0 s1 = (gwriteTrace C0 s0 "color" 1 1 7).foldl step (uproj C0 s0) :=
+  gwrite_is_memory_program C0 (by rw [s1]; rfl)
+
+/-- **`move_is_memory_program_satisfiable`** — the move-bridge keystone FIRES on the concrete transfer
+(`s0 →move 4: 1→2→ s2`): the projected post-state EQUALS the three-op trace folded onto the pre-state. -/
+theorem move_is_memory_program_satisfiable :
+    uproj C0 s2 = (moveTrace C0 s0 tm).foldl step (uproj C0 s0) :=
+  move_is_memory_program C0 (by rw [s2]; rfl)
+
+/-- **`create_is_memory_program_satisfiable`** — the create-bridge keystone FIRES on the concrete birth
+(`s0 →create cell 3 bal 5→ s3`): the projected post-state EQUALS the three-op trace folded onto the
+pre-state. -/
+theorem create_is_memory_program_satisfiable :
+    uproj C0 s3 = (createTrace C0 s0 1 3 5).foldl step (uproj C0 s0) :=
+  create_is_memory_program C0 (by rw [s3]; rfl)
+
+/-- **`bridge_program_teeth`** — the emitted memory program is NON-TRIVIAL (not the identity, not
+`:= True`): the gwrite genuinely MOVES cell 1's "color" slot from `none` (pre) to `some 7` (post). So the
+verb-bridge keystones constrain real state motion; the relation DISCRIMINATES. -/
+theorem bridge_program_teeth :
+    uproj C0 s1 (uaddr (.field 1 "color")) ≠ uproj C0 s0 (uaddr (.field 1 "color")) := by decide
+
+#assert_axioms gwrite_is_memory_program_satisfiable
+#assert_axioms move_is_memory_program_satisfiable
+#assert_axioms create_is_memory_program_satisfiable
+#assert_axioms bridge_program_teeth
+
 end NonVacuity
 
 /-! ## §8 — axiom-hygiene pins. -/

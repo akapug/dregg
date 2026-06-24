@@ -310,6 +310,7 @@ import Dregg2.Circuit.Inst.noteSpendA      -- D5 v2 breadth: noteSpendA_full_sou
 import Dregg2.Circuit.Inst.pipelinedSendA   -- D5 v1 breadth: pipelinedSendA_full_sound ⇒ PipelinedSendSpec (log-only)
 import Dregg2.Circuit.Inst.revoke          -- D5 v2 breadth: revoke_full_sound ⇒ RevokeSpec (caps)
 import Dregg2.Circuit.Inst.revokeDelegationA -- D5 v2 breadth: revokeDelegationA_full_sound ⇒ RevokeSpec (caps)
+import Dregg2.Circuit.Inst.revokeDelegationFullA -- D5 v2-dual: revokeDelegationFull_full_sound ⇒ RevokeDelegationFullSpec (caps + forced epoch step)
 import Dregg2.Circuit.Inst.transfer        -- D5 v2 breadth: transfer_full_sound ⇒ BalanceMovementSpec (bal funcComponent)
 import Dregg2.Circuit.Inst.emitEventA      -- D5 v1 breadth: emitEventA_full_sound ⇒ EmitEventSpec (log-only, touched=∅)
 import Dregg2.Circuit.Inst.incrementNonceA -- D5 v1 breadth: incrementNonceA_full_sound ⇒ IncrementNonceSpec (cell)
@@ -540,6 +541,15 @@ import Dregg2.Apps.BountyBoardForever    -- W2 residual: BountyBoard's lifetime 
 import Dregg2.Substrate.VerbRegistry      -- DREGG3 §2.3 made load-bearing: the reified kernel verb-set source of truth (8 survivor verbs + the 52-variant Effect cover + DOOMED→FACTORY map); total classification (exhaustive by compiler) + minimality of the 8 + non-vacuity. The anchor the executor dispatch / circuit descriptor table / deletion manifest reconcile against
 import Dregg2.Verify.ReceiptContract     -- W4/assurance: the receipt (Q) contract face — app properties provable from the receipt chain alone (light-client-grade)
 import Dregg2.AssuranceCase              -- W5: the five guarantees (Authority/Conservation/Integrity/Freshness/Unfoolability) organized BY GUARANTEE, superseding Claims' chronological journal
+-- The apex-KEYSTONE integrity audit (`@[load_bearing_keystone satisfiable:=W teeth:=T]` + `#keystone_audit`):
+-- each per-guarantee module TAGS its keystones with a non-vacuity (satisfiable) + a teeth (discriminating)
+-- companion and `#keystone_audit`s them (THROWS on FAIL), so the corpus build is the per-push CI gate that
+-- a keystone has not gone vacuous/toothless. Non-amp is the exemplar; the other four families follow.
+import Dregg2.Verify.KeystoneAuditNonAmp        -- guarantee A (8): EffectsAuthority.*_non_amplifying
+import Dregg2.Verify.KeystoneAuditAuthModes     -- guarantee A (5): AuthModes.{captp,bearer,token,custom}_sound
+import Dregg2.Verify.KeystoneAuditIntegrity     -- guarantee C (8): Argus.Receipt + CommitmentCrossBind + UniversalBridge
+import Dregg2.Verify.KeystoneAuditFreshness     -- guarantee D (10): noteSpend + NonMembership + CapSlotFactory
+import Dregg2.Verify.KeystoneAuditUnfoolability -- guarantee E (12): RecursiveAggregation + HistoryAggregation + LightClientUC
 
 -- REFINEMENT wave R2 (2026-06-11): THE HEAP's Lean foundation (REFINEMENT-DESIGN Decision 1).
 import Dregg2.Substrate.Heap              -- R2 keystone: the openable sorted-map semantics — the cap_root machinery generalized to a generic leaf (get/set/sorted-insert/non-membership via the REUSED sorted_gap_excludes; ext_get canonicity; root_deterministic + root_injective under the ONE named Poseidon2SpongeCR floor)
