@@ -998,6 +998,24 @@ pub struct Cockpit {
     /// the viewed URL; applied + cleared in [`Self::ensure_webshell_input`]. `None`
     /// while the bar already reflects the cursor (so user typing is never stomped).
     webshell_input_pending: Option<String>,
+    /// **THE PERSISTENT LIVE WEBVIEW** (`SERVO-INTERACTIVE.md §5.1`) — one long-lived
+    /// `servo::WebView` on one `servo::Servo` engine, held across frames so the web-shell
+    /// pane is LIVE-interactive (scroll / click / type → re-render) rather than a static
+    /// per-navigation snapshot. `None` until the first navigation opens it; thereafter
+    /// [`Self::webshell_apply_live_input`] feeds gpui pane events into it and pulls the
+    /// fresh tile into [`Self::webshell_frame`]. `RefCell` because the render `&self`
+    /// helpers + the event listeners both reach it; `!Send` (servo is `Rc`-based) — the
+    /// cockpit is a main-thread gpui view, so this never crosses a thread. Gated on
+    /// `web-shell` (the `LiveWebView` type lives behind `servo-render/libservo`).
+    #[cfg(feature = "web-shell")]
+    webshell_live: std::cell::RefCell<Option<servo_render::webview::LiveWebView>>,
+    /// The web-shell content tile's last painted WINDOW-SPACE bounds, recorded each
+    /// frame by a transparent `canvas` overlay covering the tile. The pane's scroll /
+    /// click / move listeners report positions in WINDOW coordinates; subtracting this
+    /// origin yields the WebView-local device point fed to `apply_input`. `None` until
+    /// the tile has painted once. `Cell` (the recorder runs on the `&self` paint path).
+    #[cfg(feature = "servo")]
+    webshell_tile_bounds: std::cell::Cell<Option<gpui::Bounds<gpui::Pixels>>>,
     /// **THE LIVE INSPECTOR CARD** (rung 2) — the cockpit's Inspect-mode main surface
     /// reborn as a deos-js card. LAZY: `None` until the Inspect surface first paints,
     /// then built by [`Self::ensure_inspector_card`] from the focused cell's moldable

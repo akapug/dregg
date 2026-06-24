@@ -571,6 +571,26 @@ embedder may `trust_extra_root_der` — NOT a danger-accept bypass). Proven vs a
 PNG `servo_real_https_render.png` ("dregg over https", SEEN). rustls already in-graph (+3 lines lock, 0 new
 crates). SERVO NOW BROWSES REAL PAGES — http + https, cap-gated. (servo-paint fork still reverts when
 upstream carries a SWGL `RenderingContext`.)
+### COCKPIT WEB-SHELL IS LIVE-INTERACTIVE — scroll/click/move → re-render (2026-06-24).
+The cockpit web-shell pane was a STATIC per-navigation tile; now it holds a PERSISTENT live `servo::WebView`
+on one engine and re-renders to gpui input. `servo-render/src/webview.rs`: new `LiveWebView` holder (one
+process-global `Servo` + a per-pane `WebView` on a held `ServoSwglContext`; `!Send`, single-thread + single-
+engine guarded by a `thread_local`; `open`/`load`/`apply_input(WebInput,pump)→changed?`/`frame`) + `WebInput`
+gained a `KeyChar{ch}` arm (lowered to servo `KeyboardEvent::from_state_and_key`). `panels_webshell.rs`: the
+gpui EVENT BRIDGE — the tile carries `on_scroll_wheel`/`on_mouse_down`/`on_mouse_move` listeners that lower to
+`WebInput` (window→tile-local device coords via a transparent `canvas` overlay recording the tile's bounds in
+`webshell_tile_bounds`), drive `LiveWebView::apply_input`, pull the fresh tile into `webshell_frame`, and
+`cx.notify()` ON CHANGE (the repaint-on-change hook). `webshell_render_current` now opens/navigates the
+persistent `LiveWebView` instead of a per-call `render_url_to_frame`. ARTIFACT: `--render-webshell-live <out>`
+(`main.rs render_webshell_live_headless`) bakes the cockpit web-shell loading a tall data: page (`before.png`)
+then ONE scroll-down through the live loop (`after.png`); asserts the two cockpit frames differ. Green:
+`cargo check -p servo-render --features libservo` + `cargo check -p starbridge-v2 --features native-full --bin
+starbridge-v2`. GPU PATH ready (not yet wired into the live pane): `servo-render/src/gpu_context.rs`
+`ServoGpuContext` + `make_rendering_context()` (surfman hardware-GL else SWGL) is green under `libservo` — the
+`LiveWebView` builds on `ServoSwglContext` today; pointing it at `make_rendering_context` is the GPU-accel
+swap. SEAM (named, not a wall): KEY input to the tile needs a focus handle on the pane (the engine arm
+`KeyChar` + `webshell_live_key` exist; the gpui focus-route from `on_key`→the focused tile is the remaining
+wiring — small, focus-management not engine work).
 ### FEDERATION RECONNECT/RETRY — robust late-join, by running (2026-06-23).
 `1f5d3303` (`node/src/blocklace_sync.rs` + `net/src/gossip.rs`). `spawn_peer_prober` wires
 `RequestBackoff` into the dial path → re-dials unconnected peers on capped exponential backoff (clears +
