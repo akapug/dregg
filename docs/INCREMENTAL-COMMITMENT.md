@@ -113,6 +113,30 @@ KAT byte-identity.)
 5. **Demote the symbolic bolt-on** to optional-batch (or remove), now that the hot path is
    intrinsically cheap.
 
+## The cell-leaf cache (the federation Merkle leaf)
+
+Stages 1–3 above incrementalize the SUB-roots a single cell's commitment folds (cap / heap /
+fields-map / system roots). The **whole-cell leaf** the federation Merkle tree commits —
+`Ledger::hash_cell` → `compute_canonical_state_commitment` — is the BLAKE3 absorption of the
+finished cell bytes (~1.5µs). With the sub-roots cached, that absorb is the residual.
+
+`Cell` carries a `LeafDigestCache` (`#[serde(skip)]`, `Mutex<Option<[u8;32]>>`, Clone-copies-
+value, `Eq`-excluded). It is read ONLY by `Ledger::hash_cell_cached` (the materialize path:
+`update_leaf` / `rebuild_tree`), invalidated at EVERY ledger `&mut`-handoff seam
+(`get_mut` / `update_with` / `apply_delta` / the transfer block / `migrate_commit` /
+`migrate_accept` / `insert_cell`). The off-ledger reader `Cell::state_commitment()` (sovereign
+witness / migration) ALWAYS recomputes fresh and never consults the cache, so a standalone
+`pub`-field mutation can never serve a stale leaf. Byte-identity is pinned by
+`leaf_digest_cache_matches_fresh` (8 seeds × 160 random ledger-mutation sequences, 0 mismatches).
+
+Where it wins: a **structural rebuild** (`rebuild_tree` — triggered by `SpawnCell`, lazy well
+materialization, insert/remove) re-hashes ALL N cells; with the cache, only the genuinely-
+mutated cells pay the absorb, the rest hit (~9× per untouched cell — ~447µs vs ~1640µs full
+rebuild at N=1024, scaling with N). Also: repeated `root()`/`membership_proof()` with no
+mutation (witness-freshness republishes; `pre_root` when the tree is clean) become pure hits.
+Where it does NOT win: the touched cell itself on a value-update turn — its bytes changed, so
+re-absorbing its leaf is the irreducible BLAKE3 floor the cache cannot (and must not) remove.
+
 ## What "done" looks like
 
 No consumer recomputes a commitment tree from scratch on a turn that didn't change it; a
