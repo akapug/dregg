@@ -41,6 +41,7 @@ import Dregg2.Spec.Conservation
 import Dregg2.Spec.Guard
 import Dregg2.Spec.Authority
 import Dregg2.Tactics
+import Metatheory.Dynamics.Production
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 
 namespace Dregg2.Spec
@@ -365,6 +366,99 @@ theorem authConnects_nonvacuous :
   · -- REFUTED: the empty slot holds no cap, so no member can confer the edge.
     rintro ⟨cap, hmem, _⟩
     simp at hmem
+
+/-! ### §2.AUTH-CONNECTS-PRODUCTION — `authConnects ⟹ AuthorizedProduction` (the authority-leg
+grounding into the abstract `Metatheory` production law).
+
+`authConnects caps h c` is the executable-image of `Graph.has` (Granovetter "you can reach what you
+hold a cap to"). `Metatheory.Dynamics.AuthorizedProduction held produced` is the abstract
+non-forgeability law (Miller "only connectivity begets connectivity"): a held bundle may PRODUCE a
+fragment covered by it. We bind them: WHENEVER `authConnects` holds (the holder genuinely reaches the
+target through a held cap), that connectivity IS an abstract `AuthorizedProduction` — the held cap
+PRODUCES the connectivity edge, and the edge is covered by the held authority. This makes the
+INDEPENDENT `authConnects` spec (the C-c1 authority-graph reference) cite the abstract production law,
+completing the authority leg of the chain to `Metatheory`. The SAME bridge shape as the mint binding
+(`mintAuthorizedB_covers_production`), read off the connectivity relation instead of the mint gate. -/
+
+open Metatheory.Dynamics (AuthorizedProduction)
+open Metatheory.Dynamics.USet (fits_iff)
+
+/-- **`authProduced`** — the connectivity edge an `authConnects` holder PRODUCES: the `control` right
+over the target (the abstract image of a held node/endpoint-write cap conferring an authority edge).
+The smallest non-trivial production, the `Metatheory` `USet Rights` carrier. -/
+def authProduced : Metatheory.Dynamics.USet Metatheory.Dynamics.Rights :=
+  ⟨{Dregg2.Authority.Auth.control}⟩
+
+/-- **`heldFromAuthConnects caps h c`** — the abstract held-authority bundle the connectivity relation
+GRANTS: the `control` edge WHEN `authConnects caps h c` (the holder genuinely reaches `c.target`), and
+the EMPTY bundle when it does NOT. The abstraction function on the authority leg: connected ↦
+`{control}`, disconnected ↦ `∅`. So an UNCONNECTED holder holds `∅` and produces nothing.
+(`authConnects` is a `Prop`-existential; the branch is classical, hence `noncomputable`.) -/
+noncomputable def heldFromAuthConnects (caps : Caps) (h : Label)
+    (c : Spec.Cap Label ExecRights) : Metatheory.Dynamics.USet Metatheory.Dynamics.Rights :=
+  open Classical in
+  if authConnects caps h c then ⟨{Dregg2.Authority.Auth.control}⟩ else ⟨∅⟩
+
+/-- `heldFromAuthConnects` selects `{control}` on the connected branch. -/
+theorem heldFromAuthConnects_pos (caps : Caps) (h : Label) (c : Spec.Cap Label ExecRights)
+    (hconn : authConnects caps h c) :
+    heldFromAuthConnects caps h c = ⟨{Dregg2.Authority.Auth.control}⟩ := by
+  unfold heldFromAuthConnects; exact if_pos hconn
+
+/-- `heldFromAuthConnects` selects `∅` on the disconnected branch. -/
+theorem heldFromAuthConnects_neg (caps : Caps) (h : Label) (c : Spec.Cap Label ExecRights)
+    (hconn : ¬ authConnects caps h c) :
+    heldFromAuthConnects caps h c = ⟨∅⟩ := by
+  unfold heldFromAuthConnects; exact if_neg hconn
+
+/-- **`authConnects_is_authorized_production` — THE BRIDGE: an `authConnects` edge IS an abstract
+`AuthorizedProduction`, PROVED, kernel-clean.** If `authConnects caps h c` (the holder reaches
+`c.target` through a held cap — the Granovetter connectivity the C-c1 legs attest against), then the
+connectivity-derived held bundle `heldFromAuthConnects` covers the produced edge `authProduced`:
+`authProduced ≼ heldFromAuthConnects`. So the executable connectivity relation WITNESSES the abstract
+`AuthorizedProduction (heldFromAuthConnects …) authProduced` — "only connectivity begets connectivity"
+(Miller) read off the independent `authConnects` spec, citing the abstract `Metatheory` production law.
+The hypothesis is LOAD-BEARING: `heldFromAuthConnects` is `∅` when disconnected, which covers nothing —
+no connectivity, no production authority. -/
+theorem authConnects_is_authorized_production (caps : Caps) (h : Label)
+    (c : Spec.Cap Label ExecRights) (hconn : authConnects caps h c) :
+    AuthorizedProduction (heldFromAuthConnects caps h c) authProduced := by
+  -- `authConnects` selects the `{control}` branch of `heldFromAuthConnects`; coverage is `≼`-trivial.
+  -- disconnection would select `∅`, which does NOT cover `{control}` — so `hconn` is load-bearing.
+  show Dregg2.Resource.fits authProduced (heldFromAuthConnects caps h c)
+  rw [fits_iff, heldFromAuthConnects_pos caps h c hconn]
+  simp [authProduced]
+
+/-- **`authConnects_production_nonvacuous` — the bridge is non-vacuous: a genuine connectivity
+PRODUCES, an empty slot does NOT.** A holder holding a `node 7` cap reaches `7`, so `authConnects`
+holds and the connectivity is an `AuthorizedProduction` (the `{control}` edge fits the granted bundle);
+an EMPTY-slot holder is disconnected, so `heldFromAuthConnects` is `∅` and the production does NOT hold
+(the empty bundle covers no `control` edge — the TOOTH). A vacuous accept-all bridge could not carry
+the refuted half; a vacuous reject-all could not carry the produced half. -/
+theorem authConnects_production_nonvacuous :
+    AuthorizedProduction
+        (heldFromAuthConnects (fun l => if l = 0 then [Authority.Cap.node 7] else [])
+          0 (⟨7, ()⟩ : Spec.Cap Label ExecRights)) authProduced
+    ∧ ¬ AuthorizedProduction
+          (heldFromAuthConnects (fun _ => ([] : List Authority.Cap))
+            0 (⟨7, ()⟩ : Spec.Cap Label ExecRights)) authProduced := by
+  refine ⟨?_, ?_⟩
+  · -- CONNECTED: holder `0` holds `node 7`, so `authConnects` holds; the production is authorized.
+    exact authConnects_is_authorized_production _ 0 _ authConnects_nonvacuous.1
+  · -- THE TOOTH: empty slot ⇒ disconnected ⇒ `heldFromAuthConnects = ∅`, which produces nothing.
+    intro hprod
+    rw [show AuthorizedProduction
+            (heldFromAuthConnects (fun _ => ([] : List Authority.Cap)) 0
+              (⟨7, ()⟩ : Spec.Cap Label ExecRights)) authProduced
+          = Dregg2.Resource.fits authProduced
+              (heldFromAuthConnects (fun _ => ([] : List Authority.Cap)) 0
+                (⟨7, ()⟩ : Spec.Cap Label ExecRights)) from rfl,
+        fits_iff,
+        heldFromAuthConnects_neg _ 0 _ authConnects_nonvacuous.2] at hprod
+    simp [authProduced] at hprod
+
+#assert_axioms authConnects_is_authorized_production
+#assert_axioms authConnects_production_nonvacuous
 
 /-- **`exec_owns_self_confers` (NOW OVER THE GENUINE RIGHTS LATTICE)** — the authority
 object the ownership branch lands on is the **reflexive self-conferral**, stated over the REAL
