@@ -246,6 +246,16 @@ pub mod recursive {
     /// in-circuit FRI verifier re-verifies all 38 queries (plus the PoW
     /// witness, via `check_pow_witness`) of every wrapped child.
     pub fn create_recursion_config() -> DreggRecursionConfig {
+        // Fixed knobs ⇒ identical config on every call; build once per thread, clone on access
+        // (the config is `Arc`-backed, so a clone is an Arc bump + small param copy). `thread_local`
+        // sidesteps any `Sync` requirement. The cached value is identical to a fresh build.
+        thread_local! {
+            static RECURSION_CONFIG: DreggRecursionConfig = create_recursion_config_uncached();
+        }
+        RECURSION_CONFIG.with(|c| c.clone())
+    }
+
+    fn create_recursion_config_uncached() -> DreggRecursionConfig {
         let perm = default_babybear_poseidon2_16();
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
@@ -374,9 +384,19 @@ pub mod recursive {
     }
 
     /// Create the FRI recursion backend for degree-4 extension.
+    ///
+    /// The backend holds only a fixed Poseidon2 challenger config (no per-proof state), so it is
+    /// built ONCE per thread and cloned on each call (a cheap copy of the config) rather than
+    /// re-constructing the permutation tables per leaf. `thread_local` sidesteps any `Sync`
+    /// requirement; the cached value is identical to a fresh construction (same deterministic
+    /// `BABY_BEAR_D4_W16` config).
     pub fn create_recursion_backend()
     -> p3_recursion::FriRecursionBackendForExt<D, WIDTH, RATE, Poseidon2Config> {
-        FriRecursionBackend::new(Poseidon2Config::BABY_BEAR_D4_W16).for_extension_degree::<D>()
+        thread_local! {
+            static BACKEND: p3_recursion::FriRecursionBackendForExt<D, WIDTH, RATE, Poseidon2Config> =
+                FriRecursionBackend::new(Poseidon2Config::BABY_BEAR_D4_W16).for_extension_degree::<D>();
+        }
+        BACKEND.with(|b| b.clone())
     }
 
     /// Trait alias capturing the bounds an AIR must satisfy to flow through this

@@ -348,39 +348,34 @@ impl ObserverState {
 /// so the dregg side can pre-check before submitting.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NonceTracker {
-    /// Used nonces indexed by epoch.
-    used: Vec<(u64, Vec<u64>)>,
+    /// Used nonces indexed by epoch. A per-epoch set so a membership/insert
+    /// test is O(1) rather than scanning every (epoch, nonce) pair.
+    used: std::collections::HashMap<u64, std::collections::HashSet<u64>>,
 }
 
 impl NonceTracker {
     /// Create a new empty tracker.
     pub fn new() -> Self {
-        Self { used: Vec::new() }
+        Self {
+            used: std::collections::HashMap::new(),
+        }
     }
 
     /// Check if a nonce has been used in the given epoch.
     pub fn is_used(&self, epoch: u64, nonce: u64) -> bool {
         self.used
-            .iter()
-            .any(|(e, nonces)| *e == epoch && nonces.contains(&nonce))
+            .get(&epoch)
+            .is_some_and(|nonces| nonces.contains(&nonce))
     }
 
     /// Record a nonce as used. Returns false if it was already used (replay).
     pub fn record(&mut self, epoch: u64, nonce: u64) -> bool {
-        if self.is_used(epoch, nonce) {
-            return false;
-        }
-        if let Some((_, nonces)) = self.used.iter_mut().find(|(e, _)| *e == epoch) {
-            nonces.push(nonce);
-        } else {
-            self.used.push((epoch, vec![nonce]));
-        }
-        true
+        self.used.entry(epoch).or_default().insert(nonce)
     }
 
     /// Prune all entries for epochs before `min_epoch`.
     pub fn prune_before(&mut self, min_epoch: u64) {
-        self.used.retain(|(e, _)| *e >= min_epoch);
+        self.used.retain(|e, _| *e >= min_epoch);
     }
 }
 

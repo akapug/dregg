@@ -115,16 +115,20 @@ impl Subscription {
         blocklace: &Blocklace,
         _max_depth: u32,
     ) -> bool {
-        // Walk through all blocks from subscribed strands and check if
-        // they reference this block as a direct predecessor.
+        // Use the successor reverse-index: exactly the blocks that name
+        // `block_id` as a direct predecessor, instead of scanning every block.
+        // For each, check whether its creator is subscribed. Equivalent to the
+        // old full scan over `blocks` (b subscribed && b.predecessors ∋ id).
         // For depth > 1 we'd need to walk the successor graph, but for
         // typical use (depth=0 or 1) this is sufficient.
-        for (_, b) in blocklace.blocks.iter() {
-            if self.subscribed_strands.contains(&b.creator) && b.predecessors.contains(block_id) {
-                return true;
-            }
+        match blocklace.successors_of(block_id) {
+            Some(succs) => succs.iter().any(|succ_id| {
+                blocklace
+                    .get(succ_id)
+                    .is_some_and(|b| self.subscribed_strands.contains(&b.creator))
+            }),
+            None => false,
         }
-        false
     }
 
     /// Check if a block's creator is directly subscribed.
@@ -746,7 +750,9 @@ impl Disseminator {
         // A block is sendable if all its predecessors are either known to
         // the peer or already in the send set.
         let mut sendable = Vec::new();
-        let mut peer_will_know = peer_known.clone();
+        // `peer_known` is no longer needed after the `difference` above, so
+        // move it into the running set instead of cloning (insert-only below).
+        let mut peer_will_know = peer_known;
 
         for block_id in &ordered {
             if let Some(block) = self.blocklace.get(block_id) {
@@ -1235,6 +1241,62 @@ mod tests {
     /// An authoring disseminator for identity `id` (holds the signing key).
     fn make_disseminator(id: u8) -> Disseminator {
         Disseminator::with_signing_key(signing_for(id))
+    }
+
+    /// Differential: the successor-index `is_referenced_by_subscribed` must
+    /// agree with the historical full block-scan for every block, across a
+    /// DAG where some blocks are referenced by subscribed strands and some are
+    /// not. Guards the #4 correctness-sensitive rewrite (wrong "wants" =
+    /// missed/over-sent blocks).
+    #[test]
+    fn is_referenced_by_subscribed_matches_linear_scan() {
+        // Reference implementation: the original O(n) scan over all blocks.
+        fn linear_referenced(
+            sub: &Subscription,
+            block_id: &BlockId,
+            blocklace: &Blocklace,
+        ) -> bool {
+            blocklace.blocks.iter().any(|(_, b)| {
+                sub.subscribed_strands.contains(&b.creator) && b.predecessors.contains(block_id)
+            })
+        }
+
+        let mut lace = Blocklace::new();
+        // Strand 1 genesis, strand 2 + 3 reference it; strand 2 is subscribed.
+        let g1 = make_block(1, 0, vec![], b"g1");
+        let g1_id = lace.insert(g1).unwrap();
+        let g4 = make_block(4, 0, vec![], b"g4");
+        let g4_id = lace.insert(g4).unwrap();
+        // Strand 2 (subscribed) references g1.
+        let b2 = make_block(2, 0, vec![g1_id], b"s2-refs-g1");
+        let b2_id = lace.insert(b2).unwrap();
+        // Strand 3 (NOT subscribed) references g4.
+        let b3 = make_block(3, 0, vec![g4_id], b"s3-refs-g4");
+        let b3_id = lace.insert(b3).unwrap();
+        // Strand 2 also references b3 (so g4's grandchild path exists, but the
+        // direct reference of g4 is only from the unsubscribed strand 3).
+        let b2b = make_block(2, 1, vec![b2_id, b3_id], b"s2-refs-b3");
+        let b2b_id = lace.insert(b2b).unwrap();
+
+        let sub = Subscription {
+            subscribed_strands: [make_key(2)].into_iter().collect(),
+            include_referenced: true,
+            causal_depth: 1,
+        };
+
+        for id in [&g1_id, &g4_id, &b2_id, &b3_id, &b2b_id] {
+            assert_eq!(
+                sub.is_referenced_by_subscribed(id, &lace, 1),
+                linear_referenced(&sub, id, &lace),
+                "referenced disagreement for {id:?}"
+            );
+        }
+        // Spot-check the expected truth: g1 is referenced by subscribed s2;
+        // g4 is referenced only by unsubscribed s3 (so NOT wanted via ref);
+        // b3 is referenced by subscribed s2 (via b2b).
+        assert!(sub.is_referenced_by_subscribed(&g1_id, &lace, 1));
+        assert!(!sub.is_referenced_by_subscribed(&g4_id, &lace, 1));
+        assert!(sub.is_referenced_by_subscribed(&b3_id, &lace, 1));
     }
 
     // ─── Two nodes converge ──────────────────────────────────────────────────

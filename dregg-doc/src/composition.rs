@@ -526,16 +526,21 @@ impl LayoutGraph {
 fn patch_seed(author: Author, ops: &[Op]) -> u128 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
+    // Format each op's `Debug` string ONCE (this `Op` doesn't derive `Hash`, and
+    // `Debug` is the stable structural projection used here). The old code did the
+    // `format!` twice per op (once per hash round) — pure allocation churn for an
+    // identical digest; reuse the rendered strings for both rounds instead.
+    let rendered: Vec<String> = ops.iter().map(|op| format!("{op:?}")).collect();
     let mut h = DefaultHasher::new();
     0xC0FFEEu64.hash(&mut h);
     author.0.hash(&mut h);
-    for op in ops {
-        format!("{op:?}").hash(&mut h);
+    for s in &rendered {
+        s.hash(&mut h);
     }
     let lo = h.finish();
     let mut h2 = DefaultHasher::new();
-    for op in ops {
-        format!("{op:?}").hash(&mut h2);
+    for s in &rendered {
+        s.hash(&mut h2);
     }
     author.0.hash(&mut h2);
     let hi = h2.finish();
@@ -904,7 +909,11 @@ fn fold(
 ) -> Rendered {
     let mut out = Rendered::default();
 
-    for id in parent.walk() {
+    // The layout linearization — computed ONCE and reused for both the embed
+    // render below and the pin-divergence pass (it was re-walked per use).
+    let walked = parent.walk();
+
+    for &id in &walked {
         let atom = match parent.atom(id) {
             Some(a) => a,
             None => continue,
@@ -954,7 +963,7 @@ fn fold(
     }
 
     // Surface pin-divergence conflicts (§4.3) — an embed with >=2 live pins.
-    for id in parent.walk() {
+    for &id in &walked {
         let pins = parent.pins(id);
         if pins.len() >= 2 {
             let mut alternatives: Vec<(Pin, Author)> =

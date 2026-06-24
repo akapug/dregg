@@ -2437,14 +2437,17 @@ async fn handle_frontier(
 
         // Determine which blocks we have that the peer doesn't.
         // A peer with a given tip has all blocks in that tip's causal past.
-        let mut their_known: std::collections::HashSet<BlockId> = std::collections::HashSet::new();
-        for (_, tip_id) in &their_tips {
-            if lace.contains(tip_id) {
-                let past = lace.causal_past(tip_id);
-                their_known.extend(past);
-                their_known.insert(*tip_id);
-            }
-        }
+        // Take the union of all (locally-known) tips' causal pasts in ONE
+        // shared-visited traversal instead of re-walking the overlapping
+        // history once per tip. Only tips we actually hold seed the union,
+        // matching the prior `if lace.contains(tip_id)` guard; the union is
+        // inclusive of each seed, so the tips themselves are covered.
+        let known_tips: Vec<&BlockId> = their_tips
+            .values()
+            .filter(|tip_id| lace.contains(tip_id))
+            .collect();
+        let their_known: std::collections::HashSet<BlockId> =
+            lace.causal_past_union(known_tips.into_iter());
 
         // Collect blocks they don't have, sorted in causal order.
         let mut candidates: Vec<(&BlockId, &Block)> = lace

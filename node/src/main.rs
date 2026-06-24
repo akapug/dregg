@@ -24,6 +24,13 @@ mod dkg_service;
 mod finality_gate;
 #[cfg(all(test, feature = "deos-host"))]
 mod mud_e2e;
+// THE PLAYABLE MUD CLIENT (`dregg-node mud-client`, `deos-host` feature): boots an
+// in-process node, hosts the GM (`mud_play_gm.js`), and drops you into a text-MUD REPL
+// that drives the living world with real verified turns over the node's HTTP wire.
+#[cfg(feature = "deos-host")]
+mod mud_client;
+#[cfg(all(test, feature = "deos-host"))]
+mod mud_client_e2e;
 // The old `bridge` module is removed. Cross-group communication now happens
 // via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
 // See: `dregg-node run --groups` for multi-group participation.
@@ -261,6 +268,17 @@ enum Command {
         port: u16,
     },
 
+    /// PLAY the node-hosted MUD: boot a self-contained living world (an in-process
+    /// headless node hosting the GM `mud_play_gm.js`) and drop into an interactive
+    /// text-MUD loop. Every `look` reads the real ledger; every `move` / `gain-xp` /
+    /// `descend` is a real signed, verified turn committed on the node — and a forbidden
+    /// GM-only write is refused (the asymmetry). Requires the `deos-host` feature.
+    MudClient {
+        /// Seed deriving the player identity (same seed → same character across runs).
+        #[arg(long, default_value = "mud-play-aria")]
+        player_seed: String,
+    },
+
     /// Run as an MCP (Model Context Protocol) server over stdio.
     ///
     /// Reads JSON-RPC from stdin and writes responses to stdout.
@@ -454,6 +472,21 @@ async fn main() {
         }
         Command::Init { data_dir } => init_node(&data_dir),
         Command::Status { port } => check_status(port).await,
+        Command::MudClient { player_seed } => {
+            #[cfg(feature = "deos-host")]
+            {
+                mud_client::play_interactive(&player_seed).await;
+            }
+            #[cfg(not(feature = "deos-host"))]
+            {
+                let _ = player_seed;
+                eprintln!(
+                    "`mud-client` requires the `deos-host` feature (it hosts a deos-js GM). \
+                     Rebuild with `cargo run --features deos-host --bin dregg-node -- mud-client`."
+                );
+                std::process::exit(1);
+            }
+        }
         Command::Mcp {
             data_dir,
             federation_peers,

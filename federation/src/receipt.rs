@@ -234,10 +234,13 @@ impl FederationReceipt {
                 if votes.len() < threshold {
                     return false;
                 }
+                // Membership of each signer in the known set is the only query — index it
+                // once so the per-vote check is O(1) instead of a linear scan.
+                let known: std::collections::HashSet<&PublicKey> = known_keys.iter().collect();
                 let mut seen = std::collections::HashSet::new();
                 let mut valid = 0usize;
                 for (pk, sig) in votes {
-                    if !known_keys.contains(pk) {
+                    if !known.contains(pk) {
                         return false;
                     }
                     if !pk.verify(&body_hash, sig) {

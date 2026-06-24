@@ -1653,7 +1653,9 @@ impl GossipNetwork {
 
         // Apply two-bucket padding to hide message type from size analysis.
         // See docs/design-network-privacy.md Phase 1.
-        let padded = crate::message::pad_message(data);
+        // Wrap once in an Arc so each per-link spawn clones a refcounted handle,
+        // not the whole padded frame (an N-link broadcast was N full copies).
+        let padded = Arc::new(crate::message::pad_message(data));
 
         for &addr in targets {
             // Send over EVERY live link to this peer, not just one. A committee
@@ -1679,7 +1681,7 @@ impl GossipNetwork {
                 match conn.open_uni().await {
                     Ok(mut stream) => {
                         delivered_any = true;
-                        let padded = padded.clone();
+                        let padded = Arc::clone(&padded);
                         tokio::spawn(async move {
                             // Write outer length prefix (padded frame size) then padded data.
                             let len = (padded.len() as u32).to_be_bytes();

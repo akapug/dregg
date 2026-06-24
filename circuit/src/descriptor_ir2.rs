@@ -4310,7 +4310,15 @@ fn instance_airs(
 /// across configs (FRI shape + Fiat–Shamir differ); the IR-v2 path is pre-cutover,
 /// so this pins its wire shape.
 fn ir2_config() -> DreggStarkConfig {
-    create_config_with_fri(6, 0, 3, 19, 16)
+    // The Poseidon2 perm + MMCS + FRI params are identical on every call (the knobs are fixed),
+    // so build the config ONCE per thread and hand back a clone (a few Arc bumps + small field
+    // copies — far cheaper than re-deriving the perm/MMCS/FRI params per leaf). `thread_local`
+    // sidesteps any `Sync` requirement on the config; the cached value is byte-identical to a
+    // fresh `create_config_with_fri(6, 0, 3, 19, 16)` (same deterministic knobs).
+    thread_local! {
+        static IR2_CONFIG: DreggStarkConfig = create_config_with_fri(6, 0, 3, 19, 16);
+    }
+    IR2_CONFIG.with(|c| c.clone())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4426,8 +4434,18 @@ where
     let common = &prover_data.common;
     let proof = prove_batch(config, &instances, &prover_data);
 
-    verify_batch(config, &airs, &proof, &pvs, common)
-        .map_err(|e| format!("IR v2 batch self-verify failed: {e:?}"))?;
+    // Self-verify is a producer-side debug/test guard, NOT a soundness boundary: an honest
+    // producer trusts its own witness (and the in-trace replay above, also gated by `check`,
+    // already eagerly refuses a bad witness fail-closed), and the CONSUMER always re-verifies.
+    // So the ~2-5ms full self-verify is pure redundancy on the trusted production prove path.
+    // Gate it on `check && debug_assertions`: ON in debug/test builds (every `prove_vm_descriptor2*`
+    // caller passes `check: true`, so the test path still self-verifies), OFF in release/production
+    // (where the consumer's verify is the real check). This never disables the replay — that stays
+    // under `check` alone.
+    if check && cfg!(debug_assertions) {
+        verify_batch(config, &airs, &proof, &pvs, common)
+            .map_err(|e| format!("IR v2 batch self-verify failed: {e:?}"))?;
+    }
     Ok(proof)
 }
 

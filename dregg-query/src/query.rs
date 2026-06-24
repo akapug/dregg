@@ -167,8 +167,17 @@ pub fn validate(q: &Query) -> Result<(), QueryError> {
 
 /// Try to extend `binding` so that `atom` matches `fact` — unification of a
 /// pattern against a ground fact.
+///
+/// The input `binding` is only cloned on a CONFIRMED match: const positions and
+/// already-bound (or repeated-within-atom) variable positions are checked first
+/// against `binding` directly; only once every position agrees is `binding`
+/// cloned and the newly-bound variables inserted. A mismatch returns `None`
+/// without having allocated.
 fn unify(atom: &Atom, fact_args: &[Value], binding: &Bindings) -> Option<Bindings> {
-    let mut b = binding.clone();
+    // Variables this atom newly binds (name → value), in order. A variable that
+    // recurs within the same atom is checked against the value its first
+    // occurrence pinned.
+    let mut pending: Vec<(&str, &Value)> = Vec::new();
     for (t, v) in atom.args.iter().zip(fact_args.iter()) {
         match t {
             Term::Wild => {}
@@ -177,17 +186,25 @@ fn unify(atom: &Atom, fact_args: &[Value], binding: &Bindings) -> Option<Binding
                     return None;
                 }
             }
-            Term::Var(name) => match b.get(name) {
-                Some(bound) => {
+            Term::Var(name) => {
+                if let Some(bound) = binding.get(name) {
                     if bound != v {
                         return None;
                     }
+                } else if let Some((_, pinned)) = pending.iter().find(|(n, _)| *n == name) {
+                    if *pinned != v {
+                        return None;
+                    }
+                } else {
+                    pending.push((name, v));
                 }
-                None => {
-                    b.insert(name.clone(), v.clone());
-                }
-            },
+            }
         }
+    }
+    // Confirmed match: clone once and apply the new bindings.
+    let mut b = binding.clone();
+    for (name, v) in pending {
+        b.insert(name.to_string(), v.clone());
     }
     Some(b)
 }
@@ -234,12 +251,38 @@ fn filter_holds(f: &Filter, b: &Bindings) -> bool {
 /// variables that occur in positive atoms).
 pub fn eval(base: &FactBase, q: &Query) -> Result<Vec<Bindings>, QueryError> {
     validate(q)?;
-    // Nested-loop join with binding propagation.
+    // Hash-join with binding propagation. Each atom is joined against a per-atom
+    // index over the base facts of its predicate, keyed by the values at its
+    // "join positions" — the positions whose term is either a constant or a
+    // variable already bound by a previous atom. Those values are fully
+    // determined by the incoming row, so the matching facts can be looked up
+    // directly instead of scanning every fact of the predicate. Non-join
+    // positions (wildcards, fresh variables) are resolved by `unify` exactly as
+    // before, so the answer set is identical to the nested-loop join.
     let mut rows: Vec<Bindings> = vec![Bindings::new()];
+    // Variables bound so far (after each atom). Determines which positions of the
+    // NEXT atom are join positions.
+    let mut bound: BTreeSet<&str> = BTreeSet::new();
     for atom in &q.atoms {
+        let join_positions = join_positions(atom, &bound);
+        let index = build_join_index(base, atom, &join_positions);
+
         let mut next = Vec::new();
         for b in &rows {
-            for f in base.with_pred(atom.pred) {
+            // The probe key is the required values at the join positions. `Some(key)`
+            // → look the matching facts up directly in the index; `None` (a wildcard in
+            // a join position resolved to no value) → fall back to scanning every fact
+            // of the predicate, exactly as the nested-loop join would (so the answer set
+            // is identical). `unify` does the final per-position match in both arms.
+            let scanned: Vec<&crate::fact::Fact>;
+            let candidates: &[&crate::fact::Fact] = match probe_key(atom, &join_positions, b) {
+                Some(key) => index.get(&key).map(Vec::as_slice).unwrap_or(&[]),
+                None => {
+                    scanned = base.with_pred(atom.pred).collect();
+                    &scanned
+                }
+            };
+            for f in candidates {
                 if let Some(b2) = unify(atom, &f.args, b) {
                     next.push(b2);
                 }
@@ -249,12 +292,97 @@ pub fn eval(base: &FactBase, q: &Query) -> Result<Vec<Bindings>, QueryError> {
         if rows.is_empty() {
             return Ok(vec![]);
         }
+        // Every named variable of this atom is now bound.
+        for v in Query::vars_of(&atom.args) {
+            bound.insert(v);
+        }
     }
     // Negated atoms: keep rows where the negated pattern matches NOTHING.
-    rows.retain(|b| q.negated.iter().all(|a| !matches_some(base, a, b)));
+    // Each negated atom is, by safety (range-restriction), fully bound by the
+    // positive atoms, so all of its named-variable positions are join positions
+    // and it can be checked against an anti-join index instead of re-scanning
+    // the base per surviving row.
+    if !q.negated.is_empty() {
+        let neg_indexes: Vec<(&Atom, Vec<usize>, std::collections::HashMap<Vec<Value>, ()>)> = q
+            .negated
+            .iter()
+            .map(|a| {
+                let positions = join_positions(a, &bound);
+                let mut idx: std::collections::HashMap<Vec<Value>, ()> =
+                    std::collections::HashMap::new();
+                for f in base.with_pred(a.pred) {
+                    idx.entry(positions.iter().map(|&p| f.args[p].clone()).collect())
+                        .or_insert(());
+                }
+                (a, positions, idx)
+            })
+            .collect();
+        rows.retain(|b| {
+            neg_indexes.iter().all(|(a, positions, idx)| {
+                let key = probe_key(a, positions, b);
+                // A wildcard / unbound position (probe_key None) means the
+                // negated pattern matches existentially — fall back to the
+                // scan-based check for that atom. Safety guarantees named vars
+                // are bound, so this only triggers for wildcards.
+                match key {
+                    Some(k) => !idx.contains_key(&k),
+                    None => !matches_some(base, a, b),
+                }
+            })
+        });
+    }
     // Filters.
     rows.retain(|b| q.filters.iter().all(|f| filter_holds(f, b)));
     // Deduplicate (set semantics).
     let set: BTreeSet<Bindings> = rows.into_iter().collect();
     Ok(set.into_iter().collect())
+}
+
+/// The "join positions" of an atom given the set of already-bound variables:
+/// argument positions whose term is a constant or an already-bound variable —
+/// i.e. positions whose required value is fully determined by the incoming row.
+fn join_positions(atom: &Atom, bound: &BTreeSet<&str>) -> Vec<usize> {
+    atom.args
+        .iter()
+        .enumerate()
+        .filter_map(|(i, t)| match t {
+            Term::Const(_) => Some(i),
+            Term::Var(v) if bound.contains(v.as_str()) => Some(i),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Build an index over `base`'s facts of `atom.pred`, keyed by the tuple of
+/// values at `join_positions`. A fact whose join-position values match a probe
+/// key is a join candidate (the const / bound-var positions already agree;
+/// `unify` resolves the rest). Insertion order within a bucket is preserved so
+/// the produced rows match the nested-loop order before dedup.
+fn build_join_index<'a>(
+    base: &'a FactBase,
+    atom: &Atom,
+    join_positions: &[usize],
+) -> std::collections::HashMap<Vec<Value>, Vec<&'a crate::fact::Fact>> {
+    let mut index: std::collections::HashMap<Vec<Value>, Vec<&'a crate::fact::Fact>> =
+        std::collections::HashMap::new();
+    for f in base.with_pred(atom.pred) {
+        let key: Vec<Value> = join_positions.iter().map(|&p| f.args[p].clone()).collect();
+        index.entry(key).or_default().push(f);
+    }
+    index
+}
+
+/// The probe key of an atom for a given binding: the required values at its join
+/// positions. Returns `None` if any join position resolves to an unbound value
+/// (only possible for a wildcard, never for a const or — by construction — a
+/// bound var), signaling the caller to fall back to a scan.
+fn probe_key(atom: &Atom, join_positions: &[usize], b: &Bindings) -> Option<Vec<Value>> {
+    join_positions
+        .iter()
+        .map(|&p| match &atom.args[p] {
+            Term::Const(c) => Some(c.clone()),
+            Term::Var(v) => b.get(v).cloned(),
+            Term::Wild => None,
+        })
+        .collect()
 }

@@ -23,9 +23,44 @@
 //! - **Super-ratification**: a supermajority of blocks at the wave's last round
 //!   ratify the leader.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::Rc;
 
 use crate::{BlockId, Blocklace};
+
+/// Per-`tau`-invocation memo of each block's inclusive causal past.
+///
+/// A block's causal past is a pure function of the (immutable, for the
+/// duration of one ordering computation) blocklace topology, so memoizing it
+/// is byte-identical to recomputing — `tau` previously recomputed the SAME
+/// past many times over (`ratifies` over an observer's past calls `approves`
+/// per past block, each recomputing a past; the leader loop recomputes again).
+/// Created fresh per ordering call, so it never outlives an immutable borrow
+/// of the blocklace (no cross-call staleness).
+#[derive(Default)]
+struct PastCache {
+    inner: RefCell<HashMap<BlockId, Rc<HashSet<BlockId>>>>,
+}
+
+impl PastCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// The inclusive causal past of `block_id`, computed once and reused.
+    /// Identical value to `blocklace.causal_past(block_id)`.
+    fn past(&self, blocklace: &Blocklace, block_id: &BlockId) -> Rc<HashSet<BlockId>> {
+        if let Some(hit) = self.inner.borrow().get(block_id) {
+            return Rc::clone(hit);
+        }
+        let computed = Rc::new(blocklace.causal_past(block_id));
+        self.inner
+            .borrow_mut()
+            .insert(*block_id, Rc::clone(&computed));
+        computed
+    }
+}
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
@@ -110,24 +145,30 @@ fn compute_rounds(blocklace: &Blocklace) -> (HashMap<BlockId, u64>, u64) {
     (rounds, max_round)
 }
 
-/// Get the causal past of a block (inclusive of the block itself).
-fn causal_past_inclusive(blocklace: &Blocklace, block_id: &BlockId) -> HashSet<BlockId> {
-    blocklace.causal_past(block_id)
+/// Get the causal past of a block (inclusive of the block itself), memoized
+/// for the duration of one ordering computation via `cache`.
+fn causal_past_inclusive(
+    cache: &PastCache,
+    blocklace: &Blocklace,
+    block_id: &BlockId,
+) -> Rc<HashSet<BlockId>> {
+    cache.past(blocklace, block_id)
 }
 
 /// Check if a creator has equivocated (produced multiple blocks at the same round)
 /// as visible from a given block's causal past.
 fn has_equivocation_in_past(
+    cache: &PastCache,
     blocklace: &Blocklace,
     rounds: &HashMap<BlockId, u64>,
     observer: &BlockId,
     creator: &[u8; 32],
 ) -> bool {
-    let past = causal_past_inclusive(blocklace, observer);
+    let past = causal_past_inclusive(cache, blocklace, observer);
 
     // Group blocks in the past by (creator, round).
     let mut by_round: HashMap<u64, Vec<BlockId>> = HashMap::new();
-    for &bid in &past {
+    for &bid in past.iter() {
         if let Some(block) = blocklace.get(&bid) {
             if &block.creator == creator {
                 if let Some(&round) = rounds.get(&bid) {
@@ -205,13 +246,14 @@ pub fn supermajority_threshold(n: usize) -> usize {
 /// 1. The leader block is in the observer's causal past.
 /// 2. No equivocating block by the leader's creator is in the observer's causal past.
 fn approves(
+    cache: &PastCache,
     blocklace: &Blocklace,
     rounds: &HashMap<BlockId, u64>,
     observer: &BlockId,
     leader_id: &BlockId,
     leader_creator: &[u8; 32],
 ) -> bool {
-    let past = causal_past_inclusive(blocklace, observer);
+    let past = causal_past_inclusive(cache, blocklace, observer);
 
     // Leader must be visible from the observer.
     if !past.contains(leader_id) {
@@ -219,7 +261,7 @@ fn approves(
     }
 
     // No equivocation by the leader's creator visible from the observer.
-    !has_equivocation_in_past(blocklace, rounds, observer, leader_creator)
+    !has_equivocation_in_past(cache, blocklace, rounds, observer, leader_creator)
 }
 
 /// Check if block `observer` ratifies leader block `leader_id`.
@@ -227,6 +269,7 @@ fn approves(
 /// A block ratifies a leader if a supermajority (> 2n/3) of participants have
 /// at least one block in the observer's causal past that approves the leader.
 fn ratifies(
+    cache: &PastCache,
     blocklace: &Blocklace,
     rounds: &HashMap<BlockId, u64>,
     observer: &BlockId,
@@ -235,7 +278,7 @@ fn ratifies(
     participants: &[[u8; 32]],
 ) -> bool {
     let supermajority = supermajority_threshold(participants.len());
-    let past = causal_past_inclusive(blocklace, observer);
+    let past = causal_past_inclusive(cache, blocklace, observer);
 
     // Count how many distinct participants have at least one block in the
     // observer's past that approves the leader.
@@ -245,7 +288,7 @@ fn ratifies(
             past.iter().any(|&bid| {
                 if let Some(block) = blocklace.get(&bid) {
                     block.creator == participant
-                        && approves(blocklace, rounds, &bid, leader_id, leader_creator)
+                        && approves(cache, blocklace, rounds, &bid, leader_id, leader_creator)
                 } else {
                     false
                 }
@@ -261,6 +304,7 @@ fn ratifies(
 /// Super-ratification: a supermajority of distinct participants have blocks at
 /// the wave's last round that ratify the leader.
 fn is_super_ratified(
+    cache: &PastCache,
     blocklace: &Blocklace,
     rounds: &HashMap<BlockId, u64>,
     leader_id: &BlockId,
@@ -283,6 +327,7 @@ fn is_super_ratified(
         .filter_map(|block_id| {
             let block = blocklace.get(block_id)?;
             if ratifies(
+                cache,
                 blocklace,
                 rounds,
                 block_id,
@@ -304,6 +349,7 @@ fn is_super_ratified(
 
 /// Find all finalized leaders in the blocklace, in wave order.
 fn find_all_final_leaders(
+    cache: &PastCache,
     blocklace: &Blocklace,
     rounds: &HashMap<BlockId, u64>,
     max_round: u64,
@@ -341,6 +387,7 @@ fn find_all_final_leaders(
         if leader_blocks.len() == 1 {
             let leader_id = leader_blocks[0];
             if is_super_ratified(
+                cache,
                 blocklace,
                 rounds,
                 &leader_id,
@@ -365,7 +412,7 @@ fn find_all_final_leaders(
 /// Respects causal order (if A is in B's causal past, A comes first).
 /// For concurrent blocks (no causal relationship), ties are broken by block ID
 /// (lexicographic byte comparison), giving a deterministic total order.
-fn xsort(blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
+fn xsort(cache: &PastCache, blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
     if blocks.is_empty() {
         return vec![];
     }
@@ -375,9 +422,10 @@ fn xsort(blocklace: &Blocklace, blocks: &HashSet<BlockId>) -> Vec<BlockId> {
     let mut local_predecessors: HashMap<BlockId, HashSet<BlockId>> = HashMap::new();
 
     for &block_id in blocks {
-        let past = causal_past_inclusive(blocklace, &block_id);
+        let past = causal_past_inclusive(cache, blocklace, &block_id);
         let ancestors_in_set: HashSet<BlockId> = past
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|a| a != &block_id && blocks.contains(a))
             .collect();
         local_predecessors.insert(block_id, ancestors_in_set);
@@ -450,8 +498,10 @@ pub fn tau_with_config(
         return vec![];
     }
 
+    let cache = PastCache::new();
     let (rounds, max_round) = compute_rounds(blocklace);
-    let final_leaders = find_all_final_leaders(blocklace, &rounds, max_round, participants, config);
+    let final_leaders =
+        find_all_final_leaders(&cache, blocklace, &rounds, max_round, participants, config);
 
     let mut ordered = Vec::new();
     let mut prev_covered: HashSet<BlockId> = HashSet::new();
@@ -473,6 +523,7 @@ pub fn tau_with_config(
         for (id, r) in &rounds {
             if *r == wave_end {
                 if ratifies(
+                    &cache,
                     blocklace,
                     &rounds,
                     id,
@@ -480,8 +531,8 @@ pub fn tau_with_config(
                     &leader_creator,
                     participants,
                 ) {
-                    let past = causal_past_inclusive(blocklace, id);
-                    coverage.extend(past);
+                    let past = causal_past_inclusive(&cache, blocklace, id);
+                    coverage.extend(past.iter().copied());
                 }
             }
         }
@@ -494,14 +545,14 @@ pub fn tau_with_config(
             .filter(|bid| {
                 // Exclude blocks from creators that equivocated (as visible from leader).
                 if let Some(block) = blocklace.get(bid) {
-                    !has_equivocation_in_past(blocklace, &rounds, leader_id, &block.creator)
+                    !has_equivocation_in_past(&cache, blocklace, &rounds, leader_id, &block.creator)
                 } else {
                     false
                 }
             })
             .collect();
 
-        let sorted = xsort(blocklace, &new_blocks);
+        let sorted = xsort(&cache, blocklace, &new_blocks);
         ordered.extend(sorted);
 
         prev_covered = coverage;
@@ -754,10 +805,12 @@ pub fn tau_unified(
     let participant_set: HashSet<[u8; 32]> = participants.iter().copied().collect();
 
     // Use filtered rounds (only participant blocks contribute to wave structure).
+    let cache = PastCache::new();
     let (rounds, max_round) = compute_rounds_filtered(blocklace, reference_group);
 
     // Find finalized leaders using filtered rounds (only considers participant blocks).
-    let final_leaders = find_all_final_leaders(blocklace, &rounds, max_round, participants, config);
+    let final_leaders =
+        find_all_final_leaders(&cache, blocklace, &rounds, max_round, participants, config);
 
     let mut ordered = Vec::new();
     let mut prev_covered: HashSet<BlockId> = HashSet::new();
@@ -777,6 +830,7 @@ pub fn tau_unified(
         for (id, r) in &rounds {
             if *r == wave_end {
                 if ratifies(
+                    &cache,
                     blocklace,
                     &rounds,
                     id,
@@ -784,8 +838,8 @@ pub fn tau_unified(
                     &leader_creator,
                     participants,
                 ) {
-                    let past = causal_past_inclusive(blocklace, id);
-                    coverage.extend(past);
+                    let past = causal_past_inclusive(&cache, blocklace, id);
+                    coverage.extend(past.iter().copied());
                 }
             }
         }
@@ -799,14 +853,20 @@ pub fn tau_unified(
                 if let Some(block) = blocklace.get(bid) {
                     // Only include blocks from participants (not external strands).
                     participant_set.contains(&block.creator)
-                        && !has_equivocation_in_past(blocklace, &rounds, leader_id, &block.creator)
+                        && !has_equivocation_in_past(
+                            &cache,
+                            blocklace,
+                            &rounds,
+                            leader_id,
+                            &block.creator,
+                        )
                 } else {
                     false
                 }
             })
             .collect();
 
-        let sorted = xsort(blocklace, &new_blocks);
+        let sorted = xsort(&cache, blocklace, &new_blocks);
         ordered.extend(sorted);
 
         prev_covered = coverage;

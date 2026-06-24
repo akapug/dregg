@@ -3048,7 +3048,9 @@ impl SiloServer {
         };
         conn.send(hello).await?;
         let _welcome = conn.recv().await?;
-        conn.send(push.clone()).await?;
+        // Send by reference: the broadcast caller reuses one `push` across all
+        // peers; no need to clone the (signatures + QC) payload per peer.
+        conn.send_ref(push).await?;
         // Push is fire-and-forget: the receiver acknowledges by silently
         // queueing onto its `pending_attested_root_pushes`. We do not wait
         // for a response — receivers should not respond to pushes (it would

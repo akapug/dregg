@@ -217,7 +217,7 @@ impl RingSolver {
     }
 
     /// Build the intent compatibility graph from active intents.
-    pub fn build_graph(&self, intents: &[IntentNode]) -> IntentGraph {
+    pub fn build_graph<'a>(&self, intents: &'a [IntentNode]) -> IntentGraph<'a> {
         let mut edges: Vec<Vec<(usize, f64)>> = vec![Vec::new(); intents.len()];
 
         for i in 0..intents.len() {
@@ -234,14 +234,14 @@ impl RingSolver {
         }
 
         IntentGraph {
-            nodes: intents.to_vec(),
+            nodes: intents,
             edges,
         }
     }
 
     /// Find all valid ring trades in the graph.
     /// Uses Johnson's algorithm bounded to max_ring_size.
-    pub fn find_rings(&self, graph: &IntentGraph) -> Vec<RingTrade> {
+    pub fn find_rings(&self, graph: &IntentGraph<'_>) -> Vec<RingTrade> {
         let cycles = graph.find_cycles(self.max_ring_size);
         let mut rings: Vec<RingTrade> = Vec::new();
 
@@ -249,23 +249,20 @@ impl RingSolver {
             if rings.len() >= self.max_results {
                 break;
             }
-            // Build the ring trade from the cycle
-            let mut score = 0.0;
-            let mut valid = true;
-
-            for k in 0..cycle.len() {
+            // Build the ring trade from the cycle. Discard any cycle that
+            // contains a non-positive edge score (the early `valid` filter).
+            // The accumulated edge-weight is NOT used as the ring's score —
+            // `validate_ring` is the canonical scorer (score = participant
+            // count) — so only the validity predicate is computed here.
+            let valid = (0..cycle.len()).all(|k| {
                 let next = (k + 1) % cycle.len();
                 let edge_score = graph.edges[cycle[k]]
                     .iter()
                     .find(|(target, _)| *target == cycle[next])
                     .map(|(_, s)| *s)
                     .unwrap_or(0.0);
-                if edge_score <= 0.0 {
-                    valid = false;
-                    break;
-                }
-                score += edge_score;
-            }
+                edge_score > 0.0
+            });
 
             if !valid {
                 continue;
@@ -294,13 +291,7 @@ impl RingSolver {
 
             // Scoring convention (audit §7): score = number of participants.
             // This matches `validate_ring` so the same ring produces the
-            // same score whichever entry point built it. The accumulated
-            // edge-weight `score` above is informative (it would tilt
-            // toward exact-match rings) but conflicting with
-            // `validate_ring`, which is the canonical scorer. We retain
-            // the edge-score loop for the early `valid` filter (rings
-            // with any non-positive edge score must be discarded).
-            let _ = score;
+            // same score whichever entry point built it.
             rings.push(RingTrade {
                 participants,
                 settlements,
@@ -459,11 +450,64 @@ impl RingSolver {
         rings.into_iter().next()
     }
 
+    /// Build the compatibility graph for `intents` reading edge scores from a
+    /// precomputed `(from_id, to_id) → score` cache instead of recomputing
+    /// [`IntentGraph::is_compatible`]. The produced graph is byte-identical to
+    /// [`build_graph`](Self::build_graph) over the same slice; only the
+    /// expensive O(n²) compatibility evaluation is hoisted out of the caller's
+    /// loop. A pair absent from the cache is treated as incompatible (the cache
+    /// is built over a superset of the intents seen here).
+    fn build_graph_cached<'a>(
+        &self,
+        intents: &'a [IntentNode],
+        score_cache: &std::collections::HashMap<(crate::IntentId, crate::IntentId), f64>,
+    ) -> IntentGraph<'a> {
+        let mut edges: Vec<Vec<(usize, f64)>> = vec![Vec::new(); intents.len()];
+        for i in 0..intents.len() {
+            for j in 0..intents.len() {
+                if i == j {
+                    continue;
+                }
+                if let Some(&score) =
+                    score_cache.get(&(intents[i].intent_id, intents[j].intent_id))
+                {
+                    if score >= self.min_edge_score {
+                        edges[i].push((j, score));
+                    }
+                }
+            }
+        }
+        IntentGraph {
+            nodes: intents,
+            edges,
+        }
+    }
+
     /// Solve greedily: find rings, settle them, remove from pool, repeat.
     pub fn solve_greedy(&self, intents: &mut Vec<IntentNode>, now: u64) -> Vec<RingTrade> {
         let mut results = Vec::new();
         let mut used_ids: std::collections::HashSet<crate::IntentId> =
             std::collections::HashSet::new();
+
+        // Compute pairwise compatibility ONCE up front instead of re-running the
+        // O(n²) `is_compatible` sweep on every loop iteration. The per-iteration
+        // graph is then rebuilt over the shrinking active pool by reading this
+        // cache (cheap lookups), masking out expired/used intents — yielding the
+        // same edges, the same rings, and the same greedy choices as before.
+        let mut score_cache: std::collections::HashMap<
+            (crate::IntentId, crate::IntentId),
+            f64,
+        > = std::collections::HashMap::new();
+        for i in 0..intents.len() {
+            for j in 0..intents.len() {
+                if i == j {
+                    continue;
+                }
+                if let Some(score) = IntentGraph::is_compatible(&intents[i], &intents[j]) {
+                    score_cache.insert((intents[i].intent_id, intents[j].intent_id), score);
+                }
+            }
+        }
 
         loop {
             // Remove expired and already-used intents.
@@ -473,7 +517,7 @@ impl RingSolver {
                 break;
             }
 
-            let graph = self.build_graph(intents);
+            let graph = self.build_graph_cached(intents, &score_cache);
             let rings = self.find_rings(&graph);
 
             if rings.is_empty() {
@@ -518,14 +562,18 @@ impl RingSolver {
 }
 
 /// The intent compatibility graph (adjacency list).
-pub struct IntentGraph {
+///
+/// `nodes` is borrowed from the caller's intent slice — building the graph no
+/// longer deep-clones every [`IntentNode`]; the graph is always consumed within
+/// the lifetime of the slice it was built from.
+pub struct IntentGraph<'a> {
     /// Nodes indexed by position.
-    nodes: Vec<IntentNode>,
+    nodes: &'a [IntentNode],
     /// Adjacency: edges[i] = [(j, score), ...] meaning node i's offer could satisfy node j's want.
     edges: Vec<Vec<(usize, f64)>>,
 }
 
-impl IntentGraph {
+impl IntentGraph<'_> {
     /// Check if intent A's offer is compatible with intent B's want.
     ///
     /// Returns Some(score) if A's offered asset matches B's wanted asset and

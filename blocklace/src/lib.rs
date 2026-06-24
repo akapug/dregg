@@ -351,6 +351,13 @@ pub struct Blocklace {
     equivocation_proofs: Vec<EquivocationProof>,
     /// Blocks with no successors (the current DAG frontier).
     frontier: HashSet<BlockId>,
+    /// Reverse index `(creator, sequence) -> first stored block id` at that
+    /// position. Maintained on every stored block (first-wins). Lets
+    /// [`find_conflict`] answer "is there already a block at this
+    /// (creator, sequence)?" in O(1) instead of scanning all blocks. The
+    /// retained value is the FIRST block seen at the position — the canonical
+    /// fork witness against which a later equivocating block is compared.
+    by_creator_seq: HashMap<(NodeKey, u64), BlockId>,
 }
 
 impl Blocklace {
@@ -497,21 +504,26 @@ impl Blocklace {
         }
         self.frontier.insert(block_id);
         self.successors.entry(block_id).or_default();
+        // First-wins: keep the canonical (earliest stored) block at this
+        // (creator, sequence). A later equivocating block does NOT overwrite
+        // the witness the conflict check returns.
+        self.by_creator_seq
+            .entry((block.creator, block.sequence))
+            .or_insert(block_id);
     }
 
     /// Find a stored block by the same creator at the same sequence with a
     /// different id (the fork witness). Returns the existing block's id.
     fn find_conflict(&self, block: &Block, block_id: BlockId) -> Option<BlockId> {
-        self.blocks.iter().find_map(|(id, existing)| {
-            if existing.creator == block.creator
-                && existing.sequence == block.sequence
-                && *id != block_id
-            {
-                Some(*id)
-            } else {
-                None
-            }
-        })
+        // O(1) via the reverse index: the canonical (first-stored) block at
+        // this (creator, sequence), if any, distinct from the candidate.
+        // Equivalent to the historical full scan — that scan returned an
+        // arbitrary same-(creator, sequence) block with a different id; the
+        // index returns the canonical witness, which is exactly such a block.
+        match self.by_creator_seq.get(&(block.creator, block.sequence)) {
+            Some(&id) if id != block_id => Some(id),
+            _ => None,
+        }
     }
 
     /// Creators caught equivocating (a fork was detected on insert).
@@ -542,6 +554,14 @@ impl Blocklace {
     /// Get the current frontier (blocks with no successors).
     pub fn frontier(&self) -> &HashSet<BlockId> {
         &self.frontier
+    }
+
+    /// The forward (successor) edges of a block: every stored block that names
+    /// `block_id` as a direct predecessor. Returns `None` if the block is
+    /// unknown. This is the reverse of the predecessor links, maintained on
+    /// insert; it lets referenced-by queries avoid a full block scan.
+    pub fn successors_of(&self, block_id: &BlockId) -> Option<&HashSet<BlockId>> {
+        self.successors.get(block_id)
     }
 
     /// Get the tip (latest block) for a given creator.
@@ -588,6 +608,39 @@ impl Blocklace {
             }
         }
 
+        result
+    }
+
+    /// Union of the causal pasts of several blocks (inclusive of each given
+    /// block), computed in a SINGLE shared-visited traversal.
+    ///
+    /// Equal to `ids.flat_map(|id| self.causal_past(id))` collected into one
+    /// set, but each ancestor is visited once total instead of once per
+    /// overlapping starting block — the common case for converging DAG tips,
+    /// where pasts share most of their history. Unknown ids contribute only
+    /// themselves (matching `causal_past`, which inserts the queried id before
+    /// looking it up).
+    pub fn causal_past_union<'a, I>(&self, ids: I) -> HashSet<BlockId>
+    where
+        I: IntoIterator<Item = &'a BlockId>,
+    {
+        let mut result = HashSet::new();
+        let mut queue: VecDeque<BlockId> = VecDeque::new();
+        for id in ids {
+            queue.push_back(*id);
+        }
+        while let Some(current) = queue.pop_front() {
+            if !result.insert(current) {
+                continue;
+            }
+            if let Some(block) = self.blocks.get(&current) {
+                for pred in &block.predecessors {
+                    if !result.contains(pred) {
+                        queue.push_back(*pred);
+                    }
+                }
+            }
+        }
         result
     }
 
@@ -910,5 +963,107 @@ mod tests {
         assert!(lace.equivocators().contains(&creator));
         assert!(lace.tip_for(&creator).is_none(), "tip withdrawn on fork");
         assert_eq!(lace.equivocation_proofs().len(), 1);
+    }
+
+    /// `causal_past_union` must equal the set-union of per-block `causal_past`
+    /// over a converging DAG (shared history) — the shared-visited traversal
+    /// is only valid if it computes exactly that union.
+    #[test]
+    fn causal_past_union_equals_per_block_union() {
+        let mut lace = Blocklace::new();
+        // Diamond + tails: a shared genesis, two mid blocks, a join, and
+        // separate tips — so the tips' pasts overlap heavily.
+        let g = make_block(1, 0, vec![], b"g");
+        let gid = lace.insert(g).unwrap();
+        let a = make_block(2, 0, vec![gid], b"a");
+        let aid = lace.insert(a).unwrap();
+        let b = make_block(3, 0, vec![gid], b"b");
+        let bid = lace.insert(b).unwrap();
+        let join = make_block(1, 1, vec![aid, bid], b"join");
+        let jid = lace.insert(join).unwrap();
+        let t1 = make_block(2, 1, vec![aid, jid], b"t1");
+        let t1id = lace.insert(t1).unwrap();
+        let t2 = make_block(3, 1, vec![bid, jid], b"t2");
+        let t2id = lace.insert(t2).unwrap();
+
+        let tips = [t1id, t2id, jid, aid];
+        // Reference: union the per-block pasts.
+        let mut reference: HashSet<BlockId> = HashSet::new();
+        for id in &tips {
+            reference.extend(lace.causal_past(id));
+        }
+        let union = lace.causal_past_union(tips.iter());
+        assert_eq!(union, reference);
+
+        // An unknown id contributes only itself (matches causal_past).
+        let unknown = [0x77u8; 32];
+        let with_unknown = lace.causal_past_union([&unknown, &t1id].into_iter());
+        let mut ref2 = lace.causal_past(&unknown);
+        ref2.extend(lace.causal_past(&t1id));
+        assert_eq!(with_unknown, ref2);
+    }
+
+    /// Differential: the O(1) `find_conflict` index must agree with the
+    /// historical O(n) linear scan over `blocks` for every candidate block —
+    /// both on WHETHER a conflict exists and on returning a VALID conflict
+    /// (same creator+sequence, different id). Drives a varied
+    /// enqueue/equivocate sequence so the index is exercised in the presence
+    /// of already-stored forks.
+    #[test]
+    fn find_conflict_matches_linear_scan() {
+        // Reference: the original full-scan semantics.
+        fn linear_scan(lace: &Blocklace, block: &Block, block_id: BlockId) -> Option<BlockId> {
+            lace.blocks.iter().find_map(|(id, existing)| {
+                if existing.creator == block.creator
+                    && existing.sequence == block.sequence
+                    && *id != block_id
+                {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+        }
+
+        let mut lace = Blocklace::new();
+        let g = make_block(1, 0, vec![], b"genesis");
+        let gid = lace.insert(g).unwrap();
+
+        // A spread of candidate blocks: honest extensions, exact duplicates,
+        // and deliberate forks at occupied (creator, sequence) positions.
+        let mut candidates: Vec<Block> = Vec::new();
+        for creator in 1u8..=4 {
+            for seq in 0u64..4 {
+                for payload in [b"x".as_slice(), b"y", b"z"] {
+                    candidates.push(make_block(creator, seq, vec![gid], payload));
+                }
+            }
+        }
+
+        for cand in &candidates {
+            let cid = cand.id();
+            // Index result vs reference scan — existence must match exactly.
+            let idx = lace.find_conflict(cand, cid);
+            let scan = linear_scan(&lace, cand, cid);
+            assert_eq!(
+                idx.is_some(),
+                scan.is_some(),
+                "conflict existence disagreement for creator {:?} seq {}",
+                cand.creator,
+                cand.sequence
+            );
+            // When a conflict is reported, it must be a genuine fork witness:
+            // same (creator, sequence), distinct id.
+            if let Some(existing_id) = idx {
+                assert_ne!(existing_id, cid);
+                let existing = lace.blocks.get(&existing_id).expect("witness stored");
+                assert_eq!(existing.creator, cand.creator);
+                assert_eq!(existing.sequence, cand.sequence);
+            }
+            // Apply (insert is idempotent on dup id; equivocation path stores
+            // the fork as evidence), keeping the live state advancing so later
+            // candidates see prior forks.
+            let _ = lace.insert(cand.clone());
+        }
     }
 }

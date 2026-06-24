@@ -297,12 +297,13 @@ impl Directory for InMemoryDirectory {
                         return false;
                     }
                 }
-                if !filter
-                    .required_tags
-                    .iter()
-                    .all(|t| entry.tags.iter().any(|et| et == t))
-                {
-                    return false;
+                if !filter.required_tags.is_empty() {
+                    // Index this entry's tags once so the "has ALL required tags" check
+                    // is O(required) membership lookups instead of O(required × tags).
+                    let tagset: std::collections::HashSet<&String> = entry.tags.iter().collect();
+                    if !filter.required_tags.iter().all(|t| tagset.contains(t)) {
+                        return false;
+                    }
                 }
                 true
             })

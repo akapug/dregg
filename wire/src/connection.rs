@@ -163,7 +163,17 @@ impl PeerConnection {
 
     /// Send a message to the peer.
     pub async fn send(&mut self, msg: WireMessage) -> Result<(), ConnectionError> {
-        let bytes_written = codec::write_message(&mut self.writer, &msg).await?;
+        self.send_ref(&msg).await
+    }
+
+    /// Send a message by reference (no ownership transfer).
+    ///
+    /// Identical wire behaviour to [`send`], but lets a broadcaster reuse one
+    /// message across many peers without cloning it per send.
+    ///
+    /// [`send`]: PeerConnection::send
+    pub async fn send_ref(&mut self, msg: &WireMessage) -> Result<(), ConnectionError> {
+        let bytes_written = codec::write_message(&mut self.writer, msg).await?;
         self.stats.messages_sent += 1;
         self.stats.bytes_sent += bytes_written as u64;
         Ok(())

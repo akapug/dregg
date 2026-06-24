@@ -109,6 +109,7 @@ impl RevocationRegistry {
             root: inner.root,
             revoked,
             revoked_set,
+            witness_root_cache: std::cell::OnceCell::new(),
         }
     }
 
@@ -169,6 +170,23 @@ pub struct RevocationProof {
     /// root from this witness; a holder cannot drop their own id from it
     /// without changing the root (which then fails the expected-root bind).
     pub revoked_set: Vec<[u8; 32]>,
+    /// Memoized digest of `revoked_set` (== `compute_revocation_root(&revoked_set)`).
+    /// Lazily filled on first `verify_non_revocation` so repeat verifies of the
+    /// same proof skip the BLAKE3 re-hash. NOT part of the wire form (`#[serde(skip)]`)
+    /// and NOT part of equality/identity — it is a pure cache of a function of
+    /// `revoked_set`.
+    #[serde(skip)]
+    witness_root_cache: std::cell::OnceCell<[u8; 32]>,
+}
+
+impl RevocationProof {
+    /// The digest of the witness set, computed once and memoized. Identical to
+    /// `compute_revocation_root(&self.revoked_set)`.
+    fn witness_root(&self) -> [u8; 32] {
+        *self
+            .witness_root_cache
+            .get_or_init(|| compute_revocation_root(&self.revoked_set))
+    }
 }
 
 /// Why a non-revocation check failed.
@@ -200,16 +218,24 @@ impl RevocationProof {
         &self,
         expected_root: &[u8; 32],
     ) -> Result<(), NonRevocationError> {
-        // 1. The witness must commit to the proof's claimed root.
-        if compute_revocation_root(&self.revoked_set) != self.root {
+        // 1. The witness must commit to the proof's claimed root. The witness
+        //    digest is memoized on the proof so repeat verifies of the same
+        //    proof don't re-hash the whole set; the value is identical to
+        //    `compute_revocation_root(&self.revoked_set)`.
+        if self.witness_root() != self.root {
             return Err(NonRevocationError::RootMismatch);
         }
         // 2. The claimed root must equal the verifier's trusted root.
         if *expected_root != self.root {
             return Err(NonRevocationError::UnexpectedRoot);
         }
-        // 3. Genuine non-membership against the committed set.
-        if self.revoked_set.contains(&self.credential_id) {
+        // 3. Genuine non-membership against the committed set. `revoked_set` is
+        //    stored sorted ascending (the issuer sorts before committing, and
+        //    the witness must hash to the canonical sorted order to pass step 1
+        //    above — a non-sorted witness would already have failed
+        //    `RootMismatch`). So an O(log n) binary_search is verdict-identical
+        //    to the O(n) `contains`.
+        if self.revoked_set.binary_search(&self.credential_id).is_ok() {
             return Err(NonRevocationError::Revoked);
         }
         Ok(())

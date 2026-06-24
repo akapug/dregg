@@ -90,30 +90,6 @@ fn atom_origins(history: &History) -> BTreeMap<AtomId, PatchId> {
     origin
 }
 
-/// The patch ids of every patch that assigns `name` via a (fresh or
-/// superseding) [`Op::SetField`], in history order, restricted to patches that
-/// strictly *precede* `before` in the history. Used to compute a superseding
-/// `SetField`'s dependency on the clash it resolves.
-fn prior_field_writers(
-    history: &History,
-    name: &str,
-    before: PatchId,
-) -> BTreeSet<PatchId> {
-    let mut out = BTreeSet::new();
-    for p in history.patches() {
-        let pid = p.id();
-        if pid == before {
-            break;
-        }
-        if p.ops.iter().any(
-            |op| matches!(op, Op::SetField { name: n, .. } if n == name),
-        ) {
-            out.insert(pid);
-        }
-    }
-    out
-}
-
 /// The atom ids a single op references as *structural inputs* (the atoms it
 /// reads / orders against, NOT the fresh atom an `Add` introduces). `ROOT` is
 /// excluded — it depends on nothing.
@@ -140,6 +116,100 @@ fn referenced_atoms(op: &Op) -> Vec<AtomId> {
     v
 }
 
+/// A precomputed dependency index over a [`History`]: every patch's id (computed
+/// once — `Patch::id()` is a double-hash over all ops, so recomputing it inside
+/// the O(n²) dependency loops below was the dominant cost) and the atom-origin
+/// map. Built once, then every `direct_deps`/`transitive`/`dependents`/`commute`
+/// query reads off it instead of re-hashing the whole history per call.
+struct DepIndex<'h> {
+    history: &'h History,
+    /// `ids[i]` is `history.patches()[i].id()` (computed exactly once).
+    ids: Vec<PatchId>,
+    origin: BTreeMap<AtomId, PatchId>,
+}
+
+impl<'h> DepIndex<'h> {
+    fn new(history: &'h History) -> Self {
+        let ids: Vec<PatchId> = history.patches().iter().map(Patch::id).collect();
+        let mut origin = BTreeMap::new();
+        origin.insert(AtomId::ROOT, PatchId::GENESIS);
+        for (i, p) in history.patches().iter().enumerate() {
+            let pid = ids[i];
+            for op in &p.ops {
+                if let Op::Add { id, .. } = op {
+                    origin.entry(*id).or_insert(pid);
+                }
+            }
+        }
+        DepIndex { history, ids, origin }
+    }
+
+    /// The index (into `history.patches()`/`ids`) of the patch with id `p`.
+    fn index_of(&self, p: PatchId) -> Option<usize> {
+        self.ids.iter().position(|&id| id == p)
+    }
+
+    /// Direct deps of the patch at slot `pi` (id `p == self.ids[pi]`).
+    fn direct_deps(&self, pi: usize) -> BTreeSet<PatchId> {
+        let p = self.ids[pi];
+        let patch = &self.history.patches()[pi];
+        let mut deps = BTreeSet::new();
+        for op in &patch.ops {
+            for atom in referenced_atoms(op) {
+                if let Some(&q) = self.origin.get(&atom)
+                    && q != PatchId::GENESIS
+                    && q != p
+                {
+                    deps.insert(q);
+                }
+            }
+            if let Op::SetField {
+                name,
+                superseding: true,
+                ..
+            } = op
+            {
+                // Prior writers of `name`: every patch before slot `pi` whose ops
+                // touch this field. Uses the precomputed ids (no re-hashing).
+                for (j, q) in self.history.patches().iter().enumerate() {
+                    if j >= pi {
+                        break;
+                    }
+                    let qid = self.ids[j];
+                    if qid != p
+                        && q.ops.iter().any(
+                            |op| matches!(op, Op::SetField { name: n, .. } if n == name),
+                        )
+                    {
+                        deps.insert(qid);
+                    }
+                }
+            }
+        }
+        deps
+    }
+
+    /// Transitive dependency closure of the patch at slot `pi`. Excludes `p`.
+    fn transitive(&self, pi: usize) -> BTreeSet<PatchId> {
+        let p = self.ids[pi];
+        let mut seen = BTreeSet::new();
+        let mut queue: VecDeque<PatchId> = self.direct_deps(pi).into_iter().collect();
+        while let Some(q) = queue.pop_front() {
+            if seen.insert(q) {
+                if let Some(qi) = self.index_of(q) {
+                    for r in self.direct_deps(qi) {
+                        if !seen.contains(&r) {
+                            queue.push_back(r);
+                        }
+                    }
+                }
+            }
+        }
+        seen.remove(&p);
+        seen
+    }
+}
+
 /// The **direct** dependencies of patch `p` within `history`: scan `p`'s ops,
 /// and for every referenced atom find the patch that introduced it; for every
 /// superseding field write, the prior writers of that field. A patch never
@@ -147,52 +217,21 @@ fn referenced_atoms(op: &Op) -> Vec<AtomId> {
 ///
 /// If `p` is not in the history, returns an empty set.
 pub fn dependencies(history: &History, p: PatchId) -> BTreeSet<PatchId> {
-    let origin = atom_origins(history);
-    let Some(patch) = history.patches().iter().find(|q| q.id() == p) else {
-        return BTreeSet::new();
-    };
-    let mut deps = BTreeSet::new();
-    for op in &patch.ops {
-        for atom in referenced_atoms(op) {
-            if let Some(&q) = origin.get(&atom)
-                && q != PatchId::GENESIS
-                && q != p
-            {
-                deps.insert(q);
-            }
-        }
-        if let Op::SetField {
-            name,
-            superseding: true,
-            ..
-        } = op
-        {
-            for q in prior_field_writers(history, name, p) {
-                if q != p {
-                    deps.insert(q);
-                }
-            }
-        }
+    let idx = DepIndex::new(history);
+    match idx.index_of(p) {
+        Some(pi) => idx.direct_deps(pi),
+        None => BTreeSet::new(),
     }
-    deps
 }
 
 /// The **transitive** dependency closure of `p` (every patch `p` rests on,
 /// directly or indirectly). Excludes `p` itself.
 pub fn transitive_dependencies(history: &History, p: PatchId) -> BTreeSet<PatchId> {
-    let mut seen = BTreeSet::new();
-    let mut queue: VecDeque<PatchId> = dependencies(history, p).into_iter().collect();
-    while let Some(q) = queue.pop_front() {
-        if seen.insert(q) {
-            for r in dependencies(history, q) {
-                if !seen.contains(&r) {
-                    queue.push_back(r);
-                }
-            }
-        }
+    let idx = DepIndex::new(history);
+    match idx.index_of(p) {
+        Some(pi) => idx.transitive(pi),
+        None => BTreeSet::new(),
     }
-    seen.remove(&p);
-    seen
 }
 
 /// The **dependents** of `p`: every patch in `history` that (transitively)
@@ -200,13 +239,14 @@ pub fn transitive_dependencies(history: &History, p: PatchId) -> BTreeSet<PatchI
 /// if it is unrecorded — pulling `p` while leaving a dependent behind would
 /// dangle the dependent's references. Excludes `p` itself.
 pub fn dependents(history: &History, p: PatchId) -> BTreeSet<PatchId> {
+    let idx = DepIndex::new(history);
     let mut out = BTreeSet::new();
-    for q in history.patches() {
-        let qid = q.id();
+    for qi in 0..idx.ids.len() {
+        let qid = idx.ids[qi];
         if qid == p {
             continue;
         }
-        if transitive_dependencies(history, qid).contains(&p) {
+        if idx.transitive(qi).contains(&p) {
             out.insert(qid);
         }
     }
@@ -222,8 +262,13 @@ pub fn commute(history: &History, p: PatchId, q: PatchId) -> bool {
     if p == q {
         return false;
     }
-    !transitive_dependencies(history, p).contains(&q)
-        && !transitive_dependencies(history, q).contains(&p)
+    let idx = DepIndex::new(history);
+    let p_deps = idx.index_of(p).map(|pi| idx.transitive(pi)).unwrap_or_default();
+    if p_deps.contains(&q) {
+        return false;
+    }
+    let q_deps = idx.index_of(q).map(|qi| idx.transitive(qi)).unwrap_or_default();
+    !q_deps.contains(&p)
 }
 
 /// **Unrecord** patch `p`: return a NEW history with `p` and *all its transitive

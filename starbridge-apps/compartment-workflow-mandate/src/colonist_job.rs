@@ -36,6 +36,8 @@ use dregg_app_framework::{
     StateConstraint, TransitionCase, TransitionGuard, field_from_u64, symbol,
 };
 
+use std::collections::HashSet;
+
 use crate::{clearance_label, may_read};
 
 // =============================================================================
@@ -146,14 +148,15 @@ pub fn job_clearance_root() -> FieldElement {
 // Predicate-layer admission (the hand-port of Lean jobAdvanceAdmits).
 // =============================================================================
 
-/// Completed step ids implied by the monotonic cursor (Lean `completedOf`).
-pub fn completed_of(cursor: u64) -> Vec<u64> {
+/// Completed step ids implied by the monotonic cursor (Lean `completedOf`). A set —
+/// membership is the only query, so the admission check is O(1) per prerequisite.
+pub fn completed_of(cursor: u64) -> HashSet<u64> {
     (0..cursor).collect()
 }
 
 /// **`step_admissible`** — DAG prerequisites satisfied and target not yet done (Lean
 /// `stepAdmissible`): all `needs` ∈ `completed`, and `step_id ∉ completed`.
-pub fn step_admissible(verb: WorkflowVerb, completed: &[u64]) -> bool {
+pub fn step_admissible(verb: WorkflowVerb, completed: &HashSet<u64>) -> bool {
     verb.prerequisites()
         .iter()
         .all(|need| completed.contains(need))
@@ -484,10 +487,10 @@ mod tests {
     #[test]
     fn dag_admission_matches_lean() {
         // gather admits with no prereq; make needs gather; hand-off needs make.
-        assert!(step_admissible(WorkflowVerb::Gather, &[]));
-        assert!(!step_admissible(WorkflowVerb::Make, &[]));
-        assert!(step_admissible(WorkflowVerb::Make, &[0]));
-        assert!(step_admissible(WorkflowVerb::Handoff, &[0, 1]));
+        assert!(step_admissible(WorkflowVerb::Gather, &HashSet::new()));
+        assert!(!step_admissible(WorkflowVerb::Make, &HashSet::new()));
+        assert!(step_admissible(WorkflowVerb::Make, &HashSet::from([0])));
+        assert!(step_admissible(WorkflowVerb::Handoff, &HashSet::from([0, 1])));
     }
 
     #[test]
