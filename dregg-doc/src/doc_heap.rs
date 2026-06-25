@@ -50,6 +50,55 @@ use std::collections::BTreeMap;
 /// so an embed can never be confused for document content (umem tag isolation).
 pub const COLL_EMBED: u32 = 3;
 
+/// Heap collection holding the document's **verbatim editor prose**, so a
+/// reopened document re-seeds its text FROM the committed umem-heap. The
+/// structured atom/edge/field projection ([`to_heap_map`]) hashes its leaf
+/// preimages (one-way BLAKE3), so the *recoverable* prose is bound here too:
+/// key `0` is the byte length (LE `u64` in the low 8 bytes), keys `1..` are
+/// 32-byte verbatim UTF-8 chunks. Disjoint from the content collections
+/// ([`crate::COLL_ATOMS`]=0 / [`crate::COLL_EDGES`]=1 / [`crate::COLL_FIELDS`]=2)
+/// and [`COLL_EMBED`]=3 — umem tag isolation, so prose can never be confused for
+/// content or an embed.
+pub const COLL_TEXT: u32 = 4;
+
+/// Bytes of verbatim prose carried per heap leaf in [`COLL_TEXT`].
+const TEXT_CHUNK_BYTES: usize = 32;
+
+/// Lay `text` into `map` at [`COLL_TEXT`]: a length leaf at key `0`, then one
+/// 32-byte chunk per `1..`. Any prior [`COLL_TEXT`] leaves are cleared first so a
+/// shrunk document leaves no stale chunk bound by the boundary.
+pub fn text_into_heap(map: &mut BTreeMap<(u32, u32), FieldElement>, text: &str) {
+    map.retain(|&(coll, _), _| coll != COLL_TEXT);
+    let bytes = text.as_bytes();
+    let mut len_fe = [0u8; 32];
+    len_fe[..8].copy_from_slice(&(bytes.len() as u64).to_le_bytes());
+    map.insert((COLL_TEXT, 0), len_fe);
+    for (i, chunk) in bytes.chunks(TEXT_CHUNK_BYTES).enumerate() {
+        let mut fe = [0u8; 32];
+        fe[..chunk.len()].copy_from_slice(chunk);
+        map.insert((COLL_TEXT, 1 + i as u32), fe);
+    }
+}
+
+/// Recover verbatim prose from a committed heap `map`'s [`COLL_TEXT`] leaves —
+/// the inverse of [`text_into_heap`]. `None` when no length leaf is present (the
+/// cell carries no umem-heap prose, so the caller can fall back). This is the
+/// reopen re-seed: a document's text is restored FROM the umem boundary the light
+/// client trusts, not a sidecar.
+pub fn text_from_heap(map: &BTreeMap<(u32, u32), FieldElement>) -> Option<String> {
+    let len_fe = map.get(&(COLL_TEXT, 0))?;
+    let byte_len = u64::from_le_bytes(len_fe[..8].try_into().ok()?) as usize;
+    let mut bytes = Vec::with_capacity(byte_len);
+    let mut i = 0u32;
+    while bytes.len() < byte_len {
+        let fe = map.get(&(COLL_TEXT, 1 + i)).copied().unwrap_or([0u8; 32]);
+        let take = (byte_len - bytes.len()).min(TEXT_CHUNK_BYTES);
+        bytes.extend_from_slice(&fe[..take]);
+        i += 1;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// A document realized AS a cell riding the per-cell **umem-heap**.
 ///
 /// Owns the [`Cell`] whose `heap_map` carries the document projection and whose
@@ -67,6 +116,12 @@ pub struct DocHeapCell {
     /// Re-laid into the heap on every reseal so the boundary binds every child
     /// boundary it cites.
     embeds: BTreeMap<u32, [u8; 32]>,
+    /// The document's verbatim editor prose, bound into the heap at [`COLL_TEXT`]
+    /// so a reopened document re-seeds its text from the committed boundary.
+    /// `None` for the pure structured projection (the standalone commitment); the
+    /// editor ride sets it via [`DocHeapCell::from_graph_with_text`] /
+    /// [`DocHeapCell::set_text`].
+    text: Option<String>,
 }
 
 impl DocHeapCell {
@@ -89,9 +144,35 @@ impl DocHeapCell {
             cell,
             graph,
             embeds: BTreeMap::new(),
+            text: None,
         };
         doc.reproject();
         doc
+    }
+
+    /// Open a document cell holding `graph` AND its verbatim editor `text`, both
+    /// projected into the umem-heap. The boundary binds the structured projection
+    /// (atoms/edges/fields, anti-forge) AND the recoverable prose ([`COLL_TEXT`]),
+    /// so the document's commitment IS this `heap_root` and a reopen re-seeds the
+    /// editor from it ([`text_from_heap`]).
+    pub fn from_graph_with_text(seed: u8, graph: DocGraph, text: impl Into<String>) -> Self {
+        let mut doc = Self::from_graph(seed, graph);
+        doc.set_text(text);
+        doc
+    }
+
+    /// Bind verbatim editor `text` into the umem-heap (collection [`COLL_TEXT`]),
+    /// reseal the boundary, and return the new commitment. The prose becomes part
+    /// of the committed `heap_root`, recoverable on reopen.
+    pub fn set_text(&mut self, text: impl Into<String>) -> [u8; 32] {
+        self.text = Some(text.into());
+        self.reproject();
+        self.commitment()
+    }
+
+    /// The document's verbatim editor prose, if this cell tracks it.
+    pub fn text(&self) -> Option<&str> {
+        self.text.as_deref()
     }
 
     /// The document cell id.
@@ -165,6 +246,9 @@ impl DocHeapCell {
         let mut map = to_heap_map(&self.graph);
         for (&k, &root) in &self.embeds {
             map.insert((COLL_EMBED, k), root);
+        }
+        if let Some(text) = &self.text {
+            text_into_heap(&mut map, text);
         }
         map
     }
@@ -327,6 +411,70 @@ mod tests {
             "the edited content is a leaf bound by the umem boundary"
         );
         assert_eq!(content(doc.graph()).to_marked_string(), "Hello");
+    }
+
+    #[test]
+    fn verbatim_prose_round_trips_through_the_umem_boundary() {
+        // The editor ride: a document's verbatim prose is bound into the umem-heap
+        // (COLL_TEXT) so the commitment IS the `heap_root` AND a reopen re-seeds the
+        // text FROM the committed boundary. Setting text moves the boundary, and the
+        // prose recovers byte-identically from the heap.
+        let mut doc = DocHeapCell::from_graph(7, title_clash());
+        let no_text = doc.commitment();
+        assert_eq!(text_from_heap(&doc.cell().state.heap_map), None);
+
+        let prose = "Cats vs Dogs — a clash with a long enough body to spill across several 32-byte umem chunks. ⊂( ◜◒◝ )⊃";
+        let with_text = doc.set_text(prose);
+        assert_ne!(with_text, no_text, "binding prose moved the umem boundary");
+        assert_eq!(
+            doc.commitment(),
+            doc.cell().state.heap_root,
+            "the commitment IS the cell's resealed umem boundary"
+        );
+        assert_eq!(
+            text_from_heap(&doc.cell().state.heap_map).as_deref(),
+            Some(prose),
+            "prose recovers byte-identically from the committed boundary"
+        );
+        assert!(
+            doc.boundary_matches_projection(),
+            "the boundary still equals the canonical projection (graph + prose)"
+        );
+
+        // The structured projection survives: both clashing alternatives are still
+        // bound (the anti-forge tooth) alongside the recoverable prose.
+        assert!(
+            doc.heap_membership(crate::COLL_FIELDS, 0).is_some()
+                && doc.heap_membership(crate::COLL_FIELDS, 1).is_some(),
+            "both clashing alternatives remain bound by the boundary"
+        );
+
+        // A shrunk document leaves no stale chunk: re-set to a short prose and the
+        // recovered text is exactly the short one (trailing chunks cleared).
+        let short = doc.set_text("hi");
+        assert_ne!(short, with_text, "shrinking the prose moved the boundary");
+        assert_eq!(
+            text_from_heap(&doc.cell().state.heap_map).as_deref(),
+            Some("hi"),
+            "no stale chunk lingers after a shrink"
+        );
+    }
+
+    #[test]
+    fn from_graph_with_text_commits_graph_and_prose_together() {
+        // The desktop's commit path: project graph + prose in one shot. The boundary
+        // binds both, and equals re-deriving it via `set_text`.
+        let a = DocHeapCell::from_graph_with_text(9, title_clash(), "the body");
+        let mut b = DocHeapCell::from_graph(9, title_clash());
+        b.set_text("the body");
+        assert_eq!(a.commitment(), b.commitment());
+        assert_eq!(
+            text_from_heap(&a.cell().state.heap_map).as_deref(),
+            Some("the body")
+        );
+        // Distinct prose over the same graph yields a distinct boundary.
+        let c = DocHeapCell::from_graph_with_text(9, title_clash(), "a different body");
+        assert_ne!(a.commitment(), c.commitment());
     }
 
     #[test]

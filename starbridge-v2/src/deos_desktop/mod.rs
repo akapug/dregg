@@ -75,7 +75,7 @@ use dregg_types::CellId;
 
 use dregg_doc::{
     Author, Doc, DocGraph, DocHeapCell, Granularity, History, PatchId, Regime, ResolutionChoice,
-    blame, blame_summary, content, resolutions_for, walk_atoms,
+    blame, blame_summary, content, resolutions_for, text_from_heap, walk_atoms,
 };
 
 use crate::world::{World, grant_capability, transfer};
@@ -385,8 +385,9 @@ pub struct DeosDesktop {
     /// **The real free-typing document editors** — one live `gpui-component`
     /// `InputState` (a rope-backed, multi-line text widget) per open document cell.
     /// Keystrokes flow through its `Change` event into [`Self::edit_doc`], which
-    /// commits the prose into the cell's COMMITTED heap (`commit_doc_text_to_heap` →
-    /// `SetField`) as a receipted patch. Created lazily on first render of the doc
+    /// commits the document into the cell's committed umem-heap
+    /// ([`Self::commit_doc_to_umem_heap`] → resealed `heap_root`) as a receipted
+    /// patch. Created lazily on first render of the doc
     /// body (where `window`/`cx` are in hand). The `Change` subscription's lifetime
     /// is kept in `doc_subs`.
     doc_inputs: HashMap<CellId, Entity<InputState>>,
@@ -842,39 +843,29 @@ impl DeosDesktop {
     // the committed state and survives reopen FROM THE LEDGER. The layout sidecar is
     // kept only as a fast cache / pre-heap-migration fallback.
 
-    /// Load a document cell's prose from the COMMITTED cell heap (`fields_map`),
+    /// Load a document cell's prose from the COMMITTED umem-heap (`heap_map`),
     /// falling back to the layout sidecar only for cells whose prose predates the
-    /// heap-write path (migration) — empty for a fresh doc. The committed heap is the
-    /// source of truth: reopen restores from the ledger, not the sidecar.
+    /// umem-heap-write path (migration) — empty for a fresh doc. The committed umem
+    /// boundary is the source of truth: reopen restores from the ledger, not the
+    /// sidecar.
     fn load_doc_text(&self, cell: &CellId) -> String {
         if let Some(text) = self.read_doc_from_heap(cell) {
             return text;
         }
-        // Migration / cache fallback: a doc authored before the heap-write path.
+        // Migration / cache fallback: a doc authored before the umem-heap path.
         self.layout.doc_text(&id_hex(cell)).unwrap_or_default()
     }
 
-    /// Read a document's prose back from the cell's committed heap (`fields_map`):
-    /// `DOC_TEXT_BASE` holds the byte length, `DOC_TEXT_BASE + 1 + i` the chunks.
-    /// Returns `None` when the cell carries no committed document (length key absent)
-    /// so the caller can fall back to the sidecar. The bytes are the verbatim values
-    /// committed by `fields_root` — a read off the live ledger.
+    /// Read a document's prose back from the cell's committed **umem-heap**
+    /// (`heap_map`, collection `dregg_doc::COLL_TEXT`): key `0` holds the byte
+    /// length, keys `1..` the 32-byte chunks. Returns `None` when the cell carries
+    /// no umem-heap prose (length leaf absent) so the caller can fall back to the
+    /// sidecar. The bytes are the verbatim values bound by the committed `heap_root`
+    /// — a read off the live ledger's umem boundary.
     fn read_doc_from_heap(&self, cell: &CellId) -> Option<String> {
         let w = self.world.borrow();
         let state = &w.ledger().get(cell)?.state;
-        let len_fe = state.get_field_ext(DOC_TEXT_BASE)?;
-        let byte_len = u64::from_le_bytes(len_fe[..8].try_into().ok()?) as usize;
-        let mut bytes = Vec::with_capacity(byte_len);
-        let mut chunk = 0u64;
-        while bytes.len() < byte_len && chunk < DOC_MAX_CHUNKS {
-            let fe = state
-                .get_field_ext(DOC_TEXT_BASE + 1 + chunk)
-                .unwrap_or([0u8; 32]);
-            let take = (byte_len - bytes.len()).min(DOC_CHUNK_BYTES);
-            bytes.extend_from_slice(&fe[..take]);
-            chunk += 1;
-        }
-        Some(String::from_utf8_lossy(&bytes).into_owned())
+        text_from_heap(&state.heap_map)
     }
 
     /// The sum of all live cell balances — the conservation invariant the World keeps
@@ -1270,66 +1261,24 @@ impl DeosDesktop {
         self.world.borrow_mut().commit_turn(turn).is_committed()
     }
 
-    /// **Commit a document's prose into the cell's COMMITTED heap** as ONE verified
-    /// turn: a `SetField` into `DOC_TEXT_BASE` (the byte length) plus one per 32-byte
-    /// chunk into `DOC_TEXT_BASE + 1 + i`. Stale trailing chunks from a previously
-    /// longer revision are zeroed in the same turn so a shrunk document leaves no
-    /// committed garbage. These write `fields_map` (ext keys >= STATE_SLOTS) via
-    /// `set_field_ext`, recomputing `fields_root` — the prose is on-ledger, receipted,
-    /// and replays from committed state. Returns whether the turn committed.
-    fn commit_doc_text_to_heap(&mut self, cell: CellId, text: &str) -> bool {
-        use dregg_turn::action::Effect;
-        let bytes = text.as_bytes();
-        let byte_len = bytes.len();
-        let new_chunks = byte_len.div_ceil(DOC_CHUNK_BYTES) as u64;
-
-        // The previously-committed length, to know how many trailing chunks to clear.
-        let prev_len = {
-            let w = self.world.borrow();
-            w.ledger()
-                .get(&cell)
-                .and_then(|c| c.state.get_field_ext(DOC_TEXT_BASE))
-                .map(|fe| u64::from_le_bytes(fe[..8].try_into().unwrap_or([0u8; 8])) as usize)
-                .unwrap_or(0)
-        };
-        let prev_chunks = (prev_len.div_ceil(DOC_CHUNK_BYTES) as u64).min(DOC_MAX_CHUNKS);
-
-        let mut effects: Vec<Effect> = Vec::new();
-        // Length felt (LE u64 in the low 8 bytes).
-        let mut len_fe = [0u8; 32];
-        len_fe[..8].copy_from_slice(&(byte_len as u64).to_le_bytes());
-        effects.push(Effect::SetField {
-            cell,
-            index: DOC_TEXT_BASE as usize,
-            value: len_fe,
-        });
-        // The chunk felts: 32 verbatim UTF-8 bytes each.
-        let n = new_chunks.min(DOC_MAX_CHUNKS);
-        for i in 0..n {
-            let start = (i as usize) * DOC_CHUNK_BYTES;
-            let end = (start + DOC_CHUNK_BYTES).min(byte_len);
-            let mut fe = [0u8; 32];
-            fe[..end - start].copy_from_slice(&bytes[start..end]);
-            effects.push(Effect::SetField {
-                cell,
-                index: (DOC_TEXT_BASE + 1 + i) as usize,
-                value: fe,
-            });
-        }
-        // Zero any trailing chunks left over from a longer prior revision.
-        for i in n..prev_chunks {
-            effects.push(Effect::SetField {
-                cell,
-                index: (DOC_TEXT_BASE + 1 + i) as usize,
-                value: [0u8; 32],
-            });
-        }
-
-        let turn = {
-            let w = self.world.borrow();
-            w.turn(cell, effects)
-        };
-        self.world.borrow_mut().commit_turn(turn).is_committed()
+    /// **Commit a document's content INTO the cell's umem-heap** — the per-cell
+    /// universal-memory boundary (`UMEM-PRIMITIVE` §8, `dregg_doc::doc_heap`). The
+    /// document graph (atoms/edges/fields, with anti-forge provenance) AND its
+    /// verbatim editor prose (`dregg_doc::COLL_TEXT`, recoverable on reopen) are
+    /// projected into the cell's `heap_map` via [`DocHeapCell`], then `heap_root`
+    /// is resealed out-of-band ([`World::set_cell_heap`] — `set_heap` /
+    /// `reseal_heap_root`; NO kernel effect, the substrate already commits heap
+    /// writes). The resealed `heap_root` IS the document's commitment: the boundary
+    /// the inspector shows is the committed truth (not a derived witness over
+    /// fields), and a reopen re-seeds the editor from it ([`Self::read_doc_from_heap`]).
+    /// Returns whether the boundary was resealed.
+    fn commit_doc_to_umem_heap(&mut self, cell: CellId, graph: &DocGraph, text: &str) -> bool {
+        let heap = DocHeapCell::from_graph_with_text(cell.as_bytes()[0], graph.clone(), text)
+            .cell()
+            .state
+            .heap_map
+            .clone();
+        self.world.borrow_mut().set_cell_heap(&cell, heap)
     }
 
     /// **COMPOSE — transclude a cell into a document.** Embed a provenanced reference
@@ -1348,19 +1297,23 @@ impl DeosDesktop {
         );
         let author = self.author;
         let mut committed = false;
+        let mut graph = None;
         if let Some(ws) = self.windows.get_mut(&(into, WinKindTag::DocEditor)) {
             if let WinKind::DocEditor { doc, buffer, .. } = &mut ws.kind {
                 buffer.push_str(&line);
                 let new_text = buffer.clone();
                 doc.edit(author, &new_text);
+                graph = Some(doc.history().replay());
                 committed = true;
             }
         }
         if committed {
-            // Commit the composed prose into the cell's COMMITTED heap + bump the doc
-            // cell's revision (real verified turns). The sidecar is kept as a cache.
+            // Commit the composed document into the cell's umem-heap (its `heap_root`
+            // boundary IS the commitment) + bump the doc cell's revision (a verified
+            // turn — the receipted chronicle entry). The sidecar is kept as a cache.
             let text = self.load_doc_buffer(into);
-            let prose_ok = self.commit_doc_text_to_heap(into, &text);
+            let graph = graph.unwrap_or_else(DocGraph::new);
+            let prose_ok = self.commit_doc_to_umem_heap(into, &graph, &text);
             self.layout.set_doc_text(&id_hex(&into), &text);
             self.layout.save(&self.layout_path);
             let rev = self.cell_field_u64(&into, DOC_REV_SLOT) + 1;
@@ -1369,7 +1322,7 @@ impl DeosDesktop {
             // (this path has no `&mut Window` to push into `InputState` directly).
             self.doc_resync.insert(into);
             self.status = format!(
-                "COMPOSE: transcluded {} into doc {} → patch + heap {} (height {}).",
+                "COMPOSE: transcluded {} into doc {} → patch + umem heap_root {} (height {}).",
                 id_short(&src),
                 id_short(&into),
                 if ok { "committed" } else { "rejected" },
@@ -1457,23 +1410,28 @@ impl DeosDesktop {
     fn edit_doc(&mut self, cell: CellId, new_text: String) {
         let author = self.author;
         let mut patches = 0usize;
+        let mut graph = None;
         if let Some(ws) = self.windows.get_mut(&(cell, WinKindTag::DocEditor)) {
             if let WinKind::DocEditor { doc, buffer, .. } = &mut ws.kind {
                 *buffer = new_text.clone();
                 doc.edit(author, &new_text);
                 patches = doc.history().len();
+                graph = Some(doc.history().replay());
             }
         }
-        // Commit the prose itself into the cell's COMMITTED heap (a verified turn into
-        // `fields_map`), then bump the revision. The sidecar is kept as a fast cache;
-        // the committed truth is the cell heap, restored from the ledger on reopen.
-        let prose_ok = self.commit_doc_text_to_heap(cell, &new_text);
+        // Commit the document INTO the cell's umem-heap: its resealed `heap_root`
+        // boundary IS the document commitment (no kernel effect — an out-of-band
+        // heap write). Then bump the revision (a verified turn — the receipted
+        // chronicle entry). The sidecar is kept as a fast cache; the committed
+        // truth is the umem boundary, re-seeded from the ledger on reopen.
+        let graph = graph.unwrap_or_else(DocGraph::new);
+        let prose_ok = self.commit_doc_to_umem_heap(cell, &graph, &new_text);
         self.layout.set_doc_text(&id_hex(&cell), &new_text);
         self.layout.save(&self.layout_path);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT) + 1;
         let ok = prose_ok && self.commit_set_field(cell, DOC_REV_SLOT, rev);
         self.status = format!(
-            "EDIT doc {} → patch #{patches} + heap {} (rev {rev}, height {}).",
+            "EDIT doc {} → patch #{patches} + umem heap_root {} (rev {rev}, height {}).",
             id_short(&cell),
             if ok { "committed" } else { "rejected" },
             self.world.borrow().height()
@@ -1491,6 +1449,17 @@ impl DeosDesktop {
     /// visible. The `seed` ties the boundary to the document cell's identity.
     fn doc_umem_boundary(&self, cell: CellId, graph: &DocGraph) -> [u8; 32] {
         DocHeapCell::from_graph(cell.as_bytes()[0], graph.clone()).commitment()
+    }
+
+    /// **The document's LIVE committed umem boundary** — the cell's resealed
+    /// `heap_root` straight off the ledger. After [`Self::commit_doc_to_umem_heap`]
+    /// this IS the document's commitment (the projected graph + verbatim prose,
+    /// bound by one sorted-Poseidon2 root), not a derived witness. `None` if the
+    /// cell is absent. Distinct from [`Self::doc_umem_boundary`], which derives a
+    /// hypothetical boundary from an UNcommitted graph (a confined branch or a
+    /// held conflict state).
+    fn live_doc_boundary(&self, cell: &CellId) -> Option<[u8; 32]> {
+        Some(self.world.borrow().ledger().get(cell)?.state.heap_root)
     }
 
     /// A short hex of a umem boundary root (the first/last bytes), for a face-row readout.
@@ -2314,20 +2283,13 @@ impl DeosDesktop {
         self.set_branch_text(cell, text);
     }
 
-    /// The document's current umem-heap boundary commitment (its `DocHeapCell`
-    /// `heap_root`) — the sorted-Poseidon2 boundary a light client trusts. A bake/test
-    /// hook to assert the boundary MOVES as the document is edited/resolved.
+    /// The document's LIVE committed umem-heap boundary commitment (the cell's
+    /// resealed `heap_root` off the ledger) — the sorted-Poseidon2 boundary a light
+    /// client trusts, which IS the document's commitment. A bake/test hook to assert
+    /// the committed boundary MOVES as the document is edited/resolved and survives
+    /// reopen (it reads the cell, not the window, so it holds after the editor closes).
     pub fn bake_doc_umem_boundary(&self, cell: CellId) -> Option<[u8; 32]> {
-        match self
-            .windows
-            .get(&(cell, WinKindTag::DocEditor))
-            .map(|w| &w.kind)
-        {
-            Some(WinKind::DocEditor { doc, .. }) => {
-                Some(self.doc_umem_boundary(cell, &doc.history().replay()))
-            }
-            _ => None,
-        }
+        self.live_doc_boundary(&cell)
     }
 
     /// The most recent resolution receipt for `cell` (the committed resolution patch's
@@ -3231,7 +3193,12 @@ impl DeosDesktop {
         //    sorted-Poseidon2 boundary over its umem-heap. Watch it MOVE as the document
         //    is edited, diverged, and resolved (the dregg-doc-on-umem ride made visible).
         if let Some(g) = &doc_graph {
-            let root = self.doc_umem_boundary(cell, g);
+            // The LIVE committed boundary off the ledger (the document IS this
+            // resealed `heap_root`), falling back to the derived projection only if
+            // the cell is somehow absent.
+            let root = self
+                .live_doc_boundary(&cell)
+                .unwrap_or_else(|| self.doc_umem_boundary(cell, g));
             col = col.child(face_row("umem heap_root", &Self::boundary_short(&root)));
         }
 

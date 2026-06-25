@@ -8,9 +8,10 @@
 //!      and render it once so `ensure_doc_input` builds the live editor entity;
 //!   2. TYPE into the REAL `InputState` widget via `insert` (the same path a keystroke
 //!      takes — it emits `InputEvent::Change`), which fires the desktop's `Change`
-//!      subscription → `edit_doc` → `commit_doc_text_to_heap`;
-//!   3. assert the prose landed on the COMMITTED cell heap (a verified `SetField`
-//!      revision turn: the World height grew, and the text reads back from the ledger).
+//!      subscription → `edit_doc` → `commit_doc_to_umem_heap`;
+//!   3. assert the document committed to the cell's umem-heap: its `heap_root`
+//!      boundary MOVED and IS the commitment, the prose reads back verbatim from the
+//!      umem-heap, and a reopen re-seeds from that committed boundary.
 //!
 //! This locks the widget→heap wiring: if the subscription, the editor, or the heap
 //! commit regress, this test breaks. It is the companion to
@@ -31,31 +32,24 @@ use std::sync::Arc;
 use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
 use gpui_wgpu::CosmicTextSystem;
 
-use starbridge_v2::deos_desktop::{DOC_TEXT_BASE, DeosDesktop};
+use starbridge_v2::deos_desktop::DeosDesktop;
 use starbridge_v2::world::demo_world;
 
 static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
 static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
-/// Read prose back out of a cell's committed heap (`fields_map`) — the same read the
-/// desktop's `read_doc_from_heap` does, inlined here over the live ledger.
+/// Read prose back out of a cell's committed **umem-heap** (`heap_map`, collection
+/// `dregg_doc::COLL_TEXT`) — the same read the desktop's `read_doc_from_heap` does,
+/// inlined here over the live ledger's umem boundary.
 fn read_doc(w: &starbridge_v2::world::World, cell: &dregg_types::CellId) -> Option<String> {
-    const CHUNK: usize = 32;
-    const MAX: u64 = 1024;
     let state = &w.ledger().get(cell)?.state;
-    let len_fe = state.get_field_ext(DOC_TEXT_BASE)?;
-    let byte_len = u64::from_le_bytes(len_fe[..8].try_into().ok()?) as usize;
-    let mut bytes = Vec::with_capacity(byte_len);
-    let mut chunk = 0u64;
-    while bytes.len() < byte_len && chunk < MAX {
-        let fe = state
-            .get_field_ext(DOC_TEXT_BASE + 1 + chunk)
-            .unwrap_or([0u8; 32]);
-        let take = (byte_len - bytes.len()).min(CHUNK);
-        bytes.extend_from_slice(&fe[..take]);
-        chunk += 1;
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    dregg_doc::text_from_heap(&state.heap_map)
+}
+
+/// The cell's committed umem boundary — its resealed `heap_root`, which IS the
+/// document's commitment after a `commit_doc_to_umem_heap`.
+fn heap_root(w: &starbridge_v2::world::World, cell: &dregg_types::CellId) -> Option<[u8; 32]> {
+    Some(w.ledger().get(cell)?.state.heap_root)
 }
 
 #[test]
@@ -125,9 +119,11 @@ fn typing_into_the_real_input_widget_commits_to_the_cell_heap() {
         pre, pre_height,
         "no turn yet (just opened the empty editor)"
     );
+    // The empty document's committed umem boundary (a fresh cell's empty-heap root).
+    let boundary_before = heap_root(&shared.borrow(), &user).expect("user cell exists");
 
     // TYPE into the REAL widget — `insert` emits `InputEvent::Change`, which fires the
-    // desktop's subscription → `edit_doc` → `commit_doc_text_to_heap`.
+    // desktop's subscription → `edit_doc` → `commit_doc_to_umem_heap`.
     let typed = "the operator typed THIS into the real editor widget.";
     window
         .update(&mut cx, |_desk, window, cx| {
@@ -145,7 +141,26 @@ fn typing_into_the_real_input_widget_commits_to_the_cell_heap() {
     assert_eq!(
         read_doc(&shared.borrow(), &user).as_deref(),
         Some(typed),
-        "the typed prose reads back verbatim from the COMMITTED cell heap (not a buffer)"
+        "the typed prose reads back verbatim from the COMMITTED umem-heap (not a buffer)"
+    );
+
+    // ── THE BOUNDARY IS THE COMMITMENT ── the edit MOVED the cell's committed umem
+    // `heap_root`, and that live boundary equals what the desktop surfaces. The
+    // document genuinely committed TO the umem-heap (boundary == commitment).
+    let boundary_after = heap_root(&shared.borrow(), &user).expect("user cell exists");
+    assert_ne!(
+        boundary_after, boundary_before,
+        "the edit moved the cell's committed umem boundary (heap_root)"
+    );
+    let surfaced = window
+        .update(&mut cx, |_desk, _w, cx| {
+            desk.read(cx).bake_doc_umem_boundary(user)
+        })
+        .unwrap()
+        .expect("the live umem boundary is readable");
+    assert_eq!(
+        surfaced, boundary_after,
+        "the surfaced umem boundary IS the cell's committed heap_root (not a derived witness)"
     );
 
     // The editor's own value agrees with what was committed (the widget IS the buffer).
@@ -159,9 +174,9 @@ fn typing_into_the_real_input_widget_commits_to_the_cell_heap() {
 
     // ── THE DOCUMENT IS THE CELL: close + reopen re-seeds FROM THE COMMITTED HEAP ──
     // Wipe the sidecar so the only surviving source of the prose is the cell's
-    // committed `fields_map`. Close the doc window (drops the live editor + its sub),
+    // committed umem-heap. Close the doc window (drops the live editor + its sub),
     // then reopen + render — the FRESH `InputState` must re-seed verbatim from the
-    // ledger heap, with NO new turn (reopening reads; it does not write).
+    // umem boundary, with NO new turn (reopening reads; it does not write).
     let _ = std::fs::remove_file(&layout_path);
     window
         .update(&mut cx, |_root, _w, cx| {
@@ -194,8 +209,15 @@ fn typing_into_the_real_input_widget_commits_to_the_cell_heap() {
         .expect("a fresh editor exists after reopen");
     assert_eq!(
         reopened, typed,
-        "the reopened editor re-seeds VERBATIM from the committed cell heap (the \
+        "the reopened editor re-seeds VERBATIM from the committed umem-heap (the \
          document IS the cell; the sidecar was wiped)"
+    );
+    // The committed boundary is unchanged by a read-only reopen, and still equals the
+    // boundary that bound the typed prose — the commitment persisted across reopen.
+    assert_eq!(
+        heap_root(&shared.borrow(), &user),
+        Some(boundary_after),
+        "the committed umem boundary persists across close + reopen (a read does not move it)"
     );
     assert_eq!(
         shared.borrow().height(),
@@ -206,9 +228,10 @@ fn typing_into_the_real_input_widget_commits_to_the_cell_heap() {
     let _ = std::fs::remove_file(&layout_path);
     println!(
         "OK typed {} bytes into the REAL gpui-component editor → Change → edit_doc → \
-         committed heap (height {pre} -> {post}); reads back verbatim from the ledger; \
-         and after close + sidecar-wipe + reopen, the FRESH editor re-seeds verbatim \
-         from the committed heap with no new turn — the document IS the cell.",
+         committed umem-heap (boundary moved + IS the commitment; height {pre} -> {post}); \
+         reads back verbatim from the ledger umem boundary; and after close + sidecar-wipe \
+         + reopen, the FRESH editor re-seeds verbatim from the committed boundary with no \
+         new turn — the document IS the cell, its commitment IS its umem heap_root.",
         typed.len()
     );
 }
