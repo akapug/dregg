@@ -17,5 +17,16 @@ dregg-cell = { path = "../../cell", default-features = false }
 dregg-turn = { path = "../../turn" }
 dregg-types = { path = "../../types" }
 
+[dev-dependencies]
+# The dreggverse document language patch-core (its OWN, empty workspace, like
+# the other standalone path deps — resolves its workspace inheritance from the
+# parent `../../Cargo.toml`). The `cell-heap` feature rides a `DocGraph` onto a
+# real `dregg_cell::Cell`'s committed umem `heap_root` (NO `dregg-turn`), which
+# the end-to-end coherence demo (`tests/coherent_stack_demo.rs`) publishes into
+# the same live `Ledger` the service cell + executor drive — so the document
+# fork/diverge/stitch/resolve narrative rides the SAME World as the invoke()
+# turns and the time-travel snapshot.
+dregg-doc = { path = "../../dregg-doc", features = ["cell-heap"] }
+
 [lints]
 workspace = true
