@@ -8,9 +8,14 @@
 > drives its **I/O through cap-gated effects with no ambient authority**, and leaves a
 > **receipt** for every gated act — `servo : web :: android-runtime : android`.
 
-This is a feasibility + architecture exploration, not a build-it-all. The verdict
-(jump to [§9](#9-verdict)): **feasible on Linux, with a real first spike; a wall on the
-macOS dev host** (Android containers need Linux kernel modules macOS does not have).
+**Status (2026-06-24): BUILT and running on the macOS dev host.** The `android-cell`
+crate ships the host-adaptive runtime + the I/O gate, and a live spike presents a real
+Android **Settings** app frame (1080×2400) through the genuine deos compositor gate on
+macOS, with a cap-gated net decision + receipt. The original "wall on macOS" verdict
+held only for *containers* (redroid/Waydroid need Linux `binder`/`ashmem`); the **macOS
+Android Emulator** runs a full guest kernel under **Hypervisor.framework** and IS a real
+confining Android runtime on the laptop. The simulator host crosses the wall. See
+[§3.5 the simulator host](#35-the-simulator-host-host-adaptive-runtime) and [§9](#9-verdict).
 
 ---
 
@@ -85,6 +90,79 @@ Linux.
 process tree), Docker-native (fits the existing "Docker only" project rule), multi-arch,
 and has the most direct framebuffer/ADB surface access. Cuttlefish is the high-fidelity
 fallback when an app needs a real guest kernel or a stock-AOSP target.
+
+---
+
+## 3.5 The simulator host (host-adaptive runtime)
+
+**This is the part the original §3 mis-judged.** The "macOS wall" is real for
+*containers* (redroid/Waydroid run the Android userspace as host-Linux processes, so
+they need the `binder_linux`/`ashmem_linux` kernel modules XNU lacks). But an
+*emulator* runs a full **guest kernel** under a VMM — and the **Android Emulator**
+(Google's AVD) uses **Hypervisor.framework** on macOS, so it is a genuine, confining
+Android runtime on the laptop. The container-vs-emulator axis IS the macOS-vs-Linux
+axis, and the emulator is the macOS side of it.
+
+So the runtime is abstracted behind an **`AndroidRuntime`** trait — boot a device, run
+an app, expose its surface as an `RgbaFrame` — with one impl per host:
+
+| host | impl | how it confines | capture |
+|---|---|---|---|
+| **macOS** (dev host) | **`MacOsEmulatorRuntime`** | the Android Emulator: a full guest kernel under **Hypervisor.framework** (no Linux modules) | `adb exec-out screencap` → `RgbaFrame` (the de-risking core, analogue of SWGL); emulator gRPC / scrcpy-H.264 are the later lower-latency variants |
+| **Linux** (deos node) | redroid (§3's container path) | host kernel + `binder`/`ashmem`; netns + iptables-by-UID | gralloc/SurfaceFlinger framebuffer or scrcpy H.264 |
+| **any** (CI / no SDK) | **`CapturedFrameRuntime`** | none — a saved screencap blob, no device | a committed `screencap` raw fixture |
+
+**What the `android-cell` crate ships (`/Users/ember/dev/breadstuffs/android-cell`):**
+
+- `runtime.rs` — the `AndroidRuntime` trait + `MacOsEmulatorRuntime` (drives the SDK
+  `emulator`/`adb` CLIs: boots an AVD headless under Hypervisor.framework, launches one
+  app, captures via `screencap`) + `CapturedFrameRuntime` (the host-independent
+  stand-in so the whole seam compiles + tests on any node).
+- `frame.rs` — `screencap_to_rgba`: the raw `adb screencap` wire format (16-byte
+  header: width/height/format/colorspace `u32` LE, then RGBA8) → the EXACT
+  `servo_render::RgbaFrame`. Fail-closed (a truncated/lying capture reaches nothing).
+- `present.rs` — `present_android_frame`: a one-line delegation to
+  `servo_render::present_frame` / `CompositorPd`. **Zero new compositor code** — the
+  android frame is just a different source for the unchanged T1/T2/T3 gate.
+- `netgate.rs` — `AndroidNetGate`: the app's egress bound to the held
+  `SurfaceCapability` through `Netlayer::dial` (the webcell's `NetcapConnector`
+  discipline, android-side). A cap-denied origin is `RefusedByCap` before any socket;
+  every decision leaves an `IoReceipt` (content-addressed: `blake3(origin ‖ tag ‖
+  peer?)`).
+
+**Run path (the live spike, macOS dev host):**
+
+```sh
+# One-time: an AVD (any arm64 image). The dev host used Pixel_7_API_35 / android-35.
+export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager create avd \
+  -n Pixel_7_API_35 -k "system-images;android-35;google_apis;arm64-v8a" -d pixel_7
+
+# The unit suite (no device — stand-in fixture; runs anywhere):
+cargo test -p android-cell
+
+# The LIVE spike (boots the AVD, captures a real app frame, presents it, gates I/O):
+cargo test -p android-cell --test live_emulator_spike -- --ignored --nocapture
+#   → writes target/tmp/android_cell_spike_capture.png (the android app deos admitted)
+#   → "SPIKE OK: a live Android app (1080x2400) presented through the deos compositor
+#      on macOS, with a cap-gated net decision + receipt."
+```
+
+**What ran (2026-06-24, verified):** the `Pixel_7_API_35` AVD booted headless under
+Hypervisor.framework; `com.android.settings` launched; its 1080×2400 surface captured
+to an `RgbaFrame`; `present_android_frame` drove the genuine `CompositorPd` gate (the
+commit carried `blake3(rgba8)` + the `label_of(presenter, root)` owner-binding, and
+the framebuffer composited the android tile); the net gate **refused
+`https://tracker.evil.com` before any socket** (`RefusedByCap`, `Netlayer::dial` never
+called) and **dialed `https://api.example.com` through the audited netlayer** — each a
+receipt. The captured screenshot is the real Settings app.
+
+**The honest depth (unchanged from §5).** The shallow net gate is real on both hosts.
+On macOS the egress *decision* is gated here at the connect boundary (routing the
+emulator's actual socket egress through a host proxy keyed on this decision is the
+deployment wiring); on Linux the redroid container adds netns + iptables-by-UID so the
+refusal also bites at the kernel socket. The DEEP per-call sensor/intent gate
+(HAL/binder interposition) remains the named frontier on BOTH hosts — not claimed.
 
 ---
 
@@ -238,42 +316,49 @@ cap-gated (refused-by-cap puts nothing on the glass) — the android-cell's
    assert an out-of-allowlist origin's socket never opens (refused-by-cap) and **no
    frame state changes** — the `an_uncapped_fetch_is_refused...no_frame_reaches_the_glass`
    property, android-side.
-5. **Receipt.** Emit a `TurnReceipt` for the gated egress decision.
+5. **Receipt.** Emit an `IoReceipt` for the gated egress decision (content-addressed;
+   the shallow per-connection granularity this layer honestly provides — not the heavy
+   kernel `turn::TurnReceipt`, which records a state transition).
 
-**Definition of done:** a screenshot of the live app tile in the cockpit, plus a test
-proving (a) an Android frame presents through the unchanged compositor gate and (b) a
-cap-denied egress reaches nothing. That is the android-cell's "first real rendered
-content" milestone, mirroring `content_tile.rs`'s for the webcell.
-
-**Why not a skeleton module now:** the load-bearing reuse (`present_frame`, the
-`RgbaFrame` type, the cap discipline) is already in-tree and language-ready; the NEW
-code is a Linux-only container + frame-grab that cannot compile or run meaningfully on
-the macOS dev host. Sketching a non-compiling Rust stub would be ceremony. The
-tractable deliverable is this doc + the spike plan; the spike itself belongs on a Linux
-node where step 1 actually boots.
+**Definition of done:** a screenshot of the live app tile, plus a test proving (a) an
+Android frame presents through the unchanged compositor gate and (b) a cap-denied
+egress reaches nothing. **DONE on macOS (2026-06-24)** — see §3.5: the live spike
+captures the real Settings app, presents it through the genuine gate, and refuses
+`tracker.evil.com` before any socket. This is the android-cell's "first real rendered
+content" milestone, mirroring `content_tile.rs`'s for the webcell. (The cockpit-tab
+input bridge of §6 is the next wire; the spike presents into a headless `CompositorPd`.)
 
 ---
 
 ## 9. Verdict
 
-**The android-cell is feasible — on a Linux deos node — and the path is real.**
+**The android-cell is BUILT and running — on the macOS dev host AND structurally on a
+Linux node — and the path is real.**
 
 - The expensive half (tile → glass) is **free**: `present_frame` + `CompositorPd` take
   any `RgbaFrame` unchanged; an Android frame is just a different source. servo:web ::
-  redroid:android holds structurally.
-- The runtime is real: **redroid** runs one app headless on the host Linux kernel with
-  no KVM and exposes a grabbable surface; the smallest spike is concrete (§8).
-- The confinement's shallow layer is real today (**netns + iptables-by-UID** = genuine
-  no-ambient-network, refused-before-socket, egress through `Netlayer::dial`); the deep
-  layer (sensors/intents at per-call receipt granularity) is a named HAL/binder-
-  interposition frontier, exactly analogous to the webcell's `servo-net` fork.
+  android-runtime:android holds structurally AND in running code (`android-cell`).
+- The runtime is real on BOTH hosts via the host-adaptive `AndroidRuntime` trait: on
+  **macOS** the Android **Emulator** under Hypervisor.framework (the `MacOsEmulatorRuntime`
+  shipped + verified booting + capturing a real app frame); on **Linux** redroid runs
+  one app headless on the host kernel with no KVM (the §3 container path the trait slots
+  into). A `CapturedFrameRuntime` stand-in keeps the seam green on any node.
+- The confinement's shallow layer is real today: the egress decision is gated against
+  the held `SurfaceCapability` and routed through `Netlayer::dial` (refused-before-dial,
+  each decision a receipt). On Linux redroid adds netns + iptables-by-UID so the refusal
+  also bites at the kernel socket. The deep layer (sensors/intents at per-call receipt
+  granularity) is a named HAL/binder-interposition frontier, exactly analogous to the
+  webcell's `servo-net` fork.
 
-**The wall is the macOS dev host:** Android containers need Linux kernel modules
-(`binder`/`ashmem`) that XNU does not have. So this is a Linux-node capability, iterated
-on macOS against a stand-in — the same split the seL4/Firmament work already lives with.
+**The "macOS wall" was a container-only limit.** Containers need Linux `binder`/`ashmem`
+that XNU lacks — but the Android Emulator runs its own guest kernel under
+Hypervisor.framework, so it is a real confining Android runtime on the laptop. The
+simulator host crosses the wall; macOS is the *primary* dev host for the android-cell,
+not a stand-in-only one.
 
-The smallest path: **redroid + one app + a gralloc/scrcpy frame → the existing
-`present_frame` gate + netns/iptables net-cap, on a Linux node.**
+The smallest path, RUN: **the macOS Android Emulator + one app + a `screencap` frame →
+the existing `present_frame` gate + the `SurfaceCapability`/`Netlayer::dial` net-cap →
+a receipt.** (`cargo test -p android-cell --test live_emulator_spike -- --ignored`.)
 
 ---
 

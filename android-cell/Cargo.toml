@@ -1,0 +1,49 @@
+[package]
+name = "android-cell"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "An Android app as a cap-confined deos cell-surface — the host-adaptive AndroidRuntime (a confined Android renderer) whose frame becomes an RgbaFrame presented through servo-render's UNCHANGED compositor gate, with its I/O cap-gated. servo:web :: android-runtime:android. macOS-emulator impl first (Hypervisor.framework, no Linux binder/ashmem needed)."
+
+# ────────────────────────────────────────────────────────────────────────────
+# This crate is NOT in the workspace `default-members` (it path-depends, via
+# `servo-render`, into the excluded `sel4/dregg-firmament`). Build it explicitly:
+#   cargo test -p android-cell
+# exactly as `servo-render` is built. See the workspace root Cargo.toml note.
+# ────────────────────────────────────────────────────────────────────────────
+
+[dependencies]
+# THE REUSE KEYSTONE: the compositor gate (`present_frame` + `RgbaFrame` +
+# `CompositorPd` T1/T2/T3 teeth) is taken VERBATIM from servo-render. An android
+# frame is just a different SOURCE for the same `RgbaFrame` the SWGL path produces.
+# Zero new compositor work — the expensive half is free (ANDROID-CELL.md §9).
+servo-render = { path = "../servo-render", default-features = false, features = ["swgl-standalone"] }
+
+# The compositor-PD itself (CompositorPd / Scene / Surface / Refusal / FrameCommit /
+# CellId / cell_seed / label_of). Same path-dep servo-render uses.
+dregg-firmament = { path = "../sel4/dregg-firmament" }
+
+# The REAL cap-gate vocabulary — `SurfaceCapability` (`granted ⊆ held`, the genuine
+# `is_attenuation` lattice) scopes the android app's net origins exactly as the
+# webcell scopes a page's. Same path-dep servo-render uses.
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
+# THE NET-CAP TRANSPORT — `Netlayer::dial` is the audited wire the cap-admitted
+# egress rides; a cap-denied origin never reaches it (RefusedByCap). The android
+# app's outbound net is gated at this seam, the SAME one the webcell's
+# NetcapConnector uses. Re-exported by servo-render but we name it directly.
+dregg-captp = { path = "../captp" }
+
+# content_digest = blake3(rgba8) — the SAME blake3 the RgbaFrame uses; also the
+# IoReceipt's decision digest.
+blake3 = "1"
+
+# Pretty peer ids in the receipt status line — the same bs58 the netcap connector
+# renders with.
+bs58 = "0.5"
+
+[dev-dependencies]
+# Decode the committed PNG fixture (the real captured home frame) so the
+# conversion/round-trip tests can also exercise a PNG-sourced frame, and so the
+# host-emulator path's H.264/encoded variant has a decode precedent in-tree.
+image = { version = "0.25", default-features = false, features = ["png"] }
