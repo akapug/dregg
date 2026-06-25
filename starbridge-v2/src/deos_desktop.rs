@@ -48,7 +48,7 @@ use crate::world::{World, grant_capability, transfer};
 
 /// The full hex id of a cell (a stable layout/persistence key, and the inspector's
 /// identity row). [`CellId`] carries the raw bytes; this is the canonical render.
-fn id_hex(cell: &CellId) -> String {
+pub fn id_hex(cell: &CellId) -> String {
     cell.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
 }
 

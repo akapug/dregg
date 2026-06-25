@@ -1004,7 +1004,7 @@ fn render_desktop_arg(args: &[String]) -> Option<String> {
 fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
+    use starbridge_v2::deos_desktop::{id_hex, DeosDesktop, DesktopLayout};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1072,7 +1072,7 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         persisted
             .icons
             .iter()
-            .any(|p| p.cell == user.hex() && (p.x - 720.0).abs() < 1.0),
+            .any(|p| p.cell == id_hex(&user) && (p.x - 720.0).abs() < 1.0),
         "the dragged icon position must PERSIST to the sidecar (spatial persistence)"
     );
 
