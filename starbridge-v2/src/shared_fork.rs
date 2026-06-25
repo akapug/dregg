@@ -1054,12 +1054,28 @@ mod membrane_host {
         /// `merged` carries the per-address event ids the merge folded clean (relative
         /// to the baseline); `dropped` the field-granular conflicts; `settled_root` is
         /// the driven root only when the fold is conflict-free.
+        ///
+        /// **The state pushout and the authority gate are ORTHOGONAL** (the proven
+        /// `Metatheory.SettlementSoundness` shape, live in production here). Beyond the
+        /// per-address STATE merge, every authority the driven branches would confer back
+        /// into main is checked against the authority HELD AT THE SETTLEMENT TIP — the focus's
+        /// caps in the LIVE [`Self::source_world`] (the main world AFTER any `RevokeCapability`
+        /// committed between branch and settlement, [`crate::umem_membrane::settlement_held_at_tip`]).
+        /// A cap revoked-before-tip is LINEAR-DROPPED (surfaced as a first-class
+        /// `ConflictReason::AuthorityRevoked` object — "a cap I have since revoked cannot ride a
+        /// stitch into my real world"); a still-held cap rides. The gate predicate is IDENTICAL
+        /// to the proven control model [`crate::branch_stitch::Stitch::settle`]. Settlement is
+        /// governed by the STATE pushout's cleanliness alone — a dropped cap was simply not
+        /// conferred, so it never blocks the merge.
         pub fn stitch_pair(
             &self,
             a: &ForkHandle,
             b: &ForkHandle,
         ) -> Result<StitchOutcome, MembraneError> {
-            use crate::umem_membrane::{UmemBranch, stitch_projections, umem_event_id};
+            use crate::umem_membrane::{
+                ConferredCap, UmemBranch, dropped_cap_event_id, settle_umem_stitch,
+                settlement_held_at_tip, stitch_projections, umem_event_id,
+            };
             let forks = self.forks.lock().unwrap();
             let ea = forks
                 .iter()
@@ -1069,18 +1085,46 @@ mod membrane_host {
                 .iter()
                 .find(|(id, _, _)| *id == b.0)
                 .ok_or(MembraneError::NoSuchFork(b.0))?;
+            // ── THE STATE PUSHOUT (field-granular, orthogonal to authority). ─────────────
             // The shared ancestor IS the carried umem (both rehydrated from `ea.2`).
             let base = UmemBranch::from_frustum(&ea.2);
             let proj_a = UmemBranch::mint(&ea.1, base.focus, base.max_depth);
             let proj_b = UmemBranch::mint(&eb.1, base.focus, base.max_depth);
             let stitch = stitch_projections(&base.umem, &proj_a.umem, &proj_b.umem);
-            let merged: Vec<[u8; 32]> = stitch
+
+            // ── THE SETTLEMENT-SOUND AUTHORITY GATE (settlement soundness, in production). ─
+            // The authority each driven branch would confer back = the focus's held caps in
+            // the driven forks (inherited at branch or branch-gained). The settlement-tip held
+            // view is read from the LIVE source world — the main tip, AFTER any revocation.
+            let mut conferred: Vec<ConferredCap> = Vec::new();
+            for driven in [&ea.1, &eb.1] {
+                if let Some(cell) = driven.ledger().get(&base.focus) {
+                    for cap in cell.capabilities.iter() {
+                        if cap.permissions != dregg_cell::AuthRequired::Impossible {
+                            let cc = ConferredCap {
+                                target: cap.target,
+                                debit_reach: true,
+                            };
+                            if !conferred.contains(&cc) {
+                                conferred.push(cc);
+                            }
+                        }
+                    }
+                }
+            }
+            let settlement_held = settlement_held_at_tip(&self.source_fork, base.focus);
+            let settled = settle_umem_stitch(stitch, &conferred, &settlement_held);
+
+            // ── SURFACE: clean state folds + held-back state conflicts + dropped authority. ─
+            let merged: Vec<[u8; 32]> = settled
+                .stitch
                 .merged
                 .iter()
                 .filter(|(k, v)| base.umem.get(k) != Some(v))
                 .map(|(k, _)| umem_event_id(k))
                 .collect();
-            let dropped: Vec<ConflictObject> = stitch
+            let mut dropped: Vec<ConflictObject> = settled
+                .stitch
                 .conflicts
                 .iter()
                 .map(|c| ConflictObject {
@@ -1088,7 +1132,15 @@ mod membrane_host {
                     reason: ConflictReason::ValueCollision,
                 })
                 .collect();
-            let settled_root = if stitch.is_clean() {
+            // The revoked-before-tip authority drops — the linear DROP, surfaced as first-class
+            // `AuthorityRevoked` conflict objects (transparent, never silently conferred/lost).
+            dropped.extend(settled.dropped.iter().map(|c| ConflictObject {
+                event: dropped_cap_event_id(&c.target),
+                reason: ConflictReason::AuthorityRevoked,
+            }));
+            // Settlement is governed by the STATE pushout alone (authority drops do NOT block it
+            // — they were simply not conferred), exactly as `SettledUmemStitch::settles`.
+            let settled_root = if settled.settles() {
                 Some(ea.1.state_root())
             } else {
                 None
@@ -1098,6 +1150,21 @@ mod membrane_host {
                 merged,
                 dropped,
             })
+        }
+
+        /// The owner's LIVE world the membrane is minted from — the settlement tip. Read by
+        /// [`Self::stitch_pair`]'s authority gate ([`crate::umem_membrane::settlement_held_at_tip`])
+        /// to evaluate every conferred cap at the tip, not at branch time.
+        pub fn source_world(&self) -> &World {
+            &self.source_fork
+        }
+
+        /// Mutable access to the owner's LIVE world (the settlement tip) — so the main world
+        /// can advance (e.g. a `RevokeCapability` turn committed between branch and settlement)
+        /// before a [`Self::stitch_pair`] reads the tip's held authority. The non-monotone
+        /// revocation distributed time-travel turns on lands here.
+        pub fn source_world_mut(&mut self) -> &mut World {
+            &mut self.source_fork
         }
     }
 
