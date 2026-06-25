@@ -8,6 +8,21 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## deos-desktop document-collaboration UX DEEPENED: drivable branch→diverge→stitch→conflict→resolve + the umem boundary surfaced (2026-06-25)
+- WHAT: the deos_desktop document-language surface (`starbridge-v2/src/deos_desktop/mod.rs`) is now drivable end to end:
+  (a) a LIVE co-author draft editor — a second `InputState` (`branch_inputs`/`branch_subs`) so the co-author TYPES the
+  divergence by hand (`set_branch_text` as `author^1`), not only the canned button; (b) the document's UMEM-HEAP BOUNDARY
+  (`DocHeapCell::from_graph(...).commitment()`) is read out and watched MOVE through edit/branch/stitch/resolve — the
+  conflict's boundary is labelled "binds both alternatives" (the anti-forge tooth surfaced); (c) richer ConflictView —
+  alternatives attributed you-vs-co-author (`author_label`), a RESOLVED receipt row (the resolution patch id = the turn's
+  receipt, `last_resolution`). New bake `--render-doc-collab` drives the whole flow on one large editor window + asserts the
+  boundary moves, the conflict is held off-heap, and resolve publishes (height grows, receipt lands, boundary moves).
+- NAMED TAILS (closure shape): (a) the desktop still commits prose to FIELDS (`DOC_TEXT_BASE`) via `edit_doc`; the
+  `DocHeapCell` umem boundary is surfaced as a DERIVED witness, not yet the persisted commitment target — closure = route
+  `edit_doc`'s persist through the umem-heap (`set_heap`/`reseal_heap_root`) so the displayed boundary IS the committed one.
+  (b) the live branch editor re-seeds only on creation; a programmatic diverge after the widget exists needs a `branch_resync`
+  (mirror of `doc_resync`) — closure = add it if a flow edits the branch out-of-band while its editor is open.
+
   (workspace member). Slice 3 = `gate_effect_set`/`gate_auth` over the PROVEN `is_facet_attenuation`/`is_attenuation`;
   Slice 1 = `witness_receipt` → real chained `dregg_turn::TurnReceipt` (v3 hash binds the chain link); Slice 1's payoff =
   kind → `EffectSummary`) so the attested queries see real facts, not just the receipt-hash MMR. (c) ACTUAL adoption is in

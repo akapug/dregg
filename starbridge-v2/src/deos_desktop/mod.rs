@@ -74,8 +74,8 @@ use dregg_cell::lifecycle::CellLifecycle;
 use dregg_types::CellId;
 
 use dregg_doc::{
-    Author, Doc, Granularity, History, Regime, ResolutionChoice, blame, blame_summary, content,
-    resolutions_for, walk_atoms,
+    Author, Doc, DocGraph, DocHeapCell, Granularity, History, PatchId, Regime, ResolutionChoice,
+    blame, blame_summary, content, resolutions_for, walk_atoms,
 };
 
 use crate::world::{World, grant_capability, transfer};
@@ -393,6 +393,21 @@ pub struct DeosDesktop {
     /// The per-document `Change`-event subscription handles (kept alive so the
     /// keystroke→heap commit fires for the editor's whole lifetime).
     doc_subs: HashMap<CellId, Subscription>,
+    /// **The live co-author DRAFT editors** — one `InputState` per open document that
+    /// currently carries a forked branch. Typing here is a *second author*'s divergent
+    /// edit on the CONFINED draft (no heap commit until stitched), so a real user can
+    /// drive the divergence by hand (not only the canned "diverges" button). Created
+    /// lazily when a branch exists and rendered below the main editor; dropped when the
+    /// branch retires (stitched/resolved/closed). Keyed by the document cell.
+    branch_inputs: HashMap<CellId, Entity<InputState>>,
+    /// `Change`-event subscriptions for the live branch editors (kept alive for the
+    /// draft's lifetime; the handler folds the typed text into the confined branch doc).
+    branch_subs: HashMap<CellId, Subscription>,
+    /// **The most recent resolution receipt** — `(document cell, choice label, the
+    /// committed resolution patch id)`. A resolution is itself a receipted patch (the
+    /// turn's receipt id); the conflict surface surfaces this so the user SEES the
+    /// settlement landed as a real, content-addressed turn. `None` until one resolves.
+    last_resolution: Option<(CellId, String, PatchId)>,
     /// Cells whose document text was changed OUTSIDE the editor widget (a transclude
     /// drop / a bake edit) and so the live `InputState` must be re-seeded from the
     /// cached buffer on the next render (those paths lack `&mut Window`, which
@@ -525,6 +540,9 @@ impl DeosDesktop {
             workflows: HashMap::new(),
             doc_inputs: HashMap::new(),
             doc_subs: HashMap::new(),
+            branch_inputs: HashMap::new(),
+            branch_subs: HashMap::new(),
+            last_resolution: None,
             doc_resync: std::collections::HashSet::new(),
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
@@ -708,6 +726,8 @@ impl DeosDesktop {
             self.doc_inputs.remove(&key.0);
             self.doc_subs.remove(&key.0);
             self.doc_resync.remove(&key.0);
+            self.branch_inputs.remove(&key.0);
+            self.branch_subs.remove(&key.0);
         }
         if key.1 == WinKindTag::DocExplorer {
             self.doc_explorers.remove(&key.0);
@@ -1460,12 +1480,110 @@ impl DeosDesktop {
         );
     }
 
+    /// **The document's umem-heap boundary commitment.** A dreggverse document IS a
+    /// [`dregg_doc::DocHeapCell`] — a cell whose committed `heap_root` (the
+    /// sorted-Poseidon2 boundary over its umem-heap) IS the document's commitment
+    /// (`UMEM-PRIMITIVE` §8, `dregg_doc::doc_heap`). Project this graph onto a fresh
+    /// document cell and read its boundary root, so the surface can SHOW the document as
+    /// a sovereign, content-addressed umem and watch the boundary MOVE as the document
+    /// is edited, stitched, and resolved. A conflict's boundary binds BOTH live
+    /// alternatives (forging or hiding one moves the root) — the anti-forge tooth, made
+    /// visible. The `seed` ties the boundary to the document cell's identity.
+    fn doc_umem_boundary(&self, cell: CellId, graph: &DocGraph) -> [u8; 32] {
+        DocHeapCell::from_graph(cell.as_bytes()[0], graph.clone()).commitment()
+    }
+
+    /// A short hex of a umem boundary root (the first/last bytes), for a face-row readout.
+    fn boundary_short(root: &[u8; 32]) -> String {
+        format!(
+            "{:02x}{:02x}{:02x}{:02x}…{:02x}{:02x}",
+            root[0], root[1], root[2], root[3], root[30], root[31]
+        )
+    }
+
+    /// Attribute an [`Author`] relative to the seated user: the seated author is *you*,
+    /// `author ^ 1` is the *co-author* (the draft's second identity), anything else is a
+    /// bare `@id`. Provenance is a FACT carried by the commitment — never a guess.
+    fn author_label(&self, author: Author) -> String {
+        if author == self.author {
+            format!("you (@{})", self.author.0 & 0xffff)
+        } else if author.0 == self.author.0 ^ 1 {
+            format!("co-author (@{})", author.0 & 0xffff)
+        } else {
+            format!("@{}", author.0 & 0xffff)
+        }
+    }
+
+    /// Ensure a live co-author DRAFT editor exists for `cell`'s forked branch — a real
+    /// editable `InputState` seeded with the current draft text. Typing folds into the
+    /// CONFINED branch doc as the co-author (`author ^ 1`), so a user can drive the
+    /// divergence by hand. Created without stealing focus (the main editor keeps it).
+    fn ensure_branch_input(&mut self, cell: CellId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.branch_inputs.contains_key(&cell) {
+            return;
+        }
+        let seed = match self
+            .windows
+            .get(&(cell, WinKindTag::DocEditor))
+            .map(|w| &w.kind)
+        {
+            Some(WinKind::DocEditor {
+                branch: Some(b), ..
+            }) => b.text(),
+            _ => return, // no branch — nothing to edit
+        };
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .soft_wrap(true)
+                .placeholder("The co-author's confined draft — type a divergent edit…")
+                .default_value(seed)
+        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let text = input.read(cx).value().to_string();
+                    this.set_branch_text(cell, &text);
+                    cx.notify();
+                }
+            },
+        );
+        self.branch_inputs.insert(cell, input);
+        self.branch_subs.insert(cell, sub);
+    }
+
+    /// Replace the confined draft's whole text with `text`, authored as the co-author
+    /// (`author ^ 1`). The branch is confined — this commits NOTHING to the heap; it
+    /// only advances the draft's own patch-history, ready to stitch.
+    fn set_branch_text(&mut self, cell: CellId, text: &str) {
+        let coauthor = Author(self.author.0 ^ 1);
+        if let Some(ws) = self.windows.get_mut(&(cell, WinKindTag::DocEditor)) {
+            if let WinKind::DocEditor {
+                branch: Some(b), ..
+            } = &mut ws.kind
+            {
+                b.edit(coauthor, text);
+            }
+        }
+    }
+
+    /// Drop the live branch editor + its subscription (the draft retired — stitched,
+    /// resolved, or refolded), so a future fork re-seeds a fresh draft editor.
+    fn retire_branch_input(&mut self, cell: CellId) {
+        self.branch_inputs.remove(&cell);
+        self.branch_subs.remove(&cell);
+    }
+
     /// **Fork a co-author DRAFT branch** (BRANCH-AND-STITCH-PROTOCOL §1) — clone the
     /// document's patch-history into a parallel `dregg_doc::Doc` a *second* author
     /// edits independently. The branch is confined (no heap commit) until stitched; a
     /// branch edit cannot leak into the published document. This is the live realization
     /// of "an author's draft is a branch."
     fn fork_doc_branch(&mut self, cell: CellId) {
+        // A fresh fork retires any stale draft editor so the live widget re-seeds.
+        self.retire_branch_input(cell);
         let g = if self.layout.prefs.word_granularity {
             Granularity::Word
         } else {
@@ -1580,6 +1698,7 @@ impl DeosDesktop {
                         *branch = None;
                     }
                 }
+                self.retire_branch_input(cell);
                 self.status = format!(
                     "STITCH doc {} → clean merge (disjoint edits union) committed to heap.",
                     id_short(&cell)
@@ -1644,13 +1763,14 @@ impl DeosDesktop {
         };
         // Apply the resolution patch onto the merged history; re-render.
         let mut published: Option<(Doc, bool)> = None; // (doc, fully_clean)
+        let mut receipt_out: Option<PatchId> = None;
         if let Some(ws) = self.windows.get_mut(&(cell, WinKindTag::DocEditor)) {
             if let WinKind::DocEditor {
                 merged: Some(m), ..
             } = &mut ws.kind
             {
                 let mut h = m.history().branch();
-                h.commit(choice.patch.clone());
+                receipt_out = Some(h.commit(choice.patch.clone()));
                 let still_conflicted = content(&h.replay()).has_conflict();
                 let g = if self.layout.prefs.word_granularity {
                     Granularity::Word
@@ -1660,6 +1780,10 @@ impl DeosDesktop {
                 let resolved = Doc::from_history(h, g);
                 published = Some((resolved, !still_conflicted));
             }
+        }
+        // The resolution patch's id IS the turn's receipt — surface it.
+        if let Some(receipt) = receipt_out {
+            self.last_resolution = Some((cell, choice.label.clone(), receipt));
         }
         let Some((resolved, clean)) = published else {
             return;
@@ -1681,6 +1805,7 @@ impl DeosDesktop {
                     *merged = None;
                 }
             }
+            self.retire_branch_input(cell);
             self.edit_doc(cell, text);
             self.status = format!(
                 "RESOLVE doc {} → '{}' — conflict collapsed, merge PUBLISHED to heap \
@@ -2182,6 +2307,53 @@ impl DeosDesktop {
         self.diverge_branch(cell, append);
     }
 
+    /// Set the WHOLE text of `cell`'s confined draft as the co-author (the live branch
+    /// editor's typing path), so a bake can drive the divergence by content (not the
+    /// canned append). The branch is confined — nothing commits to the heap.
+    pub fn bake_set_branch_text(&mut self, cell: CellId, text: &str) {
+        self.set_branch_text(cell, text);
+    }
+
+    /// The document's current umem-heap boundary commitment (its `DocHeapCell`
+    /// `heap_root`) — the sorted-Poseidon2 boundary a light client trusts. A bake/test
+    /// hook to assert the boundary MOVES as the document is edited/resolved.
+    pub fn bake_doc_umem_boundary(&self, cell: CellId) -> Option<[u8; 32]> {
+        match self
+            .windows
+            .get(&(cell, WinKindTag::DocEditor))
+            .map(|w| &w.kind)
+        {
+            Some(WinKind::DocEditor { doc, .. }) => {
+                Some(self.doc_umem_boundary(cell, &doc.history().replay()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The most recent resolution receipt for `cell` (the committed resolution patch's
+    /// content-addressed id), if any — a bake/test hook proving a resolution lands a
+    /// real, identified turn.
+    pub fn bake_last_resolution_receipt(&self, cell: CellId) -> Option<u128> {
+        self.last_resolution
+            .as_ref()
+            .filter(|(c, _, _)| *c == cell)
+            .map(|(_, _, pid)| pid.0)
+    }
+
+    /// Place + size `cell`'s document-editor window (a bake-layout hook) so the focused
+    /// document-collaboration shot renders the whole surface un-clipped.
+    pub fn bake_place_doc_window(&mut self, cell: CellId, x: f32, y: f32, w: f32, h: f32) {
+        if let Some(ws) = self.windows.get_mut(&(cell, WinKindTag::DocEditor)) {
+            ws.x = x;
+            ws.y = y;
+            ws.w = w;
+            ws.h = h;
+            ws.minimized = false;
+            ws.z = self.next_z;
+            self.next_z += 1;
+        }
+    }
+
     /// Stitch `cell`'s draft branch into the document (the pushout) — a clean merge
     /// folds to heap; a contested region becomes a first-class conflict state.
     pub fn bake_stitch_branch(&mut self, cell: CellId) {
@@ -2313,6 +2485,12 @@ impl DeosDesktop {
     /// Whether the warm WELCOME card is currently showing (a bake/test hook).
     pub fn bake_welcome_is_shown(&self) -> bool {
         self.show_welcome
+    }
+
+    /// Dismiss the warm WELCOME card without stepping through a door — for a focused bake
+    /// that wants the bare workbench (e.g. the document-collaboration shot).
+    pub fn bake_dismiss_welcome(&mut self) {
+        self.dismiss_welcome();
     }
 
     /// The live, jargon-free welcome greeting for the current world (a bake/test hook) —
@@ -3006,7 +3184,7 @@ impl DeosDesktop {
             .child(face_row("patches", &patches.to_string()))
             .child(face_row("cell revision", &rev.to_string()))
             .child(face_row("author", &format!("{}", self.author.0 & 0xffff)))
-            .child(self.render_doc_collab(cell, cx))
+            .child(self.render_doc_collab(cell, window, cx))
             .into_any_element()
     }
 
@@ -3016,23 +3194,46 @@ impl DeosDesktop {
     /// produced a conflict, the ConflictView — each antichain region's live
     /// alternatives side-by-side WITH author provenance, and one-click resolution
     /// buttons (`resolutions_for`) that each commit a real resolution patch.
-    fn render_doc_collab(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
-        let (has_branch, branch_text, merged) = match self
+    fn render_doc_collab(
+        &mut self,
+        cell: CellId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // A live co-author draft editor exists exactly while a branch is forked.
+        self.ensure_branch_input(cell, window, cx);
+
+        let (has_branch, branch_graph, doc_graph, merged) = match self
             .windows
             .get(&(cell, WinKindTag::DocEditor))
             .map(|w| &w.kind)
         {
-            Some(WinKind::DocEditor { branch, merged, .. }) => (
+            Some(WinKind::DocEditor {
+                doc,
+                branch,
+                merged,
+                ..
+            }) => (
                 branch.is_some(),
-                branch.as_ref().map(|b| b.text()),
+                branch.as_ref().map(|b| b.history().replay()),
+                Some(doc.history().replay()),
                 merged.clone(),
             ),
-            _ => (false, None, None),
+            _ => (false, None, None, None),
         };
+        let branch_input = self.branch_inputs.get(&cell).cloned();
 
         let mut col = div().flex().flex_col().gap_1().child(face_section(
             "Collaborate (branch · stitch · conflict-as-state)",
         ));
+
+        // ── THE UMEM-HEAP BOUNDARY — the document IS a cell; its commitment IS the
+        //    sorted-Poseidon2 boundary over its umem-heap. Watch it MOVE as the document
+        //    is edited, diverged, and resolved (the dregg-doc-on-umem ride made visible).
+        if let Some(g) = &doc_graph {
+            let root = self.doc_umem_boundary(cell, g);
+            col = col.child(face_row("umem heap_root", &Self::boundary_short(&root)));
+        }
 
         // The branch/stitch controls.
         if !has_branch && merged.is_none() {
@@ -3044,30 +3245,46 @@ impl DeosDesktop {
             ));
         }
         if has_branch {
-            let bt = branch_text.unwrap_or_default();
-            let preview: String = bt.lines().last().unwrap_or("").chars().take(48).collect();
+            // The branch's OWN umem boundary diverges from the document's the moment the
+            // co-author edits — two sovereign boundaries, reconciled only by a stitch.
+            let branch_root =
+                self.doc_umem_boundary(cell, branch_graph.as_ref().unwrap_or(&DocGraph::new()));
             col = col
                 .child(face_row(
                     "draft branch",
                     "confined (no heap commit until stitch)",
                 ))
                 .child(face_row(
-                    "branch tail",
-                    if preview.is_empty() {
-                        "(empty)"
-                    } else {
-                        &preview
-                    },
+                    "branch heap_root",
+                    &Self::boundary_short(&branch_root),
                 ))
+                .child(face_section(
+                    "Co-author's confined draft (type to diverge — a second author)",
+                ))
+                .when_some(branch_input, |this, input| {
+                    this.child(
+                        div()
+                            .id(gpui::SharedString::from(format!(
+                                "branchprose-{}",
+                                id_hex(&cell)
+                            )))
+                            .min_h(px(56.0))
+                            .bg(gpui::rgb(0xfbf7ff))
+                            .border_1()
+                            .border_color(gpui::rgb(0x9070b0))
+                            .text_size(px(11.0))
+                            .child(Input::new(&input).h_full()),
+                    )
+                })
                 .child(self.doc_collab_button(
                     cell,
-                    "Co-author diverges (edit the draft)",
+                    "Co-author diverges (canned demo edit)",
                     DocCollabAct::Diverge,
                     cx,
                 ))
                 .child(self.doc_collab_button(
                     cell,
-                    "Stitch draft → document (pushout)",
+                    "Stitch draft → document (the pushout)",
                     DocCollabAct::Stitch,
                     cx,
                 ));
@@ -3078,11 +3295,19 @@ impl DeosDesktop {
             let graph = m.history().replay();
             let rendered = content(&graph);
             let conflicts: Vec<_> = rendered.conflicts().cloned().collect();
-            col = col.child(face_section(&format!(
-                "CONFLICT ({} region{}, first-class state)",
-                conflicts.len(),
-                if conflicts.len() == 1 { "" } else { "s" }
-            )));
+            // The conflict's umem boundary BINDS BOTH live alternatives (forging or
+            // hiding one moves the root — the anti-forge tooth, in the committed heap).
+            let conflict_root = self.doc_umem_boundary(cell, &graph);
+            col = col
+                .child(face_section(&format!(
+                    "CONFLICT ({} region{}, first-class state · held, NOT committed)",
+                    conflicts.len(),
+                    if conflicts.len() == 1 { "" } else { "s" }
+                )))
+                .child(face_row(
+                    "binds both alts",
+                    &Self::boundary_short(&conflict_root),
+                ));
             for (ri, region) in conflicts.iter().enumerate() {
                 let regime_lbl = match region.regime {
                     Regime::Prose => "prose · always-resolvable",
@@ -3102,7 +3327,8 @@ impl DeosDesktop {
                         .text_color(gpui::rgb(0xa02020))
                         .child(head),
                 );
-                // Each live alternative, attributed to its author (a FACT).
+                // Each live alternative, attributed to WHO wrote it — you vs co-author
+                // (a FACT carried by the commitment; the loser is provenanced, not lost).
                 for alt in &region.alternatives {
                     let txt: String = alt.text.chars().take(80).collect();
                     col = col.child(
@@ -3115,8 +3341,8 @@ impl DeosDesktop {
                             .border_color(gpui::rgb(0xd0a0a0))
                             .text_size(px(10.0))
                             .child(format!(
-                                "@{}: {}",
-                                alt.provenance.author.0 & 0xffff,
+                                "{}: {}",
+                                self.author_label(alt.provenance.author),
                                 if txt.trim().is_empty() {
                                     "(empty)"
                                 } else {
@@ -3125,11 +3351,32 @@ impl DeosDesktop {
                             )),
                     );
                 }
-                // One-click resolution choices — each a ready, authored patch.
+                // One-click resolution choices — each a ready, authored patch (its commit
+                // is the resolution turn's receipt).
                 let choices = resolutions_for(&graph, region, self.author);
                 for (ci, choice) in choices.iter().enumerate() {
                     col = col.child(self.doc_resolve_button(cell, ri, ci, &choice.label, cx));
                 }
+            }
+        }
+
+        // ── THE RECEIPT — the most recent resolution, as a content-addressed turn id.
+        if let Some((rc, label, pid)) = &self.last_resolution {
+            if *rc == cell {
+                col = col.child(
+                    div()
+                        .my_1()
+                        .px_1()
+                        .py_1()
+                        .bg(gpui::rgb(0xe8f0e8))
+                        .border_1()
+                        .border_color(gpui::rgb(0x70a070))
+                        .text_size(px(10.0))
+                        .child(format!(
+                            "RESOLVED '{}' → receipt patch #{} (published to the umem-heap)",
+                            label, pid.0
+                        )),
+                );
             }
         }
 

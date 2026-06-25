@@ -325,6 +325,32 @@ fn main() {
         }
     }
 
+    // `--render-doc-collab <out>`: THE FOCUSED DOCUMENT-COLLABORATION BAKE — drive the
+    // whole document-language flow on ONE big editor window: author a base, fork a
+    // confined co-author draft, the co-author TYPES a divergent line, the original author
+    // diverges the main, STITCH (the pushout) → a first-class CONFLICT (both live
+    // alternatives, attributed you-vs-co-author, HELD off the heap) rendered as the
+    // ConflictView with one-click resolution choices, and the umem-heap boundary read out
+    // at each step. The bake also resolves a copy to prove publish-to-heap, but leaves the
+    // conflict + resolve buttons IN FRAME (un-clipped) for the shot. Default 1100x1500.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_doc_collab_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1100.0, 1500.0));
+            match render_doc_collab_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-doc-collab FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-guest <out>`: THE GUEST / APP-FORWARD BAKE — the welcoming,
     // low-verbosity desktop a newcomer lands on (the "after you dismiss the
     // inspector" view): the real app surfaces (browser · editor · terminal · chat)
@@ -1089,6 +1115,27 @@ fn render_woven_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-doc-collab <out>` (or `=<out>`) argument — the output base path
+/// for the focused DOCUMENT-COLLABORATION bake (branch · diverge · stitch · conflict ·
+/// resolve). Returns `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_doc_collab_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-doc-collab" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-doc-collab=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// **THE WOVEN DESKTOP BAKE** — the proof the surfaces are ONE inhabitable place, not a
 /// drawer of separate pieces. Where `--render-welcome` shows the calm front door and
 /// `--render-desktop` shows the dense workbench, THIS bake walks the SEAM BETWEEN them —
@@ -1253,6 +1300,210 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         shared.borrow().ledger().iter().count()
     );
     Ok(())
+}
+
+/// **THE FOCUSED DOCUMENT-COLLABORATION BAKE** — the document language as a surface a
+/// user can actually drive, end to end, on ONE large editor window:
+///
+///   1. Author a base document → committed to the cell's umem-heap (boundary B0).
+///   2. FORK a confined co-author draft branch (BRANCH-AND-STITCH-PROTOCOL §1). The
+///      co-author TYPES a divergent line into the live draft editor (the second author's
+///      hand, not the canned button); the original author diverges the main too.
+///   3. STITCH (the pushout, §3). Two edits to the same region become a FIRST-CLASS
+///      conflict — an antichain of live alternatives, each attributed you-vs-co-author —
+///      HELD off the heap (no write while it stands). Rendered as the ConflictView with
+///      one-click resolution choices and the conflict's umem boundary (which binds BOTH
+///      alternatives — the anti-forge tooth).
+///   4. RESOLVE (asserted on a copy so the shot keeps the conflict in frame): a chosen
+///      resolution is itself a receipted patch; the merge PUBLISHES to the umem-heap and
+///      the boundary MOVES (B0 → B_published).
+///
+/// The bake ASSERTS each seam (boundary moves on edit; a real conflict arises and is
+/// held; resolving publishes + lands a receipt + moves the boundary), then leaves the
+/// live conflict + its resolution buttons un-clipped in a tall editor window and captures
+/// `<out>.png`. Hermetic. Default 1100x1500.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_doc_collab_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::DeosDesktop;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-doccollab-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [treasury, _service, user] = anchors;
+    let shared = Rc::new(RefCell::new(world));
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // ── 1. A base document, committed to the umem-heap. Place the editor window large so
+    //    the whole collaboration surface renders un-clipped. ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_dismiss_welcome(); // the focused shot wants the bare workbench
+        d.bake_open_doc(user);
+        d.bake_place_doc_window(user, 28.0, 44.0, w - 56.0, h - 96.0);
+        d.bake_edit_doc(user, "Shared opening line.\n");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let boundary_base = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(user))
+        .expect("the document has a umem boundary");
+
+    // ── 2. Fork a confined draft; the co-author TYPES a divergent line; the original
+    //    author diverges the main too (so the stitch genuinely contests the tail). ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_fork_branch(user);
+        d.bake_set_branch_text(user, "Shared opening line.\nThe co-author's reading.\n");
+        d.bake_edit_doc(
+            user,
+            "Shared opening line.\nThe original author's reading.\n",
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let boundary_edited = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(user))
+        .expect("boundary after edit");
+    anyhow::ensure!(
+        boundary_edited != boundary_base,
+        "an edit must MOVE the document's umem-heap boundary (the dregg-doc-on-umem ride)"
+    );
+
+    // ── 3. STITCH → a first-class conflict, held off the heap. ──
+    let pre_stitch = shared.borrow().height();
+    desk.update(&mut cx, |d, cx| {
+        d.bake_stitch_branch(user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let conflicts = desk
+        .update(&mut cx, |d, _cx| d.bake_conflict_count(user))
+        .unwrap_or(0);
+    anyhow::ensure!(
+        conflicts >= 1,
+        "a stitch of two divergent edits to one region must be a FIRST-CLASS conflict \
+         (got {conflicts})"
+    );
+    anyhow::ensure!(
+        shared.borrow().height() == pre_stitch,
+        "a CONFLICTED stitch is HELD, not committed (no heap write while the conflict stands)"
+    );
+
+    // ── 4. Prove resolve→publish on a SEPARATE document (so the shot keeps the live
+    //    conflict + resolution buttons in frame). Same flow on the treasury cell, then
+    //    resolve choice 0 and assert the merge publishes + a receipt lands + boundary
+    //    moves. The user-cell conflict stays live for the capture. ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_open_doc(treasury);
+        d.bake_edit_doc(treasury, "Proof base.\n");
+        d.bake_fork_branch(treasury);
+        d.bake_set_branch_text(treasury, "Proof base.\nco-author proof.\n");
+        d.bake_edit_doc(treasury, "Proof base.\nauthor proof.\n");
+        d.bake_stitch_branch(treasury);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let proof_conflicts = desk
+        .update(&mut cx, |d, _cx| d.bake_conflict_count(treasury))
+        .unwrap_or(0);
+    anyhow::ensure!(proof_conflicts >= 1, "the proof doc must also conflict");
+    let proof_b_before = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(treasury))
+        .expect("proof boundary before");
+    let h_pre_resolve = shared.borrow().height();
+    desk.update(&mut cx, |d, cx| {
+        d.bake_resolve_conflict(treasury, 0, 0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let remaining = desk.update(&mut cx, |d, _cx| d.bake_conflict_count(treasury));
+    anyhow::ensure!(
+        remaining.is_none() || remaining == Some(0),
+        "resolving collapses the antichain — no conflict remains (got {remaining:?})"
+    );
+    let h_post = shared.borrow().height();
+    anyhow::ensure!(
+        h_post > h_pre_resolve,
+        "publishing the resolved merge lands a REAL verified turn on the umem-heap \
+         ({h_pre_resolve} -> {h_post})"
+    );
+    let receipt = desk
+        .update(&mut cx, |d, _cx| d.bake_last_resolution_receipt(treasury))
+        .expect("the resolution must carry a receipt patch id");
+    let proof_b_after = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(treasury))
+        .expect("proof boundary after");
+    anyhow::ensure!(
+        proof_b_after != proof_b_before,
+        "publishing the resolution MOVES the document's umem boundary (B0 -> B_published)"
+    );
+
+    // Bring the user-cell editor (with its live ConflictView) to the front for the shot.
+    desk.update(&mut cx, |d, cx| {
+        d.bake_open_doc(user);
+        d.bake_place_doc_window(user, 28.0, 44.0, w - 56.0, h - 96.0);
+        cx.notify();
+    });
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos DOC-COLLAB render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the document \
+         language driven end to end: base committed (umem boundary {}…), fork + co-author \
+         types a divergence + author diverges (boundary moved to {}…), STITCH → {conflicts} \
+         first-class CONFLICT held off the heap (both alternatives attributed, one-click \
+         resolve); a proof doc RESOLVED → published to heap (h{h_pre_resolve} -> {h_post}, \
+         receipt patch #{receipt}, boundary moved). The live ConflictView is in frame.",
+        hex2(&boundary_base),
+        hex2(&boundary_edited),
+    );
+    Ok(())
+}
+
+/// First two bytes of a 32-byte root, hex — a compact boundary tag for bake logs.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn hex2(root: &[u8; 32]) -> String {
+    format!("{:02x}{:02x}", root[0], root[1])
 }
 
 /// **THE CALM WELCOME BAKE** — render the deos desktop's *warm front door*: the calm,
