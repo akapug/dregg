@@ -178,21 +178,16 @@ exactly `derives` = `Matches`. Chained with `Dfa.lean`'s `dfa_bridge` (Edge C) t
 
 What remains is `derivativeCompile_eq_tableDfa` (design §3.1 Edge B's literal table equality): that
 the derivative automaton's table EQUALS (up to a reachable-state bijection) the POWERSET table
-`compiler.rs::determinize` emits. The wall:
-
-  * It needs `der_finite` (Stage 3's `der_pieces` combinatorial wall) FIRST: a "table" is a finite
-    object, so the derivative automaton must be known to have finitely many states (up to `≅`) before
-    its `δ`-table can be a finite object to compare. Without finiteness there is no table to equate.
-  * It needs a Lean MODEL of `compiler.rs::determinize`'s powerset construction (currently UNVERIFIED
-    Rust, design §3.2 sub-gap), then DFA-minimization uniqueness OR a direct language-equivalence
-    `derivativeDfa ≃ powersetDfa` (the design says language/bisim equivalence SUFFICES for the
-    table-opaque AIR — which is exactly the regime `derivativeDfa_matches` already lives in).
-
-So the CLEANEST close routes everything through the derivative automaton as the single source of
-truth (the language identity is already proven here) and reconciles the deployed powerset table by
-language-equivalence — but that reconciliation still consumes `der_finite`. Stage 4's language half is
-DONE; its table-equality half is GATED ON Stage 3's combinatorial wall, named there. NOT closed with
-`sorry`.
+`compiler.rs::determinize` emits. Its ONE prerequisite — finiteness of the derivative state space, so
+that there IS a finite δ-table to compare — is NO LONGER A WALL: `Deriv.Finiteness.der_finite`
+(Stage 3) proves the reachable derivatives are finite up to `≅`, kernel-clean. So the table-equality
+half is now UNBLOCKED; what is left is purely a Lean MODEL of `compiler.rs::determinize`'s powerset
+construction + a direct language-equivalence `derivativeDfa ≃ powersetDfa` (the design says
+language/bisim equivalence SUFFICES for the table-opaque AIR — exactly the regime
+`derivativeDfa_matches` already lives in). The cleanest close routes everything through the derivative
+automaton as the single source of truth (the language identity is proven here; its finiteness is
+proven in Stage 3) and reconciles the deployed powerset table by language-equivalence. NOT closed
+with `sorry`.
 -/
 
 end Dregg2.Crypto.Deriv
