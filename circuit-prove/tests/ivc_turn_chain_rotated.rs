@@ -216,9 +216,10 @@ fn k_fold_turn_chain_proves_and_verifies() {
     }
     whole.final_root = honest_final;
 
-    // REFUSED: relabeled chain_digest (claiming a different ordered history).
+    // REFUSED: relabeled chain_digest (claiming a different ordered history) — the digest
+    // is now a multi-felt Poseidon2 commitment; relabel any lane.
     let honest_digest = whole.chain_digest;
-    whole.chain_digest = honest_digest + BabyBear::ONE;
+    whole.chain_digest[0] = honest_digest[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled chain_digest must be refused; got {other:?}"),
@@ -273,7 +274,10 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     let bytes = whole.to_bytes();
     assert!(!bytes.is_empty(), "the byte envelope must be non-empty");
     let env = WholeChainProofBytes::from_postcard(&bytes).expect("the honest envelope must decode");
-    assert_eq!(env.version, 1);
+    assert_eq!(
+        env.version,
+        dregg_circuit_prove::ivc_turn_chain::WHOLE_CHAIN_PROOF_ENVELOPE_V1
+    );
     assert_eq!(env.genesis_root, genesis.as_u32());
     assert_eq!(env.final_root, final_root.as_u32());
     assert_eq!(env.num_turns, 3);
@@ -289,7 +293,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         &env.binding_proof,
         env.genesis_root,
         env.final_root,
-        env.chain_digest,
+        &env.chain_digest,
         env.num_turns as usize,
         &vk.0,
     )
@@ -887,35 +891,8 @@ fn expose_claim_idx(
         .map(|pos| num_primitive + pos)
 }
 
-/// The in-circuit segment digest fold the lib uses (`seg_hash2_in_circuit`),
-/// re-expressed here so the test's combine matches the lib's exactly:
-/// `acc' = a*M1 + b*M2 + (a*b)*M3` over base-field-embedded values.
-fn seg_hash2_target(
-    cb: &mut p3_circuit::CircuitBuilder<
-        <dregg_circuit_prove::plonky3_recursion_impl::recursive::DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge,
-    >,
-    a: p3_recursion::Target,
-    b: p3_recursion::Target,
-) -> p3_recursion::Target {
-    use p3_field::PrimeCharacteristicRing;
-    type Ch = <dregg_circuit_prove::plonky3_recursion_impl::recursive::DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
-    // The SAME constants the lib uses (kept in sync with `SEG_DIGEST_M*`).
-    let m1 = cb.define_const(Ch::from(P3BabyBear::from_u64(
-        (0x4D2E_8F31u32 % 0x7800_0001) as u64,
-    )));
-    let m2 = cb.define_const(Ch::from(P3BabyBear::from_u64(
-        (0x1A7C_55B9u32 % 0x7800_0001) as u64,
-    )));
-    let m3 = cb.define_const(Ch::from(P3BabyBear::from_u64(
-        (0x6F0A_3E27u32 % 0x7800_0001) as u64,
-    )));
-    let t1 = cb.mul(a, m1);
-    let t2 = cb.mul(b, m2);
-    let ab = cb.mul(a, b);
-    let t3 = cb.mul(ab, m3);
-    let s = cb.add(t1, t2);
-    cb.add(s, t3)
-}
+// The in-circuit segment digest is the lib's `pub seg_poseidon_commit` (a multi-felt
+// Poseidon2 sponge); the test calls it DIRECTLY so its combine matches the lib EXACTLY.
 
 /// **CODEX RE-REVIEW #2 — THE MIXED-ROOT FORGERY, REJECTED (the close).**
 ///
@@ -929,7 +906,8 @@ fn seg_hash2_target(
 fn mixed_root_forgery_executes_A_claims_B() {
     use dregg_circuit_prove::ivc_turn_chain::TurnChainBindingAir;
     use dregg_circuit_prove::ivc_turn_chain::{
-        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
+        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
+        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
         verify_turn_chain_recursive_from_parts,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
@@ -941,12 +919,6 @@ fn mixed_root_forgery_executes_A_claims_B() {
         build_and_prove_aggregation_layer_with_expose,
     };
 
-    // Segment lane layout (mirrors the lib's SEG_* constants).
-    const SEG_FIRST_OLD: usize = 0;
-    const SEG_LAST_NEW: usize = 1;
-    const SEG_COUNT: usize = 2;
-    const SEG_ACC: usize = 3;
-    const SEG_WIDTH: usize = 4;
     const D: usize = 4;
 
     // ----- The two histories (same K=2 transfer shape ⇒ same root VK fingerprint). -----
@@ -983,7 +955,10 @@ fn mixed_root_forgery_executes_A_claims_B() {
     let b_genesis_root = b_pis[0];
     let b_final_root = b_pis[1];
     let b_num_turns = 2usize;
-    let b_chain_digest = b_pis[3];
+    // B's carried multi-felt digest (irrelevant to the rejection — the segment tooth fails on
+    // B's genesis/final/count first — but well-formed: the single binding digest, zero-padded).
+    let mut b_chain_digest = [BabyBear::ZERO; SEG_DIGEST_WIDTH];
+    b_chain_digest[0] = b_pis[3];
 
     // ----- The fold: A's REAL segment-bearing descriptor leaves -> one root. -----
     let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> = Vec::with_capacity(2);
@@ -1017,13 +992,24 @@ fn mixed_root_forgery_executes_A_claims_B() {
                 let l = left_apt.get(left_idx).expect("left seg present");
                 let r = right_apt.get(right_idx).expect("right seg present");
                 assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-                let cont = cb.sub(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-                cb.assert_zero(cont);
+                // Continuity via direct connect (mirrors the lib `aggregate_tree`): avoids the
+                // `sub`+`assert_zero` backward-add that would clobber the shared `WitnessId(0)`.
+                cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
                 let first_old = l[SEG_FIRST_OLD];
                 let last_new = r[SEG_LAST_NEW];
                 let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
-                let acc = seg_hash2_target(cb, l[SEG_ACC], r[SEG_ACC]);
-                cb.expose_as_public_output(&[first_old, last_new, count, acc]);
+                let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+                acc_inputs
+                    .extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                acc_inputs
+                    .extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                let acc = seg_poseidon_commit(cb, &acc_inputs);
+                let mut parent = Vec::with_capacity(SEG_WIDTH);
+                parent.push(first_old);
+                parent.push(last_new);
+                parent.push(count);
+                parent.extend_from_slice(&acc);
+                cb.expose_as_public_output(&parent);
             };
             let out = build_and_prove_aggregation_layer_with_expose::<
                 DreggRecursionConfig,

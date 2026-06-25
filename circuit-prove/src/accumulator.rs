@@ -165,6 +165,41 @@ use p3_field::PrimeCharacteristicRing;
 
 const D: usize = 4;
 
+/// The recursion challenge (extension) field the expose hooks build constants over.
+type AccChallenge = <DreggRecursionConfig as StarkGenericConfig>::Challenge;
+
+/// Expose the accumulator's binding-leaf claims `[genesis, final, num_turns, chain_digest]`
+/// as a `SEG_WIDTH`-lane segment, ZERO-PADDING the single-felt binding digest to the K-fold
+/// path's [`crate::ivc_turn_chain::SEG_DIGEST_WIDTH`]-lane digest block:
+/// `[genesis, final, num_turns, chain_digest, 0, …, 0]`.
+///
+/// This keeps the ONLINE accumulator's artifact structurally uniform with the K-fold's
+/// multi-felt segment (so `verify_turn_chain_recursive`'s tooth (4) reads a consistent
+/// layout) WITHOUT strengthening its digest — the accumulator path is scoped OUT of the
+/// codex #3 mixed-root close (its binding leaf is the separate, swappable single-felt
+/// `hash_4_to_1` carrier; the padding lanes carry no additional commitment).
+fn accumulator_expose_padded_segment(
+    cb: &mut p3_circuit::CircuitBuilder<AccChallenge>,
+    binding_claims: &[p3_recursion::Target],
+) {
+    use crate::ivc_turn_chain::{NUM_CHAIN_CLAIMS, SEG_DIGEST_FIRST};
+    // Binding-leaf PI order: [genesis, final, num_turns, chain_digest] — i.e. the first
+    // SEG_DIGEST_FIRST + 1 lanes (the 3 scalar lanes + the single binding digest at the
+    // first digest lane), with the remaining digest lanes zero.
+    let prefix_len = SEG_DIGEST_FIRST + 1;
+    debug_assert!(
+        binding_claims.len() >= prefix_len,
+        "binding leaf must expose [genesis, final, num_turns, chain_digest]"
+    );
+    let zero = cb.define_const(AccChallenge::ZERO);
+    let mut seg: Vec<p3_recursion::Target> = Vec::with_capacity(NUM_CHAIN_CLAIMS);
+    seg.extend_from_slice(&binding_claims[..prefix_len]);
+    while seg.len() < NUM_CHAIN_CLAIMS {
+        seg.push(zero);
+    }
+    cb.expose_as_public_output(&seg);
+}
+
 /// **THE WRAP-STEP TRACE-HEIGHT CEILING (the `min_trace_height` half of the fixed-shape knob).**
 ///
 /// This pins every running-proof table to a fixed power-of-two `degree_bits` floor of `2^WRAP_LOG_CEIL`,
@@ -782,14 +817,23 @@ impl Accumulator {
                 preprocessed_commit: None,
             };
             // EXPOSED-CLAIM CHANNEL: emit the expose_claim table over the binding
-            // child's 4 verified `air_public_targets`, so the accumulator's root
-            // (like the K-fold root) carries the host-readable, bus-bound chain
-            // claims that `verify_turn_chain_recursive`'s tooth (4) checks.
+            // child's 4 verified `air_public_targets` `[genesis, final, num_turns,
+            // chain_digest]`, so the accumulator's root carries the host-readable,
+            // bus-bound chain claims `verify_turn_chain_recursive`'s tooth (4) checks.
+            //
+            // CODEX #3/#4: the K-fold path's `verify` tooth now expects a multi-felt
+            // (`SEG_DIGEST_WIDTH`-lane) Poseidon2 segment digest. The ONLINE accumulator
+            // (scoped OUT of the mixed-root close — its binding leaf is still the separate,
+            // swappable single-felt `hash_4_to_1` carrier) keeps that 1-felt digest, but
+            // ZERO-PADS it to the new lane width so the artifact is structurally uniform and
+            // tooth (4) reads a consistent `[genesis, final, num_turns, d, 0, 0, 0]`. This
+            // does NOT strengthen the accumulator's digest — its collision-resistance is
+            // unchanged from the 1-felt binding leaf; the structural mixed-root weakness
+            // named in codex #4 is unaffected.
             let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
                                apt: &[Vec<p3_recursion::Target>]| {
                 if let Some(claims) = apt.first() {
-                    debug_assert!(claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS);
-                    cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
+                    accumulator_expose_padded_segment(cb, claims);
                 }
             };
             build_and_prove_next_layer_with_expose::<
@@ -846,9 +890,8 @@ impl Accumulator {
                            right_apt: &[Vec<p3_recursion::Target>]| {
             if let Some(idx) = right_idx
                 && let Some(claims) = right_apt.get(idx)
-                && claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS
             {
-                cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
+                accumulator_expose_padded_segment(cb, claims);
             }
         };
         let root = build_and_prove_aggregation_layer_with_expose::<
@@ -871,10 +914,13 @@ impl Accumulator {
         })?;
 
         // The artifact digest is the binding leaf's PADDED last-row `acc_out` (`binding_pis[3]`) —
-        // the SAME quantity `generate_chain_trace_rotated` exposes as the K-fold `chain_digest`, so
-        // an accumulator artifact and a K-fold artifact of the same chain carry the IDENTICAL digest.
+        // the single-felt online-accumulator carrier — ZERO-PADDED to the K-fold path's multi-felt
+        // digest lane width (codex #3). The accumulator is scoped OUT of the mixed-root close; the
+        // padding lanes carry no commitment, they only make the artifact's lane layout uniform with
+        // the K-fold so `verify_turn_chain_recursive`'s tooth (4) reads a consistent shape.
         // (`summary.chain_digest` is the UNPADDED running carrier — a different, internal quantity.)
-        let chain_digest = binding_pis[3];
+        let mut chain_digest = [BabyBear::ZERO; crate::ivc_turn_chain::SEG_DIGEST_WIDTH];
+        chain_digest[0] = binding_pis[3];
 
         Ok(WholeChainProof {
             root,
