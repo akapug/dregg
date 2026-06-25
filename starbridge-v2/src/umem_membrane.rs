@@ -78,6 +78,19 @@ pub fn umem_event_id(key: &UKey) -> [u8; 32] {
     *h.finalize().as_bytes()
 }
 
+/// **The stable per-cap event id for a LINEAR-DROPPED authority confer** — a
+/// domain-separated blake3 commitment over a dropped cap's target cell, the authority twin
+/// of [`umem_event_id`]. Where [`umem_event_id`] names a per-address STATE event, this names
+/// a revoked-before-tip AUTHORITY drop, so the membrane wire can surface a settlement-gate
+/// drop as a first-class `ConflictObject` (`ConflictReason::AuthorityRevoked`) keyed at the
+/// cell whose conferral the tip refused — transparent, never silently lost.
+pub fn dropped_cap_event_id(target: &CellId) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"deos-umem-membrane-dropped-cap-v1");
+    h.update(target.as_bytes());
+    *h.finalize().as_bytes()
+}
+
 /// **A cap-bounded subgraph projected to a universal map — the FORK as a umem branch.**
 ///
 /// Mints from a [`World`] by BFS-culling the subgraph in view of a `focus` cell (the
