@@ -80,8 +80,8 @@ pub use organgate::{
     ServiceResolver, SystemService,
 };
 pub use permgate::{
-    BadgeReason, BadgeState, CapBadge, CapBadgeSet, KernelGrantOutcome, PermBox, PermDecision,
-    PermReceipt, PermWorld,
+    BadgeReason, BadgeState, CapBadge, CapBadgeSet, KernelGrantOutcome, PermBox, PermCheckReceipt,
+    PermDecision, PermReceipt, PermWorld, PermissionCheck,
 };
 pub use present::{AndroidPresentation, present_android_frame};
 pub use runtime::{
