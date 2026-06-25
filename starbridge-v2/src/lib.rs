@@ -265,9 +265,9 @@ pub mod world_chat;
 pub mod session;
 #[cfg(feature = "embedded-executor")]
 pub use session::{
-    agent_template, default_user_template, demo_identities, provision_system_principal, CapEntry,
-    CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal, Session,
-    ROOT_TOKEN,
+    CapEntry, CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal,
+    ROOT_TOKEN, Session, agent_template, default_user_template, demo_identities,
+    provision_system_principal,
 };
 
 #[cfg(feature = "embedded-executor")]
@@ -557,13 +557,13 @@ pub use agent::{AgentActivity, AgentSurface};
 pub use buffer::{BufferCell, BufferDoc, BufferError, BufferView};
 #[cfg(feature = "embedded-executor")]
 pub use compositor::{
-    label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,
-    RegionId,
+    CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError, RegionId,
+    label_of,
 };
 #[cfg(feature = "embedded-executor")]
 pub use coordination::{MandateArrow, NotifyArrow, SwarmGraph, SwarmNode};
 #[cfg(feature = "embedded-executor")]
-pub use demo::{render_headless_report, DemoError, DemoFrame, HeadlineDemo};
+pub use demo::{DemoError, DemoFrame, HeadlineDemo, render_headless_report};
 #[cfg(feature = "embedded-executor")]
 pub use doc_editor::{AttributedAlternative, ConflictView, DocAuthor, DocEditor, EditOutcome};
 #[cfg(feature = "embedded-executor")]
@@ -595,20 +595,20 @@ pub use powerbox::{
 pub use proofs::{AttachStatus, ProofBoard, ProofEntry, VerificationTier};
 #[cfg(feature = "embedded-executor")]
 pub use scene::{
-    baked_admit_table, compositor_program, scene_admit, surface_factory, PresentVerdict,
-    VerifiedScene, PRESENT_DIGEST_SLOT, SURFACE_FACTORY_VK,
+    PRESENT_DIGEST_SLOT, PresentVerdict, SURFACE_FACTORY_VK, VerifiedScene, baked_admit_table,
+    compositor_program, scene_admit, surface_factory,
 };
 #[cfg(feature = "embedded-executor")]
 pub use shell::{Layout, Scene, SceneItem, Shell, ShellError};
 #[cfg(feature = "embedded-executor")]
 pub use simulate::{
-    commit as simulate_commit, render_outcome, simulate, CellDelta, DraftAction, EffectKind,
-    IntentDraft, SimOutcome,
+    CellDelta, DraftAction, EffectKind, IntentDraft, SimOutcome, commit as simulate_commit,
+    render_outcome, simulate,
 };
 #[cfg(feature = "embedded-executor")]
 pub use snapshot_editor::{
-    recipient_window_cap, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor,
-    Verification, ALL_LENSES,
+    ALL_LENSES, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor, Verification,
+    recipient_window_cap,
 };
 #[cfg(feature = "embedded-executor")]
 pub use surface::{Rect, Surface, SurfaceCapability, SurfaceId, SurfaceKind};
@@ -619,7 +619,7 @@ pub use swarm::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use swarm_budget::{
-    StingrayBudgetView, StingrayDrawError, StingraySwarmBudget, SWARM_POOL_SILO,
+    SWARM_POOL_SILO, StingrayBudgetView, StingrayDrawError, StingraySwarmBudget,
 };
 #[cfg(feature = "embedded-executor")]
 pub use terminal::{Command, CommandError, OutputLine, TerminalCell, TerminalView};
@@ -628,7 +628,7 @@ pub use web_cells::{
     AffordanceRow, CellRow, SemiReinteractiveTransclusion, Transclusion, WebCellsBrowser,
 };
 #[cfg(feature = "embedded-executor")]
-pub use world::{demo_genesis, demo_world, CommitOutcome, DemoSeed, World};
+pub use world::{CommitOutcome, DemoSeed, World, demo_genesis, demo_world};
 
 // THE REFLEXIVE DISTRIBUTED IMAGE (n > 1) re-exports.
 #[cfg(feature = "embedded-executor")]
@@ -638,7 +638,7 @@ pub use branch_stitch::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use distributed_timetravel::{
-    run_collaborative_rewind, AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick,
+    AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick, run_collaborative_rewind,
 };
 #[cfg(feature = "embedded-executor")]
 pub use netlayer_image::{ImageResponder, MirrorFrame, NetlayerImage, ResponderError};
@@ -650,7 +650,7 @@ pub use remote_mirror::{
 #[cfg(feature = "embedded-executor")]
 pub use remote_mirror_live::{LiveMirror, LiveRefusal, LiveStep, LiveTail};
 #[cfg(feature = "embedded-executor")]
-pub use two_image_firmament::{run_two_image_firmament, TwoImageOutcome, TwoImageRefusal};
+pub use two_image_firmament::{TwoImageOutcome, TwoImageRefusal, run_two_image_firmament};
 
 // THE GPUI PRESENTATION PLANE — the cockpit + login + dock element trees, lifted
 // into the LIBRARY so they render on EITHER gpui platform:
@@ -735,6 +735,13 @@ pub mod unified_boot;
 // (`session::{open_session_world, session_base_dir}` + `LoginManager::logout_durable`),
 // all `cfg(not(wasm32))` filesystem code. The web boot mounts `Cockpit` directly
 // (the in-tab image is ephemeral), so it never needs the login front door.
+// THE deos DESKTOP — a Windows-NT / Pharo-Smalltalk workbench over the live verified
+// World: a desktop of cell-icons (draggable, spatially persisted), overlapping NT
+// windows (inspectors), right-click context menus that fire REAL verified turns
+// (the actuation), a menu bar, and drag-to-compose. Built NEW beside the cockpit;
+// gpui-gated. See `src/deos_desktop.rs`.
+#[cfg(all(feature = "gpui-ui", feature = "embedded-executor"))]
+pub mod deos_desktop;
 #[cfg(feature = "gpui-ui")]
 pub mod login;
 // The older NodeClient-bound rail components + the shared theme/pill/section_title
