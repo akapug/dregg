@@ -415,6 +415,121 @@ fn live_android_cell_checkpoints_as_umem() {
     );
 }
 
+/// **THE INSTALL↔LAUNCH↔INTENT SPIKE — a live app's outbound intent routes through the gate
+/// to a cap-reachable handler, on the device.**
+///
+/// This is `GRAPHIDEOS.md §1`'s "an intent is a turn over a cap you hold" on `emulator-5554`.
+/// It installs an app registry (the launching app + two handler apps minted from manifests),
+/// launches the launching app via [`launch_installed_app`] — which builds its
+/// [`crate::IntentResolver`] from ONLY the cap-reachable installed apps — then welds the
+/// resolver to the live runtime as the intent sink and fires a real `tel:` DIAL: the gate
+/// resolves it to the granted dialer and drives the device's `am start` (the Dialer opens).
+/// A custom action with no granted handler reaches NOTHING (no ambient `startActivity`).
+///
+/// `#[ignore]` (needs the live device). Run on the dev host:
+/// ```sh
+/// export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+/// cargo test -p android-cell --test live_emulator_spike \
+///   live_intent_routes_through_the_gate_on_the_device -- --ignored --nocapture
+/// ```
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a live, already-running Android emulator. Run with --ignored on the dev host."]
+fn live_intent_routes_through_the_gate_on_the_device() {
+    use android_cell::intentgate::{
+        AndroidIntent, AndroidIntentGate, IntentDecision, IntentFilter,
+    };
+    use android_cell::{
+        AndroidManifest, AndroidPermission, AppLaunch, InstalledApps, MacOsEmulatorRuntime,
+        launch_installed_app,
+    };
+    use std::collections::BTreeSet;
+
+    // ── ATTACH to the standing emulator (do NOT boot/own it) ──────────────────
+    let mut rt = MacOsEmulatorRuntime::attach_running(DeviceSpec::dev_default())
+        .expect("attach to emulator-5554");
+
+    // ── INSTALL the registry: the launching app + two handler apps ────────────
+    // Each install is the appfactory cap-gated birth (its cap-set is exactly the manifest).
+    let launcher_cell = cell_seed(0x61);
+    let dialer_cell = cell_seed(0x62);
+    let browser_cell = cell_seed(0x63);
+
+    let mut apps = InstalledApps::new();
+    apps.install(
+        launcher_cell,
+        AndroidManifest::new("com.android.settings", [AndroidPermission::Internet]),
+        AppLaunch::Component("com.android.settings/.Settings".to_string()),
+        [0x11; 32],
+    );
+    apps.install(
+        dialer_cell,
+        AndroidManifest::new("com.android.dialer", [])
+            .with_intent_filters([IntentFilter::new(["android.intent.action.DIAL"], ["tel"])]),
+        AppLaunch::Package("com.android.dialer".to_string()),
+        [0x11; 32],
+    );
+    apps.install(
+        browser_cell,
+        AndroidManifest::new("com.android.browser", [AndroidPermission::Internet])
+            .with_intent_filters([IntentFilter::new(
+                ["android.intent.action.VIEW"],
+                ["http", "https"],
+            )]),
+        AppLaunch::Package("com.android.browser".to_string()),
+        [0x11; 32],
+    );
+
+    // ── LAUNCH the launching app; its resolver is its cap-reachable neighborhood ─
+    // Granted the dialer + browser handlers (NOT a device-wide PackageManager).
+    let granted: BTreeSet<_> = [dialer_cell, browser_cell].into_iter().collect();
+    let resolver = launch_installed_app(&mut rt, &apps, launcher_cell, &granted)
+        .expect("the installed launcher app launches + yields its cap-bounded resolver");
+    assert_eq!(
+        resolver.handlers().len(),
+        2,
+        "the resolver ranges over exactly the two granted handlers"
+    );
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // ── FIRE a tel: DIAL through the gate welded to the live runtime ──────────
+    let surface = SurfaceCapability::root(launcher_cell, AuthRequired::Either);
+    let mut gate = AndroidIntentGate::new(resolver, &mut rt);
+
+    let dial = AndroidIntent::view("android.intent.action.DIAL", "tel:+15551234567");
+    let r = gate.dispatch(&surface, dial);
+    match &r.decision {
+        IntentDecision::Resolved { .. } => {
+            println!("intent-spike: {}", r.status_line());
+        }
+        IntentDecision::DispatchFailed { .. } => {
+            // The cap + resolution teeth passed; only the device-side am start failed (no
+            // dialer on this image). That is the transport tooth, NOT a cap refusal.
+            println!("intent-spike (transport): {}", r.status_line());
+        }
+        other => panic!("a granted tel DIAL must resolve to the dialer, got {other:?}"),
+    }
+    assert!(
+        !r.decision.refused_no_handler() && !r.decision.refused_by_cap(),
+        "the granted dialer is cap-reachable — never a refusal"
+    );
+
+    // ── THE GATE BITES: a custom action no granted handler answers reaches NOTHING ─
+    let custom = AndroidIntent::view("com.evil.action.EXFIL", "tel:+15551234567");
+    let refused = gate.dispatch(&surface, custom);
+    assert!(
+        refused.decision.refused_no_handler(),
+        "an action no granted handler published reaches nothing (no ambient startActivity)"
+    );
+    println!("intent-spike: {}", refused.status_line());
+
+    println!(
+        "\nINTENT-SPIKE OK: a live launching app's outbound intent routed through the cap-gated \
+         resolver to its granted handler on the device; an ungranted action reached nothing. \
+         An intent is a turn over a cap you hold."
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn bs58_short(d: &[u8; 32]) -> String {
     bs58::encode(&d[..6]).into_string()

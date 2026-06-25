@@ -520,6 +520,21 @@ pub trait AndroidIntentSink {
     ) -> Result<(), IntentError>;
 }
 
+/// A `&mut S` is itself an [`AndroidIntentSink`] — so an [`AndroidIntentGate`] can borrow a
+/// runtime *transiently* (`AndroidIntentGate::new(resolver, &mut runtime)`) and hand it back
+/// when the gate drops, rather than consuming it. This is what lets the install↔launch↔intent
+/// loop (`crate::runtime::launch_installed_app`) dispatch through the SAME runtime it captures
+/// frames from.
+impl<S: AndroidIntentSink + ?Sized> AndroidIntentSink for &mut S {
+    fn start_activity(
+        &mut self,
+        intent: &AndroidIntent,
+        handler: CellId,
+    ) -> Result<(), IntentError> {
+        (**self).start_activity(intent, handler)
+    }
+}
+
 /// **The host-independent intent stand-in.** A sink with no live device: it RECORDS the
 /// `am_start_args` of every dispatched (gate-admitted) intent without touching a device,
 /// so the gate + receipt + cap + resolution logic test on any node — the intent-side of
