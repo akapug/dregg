@@ -70,6 +70,18 @@ name = "dregg-mcp"
 path = "src/bin/dregg_mcp.rs"
 required-features = ["embedded-executor"]
 
+# systemui-cap-bake — the graphideOS SystemUI cap-chrome bake (GRAPHIDEOS.md §1/§2
+# stage 4). Builds a REAL `permgate::PermWorld` for a confined maps android-cell, renders
+# the deos-cockpit-as-android-SystemUI (status bar + quick-settings shade + hand-over
+# sheet), then drives a real `Effect::GrantCapability` hand-over and re-renders — so the
+# bake artifact SHOWS the phone's permission UI being the deos cap surface (a dim badge
+# flips lit via a verified kernel turn). gpui-free:
+#   cargo run --no-default-features --features android-systemui --bin systemui-cap-bake
+[[bin]]
+name = "systemui-cap-bake"
+path = "src/bin/systemui_cap_bake.rs"
+required-features = ["android-systemui"]
+
 # A deos document persists to the REAL committed cell heap (`fields_map` via
 # `Effect::SetField`), not a sidecar — drives the encode/commit/read-back path
 # through the real World/executor. gpui-free: needs only the embedded executor.
@@ -115,7 +127,20 @@ desktop = [
     "web-shell",
     "agent-js",
     "card-pane",
+    "android-systemui",
 ]
+
+# `android-systemui` — the graphideOS SystemUI / cockpit-chrome half (GRAPHIDEOS.md
+# §1 SystemUI row · §2 stage 4): the deos cockpit AS the android system UI. It pulls
+# the `android-cell` crate so the cockpit can hold a REAL `permgate::PermWorld` (a live
+# ledger + the verified `TurnExecutor`) and render its live cap-badge set as a
+# status-bar / quick-settings cap-chrome, handing over a dangerous cap through the REAL
+# `Effect::GrantCapability` — the phone's permission UI IS the deos cap surface. Pure,
+# gpui-free flow model (`src/systemui_caps.rs`, like `powerbox`/`web_cells`),
+# `cargo test`-able; folded into `desktop`. `android-cell` reuses exactly the path-deps
+# `embedded-executor` + `servo` already pull (firmament / web-surface / captp / cell /
+# turn / servo-render), so this adds the thin cap-chrome crate, not a new dep tree.
+android-systemui = ["embedded-executor", "dep:android-cell"]
 
 # `desktop-zed-full` — the INTENDED full-Zed-default build (`desktop` PLUS
 # `zed-full`). It stays UNDECLARED for the same reason `zed-full`/`zed-full-pane`
@@ -801,6 +826,18 @@ starbridge-polis = { path = "../starbridge-apps/polis", optional = true }
 # (full HTML layout into the SAME frame, behind the SAME gate) is a feature flip in
 # servo-render, NOT a new seam here.
 servo-render = { path = "../servo-render", optional = true }
+
+# THE GRAPHIDEOS SYSTEMUI CAP-CHROME crate (`android-systemui` feature). `android-cell`
+# is the confined-foreign-app portal; its `permgate::PermWorld` owns a live
+# `dregg_cell::Ledger` + the verified `dregg_turn::executor::TurnExecutor` and renders an
+# android-cell's held permissions as a lit/dim `CapBadgeSet`, handing over a dangerous
+# permission through a REAL `Effect::GrantCapability`. `src/systemui_caps.rs` wraps that
+# into the cockpit's SystemUI chrome (status bar + quick settings + the powerbox hand-over
+# sheet) — the deos cockpit AS the android system UI (GRAPHIDEOS.md §1/§2 stage 4). It
+# path-depends (via servo-render) into the workspace-excluded `sel4/dregg-firmament`,
+# exactly as `servo-render` above does, so `android-cell` itself stays out of
+# `default-members`; pulled here only under `android-systemui` (in `desktop`).
+android-cell = { path = "../android-cell", optional = true }
 
 # THE WASM COCKPIT MIRROR — the in-browser skin (one model, three skins). These
 # re-declare the SAME executor crates the native block above pulls, but

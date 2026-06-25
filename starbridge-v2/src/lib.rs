@@ -170,6 +170,17 @@ pub mod xanadu_e2e;
 #[cfg(feature = "embedded-executor")]
 pub mod powerbox;
 
+// THE GRAPHIDEOS SYSTEMUI CAP-CHROME — the deos cockpit AS the android system UI
+// (GRAPHIDEOS.md §1 SystemUI row · §2 stage 4). Dresses a confined android-cell's live
+// cap-badge set (`android_cell::PermWorld`) as the two SystemUI surfaces a phone user
+// sees — the status bar (compact `🛡 held/total` cap strip) and the quick-settings shade
+// (the WHOLE roster lit ●/dim ○, no hidden Settings tree) — plus the powerbox hand-over
+// sheet, which grants a dangerous cap through the REAL `Effect::GrantCapability` so the
+// permission cap lands in the app's c-list with a kernel receipt. App/presentation over
+// proven machinery; no new kernel effect. gpui-free, `cargo test`-able (like `powerbox`).
+#[cfg(feature = "android-systemui")]
+pub mod systemui_caps;
+
 // DREGG-MUD — the first slice of a decentralized multi-user world: a room is a
 // cell, an inhabitant is a cap-rooted session, an item is a capability, an action
 // is a verified turn. `Room`/`Inhabitant`/`Item` over the REAL world+powerbox; the
