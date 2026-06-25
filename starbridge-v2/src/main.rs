@@ -1848,25 +1848,79 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     //      the inspector body and compiles).
     #[cfg(feature = "card-pane")]
     {
+        // Open the World-Status pane (the reflective surface) as a real desktop window,
+        // render, and mint its live `AppletView` entity.
         desk_h.update(&mut cx, |desk, cx| {
             desk.bake_open_viewnode_pane();
             cx.notify();
         });
         cx.run_until_parked();
+        // The live renderer entity is minted lazily when the window first renders.
         let has_pane = desk_h.update(&mut cx, |desk, _cx| desk.bake_viewnode_has_pane());
         anyhow::ensure!(
             has_pane,
-            "the desktop must host a content-IR pane — a window whose body is a real \
+            "the desktop must host the World-Status pane — a window whose body is a real \
              deos_view::ViewNode rendered through deos-view's native renderer"
         );
-        // The SAME portable tree the native pane hosts also renders to HTML — carrying
-        // the card text, the seeded `bind` value, and the button's affordance payload.
-        let html = starbridge_v2::deos_desktop::viewnode_pane::card_html();
+
+        // THE REFLECTIVE-COCKPIT LOOP IN THE SHIPPED DESKTOP — capture the panel BEFORE
+        // the agent touches it, run the agent's reflect-then-rewrite loop against the
+        // SHIPPED pane, then capture AFTER. The two desktop frames differ: the agent
+        // rewrote a real cockpit surface and the change reached the glass.
+        // First dismiss the one-time welcome card + raise the World-Status pane into a
+        // clear area so its body (the surface the agent rewrites) is visible + unoccluded.
+        desk_h.update(&mut cx, |desk, cx| {
+            if desk.bake_welcome_is_shown() {
+                desk.bake_welcome_door(0);
+            }
+            desk.bake_place_viewnode_window(360.0, 110.0, 520.0, 360.0);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let vnode_before = cx.capture_screenshot(window.into())?;
+        vnode_before.save(format!("{out}.viewnode-before.png"))?;
+
+        let rewrite = desk_h
+            .update(&mut cx, |desk, cx| {
+                desk.bake_agent_rewrites_viewnode_pane(cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's reflect-then-rewrite loop failed: {e}"))?;
         anyhow::ensure!(
-            html.contains("Portable-IR card")
-                && html.contains("live count: 7")
-                && html.contains("data-turn=\"bump\""),
-            "the web renderer must render the IDENTICAL portable ViewNode the desktop \
+            rewrite.reflected_header && rewrite.reflected_rows == 3,
+            "REFLECT-ON: the agent must read the live cockpit surface's own tree (the \
+             `World Status` header + its 3 status rows it did NOT author)"
+        );
+        anyhow::ensure!(
+            !rewrite.before_has_button && rewrite.after_has_button && rewrite.live_after_has_button,
+            "REWRITE: the agent must add a `refresh` button the live pane did not have — \
+             and the SHIPPED pane entity must now carry it (the surface re-rendered)"
+        );
+        anyhow::ensure!(
+            rewrite.receipt_count == 2 && rewrite.blamed_agent,
+            "ACCOUNTABLE: the rewrite's two gestures (addButton + relabel) must each commit \
+             a receipted provenance turn, blamed on the agent (got {} receipt(s), blamed={})",
+            rewrite.receipt_count,
+            rewrite.blamed_agent
+        );
+
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let vnode_after = cx.capture_screenshot(window.into())?;
+        vnode_after.save(format!("{out}.viewnode-after.png"))?;
+        anyhow::ensure!(
+            vnode_before.as_raw() != vnode_after.as_raw(),
+            "the agent's rewrite must change the SHIPPED desktop window — the World-Status \
+             pane's `refresh` button + `(live)` relabel must reach pixels (before == after)"
+        );
+
+        // The SAME portable tree the native pane hosts also renders to HTML — renderer
+        // independence (the same World-Status ViewNode, native + web).
+        let html = starbridge_v2::deos_desktop::viewnode_pane::status_panel_html();
+        anyhow::ensure!(
+            html.contains("World Status") && html.contains("receipts: 12"),
+            "the web renderer must render the IDENTICAL World-Status ViewNode the desktop \
              hosts (renderer independence: the same tree, native + web)"
         );
     }
