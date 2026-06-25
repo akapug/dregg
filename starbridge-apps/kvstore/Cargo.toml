@@ -1,0 +1,21 @@
+[package]
+name = "starbridge-kvstore"
+version = "0.1.0"
+edition = "2024"
+description = "A verified key-value register store as a service cell — the first starbridge-app built on the invoke() front door (cells-as-service-objects). Typed InterfaceDescriptor (put/get/delete with auth + Replayable/Serviced), invokable via invoke(), inspectable in the Service Explorer."
+
+# The CELLS-AS-SERVICE-OBJECTS exemplar. Unlike the FactoryDescriptor +
+# turn-builder apps, this crate declares a first-class typed
+# `InterfaceDescriptor` and drives its methods through
+# `dregg_app_framework::invoke` — the userspace method-dispatch front door that
+# desugars to ordinary verified effects (no `Effect::Invoke`, no kernel change).
+# See `src/lib.rs` for the in-source design notes.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+[lints]
+workspace = true
