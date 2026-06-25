@@ -74,14 +74,36 @@
 //! this path; a future cockpit binding can lift [`PermWorld::grant`] onto its own `World` without
 //! a new effect (the effect IS [`Effect::GrantCapability`], reused verbatim).
 //!
-//! # The remaining depth (honest)
+//! # The in-runtime `checkSelfPermission` interposition (now real)
 //!
-//! The in-runtime `checkSelfPermission` interposition (so the confined app's own permission
-//! checks read this badge set rather than the framework's), and the in-circuit constructor proof
-//! that a given android-cell was minted by its descriptor, are the same not-yet-claimed depth the
-//! sibling gates name. What IS real today: the protection-level-faithful badge derivation + the
-//! declared / held-by-granter teeth + the receipted hand-over + revoke ([`PermBox`]), AND a real
-//! kernel cap-grant that lands in the cell's c-list with a verified `TurnReceipt` ([`PermWorld`]).
+//! `GRAPHIDEOS.md §1`/`§4`: the permission model becomes *visible capabilities*, and a cell's own
+//! runtime permission checks read THIS badge set, not AOSP's per-UID framework grant table.
+//! [`PermBox::check_self_permission`] / [`PermWorld::check_self_permission`] are that: a confined
+//! app's `Context.checkSelfPermission` is routed through [`PermBox::holds`] / [`PermWorld::holds`]
+//! (the SAME predicate the cap-badge renders) and answers [`PermissionCheck::Granted`]
+//! (`PERMISSION_GRANTED`, 0) iff the cell holds the cap-badge, [`PermissionCheck::Denied`]
+//! (`PERMISSION_DENIED`, -1) **in-runtime** otherwise — a permission whose cap the cell does not
+//! hold genuinely denies the app's own check; no ambient framework grant overrides the cap model.
+//! Each check leaves a [`PermCheckReceipt`], so the app's authority *reads* are auditable exactly
+//! like its authority *changes* (the [`PermReceipt`]). Over [`PermWorld`] the verdict reads the
+//! cell's GENUINE c-list in the live ledger, so a dangerous permission checks granted iff a real
+//! [`Effect::GrantCapability`] turn actually landed its organ cap.
+//!
+//! # The remaining depth (honest) — the binder leg that routes the GUEST's check
+//!
+//! What is NOT yet claimed is the **device-kernel binder interposition**: making a *foreign,
+//! unmodified APK's* in-process `checkSelfPermission` call (a `libbinder` transaction the
+//! framework wires to `system_server`'s `PermissionManagerService` / `AppOpsService`, ultimately
+//! `ActivityManagerService.checkPermission` over the per-UID runtime-permission state in
+//! `packages.xml`) return THIS cap-derived verdict instead. That is the same per-service binder-shim
+//! work `GRAPHIDEOS.md §4`/`§7.5` names (a Soong module forwarding the `IPermissionManager` /
+//! `checkPermission` binder transaction into this gate, on a Linux build node / a live device) — it
+//! is beyond this macOS host's model layer. What IS real today, on any node, with no device: the
+//! check-routing over [`PermBox::holds`]/[`PermWorld::holds`] (a held cap grants, a dim cap denies,
+//! receipted), the protection-level-faithful badge derivation, the declared / held-by-granter teeth,
+//! the receipted hand-over + revoke, AND a real kernel cap-grant that lands in the cell's c-list
+//! with a verified `TurnReceipt`. The in-circuit constructor proof that a given android-cell was
+//! minted by its descriptor remains the sibling gates' shared not-yet-claimed depth.
 //!
 //! [`World`]: ../../starbridge-v2/src/world.rs
 //! [`Effect::GrantCapability`]: dregg_turn::action::Effect
@@ -341,6 +363,118 @@ impl PermReceipt {
     }
 }
 
+// ── THE IN-RUNTIME `checkSelfPermission` INTERPOSITION ───────────────────────
+
+/// **The result of a confined app's OWN permission check** — what
+/// `Context.checkSelfPermission` / `Context.checkPermission` / `PermissionChecker`
+/// return. In stock Android these are the two `PackageManager` int constants the app
+/// branches on; here the verdict is decided by the deos **cap-badge set**, not AOSP's
+/// per-UID framework grant table: the app sees the cap model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionCheck {
+    /// `PackageManager.PERMISSION_GRANTED` (`== 0`) — the cell GENUINELY holds the
+    /// authority (a lit cap-badge): the check returns granted in-runtime.
+    Granted,
+    /// `PackageManager.PERMISSION_DENIED` (`== -1`) — the cell does NOT hold the
+    /// authority (a dim cap-badge): the check returns denied in-runtime, no ambient
+    /// framework grant can override it.
+    Denied,
+}
+
+impl PermissionCheck {
+    /// **The exact AOSP int the framework returns** — `PERMISSION_GRANTED == 0`,
+    /// `PERMISSION_DENIED == -1`. The confined app's `checkSelfPermission` call reads
+    /// this value verbatim, so it cannot tell a deos cap-derived verdict from a
+    /// framework one (the interposition is transparent at the call site).
+    pub fn aosp_code(&self) -> i32 {
+        match self {
+            PermissionCheck::Granted => 0,
+            PermissionCheck::Denied => -1,
+        }
+    }
+
+    /// The `PackageManager` constant name (the symbol the app's `if (… == GRANTED)`
+    /// compares against) — the audit label.
+    pub fn constant_name(&self) -> &'static str {
+        match self {
+            PermissionCheck::Granted => "PERMISSION_GRANTED",
+            PermissionCheck::Denied => "PERMISSION_DENIED",
+        }
+    }
+
+    pub fn granted(&self) -> bool {
+        matches!(self, PermissionCheck::Granted)
+    }
+    pub fn denied(&self) -> bool {
+        matches!(self, PermissionCheck::Denied)
+    }
+
+    fn tag(&self) -> &'static str {
+        match self {
+            PermissionCheck::Granted => "granted",
+            PermissionCheck::Denied => "denied",
+        }
+    }
+}
+
+/// **The receipt left by an in-runtime `checkSelfPermission` interposition.** Every
+/// permission check a confined app issues leaves one, so the app's authority *reads*
+/// (not just its authority *changes*, the [`PermReceipt`]) are auditable end to end —
+/// the deos answer to AOSP's silent, unlogged `checkSelfPermission` consultation of the
+/// per-UID grant table. The verdict + the never-hidden [`BadgeReason`] (the same "why"
+/// the cap-badge renders) are bound. Content-addressed:
+/// `decision_digest = blake3(app_cell ‖ permission ‖ verdict)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PermCheckReceipt {
+    /// The android-cell that asked (the confined app checking its OWN permission).
+    pub app_cell: CellId,
+    /// The permission the app checked.
+    pub permission: AndroidPermission,
+    /// The verdict — granted iff the cell holds the cap-badge, denied otherwise.
+    pub result: PermissionCheck,
+    /// The never-hidden audit reason — the SAME [`BadgeReason`] the cell's cap-badge
+    /// renders, so the check verdict and the visible badge can never disagree.
+    pub reason: BadgeReason,
+    /// `blake3(…)[..32]` — the content-addressed witness a verifier reconstructs.
+    pub decision_digest: [u8; 32],
+}
+
+impl PermCheckReceipt {
+    fn digest(
+        app_cell: CellId,
+        permission: &AndroidPermission,
+        result: PermissionCheck,
+    ) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(b"graphideos-perm-check-v1");
+        h.update(app_cell.as_bytes());
+        h.update(permission.android_name().as_bytes());
+        h.update(b"\x00");
+        h.update(result.tag().as_bytes());
+        *h.finalize().as_bytes()
+    }
+
+    /// The AOSP int the confined app's `checkSelfPermission` call site reads (`0` / `-1`).
+    pub fn aosp_code(&self) -> i32 {
+        self.result.aosp_code()
+    }
+
+    /// A one-line audit truth for the cockpit status line — the verdict, named exactly.
+    pub fn status_line(&self) -> String {
+        let perm = self.permission.android_name();
+        match self.result {
+            PermissionCheck::Granted => format!(
+                "android-perm-check: ✔ {perm} checkSelfPermission → PERMISSION_GRANTED (0) — the cell holds the cap-badge ({})",
+                self.reason.label()
+            ),
+            PermissionCheck::Denied => format!(
+                "android-perm-check: ✖ {perm} checkSelfPermission → PERMISSION_DENIED (-1) in-runtime — the cell holds no cap-badge ({}); no ambient framework grant overrides the cap model",
+                self.reason.label()
+            ),
+        }
+    }
+}
+
 /// **THE PERMISSION HAND-OVER SURFACE for one android-cell** — the trusted, powerbox-style
 /// surface that renders the app's cap-badges AND mediates a receipted hand-over (the deos form
 /// of the runtime-permission dialog). Holds the app's manifest (the declared set — what is even
@@ -430,6 +564,42 @@ impl PermBox {
         CapBadgeSet {
             cell: self.app_cell,
             badges,
+        }
+    }
+
+    /// **THE IN-RUNTIME `checkSelfPermission` INTERPOSITION — route the confined app's OWN
+    /// permission check through the cap-badge set.** `GRAPHIDEOS.md §1`/`§4`: the permission
+    /// model becomes *visible capabilities*, and a cell's runtime permission checks read THIS
+    /// badge set, not AOSP's per-UID framework grant table.
+    ///
+    /// When the confined app calls `Context.checkSelfPermission(perm)` (or `checkPermission` /
+    /// `PermissionChecker.checkSelfPermission`), the runtime interposes the call and answers from
+    /// [`PermBox::holds`] — the SAME predicate the cap-badge renders:
+    ///
+    /// - the cell holds the cap-badge (a `Normal` install-held permission, or a `Dangerous`/
+    ///   `Signature` one a hand-over lit) ⟹ [`PermissionCheck::Granted`] (`PERMISSION_GRANTED`, 0);
+    /// - the cell holds NO cap-badge (declared-but-dim, or never declared) ⟹
+    ///   [`PermissionCheck::Denied`] (`PERMISSION_DENIED`, -1) **in-runtime** — a permission whose
+    ///   cap the cell does not hold genuinely denies the app's own check; no ambient framework grant
+    ///   can override the cap model.
+    ///
+    /// The verdict carries the never-hidden [`BadgeReason`] (the visible "why") and leaves a
+    /// [`PermCheckReceipt`], so the app's authority *reads* are auditable exactly like its
+    /// authority *changes*.
+    pub fn check_self_permission(&self, permission: &AndroidPermission) -> PermCheckReceipt {
+        let result = if self.holds(permission) {
+            PermissionCheck::Granted
+        } else {
+            PermissionCheck::Denied
+        };
+        let reason = self.reason_for(permission);
+        let decision_digest = PermCheckReceipt::digest(self.app_cell, permission, result);
+        PermCheckReceipt {
+            app_cell: self.app_cell,
+            permission: permission.clone(),
+            result,
+            reason,
+            decision_digest,
         }
     }
 
@@ -695,6 +865,31 @@ impl PermWorld {
         CapBadgeSet {
             cell: self.app_cell,
             badges,
+        }
+    }
+
+    /// **THE IN-RUNTIME `checkSelfPermission` INTERPOSITION, over the REAL c-list.** The confined
+    /// app's own permission check, answered from [`PermWorld::holds`] — which reads the
+    /// android-cell's GENUINE capability c-list in the live ledger, not an internal flag set. So a
+    /// dangerous permission's `checkSelfPermission` returns [`PermissionCheck::Granted`] iff a real
+    /// [`Effect::GrantCapability`] turn actually landed its organ cap (the cap-badge is lit because
+    /// the cell holds the cap); a permission whose cap never landed genuinely denies in-runtime
+    /// ([`PermissionCheck::Denied`], `PERMISSION_DENIED`, -1). The verdict carries the never-hidden
+    /// [`BadgeReason`] and leaves a [`PermCheckReceipt`].
+    pub fn check_self_permission(&self, permission: &AndroidPermission) -> PermCheckReceipt {
+        let result = if self.holds(permission) {
+            PermissionCheck::Granted
+        } else {
+            PermissionCheck::Denied
+        };
+        let reason = self.reason_for(permission);
+        let decision_digest = PermCheckReceipt::digest(self.app_cell, permission, result);
+        PermCheckReceipt {
+            app_cell: self.app_cell,
+            permission: permission.clone(),
+            result,
+            reason,
+            decision_digest,
         }
     }
 
@@ -1024,6 +1219,58 @@ mod tests {
         assert_eq!(badge.reason, BadgeReason::DeclaredNotGranted);
     }
 
+    /// **THE checkSelfPermission INTERPOSITION TEST: the confined app's OWN permission check
+    /// reads the cap-badge set — a held cap → PERMISSION_GRANTED (0), a dim cap → PERMISSION_DENIED
+    /// (-1) in-runtime — and leaves a receipt. A permission whose cap the cell does not hold
+    /// genuinely denies the app's own check (not AOSP's framework grant table).**
+    #[test]
+    fn check_self_permission_routes_through_the_cap_badge_set() {
+        let (mut pb, app, _principal) = maps_permbox();
+
+        // A NORMAL declared permission (INTERNET) is held at install → GRANTED in-runtime.
+        let net = pb.check_self_permission(&AndroidPermission::Internet);
+        assert!(net.result.granted());
+        assert_eq!(net.aosp_code(), 0, "PERMISSION_GRANTED == 0");
+        assert_eq!(net.result.constant_name(), "PERMISSION_GRANTED");
+        assert_eq!(net.app_cell, app);
+        assert_eq!(net.reason, BadgeReason::HeldAtInstall);
+        assert!(net.status_line().contains("PERMISSION_GRANTED"));
+        assert_eq!(
+            net.decision_digest,
+            PermCheckReceipt::digest(app, &AndroidPermission::Internet, net.result)
+        );
+
+        // A DANGEROUS declared-but-not-granted permission (ACCESS_FINE_LOCATION): the cap is dim,
+        // so the app's OWN check is DENIED in-runtime — the load-bearing claim.
+        let loc_dim = pb.check_self_permission(&AndroidPermission::AccessFineLocation);
+        assert!(
+            loc_dim.result.denied(),
+            "a dim cap denies the app's own check"
+        );
+        assert_eq!(loc_dim.aosp_code(), -1, "PERMISSION_DENIED == -1");
+        assert_eq!(loc_dim.reason, BadgeReason::DeclaredNotGranted);
+        assert!(loc_dim.status_line().contains("PERMISSION_DENIED"));
+
+        // An UNDECLARED permission (CAMERA) → DENIED, never declared (no ambient escalation).
+        let cam = pb.check_self_permission(&AndroidPermission::Camera);
+        assert!(cam.result.denied());
+        assert_eq!(cam.reason, BadgeReason::NotDeclared);
+
+        // After a receipted hand-over lights the badge, the SAME check now returns GRANTED —
+        // the check verdict and the visible cap-badge can never disagree.
+        pb.grant(AndroidPermission::AccessFineLocation);
+        let loc_lit = pb.check_self_permission(&AndroidPermission::AccessFineLocation);
+        assert!(
+            loc_lit.result.granted(),
+            "the granted cap now grants the check"
+        );
+        assert_eq!(loc_lit.reason, BadgeReason::HeldByGrant);
+        assert_ne!(
+            loc_dim.decision_digest, loc_lit.decision_digest,
+            "the verdict is bound into the digest (denied ≠ granted)"
+        );
+    }
+
     // ── THE REAL KERNEL HAND-OVER tests (PermWorld) ──────────────────────────
 
     /// Build a `PermWorld` for a maps app declaring INTERNET (normal) +
@@ -1188,5 +1435,55 @@ mod tests {
             "no turn for an install-held permission"
         );
         assert!(pw.holds(&AndroidPermission::Internet));
+    }
+
+    /// **THE checkSelfPermission INTERPOSITION OVER THE REAL c-list: the app's own check reads the
+    /// android-cell's GENUINE capability c-list — a dangerous permission denies in-runtime
+    /// (PERMISSION_DENIED, -1) until a real GrantCapability turn lands its organ cap, then the SAME
+    /// check grants (PERMISSION_GRANTED, 0). A receipt is left.**
+    #[test]
+    fn kernel_check_self_permission_reads_the_live_clist() {
+        let mut pw = maps_permworld();
+        let app = pw.app_cell();
+
+        // INTERNET (normal, install-held) → GRANTED from the live ledger.
+        let net = pw.check_self_permission(&AndroidPermission::Internet);
+        assert!(net.result.granted());
+        assert_eq!(net.aosp_code(), 0);
+        assert_eq!(net.app_cell, app);
+
+        // ACCESS_FINE_LOCATION before the grant: the real c-list does NOT reach the organ, so the
+        // app's own check is DENIED in-runtime.
+        let loc_before = pw.check_self_permission(&AndroidPermission::AccessFineLocation);
+        assert!(
+            loc_before.result.denied(),
+            "no organ cap in the c-list → the app's checkSelfPermission denies"
+        );
+        assert_eq!(loc_before.aosp_code(), -1);
+        assert_eq!(loc_before.reason, BadgeReason::DeclaredNotGranted);
+        assert_eq!(
+            loc_before.decision_digest,
+            PermCheckReceipt::digest(
+                app,
+                &AndroidPermission::AccessFineLocation,
+                loc_before.result
+            )
+        );
+
+        // The REAL hand-over lands the organ cap in the cell's c-list.
+        assert!(pw.grant(AndroidPermission::AccessFineLocation).granted());
+
+        // Now the SAME check reads the live c-list and GRANTS — the cap genuinely landed.
+        let loc_after = pw.check_self_permission(&AndroidPermission::AccessFineLocation);
+        assert!(
+            loc_after.result.granted(),
+            "the landed cap grants the in-runtime check"
+        );
+        assert_eq!(loc_after.reason, BadgeReason::HeldByGrant);
+
+        // An UNDECLARED permission denies (no cap template, never reaches the c-list).
+        let cam = pw.check_self_permission(&AndroidPermission::Camera);
+        assert!(cam.result.denied());
+        assert_eq!(cam.reason, BadgeReason::NotDeclared);
     }
 }
