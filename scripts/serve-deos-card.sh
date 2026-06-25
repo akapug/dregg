@@ -19,6 +19,12 @@
 #                      (Row + Table + a multi-affordance row). A table of named tallies, each a
 #                      row with a live count and +1/−1 buttons; every click fires a real
 #                      cap-gated verified turn moving that one tally, and the row re-paints.
+#   /kvstore.html    — the KV-STORE SERVICE-CELL card (KvStoreWorld): a cell publishing a typed
+#                      interface (put · delete · get). Clicking put/del ROUTES the call through
+#                      the store's InterfaceDescriptor (the verified DFA) before it desugars to
+#                      the version-bump + register SetField effects — a real cap-gated verified
+#                      turn against the store cell, the monotone version advancing (a rollback is
+#                      refused by the program's Monotonic constraint; get is a named OFE seam).
 #
 # Builds the wasm bundle, bakes the live pages, assembles a self-contained dist/, and serves it
 # (each page is a module-import + a .wasm fetch — file:// is CORS-blocked, so it MUST be served
@@ -57,6 +63,8 @@ echo "  INSPECTOR : http://localhost:$PORT/inspector.html — a reflective cockp
 echo "              affordance (tick/add/score) → a real verified turn → the bound field re-paints."
 echo "  TALLY     : http://localhost:$PORT/tally.html     — a table of named tallies (Row + Table);"
 echo "              click +1/−1 on any row → a real verified turn moves that one tally."
+echo "  KVSTORE   : http://localhost:$PORT/kvstore.html   — a SERVICE CELL (published put/delete/get);"
+echo "              click put/del → a method routed through the verified DFA → a real verified turn."
 echo "(Ctrl-C to stop.)"
 cd "$DIST"
 exec python3 -m http.server "$PORT"

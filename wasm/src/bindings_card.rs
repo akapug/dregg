@@ -36,6 +36,7 @@ use crate::runtime::DreggRuntime;
 use deos_reflect::substance::FieldValue;
 use deos_reflect::{AffordanceSurface, ReflectedCell};
 use dregg_cell::AuthRequired;
+use dregg_cell::interface::{ArgsSchema, InterfaceDescriptor, MethodSig, Semantics, method_symbol};
 
 /// Pack a `u64` into a 32-byte field element — little-endian into the low 8 bytes.
 /// Byte-identical to `deos_js::applet::pack_u64` (the native applet's slot encoding).
@@ -640,6 +641,403 @@ fn tally_view_tree_json() -> String {
         "children": [
             { "kind": "text", "props": { "text": "Tally board" } },
             { "kind": "table", "props": {}, "children": rows }
+        ]
+    })
+    .to_string()
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+//  THE KV-STORE SERVICE CELL, IN THE TAB — a published interface invoked client-side
+// ════════════════════════════════════════════════════════════════════════════════════════
+//
+// `CardWorld`/`InspectorWorld`/`TallyWorld` drive a cell's OWN slots through bare `SetField`
+// turns. The KV-STORE is a different deos surface: a **service cell** that publishes a
+// first-class typed `InterfaceDescriptor` (`put` · `delete` · `get`) and whose method calls
+// are ROUTED through the verified DFA router before they desugar to the ordinary `SetField`
+// effects the kernel already enforces. There is NO `Effect::Invoke` — the kernel and the
+// light client keep seeing only the `SetField`s they witness; the one extra fact, that an
+// invoked method is a member of the cell's interface, is decided by the SAME
+// `InterfaceDescriptor::route_method` (a `dregg_dfa::Router`) the protocol uses.
+//
+// This is the wasm realization of `starbridge_kvstore` (the crate itself can't be a wasm dep:
+// it pulls `dregg-app-framework` → axum/tokio/reqwest, so its program VALUE lives in
+// `runtime::app_programs::kvstore_program`, exactly as the subscription/governance programs
+// do, and its `invoke()` routing core — route → gate-serviced → cap-gate → desugar — is
+// re-expressed here over the SAME `dregg_cell::interface` types). Every `put`/`delete` is a
+// REAL cap-gated verified turn whose post-state the executor checks against the store's
+// `CellProgram`. The store program scopes `StateConstraint::Monotonic` on the VERSION slot to
+// the `put`/`delete` cases — so a replay/reorder that would lower the version is an EXECUTOR
+// REFUSAL, here in the tab (`try_rollback` exercises it). `get` is `Serviced` — its answer
+// rides the OFE cross-cell-read, not a replay desugar — so the router REFUSES to desugar it,
+// naming the seam honestly rather than faking a write (`try_get`).
+
+/// The number of value registers the KV-store card surfaces as live rows (slots
+/// [`app_programs::KV_REG_MIN`]`..`). The store itself addresses `REG_MIN..=REG_MAX`; the card
+/// shows the first few as a legible register file.
+const KV_REGS_SHOWN: usize = 4;
+
+/// The fee (computrons) each `put`/`delete` turn meters against the caller's cell.
+const KV_FEE: u64 = 10_000;
+
+/// **The store's published typed interface** — the wasm mirror of
+/// `starbridge_kvstore::interface_descriptor`: `put(reg, value)` and `delete(reg)` are
+/// `Signature`-gated `Replayable` mutators; `get(reg)` is a `Serviced` read (the named OFE
+/// seam, never desugared). Routed through the SAME `dregg_dfa` router the protocol uses.
+fn kv_interface_descriptor() -> InterfaceDescriptor {
+    InterfaceDescriptor::new(vec![
+        MethodSig {
+            args_schema: ArgsSchema::Fixed(2),
+            auth_required: AuthRequired::Signature,
+            ..MethodSig::replayable(method_symbol("put"))
+        },
+        MethodSig {
+            args_schema: ArgsSchema::Fixed(1),
+            auth_required: AuthRequired::Signature,
+            ..MethodSig::replayable(method_symbol("delete"))
+        },
+        MethodSig {
+            args_schema: ArgsSchema::Fixed(1),
+            auth_required: AuthRequired::None,
+            semantics: Semantics::Serviced,
+            ..MethodSig::replayable(method_symbol("get"))
+        },
+    ])
+}
+
+/// Pack a `u64` into the CANONICAL felt lane the executor's state constraints read — bytes
+/// `[24..32]`, big-endian (the same `dregg_app_framework::field_from_u64` /
+/// `program::eval::field_to_u64` use). The store's `Monotonic` version check operates on THIS
+/// lane, so the KV-store writes + reads it (not the deos-js applet's little-endian low-8 lane
+/// the counter/tally use for their own bare slots).
+fn fe_be(v: u64) -> [u8; 32] {
+    let mut fe = [0u8; 32];
+    fe[24..32].copy_from_slice(&v.to_be_bytes());
+    fe
+}
+
+/// Read a `u64` back out of the canonical felt lane (`[24..32]`, big-endian) — the inverse of
+/// [`fe_be`], matching the executor's `field_to_u64`.
+fn be_to_u64(fe: &[u8; 32]) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&fe[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// The KV-store service cell, driven from the browser tab. A `KvStoreWorld` owns one runtime
+/// with a CALLER agent (agent 0, the signer/fee-payer) and a separate STORE cell carrying the
+/// published interface + the verified `CellProgram`. Each `put`/`delete` affordance is ROUTED
+/// through the store's `InterfaceDescriptor` and fired as a REAL cap-gated verified turn
+/// against the store cell — the wasm realization of `starbridge_kvstore` over a live World.
+#[wasm_bindgen]
+pub struct KvStoreWorld {
+    rt: DreggRuntime,
+    /// The store cell — the service object the caller invokes methods on.
+    store: dregg_types::CellId,
+    /// The store's published typed interface (the routing front door).
+    descriptor: InterfaceDescriptor,
+}
+
+#[wasm_bindgen]
+impl KvStoreWorld {
+    /// Mint a KV-store on its own embedded executor: a caller agent (the signer), a store cell
+    /// owned by a distinct synthetic key with the [`app_programs::kvstore_program`] installed
+    /// (open permissions; the verified slot-caveat is the enforcement), and a reach capability
+    /// granted to the caller. `seeds[i]` seeds register [`app_programs::KV_REG_MIN`]`+ i` via a
+    /// REAL `put` invocation (each routes through the interface and bumps the version), so the
+    /// genesis store itself leaves receipts. Pass an empty/short array for the defaults.
+    #[wasm_bindgen(constructor)]
+    pub fn new(seeds: Vec<u64>) -> Result<KvStoreWorld, JsError> {
+        use crate::runtime::app_programs;
+        let mut rt = DreggRuntime::new();
+        // The caller: agent 0, the signer + fee-payer for every put/delete turn.
+        rt.try_create_agent("kvstore-caller", 2_000_000)
+            .map_err(|e| JsError::new(&e))?;
+        // The store cell, owned by a synthetic key distinct from the caller's (so its id does
+        // not collide with the caller's own cell), with the verified store program installed.
+        let store_owner = *blake3::hash(b"dregg-wasm-kvstore-owner").as_bytes();
+        let store = rt
+            .mint_cell_from_genesis(store_owner, 0)
+            .map_err(|e| JsError::new(&e))?;
+        rt.install_app_program(
+            &store,
+            app_programs::kvstore_program(),
+            app_programs::kvstore_initial_state(),
+        )
+        .map_err(|e| JsError::new(&e))?;
+        // The caller must hold a capability to REACH the store (a non-self target).
+        rt.grant_reach_capability(0, store)
+            .map_err(|e| JsError::new(&e))?;
+        let mut world = KvStoreWorld {
+            rt,
+            store,
+            descriptor: kv_interface_descriptor(),
+        };
+        let defaults = [10u64, 20u64, 30u64, 40u64];
+        for i in 0..KV_REGS_SHOWN {
+            let reg = app_programs::KV_REG_MIN as usize + i;
+            let value = seeds.get(i).copied().unwrap_or(defaults[i]);
+            if value != 0 {
+                // Seed through the REAL put front door (routes + bumps the version).
+                world
+                    .put(reg as i32, value as i32)
+                    .map_err(|e| JsError::new(&format!("seed put failed: {e:?}")))?;
+            }
+        }
+        Ok(world)
+    }
+
+    /// The store cell's id (hex) — the service object's sovereignty boundary.
+    #[wasm_bindgen(js_name = cellId)]
+    pub fn cell_id(&self) -> String {
+        crate::bindings::hex_encode(&self.store.0)
+    }
+
+    /// A witnessed read of store slot `slot` off the live ledger (the canonical felt lane). The
+    /// value the web renderer paints into the matching `data-slot` span — slot 0 is the version,
+    /// slots `REG_MIN..` the registers.
+    pub fn read(&self, slot: usize) -> u64 {
+        self.rt
+            .cell_field(&self.store, slot)
+            .map(|fe| be_to_u64(&fe))
+            .unwrap_or(0)
+    }
+
+    /// The store's monotone version (slot 0) — bumped by every committed `put`/`delete`, and
+    /// (by the verified `Monotonic` constraint) never able to roll back.
+    pub fn version(&self) -> u64 {
+        use crate::runtime::app_programs;
+        self.read(app_programs::KV_VERSION_SLOT as usize)
+    }
+
+    /// The committed-receipt count — the audit tape length (one per committed method turn,
+    /// including the genesis seed puts).
+    #[wasm_bindgen(js_name = receiptCount)]
+    pub fn receipt_count(&self) -> usize {
+        self.rt.receipts.len()
+    }
+
+    /// The published interface as JSON (`[{name, auth, semantics, arity}]`) — what the Service
+    /// Explorer resolves. The card shows it so a visitor sees the typed contract the affordances
+    /// route through.
+    #[wasm_bindgen(js_name = methodsJson)]
+    pub fn methods_json(&self) -> String {
+        use serde_json::json;
+        let rows: Vec<serde_json::Value> = [("put", "Signature"), ("delete", "Signature"), ("get", "None")]
+            .iter()
+            .filter_map(|(name, auth)| {
+                self.descriptor.method(&method_symbol(name)).map(|m| {
+                    json!({
+                        "name": name,
+                        "auth": auth,
+                        "semantics": if m.semantics == Semantics::Serviced { "serviced" } else { "replayable" },
+                    })
+                })
+            })
+            .collect();
+        json!(rows).to_string()
+    }
+
+    /// **THE KV-STORE VIEW-TREE** — a titled column with the version row and a `table` of
+    /// register rows, each `row(text(label), bind(slot), button("put"), button("del"))`. The
+    /// `put`/`del` buttons carry `data-turn=put/delete` and `data-arg=slot` (the register index)
+    /// — the SAME `{kind, props, children}` JSON the web renderer (`deos-view`) consumes.
+    #[wasm_bindgen(js_name = viewTreeJson)]
+    pub fn view_tree_json(&self) -> String {
+        kvstore_view_tree_json()
+    }
+
+    /// **Invoke `put(reg)`** — write `reg := reg + 1` (a single-arg-friendly bump) and bump the
+    /// store version by one, as a REAL cap-gated verified turn ROUTED through the published
+    /// interface. Returns the re-read register value. `value` (when ≥ 0) overrides the written
+    /// value (used by the seed path); a negative `value` means "bump the current register".
+    pub fn put(&mut self, reg: i32, value: i32) -> Result<u64, JsError> {
+        let reg = reg as usize;
+        let write = if value >= 0 {
+            value as u64
+        } else {
+            self.read(reg).saturating_add(1)
+        };
+        let new_version = self.version().saturating_add(1);
+        let effects = self.desugar_mutator("put", reg, write, new_version)?;
+        self.commit_method("put", effects)?;
+        Ok(self.read(reg))
+    }
+
+    /// **Invoke `delete(reg)`** — clear `reg` to zero and bump the store version, as a REAL
+    /// cap-gated verified turn routed through the interface. Returns the re-read value (0).
+    pub fn delete(&mut self, reg: i32) -> Result<u64, JsError> {
+        let reg = reg as usize;
+        let new_version = self.version().saturating_add(1);
+        let effects = self.desugar_mutator("delete", reg, 0, new_version)?;
+        self.commit_method("delete", effects)?;
+        Ok(self.read(reg))
+    }
+
+    /// **The affordance wire entry** — the web renderer fires `data-turn`/`data-arg` here.
+    /// `put`/`delete` route + commit; any other name errors (the native `FireError::Unknown`).
+    /// `arg` is the register index the button carried.
+    pub fn fire(&mut self, turn: &str, arg: i32) -> Result<u64, JsError> {
+        match turn {
+            "put" => self.put(arg, -1),
+            "delete" => self.delete(arg),
+            other => Err(JsError::new(&format!("unknown affordance: {other}"))),
+        }
+    }
+
+    /// **Prove the verified guarantee BITES in the tab** — attempt a `put` that LOWERS the
+    /// store version (a replay/rollback), which the store program's `Monotonic` version
+    /// constraint must REFUSE on the verified commit path. Returns JSON
+    /// `{refused: bool, reason: string}`; `refused: true` is the witnessed enforcement. (Needs
+    /// the version already ≥ 1 — seed the store first.)
+    #[wasm_bindgen(js_name = tryRollback)]
+    pub fn try_rollback(&mut self, reg: i32) -> String {
+        use serde_json::json;
+        let reg = reg as usize;
+        let current = self.version();
+        if current == 0 {
+            return json!({ "refused": false, "reason": "version is 0 — nothing to roll back" })
+                .to_string();
+        }
+        let stale_version = current - 1; // strictly lower → must be refused
+        let effects = match self.desugar_mutator("put", reg, self.read(reg), stale_version) {
+            Ok(e) => e,
+            Err(e) => return json!({ "refused": false, "reason": format!("{e:?}") }).to_string(),
+        };
+        match self
+            .rt
+            .execute_app_turn_for_agent(0, self.store, "put", effects, KV_FEE)
+        {
+            Ok(dregg_turn::TurnResult::Rejected { reason, .. }) => {
+                json!({ "refused": true, "reason": format!("{reason}") }).to_string()
+            }
+            Ok(dregg_turn::TurnResult::Committed { receipt, .. }) => {
+                // It should NOT have committed — surface the breach honestly.
+                self.rt.receipts.push(receipt);
+                json!({ "refused": false, "reason": "rollback COMMITTED — Monotonic did not bite!" })
+                    .to_string()
+            }
+            Ok(other) => json!({ "refused": false, "reason": format!("{other:?}") }).to_string(),
+            Err(e) => json!({ "refused": false, "reason": e }).to_string(),
+        }
+    }
+
+    /// **Prove `get` is a NAMED SEAM, not a faked write** — route `get(reg)` through the
+    /// interface; because it is `Semantics::Serviced` its answer rides the OFE cross-cell-read,
+    /// so the router REFUSES to desugar it to a turn. Returns the refusal message (the honest
+    /// seam), or — never reached for a correct descriptor — an error if `get` somehow desugared.
+    #[wasm_bindgen(js_name = tryGet)]
+    pub fn try_get(&self, reg: i32) -> String {
+        let _ = reg;
+        match self.descriptor.route_method(&method_symbol("get")) {
+            Some(sig) if sig.semantics == Semantics::Serviced => {
+                "get is a Serviced method; its answer rides the OFE cross-cell-read (named seam) \
+                 — no effect desugar"
+                    .to_string()
+            }
+            Some(_) => "get unexpectedly resolved as replayable (descriptor bug)".to_string(),
+            None => "get is not a declared method (descriptor bug)".to_string(),
+        }
+    }
+
+    // ── internals ───────────────────────────────────────────────────────────────────────
+
+    /// Route a mutator (`put`/`delete`) through the published interface and DESUGAR it to the
+    /// underlying `SetField` effects (version bump + the register write) — the wasm mirror of
+    /// `starbridge_kvstore`'s `invoke()` core: route via the verified DFA, refuse a `Serviced`
+    /// seam, then build the effects the kernel already enforces. No `Effect::Invoke`.
+    fn desugar_mutator(
+        &self,
+        method: &str,
+        reg: usize,
+        value: u64,
+        new_version: u64,
+    ) -> Result<Vec<Effect>, JsError> {
+        use crate::runtime::app_programs;
+        if !(app_programs::KV_REG_MIN as usize..=app_programs::KV_REG_MAX as usize).contains(&reg) {
+            return Err(JsError::new(&format!(
+                "register {reg} is not a valid key (expected {}..={})",
+                app_programs::KV_REG_MIN,
+                app_programs::KV_REG_MAX
+            )));
+        }
+        // (1) Route through the VERIFIED DFA router (the same the protocol uses).
+        let sig = self
+            .descriptor
+            .route_method(&method_symbol(method))
+            .ok_or_else(|| JsError::new(&format!("method `{method}` is not declared")))?;
+        // (2) A Serviced method does not desugar to a replay effect — named seam.
+        if sig.semantics == Semantics::Serviced {
+            return Err(JsError::new(&format!(
+                "method `{method}` is Serviced — answered by the OFE read, not a turn"
+            )));
+        }
+        // (3) Desugar to the underlying SetFields: bump the version + write the register.
+        Ok(vec![
+            Effect::SetField {
+                cell: self.store,
+                index: app_programs::KV_VERSION_SLOT as usize,
+                value: fe_be(new_version),
+            },
+            Effect::SetField {
+                cell: self.store,
+                index: reg,
+                value: fe_be(value),
+            },
+        ])
+    }
+
+    /// Commit a routed method's desugared effects as a REAL signed turn TARGETING the store
+    /// cell with `method`'s symbol (so the store program's `MethodIs` guard dispatches the right
+    /// `Monotonic`-version case). A rejected turn is surfaced, never swallowed.
+    fn commit_method(&mut self, method: &str, effects: Vec<Effect>) -> Result<(), JsError> {
+        match self
+            .rt
+            .execute_app_turn_for_agent(0, self.store, method, effects, KV_FEE)
+        {
+            Ok(TurnResult::Committed { .. }) => Ok(()),
+            Ok(TurnResult::Rejected { reason, at_action }) => Err(JsError::new(&format!(
+                "turn rejected: {reason} (at {at_action:?})"
+            ))),
+            Ok(other) => Err(JsError::new(&format!("turn not committed: {other:?}"))),
+            Err(e) => Err(JsError::new(&e)),
+        }
+    }
+}
+
+/// Generate the KV-store view-tree JSON: a titled column with a version `row` and a `table` of
+/// register rows. Each register row is `row(text(label), bind(slot), button("put"),
+/// button("del"))` — `put`/`del` carry `data-turn=put/delete` + `data-arg=slot`. The SAME
+/// ViewNode vocabulary the native cockpit renders, here for a SERVICE-CELL surface.
+fn kvstore_view_tree_json() -> String {
+    use crate::runtime::app_programs;
+    use serde_json::json;
+
+    let mut reg_rows: Vec<serde_json::Value> = Vec::new();
+    for i in 0..KV_REGS_SHOWN {
+        let slot = app_programs::KV_REG_MIN as usize + i;
+        reg_rows.push(json!({
+            "kind": "row",
+            "props": {},
+            "children": [
+                { "kind": "text", "props": { "text": format!("reg {slot}: ") } },
+                { "kind": "bind", "props": { "slot": slot, "label": "" } },
+                { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": slot } } },
+                { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": slot } } }
+            ]
+        }));
+    }
+
+    json!({
+        "kind": "vstack",
+        "props": {},
+        "children": [
+            { "kind": "text", "props": { "text": "Key-Value Store — service cell" } },
+            { "kind": "text", "props": { "text": "a published interface (put · delete · get) routed through the verified DFA" } },
+            { "kind": "row", "props": {}, "children": [
+                { "kind": "text", "props": { "text": "store version: " } },
+                { "kind": "bind", "props": { "slot": app_programs::KV_VERSION_SLOT as usize, "label": "" } }
+            ] },
+            { "kind": "table", "props": {}, "children": reg_rows }
         ]
     })
     .to_string()
