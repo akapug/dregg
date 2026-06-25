@@ -209,6 +209,19 @@ pub mod app_worldspine;
 #[cfg(feature = "embedded-executor")]
 pub mod shared_fork;
 
+// THE MEMBRANE ON UMEMS — distributed branch-and-stitch recast as universal-memory
+// operations. The membrane's three moves over the ONE address space of `dregg_turn::umem`:
+// a FORK is a umem branch (a cap-bounded subgraph projected to a `UProjection`), a CARRY
+// is a passable umem (the projection serialized into a `UmemEnvelope` with an
+// anti-substitution root tooth), a STITCH is a umem merge (a per-`UKey` join of two driven
+// projections — conflicts surface as first-class `UmemConflict` objects keyed at the EXACT
+// address that diverged, so two principals editing DIFFERENT fields of the SAME cell fold
+// clean where the cell-granular `Atom` merge would collide). Distributed state-handoff
+// becomes witnessed-umem-handoff. The per-handoff Blum-trace witness (the carry binding
+// pre→post to the executor's op trace) is the named seam. gpui-free + `cargo test`-able.
+#[cfg(feature = "embedded-executor")]
+pub mod umem_membrane;
+
 // AGENT ATTACH — bind the confined agent's `run_js` (deos-js) to the cockpit's LIVE
 // World, so a Claude in Hermes drives the operator's ACTUAL cells (or a fork). The
 // cockpit-side `deos_js::WorldSink` weld + the cap-bounded attach. Gated on
