@@ -48,6 +48,22 @@ dregg-intent = { path = "../intent", default-features = false }
 # this graph — so it is wasm32-safe. `bindings_card`'s `InspectorWorld` reads its own in-tab
 # cell's faces through it and generates the inspector view-tree the web renderer paints.
 deos-reflect = { path = "../deos-reflect", default-features = false }
+# THE PIJUL-SHAPED DOCUMENT CORE — `dregg-doc`'s patch theory (DocGraph · merge as the
+# categorical pushout · conflicts-as-first-class-objects · resolve patches) PLUS its
+# `cell-heap` ride (`to_heap_map` / `substrate_commit` — the sorted-Poseidon2 umem-heap
+# boundary that IS a document's commitment, `src/doc_heap.rs`). `cell-heap` pulls JUST
+# `dregg-cell` (empty default features — already in this graph) + `blake3` (already here);
+# it does NOT pull `dregg-turn` (that is `substrate`), so it is wasm32-safe. `bindings_doc`'s
+# `DocCollabWorld` drives fork → diverge → stitch → a first-class conflict → resolve, publishing
+# the merged document to the doc-cell's umem-heap as a real verified turn over the in-tab executor.
+dregg-doc = { path = "../dregg-doc", default-features = false, features = ["cell-heap"] }
+# THE GPUI-FREE WEB RENDERER — `deos-view`'s `web` feature (`ViewNode` → an HTML/DOM string,
+# `src/web.rs`): only `serde`/`serde_json`/`anyhow`, gpui-FREE + deos-js-FREE (the heavy gpui +
+# mozjs deps are `optional` and gated on the `native` feature, never activated here). So
+# `DocCollabWorld` renders its OWN view-tree to HTML in-tab via `render_html` (the conflict view
+# re-renders wholesale after a resolve — the tree SHAPE changes, unlike the slot-repaint cards),
+# the SAME renderer the cockpit's web projection bakes.
+deos-view = { path = "../deos-view", default-features = false, features = ["web"] }
 dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link", "prover"] }
 # sdk pulls bulletproofs (via cell crypto) — already covered by the
 # clear_on_drop override below, but listing here for grep-ability.

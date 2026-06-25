@@ -53,7 +53,7 @@ pub use render::{AppletView, SharedApplet};
 pub mod web;
 #[cfg(feature = "web")]
 pub use web::{
-    GalleryCard, render_card_document, render_card_live_document, render_gallery_document,
-    render_html, render_inspector_live_document, render_kvstore_live_document,
-    render_tally_live_document,
+    GalleryCard, render_card_document, render_card_live_document, render_doccollab_live_document,
+    render_gallery_document, render_html, render_inspector_live_document,
+    render_kvstore_live_document, render_tally_live_document,
 };
