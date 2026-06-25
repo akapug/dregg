@@ -514,7 +514,7 @@ gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524", optio
 # are enabled here, keeping the cockpit lean. Add a `tree-sitter-*` feature later
 # only if the CodeEditor is wanted. Provenance + license: LICENSE-APACHE +
 # NOTICE-gpui-component at the repo root (AGPL hygiene for vendored Apache-2.0).
-gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false, optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
 
 # --- LINUX display backend for gpui ------------------------------------------
 # The x11/wayland windowing backends gpui needs on Linux are enabled via the
