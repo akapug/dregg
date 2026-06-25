@@ -44,6 +44,13 @@ pub mod docgraph_view;
 pub mod halo;
 pub mod layout;
 pub mod spotter;
+// THE GRAPHIDEOS SYSTEMUI CAP-CHROME ON THE GLASS — the gpui body that paints a focused
+// `WinKind::AndroidCell` window as the phone's SystemUI (status bar + quick-settings shade
+// + hand-over sheet), over the proven `crate::systemui_caps::SystemUiCapChrome` model.
+// App/presentation; no new kernel effect. Gated on `android-systemui` (where `android-cell`
+// + the cap-chrome model are in scope); the window falls back to the inspector body off it.
+#[cfg(feature = "android-systemui")]
+pub mod systemui_chrome_render;
 // THE CONTENT-IR BRIDGE — a desktop window whose body is a real `deos_view::ViewNode`
 // rendered through deos-view's NATIVE renderer (the portable-IR content surface beside
 // the native-chrome panes). Gated on `card-pane` (pulls deos-view + deos-js); the
@@ -232,6 +239,11 @@ enum WinKind {
     /// rendered through deos-view's NATIVE renderer (`AppletView`). The rendered
     /// renderer entity lives in `viewnode_panes`, so this variant is a marker.
     ViewNodePane,
+    /// **A confined ANDROID-CELL dressed as the phone's SystemUI** — its body is the
+    /// graphideOS cap-chrome (status bar + quick-settings shade + hand-over sheet) over a
+    /// live [`crate::systemui_caps::SystemUiCapChrome`]. The chrome (its real `PermWorld` +
+    /// executor) lives in `systemui_chromes`, so this variant is a marker.
+    AndroidCell,
 }
 
 impl WinKind {
@@ -245,6 +257,7 @@ impl WinKind {
             WinKind::DocExplorer => "Doc Explorer",
             WinKind::WorldExplorer => "World Explorer",
             WinKind::ViewNodePane => "World Status",
+            WinKind::AndroidCell => "Android · SystemUI",
         }
     }
 }
@@ -490,6 +503,18 @@ pub struct DeosDesktop {
     /// window's anchor cell. Gated on `card-pane` (where `deos-view` is in scope).
     #[cfg(feature = "card-pane")]
     viewnode_panes: HashMap<CellId, Entity<deos_view::AppletView>>,
+    /// **The live SystemUI cap-chromes** — one [`crate::systemui_caps::SystemUiCapChrome`]
+    /// (a confined android-cell's real `PermWorld` + the verified executor) per open
+    /// `AndroidCell` window, minted lazily on first paint. The window body renders its
+    /// status bar / quick-settings shade / hand-over sheet; a hand-over commits a real
+    /// `Effect::GrantCapability` on this confined ledger. Keyed by the window's anchor
+    /// cell. Gated on `android-systemui` (where the cap-chrome model is in scope).
+    #[cfg(feature = "android-systemui")]
+    systemui_chromes: HashMap<CellId, crate::systemui_caps::SystemUiCapChrome>,
+    /// Which `AndroidCell` windows have their quick-settings shade pulled down (a pure
+    /// view concern). Keyed by the window's anchor cell.
+    #[cfg(feature = "android-systemui")]
+    systemui_shades: std::collections::HashSet<CellId>,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -600,6 +625,10 @@ impl DeosDesktop {
             show_welcome,
             #[cfg(feature = "card-pane")]
             viewnode_panes: HashMap::new(),
+            #[cfg(feature = "android-systemui")]
+            systemui_chromes: HashMap::new(),
+            #[cfg(feature = "android-systemui")]
+            systemui_shades: std::collections::HashSet::new(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -641,6 +670,7 @@ impl DeosDesktop {
             WinKindTag::DocExplorer => WinKind::DocExplorer,
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
             WinKindTag::ViewNodePane => WinKind::ViewNodePane,
+            WinKindTag::AndroidCell => WinKind::AndroidCell,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -740,6 +770,8 @@ impl DeosDesktop {
             WinKindTag::DocExplorer => (460.0, 420.0),
             WinKindTag::WorldExplorer => (480.0, 440.0),
             WinKindTag::ViewNodePane => (420.0, 320.0),
+            // A phone-ish portrait window for the android-cell's SystemUI cap-chrome.
+            WinKindTag::AndroidCell => (340.0, 520.0),
             _ => (380.0, 320.0),
         };
         if let Some(g) = self.layout.win_geom(&id_hex(&cell), tag) {
@@ -789,6 +821,13 @@ impl DeosDesktop {
         #[cfg(feature = "card-pane")]
         if key.1 == WinKindTag::ViewNodePane {
             self.viewnode_panes.remove(&key.0);
+        }
+        // Drop the confined SystemUI cap-chrome (its PermWorld) + shade state when its
+        // android-cell window closes, so a reopen re-mints a fresh confined cell.
+        #[cfg(feature = "android-systemui")]
+        if key.1 == WinKindTag::AndroidCell {
+            self.systemui_chromes.remove(&key.0);
+            self.systemui_shades.remove(&key.0);
         }
         self.layout.drop_win(&id_hex(&key.0), key.1);
         self.layout.save(&self.layout_path);
@@ -3115,6 +3154,8 @@ impl DeosDesktop {
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             #[cfg(feature = "card-pane")]
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
+            #[cfg(feature = "android-systemui")]
+            WinKindTag::AndroidCell => self.render_android_systemui_body(cell, cx),
             _ => self.render_inspector_body(cell, cx),
         };
 
