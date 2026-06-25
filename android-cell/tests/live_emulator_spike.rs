@@ -22,8 +22,8 @@
 //! admitted — the screenshot the doc's "definition of done" asks for.
 
 use android_cell::{
-    AndroidNetGate, AndroidPresentation, AndroidRuntime, AppLaunch, DeviceSpec, IoDecision,
-    present_android_frame,
+    AndroidInput, AndroidInputGate, AndroidNetGate, AndroidPresentation, AndroidRuntime, AppLaunch,
+    DeviceSpec, IoDecision, present_android_frame,
 };
 use dregg_captp::netlayer::InProcessFabric;
 use dregg_firmament::emulated_kernel::EmulatedKernel;
@@ -139,4 +139,124 @@ fn android_app_presents_through_deos_compositor_with_cap_gate() {
          with a cap-gated net decision + receipt.",
         frame.width, frame.height
     );
+}
+
+/// **THE INPUT-BRIDGE SPIKE — a cap-gated tap CHANGES the live app's frame.**
+///
+/// This is the "interactive, not just watching" proof. It attaches to the standing
+/// `emulator-5554`, captures a BEFORE frame, drives a cap-gated [`AndroidInput`] (a
+/// swipe + a tap — an authorized exercise over the surface) through the
+/// [`AndroidInputGate`], re-captures an AFTER frame, and asserts the two DIFFER — the
+/// input actually reached the confined runtime and the app responded. It also proves the
+/// gate's teeth: a cap with no backing surface is refused before any `adb` call.
+///
+/// `#[ignore]` (needs a live device). Run on the dev host:
+/// ```sh
+/// export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+/// cargo test -p android-cell --test live_emulator_spike \
+///   android_input_changes_the_live_frame -- --ignored --nocapture
+/// ```
+/// It writes `target/tmp/android_cell_input_{before,after}.png` — the before/after
+/// screenshot pair the definition-of-done asks for.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a live, already-running Android emulator. Run with --ignored on the dev host."]
+fn android_input_changes_the_live_frame() {
+    use android_cell::MacOsEmulatorRuntime;
+    use std::io::Write;
+
+    // ── ATTACH to the standing emulator (do NOT boot/own it) ──────────────────
+    let mut rt = MacOsEmulatorRuntime::attach_running(DeviceSpec::dev_default())
+        .expect("attach to the already-running emulator-5554");
+
+    // Land somewhere with content + a settled surface: open Settings, go HOME first
+    // for a deterministic start, then open the app.
+    let presenter = cell_seed(3);
+    rt.launch_app(&AppLaunch::Component(
+        "com.android.settings/.Settings".to_string(),
+    ))
+    .expect("Settings launches");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // ── BEFORE frame ─────────────────────────────────────────────────────────
+    let before = rt.capture_frame().expect("capture the BEFORE frame");
+    let before_digest = before.content_digest();
+    write_png(&before, "android_cell_input_before.png");
+
+    // ── THE CAP-GATED INPUT (an authorized exercise over the surface) ─────────
+    // The held cap names the surface's backing cell → the input gate admits; the
+    // event is injected into the confined runtime through `adb shell input`.
+    let surface = SurfaceCapability::root(presenter, AuthRequired::Either);
+    let mut gate = AndroidInputGate::new(rt, Some(presenter));
+
+    // A swipe (scroll the settings list) reliably moves pixels; then a tap.
+    let r1 = gate.deliver(
+        &surface,
+        AndroidInput::Swipe {
+            x1: 540,
+            y1: 1800,
+            x2: 540,
+            y2: 600,
+            duration_ms: 250,
+        },
+    );
+    assert!(r1.decision.injected(), "the cap-admitted swipe is injected");
+    println!("input-spike: {}", r1.status_line());
+
+    let r2 = gate.deliver(&surface, AndroidInput::Tap { x: 540, y: 700 });
+    assert!(r2.decision.injected(), "the cap-admitted tap is injected");
+    println!("input-spike: {}", r2.status_line());
+
+    // Let the app repaint.
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    // ── AFTER frame — recapture; the gate handed us the runtime back via sink_mut ─
+    let after = gate
+        .sink_mut()
+        .capture_frame()
+        .expect("capture the AFTER frame");
+    let after_digest = after.content_digest();
+    write_png(&after, "android_cell_input_after.png");
+
+    // ── THE LOAD-BEARING ASSERTION: the input CHANGED the app's frame ─────────
+    assert_ne!(
+        before_digest, after_digest,
+        "a cap-gated tap/swipe CHANGED the live app's frame — the runtime is INTERACTIVE, \
+         not just observed (before {before_digest:#x} != after {after_digest:#x})"
+    );
+
+    // ── THE GATE BITES: a cap with no backing surface is refused before the device ─
+    let no_surface = SurfaceCapability {
+        window: dregg_firmament::Capability::local(0, AuthRequired::Either),
+        fetch_allow: Some(Default::default()),
+        navigate_allow: Some(Default::default()),
+        permissions: Default::default(),
+    };
+    let refused = gate.deliver(&no_surface, AndroidInput::Tap { x: 540, y: 700 });
+    assert!(
+        refused.decision.refused_by_cap(),
+        "a cap that names no surface cannot drive one — refused before any adb call"
+    );
+    println!("input-spike: {}", refused.status_line());
+
+    let _ = std::io::stdout().write_all(
+        format!(
+            "\nINPUT-SPIKE OK: a cap-gated tap/swipe changed the live Android app's frame \
+             ({}x{}); before {before_digest:#x} → after {after_digest:#x}. \
+             The android-cell is INTERACTIVE.\n",
+            after.width, after.height
+        )
+        .as_bytes(),
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn write_png(frame: &android_cell::RgbaFrame, name: &str) {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    if let Some(img) =
+        image::RgbaImage::from_raw(frame.width, frame.height, frame.bytes.clone())
+    {
+        let _ = img.save(&path);
+        println!("input-spike: wrote {}", path.display());
+    }
 }

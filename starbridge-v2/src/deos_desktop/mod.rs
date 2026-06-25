@@ -36,8 +36,12 @@
 //   * `layout`  — the spatial + content persistence (DesktopLayout and friends).
 // The remaining surfaces (windows, menus, document editing, properties, actuation,
 // rendering) live here as `impl DeosDesktop` blocks over the shared chrome/layout.
+pub mod android_window;
 pub mod chrome;
 pub mod layout;
+pub mod workflow;
+
+pub use workflow::{IntentKind, WorkflowState, WorkflowStep};
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -61,11 +65,12 @@ use crate::world::{World, grant_capability, transfer};
 // The chrome kit + persistence types are re-exported so existing call sites
 // (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
 pub use chrome::{
-    DOC_REV_SLOT, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK,
-    NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
-    NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W, bevel_raised, face_row, face_section, fmt_balance, id_hex,
-    id_short, pxf,
+    DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, ICON_H, ICON_W, MENUBAR_H,
+    NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT,
+    NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W,
+    bevel_raised, face_row, face_section, fmt_balance, id_hex, id_short, pxf,
 };
+pub use android_window::{ANDROID_WINDOW_TITLE, AndroidInputCmd, AndroidWindow};
 pub use layout::{
     DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag,
 };
@@ -111,6 +116,10 @@ enum WinKind {
     /// The transcript / receipt-log — the World's receipt chain, the chronicle the
     /// user's "do it"s have written.
     Transcript,
+    /// **The workflow-composer surface** — intents/workflows/refinement as first-class
+    /// objects. The window's editing state (steps + baseline) lives in the desktop's
+    /// `workflows` map keyed by the subject cell, so this variant is a marker.
+    WorkflowComposer,
 }
 
 impl WinKind {
@@ -120,6 +129,7 @@ impl WinKind {
             WinKind::DocEditor { .. } => "Document",
             WinKind::Links => "Links",
             WinKind::Transcript => "Transcript",
+            WinKind::WorkflowComposer => "Workflow",
         }
     }
 }
@@ -169,6 +179,9 @@ enum ActionKind {
     OpenLinks,
     /// Open the transcript / receipt-log window (the World chronicle).
     OpenTranscript,
+    /// Open the WORKFLOW-COMPOSER window over the cell — compose intents into a
+    /// workflow and check flow-refinement (the real `dregg_deploy::refine` game).
+    OpenWorkflow,
     /// Open the PROPERTY inspector/editor for the cell (the NT property-dialog +
     /// Pharo inspect-everything surface — view and edit the cell's properties).
     Properties,
@@ -280,6 +293,11 @@ pub struct DeosDesktop {
     /// A short log of the last actuations (receipt height / outcome) shown in the
     /// status bar — the user sees their "do it" landed a real verified turn.
     status: String,
+    /// **The per-cell workflow-composer state** — the intents/workflow being composed
+    /// over each subject cell, plus the pinned refinement baseline. Read by the
+    /// workflow window body; the REAL `dregg_deploy::refine` flow + decision run over
+    /// it. Keyed by the subject cell so each cell has its own workflow.
+    workflows: HashMap<CellId, workflow::WorkflowState>,
 }
 
 impl DeosDesktop {
@@ -319,6 +337,7 @@ impl DeosDesktop {
             status: "deos desktop — right-click ANYTHING for its menu · double-click to inspect · \
                      drag to arrange (persisted) · Open as Document to author"
                 .to_string(),
+            workflows: HashMap::new(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -356,6 +375,7 @@ impl DeosDesktop {
             WinKindTag::Inspector => WinKind::Inspector,
             WinKindTag::Links => WinKind::Links,
             WinKindTag::Transcript => WinKind::Transcript,
+            WinKindTag::Workflow => WinKind::WorkflowComposer,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -369,6 +389,9 @@ impl DeosDesktop {
                 }
                 WinKind::DocEditor { doc, buffer: text }
             }
+            // Other window TYPEs owned by concurrent surfaces fall back to an
+            // inspector body until their own arm lands (swarm self-heal).
+            _ => WinKind::Inspector,
         }
     }
 
@@ -412,6 +435,22 @@ impl DeosDesktop {
         self.open_kind(cell, WinKindTag::Inspector);
     }
 
+    /// Open (or focus) the WORKFLOW-COMPOSER window on `cell` — the surface that
+    /// composes intents into a workflow and decides flow-refinement.
+    pub(super) fn open_workflow_window(&mut self, cell: CellId) {
+        self.open_kind(cell, WinKindTag::Workflow);
+        self.status = format!(
+            "Workflow composer on {} — compose intents, check refinement A ≤ᶠ B.",
+            id_short(&cell)
+        );
+    }
+
+    /// The user anchor — the default counterparty for the workflow's intent steps
+    /// (transfer/grant target). Exposed to the `workflow` submodule.
+    pub(super) fn workflow_user(&self) -> CellId {
+        self.user
+    }
+
     /// Open (or focus) a window of `tag` on `cell`, restoring its persisted geometry
     /// if any, else a cascade default. The same cell can hold several window kinds.
     fn open_kind(&mut self, cell: CellId, tag: WinKindTag) {
@@ -427,6 +466,8 @@ impl DeosDesktop {
             WinKindTag::Transcript => (440.0, 300.0),
             WinKindTag::Links => (380.0, 300.0),
             WinKindTag::Inspector => (360.0, 300.0),
+            WinKindTag::Workflow => (420.0, 460.0),
+            _ => (380.0, 320.0),
         };
         if let Some(g) = self.layout.win_geom(&id_hex(&cell), tag) {
             self.open_window_at(cell, tag, g.x, g.y, g.w, g.h, false);
@@ -533,14 +574,46 @@ impl DeosDesktop {
 
     // ── Document text: the document-as-cell payload ──────────────────────────────
     // A document is a CELL: editing diffs into a `dregg_doc::Patch` (the chronicle
-    // advances) AND lands a real `SetField` turn that writes the doc revision into
-    // the cell's committed state slot 14 (so the cell's verified state moves with
-    // every edit, leaving a receipt). The prose itself persists durably to the
-    // layout sidecar keyed by cell id — restored on reopen.
+    // advances) AND lands real `SetField` turns that write the prose itself into the
+    // cell's COMMITTED heap (`fields_map`, ext keys >= STATE_SLOTS, committed via
+    // `fields_root`) plus a revision bump into slot 14. The committed truth is the
+    // cell heap: a doc edit is a verified, receipted turn whose value reads back from
+    // the committed state and survives reopen FROM THE LEDGER. The layout sidecar is
+    // kept only as a fast cache / pre-heap-migration fallback.
 
-    /// Load a document cell's prose from the durable sidecar (empty for a fresh doc).
+    /// Load a document cell's prose from the COMMITTED cell heap (`fields_map`),
+    /// falling back to the layout sidecar only for cells whose prose predates the
+    /// heap-write path (migration) — empty for a fresh doc. The committed heap is the
+    /// source of truth: reopen restores from the ledger, not the sidecar.
     fn load_doc_text(&self, cell: &CellId) -> String {
+        if let Some(text) = self.read_doc_from_heap(cell) {
+            return text;
+        }
+        // Migration / cache fallback: a doc authored before the heap-write path.
         self.layout.doc_text(&id_hex(cell)).unwrap_or_default()
+    }
+
+    /// Read a document's prose back from the cell's committed heap (`fields_map`):
+    /// `DOC_TEXT_BASE` holds the byte length, `DOC_TEXT_BASE + 1 + i` the chunks.
+    /// Returns `None` when the cell carries no committed document (length key absent)
+    /// so the caller can fall back to the sidecar. The bytes are the verbatim values
+    /// committed by `fields_root` — a read off the live ledger.
+    fn read_doc_from_heap(&self, cell: &CellId) -> Option<String> {
+        let w = self.world.borrow();
+        let state = &w.ledger().get(cell)?.state;
+        let len_fe = state.get_field_ext(DOC_TEXT_BASE)?;
+        let byte_len = u64::from_le_bytes(len_fe[..8].try_into().ok()?) as usize;
+        let mut bytes = Vec::with_capacity(byte_len);
+        let mut chunk = 0u64;
+        while bytes.len() < byte_len && chunk < DOC_MAX_CHUNKS {
+            let fe = state
+                .get_field_ext(DOC_TEXT_BASE + 1 + chunk)
+                .unwrap_or([0u8; 32]);
+            let take = (byte_len - bytes.len()).min(DOC_CHUNK_BYTES);
+            bytes.extend_from_slice(&fe[..take]);
+            chunk += 1;
+        }
+        Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 
     /// A short kind label for a cell, derived from its balance — the icon's caption.
@@ -570,6 +643,7 @@ impl DeosDesktop {
             MenuAction::new("Open as Document…", true, A::OpenDoc),
             MenuAction::new("Links & Backlinks…", true, A::OpenLinks),
             MenuAction::new("Transcript (receipt log)…", true, A::OpenTranscript),
+            MenuAction::new("Compose Workflow… (intents + refinement)", true, A::OpenWorkflow),
             MenuAction::sep(),
             // ── Verified-turn affordances (do it) ──
             MenuAction::new("Bump nonce  (verified turn)", held, A::BumpNonce),
@@ -683,11 +757,13 @@ impl DeosDesktop {
             "View" => vec![
                 MenuAction::new("Links & Backlinks…", true, A::OpenLinks),
                 MenuAction::new("Transcript…", true, A::OpenTranscript),
+                MenuAction::new("Workflow Composer…", true, A::OpenWorkflow),
             ],
             "Window" => vec![
                 MenuAction::new("New Inspector…", true, A::Inspect),
                 MenuAction::new("New Document…", true, A::OpenDoc),
                 MenuAction::new("New Transcript…", true, A::OpenTranscript),
+                MenuAction::new("New Workflow Composer…", true, A::OpenWorkflow),
             ],
             _ => vec![MenuAction::new(
                 "deos desktop — right-click anything",
@@ -781,6 +857,9 @@ impl DeosDesktop {
                 self.open_kind(cell, WinKindTag::Transcript);
                 self.status = "Transcript — the World receipt log.".into();
             }
+            ActionKind::OpenWorkflow => {
+                self.open_workflow_window(cell);
+            }
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Cell(cell));
                 self.status = format!("Properties of {}.", id_short(&cell));
@@ -850,6 +929,68 @@ impl DeosDesktop {
         self.world.borrow_mut().commit_turn(turn).is_committed()
     }
 
+    /// **Commit a document's prose into the cell's COMMITTED heap** as ONE verified
+    /// turn: a `SetField` into `DOC_TEXT_BASE` (the byte length) plus one per 32-byte
+    /// chunk into `DOC_TEXT_BASE + 1 + i`. Stale trailing chunks from a previously
+    /// longer revision are zeroed in the same turn so a shrunk document leaves no
+    /// committed garbage. These write `fields_map` (ext keys >= STATE_SLOTS) via
+    /// `set_field_ext`, recomputing `fields_root` — the prose is on-ledger, receipted,
+    /// and replays from committed state. Returns whether the turn committed.
+    fn commit_doc_text_to_heap(&mut self, cell: CellId, text: &str) -> bool {
+        use dregg_turn::action::Effect;
+        let bytes = text.as_bytes();
+        let byte_len = bytes.len();
+        let new_chunks = byte_len.div_ceil(DOC_CHUNK_BYTES) as u64;
+
+        // The previously-committed length, to know how many trailing chunks to clear.
+        let prev_len = {
+            let w = self.world.borrow();
+            w.ledger()
+                .get(&cell)
+                .and_then(|c| c.state.get_field_ext(DOC_TEXT_BASE))
+                .map(|fe| u64::from_le_bytes(fe[..8].try_into().unwrap_or([0u8; 8])) as usize)
+                .unwrap_or(0)
+        };
+        let prev_chunks = (prev_len.div_ceil(DOC_CHUNK_BYTES) as u64).min(DOC_MAX_CHUNKS);
+
+        let mut effects: Vec<Effect> = Vec::new();
+        // Length felt (LE u64 in the low 8 bytes).
+        let mut len_fe = [0u8; 32];
+        len_fe[..8].copy_from_slice(&(byte_len as u64).to_le_bytes());
+        effects.push(Effect::SetField {
+            cell,
+            index: DOC_TEXT_BASE as usize,
+            value: len_fe,
+        });
+        // The chunk felts: 32 verbatim UTF-8 bytes each.
+        let n = new_chunks.min(DOC_MAX_CHUNKS);
+        for i in 0..n {
+            let start = (i as usize) * DOC_CHUNK_BYTES;
+            let end = (start + DOC_CHUNK_BYTES).min(byte_len);
+            let mut fe = [0u8; 32];
+            fe[..end - start].copy_from_slice(&bytes[start..end]);
+            effects.push(Effect::SetField {
+                cell,
+                index: (DOC_TEXT_BASE + 1 + i) as usize,
+                value: fe,
+            });
+        }
+        // Zero any trailing chunks left over from a longer prior revision.
+        for i in n..prev_chunks {
+            effects.push(Effect::SetField {
+                cell,
+                index: (DOC_TEXT_BASE + 1 + i) as usize,
+                value: [0u8; 32],
+            });
+        }
+
+        let turn = {
+            let w = self.world.borrow();
+            w.turn(cell, effects)
+        };
+        self.world.borrow_mut().commit_turn(turn).is_committed()
+    }
+
     /// **COMPOSE — transclude a cell into a document.** Embed a provenanced reference
     /// to `src`'s content (its id, kind, balance, lifecycle) as a line into the open
     /// document on `into`. This is a genuine cross-cell compose: a receipted
@@ -875,14 +1016,16 @@ impl DeosDesktop {
             }
         }
         if committed {
-            // Persist the composed prose + bump the doc cell's revision (a real turn).
+            // Commit the composed prose into the cell's COMMITTED heap + bump the doc
+            // cell's revision (real verified turns). The sidecar is kept as a cache.
             let text = self.load_doc_buffer(into);
+            let prose_ok = self.commit_doc_text_to_heap(into, &text);
             self.layout.set_doc_text(&id_hex(&into), &text);
             self.layout.save(&self.layout_path);
             let rev = self.cell_field_u64(&into, DOC_REV_SLOT) + 1;
-            let ok = self.commit_set_field(into, DOC_REV_SLOT, rev);
+            let ok = prose_ok && self.commit_set_field(into, DOC_REV_SLOT, rev);
             self.status = format!(
-                "COMPOSE: transcluded {} into doc {} → patch + {} (height {}).",
+                "COMPOSE: transcluded {} into doc {} → patch + heap {} (height {}).",
                 id_short(&src),
                 id_short(&into),
                 if ok { "committed" } else { "rejected" },
@@ -933,12 +1076,16 @@ impl DeosDesktop {
                 patches = doc.history().len();
             }
         }
+        // Commit the prose itself into the cell's COMMITTED heap (a verified turn into
+        // `fields_map`), then bump the revision. The sidecar is kept as a fast cache;
+        // the committed truth is the cell heap, restored from the ledger on reopen.
+        let prose_ok = self.commit_doc_text_to_heap(cell, &new_text);
         self.layout.set_doc_text(&id_hex(&cell), &new_text);
         self.layout.save(&self.layout_path);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT) + 1;
-        let ok = self.commit_set_field(cell, DOC_REV_SLOT, rev);
+        let ok = prose_ok && self.commit_set_field(cell, DOC_REV_SLOT, rev);
         self.status = format!(
-            "EDIT doc {} → patch #{patches} + revision {} (height {}).",
+            "EDIT doc {} → patch #{patches} + heap {} (rev {rev}, height {}).",
             id_short(&cell),
             if ok { "committed" } else { "rejected" },
             self.world.borrow().height()
@@ -1453,6 +1600,8 @@ impl DeosDesktop {
             WinKindTag::DocEditor => self.render_doc_body(cell, cx),
             WinKindTag::Links => self.render_links_body(cell),
             WinKindTag::Transcript => self.render_transcript_body(),
+            WinKindTag::Workflow => self.render_workflow_body(cell, cx),
+            _ => self.render_inspector_body(cell, cx),
         };
 
         let resize_grip = div()
@@ -1768,6 +1917,8 @@ impl DeosDesktop {
             WinKindTag::Links => "↹",
             WinKindTag::Transcript => "≣",
             WinKindTag::Inspector => "▣",
+            WinKindTag::Workflow => "⛓",
+            _ => "▣",
         };
         // NT navy title bar with min/max/close glyph buttons. The bar grabs a
         // window-move drag on mouse-down; the buttons fire close/minimize.

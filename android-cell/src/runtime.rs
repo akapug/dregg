@@ -229,6 +229,26 @@ mod macos {
             }
         }
 
+        /// **Attach to an ALREADY-RUNNING emulator** (e.g. one a developer or the
+        /// cockpit already booted) instead of spawning a fresh one. Marks the runtime
+        /// booted without owning the emulator child, so `Drop` will NOT tear it down.
+        /// The natural constructor for the desktop mount + the live tap test, which
+        /// drive the standing `emulator-5554`.
+        pub fn attach_running(spec: DeviceSpec) -> Result<Self, RuntimeError> {
+            let mut rt = Self::new(spec);
+            // Validate the toolchain + that a device is actually reachable.
+            let _ = rt.adb()?;
+            let v = rt.adb_shell(&["getprop", "sys.boot_completed"])?;
+            if v.trim() != "1" {
+                return Err(RuntimeError::BootTimeout {
+                    avd: rt.spec.avd_name.clone(),
+                    secs: 0,
+                });
+            }
+            rt.booted = true; // attached, not owned: child stays None → no teardown on Drop.
+            Ok(rt)
+        }
+
         fn tool(&self, rel: &str, bin: &str) -> Result<PathBuf, RuntimeError> {
             let p = self.sdk_root.join(rel).join(bin);
             if p.exists() {
@@ -358,6 +378,40 @@ mod macos {
             // `adb exec-out screencap` (no -p) → raw header + RGBA8.
             let raw = self.adb_out(&["exec-out", "screencap"])?;
             Ok(screencap_to_rgba(&raw)?)
+        }
+    }
+
+    /// **THE macOS INPUT SINK.** The reverse of `capture_frame`: drive the confined
+    /// runtime's input channel through `adb shell input` (tap/swipe/text/keyevent) — the
+    /// same device-side injector `scrcpy`/the emulator console use. The cap check happens
+    /// in [`crate::AndroidInputGate::deliver`] BEFORE this is reached; this is the
+    /// transport leg, host-adaptive exactly like the capture leg.
+    impl crate::input::AndroidInputSink for MacOsEmulatorRuntime {
+        fn inject_input(
+            &mut self,
+            input: &crate::input::AndroidInput,
+        ) -> Result<(), crate::input::InputError> {
+            use crate::input::InputError;
+            let adb = self.adb().map_err(|e| match e {
+                RuntimeError::ToolMissing { tool, looked_in } => {
+                    InputError::ToolMissing { tool, looked_in }
+                }
+                other => InputError::CommandFailed {
+                    cmd: "adb".into(),
+                    stderr: other.to_string(),
+                },
+            })?;
+            let args = input.adb_args();
+            let mut full: Vec<&str> = vec!["-e", "shell"];
+            full.extend(args.iter().map(|s| s.as_str()));
+            let out = Command::new(&adb).args(&full).output()?;
+            if !out.status.success() {
+                return Err(InputError::CommandFailed {
+                    cmd: format!("adb -e shell {}", args.join(" ")),
+                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                });
+            }
+            Ok(())
         }
     }
 

@@ -44,6 +44,13 @@ pub enum WinKindTag {
     DocEditor,
     Links,
     Transcript,
+    /// The workflow-composer surface (intents + composed workflow + flow refinement).
+    Workflow,
+    /// **An android-cell** — a live, cap-confined Android app hosted as a window: its
+    /// captured surface is the window body, and the window's pointer/key events are
+    /// mapped (via [`super::android_window`]) into cap-gated `AndroidInput` driven into
+    /// the confined runtime. Clicking the window TAPS the android app.
+    AndroidCell,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

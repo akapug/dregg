@@ -258,14 +258,26 @@ still subject to the compositor's region/label/focus gate).
 
 ---
 
-## 6. Input bridge
+## 6. Input bridge — BUILT (the android-cell is INTERACTIVE)
 
-Reverse of the tile path. The cockpit tab owns a focus handle (as
-`panels_webshell.rs` does for the web tile); typed keys and pointer events on the
-focused tile become ADB `injectInput` / scrcpy control-channel events delivered to the
-app's `VirtualDisplay`. Input is itself a cap-gateable effect (an app the cap does not
-grant focus to receives no input — the T3 focus tooth already models this for the
-compositor side).
+Reverse of the tile path, and now real. Where [`frame`] pulls the app's surface OUT as
+an `RgbaFrame`, [`android_cell::input`] pushes deos input INTO the running app, so you
+USE the app, not just watch it.
+
+| seam | mechanism (file) | what it is |
+|---|---|---|
+| **input vocabulary** | `android-cell/src/input.rs::AndroidInput` | `Tap{x,y}` / `Swipe{…}` / `Text{…}` / `Key{keycode}` — each maps to one `adb shell input` subcommand (the `WebInput`-analogue). |
+| **the cap gate (input-side T3 focus tooth)** | `input.rs::AndroidInputGate::deliver` | An input is an *authorized exercise over a surface*: the held `SurfaceCapability`'s window rights decide. A cap that does not back the surface (`cell() == None`) is `RefusedByCap` **before any `adb` call** — the device never sees it. Every decision leaves an `InputReceipt` (content-addressed `blake3(cell ‖ tag ‖ args ‖ outcome)`). |
+| **the device sink (host-adaptive)** | `runtime.rs::AndroidInputSink for MacOsEmulatorRuntime` | The cap-admitted event is injected through `adb shell input` — the same injector scrcpy/the emulator console use. The transport leg, host-adaptive exactly like capture (a Linux redroid impl drives the container's channel; the `RecordingInputSink` records intent with no device). |
+
+**PROVEN LIVE (2026-06-24, `cargo test -p android-cell --test live_emulator_spike
+android_input_changes_the_live_frame -- --ignored`):** attached to the standing
+`emulator-5554`, captured a BEFORE frame (Settings home), drove a cap-gated swipe + tap
+through `AndroidInputGate::deliver`, recaptured an AFTER frame — and the two **DIFFER**
+(the app navigated into the *Notifications* sub-screen; `content_digest` before
+`0xcef6…` ≠ after `0xdb36…`). The before/after PNG pair is the screenshot evidence. The
+gate's teeth also bite: a cap with no backing surface was refused before any `adb` call.
+A cap-gated tap CHANGES the live app's frame — the android-cell is interactive.
 
 ---
 
@@ -325,8 +337,19 @@ Android frame presents through the unchanged compositor gate and (b) a cap-denie
 egress reaches nothing. **DONE on macOS (2026-06-24)** — see §3.5: the live spike
 captures the real Settings app, presents it through the genuine gate, and refuses
 `tracker.evil.com` before any socket. This is the android-cell's "first real rendered
-content" milestone, mirroring `content_tile.rs`'s for the webcell. (The cockpit-tab
-input bridge of §6 is the next wire; the spike presents into a headless `CompositorPd`.)
+content" milestone, mirroring `content_tile.rs`'s for the webcell.
+
+**The input bridge of §6 is now ALSO built + proven live** — a cap-gated tap/swipe
+changes the running app's frame (before/after differ), so the android-cell is
+INTERACTIVE, not just observed. **The desktop mount** (a `WinKind::AndroidCell` window
+hosting the live tile with its pointer/key events wired to the input gate) is built as
+a thin, gpui-free, unit-tested mount wire:
+`starbridge-v2/src/deos_desktop/android_window.rs` (`AndroidWindow` carries the
+window-pixel→device-pixel transform + the event→`AndroidInputCmd` mapping;
+`WinKindTag::AndroidCell` is the persisted window-type). The remaining seam is the ~40
+lines of `native-full` gpui body in `deos_desktop/mod.rs` that paints the captured
+`RgbaFrame` via `img()` and forwards each event through this module's mapping into the
+`android-cell` `AndroidInputGate` — named precisely in `android_window.rs`'s docs.
 
 ---
 
