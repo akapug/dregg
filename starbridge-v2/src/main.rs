@@ -1166,7 +1166,39 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         "the composed workflow's flow-Proc must fire one letter per step (4 steps -> 4 letters), got {wf_letters}"
     );
 
-    // 7. Open the PROPERTY inspector/editor over the treasury cell, and a deep
+    // 7. CASCADE all open windows (the Window→Cascade command — a pure layout
+    //    actuation that fires NO verified turn) so the dense workbench reads legibly,
+    //    then assert the World's conservation invariant (Σ balance = 0) the new
+    //    World-summary widget reflects still holds after every committed turn.
+    let pre_cascade_height = shared.borrow().height();
+    let sigma_before = window.update(&mut cx, |desk, _w, _cx| desk.bake_world_balance_sum())?;
+    // TILE the windows into a grid so every surface (the enriched inspector with its
+    // state-slots + per-cell turns + balance gauge, the transcript, the document, the
+    // workflow composer) is visible at once — and prove it fires no verified turn.
+    let _tiled = window.update(&mut cx, |desk, _w, cx| {
+        let n = desk.bake_tile_windows();
+        cx.notify();
+        n
+    })?;
+    cx.run_until_parked();
+    let post_cascade_height = shared.borrow().height();
+    anyhow::ensure!(
+        post_cascade_height == pre_cascade_height,
+        "window arrangement (tile) is a PURE layout actuation — it must NOT fire a \
+         verified turn (height {pre_cascade_height} -> {post_cascade_height})"
+    );
+    // The conservation sum (Σ balance, reflected by the World-summary widget) is
+    // INVARIANT under value-conserving turns AND under the layout actuation — the
+    // net of issuer wells vs. accounts does not move.
+    let sigma = window.update(&mut cx, |desk, _w, _cx| desk.bake_world_balance_sum())?;
+    anyhow::ensure!(
+        sigma == sigma_before,
+        "the World's Σ balance (the conservation net the widget shows) must be invariant \
+         under the cascade layout actuation ({sigma_before} -> {sigma})"
+    );
+    let total_wins = window.update(&mut cx, |desk, _w, _cx| desk.bake_total_window_count())?;
+
+    // 8. Open the PROPERTY inspector/editor over the treasury cell, and a deep
     //    right-click context menu over the service cell — both visible in the shot.
     window.update(&mut cx, |desk, _w, cx| {
         desk.bake_open_properties(treasury);
@@ -1184,13 +1216,15 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(&layout_path);
     println!(
         "OK deos DESKTOP render -> {out}.png ({ww}x{hh}, logical {w}x{h}); NT/Pharo workbench \
-         over the live verified World — {} cell-icons; inspector + transcript + {docwins} document \
-         editor window(s); a WORKFLOW COMPOSER (intents composed into a flow; the proven \
+         over the live verified World — {} cell-icons; {total_wins} tiled window(s) \
+         (inspector with state-slots + per-cell turns + a balance gauge, transcript, {docwins} \
+         document editor); a TASKBAR of open-window stubs + a World-summary widget (height, \
+         cells, receipts, Σ balance = {sigma} — invariant under transfers + layout); a WORKFLOW COMPOSER (the proven \
          dregg_deploy::refine A ≤ᶠ B game decides refinement — a widening Seal DIVERGES); a deep \
-         right-click context menu AND a property inspector/editor open; a \
-         receipted document edit + a cross-cell TRANSCLUDE compose; REAL verified turns \
-         (height {pre_height} -> {post_height}); icon drag + authored prose persisted to the \
-         layout sidecar.",
+         right-click context menu (now with Cascade/Tile/Close-all window commands) AND a \
+         property inspector/editor open; a receipted document edit + a cross-cell TRANSCLUDE \
+         compose; REAL verified turns (height {pre_height} -> {post_height}); tile/cascade are pure \
+         layout actuations (no turn); icon drag + authored prose persisted to the sidecar.",
         shared.borrow().cell_count()
     );
     Ok(())

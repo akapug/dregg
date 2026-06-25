@@ -66,10 +66,11 @@ use crate::world::{World, grant_capability, transfer};
 // (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
 pub use android_window::{ANDROID_WINDOW_TITLE, AndroidInputCmd, AndroidWindow};
 pub use chrome::{
-    DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, ICON_H, ICON_W, MENUBAR_H,
-    NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT,
-    NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W,
-    bevel_raised, face_row, face_section, fmt_balance, id_hex, id_short, pxf,
+    DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP,
+    GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE,
+    NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT, NT_SELECT, NT_SHADOW, NT_TEXT,
+    NT_TITLE_ACTIVE, NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W, bevel_raised, face_gauge, face_row,
+    face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
 };
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
 
@@ -206,6 +207,15 @@ enum ActionKind {
     /// Seal / unseal the cell (a lifecycle turn) — a window-control-ish actuation
     /// surfaced in the deep menu.
     ToggleSeal,
+    /// **Cascade every open window** — re-stagger all open windows from the top-left
+    /// (the NT "Cascade Windows" command). A pure layout/view actuation: it moves
+    /// windows and re-persists their geometry, firing NO verified turn.
+    CascadeWindows,
+    /// **Tile every open window** in a grid filling the desktop (the NT "Tile" command).
+    /// Pure layout actuation.
+    TileWindows,
+    /// **Close every open window** (the NT "Close All"). Pure layout actuation.
+    CloseAllWindows,
 }
 
 // ── A floating context menu (rendered as an NT popup overlay) ─────────────────────
@@ -614,6 +624,43 @@ impl DeosDesktop {
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 
+    /// The sum of all live cell balances — the conservation invariant the World keeps
+    /// at zero (issuer wells are negative, accounts positive; Σδ = 0). A read-only
+    /// projection over the live ledger, shown in the World-summary widget.
+    fn world_balance_sum(&self) -> i64 {
+        self.world
+            .borrow()
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.state.balance())
+            .sum()
+    }
+
+    /// The count of receipts in the World chronicle whose agent is `cell` — the
+    /// cell's own turn history length, surfaced in the inspector. A read-only filter
+    /// over the existing receipt log.
+    fn cell_receipt_count(&self, cell: &CellId) -> usize {
+        self.world
+            .borrow()
+            .receipts()
+            .iter()
+            .filter(|r| &r.agent == cell)
+            .count()
+    }
+
+    /// The largest live cell balance (a denominator for the inspector's balance
+    /// gauge, so a cell's value reads relative to the World's biggest holder).
+    fn world_max_balance(&self) -> i64 {
+        self.world
+            .borrow()
+            .ledger()
+            .iter()
+            .map(|(_, c)| c.state.balance())
+            .max()
+            .unwrap_or(1)
+            .max(1)
+    }
+
     /// A short kind label for a cell, derived from its balance — the icon's caption.
     fn cell_kind(&self, cell: &CellId) -> &'static str {
         let b = self.cell_balance(cell);
@@ -732,8 +779,13 @@ impl DeosDesktop {
     /// cell context (handled in `actuate_desktop`).
     fn desktop_actions(&self) -> Vec<MenuAction> {
         use ActionKind as A;
+        let any_win = !self.windows.is_empty();
         vec![
             MenuAction::new("World Transcript (receipt log)…", true, A::OpenTranscript),
+            MenuAction::sep(),
+            MenuAction::new("Cascade windows", any_win, A::CascadeWindows),
+            MenuAction::new("Tile windows", any_win, A::TileWindows),
+            MenuAction::new("Close all windows", any_win, A::CloseAllWindows),
             MenuAction::sep(),
             MenuAction::new("Preferences & Customize…", true, A::Properties),
         ]
@@ -761,12 +813,19 @@ impl DeosDesktop {
                 MenuAction::new("Transcript…", true, A::OpenTranscript),
                 MenuAction::new("Workflow Composer…", true, A::OpenWorkflow),
             ],
-            "Window" => vec![
-                MenuAction::new("New Inspector…", true, A::Inspect),
-                MenuAction::new("New Document…", true, A::OpenDoc),
-                MenuAction::new("New Transcript…", true, A::OpenTranscript),
-                MenuAction::new("New Workflow Composer…", true, A::OpenWorkflow),
-            ],
+            "Window" => {
+                let any_win = !self.windows.is_empty();
+                vec![
+                    MenuAction::new("New Inspector…", true, A::Inspect),
+                    MenuAction::new("New Document…", true, A::OpenDoc),
+                    MenuAction::new("New Transcript…", true, A::OpenTranscript),
+                    MenuAction::new("New Workflow Composer…", true, A::OpenWorkflow),
+                    MenuAction::sep(),
+                    MenuAction::new("Cascade windows", any_win, A::CascadeWindows),
+                    MenuAction::new("Tile windows", any_win, A::TileWindows),
+                    MenuAction::new("Close all windows", any_win, A::CloseAllWindows),
+                ]
+            }
             _ => vec![MenuAction::new(
                 "deos desktop — right-click anything",
                 false,
@@ -909,6 +968,9 @@ impl DeosDesktop {
             ActionKind::TranscludeInto { into } => {
                 self.transclude_into(cell, *into);
             }
+            ActionKind::CascadeWindows => self.cascade_windows(),
+            ActionKind::TileWindows => self.tile_windows(),
+            ActionKind::CloseAllWindows => self.close_all_windows(),
         }
     }
 
@@ -1106,6 +1168,9 @@ impl DeosDesktop {
                 self.open_properties(PropSubject::Desktop);
                 self.status = "Desktop Preferences & customization.".into();
             }
+            ActionKind::CascadeWindows => self.cascade_windows(),
+            ActionKind::TileWindows => self.tile_windows(),
+            ActionKind::CloseAllWindows => self.close_all_windows(),
             _ => {}
         }
     }
@@ -1154,6 +1219,81 @@ impl DeosDesktop {
                 },
                 self.world.borrow().height()
             );
+        }
+    }
+
+    // ── Window arrangement (pure layout actuation — NO verified turn) ────────────
+    // The NT "Window" menu's Cascade / Tile / Close-All commands. Each only moves or
+    // drops open windows and re-persists their geometry to the sidecar — view-state
+    // only, the same persistence path a manual drag uses.
+
+    /// **Cascade** every open (non-minimized) window from the top-left, staggered, and
+    /// re-persist their geometry. Restores minimized windows so the cascade is whole.
+    fn cascade_windows(&mut self) {
+        let mut keys: Vec<WinKey> = self.windows.keys().copied().collect();
+        keys.sort_by_key(|k| self.windows[k].z);
+        for (i, key) in keys.iter().enumerate() {
+            let off = i as f32 * 28.0;
+            if let Some(ws) = self.windows.get_mut(key) {
+                ws.x = 300.0 + off;
+                ws.y = MENUBAR_H + 12.0 + off;
+                ws.minimized = false;
+                ws.z = self.next_z;
+                self.next_z += 1;
+            }
+            self.persist_window(*key);
+        }
+        self.status = format!("Cascaded {} window(s).", keys.len());
+    }
+
+    /// **Tile** every open window into a near-square grid filling the desktop below
+    /// the menu bar, and re-persist. A pure layout actuation.
+    fn tile_windows(&mut self) {
+        let mut keys: Vec<WinKey> = self.windows.keys().copied().collect();
+        keys.sort_by_key(|k| self.windows[k].z);
+        let n = keys.len().max(1);
+        let cols = (n as f32).sqrt().ceil() as usize;
+        let rows = n.div_ceil(cols);
+        // Tile across the left ~2/3 of a 1600-wide desktop so the icons + summary
+        // widget on the right stay legible (the desktop is laid out for ~1600×1000).
+        let area_x = 240.0;
+        let area_y = MENUBAR_H + 8.0;
+        let area_w = 1080.0;
+        let area_h = 940.0;
+        let cw = (area_w / cols as f32).max(WIN_MIN_W);
+        let ch = (area_h / rows as f32).max(WIN_MIN_H);
+        for (i, key) in keys.iter().enumerate() {
+            let col = (i % cols) as f32;
+            let row = (i / cols) as f32;
+            if let Some(ws) = self.windows.get_mut(key) {
+                ws.x = area_x + col * cw;
+                ws.y = area_y + row * ch;
+                ws.w = (cw - 8.0).max(WIN_MIN_W);
+                ws.h = (ch - 8.0).max(WIN_MIN_H);
+                ws.minimized = false;
+            }
+            self.persist_window(*key);
+        }
+        self.status = format!("Tiled {n} window(s) in a {cols}×{rows} grid.");
+    }
+
+    /// **Close all** open windows (and drop their persisted geometry).
+    fn close_all_windows(&mut self) {
+        let keys: Vec<WinKey> = self.windows.keys().copied().collect();
+        let n = keys.len();
+        for key in keys {
+            self.close_window(key);
+        }
+        self.status = format!("Closed {n} window(s).");
+    }
+
+    /// Focus (raise + un-minimize) a window — what a taskbar-stub click does.
+    fn focus_window(&mut self, key: WinKey) {
+        if let Some(ws) = self.windows.get_mut(&key) {
+            ws.minimized = false;
+            ws.z = self.next_z;
+            self.next_z += 1;
+            self.persist_window(key);
         }
     }
 
@@ -1333,6 +1473,32 @@ impl DeosDesktop {
     pub fn bake_doc_text(&self, cell: CellId) -> String {
         self.load_doc_buffer(cell)
     }
+
+    /// **Cascade** all open windows (the Window→Cascade command) — a bake/test hook.
+    /// Pure layout; fires NO verified turn. Returns the open-window count moved.
+    pub fn bake_cascade_windows(&mut self) -> usize {
+        let n = self.windows.len();
+        self.cascade_windows();
+        n
+    }
+
+    /// **Tile** all open windows (the Window→Tile command) — a bake/test hook.
+    pub fn bake_tile_windows(&mut self) -> usize {
+        let n = self.windows.len();
+        self.tile_windows();
+        n
+    }
+
+    /// The total open-window count across ALL kinds (a bake/test assertion hook).
+    pub fn bake_total_window_count(&self) -> usize {
+        self.windows.len()
+    }
+
+    /// The World's conservation sum (Σ balance) — a bake/test hook over the live
+    /// ledger (the desktop's World-summary widget reflects it; it must read 0).
+    pub fn bake_world_balance_sum(&self) -> i64 {
+        self.world_balance_sum()
+    }
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────────
@@ -1389,6 +1555,9 @@ impl Render for DeosDesktop {
             root = root.child(self.render_icon(idx, *cell, cx));
         }
 
+        // ── The World-summary widget (pinned top-right, fills the empty margin) ───
+        root = root.child(self.render_world_widget());
+
         // ── The open windows (z-ordered) ─────────────────────────────────────────
         let mut wins: Vec<WinKey> = self.windows.keys().copied().collect();
         wins.sort_by_key(|k| self.windows[k].z);
@@ -1406,7 +1575,8 @@ impl Render for DeosDesktop {
             root = root.child(self.render_property_dialog(cx));
         }
 
-        // ── The status bar (the receipt of the last actuation) ───────────────────
+        // ── The taskbar (open-window stubs) + the status bar ─────────────────────
+        root = root.child(self.render_taskbar(cx));
         root = root.child(self.render_statusbar());
 
         root
@@ -1437,7 +1607,7 @@ impl DeosDesktop {
                 .flex()
                 .items_center()
                 .bg(gpui::rgb(NT_FACE_DARK))
-                .child(div().font_weight(FontWeight::BOLD).child("◆ deos")),
+                .child(div().font_weight(FontWeight::BOLD).child("deos")),
         );
         for (i, name) in menus.iter().enumerate() {
             let name = *name;
@@ -1492,11 +1662,13 @@ impl DeosDesktop {
         let kind = self.cell_kind(&cell);
         let bal = self.cell_balance(&cell);
         let held = self.holds(&cell);
+        // A font-safe single-letter kind badge (the geometric/dingbat icon glyphs are
+        // tofu in the bake font, so a dense letter stands in: T/W/S/A).
         let glyph = match kind {
-            "treasury" => "▣",
-            "issuer well" => "◈",
-            "service" => "⚙",
-            _ => "▤",
+            "treasury" => "T",
+            "issuer well" => "W",
+            "service" => "S",
+            _ => "A",
         };
         let label = if self.layout.prefs.show_balances {
             format!("{}\n{}\n{}", kind, id_short(&cell), fmt_balance(bal))
@@ -1630,7 +1802,11 @@ impl DeosDesktop {
                     cx.notify();
                 }),
             )
-            .child("◢");
+            .text_size(px(8.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(GLYPH_GRIP);
 
         div()
             .id(gpui::SharedString::from(format!(
@@ -1687,7 +1863,18 @@ impl DeosDesktop {
         let caps = self.cell_cap_count(&cell);
         let kind = self.cell_kind(&cell);
         let rev = self.cell_field_u64(&cell, DOC_REV_SLOT);
-        div()
+        let held = self.holds(&cell);
+        let receipts = self.cell_receipt_count(&cell);
+        // The balance gauge denominator — the World's largest holder.
+        let gauge = (bal.max(0) as f32) / (self.world_max_balance() as f32);
+        // The lifecycle reads green when Live, amber otherwise (a sealed/migrated cell).
+        let life_color = if lifecycle == "Live" {
+            0x0a7a2a
+        } else {
+            0xa06000
+        };
+
+        let mut col = div()
             .id(gpui::SharedString::from(format!(
                 "winbody-{}",
                 id_hex(&cell)
@@ -1703,13 +1890,61 @@ impl DeosDesktop {
             .child(face_section("Identity"))
             .child(face_row("id", &id_hex(&cell)))
             .child(face_row("kind", kind))
+            .child(face_row_color(
+                "authority",
+                if held { "held (lit)" } else { "system (dim)" },
+                if held { 0x0a7a2a } else { NT_DIM },
+            ))
             .child(face_section("State (live)"))
             .child(face_row("balance", &fmt_balance(bal)))
+            .child(face_gauge(gauge))
             .child(face_row("nonce", &nonce.to_string()))
-            .child(face_row("lifecycle", &lifecycle))
+            .child(face_row_color("lifecycle", &lifecycle, life_color))
             .child(face_row("capabilities", &caps.to_string()))
             .child(face_row("doc revision", &rev.to_string()))
-            .child(face_section("Affordances (do it)"))
+            .child(face_row("turns by cell", &receipts.to_string()));
+
+        // ── State slots (the raw committed fields — Pharo "inspect everything") ──
+        col = col.child(face_section("State slots (committed fields)"));
+        for slot in 0..8usize {
+            let v = self.cell_field_u64(&cell, slot);
+            // Only show non-zero slots plus slot 0 (keeps the dense view legible).
+            if v != 0 || slot == 0 {
+                col = col.child(face_row(&format!("field[{slot}]"), &v.to_string()));
+            }
+        }
+
+        // ── Recent turns whose agent IS this cell (the cell's own chronicle) ──
+        col = col.child(face_section("Recent turns (this cell)"));
+        let cell_receipts: Vec<String> = {
+            let w = self.world.borrow();
+            w.receipts()
+                .iter()
+                .filter(|r| r.agent == cell)
+                .rev()
+                .take(5)
+                .map(|r| {
+                    let hh: String = r.turn_hash[..3]
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
+                    let post: String = r.post_state_hash[..3]
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect();
+                    format!("turn {hh} → post {post}")
+                })
+                .collect()
+        };
+        if cell_receipts.is_empty() {
+            col = col.child(face_row("(none)", "actuate to write a receipt"));
+        } else {
+            for (i, line) in cell_receipts.iter().enumerate() {
+                col = col.child(face_row(&format!("[{i}]"), line));
+            }
+        }
+
+        col.child(face_section("Affordances (do it)"))
             .child(self.affordance_button(cell, "Bump nonce", ActionKind::BumpNonce, cx))
             .child(self.affordance_button(
                 cell,
@@ -1914,14 +2149,9 @@ impl DeosDesktop {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let (cell, tag) = key;
-        let glyph = match tag {
-            WinKindTag::DocEditor => "▤",
-            WinKindTag::Links => "↹",
-            WinKindTag::Transcript => "≣",
-            WinKindTag::Inspector => "▣",
-            WinKindTag::Workflow => "⛓",
-            _ => "▣",
-        };
+        // A font-safe 3-letter kind badge (the geometric window glyphs render as tofu
+        // in the bake font, so the dense legible tag stands in for them).
+        let glyph = kind_short(tag);
         // NT navy title bar with min/max/close glyph buttons. The bar grabs a
         // window-move drag on mouse-down; the buttons fire close/minimize.
         div()
@@ -1962,7 +2192,15 @@ impl DeosDesktop {
                     cx.notify();
                 }),
             )
-            .child(div().px_1().child(glyph))
+            .child(
+                div()
+                    .mx_1()
+                    .px_1()
+                    .text_size(px(9.0))
+                    .bg(gpui::rgb(0x000050))
+                    .text_color(gpui::rgb(0xc0d0ff))
+                    .child(glyph),
+            )
             .child(
                 div()
                     .flex_1()
@@ -1971,14 +2209,14 @@ impl DeosDesktop {
                     .font_weight(FontWeight::BOLD)
                     .child(title.to_string()),
             )
-            .child(self.title_btn(key, "_", TitleBtn::Minimize, cx))
+            .child(self.title_btn(key, GLYPH_MIN, TitleBtn::Minimize, cx))
             .child(self.title_btn(
                 key,
-                if minimized { "▢" } else { "❐" },
+                if minimized { GLYPH_RESTORE } else { GLYPH_MAX },
                 TitleBtn::Maximize,
                 cx,
             ))
-            .child(self.title_btn(key, "✕", TitleBtn::Close, cx))
+            .child(self.title_btn(key, GLYPH_CLOSE, TitleBtn::Close, cx))
     }
 
     fn title_btn(
@@ -2181,7 +2419,15 @@ impl DeosDesktop {
                     .bg(gpui::rgb(NT_TITLE_ACTIVE))
                     .text_color(gpui::rgb(NT_TITLE_TEXT))
                     .px_1()
-                    .child(div().px_1().child("⚙"))
+                    .child(
+                        div()
+                            .mx_1()
+                            .px_1()
+                            .text_size(px(9.0))
+                            .bg(gpui::rgb(0x000050))
+                            .text_color(gpui::rgb(0xc0d0ff))
+                            .child("CFG"),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -2210,7 +2456,7 @@ impl DeosDesktop {
                                     cx.notify();
                                 }),
                             )
-                            .child("✕"),
+                            .child(GLYPH_CLOSE),
                     ),
             )
             .child(body)
@@ -2243,9 +2489,9 @@ impl DeosDesktop {
             .child(face_section("Editable (receipted SetField turn)"))
             .child(face_row("field[14] revision", &rev.to_string()))
             // The property-edit controls: each is a verified turn.
-            .child(self.prop_setfield_button(cell, "revision ＋1", DOC_REV_SLOT, rev + 1, cx))
-            .child(self.prop_setfield_button(cell, "revision ＝0", DOC_REV_SLOT, 0, cx))
-            .child(self.prop_setfield_button(cell, "field[13] ＝42", 13, 42, cx))
+            .child(self.prop_setfield_button(cell, "revision +1", DOC_REV_SLOT, rev + 1, cx))
+            .child(self.prop_setfield_button(cell, "revision =0", DOC_REV_SLOT, 0, cx))
+            .child(self.prop_setfield_button(cell, "field[13] =42", 13, 42, cx))
             .into_any_element()
     }
 
@@ -2438,6 +2684,7 @@ impl DeosDesktop {
     }
 
     fn render_statusbar(&self) -> impl IntoElement {
+        let h = self.world.borrow().height();
         div()
             .absolute()
             .left(px(0.0))
@@ -2445,6 +2692,7 @@ impl DeosDesktop {
             .w_full()
             .h(px(22.0))
             .flex()
+            .flex_row()
             .items_center()
             .px_2()
             .bg(gpui::rgb(NT_FACE))
@@ -2452,7 +2700,150 @@ impl DeosDesktop {
             .border_color(gpui::rgb(NT_HILIGHT))
             .text_size(px(11.0))
             .text_color(gpui::rgb(NT_TEXT))
-            .child(self.status.clone())
+            .child(div().flex_1().child(self.status.clone()))
+            // A right-aligned height "tray" readout (the NT clock corner).
+            .child(
+                div()
+                    .px_2()
+                    .border_l_1()
+                    .border_color(gpui::rgb(NT_FACE_DARK))
+                    .text_color(gpui::rgb(0x303030))
+                    .child(format!("World height {h}")),
+            )
+    }
+
+    /// **The taskbar** — a row of stubs for every open window, just above the status
+    /// bar (the NT taskbar). Each stub names the window and click-focuses it; a
+    /// minimized window's stub reads dimmed. Pure view-state over `self.windows`.
+    fn render_taskbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut keys: Vec<WinKey> = self.windows.keys().copied().collect();
+        keys.sort_by_key(|k| (self.windows[k].minimized, self.windows[k].z));
+        let mut bar = div()
+            .absolute()
+            .left(px(0.0))
+            .bottom(px(22.0))
+            .w_full()
+            .h(px(24.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .bg(gpui::rgb(NT_FACE))
+            .border_t_1()
+            .border_color(gpui::rgb(NT_FACE_DARK));
+        // A leading "Windows" caption (the taskbar's system corner).
+        bar = bar.child(
+            div()
+                .px_2()
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .bg(gpui::rgb(NT_FACE_DARK))
+                .text_size(px(10.0))
+                .font_weight(FontWeight::BOLD)
+                .child(format!("{} open", keys.len())),
+        );
+        for key in keys {
+            let (cell, tag) = key;
+            let ws = &self.windows[&key];
+            let min = ws.minimized;
+            // Font-safe label: the cell id + the 3-letter kind tag (no tofu glyph).
+            let label = format!("{} · {}", id_short(&cell), kind_short(tag));
+            bar = bar.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "task-{}-{:?}",
+                            id_hex(&cell),
+                            tag as u8
+                        )))
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .text_size(px(10.0)),
+                )
+                .when(min, |d| d.opacity(0.55))
+                .hover(|s| s.bg(gpui::rgb(NT_FACE_DARK)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.focus_window(key);
+                        cx.notify();
+                    }),
+                )
+                .child(label),
+            );
+        }
+        bar
+    }
+
+    /// **The World-summary widget** — a small NT info panel pinned to the desktop's
+    /// top-right, reflecting the live World invariants: height, cell count, total
+    /// receipts, and the conservation sum (Σ balance, the net of issuer wells vs.
+    /// accounts). Read-only over the live ledger; it fills the empty right margin and
+    /// teaches the invariant at a glance. The sum is INVARIANT under value-conserving
+    /// turns (transfers move value, they do not create it), so the widget's headline
+    /// is its stability, shown as the constant net.
+    fn render_world_widget(&self) -> impl IntoElement {
+        let (h, n, receipts) = {
+            let w = self.world.borrow();
+            (w.height(), self.cells.len(), w.receipts().len())
+        };
+        let sum = self.world_balance_sum();
+        div()
+            .absolute()
+            .right(px(16.0))
+            .top(px(MENUBAR_H + 12.0))
+            .w(px(216.0))
+            .bg(gpui::rgb(NT_FACE))
+            .border_2()
+            .border_color(gpui::rgb(NT_SHADOW))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(20.0))
+                    .flex()
+                    .items_center()
+                    .px_2()
+                    .bg(gpui::rgb(NT_TITLE_ACTIVE))
+                    .text_color(gpui::rgb(NT_TITLE_TEXT))
+                    .text_size(px(11.0))
+                    .font_weight(FontWeight::BOLD)
+                    .child("World"),
+            )
+            .child(
+                div()
+                    .p_2()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(face_row("height", &h.to_string()))
+                    .child(face_row("cells", &n.to_string()))
+                    .child(face_row("receipts", &receipts.to_string()))
+                    .child(face_row_color("Σ balance", &fmt_balance(sum), 0x0a4a7a))
+                    .child(
+                        div()
+                            .mt_1()
+                            .text_size(px(10.0))
+                            .text_color(gpui::rgb(NT_DIM))
+                            .child("net of wells vs accounts — invariant under transfers"),
+                    ),
+            )
+    }
+}
+
+/// A 3-letter window-kind tag for the taskbar stub (dense, fixed-width).
+fn kind_short(tag: WinKindTag) -> &'static str {
+    match tag {
+        WinKindTag::Inspector => "INS",
+        WinKindTag::DocEditor => "DOC",
+        WinKindTag::Links => "LNK",
+        WinKindTag::Transcript => "LOG",
+        WinKindTag::Workflow => "WFL",
+        WinKindTag::AndroidCell => "AND",
     }
 }
 

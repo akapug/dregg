@@ -45,8 +45,8 @@ use crate::world::{bare_action, grant_capability, transfer};
 
 use super::DeosDesktop;
 use super::chrome::{
-    DOC_REV_SLOT, NT_DIM, NT_FACE, NT_FACE_DARK, NT_SHADOW, NT_TEXT, bevel_raised, face_row,
-    face_section, id_short,
+    DOC_REV_SLOT, GLYPH_ADD, GLYPH_PIN, GLYPH_REMOVE, NT_DIM, NT_FACE, NT_FACE_DARK, NT_SHADOW,
+    NT_TEXT, bevel_raised, face_row, face_section, id_short,
 };
 
 /// One step of a composed workflow — an INTENT (a declarative desired `Effect`) over
@@ -345,7 +345,7 @@ impl DeosDesktop {
             col = col.child(face_row("(empty)", "add intents from the palette above"));
         } else {
             for (i, step) in wf.steps.iter().enumerate() {
-                let baseline_mark = if i < wf.baseline_len { "▸B" } else { "  " };
+                let baseline_mark = if i < wf.baseline_len { ">B" } else { "  " };
                 col = col.child(face_row(
                     &format!("{baseline_mark} [{i}]"),
                     step.kind.label(),
@@ -441,7 +441,7 @@ impl DeosDesktop {
                 cx.notify();
             }),
         )
-        .child(format!("＋ {}", kind.label()))
+        .child(format!("{GLYPH_ADD} {}", kind.label()))
     }
 
     fn workflow_pop_button(&self, subject: CellId, cx: &mut Context<Self>) -> impl IntoElement {
@@ -463,7 +463,7 @@ impl DeosDesktop {
                 cx.notify();
             }),
         )
-        .child("－ remove last step")
+        .child(format!("{GLYPH_REMOVE} remove last step"))
     }
 
     fn workflow_baseline_button(
@@ -489,7 +489,7 @@ impl DeosDesktop {
                 cx.notify();
             }),
         )
-        .child("▸ pin baseline B = current workflow")
+        .child(format!("{GLYPH_PIN} pin baseline B = current workflow"))
     }
 }
 
