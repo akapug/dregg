@@ -39,7 +39,7 @@ use dregg_cell::AuthRequired;
 use gpui::AppContext;
 
 use deos_view::headless::HeadlessRender;
-use deos_view::{parse_view_tree, AppletView};
+use deos_view::{AppletView, parse_view_tree};
 
 static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
 static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
@@ -226,6 +226,62 @@ fn body() {
         "the agent-authored card renders differently (the +1 button + relabel reached pixels)"
     );
 
+    // ── PORTABLE: the SAME agent-authored ViewNode tree renders to the WEB backend ───
+    // The whole point of the ViewNode IR: the agent authored ONE tree, and it paints on
+    // BOTH renderers. Above, `before_tree`/`after_tree` drove the native gpui pixels;
+    // here the IDENTICAL trees drive the gpui-free web renderer (`ViewNode → HTML`). The
+    // agent-authored content is PORTABLE — native AND web, the same tree, two backends.
+    //
+    // This block is `web`-gated (the gpui-free renderer is `--features web`); run the
+    // portable proof with `cargo test --release --features web agent_authors_a_card_live`.
+    #[cfg(feature = "web")]
+    let web_after_path = {
+        use deos_view::{render_card_document, render_html};
+
+        // The web projection of the UNEDITED card (the before-tree the native renderer
+        // painted to `frame0`) and of the AGENT-AUTHORED card (the SAME `after_tree`
+        // object the native renderer just painted to `frame1`) — same data, web backend.
+        let web_before = render_html(&before_tree, &[0]);
+        let web_after = render_html(&after_tree, &[0]);
+
+        // The agent's two edits survived the web projection intact: the +1 button carries
+        // the REAL `inc` affordance payload (`data-turn="inc"`, the exact thing the native
+        // Button fires), and the `Counter`→`Clicks` relabel landed in a deos-text span.
+        assert!(
+            web_after.contains(
+                r#"<button class="deos-button" data-turn="inc" data-arg="1">+1</button>"#
+            ),
+            "the web render of the agent-authored card carries the +1 button's REAL inc affordance"
+        );
+        assert!(
+            web_after.contains(r#"<span class="deos-text">Clicks</span>"#),
+            "the web render carries the agent's `Counter`→`Clicks` relabel"
+        );
+        // The web mirror of the native before/after PIXEL diff: the unedited card had no
+        // button + said `Counter`; the agent's edit re-painted on the web too.
+        assert!(
+            !web_before.contains(r#"data-turn="inc""#)
+                && web_before.contains(r#"<span class="deos-text">Counter</span>"#),
+            "the unedited card's web render had NO inc button and the original `Counter` title"
+        );
+        assert_ne!(
+            web_before, web_after,
+            "native (pixels) AND web (HTML) BOTH re-painted the agent's edit — the SAME \
+             agent-authored ViewNode tree, two renderers: agent-authored content is PORTABLE"
+        );
+
+        // Write the full browser-loadable document — the served portable artifact, the
+        // web sibling of the `counter-after-agent.png` the native renderer baked above.
+        let doc = render_card_document("agent-authored counter card", &after_tree, &[0]);
+        assert!(
+            doc.starts_with("<!doctype html>"),
+            "a complete browser-loadable document"
+        );
+        let html_path = out.join("counter-after-agent.html");
+        std::fs::write(&html_path, &doc).expect("write the agent-authored card's web bake");
+        html_path
+    };
+
     // ── THE CAP TOOTH: an UNAUTHORIZED edit is REFUSED in-band ───────────────────────
     // The agent holds Signature, but this card's authoring requires Proof — an over-reach.
     // `editView` returns null, no patch lands, no turn commits, the view is untouched.
@@ -271,6 +327,11 @@ fn body() {
     println!("│ it reached pixels (real gpui-component, before/after DIFFER):");
     println!("│   before : {}", png_before.display());
     println!("│   after  : {}", png_after.display());
+    #[cfg(feature = "web")]
+    {
+        println!("│ it is PORTABLE — the SAME agent-authored tree also renders to the web:");
+        println!("│   web    : {}", web_after_path.display());
+    }
     println!("│ the cap tooth:");
     println!("│   an over-reach (Signature held, Proof required) was REFUSED in-band — no patch.");
     println!("╰───────────────────────────────────────────────────────────────────────────╯\n");
