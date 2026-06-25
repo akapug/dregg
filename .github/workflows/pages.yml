@@ -1,13 +1,16 @@
-name: Deploy Dregg site to GitHub Pages
+name: Deploy deos to GitHub Pages
+
+# The site is a thin static launcher that drops a visitor straight into the live,
+# in-browser, node-LESS deos: the verified executor runs CLIENT-SIDE in the
+# visitor's own WebAssembly tab (no backend server — GitHub Pages is static).
+#   /              the deos cockpit (WebImage model skin) — land IN deos, fire a real turn
+#   /cockpit-gpui/ the FULL gpui renderer on a WebGPU canvas (same in-tab executor)
+#   /cards/        the deos-js card gallery (counter + reflective inspector)
+#   /atlas/        the interactive atlas
+# scripts/build-pages-dist.sh assembles site/dist; this workflow just builds + uploads it.
 
 on:
   push:
-    branches: [main]
-  workflow_run:
-    # Re-deploy whenever demos.yml finishes so the site picks up fresh
-    # site/demos/results.json. demos.yml itself does not deploy.
-    workflows: ["Run demos and publish results"]
-    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -27,10 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Materialize the dregg-atlas's LFS-tracked images into the working
-          # tree so the real files land in the Pages artifact. (Pages-via-Actions
-          # serves the materialized files; legacy Pages-from-branch would serve
-          # LFS pointer stubs instead — broken images. This is why LFS is fine.)
+          # Materialize the atlas's LFS-tracked images into the working tree so the
+          # real files (not LFS pointer stubs) land in the Pages artifact.
           lfs: true
 
       - uses: dtolnay/rust-toolchain@master
@@ -40,113 +41,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: wasm
+          key: pages-wasm
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Build WASM
-        # Output must match the path imported by the playground/sandbox
-        # (../pkg/dregg_wasm.js). The build script copies site/pkg/ verbatim
-        # into dist/pkg/. GREEN OR BUST: a broken wasm crate fails the
-        # workflow — fix the crate, never ship stale artifacts.
-        run: wasm-pack build wasm --target web --out-dir ../site/pkg
-
-      - name: Package extension
-        # TS build via esbuild + build.sh package. The extension's wasm glue
-        # (extension/dregg_wasm.js + _bg.wasm) is committed, so this needs no
-        # cargo build. GREEN OR BUST: packaging failure fails the workflow.
-        run: |
-          set -euo pipefail
-          cd extension
-          npm install
-          npm run build
-          ./build.sh package
-          mkdir -p ../site/extension
-          cp dist/dregg-cipherclerk-chrome.zip ../site/extension/dregg-cipherclerk.zip
-          cp dist/dregg-cipherclerk-chrome.zip ../site/extension/dregg-wallet.zip
-          cp dist/dregg-cipherclerk-firefox.xpi ../site/extension/dregg-cipherclerk-firefox.xpi
-
-      - name: Fetch latest demo results from demos.yml
-        # Pulls the most recent successful demo-results artifact from the
-        # demos.yml workflow on main and drops it at site/demos/results.json.
-        # If no successful run exists yet (first deploy after the split), the
-        # step is a no-op and the site simply ships without results.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p site/demos
-          RUN_ID=$(gh run list \
-            --workflow=demos.yml \
-            --branch=main \
-            --status=success \
-            --limit=1 \
-            --json databaseId \
-            --jq '.[0].databaseId' || true)
-          if [ -z "${RUN_ID:-}" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful demos.yml run found; skipping."
-            exit 0
-          fi
-          echo "Downloading demo-results from run $RUN_ID..."
-          gh run download "$RUN_ID" \
-            --name demo-results \
-            --dir site/demos/ \
-            || echo "Artifact download failed (may have expired); skipping."
-          ls -la site/demos/ || true
-
-      - name: Install typst
-        run: |
-          curl -fsSL https://github.com/typst/typst/releases/latest/download/typst-x86_64-unknown-linux-musl.tar.xz | tar xJ
-          sudo mv typst-x86_64-unknown-linux-musl/typst /usr/local/bin/
-
-      - name: Build paper PDF
-        run: |
-          mkdir -p site/paper
-          typst compile paper/dregg.typ site/paper/dregg.pdf
-
-      - name: Build site
-        # BASE_PATH rewrites absolute hrefs/srcs so the site works under
-        # GitHub Pages' /dregg/ subpath. Drop to "" if a custom domain (CNAME)
-        # is configured for emberian.github.io/dregg later.
-        env:
-          BASE_PATH: /dregg
-        run: |
-          cd site
-          # The committed package-lock.json is generated on macOS and pins
-          # platform-specific binaries (e.g. lightningcss-darwin-arm64), which the
-          # linux runner cannot install (EBADPLATFORM). Drop it so npm re-resolves
-          # the right binaries for THIS platform (lightningcss-linux-x64-gnu).
-          rm -f package-lock.json
-          npm install --no-audit --no-fund
-          npm run build
-
-      - name: Bundle THE DREGG ATLAS
-        # Ship the self-built interactive atlas (game tree + UI tree + ocap web +
-        # 28-surface UI atlas + protocol) at emberian.github.io/dregg/atlas/. The
-        # atlas uses only relative paths, so it works at any subpath unchanged.
-        # Copied BEFORE the site tests (with `atlas` registered as an app-surface
-        # in nav-coherence's COPY_DIRS) so the authored link to /atlas/ resolves.
-        run: |
-          set -euo pipefail
-          mkdir -p site/dist/atlas
-          cp -a dregg-atlas/site/. site/dist/atlas/
-          # sanity: the entrypoint + a sample LFS-materialized image exist
-          test -f site/dist/atlas/index.html
-          test -s site/dist/atlas/ui-states/HOME_.jpg
-          head -c 20 site/dist/atlas/ui-states/HOME_.jpg | grep -q '^version https://gi' \
-            && (echo "ERROR: atlas image is an unmaterialized LFS pointer — checkout needs lfs:true" && exit 1) || true
-          echo "atlas bundled at /dregg/atlas/ ($(find site/dist/atlas -type f | wc -l) files)"
-
-      - name: Bundle THE LIVE WEB COCKPIT
-        # The verified cockpit MODEL compiled to wasm, served LIVE at /dregg/cockpit/
-        # (Path C): the executor runs in the visitor's own browser tab — no server.
-        # GREEN-OR-BUST: a real wasm build, no placeholder fallback — a degraded
-        # /cockpit/ would break the live wasm experience, so we fail loudly instead.
-        # starbridge-v2 [patch]es the plonky3-recursion fork to a local sibling for
-        # dev; fetch it at the pinned Cargo rev (../plonky3-recursion from the repo
-        # root == ../../plonky3-recursion from starbridge-v2/). The fork is public and
-        # the fetch sequence is verified.
+      - name: Fetch the plonky3-recursion fork (starbridge-v2 [patch]es it at a pinned rev)
+        # starbridge-v2 patches the plonky3-recursion fork to a local sibling for dev;
+        # fetch it at the pinned Cargo rev. The fork is public; the sequence is verified.
         run: |
           set -euo pipefail
           if [ ! -d ../plonky3-recursion/.git ]; then
@@ -154,19 +56,27 @@ jobs:
             git -C ../plonky3-recursion fetch --depth 1 origin 72ffc5646e90af9324ab17248b4beed31c036db3
             git -C ../plonky3-recursion checkout 72ffc5646e90af9324ab17248b4beed31c036db3
           fi
-          ( cd starbridge-v2 && wasm-pack build web --target web --out-dir pkg --release )
-          mkdir -p site/dist/cockpit
-          cp starbridge-v2/web/cockpit.html site/dist/cockpit/index.html
-          cp -r starbridge-v2/web/pkg site/dist/cockpit/pkg
-          test -s site/dist/cockpit/pkg/starbridge_web_bg.wasm
-          echo "live web cockpit bundled at /dregg/cockpit/ ($(du -sh site/dist/cockpit | cut -f1))"
 
-      - name: Site tests (built output)
-        # Static checks against dist/: nav coherence (every internal link
-        # resolves; no orphan pages) and the living-docs drift check.
+      - name: Build the in-browser deos dist (all wasm client-side, node-less)
+        # GREEN-OR-BUST: a broken wasm crate fails the workflow — we fix the crate, never
+        # ship stale or placeholder artifacts. The script builds the WebImage cockpit
+        # (root), the gpui-web cockpit (/cockpit-gpui/), the card gallery (/cards/), and
+        # bundles the atlas (/atlas/), all into site/dist.
+        run: scripts/build-pages-dist.sh
+
+      - name: Sanity-check the dist
         run: |
-          node site/tests/nav-coherence.mjs
-          node site/tests/docs-living-content.mjs
+          set -euo pipefail
+          test -f site/dist/index.html
+          test -s site/dist/pkg/starbridge_web_bg.wasm
+          test -s site/dist/cards/pkg/dregg_wasm_bg.wasm
+          test -f site/dist/cards/index.html
+          test -f site/dist/atlas/index.html
+          # the atlas images must be materialized, not LFS pointer stubs
+          if head -c 20 site/dist/atlas/ui-states/HOME_.jpg 2>/dev/null | grep -q '^version https://gi'; then
+            echo "ERROR: atlas image is an unmaterialized LFS pointer — checkout needs lfs:true" && exit 1
+          fi
+          echo "dist OK: $(find site/dist -type f | wc -l) files"
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

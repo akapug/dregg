@@ -255,6 +255,29 @@ fn main() {
         }
     }
 
+    // `--render-desktop <out>`: THE deos DESKTOP BAKE — the Windows-NT / Pharo
+    // workbench over the live verified World. Bakes a desktop of cell-icons with two
+    // inspector windows open and a right-click context menu visible, then drives a
+    // real right-click actuation (a verified turn) + a drag-persist to prove the
+    // metaphors are live, baking `<out>.png`. Default 1600x1000.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_desktop_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1600.0, 1000.0));
+            match render_desktop_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-desktop FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-guest <out>`: THE GUEST / APP-FORWARD BAKE — the welcoming,
     // low-verbosity desktop a newcomer lands on (the "after you dismiss the
     // inspector" view): the real app surfaces (browser · editor · terminal · chat)
@@ -936,6 +959,145 @@ fn render_showcase_arg(args: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse the `--render-desktop <out>` (or `=<out>`) argument — the output base path
+/// for the deos DESKTOP bake. Returns `None` when absent. `<out>.png` is written.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_desktop_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-desktop" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-desktop=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// **THE deos DESKTOP BAKE** — render the Windows-NT / Pharo-Smalltalk workbench
+/// over the live verified World, headless, and capture the PNG.
+///
+/// Mounts [`starbridge_v2::deos_desktop::DeosDesktop`] over the real `demo_world`
+/// image: each ledger cell becomes a draggable desktop icon; double-click opens an
+/// NT inspector window; right-click opens a context menu of REAL actuations (each a
+/// verified turn). To prove the metaphors are LIVE (not a static mock), the bake:
+///   1. opens two inspector windows (the treasury + the user cell),
+///   2. fires a REAL right-click actuation (transfer treasury → user) — a verified
+///      turn that advances `World::height`,
+///   3. drags an icon to a new position and asserts the layout PERSISTED to the
+///      sidecar (the #1 missing thing — spatial persistence),
+///   4. opens a context menu so the right-click ACTUATION surface is visible in the
+///      shot,
+/// then bakes `<out>.png`. Uses a throwaway sidecar path so the bake is hermetic.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A hermetic sidecar for this bake (so the persistence write/read is real but
+    // does not clobber a user's layout). Start clean.
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-desktop-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    // The live verified image — the SAME `World` the cockpit runs.
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [treasury, _service, user] = anchors;
+    let pre_height = world.height();
+    let shared = Rc::new(RefCell::new(world));
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx))
+    })?;
+    cx.run_until_parked();
+
+    // 1. Open two inspector windows (treasury + user) via the public actuation path.
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_open_window(treasury);
+        desk.bake_open_window(user);
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+
+    // 2. Fire a REAL right-click actuation: transfer treasury → user (a verified
+    //    turn). Assert the World advanced.
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_actuate_transfer(treasury, user, 1_000);
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+    let post_height = shared.borrow().height();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "the desktop actuation must commit a REAL verified turn (height {pre_height} -> {post_height})"
+    );
+
+    // 3. Drag the user icon to a new position and assert the layout PERSISTED.
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_drag_icon(user, 720.0, 540.0);
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+    let persisted = DesktopLayout::load(&layout_path);
+    anyhow::ensure!(
+        persisted
+            .icons
+            .iter()
+            .any(|p| p.cell == user.hex() && (p.x - 720.0).abs() < 1.0),
+        "the dragged icon position must PERSIST to the sidecar (spatial persistence)"
+    );
+
+    // 4. Open a context menu over the service-anchored cell so the ACTUATION surface
+    //    is visible in the shot.
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_open_menu(treasury, 360.0, 230.0);
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos DESKTOP render -> {out}.png ({ww}x{hh}, logical {w}x{h}); NT/Pharo workbench \
+         over the live verified World — {} cell-icons, 2 inspector windows, a right-click \
+         context menu, a REAL fired actuation (height {pre_height} -> {post_height}), and a \
+         drag persisted to the layout sidecar.",
+        shared.borrow().cell_count()
+    );
+    Ok(())
 }
 
 /// Parse the `--render-guest <out>` (or `--render-guest=<out>`) argument — the
