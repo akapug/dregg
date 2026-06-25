@@ -535,6 +535,20 @@ pub enum TurnChainError {
         /// The root this turn claims to consume.
         found_old_root: u32,
     },
+    /// **The WIDE temporal tooth.** Turn `index` does not continue the chain at the 8-felt
+    /// (~124-bit) anchor: its `wide_old_root8` is not the previous turn's `wide_new_root8`. For a
+    /// WIDE welded leg the single-felt rotated commit PIs (34/35) are RETIRED to zero (the 8-felt
+    /// wide commit is the sole binding), so continuity is bound at the 8-felt anchor, not the felt.
+    WideChainBreak {
+        /// The turn that breaks 8-felt continuity.
+        index: usize,
+    },
+    /// A WIDE welded leg is missing its 8-felt commit anchor (PI vector too short for the wide
+    /// tail) — a narrow leg presented to the wide fold. Fail-closed.
+    MissingWideAnchor {
+        /// The turn whose leg lacks the wide tail.
+        index: usize,
+    },
     /// A turn's per-cell whole-turn proof failed to verify (host admission or
     /// the in-circuit leaf re-proof).
     TurnProofInvalid {
@@ -591,6 +605,16 @@ impl core::fmt::Display for TurnChainError {
                 f,
                 "turn {index} breaks the finalized chain: old_root {found_old_root} != \
                  previous turn's new_root {expected_old_root} (order tampered)"
+            ),
+            TurnChainError::WideChainBreak { index } => write!(
+                f,
+                "turn {index} breaks the finalized chain at the 8-felt (~124-bit) anchor: \
+                 wide_old_root8 != previous turn's wide_new_root8 (order tampered)"
+            ),
+            TurnChainError::MissingWideAnchor { index } => write!(
+                f,
+                "turn {index} leg is missing its 8-felt wide commit anchor (narrow leg in the \
+                 wide fold) — refused"
             ),
             TurnChainError::TurnProofInvalid { index, reason } => {
                 write!(f, "turn {index} proof invalid: {reason}")
@@ -1646,13 +1670,19 @@ pub struct WeldedChainHostSummary {
 /// proof against the leg's own descriptor and confirms the staged-weld marker.
 fn admit_welded_leg(t: &FinalizedTurn, index: usize) -> Result<(), TurnChainError> {
     use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
-    use dregg_circuit::effect_vm_descriptors::ROTATED_UMEM_WELD_SUFFIX;
+    use dregg_circuit::effect_vm_descriptors::{ROTATED_UMEM_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX};
     let leg = &t.participant.rotated;
-    if !leg.descriptor.name.ends_with(ROTATED_UMEM_WELD_SUFFIX) {
+    // Accept BOTH staged weld forms: the NARROW rotated+umem weld (1-felt / 46-PI) and the WIDE
+    // rotated+umem weld (8-felt / ~124-bit, the wide commit PIs preserved through the additive
+    // weld). Either rides the SAME single-felt `old_root`/`new_root` (PI 34/35) the chain fold's
+    // temporal tooth binds; the wide form additionally carries the 8-felt anchors at its PI tail.
+    if !(leg.descriptor.name.ends_with(ROTATED_UMEM_WELD_SUFFIX)
+        || leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX))
+    {
         return Err(TurnChainError::TurnProofInvalid {
             index,
             reason: format!(
-                "leg descriptor '{}' is not a staged rotated+umem weld",
+                "leg descriptor '{}' is not a staged rotated+umem weld (narrow or wide)",
                 leg.descriptor.name
             ),
         });
@@ -1704,6 +1734,85 @@ pub fn fold_welded_umem_turn_chain_staged(
         final_root: root_seg.last_new,
         num_turns: turns.len(),
         chain_digest: root_seg.acc,
+    })
+}
+
+/// The host-side whole-chain summary the staged WIDE welded fold computes — the 8-felt (~124-bit)
+/// twin of [`WeldedChainHostSummary`]. For a WIDE welded leg the single-felt rotated commit PIs are
+/// retired to zero (the 8-felt wide commit is the sole binding), so the chain is bound at the 8-felt
+/// `wide_old_root8`/`wide_new_root8` anchors — the genesis / final / ordered-history digest are all
+/// 8-felt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WideWeldedChainHostSummary {
+    /// The first turn's `wide_old_root8` (the 8-felt chain genesis).
+    pub genesis_root8: [BabyBear; 8],
+    /// The last turn's `wide_new_root8` (the 8-felt chain head).
+    pub final_root8: [BabyBear; 8],
+    /// The number of folded turns.
+    pub num_turns: usize,
+    /// The 8-felt Poseidon2 ordered-history digest over the per-turn `(wide_old_root8,
+    /// wide_new_root8)` pairs (`hash_many_8`-folded in chain order — a genuine ~124-bit
+    /// collision-resistant commitment; a reorder yields a different digest).
+    pub chain_digest8: [BabyBear; 8],
+}
+
+/// **THE STAGED WIDE WELDED-UMEM IVC FOLD (HOST — VK-RISK-FREE) — the IVC half of the genuine flip
+/// precursor the VK epoch needs.** The 8-felt (~124-bit) twin of
+/// [`fold_welded_umem_turn_chain_staged`]: fold a multi-turn history of WIDE welded rotated+umem
+/// legs ([`crate::joint_turn_aggregation::RotatedParticipantLeg::mint_welded_wide_from_block_witnesses`]).
+/// Each leg is host-admitted (its welded `Ir2BatchProof` re-verified against its welded WIDE
+/// descriptor), then the chain's temporal tooth is bound at the **8-felt** anchor
+/// (`prev.wide_new_root8 == next.wide_old_root8`) — NOT the single felt, which the wide form retires
+/// to zero — and the 8-felt ordered-history digest is folded.
+///
+/// A `WideChainBreak` (reordered / dropped / spliced turn), a `MissingWideAnchor` (a narrow leg
+/// presented to the wide fold), and a leg whose welded proof does not verify are all refused. STAGED:
+/// nothing deployed — the welded legs carry staged descriptors, no VK epoch, no deployed-default
+/// flip.
+pub fn fold_wide_welded_umem_turn_chain_staged(
+    turns: &[FinalizedTurn],
+) -> Result<WideWeldedChainHostSummary, TurnChainError> {
+    use dregg_circuit::poseidon2::hash_many_8;
+    if turns.len() < 2 {
+        return Err(TurnChainError::TooFewTurns { count: turns.len() });
+    }
+    // (1) Host admission: each leg's welded WIDE proof re-verifies against its welded descriptor.
+    for (i, t) in turns.iter().enumerate() {
+        admit_welded_leg(t, i)?;
+    }
+    // (2) Collect the 8-felt anchors (a narrow leg lacking the wide tail is refused).
+    let mut anchors: Vec<([BabyBear; 8], [BabyBear; 8])> = Vec::with_capacity(turns.len());
+    for (i, t) in turns.iter().enumerate() {
+        let leg = &t.participant.rotated;
+        let old8 = leg
+            .wide_old_root8()
+            .ok_or(TurnChainError::MissingWideAnchor { index: i })?;
+        let new8 = leg
+            .wide_new_root8()
+            .ok_or(TurnChainError::MissingWideAnchor { index: i })?;
+        anchors.push((old8, new8));
+    }
+    // (3) The 8-felt temporal tooth: each turn's old8 == the previous turn's new8.
+    for i in 1..anchors.len() {
+        if anchors[i].0 != anchors[i - 1].1 {
+            return Err(TurnChainError::WideChainBreak { index: i });
+        }
+    }
+    // (4) The 8-felt ordered-history digest (a genuine ~124-bit Poseidon2 fold over the ordered
+    //     `(old8, new8)` pairs; a reorder yields a different digest).
+    let mut acc = [BabyBear::ZERO; 8];
+    for (old8, new8) in &anchors {
+        let mut absorb = Vec::with_capacity(24);
+        absorb.extend_from_slice(&acc);
+        absorb.extend_from_slice(old8);
+        absorb.extend_from_slice(new8);
+        acc = hash_many_8(&absorb);
+    }
+    Ok(WideWeldedChainHostSummary {
+        genesis_root8: anchors[0].0,
+        final_root8: anchors[anchors.len() - 1].1,
+        num_turns: turns.len(),
+        chain_digest8: acc,
     })
 }
 

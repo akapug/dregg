@@ -1356,9 +1356,48 @@ pub fn prove_effect_vm_rotated_wide(
     ),
     SdkError,
 > {
-    use dregg_circuit::descriptor_ir2::{
-        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
-    };
+    use dregg_circuit::descriptor_ir2::prove_vm_descriptor2;
+    let (desc, trace, dpis, map_heaps, mem_boundary) = generate_wide_descriptor_and_trace(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_nullifiers,
+        refusal_fields,
+    )?;
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
+    Ok((proof, dpis))
+}
+
+/// The shared WIDE descriptor + trace generation (the body of [`prove_effect_vm_rotated_wide`],
+/// extracted so the WIDE+umem weld prover [`prove_wide_umem_welded_staged`] reuses the EXACT same
+/// wide trace / PI vector / witness production then welds the umem leg onto it). Returns the
+/// resolved WIDE descriptor (from `WIDE_REGISTRY_STAGED_TSV`), its base trace, the wide PI vector
+/// (the 16 wide commit PIs at the tail = the 8-felt before/after anchors), the grow-gate
+/// `map_heaps`, and the (setFieldDyn-only) mem boundary.
+#[cfg(feature = "prover")]
+#[allow(clippy::type_complexity)]
+fn generate_wide_descriptor_and_trace(
+    initial_state: &CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    before_nullifiers: Option<&[BabyBear]>,
+    refusal_fields: Option<(&[dregg_circuit::heap_root::HeapLeaf], BabyBear)>,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
+        dregg_circuit::descriptor_ir2::MemBoundaryWitness,
+    ),
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, parse_vm_descriptor2};
     use dregg_circuit::effect_vm::trace_rotated::{
         RotatedBlockWitness, generate_rotated_create_cell_wide,
         generate_rotated_create_from_factory_wide, generate_rotated_custom_wide,
@@ -1599,8 +1638,122 @@ pub fn prove_effect_vm_rotated_wide(
         MemBoundaryWitness::default()
     };
 
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
-        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
+    Ok((desc, trace, dpis, map_heaps, mem_boundary))
+}
+
+/// **THE WIDE ROTATED+UMEM WELD PROVER (STAGED, VK-RISK-FREE) — the genuine flip precursor the VK
+/// epoch needs.** The WIDE (8-felt / ~124-bit faithful commit) twin of
+/// [`prove_rotated_umem_welded_staged`]: it proves, in ONE descriptor / ONE proof, BOTH the WIDE
+/// rotated cohort proof (the effect semantics + the wide PI vector whose LAST 16 PIs are the 8-felt
+/// before/after commit anchors `verify_full_turn_bound` binds at ~124-bit) AND the universal-memory
+/// reconciliation leg (the cohort `umemOp` over 7 appended columns + a REAL [`UMemBoundaryWitness`]).
+///
+/// Where the NARROW weld ([`prove_rotated_umem_welded_staged`]) welded onto the 1-felt / 46-PI
+/// rotated descriptor (a correct staging artifact, but flipping the deployed WIDE wire onto it would
+/// NARROW the ~124-bit commitment to ~46-bit — the no-narrowing scar the VK epoch refused to cross),
+/// THIS welds onto the deployed WIDE descriptor ([`WIDE_REGISTRY_STAGED_TSV`]) via
+/// [`weld_umem_into_wide_descriptor`], which is purely ADDITIVE: it appends the umem leg PAST the
+/// wide carriers and NEVER touches `public_input_count` nor any PI binding, so the 16 wide commit
+/// PIs (the 8-felt anchors) ride through UNCHANGED. The welded form keeps the FULL ~124-bit faithful
+/// commitment AND carries the umem reconciliation leg.
+///
+/// `effects` is the turn's homogeneous wide cohort slice; `before_w`/`after_w` the rotation
+/// witnesses the wide producers consume; `pre`/`ops` the SAME turn's universal-memory touch (its
+/// pre-state projection + Blum op trace) the cohort prover folds. `before_nullifiers`/`refusal_fields`
+/// thread the grow-gate / refusal context the wide producers need (mirrors
+/// [`prove_effect_vm_rotated_wide`]). Self-verifies before return; returns `(proof, wide_dpis)` — the
+/// caller binds the 16 wide commit PIs.
+///
+/// STAGED: a NEW wide+umem welded descriptor BESIDE the deployed wide registry; no VK epoch, no
+/// deployed-default flip, no committed-VK change.
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn prove_wide_umem_welded_staged(
+    initial_state: &CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+    before_nullifiers: Option<&[BabyBear]>,
+    refusal_fields: Option<(&[dregg_circuit::heap_root::HeapLeaf], BabyBear)>,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
+        Vec<BabyBear>,
+    ),
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{prove_vm_descriptor2_umem, verify_vm_descriptor2};
+    use dregg_circuit::effect_vm_descriptors::weld_umem_into_wide_descriptor;
+
+    // The umem leg's single-domain cohort rows + the REAL boundary (fails closed on a multi-domain
+    // leg — such effects stay on the per-map path until their own cohort design).
+    let inputs = dregg_turn::umem::umem_cohort_proving_inputs_from(pre, ops)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort trace generation: {e}")))?;
+
+    // Reuse the EXACT deployed wide trace / PI / witness production, then weld the umem leg ONTO it.
+    let (wide_desc, wide_trace, dpis, map_heaps, mem_boundary) =
+        generate_wide_descriptor_and_trace(
+            initial_state,
+            effects,
+            before_w,
+            after_w,
+            caveat,
+            before_nullifiers,
+            refusal_fields,
+        )?;
+
+    // WELD: append the umem leg INTO the WIDE descriptor (keeps the wide PI vector + the 16 wide
+    // commit PIs — the 8-felt anchors — INTACT). The first appended umem column is PAST the wide
+    // carriers (`base` = the wide trace width).
+    let welded = weld_umem_into_wide_descriptor(&wide_desc, inputs.domain);
+    let base = wide_desc.trace_width;
+
+    // Assemble the WELDED base trace: each wide row widened to the welded width, the REAL umem
+    // cohort rows (guard col 6 == 1) injected into the appended 7 columns of the first rows. The
+    // wide leg occupies cols `[0, base)`; the umem leg occupies `[base, base+7)`; the cohort
+    // umem-op gathering reads its operands row-local (guard gates which rows contribute).
+    let real_umem_rows: Vec<&Vec<BabyBear>> = inputs
+        .rows
+        .iter()
+        .filter(|r| r.get(6).copied() == Some(BabyBear::ONE))
+        .collect();
+    if real_umem_rows.len() > wide_trace.len() {
+        return Err(SdkError::InvalidWitness(format!(
+            "wide+umem weld: {} umem ops exceed the wide trace height {} (cannot co-locate the \
+             umem leg on the wide rows)",
+            real_umem_rows.len(),
+            wide_trace.len()
+        )));
+    }
+    let mut welded_base: Vec<Vec<BabyBear>> = Vec::with_capacity(wide_trace.len());
+    for (ri, row) in wide_trace.iter().enumerate() {
+        let mut wr = row.clone();
+        wr.resize(base + 7, BabyBear::ZERO);
+        if let Some(umem_row) = real_umem_rows.get(ri) {
+            for (i, &v) in umem_row.iter().enumerate().take(7) {
+                wr[base + i] = v;
+            }
+        }
+        welded_base.push(wr);
+    }
+
+    // Prove the WELDED WIDE descriptor through the DEPLOYED-form umem prover with the REAL boundary.
+    let proof = prove_vm_descriptor2_umem(
+        &welded,
+        &welded_base,
+        &dpis,
+        &mem_boundary,
+        &map_heaps,
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("wide+umem welded IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&welded, &proof, &dpis)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide+umem welded self-verify: {e}")))?;
     Ok((proof, dpis))
 }
 
