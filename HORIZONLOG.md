@@ -5560,3 +5560,25 @@ cannot distinguish them; the witness HONESTLY asserts `is_ok()` (hole open) and 
   `root_exposed_publics == [genesis, final, num_turns, digest]`, fail-closed. THIS PASS: precise root-cause recorded in
   `ivc_turn_chain.rs` module header + the witness doc; host/fork/lightclient build green; witness still honestly `is_ok()`
   (open). NO fork change ⇒ no rev bump (fork clean at fc12f233).
+
+## 2026-06-24 — gpui PlatformAndroid backend (graphideOS step 2): deos's renderer runs on android
+- BUILT the missing gpui android platform layer: `crates/gpui_android/` in the emberian/zed fork (modeled on gpui_web — the
+  non-native, single-surface, gpui_wgpu-over-raw_window_handle precedent). Platform + android-activity event loop & full
+  lifecycle (InitWindow/TerminateWindow/Resized/RedrawNeeded/Focus/Pause/Destroy) + window from `ANativeWindow`
+  (HasWindowHandle/HasDisplayHandle → `WgpuRenderer::new` raw-handle path) + real-thread dispatcher (à la gpui_linux) woken
+  via AndroidAppWaker + touch→mouse input + cosmic-text. Wired into `gpui_platform::current_platform()` under
+  cfg(target_os=android); gpui's PriorityQueue re-export + queue mod gained target_os=android; gpui_wgpu's instance() gained a
+  `GPUI_WGPU_BACKENDS` env knob. Other platforms UNTOUCHED (additive + cfg-gated).
+- PROVEN on-device: `mobile/deos-android-paint/` (gpui app painting a deos welcome frame) → cargo-apk APK → installs + launches
+  on the Pixel_7_API_35 emulator → android_main runs → the platform creates a VULKAN SURFACE FROM THE ANativeWindow → wgpu
+  selects an adapter + builds the renderer (`gpui_android: open_window: surface + renderer ready` in logcat, ~4s on host-GPU).
+- WALL = emulator GPU drivers, NOT the backend: SwiftShader (CPU Vulkan) is correct+stable but its LLVM JIT compiles gpui's
+  pipeline set pathologically slowly (>15min, observed 15:50 CPU still going); host-GPU MoltenVK loses the wgpu device at init
+  ("Unexpected error variant") → the sprite atlas (built once) is invalidated → frame fails; host-GPU GL advertises 0 compute
+  workgroups (gpui needs compute) → device creation rejected. Clean target = a PHYSICAL arm64 device (real Vulkan).
+- SHIPPED: fork commit adb9026524 (branch android-on-pinned = pinned-rev 54fbcb6943 + the one additive backend commit), pushed;
+  breadstuffs repinned 54fbcb6943→adb9026524 across 8 manifests (commit 496c89c65), resolve-verified, gpui itself compiles.
+  (deos-view's 29 errors are PRE-EXISTING gpui-component@b2deb2aa API drift — its gpui-component pin is untouched by the bump.)
+- EXACT REMAINING (named, not blockers): a clean painted frame needs real-Vulkan hardware; then the on-device backend ports —
+  keycode→Keystroke + IME commit (soft keyboard already shows; `AndroidWindowInner::is_composing` is the hook), pinch/
+  multi-touch, scroll-axis extraction, window insets. Status table + the debug.gpui.backends knob in mobile/README.md.
