@@ -275,6 +275,14 @@ pub mod bilateral_aggregation_air;
 /// `metatheory/Dregg2/Circuit/CrossCellConservation.lean`.
 pub mod cross_cell_conservation_air;
 
+/// The WHOLE-IMAGE FOLD CHIP: the in-circuit realization of the `hpin` obligation — an AIR that
+/// COMPUTES the depth-`d` binary-Merkle fold of an ENTIRE declared whole-boundary view (via a
+/// sorted-insert chain from the empty root) and PINS it to the published-root public input,
+/// realizing the no-extra-cells direction of the cross-cell read in-circuit. Lean soundness:
+/// `metatheory/Dregg2/Exec/UniversalBridge.lean` (`crossCellRead_whole_image` /
+/// `cross_cell_read_no_extra_cell` / `_teeth`, the `MapMerkleRoot.mapRoot_injective` anti-ghost).
+pub mod whole_image_fold;
+
 /// BLOCK / BATCH-level cross-cell conservation COLLECTOR (the deeper half of gap #6): gathers every
 /// per-cell proof's published signed NET_DELTA, groups by asset (AssetId := issuer-cell), and runs
 /// the committed `cross_cell_conservation_air` per asset — ACCEPTS the block iff every asset's Σδ=0

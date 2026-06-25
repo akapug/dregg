@@ -111,12 +111,17 @@
 //!     published peer root to the binary fold of the ENTIRE declared whole-boundary view and, under
 //!     the CR floor, the committed peer heap agrees with the declared image at EVERY address
 //!     INCLUDING absence off the declared list (no extra cells — a hidden cell cannot survive the
-//!     pin). What remains is ONE precise in-circuit obligation — the Lean theorem's `hpin`
-//!     hypothesis, named exactly: an AIR that COMPUTES the whole-boundary binary fold
-//!     (`mapRoot hash d boundaryHeap`, the per-domain sorted-leaf fold padded to the `2^d`-leaf
-//!     vector) over the universal boundary table and pins it to the published-root public input.
-//!     That fold chip rides the universal-map rotation; this pass realizes only the per-cell subset
-//!     opening above.
+//!     pin). The Lean theorem's `hpin` hypothesis — an AIR that COMPUTES the whole-boundary binary
+//!     fold (`mapRoot hash d boundaryHeap`, the sorted-leaf fold to the `2^d`-leaf root) and pins
+//!     it to the published-root public input — is now REALIZED in `crate::whole_image_fold` (the
+//!     WHOLE-IMAGE FOLD CHIP): a sorted-`MapKind::Insert` chain from the empty root reconstructs the
+//!     deployed binary fold over the ENTIRE declared boundary view and `PiBinding`s the delivered
+//!     fold to the published root, so a peer heap with one undeclared/altered cell folds elsewhere
+//!     and cannot be pinned (the `mapRoot_injective` no-extra-cells tooth biting in-circuit;
+//!     `tests/effect_vm_umem_real_turn.rs::cross_cell_read_whole_image_*`). The ONE remaining
+//!     rotation step is the cross-table wiring binding the chip's insert-chain `(key, value)` rows
+//!     to the universal boundary table's per-domain `(domain, key)` cells (named in the
+//!     `whole_image_fold` module docs); the fold arithmetic — the `hpin` content — rides there.
 //!   * The custom table id 5 (Lean `SUBMASK_TID = 0`) is realized as the bitwise-submask
 //!     relation at 30 bits (`subsetTable_mem_iff`: both elements in `[0, 2^30)` and
 //!     `keep & held = keep`), enforced by per-bit decomposition — the custom-table CONTENTS
