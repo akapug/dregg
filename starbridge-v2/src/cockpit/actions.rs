@@ -557,7 +557,9 @@ impl Cockpit {
         self.last_outcome = Some(match &outcome {
             Ok(ao) => format!(
                 "swarm: coordinator emitted task/go → worker-a (receipt {}) — {} notify edge(s) deposited",
-                ao.receipt_hash.map(|h| reflect::short_hex(&h)).unwrap_or_default(),
+                ao.receipt_hash
+                    .map(|h| reflect::short_hex(&h))
+                    .unwrap_or_default(),
                 ao.notify_edges.len(),
             ),
             Err(e) => format!("swarm: REFUSED — {}", e.label()),
@@ -607,7 +609,9 @@ impl Cockpit {
         self.last_outcome = Some(match &outcome {
             Ok(ao) => format!(
                 "swarm: coordinator transferred 500 + woke worker-a (receipt {}) — {} notify edge(s)",
-                ao.receipt_hash.map(|h| reflect::short_hex(&h)).unwrap_or_default(),
+                ao.receipt_hash
+                    .map(|h| reflect::short_hex(&h))
+                    .unwrap_or_default(),
                 ao.notify_edges.len(),
             ),
             Err(e) => format!("swarm: REFUSED — {}", e.label()),

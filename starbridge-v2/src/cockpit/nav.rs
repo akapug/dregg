@@ -24,6 +24,7 @@ impl Cockpit {
             iv_focus: self.inspector_view.doc().focus(),
             iv_present: self.inspector_view.doc().present_idx(),
             inspect_act_focus: self.inspect_act_focus,
+            service_explorer_focus: self.service_explorer_focus,
             sim_target_idx: self.sim_target_idx,
             sim_effect_idx: self.sim_effect_idx,
             lane_idx: self.lane_idx,
@@ -46,6 +47,7 @@ impl Cockpit {
         self.moldable_lens = s.moldable_lens;
         self.inspector_reflexive = s.inspector_reflexive;
         self.inspect_act_focus = s.inspect_act_focus;
+        self.service_explorer_focus = s.service_explorer_focus;
         self.sim_target_idx = s.sim_target_idx;
         self.sim_effect_idx = s.sim_effect_idx;
         self.lane_idx = s.lane_idx;
@@ -91,6 +93,7 @@ impl Cockpit {
                 self.inspector_view.doc().present_idx()
             ),
             Tab::InspectAct => format!("focus={}", sh(self.inspect_act_focus)),
+            Tab::ServiceExplorer => format!("focus={}", sh(self.service_explorer_focus)),
             Tab::Simulate => format!("tgt={};eff={}", self.sim_target_idx, self.sim_effect_idx),
             Tab::Lanes => format!("lane={}", self.lane_idx),
             Tab::WebOfCells => format!(
@@ -145,6 +148,9 @@ impl Cockpit {
                 v.push(("next face".into(), NavAction::CyclePresent));
             }
             Tab::InspectAct => v.push(("cycle focus".into(), NavAction::CycleInspectFocus)),
+            Tab::ServiceExplorer => {
+                v.push(("cycle focus".into(), NavAction::CycleServiceFocus))
+            }
             Tab::Simulate => {
                 v.push(("cycle target".into(), NavAction::CycleSimTarget));
                 v.push(("cycle effect".into(), NavAction::CycleSimEffect));
@@ -204,6 +210,12 @@ impl Cockpit {
             NavAction::CycleInspectFocus => {
                 self.inspect_act_focus = cycle(self.inspect_act_focus);
                 self.inspect_act_outcome = None;
+                cx.notify();
+            }
+            NavAction::CycleServiceFocus => {
+                self.service_explorer_focus = cycle(self.service_explorer_focus);
+                self.service_explorer_selected = None;
+                self.service_explorer_outcome = None;
                 cx.notify();
             }
             NavAction::CycleSimTarget => self.sim_cycle_target(cx),
