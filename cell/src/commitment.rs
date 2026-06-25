@@ -107,7 +107,18 @@ use crate::state::{CellState, FieldVisibility};
 /// would not meaningfully reflect) a tombstone bump. The cryptographic
 /// invalidation of stale post-revoke roots is enforced by the changed cap-root
 /// VALUE flowing into this commitment's PI face, not by a VK-string change.
-pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v9";
+///
+/// `v9 → v10` (CELLS-AS-SERVICE-OBJECTS Stage 1, the interface weld): absorb the
+/// cell's `interfaces: Vec<InterfaceRef>` — the first-class typed interfaces the
+/// cell exposes. Each ref binds its content-addressed `interface_id` (the
+/// sorted-Poseidon2 root over its method leaves) + method count, so "this cell
+/// exposes THIS interface" is a light-client-witnessable fact (change a method ⇒
+/// `interface_id` changes ⇒ commitment changes). PURE-ADDITIVE: a cell with no
+/// interfaces absorbs a length prefix of 0 — a cell-independent constant — so the
+/// absorption is a uniform no-op for legacy cells, exactly the cap-root/program
+/// weld discipline. The bump cleanly re-domain-separates so no stale v9
+/// commitment can collide cross-version.
+pub const CANONICAL_COMMITMENT_CONTEXT: &str = "dregg-cell:canonical-state-commitment v10";
 
 /// Domain-separation context for the canonical capability-set root.
 ///
@@ -277,7 +288,33 @@ pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
     // cell as still-Live to downstream verifiers.
     hash_lifecycle_into(&mut hasher, &cell.lifecycle);
 
+    // ---- Interfaces (v10 addition — CELLS-AS-SERVICE-OBJECTS Stage 1) ----
+    //
+    // The first-class typed interfaces this cell exposes. Each ref binds its
+    // content-addressed `interface_id` + method count, so changing any method of
+    // any exposed interface moves its `interface_id` and thus the commitment. A
+    // cell with no interfaces absorbs a length prefix of 0 (a cell-independent
+    // constant) — the absorption is a uniform no-op for legacy cells (the
+    // cap-root/program pure-additive weld discipline).
+    hash_interfaces_into(&mut hasher, &cell.interfaces);
+
     *hasher.finalize().as_bytes()
+}
+
+/// Commit a cell's `interfaces` into the canonical commitment hasher. The count
+/// is absorbed first (so an empty vector is a fixed no-op prefix), then each
+/// ref's `interface_id` + `method_count`. The `interface_id` is itself the
+/// sorted-Poseidon2 content-address over the interface's method leaves, so a
+/// tampered method moves it (and thus the commitment).
+fn hash_interfaces_into(
+    hasher: &mut blake3::Hasher,
+    interfaces: &[crate::interface::InterfaceRef],
+) {
+    hasher.update(&(interfaces.len() as u64).to_le_bytes());
+    for iface in interfaces {
+        hasher.update(&iface.interface_id);
+        hasher.update(&iface.method_count.to_le_bytes());
+    }
 }
 
 /// Commit a [`crate::lifecycle::CellLifecycle`] value into a canonical
@@ -890,6 +927,28 @@ pub fn compute_authority_digest_felt(cell: &Cell) -> dregg_circuit::field::BabyB
     bytes.extend_from_slice(&st.refcount_table_root);
     bytes.extend_from_slice(&st.fields_root);
     bytes.extend_from_slice(&st.system_roots_digest());
+
+    // ---- Interfaces (v10 — CELLS-AS-SERVICE-OBJECTS Stage 1) ----
+    // The exposed typed interfaces are authority-bearing residue that no named
+    // rotated limb carries, so they fold into the r23 authority digest alongside
+    // permissions/VK/program — keeping the rotated v9 commitment / circuit
+    // STATE_COMMIT bound to the SAME interface set the v10 BLAKE3 commitment
+    // binds. PURE-ADDITIVE on the rotated digest: the bytes are appended ONLY for
+    // a cell that DECLARES interfaces, under a dedicated domain tag. A cell with
+    // NO interfaces (every legacy cell, and the entire existing rotated-trace /
+    // Lean-differential corpus) is BYTE-UNCHANGED — the rotated authority digest
+    // is identical to its v9 value, so the welded `live_cell_v9_equals_circuit_-
+    // state_commit` differential and the Lean `wireCommitR` twin continue to hold
+    // without a rotated flag-day. (The Lean twin for the DECLARED-interface case
+    // is the owed follow-on, per the S2 list.)
+    if !cell.interfaces.is_empty() {
+        bytes.extend_from_slice(b"dregg-cell:v10-interfaces v1");
+        bytes.extend_from_slice(&(cell.interfaces.len() as u64).to_le_bytes());
+        for iface in &cell.interfaces {
+            bytes.extend_from_slice(&iface.interface_id);
+            bytes.extend_from_slice(&iface.method_count.to_le_bytes());
+        }
+    }
 
     hash_bytes(&bytes)
 }
@@ -1775,6 +1834,9 @@ mod tests {
         }
         hash_program_into(&mut hasher, &cell.program);
         hash_lifecycle_into(&mut hasher, &cell.lifecycle);
+        // v10 no-op fold: the empty-interfaces length prefix, independent of the
+        // cell (a legacy cell carries no interfaces).
+        hash_interfaces_into(&mut hasher, &cell.interfaces);
         *hasher.finalize().as_bytes()
     }
 
