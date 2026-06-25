@@ -289,6 +289,24 @@ pub struct Cell {
     /// lifecycle explicit going forward.
     #[serde(default)]
     pub lifecycle: CellLifecycle,
+    /// **First-class typed interfaces this cell exposes** (CELLS-AS-SERVICE-
+    /// OBJECTS, Stage 1). Each [`crate::InterfaceRef`] names a content-addressed
+    /// [`crate::InterfaceDescriptor`] by its `interface_id` (the sorted-Poseidon2
+    /// root over its method leaves). The cell carries the REFERENCE; the full
+    /// method table is resolved out-of-band (S2: the captp interface handshake).
+    ///
+    /// The canonical commitment BINDS this vector (see
+    /// `compute_canonical_state_commitment`), so "this cell exposes THIS
+    /// interface" is a light-client-witnessable fact: change a method, the
+    /// `interface_id` changes, the cell commitment changes.
+    ///
+    /// `#[serde(default)]`: existing serialized cells deserialize to the EMPTY
+    /// interface vector, and the commitment treats an empty vector as a uniform
+    /// no-op (a length prefix of 0), so a cell that declares no interfaces is
+    /// byte-unchanged across the additive weld — exactly the cap-root/program
+    /// pure-additive discipline.
+    #[serde(default)]
+    pub interfaces: Vec<crate::interface::InterfaceRef>,
     /// Cached canonical Merkle-leaf digest (`docs/INCREMENTAL-COMMITMENT.md`
     /// step 3). Read ONLY by `Ledger::hash_cell`; invalidated at every ledger
     /// `&mut`-handoff seam. `#[serde(skip)]` ⇒ reconstructs dirty on decode;
@@ -391,6 +409,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Sovereign,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -413,6 +432,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -435,6 +455,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -501,6 +522,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -521,6 +543,7 @@ impl Cell {
             program: config.program.unwrap_or(CellProgram::None),
             mode: config.mode,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -795,6 +818,7 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
     }
@@ -850,8 +874,154 @@ impl Cell {
             program: CellProgram::None,
             mode: CellMode::Hosted,
             lifecycle: CellLifecycle::Live,
+            interfaces: Vec::new(),
             leaf_cache: LeafDigestCache::default(),
         }
+    }
+}
+
+impl Cell {
+    /// **Declare a typed interface on this cell** (CELLS-AS-SERVICE-OBJECTS Stage
+    /// 1). Appends the [`crate::InterfaceRef`] for `descriptor` to
+    /// `self.interfaces` (replacing any prior ref with the same `interface_id`),
+    /// so the cell's commitment binds the interface the descriptor names. The cell
+    /// carries the REFERENCE; the full method table is the `descriptor` itself,
+    /// resolved out-of-band. Builder-style.
+    pub fn with_interface(mut self, descriptor: &crate::interface::InterfaceDescriptor) -> Self {
+        let r = descriptor.as_ref();
+        self.interfaces.retain(|i| i.interface_id != r.interface_id);
+        self.interfaces.push(r);
+        self
+    }
+
+    /// **Declare the REPLAYABLE interface this cell's program already implements**
+    /// — the auto-derivation front door (CELLS-AS-SERVICE-OBJECTS Stage 1). Lifts
+    /// the cell's [`CellProgram`] method-dispatch guards into an
+    /// [`crate::InterfaceDescriptor`] (every `MethodIs` guard ⇒ a `Replayable`
+    /// `MethodSig`) and declares it on the cell. A cell that already does
+    /// method-dispatch gets its interface for FREE — no new authoring. Returns the
+    /// derived descriptor so the caller can resolve its method table.
+    pub fn derive_and_declare_interface(&mut self) -> crate::interface::InterfaceDescriptor {
+        let descriptor = crate::interface::InterfaceDescriptor::derive_replayable(&self.program);
+        let r = descriptor.as_ref();
+        self.interfaces.retain(|i| i.interface_id != r.interface_id);
+        self.interfaces.push(r);
+        descriptor
+    }
+}
+
+#[cfg(test)]
+mod interface_weld_tests {
+    //! CELLS-AS-SERVICE-OBJECTS Stage 1: a cell carries a typed
+    //! `InterfaceDescriptor`, it auto-derives from a `Cases`/`MethodIs` program,
+    //! and the commitment BINDS it (changing a method changes the commitment).
+    use super::*;
+    use crate::interface::{InterfaceDescriptor, MethodSig, Semantics, method_symbol};
+    use crate::program::{CellProgram, TransitionCase, TransitionGuard};
+
+    fn fresh() -> Cell {
+        Cell::new([7u8; 32], [0u8; 32])
+    }
+
+    fn cases_program(methods: &[&str]) -> CellProgram {
+        CellProgram::Cases(
+            methods
+                .iter()
+                .map(|m| TransitionCase {
+                    guard: TransitionGuard::MethodIs {
+                        method: method_symbol(m),
+                    },
+                    constraints: vec![],
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_cell_carries_an_interface_descriptor() {
+        let iface = InterfaceDescriptor::new(vec![
+            MethodSig::replayable(method_symbol("send")),
+            MethodSig::replayable(method_symbol("dequeue")),
+        ]);
+        let cell = fresh().with_interface(&iface);
+        assert_eq!(cell.interfaces.len(), 1);
+        assert_eq!(cell.interfaces[0].interface_id, iface.interface_id);
+        assert_eq!(cell.interfaces[0].method_count, 2);
+    }
+
+    #[test]
+    fn auto_derivation_from_cases_yields_the_right_methods() {
+        // A queue-style cell with `send` + `dequeue` method-dispatch.
+        let mut cell = fresh();
+        cell.program = cases_program(&["send", "dequeue"]);
+        let derived = cell.derive_and_declare_interface();
+
+        // The derived interface is exactly the methods the program dispatches on.
+        assert_eq!(derived.methods.len(), 2);
+        assert!(derived.method(&method_symbol("send")).is_some());
+        assert!(derived.method(&method_symbol("dequeue")).is_some());
+        for m in &derived.methods {
+            assert_eq!(m.semantics, Semantics::Replayable);
+        }
+        // It is now declared on the cell (one ref, binding the content-address).
+        assert_eq!(cell.interfaces.len(), 1);
+        assert_eq!(cell.interfaces[0].interface_id, derived.interface_id);
+    }
+
+    #[test]
+    fn the_commitment_binds_the_interface() {
+        // Two cells identical except for the interface they declare must produce
+        // DISTINCT commitments — the weld is load-bearing.
+        let bare = fresh();
+        let bare_commit = bare.state_commitment();
+
+        let iface = InterfaceDescriptor::new(vec![MethodSig::replayable(method_symbol("send"))]);
+        let with_iface = fresh().with_interface(&iface);
+        let with_commit = with_iface.state_commitment();
+        assert_ne!(
+            bare_commit, with_commit,
+            "declaring an interface must change the cell commitment"
+        );
+    }
+
+    #[test]
+    fn changing_a_method_changes_the_cell_commitment() {
+        // The end-to-end anti-ghost tooth: a cell whose interface's method auth
+        // changed commits differently, even with the SAME method symbol.
+        let send_none =
+            InterfaceDescriptor::new(vec![MethodSig::replayable(method_symbol("send"))]);
+        let send_sig = InterfaceDescriptor::new(vec![MethodSig {
+            auth_required: crate::permissions::AuthRequired::Signature,
+            ..MethodSig::replayable(method_symbol("send"))
+        }]);
+        assert_ne!(send_none.interface_id, send_sig.interface_id);
+
+        let c1 = fresh().with_interface(&send_none);
+        let c2 = fresh().with_interface(&send_sig);
+        assert_ne!(
+            c1.state_commitment(),
+            c2.state_commitment(),
+            "a changed method must move the cell commitment"
+        );
+    }
+
+    #[test]
+    fn legacy_cell_with_no_interfaces_is_a_uniform_noop_prefix() {
+        // Pure-additive: two cells with empty interfaces agree; declaring then
+        // clearing returns to the bare commitment (the empty-vector no-op).
+        let a = fresh();
+        let b = fresh();
+        assert_eq!(a.state_commitment(), b.state_commitment());
+
+        let iface = InterfaceDescriptor::new(vec![MethodSig::replayable(method_symbol("x"))]);
+        let mut c = fresh().with_interface(&iface);
+        assert_ne!(a.state_commitment(), c.state_commitment());
+        c.interfaces.clear();
+        assert_eq!(
+            a.state_commitment(),
+            c.state_commitment(),
+            "clearing interfaces returns to the legacy no-op commitment"
+        );
     }
 }
 
