@@ -28,7 +28,7 @@ use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, Styled, div, px};
 use dregg_doc::{AtomId, Doc, DocGraph, Op, merge, merge_base, render_three_way, walk_atoms};
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, face_row, face_section,
+    NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, bevel_raised, bevel_sunken, face_row, face_section,
 };
 
 /// A short legible atom id (the low 16 bits, hex) — matches the `a%04x` style the
@@ -48,7 +48,9 @@ fn preview(s: &str, max: usize) -> String {
     if p.trim().is_empty() {
         "·".to_string()
     } else {
-        p.replace('\n', "⏎")
+        // Flatten newlines to a font-safe return marker (the geometric ⏎ is tofu in
+        // the bake font — a bracketed ASCII reads cleanly everywhere).
+        p.replace('\n', "[nl]")
     }
 }
 
@@ -65,7 +67,7 @@ fn describe_op(op: &Op) -> String {
         ),
         Op::Delete { id } => format!("× delete {}", atom_short(*id)),
         Op::Connect { from, to } => {
-            format!("→ connect {} → {}", atom_short(*from), atom_short(*to))
+            format!("+ connect {} → {}", atom_short(*from), atom_short(*to))
         }
         Op::SetField {
             name,
@@ -77,13 +79,13 @@ fn describe_op(op: &Op) -> String {
             } else {
                 "field"
             };
-            format!("◆ {} {} := '{}'", verb, name, preview(value, 40))
+            format!("• {} {} := '{}'", verb, name, preview(value, 40))
         }
-        Op::Resurrect { id } => format!("↑ resurrect {}", atom_short(*id)),
+        Op::Resurrect { id } => format!("+ resurrect {}", atom_short(*id)),
         Op::Disconnect { from, to } => {
-            format!("⊘ disconnect {} → {}", atom_short(*from), atom_short(*to))
+            format!("× disconnect {} → {}", atom_short(*from), atom_short(*to))
         }
-        Op::RetractField { name } => format!("⊘ retract field {}", name),
+        Op::RetractField { name } => format!("× retract field {}", name),
     }
 }
 
@@ -320,27 +322,29 @@ pub fn render_docgraph_nodes(doc: &Doc) -> AnyElement {
 /// marks the ROOT sentinel.
 fn node_box(id: &str, label: &str, dim: bool, anchor: bool) -> impl IntoElement {
     let id_color = if anchor || dim { NT_DIM } else { NT_SELECT };
-    div()
+    // Off-spine / dead nodes read SUNKEN-grey (recessed into the graph); live spine
+    // nodes read RAISED (the same two-tone bevel as every other NT face).
+    let base = div()
         .flex()
         .flex_row()
         .gap_1()
-        .px_1()
+        .px_2()
         .py_1()
         .max_w(px(360.0))
-        .border_t_2()
-        .border_l_2()
-        .border_color(gpui::rgb(0xffffff))
-        .bg(gpui::rgb(if dim { NT_FACE_DARK } else { 0xc0c0c0 }))
-        .text_size(px(10.0))
-        .when(dim, |d| d.text_color(gpui::rgb(NT_DIM)))
-        .child(
-            div()
-                .w(px(70.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(gpui::rgb(id_color))
-                .child(id.to_string()),
-        )
-        .child(div().flex_1().child(label.to_string()))
+        .text_size(px(10.0));
+    let base = if dim {
+        bevel_sunken(base.bg(gpui::rgb(NT_FACE_DARK))).text_color(gpui::rgb(NT_DIM))
+    } else {
+        bevel_raised(base)
+    };
+    base.child(
+        div()
+            .w(px(70.0))
+            .font_weight(FontWeight::BOLD)
+            .text_color(gpui::rgb(id_color))
+            .child(id.to_string()),
+    )
+    .child(div().flex_1().child(label.to_string()))
 }
 
 /// The connector under a node: a plain "↓" when the atom continues to a single
@@ -348,8 +352,11 @@ fn node_box(id: &str, label: &str, dim: bool, anchor: bool) -> impl IntoElement 
 /// (more than one live successor with no order between them — a Pijul conflict).
 fn connector(g: &DocGraph, id: AtomId) -> impl IntoElement {
     let succ = live_successors(g, id);
+    // The fork glyph (⑂) is tofu in the bake font; a bracketed ASCII marker reads as
+    // the antichain everywhere. The plain "↓" connector is a basic arrow the font
+    // carries.
     let (glyph, color, fork) = if succ.len() > 1 {
-        (format!("⑂ fork ({} ways)", succ.len()), 0xa04040u32, true)
+        (format!("├< fork ({} ways)", succ.len()), 0xa04040u32, true)
     } else {
         ("↓".to_string(), NT_DIM, false)
     };

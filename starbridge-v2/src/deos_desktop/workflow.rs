@@ -45,8 +45,8 @@ use crate::world::{bare_action, grant_capability, transfer};
 
 use super::DeosDesktop;
 use super::chrome::{
-    DOC_REV_SLOT, GLYPH_ADD, GLYPH_PIN, GLYPH_REMOVE, NT_DIM, NT_FACE, NT_FACE_DARK, NT_SHADOW,
-    NT_TEXT, bevel_raised, face_row, face_section, id_short,
+    DOC_REV_SLOT, GLYPH_ADD, GLYPH_PIN, GLYPH_REMOVE, NT_DIM, NT_FACE, NT_FACE_DARK, NT_OK,
+    NT_PANEL, NT_SHADOW, NT_TEXT, bevel_raised, face_row, face_section, id_short,
 };
 
 /// One step of a composed workflow — an INTENT (a declarative desired `Effect`) over
@@ -327,7 +327,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf2f0f6))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -382,7 +382,7 @@ impl DeosDesktop {
             RefineVerdict::Refines => {
                 col = col.child(
                     div()
-                        .text_color(gpui::rgb(0x0a7a2a))
+                        .text_color(gpui::rgb(NT_OK))
                         .child("✓ REFINES — every step is within the baseline envelope."),
                 );
             }

@@ -6,7 +6,9 @@
 //! and section helpers, and the small render/format utilities are all here, so a
 //! new window-type or dialog composes them rather than re-deriving the chrome.
 
-use gpui::{FontWeight, IntoElement, ParentElement, Pixels, Styled, div, px};
+use gpui::{
+    BoxShadow, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div, point, px,
+};
 
 use dregg_types::CellId;
 
@@ -25,6 +27,17 @@ pub const NT_ICON_LABEL: u32 = 0xf0f0f0;
 pub const NT_SELECT: u32 = 0x000080;
 pub const NT_MENU_HILIGHT: u32 = 0x000080;
 pub const NT_DIM: u32 = 0x707070; // a disabled / unheld affordance
+// One coherent content-area face for every window body / explorer / dialog (the
+// near-white "client area" the chrome frames). Unifying it is what makes the
+// inspector, the explorers, and the dialogs read as ONE desktop rather than a
+// patchwork of slightly-different off-whites.
+pub const NT_PANEL: u32 = 0xf0f0f0; // the client-area background
+pub const NT_RULE: u32 = 0x808080; // a hairline rule / groove
+pub const NT_LABEL: u32 = 0x505050; // a property-row key label
+pub const NT_OK: u32 = 0x0a7a2a; // a held / live / conserved accent (green)
+pub const NT_WARN: u32 = 0xa06000; // a well / drifted / sealed accent (amber)
+pub const NT_TITLE_INACTIVE: u32 = 0x9a9a9a; // an unfocused window's title bar
+pub const NT_TITLE_INACTIVE_TEXT: u32 = 0x303030;
 
 // ── Geometry constants ────────────────────────────────────────────────────────────
 pub const ICON_W: f32 = 92.0;
@@ -82,26 +95,94 @@ pub fn pxf(p: Pixels) -> f32 {
 }
 
 // ── The bevel/face primitives (reusable NT widgets) ───────────────────────────────
+//
+// A faithful Windows-NT bevel is TWO-TONE: a light highlight on the top+left edges
+// and a dark shadow on the bottom+right, so the face reads as physically RAISED off
+// (or pressed INTO) the desktop. gpui carries a single `border_color`, so the two
+// tones are painted as a pair of crisp (blur-0) inset box-shadows instead — one
+// helper, applied everywhere, gives the whole desktop one coherent 3D material.
 
-/// An NT 3D bevel (raised) — a light face with a 2px top-left highlight border (the
+fn hsla_of(c: u32) -> Hsla {
+    gpui::rgb(c).into()
+}
+
+/// A pair of crisp inset shadows forming a `w`-pixel two-tone bevel: `tl` on the
+/// top-left, `br` on the bottom-right. The shared engine behind every raised/sunken
+/// face.
+fn bevel<E: Styled>(d: E, tl: u32, br: u32, w: f32) -> E {
+    d.shadow(vec![
+        BoxShadow {
+            color: hsla_of(tl),
+            offset: point(px(w), px(w)),
+            blur_radius: px(0.0),
+            spread_radius: px(0.0),
+            inset: true,
+        },
+        BoxShadow {
+            color: hsla_of(br),
+            offset: point(px(-w), px(-w)),
+            blur_radius: px(0.0),
+            spread_radius: px(0.0),
+            inset: true,
+        },
+    ])
+}
+
+/// An NT 3D bevel (RAISED) — a light face lit top-left, shadowed bottom-right (the
 /// raised-button look). Generic over any [`Styled`] element so it composes onto a
 /// plain `div()` or an `.id()`'d `Stateful<Div>`.
 pub fn bevel_raised<E: Styled>(d: E) -> E {
-    d.border_t_2()
-        .border_l_2()
-        .border_color(gpui::rgb(NT_HILIGHT))
-        .bg(gpui::rgb(NT_FACE))
+    bevel(d.bg(gpui::rgb(NT_FACE)), NT_HILIGHT, NT_SHADOW, 2.0)
 }
 
-/// A bold navy section heading inside a window/dialog body (the dense field-group
-/// divider).
+/// A SUNKEN bevel — shadowed top-left, lit bottom-right (a pressed button, a text
+/// well, a list track). The inverse of [`bevel_raised`].
+pub fn bevel_sunken<E: Styled>(d: E) -> E {
+    bevel(d, NT_SHADOW, NT_HILIGHT, 2.0)
+}
+
+/// The WINDOW / panel frame — a raised two-tone bevel inside a thin dark outer line,
+/// the way an NT window lifts off the teal void. Use for the big surfaces (windows,
+/// the World widget, popups, dialogs) so they all frame the same way.
+pub fn bevel_window<E: Styled>(d: E) -> E {
+    bevel(
+        d.bg(gpui::rgb(NT_FACE))
+            .border_1()
+            .border_color(gpui::rgb(0x000000)),
+        NT_HILIGHT,
+        NT_SHADOW,
+        2.0,
+    )
+}
+
+/// A bold navy section heading inside a window/dialog body — the field-group divider,
+/// drawn as a small-caps-feel label over a full-width groove rule so a dense body
+/// reads as cleanly separated sections rather than a wall of rows.
 pub fn face_section(title: &str) -> impl IntoElement {
     div()
         .mt_1()
-        .text_size(px(10.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(gpui::rgb(0x000080))
-        .child(format!("── {title} "))
+        .mb_px()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .flex_none()
+                .text_size(px(10.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(gpui::rgb(NT_TITLE_ACTIVE))
+                .child(title.to_string()),
+        )
+        .child(
+            // The groove rule: a 1px shadow line over a 1px highlight line (the NT
+            // engraved separator) filling the rest of the row.
+            div()
+                .flex_1()
+                .h(px(2.0))
+                .border_t_1()
+                .border_color(gpui::rgb(NT_RULE)),
+        )
 }
 
 /// A `key: value` property row (the dense inspector/property line).
@@ -113,7 +194,7 @@ pub fn face_row(key: &str, value: &str) -> impl IntoElement {
         .child(
             div()
                 .w(px(96.0))
-                .text_color(gpui::rgb(0x505050))
+                .text_color(gpui::rgb(NT_LABEL))
                 .child(format!("{key}:")),
         )
         .child(div().flex_1().child(value.to_string()))
@@ -130,7 +211,7 @@ pub fn face_row_color(key: &str, value: &str, color: u32) -> impl IntoElement {
         .child(
             div()
                 .w(px(96.0))
-                .text_color(gpui::rgb(0x505050))
+                .text_color(gpui::rgb(NT_LABEL))
                 .child(format!("{key}:")),
         )
         .child(
