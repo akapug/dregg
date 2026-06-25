@@ -220,7 +220,8 @@ use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_recursion::{
     BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput,
-    build_and_prove_aggregation_layer, build_and_prove_next_layer,
+    build_and_prove_aggregation_layer_with_expose, build_and_prove_next_layer,
+    build_and_prove_next_layer_with_expose,
 };
 
 use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
@@ -241,8 +242,46 @@ pub use crate::plonky3_recursion_impl::recursive::RecursionVk;
 
 const D: usize = 4;
 
+/// The number of exposed chain claims: `[genesis_root, final_root, num_turns, chain_digest]`.
+pub(crate) const NUM_CHAIN_CLAIMS: usize = 4;
+
 fn to_p3(v: BabyBear) -> P3BabyBear {
     P3BabyBear::from_u64(v.0 as u64)
+}
+
+/// Find the instance index of the `expose_claim` non-primitive table in a batch
+/// proof, in the same instance order the in-circuit verifier allocates
+/// `air_public_targets` (primitive tables first, then non-primitives in order).
+///
+/// Returns `None` if the proof carries no exposed-claim table.
+pub(crate) fn expose_claim_instance_index(
+    proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
+) -> Option<usize> {
+    let num_primitive = p3_circuit_prover::batch_stark_prover::NUM_PRIMITIVE_TABLES;
+    proof
+        .non_primitives
+        .iter()
+        .position(|e| e.op_type.as_str() == "expose_claim")
+        .map(|pos| num_primitive + pos)
+}
+
+/// Read the `expose_claim` table's public values from a batch proof (the 4 chain
+/// claims, host-readable and bus-bound to the verified history). Returns `None`
+/// if there is no exposed-claim table.
+fn root_exposed_claims(
+    proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
+) -> Option<Vec<BabyBear>> {
+    let entry = proof
+        .non_primitives
+        .iter()
+        .find(|e| e.op_type.as_str() == "expose_claim")?;
+    Some(
+        entry
+            .public_values
+            .iter()
+            .map(|&v| BabyBear::new(v.as_canonical_u32()))
+            .collect(),
+    )
 }
 
 // ============================================================================
@@ -402,10 +441,10 @@ impl std::error::Error for TurnChainError {}
 // A forged `chain_digest` (a tampered `acc_out` on the last row) therefore has
 // no satisfying witness, and a forged `num_turns` is rejected by the real-row
 // counter binding (`real_count[last] == num_turns`).
-const COL_OLD_ROOT: usize = 0;
-const COL_NEW_ROOT: usize = 1;
+pub(crate) const COL_OLD_ROOT: usize = 0;
+pub(crate) const COL_NEW_ROOT: usize = 1;
 const COL_ACC_IN: usize = 2;
-const COL_ACC_OUT: usize = 3;
+pub(crate) const COL_ACC_OUT: usize = 3;
 const COL_IDX: usize = 4;
 const COL_IS_REAL: usize = 5;
 const COL_REAL_COUNT: usize = 6;
@@ -575,7 +614,7 @@ where
 // The rotated fold builds its binding trace via `generate_chain_trace_rotated` (reading the
 // ROTATED commitments at PI 34/35).
 
-fn trace_to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
+pub(crate) fn trace_to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
     debug_assert!(
         trace.iter().all(|row| row.len() == BINDING_WIDTH),
         "binding trace rows must all be {BINDING_WIDTH} wide"
@@ -662,7 +701,7 @@ fn generate_chain_trace_rotated(
 /// intermediate-state witness [`poseidon2_permute_expr`] checks round-by-round,
 /// seeded from `[acc_in, old_root, new_root, idx, 4, 0..]` (the `hash_4_to_1`
 /// state).
-fn binding_row(
+pub(crate) fn binding_row(
     old_root: BabyBear,
     new_root: BabyBear,
     acc_in: BabyBear,
@@ -1272,6 +1311,14 @@ fn prove_chain_core_rotated(
     }
 
     // The chain-binding leaf wrapped uni->batch at the wrap config.
+    //
+    // EXPOSED-CLAIM CHANNEL (close of IVC hole #1/#6): at this wrap we EMIT an
+    // expose_claim table over the binding child's 4 verified `air_public_targets`
+    // (= [genesis_root, final_root, num_turns, chain_digest]). The table reads
+    // those targets off the WitnessChecks bus (reader mult -1) and surfaces them
+    // as the wrapped proof's `non_primitives[expose_claim].public_values`, BOUND
+    // in-circuit to the binding proof. Re-exposed + bound at every aggregation
+    // layer below, the ROOT then carries these 4 claims host-readable.
     {
         let air = TurnChainBindingAir;
         let p3_pis: Vec<P3BabyBear> = binding_pis.iter().map(|&v| to_p3(v)).collect();
@@ -1281,13 +1328,24 @@ fn prove_chain_core_rotated(
             public_inputs: p3_pis,
             preprocessed_commit: None,
         };
-        let wrapped =
-            build_and_prove_next_layer::<DreggRecursionConfig, TurnChainBindingAir, _, D>(
-                &input, &config, &backend, &params,
-            )
-            .map_err(|e| TurnChainError::RecursionFailed {
-                reason: format!("recursive chain-binding leaf failed: {e:?}"),
-            })?;
+        // The binding child is a single uni-STARK instance; its `air_public_targets[0]`
+        // is exactly the 4 chain claims (in PI order).
+        let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                           apt: &[Vec<p3_recursion::Target>]| {
+            if let Some(claims) = apt.first() {
+                debug_assert!(claims.len() >= NUM_CHAIN_CLAIMS);
+                cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
+            }
+        };
+        let wrapped = build_and_prove_next_layer_with_expose::<
+            DreggRecursionConfig,
+            TurnChainBindingAir,
+            _,
+            D,
+        >(&input, &config, &backend, &params, Some(&expose))
+        .map_err(|e| TurnChainError::RecursionFailed {
+            reason: format!("recursive chain-binding leaf failed: {e:?}"),
+        })?;
         batch_leaves.push(wrapped);
     }
 
@@ -1344,15 +1402,40 @@ fn aggregate_tree(
             Vec::with_capacity(proofs.len().div_ceil(2));
         let mut i = 0;
         while i + 1 < proofs.len() {
+            // EXPOSED-CLAIM CHANNEL: re-expose + connect-bind the binding leaf's
+            // 4 claims one layer up. Exactly one child subtree carries the
+            // expose_claim table; find its instance index per child (the order
+            // matches the in-circuit `air_public_targets` allocation), capture
+            // it, and re-expose those bus-bound targets at this layer.
+            let left_idx = expose_claim_instance_index(&proofs[i].0);
+            let right_idx = expose_claim_instance_index(&proofs[i + 1].0);
+
             let left = proofs[i].into_recursion_input::<BatchOnly>();
             let right = proofs[i + 1].into_recursion_input::<BatchOnly>();
-            let out = build_and_prove_aggregation_layer::<
+
+            let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                               left_apt: &[Vec<p3_recursion::Target>],
+                               right_apt: &[Vec<p3_recursion::Target>]| {
+                if let Some(idx) = left_idx
+                    && let Some(claims) = left_apt.get(idx)
+                    && claims.len() >= NUM_CHAIN_CLAIMS
+                {
+                    cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
+                } else if let Some(idx) = right_idx
+                    && let Some(claims) = right_apt.get(idx)
+                    && claims.len() >= NUM_CHAIN_CLAIMS
+                {
+                    cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
+                }
+            };
+
+            let out = build_and_prove_aggregation_layer_with_expose::<
                 DreggRecursionConfig,
                 BatchOnly,
                 BatchOnly,
                 _,
                 D,
-            >(&left, &right, config, backend, params, None)
+            >(&left, &right, config, backend, params, None, Some(&expose))
             .map_err(|e| TurnChainError::RecursionFailed {
                 reason: format!("aggregation layer failed: {e:?}"),
             })?;
@@ -1457,7 +1540,38 @@ pub fn verify_turn_chain_recursive_from_parts(
     // 38 queries). It MUST be verified under that same config, else FRI reconstruction expects
     // the wrong query count (`QueryProofCountMismatch { expected: 38, got: 19 }`).
     verify_recursive_batch_proof_with_config(root_proof, &ir2_leaf_wrap_config())
-        .map_err(|reason| TurnChainError::RecursionFailed { reason })
+        .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
+
+    // (4) EXPOSED-CLAIM TOOTH (the close of IVC hole #1/#6). The root proof carries an
+    // expose_claim non-primitive table whose `public_values` are the 4 chain claims,
+    // BOUND in-circuit (WitnessChecks bus, reader mult -1) to the binding proof that the
+    // fold actually verified, and re-bound at every aggregation layer up to the root. The
+    // carried claim must MATCH these root-exposed publics. This is what ties the carried
+    // binding proof to THIS root: a genuine root for history A paired with a genuine
+    // binding proof for a DIFFERENT history B now FAILS, because A's root exposes A's
+    // endpoints while the swapped claim is B's.
+    let exposed = root_exposed_claims(root_proof).ok_or_else(|| {
+        TurnChainError::ClaimedPublicsUnattested {
+            reason: "root proof carries no exposed-claim table (binding↔root channel absent)"
+                .to_string(),
+        }
+    })?;
+    let expected = vec![
+        genesis_root,
+        final_root,
+        BabyBear::new(num_turns as u32),
+        chain_digest,
+    ];
+    if exposed != expected {
+        return Err(TurnChainError::ClaimedPublicsUnattested {
+            reason: format!(
+                "root-exposed claims {exposed:?} != carried claim {expected:?} \
+                 (the carried binding proof is not linked to this root)"
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 // ============================================================================

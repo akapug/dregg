@@ -593,8 +593,8 @@ fn foreign_circuit_root_is_refused_by_vk_pin() {
 /// tooth 1 cannot tell them apart. They have DIFFERENT data ⇒ different roots/digests, so
 /// the cross-paired claim is genuinely false.
 #[test]
-#[ignore = "SLOW: two real folds (~minutes); run with --ignored — DEMONSTRATES the open #1 hole"]
-fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
+#[ignore = "SLOW: two real folds (~minutes); run with --ignored — the CLOSE of IVC hole #1/#6"]
+fn carried_binding_proof_unlinked_to_root_is_rejected() {
     // History A: the GENUINE root we keep.
     let (turns_a, _ga, _fa) = make_chain(1000, 0, 7, 2);
     let whole_a = prove_turn_chain_recursive(&turns_a).expect("chain A folds");
@@ -618,7 +618,7 @@ fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
 
     // THE FORGERY: keep A's GENUINE root, but swap in B's GENUINE binding proof + B's
     // publics. Every field is internally consistent (B's binding proof attests B's
-    // publics), and the root is a genuine same-shape root — nothing ties them.
+    // publics), and the root is a genuine same-shape root.
     let mut forged = whole_a;
     forged.binding_proof = whole_b.binding_proof;
     forged.genesis_root = gb;
@@ -627,13 +627,17 @@ fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
     forged.num_turns = whole_b.num_turns;
 
     let verdict = verify_turn_chain_recursive(&forged, &vk);
-    // OPEN HOLE: today this VERIFIES (the false claim is accepted). When the binding↔root
-    // linkage lands, flip this to `verdict.is_err()`.
+    // CLOSED (IVC hole #1/#6). The EXPOSED-CLAIM CHANNEL ties the carried binding proof
+    // to THIS root: A's root proof carries an `expose_claim` non-primitive table whose
+    // public_values are A's 4 chain claims, bus-bound (WitnessChecks reader mult -1) to
+    // the binding proof the fold actually verified and re-bound at every aggregation layer.
+    // Tooth (4) compares the carried claim against those root-exposed publics — so A's
+    // root paired with B's binding proof + B's claims now FAILS: A's root exposes A's
+    // endpoints, while the swapped claim is B's.
     assert!(
-        verdict.is_ok(),
-        "WITNESS of codex finding #1: a genuine root for history A paired with a genuine \
-         binding proof for history B currently VERIFIES — the binding↔root linkage is \
-         missing. (If this now ERRORS, the hole has been CLOSED — update the assertion.) \
+        verdict.is_err(),
+        "the binding↔root linkage REJECTS a genuine root for history A paired with a \
+         genuine binding proof for a DIFFERENT history B (the cross-pairing forgery). \
          got: {verdict:?}"
     );
 }

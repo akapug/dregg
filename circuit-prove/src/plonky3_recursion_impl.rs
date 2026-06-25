@@ -190,6 +190,9 @@ pub mod recursive {
             );
             circuit
                 .enable_recompose::<F>(p3_circuit::ops::generate_recompose_trace::<F, Challenge>);
+            circuit.enable_expose_claim::<F>(
+                p3_circuit::ops::generate_expose_claim_trace::<F, Challenge>,
+            );
             Ok(())
         }
 
@@ -725,6 +728,8 @@ pub mod recursive {
         prover.register_poseidon2_table::<D>(Poseidon2Config::BABY_BEAR_D4_W16);
         // split_coeff_tables = false because Poseidon2Config::D (4) == extension degree D (4)
         prover.register_recompose_table::<D>(false);
+        // The exposed-claim channel: the root proof carries an `expose_claim` table.
+        prover.register_expose_claim_table::<D>();
         prover
             .verify_all_tables(proof)
             .map_err(|e| format!("Recursive proof verification failed: {:?}", e))

@@ -121,7 +121,8 @@
 use p3_commit::Pcs;
 use p3_recursion::{
     BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput,
-    build_and_prove_aggregation_layer, build_and_prove_next_layer,
+    build_and_prove_aggregation_layer, build_and_prove_aggregation_layer_with_expose,
+    build_and_prove_next_layer_with_expose,
 };
 use p3_uni_stark::StarkGenericConfig;
 
@@ -145,7 +146,6 @@ use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_4_to_1;
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::PrimeCharacteristicRing;
-use p3_matrix::dense::RowMajorMatrix;
 
 const D: usize = 4;
 
@@ -765,12 +765,23 @@ impl Accumulator {
                 public_inputs: p3_pis,
                 preprocessed_commit: None,
             };
-            build_and_prove_next_layer::<DreggRecursionConfig, TurnChainBindingAir, _, D>(
-                &input,
-                &config,
-                &backend,
-                &leaf_params,
-            )
+            // EXPOSED-CLAIM CHANNEL: emit the expose_claim table over the binding
+            // child's 4 verified `air_public_targets`, so the accumulator's root
+            // (like the K-fold root) carries the host-readable, bus-bound chain
+            // claims that `verify_turn_chain_recursive`'s tooth (4) checks.
+            let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                               apt: &[Vec<p3_recursion::Target>]| {
+                if let Some(claims) = apt.first() {
+                    debug_assert!(claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS);
+                    cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
+                }
+            };
+            build_and_prove_next_layer_with_expose::<
+                DreggRecursionConfig,
+                TurnChainBindingAir,
+                _,
+                D,
+            >(&input, &config, &backend, &leaf_params, Some(&expose))
             .map_err(|e| AccError::RecursionFailed {
                 reason: format!("finalize binding-leaf wrap failed: {e:?}"),
             })?
@@ -810,14 +821,35 @@ impl Accumulator {
         } else {
             running.into_recursion_input::<BatchOnly>()
         };
+        // The binding leaf (right child) carries the expose_claim table; find its
+        // instance index so the root re-exposes those bus-bound claims.
+        let right_idx = crate::ivc_turn_chain::expose_claim_instance_index(&binding_batch.0);
         let right = binding_batch.into_recursion_input::<BatchOnly>();
-        let root = build_and_prove_aggregation_layer::<
+        let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                           _left_apt: &[Vec<p3_recursion::Target>],
+                           right_apt: &[Vec<p3_recursion::Target>]| {
+            if let Some(idx) = right_idx
+                && let Some(claims) = right_apt.get(idx)
+                && claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS
+            {
+                cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
+            }
+        };
+        let root = build_and_prove_aggregation_layer_with_expose::<
             DreggRecursionConfig,
             BatchOnly,
             BatchOnly,
             _,
             D,
-        >(&left, &right, &config, &backend, &root_params, None)
+        >(
+            &left,
+            &right,
+            &config,
+            &backend,
+            &root_params,
+            None,
+            Some(&expose),
+        )
         .map_err(|e| AccError::RecursionFailed {
             reason: format!("finalize root aggregation failed: {e:?}"),
         })?;
@@ -870,27 +902,36 @@ fn finalize_binding_leaf(
     }
     let n = seam_pairs.len();
     let padded_len = n.next_power_of_two().max(2);
-    let mut trace: Vec<[BabyBear; 4]> = Vec::with_capacity(padded_len);
+    // Build the GENUINE WIDE binding trace (7 scalar cols + the Poseidon2 aux
+    // block) via the shared `binding_row`, mirroring `generate_chain_trace_rotated`.
+    // `TurnChainBindingAir` enforces the per-row Poseidon2 hash binding
+    // (constraint 5, codex finding #2), so the narrow 4-column trace this used to
+    // build is UNSAT against the current AIR — the row must carry the aux witness.
+    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(padded_len);
     let mut acc = BabyBear::ZERO;
+    let mut real_count = BabyBear::ZERO;
     for (i, &(old_root, new_root)) in seam_pairs.iter().enumerate() {
         let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, old_root, new_root, idx]);
-        trace.push([old_root, new_root, acc, acc_out]);
+        real_count += BabyBear::ONE;
+        let (acc_out, row) = crate::ivc_turn_chain::binding_row(
+            old_root, new_root, acc, idx, /* is_real */ true, real_count,
+        );
+        trace.push(row);
         acc = acc_out;
     }
-    let final_root = trace.last().unwrap()[1];
+    let final_root = trace.last().unwrap()[crate::ivc_turn_chain::COL_NEW_ROOT];
     for i in n..padded_len {
         let idx = BabyBear::new(i as u32);
-        let acc_out = hash_4_to_1(&[acc, final_root, final_root, idx]);
-        trace.push([final_root, final_root, acc, acc_out]);
+        // Padding rows: is_real = 0, real_count frozen, continuing the genuine
+        // hash chain over (final_root, final_root, idx).
+        let (acc_out, row) = crate::ivc_turn_chain::binding_row(
+            final_root, final_root, acc, idx, /* is_real */ false, real_count,
+        );
+        trace.push(row);
         acc = acc_out;
     }
-    let chain_digest = trace.last().unwrap()[3];
-    let values: Vec<P3BabyBear> = trace
-        .iter()
-        .flat_map(|row| row.iter().map(|&v| to_p3(v)))
-        .collect();
-    let matrix = RowMajorMatrix::new(values, 4);
+    let chain_digest = trace.last().unwrap()[crate::ivc_turn_chain::COL_ACC_OUT];
+    let matrix = crate::ivc_turn_chain::trace_to_matrix(&trace);
     let pis = vec![
         summary.genesis_root,
         summary.head_root,
