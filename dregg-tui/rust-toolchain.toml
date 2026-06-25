@@ -1,0 +1,9 @@
+# dregg-tui is a STANDALONE workspace (EXCLUDED from the root workspace because
+# its only-ratatui `unicode-width =0.2.0` exact pin conflicts with the full-Zed
+# editor surface's `merman` `^0.2.2`). It pins the same ROLLING `nightly` the repo
+# root does so its path-deps (dregg-circuit/turn/sdk/verifier, members of the root
+# workspace) compile under the identical toolchain.
+[toolchain]
+channel = "nightly"
+profile = "default"
+components = ["cargo", "clippy", "rust-analyzer", "rustc", "rustfmt"]

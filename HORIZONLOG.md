@@ -8,26 +8,40 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
-## ⚑ FULL ZED AS THE DEFAULT DEV EDITOR — one root-workspace version conflict left (2026-06-24)
+## ⚑ FULL ZED AS THE DEFAULT DEV EDITOR — ONE native `links="sqlite3"` clash left (2026-06-24)
 Named by the feature-collapse + zed-full-default lane (`starbridge-v2/Cargo.toml` feature table;
-`deos-matrix/Cargo.toml` + `deos-matrix/src/client.rs`). The cockpit's Dev editor is still deos-zed's THIN
-integration, not the full Zed (`deos-zed-full`'s `ZedFullPane`, written + ready in
-`starbridge-v2/src/zed_full_pane.rs`). TWO blockers gate making the full Zed the default:
-BLOCKER 1 (`links="sqlite3"` collision: Zed's `sqlez` `libsqlite3-sys 0.30` vs matrix's
-`matrix-sdk-sqlite` `libsqlite3-sys 0.35`) — **RESOLVED**: `deos-matrix` now defaults to matrix-sdk's
-IN-MEMORY store (new `live-matrix` feature re-adds the on-disk `sqlite` store; `client.rs`'s `sqlite_store`
-call is gated on it), so matrix-sdk no longer pulls `matrix-sdk-sqlite` and `sqlez` becomes the sole
-`links="sqlite3"` package. BLOCKER 2 (a root-workspace VERSION conflict) — **STILL OPEN**: `deos-zed-full`
-→ editor → markdown → merman needs `unicode-width ^0.2.2`, but the root workspace's `dregg-tui` → `ratatui
-0.29` pins `unicode-width =0.2.0` (an exact upstream pin inside ratatui). Cargo cannot satisfy both, and
-merely DECLARING the optional `deos-zed-full` dep on the root-member `starbridge-v2` breaks WHOLE-workspace
-resolution even with the feature off — so the `deos-zed-full` dep + `zed-full`/`zed-full-pane`/
-`desktop-zed-full` features are left UNDECLARED (the exact re-add block is in `starbridge-v2/Cargo.toml`).
-CLOSURE (pick cleanest): (a) bump `ratatui` past the `=0.2.0` pin once upstream loosens it (0.29 + 0.28 both
-pin exactly 0.2.0 → needs a newer ratatui line), or (b) move `dregg-tui` (the only ratatui user) out of the
-root workspace into its own, or (c) a `[patch]` that loosens merman's `unicode-width` floor to `0.2.0`. Then
-uncomment the re-add block, fold `zed-full` into `desktop`, retire `desktop-zed-full`, and bake Dev showing
-the full Zed.
+`deos-zed-full/Cargo.toml`; root `Cargo.toml` exclude; `dregg-tui/`). The cockpit's Dev editor is still
+deos-zed's THIN integration, not the full Zed (`deos-zed-full`'s `ZedFullPane`, written + ready in
+`starbridge-v2/src/zed_full_pane.rs`).
+BLOCKER 2 (root-workspace `unicode-width` VERSION conflict) — **RESOLVED** (option b). `deos-zed-full` →
+editor → markdown → merman needs `unicode-width ^0.2.2`, but the former root member `dregg-tui` → `ratatui
+0.29` pinned `unicode-width =0.2.0` (exact). FIX: `dregg-tui` (the ONLY ratatui user) is now its OWN
+root-EXCLUDED workspace — root `Cargo.toml` `exclude` += `dregg-tui`; `dregg-tui/Cargo.toml` carries its own
+`[workspace]` + `[patch.crates-io]` (ark-serialize fork) + `dregg-tui/rust-toolchain.toml` (rolling nightly),
+exactly the `discord-bot`/`deos-zed-full` root-exclusion pattern. Its path-deps (sdk/turn/circuit/verifier)
+stay root members so their `workspace = true` deps resolve against root. Verified: root `cargo metadata`
+(full deps) green; `dregg-tui` resolves + compiles standalone (`cd dregg-tui && cargo build` — its leaf deps
+green; full build only hits the PRE-EXISTING root-wide `dregg-circuit-prove` `enable_expose_claim` breakage,
+another lane's in-flight API change, identical from root, NOT this lane's).
+BLOCKER 1 (native `links="sqlite3"` clash) — **STILL OPEN** (the prior "in-memory store RESOLVED it" note was
+INCOMPLETE). Zed's `sqlez` links `libsqlite3-sys 0.30`. The root member `deos-matrix` (pulled into the cockpit
+via `dev-surfaces`) cannot share a binary with it: cargo's links-UNIFIER pulls `matrix-sdk-sqlite` →
+`libsqlite3-sys 0.35` whenever `sqlez` is co-present — EVEN with `deos-matrix`'s on-disk `live-matrix` store
+OFF (measured: `cargo generate-lockfile` on `deos-zed-full[full-zed]` + `deos-matrix[cockpit-surface]` fails
+the links check). The default `desktop`'s `web-shell` libservo lane (→ `servo` → `servo-storage` → `rusqlite
+0.37` → `libsqlite3-sys 0.35`) is the SAME clash a second way. Two `links="sqlite3"` packages in one binary
+is forbidden, so merely DECLARING the optional `deos-zed-full` dep on the root member `starbridge-v2`
+re-breaks WHOLE-workspace resolution (the same "declaring breaks it" class the unicode-width pin used to
+cause) — the dep + `zed-full`/`zed-full-pane`/`desktop-zed-full` features stay UNDECLARED (re-add block in
+`starbridge-v2/Cargo.toml`). MEASURED-CLEAN in isolation: `deos-zed-full[full-zed]` + `servo`(swgl, no
+libservo) resolves green — only the `sqlez`↔`{matrix-sdk-sqlite, servo-storage}` `libsqlite3-sys` split gates
+it. CLOSURE (clean, one line): bump Zed's `sqlez` to `libsqlite3-sys 0.35` in the emberian/zed fork's
+workspace `Cargo.toml` (so `sqlez` + `servo-storage` + `matrix-sdk-sqlite` all share ONE `links="sqlite3"`
+package — sqlite3 C ABI 0.30→0.35 is backward-compatible). THEN uncomment the re-add block, wire `ZedFullPane`
+into `open_editor_pane` (gated `zed-full-pane`) + build the live-cockpit `AppState` (the named mount seam in
+`zed_full_pane.rs` — real `client::Client`/`session::Session`/`UserStore`/`WorkspaceStore`/`LanguageRegistry`/
+`NodeRuntime`, `set_global`'d), fold `zed-full` into `desktop`, retire `desktop-zed-full`, and bake Dev
+showing the full Zed.
 
 ## ✎ "MAKE YOUR FIRST CARD" — repeat entry from Author mode (2026-06-24)
 Named by the onboarding commit (`12d072eff`; `starbridge-v2/src/dock/card_surface.rs::build_first_card_surface`,
