@@ -34,8 +34,10 @@ use dregg_firmament::CellId;
 
 use crate::appfactory::AndroidManifest;
 use crate::contentgate::{ContentProvider, ContentResolver, ProviderGrant};
+use crate::appfactory::AndroidPermission;
 use crate::intentgate::{IntentHandler, IntentResolver};
 use crate::organgate::{ServiceGrant, ServiceOrgan, ServiceResolver, SystemService};
+use crate::permgate::PermBox;
 use crate::runtime::AppLaunch;
 
 /// One installed app — the android-cell minted from a manifest, plus how to launch it.
@@ -186,6 +188,30 @@ impl InstalledApps {
             .map(|svc| ServiceOrgan::standard(svc, grant))
             .collect::<Vec<_>>();
         ServiceResolver::new(organs, Some(launching_cell))
+    }
+
+    /// **Build the [`PermBox`] for an installed `cell`** — the cap-badge + hand-over surface
+    /// over the app's own manifest (its declared permissions are the only grantable ones), with
+    /// `principal` the granting identity holding `principal_holds`. The install↔permission loop:
+    /// the install's manifest (whose `<uses-permission>`s the appfactory turned into cap
+    /// templates) is exactly what the badge set renders — a `Normal` permission lit at install,
+    /// a `Dangerous` one dim until a receipted hand-over. `None` for an uninstalled cell (it has
+    /// no manifest, so there is no authority to render). This parallels [`Self::resolver_for`] /
+    /// [`Self::content_resolver_for`] / [`Self::service_resolver_for`], closing the last
+    /// framework-reforge loop (`GRAPHIDEOS.md §1`, the permission-model row).
+    pub fn permbox_for(
+        &self,
+        cell: CellId,
+        principal: CellId,
+        principal_holds: impl IntoIterator<Item = AndroidPermission>,
+    ) -> Option<PermBox> {
+        let app = self.get(cell)?;
+        Some(PermBox::new(
+            cell,
+            app.manifest.clone(),
+            principal,
+            principal_holds,
+        ))
     }
 }
 
@@ -404,5 +430,51 @@ mod tests {
         // A read-only grant does not amplify to a state-changing location call.
         let upd = ServiceOp::resolve(SystemService::Location, "requestLocationUpdates");
         assert!(resolver.resolve(&upd).decision.refused_read_only());
+    }
+
+    /// The install↔permission loop: an installed app's manifest is exactly what the cap-badge
+    /// surface renders — its normal permission lit at install, its dangerous permission dim
+    /// until a receipted hand-over; an uninstalled cell has no permbox.
+    #[test]
+    fn permbox_for_renders_the_installed_apps_badges() {
+        use crate::permgate::BadgeState;
+
+        let apps = registry();
+        let (maps_cell, _) = maps();
+        let principal = cell_seed(0x01);
+
+        // No permbox for a cell that was never installed.
+        assert!(
+            apps.permbox_for(cell_seed(0xFE), principal, []).is_none(),
+            "an uninstalled cell has no manifest, so no badge surface"
+        );
+
+        // The maps app declared INTERNET (normal) + ACCESS_FINE_LOCATION (dangerous); the
+        // principal holds the location authority.
+        let mut pb = apps
+            .permbox_for(
+                maps_cell,
+                principal,
+                [AndroidPermission::AccessFineLocation],
+            )
+            .expect("the installed maps app has a badge surface");
+
+        // INTERNET is lit at install; ACCESS_FINE_LOCATION is dim until handed over.
+        assert!(pb.holds(&AndroidPermission::Internet));
+        assert!(!pb.holds(&AndroidPermission::AccessFineLocation));
+
+        // The hand-over (the dialog, reforged) lights the location badge with a receipt.
+        let receipt = pb.grant(AndroidPermission::AccessFineLocation);
+        assert!(receipt.decision.granted());
+        assert!(pb.holds(&AndroidPermission::AccessFineLocation));
+
+        // CAMERA was never declared → its badge is dim and a hand-over is refused.
+        let cam = pb
+            .badges()
+            .badges
+            .into_iter()
+            .find(|b| b.permission == AndroidPermission::Camera)
+            .expect("camera is shown in the roster (never hidden)");
+        assert_eq!(cam.state, BadgeState::Dim);
     }
 }
