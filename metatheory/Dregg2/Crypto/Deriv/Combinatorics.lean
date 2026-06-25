@@ -96,6 +96,9 @@ theorem neSublists_characterization {xs ys : List α} :
 theorem neSub_ne {xs ys : List α} (h : xs ∈ neSublists ys) : xs ≠ [] :=
   (neSublists_correctness h).2
 
+theorem neSub_ne_perm {xs pxs ys : List α} (h : pxs ∈ neSublists ys) (hp : xs ~ pxs) : xs ≠ [] :=
+  fun he => by subst he; exact (neSub_ne h) hp.nil_eq.symm
+
 theorem neSublists_append {x y xs ys : List α}
     (h : x ∈ neSublists xs) (h1 : y ∈ neSublists ys) :
     (x ++ y) ∈ neSublists (xs ++ ys) :=
