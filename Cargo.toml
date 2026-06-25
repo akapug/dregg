@@ -172,16 +172,6 @@ servo-net = { path = "servo-render/vendor/servo-net" }
 # starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
 # bakes need is on that pushed rev) — no local-path [patch] override.
 
-# TEMPORARY (iteration-only — to be REPLACED by a rev bump once the fork is pushed):
-# point the 4 plonky3-recursion fork crates at the local working tree so the
-# exposed-claim channel under construction is buildable. The angel rule says the
-# FINAL state must be a pushed-rev pin with no local path; this patch exists only
-# while the channel is being driven to the witness flip.
-[patch."https://github.com/emberian/plonky3-recursion"]
-p3-recursion = { path = "../plonky3-recursion/recursion" }
-p3-circuit = { path = "../plonky3-recursion/circuit" }
-p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
 
 [workspace.dependencies]
 ## Local
@@ -215,10 +205,10 @@ p3-util = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a
 ## child-VK identity pinned in-band + table_public_inputs threaded = the constant-VK perpetual
 ## fold; validated end-to-end by incremental_accumulate_verifies_whole_history). PURE git deps,
 ## no `[patch]`, no sibling checkout — a fresh clone and CI resolve this identically.
-p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "fc12f233a2d14531381d40bfaf10c7eefb73f94d" }
-p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "fc12f233a2d14531381d40bfaf10c7eefb73f94d" }
-p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "fc12f233a2d14531381d40bfaf10c7eefb73f94d" }
-p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "fc12f233a2d14531381d40bfaf10c7eefb73f94d" }
+p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
+p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
+p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
+p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
 
 ## Crates.io
 ark-serialize = { version = "0.5", features = ["derive"] }
