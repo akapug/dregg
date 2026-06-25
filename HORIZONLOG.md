@@ -26,6 +26,17 @@ reason.)*
 - UMEM: the whole-image FOLD CHIP landed in-circuit (`74565bd5`, `dregg-circuit::whole_image_fold` discharges
   fc679a5f's `hpin`). NAMED TAIL: the universal-map rotation flip (umem becomes the prover — `umem_witness_enabled`
   still defaults FALSE, `turn/src/executor/mod.rs:815`) → Stage B heap-write effect.
+- UMEM WELD PRECURSOR (the last precursor before the gated VK epoch, STAGED / VK-RISK-FREE): the umem cohort leg is
+  WELDED INTO the rotated descriptor — `weld_umem_into_rotated_descriptor` (circuit, keeps the rotated 46-PI vector +
+  appends the cohort `umemOp` over 7 columns + the umemory/umem_boundary tables). A REAL turn proves through the welded
+  rotated+umem descriptor (`sdk::full_turn_proof::prove_rotated_umem_welded_staged` + gauntlet — control proves, forged-pre
+  tooth bites). The IVC half: `RotatedParticipantLeg::mint_welded_from_block_witnesses` (circuit-prove) +
+  `mint_welded_umem_rotated_participant_leg` (turn) mint a welded leg whose old_root/new_root PI accessors are INTACT
+  (resolving the 0-PI cohort-leg IVC incompatibility); a multi-turn history folds host-side through
+  `fold_welded_umem_turn_chain_staged` (continuity + ordered digest) — green; the in-circuit recursion fold is
+  `prove_welded_umem_turn_chain_recursive_staged` (`#[ignore]`, the staged end-to-end). Teeth bite the welded form
+  (ChainBreak on reorder, TurnProofInvalid on a forged welded post-commit). NAMED TAIL = THE VK EPOCH ITSELF: commit the
+  welded descriptor's VK + flip the deployed default off rotated+per-map (the ONLY remaining step — deliberately gated).
 - FIRMAMENT: the semihost interactive cockpit now runs the REAL verified `DreggEngine` (live-repaint-on-turn,
   `251692b7`) — closes `SEL4-INTERACTIVE-COCKPIT.md §3.5`. NAMED TAIL: §3.6 step 4, the executor-PD's bare-metal
   Lean-ELF runtime link (the real-seL4 WALL; gated on Microkit SDK on PATH, not a semihost blocker).

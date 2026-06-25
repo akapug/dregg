@@ -876,6 +876,84 @@ pub fn umem_cohort_descriptor_json(lean_key: &str) -> Option<&'static str> {
     })
 }
 
+/// The wire-name suffix marking a descriptor as the rotated+umem WELD
+/// ([`weld_umem_into_rotated_descriptor`]). A descriptor whose `name` ends with this is a STAGED
+/// welded form — never a deployed-registry member.
+pub const ROTATED_UMEM_WELD_SUFFIX: &str = "-umem-welded-staged";
+
+/// **THE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the last precursor before the gated VK epoch.**
+///
+/// Weld the universal-memory COHORT leg INTO a rotated R=24 descriptor: keep the WHOLE rotated
+/// constraint set (gates / transitions / pi-bindings / chip lookups) AND the rotated 46-PI vector
+/// (`ROT_PI_COUNT` — the OLD/NEW state-commit pins at PI `V1_PI_COUNT` / `+1` the IVC chain fold
+/// reads as `old_root` / `new_root`), and APPEND a SINGLE-domain `umem_op` reconciliation leg over
+/// 7 fresh main columns `[base .. base+7)` (`base` = the rotated trace width) plus the `umemory`
+/// (id 6, arity 8) / `umem_boundary` (id 7, arity 7) tables — exactly the cohort emitter's width-7
+/// `umemOp` shape (`key · present · value · prev_present · prev_value · prev_serial · guard`),
+/// offset to `base`.
+///
+/// This is the deployed flag-day weld in struct form: the per-map memory reconciliation moves INTO
+/// the rotated descriptor as the universal-memory leg (`prove_vm_descriptor2_umem` with a REAL
+/// `UMemBoundaryWitness`), while the rotated PIs stay INTACT — which is exactly what resolves the
+/// two reconciliation seams the staged cohort leg named: (a) the umem leg now rides the rotated
+/// descriptor's committed PI vector, and (b) the IVC fold's `old_root`/`new_root` PI accessors keep
+/// working over the welded leg (the 0-PI cohort form could not supply them).
+///
+/// STAGED: a NEW descriptor BESIDE the deployed rotated registry — no VK bump, nothing on the live
+/// wire. `domain` is the cohort domain the welded effect touches (heap 1 / caps 2 / nullifiers 3),
+/// checked against the leg's actual domain by the prover.
+pub fn weld_umem_into_rotated_descriptor(
+    rotated: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    use crate::descriptor_ir2::{
+        MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem, UMemOpSpec, VmConstraint2,
+    };
+    use crate::lean_descriptor_air::LeanExpr;
+
+    // The first fresh universal-memory operand column (the rotated form occupies `[0, base)`).
+    let base = rotated.trace_width;
+    let mut welded = rotated.clone();
+    welded.name = format!("{}{ROTATED_UMEM_WELD_SUFFIX}", rotated.name);
+    welded.trace_width = base + 7;
+    // Widen the MAIN table arity (sem `Main`) to the welded width; the rotated chip/range/memory/
+    // map tables keep their arities (the umem leg adds its own tables, below).
+    for t in welded.tables.iter_mut() {
+        if t.sem == TableSem::Main {
+            t.arity = welded.trace_width;
+        }
+    }
+    // Declare the universal-memory tables (the cohort emitter shape: `umemory` arity 8 carries the
+    // domain-tagged Blum tuple + serial/gap lanes; `umem_boundary` arity 7 the declared
+    // `(domain,key)` init/final image).
+    welded.tables.push(TableDef2 {
+        id: TID_UMEMORY,
+        name: "umemory".to_string(),
+        arity: 8,
+        sem: TableSem::UMemory,
+    });
+    welded.tables.push(TableDef2 {
+        id: TID_UMEM_BOUNDARY,
+        name: "umem_boundary".to_string(),
+        arity: 7,
+        sem: TableSem::UMemBoundary,
+    });
+    // The single welded universal-memory WRITE op over the appended 7 columns — byte-for-byte the
+    // cohort `umemOp` (`circuit/descriptors/umem-cohort-v1-staged-registry.tsv`), offset to `base`.
+    welded.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+        guard: LeanExpr::Var(base + 6),
+        domain,
+        key: LeanExpr::Var(base),
+        present: LeanExpr::Var(base + 1),
+        value: LeanExpr::Var(base + 2),
+        prev_present: LeanExpr::Var(base + 3),
+        prev_value: LeanExpr::Var(base + 4),
+        prev_serial: LeanExpr::Var(base + 5),
+        kind: MemKind::Write,
+    }));
+    welded
+}
+
 /// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
 /// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
 /// the byte source of the first wide prove+verify roundtrip. Emitted from the verified Lean

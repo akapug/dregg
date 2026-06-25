@@ -255,6 +255,134 @@ impl RotatedParticipantLeg {
             public_inputs: dpis,
         })
     }
+
+    /// **THE ROTATED+UMEM WELDED LEG MINT (STAGED, VK-RISK-FREE) — the IVC half of the flag-day
+    /// weld.** Like [`mint_from_block_witnesses`](Self::mint_from_block_witnesses), but the leg's
+    /// descriptor is the WELDED rotated+umem form
+    /// ([`dregg_circuit::effect_vm_descriptors::weld_umem_into_rotated_descriptor`]): the rotated
+    /// cohort proof PLUS the universal-memory reconciliation leg (the cohort `umemOp` over 7
+    /// appended columns + the REAL [`UMemBoundaryWitness`]), proved in ONE leaf under the leaf-wrap
+    /// config. The carried 46-PI vector is UNCHANGED (the weld adds no PIs), so
+    /// [`old_root`](Self::old_root) / [`new_root`](Self::new_root) — the temporal binding the IVC
+    /// chain fold reads — keep working over the welded leg. This is what resolves the seam the
+    /// 0-PI cohort form could not: the umem leg now rides a descriptor that carries the IVC's
+    /// `old_root`/`new_root` accessors.
+    ///
+    /// `umem_rows` are the single-domain width-7 cohort rows (`key · present · value ·
+    /// prev_present · prev_value · prev_serial · guard`, the
+    /// `dregg_turn::umem::UmemCohortProvingInputs::rows`); `umem_boundary` is that leg's REAL
+    /// boundary; `domain` is its cohort domain (heap 1 / caps 2 / nullifiers 3). The downstream
+    /// `dregg_turn` wrapper derives all three from the cell transition. STAGED: a welded descriptor
+    /// BESIDE the deployed rotated registry; no VK bump, nothing on the live wire.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mint_welded_from_block_witnesses(
+        initial_state: &dregg_circuit::effect_vm::CellState,
+        effects: &[dregg_circuit::effect_vm::Effect],
+        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+        umem_rows: &[Vec<BabyBear>],
+        umem_boundary: &dregg_circuit::descriptor_ir2::UMemBoundaryWitness,
+        domain: u32,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+        use dregg_circuit::descriptor_ir2::{
+            MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_for_config,
+            verify_vm_descriptor2_with_config,
+        };
+        use dregg_circuit::effect_vm::trace_rotated::{
+            empty_caveat_manifest, generate_rotated_effect_vm_trace,
+            rotated_descriptor_name_for_effect, transfer_caveat_manifest,
+        };
+        use dregg_circuit::effect_vm_descriptors::{
+            V3_STAGED_REGISTRY_TSV, weld_umem_into_rotated_descriptor,
+        };
+
+        let lead = effects
+            .first()
+            .ok_or_else(|| "mint_welded: empty effect slice".to_string())?;
+        let r24_name = rotated_descriptor_name_for_effect(lead)
+            .ok_or_else(|| format!("mint_welded: effect {lead:?} is not a rotated R=24 member"))?;
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(r24_name) {
+                return Err("mint_welded: heterogeneous multi-effect turn (one welded leg)".into());
+            }
+        }
+        let json = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                if it.next() == Some(r24_name) {
+                    let _display = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| format!("mint_welded: '{r24_name}' not in V3_STAGED_REGISTRY_TSV"))?;
+        let rotated_desc = parse_vm_descriptor2(json)
+            .map_err(|e| format!("mint_welded: descriptor '{r24_name}' parse failed: {e}"))?;
+
+        // WELD: the universal-memory leg INTO the rotated descriptor (keeps the 46 rotated PIs).
+        let welded = weld_umem_into_rotated_descriptor(&rotated_desc, domain);
+        let base = rotated_desc.trace_width;
+
+        let caveat = match effects {
+            [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
+            _ => empty_caveat_manifest(),
+        };
+        let (rot_trace, mut dpis) =
+            generate_rotated_effect_vm_trace(initial_state, effects, before, after, &caveat)
+                .map_err(|e| format!("mint_welded: rotated trace generation failed: {e}"))?;
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        // Assemble the welded base trace: inject the REAL umem rows (guard col 6 == 1) into the
+        // appended 7 columns of the first rows (the umem-op gathering reads operands row-local).
+        let real_umem_rows: Vec<&Vec<BabyBear>> = umem_rows
+            .iter()
+            .filter(|r| r.get(6).copied() == Some(BabyBear::ONE))
+            .collect();
+        if real_umem_rows.len() > rot_trace.len() {
+            return Err(format!(
+                "mint_welded: {} umem ops exceed rotated trace height {}",
+                real_umem_rows.len(),
+                rot_trace.len()
+            ));
+        }
+        let mut welded_trace: Vec<Vec<BabyBear>> = Vec::with_capacity(rot_trace.len());
+        for (ri, row) in rot_trace.iter().enumerate() {
+            let mut wr = row.clone();
+            wr.resize(base + 7, BabyBear::ZERO);
+            if let Some(umem_row) = real_umem_rows.get(ri) {
+                for (i, &v) in umem_row.iter().enumerate().take(7) {
+                    wr[base + i] = v;
+                }
+            }
+            welded_trace.push(wr);
+        }
+
+        let wrap_config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config(
+            &welded,
+            &welded_trace,
+            &dpis,
+            &MemBoundaryWitness::default(),
+            &[],
+            umem_boundary,
+            &wrap_config,
+        )
+        .map_err(|e| format!("mint_welded: IR-v2 welded batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&welded, &proof, &dpis, &wrap_config)
+            .map_err(|e| format!("mint_welded: minted welded proof self-verify failed: {e}"))?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: welded,
+            public_inputs: dpis,
+        })
+    }
     /// The rotated OLD-state commitment (PI 34 — the row-0 before-block `state_commit`).
     pub fn old_root(&self) -> BabyBear {
         self.public_inputs[dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT]
