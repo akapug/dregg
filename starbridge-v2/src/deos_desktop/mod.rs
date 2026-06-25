@@ -76,9 +76,10 @@ pub use android_window::{ANDROID_WINDOW_TITLE, AndroidInputCmd, AndroidWindow};
 pub use chrome::{
     DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP,
     GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE,
-    NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT, NT_SELECT, NT_SHADOW, NT_TEXT,
-    NT_TITLE_ACTIVE, NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W, bevel_raised, face_gauge, face_row,
-    face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
+    NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL, NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE,
+    NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT,
+    NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W, bevel_raised, bevel_sunken, bevel_window,
+    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
 };
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
 
@@ -1807,11 +1808,14 @@ impl DeosDesktop {
         let cols = (n as f32).sqrt().ceil() as usize;
         let rows = n.div_ceil(cols);
         // Tile across the left ~2/3 of a 1600-wide desktop so the icons + summary
-        // widget on the right stay legible (the desktop is laid out for ~1600×1000).
-        let area_x = 240.0;
-        let area_y = MENUBAR_H + 8.0;
-        let area_w = 1080.0;
-        let area_h = 940.0;
+        // widget on the right stay legible (the desktop is laid out for ~1600×1000),
+        // and RESERVE the chrome margins — below the menu bar, above the taskbar +
+        // status bar (46px) — so no window tucks under the system chrome.
+        let gap = 10.0;
+        let area_x = 232.0;
+        let area_y = MENUBAR_H + gap;
+        let area_w = 1112.0;
+        let area_h = 1000.0 - area_y - 46.0 - gap;
         let cw = (area_w / cols as f32).max(WIN_MIN_W);
         let ch = (area_h / rows as f32).max(WIN_MIN_H);
         for (i, key) in keys.iter().enumerate() {
@@ -1820,8 +1824,8 @@ impl DeosDesktop {
             if let Some(ws) = self.windows.get_mut(key) {
                 ws.x = area_x + col * cw;
                 ws.y = area_y + row * ch;
-                ws.w = (cw - 8.0).max(WIN_MIN_W);
-                ws.h = (ch - 8.0).max(WIN_MIN_H);
+                ws.w = (cw - gap).max(WIN_MIN_W);
+                ws.h = (ch - gap).max(WIN_MIN_H);
                 ws.minimized = false;
             }
             self.persist_window(*key);
@@ -2277,10 +2281,19 @@ impl Render for DeosDesktop {
         root = root.child(self.render_world_widget());
 
         // ── The open windows (z-ordered) ─────────────────────────────────────────
+        // The top-z, non-minimized window is the FOCUSED one — it alone wears the
+        // active navy title bar (the NT "one focused thing" cue); the rest read
+        // inactive-gray so the eye lands on the live surface, not a wall of navy.
         let mut wins: Vec<WinKey> = self.windows.keys().copied().collect();
         wins.sort_by_key(|k| self.windows[k].z);
+        let focused: Option<WinKey> = wins
+            .iter()
+            .filter(|k| !self.windows[*k].minimized)
+            .max_by_key(|k| self.windows[*k].z)
+            .copied();
         for key in wins {
-            root = root.child(self.render_window(key, window, cx));
+            let active = Some(key) == focused;
+            root = root.child(self.render_window(key, active, window, cx));
         }
 
         // ── The context menu overlay (the ACTUATION) ─────────────────────────────
@@ -2471,6 +2484,7 @@ impl DeosDesktop {
     fn render_window(
         &mut self,
         key: WinKey,
+        active: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -2492,7 +2506,7 @@ impl DeosDesktop {
                 .left(px(x))
                 .top(px(y))
                 .w(px(180.0))
-                .child(self.render_titlebar(key, &title, true, cx))
+                .child(self.render_titlebar(key, &title, active, true, cx))
                 .into_any_element();
         }
 
@@ -2538,50 +2552,50 @@ impl DeosDesktop {
             .justify_center()
             .child(GLYPH_GRIP);
 
-        div()
-            .id(gpui::SharedString::from(format!(
-                "win-{}-{:?}",
-                id_hex(&cell),
-                tag as u8
-            )))
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(w))
-            .h(px(h))
-            .flex()
-            .flex_col()
-            .bg(gpui::rgb(NT_FACE))
-            .border_2()
-            .border_color(gpui::rgb(NT_SHADOW))
-            // Clicking anywhere in the window raises it.
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
-                    if let Some(ws) = this.windows.get_mut(&key) {
-                        ws.z = this.next_z;
-                        this.next_z += 1;
-                    }
-                    cx.notify();
-                }),
-            )
-            // Right-click anywhere on the window chrome opens the WINDOW menu.
-            .on_mouse_down(MouseButton::Right, {
-                let title_for_menu = title.clone();
-                cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
-                    this.open_menu = Some(OpenMenu {
-                        cell: Some(cell),
-                        heading: title_for_menu.clone(),
-                        at: ev.position,
-                        actions: this.window_actions(cell, tag),
-                    });
-                    cx.notify();
-                })
+        bevel_window(
+            div()
+                .id(gpui::SharedString::from(format!(
+                    "win-{}-{:?}",
+                    id_hex(&cell),
+                    tag as u8
+                )))
+                .absolute()
+                .left(px(x))
+                .top(px(y))
+                .w(px(w))
+                .h(px(h))
+                .flex()
+                .flex_col()
+                .p_px(),
+        )
+        // Clicking anywhere in the window raises it.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                if let Some(ws) = this.windows.get_mut(&key) {
+                    ws.z = this.next_z;
+                    this.next_z += 1;
+                }
+                cx.notify();
+            }),
+        )
+        // Right-click anywhere on the window chrome opens the WINDOW menu.
+        .on_mouse_down(MouseButton::Right, {
+            let title_for_menu = title.clone();
+            cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
+                this.open_menu = Some(OpenMenu {
+                    cell: Some(cell),
+                    heading: title_for_menu.clone(),
+                    at: ev.position,
+                    actions: this.window_actions(cell, tag),
+                });
+                cx.notify();
             })
-            .child(self.render_titlebar(key, &title, false, cx))
-            .child(body)
-            .child(resize_grip)
-            .into_any_element()
+        })
+        .child(self.render_titlebar(key, &title, active, false, cx))
+        .child(body)
+        .child(resize_grip)
+        .into_any_element()
     }
 
     /// The classic reflective inspector body (identity + live state + affordances +
@@ -2598,11 +2612,7 @@ impl DeosDesktop {
         // The balance gauge denominator — the World's largest holder.
         let gauge = (bal.max(0) as f32) / (self.world_max_balance() as f32);
         // The lifecycle reads green when Live, amber otherwise (a sealed/migrated cell).
-        let life_color = if lifecycle == "Live" {
-            0x0a7a2a
-        } else {
-            0xa06000
-        };
+        let life_color = if lifecycle == "Live" { NT_OK } else { NT_WARN };
 
         let mut col = div()
             .id(gpui::SharedString::from(format!(
@@ -2612,7 +2622,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf4f4f4))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -2623,7 +2633,7 @@ impl DeosDesktop {
             .child(face_row_color(
                 "authority",
                 if held { "held (lit)" } else { "system (dim)" },
-                if held { 0x0a7a2a } else { NT_DIM },
+                if held { NT_OK } else { NT_DIM },
             ))
             .child(face_section("State (live)"))
             .child(face_row("balance", &fmt_balance(bal)))
@@ -2765,7 +2775,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xfbfbf0))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -3069,7 +3079,7 @@ impl DeosDesktop {
             .flex()
             .flex_col()
             .gap_1()
-            .bg(gpui::rgb(0xeef2f0))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .child(tabs)
             .child(body)
@@ -3161,15 +3171,12 @@ impl DeosDesktop {
             .flex_col()
             .items_center()
             .child(
-                bevel_raised(
+                bevel_window(
                     div()
                         .id("spotter-panel")
                         .w(px(520.0))
                         .max_h(px(440.0))
                         .overflow_y_scroll()
-                        .bg(gpui::rgb(NT_FACE))
-                        .border_2()
-                        .border_color(gpui::rgb(NT_SHADOW))
                         .p_2(),
                 )
                 .child(face_section(&format!(
@@ -3207,7 +3214,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf2f0f8))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -3470,7 +3477,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf0f4f8))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -3601,6 +3608,7 @@ impl DeosDesktop {
         &self,
         key: WinKey,
         title: &str,
+        active: bool,
         minimized: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
@@ -3608,8 +3616,15 @@ impl DeosDesktop {
         // A font-safe 3-letter kind badge (the geometric window glyphs render as tofu
         // in the bake font, so the dense legible tag stands in for them).
         let glyph = kind_short(tag);
-        // NT navy title bar with min/max/close glyph buttons. The bar grabs a
-        // window-move drag on mouse-down; the buttons fire close/minimize.
+        // The FOCUSED window wears the navy active bar; the rest read inactive-gray
+        // (the NT focus cue — one window is "the one you're working in").
+        let (bar_bg, bar_text) = if active {
+            (NT_TITLE_ACTIVE, NT_TITLE_TEXT)
+        } else {
+            (NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT)
+        };
+        // NT title bar with min/max/close glyph buttons. The bar grabs a window-move
+        // drag on mouse-down; the buttons fire close/minimize.
         div()
             .id(gpui::SharedString::from(format!(
                 "title-{}-{:?}",
@@ -3620,8 +3635,8 @@ impl DeosDesktop {
             .flex()
             .flex_row()
             .items_center()
-            .bg(gpui::rgb(NT_TITLE_ACTIVE))
-            .text_color(gpui::rgb(NT_TITLE_TEXT))
+            .bg(gpui::rgb(bar_bg))
+            .text_color(gpui::rgb(bar_text))
             .px_1()
             .on_mouse_down(
                 MouseButton::Left,
@@ -3796,17 +3811,16 @@ impl DeosDesktop {
         let cell = menu.cell;
         let heading = menu.heading.clone();
         let key_base = cell.map(|c| id_hex(&c)).unwrap_or_else(|| "desktop".into());
-        let mut m = div()
-            .absolute()
-            .left(menu.at.x)
-            .top(menu.at.y)
-            .w(px(268.0))
-            .bg(gpui::rgb(NT_FACE))
-            .border_2()
-            .border_color(gpui::rgb(NT_SHADOW))
-            .py_1()
-            .flex()
-            .flex_col();
+        let mut m = bevel_window(
+            div()
+                .absolute()
+                .left(menu.at.x)
+                .top(menu.at.y)
+                .w(px(268.0))
+                .py_1()
+                .flex()
+                .flex_col(),
+        );
         // A header naming the object the menu acts on.
         m = m.child(
             div()
@@ -3875,70 +3889,70 @@ impl DeosDesktop {
                 self.prop_body_desktop(cx),
             ),
         };
-        div()
-            .id("prop-dialog")
-            .absolute()
-            .left(x)
-            .top(y)
-            .w(px(w))
-            .h(px(h))
-            .flex()
-            .flex_col()
-            .bg(gpui::rgb(NT_FACE))
-            .border_2()
-            .border_color(gpui::rgb(NT_SHADOW))
-            .child(
-                // The dialog title bar (with a close X).
-                div()
-                    .h(px(22.0))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .bg(gpui::rgb(NT_TITLE_ACTIVE))
-                    .text_color(gpui::rgb(NT_TITLE_TEXT))
-                    .px_1()
-                    .child(
-                        div()
-                            .mx_1()
-                            .px_1()
-                            .text_size(px(9.0))
-                            .bg(gpui::rgb(0x000050))
-                            .text_color(gpui::rgb(0xc0d0ff))
-                            .child("CFG"),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_1()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::BOLD)
-                            .child(heading),
-                    )
-                    .child(
-                        div()
-                            .id("prop-close")
-                            .w(px(16.0))
-                            .h(px(14.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(gpui::rgb(NT_FACE))
-                            .text_color(gpui::rgb(NT_TEXT))
-                            .text_size(px(9.0))
-                            .border_1()
-                            .border_color(gpui::rgb(NT_SHADOW))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                                    this.open_prop = None;
-                                    cx.notify();
-                                }),
-                            )
-                            .child(GLYPH_CLOSE),
-                    ),
-            )
-            .child(body)
-            .into_any_element()
+        bevel_window(
+            div()
+                .id("prop-dialog")
+                .absolute()
+                .left(x)
+                .top(y)
+                .w(px(w))
+                .h(px(h))
+                .flex()
+                .flex_col()
+                .p_px(),
+        )
+        .child(
+            // The dialog title bar (with a close X).
+            div()
+                .h(px(22.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .bg(gpui::rgb(NT_TITLE_ACTIVE))
+                .text_color(gpui::rgb(NT_TITLE_TEXT))
+                .px_1()
+                .child(
+                    div()
+                        .mx_1()
+                        .px_1()
+                        .text_size(px(9.0))
+                        .bg(gpui::rgb(0x000050))
+                        .text_color(gpui::rgb(0xc0d0ff))
+                        .child("CFG"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .px_1()
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(heading),
+                )
+                .child(
+                    div()
+                        .id("prop-close")
+                        .w(px(16.0))
+                        .h(px(14.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::rgb(NT_FACE))
+                        .text_color(gpui::rgb(NT_TEXT))
+                        .text_size(px(9.0))
+                        .border_1()
+                        .border_color(gpui::rgb(NT_SHADOW))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                this.open_prop = None;
+                                cx.notify();
+                            }),
+                        )
+                        .child(GLYPH_CLOSE),
+                ),
+        )
+        .child(body)
+        .into_any_element()
     }
 
     fn prop_body_cell(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
@@ -3953,7 +3967,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf4f4f4))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -4021,7 +4035,7 @@ impl DeosDesktop {
         div()
             .flex_1()
             .min_h(px(0.0))
-            .bg(gpui::rgb(0xf4f4f4))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -4043,7 +4057,7 @@ impl DeosDesktop {
             .flex_1()
             .min_h(px(0.0))
             .overflow_y_scroll()
-            .bg(gpui::rgb(0xf4f4f4))
+            .bg(gpui::rgb(NT_PANEL))
             .p_2()
             .flex()
             .flex_col()
@@ -4270,46 +4284,45 @@ impl DeosDesktop {
             (w.height(), self.cells.len(), w.receipts().len())
         };
         let sum = self.world_balance_sum();
-        div()
-            .absolute()
-            .right(px(16.0))
-            .top(px(MENUBAR_H + 12.0))
-            .w(px(216.0))
-            .bg(gpui::rgb(NT_FACE))
-            .border_2()
-            .border_color(gpui::rgb(NT_SHADOW))
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .h(px(20.0))
-                    .flex()
-                    .items_center()
-                    .px_2()
-                    .bg(gpui::rgb(NT_TITLE_ACTIVE))
-                    .text_color(gpui::rgb(NT_TITLE_TEXT))
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::BOLD)
-                    .child("World"),
-            )
-            .child(
-                div()
-                    .p_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(face_row("height", &h.to_string()))
-                    .child(face_row("cells", &n.to_string()))
-                    .child(face_row("receipts", &receipts.to_string()))
-                    .child(face_row_color("Σ balance", &fmt_balance(sum), 0x0a4a7a))
-                    .child(
-                        div()
-                            .mt_1()
-                            .text_size(px(10.0))
-                            .text_color(gpui::rgb(NT_DIM))
-                            .child("net of wells vs accounts — invariant under transfers"),
-                    ),
-            )
+        bevel_window(
+            div()
+                .absolute()
+                .right(px(16.0))
+                .top(px(MENUBAR_H + 12.0))
+                .w(px(216.0))
+                .flex()
+                .flex_col(),
+        )
+        .child(
+            div()
+                .h(px(20.0))
+                .flex()
+                .items_center()
+                .px_2()
+                .bg(gpui::rgb(NT_TITLE_ACTIVE))
+                .text_color(gpui::rgb(NT_TITLE_TEXT))
+                .text_size(px(11.0))
+                .font_weight(FontWeight::BOLD)
+                .child("World"),
+        )
+        .child(
+            div()
+                .p_2()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(face_row("height", &h.to_string()))
+                .child(face_row("cells", &n.to_string()))
+                .child(face_row("receipts", &receipts.to_string()))
+                .child(face_row_color("Σ balance", &fmt_balance(sum), 0x0a4a7a))
+                .child(
+                    div()
+                        .mt_1()
+                        .text_size(px(10.0))
+                        .text_color(gpui::rgb(NT_DIM))
+                        .child("net of wells vs accounts — invariant under transfers"),
+                ),
+        )
     }
 }
 

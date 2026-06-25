@@ -23,7 +23,8 @@ use dregg_cell::{Cell, lifecycle::CellLifecycle};
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, face_gauge, face_row, face_row_color, face_section, fmt_balance, id_short,
+    NT_DIM, NT_OK, NT_PANEL, NT_WARN, face_gauge, face_row, face_row_color, face_section,
+    fmt_balance, id_short,
 };
 use crate::world::World;
 
@@ -126,7 +127,7 @@ fn render_ledger_face(world: &World) -> AnyElement {
         .flex_1()
         .min_h(px(0.0))
         .overflow_y_scroll()
-        .bg(gpui::rgb(0xf4f4f4))
+        .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
         .flex_col()
@@ -148,7 +149,7 @@ fn render_ledger_face(world: &World) -> AnyElement {
         let life = cell_lifecycle(cell);
         let nonce = cell.state.nonce();
         // An issuer well (negative) reads amber, a Live account reads neutral.
-        let bal_color = if bal < 0 { 0xa06000 } else { 0x101010 };
+        let bal_color = if bal < 0 { NT_WARN } else { 0x101010 };
         col = col.child(
             div()
                 .flex()
@@ -252,14 +253,14 @@ fn render_conservation_face(world: &World) -> AnyElement {
     let receipts = world.receipts().len();
     // Σ reads green at the invariant (0), amber if it ever drifts — the operator's
     // at-a-glance conservation verdict.
-    let sum_color = if sum == 0 { 0x0a7a2a } else { 0xa06000 };
+    let sum_color = if sum == 0 { NT_OK } else { NT_WARN };
 
     let mut col = div()
         .id("world-explorer-conservation")
         .flex_1()
         .min_h(px(0.0))
         .overflow_y_scroll()
-        .bg(gpui::rgb(0xf4f4f4))
+        .bg(gpui::rgb(NT_PANEL))
         .p_2()
         .flex()
         .flex_col()
@@ -303,9 +304,9 @@ fn render_conservation_face(world: &World) -> AnyElement {
     for (id, cell) in cells.iter().take(cap) {
         let bal = cell.state.balance();
         let color = if bal < 0 {
-            0xa06000
+            NT_WARN
         } else if bal > 0 {
-            0x0a7a2a
+            NT_OK
         } else {
             NT_DIM
         };
