@@ -85,6 +85,10 @@ pub enum RuntimeError {
     Capture(ScreencapError),
     /// An I/O error invoking a tool.
     Io(std::io::Error),
+    /// [`launch_installed_app`] was asked to launch a cell with no registry entry — the
+    /// app was never installed (minted), so there is nothing to launch and no neighborhood
+    /// to resolve over.
+    AppNotInstalled { cell: dregg_firmament::CellId },
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -104,6 +108,13 @@ impl std::fmt::Display for RuntimeError {
             }
             RuntimeError::Capture(e) => write!(f, "frame capture: {e}"),
             RuntimeError::Io(e) => write!(f, "io: {e}"),
+            RuntimeError::AppNotInstalled { cell } => {
+                write!(
+                    f,
+                    "no installed app for cell {} — it was never minted/installed",
+                    bs58::encode(&cell.as_bytes()[..6]).into_string()
+                )
+            }
         }
     }
 }
@@ -142,6 +153,35 @@ pub trait AndroidRuntime {
     fn capture_frame(&mut self) -> Result<RgbaFrame, RuntimeError>;
 }
 
+/// **THE INSTALL↔LAUNCH↔INTENT LOOP, on a live runtime.** Launch the installed app
+/// `app_cell` on `rt` (its `am start` program from the registry entry) and return its
+/// cap-bounded [`IntentResolver`] — built by [`crate::apps::InstalledApps::resolver_for`]
+/// from only the installed apps the launching cell holds a cap to (`granted`).
+///
+/// This is `GRAPHIDEOS.md §1`'s "an intent is a turn over a cap you hold" wired to the real
+/// installed-app set: the launched app's outbound intents resolve over a **spotter of its
+/// cap-reachable neighborhood**, NOT a device-wide `PackageManager`. Weld the returned
+/// resolver to `rt` as the [`AndroidIntentSink`](crate::intentgate::AndroidIntentSink)
+/// (`AndroidIntentGate::new(resolver, &mut rt)` — the `&mut S` sink impl hands `rt` back when
+/// the gate drops) and a singly-resolved, cap-admitted intent reaches the device's `am start`;
+/// a refused/ambiguous one never does.
+///
+/// Gated only by the runtime: on the [`CapturedFrameRuntime`] the launch is a no-op and the
+/// loop is exercised with no device; on the [`MacOsEmulatorRuntime`] it drives the live
+/// `emulator-5554`.
+pub fn launch_installed_app<R: AndroidRuntime>(
+    rt: &mut R,
+    apps: &crate::apps::InstalledApps,
+    app_cell: dregg_firmament::CellId,
+    granted: &std::collections::BTreeSet<dregg_firmament::CellId>,
+) -> Result<crate::intentgate::IntentResolver, RuntimeError> {
+    let app = apps
+        .get(app_cell)
+        .ok_or(RuntimeError::AppNotInstalled { cell: app_cell })?;
+    rt.launch_app(&app.launch)?;
+    Ok(apps.resolver_for(app_cell, granted))
+}
+
 /// **The host-independent stand-in.** A runtime that has no live device: it yields a
 /// pre-captured frame (a `screencap` raw blob — e.g. the committed real-home fixture,
 /// or a frame captured earlier on a host that had the emulator). It lets the WHOLE
@@ -151,6 +191,10 @@ pub trait AndroidRuntime {
 pub struct CapturedFrameRuntime {
     screencap_raw: Vec<u8>,
     booted: bool,
+    /// Every intent dispatched THROUGH this runtime as an [`crate::intentgate::AndroidIntentSink`]
+    /// — `(am_start_args, handler_cell)`, in order. Lets the WHOLE install↔launch↔intent loop
+    /// (`launch_installed_app` → gate → dispatch) be proven on any node with no device.
+    pub intents_dispatched: Vec<(Vec<String>, dregg_firmament::CellId)>,
 }
 
 impl CapturedFrameRuntime {
@@ -159,7 +203,23 @@ impl CapturedFrameRuntime {
         CapturedFrameRuntime {
             screencap_raw: raw.into(),
             booted: false,
+            intents_dispatched: Vec::new(),
         }
+    }
+}
+
+/// The stand-in records a gate-admitted intent's `am start` argv (no device) — the
+/// intent-side of its [`AndroidRuntime`] capture stand-in, so the launch↔intent loop tests
+/// anywhere.
+impl crate::intentgate::AndroidIntentSink for CapturedFrameRuntime {
+    fn start_activity(
+        &mut self,
+        intent: &crate::intentgate::AndroidIntent,
+        handler: dregg_firmament::CellId,
+    ) -> Result<(), crate::intentgate::IntentError> {
+        self.intents_dispatched
+            .push((intent.am_start_args(), handler));
+        Ok(())
     }
 }
 

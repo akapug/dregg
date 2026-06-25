@@ -41,7 +41,9 @@
 //! the named frontier on BOTH hosts; the shallow net gate is real today (§5).
 
 pub mod appfactory;
+pub mod apps;
 pub mod checkpoint;
+pub mod contentgate;
 pub mod frame;
 pub mod input;
 pub mod intentgate;
@@ -50,9 +52,14 @@ pub mod present;
 pub mod runtime;
 
 pub use appfactory::{AndroidManifest, AndroidPermission};
+pub use apps::{InstalledApp, InstalledApps};
 pub use checkpoint::{
     ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
     diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold,
+};
+pub use contentgate::{
+    ContentAccess, ContentDecision, ContentProvider, ContentReceipt, ContentResolver, ContentUri,
+    ProviderGrant,
 };
 pub use frame::{ANDROID_SCREENCAP_HEADER_LEN, ScreencapError, screencap_to_rgba};
 pub use input::{
@@ -67,6 +74,7 @@ pub use netgate::{AndroidNetGate, IoDecision, IoReceipt};
 pub use present::{AndroidPresentation, present_android_frame};
 pub use runtime::{
     AndroidRuntime, AppLaunch, CapturedFrameRuntime, DeviceSpec, RuntimeError, RuntimeKind,
+    launch_installed_app,
 };
 
 #[cfg(target_os = "macos")]

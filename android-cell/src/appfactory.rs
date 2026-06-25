@@ -177,6 +177,11 @@ pub struct AndroidManifest {
     /// handler in another cell's [`crate::intentgate::IntentResolver`] (closing the
     /// install ↔ intent-dispatch loop).
     pub intent_filters: Vec<IntentFilter>,
+    /// The `<provider android:authorities=…>` this app publishes — what makes it a
+    /// reachable content provider in another cell's [`crate::contentgate::ContentResolver`]
+    /// (closing the install ↔ content loop, exactly as `intent_filters` closes the
+    /// intent loop). A `BTreeSet` so duplicates collapse and the order is stable.
+    pub content_authorities: BTreeSet<String>,
     /// Whether the app runs as a sovereign cell (its own root authority) or hosted under
     /// a parent (the common confined-foreign-app case).
     pub sovereign: bool,
@@ -193,6 +198,7 @@ impl AndroidManifest {
             package: package.into(),
             uses_permissions: permissions.into_iter().collect(),
             intent_filters: Vec::new(),
+            content_authorities: BTreeSet::new(),
             sovereign: false,
         }
     }
@@ -200,6 +206,19 @@ impl AndroidManifest {
     /// Publish the component intent-filters (builder).
     pub fn with_intent_filters(mut self, filters: impl IntoIterator<Item = IntentFilter>) -> Self {
         self.intent_filters = filters.into_iter().collect();
+        self
+    }
+
+    /// Publish the `<provider>` content authorities (builder) — what makes this app a
+    /// reachable content provider in a granted cell's [`crate::contentgate::ContentResolver`].
+    pub fn with_content_authorities(
+        mut self,
+        authorities: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.content_authorities = authorities
+            .into_iter()
+            .map(|a| a.into().to_ascii_lowercase())
+            .collect();
         self
     }
 
@@ -257,6 +276,13 @@ impl AndroidManifest {
     /// intent-dispatch bridge).
     pub fn published_filters(&self) -> &[IntentFilter] {
         &self.intent_filters
+    }
+
+    /// The published content authorities this installed app advertises — to be registered
+    /// as a [`crate::contentgate::ContentProvider`] in the resolvers of cells granted a cap
+    /// to it (the install ↔ content bridge).
+    pub fn published_authorities(&self) -> &BTreeSet<String> {
+        &self.content_authorities
     }
 }
 
