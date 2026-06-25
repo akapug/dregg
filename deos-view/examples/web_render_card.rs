@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use deos_view::{
     GalleryCard, parse_view_tree, render_card_document, render_card_live_document,
     render_gallery_document, render_html, render_inspector_live_document,
-    render_tally_live_document,
+    render_kvstore_live_document, render_tally_live_document,
 };
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the
@@ -119,6 +119,55 @@ const TALLY_CARD_JSON: &str = r#"{
             { "kind": "bind", "props": { "slot": 2, "label": "" } },
             { "kind": "button", "props": { "label": "+1", "on_click": { "turn": "inc", "arg": 2 } } },
             { "kind": "button", "props": { "label": "−1", "on_click": { "turn": "dec", "arg": 2 } } }
+        ] }
+    ] }
+  ]
+}"#;
+
+/// THE KV-STORE SERVICE-CELL CARD's view-tree — byte-for-byte the shape
+/// `wasm/src/bindings_card.rs`'s `KvStoreWorld::view_tree_json` generates: a titled column with
+/// a version `row` and a `table` of register rows (slots 1–4), each `row(text label, bind slot,
+/// button "put", button "del")`. The `put`/`del` buttons carry `{turn: put|delete, arg: slot}`.
+/// Unlike the other cards (which write a cell's OWN slots through bare `SetField`), the KV-store
+/// is a SERVICE CELL: clicking `put`/`del` ROUTES the call through the store's published
+/// `InterfaceDescriptor` (the verified DFA) before it desugars to the version-bump + register
+/// `SetField`s — proving a published-interface service surface renders + drives in the web
+/// renderer. The static seeds below (version 4; regs 10/20/30/40) are the first paint; the
+/// in-tab `KvStoreWorld` re-reads the live values after boot.
+const KVSTORE_CARD_JSON: &str = r#"{
+  "kind": "vstack",
+  "props": {},
+  "children": [
+    { "kind": "text", "props": { "text": "Key-Value Store — service cell" } },
+    { "kind": "text", "props": { "text": "a published interface (put · delete · get) routed through the verified DFA" } },
+    { "kind": "row", "props": {}, "children": [
+        { "kind": "text", "props": { "text": "store version: " } },
+        { "kind": "bind", "props": { "slot": 0, "label": "" } }
+    ] },
+    { "kind": "table", "props": {}, "children": [
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 1: " } },
+            { "kind": "bind", "props": { "slot": 1, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 1 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 1 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 2: " } },
+            { "kind": "bind", "props": { "slot": 2, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 2 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 2 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 3: " } },
+            { "kind": "bind", "props": { "slot": 3, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 3 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 3 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 4: " } },
+            { "kind": "bind", "props": { "slot": 4, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 4 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 4 } } }
         ] }
     ] }
   ]
@@ -349,6 +398,54 @@ fn main() {
         "the live tally page imports + mints the in-tab executor and re-paints each row off its slot"
     );
 
+    // ── 6c. Bake the LIVE KV-STORE page — a SERVICE CELL invoked client-side ─────────────
+    // The SAME gpui-free web renderer paints the store's view-tree (a version row + a `Table`
+    // of register rows with `put`/`del` buttons). The bootstrap mints an in-tab `KvStoreWorld`
+    // seeded to [10, 20, 30, 40], binds `window.__deosCard`, and re-paints each bound row from
+    // the committed ledger. Clicking `put`/`del` ROUTES the call through the store's published
+    // `InterfaceDescriptor` (the verified DFA) and fires a REAL cap-gated verified turn against
+    // the store cell, the monotone version bumping. The status strip additionally exercises the
+    // verified `Monotonic`-version guarantee (a refused rollback) and the `Serviced` `get` seam.
+    let kvstore = parse_view_tree(KVSTORE_CARD_JSON).expect("parse the kvstore card view-tree");
+    let live_kv = render_kvstore_live_document(
+        "deos KV-store service cell — live",
+        &kvstore,
+        /*bind_values (tree-walk order: version, reg1..reg4)*/ &[4, 10, 20, 30, 40],
+        /*seeds (reg1..reg4)*/ &[10, 20, 30, 40],
+        "./pkg/dregg_wasm.js",
+    );
+    let plive_kv = dist.join("kvstore.html");
+    std::fs::write(&plive_kv, &live_kv).expect("write the live kvstore.html");
+
+    // ── PROVE the kvstore service-cell card renders the published-interface surface + is wired ─
+    let frag_kv = render_html(&kvstore, &[4, 10, 20, 30, 40]);
+    assert!(
+        frag_kv.contains("Key-Value Store — service cell") && frag_kv.contains("store version: "),
+        "the store card paints its title + the version row"
+    );
+    assert!(
+        frag_kv.contains("deos-table") && frag_kv.matches("deos-row").count() == 5,
+        "the store renders a version Row + a Table of four register Rows"
+    );
+    assert!(
+        frag_kv.contains("data-slot=\"0\">4</span>")
+            && frag_kv.contains("data-slot=\"1\">10</span>")
+            && frag_kv.contains("data-slot=\"4\">40</span>"),
+        "the version + register Binds paint their seeded values (version 4; regs 10/40)"
+    );
+    assert!(
+        frag_kv.matches("data-turn=\"put\"").count() == 4
+            && frag_kv.matches("data-turn=\"delete\"").count() == 4,
+        "each register Row carries BOTH method affordances (put / del)"
+    );
+    assert!(
+        live_kv.contains("import init, { KvStoreWorld }")
+            && live_kv.contains("new KvStoreWorld([10n, 20n, 30n, 40n])")
+            && live_kv.contains("card.read(slot)")
+            && live_kv.contains("c.version()"),
+        "the live store page imports + mints the in-tab service cell and re-paints each row + version"
+    );
+
     // ── 7. Bake the GALLERY / card-picker as the served home page (`/` = index.html) ──
     // Without a front door a visitor lands on one card and never finds the others. This is
     // a plain-HTML (no-wasm) landing of clickable tiles, one per live card — the
@@ -377,6 +474,14 @@ fn main() {
                         buttons. The full ViewNode layout vocabulary (Row + Table + a \
                         multi-affordance row); every click is a verified turn moving one tally.",
             },
+            GalleryCard {
+                href: "kvstore.html",
+                name: "KV-Store (service cell)",
+                blurb: "A cell publishing a typed interface (put · delete · get). Clicking \
+                        put/del routes the call through the verified DFA before it desugars to \
+                        SetField effects — a real verified turn against the store, the monotone \
+                        version bumping (a rollback is refused; get is a named OFE seam).",
+            },
         ],
     );
     let pgallery = dist.join("index.html");
@@ -386,14 +491,16 @@ fn main() {
     assert!(
         gallery.contains("href=\"counter.html\"")
             && gallery.contains("href=\"inspector.html\"")
-            && gallery.contains("href=\"tally.html\""),
-        "the gallery links to ALL THREE live card pages (the card-picker)"
+            && gallery.contains("href=\"tally.html\"")
+            && gallery.contains("href=\"kvstore.html\""),
+        "the gallery links to ALL FOUR live card pages (the card-picker)"
     );
     assert!(
         gallery.contains("Counter")
             && gallery.contains("Reflective Inspector")
-            && gallery.contains("Tally Board"),
-        "the gallery names all three cards"
+            && gallery.contains("Tally Board")
+            && gallery.contains("KV-Store (service cell)"),
+        "the gallery names all four cards"
     );
 
     eprintln!("deos-view web projection baked (gpui-free):");
@@ -404,6 +511,7 @@ fn main() {
     eprintln!("  LIVE counter page    : {}", plive.display());
     eprintln!("  LIVE inspector page  : {}", plive_insp.display());
     eprintln!("  LIVE tally page      : {}", plive_tally.display());
+    eprintln!("  LIVE kvstore page    : {}", plive_kv.display());
     eprintln!();
     eprintln!("To serve the LIVE deos (a card firing real cap-gated verified turns in a TAB):");
     eprintln!("  1. wasm-pack build wasm --target web --out-dir pkg --release");
