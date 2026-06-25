@@ -226,7 +226,17 @@ backed by these app/organ modules:
 
 - **`factories`** — settlement-cell plan builders (escrow, obligation, bridge
   lock) emitting effect lists that ride `runtime.turn().effects(..)`
-  (`sdk/src/lib.rs:243`).
+  (`sdk/src/lib.rs:243`). Each builder constructs a `SettlementCellPlan` over
+  exactly four surviving verbs — `CreateCellFromFactory`, `SetField`,
+  `Transfer`, `GrantCapability` — with the safety living in the `CellProgram`
+  the factory installs, not in the builder; the resolve verbs (`release_escrow`,
+  `refund_escrow`, `fulfill_obligation`, `slash_obligation`, `finalize_bridge`,
+  `cancel_bridge`) are gated by that program and proved on Lean twins
+  (`Dregg2.Apps.{EscrowFactory,ObligationFactory,BridgeCell}`,
+  `sdk/src/factories.rs:1`). The cap-gated supply mint `factories::mint_supply`
+  (not re-exported at root) emits one `Effect::Mint`, admitted by the executor
+  only for an agent holding a control-grade mint-cap over the issuer well — a
+  self-mint is rejected (`sdk/src/factories.rs:512`, `docs/SUPPLY-MODEL.md`).
 - **`flashwell`** — the flash-well ring builder (zero-duration credit;
   settlement enforced by the well's installed program) (`sdk/src/lib.rs:249`).
 - **`council_seal` + `sealed_governance`** — the threshold council seal (DKG

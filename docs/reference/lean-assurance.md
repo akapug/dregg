@@ -155,6 +155,12 @@ adjacent kernels coincide as *state*, not just commitment), and the game-based r
 to STARK/Fiat-Shamir extractability + sponge-CR binding) (`AssuranceCase.lean:614-642`, pins
 `:684-709`). Floor: FRI/STARK soundness, Poseidon2-CR, ed25519, PostGSTProgress (`:640-642`).
 
+There is no single Lean theorem literally named `lightclient_unfoolable`; the unfoolability
+content is carried by the named theorems above — `unfoolability_guarantee` (the apex aggregation),
+`RecursiveAggregation.light_client_verifies_whole_history` (the whole-history headline), and
+`Crypto.LightClientUC.unfoolable_of_floor` (the game-based reduction). A reader searching for one
+"unfoolability" theorem should read those three.
+
 ## R — the running entry
 
 The five guarantees above are stated over the abstract kernel. `running_entry_sound` (`:763`)
