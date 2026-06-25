@@ -415,6 +415,44 @@ mod macos {
         }
     }
 
+    /// **THE macOS INTENT SINK.** The device-side `startActivity` leg: drive the confined
+    /// runtime's activity manager (`am start`) for an intent the [`crate::AndroidIntentGate`]
+    /// already resolved + cap-admitted. The cap + resolution teeth fire in the gate BEFORE
+    /// this is reached — this is the transport, host-adaptive exactly like the capture +
+    /// input legs (a Linux redroid impl would drive the container's `am`; the
+    /// `RecordingIntentSink` records with no device). A `RefusedNoHandler` / `RefusedByCap`
+    /// / `Ambiguous` intent never reaches this impl, so a cap-denied intent never hits the
+    /// device's `am start` — the no-ambient-`startActivity` property at the transport.
+    impl crate::intentgate::AndroidIntentSink for MacOsEmulatorRuntime {
+        fn start_activity(
+            &mut self,
+            intent: &crate::intentgate::AndroidIntent,
+            _handler: dregg_firmament::CellId,
+        ) -> Result<(), crate::intentgate::IntentError> {
+            use crate::intentgate::IntentError;
+            let adb = self.adb().map_err(|e| match e {
+                RuntimeError::ToolMissing { tool, looked_in } => {
+                    IntentError::ToolMissing { tool, looked_in }
+                }
+                other => IntentError::CommandFailed {
+                    cmd: "adb".into(),
+                    stderr: other.to_string(),
+                },
+            })?;
+            let args = intent.am_start_args();
+            let mut full: Vec<&str> = vec!["-e", "shell"];
+            full.extend(args.iter().map(|s| s.as_str()));
+            let out = Command::new(&adb).args(&full).output()?;
+            if !out.status.success() {
+                return Err(IntentError::CommandFailed {
+                    cmd: format!("adb -e shell {}", args.join(" ")),
+                    stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+                });
+            }
+            Ok(())
+        }
+    }
+
     impl Drop for MacOsEmulatorRuntime {
         fn drop(&mut self) {
             // Tear down the emulator we spawned (best effort).

@@ -402,16 +402,25 @@ mod tests {
 
         // Authorized: a real surface cap → injected.
         let r = gate.deliver(&surface(cell), AndroidInput::Tap { x: 540, y: 1200 });
-        assert!(r.decision.injected(), "a cap over the surface injects the tap");
+        assert!(
+            r.decision.injected(),
+            "a cap over the surface injects the tap"
+        );
         assert_eq!(r.cell, Some(cell));
-        assert!(r.status_line().contains("injected into the confined runtime"));
+        assert!(
+            r.status_line()
+                .contains("injected into the confined runtime")
+        );
         // The device sink actually saw the event.
-        assert_eq!(gate.sink_mut().injected, vec![vec![
-            "input".to_string(),
-            "tap".into(),
-            "540".into(),
-            "1200".into()
-        ]]);
+        assert_eq!(
+            gate.sink_mut().injected,
+            vec![vec![
+                "input".to_string(),
+                "tap".into(),
+                "540".into(),
+                "1200".into()
+            ]]
+        );
 
         // Unauthorized: a cap with NO backing surface (a LOCAL kernel-slot target, not a
         // surface) → refused before the device, because it is not authority over a
@@ -455,9 +464,12 @@ mod tests {
             ..Default::default()
         };
         let mut gate = AndroidInputGate::new(sink, Some(cell));
-        let r = gate.deliver(&surface(cell), AndroidInput::Key {
-            keycode: "KEYCODE_HOME".into(),
-        });
+        let r = gate.deliver(
+            &surface(cell),
+            AndroidInput::Key {
+                keycode: "KEYCODE_HOME".into(),
+            },
+        );
         assert!(!r.decision.refused_by_cap());
         assert!(matches!(r.decision, InputDecision::Failed { .. }));
         assert!(r.status_line().contains("device injection failed"));

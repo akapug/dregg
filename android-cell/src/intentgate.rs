@@ -129,6 +129,34 @@ impl AndroidIntent {
             None => self.action.clone(),
         }
     }
+
+    /// The `am start` argument vector that dispatches this intent into the confined
+    /// runtime — the device-side `startActivity` leg. The activity manager is the
+    /// device's launch tool; these are exactly its `start` flags (`-a` action, `-d`
+    /// data, `-t` MIME, `-c` category). The [`AndroidIntentGate`] runs the cap +
+    /// resolution teeth BEFORE this is ever built, so only a singly-resolved,
+    /// cap-admitted intent reaches it.
+    pub fn am_start_args(&self) -> Vec<String> {
+        let mut args = vec![
+            "am".into(),
+            "start".into(),
+            "-a".into(),
+            self.action.clone(),
+        ];
+        if let Some(d) = &self.data {
+            args.push("-d".into());
+            args.push(d.clone());
+        }
+        if let Some(t) = &self.mime_type {
+            args.push("-t".into());
+            args.push(t.clone());
+        }
+        for c in &self.categories {
+            args.push("-c".into());
+            args.push(c.clone());
+        }
+        args
+    }
 }
 
 /// What a **handler cell** declares it handles — the deos form of an AOSP
@@ -239,6 +267,16 @@ pub enum IntentDecision {
     /// refused at the gate, before any handler is consulted (the same fetch-allowlist
     /// tooth the net gate bites with).
     RefusedByCap { origin: String },
+    /// The intent resolved to one cap-admitted handler, but the device-side dispatch
+    /// (`am start`) itself failed — the transport's own refusal, distinct from the cap +
+    /// resolution teeth (the intent-side analogue of [`crate::InputDecision::Failed`]).
+    /// Only [`AndroidIntentGate::dispatch`] produces this; [`IntentResolver::resolve`]
+    /// stays pure (it never touches a device).
+    DispatchFailed {
+        handler: CellId,
+        label: String,
+        reason: String,
+    },
 }
 
 impl IntentDecision {
@@ -253,6 +291,9 @@ impl IntentDecision {
     }
     pub fn ambiguous(&self) -> bool {
         matches!(self, IntentDecision::Ambiguous { .. })
+    }
+    pub fn dispatch_failed(&self) -> bool {
+        matches!(self, IntentDecision::DispatchFailed { .. })
     }
 }
 
@@ -302,6 +343,13 @@ impl IntentReceipt {
                 h.update(b"\x04refused-by-cap");
                 h.update(origin.as_bytes());
             }
+            IntentDecision::DispatchFailed {
+                handler, reason, ..
+            } => {
+                h.update(b"\x05dispatch-failed");
+                h.update(handler.as_bytes());
+                h.update(reason.as_bytes());
+            }
         }
         *h.finalize().as_bytes()
     }
@@ -324,6 +372,10 @@ impl IntentReceipt {
             ),
             IntentDecision::RefusedByCap { origin } => format!(
                 "android-intent: ✖ {} REFUSED at the gate — the held SurfaceCapability does not authorize the data origin {origin}",
+                self.intent.tag()
+            ),
+            IntentDecision::DispatchFailed { label, reason, .. } => format!(
+                "android-intent: ⚠ {} cap-admitted + resolved to «{label}» but the device dispatch (am start) failed ({reason})",
                 self.intent.tag()
             ),
         }
@@ -412,6 +464,163 @@ impl IntentResolver {
             intent: intent.clone(),
             decision,
             decision_digest,
+        }
+    }
+}
+
+// ===========================================================================
+// THE TRANSPORT LEG — interpose the confined runtime's `startActivity`.
+// ===========================================================================
+
+/// Why a device-side intent dispatch failed (distinct from a cap/no-handler refusal,
+/// which never reaches the device — the intent-side of [`crate::InputError`]).
+#[derive(Debug)]
+pub enum IntentError {
+    /// A required tool (`adb`/`am`) was not found.
+    ToolMissing { tool: String, looked_in: String },
+    /// The device-side `am start` exited non-zero.
+    CommandFailed { cmd: String, stderr: String },
+    /// An I/O error invoking the tool.
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for IntentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IntentError::ToolMissing { tool, looked_in } => {
+                write!(f, "android tool `{tool}` not found (looked in {looked_in})")
+            }
+            IntentError::CommandFailed { cmd, stderr } => write!(f, "`{cmd}` failed: {stderr}"),
+            IntentError::Io(e) => write!(f, "io: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for IntentError {}
+
+impl From<std::io::Error> for IntentError {
+    fn from(e: std::io::Error) -> Self {
+        IntentError::Io(e)
+    }
+}
+
+/// **The device-side intent sink.** A confined runtime an already-gated intent can be
+/// dispatched into (the binder `startActivity` leg). The cap + resolution teeth fire in
+/// [`AndroidIntentGate::dispatch`] BEFORE this is ever called — an impl here is the
+/// transport, not the authority — exactly the [`crate::AndroidInputSink`] discipline.
+pub trait AndroidIntentSink {
+    /// Dispatch one already-resolved, cap-admitted intent into the device, named to the
+    /// resolved `handler` cell (recorded for the audit; the device-side tool is
+    /// `am start`). Returns `Ok(())` on a successful launch, or an error the gate turns
+    /// into [`IntentDecision::DispatchFailed`].
+    fn start_activity(
+        &mut self,
+        intent: &AndroidIntent,
+        handler: CellId,
+    ) -> Result<(), IntentError>;
+}
+
+/// **The host-independent intent stand-in.** A sink with no live device: it RECORDS the
+/// `am_start_args` of every dispatched (gate-admitted) intent without touching a device,
+/// so the gate + receipt + cap + resolution logic test on any node — the intent-side of
+/// [`crate::RecordingInputSink`].
+#[derive(Default)]
+pub struct RecordingIntentSink {
+    /// Every dispatched intent's `(am_start_args, handler)`, in order — the audit trail
+    /// a test asserts on. ONLY gate-admitted (singly-resolved, cap-passed) intents land
+    /// here; a refused/ambiguous intent never reaches the sink.
+    pub dispatched: Vec<(Vec<String>, CellId)>,
+    /// If set, `start_activity` returns this as a `CommandFailed` (to test the
+    /// `DispatchFailed` arm without a device).
+    pub fail_with: Option<String>,
+}
+
+impl AndroidIntentSink for RecordingIntentSink {
+    fn start_activity(
+        &mut self,
+        intent: &AndroidIntent,
+        handler: CellId,
+    ) -> Result<(), IntentError> {
+        if let Some(reason) = &self.fail_with {
+            return Err(IntentError::CommandFailed {
+                cmd: format!("adb shell {}", intent.am_start_args().join(" ")),
+                stderr: reason.clone(),
+            });
+        }
+        self.dispatched.push((intent.am_start_args(), handler));
+        Ok(())
+    }
+}
+
+/// **THE LIVE INTENT GATE** — a [`IntentResolver`] (the cap + spotter decision) welded to
+/// an [`AndroidIntentSink`] (the device transport). This is what interposes a confined
+/// app's `startActivity`: the app fires an intent, the gate decides, and ONLY a
+/// singly-resolved, cap-admitted intent reaches the device's `am start`. A
+/// `RefusedNoHandler` / `RefusedByCap` / `Ambiguous` intent NEVER touches the device —
+/// the no-ambient-`startActivity` property, enforced at the transport, exactly as the
+/// input gate refuses a cap-denied tap before `adb`.
+pub struct AndroidIntentGate<S: AndroidIntentSink> {
+    resolver: IntentResolver,
+    sink: S,
+}
+
+impl<S: AndroidIntentSink> AndroidIntentGate<S> {
+    /// Weld a resolver (the decision) to a sink (the device transport).
+    pub fn new(resolver: IntentResolver, sink: S) -> Self {
+        AndroidIntentGate { resolver, sink }
+    }
+
+    pub fn sink_mut(&mut self) -> &mut S {
+        &mut self.sink
+    }
+
+    pub fn resolver(&self) -> &IntentResolver {
+        &self.resolver
+    }
+
+    /// **DISPATCH ONE INTENT, GATED.** Resolve `intent` against the held `surface` cap +
+    /// the granted handler set and, **iff it resolves to exactly one cap-admitted
+    /// handler**, dispatch it into the device — returning the [`IntentReceipt`].
+    ///
+    /// - `Resolved` ⟹ the device sink is driven (`am start`); on a sink error the receipt
+    ///   becomes [`IntentDecision::DispatchFailed`] (the transport tooth, distinct from
+    ///   cap/resolution).
+    /// - `RefusedNoHandler` / `RefusedByCap` / `Ambiguous` ⟹ **the device is never
+    ///   touched** — the resolution receipt is returned verbatim. Ambiguity in particular
+    ///   is NOT auto-dispatched: it awaits the explicit chooser (no silent default).
+    pub fn dispatch(
+        &mut self,
+        surface: &SurfaceCapability,
+        intent: AndroidIntent,
+    ) -> IntentReceipt {
+        let resolved = self.resolver.resolve(surface, &intent);
+        match &resolved.decision {
+            IntentDecision::Resolved { handler, label } => {
+                let handler = *handler;
+                let label = label.clone();
+                match self.sink.start_activity(&intent, handler) {
+                    Ok(()) => resolved, // the device launched; the Resolved receipt stands.
+                    Err(e) => {
+                        // Cap admitted + resolved, but the device dispatch failed — a
+                        // distinct transport tooth, re-receipted (NOT a cap refusal).
+                        let decision = IntentDecision::DispatchFailed {
+                            handler,
+                            label,
+                            reason: e.to_string(),
+                        };
+                        let decision_digest =
+                            IntentReceipt::digest(self.resolver.cell, &intent, &decision);
+                        IntentReceipt {
+                            cell: self.resolver.cell,
+                            intent,
+                            decision,
+                            decision_digest,
+                        }
+                    }
+                }
+            }
+            // Refused or ambiguous — the device is never touched.
+            _ => resolved,
         }
     }
 }
@@ -612,5 +821,132 @@ mod tests {
         let geo = AndroidIntent::view("a", "geo:0,0?q=cafe");
         assert_eq!(geo.scheme().as_deref(), Some("geo"));
         assert_eq!(geo.web_origin(), None);
+    }
+
+    /// `am_start_args` is the activity-manager `start` argv (action · data · mime · cat).
+    #[test]
+    fn am_start_args_are_the_activity_manager_flags() {
+        let intent = AndroidIntent {
+            action: "android.intent.action.VIEW".into(),
+            data: Some("geo:0,0?q=cafe".into()),
+            mime_type: Some("text/plain".into()),
+            categories: ["android.intent.category.BROWSABLE".to_string()]
+                .into_iter()
+                .collect(),
+        };
+        assert_eq!(
+            intent.am_start_args(),
+            vec![
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.VIEW",
+                "-d",
+                "geo:0,0?q=cafe",
+                "-t",
+                "text/plain",
+                "-c",
+                "android.intent.category.BROWSABLE",
+            ]
+        );
+    }
+
+    /// **THE LIVE-GATE LOAD-BEARING TEST: a singly-resolved cap-admitted intent reaches
+    /// the device (`am start`); a no-handler / cap-refused / ambiguous intent NEVER does.**
+    #[test]
+    fn gate_dispatches_only_a_resolved_intent_to_the_device() {
+        let me = cell_seed(9);
+        let resolver = IntentResolver::new(
+            [maps_handler(), dialer_handler(), browser_handler()],
+            Some(me),
+        );
+        let mut gate = AndroidIntentGate::new(resolver, RecordingIntentSink::default());
+        let cap = web_cap(me, &["https://example.com"]);
+
+        // (a) Resolved → dispatched to the device.
+        let r = gate.dispatch(
+            &cap,
+            AndroidIntent::view("android.intent.action.VIEW", "geo:37,-122?q=cafe"),
+        );
+        assert!(r.decision.resolved());
+        assert_eq!(gate.sink_mut().dispatched.len(), 1, "the geo VIEW launched");
+        assert_eq!(
+            gate.sink_mut().dispatched[0].1,
+            cell_seed(0x21),
+            "dispatched to the Maps handler cell"
+        );
+
+        // (b) No cap-reachable handler → refused, device untouched.
+        let before = gate.sink_mut().dispatched.len();
+        let r = gate.dispatch(
+            &cap,
+            AndroidIntent::view("android.intent.action.SEND", "mailto:x@y.z"),
+        );
+        assert!(r.decision.refused_no_handler());
+        assert_eq!(
+            gate.sink_mut().dispatched.len(),
+            before,
+            "no am start for an unhandleable intent"
+        );
+
+        // (c) Cap-refused web origin → refused before resolution, device untouched.
+        let before = gate.sink_mut().dispatched.len();
+        let r = gate.dispatch(
+            &cap,
+            AndroidIntent::view("android.intent.action.VIEW", "https://tracker.evil.com/x"),
+        );
+        assert!(r.decision.refused_by_cap());
+        assert_eq!(
+            gate.sink_mut().dispatched.len(),
+            before,
+            "no am start for a cap-refused origin"
+        );
+
+        // (d) Ambiguous → awaits the chooser, NOT auto-dispatched.
+        let other_dialer = IntentHandler::new(
+            cell_seed(0x33),
+            "VoIP",
+            IntentFilter::new(["android.intent.action.DIAL"], ["tel"]),
+        );
+        let resolver2 = IntentResolver::new([dialer_handler(), other_dialer], Some(me));
+        let mut gate2 = AndroidIntentGate::new(resolver2, RecordingIntentSink::default());
+        let r = gate2.dispatch(
+            &SurfaceCapability::root(me, AuthRequired::Either),
+            AndroidIntent::view("android.intent.action.DIAL", "tel:+15551234"),
+        );
+        assert!(r.decision.ambiguous());
+        assert!(
+            gate2.sink_mut().dispatched.is_empty(),
+            "an ambiguous intent is never silently auto-dispatched"
+        );
+    }
+
+    /// A resolved + cap-admitted intent whose device dispatch fails is `DispatchFailed`
+    /// (distinct from a cap/no-handler refusal) — cap, resolution, and transport are
+    /// three distinct teeth.
+    #[test]
+    fn dispatch_failure_is_distinct_from_refusal() {
+        let me = cell_seed(9);
+        let resolver = IntentResolver::new([maps_handler()], Some(me));
+        let sink = RecordingIntentSink {
+            fail_with: Some("device offline".into()),
+            ..Default::default()
+        };
+        let mut gate = AndroidIntentGate::new(resolver, sink);
+        let r = gate.dispatch(
+            &SurfaceCapability::root(me, AuthRequired::Either),
+            AndroidIntent::view("android.intent.action.VIEW", "geo:0,0?q=x"),
+        );
+        assert!(!r.decision.refused_by_cap());
+        assert!(!r.decision.refused_no_handler());
+        assert!(r.decision.dispatch_failed());
+        assert!(
+            r.status_line()
+                .contains("device dispatch (am start) failed")
+        );
+        assert_eq!(
+            r.decision_digest,
+            IntentReceipt::digest(Some(me), &r.intent, &r.decision)
+        );
     }
 }
