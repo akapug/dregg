@@ -786,6 +786,10 @@ impl TurnExecutor {
 
             self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
             effects_hashes.push(effect.hash());
+            // Mid-forest yield point: snapshot the live executor state between two
+            // effects when the journal prefix reaches the configured boundary
+            // (no-op unless the umem lane + a yield length are set).
+            self.maybe_umem_yield(ledger, journal);
         }
 
         // Apply permission-changing effects LAST.
@@ -804,6 +808,8 @@ impl TurnExecutor {
 
             self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
             effects_hashes.push(effect.hash());
+            // Mid-forest yield point (permission-effect tail): same checkpoint.
+            self.maybe_umem_yield(ledger, journal);
         }
 
         // Update proved_state based on authorization type and fields touched.

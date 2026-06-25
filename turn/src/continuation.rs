@@ -41,23 +41,35 @@
 //! is witnessed: the resumed post equals the run-straight-through post, and the discipline
 //! holds across the cut.
 //!
-//! It is NOT yet wired to a mid-forest executor checkpoint. The executor's journal is
-//! whole-turn (`crate::umem::emit_trace` re-reads the journal AFTER the turn commits),
-//! so capturing a continuation from a turn paused *between two of its effects* needs the
-//! one seam named below.
+//! ## THE MID-FOREST CHECKPOINT — LANDED (`yield_point`)
 //!
-//! ## THE SEAM — `mid-forest checkpoint`
+//! The executor now exposes a `yield_point` in its depth-first effect-application loop
+//! (`TurnExecutor::maybe_umem_yield`, called from `executor/execute_tree.rs` after each
+//! effect appends to the journal): when armed at a journal-prefix length
+//! (`TurnExecutor::set_umem_yield_at`), the LIVE forest walk snapshots
+//! `project_executor_state(ledger)` BETWEEN two effects into `last_umem_yield` — the
+//! genuine intermediate state of a turn paused mid-flight. [`Continuation::from_yield`]
+//! then BINDS that live boundary to the committed Blum trace: it admits the snapshot as a
+//! yield boundary only if it equals `fold(pre, ops[..cut])` for some cut (the journal-prefix
+//! snapshot IS the trace-prefix fold — the Rust shadow of
+//! `Dregg2/Exec/Continuation.midturn_split`), then suspends there. `from_yield` REFUSES a
+//! snapshot no trace prefix reproduces, so a foreign / spliced boundary cannot masquerade
+//! as a mid-turn yield of this turn.
 //!
-//! To capture a continuation from the LIVE executor mid-flight (rather than from a trace
-//! cut, as this module proves), the executor must expose a checkpoint between two effects
-//! of a running call-forest: snapshot the journal-so-far as a `UProjection` (it already
-//! can, via `project_executor_state` + the prefix of the journal), emit the prefix ops,
-//! and hand the rest of the forest forward as the continuation's "remaining work". The
-//! hook would live next to `crate::executor::execute`'s forest walk (`executor/execute.rs`,
-//! the depth-first effect application loop) — a `yield_point` that returns a
-//! `Continuation` instead of completing. Until that hook exists, a continuation is
-//! captured from a completed turn's trace (this module) — which is sufficient to PROVE the
-//! round-trip is sound, and to carry promise-resolution intermediate state across the pipe.
+//! ## THE RECEIPT / ATOMICITY BOUNDARY (honest, not papered)
+//!
+//! The yield is an OBSERVATION: it never short-circuits the walk and never emits a receipt.
+//! A turn is all-or-nothing — the executor commits the WHOLE forest or rolls it back via the
+//! journal, and the receipt is emitted only at whole-turn completion. So the captured
+//! mid-forest boundary is sound as a REPRESENTATION of mid-flight state ("this prefix, to be
+//! completed by the rest of THIS turn"), NOT as an independently committable state: if the
+//! remaining forest would have failed (budget / conservation / a later precondition),
+//! straight-through execution ROLLS BACK the whole turn, and the prefix boundary is a state
+//! the chain never commits. Resuming therefore re-drives the remainder so the commit/rollback
+//! decision still spans the whole turn. `midturn_split` proves exactly the STATE-fold half of
+//! this — the journal-prefix snapshot + forward-the-rest reaches the same post as running
+//! straight through — and nothing about committing at the cut. This is the precise invariant,
+//! named where it lives rather than waved away.
 
 use serde::{Deserialize, Serialize};
 
@@ -158,6 +170,59 @@ impl Continuation {
             remaining,
             consumed: cut,
         }
+    }
+
+    /// **MID-FOREST YIELD CAPTURE** — build a continuation from a LIVE mid-flight executor
+    /// snapshot (the boundary the executor's `yield_point` captured BETWEEN two effects)
+    /// plus the whole-turn Blum trace `(pre, ops)` the bridge emitted after commit.
+    ///
+    /// This is the seam `continuation.rs`'s banner named ("THE SEAM — mid-forest
+    /// checkpoint"): the executor captures the genuine intermediate projection while the
+    /// forest is mid-flight (`TurnExecutor::maybe_umem_yield`); here we BIND that live
+    /// boundary to the committed trace by finding the trace prefix whose fold reproduces it
+    /// EXACTLY, then suspend there.
+    ///
+    /// The bind is the soundness gate: a live snapshot is admitted as a yield boundary ONLY
+    /// if it equals `fold(pre, ops[..cut])` for some `cut` (the journal-prefix snapshot ==
+    /// the trace-prefix fold — the Rust shadow of `Dregg2/Exec/Continuation.midturn_split`).
+    /// If NO trace prefix reproduces the live snapshot, the snapshot does not belong to THIS
+    /// trace and capture is refused fail-closed (`None`) — a foreign / spliced boundary
+    /// cannot masquerade as a mid-turn yield of this turn.
+    ///
+    /// The journal-prefix length and the trace-op index do NOT coincide 1:1 (the trace
+    /// emitter expands `CreateCell` into per-plane ops and appends synthesized diff ops), so
+    /// the cut is FOUND by folding forward and comparing — not assumed equal to the journal
+    /// length. On success, the resumed continuation reaches the executor's post-state
+    /// (`yield_resume_sound`), proven by [`Self::resume`] returning `fold(pre, ops) == post`.
+    pub fn from_yield(
+        pre: &UProjection,
+        ops: &[UmemOp],
+        live_snapshot: &UProjection,
+    ) -> Option<Self> {
+        // Walk the trace, folding one op at a time; the cut is the first prefix length whose
+        // running fold EQUALS the live mid-flight snapshot. `cut == 0` (pre itself) and
+        // `cut == ops.len()` (the post) are both admissible boundaries.
+        let mut running = pre.clone();
+        if &running == live_snapshot {
+            return Some(Continuation::suspend(pre, ops, 0));
+        }
+        for (i, op) in ops.iter().enumerate() {
+            if let UmemKind::Write = op.kind {
+                match &op.val {
+                    Some(v) => {
+                        running.insert(op.key.clone(), v.clone());
+                    }
+                    None => {
+                        running.remove(&op.key);
+                    }
+                }
+            }
+            if &running == live_snapshot {
+                return Some(Continuation::suspend(pre, ops, i + 1));
+            }
+        }
+        // No trace prefix reproduces the live snapshot: it is not a boundary of THIS trace.
+        None
     }
 
     /// The captured intermediate umem as a `UProjection` (rebuilt from the wire list).

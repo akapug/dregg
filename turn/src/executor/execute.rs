@@ -131,6 +131,64 @@ impl TurnExecutor {
         )
     }
 
+    /// THE MID-FOREST YIELD POINT — checkpoint BETWEEN two effects of an in-flight turn.
+    ///
+    /// Called from the depth-first effect-application loop (`execute_tree`) right AFTER an
+    /// effect appends to the journal. When [`Self::umem_yield_at`] names a journal-prefix
+    /// length `k` and the live journal has just reached `k` entries (and nothing was
+    /// captured yet), this snapshots `project_executor_state(ledger)` — the GENUINE
+    /// mid-flight executor state, between two effects — into [`Self::last_umem_yield`].
+    ///
+    /// It is recursion-gated by [`Self::umem_witness_enabled`] (no work when the umem lane
+    /// is off — the live proving path is untouched) and is an OBSERVATION only: it never
+    /// changes the walk, never short-circuits, never emits a receipt. The turn still
+    /// commits-or-rolls-back as a whole (the atomicity / receipt boundary stays whole-turn;
+    /// the captured boundary is "this prefix, to be completed by the rest of THIS turn" —
+    /// see `crate::continuation`). The FIRST crossing wins: a `>=` test with a once-guard
+    /// (the `is_none` check) so a deeper recursion that pushes more entries does not clobber
+    /// the boundary captured at exactly `k`.
+    pub(crate) fn maybe_umem_yield(&self, ledger: &Ledger, journal: &LedgerJournal) {
+        if !self
+            .umem_witness_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
+        let k = self
+            .umem_yield_at
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if k == u64::MAX || (journal.entries().len() as u64) < k {
+            return;
+        }
+        let mut slot = self.last_umem_yield.lock().unwrap();
+        if slot.is_none() {
+            *slot = Some(self.umem_snapshot(ledger));
+        }
+    }
+
+    /// Arm the mid-forest yield point at a journal-prefix length `k` (the boundary BETWEEN
+    /// two effects at which the live forest walk snapshots executor state). Pass `None` to
+    /// disarm. The yield only fires when [`Self::umem_witness_enabled`] is also set.
+    pub fn set_umem_yield_at(&self, k: Option<u64>) {
+        self.umem_yield_at
+            .store(k.unwrap_or(u64::MAX), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Build a [`crate::continuation::Continuation`] from the most recent mid-forest yield.
+    ///
+    /// Pairs the live mid-flight snapshot ([`Self::last_umem_yield`], captured BETWEEN two
+    /// effects by [`Self::maybe_umem_yield`]) with the committed whole-turn Blum trace
+    /// ([`Self::last_umem_witness`]) and binds them via
+    /// [`crate::continuation::Continuation::from_yield`]: the live boundary must equal a
+    /// trace-prefix fold or capture is refused. Returns `None` when no yield fired, the umem
+    /// witness is absent/errored, or the snapshot does not bind to the trace.
+    pub fn capture_yielded_continuation(&self) -> Option<crate::continuation::Continuation> {
+        let live = self.last_umem_yield.lock().unwrap().clone()?;
+        let guard = self.last_umem_witness.lock().unwrap();
+        let witness = guard.as_ref()?.as_ref().ok()?;
+        crate::continuation::Continuation::from_yield(&witness.pre, &witness.ops, &live)
+    }
+
     /// Execute a turn against a ledger, returning the result.
     ///
     /// This is the main entry point. The executor:
@@ -936,6 +994,9 @@ impl TurnExecutor {
             .umem_witness_enabled
             .load(std::sync::atomic::Ordering::Relaxed)
         {
+            // A fresh forest window: discard any mid-forest yield captured by a prior
+            // turn so this turn's yield boundary (if `umem_yield_at` is set) is its own.
+            *self.last_umem_yield.lock().unwrap() = None;
             Some(self.umem_snapshot(ledger))
         } else {
             None

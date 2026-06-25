@@ -8,6 +8,23 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## mid-forest `yield_point` LANDED; promise-pipelining lift of the live yield is the named follow-up (2026-06-25)
+- WHAT: the continuations lane's "THE SEAM — mid-forest checkpoint" is CLOSED. `TurnExecutor::maybe_umem_yield`
+  (called from `executor/execute_tree.rs` after each effect appends to the journal) snapshots
+  `project_executor_state(ledger)` LIVE between two effects when armed via `set_umem_yield_at`; the snapshot lands in
+  `last_umem_yield`. `Continuation::from_yield` BINDS the live boundary to the committed Blum trace (admits only a
+  snapshot equal to a trace-prefix fold; refuses foreign). Lean twin `Dregg2/Exec/Continuation.lean`:
+  `midturn_split`/`yield_resume_sound`/`resumed_tail_disciplined`, 7 keystones `#assert_all_clean`. Tests:
+  `turn/tests/mid_forest_yield_point.rs` (4 green). Banner in `turn/src/continuation.rs` rewritten LANDED + the
+  receipt/atomicity boundary named precisely (yield is observation-only; commit/rollback stays whole-turn).
+- THE NAMED INVARIANT (not a hole, by design): the captured mid-forest boundary is a REPRESENTATION of mid-flight
+  state, NOT independently committable — a turn is all-or-nothing, so if the remaining forest would fail, the
+  prefix boundary is a state the chain never commits. `midturn_split` proves only the STATE-fold half.
+- CLOSURE SHAPE (the forward lane): wire the live yield into the partial-turn/promise EFFECT vocabulary
+  (project-partial-turn-promises) — a `yield_point` that RETURNS a `Continuation` to a promise pipe (CapTP),
+  resumed when the dependency lands, so promise pipelining inherits light-client unfoolability. The state half is
+  proven; the lift is WIRE (ConditionalBatch ↔ the live yield), not new foundation.
+
 ## Touch UI (graphideOS shape) LANDED as a bake; the live-on-Android frame is the named follow-up (2026-06-25)
 The touch-adapted deos UI shipped: `starbridge-v2/src/touch.rs` (`TouchShell`) — the bottom-bar five-mode
 switch (Inhabit/Author/Dev/Inspect/Operate via gpui-component `TabBar`), the tappable cell garden (reusing
