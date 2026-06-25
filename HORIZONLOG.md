@@ -37,11 +37,16 @@ reason.)*
   alternatives attributed you-vs-co-author (`author_label`), a RESOLVED receipt row (the resolution patch id = the turn's
   receipt, `last_resolution`). New bake `--render-doc-collab` drives the whole flow on one large editor window + asserts the
   boundary moves, the conflict is held off-heap, and resolve publishes (height grows, receipt lands, boundary moves).
-- NAMED TAILS (closure shape): (a) the desktop still commits prose to FIELDS (`DOC_TEXT_BASE`) via `edit_doc`; the
-  `DocHeapCell` umem boundary is surfaced as a DERIVED witness, not yet the persisted commitment target — closure = route
-  `edit_doc`'s persist through the umem-heap (`set_heap`/`reseal_heap_root`) so the displayed boundary IS the committed one.
-  (b) the live branch editor re-seeds only on creation; a programmatic diverge after the widget exists needs a `branch_resync`
-  (mirror of `doc_resync`) — closure = add it if a flow edits the branch out-of-band while its editor is open.
+- NAMED TAILS (closure shape): (a) CLOSED 2026-06-25 (`83352a35d`) — `edit_doc` now persists the document INTO the cell's
+  umem-heap (`commit_doc_to_umem_heap` → `DocHeapCell::from_graph_with_text` → `World::set_cell_heap`, an out-of-band
+  `set_heap`/`reseal_heap_root`, no kernel effect), so the cell's committed `heap_root` IS the document commitment (boundary ==
+  commitment, surfaced via `live_doc_boundary`); prose re-seeds on reopen from `dregg_doc::COLL_TEXT` (the one-way BLAKE3
+  projection stays recoverable). Conflict/stitch/resolve ride the same heap. RESIDUAL (durable-image seam): `set_cell_heap`
+  fail-fasts on a durable image whose doc cell a committed turn already touched (the genesis-mirror-after-turn guard) — the
+  demo world is ephemeral so it passes, but a DURABLE runtime heap write awaits an ordered heap effect (no `Effect::SetHeap`
+  exists; mirrors the `set_cell_program` runtime-vs-genesis tension). (b) the live branch editor re-seeds only on creation; a
+  programmatic diverge after the widget exists needs a `branch_resync` (mirror of `doc_resync`) — closure = add it if a flow
+  edits the branch out-of-band while its editor is open.
 
   (workspace member). Slice 3 = `gate_effect_set`/`gate_auth` over the PROVEN `is_facet_attenuation`/`is_attenuation`;
   Slice 1 = `witness_receipt` → real chained `dregg_turn::TurnReceipt` (v3 hash binds the chain link); Slice 1's payoff =
