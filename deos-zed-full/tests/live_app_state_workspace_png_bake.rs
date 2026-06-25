@@ -27,7 +27,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
-use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+use gpui::{AppContext, BorrowAppContext, HeadlessAppContext, PlatformTextSystem, px, size};
 use gpui_wgpu::CosmicTextSystem;
 
 use fs::Fs;
@@ -71,9 +71,15 @@ fn bake_the_live_app_state_workspace_png() -> Result<()> {
     cx.allow_parking();
 
     // 1. Workspace + panel globals (settings store FIRST, then the panel inits).
+    //    Use the REAL `settings::init` (loads bundled `default_settings()`), NOT
+    //    `SettingsStore::test`, so panel default dock sides + chrome resolve from
+    //    the production defaults. Then a tiny user-settings override docks the
+    //    project panel LEFT (the fork's `default.json` defaults it `right`).
     cx.update(|cx| {
-        let settings_store = SettingsStore::test(cx);
-        cx.set_global(settings_store);
+        settings::init(cx);
+        cx.update_global(|store: &mut SettingsStore, cx| {
+            let _ = store.set_user_settings(r#"{ "project_panel": { "dock": "left" } }"#, cx);
+        });
         boot::install_workspace_globals(cx);
     });
 
@@ -93,6 +99,12 @@ fn bake_the_live_app_state_workspace_png() -> Result<()> {
     //    global, exactly as the live cockpit's `ZedWindow::open` does.
     let fs: Arc<dyn Fs> = fzfs.clone();
     let app_state = cx.update(|cx| boot::build_live_app_state(fs.clone(), cx));
+
+    // 3b. Wire the FULL workspace chrome BEFORE any Workspace is created — this
+    //     registers `title_bar::init` + the per-crate inits + the
+    //     `observe_new(Workspace)` hook that installs the status bar, the pane
+    //     toolbar, and kicks the default-panel load. Must precede `Workspace::new`.
+    cx.update(|cx| boot::wire_full_workspace_ui(app_state.clone(), cx));
 
     // 4. A real Project over the cell-fs, using the live AppState's parts.
     let project = cx.update(|cx| {
@@ -143,21 +155,36 @@ fn bake_the_live_app_state_workspace_png() -> Result<()> {
     let workspace = window.root(&mut cx)?;
     cx.run_until_parked();
 
-    // 7. Dock the project / outline / terminal panels.
+    // 7. The default panels (project LEFT, outline/git RIGHT, terminal BOTTOM)
+    //    were ALREADY kicked by `wire_full_workspace_ui`'s `observe_new(Workspace)`
+    //    hook when `Workspace::new` ran above — pump the executor so those
+    //    `Panel::load` futures resolve and `add_panel` docks them.
     {
-        let weak_ws = workspace.downgrade();
         let done = Rc::new(RefCell::new(false));
-        let d2 = done.clone();
-        cx.update_window(window.into(), |_, window, cx| {
-            window
-                .spawn(cx, async move |cx| {
-                    let _ = boot::load_firmament_panels(weak_ws, cx.clone()).await;
-                    *d2.borrow_mut() = true;
-                })
-                .detach();
-        })?;
-        pump(&cx, &done, 4000);
+        // The panel-load future has no completion flag we own; pump a fixed budget
+        // so the spawned `load_full_default_panels` join resolves.
+        pump(&cx, &done, 600);
     }
+
+    // 7b. Reveal every loaded panel by TYPE — `open_panel::<T>` finds whichever
+    //     dock holds the panel, activates it, and opens that dock. Robust against
+    //     which side each panel docked on (project LEFT, outline/git RIGHT,
+    //     terminal BOTTOM), unlike `toggle_dock` by position (which finds nothing
+    //     if a dock's panel hadn't loaded yet). This shows the project tree on the
+    //     left, the terminal at the bottom, and the outline/git on the right.
+    cx.update_window(window.into(), |_, window, cx| {
+        workspace.update(cx, |ws, cx| {
+            use git_ui::git_panel::GitPanel;
+            use outline_panel::OutlinePanel;
+            use project_panel::ProjectPanel;
+            use terminal_view::terminal_panel::TerminalPanel;
+            ws.open_panel::<ProjectPanel>(window, cx);
+            ws.open_panel::<TerminalPanel>(window, cx);
+            ws.open_panel::<OutlinePanel>(window, cx);
+            ws.open_panel::<GitPanel>(window, cx);
+        });
+    })?;
+    cx.run_until_parked();
 
     // 8. Open a cell as an editor buffer (so the center pane shows real content).
     {
