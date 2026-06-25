@@ -68,7 +68,7 @@ gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", o
 # boot (the cockpit's `Input`/`Button`/list globals). VENDORED fork (same rev as
 # starbridge-v2 pins) so cargo resolves ONE gpui-component instance. Default
 # features OFF (no tree-sitter grammars), matching starbridge-v2's dep.
-gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false, optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
 
 # THE EDITOR PANE BACKEND — deos-zed's gpui-free `FirmamentFs`/`OwnedSpine` (the
 # `firmament` feature, NOT `gui`): a file IS a cell, a save IS a real cap-gated

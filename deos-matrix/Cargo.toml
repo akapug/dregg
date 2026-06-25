@@ -105,8 +105,8 @@ url = "2"
 # the wasm build never enables `gui`, so this graph is absent from wasm32.
 gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
 gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "x11", "wayland", "runtime_shaders"], optional = true }
-gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false, optional = true }
-gpui-component-assets = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
+gpui-component-assets = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", optional = true }
 
 # The wgpu renderer leaf, pulled DIRECTLY only for the offscreen screenshot bake
 # (the `CosmicTextSystem` platform text system + the surfaceless renderer behind
