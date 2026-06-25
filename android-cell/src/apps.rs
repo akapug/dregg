@@ -33,8 +33,9 @@ use dregg_cell::FactoryDescriptor;
 use dregg_firmament::CellId;
 
 use crate::appfactory::AndroidManifest;
-use crate::contentgate::{ContentProvider, ContentResolver, ProviderGrant};
 use crate::appfactory::AndroidPermission;
+use crate::broadcastgate::{BroadcastReceiver, BroadcastRouter};
+use crate::contentgate::{ContentProvider, ContentResolver, ProviderGrant};
 use crate::intentgate::{IntentHandler, IntentResolver};
 use crate::organgate::{ServiceGrant, ServiceOrgan, ServiceResolver, SystemService};
 use crate::permgate::PermBox;
@@ -190,6 +191,38 @@ impl InstalledApps {
         ServiceResolver::new(organs, Some(launching_cell))
     }
 
+    /// **Build the [`BroadcastRouter`] for `sending_cell`** over only the installed apps it
+    /// holds a cap to (`granted`). Each published `<receiver>` filter becomes a
+    /// [`BroadcastReceiver`] named to the publishing app's cell — so an app receives a
+    /// broadcast iff its manifest declared the `<receiver>` filter AND `sending_cell` holds a
+    /// cap to it. This is the install↔broadcast loop, sourced from the real installed-app set:
+    /// a broadcast fans out over a BOUNDED neighborhood, not the device's global receiver
+    /// table (the no-ambient-global-broadcast property). The receivers carry no per-receiver
+    /// permission requirement here (the cap to reach the app IS the authority); the richer
+    /// `<receiver android:permission>` / `sendBroadcast(receiverPermission)` legs are set
+    /// directly on a [`BroadcastReceiver`] / [`crate::broadcastgate::Broadcast`].
+    pub fn broadcast_router_for(
+        &self,
+        sending_cell: CellId,
+        granted: &BTreeSet<CellId>,
+    ) -> BroadcastRouter {
+        let receivers = self
+            .apps
+            .iter()
+            .filter(|a| granted.contains(&a.cell))
+            .flat_map(|a| {
+                let cell = a.cell;
+                let label = a.manifest.package.clone();
+                a.manifest
+                    .broadcast_receivers
+                    .iter()
+                    .cloned()
+                    .map(move |filter| BroadcastReceiver::new(cell, label.clone(), filter))
+            })
+            .collect::<Vec<_>>();
+        BroadcastRouter::new(receivers, Some(sending_cell))
+    }
+
     /// **Build the [`PermBox`] for an installed `cell`** — the cap-badge + hand-over surface
     /// over the app's own manifest (its declared permissions are the only grantable ones), with
     /// `principal` the granting identity holding `principal_holds`. The install↔permission loop:
@@ -251,7 +284,11 @@ mod tests {
         (
             cell_seed(0x53),
             AndroidManifest::new("com.android.contacts", [AndroidPermission::ReadContacts])
-                .with_content_authorities(["com.android.contacts"]),
+                .with_content_authorities(["com.android.contacts"])
+                .with_broadcast_receivers([IntentFilter::new(
+                    ["com.example.SYNC"],
+                    Vec::<String>::new(),
+                )]),
         )
     }
 
@@ -430,6 +467,36 @@ mod tests {
         // A read-only grant does not amplify to a state-changing location call.
         let upd = ServiceOp::resolve(SystemService::Location, "requestLocationUpdates");
         assert!(resolver.resolve(&upd).decision.refused_read_only());
+    }
+
+    /// The install↔broadcast loop: a broadcast fans out over only the granted apps that
+    /// published a matching `<receiver>` filter; an ungranted app is never a candidate (the
+    /// no-ambient-global-broadcast property, sourced from the real installed-app set).
+    #[test]
+    fn broadcast_router_ranges_only_over_the_granted_neighborhood() {
+        use crate::broadcastgate::{Broadcast, Sender};
+
+        let apps = registry();
+        let me = cell_seed(9);
+        let (contacts_cell, _) = contacts();
+
+        // Ungranted: the contacts app's SYNC receiver is unreachable — fan-out delivers to
+        // nothing.
+        let none: BTreeSet<CellId> = BTreeSet::new();
+        let r0 = apps.broadcast_router_for(me, &none);
+        let bc = Broadcast::action("com.example.SYNC");
+        let sender = Sender::app(me, []);
+        assert!(
+            r0.send(&sender, &bc).decision.delivered_to().is_empty(),
+            "an ungranted receiver never receives (no ambient broadcast)"
+        );
+
+        // Granted: the contacts app's SYNC receiver is now a cap-reachable delivery target.
+        let granted: BTreeSet<CellId> = [contacts_cell].into_iter().collect();
+        let r1 = apps.broadcast_router_for(me, &granted);
+        let receipt = r1.send(&sender, &bc);
+        assert!(receipt.decision.fanned_out());
+        assert_eq!(receipt.decision.delivered_to(), vec![contacts_cell]);
     }
 
     /// The install↔permission loop: an installed app's manifest is exactly what the cap-badge

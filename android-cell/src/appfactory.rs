@@ -271,6 +271,13 @@ pub struct AndroidManifest {
     /// (closing the install ↔ content loop, exactly as `intent_filters` closes the
     /// intent loop). A `BTreeSet` so duplicates collapse and the order is stable.
     pub content_authorities: BTreeSet<String>,
+    /// The `<receiver><intent-filter>` components this app publishes — what makes it a
+    /// reachable broadcast receiver in another cell's
+    /// [`crate::broadcastgate::BroadcastRouter`] (closing the install ↔ broadcast loop,
+    /// exactly as `intent_filters` closes the intent loop). A broadcast fans out to one of
+    /// these only if its manifest declared the `<receiver>` filter AND the sending cell holds
+    /// a cap to it.
+    pub broadcast_receivers: Vec<IntentFilter>,
     /// Whether the app runs as a sovereign cell (its own root authority) or hosted under
     /// a parent (the common confined-foreign-app case).
     pub sovereign: bool,
@@ -288,6 +295,7 @@ impl AndroidManifest {
             uses_permissions: permissions.into_iter().collect(),
             intent_filters: Vec::new(),
             content_authorities: BTreeSet::new(),
+            broadcast_receivers: Vec::new(),
             sovereign: false,
         }
     }
@@ -295,6 +303,17 @@ impl AndroidManifest {
     /// Publish the component intent-filters (builder).
     pub fn with_intent_filters(mut self, filters: impl IntoIterator<Item = IntentFilter>) -> Self {
         self.intent_filters = filters.into_iter().collect();
+        self
+    }
+
+    /// Publish the `<receiver>` broadcast-receiver filters (builder) — what makes this app a
+    /// reachable broadcast receiver in a granted cell's
+    /// [`crate::broadcastgate::BroadcastRouter`].
+    pub fn with_broadcast_receivers(
+        mut self,
+        filters: impl IntoIterator<Item = IntentFilter>,
+    ) -> Self {
+        self.broadcast_receivers = filters.into_iter().collect();
         self
     }
 
