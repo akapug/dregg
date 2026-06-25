@@ -40,12 +40,22 @@
 //! it. The deep per-syscall I/O gate (sensor/intent at HAL/binder granularity) remains
 //! the named frontier on BOTH hosts; the shallow net gate is real today (§5).
 
+pub mod checkpoint;
 pub mod frame;
+pub mod input;
 pub mod netgate;
 pub mod present;
 pub mod runtime;
 
+pub use checkpoint::{
+    ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
+    diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold,
+};
 pub use frame::{ANDROID_SCREENCAP_HEADER_LEN, ScreencapError, screencap_to_rgba};
+pub use input::{
+    AndroidInput, AndroidInputGate, AndroidInputSink, InputDecision, InputError, InputReceipt,
+    RecordingInputSink, cap_admits_input,
+};
 pub use netgate::{AndroidNetGate, IoDecision, IoReceipt};
 pub use present::{AndroidPresentation, present_android_frame};
 pub use runtime::{
