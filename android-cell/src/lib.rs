@@ -49,10 +49,11 @@ pub mod input;
 pub mod intentgate;
 pub mod netgate;
 pub mod organgate;
+pub mod permgate;
 pub mod present;
 pub mod runtime;
 
-pub use appfactory::{AndroidManifest, AndroidPermission};
+pub use appfactory::{AndroidManifest, AndroidPermission, ProtectionLevel};
 pub use apps::{InstalledApp, InstalledApps};
 pub use checkpoint::{
     ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
@@ -75,6 +76,9 @@ pub use netgate::{AndroidNetGate, IoDecision, IoReceipt};
 pub use organgate::{
     ServiceCallKind, ServiceDecision, ServiceGrant, ServiceOp, ServiceOrgan, ServiceReceipt,
     ServiceResolver, SystemService,
+};
+pub use permgate::{
+    BadgeReason, BadgeState, CapBadge, CapBadgeSet, PermBox, PermDecision, PermReceipt,
 };
 pub use present::{AndroidPresentation, present_android_frame};
 pub use runtime::{

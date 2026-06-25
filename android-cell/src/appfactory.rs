@@ -112,6 +112,48 @@ impl AndroidPermission {
         }
     }
 
+    /// **The AOSP protection level** — the faithful classification that decides whether
+    /// *declaring* a permission suffices (a `Normal` permission is auto-granted at install,
+    /// no dialog) or whether it needs an explicit runtime grant (a `Dangerous` / `Signature`
+    /// permission is declared-but-not-held until the user/system hands it over). This is the
+    /// load-bearing faithfulness the [`crate::permgate`] cap-badge layer renders: a `Normal`
+    /// badge lights at install, a `Dangerous` badge stays dim until the receipted hand-over.
+    ///
+    /// An [`Other`](AndroidPermission::Other) (custom) permission is **fail-closed** to
+    /// `Dangerous` — AOSP defaults an unspecified custom permission to `normal`, but graphideOS
+    /// refuses to auto-hold an unrecognised authority: it requires an explicit receipted
+    /// hand-over (the same fail-closed-toward-more-authority stance `organgate` takes for an
+    /// unknown method).
+    pub fn protection_level(&self) -> ProtectionLevel {
+        match self {
+            // INTERNET is a `normal` permission — auto-granted at install, never a dialog.
+            AndroidPermission::Internet => ProtectionLevel::Normal,
+            // The sensor/storage/contacts permissions are AOSP `dangerous` — runtime-granted.
+            AndroidPermission::AccessFineLocation
+            | AndroidPermission::Camera
+            | AndroidPermission::RecordAudio
+            | AndroidPermission::ReadContacts
+            | AndroidPermission::ReadExternalStorage
+            | AndroidPermission::WriteExternalStorage => ProtectionLevel::Dangerous,
+            // A custom permission fails closed to `dangerous` (needs an explicit hand-over).
+            AndroidPermission::Other(_) => ProtectionLevel::Dangerous,
+        }
+    }
+
+    /// The standard roster of named permissions (sans the `Other` long tail) — the full set a
+    /// cap-badge surface lights/dims over, before unioning an app's declared custom permissions.
+    pub fn all_standard() -> Vec<AndroidPermission> {
+        vec![
+            AndroidPermission::Internet,
+            AndroidPermission::AccessFineLocation,
+            AndroidPermission::Camera,
+            AndroidPermission::RecordAudio,
+            AndroidPermission::ReadContacts,
+            AndroidPermission::ReadExternalStorage,
+            AndroidPermission::WriteExternalStorage,
+        ]
+    }
+
     /// **The permission → cap-template map.** Each declared permission becomes ONE typed
     /// [`CapTemplate`] in the factory descriptor — the authority the minted cell is born
     /// holding. The `target` types the resource (network is `Any`-peer, narrowed by the
@@ -159,6 +201,34 @@ impl AndroidPermission {
                 attenuatable: false,
             },
         }
+    }
+}
+
+/// **The AOSP permission protection level** — `normal` (auto-granted at install, no dialog),
+/// `dangerous` (runtime-granted: the app must explicitly request it and the user grant it), or
+/// `signature` (granted only to an app signed with the declaring cert). The faithful split the
+/// [`crate::permgate`] cap-badge layer reforges: a `Normal` permission's badge lights at
+/// install; a `Dangerous`/`Signature` permission's badge stays dim until a receipted hand-over
+/// turn (the deos form of the runtime dialog).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProtectionLevel {
+    /// Auto-granted at install — declaring it in the manifest is enough (no dialog, no
+    /// hand-over). The badge lights the moment the cell is minted.
+    Normal,
+    /// Runtime-granted — declared in the manifest but NOT held until an explicit hand-over.
+    /// The badge stays dim until the [`crate::permgate`] ceremony lights it.
+    Dangerous,
+    /// Signature-protected — granted only under the device/signing authority. Treated like
+    /// `Dangerous` by the badge layer (declared-but-dim until the authority hands it over);
+    /// the AOSP signature condition is the granter's held-authority check.
+    Signature,
+}
+
+impl ProtectionLevel {
+    /// Is this permission held the moment the app is installed (a `Normal` permission), with no
+    /// runtime hand-over needed? `Dangerous`/`Signature` permissions are NOT auto-held.
+    pub fn held_at_install(&self) -> bool {
+        matches!(self, ProtectionLevel::Normal)
     }
 }
 
