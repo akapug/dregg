@@ -47,6 +47,22 @@ THEN uncomment the re-add block (`starbridge-v2/Cargo.toml`), wire `ZedFullPane`
 real `client::Client`/`session::Session`/`UserStore`/`WorkspaceStore`/`LanguageRegistry`/`NodeRuntime`,
 `set_global`'d), fold `zed-full` into `desktop`, retire `desktop-zed-full`, and bake Dev showing the full Zed.
 (BLOCKER 2 unicode-width already CLOSED — `dregg-tui` extracted, commit `678d47ced`.)
+UPDATE 2026-06-24 (`9f339c98b`): the live-cockpit `AppState` MOUNT SEAM is CLOSED. `deos_zed_full::boot::
+build_live_app_state` builds a genuine non-test `workspace::AppState` (real `Client` over `RealSystemClock`
++ `HttpClientWithUrl`/`BlockedHttpClient`; `Session` over the real `db::AppDatabase` — `ZED_STATELESS` →
+in-mem fallback; real `LanguageRegistry`/`UserStore`/`WorkspaceStore`; `NodeRuntime::unavailable`) +
+`AppState::set_global`. starbridge-v2 gets the WINDOW-ABLE API `ZedWindow::open(id, root, files, window, cx)
+-> ZedWindowHandle{pane: ZedFullPane (CockpitSurface), project}` — each call an independent Zed window (own
+Workspace + own FirmamentZedFs ledger), so the desktop hosts ONE or MANY. VERIFIED: `deos-zed-full[full-zed]`
+green + new bake `tests/live_app_state_workspace_png_bake.rs` PASSES (a REAL Zed Workspace from the PRODUCTION
+AppState renders the file tree proj/{src,lib.rs,main.rs} + an open editor over a cell, 3600x2200 PNG).
+REMAINING SEAM (UNCHANGED, fork-gated): the `deos-zed-full` dep + `zed-full`/`zed-full-pane` features stay
+COMMENTED in `starbridge-v2/Cargo.toml` — merely declaring the dep re-injects `sqlez → libsqlite3-sys 0.30`
+into the ROOT lock graph, clashing (`links=sqlite3`) with `deos-matrix → libsqlite3-sys 0.35` (EMPIRICALLY
+re-confirmed this session: `cargo generate-lockfile` fails the links check at rev `54fbcb6943`). The ONE-LINE
+close is still pending: bump the emberian/zed fork's `sqlez` pin `0.30.1 → 0.35.0` + repin the rev across
+breadstuffs, THEN uncomment. (The cockpit-side code is DONE — only the fork-rev/repin step remains; it is
+fenced off as "don't touch the gpui fork" for this lane.)
 
 ## ✎ "MAKE YOUR FIRST CARD" — repeat entry from Author mode (2026-06-24)
 Named by the onboarding commit (`12d072eff`; `starbridge-v2/src/dock/card_surface.rs::build_first_card_surface`,
