@@ -11,6 +11,34 @@
 # Runs on the host (the operator's terminal). It reaches the node over the
 # network the M3 PD provides — it does not itself boot on seL4.
 
+# STANDALONE WORKSPACE. dregg-tui is the ONLY `ratatui` user in the tree, and
+# ratatui 0.29 pins `unicode-width =0.2.0` EXACTLY. The full-Zed editor surface
+# (starbridge-v2 → deos-zed-full → editor → markdown → merman) needs
+# `unicode-width ^0.2.2`. Both constraints in one resolution graph is unsatisfiable,
+# so dregg-tui is EXCLUDED from the root workspace and declares its OWN here — the
+# same root-exclusion pattern `discord-bot`/`deos-zed-full` use. Its path-deps
+# (dregg-sdk/turn/circuit/verifier) are members of the ROOT workspace, so THEIR
+# `workspace = true` deps (p3-*, ark-serialize, dregg-* locals) resolve against the
+# root; this manifest references none of them via `workspace = true`, so the
+# `[workspace.dependencies]` table is empty. `[patch.crates-io]` replicates only
+# the root patch this graph consumes — the `ark-serialize` serde-integration fork
+# the proof tree (dregg-hints via dregg-circuit/dregg-sdk) needs. The
+# plonky3-recursion deps are direct git deps in the root `[workspace.dependencies]`
+# (no patch) and resolve via the path-dep'd circuit crate's root membership.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.lints.rust]
+unexpected_cfgs = "allow"
+
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
 [package]
 name = "dregg-tui"
 version = "0.1.0"

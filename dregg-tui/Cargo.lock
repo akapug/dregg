@@ -963,7 +963,6 @@ dependencies = [
  "bs58",
  "chacha20poly1305",
  "dregg-cell",
- "dregg-lean-ffi",
  "dregg-types",
  "getrandom 0.3.4",
  "hkdf",
@@ -979,9 +978,23 @@ name = "dregg-cell"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-circuit",
+ "dregg-dfa",
+ "dregg-types",
+ "postcard",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dregg-cell-crypto"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "bulletproofs",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-cell",
  "dregg-circuit",
  "dregg-types",
  "ed25519-dalek",
@@ -1006,8 +1019,6 @@ dependencies = [
  "p3-baby-bear",
  "p3-batch-stark",
  "p3-challenger",
- "p3-circuit",
- "p3-circuit-prover",
  "p3-commit",
  "p3-dft",
  "p3-field",
@@ -1019,10 +1030,41 @@ dependencies = [
  "p3-monty-31",
  "p3-poseidon2",
  "p3-poseidon2-circuit-air",
- "p3-recursion",
  "p3-symmetric",
  "p3-uni-stark",
  "p3-util",
+ "postcard",
+ "rand 0.10.1",
+ "rmp-serde",
+ "serde",
+ "tracing",
+]
+
+[[package]]
+name = "dregg-circuit-prove"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-circuit",
+ "getrandom 0.3.4",
+ "itertools 0.14.0",
+ "p3-air",
+ "p3-baby-bear",
+ "p3-batch-stark",
+ "p3-challenger",
+ "p3-circuit",
+ "p3-circuit-prover",
+ "p3-commit",
+ "p3-dft",
+ "p3-field",
+ "p3-fri",
+ "p3-lookup",
+ "p3-matrix",
+ "p3-merkle-tree",
+ "p3-poseidon2-circuit-air",
+ "p3-recursion",
+ "p3-symmetric",
+ "p3-uni-stark",
  "postcard",
  "rand 0.10.1",
  "rmp-serde",
@@ -1104,9 +1146,9 @@ dependencies = [
  "dregg-blocklace",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
@@ -1148,11 +1190,11 @@ dependencies = [
  "chacha20poly1305",
  "curve25519-dalek",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-commit",
  "dregg-dfa",
  "dregg-federation",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-trace",
  "dregg-turn",
@@ -1179,6 +1221,7 @@ dependencies = [
  "dregg-blocklace",
  "dregg-cell",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-turn",
 ]
 
@@ -1211,9 +1254,10 @@ dependencies = [
  "blake3",
  "curve25519-dalek",
  "dregg-bridge",
- "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-dsl-tests",
@@ -1299,11 +1343,12 @@ dependencies = [
  "curve25519-dalek",
  "dregg-captp",
  "dregg-cell",
+ "dregg-cell-crypto",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
- "dregg-lean-ffi",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",
@@ -1313,6 +1358,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "web-time",
  "x25519-dalek",
 ]
 
@@ -1334,6 +1380,7 @@ dependencies = [
  "blake3",
  "dregg-captp",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-federation",
  "dregg-turn",
@@ -2263,7 +2310,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=fc12f233a2d14531381d40bfaf10c7eefb73f94d#fc12f233a2d14531381d40bfaf10c7eefb73f94d"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -2290,7 +2337,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=fc12f233a2d14531381d40bfaf10c7eefb73f94d#fc12f233a2d14531381d40bfaf10c7eefb73f94d"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -2566,7 +2613,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=fc12f233a2d14531381d40bfaf10c7eefb73f94d#fc12f233a2d14531381d40bfaf10c7eefb73f94d"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -2616,7 +2663,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=fc12f233a2d14531381d40bfaf10c7eefb73f94d#fc12f233a2d14531381d40bfaf10c7eefb73f94d"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -2640,7 +2687,7 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=fc12f233a2d14531381d40bfaf10c7eefb73f94d#fc12f233a2d14531381d40bfaf10c7eefb73f94d"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -4042,6 +4089,16 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap 2.14.0",
  "semver",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]

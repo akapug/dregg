@@ -13,7 +13,7 @@ resolver = "3"
 # workspace, so those two stay separate workspaces (discord-bot excluded below,
 # deos-zed-full still excluded). `default-members` (below) is the light protocol/
 # circuit/app set so bare `cargo build`/`cargo test` stays gpui/mozjs/servo-free.
-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "circuit-prove", "audit", "bridge", "wire", "persist", "cell", "cell-crypto", "turn", "exec-lean", "coord", "tests", "types", "sdk", "dregg-sdk-net", "node", "intent", "net", "discharge-gateway", "teasting", "app-framework", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "dfa-federation", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "starbridge-apps/polis", "starbridge-apps/escrow-market", "starbridge-apps/first-room", "starbridge-apps/compute-exchange", "starbridge-apps/gallery", "starbridge-apps/swarm-orchestration", "starbridge-apps/supply-chain-provenance", "starbridge-apps/agent-orchestration", "starbridge-apps/tussle", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient", "redteam", "perf", "dregg-auth", "dregg-query", "dregg-userspace-verify", "dregg-deploy", "dregg-analyzer", "deos-reflect", "starbridge-v2", "starbridge-v2/web", "deos-js", "deos-view", "deos-zed", "deos-matrix", "deos-hermes", "deos-terminal", "servo-render", "deos-web-cells", "dregg-tui", "starbridge-web-surface", "deos-leptos"]
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "circuit-prove", "audit", "bridge", "wire", "persist", "cell", "cell-crypto", "turn", "exec-lean", "coord", "tests", "types", "sdk", "dregg-sdk-net", "node", "intent", "net", "discharge-gateway", "teasting", "app-framework", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "dfa-federation", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "starbridge-apps/polis", "starbridge-apps/escrow-market", "starbridge-apps/first-room", "starbridge-apps/compute-exchange", "starbridge-apps/gallery", "starbridge-apps/swarm-orchestration", "starbridge-apps/supply-chain-provenance", "starbridge-apps/agent-orchestration", "starbridge-apps/tussle", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient", "redteam", "perf", "dregg-auth", "dregg-query", "dregg-userspace-verify", "dregg-deploy", "dregg-analyzer", "deos-reflect", "starbridge-v2", "starbridge-v2/web", "deos-js", "deos-view", "deos-zed", "deos-matrix", "deos-hermes", "deos-terminal", "servo-render", "deos-web-cells", "starbridge-web-surface", "deos-leptos"]
 
 # default-members = the LIGHT protocol/circuit/app crates (members minus the 12
 # gpui/mozjs/servo elephants). A bare `cargo build`/`cargo test` (no `--workspace`,
@@ -39,7 +39,17 @@ default-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit
 # deos-matrix's rusqlite-0.35 (one `links="sqlite3"` per workspace). discord-bot
 # carries its own `[workspace]`/`[workspace.dependencies]`/`[patch]` + a
 # `rust-toolchain.toml` so it still builds standalone.
-exclude = ["chain", "chain/program", "wasm", "sdk-py", "pg-dregg", "sel4/dregg-firmament", "deos-zed-full", "dregg-doc", "discord-bot"]
+# `dregg-tui` is EXCLUDED (its own workspace) for a VERSION-PIN reason: it is the
+# only `ratatui` user, and ratatui 0.29 pins `unicode-width =0.2.0` EXACTLY, which
+# is incompatible with `merman` (pulled by the full-Zed editor surface via
+# `starbridge-v2` → `deos-zed-full` → editor → markdown), which needs
+# `unicode-width ^0.2.2`. Keeping `dregg-tui` in the root workspace forces both
+# constraints into one resolution graph and breaks it. Excluded, it carries its
+# own `[workspace]` + `[patch]` (ark-serialize fork) + `rust-toolchain.toml` so it
+# still builds standalone (`cd dregg-tui && cargo build`); its path-deps
+# (dregg-sdk/turn/circuit/verifier) are root-workspace members so THEIR
+# `workspace = true` deps resolve against the root.
+exclude = ["chain", "chain/program", "wasm", "sdk-py", "pg-dregg", "sel4/dregg-firmament", "deos-zed-full", "dregg-doc", "discord-bot", "dregg-tui"]
 
 [workspace.package]
 version = "0.1.0"
@@ -161,6 +171,17 @@ servo-net = { path = "servo-render/vendor/servo-net" }
 # The gpui fork (emberian/zed) resolves directly from git at the rev pinned in
 # starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
 # bakes need is on that pushed rev) — no local-path [patch] override.
+
+# TEMPORARY (iteration-only — to be REPLACED by a rev bump once the fork is pushed):
+# point the 4 plonky3-recursion fork crates at the local working tree so the
+# exposed-claim channel under construction is buildable. The angel rule says the
+# FINAL state must be a pushed-rev pin with no local path; this patch exists only
+# while the channel is being driven to the witness flip.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../plonky3-recursion/recursion" }
+p3-circuit = { path = "../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
 
 [workspace.dependencies]
 ## Local
