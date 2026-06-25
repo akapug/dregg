@@ -69,15 +69,28 @@ The five state structures become five DOMAINS of one address space. An address i
 content of that hashing). Domains are DISJOINT sub-multisets by construction: a tuple written in
 one domain can never cancel a claim in another (`Entry` equality requires address equality). -/
 
-/-- The state domains of the unified memory: the five collections of `EPOCH-DESIGN.md`'s
-commitment layout (registers · heap · capabilities · nullifiers · receipt index). A future state
-component is a NEW domain value, never a new table. -/
+/-- The state domains of the unified memory: the five COMMITTED collections of
+`EPOCH-DESIGN.md`'s commitment layout (registers · heap · capabilities · nullifiers · receipt
+index), plus the transient `working` scratch. A future state component is a NEW domain value,
+never a new table.
+
+`working` is the universal-memory realization of the Rust `UDomain::Working`
+(`turn/src/umem.rs:118`): a service cell's / the interpreter's / a long-running effect's
+TRANSIENT scratch. It rides the ONE memcheck trace exactly like every other domain — so it is
+consistent for free (`universal_memory_sound` quantifies over it like any `d`) and its cells
+get their OWN non-aliasing address class by the same tag isolation (`consistentFrom_filter`).
+But, exactly like `registers`, it is DESIGNED to publish NO committed boundary: it is never
+projected into the state commitment (`working_commitment_inert` below makes "never projected ⇒
+inert" a theorem, not a Rust `debug_assert`). Its boundary IS derivable on demand
+(`working_umem_root`, the §4 checkpoint, and the level-1 image of `recursive_open_sound`),
+it simply never enters consensus state. -/
 inductive Domain : Type where
   | registers
   | heap
   | caps
   | nullifiers
   | index
+  | working
 deriving DecidableEq, Repr
 
 /-- The unified address: a domain tag paired with the in-domain key. The abstract form of the
@@ -535,6 +548,110 @@ theorem boundary_whole_image_sem (hash : List ℤ → ℤ) (hCR : Poseidon2Spong
   rw [boundary_image_eq_of_root hash hCR hpin]
   exact get_boundaryCells has a
 
+/-! ### §4d — the WORKING domain is INERT in the commitment (never-projected ⇒ a theorem).
+
+The Rust `UDomain::Working` (`turn/src/umem.rs:118`) is transient scratch: it rides the ONE
+memcheck trace (consistent for free) but is NEVER emitted by `project_cell`/`project_ledger`/
+`project_executor_state`, so its boundary root never enters the state commitment. That guarantee
+was load-bearing only by the Rust FACT that the projection happens to never construct a
+`UKey::Working` — a `debug_assert_no_working` comment (`turn/src/umem.rs:347`), not a checked
+property.
+
+`working_commitment_inert` makes it a THEOREM, by the same tag-disjointness that powers the whole
+module: the committed boundary view of ANY committed domain `d ≠ working` reads `fin` ONLY at the
+addresses `(d, a)` — addresses whose tag is `d`, never `working`. So two final memories that
+agree everywhere OFF the working domain (the only place a working write can differ) derive the
+IDENTICAL committed boundary view. A working address therefore cannot move any committed
+boundary: it is inert in the state commitment, exactly as `registers` is. -/
+
+/-- **`working_commitment_inert` — A WORKING ADDRESS NEVER ENTERS A COMMITTED BOUNDARY.** For any
+committed domain `d` (`d ≠ working`), two final memories that AGREE everywhere off the working
+domain produce the SAME committed boundary view. Working writes — the only cells where the two
+can differ — leave every committed domain's boundary untouched, because that boundary reads `fin`
+only at tag-`d` addresses (never tag-`working`). The "never projected ⇒ inert" Rust invariant,
+made a theorem by tag-disjointness (the dual of `consistentFrom_filter`'s class isolation). -/
+theorem working_commitment_inert {d : Domain} (hd : d ≠ Domain.working)
+    {fin₁ fin₂ : UAddr κ → Option ν} {as : List κ}
+    (hagree : ∀ a : UAddr κ, a.1 ≠ Domain.working → fin₁ a = fin₂ a) :
+    boundaryCells (fun a => fin₁ (d, a)) as = boundaryCells (fun a => fin₂ (d, a)) as := by
+  have hfun : (fun a => fin₁ (d, a)) = (fun a => fin₂ (d, a)) := by
+    funext a; exact hagree (d, a) hd
+  rw [hfun]
+
+/-- **`working_commitment_root_inert` — the committed boundary ROOT is inert to working cells.**
+The sorted-Poseidon2 root of a committed domain's boundary is INVARIANT under any change confined
+to the working domain (the value-world consequence of `working_commitment_inert`, by `congrArg`).
+A working umem cannot perturb a single committed map root — it costs nothing on the consensus
+path, regardless of how much working scratch a service writes. -/
+theorem working_commitment_root_inert (hash : List ℤ → ℤ) {d : Domain} (hd : d ≠ Domain.working)
+    {fin₁ fin₂ : UAddr ℤ → Option ℤ} {as : List ℤ}
+    (hagree : ∀ a : UAddr ℤ, a.1 ≠ Domain.working → fin₁ a = fin₂ a) :
+    Heap.root hash (boundaryCells (fun a => fin₁ (d, a)) as)
+      = Heap.root hash (boundaryCells (fun a => fin₂ (d, a)) as) :=
+  congrArg (Heap.root hash) (working_commitment_inert hd hagree)
+
+/-! ### §4e — COMPOSABLE umems: the recursive open is TWO binds at DISJOINT levels.
+
+A `UVal::UmemRef` (`turn/src/umem.rs:316`) makes one umem hold, at a key, the committed root of
+ANOTHER umem. Reading "through" the ref is `open_through_umem_ref` (`turn/src/umem.rs:716`): bind
+the OUTER service umem's committed boundary (the `working` domain) as an init image, read the
+child root it names there, then bind THAT root as the INNER cell heap's (the `heap` domain) init
+image and open the requested key. Two independent `boundary_init_root_bound` applications — the
+keystone composed with itself.
+
+The two levels CANNOT alias: the outer cells live in the `working` domain and the inner cells in
+the `heap` domain, disjoint by tag. `recursive_levels_disjoint` makes that disjointness a theorem
+(the two domain projections of ONE consistent trace are INDEPENDENT standalone memories,
+`universal_memory_sound` at `working` and at `heap`); `recursive_open_sound` is the two-level bind
+itself. A tamper at either level derives a different sorted-Poseidon2 root and the matching pin
+refuses — soundness compositional for free. -/
+
+/-- **`recursive_levels_disjoint` — the outer (working) and inner (heap) levels are independent.**
+From ONE Blum balance, the outer service umem (`working` domain) and the inner cell heap (`heap`
+domain) project to INDEPENDENT consistent standalone memories: a working op never moves a heap
+cell and vice versa (tag isolation, two instances of `universal_memory_sound`). So the two
+`boundary_init_root_bound` applications in `recursive_open_sound` bind genuinely independent
+images — no cross-level aliasing. -/
+theorem recursive_levels_disjoint [DecidableEq κ]
+    {init : UAddr κ → ν} {fin : UAddr κ → ν × Nat}
+    {addrs : List (UAddr κ)} {tr : List (Op (UAddr κ) ν)}
+    (hnd : addrs.Nodup) (hcl : ∀ op ∈ tr, op.addr ∈ addrs)
+    (hdisc : Disciplined tr) (hmc : MemCheck init fin addrs tr) :
+    Consistent (fun a => init (Domain.working, a))
+        ((domTrace Domain.working tr).map stripOp) ∧
+      Consistent (fun a => init (Domain.heap, a))
+        ((domTrace Domain.heap tr).map stripOp) :=
+  let h := (universal_memory_sound hnd hcl hdisc hmc).2
+  ⟨h Domain.working, h Domain.heap⟩
+
+/-- **`recursive_open_sound` — THE COMPOSABLE-UMEM RECURSIVE OPEN (Stage D).** The Rust
+`open_through_umem_ref` two-level bind made a theorem: `boundary_init_root_bound` applied at TWO
+levels.
+  * LEVEL 1 — the outer service umem's declared image carries the committed boundary root
+    (`houter`) ⟹ under the CR floor the declared OUTER image IS the committed working umem
+    (`outerDeclared = outerCommitted`).
+  * the bound outer umem NAMES `childRoot` at the ref address (`hnames`, the `UmemRef` cell), and
+    that named root IS the genuine inner umem's committed root (`hchildRoot`).
+  * LEVEL 2 — the declared inner heap is pinned to the named child root (`hchild`) ⟹ under the
+    SAME CR floor the declared INNER image IS the committed child heap
+    (`childDeclared = childCommitted`).
+Two independent `boundary_init_root_bound` teeth; the levels are tag-disjoint
+(`recursive_levels_disjoint`), so they cannot forge each other. The conclusion also re-exposes the
+named child root through the (now-forced) outer DECLARED image — what the reader actually holds. -/
+theorem recursive_open_sound (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {outerCommitted outerDeclared childCommitted childDeclared : FeltHeap}
+    {refKey childRoot : ℤ}
+    (houter : Heap.root hash outerDeclared = Heap.root hash outerCommitted)
+    (hnames : Heap.get outerCommitted refKey = some childRoot)
+    (hchildRoot : Heap.root hash childCommitted = childRoot)
+    (hchild : Heap.root hash childDeclared = childRoot) :
+    outerDeclared = outerCommitted ∧ childDeclared = childCommitted ∧
+      Heap.get outerDeclared refKey = some childRoot := by
+  have h1 : outerDeclared = outerCommitted := boundary_init_root_bound hash hCR houter
+  have h2 : childDeclared = childCommitted :=
+    boundary_init_root_bound hash hCR (hchild.trans hchildRoot.symm)
+  exact ⟨h1, h2, by rw [h1]; exact hnames⟩
+
 /-! ## §5 — THE NULLIFIER WIN: freshness is a memory property (no Merkle path intra-proof).
 
 A nullifier domain cell is `none` (never spent) or `some _` (spent). Inserts are the only writes
@@ -852,6 +969,54 @@ example (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     ∀ a, Heap.get (boundaryCells init as) a = if a ∈ as then init a else none :=
   boundary_whole_image_sem hash hCR has rfl
 
+/-! ### Working-inert non-vacuity — a working write moves the working boundary but NOT a
+committed one, and the committed root is unchanged. -/
+
+-- Two final memories differing ONLY at a working cell `(working, 0)`: agree off the working
+-- domain. (The hypothesis `working_commitment_inert` takes, exhibited concretely.)
+private def finA : UAddr ℤ → Option ℤ := fun a => if a = (Domain.heap, 10) then some 99 else none
+private def finB : UAddr ℤ → Option ℤ := fun a =>
+  if a = (Domain.heap, 10) then some 99
+  else if a = (Domain.working, 0) then some 7 else none
+
+-- The committed HEAP boundary is IDENTICAL across the two (the working write is inert)…
+#guard boundaryCells (fun a => finA (Domain.heap, a)) [10]
+  == boundaryCells (fun a => finB (Domain.heap, a)) [10]
+-- …but the WORKING boundary genuinely DIFFERS (finB wrote a working cell finA did not) —
+-- the inert guarantee is about COMMITTED domains, and working really is a live (uncommitted) plane.
+#guard boundaryCells (fun a => finA (Domain.working, a)) [0]
+  != boundaryCells (fun a => finB (Domain.working, a)) [0]
+
+/-- `working_commitment_inert` fires: `finA`/`finB` agree off the working domain, so the heap
+domain's committed boundary view coincides — the working cell never enters it. -/
+example :
+    boundaryCells (fun a => finA (Domain.heap, a)) [10]
+      = boundaryCells (fun a => finB (Domain.heap, a)) [10] :=
+  working_commitment_inert (d := Domain.heap) (by decide)
+    (fun a ha => by
+      -- off the working domain finA and finB agree (they differ only at (working, 0))
+      simp only [finA, finB]
+      by_cases h0 : a = (Domain.working, 0)
+      · exact absurd (h0 ▸ rfl) ha
+      · rw [if_neg h0])
+
+/-! ### Recursive-open non-vacuity — the two-level bind fires on a concrete UmemRef shape.
+
+The inner umem `[(0, 99)]` has root `R`; the outer umem holds `R` at ref key `5` (a `UmemRef`).
+Both binds discharge by `rfl` on the matching declared/committed heaps. Stated against the
+abstract CR floor (as every boundary binder is): the recursive open is the keystone, twice. -/
+
+example (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
+    ([((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])] : FeltHeap)
+        = [((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])]
+      ∧ ([((0 : ℤ), (99 : ℤ))] : FeltHeap) = [((0 : ℤ), (99 : ℤ))]
+      ∧ Heap.get ([((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])] : FeltHeap) 5
+          = some (Heap.root hash [((0 : ℤ), (99 : ℤ))]) :=
+  recursive_open_sound hash hCR (refKey := 5)
+    (outerCommitted := [((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])])
+    (childCommitted := [((0 : ℤ), (99 : ℤ))]) (childDeclared := [((0 : ℤ), (99 : ℤ))])
+    rfl (by simp) rfl rfl
+
 end NonVacuity
 
 /-! ## Axiom-hygiene pins -/
@@ -869,6 +1034,10 @@ end NonVacuity
 #assert_axioms boundary_init_root_bound
 #assert_axioms boundary_image_eq_of_root
 #assert_axioms boundary_whole_image_sem
+#assert_axioms working_commitment_inert
+#assert_axioms working_commitment_root_inert
+#assert_axioms recursive_levels_disjoint
+#assert_axioms recursive_open_sound
 #assert_axioms consistent_read_pins
 #assert_axioms fold_none_of_insert_only
 #assert_axioms nullifier_fresh_sound
