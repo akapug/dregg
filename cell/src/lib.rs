@@ -37,9 +37,11 @@ pub mod escrow_sealed;
 pub mod facet;
 pub mod factory;
 pub mod id;
-/// First-class typed cell interfaces (CELLS-AS-SERVICE-OBJECTS, Stage 1): a
-/// content-addressed [`interface::InterfaceDescriptor`] the cell commitment binds,
-/// auto-derived from a cell's method-dispatch program.
+/// First-class typed cell interfaces (CELLS-AS-SERVICE-OBJECTS): a
+/// content-addressed [`interface::InterfaceDescriptor`] auto-derived from a
+/// cell's method-dispatch program. A standalone, NON-committed type — the
+/// service-object / `invoke()` layer lives ABOVE the effectvm/commitment, so the
+/// descriptor is not folded into the cell commitment.
 pub mod interface;
 pub mod ledger;
 pub mod lifecycle;
