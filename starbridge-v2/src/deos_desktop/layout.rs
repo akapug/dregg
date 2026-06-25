@@ -1,0 +1,216 @@
+//! **The spatial + content persistence layer** — the durable desktop layout: every
+//! icon position, every open window's geometry and TYPE, every document cell's
+//! prose, and the desktop's customization preferences. All serialized to one
+//! sidecar JSON file and restored on open.
+
+use std::path::PathBuf;
+
+use gpui::{Pixels, Point, px};
+
+use super::chrome::NT_DESKTOP_BG;
+
+/// A persisted desktop position for one cell-icon (`(x, y)` on the desktop) — keyed
+/// by the cell's hex id so it survives across worlds with the same cells.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct IconPos {
+    pub cell: String,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A persisted open-window geometry for one cell (id + frame). Persisting this is
+/// what makes "you arrange your world and it STAYS" true for windows too.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct WinGeom {
+    pub cell: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub minimized: bool,
+    /// Which window TYPE this geometry restores — inspector / document editor /
+    /// links view / transcript. Defaults to the inspector for legacy layouts.
+    #[serde(default)]
+    pub kind: WinKindTag,
+}
+
+/// The persisted tag of a window's type (the serializable face of `WinKind`).
+#[derive(
+    Clone, Copy, Default, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize,
+)]
+pub enum WinKindTag {
+    #[default]
+    Inspector,
+    DocEditor,
+    Links,
+    Transcript,
+}
+
+/// A persisted document's text, keyed by the cell's hex id — the CONTENT
+/// persistence that pairs with the spatial persistence. A document cell's prose is
+/// durable state; the sidecar mirrors it so a reopened desktop restores the exact
+/// authored text.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct DocText {
+    pub cell: String,
+    pub text: String,
+}
+
+/// **THE DESKTOP LAYOUT — the load-bearing spatial-persistence state.** The whole
+/// arrangement of the user's world: every icon position, every open window's
+/// geometry, every document's prose, and the customization prefs. Serialized to a
+/// sidecar JSON file ([`DesktopLayout::default_path`]) on every change and reloaded
+/// on open, so the arrangement is durable state, not ephemeral view-state.
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DesktopLayout {
+    pub icons: Vec<IconPos>,
+    pub windows: Vec<WinGeom>,
+    /// Persisted document text per cell (the CONTENT persistence — pairs with the
+    /// spatial persistence above so a reopened desktop restores the authored prose).
+    #[serde(default)]
+    pub docs: Vec<DocText>,
+    /// The desktop's customization preferences (appearance / layout knobs the user
+    /// sets via Properties → Preferences). Persisted like everything else.
+    #[serde(default)]
+    pub prefs: DesktopPrefs,
+}
+
+/// **Customization** — the desktop's persisted preferences, edited through the
+/// Properties/Preferences surface. Layout-level customization (it carries no
+/// authority, just appearance), so changing it is a pure persisted layout change.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct DesktopPrefs {
+    /// The desktop background colour (one of a small NT-era palette).
+    pub bg: u32,
+    /// Whether icon captions show the grouped balance line.
+    pub show_balances: bool,
+    /// Whether new document windows default to word- vs line-granularity edits.
+    pub word_granularity: bool,
+    /// The icon auto-arrange column height (rows per column on a fresh desktop).
+    pub grid_rows: u32,
+}
+
+impl Default for DesktopPrefs {
+    fn default() -> Self {
+        DesktopPrefs {
+            bg: NT_DESKTOP_BG,
+            show_balances: true,
+            word_granularity: false,
+            grid_rows: 6,
+        }
+    }
+}
+
+impl DesktopLayout {
+    /// The default sidecar path (under the user's data dir, falling back to a temp
+    /// path). The desktop saves here on every spatial change and loads here on open.
+    pub fn default_path() -> PathBuf {
+        if let Some(dir) = dirs_next_data() {
+            dir.join("deos-desktop-layout.json")
+        } else {
+            std::env::temp_dir().join("deos-desktop-layout.json")
+        }
+    }
+
+    /// Load a persisted layout from `path`, or an empty layout if none exists / it
+    /// is corrupt (a fresh desktop falls back to the auto-arranged grid).
+    pub fn load(path: &PathBuf) -> Self {
+        std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// **Persist the layout** to `path` (atomic-ish: write then rename). Called on
+    /// every drag-end / window move / resize — this is the act that makes the
+    /// arrangement durable. Errors are swallowed (a read-only FS still gives a live
+    /// desktop; only persistence is lost).
+    pub fn save(&self, path: &PathBuf) {
+        if let Ok(json) = serde_json::to_vec_pretty(self) {
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, &json).is_ok() {
+                let _ = std::fs::rename(&tmp, path);
+            }
+        }
+    }
+
+    pub(super) fn icon_pos(&self, cell: &str) -> Option<Point<Pixels>> {
+        self.icons
+            .iter()
+            .find(|p| p.cell == cell)
+            .map(|p| Point::new(px(p.x), px(p.y)))
+    }
+
+    pub(super) fn set_icon_pos(&mut self, cell: &str, x: f32, y: f32) {
+        if let Some(p) = self.icons.iter_mut().find(|p| p.cell == cell) {
+            p.x = x;
+            p.y = y;
+        } else {
+            self.icons.push(IconPos {
+                cell: cell.to_string(),
+                x,
+                y,
+            });
+        }
+    }
+
+    pub(super) fn win_geom(&self, cell: &str, kind: WinKindTag) -> Option<WinGeom> {
+        self.windows
+            .iter()
+            .find(|w| w.cell == cell && w.kind == kind)
+            .cloned()
+    }
+
+    pub(super) fn set_win_geom(&mut self, g: WinGeom) {
+        if let Some(w) = self
+            .windows
+            .iter_mut()
+            .find(|w| w.cell == g.cell && w.kind == g.kind)
+        {
+            *w = g;
+        } else {
+            self.windows.push(g);
+        }
+    }
+
+    pub(super) fn drop_win(&mut self, cell: &str, kind: WinKindTag) {
+        self.windows.retain(|w| !(w.cell == cell && w.kind == kind));
+    }
+
+    pub(super) fn doc_text(&self, cell: &str) -> Option<String> {
+        self.docs
+            .iter()
+            .find(|d| d.cell == cell)
+            .map(|d| d.text.clone())
+    }
+
+    pub(super) fn set_doc_text(&mut self, cell: &str, text: &str) {
+        if let Some(d) = self.docs.iter_mut().find(|d| d.cell == cell) {
+            d.text = text.to_string();
+        } else {
+            self.docs.push(DocText {
+                cell: cell.to_string(),
+                text: text.to_string(),
+            });
+        }
+    }
+}
+
+/// A platform-appropriate data dir (no extra dep): `$XDG_DATA_HOME` /
+/// `~/Library/Application Support` / `~/.local/share`.
+fn dirs_next_data() -> Option<PathBuf> {
+    if let Ok(x) = std::env::var("XDG_DATA_HOME") {
+        if !x.is_empty() {
+            return Some(PathBuf::from(x).join("deos"));
+        }
+    }
+    let home = std::env::var("HOME").ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        Some(PathBuf::from(home).join("Library/Application Support/deos"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some(PathBuf::from(home).join(".local/share/deos"))
+    }
+}

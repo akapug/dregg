@@ -29,6 +29,16 @@
 //! the inspector shows the cell's real reflected faces; the layout persists as real
 //! JSON state. Built NEW, beside the cockpit — it does not touch the cockpit tree.
 
+// ── Submodules ────────────────────────────────────────────────────────────────────
+// The desktop is split into a reusable chrome kit + a persistence layer + this glue.
+//   * `chrome`  — the NT widget infrastructure (palette, bevel/face primitives,
+//                 id/number formatting). The reusable component layer.
+//   * `layout`  — the spatial + content persistence (DesktopLayout and friends).
+// The remaining surfaces (windows, menus, document editing, properties, actuation,
+// rendering) live here as `impl DeosDesktop` blocks over the shared chrome/layout.
+pub mod chrome;
+pub mod layout;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -48,260 +58,17 @@ use dregg_doc::{Author, Doc, Granularity};
 
 use crate::world::{World, grant_capability, transfer};
 
-/// The full hex id of a cell (a stable layout/persistence key, and the inspector's
-/// identity row). [`CellId`] carries the raw bytes; this is the canonical render.
-pub fn id_hex(cell: &CellId) -> String {
-    cell.as_bytes().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A short legible id (first 4 bytes) — the icon caption / window-title id.
-fn id_short(cell: &CellId) -> String {
-    cell.as_bytes()[..4]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-/// `Pixels` → `f32` (the field is private; the `From` impl is the supported route).
-fn pxf(p: Pixels) -> f32 {
-    f32::from(p)
-}
-
-// ── The NT palette ──────────────────────────────────────────────────────────────
-// Deliberately sterile / technical: a 3D-beveled gray chrome over a teal void, the
-// way an NT workstation reads. Dense, not calm; detailed, not minimal.
-const NT_DESKTOP_BG: u32 = 0x0a3a4a; // the classic teal void
-const NT_FACE: u32 = 0xc0c0c0; // button-face gray
-const NT_FACE_DARK: u32 = 0x9a9a9a;
-const NT_HILIGHT: u32 = 0xffffff; // top-left bevel
-const NT_SHADOW: u32 = 0x404040; // bottom-right bevel
-const NT_TEXT: u32 = 0x101010;
-const NT_TITLE_ACTIVE: u32 = 0x000080; // navy active title bar
-const NT_TITLE_TEXT: u32 = 0xffffff;
-const NT_ICON_LABEL: u32 = 0xf0f0f0;
-const NT_SELECT: u32 = 0x000080;
-const NT_MENU_HILIGHT: u32 = 0x000080;
-const NT_DIM: u32 = 0x707070; // a disabled / unheld affordance
-
-const ICON_W: f32 = 92.0;
-const ICON_H: f32 = 76.0;
-const WIN_MIN_W: f32 = 280.0;
-const WIN_MIN_H: f32 = 180.0;
-const MENUBAR_H: f32 = 26.0;
-
-/// The state slot a document-editor edit bumps via a real `SetField` turn — so
-/// each edit advances the cell's chronicle (height + receipt) in the same breath
-/// it commits the patch. Picked high (slot 14) to stay clear of the demo cells'
-/// balance/model slots.
-const DOC_REV_SLOT: usize = 14;
-
-// ── Persisted layout (the SPATIAL PERSISTENCE — real saved state) ─────────────────
-
-/// A persisted desktop position for one cell-icon (`(x, y)` on the desktop) — keyed
-/// by the cell's hex id so it survives across worlds with the same cells.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct IconPos {
-    pub cell: String,
-    pub x: f32,
-    pub y: f32,
-}
-
-/// A persisted open-window geometry for one cell (id + frame). Persisting this is
-/// what makes "you arrange your world and it STAYS" true for windows too.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct WinGeom {
-    pub cell: String,
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-    pub minimized: bool,
-    /// Which window TYPE this geometry restores — inspector / document editor /
-    /// links view / transcript. Defaults to the inspector for legacy layouts.
-    #[serde(default)]
-    pub kind: WinKindTag,
-}
-
-/// The persisted tag of a window's type (the serializable face of [`WinKind`]).
-#[derive(
-    Clone, Copy, Default, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize,
-)]
-pub enum WinKindTag {
-    #[default]
-    Inspector,
-    DocEditor,
-    Links,
-    Transcript,
-}
-
-/// A persisted document's text, keyed by the cell's hex id — the CONTENT
-/// persistence that pairs with the spatial persistence. A document cell's prose
-/// is durable cell state (it lives in the cell's committed heap too), and the
-/// sidecar mirrors it so a reopened desktop restores the exact authored text.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct DocText {
-    pub cell: String,
-    pub text: String,
-}
-
-/// **THE DESKTOP LAYOUT — the load-bearing spatial-persistence state.** The whole
-/// arrangement of the user's world: every icon position and every open window's
-/// geometry. Serialized to a sidecar JSON file ([`DesktopLayout::path`]) on every
-/// drag/move/resize and reloaded on open, so the spatial arrangement is durable
-/// state, not ephemeral view-state.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct DesktopLayout {
-    pub icons: Vec<IconPos>,
-    pub windows: Vec<WinGeom>,
-    /// Persisted document text per cell (the CONTENT persistence — pairs with the
-    /// spatial persistence above so a reopened desktop restores the authored prose).
-    #[serde(default)]
-    pub docs: Vec<DocText>,
-    /// The desktop's customization preferences (appearance / layout knobs the user
-    /// sets via Properties → Preferences). Persisted like everything else.
-    #[serde(default)]
-    pub prefs: DesktopPrefs,
-}
-
-/// **Customization** — the desktop's persisted preferences, edited through the
-/// Properties/Preferences surface. Layout-level customization (it carries no
-/// authority, just appearance), so changing it is a pure persisted layout change.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct DesktopPrefs {
-    /// The desktop background colour (one of a small NT-era palette).
-    pub bg: u32,
-    /// Whether icon captions show the grouped balance line.
-    pub show_balances: bool,
-    /// Whether new document windows default to word- vs line-granularity edits.
-    pub word_granularity: bool,
-    /// The icon auto-arrange column height (rows per column on a fresh desktop).
-    pub grid_rows: u32,
-}
-
-impl Default for DesktopPrefs {
-    fn default() -> Self {
-        DesktopPrefs {
-            bg: NT_DESKTOP_BG,
-            show_balances: true,
-            word_granularity: false,
-            grid_rows: 6,
-        }
-    }
-}
-
-impl DesktopLayout {
-    /// The default sidecar path (under the user's data dir, falling back to a temp
-    /// path). The desktop saves here on every spatial change and loads here on open.
-    pub fn default_path() -> PathBuf {
-        if let Some(dir) = dirs_next_data() {
-            dir.join("deos-desktop-layout.json")
-        } else {
-            std::env::temp_dir().join("deos-desktop-layout.json")
-        }
-    }
-
-    /// Load a persisted layout from `path`, or an empty layout if none exists / it
-    /// is corrupt (a fresh desktop falls back to the auto-arranged grid).
-    pub fn load(path: &PathBuf) -> Self {
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
-    }
-
-    /// **Persist the layout** to `path` (atomic-ish: write then rename). Called on
-    /// every drag-end / window move / resize — this is the act that makes the
-    /// arrangement durable. Errors are swallowed (a read-only FS still gives a live
-    /// desktop; only persistence is lost).
-    pub fn save(&self, path: &PathBuf) {
-        if let Ok(json) = serde_json::to_vec_pretty(self) {
-            let tmp = path.with_extension("json.tmp");
-            if std::fs::write(&tmp, &json).is_ok() {
-                let _ = std::fs::rename(&tmp, path);
-            }
-        }
-    }
-
-    fn icon_pos(&self, cell: &str) -> Option<Point<Pixels>> {
-        self.icons
-            .iter()
-            .find(|p| p.cell == cell)
-            .map(|p| Point::new(px(p.x), px(p.y)))
-    }
-
-    fn set_icon_pos(&mut self, cell: &str, x: f32, y: f32) {
-        if let Some(p) = self.icons.iter_mut().find(|p| p.cell == cell) {
-            p.x = x;
-            p.y = y;
-        } else {
-            self.icons.push(IconPos {
-                cell: cell.to_string(),
-                x,
-                y,
-            });
-        }
-    }
-
-    fn win_geom(&self, cell: &str, kind: WinKindTag) -> Option<WinGeom> {
-        self.windows
-            .iter()
-            .find(|w| w.cell == cell && w.kind == kind)
-            .cloned()
-    }
-
-    fn set_win_geom(&mut self, g: WinGeom) {
-        if let Some(w) = self
-            .windows
-            .iter_mut()
-            .find(|w| w.cell == g.cell && w.kind == g.kind)
-        {
-            *w = g;
-        } else {
-            self.windows.push(g);
-        }
-    }
-
-    fn drop_win(&mut self, cell: &str, kind: WinKindTag) {
-        self.windows.retain(|w| !(w.cell == cell && w.kind == kind));
-    }
-
-    fn doc_text(&self, cell: &str) -> Option<String> {
-        self.docs
-            .iter()
-            .find(|d| d.cell == cell)
-            .map(|d| d.text.clone())
-    }
-
-    fn set_doc_text(&mut self, cell: &str, text: &str) {
-        if let Some(d) = self.docs.iter_mut().find(|d| d.cell == cell) {
-            d.text = text.to_string();
-        } else {
-            self.docs.push(DocText {
-                cell: cell.to_string(),
-                text: text.to_string(),
-            });
-        }
-    }
-}
-
-/// A platform-appropriate data dir (no extra dep): `$XDG_DATA_HOME` /
-/// `~/Library/Application Support` / `~/.local/share`.
-fn dirs_next_data() -> Option<PathBuf> {
-    if let Ok(x) = std::env::var("XDG_DATA_HOME") {
-        if !x.is_empty() {
-            return Some(PathBuf::from(x).join("deos"));
-        }
-    }
-    let home = std::env::var("HOME").ok()?;
-    #[cfg(target_os = "macos")]
-    {
-        Some(PathBuf::from(home).join("Library/Application Support/deos"))
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Some(PathBuf::from(home).join(".local/share/deos"))
-    }
-}
+// The chrome kit + persistence types are re-exported so existing call sites
+// (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
+pub use chrome::{
+    DOC_REV_SLOT, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK,
+    NT_HILIGHT, NT_ICON_LABEL, NT_MENU_HILIGHT, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
+    NT_TITLE_TEXT, WIN_MIN_H, WIN_MIN_W, bevel_raised, face_row, face_section, fmt_balance, id_hex,
+    id_short, pxf,
+};
+pub use layout::{
+    DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag,
+};
 
 // ── A live, open inspector window over one cell ───────────────────────────────────
 
@@ -1420,16 +1187,8 @@ impl DeosDesktop {
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────────────
-
-/// An NT 3D bevel (raised) — a light face with a 2px top-left highlight border (the
-/// raised-button look). Generic over any [`Styled`] element so it composes onto a
-/// plain `div()` or an `.id()`'d `Stateful<Div>`.
-fn bevel_raised<E: Styled>(d: E) -> E {
-    d.border_t_2()
-        .border_l_2()
-        .border_color(gpui::rgb(NT_HILIGHT))
-        .bg(gpui::rgb(NT_FACE))
-}
+// (The `bevel_raised` / `face_section` / `face_row` chrome primitives live in
+// `chrome.rs` and are imported above.)
 
 impl Render for DeosDesktop {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2558,50 +2317,5 @@ enum PrefToggle {
     WordGran,
 }
 
-// ── Small render helpers ──────────────────────────────────────────────────────────
-
-fn face_section(title: &str) -> impl IntoElement {
-    div()
-        .mt_1()
-        .text_size(px(10.0))
-        .font_weight(FontWeight::BOLD)
-        .text_color(gpui::rgb(0x000080))
-        .child(format!("── {title} "))
-}
-
-fn face_row(key: &str, value: &str) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .text_size(px(11.0))
-        .child(
-            div()
-                .w(px(96.0))
-                .text_color(gpui::rgb(0x505050))
-                .child(format!("{key}:")),
-        )
-        .child(div().flex_1().child(value.to_string()))
-}
-
-fn fmt_balance(b: i64) -> String {
-    if b < 0 {
-        format!("−{}", group(-b as u64))
-    } else {
-        group(b as u64)
-    }
-}
-
-/// Group an integer with thousands separators (NT-dense numerics).
-fn group(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*b as char);
-    }
-    out
-}
+// (Small render helpers — `face_section` / `face_row` / `fmt_balance` / `group` —
+// live in `chrome.rs` and are imported at the top of this module.)
