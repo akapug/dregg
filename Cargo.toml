@@ -203,10 +203,10 @@ p3-util = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a
 ## child-VK identity pinned in-band + table_public_inputs threaded = the constant-VK perpetual
 ## fold; validated end-to-end by incremental_accumulate_verifies_whole_history). PURE git deps,
 ## no `[patch]`, no sibling checkout — a fresh clone and CI resolve this identically.
-p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
-p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
-p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
-p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "8d42900357f0140851e0098fab84b93995c498e9" }
+p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "a45ee56eb9d739de3ad3fda3ac4ca70dd07ceeea" }
+p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "a45ee56eb9d739de3ad3fda3ac4ca70dd07ceeea" }
+p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "a45ee56eb9d739de3ad3fda3ac4ca70dd07ceeea" }
+p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "a45ee56eb9d739de3ad3fda3ac4ca70dd07ceeea" }
 
 ## Crates.io
 ## --- TEMP LOCAL DSU-FIX ITERATION PATCH (REMOVE before CI-correct rev bump) ---
@@ -329,12 +329,3 @@ opt-level = 3
 [profile.dev.package.dregg-lightclient]
 opt-level = 3
 
-# --- TEMP LOCAL DSU-FIX ITERATION PATCH (REMOVE before CI-correct rev bump) ---
-# Points the four emberian/plonky3-recursion git deps at the local working tree so
-# the in-flight connect-DSU fix can be iterated without a push. Removed + replaced
-# by a rev bump to the pushed fork tip once the heavy folds are green.
-[patch."https://github.com/emberian/plonky3-recursion"]
-p3-recursion = { path = "../plonky3-recursion/recursion" }
-p3-circuit = { path = "../plonky3-recursion/circuit" }
-p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
-p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }

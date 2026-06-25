@@ -149,14 +149,19 @@
 //! - **Engine soundness** (`recursive_sound`): the wrap layer's in-circuit FRI
 //!   verifier and the root batch-STARK verifier are the plonky3 recursion
 //!   fork's; their soundness is the named crypto carrier, as everywhere else.
-//! - **Segment digest is a single base-field felt** ([`seg_hash2_in_circuit`]): an
-//!   order-sensitive base-field ordered-history fold (matched host-side by
-//!   [`seg_hash2_host`]). It makes a relabeled / reordered history mismatch the root, but
-//!   it is NOT a 128-bit collision-resistant commitment — the mixed-root REJECTION rests
-//!   on the genesis/final/count fields (each bound to the real descriptor leaves), not on
-//!   the digest. A felt digest is consistent with the prior `hash_4_to_1`-based scheme
-//!   (`chain_digest` was always one BabyBear). Lifting it to a multi-felt poseidon
-//!   commitment is a defense-in-depth follow-up.
+//! - **Segment digest — a multi-felt Poseidon2 commitment** ([`seg_poseidon_commit`],
+//!   codex re-review #3, CLOSED). The ordered-history `acc` is a genuine
+//!   [`SEG_DIGEST_WIDTH`]-felt Poseidon2 sponge over the recursion config's
+//!   `BABY_BEAR_D4_W16` challenger permutation (the SAME full-round arithmetization the
+//!   FRI challenger uses, CTL-bound against the Poseidon2 AIR), matched host-side by
+//!   [`seg_poseidon_commit_host`]. This REPLACED the prior one-felt quadratic fold
+//!   `a*M1 + b*M2 + a*b*M3`, which was algebraically broken (a given middle root had a
+//!   directly-solvable colliding partner, plus degeneracy roots that made it ignore an
+//!   operand). The multi-felt commitment has no algebraic shortcut and ~124-bit collision
+//!   resistance, so a same-genesis/same-final/same-count history B with a different middle
+//!   now mismatches the root digest. The ONLINE [`crate::accumulator`] is scoped OUT (it
+//!   keeps the single-felt binding-leaf carrier, zero-padded to the new lane width — codex
+//!   #4 mixed-root weakness for that path is unchanged).
 //! - **Child-circuit identity under the VK pin (fork follow-up, precise).** The
 //!   harness-level VK pin (tooth 1) pins the ROOT layer's circuit structure; the leaf
 //!   circuits' op-list identity is pinned in-band only via the fork's
@@ -207,94 +212,231 @@ pub use crate::plonky3_recursion_impl::recursive::RecursionVk;
 
 const D: usize = 4;
 
+/// The BabyBear prime modulus `2^31 - 2^27 + 1`. The `count` / `num_turns` chain claim is a
+/// BabyBear field element, so a faithful (non-wrapping) count requires `num_turns < p`
+/// (codex re-review #5).
+const BABY_BEAR_MODULUS: u32 = 0x7800_0001;
+
 /// The recursion config's challenge (extension) field — the field the verifier
 /// circuit (and every expose/combine hook) builds over.
 type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
 
-/// The number of exposed chain claims: `[genesis_root, final_root, num_turns, chain_digest]`.
-///
-/// In the segment-accumulator model these are the four fields of the ORDERED SEGMENT
-/// every descriptor leaf and every aggregation node carries and exposes (in this exact
-/// order, so the host verifier's tooth-4 `[genesis_root, final_root, num_turns,
-/// chain_digest]` check reads them directly):
-///   `[first_old, last_new, count, acc]`
-/// — see [`SEG_FIRST_OLD`]/[`SEG_LAST_NEW`]/[`SEG_COUNT`]/[`SEG_ACC`].
-pub(crate) const NUM_CHAIN_CLAIMS: usize = 4;
+/// **The segment digest width** — the multi-felt Poseidon2 commitment carried as the
+/// ordered-history `acc`. Codex re-review #3 replaced the algebraically-broken one-felt
+/// quadratic fold with this genuine collision-resistant commitment. Four BabyBear lanes
+/// ⇒ ~124-bit collision resistance (the host's tooth-4 check compares all four), and the
+/// commitment is a real full-round Poseidon2 permutation — there is no algebraic
+/// shortcut and no degeneracy root (the quadratic fold's weakness).
+pub const SEG_DIGEST_WIDTH: usize = 4;
+
+/// The number of exposed chain claims: `[first_old, last_new, count, acc_0..acc_{W-1}]`
+/// where `W = SEG_DIGEST_WIDTH`. The host verifier's tooth-4 reads these directly,
+/// comparing against `[genesis_root, final_root, num_turns, chain_digest_0..]`.
+pub const NUM_CHAIN_CLAIMS: usize = SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH;
 
 /// Segment field lanes (the order they are exposed in the `expose_claim` table).
-pub(crate) const SEG_FIRST_OLD: usize = 0;
-pub(crate) const SEG_LAST_NEW: usize = 1;
-pub(crate) const SEG_COUNT: usize = 2;
-pub(crate) const SEG_ACC: usize = 3;
+pub const SEG_FIRST_OLD: usize = 0;
+pub const SEG_LAST_NEW: usize = 1;
+pub const SEG_COUNT: usize = 2;
+/// First lane of the multi-felt digest block (`acc_0`); the digest occupies
+/// `[SEG_DIGEST_FIRST .. SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]`.
+pub const SEG_DIGEST_FIRST: usize = 3;
 /// A segment is exactly [`NUM_CHAIN_CLAIMS`] base-field lanes.
-pub(crate) const SEG_WIDTH: usize = NUM_CHAIN_CLAIMS;
+pub const SEG_WIDTH: usize = NUM_CHAIN_CLAIMS;
 
 fn to_p3(v: BabyBear) -> P3BabyBear {
     P3BabyBear::from_u64(v.0 as u64)
 }
 
-/// **The in-circuit ordered-segment digest step.** A 2-to-1 collision-resistant
-/// Poseidon2 compression `acc' = H(a, b)` over the recursion config's challenger
-/// permutation (`BABY_BEAR_D4_W16`, CTL-verified against the Poseidon2 AIR table —
-/// the SAME arithmetization the FRI challenger uses, so it is genuinely
-/// collision-resistant, not a weak algebraic fold). Used (i) at the descriptor
-/// leaf to seed the per-turn segment digest `acc = H(first_old, last_new)`, and
-/// (ii) at each aggregation node to fold `parent.acc = H(L.acc, R.acc)` — an
-/// order-sensitive (left≠right) tree commitment over the real turn endpoints, so
-/// any reorder / drop / insert of the real descriptor leaves changes the root acc.
+/// The Poseidon2 challenger perm config the segment-digest sponge runs over —
+/// `BABY_BEAR_D4_W16`, the SAME permutation the recursion FRI challenger uses (enabled by
+/// `prepare_circuit_for_verification`). Reusing it means the sponge is a genuine, already
+/// CTL-soundly-arithmetized Poseidon2, not a new gadget.
+fn seg_poseidon_config() -> p3_circuit::ops::Poseidon2Config {
+    // The ISOLATED segment-digest permutation: `BABY_BEAR_D4_W24` is a DISTINCT op-type
+    // (`poseidon2_perm/baby_bear_d4_w24`) from the FRI challenger's `BABY_BEAR_D4_W16`.
+    // Sharing nothing — chain-state, CTL bus, op-type — means the digest sponge's perm I/O
+    // can never be transitively aliased into the verifier's shared `ExprId::ZERO` witness
+    // class (the cross-op connect-DSU collapse that produced the `WitnessId(0)` conflict when
+    // the digest reused the challenger's W16 perm). Enabled in
+    // `DreggRecursionConfig::prepare_circuit_for_verification`.
+    p3_circuit::ops::Poseidon2Config::BABY_BEAR_D4_W24
+}
+
+/// Sponge rate (in ext limbs) for the segment digest: `rate_ext` of `BABY_BEAR_D4_W24`
+/// = 4. Each absorb adds up to 4 base-field-embedded inputs into the rate limbs; each
+/// squeeze reads the 4 CTL-verified rate-output limbs.
+const SEG_SPONGE_RATE: usize = 4;
+
+/// Width (in ext limbs) of the sponge state for `BABY_BEAR_D4_W24` = `width_ext` = 6
+/// (rate 4 + capacity 2).
+const SEG_SPONGE_WIDTH: usize = 6;
+
+/// A base-field domain-separation tag absorbed first, so the digest is a *keyed* sponge
+/// (the empty-input / all-zero state cannot be reached by a real chain). Arbitrary fixed
+/// nonzero BabyBear; not security-load-bearing on its own, only domain separation.
+const SEG_DOMAIN_TAG: u32 = 0x5345_4731 % 0x7800_0001; // "SEG1" mod BabyBear
+
+/// **The in-circuit ordered-segment digest** — a genuine multi-felt Poseidon2
+/// commitment (codex re-review #3, replacing the algebraically-broken quadratic fold).
 ///
-/// `a` and `b` are base-field scalars embedded in the challenge field (only coeff 0
-/// nonzero). The returned digest is the BASE-FIELD coordinate (coeff 0) of the
-/// permutation's first output limb — exposable through the `expose_claim` table
-/// (which requires base-field lane values) and matched host-side by
-/// [`seg_hash2_host`]. (A single-felt digest, exactly like the prior
-/// `hash_4_to_1`-based `chain_digest`: an ordered-history commitment whose role is
-/// to make a relabeled / reordered history mismatch the root, not a 128-bit hash.)
-fn seg_hash2_in_circuit(
+/// Runs a duplex sponge over the recursion config's challenger permutation
+/// (`BABY_BEAR_D4_W16`, the SAME full-round Poseidon2 the FRI challenger uses, CTL-bound
+/// against the Poseidon2 AIR), absorbing `inputs` (each a base-field-embedded ext scalar)
+/// two-at-a-time into the rate limbs, then squeezing [`SEG_DIGEST_WIDTH`] base-field
+/// lanes from the rate-output limbs. The returned targets are the digest lanes, exposed
+/// through the `expose_claim` table (which reads each target's coeff-0) and matched
+/// host-side EXACTLY by [`seg_poseidon_commit_host`].
+///
+/// Because the squeeze outputs are genuine Poseidon2 permutation coordinates, the digest
+/// is collision-resistant: there is NO algebraic shortcut (the quadratic fold's `a*b`
+/// solvable-collision) and no degeneracy root (the `a=-M2/M3` / `b=-M1/M3` cases that
+/// made the old fold ignore an operand). A same-genesis/same-final/same-count history B
+/// with a different middle now yields a different digest with ~124-bit security.
+///
+/// Used (i) at the descriptor leaf to seed `acc = commit([first_old, last_new])`, and
+/// (ii) at each aggregation node to fold `parent.acc = commit(L.acc ++ R.acc)` — an
+/// order-sensitive tree commitment (left≠right because L.acc is absorbed before R.acc).
+///
+/// `pub` so the executable witness test (`ivc_turn_chain_rotated.rs`) can mirror the lib's
+/// EXACT segment combine when it reconstructs the fold from the public building blocks.
+pub fn seg_poseidon_commit(
     cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
-    a: p3_recursion::Target,
-    b: p3_recursion::Target,
-) -> p3_recursion::Target {
-    // An order-sensitive base-field ordered-history fold over the verified-segment
-    // values (themselves base-field-embedded scalars): `acc' = a*M1 + b*M2 + (a*b)*M3`.
-    // The asymmetric multipliers make it order-sensitive (`H(a,b) != H(b,a)`), and the
-    // cross term `a*b` couples both operands. The output is a base-field-embedded
-    // extension value (each multiply by a base-embedded constant stays in coeff 0), so
-    // it is exposable through the `expose_claim` table (which requires base-field lanes).
-    // Matched host-side EXACTLY by [`seg_hash2_host`].
-    let m1 = cb.define_const(seg_mult_ext(SEG_DIGEST_M1));
-    let m2 = cb.define_const(seg_mult_ext(SEG_DIGEST_M2));
-    let m3 = cb.define_const(seg_mult_ext(SEG_DIGEST_M3));
-    let t1 = cb.mul(a, m1);
-    let t2 = cb.mul(b, m2);
-    let ab = cb.mul(a, b);
-    let t3 = cb.mul(ab, m3);
-    let s = cb.add(t1, t2);
-    cb.add(s, t3)
+    inputs: &[p3_recursion::Target],
+) -> [p3_recursion::Target; SEG_DIGEST_WIDTH] {
+    let config = seg_poseidon_config();
+    // IV/pad constant: a NONZERO domain tag. We deliberately AVOID feeding the shared zero
+    // constant (`ExprId::ZERO` == `WitnessId(0)`) into the permutation — in the assembled
+    // recursion verifier circuit a perm input/output that touches the shared zero-witness
+    // trips a `WitnessConflict { WitnessId(0) }` (the all-zero double-creator class). Seeding
+    // every state/pad lane with a nonzero IV keeps the sponge off WitnessId(0) entirely.
+    let tag = cb.define_const(RecursionChallenge::from(P3BabyBear::from_u64(
+        SEG_DOMAIN_TAG as u64,
+    )));
+
+    // Capacity IV seed (the `SEG_SPONGE_WIDTH - SEG_SPONGE_RATE` capacity limbs) for the
+    // FIRST permutation; on it the capacity is CTL-bound to this `Const`, keeping the bus
+    // balanced. On EVERY SUBSEQUENT permutation the capacity is chained OFF the bus (the
+    // perm AIR inherits the previous row's capacity output) — see
+    // `add_poseidon2_perm_sponge_step`. This is what makes the digest sponge's
+    // `WitnessChecks` global cumulative balance: feeding the full previous state (capacity
+    // included) as fresh CTL inputs each perm left every chained perm's capacity RECEIVE
+    // unmatched (a perm only sends its rate outputs), so the aggregation child's lookup bus
+    // did not balance to zero.
+    let cap_seed: Vec<p3_recursion::Target> = vec![tag; SEG_SPONGE_WIDTH - SEG_SPONGE_RATE];
+
+    // The rate lanes carried across permutations (seeded with the nonzero IV). The capacity
+    // is held internally by the perm chain, not in this array.
+    let mut rate: Vec<p3_recursion::Target> = vec![tag; SEG_SPONGE_RATE];
+
+    // The padded absorb stream: the input length (so different arities can't collide) then
+    // the inputs. Pad to a multiple of the rate with the nonzero IV.
+    let len_tag = cb.define_const(RecursionChallenge::from(P3BabyBear::from_u64(
+        inputs.len() as u64
+    )));
+    let mut stream: Vec<p3_recursion::Target> = Vec::with_capacity(inputs.len() + 1);
+    stream.push(len_tag);
+    stream.extend_from_slice(inputs);
+    while stream.len() % SEG_SPONGE_RATE != 0 {
+        stream.push(tag);
+    }
+
+    // Absorb: add each rate-block into the rate limbs, then permute. The first step seeds +
+    // CTL-binds the capacity IV; subsequent steps chain the capacity off the bus. The result
+    // is byte-identical to the full-state sponge (`seg_poseidon_commit_host`): the AIR
+    // computes over the same rate + (inherited) capacity, only the bus bookkeeping differs.
+    let mut first = true;
+    for block in stream.chunks(SEG_SPONGE_RATE) {
+        for (lane, &inp) in block.iter().enumerate() {
+            rate[lane] = cb.add(rate[lane], inp);
+        }
+        rate = cb
+            .add_poseidon2_perm_sponge_step(config, first, &rate, &cap_seed)
+            .expect(
+                "segment-digest poseidon2 sponge step builds (perm op enabled by the \
+                     recursion config's prepare_circuit_for_verification)",
+            );
+        first = false;
+    }
+
+    // Squeeze SEG_DIGEST_WIDTH base lanes from the rate-output limbs. A squeeze that needs
+    // more than the rate re-permutes WITHOUT absorbing (capacity still chained off-bus).
+    let mut digest: Vec<p3_recursion::Target> = Vec::with_capacity(SEG_DIGEST_WIDTH);
+    loop {
+        for &r in rate.iter().take(SEG_SPONGE_RATE) {
+            if digest.len() == SEG_DIGEST_WIDTH {
+                break;
+            }
+            digest.push(r);
+        }
+        if digest.len() == SEG_DIGEST_WIDTH {
+            break;
+        }
+        rate = cb
+            .add_poseidon2_perm_sponge_step(config, false, &rate, &cap_seed)
+            .expect("segment-digest poseidon2 squeeze step builds");
+    }
+    digest
+        .try_into()
+        .expect("digest collected exactly SEG_DIGEST_WIDTH lanes")
 }
 
-// Ordered-history fold multipliers (distinct, asymmetric → order-sensitive). Large
-// fixed BabyBear constants; their exact values are not security-load-bearing (the
-// mixed-root rejection rests on genesis/final/count, not the digest — see the verify
-// segment tooth), they only give an order-sensitive digest that makes a relabeled /
-// reordered history mismatch the root.
-const SEG_DIGEST_M1: u32 = 0x4D2E_8F31 % 0x7800_0001; // < BabyBear modulus 2^31 - 2^27 + 1
-const SEG_DIGEST_M2: u32 = 0x1A7C_55B9 % 0x7800_0001;
-const SEG_DIGEST_M3: u32 = 0x6F0A_3E27 % 0x7800_0001;
+/// Host-side dual of [`seg_poseidon_commit`]: the SAME duplex sponge over the SAME native
+/// Poseidon2 permutation (`default_babybear_poseidon2_16`, which the recursion config
+/// enables in-circuit), so the prover computes the EXACT digest lanes the root proof will
+/// expose. The state is the 16 base lanes (4 ext limbs × 4 coeffs); a base input is added
+/// into coeff-0 of a rate limb (base lane `4*lane`); the squeeze reads coeff-0 of the rate
+/// limbs (base lanes 0 and 4).
+///
+/// `pub` so the executable witness test can assert host/in-circuit agreement (the digest
+/// the prover carries == the digest the root proof exposes).
+pub fn seg_poseidon_commit_host(inputs: &[BabyBear]) -> [BabyBear; SEG_DIGEST_WIDTH] {
+    use p3_baby_bear::default_babybear_poseidon2_24;
+    use p3_symmetric::Permutation;
 
-/// A multiplier as a base-field-embedded challenge-field constant.
-fn seg_mult_ext(m: u32) -> RecursionChallenge {
-    RecursionChallenge::from(P3BabyBear::from_u64(m as u64))
-}
+    let perm = default_babybear_poseidon2_24();
+    let iv = to_p3(BabyBear::new(SEG_DOMAIN_TAG));
 
-/// Host-side dual of [`seg_hash2_in_circuit`]: the SAME base-field fold
-/// `acc' = a*M1 + b*M2 + (a*b)*M3`. The prover replays this to compute the running
-/// segment digest it carries as the whole-chain `chain_digest`.
-fn seg_hash2_host(a: BabyBear, b: BabyBear) -> BabyBear {
-    let m1 = BabyBear::new(SEG_DIGEST_M1);
-    let m2 = BabyBear::new(SEG_DIGEST_M2);
-    let m3 = BabyBear::new(SEG_DIGEST_M3);
-    a * m1 + b * m2 + (a * b) * m3
+    // 24 base lanes = 6 ext limbs × D(=4) coeffs. Lane `4*limb + coeff`. coeff-0 of limb i
+    // is lane `4*i` — the squeeze/absorb point that mirrors the in-circuit base-embedding.
+    // Initial state mirrors the circuit's `[tag; 6]`: coeff-0 of every limb = the IV, rest 0.
+    let mut state = [P3BabyBear::ZERO; 24];
+    for limb in 0..SEG_SPONGE_WIDTH {
+        state[limb * D] = iv;
+    }
+
+    let mut stream: Vec<BabyBear> = Vec::with_capacity(inputs.len() + 1);
+    stream.push(BabyBear::new(inputs.len() as u32));
+    stream.extend_from_slice(inputs);
+    while stream.len() % SEG_SPONGE_RATE != 0 {
+        stream.push(BabyBear::new(SEG_DOMAIN_TAG));
+    }
+
+    for block in stream.chunks(SEG_SPONGE_RATE) {
+        for (lane, &inp) in block.iter().enumerate() {
+            // add into coeff-0 of rate limb `lane` == base lane `4*lane`.
+            state[lane * D] += to_p3(inp);
+        }
+        state = perm.permute(state);
+    }
+
+    let mut digest: Vec<BabyBear> = Vec::with_capacity(SEG_DIGEST_WIDTH);
+    loop {
+        for lane in 0..SEG_SPONGE_RATE {
+            if digest.len() == SEG_DIGEST_WIDTH {
+                break;
+            }
+            // squeeze coeff-0 of rate limb `lane` == base lane `4*lane`.
+            digest.push(BabyBear::new(state[lane * D].as_canonical_u32()));
+        }
+        if digest.len() == SEG_DIGEST_WIDTH {
+            break;
+        }
+        state = perm.permute(state);
+    }
+    digest
+        .try_into()
+        .expect("host digest collected exactly SEG_DIGEST_WIDTH lanes")
 }
 
 /// Find the instance index of the `expose_claim` non-primitive table in a batch
@@ -685,40 +827,44 @@ fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
 }
 
 /// The host-side mirror of one descriptor leaf / aggregation node's ORDERED SEGMENT
-/// (the four base-field values it exposes through the `expose_claim` table):
-/// `[first_old, last_new, count, acc]`. The prover folds these the SAME way the
-/// in-circuit combine does so it knows the root segment (hence the four chain
-/// claims) to carry.
+/// (the base-field values it exposes through the `expose_claim` table):
+/// `[first_old, last_new, count, acc_0..acc_{W-1}]` (`W = SEG_DIGEST_WIDTH`). The prover
+/// folds these the SAME way the in-circuit combine does so it knows the root segment
+/// (hence the chain claims) to carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HostSeg {
     pub first_old: BabyBear,
     pub last_new: BabyBear,
     pub count: BabyBear,
-    pub acc: BabyBear,
+    /// The multi-felt Poseidon2 ordered-history digest (codex #3).
+    pub acc: [BabyBear; SEG_DIGEST_WIDTH],
 }
 
 /// The per-turn (descriptor-leaf) segment: `first_old = old_root`, `last_new =
-/// new_root`, `count = 1`, `acc = H(old_root, new_root)` — the SAME seed
-/// [`seg_hash2_in_circuit`] computes at the leaf wrap.
+/// new_root`, `count = 1`, `acc = commit([old_root, new_root])` — the SAME seed
+/// [`seg_poseidon_commit`] computes at the leaf wrap.
 fn leaf_seg(old_root: BabyBear, new_root: BabyBear) -> HostSeg {
     HostSeg {
         first_old: old_root,
         last_new: new_root,
         count: BabyBear::ONE,
-        acc: seg_hash2_host(old_root, new_root),
+        acc: seg_poseidon_commit_host(&[old_root, new_root]),
     }
 }
 
 /// Combine two adjacent segments (the host mirror of the aggregation combine):
 /// continuity `l.last_new == r.first_old` (caller-checked upstream as `ChainBreak`),
 /// `first_old = l.first_old`, `last_new = r.last_new`, `count = l.count + r.count`,
-/// `acc = H(l.acc, r.acc)`.
+/// `acc = commit(l.acc ++ r.acc)` (order-sensitive: l before r).
 fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
+    let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+    acc_inputs.extend_from_slice(&l.acc);
+    acc_inputs.extend_from_slice(&r.acc);
     HostSeg {
         first_old: l.first_old,
         last_new: r.last_new,
         count: l.count + r.count,
-        acc: seg_hash2_host(l.acc, r.acc),
+        acc: seg_poseidon_commit_host(&acc_inputs),
     }
 }
 
@@ -1059,8 +1205,14 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
         let first_old = main[V1_PI_COUNT];
         let last_new = main[V1_PI_COUNT + 1];
         let count = cb.define_const(RecursionChallenge::ONE);
-        let acc = seg_hash2_in_circuit(cb, first_old, last_new);
-        let seg = [first_old, last_new, count, acc];
+        // The per-turn seed: a genuine multi-felt Poseidon2 commitment over the leaf's
+        // REAL (descriptor-bound) endpoints (codex #3).
+        let acc = seg_poseidon_commit(cb, &[first_old, last_new]);
+        let mut seg = Vec::with_capacity(SEG_WIDTH);
+        seg.push(first_old);
+        seg.push(last_new);
+        seg.push(count);
+        seg.extend_from_slice(&acc);
         debug_assert_eq!(seg.len(), SEG_WIDTH);
         cb.expose_as_public_output(&seg);
     };
@@ -1101,8 +1253,10 @@ pub struct WholeChainProof {
     pub genesis_root: BabyBear,
     /// The final root the chain reaches.
     pub final_root: BabyBear,
-    /// The running digest committing to the ordered (old_root, new_root) pairs.
-    pub chain_digest: BabyBear,
+    /// The multi-felt Poseidon2 digest committing to the ordered (old_root, new_root)
+    /// pairs (codex re-review #3 — a genuine [`SEG_DIGEST_WIDTH`]-felt collision-resistant
+    /// commitment, replacing the algebraically-broken one-felt fold).
+    pub chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     /// Number of finalized turns folded.
     pub num_turns: usize,
 }
@@ -1175,15 +1329,20 @@ pub struct WholeChainProofBytes {
     pub genesis_root: u32,
     /// The final root the chain reaches.
     pub final_root: u32,
-    /// The ordered-history digest over the (old_root, new_root) pairs.
-    pub chain_digest: u32,
+    /// The multi-felt Poseidon2 ordered-history digest over the (old_root, new_root)
+    /// pairs ([`SEG_DIGEST_WIDTH`] canonical `BabyBear` lanes as `u32`). Codex #3 widened
+    /// this from a single felt; the envelope version was bumped to fail-close old readers.
+    pub chain_digest: [u32; SEG_DIGEST_WIDTH],
     /// The number of finalized turns folded.
     pub num_turns: u64,
 }
 
 /// The on-the-wire version tag of [`WholeChainProofBytes`]. Bumped on any layout
 /// change so an old producer's bytes are refused (fail-closed) not misread.
-pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 1;
+///
+/// **v2** (codex re-review #3): `chain_digest` widened from one `u32` to
+/// `[u32; SEG_DIGEST_WIDTH]` — the multi-felt Poseidon2 commitment.
+pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 2;
 
 impl WholeChainProofBytes {
     /// Project a [`WholeChainProof`] to its verify-sufficient byte envelope.
@@ -1199,7 +1358,7 @@ impl WholeChainProofBytes {
             binding_proof,
             genesis_root: proof.genesis_root.as_u32(),
             final_root: proof.final_root.as_u32(),
-            chain_digest: proof.chain_digest.as_u32(),
+            chain_digest: core::array::from_fn(|i| proof.chain_digest[i].as_u32()),
             num_turns: proof.num_turns as u64,
         }
     }
@@ -1299,7 +1458,7 @@ pub fn verify_whole_chain_proof_bytes(
         &binding_proof,
         BabyBear::new(env.genesis_root),
         BabyBear::new(env.final_root),
-        BabyBear::new(env.chain_digest),
+        core::array::from_fn(|i| BabyBear::new(env.chain_digest[i])),
         env.num_turns as usize,
         expected_vk,
     )
@@ -1324,10 +1483,18 @@ pub fn verify_turn_chain_recursive_from_blobs(
     binding_blob: &[u8],
     genesis_root: u32,
     final_root: u32,
-    chain_digest: u32,
+    chain_digest: &[u32],
     num_turns: usize,
     vk_anchor: &[u8; 32],
 ) -> Result<(), TurnChainError> {
+    if chain_digest.len() != SEG_DIGEST_WIDTH {
+        return Err(TurnChainError::EnvelopeDecode {
+            reason: format!(
+                "chain_digest must be {SEG_DIGEST_WIDTH} lanes, got {}",
+                chain_digest.len()
+            ),
+        });
+    }
     if root_blob.is_empty() {
         return Err(TurnChainError::EnvelopeDecode {
             reason: "empty root proof blob".to_string(),
@@ -1356,7 +1523,7 @@ pub fn verify_turn_chain_recursive_from_blobs(
         &binding_proof,
         BabyBear::new(genesis_root),
         BabyBear::new(final_root),
-        BabyBear::new(chain_digest),
+        core::array::from_fn(|i| BabyBear::new(chain_digest[i])),
         num_turns,
         &RecursionVk(*vk_anchor),
     )
@@ -1473,6 +1640,19 @@ fn prove_chain_core_rotated(
     // Host-side continuity (the `ChainBreak` tooth: `prev.new_root == next.old_root`). This
     // mirrors the in-circuit combine's continuity constraint and fails closed BEFORE any proving.
     let _ = generate_chain_trace_rotated_continuity(turns)?;
+
+    // CODEX #5 — the count field is a BabyBear (mod p), so `num_turns` must be `< p` for the
+    // exposed `count` lane to faithfully equal the real turn count (no modular wrap). A single
+    // K-fold window of `>= p ~ 2^31` turns is far past any real finality stream, but we bound it
+    // explicitly rather than rely on the implicit ceiling.
+    if (turns.len() as u64) >= BABY_BEAR_MODULUS as u64 {
+        return Err(TurnChainError::RecursionFailed {
+            reason: format!(
+                "num_turns {} >= BabyBear modulus {BABY_BEAR_MODULUS} (count lane would wrap mod p)",
+                turns.len()
+            ),
+        });
+    }
 
     // The ROOT SEGMENT the host computes by folding the per-turn leaf segments through the SAME
     // pairwise binary tree `aggregate_tree` runs in-circuit. Its four fields ARE the four chain
@@ -1624,16 +1804,36 @@ fn aggregate_tree(
 
                 // (1) STATE CONTINUITY: L.last_new == R.first_old. The left subtree's final
                 // root must be the right subtree's first root — the temporal tooth, in-circuit.
-                let cont = cb.sub(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-                cb.assert_zero(cont);
+                //
+                // Enforce equality by DIRECT `connect`, NOT `assert_zero(sub(..))`. The
+                // `sub`+`assert_zero` idiom lowers to a backward-add whose `out` is the shared
+                // `ExprId::ZERO` witness (`WitnessId(0)`): when one operand (`l.last_new`, a real
+                // child-exposed root) is transitively unioned into the zero class by the verifier's
+                // in-circuit challenger machinery, witness generation OVERWRITES `WitnessId(0)` with
+                // a non-zero root — a `WitnessConflict { WitnessId(0) }`. `connect` unions the two
+                // operands directly (no zero involved): equal on the honest path, and a mismatch
+                // (a tampered/discontinuous chain) is rejected as a conflict — the same temporal
+                // tooth, fail-closed, without touching the zero slot.
+                cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
 
                 // (2) parent segment: span [L.first_old .. R.last_new], count L+R, ordered
-                // digest acc = H(L.acc, R.acc) (left≠right ⇒ order-sensitive).
+                // multi-felt digest acc = commit(L.acc ++ R.acc) (L absorbed before R ⇒
+                // order-sensitive). The digest occupies SEG_DIGEST_WIDTH lanes from
+                // SEG_DIGEST_FIRST.
                 let first_old = l[SEG_FIRST_OLD];
                 let last_new = r[SEG_LAST_NEW];
                 let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
-                let acc = seg_hash2_in_circuit(cb, l[SEG_ACC], r[SEG_ACC]);
-                let parent = [first_old, last_new, count, acc];
+                let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+                acc_inputs
+                    .extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                acc_inputs
+                    .extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                let acc = seg_poseidon_commit(cb, &acc_inputs);
+                let mut parent = Vec::with_capacity(SEG_WIDTH);
+                parent.push(first_old);
+                parent.push(last_new);
+                parent.push(count);
+                parent.extend_from_slice(&acc);
                 debug_assert_eq!(parent.len(), SEG_WIDTH);
                 cb.expose_as_public_output(&parent);
             };
@@ -1717,7 +1917,7 @@ pub fn verify_turn_chain_recursive_from_parts(
     binding_proof: &RecursionCompatibleProof,
     genesis_root: BabyBear,
     final_root: BabyBear,
-    chain_digest: BabyBear,
+    chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     num_turns: usize,
     expected_vk: &RecursionVk,
 ) -> Result<(), TurnChainError> {
@@ -1760,12 +1960,11 @@ pub fn verify_turn_chain_recursive_from_parts(
                 .to_string(),
         }
     })?;
-    let expected = vec![
-        genesis_root,
-        final_root,
-        BabyBear::new(num_turns as u32),
-        chain_digest,
-    ];
+    let mut expected = Vec::with_capacity(SEG_WIDTH);
+    expected.push(genesis_root);
+    expected.push(final_root);
+    expected.push(BabyBear::new(num_turns as u32));
+    expected.extend_from_slice(&chain_digest);
     if exposed != expected {
         return Err(TurnChainError::ClaimedPublicsUnattested {
             reason: format!(
