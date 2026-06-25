@@ -278,6 +278,28 @@ fn main() {
         }
     }
 
+    // `--render-welcome <out>`: THE CALM WELCOME BAKE — the warm front door (the OTHER
+    // end of the bar from the dense `--render-desktop` workbench): a breathing room of
+    // cell-icons + a gentle "type anything" Spotter pill + the warm welcome card
+    // greeting a newcomer with the live image's real shape. Nothing else open. 1600x1000.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_welcome_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1600.0, 1000.0));
+            match render_welcome_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-welcome FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-guest <out>`: THE GUEST / APP-FORWARD BAKE — the welcoming,
     // low-verbosity desktop a newcomer lands on (the "after you dismiss the
     // inspector" view): the real app surfaces (browser · editor · terminal · chat)
@@ -1000,6 +1022,126 @@ fn render_desktop_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-welcome <out>` (or `=<out>`) argument — the output base path
+/// for the CALM WELCOME bake (the other end of the bar: the warm front door a stranger
+/// wakes up to, not the dense workbench). Returns `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_welcome_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-welcome" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-welcome=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// **THE CALM WELCOME BAKE** — render the deos desktop's *warm front door*: the calm,
+/// breathing default a never-greeted newcomer wakes up to. The dense workbench bake
+/// (`--render-desktop`) shows the power end of the bar — every surface open; this bake
+/// shows the OTHER end: a bare room of glowing cell-icons, the live World summary, the
+/// gentle "type anything" Spotter pill, and the warm WELCOME card greeting the stranger
+/// with the image's REAL shape (its true cell count + history height) over four inviting
+/// doors. NOTHING else is opened — the litmus is a five-year-old gladly clicking around.
+///
+/// The bake asserts the calm default is genuinely calm (no windows open), the welcome is
+/// shown, and its greeting names the live world; then captures `<out>.png`. Hermetic
+/// (a throwaway sidecar). Default 1600x1000 (overridable via `--render-size`).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::DeosDesktop;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A hermetic, fresh sidecar so `welcomed = false` → the warm card shows (a fresh
+    // image is exactly the newcomer's first run). Start clean.
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-welcome-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    // The live verified image — the SAME `World` the cockpit runs.
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [_treasury, _service, user] = anchors;
+    let shared = Rc::new(RefCell::new(world));
+    let height = shared.borrow().height();
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk_h = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // The calm default is genuinely CALM: a fresh image opens onto the warm welcome,
+    // and NOTHING else is open (no windows) — breathing room, not everything-at-once.
+    let (shown, greeting, open_windows) = desk_h.update(&mut cx, |desk, _cx| {
+        (
+            desk.bake_welcome_is_shown(),
+            desk.bake_welcome_greeting(),
+            desk.bake_total_window_count(),
+        )
+    });
+    anyhow::ensure!(
+        shown,
+        "a fresh image must open onto the warm WELCOME card (the calm front door)"
+    );
+    anyhow::ensure!(
+        open_windows == 0,
+        "the calm default must open NOTHING else — a welcoming first view, not the dense \
+         workbench (got {open_windows} open window(s))"
+    );
+    anyhow::ensure!(
+        greeting.contains(&height.to_string()),
+        "the welcome greeting must name the live image's REAL history height ({height})"
+    );
+
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos WELCOME render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the calm front \
+         door — a warm greeting over the live image ({} cells, height {height}), a gentle \
+         'type anything' Spotter pill, and four inviting doors; nothing else open.",
+        shared.borrow().ledger().iter().count()
+    );
+    Ok(())
+}
+
 /// **THE deos DESKTOP BAKE** — render the Windows-NT / Pharo-Smalltalk workbench
 /// over the live verified World, headless, and capture the PNG.
 ///
@@ -1023,7 +1165,7 @@ fn render_desktop_arg(args: &[String]) -> Option<String> {
 fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, id_hex};
+    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, WinKindTag, id_hex};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1232,6 +1374,40 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     });
     cx.run_until_parked();
 
+    // 4e′. THE CONTENT-IR BRIDGE — a desktop window whose body IS a real
+    //      `deos_view::ViewNode` (a card-as-cell) rendered through deos-view's NATIVE
+    //      renderer (`AppletView`), beside the native-chrome surfaces. Open it, render,
+    //      and assert (1) the desktop minted the IR renderer entity (its window body is a
+    //      rendered portable tree), and (2) the WEB renderer paints the IDENTICAL
+    //      `ViewNode` to HTML — the same tree, two backends; the native desktop is one.
+    //      Gated on `card-pane` (the default build has it; the gpui-free `headless` bake
+    //      does not, so the step is skipped there — the window-type still falls back to
+    //      the inspector body and compiles).
+    #[cfg(feature = "card-pane")]
+    {
+        desk_h.update(&mut cx, |desk, cx| {
+            desk.bake_open_viewnode_pane();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let has_pane = desk_h.update(&mut cx, |desk, _cx| desk.bake_viewnode_has_pane());
+        anyhow::ensure!(
+            has_pane,
+            "the desktop must host a content-IR pane — a window whose body is a real \
+             deos_view::ViewNode rendered through deos-view's native renderer"
+        );
+        // The SAME portable tree the native pane hosts also renders to HTML — carrying
+        // the card text, the seeded `bind` value, and the button's affordance payload.
+        let html = starbridge_v2::deos_desktop::viewnode_pane::card_html();
+        anyhow::ensure!(
+            html.contains("Portable-IR card")
+                && html.contains("live count: 7")
+                && html.contains("data-turn=\"bump\""),
+            "the web renderer must render the IDENTICAL portable ViewNode the desktop \
+             hosts (renderer independence: the same tree, native + web)"
+        );
+    }
+
     // 4f. THE SPOTTER — the Pharo command palette. Open it with a query, assert it ranks
     //     real candidates over the live cells, then dispatch to prove it jumps. (We then
     //     re-open it for the final shot so the palette renders over the desktop.)
@@ -1352,6 +1528,43 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         cx.notify();
     });
     cx.run_until_parked();
+
+    // 9. THE PHARO HALO — the "mold it in place" gesture. Select a cell-icon and its
+    //    ring of direct-manipulation handles floats (inspect · explore · open-as-doc ·
+    //    fork · properties · the verified-turn affordance). Each handle fires the SAME
+    //    actuation the right-click menu does — prove it FUNCTIONALLY (the Inspect handle
+    //    opens a real inspector window), then leave a WINDOW selected so the ring renders
+    //    around it in the final shot (the halo over the live workbench).
+    let pre_halo_wins = desk_h.update(&mut cx, |desk, _cx| desk.bake_total_window_count());
+    let halo_handles = desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_select_icon(service);
+        cx.notify();
+        desk.bake_halo_handle_count()
+    });
+    anyhow::ensure!(
+        halo_handles >= 5,
+        "a selected cell-icon must float a ring of halo handles (got {halo_handles})"
+    );
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_halo_fire_inspect();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let post_halo_wins = desk_h.update(&mut cx, |desk, _cx| desk.bake_total_window_count());
+    anyhow::ensure!(
+        post_halo_wins > pre_halo_wins,
+        "firing the halo's Inspect handle must REUSE the actuation and open a window \
+         ({pre_halo_wins} -> {post_halo_wins}) — the ring is a spatial face on the same verbs"
+    );
+    // Leave a window molded so the halo ring renders around it in the final shot
+    // (raise the user transcript window to the top, then select it).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_transcript(user);
+        desk.bake_select_window(user, WinKindTag::Transcript);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
     cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
     cx.run_until_parked();
 
@@ -1368,9 +1581,13 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
          cells, receipts, Σ balance = {sigma} — invariant under transfers + layout); a WORKFLOW COMPOSER (the proven \
          dregg_deploy::refine A ≤ᶠ B game decides refinement — a widening Seal DIVERGES); a deep \
          right-click context menu (now with Cascade/Tile/Close-all window commands) AND a \
-         property inspector/editor open; a receipted document edit + a cross-cell TRANSCLUDE \
-         compose; REAL verified turns (height {pre_height} -> {post_height}); tile/cascade are pure \
-         layout actuations (no turn); icon drag + authored prose persisted to the sidecar.",
+         property inspector/editor open; the PHARO HALO floating its ring of \
+         direct-manipulation handles on a molded surface (inspect · explore · open-as-doc · \
+         fork · properties · the verified-turn affordance · resize · close — each firing the \
+         SAME actuation the right-click menu does); a receipted document edit + a cross-cell \
+         TRANSCLUDE compose; REAL verified turns (height {pre_height} -> {post_height}); \
+         tile/cascade are pure layout actuations (no turn); icon drag + authored prose \
+         persisted to the sidecar.",
         shared.borrow().cell_count()
     );
     Ok(())

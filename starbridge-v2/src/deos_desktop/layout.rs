@@ -60,6 +60,13 @@ pub enum WinKindTag {
     /// inspector over the World itself (the ledger census · the receipt-log chronicle ·
     /// the Σ-balance conservation invariant). Anchored on a sentinel cell (the user).
     WorldExplorer,
+    /// **THE CONTENT-IR PANE** — a window whose body is a real `deos_view::ViewNode`
+    /// (a card-as-cell) rendered through deos-view's NATIVE renderer (`AppletView`),
+    /// beside the native-chrome surfaces. Proves the desktop hosts portable-IR content
+    /// (the same tree a web renderer would render), not just hand-built native gpui.
+    /// The rendered renderer entity lives in `viewnode_panes` (gated on `card-pane`),
+    /// so this variant is a marker like `WorldExplorer`.
+    ViewNodePane,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT
@@ -104,6 +111,12 @@ pub struct DesktopPrefs {
     pub word_granularity: bool,
     /// The icon auto-arrange column height (rows per column on a fresh desktop).
     pub grid_rows: u32,
+    /// Whether the newcomer has already been greeted. `false` (the default, and the
+    /// value a fresh/legacy layout deserializes to) means the warm WELCOME moment
+    /// shows on open; dismissing it sets this `true` so the calm front door appears
+    /// exactly once and the room is thereafter the bare, breathing desktop.
+    #[serde(default)]
+    pub welcomed: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -113,6 +126,7 @@ impl Default for DesktopPrefs {
             show_balances: true,
             word_granularity: false,
             grid_rows: 6,
+            welcomed: false,
         }
     }
 }

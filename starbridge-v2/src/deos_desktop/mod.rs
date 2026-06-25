@@ -39,8 +39,18 @@
 pub mod android_window;
 pub mod chrome;
 pub mod docgraph_view;
+/// The Pharo HALO — direct-manipulation handles floating on a selected icon/window,
+/// each firing the same actuation the right-click menu does ("mold it in place").
+pub mod halo;
 pub mod layout;
 pub mod spotter;
+// THE CONTENT-IR BRIDGE — a desktop window whose body is a real `deos_view::ViewNode`
+// rendered through deos-view's NATIVE renderer (the portable-IR content surface beside
+// the native-chrome panes). Gated on `card-pane` (pulls deos-view + deos-js); the
+// window-type registration below falls back to the inspector body when it is off.
+#[cfg(feature = "card-pane")]
+pub mod viewnode_pane;
+pub mod welcome;
 pub mod workflow;
 pub mod world_explorer;
 
@@ -82,6 +92,8 @@ pub use chrome::{
     face_gauge, face_row, face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
 };
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
+
+use halo::HaloTarget;
 
 /// Parse a document line back to the `CellId` it transcludes, if any. The compose
 /// gesture writes `{transclude dregg://<64-hex> · <kind> · balance <b> · <life>}`
@@ -168,6 +180,10 @@ enum WinKind {
     /// chronicle · conservation). Per-window face selection lives in `world_explorers`,
     /// so this variant is a marker.
     WorldExplorer,
+    /// **THE CONTENT-IR PANE** — a window whose body is a real `deos_view::ViewNode`
+    /// rendered through deos-view's NATIVE renderer (`AppletView`). The rendered
+    /// renderer entity lives in `viewnode_panes`, so this variant is a marker.
+    ViewNodePane,
 }
 
 impl WinKind {
@@ -180,6 +196,7 @@ impl WinKind {
             WinKind::WorkflowComposer => "Workflow",
             WinKind::DocExplorer => "Doc Explorer",
             WinKind::WorldExplorer => "World Explorer",
+            WinKind::ViewNodePane => "Portable IR",
         }
     }
 }
@@ -391,6 +408,24 @@ pub struct DeosDesktop {
     /// **The SPOTTER overlay** — the Pharo command palette (fuzzy-jump to any cell /
     /// action / window). `None` when closed; holds the live query + selection when open.
     spotter: Option<SpotterUi>,
+    /// **The current halo selection** — the icon or window wearing the Pharo
+    /// direct-manipulation ring (`None` when nothing is molded). Set by a left-click on
+    /// an icon/window, cleared by a click on the bare desktop. Read only by the `halo`
+    /// submodule's render + actuation.
+    selected: Option<HaloTarget>,
+    /// **The WELCOME moment** — `true` while the warm front-door card is showing. Set
+    /// from `prefs.welcomed` on open (a fresh/never-greeted image shows it once), and
+    /// cleared the moment the newcomer dismisses it or steps through a door (which also
+    /// persists `welcomed = true`, so the calm greeting appears exactly once). The
+    /// `welcome` submodule owns the gpui-free model + greeting; this View renders it.
+    show_welcome: bool,
+    /// **The content-IR panes** — one [`deos_view::AppletView`] (deos-view's NATIVE
+    /// renderer over a portable `deos_view::ViewNode`) per open `ViewNodePane` window,
+    /// created lazily on first render. The desktop hosts the entity as the window body,
+    /// so the shell paints portable IR beside its native-chrome surfaces. Keyed by the
+    /// window's anchor cell. Gated on `card-pane` (where `deos-view` is in scope).
+    #[cfg(feature = "card-pane")]
+    viewnode_panes: HashMap<CellId, Entity<deos_view::AppletView>>,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -464,6 +499,9 @@ impl DeosDesktop {
             v
         };
         let layout = DesktopLayout::load(&layout_path);
+        // A never-greeted image opens onto the warm WELCOME card (the calm default);
+        // a returning one opens straight onto its arranged room.
+        let show_welcome = !layout.prefs.welcomed;
 
         let mut desk = DeosDesktop {
             world,
@@ -491,6 +529,10 @@ impl DeosDesktop {
             doc_explorers: HashMap::new(),
             world_explorers: HashMap::new(),
             spotter: None,
+            selected: None,
+            show_welcome,
+            #[cfg(feature = "card-pane")]
+            viewnode_panes: HashMap::new(),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -531,6 +573,7 @@ impl DeosDesktop {
             WinKindTag::Workflow => WinKind::WorkflowComposer,
             WinKindTag::DocExplorer => WinKind::DocExplorer,
             WinKindTag::WorldExplorer => WinKind::WorldExplorer,
+            WinKindTag::ViewNodePane => WinKind::ViewNodePane,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -629,6 +672,7 @@ impl DeosDesktop {
             WinKindTag::Workflow => (420.0, 460.0),
             WinKindTag::DocExplorer => (460.0, 420.0),
             WinKindTag::WorldExplorer => (480.0, 440.0),
+            WinKindTag::ViewNodePane => (420.0, 320.0),
             _ => (380.0, 320.0),
         };
         if let Some(g) = self.layout.win_geom(&id_hex(&cell), tag) {
@@ -642,6 +686,10 @@ impl DeosDesktop {
 
     fn close_window(&mut self, key: WinKey) {
         self.windows.remove(&key);
+        // Drop a halo selection that pointed at the now-closed window (no stale ring).
+        if self.selected == Some(HaloTarget::Window(key)) {
+            self.selected = None;
+        }
         // Drop the live editor entity + its Change subscription when a document window
         // closes, so a reopen re-seeds the widget from the committed cell heap.
         if key.1 == WinKindTag::DocEditor {
@@ -654,6 +702,12 @@ impl DeosDesktop {
         }
         if key.1 == WinKindTag::WorldExplorer {
             self.world_explorers.remove(&key.0);
+        }
+        // Drop the content-IR renderer entity when its window closes so a reopen
+        // re-mints the applet + re-renders the portable tree fresh.
+        #[cfg(feature = "card-pane")]
+        if key.1 == WinKindTag::ViewNodePane {
+            self.viewnode_panes.remove(&key.0);
         }
         self.layout.drop_win(&id_hex(&key.0), key.1);
         self.layout.save(&self.layout_path);
@@ -1702,6 +1756,42 @@ impl DeosDesktop {
         self.spotter = None;
     }
 
+    /// Dismiss the warm WELCOME card and remember the newcomer has been greeted (so the
+    /// calm front door shows exactly once — thereafter the room opens bare). Persisting
+    /// `welcomed` is a pure layout change, like any other preference.
+    fn dismiss_welcome(&mut self) {
+        self.show_welcome = false;
+        self.layout.prefs.welcomed = true;
+        self.layout.save(&self.layout_path);
+    }
+
+    /// Step through one of the welcome card's warm doors. Each maps to a real desktop
+    /// gesture the adept fires too — the welcome only *names the first move* in plain
+    /// words; it invents no beginner-only machinery. Dismisses the card in the same
+    /// breath (you have begun; the front door steps aside).
+    fn welcome_dispatch(&mut self, action: welcome::WelcomeAction) {
+        use welcome::WelcomeAction as A;
+        self.dismiss_welcome();
+        match action {
+            A::LookAround => {
+                self.status =
+                    "Look around — hover a cell for its menu, double-click to open it.".into();
+            }
+            A::FindAnything => self.open_spotter(),
+            A::WriteSomething => {
+                // Open the user's own cell as a fresh page — the newcomer's first
+                // document, on the cell that is *them*.
+                self.open_kind(self.user, WinKindTag::DocEditor);
+                self.status = "Write something — type, and every keystroke is kept.".into();
+            }
+            A::SeeTheWorld => {
+                self.open_kind(self.user, WinKindTag::WorldExplorer);
+                self.status =
+                    "The whole world — every cell, every receipt, balance summing to zero.".into();
+            }
+        }
+    }
+
     /// Actuate a desktop-background menu action (no cell context).
     fn actuate_desktop(&mut self, kind: &ActionKind) {
         match kind {
@@ -2137,6 +2227,24 @@ impl DeosDesktop {
         self.world_explorers.entry(self.user).or_default().tab = t;
     }
 
+    // ── Content-IR pane bake/test hooks (gated on `card-pane`) ──
+
+    /// Open the content-IR pane window (anchored on the user cell) — a desktop window
+    /// whose body is a real `deos_view::ViewNode` rendered through deos-view's native
+    /// renderer. A bake/test hook. The renderer entity is minted on the next render.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_open_viewnode_pane(&mut self) {
+        self.open_kind(self.user, WinKindTag::ViewNodePane);
+    }
+
+    /// Whether the content-IR renderer entity has been minted for the user's pane —
+    /// i.e. the desktop window's body IS a rendered portable `ViewNode`. True only
+    /// after the window has rendered at least once (the entity is created lazily).
+    #[cfg(feature = "card-pane")]
+    pub fn bake_viewnode_has_pane(&self) -> bool {
+        self.viewnode_panes.contains_key(&self.user)
+    }
+
     /// Open the Spotter overlay with a query — a bake/test hook driving the palette.
     pub fn bake_open_spotter(&mut self, query: &str) {
         self.open_spotter();
@@ -2162,6 +2270,27 @@ impl DeosDesktop {
     /// Dispatch the Spotter's top candidate (what Enter does) — a bake/test hook.
     pub fn bake_spotter_dispatch_top(&mut self) {
         self.spotter_dispatch(Some(0));
+    }
+
+    /// Whether the warm WELCOME card is currently showing (a bake/test hook).
+    pub fn bake_welcome_is_shown(&self) -> bool {
+        self.show_welcome
+    }
+
+    /// The live, jargon-free welcome greeting for the current world (a bake/test hook) —
+    /// the exact sentence the card renders, so a bake can assert it names the real image.
+    pub fn bake_welcome_greeting(&self) -> String {
+        welcome::greeting(self.cells.len(), self.world.borrow().height())
+    }
+
+    /// Step through the welcome card's `n`-th door (0-based: look · find · make · survey)
+    /// — a bake/test hook proving a door dispatches its real gesture and dismisses the
+    /// card. Returns whether the card is still shown afterward (always `false`).
+    pub fn bake_welcome_door(&mut self, n: usize) -> bool {
+        if let Some(tile) = welcome::welcome_tiles().get(n) {
+            self.welcome_dispatch(tile.action);
+        }
+        self.show_welcome
     }
 
     /// The live `InputState` editor entity for `cell`'s open document, if the doc body
@@ -2245,11 +2374,16 @@ impl Render for DeosDesktop {
                 MouseButton::Left,
                 cx.listener(|this, ev: &MouseUpEvent, _w, cx| this.on_mouse_up(ev, cx)),
             )
-            // A left-click on the bare desktop dismisses an open menu/dialog.
+            // A left-click on the bare desktop dismisses an open menu/dialog AND
+            // clears the halo selection. This parent handler runs BEFORE a child
+            // icon/window's own mouse-down (which re-sets the selection), so a click
+            // that lands ON a surface still selects it; only a bare-desktop click
+            // deselects. (gpui dispatches ancestor handlers first, child last.)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                    if this.open_menu.take().is_some() {
+                    let dirty = this.open_menu.take().is_some() | this.selected.take().is_some();
+                    if dirty {
                         cx.notify();
                     }
                 }),
@@ -2296,6 +2430,16 @@ impl Render for DeosDesktop {
             root = root.child(self.render_window(key, active, window, cx));
         }
 
+        // ── The Pharo HALO — direct-manipulation handles on the selected surface ──
+        // A ring of round handles floating around the molded icon/window; each fires
+        // the SAME actuation the right-click menu does. Painted above the windows so
+        // the ring sits on the live surface; the context menu still draws over it.
+        if self.selected.is_some() {
+            for el in self.render_halo(cx) {
+                root = root.child(el);
+            }
+        }
+
         // ── The context menu overlay (the ACTUATION) ─────────────────────────────
         if self.open_menu.is_some() {
             root = root.child(self.render_context_menu(cx));
@@ -2314,6 +2458,21 @@ impl Render for DeosDesktop {
         // ── The taskbar (open-window stubs) + the status bar ─────────────────────
         root = root.child(self.render_taskbar(cx));
         root = root.child(self.render_statusbar());
+
+        // ── The gentle "type anything" entry pill (the calm Spotter door) ─────────
+        // A small, always-present invitation pinned top-center. It is the wonder-first
+        // face of the Spotter: a newcomer who learns nothing else learns that they can
+        // type a word here and arrive. Hidden while the Spotter or the welcome card is
+        // already open (one calm thing at a time).
+        if self.spotter.is_none() && !self.show_welcome {
+            root = root.child(self.render_spotter_pill(cx));
+        }
+
+        // ── The warm WELCOME card (the calm front door — first run only) ──────────
+        // Painted LAST so it rests over the whole room: a stranger's first breath.
+        if self.show_welcome {
+            root = root.child(self.render_welcome_overlay(cx));
+        }
 
         root
     }
@@ -2429,6 +2588,8 @@ impl DeosDesktop {
                 MouseButton::Left,
                 cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
                     this.open_menu = None;
+                    // Select the icon → its halo ring floats (the Pharo "mold it").
+                    this.selected = Some(HaloTarget::Icon(cell));
                     let idx = this.cells.iter().position(|c| *c == cell).unwrap_or(0);
                     let p = this.icon_pos(idx, &cell);
                     this.drag = Some(Drag::Icon {
@@ -2519,6 +2680,8 @@ impl DeosDesktop {
             WinKindTag::Workflow => self.render_workflow_body(cell, cx),
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, cx),
             WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
+            #[cfg(feature = "card-pane")]
+            WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
             _ => self.render_inspector_body(cell, cx),
         };
 
@@ -2568,10 +2731,11 @@ impl DeosDesktop {
                 .flex_col()
                 .p_px(),
         )
-        // Clicking anywhere in the window raises it.
+        // Clicking anywhere in the window raises it AND selects it (its halo ring).
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                this.selected = Some(HaloTarget::Window(key));
                 if let Some(ws) = this.windows.get_mut(&key) {
                     ws.z = this.next_z;
                     this.next_z += 1;
@@ -3086,6 +3250,63 @@ impl DeosDesktop {
             .into_any_element()
     }
 
+    /// **The content-IR pane body** — host a real `deos_view::ViewNode` rendered
+    /// through deos-view's NATIVE renderer ([`viewnode_pane`] → `deos_view::AppletView`)
+    /// as this window's body, BESIDE the native-chrome surfaces. The renderer entity is
+    /// created lazily on first render (it needs `cx`) and cached in `viewnode_panes`;
+    /// the desktop paints it as a child entity. This is the proof that the native shell
+    /// hosts portable-IR content (the same tree a web renderer would render), not just
+    /// hand-built native gpui.
+    #[cfg(feature = "card-pane")]
+    fn render_viewnode_body(
+        &mut self,
+        cell: CellId,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Lazily mint the `AppletView` (deos-view's native renderer) over the static
+        // portable card on first render of this window; cache it so reads/turns persist.
+        let entity = match self.viewnode_panes.get(&cell).cloned() {
+            Some(e) => e,
+            None => {
+                let e = viewnode_pane::build_viewnode_view(cx);
+                self.viewnode_panes.insert(cell, e.clone());
+                e
+            }
+        };
+        div()
+            .id(gpui::SharedString::from(format!("irbody-{}", id_hex(&cell))))
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
+            .bg(gpui::rgb(NT_PANEL))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(face_section(
+                "Portable IR (deos_view::ViewNode -> AppletView · the same tree a web renderer renders)",
+            ))
+            .child(
+                // THE IR-RENDERED SURFACE — deos-view's native renderer walks the
+                // portable `ViewNode` into real gpui-component widgets (the `bind` reads
+                // a live cell slot; the `+1` button fires a verified turn on the embedded
+                // ledger). A white panel so the rendered card reads against the NT chrome.
+                div()
+                    .id(gpui::SharedString::from(format!(
+                        "irsurface-{}",
+                        id_hex(&cell)
+                    )))
+                    .flex_1()
+                    .min_h(px(120.0))
+                    .bg(gpui::rgb(0xffffff))
+                    .border_1()
+                    .border_color(gpui::rgb(NT_FACE_DARK))
+                    .child(entity),
+            )
+            .into_any_element()
+    }
+
     /// Build the Spotter's live query input on first render (a real `gpui-component`
     /// `Input`, focused), with a `Change` subscription that mirrors the text into
     /// `query` + re-ranks, and `PressEnter` that dispatches the top candidate.
@@ -3195,6 +3416,243 @@ impl DeosDesktop {
                     )
                 })
                 .child(list),
+            )
+            .into_any_element()
+    }
+
+    /// **The gentle "type anything" pill** — the calm, always-present face of the
+    /// Spotter, pinned just under the menu bar, centered. A newcomer who learns nothing
+    /// else learns that words go here and carry them somewhere. Clicking it opens the
+    /// full Spotter overlay (the same `open_spotter` the menu/keystroke fire). Pure
+    /// presentation + one click listener; it holds no state of its own.
+    fn render_spotter_pill(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .absolute()
+            .top(px(MENUBAR_H + 12.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .flex()
+            .flex_row()
+            .justify_center()
+            .child(
+                bevel_sunken(
+                    div()
+                        .id("spotter-pill")
+                        .w(px(340.0))
+                        .h(px(26.0))
+                        .px_3()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .bg(gpui::rgb(0xffffff)),
+                )
+                .hover(|s| s.bg(gpui::rgb(NT_PANEL)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                        this.open_spotter();
+                        cx.notify();
+                    }),
+                )
+                // A font-safe magnifier stand-in (the search affordance), then the warm
+                // prompt — never "query", never "command palette".
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(gpui::rgb(NT_DIM))
+                        .child("o-"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(px(12.0))
+                        .text_color(gpui::rgb(NT_DIM))
+                        .child("Type anything — jump to a cell, an action, a place"),
+                ),
+            )
+    }
+
+    /// **The warm WELCOME card** — the calm front door over the live image. Shown once
+    /// to a never-greeted newcomer: a plain greeting drawn from the REAL world (its cell
+    /// count + history height) over a small set of inviting doors (look · find · make ·
+    /// survey), each a real desktop gesture in warm words. The model + greeting are the
+    /// gpui-free `welcome` submodule; this method renders + wires the click dispatch.
+    fn render_welcome_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (cells, height) = {
+            let w = self.world.borrow();
+            (self.cells.len(), w.height())
+        };
+        let greeting = welcome::greeting(cells, height);
+
+        // The doors — each a beveled tile with a digit step badge, a warm title, and one
+        // plain sentence, wired to dispatch its `WelcomeAction`.
+        let mut doors = div().flex().flex_col().gap_2().mt_2();
+        for tile in welcome::welcome_tiles() {
+            let action = tile.action;
+            doors = doors.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "welcome-door-{}",
+                            tile.step
+                        )))
+                        .px_3()
+                        .py_2()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_3(),
+                )
+                .hover(|s| s.bg(gpui::rgb(NT_PANEL)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.welcome_dispatch(action);
+                        cx.notify();
+                    }),
+                )
+                // The step badge — a calm navy chip a five-year-old can follow.
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(26.0))
+                        .h(px(26.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(gpui::rgb(NT_TITLE_ACTIVE))
+                        .text_color(gpui::rgb(NT_TITLE_TEXT))
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(tile.step),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_size(px(14.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(gpui::rgb(NT_TEXT))
+                                .child(tile.title),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(gpui::rgb(NT_LABEL))
+                                .child(tile.blurb),
+                        ),
+                ),
+            );
+        }
+
+        // The card itself — centered, with breathing room, over a soft scrim that dims
+        // (but does not hide) the room behind it.
+        div()
+            .id("welcome-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            // A soft scrim — the room is still visible, just resting behind the door.
+            .bg(gpui::rgba(0x0a3a4a99))
+            .child(
+                bevel_window(
+                    div()
+                        .id("welcome-card")
+                        .w(px(560.0))
+                        .p_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2(),
+                )
+                // The title bar — warm, not a system caption.
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(20.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(gpui::rgb(NT_TITLE_ACTIVE))
+                                .child("Welcome to deos"),
+                        )
+                        // A quiet close (×) — the same dismiss the footer offers.
+                        .child(
+                            bevel_raised(
+                                div()
+                                    .id("welcome-close")
+                                    .w(px(22.0))
+                                    .h(px(20.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(px(13.0)),
+                            )
+                            .hover(|s| s.bg(gpui::rgb(NT_PANEL)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                    this.dismiss_welcome();
+                                    cx.notify();
+                                }),
+                            )
+                            .child(GLYPH_CLOSE),
+                        ),
+                )
+                // The greeting — the live, jargon-free sentence.
+                .child(
+                    div()
+                        .mt_1()
+                        .text_size(px(13.0))
+                        .text_color(gpui::rgb(NT_TEXT))
+                        .child(greeting),
+                )
+                .child(face_section("Where would you like to begin?"))
+                .child(doors)
+                // The closing reassurance + the "just let me look" door.
+                .child(
+                    div()
+                        .mt_3()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_3()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(11.0))
+                                .text_color(gpui::rgb(NT_DIM))
+                                .child(welcome::WELCOME_FOOTER),
+                        )
+                        .child(
+                            bevel_raised(
+                                div()
+                                    .id("welcome-begin")
+                                    .px_3()
+                                    .py_1()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::BOLD),
+                            )
+                            .hover(|s| s.bg(gpui::rgb(NT_PANEL)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                    this.welcome_dispatch(welcome::WelcomeAction::LookAround);
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Just let me look around"),
+                        ),
+                ),
             )
             .into_any_element()
     }
@@ -4337,6 +4795,7 @@ fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::AndroidCell => "AND",
         WinKindTag::DocExplorer => "DGX",
         WinKindTag::WorldExplorer => "WLD",
+        WinKindTag::ViewNodePane => "IR",
     }
 }
 
