@@ -5833,3 +5833,19 @@ cannot distinguish them; the witness HONESTLY asserts `is_ok()` (hole open) and 
 - EXACT REMAINING (named, not blockers): a clean painted frame needs real-Vulkan hardware; then the on-device backend ports —
   keycode→Keystroke + IME commit (soft keyboard already shows; `AndroidWindowInner::is_composing` is the hook), pinch/
   multi-touch, scroll-axis extraction, window insets. Status table + the debug.gpui.backends knob in mobile/README.md.
+
+### ✅ IVC #1 GENUINELY CLOSED — the un-forgeable-history floor (2026-06-25, multi-day marathon)
+The whole-chain mixed-root forgery (a claim for history B verifying against a root that executed A) is REJECTED end-to-end,
+distinct-endpoint AND same-endpoint. Confirmed by FOUR arbiters: both heavy folds (k_fold ok 176s, mixed_root_forgery is_err
+114s), native verify_all_tables (accepts), AND an adversarial codex final re-review (metatheory/docs/CODEX-IVC-FINAL-REVIEW.md:
+no critical hole). The close: an ordered segment-accumulator (codex's sound-by-construction design — each descriptor leaf carries
+[first_old,last_new,count,acc], the claim IS the segment summary of the execution leaves) + a real 4-lane W24 Poseidon2 digest
+(replacing the algebraically-broken quadratic fold). Fork at a45ee56 (pushed); dregg 968f2737. The arc: 4 refuted FRI hypotheses
+-> the FROZEN-PROOF technique (65s non-stationary oracle -> 0.2s deterministic) -> root cause was 2 WitnessChecks bus imbalances
+(NOT FRI) in the expose_claim/W24 path -> codex (the bus designer) named the accounting -> fixed + cleared.
+NAMED RESIDUALS (codex, none critical): (1) MEDIUM — the ONLINE ACCUMULATOR path (accumulator.rs:171/819/916) is still
+single-felt/zero-padded, scoped out; port the 4-lane segment digest to it. (2) LOW — doc drift: expose_claim_air.rs:23 +
+circuit_builder.rs:486 comments still describe the old scalar-only expose; fix them. (3) LOW — the digest is 4 BabyBear lanes
+(~124-bit); widen for a conservative 128-bit collision story.
+#9 (Lean EngineSound discharge) is now UNBLOCKED — the verifier genuinely enforces the binding, so acc_attests_whole_history can
+stop assuming EngineSound and derive it from the verifier soundness. The LAST IVC piece.
