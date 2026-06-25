@@ -60,6 +60,7 @@ pub mod fee_policy;
 pub mod fields;
 pub mod hex;
 pub mod inbox_endpoint;
+pub mod invoke;
 pub mod middleware;
 pub mod multi_group;
 pub mod optimistic_fire;
@@ -136,6 +137,14 @@ pub use dregg_turn::{Turn, TurnReceipt, WitnessedReceipt};
 // admin affordance fires without adding `dregg-cell` to their own Cargo.toml.
 // (`AuthRequired` is already re-exported via the `dregg_cell::{…}` block below.)
 pub use dregg_cell::CapabilityRef;
+
+// The `invoke()` front door: cells-as-service-objects method dispatch at the
+// userspace layer (no `Effect::Invoke`, no cell-commitment dependency — the
+// interface is resolved in userspace and resolves to existing effects).
+pub use invoke::{
+    invoke, invoke_with_descriptor, resolve_against, resolve_invocation, InterfaceRegistry,
+    InvokeAuthority, InvokeRefused,
+};
 
 // Re-export the SDK cipherclerk at the framework root so applications
 // that need to *construct* one (typically in `main`) don't have to add
