@@ -446,6 +446,25 @@ fn main() {
         }
     }
 
+    // `--render-touch <out>`: the TOUCH-UI bake (the graphideOS / mobile shape — the
+    // bottom-bar mode switch + the tappable cell garden + a long-press face sheet).
+    // `--render-size WxH` defaults to a phone 390x844; `--render-mode <name>` selects
+    // a mode (Inhabit/Author/Dev/Inspect/Operate) and shows it clean (no sheet).
+    #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+    {
+        if let Some(out) = render_touch_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((390.0, 844.0));
+            let mode = render_mode_arg(&args);
+            match render_touch_headless(&out, w, h, mode.as_deref()) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-touch FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--node <url>`: ALSO connect the master interface to a LIVE remote dregg
     // node (its receipt nervous system + cell reflections), alongside the embedded
     // image. The embedded world is the headline; this is the additional remote
@@ -1485,6 +1504,40 @@ fn render_login_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-login=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-touch <out>` (or `=<out>`) — the TOUCH-UI bake (the
+/// graphideOS / mobile shape: a bottom-bar mode switch, a tappable cell garden,
+/// a long-press face sheet). `<out>.png` is written. See `render_touch_headless`.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_touch_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-touch" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-touch=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-mode <name>` — the touch-shell mode the bake selects
+/// (Inhabit/Author/Dev/Inspect/Operate, matched case-insensitively against
+/// [`touch::TouchShell::select_mode_named`]). `None` keeps the default (Inhabit).
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_mode_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-mode" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-mode=") {
             return Some(rest.to_string());
         }
     }
@@ -4339,6 +4392,100 @@ fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         "OK headless login render -> {out}.png ({}x{}, logical {w}x{h}); LIVE login::LoginSurface.",
         captured.width(),
         captured.height()
+    );
+    Ok(())
+}
+
+/// THE HEADLESS TOUCH RENDER — bake the real [`touch::TouchShell`] element tree
+/// (the graphideOS / mobile shape) offscreen to a PNG, no GPU and no window, the
+/// same headless capture path the cockpit + login bakes use. Proves the three
+/// touch surfaces lay out: the thumb-reachable BOTTOM TAB BAR (the five modes),
+/// the tappable CELL GARDEN (the AOL-wonder home over the live image), and — by
+/// default — a LONG-PRESS FACE SHEET opened on the image's brightest cell (its
+/// faces + the lit ACTUATE affordance). `--render-mode <name>` selects a mode and
+/// shows it CLEAN (no sheet); `--render-size WxH` defaults to a phone 390x844.
+///
+/// The shell drives the SAME live `World` the desktop cockpit drives (the fully-
+/// seeded `demo_world` — real cells, real glows from the dynamics stream), so the
+/// garden's glowing cards + the sheet's reflected faces are the running image's
+/// actual state, never decorative.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_touch_headless(out: &str, w: f32, h: f32, mode: Option<&str>) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::touch;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    // The fully-seeded demo image — the SAME `World` the desktop cockpit runs, so the
+    // garden's glows are the running image's actual recent activity.
+    let (world, _anchors) = world::demo_world();
+    // The brightest live cell — what the default bake opens its long-press sheet on
+    // (the image's current hotspot, so the sheet shows a cell with real faces + glow).
+    let hotspot = {
+        let room = starbridge_v2::wonder::WonderRoom::build(&world);
+        room.brightest()
+            .or_else(|| room.cells.first())
+            .map(|g| g.cell)
+    };
+    let shared = Rc::new(RefCell::new(world));
+    let mode_owned = mode.map(|s| s.to_string());
+
+    let window = cx.open_window(size(px(w), px(h)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut shell = touch::TouchShell::new(shared.clone(), focus);
+            match &mode_owned {
+                // A named mode → show that surface CLEAN (no sheet over it).
+                Some(name) => {
+                    if !shell.select_mode_named(name) {
+                        eprintln!("render-mode: no mode named `{name}` — keeping default");
+                    }
+                }
+                // The default bake → the home garden with a LONG-PRESS SHEET open on
+                // the hotspot, so the one shot shows all three surfaces at once.
+                None => {
+                    if let Some(cell) = hotspot {
+                        shell.open_sheet(cell);
+                    }
+                }
+            }
+            shell
+        });
+        // Wrap in a gpui-component `Root` (the window-root weld) so any kit widget
+        // that reads the `Root` global paints clean (the cockpit pattern).
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    captured.save(format!("{out}.png"))?;
+    println!(
+        "OK headless touch render -> {out}.png ({}x{}, logical {w}x{h}{}); \
+         LIVE touch::TouchShell — bottom tab bar · cell garden · {}.",
+        captured.width(),
+        captured.height(),
+        mode.map(|m| format!(", mode={m}")).unwrap_or_default(),
+        if mode.is_some() {
+            "mode surface"
+        } else {
+            "long-press face sheet"
+        }
     );
     Ok(())
 }

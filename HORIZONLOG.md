@@ -8,6 +8,20 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## Touch UI (graphideOS shape) LANDED as a bake; the live-on-Android frame is the named follow-up (2026-06-25)
+The touch-adapted deos UI shipped: `starbridge-v2/src/touch.rs` (`TouchShell`) — the bottom-bar five-mode
+switch (Inhabit/Author/Dev/Inspect/Operate via gpui-component `TabBar`), the tappable cell garden (reusing
+`wonder::WonderRoom` over the live `World`), and long-press → a bottom face-sheet (the reflected `Inspectable`
+faces + the lit ACTUATE affordance firing a real `wonder::DragValue` predict-then-commit turn). Distinct from
+the desktop cockpit; reuses the gpui-free view model. Baked headless via `--render-touch` (main.rs,
+`render_touch_headless`; phone 390x844 default, `--render-mode <name>` selects a clean mode surface). NAMED
+FOLLOW-UP (per MOBILE-DEOS.md §7 ⛔ STEP-2 wall, NOT this pass's scope): the SAME `TouchShell` painting a real
+frame ON an Android device needs the gpui `PlatformAndroid` backend (window from `ANativeWindow`, an android
+event/IME pump, lifecycle) — a gpui-fork change. CLOSURE SHAPE: lift upstream `gpui-mobile` + drive `TouchShell`
+through it (the bake proves the element tree; the device frame waits on the backend). Also: touch gestures are
+currently tap (`on_click`) + an explicit "⋯ faces" affordance standing in for long-press (gpui has no native
+long-press); a real press-and-hold recognizer is the gesture-layer follow-up.
+
 ## reify_seam CLOSED at the value level; Lean uproj-injectivity is the named follow-up (2026-06-25)
 `reify_cell`/`reify_ledger`/`reify_executor_state` landed (`turn/src/umem.rs`) — the byte-identical inverse of
 `project_cell`/`project_ledger`, re-deriving the dropped commitments (`fields_root` from the `Field{slot≥16}`
