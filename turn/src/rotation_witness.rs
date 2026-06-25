@@ -505,7 +505,7 @@ pub fn mint_welded_umem_rotated_participant_leg(
     turn_id: Option<BabyBear>,
 ) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
     use crate::umem::{
-        UmemKind, UmemOp, project_record_kernel_state, umem_cohort_proving_inputs_from,
+        project_diff_ops, project_record_kernel_state, umem_cohort_proving_inputs_from,
     };
     use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
     use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
@@ -539,23 +539,7 @@ pub fn mint_welded_umem_rotated_participant_leg(
     // trace, bridged into the single-domain cohort rows + REAL boundary.
     let proj_pre = project_record_kernel_state(before_cell);
     let proj_post = project_record_kernel_state(after_cell);
-    let mut keys: Vec<_> = proj_pre.keys().chain(proj_post.keys()).cloned().collect();
-    keys.sort();
-    keys.dedup();
-    let mut ops: Vec<UmemOp> = Vec::new();
-    for k in &keys {
-        let a = proj_pre.get(k);
-        let b = proj_post.get(k);
-        if a != b {
-            ops.push(UmemOp {
-                kind: UmemKind::Write,
-                key: k.clone(),
-                val: b.cloned(),
-                prev_val: a.cloned(),
-                prev_serial: 0,
-            });
-        }
-    }
+    let ops = project_diff_ops(&proj_pre, &proj_post);
     let inputs = umem_cohort_proving_inputs_from(&proj_pre, &ops)
         .map_err(|e| format!("mint_welded_umem: umem cohort inputs: {e}"))?;
 

@@ -1425,6 +1425,33 @@ pub fn umem_cohort_proving_inputs_from(
     })
 }
 
+/// The pre→post projection DIFF as a Blum write trace: every address whose value changed
+/// (insert / update / delete), emitted as a same-transition [`UmemOp::Write`] with the PRE
+/// value as `prev_val` and `prev_serial == 0` (each touched address is opened once against the
+/// init image). The canonical key-union diff the welded-cohort legs lower — sharing it keeps the
+/// producer's row/boundary derivation in lockstep with its callers (no hand-inlined twin to
+/// drift).
+pub fn project_diff_ops(pre: &UProjection, post: &UProjection) -> Vec<UmemOp> {
+    let mut keys: Vec<UKey> = pre.keys().chain(post.keys()).cloned().collect();
+    keys.sort();
+    keys.dedup();
+    let mut ops = Vec::new();
+    for k in keys {
+        let a = pre.get(&k);
+        let b = post.get(&k);
+        if a != b {
+            ops.push(UmemOp {
+                kind: UmemKind::Write,
+                key: k,
+                val: b.cloned(),
+                prev_val: a.cloned(),
+                prev_serial: 0,
+            });
+        }
+    }
+    ops
+}
+
 /// A journal entry's address touches: `(key, recorded_prev)` where
 /// `recorded_prev = Some(cell)` when the journal recorded the prior value
 /// (`Some(None)` = recorded-absent, e.g. a fresh capability slot) and `None` when the
