@@ -33,6 +33,12 @@ open List
 
 @[inherit_doc] notation xs " ⊆[ " R " ] " ys => SubsetUpTo R xs ys
 
+/-- **`EqualityUpTo R xs ys`** — mutual inclusion modulo `R`. -/
+@[simp] def EqualityUpTo (R : α → α → Prop) (xs ys : List α) : Prop :=
+  (xs ⊆[ R ] ys) ∧ (ys ⊆[ R ] xs)
+
+@[inherit_doc] notation xs " =[ " R " ] " ys => EqualityUpTo R xs ys
+
 theorem subset_up_to_refl {R : α → α → Prop} {xs : List α} (hr : ∀ x, R x x) :
     xs ⊆[ R ] xs := fun x h => ⟨x, hr x, h⟩
 
