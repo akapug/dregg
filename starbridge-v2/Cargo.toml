@@ -227,7 +227,10 @@ agent-js = ["embedded-executor", "dep:deos-js"]
 # OWN standalone workspace pinning the SAME gpui fork @407a6ff) + `agent-js` (deos-js
 # + the live World). Off the default build (multi-GB mozjs). The `--render-card-pane`
 # bake (main.rs, render-capture) bakes a PNG of the card pane after a live fire.
-card-pane = ["agent-js", "gpui-ui", "render-capture", "dep:deos-view"]
+# Also enables deos-view's `web` renderer (gpui-free, additive) so the desktop's
+# content-IR pane (`deos_desktop::viewnode_pane`) can render the IDENTICAL portable
+# `ViewNode` to HTML beside the live native pane — the renderer-independence proof.
+card-pane = ["agent-js", "gpui-ui", "render-capture", "dep:deos-view", "deos-view/web"]
 
 # live-brain — THE HEADLINE: a LIVE Hermes brain (a real Claude over the
 # `hermes-acp` ACP subprocess) drives `run_js` against the cockpit's LIVE `World`.
