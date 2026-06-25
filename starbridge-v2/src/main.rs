@@ -1282,21 +1282,139 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
          ring floating, exactly like the welcome door (one consistent gesture everywhere)"
     );
 
-    // Leave the woven room in frame: a live surface molded with its halo + (the Spotter
-    // now closed) the calm "type anything" pill showing.
+    // ── 4. THE SPOTTER REACHES THIS SESSION'S NEW SURFACES TOO — one entry, every place. ──
+    // Each lands mold-ready (selected + its halo floating), exactly like the welcome door
+    // and the World Explorer jump: the woven surfaces are ONE place, one gesture vocabulary,
+    // not a scatter of separate windows you have to know exist.
+
+    // 4a. A DOCUMENT-COLLABORATION session — the Spotter opens the editor WITH a confined
+    //     co-author draft already forked (branch · stitch · resolve), landed mold-ready.
+    desk.update(&mut cx, |d, _cx| d.bake_open_spotter("co-author document"));
+    let collab_top = desk
+        .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        collab_top.to_lowercase().contains("co-author"),
+        "the Spotter must reach the DOCUMENT-COLLABORATION surface (top: {collab_top:?})"
+    );
+    desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_selected_window_label()) == Some("Document")
+            && desk.update(&mut cx, |d, _cx| d.bake_doc_has_branch(user)),
+        "the doc-collab jump LANDS in a Document surface mold-ready, WITH a forked co-author \
+         draft already in flight (a real branch-and-stitch session, not a bare editor)"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+        "the landed doc-collab surface floats its Pharo halo ring (mold-in-place)"
+    );
+
+    // 4b. THE WORLD-STATUS BOARD — the agent-composable ViewNode surface (the reflective
+    //     pane a confined agent rewrites). Reachable from the same Spotter. Gated on
+    //     `card-pane` (the default native-full build has it).
+    #[cfg(feature = "card-pane")]
+    {
+        desk.update(&mut cx, |d, _cx| d.bake_open_spotter("world status board"));
+        let board_top = desk
+            .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+            .unwrap_or_default();
+        anyhow::ensure!(
+            board_top.to_lowercase().contains("world-status board"),
+            "the Spotter must reach the agent-composable World-Status board (top: {board_top:?})"
+        );
+        desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+        cx.run_until_parked();
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_selected_window_label()) == Some("World Status")
+                && desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+            "the World-Status board jump lands its ViewNode surface mold-ready (the same \
+             gesture as every other surface)"
+        );
+    }
+
+    // 4c. A CONFINED ANDROID CELL with its SystemUI cap-chrome — reachable from the same
+    //     Spotter; landing mints the confined chrome (a real PermWorld + executor) and the
+    //     status bar reads its standing authorities. Gated on `android-systemui`.
+    #[cfg(feature = "android-systemui")]
+    {
+        desk.update(&mut cx, |d, _cx| {
+            d.bake_open_spotter("android cell systemui")
+        });
+        let android_top = desk
+            .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+            .unwrap_or_default();
+        anyhow::ensure!(
+            android_top.to_lowercase().contains("android cell"),
+            "the Spotter must reach the Android Cell / SystemUI cap-chrome (top: {android_top:?})"
+        );
+        desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_selected_window_label())
+                == Some("Android · SystemUI")
+                && desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+            "the Android Cell jump lands its SystemUI cap-chrome mold-ready (one gesture)"
+        );
+        let held = desk.update(&mut cx, |d, _cx| d.clone_status_held(user));
+        anyhow::ensure!(
+            !held.is_empty(),
+            "the landed Android cell's confined chrome must read its standing authorities on \
+             the status bar (the cap-chrome is live, not a mock)"
+        );
+    }
+
+    // 4d. THE AGENT AS CO-AUTHOR, IN THE SAME ROOM — a confined agent composes a brand-new
+    //     World Board from scratch (reading the live World) and it MOUNTS as a real window
+    //     beside the woven surfaces: the agent-composed surface is part of the one place,
+    //     not a separate demo. Gated on `card-pane` (drives a SpiderMonkey runtime).
+    #[cfg(feature = "card-pane")]
+    {
+        let mut rt = deos_js::JsRuntime::new()
+            .map_err(|e| anyhow::anyhow!("boot SpiderMonkey for the agent's compose loop: {e}"))?;
+        let board = desk
+            .update(&mut cx, |d, cx| {
+                d.bake_agent_composes_world_board(&mut rt, cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's compose-from-scratch loop failed: {e}"))?;
+        anyhow::ensure!(
+            board.started_empty && board.crawled_cells >= 1 && board.mounted_window,
+            "the agent must compose a NEW World Board from an empty root (crawling the live \
+             World) and mount it as a real window in the same room (empty={}, crawled={}, \
+             mounted={})",
+            board.started_empty,
+            board.crawled_cells,
+            board.mounted_window
+        );
+    }
+
+    // Leave the woven room in frame, every surface present at once: cascade the open
+    // windows so the doc-collab editor, the World-Status board, the Android cap-chrome, and
+    // the agent-composed board are all visible as ONE coherent workbench, with the calm
+    // "type anything" Spotter pill showing (the unifying entry that reached them all).
+    desk.update(&mut cx, |d, _cx| {
+        d.bake_cascade_windows();
+    });
+    cx.run_until_parked();
     cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
     cx.run_until_parked();
 
     let captured = cx.capture_screenshot(window.into())?;
     let (ww, hh) = (captured.width(), captured.height());
     captured.save(format!("{out}.png"))?;
+    let open_now = desk.update(&mut cx, |d, _cx| d.bake_total_window_count());
     let _ = std::fs::remove_file(&layout_path);
     println!(
         "OK deos WOVEN render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the stranger's path \
          welded end to end — calm welcome over the live image ({} cells, height {height}) → a \
          door LANDS you mold-ready in a live surface ({door_handles}-handle halo floating) → the \
-         Spotter (unifying entry) reaches the global World Explorer surface and lands it \
-         mold-ready too. One place, one gesture.",
+         Spotter (the unifying entry) reaches EVERY surface and lands each mold-ready: the World \
+         Explorer, a doc-collaboration session (branch · stitch · resolve), the agent-composable \
+         World-Status board, a confined Android cell's SystemUI cap-chrome — plus the agent \
+         composing a brand-new board, all mounted in ONE room ({open_now} windows). One place, \
+         one gesture.",
         shared.borrow().ledger().iter().count()
     );
     Ok(())

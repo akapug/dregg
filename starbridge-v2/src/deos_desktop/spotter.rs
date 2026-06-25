@@ -53,11 +53,23 @@ pub enum SpotterTarget {
     WorldExplorer,
     /// Open the World Transcript — the receipt log of every committed turn (global).
     WorldTranscript,
-    /// Open the Portable-IR content card — a `deos_view::ViewNode` rendered through
-    /// deos-view's native renderer, beside the native chrome (global). Gated on the
-    /// `card-pane` feature that compiles the content-IR pane in.
+    /// Open a DOCUMENT-COLLABORATION session — a document editor over the user's own
+    /// cell with a forked co-author draft already in flight, ready to diverge · stitch ·
+    /// resolve (the branch-and-stitch flow as ONE reachable place, not a button you must
+    /// first discover inside an editor). A global surface, anchored on the user sentinel.
+    DocCollab,
+    /// Open the WORLD-STATUS BOARD — a `deos_view::ViewNode` rendered through deos-view's
+    /// native renderer, beside the native chrome (global). This is the agent-composable
+    /// reflective surface (a confined agent reflects-on + rewrites it, and composes new
+    /// boards OF it). Gated on the `card-pane` feature that compiles the content-IR pane in.
     #[cfg(feature = "card-pane")]
     PortableCard,
+    /// Open a confined ANDROID CELL dressed as the phone's SystemUI cap-chrome — the
+    /// status bar · the pull-down quick-settings shade · the hand-over sheet (a tap is a
+    /// real `Effect::GrantCapability` on the confined ledger). A global surface, anchored
+    /// on the user sentinel. Gated on `android-systemui` (where the cap-chrome is in scope).
+    #[cfg(feature = "android-systemui")]
+    AndroidCell,
 }
 
 /// One ranked candidate in the spotter result list. `label` is the reader-legible
@@ -263,13 +275,29 @@ pub fn surface_candidates() -> Vec<SpotterEntry> {
             target: SpotterTarget::WorldTranscript,
             score: 0,
         },
+        SpotterEntry {
+            label: "Co-author a Document  (branch · stitch · resolve)".to_string(),
+            sublabel: "surface · a confined co-author draft, ready to diverge + merge".to_string(),
+            target: SpotterTarget::DocCollab,
+            score: 0,
+        },
     ];
-    // The content-IR card sits beside the native chrome only when it is compiled in.
+    // The World-Status board (the agent-composable ViewNode surface) sits beside the
+    // native chrome only when the content-IR pane is compiled in.
     #[cfg(feature = "card-pane")]
     out.push(SpotterEntry {
-        label: "Portable Card  (deos.ui IR · ViewNode)".to_string(),
-        sublabel: "surface · portable content beside native chrome".to_string(),
+        label: "World-Status Board  (deos.ui ViewNode · agent-composable)".to_string(),
+        sublabel: "surface · live state the agent reflects-on + rewrites".to_string(),
         target: SpotterTarget::PortableCard,
+        score: 0,
+    });
+    // The confined Android cell + its SystemUI cap-chrome only when that half is built in.
+    #[cfg(feature = "android-systemui")]
+    out.push(SpotterEntry {
+        label: "Android Cell  (SystemUI cap-chrome · hand-over)".to_string(),
+        sublabel: "surface · a confined app's caps on the glass; a tap grants a real cap"
+            .to_string(),
+        target: SpotterTarget::AndroidCell,
         score: 0,
     });
     out

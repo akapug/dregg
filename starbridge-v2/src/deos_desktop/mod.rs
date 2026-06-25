@@ -309,6 +309,15 @@ enum ActionKind {
     /// Open the WORLD EXPLORER — the "My Computer" of the verified World (ledger ·
     /// chronicle · conservation). A World-level (desktop-background) surface.
     OpenWorldExplorer,
+    /// Open a DOCUMENT-COLLABORATION session — the document editor with a forked
+    /// co-author draft already in flight (branch · stitch · resolve), landed mold-ready.
+    OpenDocCollab,
+    /// Open the WORLD-STATUS BOARD — the agent-composable `deos_view::ViewNode` pane
+    /// (the reflective surface a confined agent rewrites). A World-level surface.
+    OpenViewNodePane,
+    /// Open a confined ANDROID CELL dressed as the phone's SystemUI cap-chrome (status
+    /// bar · quick-settings shade · hand-over sheet). A World-level surface.
+    OpenAndroidCell,
     /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
     OpenSpotter,
     /// Open the links / backlinks view over the cell.
@@ -1116,7 +1125,7 @@ impl DeosDesktop {
     fn desktop_actions(&self) -> Vec<MenuAction> {
         use ActionKind as A;
         let any_win = !self.windows.is_empty();
-        vec![
+        let mut v = vec![
             MenuAction::new(
                 "World Explorer… (ledger · chronicle · Σ)",
                 true,
@@ -1125,12 +1134,35 @@ impl DeosDesktop {
             MenuAction::new("World Transcript (receipt log)…", true, A::OpenTranscript),
             MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
+            // The session's woven surfaces — reachable from the bare desktop too, not only
+            // the Spotter (one place, one vocabulary).
+            MenuAction::new(
+                "Co-author a Document… (branch · stitch · resolve)",
+                true,
+                A::OpenDocCollab,
+            ),
+        ];
+        #[cfg(feature = "card-pane")]
+        v.push(MenuAction::new(
+            "World-Status Board… (deos.ui ViewNode · agent-composable)",
+            true,
+            A::OpenViewNodePane,
+        ));
+        #[cfg(feature = "android-systemui")]
+        v.push(MenuAction::new(
+            "Android Cell… (SystemUI cap-chrome · hand-over)",
+            true,
+            A::OpenAndroidCell,
+        ));
+        v.extend([
+            MenuAction::sep(),
             MenuAction::new("Cascade windows", any_win, A::CascadeWindows),
             MenuAction::new("Tile windows", any_win, A::TileWindows),
             MenuAction::new("Close all windows", any_win, A::CloseAllWindows),
             MenuAction::sep(),
             MenuAction::new("Preferences & Customize…", true, A::Properties),
-        ]
+        ]);
+        v
     }
 
     /// The pull-down for one menu-bar item (acts on the `user` anchor cell). Dense,
@@ -1150,11 +1182,32 @@ impl DeosDesktop {
                 MenuAction::new("Bump nonce  (verified turn)", self.holds(&u), A::BumpNonce),
                 MenuAction::new("Properties…", true, A::Properties),
             ],
-            "View" => vec![
-                MenuAction::new("Links & Backlinks…", true, A::OpenLinks),
-                MenuAction::new("Transcript…", true, A::OpenTranscript),
-                MenuAction::new("Workflow Composer…", true, A::OpenWorkflow),
-            ],
+            "View" => {
+                let mut v = vec![
+                    MenuAction::new("Links & Backlinks…", true, A::OpenLinks),
+                    MenuAction::new("Transcript…", true, A::OpenTranscript),
+                    MenuAction::new("Workflow Composer…", true, A::OpenWorkflow),
+                    MenuAction::sep(),
+                    MenuAction::new(
+                        "Co-author a Document… (branch · stitch)",
+                        true,
+                        A::OpenDocCollab,
+                    ),
+                ];
+                #[cfg(feature = "card-pane")]
+                v.push(MenuAction::new(
+                    "World-Status Board… (agent-composable)",
+                    true,
+                    A::OpenViewNodePane,
+                ));
+                #[cfg(feature = "android-systemui")]
+                v.push(MenuAction::new(
+                    "Android Cell… (SystemUI cap-chrome)",
+                    true,
+                    A::OpenAndroidCell,
+                ));
+                v
+            }
             "Window" => {
                 let any_win = !self.windows.is_empty();
                 vec![
@@ -1326,6 +1379,11 @@ impl DeosDesktop {
                 self.open_kind(self.user, WinKindTag::WorldExplorer);
             }
             ActionKind::OpenSpotter => self.open_spotter(),
+            // The session's woven surfaces, reached from a cell menu too (anchored on the
+            // acted-on cell): a doc-collab session, the World-Status board, an Android cell.
+            ActionKind::OpenDocCollab => self.start_doc_collab(cell),
+            ActionKind::OpenViewNodePane => self.land_in(cell, WinKindTag::ViewNodePane),
+            ActionKind::OpenAndroidCell => self.land_in(cell, WinKindTag::AndroidCell),
         }
     }
 
@@ -1664,6 +1722,24 @@ impl DeosDesktop {
         );
     }
 
+    /// **Land in a live DOCUMENT-COLLABORATION session** — open (mold-ready) the document
+    /// editor on `cell` AND fork a confined co-author draft in the same gesture, so the
+    /// branch-and-stitch flow (diverge · Stitch · the first-class conflict · resolve) is
+    /// present and discoverable the instant you arrive — not a button buried inside an
+    /// editor you must first find. This is the seam that makes "co-author a document" ONE
+    /// reachable place from the unifying Spotter (and the desktop menu). It adds no new
+    /// actuation: it composes the two gestures the doc surface already performs.
+    fn start_doc_collab(&mut self, cell: CellId) {
+        self.land_in(cell, WinKindTag::DocEditor);
+        self.fork_doc_branch(cell);
+        self.status = format!(
+            "Document collaboration on {} — a confined co-author draft is open. Type a \
+             divergent line, then Stitch: a clashing region becomes a first-class conflict \
+             you resolve (never a rejected merge).",
+            id_short(&cell)
+        );
+    }
+
     /// **A divergent edit on the draft branch** — author the branch as a *second*
     /// author (`author ^ 1`, a distinct identity) so a stitch that touches the same
     /// region yields a genuine prose antichain (two live, mutually-unordered
@@ -1957,8 +2033,11 @@ impl DeosDesktop {
             }
             Tg::WorldExplorer => self.land_in(self.user, WinKindTag::WorldExplorer),
             Tg::WorldTranscript => self.land_in(self.user, WinKindTag::Transcript),
+            Tg::DocCollab => self.start_doc_collab(self.user),
             #[cfg(feature = "card-pane")]
             Tg::PortableCard => self.land_in(self.user, WinKindTag::ViewNodePane),
+            #[cfg(feature = "android-systemui")]
+            Tg::AndroidCell => self.land_in(self.user, WinKindTag::AndroidCell),
         }
         self.status = format!("Spotter → {}", entry.label);
         self.spotter = None;
@@ -2026,6 +2105,21 @@ impl DeosDesktop {
                     "World Explorer — the ledger census · the chronicle · Σ balance = 0.".into();
             }
             ActionKind::OpenSpotter => self.open_spotter(),
+            ActionKind::OpenDocCollab => self.start_doc_collab(self.user),
+            ActionKind::OpenViewNodePane => {
+                self.land_in(self.user, WinKindTag::ViewNodePane);
+                self.status =
+                    "World-Status Board — the agent-composable ViewNode surface (reflect-on \
+                     + rewrite). Mold it in place with its halo handles."
+                        .into();
+            }
+            ActionKind::OpenAndroidCell => {
+                self.land_in(self.user, WinKindTag::AndroidCell);
+                self.status =
+                    "Android Cell — a confined app's caps on the glass; pull the shade to see \
+                     every authority, tap the hand-over sheet to grant a real cap."
+                        .into();
+            }
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.status = "Desktop Preferences & customization.".into();
@@ -2815,6 +2909,34 @@ impl DeosDesktop {
     /// The total open-window count across ALL kinds (a bake/test assertion hook).
     pub fn bake_total_window_count(&self) -> usize {
         self.windows.len()
+    }
+
+    /// The kind-label of the surface the halo selection currently points at (the window
+    /// kind's reader-legible name, e.g. "Document", "Android · SystemUI", "World Status").
+    /// `None` when nothing or a bare icon is selected. A bake/test hook: proves a Spotter
+    /// jump LANDED in the RIGHT surface (not merely that some window opened), and that it
+    /// arrived mold-ready (the selection IS the landed window).
+    pub fn bake_selected_window_label(&self) -> Option<&'static str> {
+        match self.selected {
+            Some(HaloTarget::Window(key)) => self.windows.get(&key).map(|ws| ws.kind.label()),
+            _ => None,
+        }
+    }
+
+    /// Whether the open document on `cell` currently carries a forked co-author draft
+    /// branch (the live doc-collaboration session). A bake/test hook proving the Spotter's
+    /// "Co-author a Document" surface landed a real branch-and-stitch session, not a bare
+    /// editor.
+    pub fn bake_doc_has_branch(&self, cell: CellId) -> bool {
+        matches!(
+            self.windows
+                .get(&(cell, WinKindTag::DocEditor))
+                .map(|ws| &ws.kind),
+            Some(WinKind::DocEditor {
+                branch: Some(_),
+                ..
+            })
+        )
     }
 
     /// The World's conservation sum (Σ balance) — a bake/test hook over the live
