@@ -77,6 +77,33 @@ pub struct ViewnodeRewrite {
     pub blamed_agent: bool,
 }
 
+/// The witnesses of the agent COMPOSING a brand-new cockpit surface — the World Board —
+/// from an empty root, informed by the live World (the return of
+/// [`DeosDesktop::bake_agent_composes_world_board`]). The deeper reflective loop: the
+/// agent stops editing the cockpit and co-authors a NEW surface OF it.
+#[cfg(feature = "card-pane")]
+pub struct WorldBoardComposition {
+    /// REFLECT-ON: the agent's authoring surface began as a bare empty root (it composed
+    /// from nothing, not by tweaking a pre-existing pane).
+    pub started_empty: bool,
+    /// READ THE WORLD: the live cell count the agent crawled off the real ledger (which
+    /// the host cross-checks against its own ledger read).
+    pub crawled_cells: usize,
+    /// The agent authored the board's title text from nothing.
+    pub composed_title: bool,
+    /// How many LIVE state-bound rows the agent composed (the board has 3).
+    pub composed_bind_rows: usize,
+    /// The agent composed the `refresh` affordance button.
+    pub composed_button: bool,
+    /// How many receipted provenance turns the composition committed (one per gesture: a
+    /// title + 3 bind rows + a button = 5).
+    pub receipt_count: usize,
+    /// Whether the board's blame attributes the composition to the agent (accountable).
+    pub blamed_agent: bool,
+    /// A REAL second `viewnode_pane` desktop window now hosts the agent-composed board.
+    pub mounted_window: bool,
+}
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -2454,6 +2481,23 @@ impl DeosDesktop {
         }
     }
 
+    /// Place + raise the `ViewNodePane` window keyed on `cell` in a clear area (a bake
+    /// hook) — the cell-addressed sibling of [`Self::bake_place_viewnode_window`], used to
+    /// surface the agent-composed World Board window for the after-capture.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_place_window(&mut self, cell: CellId, x: f32, y: f32, w: f32, h: f32) {
+        let key = (cell, WinKindTag::ViewNodePane);
+        if let Some(ws) = self.windows.get_mut(&key) {
+            ws.x = x;
+            ws.y = y;
+            ws.w = w;
+            ws.h = h;
+            ws.minimized = false;
+            ws.z = self.next_z;
+            self.next_z += 1;
+        }
+    }
+
     /// **THE REFLECTIVE-COCKPIT LOOP, IN THE SHIPPED DESKTOP** — a confined agent
     /// reflects-on then rewrites the World-Status pane in the REAL desktop window.
     ///
@@ -2472,6 +2516,7 @@ impl DeosDesktop {
     #[cfg(feature = "card-pane")]
     pub fn bake_agent_rewrites_viewnode_pane(
         &mut self,
+        rt: &mut deos_js::JsRuntime,
         cx: &mut Context<Self>,
     ) -> Result<ViewnodeRewrite, String> {
         let cell = self.user;
@@ -2495,7 +2540,7 @@ impl DeosDesktop {
 
         // (3) REWRITE — run the agent's reflect-then-rewrite JS through the proven
         //     `CardEditor` machinery (receipted, blamed, cap-toothed).
-        let rw = viewnode_pane::agent_rewrite_status_panel()?;
+        let rw = viewnode_pane::agent_rewrite_status_panel(rt)?;
 
         // (4) THE LIVE SURFACE RE-RENDERS — swap the re-folded tree into the SAME entity
         //     the desktop window hosts, and notify so the real window repaints it.
@@ -2516,6 +2561,114 @@ impl DeosDesktop {
             live_after_has_button,
             receipt_count: rw.receipt_count,
             blamed_agent: rw.blamed_agent,
+        })
+    }
+
+    /// **THE AGENT AS CO-AUTHOR — compose a brand-new cockpit surface from scratch.**
+    ///
+    /// The deeper rung past [`Self::bake_agent_rewrites_viewnode_pane`] (which rewrites one
+    /// pre-existing surface): here a confined agent COMPOSES a NEW surface — a World Board —
+    /// from an EMPTY root, informed by reading the live World, and the board is mounted as a
+    /// REAL second `viewnode_pane` window in the shipped desktop. The agent stops being an
+    /// editor of the cockpit and becomes a co-author OF it:
+    ///
+    ///   1. The host reads its live World (cell count · receipts · conservation Σ) and
+    ///      seeds a fresh, EMPTY board card with those stats (its `bind` rows surface them).
+    ///   2. The agent's JS runs through the proven `CardEditor` machinery WITH a live-World
+    ///      crawl target attached: it REFLECTS-ON its own empty surface, CRAWLS the real
+    ///      ledger (`deos.world.cells()`) to decide what to surface, then COMPOSES from the
+    ///      empty root — a title + 3 live state-bound rows (`addBind`) + a `refresh` button —
+    ///      each a receipted patch blamed on the agent, cap-toothed.
+    ///   3. The composed tree is painted by the SAME native renderer into a NEW desktop
+    ///      window (a distinct `ViewNodePane`): the agent ADDED a cockpit surface.
+    ///
+    /// Returns the loop's witnesses (started-empty · crawled cell count · composed nodes ·
+    /// receipts · blame · the mounted window) so a bake can assert the agent co-authored a
+    /// real new cockpit surface.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_agent_composes_world_board(
+        &mut self,
+        rt: &mut deos_js::JsRuntime,
+        cx: &mut Context<Self>,
+    ) -> Result<WorldBoardComposition, String> {
+        use crate::agent_attach::{WorldSinkAdapter, attach_agent};
+
+        // (1) READ THE LIVE WORLD (host side) — the real stats the board will surface. The
+        //     ledger count is what the agent's crawl will independently report.
+        let cells = self.world.borrow().ledger().iter().count() as u64;
+        let receipts = self.world.borrow().receipts().len() as u64;
+        let sum = self.world_balance_sum().max(0) as u64;
+
+        // (2) A fresh, EMPTY board card seeded with those live stats (the agent composes
+        //     every node; its `bind` rows re-read these slots). Confirm it begins bare —
+        //     the agent composes from nothing, not by tweaking a pre-existing pane.
+        let editor = viewnode_pane::world_board_editor(cells, receipts, sum);
+        let started_empty = editor
+            .view_tree()
+            .map(|t| t.children().is_empty())
+            .unwrap_or(false);
+
+        // (3) The agent ALSO crawls the live World directly — attach a witnessed-read crawl
+        //     target over the live ledger under the user cell's Signature (a read confers
+        //     no authority; the empty affordance surface means it cannot mutate via it).
+        let sink = WorldSinkAdapter::live(self.world.clone());
+        let applet = attach_agent(sink, self.user, dregg_cell::AuthRequired::Signature, vec![]);
+        let target = deos_js::JsTarget::Attached(applet);
+
+        // (4) COMPOSE — run the agent's reflect→read→compose JS through the proven machinery
+        //     on the shared process-global runtime (the same `rt` that drove the rewrite).
+        let (result, editor, _target) =
+            rt.run_authoring_with_crawl(editor, target, viewnode_pane::WORLD_BOARD_COMPOSE_JS)?;
+        let crawled = result.unwrap_or(0);
+        if crawled < 1 {
+            return Err(format!(
+                "the agent's compose-from-scratch run did not complete (returned {result:?})"
+            ));
+        }
+
+        let after_source = editor.view_source();
+        let after_tree = deos_view::parse_view_tree(&after_source)?;
+        let composed_title = viewnode_pane::tree_has_board_title(&after_tree);
+        let composed_bind_rows = viewnode_pane::count_bind_rows(&after_tree);
+        let composed_button = viewnode_pane::tree_has_refresh_button(&after_tree);
+        let receipt_count = editor.card().receipt_count();
+        let blamed_agent = editor
+            .view_blame()
+            .iter()
+            .any(|l| l.author == viewnode_pane::AGENT_AUTHOR);
+
+        // (5) MOUNT — paint the agent's composed tree into a NEW desktop window (a distinct
+        //     ViewNodePane keyed on the board cell). Pre-insert the entity so the window's
+        //     render hosts the agent's board (not the default World-Status panel).
+        let board_cell = viewnode_pane::world_board_window_cell();
+        let entity = viewnode_pane::build_board_view(cx, cells, receipts, sum, after_tree.clone());
+        self.viewnode_panes.insert(board_cell, entity);
+        self.open_kind(board_cell, WinKindTag::ViewNodePane);
+        if let Some(ws) = self
+            .windows
+            .get_mut(&(board_cell, WinKindTag::ViewNodePane))
+        {
+            ws.title = "World Board — composed by the agent · deos_view::ViewNode".to_string();
+        }
+        let mounted_window = self
+            .windows
+            .contains_key(&(board_cell, WinKindTag::ViewNodePane))
+            && self.viewnode_panes.contains_key(&board_cell);
+
+        self.status = format!(
+            "The agent COMPOSED a new cockpit surface — a World Board (cells {cells} · \
+             receipts {receipts}) — from scratch, mounted as a live window."
+        );
+
+        Ok(WorldBoardComposition {
+            started_empty,
+            crawled_cells: crawled as usize,
+            composed_title,
+            composed_bind_rows,
+            composed_button,
+            receipt_count,
+            blamed_agent,
+            mounted_window,
         })
     }
 
@@ -3638,9 +3791,11 @@ impl DeosDesktop {
             .flex()
             .flex_col()
             .gap_1()
-            .child(face_section(
-                "World-Status panel (deos_view::ViewNode -> AppletView · a confined agent reflects-on + rewrites it live)",
-            ))
+            .child(face_section(if viewnode_pane::is_world_board(&cell) {
+                "World Board (deos_view::ViewNode -> AppletView · the confined agent COMPOSED this surface from scratch, reading the live World)"
+            } else {
+                "World-Status panel (deos_view::ViewNode -> AppletView · a confined agent reflects-on + rewrites it live)"
+            }))
             .child(
                 // THE IR-RENDERED SURFACE — deos-view's native renderer walks the
                 // portable `ViewNode` into real gpui-component widgets (the `bind` reads

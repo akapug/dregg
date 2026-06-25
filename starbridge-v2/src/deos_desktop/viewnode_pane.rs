@@ -53,6 +53,7 @@ use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet}
 use deos_js::{Applet, JsRuntime};
 use deos_view::{AppletView, SharedApplet, ViewNode, parse_view_tree};
 use dregg_cell::AuthRequired;
+use dregg_types::CellId;
 
 /// The status panel's model slots — the live values its `bind` rows re-read off the
 /// ledger (a status face is a function of state). `refreshes` is what the panel's
@@ -277,9 +278,10 @@ pub struct RewriteResult {
 /// [`AGENT_REWRITE_JS`] in real SpiderMonkey against it (the agent reads the surface, then
 /// rewrites it as receipted patches), and hand back the re-folded tree + accountability.
 ///
-/// SpiderMonkey is a process-global thread-bound singleton; this boots one [`JsRuntime`]
-/// on the calling thread (the desktop's gpui thread, in the bake).
-pub fn agent_rewrite_status_panel() -> Result<RewriteResult, String> {
+/// SpiderMonkey is a process-global thread-bound singleton (its engine is one-shot per
+/// process), so the runtime is created ONCE by the caller and threaded in — the same
+/// `rt` drives the rewrite AND the [`world_board_editor`] compose loop.
+pub fn agent_rewrite_status_panel(rt: &mut JsRuntime) -> Result<RewriteResult, String> {
     let manifest = status_panel_manifest();
     let card = status_panel_applet();
     // The editor holds `Signature`, which satisfies the panel's authoring authority
@@ -293,7 +295,6 @@ pub fn agent_rewrite_status_panel() -> Result<RewriteResult, String> {
         AuthRequired::Signature,
     );
 
-    let mut rt = JsRuntime::new()?;
     let (result, editor) = rt.run_authoring(editor, AGENT_REWRITE_JS)?;
     if result != Some(1) {
         return Err(format!(
@@ -315,9 +316,240 @@ pub fn agent_rewrite_status_panel() -> Result<RewriteResult, String> {
     })
 }
 
+// ══════════════════════════════════════════════════════════════════════════════════
+//  THE WORLD BOARD — the agent as a CO-AUTHOR of the live cockpit
+// ══════════════════════════════════════════════════════════════════════════════════
+//
+// The `0c3e567b`/`b18447aa` loop proved the agent can REWRITE one pre-existing surface
+// (the World-Status panel). This goes deeper: the agent COMPOSES a BRAND-NEW cockpit
+// surface — a "World Board" — FROM AN EMPTY ROOT, informed by reading the live World,
+// and the board is mounted as a REAL second `viewnode_pane` desktop window. The agent
+// stops being an editor of the cockpit and becomes a co-author OF it:
+//
+//   1. REFLECT-ON  — the agent reads its OWN surface (`deos.editor.view()`) and finds a
+//      bare, empty root: it is about to compose from nothing, not tweak an existing pane.
+//   2. READ THE WORLD — it crawls the live ledger (`deos.world.cells()`) to DECIDE what
+//      to surface (a witnessed read; confers no authority).
+//   3. COMPOSE — from the empty root it authors every node: a title, three LIVE
+//      state-bound rows (`addBind` — the new authoring primitive), and a `refresh`
+//      button. Each gesture is a receipted patch blamed on the agent, cap-toothed.
+//   4. MOUNT — the composed tree is painted by the SAME native renderer into a new
+//      desktop window (a distinct `ViewNodePane`): the agent ADDED a cockpit surface.
+
+/// The board card's model slots — the live values its `bind` rows surface (a status
+/// face is a function of state). The host seeds these from its live-World read.
+pub const BOARD_SLOT_CELLS: Slot = 0;
+pub const BOARD_SLOT_RECEIPTS: Slot = 1;
+pub const BOARD_SLOT_SUM: Slot = 2;
+/// What the board's `refresh` affordance bumps (kept off the surfaced stat slots).
+pub const BOARD_SLOT_REFRESHES: Slot = 3;
+
+/// The window key the desktop hosts the agent-composed board under — a deterministic,
+/// distinct cell so the board opens as its OWN `ViewNodePane` window (beside the
+/// World-Status pane keyed on the user cell). Not the board applet's internal cell; it
+/// is the window/HashMap key + the marker [`is_world_board`] reads.
+pub fn world_board_window_cell() -> CellId {
+    CellId::from_bytes([0x42u8; 32])
+}
+
+/// Whether `cell` keys the agent-composed World Board window (drives the pane header).
+pub fn is_world_board(cell: &CellId) -> bool {
+    cell == &world_board_window_cell()
+}
+
+/// **The agent's compose-from-scratch script.** (0) REFLECT-ON — read the agent's own
+/// surface and confirm it is a bare EMPTY root (composing from nothing); (1) READ THE
+/// WORLD — crawl the live ledger's real cells; (2) COMPOSE — from the empty root, author
+/// a title + three live state-bound rows (`addBind`) + a `refresh` button. Returns the
+/// crawled live-cell count on full success (a positive witness the host cross-checks
+/// against its own ledger read), else 0. Each `editView` is a receipted, blamed,
+/// cap-toothed patch — the SAME proven `CardEditor` machinery, now building a new surface.
+pub const WORLD_BOARD_COMPOSE_JS: &str = r#"
+    // (0) REFLECT-ON — the agent reads its OWN surface first: a bare, EMPTY root.
+    var surface = deos.editor.view();
+    var startedEmpty = surface && surface.kind === "vstack" &&
+        (!surface.children || surface.children.length === 0);
+
+    // (1) READ THE LIVE WORLD — crawl the REAL ledger to DECIDE what to surface.
+    var n = deos.world.cells().length;
+
+    // (2) COMPOSE A FRESH SURFACE FROM THE EMPTY ROOT — the agent authors every row of
+    //     its OWN cockpit board: a title, three live state-bound rows, a refresh button.
+    var card = deos.editor.card();
+    deos.editor.editView(card, { op: "addText", text: "World Board" });
+    deos.editor.editView(card, { op: "addBind", slot: 0, label: "live cells: " });
+    deos.editor.editView(card, { op: "addBind", slot: 1, label: "receipts: " });
+    deos.editor.editView(card, { op: "addBind", slot: 2, label: "conservation Σ: " });
+    var tree = deos.editor.editView(card, {
+        op: "addButton", label: "refresh", affordance: "refresh", arg: 1
+    });
+
+    // (3) WITNESS — the empty surface now carries the agent's composed board.
+    var titled = false, binds = 0, hasButton = false;
+    (function walk(node) {
+        if (!node) return;
+        if (node.kind === "text" && node.props && node.props.text === "World Board") titled = true;
+        if (node.kind === "bind") binds += 1;
+        if (node.kind === "button" && node.props && node.props.on_click &&
+            node.props.on_click.turn === "refresh") hasButton = true;
+        var kids = node.children || [];
+        for (var i = 0; i < kids.length; i++) walk(kids[i]);
+    })(tree);
+
+    (startedEmpty && n >= 1 && titled && binds === 3 && hasButton) ? n : 0;
+"#;
+
+/// The board card's portable manifest — an **EMPTY root view** (the agent composes every
+/// node from scratch), its three stat slots seeded from the host's live-World read, and a
+/// `refresh` affordance the agent's composed button fires.
+pub fn world_board_manifest(cells: u64, receipts: u64, sum: u64) -> AppletManifest {
+    AppletManifest {
+        seed_fields: vec![
+            (BOARD_SLOT_CELLS, cells),
+            (BOARD_SLOT_RECEIPTS, receipts),
+            (BOARD_SLOT_SUM, sum),
+            (BOARD_SLOT_REFRESHES, 0),
+        ],
+        affordances: vec![AffordanceSpec {
+            name: "refresh".into(),
+            required: AuthRequired::Signature,
+            op: ApplyOp::AddToSlot {
+                slot: BOARD_SLOT_REFRESHES,
+            },
+        }],
+        held: AuthRequired::Signature,
+        // The agent composes the whole tree — the surface starts as a bare vstack.
+        view_source: EditorViewTree::root().to_json(),
+    }
+}
+
+/// Mint the board's backing applet on a fresh embedded verified executor, seeded with the
+/// live-World stats its `bind` rows surface.
+pub fn world_board_applet(cells: u64, receipts: u64, sum: u64) -> Applet {
+    let public_key = [0x42u8; 32]; // 'B' — the World Board
+    let token_id = [0x0bu8; 32];
+    PortableApplet::mint(
+        public_key,
+        token_id,
+        &world_board_manifest(cells, receipts, sum),
+    )
+}
+
+/// Adopt a fresh, empty board card for authoring under the agent's identity (held
+/// `Signature`, the cap tooth runs before each compose gesture).
+pub fn world_board_editor(cells: u64, receipts: u64, sum: u64) -> CardEditor {
+    let manifest = world_board_manifest(cells, receipts, sum);
+    let card = world_board_applet(cells, receipts, sum);
+    CardEditor::adopt(
+        card,
+        manifest,
+        AGENT_AUTHOR,
+        AuthRequired::Signature,
+        AuthRequired::Signature,
+    )
+}
+
+/// Count the live `bind` rows in a rendered board tree (the agent's composed state rows).
+pub fn count_bind_rows(tree: &ViewNode) -> usize {
+    fn walk(n: &ViewNode, rows: &mut usize) {
+        if let ViewNode::Bind { .. } = n {
+            *rows += 1;
+        }
+        match n {
+            ViewNode::VStack(kids)
+            | ViewNode::Row(kids)
+            | ViewNode::List(kids)
+            | ViewNode::Table(kids) => {
+                for k in kids {
+                    walk(k, rows);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut rows = 0;
+    walk(tree, &mut rows);
+    rows
+}
+
+/// Whether a rendered board tree carries the agent's `World Board` title text.
+pub fn tree_has_board_title(tree: &ViewNode) -> bool {
+    fn walk(n: &ViewNode) -> bool {
+        match n {
+            ViewNode::Text(s) => s == "World Board",
+            ViewNode::VStack(kids)
+            | ViewNode::Row(kids)
+            | ViewNode::List(kids)
+            | ViewNode::Table(kids) => kids.iter().any(walk),
+            _ => false,
+        }
+    }
+    walk(tree)
+}
+
+/// **Build the agent-composed World Board pane** — a [`deos_view::AppletView`] gpui entity
+/// over the agent's composed `tree`, backed by a board applet seeded with the live-World
+/// stats the `bind` rows surface. The desktop hosts the returned entity as a new window
+/// body (a distinct `ViewNodePane`), so the agent's from-scratch composition reaches the
+/// glass through the SAME native renderer the World-Status pane uses.
+pub fn build_board_view(
+    cx: &mut App,
+    cells: u64,
+    receipts: u64,
+    sum: u64,
+    tree: ViewNode,
+) -> Entity<AppletView> {
+    let applet: SharedApplet = Rc::new(RefCell::new(world_board_applet(cells, receipts, sum)));
+    cx.new(|_cx| AppletView::new(applet, tree))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_manifest_starts_empty_and_seeds_live_stats() {
+        // The board's authoring surface begins as a bare empty root — the agent composes
+        // every node — and its model carries the host's live-World read.
+        let tree = parse_view_tree(&world_board_manifest(7, 21, 0).view_source)
+            .expect("the board's empty-root view-source parses");
+        assert!(
+            matches!(&tree, ViewNode::VStack(kids) if kids.is_empty()),
+            "a fresh board is a bare empty vstack (nothing authored yet)"
+        );
+        let mut applet = world_board_applet(7, 21, 0);
+        assert_eq!(applet.get_u64(BOARD_SLOT_CELLS), 7);
+        assert_eq!(applet.get_u64(BOARD_SLOT_RECEIPTS), 21);
+        // The `refresh` affordance the agent's composed button fires is a cap-gated turn.
+        applet.fire("refresh", 1).expect("refresh commits");
+        assert_eq!(applet.get_u64(BOARD_SLOT_REFRESHES), 1);
+    }
+
+    #[test]
+    fn add_bind_composes_a_live_row_from_scratch() {
+        // The new `AddBind` authoring primitive: from an empty editor, an agent can
+        // compose a state-bound row (not just a frozen text snapshot).
+        use deos_js::card_editor::ViewPatch;
+        let mut editor = world_board_editor(3, 12, 0);
+        editor
+            .edit_view(ViewPatch::AddText {
+                text: "World Board".into(),
+            })
+            .expect("compose the title");
+        editor
+            .edit_view(ViewPatch::AddBind {
+                slot: BOARD_SLOT_CELLS,
+                label: "live cells: ".into(),
+            })
+            .expect("compose a live bind row");
+        let tree = parse_view_tree(&editor.view_source()).expect("composed source parses");
+        assert!(tree_has_board_title(&tree), "the title was composed");
+        assert_eq!(
+            count_bind_rows(&tree),
+            1,
+            "one live state-bound row composed"
+        );
+    }
 
     #[test]
     fn panel_source_parses_to_the_expected_shape() {

@@ -517,6 +517,7 @@ const PRELUDE: &str = r#"
             // view-source, leave a receipted patch + blame. patchSpec is a small object:
             //   {op:"addButton", label, affordance, arg}  — append a button (a turn);
             //   {op:"addText",   text}                     — append a text node;
+            //   {op:"addBind",   slot, label}             — append a live state-bound row;
             //   {op:"relabel",   target, text}            — relabel a text node.
             // Returns the re-folded view-tree (the {kind,props,children} JSON deos-view
             // consumes), or null on refusal (unauthorized / wrong card / no-op).
@@ -804,6 +805,34 @@ impl JsRuntime {
             take_current_editor().ok_or_else(|| "card editor vanished during run".to_string())?;
         match eval {
             Ok(result) => Ok((result, editor)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// THE AUTHORING-WITH-CRAWL RUN — like [`Self::run_authoring`], but ALSO installs a
+    /// crawl/drive [`JsTarget`] (embedded or a live-World attach) so the authoring script
+    /// can READ the live image (`deos.world.*`, `deos.cell(id)`) *while* it composes. The
+    /// reflective-cockpit loop deepened from rewriting one surface to **composing a fresh
+    /// surface from the live world-state**: the agent reads the real ledger, decides a
+    /// layout, and authors it. The crawl read confers no authority (it is a witnessed
+    /// read); authoring stays bounded by the editor's `held` (the cap tooth).
+    ///
+    /// Returns `(script_result, the_editor_back, the_crawl_target_back)`.
+    pub fn run_authoring_with_crawl(
+        &mut self,
+        editor: CardEditor,
+        target: JsTarget,
+        source: &str,
+    ) -> Result<(Option<i32>, CardEditor, JsTarget), String> {
+        set_current_target(target);
+        set_current_editor(editor);
+        let eval = self.eval(source);
+        let editor =
+            take_current_editor().ok_or_else(|| "card editor vanished during run".to_string())?;
+        let target =
+            take_current_target().ok_or_else(|| "crawl target vanished during run".to_string())?;
+        match eval {
+            Ok(result) => Ok((result, editor, target)),
             Err(e) => Err(e),
         }
     }
@@ -1404,6 +1433,10 @@ fn parse_view_patch(spec_json: &str) -> Result<ViewPatch, String> {
             arg: i("arg"),
         }),
         "addText" => Ok(ViewPatch::AddText { text: s("text") }),
+        "addBind" => Ok(ViewPatch::AddBind {
+            slot: i("slot").max(0) as usize,
+            label: s("label"),
+        }),
         "relabel" => Ok(ViewPatch::Relabel {
             from: s("target"),
             to: s("text"),

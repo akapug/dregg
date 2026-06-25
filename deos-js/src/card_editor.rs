@@ -216,6 +216,10 @@ pub enum ViewPatch {
     },
     /// Append a static text node to the root view.
     AddText { text: String },
+    /// Append a live `bind` row — re-reads model `slot`, prefixed by `label` — to the
+    /// root view. The authoring primitive for composing a *state-bound* row (a status
+    /// surface is a function of state), distinct from a frozen [`AddText`] snapshot.
+    AddBind { slot: usize, label: String },
     /// Relabel the first text node matching `from` to `to` (change a label).
     Relabel { from: String, to: String },
 }
@@ -239,6 +243,15 @@ impl ViewPatch {
             ViewPatch::AddText { text } => {
                 tree.push_child(ViewTree::Text {
                     props: TextProps { text: text.clone() },
+                });
+                true
+            }
+            ViewPatch::AddBind { slot, label } => {
+                tree.push_child(ViewTree::Bind {
+                    props: BindProps {
+                        slot: *slot,
+                        label: label.clone(),
+                    },
                 });
                 true
             }

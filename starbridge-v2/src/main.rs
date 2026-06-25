@@ -1882,9 +1882,14 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         let vnode_before = cx.capture_screenshot(window.into())?;
         vnode_before.save(format!("{out}.viewnode-before.png"))?;
 
+        // ONE process-global SpiderMonkey runtime drives BOTH agent loops (the rewrite +
+        // the compose) — its engine is one-shot per process, so it is booted once here.
+        let mut rt = deos_js::JsRuntime::new()
+            .map_err(|e| anyhow::anyhow!("boot SpiderMonkey for the agent loops: {e}"))?;
+
         let rewrite = desk_h
             .update(&mut cx, |desk, cx| {
-                desk.bake_agent_rewrites_viewnode_pane(cx)
+                desk.bake_agent_rewrites_viewnode_pane(&mut rt, cx)
             })
             .map_err(|e| anyhow::anyhow!("the agent's reflect-then-rewrite loop failed: {e}"))?;
         anyhow::ensure!(
@@ -1922,6 +1927,75 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
             html.contains("World Status") && html.contains("receipts: 12"),
             "the web renderer must render the IDENTICAL World-Status ViewNode the desktop \
              hosts (renderer independence: the same tree, native + web)"
+        );
+
+        // 4e″. THE AGENT AS CO-AUTHOR — the DEEPER reflective loop. Past rewriting one
+        //      surface: a confined agent COMPOSES a BRAND-NEW cockpit surface — a World
+        //      Board — from an EMPTY root, informed by reading the live World, and the
+        //      board is mounted as a REAL second `viewnode_pane` window. Capture BEFORE
+        //      (no board) and AFTER (the agent's composed board on the glass); the frames
+        //      differ. The agent stopped editing the cockpit and co-authored a surface OF it.
+        let board_before = cx.capture_screenshot(window.into())?;
+        board_before.save(format!("{out}.world-board-before.png"))?;
+
+        let board = desk_h
+            .update(&mut cx, |desk, cx| {
+                desk.bake_agent_composes_world_board(&mut rt, cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's compose-from-scratch loop failed: {e}"))?;
+        anyhow::ensure!(
+            board.started_empty,
+            "COMPOSE-FROM-SCRATCH: the agent's authoring surface must begin as a bare empty \
+             root (it composes a NEW surface, it does not tweak a pre-existing pane)"
+        );
+        anyhow::ensure!(
+            board.crawled_cells >= 1,
+            "READ-THE-WORLD: the agent must crawl the live ledger's real cells to decide \
+             what to surface (got {})",
+            board.crawled_cells
+        );
+        anyhow::ensure!(
+            board.composed_title && board.composed_bind_rows == 3 && board.composed_button,
+            "COMPOSE: the agent must author the board from nothing — a title + 3 LIVE \
+             state-bound rows + a refresh button (title={}, binds={}, button={})",
+            board.composed_title,
+            board.composed_bind_rows,
+            board.composed_button
+        );
+        anyhow::ensure!(
+            board.receipt_count == 5 && board.blamed_agent,
+            "ACCOUNTABLE: the composition's 5 gestures (title + 3 binds + button) must each \
+             commit a receipted provenance turn, blamed on the agent (got {} receipt(s), \
+             blamed={})",
+            board.receipt_count,
+            board.blamed_agent
+        );
+        anyhow::ensure!(
+            board.mounted_window,
+            "MOUNT: a REAL second viewnode_pane window must host the agent-composed board"
+        );
+
+        // Raise the board window into a clear area so its composed body reaches pixels,
+        // then capture AFTER — the agent's from-scratch surface on the live desktop.
+        desk_h.update(&mut cx, |desk, cx| {
+            desk.bake_place_window(
+                starbridge_v2::deos_desktop::viewnode_pane::world_board_window_cell(),
+                170.0,
+                150.0,
+                480.0,
+                300.0,
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let board_after = cx.capture_screenshot(window.into())?;
+        board_after.save(format!("{out}.world-board-after.png"))?;
+        anyhow::ensure!(
+            board_before.as_raw() != board_after.as_raw(),
+            "the agent's COMPOSED board must reach the SHIPPED desktop — a new surface the \
+             agent authored from scratch must appear on the glass (before == after)"
         );
     }
 
