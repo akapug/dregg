@@ -619,6 +619,15 @@ fn apply_view_patch(patch: &ViewPatch, tree: &mut ViewTree) -> bool {
     match patch {
         ViewPatch::AddButton { label, turn, arg } => push_child(tree, button(label, turn, *arg)),
         ViewPatch::AddText { text: t } => push_child(tree, text(t)),
+        ViewPatch::AddBind { slot, label } => push_child(
+            tree,
+            ViewTree::Bind {
+                props: crate::card_editor::BindProps {
+                    slot: *slot,
+                    label: label.clone(),
+                },
+            },
+        ),
         ViewPatch::Relabel { from, to } => relabel_text(tree, from, to),
     }
 }

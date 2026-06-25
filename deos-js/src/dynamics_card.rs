@@ -315,6 +315,15 @@ fn apply_patch(patch: &ViewPatch, tree: &mut ViewTree) -> bool {
                 props: TextProps { text: text.clone() },
             },
         ),
+        ViewPatch::AddBind { slot, label } => push_child(
+            tree,
+            ViewTree::Bind {
+                props: crate::card_editor::BindProps {
+                    slot: *slot,
+                    label: label.clone(),
+                },
+            },
+        ),
         ViewPatch::Relabel { from, to } => relabel_text(tree, from, to),
     }
 }
