@@ -773,7 +773,9 @@ impl Accumulator {
                                apt: &[Vec<p3_recursion::Target>]| {
                 if let Some(claims) = apt.first() {
                     debug_assert!(claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS);
-                    cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
+                    cb.expose_as_public_output(
+                        &claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS],
+                    );
                 }
             };
             build_and_prove_next_layer_with_expose::<
@@ -842,13 +844,7 @@ impl Accumulator {
             _,
             D,
         >(
-            &left,
-            &right,
-            &config,
-            &backend,
-            &root_params,
-            None,
-            Some(&expose),
+            &left, &right, &config, &backend, &root_params, None, Some(&expose),
         )
         .map_err(|e| AccError::RecursionFailed {
             reason: format!("finalize root aggregation failed: {e:?}"),
