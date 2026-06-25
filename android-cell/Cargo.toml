@@ -34,6 +34,14 @@ starbridge-web-surface = { path = "../starbridge-web-surface" }
 # NetcapConnector uses. Re-exported by servo-render but we name it directly.
 dregg-captp = { path = "../captp" }
 
+# THE FACTORY / CELL-BIRTH VOCABULARY — `FactoryDescriptor` / `CapTemplate` /
+# `CapTarget` (the provable, cap-gated cell birth). The package-manager→cell-factory
+# reforge (GRAPHIDEOS.md §1) translates an APK manifest's declared permissions into a
+# descriptor's `allowed_cap_templates`, so "installing an app" mints an android-cell
+# whose authority is EXACTLY its manifest — nothing ambient. `dregg-firmament` already
+# pulls `dregg-cell` transitively; we name it directly for the factory types.
+dregg-cell = { path = "../cell" }
+
 # content_digest = blake3(rgba8) — the SAME blake3 the RgbaFrame uses; also the
 # IoReceipt's decision digest.
 blake3 = "1"

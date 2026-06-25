@@ -247,20 +247,32 @@ from outermost (easy, real today) to innermost (the deep ceiling):
   property: **no ambient authority; a denied I/O reaches nothing.** This is the
   android-cell's equivalent of the webcell's connect-decision gate, and it is enough for
   the first spike.
-- **Shallow + real today (intents):** the **intent resolution-and-authority gate** is
-  built (`intentgate.rs`) — an outbound `Intent` is resolved by a spotter over only the
-  cell's *granted* handler neighborhood (no ambient `PackageManager` over the whole
-  device), gated by the held `SurfaceCapability` for web data, a single match handed off
-  as a targeted turn, ambiguity surfaced as an explicit chooser (Android's remembered
-  "default app" auto-pick — the standing ambient grant — refused), each decision a
-  content-addressed `IntentReceipt`. This is the same shape as the net/input gates and
-  delivers the no-ambient-`startActivity` property at the resolution granularity.
+- **Shallow + real today (intents):** the **intent gate** is built end-to-end
+  (`intentgate.rs`) — an outbound `Intent` is resolved by a spotter over only the cell's
+  *granted* handler neighborhood (no ambient `PackageManager` over the whole device),
+  gated by the held `SurfaceCapability` for web data, a single match handed off as a
+  targeted turn, ambiguity surfaced as an explicit chooser (Android's remembered "default
+  app" auto-pick — the standing ambient grant — refused), each decision a content-addressed
+  `IntentReceipt`. The **transport leg is wired** (`AndroidIntentGate` + the
+  `AndroidIntentSink for MacOsEmulatorRuntime` driving `am start`): ONLY a singly-resolved,
+  cap-admitted intent reaches the device's activity manager — a refused/ambiguous intent
+  never touches `am start`, the no-ambient-`startActivity` property enforced at the
+  transport, exactly as the input gate refuses a cap-denied tap before `adb`.
+- **Shallow + real today (install):** the **package-manager → cell-factory** reforge is
+  built (`appfactory.rs`) — an `AndroidManifest`'s declared `<uses-permission>`s translate
+  into a `FactoryDescriptor` whose `allowed_cap_templates` are EXACTLY the manifest, so
+  "installing an APK" mints an android-cell born holding precisely its declared authority
+  (a permission not declared yields no cap — no ambient UID grant, no runtime escalation),
+  content-addressed for audit. The component `<intent-filter>`s become the published
+  handler filters the intent resolver ranges over (install ↔ dispatch closed).
 - **Deep (the ceiling):** sensor/camera gating, AND interposing the *actual* binder
   `startActivity`/`queryIntentActivities` transaction (so the device kernel itself routes
-  only cap-admitted intents), at *per-call receipt* granularity needs interposing
-  Android's HAL or binder — the analogue of vendoring `servo-net` to own the http byte
-  socket. That is real engineering (a HAL stub or a binder filter), out of one spike's
-  reach, and named here as the frontier, not claimed.
+  only cap-admitted intents), AND the in-circuit constructor proof binding a foreign-APK
+  birth to its descriptor + the device-side APK signature rooted in Titan-M2 — at
+  *per-call receipt* granularity these need interposing Android's HAL or binder (the
+  analogue of vendoring `servo-net` to own the http byte socket). That is real engineering
+  (a HAL stub or a binder filter), out of one spike's reach, named as the frontier, not
+  claimed.
 
 The principle holds at the shallow depth and the gate composes with the compositor
 gate exactly as in the webcell: **two independent teeth** (a cap-permitted app frame is
