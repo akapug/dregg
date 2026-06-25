@@ -58,8 +58,8 @@ use std::collections::BTreeMap;
 use dregg_firmament::CellId;
 use servo_render::RgbaFrame;
 
-use crate::input::{InputReceipt, InputDecision};
-use crate::netgate::{IoReceipt, IoDecision};
+use crate::input::InputReceipt;
+use crate::netgate::IoReceipt;
 
 /// The five universal-memory domains — wire codes IDENTICAL to the kernel umem's
 /// `UDomain` (registers 0 · heap 1 · caps 2 · nullifiers 3 · index 4;
@@ -119,10 +119,9 @@ impl UKey {
     /// The domain this key lives in.
     pub fn domain(&self) -> UDomain {
         match self {
-            UKey::Exist(_)
-            | UKey::FrameDigest(_)
-            | UKey::FrameDims(_)
-            | UKey::PresentSeq(_) => UDomain::Heap,
+            UKey::Exist(_) | UKey::FrameDigest(_) | UKey::FrameDims(_) | UKey::PresentSeq(_) => {
+                UDomain::Heap
+            }
             UKey::SurfaceCapRoot(_) => UDomain::Caps,
             UKey::BoundaryReceipt { .. } => UDomain::Index,
         }
@@ -311,10 +310,7 @@ impl ServiceCellCheckpoint {
 /// Because the boundary planes are append-only (receipts) or last-writer (frame /
 /// present-seq), the diff is a faithful trace: every changed address is one write, the
 /// receipt appends never rewrite a prior position.
-pub fn emit_boundary_trace(
-    pre: &UProjection,
-    post: &UProjection,
-) -> Result<Vec<UmemOp>, String> {
+pub fn emit_boundary_trace(pre: &UProjection, post: &UProjection) -> Result<Vec<UmemOp>, String> {
     let mut ops: Vec<UmemOp> = Vec::new();
 
     // Every address present in post whose value differs from pre is a write.
@@ -384,6 +380,8 @@ pub fn diff(a: &UProjection, b: &UProjection) -> (Vec<UKey>, Vec<UKey>, Vec<UKey
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::InputDecision;
+    use crate::netgate::IoDecision;
     use dregg_firmament::cell_seed;
 
     fn frame(seed: u8, w: u32, h: u32) -> RgbaFrame {
@@ -393,7 +391,11 @@ mod tests {
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = (i as u8).wrapping_add(seed);
         }
-        RgbaFrame { width: w, height: h, bytes }
+        RgbaFrame {
+            width: w,
+            height: h,
+            bytes,
+        }
     }
 
     fn io_receipt(cell: CellId, origin: &str, dialed: bool) -> IoReceipt {
@@ -403,16 +405,15 @@ mod tests {
                 peer: crate::netgate::origin_to_peer(origin),
             }
         } else {
-            IoDecision::RefusedByCap { origin: origin.to_string() }
+            IoDecision::RefusedByCap {
+                origin: origin.to_string(),
+            }
         };
         IoReceipt {
             cell: Some(cell),
             origin: origin.to_string(),
             decision: decision.clone(),
-            decision_digest: blake3::hash(
-                format!("{origin}:{dialed}").as_bytes(),
-            )
-            .as_bytes()[..32]
+            decision_digest: blake3::hash(format!("{origin}:{dialed}").as_bytes()).as_bytes()[..32]
                 .try_into()
                 .unwrap(),
         }
@@ -440,7 +441,11 @@ mod tests {
         // present_seq is restored from the saved heap plane (here: one present).
         restored.present_seq = cp.present_seq;
 
-        assert_eq!(restored.project(), saved, "restore reproduces the umem exactly");
+        assert_eq!(
+            restored.project(),
+            saved,
+            "restore reproduces the umem exactly"
+        );
         assert_eq!(
             restored.commitment(),
             saved_commitment,
@@ -476,8 +481,14 @@ mod tests {
         // The changed addresses are exactly: the frame digest, the present-seq, and the
         // newly-appended receipt position — content-addressed.
         let (changed, _, only_post) = diff(&pre, &post);
-        assert!(changed.contains(&UKey::FrameDigest(cell)), "the frame digest moved");
-        assert!(changed.contains(&UKey::PresentSeq(cell)), "the present-seq moved");
+        assert!(
+            changed.contains(&UKey::FrameDigest(cell)),
+            "the frame digest moved"
+        );
+        assert!(
+            changed.contains(&UKey::PresentSeq(cell)),
+            "the present-seq moved"
+        );
         assert!(
             only_post.contains(&UKey::BoundaryReceipt { cell, position: 0 }),
             "a new receipt was appended at position 0"
