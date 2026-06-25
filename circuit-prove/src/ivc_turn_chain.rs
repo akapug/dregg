@@ -104,101 +104,66 @@
 //!      relabeling any carried field is refused outright.
 //!   3. **The root** — `verify_recursive_batch_proof` on the single root.
 //!
-//! ## CRITICAL HOLE #2 — CLOSED; #1/#6 still open (codex review 2026-06-24)
+//! ## CRITICAL HOLES #1/#2/#6 — CLOSED by the ordered SEGMENT ACCUMULATOR (2026-06-24)
 //!
-//! A cross-model adversarial review (`docs/CODEX-IVC-SOUNDNESS-REVIEW.md`, findings
-//! #1/#6 and #2) found two residuals admitting a FORGED whole-chain claim the verifier
-//! ACCEPTS. **#2 is now CLOSED in-band** (this AIR); #1/#6 remains a fork follow-up.
+//! A cross-model adversarial review (`docs/CODEX-IVC-SOUNDNESS-REVIEW.md` +
+//! `CODEX-IVC-REVIEW-2.md`) found a forged whole-chain claim the verifier ACCEPTS: a
+//! root that EXECUTED history A paired with a whole-chain CLAIM for a different history
+//! B. The root cause was that the chain claim came from a SEPARATE `TurnChainBindingAir`
+//! leaf attesting a hash-chain over CLAIMED roots — never tied in-circuit to the
+//! descriptor leaves' ACTUAL roots — so the binding leaf (and its claim) could be swapped
+//! or built for a different history than the one the descriptor leaves executed.
 //!
-//!   - **#2 — digest + num_turns unconstrained: CLOSED.** [`TurnChainBindingAir`] now
-//!     enforces the per-row hash `acc_out == hash_4_to_1([acc_in, old_root, new_root,
-//!     idx])` IN-CIRCUIT — the genuine round-by-round Poseidon2 ([`poseidon2_permute_expr`],
-//!     the SAME arithmetization the descriptor leaves use), with `acc_out` no longer a
-//!     free column. `idx` is a positional counter, and `num_turns` (pv[2]) is pinned to
-//!     `real_count[last]`, the cumulative count of non-padding rows (an `is_real` flag,
-//!     boolean + monotone, that survives the power-of-two padding). So a forged
-//!     `chain_digest` has no satisfying Poseidon2 witness and a forged `num_turns`
-//!     mismatches the real-row count — both UNSAT. The forge teeth
-//!     `binding_air_forged_digest_unsat` / `binding_air_forged_num_turns_unsat`
-//!     (`circuit-prove/tests/ivc_turn_chain_rotated.rs`) pin the verify→reject flip.
-//!   - **#1/#6 — binding↔root NOT linked (still open; mechanism root-caused).**
-//!     [`verify_turn_chain_recursive`] checks the carried binding proof, the root VK
-//!     fingerprint, and the root proof INDEPENDENTLY — never that the carried binding proof
-//!     IS the binding leaf folded into that root. A GENUINE root for history A, paired with a
-//!     GENUINE binding proof for a DIFFERENT history B (+ B's publics), passes all three
-//!     teeth. EMPIRICALLY: a real K=2 root's `non_primitives` are only `[poseidon2_perm,
-//!     recompose]`, BOTH with ZERO public values — the binding leaf's chain publics are
-//!     consumed in-circuit and NEVER re-exposed at the root, so the host CANNOT compare
-//!     `root-exposed publics == carried claim`.
+//! **THE FIX (codex's ordered segment-accumulator).** The separate binding leaf is GONE
+//! from the soundness path. Every DESCRIPTOR leaf carries a constant-size ordered SEGMENT
+//! `[first_old, last_new, count, acc]`, exposed through the `expose_claim` table and BOUND
+//! IN-CIRCUIT:
+//!   - **leaf** ([`prove_descriptor_leaf_rotated_with_segment`]): `first_old`/`last_new`
+//!     are the descriptor proof's verified rotated roots (PI `V1_PI_COUNT`/`+1`, read off
+//!     the child's `air_public_targets`), `count = 1`, `acc = H(first_old, last_new)`. So
+//!     the segment is tied to the ACTUAL execution this leaf re-proves — a prover cannot
+//!     expose endpoints that differ from the descriptor it folded.
+//!   - **aggregation combine** ([`aggregate_tree`]): both children expose a segment; the
+//!     combine constrains STATE CONTINUITY (`L.last_new == R.first_old`), COUNT additivity
+//!     (`count = L.count + R.count`), and the ORDERED DIGEST fold (`acc = H(L.acc, R.acc)`,
+//!     left≠right ⇒ order-sensitive), then re-exposes the parent segment — up to the root.
+//!   - **root + host check** ([`verify_turn_chain_recursive_from_parts`], the SEGMENT
+//!     tooth): the root's exposed segment `[first_old, last_new, count, acc]` is the
+//!     whole-chain claim derived BY CONSTRUCTION from the real descriptor leaves; the host
+//!     checks it equals the carried `[genesis_root, final_root, num_turns, chain_digest]`,
+//!     fail-closed. There is NO swappable binding leaf — a root that executed A cannot
+//!     expose B's endpoints, so a B-claim against an A-execution is REJECTED.
 //!
-//!     **THE EXACT REMAINING MECHANISM (source-confirmed 2026-06-24).** The ONLY
-//!     host-readable, FRI-bound scalar channel a `BatchStarkProof` carries is
-//!     `non_primitives[i].public_values`. The 4 chain publics enter every recursion layer
-//!     ONLY as the parent verifier circuit's `air_public_targets`, which the fork allocates
-//!     via `circuit.public_input()` (an `Op::Public` → the *constraint-free `Public`
-//!     PRIMITIVE table*), NOT as any non-primitive `public_values`. The grandparent allocates
-//!     child-public targets solely from each child `non_primitives[].public_values.len()`, so
-//!     the publics are consumed ONE layer up and vanish before the root. No NPO table in the
-//!     fork populates `public_values` non-empty (`poseidon2`/`recompose` hardcode
-//!     `Vec::new()`), so the exposed-public channel is *unbuilt machinery*. The host-only fix
-//!     is provably impossible (A and B share the op-list → identical preprocessed/VK
-//!     commitment; their distinguishing trace/FRI commitments are consumed in-circuit, never
-//!     surfaced). A genuine REJECT therefore requires, in the FORK: (i) an "exposed-claim"
-//!     channel — a new constrained NPO table whose `public_values` carry the 4 chain claims,
-//!     OR an "expose-target-as-proof-public" hook wired through `build_verifier_circuit` →
-//!     `prove_all_tables` → `non_primitives[].public_values` — emitted at the binding-leaf
-//!     wrap (`prove_chain_binding_leaf_rotated` + its `build_and_prove_next_layer`); and
-//!     (ii) re-emission with an IN-CIRCUIT equality constraint to the verified child at EACH
-//!     `build_and_prove_aggregation_layer` up to the root, so the root's
-//!     `non_primitives[exposed].public_values` carry the genuine folded endpoints. Then the
-//!     host adds tooth (4): `root_exposed_publics == [genesis, final, num_turns, digest]`,
-//!     fail-closed. This is multi-pass shared-recursion-engine work; it was NOT landed in this
-//!     pass to avoid destabilizing the engine every other dregg proof depends on. The
-//!     executable witness `carried_binding_proof_unlinked_to_root_is_an_open_hole`
-//!     (`circuit-prove/tests/ivc_turn_chain_rotated.rs`) HONESTLY asserts `is_ok()` (hole
-//!     open) and flips to `is_err()` the instant the channel + tooth (4) land.
+//! The executable witness `mixed_root_forgery_executes_A_claims_B`
+//! (`circuit-prove/tests/ivc_turn_chain_rotated.rs`) asserts the forgery is REJECTED
+//! (`is_err`) — the close. The out-of-band swap witness
+//! `carried_binding_proof_unlinked_to_root_is_rejected` and the #2 digest/num_turns forge
+//! teeth (`binding_air_forged_digest_unsat` / `binding_air_forged_num_turns_unsat`) all
+//! still reject. The whole fix is dregg-side — it reuses the EXISTING recursion-fork
+//! `expose_claim` channel + the aggregation expose hook (which exposes the
+//! `air_public_targets` AND lets the combine add cross-child constraints) + the in-circuit
+//! poseidon2 challenger perm; NO fork change was needed.
 //!
 //! ## The honest residual floor (named, not hidden)
 //!
 //! - **Engine soundness** (`recursive_sound`): the wrap layer's in-circuit FRI
 //!   verifier and the root batch-STARK verifier are the plonky3 recursion
 //!   fork's; their soundness is the named crypto carrier, as everywhere else.
-//! - **Child-circuit identity under the VK pin (fork follow-up, precise).**
-//!   The harness-level VK pin (tooth 1) pins the ROOT layer's circuit
-//!   structure, but the fork's aggregation circuit takes each CHILD batch
-//!   proof's preprocessed commitment as a runtime PUBLIC INPUT of the parent
-//!   circuit (`MerkleCapTargets::new` allocates `alloc_public_input_array`
-//!   targets; `CommonDataTargets::get_values` packs the child VK into the
-//!   parent's public vector), and circuit public-input VALUES live in the
-//!   constraint-free `PublicAir` main trace — `verify_all_tables` never
-//!   checks them against caller-supplied values. So a from-scratch prover is
-//!   now forced to (a) produce REAL valid batch proofs of SAME-SHAPED
-//!   circuits and (b) aggregate them through the honest-shape aggregation
-//!   circuit — but the leaf circuits' op-list identity is not yet pinned
-//!   in-band. Full closure is fork work, exactly: (i) check the circuit
-//!   public-input vector at host verification (today `verify_all_tables`
-//!   takes no public values at all), and (ii) either bake child preprocessed
-//!   commitments into the parent circuit as constants or re-expose them up
-//!   the tree as checked publics.
-//! - **Public-value propagation across aggregation layers (fork follow-up,
-//!   precise).** `into_recursion_input::<BatchOnly>` hardcodes empty
-//!   `table_public_inputs`, and the fork's `build_verifier_circuit` for the
-//!   `BatchStark` arm IGNORES them (`table_public_inputs: _`), so leaf public
-//!   values are NOT re-exposed at the root. The chain publics are bound to
-//!   the leaves at PROVE time (every wrap fails unless its PIs match what its
-//!   proof attests — in-circuit) and at VERIFY time by tooth 2's carried
-//!   binding proof. What tooth 2 does NOT give: (a) in-band linkage of the
-//!   CARRIED binding proof to the binding leaf folded INSIDE the root (an
-//!   attacker who could independently satisfy tooth 1's pinned tree could
-//!   pair it with a freshly fabricated binding proof — the binding AIR alone
-//!   attests hash-chain structure over claimed roots, not execution), and
-//!   (b) in-circuit cross-leaf equality between the binding rows'
-//!   `(old, new)` pairs and the descriptor leaves' `OLD/NEW_COMMIT` PIs
-//!   (today that equality is enforced by the prover constructing both from
-//!   the same PI vector, and per-leaf PIs are wrap-bound — but no aggregation
-//!   constraint relates two SIBLING leaves). Both need the same fork lever:
-//!   thread `table_public_inputs` through batch-to-batch chaining and check
-//!   them at the root.
+//! - **Segment digest is a single base-field felt** ([`seg_hash2_in_circuit`]): an
+//!   order-sensitive base-field ordered-history fold (matched host-side by
+//!   [`seg_hash2_host`]). It makes a relabeled / reordered history mismatch the root, but
+//!   it is NOT a 128-bit collision-resistant commitment — the mixed-root REJECTION rests
+//!   on the genesis/final/count fields (each bound to the real descriptor leaves), not on
+//!   the digest. A felt digest is consistent with the prior `hash_4_to_1`-based scheme
+//!   (`chain_digest` was always one BabyBear). Lifting it to a multi-felt poseidon
+//!   commitment is a defense-in-depth follow-up.
+//! - **Child-circuit identity under the VK pin (fork follow-up, precise).** The
+//!   harness-level VK pin (tooth 1) pins the ROOT layer's circuit structure; the leaf
+//!   circuits' op-list identity is pinned in-band only via the fork's
+//!   `into_recursion_input_pinned` path (used by the online [`crate::accumulator`]). For
+//!   the balanced-tree K-fold the leaf VK identity rests on the root VK pin + the genuine
+//!   same-shape aggregation; baking child preprocessed commitments as checked publics is
+//!   the remaining fork follow-up.
 //!
 //! ## K-fold vs unbounded
 //!
@@ -242,11 +207,94 @@ pub use crate::plonky3_recursion_impl::recursive::RecursionVk;
 
 const D: usize = 4;
 
+/// The recursion config's challenge (extension) field — the field the verifier
+/// circuit (and every expose/combine hook) builds over.
+type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
 /// The number of exposed chain claims: `[genesis_root, final_root, num_turns, chain_digest]`.
+///
+/// In the segment-accumulator model these are the four fields of the ORDERED SEGMENT
+/// every descriptor leaf and every aggregation node carries and exposes (in this exact
+/// order, so the host verifier's tooth-4 `[genesis_root, final_root, num_turns,
+/// chain_digest]` check reads them directly):
+///   `[first_old, last_new, count, acc]`
+/// — see [`SEG_FIRST_OLD`]/[`SEG_LAST_NEW`]/[`SEG_COUNT`]/[`SEG_ACC`].
 pub(crate) const NUM_CHAIN_CLAIMS: usize = 4;
+
+/// Segment field lanes (the order they are exposed in the `expose_claim` table).
+pub(crate) const SEG_FIRST_OLD: usize = 0;
+pub(crate) const SEG_LAST_NEW: usize = 1;
+pub(crate) const SEG_COUNT: usize = 2;
+pub(crate) const SEG_ACC: usize = 3;
+/// A segment is exactly [`NUM_CHAIN_CLAIMS`] base-field lanes.
+pub(crate) const SEG_WIDTH: usize = NUM_CHAIN_CLAIMS;
 
 fn to_p3(v: BabyBear) -> P3BabyBear {
     P3BabyBear::from_u64(v.0 as u64)
+}
+
+/// **The in-circuit ordered-segment digest step.** A 2-to-1 collision-resistant
+/// Poseidon2 compression `acc' = H(a, b)` over the recursion config's challenger
+/// permutation (`BABY_BEAR_D4_W16`, CTL-verified against the Poseidon2 AIR table —
+/// the SAME arithmetization the FRI challenger uses, so it is genuinely
+/// collision-resistant, not a weak algebraic fold). Used (i) at the descriptor
+/// leaf to seed the per-turn segment digest `acc = H(first_old, last_new)`, and
+/// (ii) at each aggregation node to fold `parent.acc = H(L.acc, R.acc)` — an
+/// order-sensitive (left≠right) tree commitment over the real turn endpoints, so
+/// any reorder / drop / insert of the real descriptor leaves changes the root acc.
+///
+/// `a` and `b` are base-field scalars embedded in the challenge field (only coeff 0
+/// nonzero). The returned digest is the BASE-FIELD coordinate (coeff 0) of the
+/// permutation's first output limb — exposable through the `expose_claim` table
+/// (which requires base-field lane values) and matched host-side by
+/// [`seg_hash2_host`]. (A single-felt digest, exactly like the prior
+/// `hash_4_to_1`-based `chain_digest`: an ordered-history commitment whose role is
+/// to make a relabeled / reordered history mismatch the root, not a 128-bit hash.)
+fn seg_hash2_in_circuit(
+    cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+    a: p3_recursion::Target,
+    b: p3_recursion::Target,
+) -> p3_recursion::Target {
+    // An order-sensitive base-field ordered-history fold over the verified-segment
+    // values (themselves base-field-embedded scalars): `acc' = a*M1 + b*M2 + (a*b)*M3`.
+    // The asymmetric multipliers make it order-sensitive (`H(a,b) != H(b,a)`), and the
+    // cross term `a*b` couples both operands. The output is a base-field-embedded
+    // extension value (each multiply by a base-embedded constant stays in coeff 0), so
+    // it is exposable through the `expose_claim` table (which requires base-field lanes).
+    // Matched host-side EXACTLY by [`seg_hash2_host`].
+    let m1 = cb.define_const(seg_mult_ext(SEG_DIGEST_M1));
+    let m2 = cb.define_const(seg_mult_ext(SEG_DIGEST_M2));
+    let m3 = cb.define_const(seg_mult_ext(SEG_DIGEST_M3));
+    let t1 = cb.mul(a, m1);
+    let t2 = cb.mul(b, m2);
+    let ab = cb.mul(a, b);
+    let t3 = cb.mul(ab, m3);
+    let s = cb.add(t1, t2);
+    cb.add(s, t3)
+}
+
+// Ordered-history fold multipliers (distinct, asymmetric → order-sensitive). Large
+// fixed BabyBear constants; their exact values are not security-load-bearing (the
+// mixed-root rejection rests on genesis/final/count, not the digest — see the verify
+// segment tooth), they only give an order-sensitive digest that makes a relabeled /
+// reordered history mismatch the root.
+const SEG_DIGEST_M1: u32 = 0x4D2E_8F31 % 0x7800_0001; // < BabyBear modulus 2^31 - 2^27 + 1
+const SEG_DIGEST_M2: u32 = 0x1A7C_55B9 % 0x7800_0001;
+const SEG_DIGEST_M3: u32 = 0x6F0A_3E27 % 0x7800_0001;
+
+/// A multiplier as a base-field-embedded challenge-field constant.
+fn seg_mult_ext(m: u32) -> RecursionChallenge {
+    RecursionChallenge::from(P3BabyBear::from_u64(m as u64))
+}
+
+/// Host-side dual of [`seg_hash2_in_circuit`]: the SAME base-field fold
+/// `acc' = a*M1 + b*M2 + (a*b)*M3`. The prover replays this to compute the running
+/// segment digest it carries as the whole-chain `chain_digest`.
+fn seg_hash2_host(a: BabyBear, b: BabyBear) -> BabyBear {
+    let m1 = BabyBear::new(SEG_DIGEST_M1);
+    let m2 = BabyBear::new(SEG_DIGEST_M2);
+    let m3 = BabyBear::new(SEG_DIGEST_M3);
+    a * m1 + b * m2 + (a * b) * m3
 }
 
 /// Find the instance index of the `expose_claim` non-primitive table in a batch
@@ -636,6 +684,71 @@ fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
     (leg.old_root(), leg.new_root())
 }
 
+/// The host-side mirror of one descriptor leaf / aggregation node's ORDERED SEGMENT
+/// (the four base-field values it exposes through the `expose_claim` table):
+/// `[first_old, last_new, count, acc]`. The prover folds these the SAME way the
+/// in-circuit combine does so it knows the root segment (hence the four chain
+/// claims) to carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HostSeg {
+    pub first_old: BabyBear,
+    pub last_new: BabyBear,
+    pub count: BabyBear,
+    pub acc: BabyBear,
+}
+
+/// The per-turn (descriptor-leaf) segment: `first_old = old_root`, `last_new =
+/// new_root`, `count = 1`, `acc = H(old_root, new_root)` — the SAME seed
+/// [`seg_hash2_in_circuit`] computes at the leaf wrap.
+fn leaf_seg(old_root: BabyBear, new_root: BabyBear) -> HostSeg {
+    HostSeg {
+        first_old: old_root,
+        last_new: new_root,
+        count: BabyBear::ONE,
+        acc: seg_hash2_host(old_root, new_root),
+    }
+}
+
+/// Combine two adjacent segments (the host mirror of the aggregation combine):
+/// continuity `l.last_new == r.first_old` (caller-checked upstream as `ChainBreak`),
+/// `first_old = l.first_old`, `last_new = r.last_new`, `count = l.count + r.count`,
+/// `acc = H(l.acc, r.acc)`.
+fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
+    HostSeg {
+        first_old: l.first_old,
+        last_new: r.last_new,
+        count: l.count + r.count,
+        acc: seg_hash2_host(l.acc, r.acc),
+    }
+}
+
+/// Fold the per-turn leaf segments into the ROOT segment using the SAME pairwise
+/// left-to-right binary tree (with odd-element carry) that [`aggregate_tree`] runs
+/// in-circuit — so the host-computed root `[first_old, last_new, count, acc]`
+/// equals what the root proof exposes.
+fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
+    let mut level: Vec<HostSeg> = turns
+        .iter()
+        .map(|t| {
+            let (o, n) = rotated_roots(t);
+            leaf_seg(o, n)
+        })
+        .collect();
+    while level.len() > 1 {
+        let mut next: Vec<HostSeg> = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(combine_seg(level[i], level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        level = next;
+    }
+    level[0]
+}
+
 /// [`generate_chain_trace`] reading the ROTATED chain roots (PI 34/35) instead of the v1
 /// OLD/NEW_COMMIT (PI 0/4). The binding leaf the rotated fold wraps therefore commits to the
 /// rotated v9 commitments.
@@ -886,6 +999,85 @@ pub fn prove_descriptor_leaf_rotated_with_config(
         &ProveNextLayerParams::default(),
     )
     .map_err(|e| format!("rotated native-batch leaf-wrap failed: {e:?}"))
+}
+
+/// **THE SEGMENT-ACCUMULATOR DESCRIPTOR LEAF (the soundness-critical replacement for the
+/// separate binding leaf).** Wrap one rotated finalized-turn descriptor batch in-circuit
+/// AND emit its constant-size ordered SEGMENT through the `expose_claim` table, BOUND
+/// in-circuit to the descriptor proof's REAL published chain roots:
+///
+///   `Seg = [first_old, last_new, count, acc]`
+///     first_old := descriptor PI `V1_PI_COUNT`   (the rotated OLD-state commitment)
+///     last_new  := descriptor PI `V1_PI_COUNT+1` (the rotated NEW-state commitment)
+///     count     := 1
+///     acc       := H(first_old, last_new)        (the per-turn ordered-history seed)
+///
+/// Because `first_old`/`last_new` are READ from the descriptor proof's own verified
+/// `air_public_targets` (not free prover scalars), the segment is tied to the ACTUAL
+/// execution this leaf re-proves. A prover cannot expose a segment whose endpoints differ
+/// from the descriptor it folded. This is what closes the mixed-root hole: there is no
+/// separate, swappable binding leaf — the whole-chain endpoints/digest are derived from the
+/// real descriptor leaves and combined up the tree.
+pub fn prove_descriptor_leaf_rotated_with_segment(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+
+    let (airs, table_public_inputs, common) =
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
+
+    let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend();
+
+    // The expose hook: the main instance (instance 0) carries the descriptor PIs, so its
+    // `air_public_targets[V1_PI_COUNT] / [V1_PI_COUNT+1]` are the verified rotated OLD/NEW
+    // commitments. Build the segment over them and expose it.
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let main = apt
+            .first()
+            .expect("descriptor leaf has a main instance with descriptor PIs");
+        debug_assert!(
+            main.len() > V1_PI_COUNT + 1,
+            "descriptor PI vector must carry the rotated OLD/NEW commitments"
+        );
+        let first_old = main[V1_PI_COUNT];
+        let last_new = main[V1_PI_COUNT + 1];
+        let count = cb.define_const(RecursionChallenge::ONE);
+        let acc = seg_hash2_in_circuit(cb, first_old, last_new);
+        let seg = [first_old, last_new, count, acc];
+        debug_assert_eq!(seg.len(), SEG_WIDTH);
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_next_layer_with_expose::<
+        DreggRecursionConfig,
+        dregg_circuit::descriptor_ir2::Ir2Air,
+        _,
+        D,
+    >(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("rotated native-batch segment leaf-wrap failed: {e:?}"))
 }
 
 // ============================================================================
@@ -1278,29 +1470,39 @@ fn prove_chain_core_rotated(
             ),
         });
     }
-    // Host-side continuity + the binding witness. The binding leaf reads the chain roots from
-    // `FinalizedTurn::old_root/new_root`, which the rotated path overrides to the rotated
-    // commitments (see `generate_chain_trace_rotated`).
-    let (_, chain_pis, chain_digest) = generate_chain_trace_rotated(turns)?;
-    let genesis_root = chain_pis[0];
-    let final_root = chain_pis[1];
+    // Host-side continuity (the `ChainBreak` tooth: `prev.new_root == next.old_root`). This
+    // mirrors the in-circuit combine's continuity constraint and fails closed BEFORE any proving.
+    let _ = generate_chain_trace_rotated_continuity(turns)?;
 
-    // The ONE FRI engine the whole rotated tree runs at (inner proof + leaf-wrap + binding +
+    // The ROOT SEGMENT the host computes by folding the per-turn leaf segments through the SAME
+    // pairwise binary tree `aggregate_tree` runs in-circuit. Its four fields ARE the four chain
+    // claims the artifact carries — derived from the REAL descriptor leaves' rotated roots, NOT
+    // from a separate (swappable) binding leaf.
+    let root_seg = compute_root_segment(turns);
+    let genesis_root = root_seg.first_old;
+    let final_root = root_seg.last_new;
+    let chain_digest = root_seg.acc;
+
+    // The ONE FRI engine the whole rotated tree runs at (inner proof + leaf-wrap +
     // aggregation), so the in-circuit FRI verifier params match every child's FRI engine.
     let config = ir2_leaf_wrap_config();
     let backend = create_recursion_backend();
     let params = ProveNextLayerParams::default();
 
-    // Chain-binding leaf, wrapped to a batch at the wrap config.
-    let (binding_inner, binding_pis) = prove_chain_binding_leaf_rotated(turns)?;
+    // The carried binding proof is RETAINED for byte-envelope/struct API compatibility and as a
+    // host-side defense-in-depth witness of the ordered chain — but it is NO LONGER a soundness
+    // dependency of `verify_turn_chain_recursive` (see its tooth list: the segment tooth (4) over
+    // the root's exposed segment is what binds the claim now). It is NOT folded into the root.
+    let (binding_inner, _binding_pis) = prove_chain_binding_leaf_rotated(turns)?;
 
     let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
-        Vec::with_capacity(turns.len() + 1);
+        Vec::with_capacity(turns.len());
 
-    // One rotated descriptor leaf per finalized turn.
+    // One rotated descriptor leaf per finalized turn, EACH carrying its ordered segment
+    // (first_old/last_new bound to the descriptor's real roots, count=1, acc=H(old,new)).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
-        let wrapped = prove_descriptor_leaf_rotated_with_config(
+        let wrapped = prove_descriptor_leaf_rotated_with_segment(
             &leg.descriptor,
             &leg.proof,
             &leg.public_inputs,
@@ -1310,45 +1512,9 @@ fn prove_chain_core_rotated(
         batch_leaves.push(wrapped);
     }
 
-    // The chain-binding leaf wrapped uni->batch at the wrap config.
-    //
-    // EXPOSED-CLAIM CHANNEL (close of IVC hole #1/#6): at this wrap we EMIT an
-    // expose_claim table over the binding child's 4 verified `air_public_targets`
-    // (= [genesis_root, final_root, num_turns, chain_digest]). The table reads
-    // those targets off the WitnessChecks bus (reader mult -1) and surfaces them
-    // as the wrapped proof's `non_primitives[expose_claim].public_values`, BOUND
-    // in-circuit to the binding proof. Re-exposed + bound at every aggregation
-    // layer below, the ROOT then carries these 4 claims host-readable.
-    {
-        let air = TurnChainBindingAir;
-        let p3_pis: Vec<P3BabyBear> = binding_pis.iter().map(|&v| to_p3(v)).collect();
-        let input = RecursionInput::UniStark {
-            proof: &binding_inner,
-            air: &air,
-            public_inputs: p3_pis,
-            preprocessed_commit: None,
-        };
-        // The binding child is a single uni-STARK instance; its `air_public_targets[0]`
-        // is exactly the 4 chain claims (in PI order).
-        let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
-                           apt: &[Vec<p3_recursion::Target>]| {
-            if let Some(claims) = apt.first() {
-                debug_assert!(claims.len() >= NUM_CHAIN_CLAIMS);
-                cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
-            }
-        };
-        let wrapped = build_and_prove_next_layer_with_expose::<
-            DreggRecursionConfig,
-            TurnChainBindingAir,
-            _,
-            D,
-        >(&input, &config, &backend, &params, Some(&expose))
-        .map_err(|e| TurnChainError::RecursionFailed {
-            reason: format!("recursive chain-binding leaf failed: {e:?}"),
-        })?;
-        batch_leaves.push(wrapped);
-    }
-
+    // Aggregate the segment-carrying descriptor leaves to ONE root, COMBINING the segments
+    // in-circuit at each node (continuity + count + ordered-digest fold). The root's exposed
+    // segment is the whole-chain `[genesis_root, final_root, num_turns, chain_digest]`.
     let root = aggregate_tree(batch_leaves, &config, &backend, &params)?;
 
     Ok(WholeChainProof {
@@ -1359,6 +1525,27 @@ fn prove_chain_core_rotated(
         chain_digest,
         num_turns: turns.len(),
     })
+}
+
+/// Host-side continuity check ONLY (the `ChainBreak` tooth), extracted so the rotated fold no
+/// longer needs the full binding-trace generation just to validate ordering. Returns `Ok(())`
+/// when `>= 2` turns and every `prev.new_root == next.old_root`.
+fn generate_chain_trace_rotated_continuity(turns: &[&FinalizedTurn]) -> Result<(), TurnChainError> {
+    if turns.len() < 2 {
+        return Err(TurnChainError::TooFewTurns { count: turns.len() });
+    }
+    for i in 1..turns.len() {
+        let (_, prev_new) = rotated_roots(turns[i - 1]);
+        let (this_old, _) = rotated_roots(turns[i]);
+        if prev_new != this_old {
+            return Err(TurnChainError::ChainBreak {
+                index: i,
+                expected_old_root: prev_new.0,
+                found_old_root: this_old.0,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Build the chain-binding leaf reading the ROTATED chain roots (PI 34/35), at the wrap config.
@@ -1402,31 +1589,53 @@ fn aggregate_tree(
             Vec::with_capacity(proofs.len().div_ceil(2));
         let mut i = 0;
         while i + 1 < proofs.len() {
-            // EXPOSED-CLAIM CHANNEL: re-expose + connect-bind the binding leaf's
-            // 4 claims one layer up. Exactly one child subtree carries the
-            // expose_claim table; find its instance index per child (the order
-            // matches the in-circuit `air_public_targets` allocation), capture
-            // it, and re-expose those bus-bound targets at this layer.
-            let left_idx = expose_claim_instance_index(&proofs[i].0);
-            let right_idx = expose_claim_instance_index(&proofs[i + 1].0);
+            // THE SEGMENT COMBINE (close of the mixed-root hole): BOTH children carry an
+            // ordered segment `[first_old, last_new, count, acc]` in their `expose_claim`
+            // table. Read both, constrain them to combine soundly (state continuity, count
+            // additivity, ordered-digest fold), and expose the parent segment. There is no
+            // separate binding leaf — the whole-chain claim is the fold of the REAL
+            // descriptor leaves' segments.
+            let left_idx = expose_claim_instance_index(&proofs[i].0).ok_or_else(|| {
+                TurnChainError::RecursionFailed {
+                    reason: "left aggregation child carries no segment (expose_claim) table"
+                        .to_string(),
+                }
+            })?;
+            let right_idx = expose_claim_instance_index(&proofs[i + 1].0).ok_or_else(|| {
+                TurnChainError::RecursionFailed {
+                    reason: "right aggregation child carries no segment (expose_claim) table"
+                        .to_string(),
+                }
+            })?;
 
             let left = proofs[i].into_recursion_input::<BatchOnly>();
             let right = proofs[i + 1].into_recursion_input::<BatchOnly>();
 
-            let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+            let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
                                left_apt: &[Vec<p3_recursion::Target>],
                                right_apt: &[Vec<p3_recursion::Target>]| {
-                if let Some(idx) = left_idx
-                    && let Some(claims) = left_apt.get(idx)
-                    && claims.len() >= NUM_CHAIN_CLAIMS
-                {
-                    cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
-                } else if let Some(idx) = right_idx
-                    && let Some(claims) = right_apt.get(idx)
-                    && claims.len() >= NUM_CHAIN_CLAIMS
-                {
-                    cb.expose_as_public_output(&claims[..NUM_CHAIN_CLAIMS]);
-                }
+                let l = left_apt
+                    .get(left_idx)
+                    .expect("left segment instance present");
+                let r = right_apt
+                    .get(right_idx)
+                    .expect("right segment instance present");
+                debug_assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
+
+                // (1) STATE CONTINUITY: L.last_new == R.first_old. The left subtree's final
+                // root must be the right subtree's first root — the temporal tooth, in-circuit.
+                let cont = cb.sub(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+                cb.assert_zero(cont);
+
+                // (2) parent segment: span [L.first_old .. R.last_new], count L+R, ordered
+                // digest acc = H(L.acc, R.acc) (left≠right ⇒ order-sensitive).
+                let first_old = l[SEG_FIRST_OLD];
+                let last_new = r[SEG_LAST_NEW];
+                let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
+                let acc = seg_hash2_in_circuit(cb, l[SEG_ACC], r[SEG_ACC]);
+                let parent = [first_old, last_new, count, acc];
+                debug_assert_eq!(parent.len(), SEG_WIDTH);
+                cb.expose_as_public_output(&parent);
             };
 
             let out = build_and_prove_aggregation_layer_with_expose::<
@@ -1459,11 +1668,14 @@ fn aggregate_tree(
 ///      distributed). A root proof of a different circuit — the from-scratch
 ///      aggregation route — is refused here, BEFORE any cryptographic check
 ///      trusts the proof's self-described circuit data.
-///   2. **Claimed-publics attestation** — the carried `genesis_root` /
-///      `final_root` / `num_turns` / `chain_digest` must verify as the public
-///      inputs of the carried chain-binding proof (Fiat–Shamir binds all
-///      four). Relabeled public claims are refused.
-///   3. **The root** — the single root batch-STARK proof verifies.
+///   2. **The root** — the single root batch-STARK proof verifies.
+///   3. **The segment tooth** — the root's exposed ORDERED SEGMENT
+///      `[first_old, last_new, count, acc]` (derived by construction from the
+///      real descriptor leaves and combined up the tree) must equal the carried
+///      `[genesis_root, final_root, num_turns, chain_digest]`. This closes the
+///      mixed-root hole: a root that executed history A cannot expose B's
+///      endpoints, so a B-claim against an A-execution is refused. (The carried
+///      binding proof is NO LONGER a soundness dependency.)
 pub fn verify_turn_chain_recursive(
     proof: &WholeChainProof,
     expected_vk: &RecursionVk,
@@ -1494,10 +1706,11 @@ pub fn verify_turn_chain_recursive(
 /// The teeth, in order (identical to [`verify_turn_chain_recursive`]):
 ///   1. **VK pin** — recompute the root's verifier-key fingerprint and compare to
 ///      `expected_vk` (a foreign-circuit root is refused before any check trusts it).
-///   2. **Claimed-publics attestation** — `genesis_root`/`final_root`/`num_turns`/
-///      `chain_digest` must verify as the public inputs of the carried binding proof
-///      (Fiat–Shamir binds all four); a relabeled public is refused.
-///   3. **The root** — the single root batch-STARK proof verifies.
+///   2. **The root** — the single root batch-STARK proof verifies.
+///   3. **The segment tooth** — the root's exposed ordered segment `[first_old,
+///      last_new, count, acc]` (built from the real descriptor leaves, combined up
+///      the tree) must equal the carried `[genesis_root, final_root, num_turns,
+///      chain_digest]`. (The carried binding proof is NOT a soundness dependency.)
 #[allow(clippy::too_many_arguments)]
 pub fn verify_turn_chain_recursive_from_parts(
     root_proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
@@ -1508,6 +1721,11 @@ pub fn verify_turn_chain_recursive_from_parts(
     num_turns: usize,
     expected_vk: &RecursionVk,
 ) -> Result<(), TurnChainError> {
+    // The carried binding proof is NO LONGER a soundness dependency (the SEGMENT tooth below
+    // binds the claim to the real descriptor leaves). It is retained in the artifact for byte
+    // API compatibility and host-side defense-in-depth only; deliberately not re-verified here.
+    let _ = binding_proof;
+
     // (1) VK pin.
     let found = recursion_vk_fingerprint(root_proof);
     if found != *expected_vk {
@@ -1517,24 +1735,7 @@ pub fn verify_turn_chain_recursive_from_parts(
         });
     }
 
-    // (2) Claimed publics, read against the carried binding proof. The binding proof is minted at
-    // the rotated leaf-wrap config (log_blowup 6, `prove_chain_binding_leaf_rotated`), so it must
-    // be verified under that SAME config.
-    let claimed_pis = vec![
-        genesis_root,
-        final_root,
-        BabyBear::new(num_turns as u32),
-        chain_digest,
-    ];
-    crate::plonky3_recursion_impl::recursive::verify_inner_for_air_with_config(
-        &TurnChainBindingAir,
-        binding_proof,
-        &claimed_pis,
-        &ir2_leaf_wrap_config(),
-    )
-    .map_err(|reason| TurnChainError::ClaimedPublicsUnattested { reason })?;
-
-    // (3) The root. The root batch proof is produced by `aggregate_tree` at the rotated
+    // (2) The root. The root batch proof is produced by `aggregate_tree` at the rotated
     // leaf-wrap config (`ir2_leaf_wrap_config`, log_blowup 6 / 19 queries — the SAME FRI engine
     // the whole rotated tree runs at), NOT the default `create_recursion_config` (log_blowup 3 /
     // 38 queries). It MUST be verified under that same config, else FRI reconstruction expects
@@ -1542,17 +1743,20 @@ pub fn verify_turn_chain_recursive_from_parts(
     verify_recursive_batch_proof_with_config(root_proof, &ir2_leaf_wrap_config())
         .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
 
-    // (4) EXPOSED-CLAIM TOOTH (the close of IVC hole #1/#6). The root proof carries an
-    // expose_claim non-primitive table whose `public_values` are the 4 chain claims,
-    // BOUND in-circuit (WitnessChecks bus, reader mult -1) to the binding proof that the
-    // fold actually verified, and re-bound at every aggregation layer up to the root. The
-    // carried claim must MATCH these root-exposed publics. This is what ties the carried
-    // binding proof to THIS root: a genuine root for history A paired with a genuine
-    // binding proof for a DIFFERENT history B now FAILS, because A's root exposes A's
-    // endpoints while the swapped claim is B's.
+    // (3) THE SEGMENT TOOTH (the close of the IVC mixed-root hole). The root proof carries an
+    // `expose_claim` non-primitive table whose `public_values` are the root's ORDERED SEGMENT
+    // `[first_old, last_new, count, acc]`. That segment is built BY CONSTRUCTION from the real
+    // descriptor leaves: each leaf's `first_old`/`last_new` are bound in-circuit to its
+    // descriptor proof's verified rotated roots, and the combine at each aggregation node
+    // enforces state continuity (`L.last_new == R.first_old`), count additivity, and the
+    // ordered-digest fold (`acc = H(L.acc, R.acc)`) — re-exposed up to the root. So the
+    // root-exposed segment is the WHOLE-CHAIN claim derived from the ACTUAL execution. The
+    // carried claim must match it exactly. There is NO separate binding leaf to swap: a root
+    // that executed history A cannot expose B's endpoints, so a B-claim against an A-execution
+    // FAILS here (`genesis = A.first_old != B.genesis`, etc.).
     let exposed = root_exposed_claims(root_proof).ok_or_else(|| {
         TurnChainError::ClaimedPublicsUnattested {
-            reason: "root proof carries no exposed-claim table (binding↔root channel absent)"
+            reason: "root proof carries no exposed segment table (segment channel absent)"
                 .to_string(),
         }
     })?;
@@ -1565,8 +1769,8 @@ pub fn verify_turn_chain_recursive_from_parts(
     if exposed != expected {
         return Err(TurnChainError::ClaimedPublicsUnattested {
             reason: format!(
-                "root-exposed claims {exposed:?} != carried claim {expected:?} \
-                 (the carried binding proof is not linked to this root)"
+                "root-exposed segment {exposed:?} != carried claim {expected:?} \
+                 (the carried claim is not the fold of the real descriptor leaves)"
             ),
         });
     }

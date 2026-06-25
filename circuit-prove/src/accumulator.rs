@@ -36,6 +36,22 @@
 //! SCALARS, not O(1) — though the proof memory (the expensive part) is genuinely constant. Folding
 //! the binding incrementally so `seam_pairs` vanishes is named open work (prereq (b) below).
 //!
+//! ## ⚠ SEGMENT-ACCUMULATOR FOLLOW-UP (the mixed-root analog, named)
+//!
+//! The K-fold tree (`ivc_turn_chain`) closed the mixed-root hole by carrying an ordered
+//! SEGMENT on every DESCRIPTOR leaf and combining segments in-circuit (so the whole-chain
+//! claim is derived from the real executions, with no swappable binding leaf). This online
+//! accumulator STILL uses the separate `TurnChainBindingAir` leaf at `finalize` (its claim
+//! is a hash-chain over the seam-pair roots, reconstructed from `seam_pairs`), so it has the
+//! SAME structural weakness the K-fold just retired: the binding leaf is not tied in-circuit
+//! to the descriptor leaves the running fold actually verified. Its `verify_turn_chain_recursive`
+//! is self-consistent (it exposes + checks its own binding claim) but does NOT yet enjoy the
+//! segment tooth's by-construction binding. The follow-up is to port the segment model here:
+//! each `accumulate` step's descriptor leaf carries its segment, and the running fold combines
+//! `running.segment` with the new leaf's segment (the left-linear analog of the K-fold combine —
+//! its continuity/count/digest constraints are identical). NAMED, not closed in this pass; the
+//! K-fold bar (the mixed-root witness) is the one that landed.
+//!
 //! ## What is GENUINELY here vs the named in-band gap (honest, tiered)
 //!
 //! **BUILT + RUNNING:** the running-fold DRIVER over the REAL recursion primitives. Each step does a
@@ -773,9 +789,7 @@ impl Accumulator {
                                apt: &[Vec<p3_recursion::Target>]| {
                 if let Some(claims) = apt.first() {
                     debug_assert!(claims.len() >= crate::ivc_turn_chain::NUM_CHAIN_CLAIMS);
-                    cb.expose_as_public_output(
-                        &claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS],
-                    );
+                    cb.expose_as_public_output(&claims[..crate::ivc_turn_chain::NUM_CHAIN_CLAIMS]);
                 }
             };
             build_and_prove_next_layer_with_expose::<
@@ -844,7 +858,13 @@ impl Accumulator {
             _,
             D,
         >(
-            &left, &right, &config, &backend, &root_params, None, Some(&expose),
+            &left,
+            &right,
+            &config,
+            &backend,
+            &root_params,
+            None,
+            Some(&expose),
         )
         .map_err(|e| AccError::RecursionFailed {
             reason: format!("finalize root aggregation failed: {e:?}"),
