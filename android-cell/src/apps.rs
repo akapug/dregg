@@ -35,6 +35,7 @@ use dregg_firmament::CellId;
 use crate::appfactory::AndroidManifest;
 use crate::contentgate::{ContentProvider, ContentResolver, ProviderGrant};
 use crate::intentgate::{IntentHandler, IntentResolver};
+use crate::organgate::{ServiceGrant, ServiceOrgan, ServiceResolver, SystemService};
 use crate::runtime::AppLaunch;
 
 /// One installed app — the android-cell minted from a manifest, plus how to launch it.
@@ -150,6 +151,41 @@ impl InstalledApps {
             })
             .collect::<Vec<_>>();
         ContentResolver::new(providers, Some(launching_cell))
+    }
+
+    /// **Build the [`ServiceResolver`] for `launching_cell`** over the system-service organs its
+    /// OWN manifest's declared permissions grant a cap to — the install↔service loop. Each
+    /// declared permission that names a [`SystemService`] (via
+    /// [`SystemService::required_permission`]'s inverse) becomes a cap-reachable
+    /// [`ServiceOrgan`] at the caller-supplied `grant` (the cap attenuation — a strictly
+    /// narrower per-organ grant is the powerbox hand-over).
+    ///
+    /// This is the no-ambient-`getSystemService` property sourced from the real installed-app
+    /// set: an app that did NOT declare a service's required permission has NO cap-reachable
+    /// organ for it, so the resolver refuses the reach (`RefusedNoOrgan`) — the AOSP "get the
+    /// manager freely, throw at the call" loophole closed at the reach. An unknown
+    /// `launching_cell` yields an empty resolver (it reaches no organ).
+    pub fn service_resolver_for(
+        &self,
+        launching_cell: CellId,
+        grant: ServiceGrant,
+    ) -> ServiceResolver {
+        let organs = self
+            .get(launching_cell)
+            .into_iter()
+            .flat_map(|app| {
+                let perms = app.manifest.uses_permissions.clone();
+                SystemService::all_standard()
+                    .into_iter()
+                    .filter(move |svc| {
+                        svc.required_permission()
+                            .map(|p| perms.contains(&p))
+                            .unwrap_or(false)
+                    })
+            })
+            .map(|svc| ServiceOrgan::standard(svc, grant))
+            .collect::<Vec<_>>();
+        ServiceResolver::new(organs, Some(launching_cell))
     }
 }
 
@@ -341,5 +377,32 @@ mod tests {
                 .refused_read_only(),
             "a read-only grant does not amplify to a write"
         );
+    }
+
+    /// The install↔service loop: an app's declared permissions grant a cap to the matching
+    /// system-service organs; a service whose permission was NOT declared is unreachable.
+    #[test]
+    fn service_resolver_ranges_over_the_declared_permission_organs() {
+        use crate::organgate::{ServiceGrant, ServiceOp, SystemService};
+
+        let apps = registry();
+        // `maps` declared INTERNET + ACCESS_FINE_LOCATION ⟹ a cap to Location (+ Connectivity).
+        let (maps_cell, _) = maps();
+        let resolver = apps.service_resolver_for(maps_cell, ServiceGrant::ReadOnly);
+
+        // A location read is granted (the location permission was declared).
+        let loc = ServiceOp::query(SystemService::Location, "getLastKnownLocation");
+        assert!(resolver.resolve(&loc).decision.granted());
+
+        // The camera organ is NOT reachable — maps never declared the CAMERA permission.
+        let cam = ServiceOp::query(SystemService::Camera, "getCameraIdList");
+        assert!(
+            resolver.resolve(&cam).decision.refused_no_organ(),
+            "no cap-reachable camera organ — the permission was never declared"
+        );
+
+        // A read-only grant does not amplify to a state-changing location call.
+        let upd = ServiceOp::resolve(SystemService::Location, "requestLocationUpdates");
+        assert!(resolver.resolve(&upd).decision.refused_read_only());
     }
 }

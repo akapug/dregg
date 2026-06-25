@@ -48,6 +48,7 @@ pub mod frame;
 pub mod input;
 pub mod intentgate;
 pub mod netgate;
+pub mod organgate;
 pub mod present;
 pub mod runtime;
 
@@ -71,6 +72,10 @@ pub use intentgate::{
     IntentHandler, IntentReceipt, IntentResolver, RecordingIntentSink,
 };
 pub use netgate::{AndroidNetGate, IoDecision, IoReceipt};
+pub use organgate::{
+    ServiceCallKind, ServiceDecision, ServiceGrant, ServiceOp, ServiceOrgan, ServiceReceipt,
+    ServiceResolver, SystemService,
+};
 pub use present::{AndroidPresentation, present_android_frame};
 pub use runtime::{
     AndroidRuntime, AppLaunch, CapturedFrameRuntime, DeviceSpec, RuntimeError, RuntimeKind,
