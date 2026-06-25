@@ -56,6 +56,27 @@ pub mod world_explorer;
 
 pub use workflow::{IntentKind, WorkflowState, WorkflowStep};
 
+/// The witnesses of one reflective-cockpit loop over the shipped World-Status pane (the
+/// return of [`DeosDesktop::bake_agent_rewrites_viewnode_pane`]).
+#[cfg(feature = "card-pane")]
+pub struct ViewnodeRewrite {
+    /// REFLECT-ON saw the pre-existing `World Status` header on the live surface.
+    pub reflected_header: bool,
+    /// REFLECT-ON counted the live surface's `bind` rows (the panel has 3).
+    pub reflected_rows: usize,
+    /// The surface had NO `refresh` button before the agent's rewrite.
+    pub before_has_button: bool,
+    /// The agent's re-folded tree carries the `refresh` button.
+    pub after_has_button: bool,
+    /// The LIVE entity the desktop window paints now carries the rewrite (the real
+    /// window's surface IS the rewritten one).
+    pub live_after_has_button: bool,
+    /// How many receipted provenance turns the rewrite committed (addButton + relabel).
+    pub receipt_count: usize,
+    /// Whether the surface's blame attributes the rewrites to the agent (accountable).
+    pub blamed_agent: bool,
+}
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -196,7 +217,7 @@ impl WinKind {
             WinKind::WorkflowComposer => "Workflow",
             WinKind::DocExplorer => "Doc Explorer",
             WinKind::WorldExplorer => "World Explorer",
-            WinKind::ViewNodePane => "Portable IR",
+            WinKind::ViewNodePane => "World Status",
         }
     }
 }
@@ -2417,6 +2438,87 @@ impl DeosDesktop {
         self.viewnode_panes.contains_key(&self.user)
     }
 
+    /// Place + raise the World-Status pane window in a clear area (a bake hook) so its
+    /// body is visible + unoccluded when the bake captures the before/after frames.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_place_viewnode_window(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let key = (self.user, WinKindTag::ViewNodePane);
+        if let Some(ws) = self.windows.get_mut(&key) {
+            ws.x = x;
+            ws.y = y;
+            ws.w = w;
+            ws.h = h;
+            ws.minimized = false;
+            ws.z = self.next_z;
+            self.next_z += 1;
+        }
+    }
+
+    /// **THE REFLECTIVE-COCKPIT LOOP, IN THE SHIPPED DESKTOP** — a confined agent
+    /// reflects-on then rewrites the World-Status pane in the REAL desktop window.
+    ///
+    /// The next rung of `0c3e567b` (which proved the loop over a headless deos-view
+    /// render): here it runs against the SHIPPED `viewnode_pane` window. We (1) ensure
+    /// the live [`deos_view::AppletView`] entity exists, (2) REFLECT-ON its current
+    /// view-tree (the host read; the agent's JS reads the same tree via
+    /// `deos.editor.view()`), (3) run the agent's reflect-then-rewrite JS through the
+    /// proven `CardEditor` machinery (receipted patches, blamed on the agent, cap-toothed),
+    /// and (4) SWAP the re-folded tree into the SAME live entity ([`AppletView::set_tree`])
+    /// + `notify` — so the real desktop window repaints the agent's rewrite on the next
+    /// frame (a `refresh` button + the `World Status (live)` relabel reach the glass).
+    ///
+    /// Returns the loop's witnesses (reflect counts, receipt count, blame, before/after
+    /// button presence) so a bake can assert the agent rewrote a real cockpit surface.
+    #[cfg(feature = "card-pane")]
+    pub fn bake_agent_rewrites_viewnode_pane(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<ViewnodeRewrite, String> {
+        let cell = self.user;
+
+        // (1) Ensure the live renderer entity exists (created lazily on render; mint it
+        //     here so the bake can reflect-on it before the next paint).
+        let entity = match self.viewnode_panes.get(&cell).cloned() {
+            Some(e) => e,
+            None => {
+                let e = viewnode_pane::build_viewnode_view(cx);
+                self.viewnode_panes.insert(cell, e.clone());
+                e
+            }
+        };
+
+        // (2) REFLECT-ON — read the live surface's OWN view-tree off the entity the
+        //     desktop window paints (the host read; the agent's JS reads the same tree).
+        let before_tree = entity.read(cx).tree().clone();
+        let (reflected_header, reflected_rows) = viewnode_pane::reflect_status(&before_tree);
+        let before_has_button = viewnode_pane::tree_has_refresh_button(&before_tree);
+
+        // (3) REWRITE — run the agent's reflect-then-rewrite JS through the proven
+        //     `CardEditor` machinery (receipted, blamed, cap-toothed).
+        let rw = viewnode_pane::agent_rewrite_status_panel()?;
+
+        // (4) THE LIVE SURFACE RE-RENDERS — swap the re-folded tree into the SAME entity
+        //     the desktop window hosts, and notify so the real window repaints it.
+        let after_tree = rw.after_tree.clone();
+        entity.update(cx, |view, cx| {
+            view.set_tree(after_tree);
+            cx.notify();
+        });
+        // The LIVE entity's tree now carries the agent's rewrite (the surface in the real
+        // window IS the rewritten one).
+        let live_after_has_button = viewnode_pane::tree_has_refresh_button(entity.read(cx).tree());
+
+        Ok(ViewnodeRewrite {
+            reflected_header,
+            reflected_rows,
+            before_has_button,
+            after_has_button: rw.after_has_button,
+            live_after_has_button,
+            receipt_count: rw.receipt_count,
+            blamed_agent: rw.blamed_agent,
+        })
+    }
+
     /// Open the Spotter overlay with a query — a bake/test hook driving the palette.
     pub fn bake_open_spotter(&mut self, query: &str) {
         self.open_spotter();
@@ -3537,7 +3639,7 @@ impl DeosDesktop {
             .flex_col()
             .gap_1()
             .child(face_section(
-                "Portable IR (deos_view::ViewNode -> AppletView · the same tree a web renderer renders)",
+                "World-Status panel (deos_view::ViewNode -> AppletView · a confined agent reflects-on + rewrites it live)",
             ))
             .child(
                 // THE IR-RENDERED SURFACE — deos-view's native renderer walks the
