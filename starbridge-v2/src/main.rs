@@ -1222,6 +1222,33 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         "the Document Explorer's DocGraph face must reflect the document's live atoms"
     );
 
+    // 4e. THE WORLD EXPLORER — the "My Computer" of the verified World. Open it on the
+    //     Conservation face (the Σ-balance breakdown over the live ledger). Renders in
+    //     the final shot (ledger · chronicle · conservation tabs).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_world_explorer();
+        desk.bake_world_explorer_tab(2); // Conservation face
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // 4f. THE SPOTTER — the Pharo command palette. Open it with a query, assert it ranks
+    //     real candidates over the live cells, then dispatch to prove it jumps. (We then
+    //     re-open it for the final shot so the palette renders over the desktop.)
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_spotter("doc");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let spot_matches = desk_h
+        .update(&mut cx, |desk, _cx| desk.bake_spotter_match_count())
+        .unwrap_or(0);
+    anyhow::ensure!(
+        spot_matches >= 1,
+        "the Spotter must rank at least one candidate for 'doc' over the live cells \
+         (got {spot_matches})"
+    );
+
     // 5. Drag the treasury icon to a new position and assert the layout PERSISTED.
     desk_h.update(&mut cx, |desk, cx| {
         desk.bake_drag_icon(treasury, 720.0, 540.0);
