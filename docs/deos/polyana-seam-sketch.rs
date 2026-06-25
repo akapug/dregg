@@ -1,10 +1,19 @@
-//! polyana ⋈ dregg — Slice 1 seam sketch (ILLUSTRATIVE, NOT WIRED)
+//! polyana ⋈ dregg — Slice 1 seam sketch (ILLUSTRATIVE — now WIRED in `polyana-bridge`)
 //!
 //! Companion to `docs/deos/POLYANA-ALLIANCE.md`. This file is a documentation
 //! artifact: it is NOT a crate member, is NOT compiled by CI, and exists to show
 //! the *shape* of the smallest adoptable seam with names that match the real
 //! cited types on both sides. It does not import anything (the type names are
 //! sketched locally) so it never breaks a build and never churns a crate.
+//!
+//! ⚑ REALIZED: the shape below is now a compiling, tested crate at
+//! `polyana-bridge/` (workspace member). It rides the REAL dregg primitives —
+//! `dregg_cell::facet::is_facet_attenuation` over an `EffectMask` and
+//! `dregg_cell::is_attenuation` over `AuthRequired` (Slice 3), a real chained
+//! `dregg_turn::TurnReceipt` (Slice 1), and a `dregg_query::AttestedAnswer`
+//! non-omission certificate over the audit log (Slice 1's payoff) — and the
+//! whole seam is exercised in `polyana-bridge/tests/seam.rs` (7 tests). This
+//! sketch stays as the illustrative narrative; `polyana-bridge` is the truth.
 //!
 //! The seam: at polyana's `pa_witness` / `audit-mcp` boundary, in addition to
 //! writing a `TraceRecord` (polyana `src/core/src/provider.rs:324-336`), also
