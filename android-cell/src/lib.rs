@@ -42,6 +42,7 @@
 
 pub mod appfactory;
 pub mod apps;
+pub mod broadcastgate;
 pub mod checkpoint;
 pub mod checkpointed_runtime;
 pub mod contentgate;
@@ -56,6 +57,10 @@ pub mod runtime;
 
 pub use appfactory::{AndroidManifest, AndroidPermission, ProtectionLevel};
 pub use apps::{InstalledApp, InstalledApps};
+pub use broadcastgate::{
+    Broadcast, BroadcastDecision, BroadcastReceipt, BroadcastReceiver, BroadcastRouter, Delivery,
+    DeliveryOutcome, Sender, is_protected_action,
+};
 pub use checkpoint::{
     ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
     diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold,
