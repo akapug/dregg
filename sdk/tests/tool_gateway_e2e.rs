@@ -69,6 +69,23 @@ fn granted_tool_call_commits_with_receipt_and_conserved_spend() {
         out.receipt.agent, worker_cell,
         "receipt is the worker's turn"
     );
+    let receipt_hash = out.receipt.receipt_hash();
+    assert_ne!(
+        receipt_hash, [0u8; 32],
+        "a committed tool call returns a real non-zero TurnReceipt hash"
+    );
+    assert_eq!(
+        out.receipt.receipt_hash(),
+        receipt_hash,
+        "receipt_hash recomputes stably from the returned TurnReceipt"
+    );
+    let mut tampered_receipt = out.receipt.clone();
+    tampered_receipt.action_count += 1;
+    assert_ne!(
+        tampered_receipt.receipt_hash(),
+        receipt_hash,
+        "the TurnReceipt hash binds receipt fields, not a stub constant"
+    );
     assert_eq!(gw.calls_made(), 1);
 
     // CONSERVED SPEND: the metered write moves the counter, not value beyond the

@@ -15,6 +15,7 @@ dregg-federation = { path = "../federation", default-features = false }
 # must be a real dep (not only a dev-dep, which only covers the test targets).
 hints = { path = "../hints", package = "dregg-hints" }
 dregg-types = { path = "../types" }
+dregg-tool-gateway = { path = "../tool-gateway" }
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-turn = { path = "../turn" }
