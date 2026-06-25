@@ -530,6 +530,142 @@ fn live_intent_routes_through_the_gate_on_the_device() {
     );
 }
 
+/// **THE LIVE-PATH CHECKPOINTED-RUNTIME SPIKE — the boundary umem is LOAD-BEARING.**
+///
+/// The spike above (`live_android_cell_checkpoints_as_umem`) wires a `ServiceCellCheckpoint`
+/// BY HAND around a bare runtime. This one drives the standing emulator THROUGH the
+/// [`CheckpointedRuntime`] wrapper — the live-path drop-in that threads the boundary umem
+/// through every act automatically, so the running system DEPENDS on the checkpoint:
+///  1. attach to `emulator-5554`, launch Settings, capture A through the wrapper — the
+///     frame is folded into the boundary as a verified Blum advance with no manual umem code;
+///  2. drive a cap-gated swipe THROUGH `AndroidInputGate::new(checkpointed_rt, …)` (the
+///     wrapper IS the input sink), fold its receipt + capture B through the wrapper;
+///  3. SAVE the live boundary witness + its commitment (the handoff root);
+///  4. MIGRATE the witness onto a FRESH runtime with `migrate_onto_expecting(root)` — it
+///     reconstructs byte-identically + verifies against the trusted root (fail-closed);
+///  5. confirm the whole-session accumulated trace folds genesis → the live boundary
+///     (a disciplined memory program), and a forged witness is REFUSED against the root.
+///
+/// `#[ignore]` (needs the live device). Run on the dev host:
+/// ```sh
+/// export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
+/// cargo test -p android-cell --test live_emulator_spike \
+///   live_checkpointed_runtime_is_load_bearing -- --ignored --nocapture
+/// ```
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "needs a live, already-running Android emulator. Run with --ignored on the dev host."]
+fn live_checkpointed_runtime_is_load_bearing() {
+    use android_cell::checkpoint::fold;
+    use android_cell::{
+        AndroidInputGate, CheckpointError, CheckpointedRuntime, MacOsEmulatorRuntime,
+        ServiceCellCheckpoint,
+    };
+    use std::io::Write;
+
+    let cell = cell_seed(3);
+
+    // ── ATTACH + WRAP: the live runtime, threaded through the boundary umem ───
+    let rt = MacOsEmulatorRuntime::attach_running(DeviceSpec::dev_default())
+        .expect("attach to emulator-5554");
+    let mut crt = CheckpointedRuntime::new(rt, cell);
+    crt.launch_app(&AppLaunch::Component(
+        "com.android.settings/.Settings".to_string(),
+    ))
+    .expect("Settings launches");
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // ── CAPTURE A through the wrapper — folded into the boundary automatically ─
+    let frame_a = crt
+        .capture_checkpointed()
+        .expect("capture A folds the boundary");
+    println!(
+        "live-checkpointed: capture A {}x{} → boundary advanced to {} umem addrs",
+        frame_a.width,
+        frame_a.height,
+        crt.project().len()
+    );
+
+    // ── DRIVE a cap-gated swipe THROUGH the wrapper-as-input-sink ──────────────
+    let mut gate = AndroidInputGate::new(crt, Some(cell));
+    let root_cap = SurfaceCapability::root(cell, AuthRequired::Either);
+    let r = gate.deliver(
+        &root_cap,
+        AndroidInput::Swipe {
+            x1: 540,
+            y1: 1800,
+            x2: 540,
+            y2: 600,
+            duration_ms: 250,
+        },
+    );
+    assert!(r.decision.injected(), "the cap-gated swipe injects");
+    // Fold the gate's receipt + recapture THROUGH the wrapper (sink_mut hands it back).
+    gate.sink_mut()
+        .record_input(&r)
+        .expect("the input receipt folds into the boundary");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    let frame_b = gate
+        .sink_mut()
+        .capture_checkpointed()
+        .expect("capture B folds the boundary");
+    // The wrapper (now owned by the gate) is the live checkpointed runtime.
+    let live = gate.sink_mut();
+
+    // ── SAVE the live boundary witness + the handoff root ─────────────────────
+    let saved = live.save().expect("the live boundary vends a witness");
+    let trusted_root = saved.commitment();
+    println!(
+        "live-checkpointed: SAVED boundary — commitment {}, {} session ops, frame B digest {:#x}",
+        bs58_short(&trusted_root),
+        live.boundary_trace().len(),
+        frame_b.content_digest(),
+    );
+
+    // The whole-session accumulated trace folds genesis → the live boundary.
+    let genesis = ServiceCellCheckpoint::new(cell).project();
+    assert_eq!(
+        fold(&genesis, live.boundary_trace()),
+        live.project(),
+        "fold(genesis, session trace) == the live boundary — a disciplined memory program"
+    );
+
+    // ── MIGRATE onto a FRESH runtime, verified against the trusted root ───────
+    let fresh = MacOsEmulatorRuntime::attach_running(DeviceSpec::dev_default())
+        .expect("a fresh runtime handle (the 'second node')");
+    let migrated = CheckpointedRuntime::migrate_onto_expecting(&saved, trusted_root, fresh)
+        .expect("the witness reconstructs the boundary + matches the trusted handoff root");
+    let (changed, only_a, only_b) = migrated.diff_against(&saved);
+    assert!(
+        changed.is_empty() && only_a.is_empty() && only_b.is_empty(),
+        "the migrated boundary is byte-identical to the saved one"
+    );
+
+    // ── A FORGED witness is REFUSED against the trusted root — fail-closed ─────
+    let mut forged = saved.clone();
+    forged.frame = Some((0xDEAD_BEEF, frame_b.width, frame_b.height));
+    let fresh2 = MacOsEmulatorRuntime::attach_running(DeviceSpec::dev_default()).unwrap();
+    let refused = CheckpointedRuntime::migrate_onto_expecting(&forged, trusted_root, fresh2);
+    assert!(
+        matches!(refused, Err(CheckpointError::RestoreMismatch { .. })),
+        "the forged witness does not match the trusted root — restore refuses (fail-closed)"
+    );
+
+    let _ = std::io::stdout().write_all(
+        format!(
+            "\nLIVE-CHECKPOINTED OK: a live android-cell ({}x{}) driven THROUGH the \
+             CheckpointedRuntime wrapper checkpointed its boundary on every act (no manual \
+             umem code); SAVED (root {}), the session trace folds genesis → live, MIGRATED \
+             onto a fresh runtime against the trusted root (byte-identical), a forged \
+             witness REFUSED. The boundary umem is load-bearing in the live path.\n",
+            frame_b.width,
+            frame_b.height,
+            bs58_short(&trusted_root),
+        )
+        .as_bytes(),
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn bs58_short(d: &[u8; 32]) -> String {
     bs58::encode(&d[..6]).into_string()

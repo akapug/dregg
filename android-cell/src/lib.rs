@@ -43,6 +43,7 @@
 pub mod appfactory;
 pub mod apps;
 pub mod checkpoint;
+pub mod checkpointed_runtime;
 pub mod contentgate;
 pub mod frame;
 pub mod input;
@@ -59,6 +60,7 @@ pub use checkpoint::{
     ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
     diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold,
 };
+pub use checkpointed_runtime::{CheckpointError, CheckpointedRuntime};
 pub use contentgate::{
     ContentAccess, ContentDecision, ContentProvider, ContentReceipt, ContentResolver, ContentUri,
     ProviderGrant,
