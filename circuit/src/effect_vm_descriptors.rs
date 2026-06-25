@@ -935,6 +935,13 @@ pub fn umem_cohort_multidomain_descriptor_json(lean_key: &str) -> Option<&'stati
 /// welded form — never a deployed-registry member.
 pub const ROTATED_UMEM_WELD_SUFFIX: &str = "-umem-welded-staged";
 
+/// The wire-name suffix marking a descriptor as the WIDE rotated+umem WELD
+/// ([`weld_umem_into_wide_descriptor`]) — the WIDE (8-felt / ~124-bit faithful commit) twin of
+/// [`ROTATED_UMEM_WELD_SUFFIX`]. A descriptor whose `name` ends with this is a STAGED welded form
+/// over a WIDE descriptor (preserving the wide member's 16 commit PIs / 8-felt before-after
+/// anchors); never a deployed-registry member.
+pub const WIDE_UMEM_WELD_SUFFIX: &str = "-umem-wide-welded-staged";
+
 /// **THE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the last precursor before the gated VK epoch.**
 ///
 /// Weld the universal-memory COHORT leg INTO a rotated R=24 descriptor: keep the WHOLE rotated
@@ -960,15 +967,79 @@ pub fn weld_umem_into_rotated_descriptor(
     rotated: &crate::descriptor_ir2::EffectVmDescriptor2,
     domain: u32,
 ) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(rotated, domain, ROTATED_UMEM_WELD_SUFFIX, false)
+}
+
+/// **THE COHORT-SPECIALIZED ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the IVC-fold perf lever.**
+///
+/// Identical to [`weld_umem_into_rotated_descriptor`] except the universal boundary table (id 7) is
+/// declared with [`TableSem::UMemBoundaryCohort`](crate::descriptor_ir2::TableSem::UMemBoundaryCohort)
+/// — the SINGLE-ROW specialization. The single-domain welded leg (e.g. a `Transfer`'s lone Balance
+/// touch) reconciles AT MOST ONE `(domain, key)` cell, so the general boundary's ~29 columns of key
+/// decomposition + lexicographic strict-increase comparator (which exist SOLELY to prove the declared
+/// address list is `Nodup`) are dead weight: with one row, `Nodup` is `List.nodup_singleton` (Lean
+/// `UniversalMemory.universal_memory_sound_single`, `#assert_axioms`-clean). This weld routes the leg
+/// through the width-9 `Ir2Air::UMemBoundaryCohort`, quartering the boundary instance's FRI columns —
+/// and that instance is re-paid up the WHOLE IVC aggregation tree, so the saving compounds. The
+/// single-row discipline is enforced in-circuit (`next.is_real = 0` on every transition); a
+/// multi-address witness is REFUSED at assembly and in the AIR, never silently mis-proved. A
+/// multi-address single-domain leg must use the general [`weld_umem_into_rotated_descriptor`].
+pub fn weld_umem_into_rotated_descriptor_cohort(
+    rotated: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(rotated, domain, ROTATED_UMEM_WELD_SUFFIX, true)
+}
+
+/// **THE WIDE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the real flip precursor the VK epoch
+/// needs.** Weld the universal-memory COHORT leg INTO a WIDE descriptor (a member of
+/// [`WIDE_REGISTRY_STAGED_TSV`], the verified Lean `v3RegistryCapOpenWide`, carrying the two 13×8
+/// BEFORE/AFTER carriers + the 16 wide commit PIs = the 8-felt ~124-bit before/after anchors).
+///
+/// IDENTICAL append shape to [`weld_umem_into_rotated_descriptor`] — the single-domain cohort
+/// `umemOp` over 7 fresh main columns `[base .. base+7)` (`base` = the WIDE trace width, PAST the
+/// wide carriers) plus the `umemory` / `umem_boundary` tables — but onto the WIDE base. **Crucially
+/// it PRESERVES the wide descriptor's `public_input_count` AND every existing constraint (incl. all
+/// 16 wide-commit `PiBinding`s), so the welded form keeps the 8-felt before/after anchors at the
+/// SAME PI offsets (the leg's LAST 16 PIs) — NO narrowing.** The weld is purely ADDITIVE (it appends
+/// columns / tables / one `umemOp` constraint and NEVER edits `public_input_count` or any PI
+/// binding), which is exactly why a proof under the welded descriptor binds the ~124-bit commitment
+/// identically to the wide descriptor — the no-narrowing scar the VK epoch refused to cross.
+///
+/// This is the genuine deployable flag-day weld: the per-map memory reconciliation moves INTO the
+/// WIDE rotated descriptor as the universal-memory leg, while the WIDE PIs (the 8-felt commit
+/// `verify_full_turn_bound` binds) stay intact. STAGED: a NEW descriptor BESIDE the deployed wide
+/// registry — no VK bump, nothing on the live wire. `domain` is the cohort domain the welded effect
+/// touches (heap 1 / caps 2 / nullifiers 3), checked against the leg's actual domain by the prover.
+pub fn weld_umem_into_wide_descriptor(
+    wide: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(wide, domain, WIDE_UMEM_WELD_SUFFIX, false)
+}
+
+/// The shared, purely-ADDITIVE umem-cohort weld (the body of both
+/// [`weld_umem_into_rotated_descriptor`] and [`weld_umem_into_wide_descriptor`]): append the
+/// single-domain cohort `umemOp` over 7 fresh main columns + the `umemory` / `umem_boundary` tables
+/// onto `desc`, marking the result with `suffix`. It NEVER touches `public_input_count` nor any
+/// existing constraint, so the base descriptor's whole PI vector + every PI binding survive
+/// unchanged — the property that lets the WIDE weld keep the 16 wide-commit PIs (the 8-felt
+/// ~124-bit anchors) intact.
+fn weld_umem_into_descriptor_with_suffix(
+    desc: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+    suffix: &str,
+    cohort: bool,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
     use crate::descriptor_ir2::{
         MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem, UMemOpSpec, VmConstraint2,
     };
     use crate::lean_descriptor_air::LeanExpr;
 
-    // The first fresh universal-memory operand column (the rotated form occupies `[0, base)`).
-    let base = rotated.trace_width;
-    let mut welded = rotated.clone();
-    welded.name = format!("{}{ROTATED_UMEM_WELD_SUFFIX}", rotated.name);
+    // The first fresh universal-memory operand column (the base form occupies `[0, base)`).
+    let base = desc.trace_width;
+    let mut welded = desc.clone();
+    welded.name = format!("{}{suffix}", desc.name);
     welded.trace_width = base + 7;
     // Widen the MAIN table arity (sem `Main`) to the welded width; the rotated chip/range/memory/
     // map tables keep their arities (the umem leg adds its own tables, below).
@@ -986,11 +1057,23 @@ pub fn weld_umem_into_rotated_descriptor(
         arity: 8,
         sem: TableSem::UMemory,
     });
+    // The cohort weld declares the SINGLE-ROW boundary specialization: at most one declared
+    // `(domain,key)` cell ⇒ the inter-row comparator + key decomposition are dropped (width 9 vs
+    // 38; `Nodup` is free). The arity stays 7 (the witness-supplied init/final image shape is
+    // unchanged); only the AIR routing + assembled trace width differ.
     welded.tables.push(TableDef2 {
         id: TID_UMEM_BOUNDARY,
-        name: "umem_boundary".to_string(),
+        name: if cohort {
+            "umem_boundary_cohort".to_string()
+        } else {
+            "umem_boundary".to_string()
+        },
         arity: 7,
-        sem: TableSem::UMemBoundary,
+        sem: if cohort {
+            TableSem::UMemBoundaryCohort
+        } else {
+            TableSem::UMemBoundary
+        },
     });
     // The single welded universal-memory WRITE op over the appended 7 columns — byte-for-byte the
     // cohort `umemOp` (`circuit/descriptors/umem-cohort-v1-staged-registry.tsv`), offset to `base`.
