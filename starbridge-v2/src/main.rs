@@ -1004,7 +1004,7 @@ fn render_desktop_arg(args: &[String]) -> Option<String> {
 fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::deos_desktop::{id_hex, DeosDesktop, DesktopLayout};
+    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, id_hex};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1021,7 +1021,7 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 
     // The live verified image — the SAME `World` the cockpit runs.
     let (world, anchors) = starbridge_v2::world::demo_world();
-    let [treasury, _service, user] = anchors;
+    let [treasury, service, user] = anchors;
     let pre_height = world.height();
     let shared = Rc::new(RefCell::new(world));
 
@@ -1040,10 +1040,10 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     })?;
     cx.run_until_parked();
 
-    // 1. Open two inspector windows (treasury + user) via the public actuation path.
+    // 1. Open an inspector + a TRANSCRIPT (receipt log) window — denser surfaces.
     window.update(&mut cx, |desk, _w, cx| {
         desk.bake_open_window(treasury);
-        desk.bake_open_window(user);
+        desk.bake_open_transcript(user);
         cx.notify();
     })?;
     cx.run_until_parked();
@@ -1055,15 +1055,55 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         cx.notify();
     })?;
     cx.run_until_parked();
-    let post_height = shared.borrow().height();
+    let mid_height = shared.borrow().height();
     anyhow::ensure!(
-        post_height > pre_height,
-        "the desktop actuation must commit a REAL verified turn (height {pre_height} -> {post_height})"
+        mid_height > pre_height,
+        "the desktop actuation must commit a REAL verified turn (height {pre_height} -> {mid_height})"
     );
 
-    // 3. Drag the user icon to a new position and assert the layout PERSISTED.
+    // 3. Open a DOCUMENT EDITOR on the user cell and TYPE into it — each edit is a
+    //    receipted patch + a verified revision turn (the document IS the cell).
     window.update(&mut cx, |desk, _w, cx| {
-        desk.bake_drag_icon(user, 720.0, 540.0);
+        desk.bake_open_doc(user);
+        desk.bake_edit_doc(
+            user,
+            "# deos document\nA document is a cell.\nEditing is receipted patches.\n",
+        );
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+    let doc_height = shared.borrow().height();
+    anyhow::ensure!(
+        doc_height > mid_height,
+        "a document edit must land a REAL verified revision turn (height {mid_height} -> {doc_height})"
+    );
+    let doc_text = window.update(&mut cx, |desk, _w, _cx| desk.bake_doc_text(user))?;
+    anyhow::ensure!(
+        doc_text.contains("A document is a cell."),
+        "the document editor must hold the authored prose"
+    );
+
+    // 4. COMPOSE: transclude the treasury cell INTO the user's document — a genuine
+    //    cross-cell compose (receipted patch + verified turn).
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_transclude(treasury, user);
+        cx.notify();
+    })?;
+    cx.run_until_parked();
+    let post_height = shared.borrow().height();
+    anyhow::ensure!(
+        post_height > doc_height,
+        "the compose/transclude must land a REAL verified turn (height {doc_height} -> {post_height})"
+    );
+    let composed = window.update(&mut cx, |desk, _w, _cx| desk.bake_doc_text(user))?;
+    anyhow::ensure!(
+        composed.contains("{transclude dregg://"),
+        "the composed document must carry the transclusion"
+    );
+
+    // 5. Drag the treasury icon to a new position and assert the layout PERSISTED.
+    window.update(&mut cx, |desk, _w, cx| {
+        desk.bake_drag_icon(treasury, 720.0, 540.0);
         cx.notify();
     })?;
     cx.run_until_parked();
@@ -1072,14 +1112,19 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         persisted
             .icons
             .iter()
-            .any(|p| p.cell == id_hex(&user) && (p.x - 720.0).abs() < 1.0),
+            .any(|p| p.cell == id_hex(&treasury) && (p.x - 720.0).abs() < 1.0),
         "the dragged icon position must PERSIST to the sidecar (spatial persistence)"
     );
+    anyhow::ensure!(
+        persisted.docs.iter().any(|d| d.cell == id_hex(&user)),
+        "the authored document prose must PERSIST to the sidecar (content persistence)"
+    );
 
-    // 4. Open a context menu over the service-anchored cell so the ACTUATION surface
-    //    is visible in the shot.
+    // 6. Open the PROPERTY inspector/editor over the treasury cell, and a deep
+    //    right-click context menu over the service cell — both visible in the shot.
     window.update(&mut cx, |desk, _w, cx| {
-        desk.bake_open_menu(treasury, 360.0, 230.0);
+        desk.bake_open_properties(treasury);
+        desk.bake_open_menu(service, 60.0, 250.0);
         cx.notify();
     })?;
     cx.run_until_parked();
@@ -1089,12 +1134,15 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     let captured = cx.capture_screenshot(window.into())?;
     let (ww, hh) = (captured.width(), captured.height());
     captured.save(format!("{out}.png"))?;
+    let docwins = window.update(&mut cx, |desk, _w, _cx| desk.bake_window_count(true))?;
     let _ = std::fs::remove_file(&layout_path);
     println!(
         "OK deos DESKTOP render -> {out}.png ({ww}x{hh}, logical {w}x{h}); NT/Pharo workbench \
-         over the live verified World — {} cell-icons, 2 inspector windows, a right-click \
-         context menu, a REAL fired actuation (height {pre_height} -> {post_height}), and a \
-         drag persisted to the layout sidecar.",
+         over the live verified World — {} cell-icons; inspector + transcript + {docwins} document \
+         editor window(s); a deep right-click context menu AND a property inspector/editor open; a \
+         receipted document edit + a cross-cell TRANSCLUDE compose; REAL verified turns \
+         (height {pre_height} -> {post_height}); icon drag + authored prose persisted to the \
+         layout sidecar.",
         shared.borrow().cell_count()
     );
     Ok(())
