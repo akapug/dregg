@@ -743,3 +743,98 @@ fn ir2_mapop_interior_to_umem_chip_drop() {
         "dropping the chip table shrinks the umem proof below the map_op proof"
     );
 }
+
+/// THE COHORT BOUNDARY PERF LEVER: a single-address universal-memory leg proven through the
+/// width-9 cohort boundary AIR (`umem_boundary_cohort` sem) vs the width-38 general one. The
+/// inter-row `Nodup` comparator + key decomposition (29 columns) are dropped — sound because a
+/// one-address list is `Nodup` by `nodup_singleton` (Lean `universal_memory_sound_single`). This
+/// is the per-leaf saving the IVC fold re-pays up the WHOLE aggregation tree, so it compounds.
+#[test]
+fn ir2_umem_cohort_vs_general_boundary_size() {
+    use dregg_circuit::descriptor_ir2::{
+        EffectVmDescriptor2, MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem,
+        UMemBoundaryWitness, UMemOpSpec, VmConstraint2, prove_vm_descriptor2_umem,
+    };
+    use dregg_circuit::lean_descriptor_air::LeanExpr;
+
+    // The single write op + single declared address, identical in both shapes.
+    let op = VmConstraint2::UMemOp(UMemOpSpec {
+        guard: LeanExpr::Var(2),
+        domain: 0,
+        key: LeanExpr::Var(0),
+        present: LeanExpr::Const(1),
+        value: LeanExpr::Var(1),
+        prev_present: LeanExpr::Const(0),
+        prev_value: LeanExpr::Const(0),
+        prev_serial: LeanExpr::Const(0),
+        kind: MemKind::Write,
+    });
+    let mk = |cohort: bool| EffectVmDescriptor2 {
+        name: if cohort {
+            "probe-umem-cohort"
+        } else {
+            "probe-umem-general"
+        }
+        .to_string(),
+        trace_width: 3,
+        public_input_count: 0,
+        tables: vec![
+            TableDef2 {
+                id: TID_UMEMORY,
+                name: "umemory".to_string(),
+                arity: 8,
+                sem: TableSem::UMemory,
+            },
+            TableDef2 {
+                id: TID_UMEM_BOUNDARY,
+                name: if cohort {
+                    "umem_boundary_cohort"
+                } else {
+                    "umem_boundary"
+                }
+                .to_string(),
+                arity: 7,
+                sem: if cohort {
+                    TableSem::UMemBoundaryCohort
+                } else {
+                    TableSem::UMemBoundary
+                },
+            },
+        ],
+        constraints: vec![op.clone()],
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+    let mut rows = vec![vec![BabyBear::new(5), BabyBear::new(42), BabyBear::ZERO]; 4];
+    rows[0][2] = BabyBear::ONE;
+    let boundary = UMemBoundaryWitness {
+        addrs: vec![(0, BabyBear::new(5))],
+        init_vals: vec![None],
+    };
+
+    let prove = |desc: &EffectVmDescriptor2| {
+        prove_vm_descriptor2_umem(
+            desc,
+            &rows,
+            &[],
+            &MemBoundaryWitness::default(),
+            &[],
+            &boundary,
+        )
+        .expect("single-address umem leg proves")
+    };
+    let general = prove(&mk(false));
+    let cohort = prove(&mk(true));
+    let general_bytes = breakdown("umem-boundary-general(w38)", &general);
+    let cohort_bytes = breakdown("umem-boundary-cohort(w9)", &cohort);
+    println!(
+        "cohort boundary: {} B vs general {} B — {:.1}% smaller (boundary matrix 38->9 cols)",
+        cohort_bytes,
+        general_bytes,
+        (1.0 - cohort_bytes as f64 / general_bytes as f64) * 100.0,
+    );
+    assert!(
+        cohort_bytes < general_bytes,
+        "the cohort single-row boundary must shrink the proof ({cohort_bytes} !< {general_bytes})"
+    );
+}

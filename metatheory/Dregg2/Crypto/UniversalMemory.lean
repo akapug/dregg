@@ -225,6 +225,24 @@ theorem universal_memory_sound
     (fun op hop => of_decide_eq_true (List.mem_filter.mp hop).2)
     (fun _ => rfl) hfil
 
+/-- **Single-cell universal soundness — the cohort-specialized single-row boundary.** With at most
+ONE declared `(domain, key)` address the `Nodup` hypothesis `universal_memory_sound` stands on is
+free (`List.nodup_singleton`), so the inter-row lexicographic comparator the general universal
+boundary uses to establish it is VACUOUS and the keystone still gives the whole-trace consistency
+AND every domain projection's consistency. This is the soundness obligation of the width-9
+`Ir2Air::UMemBoundaryCohort` AIR (the welded single-domain leg): it drops the comparator columns
+because at most one row exists, and Nodup follows from the row being alone — not from any
+in-circuit comparison. -/
+theorem universal_memory_sound_single
+    {init : UAddr κ → ν} {fin : UAddr κ → ν × Nat}
+    {a : UAddr κ} {tr : List (Op (UAddr κ) ν)}
+    (hcl : ∀ op ∈ tr, op.addr ∈ [a])
+    (hdisc : Disciplined tr) (hmc : MemCheck init fin [a] tr) :
+    Consistent init tr ∧
+      ∀ d : Domain,
+        Consistent (fun a => init (d, a)) ((domTrace d tr).map stripOp) :=
+  universal_memory_sound (List.nodup_singleton a) hcl hdisc hmc
+
 end Strip
 
 /-! ## §3 — the final column is PINNED (the boundary view is trustworthy).
@@ -1024,6 +1042,7 @@ end NonVacuity
 #assert_axioms consistentFrom_filter
 #assert_axioms consistentFrom_strip
 #assert_axioms universal_memory_sound
+#assert_axioms universal_memory_sound_single
 #assert_axioms chains_pin_fold
 #assert_axioms memcheck_pins_final
 #assert_axioms boundaryCells_sorted

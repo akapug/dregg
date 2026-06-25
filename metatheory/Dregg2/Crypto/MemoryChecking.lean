@@ -591,6 +591,20 @@ theorem memcheck_sound {init : Addr → Val} {fin : Addr → Val × Nat}
   · intro a
     rfl
 
+/-- **Single-cell soundness — the boundary's `Nodup` is FREE for a one-address declared list.**
+A declared address list of exactly one entry `[a]` is `Nodup` by `List.nodup_singleton`, so
+`memcheck_sound` discharges with NO strict-increase comparator supplied. This is the soundness of
+the cohort-specialized single-row boundary AIR (`Ir2Air::UMemBoundaryCohort`), which OMITS the
+inter-row lexicographic comparator the general boundary uses to ESTABLISH `Nodup`: with at most
+one declared address the comparator is vacuous, and consistency still follows from the same Blum
+balance. The dropped columns prove nothing here — `[a].Nodup` is a theorem, not a witness. -/
+theorem memcheck_sound_single {init : Addr → Val} {fin : Addr → Val × Nat}
+    {a : Addr} {tr : List (Op Addr Val)}
+    (hcl : ∀ op ∈ tr, op.addr ∈ [a])
+    (hdisc : Disciplined tr) (hmc : MemCheck init fin [a] tr) :
+    Consistent init tr :=
+  memcheck_sound (List.nodup_singleton a) hcl hdisc hmc
+
 /-- Chains alone (with the read echo) already give consistency — the semantic half of the
 round trip, no multisets needed. The honest memory's claims are chained by construction. -/
 theorem chained_consistent {init : Addr → Val} {fin : Addr → Val × Nat}
@@ -720,6 +734,7 @@ end NonVacuity
 
 #assert_axioms chain_reconstruct
 #assert_axioms memcheck_sound
+#assert_axioms memcheck_sound_single
 #assert_axioms memcheck_complete
 #assert_axioms memcheck_iff_chained
 #assert_axioms chained_consistent

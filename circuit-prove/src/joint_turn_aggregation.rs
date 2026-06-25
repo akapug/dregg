@@ -296,6 +296,7 @@ impl RotatedParticipantLeg {
         };
         use dregg_circuit::effect_vm_descriptors::{
             V3_STAGED_REGISTRY_TSV, weld_umem_into_rotated_descriptor,
+            weld_umem_into_rotated_descriptor_cohort,
         };
 
         let lead = effects
@@ -324,7 +325,18 @@ impl RotatedParticipantLeg {
             .map_err(|e| format!("mint_welded: descriptor '{r24_name}' parse failed: {e}"))?;
 
         // WELD: the universal-memory leg INTO the rotated descriptor (keeps the 46 rotated PIs).
-        let welded = weld_umem_into_rotated_descriptor(&rotated_desc, domain);
+        // A single-domain leg that reconciles AT MOST ONE `(domain,key)` cell (the common case —
+        // a `Transfer`'s lone Balance touch) routes through the COHORT single-row boundary AIR
+        // (width 9 vs 38): the inter-row `Nodup` comparator is vacuous for one row and dropped, and
+        // that lighter boundary instance is re-paid up the whole IVC aggregation tree. A
+        // multi-address leg keeps the general boundary. The choice rides the descriptor (the table-7
+        // sem), which is carried with the leg, so the verifier rebuilds the SAME AIR set.
+        let single_row = umem_boundary.addrs.len() <= 1;
+        let welded = if single_row {
+            weld_umem_into_rotated_descriptor_cohort(&rotated_desc, domain)
+        } else {
+            weld_umem_into_rotated_descriptor(&rotated_desc, domain)
+        };
         let base = rotated_desc.trace_width;
 
         let caveat = match effects {
@@ -383,9 +395,166 @@ impl RotatedParticipantLeg {
             public_inputs: dpis,
         })
     }
+    /// **THE WIDE WELDED ROTATED+UMEM LEG (STAGED, VK-RISK-FREE) — the IVC half of the genuine flip
+    /// precursor.** The WIDE (8-felt / ~124-bit faithful commit) twin of
+    /// [`mint_welded_from_block_witnesses`](Self::mint_welded_from_block_witnesses): mints ONE leaf
+    /// that proves BOTH the WIDE rotated cohort proof (the wide PI vector whose LAST 16 PIs are the
+    /// 8-felt before/after commit anchors) AND the universal-memory reconciliation leg. It welds the
+    /// umem leg onto the WIDE descriptor ([`weld_umem_into_wide_descriptor`]) — purely additive, so
+    /// the 16 wide commit PIs ride through INTACT, keeping the ~124-bit commitment (no narrowing) —
+    /// and the leg still carries the single-felt rotated `old_root`/`new_root` (PI 34/35) the IVC
+    /// chain fold's temporal tooth binds, PLUS the 8-felt [`wide_old_root8`](Self::wide_old_root8) /
+    /// [`wide_new_root8`](Self::wide_new_root8) the ~124-bit binding reads.
+    ///
+    /// SCOPE: the live sovereign Transfer lead (the transfer-shape wide producer); a non-Transfer
+    /// lead fails closed (its wide producer leg extends identically when the IVC routes it). STAGED:
+    /// a welded WIDE descriptor BESIDE the deployed wide registry; no VK bump, nothing on the wire.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mint_welded_wide_from_block_witnesses(
+        initial_state: &dregg_circuit::effect_vm::CellState,
+        effects: &[dregg_circuit::effect_vm::Effect],
+        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+        umem_rows: &[Vec<BabyBear>],
+        umem_boundary: &dregg_circuit::descriptor_ir2::UMemBoundaryWitness,
+        domain: u32,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+        use dregg_circuit::descriptor_ir2::{
+            MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_for_config,
+            verify_vm_descriptor2_with_config,
+        };
+        use dregg_circuit::effect_vm::trace_rotated::{
+            generate_rotated_transfer_shape_wide, rotated_descriptor_name_for_effect,
+            transfer_caveat_manifest,
+        };
+        use dregg_circuit::effect_vm_descriptors::{
+            WIDE_REGISTRY_STAGED_TSV, weld_umem_into_wide_descriptor,
+        };
+
+        let lead = effects
+            .first()
+            .ok_or_else(|| "mint_welded_wide: empty effect slice".to_string())?;
+        if !matches!(lead, dregg_circuit::effect_vm::Effect::Transfer { .. }) {
+            return Err(format!(
+                "mint_welded_wide: effect {lead:?} is not the Transfer lead this staged wide IVC leg \
+                 supports (the transfer-shape wide producer); it fails closed"
+            ));
+        }
+        let r24_name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+            format!("mint_welded_wide: effect {lead:?} is not a rotated R=24 member")
+        })?;
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(r24_name) {
+                return Err(
+                    "mint_welded_wide: heterogeneous multi-effect turn (one welded leg)".into(),
+                );
+            }
+        }
+        let json = WIDE_REGISTRY_STAGED_TSV
+            .lines()
+            .find_map(|line| {
+                let mut it = line.splitn(3, '\t');
+                if it.next() == Some(r24_name) {
+                    let _display = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| {
+                format!("mint_welded_wide: '{r24_name}' not in WIDE_REGISTRY_STAGED_TSV")
+            })?;
+        let wide_desc = parse_vm_descriptor2(json).map_err(|e| {
+            format!("mint_welded_wide: wide descriptor '{r24_name}' parse failed: {e}")
+        })?;
+
+        // WELD: the universal-memory leg INTO the WIDE descriptor (keeps the 16 wide commit PIs).
+        let welded = weld_umem_into_wide_descriptor(&wide_desc, domain);
+        let base = wide_desc.trace_width;
+
+        let caveat = transfer_caveat_manifest();
+        let (wide_trace, mut dpis) =
+            generate_rotated_transfer_shape_wide(initial_state, effects, before, after, &caveat)
+                .map_err(|e| {
+                    format!("mint_welded_wide: wide transfer-shape generation failed: {e}")
+                })?;
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        // Assemble the welded base trace: inject the REAL umem rows (guard col 6 == 1) into the
+        // appended 7 columns of the first rows (the umem-op gathering reads operands row-local).
+        let real_umem_rows: Vec<&Vec<BabyBear>> = umem_rows
+            .iter()
+            .filter(|r| r.get(6).copied() == Some(BabyBear::ONE))
+            .collect();
+        if real_umem_rows.len() > wide_trace.len() {
+            return Err(format!(
+                "mint_welded_wide: {} umem ops exceed wide trace height {}",
+                real_umem_rows.len(),
+                wide_trace.len()
+            ));
+        }
+        let mut welded_trace: Vec<Vec<BabyBear>> = Vec::with_capacity(wide_trace.len());
+        for (ri, row) in wide_trace.iter().enumerate() {
+            let mut wr = row.clone();
+            wr.resize(base + 7, BabyBear::ZERO);
+            if let Some(umem_row) = real_umem_rows.get(ri) {
+                for (i, &v) in umem_row.iter().enumerate().take(7) {
+                    wr[base + i] = v;
+                }
+            }
+            welded_trace.push(wr);
+        }
+
+        let wrap_config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config(
+            &welded,
+            &welded_trace,
+            &dpis,
+            &MemBoundaryWitness::default(),
+            &[],
+            umem_boundary,
+            &wrap_config,
+        )
+        .map_err(|e| format!("mint_welded_wide: IR-v2 welded wide batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&welded, &proof, &dpis, &wrap_config).map_err(|e| {
+            format!("mint_welded_wide: minted welded wide proof self-verify failed: {e}")
+        })?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: welded,
+            public_inputs: dpis,
+        })
+    }
+
     /// The rotated OLD-state commitment (PI 34 — the row-0 before-block `state_commit`).
     pub fn old_root(&self) -> BabyBear {
         self.public_inputs[dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT]
+    }
+
+    /// **THE WIDE 8-FELT OLD-state commitment** (the BEFORE 8-felt commit at the leg's
+    /// PIs `[n-16 .. n-8)` — the ~124-bit faithful anchor a WIDE / wide-welded leg publishes).
+    /// `None` for a leg whose PI vector is too short to carry the wide tail (a narrow leg).
+    pub fn wide_old_root8(&self) -> Option<[BabyBear; 8]> {
+        let n = self.public_inputs.len();
+        if n < 16 {
+            return None;
+        }
+        self.public_inputs[n - 16..n - 8].try_into().ok()
+    }
+
+    /// **THE WIDE 8-FELT NEW-state commitment** (the AFTER 8-felt commit at the leg's
+    /// PIs `[n-8 .. n)` — the ~124-bit faithful anchor). `None` for a narrow leg.
+    pub fn wide_new_root8(&self) -> Option<[BabyBear; 8]> {
+        let n = self.public_inputs.len();
+        if n < 16 {
+            return None;
+        }
+        self.public_inputs[n - 8..n].try_into().ok()
     }
     /// The rotated NEW-state commitment (PI 35 — the last-row after-block `state_commit`).
     /// This is the next finalized turn's required `old_root` (the temporal binding).

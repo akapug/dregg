@@ -322,6 +322,12 @@ pub enum TableSem {
     UMemory,
     /// One row per declared universal `(domain, key)` address (init/final `Option` images).
     UMemBoundary,
+    /// The COHORT single-row specialization of [`TableSem::UMemBoundary`]: at most one declared
+    /// `(domain, key)` address, so the inter-row lexicographic comparator + key decomposition the
+    /// general boundary uses to establish `Nodup` are dropped (`Nodup` is `nodup_singleton`). The
+    /// single-row discipline is enforced in-circuit; a multi-row witness is refused. Selected by
+    /// the welded single-domain leg ([`crate::effect_vm_descriptors::weld_umem_into_rotated_descriptor`]).
+    UMemBoundaryCohort,
 }
 
 /// A declared table (Lean `TableDef`).
@@ -744,6 +750,7 @@ fn parse_table_def(c: &mut JsonCursor) -> Result<TableDef2, String> {
         Some("map_ops") => TableSem::MapOps,
         Some("umemory") => TableSem::UMemory,
         Some("umem_boundary") => TableSem::UMemBoundary,
+        Some("umem_boundary_cohort") => TableSem::UMemBoundaryCohort,
         Some(other) => return Err(format!("unknown table sem \"{other}\"")),
         None => return Err("table def missing \"sem\"".to_string()),
     };
@@ -1611,6 +1618,29 @@ const UB_KCMP_DLO: usize = UB_KCMP_DHI + 1; // 27
 const UB_KCMP_DLO_LIMB0: usize = UB_KCMP_DLO + 1; // 28
 const UB_WIDTH: usize = UB_KCMP_DLO_LIMB0 + decomp_cols(KEY_LO_BITS); // 38
 
+// -- COHORT universal boundary layout (the single-row specialization). The general boundary
+//    (above) spends columns 9..38 — the canonical key decomposition (`UB_KEY_HI4..`) plus the
+//    domain-major lexicographic strict-increase comparator (`UB_DGAP`/`UB_SAME_DOM*`/`UB_KCMP_*`)
+//    — SOLELY to establish that the declared `(domain, key)` address list is `Nodup`, the
+//    hypothesis `memcheck_sound` stands on. For the single-domain cohort / welded leg the boundary
+//    has AT MOST ONE real row, so `Nodup` is `List.nodup_singleton` (Lean
+//    `UniversalMemory.universal_memory_sound_single` / `MemoryChecking.memcheck_sound_single`,
+//    `#assert_axioms`-clean): the entire comparator + key decomposition is VACUOUS and dropped.
+//    The single-row discipline is enforced IN-CIRCUIT by `(next.is_real = 0)` on every transition
+//    (`UB` row 0 may be real; rows 1.. are forced pads) — a multi-row witness is REFUSED, never
+//    silently accepted, so the specialization can never be used unsoundly. Width 9 vs 38: the heavy
+//    instance the IVC fold re-pays up the aggregation tree is cut to a quarter of its FRI columns. --
+const UBC_DOMAIN: usize = 0;
+const UBC_KEY: usize = 1;
+const UBC_INIT_PRESENT: usize = 2;
+const UBC_INIT_VALUE: usize = 3;
+const UBC_FIN_PRESENT: usize = 4;
+const UBC_FIN_VALUE: usize = 5;
+const UBC_FIN_SERIAL: usize = 6;
+const UBC_IS_REAL: usize = 7;
+const UBC_ADDR_MULT: usize = 8;
+const UBC_WIDTH: usize = UBC_ADDR_MULT + 1; // 9
+
 // -- Map-ABSENT table layout (one row per non-membership reconciliation): the realization of
 //    `map_op` kind `absent` (Lean `opensTo … none`, constructible by `opensTo_none_of_gap`) —
 //    the sorted-gap bracketing, IN-CIRCUIT: two membership paths at ADJACENT leaf positions
@@ -1780,6 +1810,11 @@ pub enum Ir2Air {
     /// The universal boundary (init/final `Option` images over the declared,
     /// domain-major lexicographically increasing `(domain, key)` list).
     UMemBoundary,
+    /// The COHORT single-row specialization of [`Ir2Air::UMemBoundary`] (width 9): at most one
+    /// real declared address, so the inter-row lexicographic comparator + key decomposition are
+    /// dropped (`Nodup` is `nodup_singleton`, Lean `universal_memory_sound_single`). Refuses a
+    /// multi-row witness in-circuit via `(next.is_real = 0)` on every transition.
+    UMemBoundaryCohort,
 }
 
 /// Public re-export wrapper of the resolved main layout (kept opaque; constructed by
@@ -1799,6 +1834,7 @@ impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for Ir2Air {
             Ir2Air::MapAbsent => MA_WIDTH,
             Ir2Air::UMemory => UM_WIDTH,
             Ir2Air::UMemBoundary => UB_WIDTH,
+            Ir2Air::UMemBoundaryCohort => UBC_WIDTH,
         }
     }
 
@@ -2947,6 +2983,77 @@ where
                     local[UB_ADDR_MULT].into(),
                 );
             }
+            // ----------------------------------------------------------------
+            // The COHORT single-row boundary: the same Blum legs + address table as
+            // `UMemBoundary`, but the inter-row lexicographic comparator + key decomposition (the
+            // general boundary's `Nodup`-establishing machinery) are GONE. `Nodup` instead follows
+            // from there being at most ONE real row, which is forced here: every transition pins
+            // `next.is_real = 0`, so row 0 may be real and rows 1.. are pads — a multi-row witness
+            // is UNSAT. The soundness of dropping the comparator under this discipline is Lean
+            // `UniversalMemory.universal_memory_sound_single` (`[a].Nodup` via `nodup_singleton`,
+            // `#assert_axioms`-clean): with ≤1 declared address the dropped columns prove nothing.
+            Ir2Air::UMemBoundaryCohort => {
+                let is_real: AB::Expr = local[UBC_IS_REAL].into();
+                let init_present: AB::Expr = local[UBC_INIT_PRESENT].into();
+                let fin_present: AB::Expr = local[UBC_FIN_PRESENT].into();
+                for b in [&is_real, &init_present, &fin_present] {
+                    builder.assert_zero(b.clone() * (b.clone() - AB::Expr::ONE));
+                }
+                // THE SINGLE-ROW TOOTH: at most one real row (row 0). Every transition forces the
+                // NEXT row to be a pad, so the declared address list has length ≤ 1 ⇒ `Nodup` is
+                // free. This is what licenses dropping the lexicographic comparator: there is never
+                // a second row to compare against.
+                builder
+                    .when_transition()
+                    .assert_zero(next[UBC_IS_REAL].into());
+                // Canonical `none` images (the present bit gates the value to 0 for an absent cell).
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - init_present.clone())
+                        * local[UBC_INIT_VALUE].into(),
+                );
+                builder.assert_zero(
+                    is_real.clone()
+                        * (AB::Expr::ONE - fin_present.clone())
+                        * local[UBC_FIN_VALUE].into(),
+                );
+                // The domain coordinate is a nibble (the shared byte table is exactly [0, 16)).
+                let bus = LookupBus::new(BUS_BYTE);
+                bus.lookup_key(builder, [local[UBC_DOMAIN].into()], AB::Expr::ONE);
+                // Init cells produced at serial 0; final cells consumed — the ONE Blum balance,
+                // identical to the general boundary's send/receive (the cohort drops only the
+                // ordering machinery, never the multiset legs).
+                let umem_check = PermutationCheckBus::new(BUS_UMEM_CHECK);
+                umem_check.send(
+                    builder,
+                    [
+                        local[UBC_DOMAIN].into(),
+                        local[UBC_KEY].into(),
+                        local[UBC_INIT_PRESENT].into(),
+                        local[UBC_INIT_VALUE].into(),
+                        AB::Expr::ZERO,
+                    ],
+                    is_real.clone(),
+                );
+                umem_check.receive(
+                    builder,
+                    [
+                        local[UBC_DOMAIN].into(),
+                        local[UBC_KEY].into(),
+                        local[UBC_FIN_PRESENT].into(),
+                        local[UBC_FIN_VALUE].into(),
+                        local[UBC_FIN_SERIAL].into(),
+                    ],
+                    is_real,
+                );
+                // The declared-address table for closure lookups (the `umemClosed` tooth).
+                let addrs = LookupBus::new(BUS_UMEM_ADDRS);
+                addrs.table_entry(
+                    builder,
+                    [local[UBC_DOMAIN].into(), local[UBC_KEY].into()],
+                    local[UBC_ADDR_MULT].into(),
+                );
+            }
         }
     }
 }
@@ -3195,6 +3302,11 @@ struct Presence {
     /// in NO chip table — the universal memory argument does zero hashing, which is the
     /// measured point of `docs/UNIVERSAL-MEMORY.md`.
     umem: bool,
+    /// The universal boundary is the COHORT single-row specialization (`Ir2Air::UMemBoundaryCohort`,
+    /// width 9) rather than the general `Ir2Air::UMemBoundary` (width 38). A DECLARATION property
+    /// (the descriptor's table-7 sem), NOT derivable from the constraint list — both forms carry
+    /// the same `umem_op` — so prover and verifier read it from the SAME descriptor and agree.
+    umem_cohort: bool,
 }
 
 impl Presence {
@@ -3219,6 +3331,11 @@ impl Presence {
             .constraints
             .iter()
             .any(|k| matches!(k, VmConstraint2::Lookup(l) if l.table == TID_P2));
+        let umem_cohort = has_umem
+            && desc
+                .tables
+                .iter()
+                .any(|t| t.sem == TableSem::UMemBoundaryCohort);
         Presence {
             chip: has_chip_lookup || has_map_rw || has_map_absent,
             byte: !layout.ranges.is_empty() || has_mem || has_umem || has_map_absent,
@@ -3226,6 +3343,7 @@ impl Presence {
             map_ops: has_map_rw,
             map_absent: has_map_absent,
             umem: has_umem,
+            umem_cohort,
         }
     }
 }
@@ -3704,10 +3822,26 @@ fn build_traces(
             image.insert(a, (op[2], op[3], (i + 1) as u32));
             *addr_mult.entry(a).or_insert(0) += 1;
         }
+        // The COHORT single-row boundary (`Ir2Air::UMemBoundaryCohort`, width 9) drops the key
+        // decomposition + lexicographic comparator: it requires AT MOST ONE declared address, for
+        // which `Nodup` is free. Refuse a multi-address witness here (the AIR also refuses it via
+        // the single-row tooth, but failing in the assembler is the clearer diagnostic).
+        if presence.umem_cohort && umem_boundary.addrs.len() > 1 {
+            return Err(format!(
+                "umem_boundary_cohort: {} declared addresses — the cohort single-row boundary \
+                 carries at most one (a multi-address leg uses the general umem_boundary table)",
+                umem_boundary.addrs.len()
+            ));
+        }
+        let ub_width = if presence.umem_cohort {
+            UBC_WIDTH
+        } else {
+            UB_WIDTH
+        };
         let ub_height = next_pow2(umem_boundary.addrs.len());
         let mut ub_rows: Vec<Vec<BabyBear>> = Vec::with_capacity(ub_height);
         for i in 0..ub_height {
-            let mut row: Vec<BabyBear> = Vec::with_capacity(UB_WIDTH);
+            let mut row: Vec<BabyBear> = Vec::with_capacity(ub_width);
             let (domain, key, init, is_real) = if i < umem_boundary.addrs.len() {
                 (
                     umem_boundary.addrs[i].0,
@@ -3745,35 +3879,39 @@ fn build_traces(
                     as u32
                     * (is_real as u32),
             ));
-            fill_canon(key.as_u32(), is_real, &mut row, &mut byte_hist);
-            // Ordering witness vs the NEXT declared row.
-            let next_real = i + 1 < umem_boundary.addrs.len();
-            let (dgap, same_dom) = if next_real {
-                let nd = umem_boundary.addrs[i + 1].0;
-                (nd - domain, nd == domain)
-            } else {
-                (0, false)
-            };
-            row.push(BabyBear::new(dgap));
-            byte_hist[dgap as usize] += 1; // the dgap nibble lookup, every row
-            row.push(if same_dom {
-                BabyBear::ONE
-            } else {
-                BabyBear::ZERO
-            });
-            // dgap·inv = next_real − same_dom: the inverse witness when domains differ.
-            row.push(if next_real && dgap != 0 {
-                BabyBear::new(dgap).inverse().expect("dgap != 0")
-            } else {
-                BabyBear::ZERO
-            });
-            let next_key = if next_real {
-                umem_boundary.addrs[i + 1].1.as_u32()
-            } else {
-                0
-            };
-            fill_lex_lt(key.as_u32(), next_key, same_dom, &mut row, &mut byte_hist)?;
-            debug_assert_eq!(row.len(), UB_WIDTH);
+            // The cohort row STOPS at the 9 base columns — the key decomposition + lexicographic
+            // comparator (the general boundary's `Nodup`-establishing machinery) are absent.
+            if !presence.umem_cohort {
+                fill_canon(key.as_u32(), is_real, &mut row, &mut byte_hist);
+                // Ordering witness vs the NEXT declared row.
+                let next_real = i + 1 < umem_boundary.addrs.len();
+                let (dgap, same_dom) = if next_real {
+                    let nd = umem_boundary.addrs[i + 1].0;
+                    (nd - domain, nd == domain)
+                } else {
+                    (0, false)
+                };
+                row.push(BabyBear::new(dgap));
+                byte_hist[dgap as usize] += 1; // the dgap nibble lookup, every row
+                row.push(if same_dom {
+                    BabyBear::ONE
+                } else {
+                    BabyBear::ZERO
+                });
+                // dgap·inv = next_real − same_dom: the inverse witness when domains differ.
+                row.push(if next_real && dgap != 0 {
+                    BabyBear::new(dgap).inverse().expect("dgap != 0")
+                } else {
+                    BabyBear::ZERO
+                });
+                let next_key = if next_real {
+                    umem_boundary.addrs[i + 1].1.as_u32()
+                } else {
+                    0
+                };
+                fill_lex_lt(key.as_u32(), next_key, same_dom, &mut row, &mut byte_hist)?;
+            }
+            debug_assert_eq!(row.len(), ub_width);
             ub_rows.push(row);
         }
         umem_boundary_rows = Some(ub_rows);
@@ -4318,7 +4456,11 @@ fn instance_airs(
     }
     if presence.umem {
         airs.push(Ir2Air::UMemory);
-        airs.push(Ir2Air::UMemBoundary);
+        airs.push(if presence.umem_cohort {
+            Ir2Air::UMemBoundaryCohort
+        } else {
+            Ir2Air::UMemBoundary
+        });
     }
     airs
 }
@@ -4802,6 +4944,7 @@ mod tests {
                     Ir2Air::MapAbsent => "map_absent",
                     Ir2Air::UMemory => "umemory",
                     Ir2Air::UMemBoundary => "umem_boundary",
+                    Ir2Air::UMemBoundaryCohort => "umem_boundary_cohort",
                 };
                 (name.to_string(), deg)
             })
@@ -4854,6 +4997,8 @@ mod tests {
                     "umemory" => 3,
                     // The transition-gated lexicographic comparator legs.
                     "umem_boundary" => 3,
+                    // The cohort single-row boundary: Blum legs + booleans + single-row tooth.
+                    "umem_boundary_cohort" => 3,
                     // Value-pinned table + decomposition booleans + Blum legs.
                     "byte" | "memory" | "boundary" => 3,
                     other => panic!("{key}: unknown table {other}"),
@@ -6186,6 +6331,131 @@ mod tests {
             &umem_test_boundary(),
         );
         assert!(r.is_err(), "stray umem boundary witness must refuse");
+    }
+
+    /// A single-domain, single-address COHORT descriptor: one `umemOp` write, declaring the
+    /// `umem_boundary_cohort` table sem (the width-9 single-row boundary). The deployed welded
+    /// leg's shape (`weld_umem_into_rotated_descriptor_cohort`) in miniature.
+    fn umem_cohort_desc() -> EffectVmDescriptor2 {
+        EffectVmDescriptor2 {
+            name: "ir2-umem-cohort-test".to_string(),
+            trace_width: 3,
+            public_input_count: 0,
+            tables: vec![
+                TableDef2 {
+                    id: TID_UMEMORY,
+                    name: "umemory".to_string(),
+                    arity: 8,
+                    sem: TableSem::UMemory,
+                },
+                TableDef2 {
+                    id: TID_UMEM_BOUNDARY,
+                    name: "umem_boundary_cohort".to_string(),
+                    arity: 7,
+                    sem: TableSem::UMemBoundaryCohort,
+                },
+            ],
+            constraints: vec![VmConstraint2::UMemOp(UMemOpSpec {
+                guard: LeanExpr::Var(2),
+                domain: 0,
+                key: LeanExpr::Var(0),
+                present: LeanExpr::Const(1),
+                value: LeanExpr::Var(1),
+                prev_present: LeanExpr::Const(0),
+                prev_value: LeanExpr::Const(0),
+                prev_serial: LeanExpr::Const(0),
+                kind: MemKind::Write,
+            })],
+            hash_sites: vec![],
+            ranges: vec![],
+        }
+    }
+
+    fn umem_cohort_trace() -> Vec<Vec<BabyBear>> {
+        // col0 = key, col1 = value, col2 = guard (row 0 only — one declared address).
+        let row = vec![BabyBear::new(5), BabyBear::new(42), BabyBear::ZERO];
+        let mut rows = vec![row; 4];
+        rows[0][2] = BabyBear::ONE;
+        rows
+    }
+
+    fn umem_cohort_boundary() -> UMemBoundaryWitness {
+        UMemBoundaryWitness {
+            addrs: vec![(0, BabyBear::new(5))],
+            init_vals: vec![None],
+        }
+    }
+
+    /// THE COHORT PERF LEVER: a single-address universal boundary proves through the width-9
+    /// specialized AIR (`Ir2Air::UMemBoundaryCohort`), NOT the width-38 general one — the
+    /// inter-row `Nodup` comparator + key decomposition (29 columns) are dropped, sound because
+    /// `Nodup` of one address is `nodup_singleton` (Lean `universal_memory_sound_single`).
+    #[test]
+    fn ir2_umem_cohort_proves_through_specialized_air() {
+        // Width: the dropped comparator is real — the cohort boundary is a quarter of the columns.
+        assert_eq!(UBC_WIDTH, 9);
+        assert!(
+            UBC_WIDTH * 4 <= UB_WIDTH,
+            "cohort boundary {UBC_WIDTH} is not ≤ a quarter of the general {UB_WIDTH}"
+        );
+
+        let desc = umem_cohort_desc();
+        let layout = check_descriptor2(&desc).expect("cohort desc checks");
+        let presence = Presence::of(&desc, &layout);
+        assert!(
+            presence.umem_cohort,
+            "the cohort table sem must select the specialized boundary"
+        );
+        let airs = instance_airs(&desc, layout, presence);
+        assert!(
+            airs.iter().any(|a| matches!(a, Ir2Air::UMemBoundaryCohort)),
+            "the cohort boundary AIR must be in the instance set"
+        );
+        assert!(
+            !airs.iter().any(|a| matches!(a, Ir2Air::UMemBoundary)),
+            "the general boundary AIR must NOT be committed for a cohort descriptor"
+        );
+
+        let proof = prove_vm_descriptor2_umem(
+            &desc,
+            &umem_cohort_trace(),
+            &[],
+            &MemBoundaryWitness::default(),
+            &[],
+            &umem_cohort_boundary(),
+        )
+        .expect("honest single-address cohort must prove through the specialized AIR");
+        assert_eq!(
+            proof.degree_bits.len(),
+            4,
+            "cohort commits main + byte + umemory + umem_boundary_cohort (no chip)"
+        );
+        verify_vm_descriptor2(&desc, &proof, &[]).expect("cohort proof must verify");
+    }
+
+    /// THE SINGLE-ROW TOOTH: the cohort boundary carries AT MOST ONE address. A two-address
+    /// witness is REFUSED (at assembly, and the in-circuit `next.is_real = 0` tooth would refuse
+    /// it too) — the specialization can never be used to skip the `Nodup` comparator for a
+    /// genuinely multi-row boundary.
+    #[test]
+    fn ir2_umem_cohort_refuses_two_addresses() {
+        let desc = umem_cohort_desc();
+        let two = UMemBoundaryWitness {
+            addrs: vec![(0, BabyBear::new(5)), (0, BabyBear::new(6))],
+            init_vals: vec![None, None],
+        };
+        let r = prove_vm_descriptor2_umem(
+            &desc,
+            &umem_cohort_trace(),
+            &[],
+            &MemBoundaryWitness::default(),
+            &[],
+            &two,
+        );
+        assert!(
+            r.is_err(),
+            "the cohort single-row boundary must refuse a >1-address witness"
+        );
     }
 
     /// THE DOUBLE-SPEND TOOTH: insert nullifier 7, then claim it is STILL FRESH (the read's
