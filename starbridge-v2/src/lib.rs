@@ -377,6 +377,14 @@ pub mod persistence;
 // gpui-free, `cargo test`-able (reuses `reflect` + `affordance` + `world`).
 #[cfg(feature = "embedded-executor")]
 pub mod inspect_act;
+// THE SERVICE EXPLORER — a Postman-like surface for INVOKING cell methods: it
+// discovers a cell's published interface (derive-from-program, or a registered
+// descriptor), lets you pick a method + fill args, and invokes it as a real
+// verified turn (the `invoke()` front door, deos-interior — no kernel effect).
+// gpui-free, `cargo test`-able (reuses `reflect` + `world` + dregg-cell's
+// InterfaceDescriptor routing). The cockpit renders this model.
+#[cfg(feature = "embedded-executor")]
+pub mod service_explorer;
 // THE LIVE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an
 // intent, evaluate it in a forked throwaway world (predict, never mutate), print
 // the predicted receipt, inspect the predicted post-state as live objects, then
@@ -688,6 +696,14 @@ pub mod dock;
 // surfaces + the gpui-component widget set), rendering the live embedded `World`.
 #[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 pub mod cockpit;
+// THE TOUCH SHELL — deos on a phone (the graphideOS / mobile shape): the SAME live
+// `World` + the SAME gpui renderer, re-bodied for a thumb (a bottom-bar mode switch,
+// a tappable cell garden, long-press → a face sheet). DISTINCT from the desktop
+// cockpit (it does not disturb it); reuses the gpui-free view model
+// (`wonder::WonderRoom`, `reflect`). gpui-gated. See `docs/deos/MOBILE-DEOS.md` +
+// `docs/deos/HIG.md`, and `--render-touch` in main.rs.
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
+pub mod touch;
 // THE SHOWCASE BAKE — a headless render of the full deos desktop with every dev
 // surface mounted + seeded (the marketing money shot). Needs the dock surface
 // wrappers (`dev-surfaces`) + gpui. See `--render-showcase` in main.rs.
