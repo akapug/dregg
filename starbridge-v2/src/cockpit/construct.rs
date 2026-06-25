@@ -393,6 +393,12 @@ impl Cockpit {
             inspect_act_focus: Some(treasury),
             inspect_act_outcome: None,
 
+            // THE SERVICE EXPLORER boots on the treasury, no method selected yet.
+            service_explorer_focus: Some(treasury),
+            service_explorer_selected: None,
+            service_explorer_args: String::new(),
+            service_explorer_outcome: None,
+
             // THE WORKSPACE boots with a seeded conserving transfer draft so the
             // panel opens on a runnable doIt rather than an empty expression.
             workspace: {
