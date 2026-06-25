@@ -56,6 +56,10 @@ pub enum WinKindTag {
     /// `dregg_doc` faces (History time-travel scrubber · the DocGraph atoms+edges ·
     /// Blame authorship). Read-only reflection; the editing happens in `DocEditor`.
     DocExplorer,
+    /// **The WORLD EXPLORER** — the "My Computer" of the verified World: a tabbed
+    /// inspector over the World itself (the ledger census · the receipt-log chronicle ·
+    /// the Σ-balance conservation invariant). Anchored on a sentinel cell (the user).
+    WorldExplorer,
 }
 
 /// A persisted document's text, keyed by the cell's hex id — the CONTENT

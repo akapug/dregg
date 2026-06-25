@@ -38,8 +38,11 @@
 // rendering) live here as `impl DeosDesktop` blocks over the shared chrome/layout.
 pub mod android_window;
 pub mod chrome;
+pub mod docgraph_view;
 pub mod layout;
+pub mod spotter;
 pub mod workflow;
+pub mod world_explorer;
 
 pub use workflow::{IntentKind, WorkflowState, WorkflowStep};
 
@@ -160,6 +163,10 @@ enum WinKind {
     /// view state (selected tab + scrubber cursor) lives in `doc_explorers`, so this
     /// variant is a marker like `WorkflowComposer`.
     DocExplorer,
+    /// **The WORLD EXPLORER** — the "My Computer" of the verified World (ledger ·
+    /// chronicle · conservation). Per-window face selection lives in `world_explorers`,
+    /// so this variant is a marker.
+    WorldExplorer,
 }
 
 impl WinKind {
@@ -171,6 +178,7 @@ impl WinKind {
             WinKind::Transcript => "Transcript",
             WinKind::WorkflowComposer => "Workflow",
             WinKind::DocExplorer => "Doc Explorer",
+            WinKind::WorldExplorer => "World Explorer",
         }
     }
 }
@@ -219,6 +227,11 @@ enum ActionKind {
     /// Open the DOCUMENT EXPLORER — the Pharo-moldable inspector of the document's
     /// patch substance (History scrubber · DocGraph · Blame).
     OpenDocExplorer,
+    /// Open the WORLD EXPLORER — the "My Computer" of the verified World (ledger ·
+    /// chronicle · conservation). A World-level (desktop-background) surface.
+    OpenWorldExplorer,
+    /// Open the SPOTTER command palette — fuzzy-jump to any cell / action / window.
+    OpenSpotter,
     /// Open the links / backlinks view over the cell.
     OpenLinks,
     /// Open the transcript / receipt-log window (the World chronicle).
@@ -371,6 +384,26 @@ pub struct DeosDesktop {
     /// where the History time-travel scrubber's cursor sits. Keyed by the subject cell;
     /// the `DocExplorer` window reads it. A pure view concern (no committed state).
     doc_explorers: HashMap<CellId, DocExplorerState>,
+    /// **The per-window WORLD-EXPLORER view state** — which face (ledger/chronicle/
+    /// conservation) is selected. Keyed by the anchor cell of the World Explorer window.
+    world_explorers: HashMap<CellId, world_explorer::WorldExplorerState>,
+    /// **The SPOTTER overlay** — the Pharo command palette (fuzzy-jump to any cell /
+    /// action / window). `None` when closed; holds the live query + selection when open.
+    spotter: Option<SpotterUi>,
+}
+
+/// The live state of the open Spotter command palette overlay.
+struct SpotterUi {
+    /// The current query text — mirrored from the live `InputState` widget on each
+    /// `Change`, so ranking + render read it without touching the entity.
+    query: String,
+    /// The highlighted candidate index (click dispatches it; Enter dispatches the top).
+    selected: usize,
+    /// The live query field — a real `gpui-component` `Input` (rope-backed). Built
+    /// lazily on first render of the overlay; the subscription keeps `query` in sync.
+    input: Option<Entity<InputState>>,
+    /// The query field's `Change`/`PressEnter` subscription (kept alive while open).
+    _sub: Option<Subscription>,
 }
 
 /// The view state of a [`WinKind::DocExplorer`] window: which moldable face is shown
@@ -388,7 +421,9 @@ enum DocExplorerTab {
     /// The patch-history time-travel scrubber (replay the doc at each revision).
     #[default]
     History,
-    /// The DocGraph laid bare — atoms (id · alive/dead · author) + order-edges.
+    /// The per-patch diff — what each patch's ops added/deleted/connected/set.
+    Patches,
+    /// The DocGraph as a visual node-chain — boxes + ↓ order + ⑂ conflict forks.
     Graph,
     /// Per-line authorship blame + contributions-by-author.
     Blame,
@@ -398,12 +433,14 @@ impl DocExplorerTab {
     fn label(self) -> &'static str {
         match self {
             DocExplorerTab::History => "History (time-travel)",
-            DocExplorerTab::Graph => "DocGraph (atoms)",
+            DocExplorerTab::Patches => "Patches (diff)",
+            DocExplorerTab::Graph => "DocGraph (nodes)",
             DocExplorerTab::Blame => "Blame (authorship)",
         }
     }
-    const ALL: [DocExplorerTab; 3] = [
+    const ALL: [DocExplorerTab; 4] = [
         DocExplorerTab::History,
+        DocExplorerTab::Patches,
         DocExplorerTab::Graph,
         DocExplorerTab::Blame,
     ];
@@ -451,6 +488,8 @@ impl DeosDesktop {
             doc_subs: HashMap::new(),
             doc_resync: std::collections::HashSet::new(),
             doc_explorers: HashMap::new(),
+            world_explorers: HashMap::new(),
+            spotter: None,
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -490,6 +529,7 @@ impl DeosDesktop {
             WinKindTag::Transcript => WinKind::Transcript,
             WinKindTag::Workflow => WinKind::WorkflowComposer,
             WinKindTag::DocExplorer => WinKind::DocExplorer,
+            WinKindTag::WorldExplorer => WinKind::WorldExplorer,
             WinKindTag::DocEditor => {
                 let text = self.load_doc_text(&cell);
                 let g = if self.layout.prefs.word_granularity {
@@ -587,6 +627,7 @@ impl DeosDesktop {
             WinKindTag::Inspector => (360.0, 300.0),
             WinKindTag::Workflow => (420.0, 460.0),
             WinKindTag::DocExplorer => (460.0, 420.0),
+            WinKindTag::WorldExplorer => (480.0, 440.0),
             _ => (380.0, 320.0),
         };
         if let Some(g) = self.layout.win_geom(&id_hex(&cell), tag) {
@@ -609,6 +650,9 @@ impl DeosDesktop {
         }
         if key.1 == WinKindTag::DocExplorer {
             self.doc_explorers.remove(&key.0);
+        }
+        if key.1 == WinKindTag::WorldExplorer {
+            self.world_explorers.remove(&key.0);
         }
         self.layout.drop_win(&id_hex(&key.0), key.1);
         self.layout.save(&self.layout_path);
@@ -908,7 +952,13 @@ impl DeosDesktop {
         use ActionKind as A;
         let any_win = !self.windows.is_empty();
         vec![
+            MenuAction::new(
+                "World Explorer… (ledger · chronicle · Σ)",
+                true,
+                A::OpenWorldExplorer,
+            ),
             MenuAction::new("World Transcript (receipt log)…", true, A::OpenTranscript),
+            MenuAction::new("Spotter… (jump to anything)", true, A::OpenSpotter),
             MenuAction::sep(),
             MenuAction::new("Cascade windows", any_win, A::CascadeWindows),
             MenuAction::new("Tile windows", any_win, A::TileWindows),
@@ -1105,6 +1155,12 @@ impl DeosDesktop {
             ActionKind::CascadeWindows => self.cascade_windows(),
             ActionKind::TileWindows => self.tile_windows(),
             ActionKind::CloseAllWindows => self.close_all_windows(),
+            // World-level surfaces (also reachable from the desktop menu) — open them
+            // regardless of which cell's menu summoned them.
+            ActionKind::OpenWorldExplorer => {
+                self.open_kind(self.user, WinKindTag::WorldExplorer);
+            }
+            ActionKind::OpenSpotter => self.open_spotter(),
         }
     }
 
@@ -1582,6 +1638,69 @@ impl DeosDesktop {
         }
     }
 
+    // ── THE SPOTTER — the Pharo command palette (fuzzy-jump to anything) ──
+
+    /// Open the Spotter overlay (empty query, top candidate selected).
+    fn open_spotter(&mut self) {
+        self.spotter = Some(SpotterUi {
+            query: String::new(),
+            selected: 0,
+            input: None,
+            _sub: None,
+        });
+        self.open_menu = None;
+        self.status = "Spotter — type to jump to any cell, action, or surface.".into();
+    }
+
+    /// Build the Spotter candidate set over the World's cells (each cell + its action
+    /// verbs), reading live faces off the ledger. Delegates the entry shapes to
+    /// [`spotter::candidates_for_cells`].
+    fn spotter_candidates(&self) -> Vec<spotter::SpotterEntry> {
+        spotter::candidates_for_cells(&self.cells, |c| {
+            (
+                self.cell_kind(c).to_string(),
+                format!(
+                    "balance {} · {}",
+                    fmt_balance(self.cell_balance(c)),
+                    self.cell_lifecycle(c)
+                ),
+            )
+        })
+    }
+
+    /// The ranked candidates for the live query (empty query = the full list).
+    fn spotter_ranked(&self) -> Vec<spotter::SpotterEntry> {
+        let q = self
+            .spotter
+            .as_ref()
+            .map(|s| s.query.as_str())
+            .unwrap_or("");
+        spotter::rank(q, &self.spotter_candidates())
+    }
+
+    /// Dispatch the Spotter's selected (or `idx`-th) candidate: open the corresponding
+    /// surface / fire the gesture, then close the overlay. The single keystroke that
+    /// ties every surface together.
+    fn spotter_dispatch(&mut self, idx: Option<usize>) {
+        use spotter::SpotterTarget as Tg;
+        let ranked = self.spotter_ranked();
+        let i = idx.unwrap_or_else(|| self.spotter.as_ref().map(|s| s.selected).unwrap_or(0));
+        let Some(entry) = ranked.get(i) else {
+            self.spotter = None;
+            return;
+        };
+        match entry.target.clone() {
+            Tg::Cell(c) | Tg::Inspect(c) => self.open_kind(c, WinKindTag::Inspector),
+            Tg::OpenDoc(c) => self.open_kind(c, WinKindTag::DocEditor),
+            Tg::Explore(c) => self.open_kind(c, WinKindTag::DocExplorer),
+            Tg::Links(c) => self.open_kind(c, WinKindTag::Links),
+            Tg::Transcript(c) => self.open_kind(c, WinKindTag::Transcript),
+            Tg::Workflow(c) => self.open_workflow_window(c),
+        }
+        self.status = format!("Spotter → {}", entry.label);
+        self.spotter = None;
+    }
+
     /// Actuate a desktop-background menu action (no cell context).
     fn actuate_desktop(&mut self, kind: &ActionKind) {
         match kind {
@@ -1590,6 +1709,13 @@ impl DeosDesktop {
                 self.open_kind(self.user, WinKindTag::Transcript);
                 self.status = "World Transcript — the receipt log of every turn.".into();
             }
+            ActionKind::OpenWorldExplorer => {
+                // The World Explorer anchors on the user cell (a stable sentinel).
+                self.open_kind(self.user, WinKindTag::WorldExplorer);
+                self.status =
+                    "World Explorer — the ledger census · the chronicle · Σ balance = 0.".into();
+            }
+            ActionKind::OpenSpotter => self.open_spotter(),
             ActionKind::Properties => {
                 self.open_properties(PropSubject::Desktop);
                 self.status = "Desktop Preferences & customization.".into();
@@ -1953,8 +2079,9 @@ impl DeosDesktop {
     /// Select the explorer's face (0=History, 1=Graph, 2=Blame) — the tab gesture.
     pub fn bake_doc_explorer_tab(&mut self, cell: CellId, tab: usize) {
         let t = match tab {
-            1 => DocExplorerTab::Graph,
-            2 => DocExplorerTab::Blame,
+            1 => DocExplorerTab::Patches,
+            2 => DocExplorerTab::Graph,
+            3 => DocExplorerTab::Blame,
             _ => DocExplorerTab::History,
         };
         self.doc_explorers.entry(cell).or_default().tab = t;
@@ -1986,6 +2113,51 @@ impl DeosDesktop {
         let atoms = graph.atoms().count();
         let authors = blame_summary(&graph).len();
         Some((atoms, authors))
+    }
+
+    // ── World Explorer + Spotter bake/test hooks ──
+
+    /// Open the World Explorer window (anchored on the user cell). A bake/test hook.
+    pub fn bake_open_world_explorer(&mut self) {
+        self.open_kind(self.user, WinKindTag::WorldExplorer);
+    }
+
+    /// Select the World Explorer face (0=Ledger, 1=Chronicle, 2=Conservation).
+    pub fn bake_world_explorer_tab(&mut self, tab: usize) {
+        use world_explorer::WorldExplorerTab as T;
+        let t = match tab {
+            1 => T::Chronicle,
+            2 => T::Conservation,
+            _ => T::Ledger,
+        };
+        self.world_explorers.entry(self.user).or_default().tab = t;
+    }
+
+    /// Open the Spotter overlay with a query — a bake/test hook driving the palette.
+    pub fn bake_open_spotter(&mut self, query: &str) {
+        self.open_spotter();
+        if let Some(ui) = self.spotter.as_mut() {
+            ui.query = query.to_string();
+        }
+    }
+
+    /// How many Spotter candidates the current query ranks (a bake/test hook proving
+    /// the fuzzy match runs over the live cells). `None` when the Spotter is closed.
+    pub fn bake_spotter_match_count(&self) -> Option<usize> {
+        self.spotter.as_ref()?;
+        Some(self.spotter_ranked().len())
+    }
+
+    /// The label of the Spotter's top-ranked candidate for the live query — a bake/test
+    /// hook proving the ranking surfaces a sensible best match.
+    pub fn bake_spotter_top_label(&self) -> Option<String> {
+        self.spotter.as_ref()?;
+        self.spotter_ranked().first().map(|e| e.label.clone())
+    }
+
+    /// Dispatch the Spotter's top candidate (what Enter does) — a bake/test hook.
+    pub fn bake_spotter_dispatch_top(&mut self) {
+        self.spotter_dispatch(Some(0));
     }
 
     /// The live `InputState` editor entity for `cell`'s open document, if the doc body
@@ -2119,6 +2291,11 @@ impl Render for DeosDesktop {
         // ── The property dialog overlay (the PROPERTY inspector/editor) ───────────
         if self.open_prop.is_some() {
             root = root.child(self.render_property_dialog(cx));
+        }
+
+        // ── The Spotter command-palette overlay (the Pharo fuzzy-jump) ────────────
+        if self.spotter.is_some() {
+            root = root.child(self.render_spotter_overlay(window, cx));
         }
 
         // ── The taskbar (open-window stubs) + the status bar ─────────────────────
@@ -2327,6 +2504,7 @@ impl DeosDesktop {
             WinKindTag::Transcript => self.render_transcript_body(),
             WinKindTag::Workflow => self.render_workflow_body(cell, cx),
             WinKindTag::DocExplorer => self.render_doc_explorer_body(cell, cx),
+            WinKindTag::WorldExplorer => self.render_world_explorer_window(cell, cx),
             _ => self.render_inspector_body(cell, cx),
         };
 
@@ -2841,6 +3019,179 @@ impl DeosDesktop {
         Some(doc)
     }
 
+    /// **The World Explorer window** — the NT tab strip + the [`world_explorer`] body
+    /// (ledger · chronicle · conservation). The "My Computer" of the verified World.
+    fn render_world_explorer_window(&self, cell: CellId, cx: &mut Context<Self>) -> AnyElement {
+        use world_explorer::WorldExplorerTab as T;
+        let tab = self
+            .world_explorers
+            .get(&cell)
+            .map(|s| s.tab)
+            .unwrap_or_default();
+
+        let mut tabs = div().flex().flex_row().gap_1().my_1();
+        for t in T::ALL {
+            let selected = t == tab;
+            tabs = tabs.child(
+                bevel_raised(
+                    div()
+                        .id(gpui::SharedString::from(format!(
+                            "wldtab-{}-{}",
+                            id_hex(&cell),
+                            t.label()
+                        )))
+                        .px_2()
+                        .py_1()
+                        .text_size(px(10.0))
+                        .when(selected, |d| {
+                            d.bg(gpui::rgb(NT_SELECT)).text_color(gpui::rgb(0xffffff))
+                        }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                        this.world_explorers.entry(cell).or_default().tab = t;
+                        cx.notify();
+                    }),
+                )
+                .child(t.label()),
+            );
+        }
+
+        let body = world_explorer::render_world_explorer_body(&self.world.borrow(), tab);
+        div()
+            .id(gpui::SharedString::from(format!(
+                "wldbody-{}",
+                id_hex(&cell)
+            )))
+            .flex_1()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(gpui::rgb(0xeef2f0))
+            .p_2()
+            .child(tabs)
+            .child(body)
+            .into_any_element()
+    }
+
+    /// Build the Spotter's live query input on first render (a real `gpui-component`
+    /// `Input`, focused), with a `Change` subscription that mirrors the text into
+    /// `query` + re-ranks, and `PressEnter` that dispatches the top candidate.
+    fn ensure_spotter_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .spotter
+            .as_ref()
+            .map(|s| s.input.is_some())
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Jump to a cell, action, or surface…")
+        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, ev: &InputEvent, _w, cx| match ev {
+                InputEvent::Change => {
+                    let q = input.read(cx).value().to_string();
+                    if let Some(ui) = this.spotter.as_mut() {
+                        ui.query = q;
+                        ui.selected = 0;
+                    }
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.spotter_dispatch(None);
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+        input.update(cx, |st, cx| st.focus(window, cx));
+        if let Some(ui) = self.spotter.as_mut() {
+            ui.input = Some(input);
+            ui._sub = Some(sub);
+        }
+    }
+
+    /// **The Spotter overlay** — a centered NT palette: the live query field over a
+    /// ranked candidate list (click a row to jump; Enter takes the top). The single
+    /// keystroke that ties every surface together.
+    fn render_spotter_overlay(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.ensure_spotter_input(window, cx);
+        let (input, selected) = match self.spotter.as_ref() {
+            Some(ui) => (ui.input.clone(), ui.selected),
+            None => (None, 0),
+        };
+        let ranked = self.spotter_ranked();
+        let shown = ranked.len().min(12);
+        let rows = spotter::render_spotter_rows(&ranked[..shown], selected);
+
+        let mut list = div().flex().flex_col().gap_1().mt_1();
+        for (i, row) in rows.into_iter().enumerate() {
+            list = list.child(
+                div()
+                    .id(gpui::SharedString::from(format!("spotrow-{i}")))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                            this.spotter_dispatch(Some(i));
+                            cx.notify();
+                        }),
+                    )
+                    .child(row),
+            );
+        }
+
+        // The palette panel, centered near the top (the NT/Spotlight position).
+        div()
+            .id("spotter-overlay")
+            .absolute()
+            .top(px(90.0))
+            .left(px(0.0))
+            .right(px(0.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .child(
+                bevel_raised(
+                    div()
+                        .id("spotter-panel")
+                        .w(px(520.0))
+                        .max_h(px(440.0))
+                        .overflow_y_scroll()
+                        .bg(gpui::rgb(NT_FACE))
+                        .border_2()
+                        .border_color(gpui::rgb(NT_SHADOW))
+                        .p_2(),
+                )
+                .child(face_section(&format!(
+                    "Spotter — {} match(es)",
+                    ranked.len()
+                )))
+                .when_some(input, |this, input| {
+                    this.child(
+                        div()
+                            .my_1()
+                            .h(px(26.0))
+                            .bg(gpui::rgb(0xffffff))
+                            .border_1()
+                            .border_color(gpui::rgb(NT_FACE_DARK))
+                            .child(Input::new(&input).h_full()),
+                    )
+                })
+                .child(list),
+            )
+            .into_any_element()
+    }
+
     /// **The Document Explorer body** — a tabbed Pharo-moldable inspector over a
     /// document's `dregg_doc` faces: the History time-travel scrubber, the DocGraph
     /// atoms+edges, and Blame. Read-only reflection over the live patch substance.
@@ -2904,7 +3255,10 @@ impl DeosDesktop {
 
         let body = match state.tab {
             DocExplorerTab::History => self.render_docx_history(cell, &doc, state.scrub, cx),
-            DocExplorerTab::Graph => self.render_docx_graph(&doc),
+            DocExplorerTab::Patches => docgraph_view::render_patch_diff(&doc),
+            // The richer node-chain view (boxes + ↓ order + ⑂ forks) supersedes the flat
+            // atom list; `render_docx_graph` is retained as the dense fallback.
+            DocExplorerTab::Graph => docgraph_view::render_docgraph_nodes(&doc),
             DocExplorerTab::Blame => self.render_docx_blame(&doc),
         };
         col.child(body).into_any_element()
@@ -2998,6 +3352,7 @@ impl DeosDesktop {
     /// The DocGraph FACE — the Pijul graph laid bare: every atom (its id, alive/dead
     /// status, author, content) and the order-edges. Pure structural reflection (the
     /// "inspect the object's guts" Pharo bar) over the document's content-addressed atoms.
+    #[allow(dead_code)] // the dense flat-list view, superseded by docgraph_view nodes
     fn render_docx_graph(&self, doc: &Doc) -> AnyElement {
         let graph = doc.history().replay();
         let mut atoms: Vec<_> = graph.atoms().collect();
@@ -3968,6 +4323,7 @@ fn kind_short(tag: WinKindTag) -> &'static str {
         WinKindTag::Workflow => "WFL",
         WinKindTag::AndroidCell => "AND",
         WinKindTag::DocExplorer => "DGX",
+        WinKindTag::WorldExplorer => "WLD",
     }
 }
 
