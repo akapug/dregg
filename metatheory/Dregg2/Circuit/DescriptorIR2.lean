@@ -218,10 +218,13 @@ realization — strictly stronger). Cells are `Option`-valued: `(present, value)
 canonical encoding `none ↦ (0, 0)`, `some v ↦ (1, v)` — which is what makes nullifier freshness
 ONE read row returning `none` (`nullifier_fresh_sound`), Merkle-path-free. -/
 
-/-- The wire code of a state domain (`UniversalMemory.Domain`): the five collections of the
-commitment layout. A FUTURE state component is a new code, never a new table. -/
+/-- The wire code of a state domain (`UniversalMemory.Domain`): the five committed collections
+of the commitment layout, plus `working` (transient scratch, wire code `5`, IDENTICAL to the Rust
+`UDomain::Working` at `turn/src/umem.rs:118`). A FUTURE state component is a new code, never a new
+table. -/
 def domainCode : UniversalMemory.Domain → ℤ
   | .registers => 0 | .heap => 1 | .caps => 2 | .nullifiers => 3 | .index => 4
+  | .working => 5
 
 /-- Domain codes are collision-free on the wire. -/
 theorem domainCode_injective : Function.Injective domainCode := by
