@@ -368,6 +368,46 @@ runs anywhere with `cd sel4/dregg-firmament && cargo test --test
 live_repaint_on_turn` (2/2 green, no SDK needed). The real-seL4 framebuffer
 demonstration is `make run-image` after `deos-live.system` lands (step 1–3 above).
 
+### 3.6.1 LANDED — `deos-live.system` drives live-repaint-on-turn on real seL4
+
+Steps 1–4 above are now CLOSED on real seL4. Step 4's "WALL" (the executor-PD
+Lean-ELF runtime link) was already cleared by the `executor-microkit-pd` keystone
+(`sel4/dregg-pd/executor-microkit-pd/WALL.md`: the verified executor links into a
+Microkit PD, 0 undefined symbols, and runs `status:2 ok:1`) plus the 2 MiB-page
+microkit patch (`microkit-patch/0001-2mib-elf-image-pages.patch`) that fits the
+~285-MiB executor image under the loader. So `deos-live.system` is the FULL loop,
+booting:
+
+- **`sel4/deos-live.system`** — the two-PD assembly: the `executor` PD (the banked
+  verified-executor ELF) ⊕ the `deos_image` PD (ramfb + virtio-keyboard), three
+  shared regions (`turn_in` R, `commit_out` RW→R), and two channels (executor
+  `commit ready` id 2 ⇄ viewer REPAINT id 1; the one-way verifier edge id 3 ⇄ id 2,
+  ignored). NO executor relink — it reuses the keystone ELF verbatim.
+- **The bare-metal repaint arm** (`deos-image/src/main.rs`): a `REPAINT` channel
+  arm in `notified()` reads the verified turn's JSON receipt from the shared
+  `commit_out` region, parses `status`/`ok`/`nonce`, and repaints. The genuine
+  receipt drives the frame — a REJECTED turn (status≠2) shows the fail-closed
+  banner, mirroring the semihost `repaint.rs` `DirtyRegion`/`None` discipline.
+- **On glass** (`deos-image/src/view.rs`): the `live_turn_banner` overlay — the
+  "VERIFIED TURN on seL4" banner with the real receipt facts.
+
+Booted under `qemu-system-aarch64` (`make run-deos-live` / `run-deos-live-headless`,
+the relinked `0x90000000` loader + the 2 MiB-page patched microkit, ZERO faults
+across both PDs). The serial transcript (`sel4/deos-live-boot-evidence.log`):
+
+```
+[executor]   ==> bodyCommitted — the executor PD ran a REAL accepted turn ( ◕‿◕ )
+[executor]   signalling persist (ch 2) + verifier (ch 3)
+...
+[deos-image]   ramfb CONFIGURED: addr=0x65e00000 XRGB8888 800x600 stride=3200
+[deos-image]   <== LIVE TURN #1: the executor PD committed a VERIFIED turn
+               (status:2 ok:1, nonce->8, receipt 313B) — repainting on glass ( ◕‿◕ )
+```
+
+A genuine `dregg_exec_full_forest_auth` turn, in its own cap-bounded protection
+domain, drives a framebuffer repaint in the display PD over a real cross-PD seL4
+notification — on real seL4, not the stub. Run `make run-deos-live`.
+
 ---
 
 ## 4. Concrete next-step PD/IPC sketch (the smallest end-to-end slice)
