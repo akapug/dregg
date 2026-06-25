@@ -9,6 +9,49 @@ This doc covers the node's request surface — the router, the turn-submission i
 the receipt SSE stream — and the **deos-host**, the userspace deos-js "private server" the
 node can host inside its own process.
 
+## Subcommands
+
+The binary is a `clap` CLI (`node/src/main.rs:89`) with these commands:
+
+- **`run`** — the daemon: HTTP API + federation sync (`node/src/main.rs:92`). Flags include
+  `--port`/`--bind`, `--federation-peers`, `--data-dir`/`--key-file`, `--gossip-port`,
+  `--federation-mode` (`solo`|`full`, default `solo`, `:210`), `--consensus` (`blocklace`,
+  the only engine, `:216`), `--prove-turns` (prove + verify-gate every finalized turn, also
+  `DREGG_PROVE_TURNS=1`, `:145`), `--enable-faucet`, `--enable-pruning`, the block-cadence /
+  idle-heartbeat / min-block-interval timers (`:174`–`:196`), `--groups`,
+  `--auto-approve-joins`, `--cors-origin`, and `--deos-program` (`:260`).
+- **`init`** — create the data dir and generate a node keypair, writing `node.key` at mode
+  `0600` and printing the public key (`node/src/main.rs:265`, `:1030`).
+- **`status`** — raw TCP liveness probe of the HTTP port (no HTTP client dep;
+  `node/src/main.rs:271`, `:1082`).
+- **`mud-client`** — boot a self-contained playable MUD and drop into a REPL (requires the
+  `deos-host` feature; `node/src/main.rs:283`, `:482`). See "Playable engines" below.
+- **`mcp`** — run as a Model Context Protocol server over stdio for AI assistants. Tracing
+  goes to stderr so stdout stays clean JSON-RPC; the cipherclerk starts unlocked since stdio
+  is a single-user CLI (`node/src/main.rs:293`, `:1118`–`:1152`).
+- **`register-federation`** — register a peer federation's descriptor into
+  `<data-dir>/known_federations/<id>.json` after recomputing and matching its `federation_id`
+  (rejects a tampered descriptor, audit F1; `node/src/main.rs:314`, `:1431`).
+- **`genesis`** — generate devnet genesis (keys, `genesis.json`, env files;
+  `node/src/main.rs:327`, dispatch to `genesis::run_genesis`).
+- **`relay`** — run as a hosted CapTP inbox relay operator (`node/src/main.rs:350`, dispatch
+  to `relay_service::run_relay_service`).
+
+`main()` installs the rustls ring provider, arms the verified-Lean distributed coordination
+gates (`dregg_exec_lean::register_distributed_gates`), and initializes tracing before
+dispatch (`node/src/main.rs:401`–`:425`).
+
+### Boot sequence (`run`)
+
+`run_node` (`node/src/main.rs:546`): expand `--data-dir` (exits if absent — run `init`
+first); warn on a `.devnet` marker; build `NodeState`; spawn the async `ProvePool` and attach
+it; load `genesis.json` if present (committee epoch, validator keys, threshold, checkpoint
+interval, `genesis_moves` issuer-seeding via `materialize_genesis_cells`, and starbridge
+factory cells, `:604`–`:723`); backfill default starbridge cells when `--enable-faucet` and no
+genesis seeded them (`:731`); load `known_federations/`; configure pruning + full-turn proving
++ solo consensus; install the Prometheus recorder; start blocklace sync; assemble the CORS
+allowlist; build the router and serve it with graceful shutdown.
+
 ## Boot & serving
 
 The `Run` subcommand (`node/src/main.rs:90`) starts the daemon. It binds `127.0.0.1` by
@@ -249,3 +292,41 @@ proven attenuation lattice (`deos_reflect::AffordanceSurface::project_for`,
 `executor_federation_id` a client needs to build + sign a fire turn in one round-trip
 (`node/src/api.rs:2425`–`:2456`). A client then fires an affordance through the node's
 `/turns/submit` ingress as a real verified turn.
+
+## Playable engines: `mud-client` & `shared-world`
+
+Both are `deos-host`-feature-gated engines that boot an **in-process** node, host a deos-js
+GM, bind a real TCP listener, and drive the genuine HTTP wire — self-contained demonstrations
+of the deos-host architecture.
+
+### `mud_client` — a playable text MUD
+
+`boot_mud_world(player_seed)` (`node/src/mud_client.rs:192`) creates a headless `NodeState`
+over a tempdir, marks it `unlocked`, mints a funded open player cell from the seed
+(`node/src/mud_client.rs:206`–`:221`), hosts `tests/fixtures/mud_play_gm.js` via
+`host_server_program` (the GM spawns rooms / character / NPC, grants the player a cap, forks
+dungeon instances, registers `move` / `gain-xp` / `descend` affordances,
+`node/src/mud_client.rs:227`), and binds a real `127.0.0.1:0` listener. The `MudClient` engine
+is pure HTTP against any node URL; `run_repl` (`:533`) drives the interactive loop and
+`play_interactive` (`:692`) wires it to stdin/stdout — what `dregg-node mud-client` runs.
+
+Each `move` / `gain-xp` / `descend` is a signed turn discovered and fired through
+`dregg_sdk_net::{discover_server_affordances, fire_affordance}` and committed on the live
+ledger; `look` reads the cells back via `GET /api/cell/{id}`; a `tick` re-hosts the GM's
+reactive program (`mud_play_tick.js`) — a GM superpower no player can reach. A forbidden
+cross-cell write (e.g. `descend` into the sealed dungeon) is a receipted refusal by the
+executor's authority gate (`node/src/mud_client.rs:1`–`:27`).
+
+### `shared_world` — two identities co-inhabiting one world
+
+`boot_shared_world(seed_a, seed_b)` (`node/src/shared_world.rs:174`) is the first rung of
+multi-person deos: a headless node hosts `shared_world_gm.js` (a shared board + a presence
+seat per identity + a private cell, granting each identity a cap over the shared board and its
+own seat); two distinct key-ceremony identities (`SharedClient`) connect over real HTTP and
+fire cap-gated turns into the shared board, each turn attributed to its firer (`receipt.agent`,
+`node/src/shared_world.rs:1`–`:30`). **Live sync**: each client subscribes to
+`/api/events/stream` (`dregg_sdk_net::NodeEvents`), so when A commits, B observes the receipt
+and re-reads the changed board. **The over-reach**: B firing `touch-private` over A's private
+cell is refused by the executor's authority gate (a receipted refusal leaving the cell
+unchanged). This is a `#![allow(dead_code)]` demonstrative harness consumed by the
+`shared_world_e2e` integration proof, not a `--bin` entry point (`node/src/shared_world.rs:31`–`:36`).

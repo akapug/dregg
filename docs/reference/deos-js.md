@@ -78,8 +78,8 @@ private embedded world and a live World. The prelude (`src/js.rs:389-615`) expos
   `input`/`list`/`table` produce `{kind, props, children}` DATA (deos-js stays gpui-free; a
   separate renderer draws it); a button's `onClick` is `{turn, arg}` (`src/js.rs:430-450`).
 - `deos.editor.*` — the card editor (`card`/`editView`/`setField`/`addAffordance`).
-- `deos.server.*` — the private-server / GM surface.
-- `deos.compose([...])` — the bounded multi-cell story.
+- `deos.server.*` — the private-server / GM surface (see below).
+- `deos.compose([...])` — the bounded multi-cell story (see below).
 
 `__deos_fire` distinguishes three faces (`FireOutcome`, `src/js.rs:936-970`): **Committed**
 (a verified turn), **Refused** (the cap gate said no — an expected, JS-observable `-1`, no
@@ -97,6 +97,56 @@ composing composes with either an embedded or an attached crawl target.
 JS names authority by string: `parse_auth_label` (`src/js.rs:1320-1329`) maps
 `"signature"`/`"proof"`/`"either"`/`"impossible"` to `AuthRequired` variants; anything else
 (including `"none"`) → `AuthRequired::None` (the broadest).
+
+### `deos.server.*` — the private-server / GM surface (`src/js.rs:566-587`)
+
+A hosted userspace program (run headless inside a node) registers cap-gated affordances and
+wields GM superpowers; the host drains the registries after the program's setup runs and
+publishes the surface for client discovery (`reset_server_registry`/`take_server_registry`/
+`take_fork_registry`, `src/js.rs:290-304`).
+
+- `defineAffordance({name, required, effects, instance?})` (`__deos_server_define_affordance`,
+  `src/js.rs:1580-1641`) — the keystone: register a cap-gated affordance carrying **arbitrary
+  effects** into the thread-local `SERVER_REGISTRY` (each entry a `ServerAffordanceDef`,
+  `:266-273`). Each effect descriptor (`parse_effect_descriptor`, `:1557-1576`) decodes to a
+  real `Effect`: `{type:"setField", cell, index, value}` or `{type:"incrementNonce", cell}`.
+  `instance` (a fork's cell hex) scopes the affordance to a forked surface; a present-but-bad
+  instance hex is a hard error. Returns 1/-1.
+- `fork(seedLabel)` (`__deos_server_fork`, `:1649-1696`) — INSTANCE the server's world: mint a
+  fresh OPEN funded instance cell (`mint_open_cell`, `FORK_FUNDING = 100_000`) and record it in
+  `FORK_REGISTRY`; the cap-bounded membrane-fork for a party/session. Returns the instance cell
+  hex (the discovery key) or `null`.
+- `spawnCell(seedHex, perms)` (`__deos_server_spawn_cell`, `:1711-1780`) — mint a cell. For
+  `perms == "open"` (default) an OPEN funded mint (`SPAWN_FUNDING = 100_000`); OPEN is
+  load-bearing because the cell's pubkey is `hash(seed)`, not a signable Ed25519 key, so only a
+  no-signature cell admits the GM's later self-stamps + a player's cap-bounded writes. A
+  non-open spawn commits a bare `CreateCell` turn. Returns the new cell hex or `null`.
+- `grant(toHex, onHex, required)` (`__deos_server_grant`, `:1785-1848`) — a `GrantCapability`
+  turn committed AS the `on` cell (a self-grant: `from == actor == target`), which authorizes
+  for an open cell (`delegate: None`). Returns 1/-1.
+- `setField(cellHex, index, value)` (`__deos_server_set_field`, `:1854-1905`) — a `SetField`
+  turn committed AS the governed cell (the GM stamping stats / firing NPC reactions / applying
+  level-ups). Returns 1/-1.
+- `getField(cellHex, index)` (`__deos_server_get_field`, `:1910-1951`) — a witnessed u64 read
+  off the live ledger (the GM observing a player's character), or -1 if absent.
+
+The spawn/grant/setField superpowers all commit through the attached World's
+`fire_raw_effects`/`fire_raw_effects_as` (no affordance-level cap tooth — the GM drives its own
+world; the executor's authority gate is the binding check). They require an attached live World
+(the embedded engine errors).
+
+### `deos.compose([...])` — the bounded multi-cell story (`src/js.rs:609-613`)
+
+The bounded sibling of the GM superpowers: the agent's brain composes a genuinely useful
+multi-cell task (mint a card + seed a field + grant a peer a cap) as ONE all-or-nothing gesture
+on the live World, **bounded by the agent's `held`** (the red-team invariant). `__deos_compose`
+(`src/js.rs:2057-2122`) parses the steps JSON into `ComposeStep`s (`parse_compose_step`,
+`:1961-2031` — ops `mintCard`/`setField`/`grant`, authority labels for `required`/`granted`)
+and drives the installed `AttachedComposer`. A malformed steps blob is an in-band refusal
+before any turn. The outcome (`ComposeOutcome`, `:239-257`) — `{ok, committed, receipts[],
+minted[], refusal?}` — is returned to JS and stashed in `LAST_COMPOSE` for the host. An
+over-reach aborts the whole story with `committed: 0`; an executor refusal mid-story names the
+failed leg, with prior legs already landed (the composer commits step-wise).
 
 ## `reflect_binding` — the crawl JSON (`src/reflect_binding.rs`)
 
@@ -153,6 +203,25 @@ held`; **any over-reach aborts the whole story in-band with nothing committed**
 verified turn (`ComposeError::Executor` reports a residual executor refusal, with prior legs
 already landed). `mint_id_of(seed)` derives the deterministic minted id (`blake3(seed)`
 against the default token domain) so the pre-screen can project it (`src/attach.rs:755-759`).
+
+## `multi_cell` — the embedded multi-cell author (`src/multi_cell.rs`)
+
+`MultiCellAuthor` (`src/multi_cell.rs:209-225`) is the `AttachedComposer`'s embedded sibling:
+it owns its OWN `DreggEngine` (single-custody, Symbolic by default) rather than a provided
+World, and composes stories over a pre-declared scope. Its `Step` enum (`MintCard`/`SetField`/
+`GrantCap`, `:70-118`) and `compose` (`:363-435`) run the same two-tooth atomic pre-screen as
+the composer — authority (`is_attenuation`) + scope, with `MintCard` growing the *projected*
+scope — and only commit each leg as its own verified turn when every leg clears
+(`ComposeError::OverReach` aborts in-band, nothing committed). `mint`'s executor-standing seed
+(`:247-302`) is the subtlety: a cross-cell write is gated by the executor's own
+`check_cross_cell_permission`, so `mint` seeds each scope card with open permissions AND grants
+the author cell a c-list access capability to it; `peers` get default permissions and no c-list
+entry (so a `SetField`/grant-FROM on a peer is refused by both the in-band scope tooth and the
+executor). A `MintCard` leg's genesis config (open perms + seed model + author standing) is
+applied post-commit, because a same-action cross-cell `SetField`/`SetPermissions` on a
+brand-new cell would trip the cross-cell tooth (`:455-517`). The module's own tests
+(`:556-764`) prove the keystone story, the scope over-reach, the authority over-reach, and the
+grant-wider-than-held refusals.
 
 ## `card_editor` — authoring a card from within (`src/card_editor.rs`)
 
@@ -252,3 +321,7 @@ a receipted patch with blame on the card's own chain). From their module docs:
   `ProgramSource::edit` (patch + content-addressed `blame`), `transclude_fragment` (a
   provenanced live quote carrying the source's blame), and merge of concurrent edits
   (`src/program_doc.rs:1-25`).
+
+> `src/mud.rs` (a GM-coordinated MUD as deos substance, the `mailtown` sibling) exists on
+> disk but is **not declared in `src/lib.rs`**, so it is not compiled into the crate. It is
+> documented as an example shape elsewhere, not part of the live `deos-js` surface.
