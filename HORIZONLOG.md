@@ -37,6 +37,30 @@ reason.)*
   `prove_welded_umem_turn_chain_recursive_staged` (`#[ignore]`, the staged end-to-end). Teeth bite the welded form
   (ChainBreak on reorder, TurnProofInvalid on a forged welded post-commit). NAMED TAIL = THE VK EPOCH ITSELF: commit the
   welded descriptor's VK + flip the deployed default off rotated+per-map (the ONLY remaining step — deliberately gated).
+- WIDE+UMEM WELD (STAGED / VK-RISK-FREE) — the GENUINE flip precursor the VK epoch needs (closes the no-narrowing scar
+  the VK epoch refused): the narrow weld `926124e6` welded onto the 1-felt/46-PI rotated descriptor — flipping the
+  deployed WIDE wire (8-felt/~124-bit faithful commit) onto it would NARROW the commitment to ~46-bit. THIS welds the
+  umem cohort leg onto the deployed WIDE descriptor (`WIDE_REGISTRY_STAGED_TSV`) via
+  `weld_umem_into_wide_descriptor` (circuit; the shared `weld_umem_into_descriptor_with_suffix` body, purely ADDITIVE —
+  appends the cohort `umemOp` over 7 cols PAST the wide carriers + umemory/umem_boundary tables, NEVER touches
+  `public_input_count` nor any PiBinding), so the 16 wide commit PIs (the 8-felt before/after anchors) ride through
+  UNCHANGED — NO narrowing, AND the umem reconciliation leg rides along. SDK prover
+  `sdk::full_turn_proof::prove_wide_umem_welded_staged` (reuses the EXACT deployed wide trace/PI production via the
+  extracted `generate_wide_descriptor_and_trace`, then welds + proves via the deployed-form `prove_vm_descriptor2_umem`
+  with a REAL boundary). SOUNDNESS PROVEN (gauntlet `sdk/tests/wide_umem_weld_staged_gauntlet.rs`, 3/3): the welded leg's
+  PI vector is BYTE-IDENTICAL to the wide-only leg's (0 PIs appended) so the last-16 PIs == the trusted
+  `wide_commit_anchors` 8-felt; `public_input_count` + every wide PiBinding survive the weld; and the ~124-bit BINDING
+  TOOTH bites — a forged 8-felt commit felt makes the welded proof UNSAT (`verify_vm_descriptor2`). + forged-pre umem
+  refuses, non-cohort fails closed. IVC half: `RotatedParticipantLeg::mint_welded_wide_from_block_witnesses` (circuit-prove)
+  + `mint_welded_wide_umem_rotated_participant_leg` (turn) mint a WIDE welded leg + `wide_old_root8`/`wide_new_root8`
+  accessors; `fold_wide_welded_umem_turn_chain_staged` (circuit-prove) binds the **8-felt** continuity (the wide form
+  RETIRES the single-felt PIs 34/35 to zero — the 8-felt wide commit is the sole binding), with a `WideChainBreak` tooth
+  on reorder + `MissingWideAnchor` fail-close + host admission refusing a forged 8-felt post-commit. Test
+  `circuit-prove/tests/ivc_turn_chain_wide_umem_welded.rs` 3/3. NAMED TAILS: (1) the in-circuit RECURSIVE wide fold (an
+  8-felt generalization of the single-felt chain-binding AIR) is a clean follow-on beyond this host precursor; (2) the
+  IVC wide-welded leg currently scopes the Transfer lead (transfer-shape wide producer) — the other wide families extend
+  identically. NAMED TAIL = THE VK EPOCH ITSELF (now over the WIDE welded form, no narrowing): commit the wide-welded VK
+  + flip the deployed default (deliberately gated).
 - UMEM COHORT → MULTI-DOMAIN (STAGED / VK-RISK-FREE): the umem cohort now covers the FULL effect set. The
   single-domain cohort (`c67796d8`, width-7) failed closed on effects whose touch spans >1 domain in one effect;
   this completes it. `metatheory/Dregg2/Circuit/Emit/EffectVmEmitUMemCohortMulti.lean` (`#assert_axioms`-clean):

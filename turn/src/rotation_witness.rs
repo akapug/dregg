@@ -555,6 +555,80 @@ pub fn mint_welded_umem_rotated_participant_leg(
     )
 }
 
+/// **THE WIDE WELDED ROTATED+UMEM LEG MINTING RECIPE (STAGED, VK-RISK-FREE) — the IVC half of the
+/// genuine flip precursor.** The WIDE (8-felt / ~124-bit) twin of
+/// [`mint_welded_umem_rotated_participant_leg`]: it derives the SAME turn's universal-memory touch
+/// (the pre→post projection diff, the single-domain cohort rows + REAL boundary) and hands it to
+/// [`RotatedParticipantLeg::mint_welded_wide_from_block_witnesses`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg::mint_welded_wide_from_block_witnesses),
+/// which welds the umem leg INTO the WIDE descriptor and proves both in ONE leaf under the leaf-wrap
+/// config. The leg's wide PI vector is intact (the 16 wide commit PIs ride through the additive
+/// weld), so the IVC chain fold's `old_root`/`new_root` accessors keep working over the welded leg
+/// AND the 8-felt anchors are preserved for the ~124-bit binding.
+///
+/// SCOPE: the live sovereign Transfer lead (the transfer-shape wide producer); a non-Transfer lead
+/// fails closed. `before_cell`/`after_cell` are the real actor cells (their projection diff IS the
+/// umem touch).
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn mint_welded_wide_umem_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    commitments_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use crate::umem::{
+        project_diff_ops, project_record_kernel_state, umem_cohort_proving_inputs_from,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+    let mut ledger = Ledger::new();
+    ledger
+        .insert_cell(after_cell.clone())
+        .map_err(|e| format!("mint_welded_wide_umem: ledger seed failed: {e:?}"))?;
+
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
+            .map_err(|e| format!("mint_welded_wide_umem: rotated block witness: {e}"))
+    };
+
+    let proj_pre = project_record_kernel_state(before_cell);
+    let proj_post = project_record_kernel_state(after_cell);
+    let ops = project_diff_ops(&proj_pre, &proj_post);
+    let inputs = umem_cohort_proving_inputs_from(&proj_pre, &ops)
+        .map_err(|e| format!("mint_welded_wide_umem: umem cohort inputs: {e}"))?;
+
+    RotatedParticipantLeg::mint_welded_wide_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+        &inputs.rows,
+        &inputs.boundary,
+        inputs.domain,
+    )
+}
+
 /// **The shared single-effect state projection onto a cell — the anti-drift weld.**
 ///
 /// Applies ONE kernel effect's STATE change to `cell`, mirroring exactly what the executor's
