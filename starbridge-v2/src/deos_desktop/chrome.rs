@@ -119,6 +119,66 @@ pub fn face_row(key: &str, value: &str) -> impl IntoElement {
         .child(div().flex_1().child(value.to_string()))
 }
 
+/// A `key: value` property row with a colour-keyed value — for a status/verdict line
+/// (e.g. a "Live" lifecycle in green, a held/unheld marker). Same dense geometry as
+/// [`face_row`] but the value carries an accent colour.
+pub fn face_row_color(key: &str, value: &str, color: u32) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .text_size(px(11.0))
+        .child(
+            div()
+                .w(px(96.0))
+                .text_color(gpui::rgb(0x505050))
+                .child(format!("{key}:")),
+        )
+        .child(
+            div()
+                .flex_1()
+                .text_color(gpui::rgb(color))
+                .child(value.to_string()),
+        )
+}
+
+/// A thin horizontal bar visualising a fraction `0.0..=1.0` (a balance / fill gauge).
+/// NT-dense: a sunken track with a navy fill. Read-only — pure presentation over an
+/// already-computed ratio.
+pub fn face_gauge(ratio: f32) -> impl IntoElement {
+    let r = ratio.clamp(0.0, 1.0);
+    div()
+        .h(px(8.0))
+        .my_1()
+        .bg(gpui::rgb(NT_FACE_DARK))
+        .border_1()
+        .border_color(gpui::rgb(NT_SHADOW))
+        .child(
+            div()
+                .h(px(6.0))
+                .w(gpui::relative(r))
+                .bg(gpui::rgb(NT_TITLE_ACTIVE)),
+        )
+}
+
+// ── Glyphs (kept inside the bake font's coverage) ─────────────────────────────────
+// The headless bake renders with Lilex + IBM Plex Sans; a handful of decorative
+// code points (fullwidth +/=, some dingbats) fall back to tofu (▯) there. These
+// constants centralize the SAFE glyphs every surface draws so a bake reads clean.
+/// The window-control glyphs (minimize / restore / maximize / close) — kept to
+/// code points the bake font carries (the geometric square glyphs are tofu in-bake,
+/// so maximize/restore use a bracketed-box ASCII that reads as a window).
+pub const GLYPH_MIN: &str = "–";
+pub const GLYPH_RESTORE: &str = "[o]";
+pub const GLYPH_MAX: &str = "[]";
+pub const GLYPH_CLOSE: &str = "×";
+/// The resize-grip glyph (a corner of slashes the font carries).
+pub const GLYPH_GRIP: &str = "//";
+/// The "add" / "remove" affordance markers (ASCII — fullwidth +/− are tofu in-bake).
+pub const GLYPH_ADD: &str = "+";
+pub const GLYPH_REMOVE: &str = "-";
+/// A small right-pointing marker (the baseline/pin marker) the font carries.
+pub const GLYPH_PIN: &str = ">";
+
 // ── Numeric formatting (NT-dense numerics) ────────────────────────────────────────
 
 /// Format a signed balance with a unicode minus and thousands grouping.
