@@ -154,34 +154,23 @@ end PredRE
 ]
 
 /-!
-## The precise remaining wall for Stage 3 (`der_finite`) — NAMED, not closed.
+## Stage 3 (`der_finite`) — NOW CLOSED (this note records how `sim_sound` fits the closed proof).
 
-`sim_sound` above is the SEMANTIC foundation of "finite up to `≅`": it proves the quotient relation
+`sim_sound` here is the SEMANTIC foundation of "finite up to `≅`": it proves the quotient relation
 respects the matched language, so a finite set of `≅`-classes is a finite set of recognized
-languages (non-vacuous). What remains is the COMBINATORIAL finiteness COUNT, which is purely
-syntactic (it never mentions `Matches`):
+languages (non-vacuous). The COMBINATORIAL finiteness COUNT — once named here as the remaining wall —
+is now BUILT AND PROVEN kernel-clean across the `Deriv.{Combinatorics,TTerm,Permute,
+SymbolicDerivative,Pieces,Finite,Monotone,Finiteness}` modules:
 
-  **Wall lemma `der_pieces`** (the `PredRE` analog of ITP'25 `step_to_pieces`, `Finite.lean:18`):
-    `∀ a R, ∃ xs, toSum xs ≅ der a R ∧ xs ∈ neSubsets (pieces R)`
-  whence **`der_finite`**: `{ derivative-closure of R } ⊆[≅] ⊕(pieces R)`, and `⊕(pieces R)` is a
-  fixed finite list — so the reachable derivatives are finite up to `≅`.
+  * `Deriv.Finiteness.der_finite` : `∃ xs, ∀ {n}, steps r n ⊆[≅] xs` — the whole symbolic-derivative
+    state space fits, up to `≅`, in the fixed finite `⊕(pieces r)` (depends only on
+    `{propext, Classical.choice, Quot.sound}`).
+  * the closure heart `Deriv.Finite.step_to_pieces` and the lift `Deriv.Monotone.toSumSubsets_monotone`
+    + the `pieces`-similarity layer (`Deriv.Finiteness.pieces_equiv'`/`pieces_trans'`) are the ported
+    ITP'25 tower (`step_to_pieces` / `Permute` nodup block / `pieces_equiv'`), over dregg's `Pred`.
 
-Why it is a genuine wall and not a one-liner — it requires PORTING, over `PredRE`, the entire
-ITP'25 syntactic-combinatorics tower (none of which is about semantics, so none of it transports
-from Stages 0–1):
-
-  * `pieces : PredRE → List PredRE` — the over-approximation closure (`Pieces.lean`, 392 lines):
-    `pieces (l ⋒ r) = productWith (·⋒·) ⊕(pieces l) ⊕(pieces r)`,
-    `pieces (l ⬝ r) = map (·⬝r) ⊕(pieces l) ++ pieces r`, `pieces (star r) = r* :: map (·⬝r*) ⊕(pieces r)`,
-    `pieces (~r) = map (~·) ⊕(pieces r)` — plus `pieces_refl`, `topmost_not_union`, and the
-    `piecesS` CLOSURE-OPERATOR laws (extensive / monotone / idempotent), `Pieces.lean`.
-  * `toSum` / `neSubsets` / `toSumSubsets ⊕` and the `subset_up_to` (`⊆[≅]`) calculus — the
-    non-empty-subset / permutation / nodup combinatorics of `Permute.lean` (387 lines) +
-    `SubsetUpTo.lean` (44) + `NeSublists.lean` (94): `neSubsets_append`, `neSubsets_singleton`,
-    `toSum_append`, `subset_sim_toSum`, `nodup_subset_to_neSubsets`, `subset_up_to_trans`, etc.
-  * the `der`-to-`pieces` closure induction itself (`step_to_pieces`'s 7 surviving constructor
-    arms), then `steps_to_toSumSubsets` (transitivity of the closure along iterated `der`) →
-    `finiteness`.
+So `sim_sound` (this module) is the language-soundness that makes that finite ≅-quotient a finite set
+of recognized LANGUAGES. Stage 3 is closed; nothing here is a wall.
 
 This is the design §3.3 "hard core #1 — months, not days," and it is NOT reduced by owning the
 carrier (only the licensing/toolchain costs were). It is faithfully buildable (the structure
