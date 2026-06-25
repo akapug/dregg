@@ -479,6 +479,98 @@ pub fn mint_rotated_participant_leg(
     )
 }
 
+/// **THE WELDED ROTATED+UMEM LEG MINTING RECIPE (STAGED, VK-RISK-FREE) — the IVC half of the
+/// flag-day weld.** Like [`mint_rotated_participant_leg`], but the minted leg carries the WELDED
+/// rotated+umem descriptor: it derives the SAME turn's universal-memory touch (the pre→post
+/// projection diff, the single-domain cohort rows + REAL boundary via
+/// [`crate::umem::umem_cohort_proving_inputs_from`]) and hands it to
+/// [`RotatedParticipantLeg::mint_welded_from_block_witnesses`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg::mint_welded_from_block_witnesses),
+/// which welds the umem leg INTO the rotated descriptor and proves both in ONE leaf under the
+/// leaf-wrap config. The leg's 46-PI vector (the rotated commit pins) is intact, so the IVC chain
+/// fold's `old_root`/`new_root` accessors keep working over the welded leg.
+///
+/// `before_cell`/`after_cell` are the real actor cells (their projection diff IS the umem touch).
+/// Fails closed if the turn is not a single rotated R=24 cohort member, or if its umem touch is
+/// multi-domain (such effects stay on the per-map path until their own cohort design).
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn mint_welded_umem_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    commitments_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use crate::umem::{
+        UmemKind, UmemOp, project_record_kernel_state, umem_cohort_proving_inputs_from,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+    let mut ledger = Ledger::new();
+    ledger
+        .insert_cell(after_cell.clone())
+        .map_err(|e| format!("mint_welded_umem: ledger seed failed: {e:?}"))?;
+
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
+            .map_err(|e| format!("mint_welded_umem: rotated block witness: {e}"))
+    };
+
+    // The SAME transition's universal-memory touch: the pre→post projection diff as a Blum write
+    // trace, bridged into the single-domain cohort rows + REAL boundary.
+    let proj_pre = project_record_kernel_state(before_cell);
+    let proj_post = project_record_kernel_state(after_cell);
+    let mut keys: Vec<_> = proj_pre.keys().chain(proj_post.keys()).cloned().collect();
+    keys.sort();
+    keys.dedup();
+    let mut ops: Vec<UmemOp> = Vec::new();
+    for k in &keys {
+        let a = proj_pre.get(k);
+        let b = proj_post.get(k);
+        if a != b {
+            ops.push(UmemOp {
+                kind: UmemKind::Write,
+                key: k.clone(),
+                val: b.cloned(),
+                prev_val: a.cloned(),
+                prev_serial: 0,
+            });
+        }
+    }
+    let inputs = umem_cohort_proving_inputs_from(&proj_pre, &ops)
+        .map_err(|e| format!("mint_welded_umem: umem cohort inputs: {e}"))?;
+
+    RotatedParticipantLeg::mint_welded_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+        &inputs.rows,
+        &inputs.boundary,
+        inputs.domain,
+    )
+}
+
 /// **The shared single-effect state projection onto a cell — the anti-drift weld.**
 ///
 /// Applies ONE kernel effect's STATE change to `cell`, mirroring exactly what the executor's

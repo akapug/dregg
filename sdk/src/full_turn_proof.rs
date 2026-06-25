@@ -1080,6 +1080,153 @@ pub fn prove_umem_cohort_staged(
     Ok(proof)
 }
 
+/// **THE ROTATED+UMEM WELD PROVER (STAGED, VK-RISK-FREE) — the last precursor before the gated VK
+/// epoch.** Prove a REAL turn through the WELDED rotated+umem descriptor
+/// ([`dregg_circuit::effect_vm_descriptors::weld_umem_into_rotated_descriptor`]): the WHOLE rotated
+/// R=24 cohort proof (effect semantics, the rotated 46-PI vector with the OLD/NEW state-commit pins)
+/// PLUS the universal-memory reconciliation leg (the cohort `umemOp` over 7 appended columns + the
+/// real [`UMemBoundaryWitness`]), in ONE descriptor / ONE proof.
+///
+/// This is the deployed flag-day weld made executable BEFORE the switch: the per-map memory
+/// reconciliation moves INTO the rotated descriptor as the umem leg, while the rotated PIs stay
+/// intact. It welds the two reconciliation seams the staged cohort leg ([`prove_umem_cohort_staged`])
+/// named — the 0-PI umem leg now rides the rotated descriptor's committed PI vector (so the IVC
+/// fold's `old_root`/`new_root` accessors keep working over the welded leg).
+///
+/// `effects` is the turn's homogeneous rotated cohort slice (the lead resolves the rotated
+/// descriptor + the umem cohort domain); `pre`/`ops` are the same turn's universal-memory touch (its
+/// pre-state projection + Blum op trace) the standalone cohort prover consumes. Self-verifies before
+/// return.
+///
+/// STAGED: the deployed default ([`prove_effect_vm_rotated_ir2_with_caveat`]) stays rotated+per-map
+/// with a DEFAULT umem boundary; this entry is opt-in and never on the live wire. No VK epoch, no
+/// committed-VK change.
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn prove_rotated_umem_welded_staged(
+    initial_state: &CellState,
+    effects: &[VmEffectKind],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+) -> Result<
+    dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_umem, verify_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::{
+        RotatedBlockWitness, generate_rotated_effect_vm_trace, rotated_descriptor_name_for_effect,
+    };
+    use dregg_circuit::effect_vm_descriptors::{
+        V3_STAGED_REGISTRY_TSV, weld_umem_into_rotated_descriptor,
+    };
+
+    // Resolve the rotated cohort descriptor for this turn's lead effect (homogeneous-cohort only,
+    // exactly as the deployed rotated prover routes). The welded form is single-leg by design.
+    let lead = effects
+        .first()
+        .ok_or_else(|| SdkError::InvalidWitness("rotated+umem weld: empty turn".into()))?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "rotated+umem weld: effect {lead:?} is not in the rotated cohort (no R=24 descriptor)"
+        ))
+    })?;
+    for e in &effects[1..] {
+        if rotated_descriptor_name_for_effect(e) != Some(name) {
+            return Err(SdkError::InvalidWitness(
+                "rotated+umem weld: heterogeneous multi-effect turn (one welded descriptor per proof)"
+                    .into(),
+            ));
+        }
+    }
+    let json = V3_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            SdkError::InvalidWitness(format!("{name} not in staged rotated registry"))
+        })?;
+    let rotated_desc = parse_vm_descriptor2(json)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated descriptor parse: {e}")))?;
+
+    // The umem leg's single-domain cohort rows + the REAL boundary (fails closed on a multi-domain
+    // leg — such effects stay on the per-map path until their own cohort design).
+    let inputs = dregg_turn::umem::umem_cohort_proving_inputs_from(pre, ops)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort trace generation: {e}")))?;
+
+    // WELD: append the umem leg INTO the rotated descriptor (keeps the 46 rotated PIs).
+    let welded = weld_umem_into_rotated_descriptor(&rotated_desc, inputs.domain);
+    let base = rotated_desc.trace_width; // the first appended umem column
+
+    // The rotated trace + its 46-PI vector (the welded descriptor's PIs are the rotated PIs).
+    let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
+    };
+    let before = bridge(before_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
+    let after = bridge(after_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
+    let (rot_trace, dpis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, caveat)
+            .map_err(|e| SdkError::InvalidWitness(format!("rotated trace generation: {e}")))?;
+
+    // Assemble the WELDED base trace: each rotated row widened to the welded width, the REAL umem
+    // cohort rows (guard col 6 == 1) injected into the appended 7 columns of the first rows. The
+    // rotated leg occupies cols `[0, base)`; the umem leg occupies `[base, base+7)`; the cohort
+    // umem-op gathering reads its operands row-local (guard gates which rows contribute).
+    let real_umem_rows: Vec<&Vec<dregg_circuit::field::BabyBear>> = inputs
+        .rows
+        .iter()
+        .filter(|r| r.get(6).copied() == Some(dregg_circuit::field::BabyBear::ONE))
+        .collect();
+    if real_umem_rows.len() > rot_trace.len() {
+        return Err(SdkError::InvalidWitness(format!(
+            "rotated+umem weld: {} umem ops exceed the rotated trace height {} (cannot co-locate \
+             the umem leg on the rotated rows)",
+            real_umem_rows.len(),
+            rot_trace.len()
+        )));
+    }
+    let mut welded_base: Vec<Vec<dregg_circuit::field::BabyBear>> =
+        Vec::with_capacity(rot_trace.len());
+    for (ri, row) in rot_trace.iter().enumerate() {
+        let mut wr = row.clone();
+        wr.resize(base + 7, dregg_circuit::field::BabyBear::ZERO);
+        if let Some(umem_row) = real_umem_rows.get(ri) {
+            for (i, &v) in umem_row.iter().enumerate().take(7) {
+                wr[base + i] = v;
+            }
+        }
+        welded_base.push(wr);
+    }
+
+    // Prove the WELDED descriptor through the DEPLOYED-form umem prover with the REAL boundary.
+    let proof = prove_vm_descriptor2_umem(
+        &welded,
+        &welded_base,
+        &dpis,
+        &MemBoundaryWitness::default(),
+        &[],
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("rotated+umem welded IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&welded, &proof, &dpis)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated+umem welded self-verify: {e}")))?;
+    Ok(proof)
+}
+
 /// **THE FAITHFUL 8-FELT WIDE rotated prover (STAGED — the flip's producer leg).** The wide twin of
 /// [`prove_effect_vm_rotated_ir2_with_caveat`]: routes the WIDE descriptor (from
 /// `WIDE_REGISTRY_STAGED_TSV`, the verified Lean `v3RegistryCapOpenWide`), generates the trace
