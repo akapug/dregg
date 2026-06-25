@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  deos-live.system : LIVE-REPAINT-ON-TURN on real seL4. A two-PD Microkit image
+  that welds the LIVE IMAGE VIEWER (the deos-image PD: ramfb + virtio-keyboard, a
+  Pharo-style object browser of REAL cells) to the VERIFIED executor (the
+  executor-microkit PD: it EMBEDS `dregg_exec_full_forest_auth` = execFullForestG
+  + admission, proved in `metatheory/`, and runs a REAL turn on bare-metal seL4).
+
+  The loop (the bare-metal transcription of the semihost-proven repaint.rs, §3.5
+  of docs/desktop-os-research/SEL4-INTERACTIVE-COCKPIT.md):
+
+      [executor PD]  runs the verified demo turn (in-PD wire),
+          writes the JSON receipt to commit_out (RW)  ===>  status:2 ok:1,
+          then (channel id 2) notifies "commit ready".
+      [deos-image PD]  on REPAINT (id 1): reads the genuine receipt from
+          commit_out (R) and paints the "VERIFIED TURN on seL4" banner on the
+          ramfb framebuffer.
+
+  A genuine verified turn in its OWN protection domain drives a frame change in
+  the display PD, over a real cross-PD seL4 notification. Not a stub. The
+  executor's cap partition is enforced: turn_in (R), commit_out (RW), and NOTHING
+  else (no device/NIC/framebuffer cap). The viewer holds the fw_cfg display cap,
+  the framebuffer, the virtio-keyboard, and commit_out (R), and nothing else.
+
+  Build + boot: sel4/Makefile `make run-deos-live` (board qemu_virt_aarch64).
+  The executor PD embeds the ~285-MiB verified Lean image, so this image needs
+  the 2 MiB-page microkit patch plus the relinked 0x90000000 loader (the same the
+  5-PD `make run-assembly-real` uses; see executor-microkit-pd/microkit-patch/).
+-->
+<system>
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         Shared regions (the only cross-PD byte channels).
+         ════════════════════════════════════════════════════════════════════ -->
+
+    <!-- the turn the executor reads (R). No ingress PD here, so the executor runs
+         its compiled-in verified demo wire; turn_in stays the (zero-filled)
+         readable staging the live path would use. -->
+    <memory_region name="turn_in"    size="0x100000" />   <!-- 1 MiB -->
+    <!-- executor -> viewer receipt handoff: executor writes (RW), viewer reads
+         (R). The verified turn's JSON receipt lands here; the viewer reads its
+         status/ok/nonce and repaints. -->
+    <memory_region name="commit_out" size="0x400000" />   <!-- 4 MiB -->
+
+    <!-- the framebuffer DMA region: 4 MiB, huge-page-backed so region_paddr is a
+         single contiguous run (a scanned-out framebuffer must be contiguous in
+         guest-physical space). 800x600x4 = 1.83 MiB fits. -->
+    <memory_region name="fb_dma" size="0x400_000" page_size="0x200_000" />
+    <!-- QEMU's fw_cfg engine MMIO window (hw/arm/virt.c: 0x9020000). -->
+    <memory_region name="fwcfg_mmio" size="0x1000" phys_addr="0x9020000" />
+    <!-- the virtio-keyboard's virtio-mmio window (slot 30, phys 0xa003000). -->
+    <memory_region name="virtio_kbd_mmio" size="0x1000" phys_addr="0xa003000" />
+    <!-- the keyboard driver's DMA region (its virtio event/status rings). -->
+    <memory_region name="virtio_kbd_dma" size="0x200_000" page_size="0x200_000" />
+
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         PD: executor  — the VERIFIED heart. Embeds `dregg_exec_full_forest_auth`.
+         Its Microkit handler runs the verified turn, writes the receipt to
+         commit_out (RW), and signals "commit ready" (id 2). Cap partition:
+         turn_in (R), commit_out (RW), NOTHING else. The embedded Lean image is
+         ~285 MiB of loaded ELF; the shared regions map high, clear of it.
+         ════════════════════════════════════════════════════════════════════ -->
+    <protection_domain name="executor" priority="120" stack_size="0x40000">
+        <program_image path="dregg-executor-microkit-pd.elf" />
+        <map mr="turn_in"    vaddr="0x4_000_000_000" perms="r"  cached="true" setvar_vaddr="turn_in_vaddr" />
+        <map mr="commit_out" vaddr="0x4_000_400_000" perms="rw" cached="true" setvar_vaddr="commit_out_vaddr" />
+    </protection_domain>
+
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         PD: deos_image  — the LIVE OBJECT BROWSER + the repaint sink. Holds the
+         fw_cfg display cap, the framebuffer, the keyboard's mmio/DMA/IRQ, and
+         commit_out (R) — and nothing else. A keypress navigates; a REPAINT signal
+         (id 1) from the executor reads the genuine receipt and repaints.
+         ════════════════════════════════════════════════════════════════════ -->
+    <protection_domain name="deos_image" priority="100" stack_size="0x10000">
+        <program_image path="dregg-deos-image-pd.elf" />
+
+        <map mr="fb_dma" vaddr="0x2_000_000" perms="rw" cached="true" setvar_vaddr="fb_dma_vaddr" />
+        <setvar symbol="fb_dma_paddr" region_paddr="fb_dma" />
+
+        <map mr="fwcfg_mmio" vaddr="0x6_000_000_000" perms="rw" cached="false" setvar_vaddr="fwcfg_mmio_vaddr" />
+        <map mr="virtio_kbd_mmio" vaddr="0x6_000_001_000" perms="rw" cached="false" setvar_vaddr="virtio_kbd_mmio_vaddr" />
+
+        <map mr="virtio_kbd_dma" vaddr="0x7_000_000_000" perms="rw" cached="true" setvar_vaddr="virtio_kbd_dma_vaddr" />
+        <setvar symbol="virtio_kbd_dma_paddr" region_paddr="virtio_kbd_dma" />
+
+        <!-- the receipt the executor wrote: R (the executor is the sole writer). -->
+        <map mr="commit_out" vaddr="0x8_000_000_000" perms="r" cached="true" setvar_vaddr="commit_out_vaddr" />
+
+        <!-- the keyboard IRQ: SPI 78 = 48 + 30. id 0 -> KBD. -->
+        <irq irq="78" id="0" />
+    </protection_domain>
+
+
+    <!-- ════════════════════════════════════════════════════════════════════
+         Channels — the only control-flow edges.
+         ════════════════════════════════════════════════════════════════════ -->
+
+    <!-- executor "commit ready" (id 2) -> viewer REPAINT (id 1). The verified turn
+         landed; the viewer reads commit_out and repaints. -->
+    <channel>
+        <end pd="executor"   id="2" />
+        <end pd="deos_image" id="1" />
+    </channel>
+
+    <!-- executor one-way verifier edge (id 3) -> viewer (id 2). Carries no repaint
+         payload; the viewer ignores it. Bound so the executor's notify lands on a
+         real channel rather than faulting on an unbound cap. -->
+    <channel>
+        <end pd="executor"   id="3" />
+        <end pd="deos_image" id="2" />
+    </channel>
+
+</system>

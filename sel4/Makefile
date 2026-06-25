@@ -56,6 +56,7 @@ QEMU_DISPLAY ?= cocoa,show-cursor=on
         build-aarch64 build-assembly build-riscv build-graphical run-graphical \
         run-graphical-headless build-tutorial run-tutorial run-tutorial-headless \
         build-image run-image run-image-headless capture-image-modes \
+        build-deos-live run-deos-live run-deos-live-headless \
         verify-isolation clean help
 
 help:
@@ -385,6 +386,45 @@ run-image-headless: build-image
 # weld's reproducible proof.
 capture-image-modes: build-image
 	python3 scripts/capture-cockpit-mode.py
+
+# ── LIVE-REPAINT-ON-TURN on real seL4 (deos-live.system) ────────────────────
+# A two-PD image: the VERIFIED executor PD (dregg-executor-microkit-pd, embedding
+# `dregg_exec_full_forest_auth`) ⊕ the LIVE IMAGE VIEWER PD (deos-image, ramfb +
+# virtio-keyboard). The executor runs a REAL verified turn, writes the receipt to
+# the shared commit_out region, and signals the viewer (channel id 2 ⇄ id 1); the
+# viewer reads the genuine receipt and paints the "VERIFIED TURN on seL4" banner
+# on glass. A genuine verified turn drives live-repaint, on real seL4.
+#
+# REUSES the banked executor PD ELF (the firmament keystone, executor-microkit-pd
+# /WALL.md) — no relink. Like build-assembly-real, the ~285-MiB executor needs
+# (1) the 2 MiB-page microkit patch and (2) the relinked 0x90000000 loader, both
+# already installed (executor-microkit-pd/microkit-patch/). QEMU loads the image
+# at addr=0x90000000 and adds -device ramfb + the virtio-keyboard.
+build-deos-live: build-image
+	@test -f $(EXEC_MK_ELF) || (echo "executor PD ELF missing: $(EXEC_MK_ELF) — run 'make build-executor-microkit' first" && exit 1)
+	mkdir -p $(BUILD)
+	cp $(EXEC_MK_ELF) $(BUILD)/
+	$(MICROKIT) deos-live.system --search-path $(BUILD) --board $(BOARD) --config $(CONFIG) -o $(BUILD)/deos-live.img -r $(BUILD)/deos-live.report.txt
+
+# Boot WITH a window: the cell browser on ramfb; the executor's verified turn
+# repaints the live-turn banner the instant the assembly comes up. UP/DOWN still
+# walk the cells (the banner rides every paint).
+run-deos-live: build-deos-live
+	qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -m 4G \
+		-device ramfb -display $(QEMU_DISPLAY) \
+		-global virtio-mmio.force-legacy=false \
+		-device virtio-keyboard-device,bus=virtio-mmio-bus.30 \
+		-device loader,file=$(BUILD)/deos-live.img,addr=0x90000000,cpu-num=0 \
+		-serial mon:stdio
+
+# Window-less (CI / screendump capture over QMP): the SAME image, -display none.
+run-deos-live-headless: build-deos-live
+	qemu-system-aarch64 -machine virt,virtualization=on -cpu cortex-a53 -m 4G \
+		-device ramfb -display none \
+		-global virtio-mmio.force-legacy=false \
+		-device virtio-keyboard-device,bus=virtio-mmio-bus.30 \
+		-device loader,file=$(BUILD)/deos-live.img,addr=0x90000000,cpu-num=0 \
+		-serial mon:stdio
 
 # ── M5: M0 on riscv64 ───────────────────────────────────────────────────────
 run-riscv: build-riscv
