@@ -448,10 +448,17 @@ fn umem_real_turn_stale_prev_refuses() {
 // `UniversalMemory.boundary_whole_image_sem` (IR lift `DescriptorIR2.satisfied2U_init_whole_image`)
 // — pinning the committed root to the whole-boundary fold forces the committed heap to agree with
 // the declared image at every address, absence off-list included (no extra cells), via
-// `boundary_init_root_bound`'s injectivity. What remains is purely the in-circuit AIR/witness work
-// that COMPUTES that whole-boundary root-fold and pins it to the committed-root PI (the theorem's
-// `hpin` hypothesis); that per-domain sorted-leaf fold chip rides the universal-map rotation, not
-// this pass.
+// `boundary_init_root_bound`'s injectivity. The in-circuit AIR/witness work that COMPUTES that
+// whole-boundary root-fold and pins it to the committed-root PI (the theorem's `hpin` hypothesis)
+// is now REALIZED — `dregg_circuit::whole_image_fold` (the WHOLE-IMAGE FOLD CHIP, exercised in the
+// `cross_cell_read_whole_image_*` tests below): the chip reconstructs `mapRoot hash d boundaryHeap`
+// over the ENTIRE declared boundary view via a sorted-insert chain from the empty root and pins the
+// delivered fold to the published-root PI. A peer heap with one extra/altered cell folds to a
+// different root and can no longer be pinned (the `mapRoot_injective` no-extra-cells tooth, biting
+// in-circuit). The ONE remaining rotation step is the cross-table wiring binding the chip's
+// insert-chain `(key, value)` rows to the universal boundary table's per-domain `(domain, key)`
+// cells (`whole_image_fold` module docs name it precisely); the fold arithmetic — the `hpin`
+// content — rides here.
 
 /// The deployed-shape column layout for the cross-cell read MapOp (arbitrary but stable):
 /// col 0 = the peer's published field-plane root (pinned to PI 0), col 1 = the read field
@@ -684,5 +691,117 @@ fn cross_cell_read_pi_mismatch_refuses() {
     assert!(
         refused,
         "the opened root must equal the published-commitment PI (no claiming-a-different-root)"
+    );
+}
+
+// ============================================================================
+// THE WHOLE-IMAGE FOLD CHIP — the no-extra-cells direction, realized in-circuit.
+//
+// The cross-cell-read leg above is the per-cell SUBSET view (each declared address opens to the
+// peer's committed value under the published root). It does not, on its own, forbid a committed
+// peer heap holding the declared cells AND extra cells the boundary never declared.
+//
+// `dregg_circuit::whole_image_fold` closes that direction: it CONSTRUCTS the published root from
+// the declared boundary cells alone — a sorted-INSERT chain from the empty root reconstructs
+// `mapRoot hash d boundaryHeap` (the deployed depth-16 binary fold, `heap_root.rs` /
+// `MapMerkleRoot.lean`), pinned to the published-root PI. This realizes the `hpin` hypothesis of
+// the discharged Lean theorems (`UniversalBridge.crossCellRead_whole_image` /
+// `cross_cell_read_no_extra_cell` / `_teeth`): the committed peer heap IS the declared view, no
+// hidden cell. A peer heap with one extra/altered cell folds to a different root and can no longer
+// be pinned (the `mapRoot_injective` anti-ghost biting in-circuit).
+
+use dregg_circuit::whole_image_fold::{
+    build_whole_image_fold, prove_whole_image_fold, verify_whole_image_fold, whole_boundary_fold,
+};
+
+/// A peer with several non-zero committed fields, lowered to its published field-plane leaves (the
+/// whole-boundary view the cross-cell read declares).
+fn peer_with_fields(slots_values: &[(usize, u32)]) -> Vec<HeapLeaf> {
+    let mut peer = make_open_cell(31, 500);
+    for &(slot, v) in slots_values {
+        let mut b = [0u8; 32];
+        b[..4].copy_from_slice(&v.to_le_bytes());
+        peer.state.fields[slot] = b;
+    }
+    peer_field_heap(&peer).0
+}
+
+#[test]
+fn cross_cell_read_whole_image_folds_to_published_root() {
+    // A peer with a non-trivial field plane (three committed cells): the chip must fold ALL of
+    // them up the binary tree to the genuine published root.
+    let leaves = peer_with_fields(&[(1, 111), (3, 777), (5, 555)]);
+    assert!(leaves.len() >= 2, "the fold must be non-trivial");
+    let published = whole_boundary_fold(&leaves);
+
+    // HONEST whole-image read: the published commitment IS the fold of the entire declared view.
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+    let proof = prove_whole_image_fold(&witness)
+        .expect("the whole-boundary fold to the published root proves");
+    verify_whole_image_fold(&proof, &witness.public_inputs)
+        .expect("the whole-image fold verifies against the published commitment");
+}
+
+#[test]
+fn cross_cell_read_whole_image_extra_cell_refuses() {
+    // The peer's GENUINE committed heap holds an EXTRA cell (slot 7) the cross-cell read's declared
+    // boundary never names. Its real published root is the fold of ALL four cells.
+    let full = peer_with_fields(&[(1, 111), (3, 777), (5, 555), (7, 999)]);
+    let peer_published_root = whole_boundary_fold(&full);
+
+    // The DECLARED whole-boundary view omits the hidden cell (slot 7). Folding only the declared
+    // cells cannot reach the peer's real root: the `PiBinding{Last}` pin to the published root is
+    // unsatisfiable — the no-extra-cells tooth bites in-circuit.
+    let mut declared = full.clone();
+    declared.retain(|l| l.addr != BabyBear::new(7 + 1));
+    assert_eq!(declared.len(), full.len() - 1, "exactly one cell hidden");
+    assert_ne!(
+        whole_boundary_fold(&declared),
+        peer_published_root,
+        "the declared-view fold must differ from the hidden-cell root"
+    );
+
+    let witness =
+        build_whole_image_fold(&declared, peer_published_root).expect("declared view folds");
+    // The pin is a boundary constraint (not a pre-flight replay), so the refusal can surface as an
+    // Err or an in-circuit panic — either way no satisfying proof exists.
+    let outcome = std::panic::catch_unwind(|| prove_whole_image_fold(&witness));
+    let refused = match outcome {
+        Err(_) => true,
+        Ok(r) => r.is_err(),
+    };
+    assert!(
+        refused,
+        "a peer heap with an undeclared extra cell must refuse (the fold cannot reach its root)"
+    );
+}
+
+#[test]
+fn cross_cell_read_whole_image_tampered_value_refuses() {
+    // Tamper ONE declared cell's value while claiming the published root is the GENUINE fold: the
+    // chip's sorted insert recomputes the authentic post-root, which no longer matches the claimed
+    // chain link — the map-op reconciliation refuses.
+    let leaves = peer_with_fields(&[(1, 111), (3, 777), (5, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let mut witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+
+    // Bump the value installed by the first real insert row (guard == 1) — the genuine insert
+    // result will no longer equal the row's claimed new_root.
+    let row = witness
+        .trace
+        .iter_mut()
+        .find(|r| r[dregg_circuit::whole_image_fold::WIF_GUARD] == BabyBear::ONE)
+        .expect("a real insert row exists");
+    row[dregg_circuit::whole_image_fold::WIF_VALUE] =
+        row[dregg_circuit::whole_image_fold::WIF_VALUE] + BabyBear::ONE;
+
+    let outcome = std::panic::catch_unwind(|| prove_whole_image_fold(&witness));
+    let refused = match outcome {
+        Err(_) => true,
+        Ok(r) => r.is_err(),
+    };
+    assert!(
+        refused,
+        "a tampered declared value must refuse (the sorted insert recomputes a different root)"
     );
 }
