@@ -1024,6 +1024,59 @@ impl World {
         existed
     }
 
+    /// **Write a cell's universal-memory heap out-of-band and reseal its
+    /// committed `heap_root`** — the per-cell umem boundary (`UMEM-PRIMITIVE` §2,
+    /// §8; `cell/src/state.rs`: `set_heap` / `reseal_heap_root`). Replaces the
+    /// cell's `heap_map` wholesale (so a dropped leaf simply vanishes from the
+    /// boundary) and recomputes `heap_root` = sorted-Poseidon2 over the present
+    /// leaves, so the resealed boundary IS the cell's committed commitment.
+    ///
+    /// This is the document-on-umem ride ([`dregg_doc::DocHeapCell`]): the desktop
+    /// projects a document into its cell's umem-heap and reseals, so the
+    /// document's commitment IS that `heap_root`. The heap register is orthogonal
+    /// to `fields_map`/`fields_root` (a later `SetField` turn re-executes against,
+    /// and preserves, the written heap). Like [`Self::set_cell_program`] /
+    /// [`Self::genesis_grant_cap`], it installs committed state on a cell without
+    /// moving value or running a turn — there is no kernel heap effect, the writes
+    /// are ordinary heap writes the substrate already commits. Mirrored into the
+    /// replay-recorder's ledger so the recorded roots stay in lock-step.
+    ///
+    /// FAIL-FAST on a DURABLE image whose cell a committed turn already touched
+    /// (the genesis-mirror-after-turn bug): returns `false` rather than poison
+    /// reopen. The desktop's demo world is ephemeral, so this passes; a durable
+    /// runtime heap write awaits an ordered heap effect (HORIZONLOG seam). Returns
+    /// `true` if the cell existed and its boundary was resealed.
+    pub fn set_cell_heap(
+        &mut self,
+        cell: &CellId,
+        heap_map: std::collections::BTreeMap<(u32, u32), dregg_cell::FieldElement>,
+    ) -> bool {
+        if self.genesis_mutation_would_break_reopen(cell) {
+            return false;
+        }
+        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
+            c.state.heap_map = heap_map.clone();
+            c.state.reseal_heap_root();
+            true
+        } else {
+            false
+        };
+        // Keep the replay tape's ledger in lock-step so its recorded roots match
+        // the live engine's (the document cell carries the SAME umem boundary).
+        if let Some(c) = self.record_ledger.get_mut(cell) {
+            c.state.heap_map = heap_map;
+            c.state.reseal_heap_root();
+        }
+        // Durable genesis re-record (SEAM §2): the in-place heap write carries no
+        // `CommitRecord`, so persist the cell's new post-state for reopen.
+        if existed {
+            self.durable_regenesis(cell);
+        }
+        // Genesis-path ledger mutation without a height bump — bust the memo.
+        self.state_root_memo.set(None);
+        existed
+    }
+
     /// Deploy a [`FactoryDescriptor`] into the embedded executor's factory
     /// registry (the out-of-band genesis path — a node registers its factories
     /// the way it seeds genesis cells). Returns the factory's content-addressed
@@ -1782,6 +1835,13 @@ pub fn create_cell(seed: u8) -> Effect {
 /// Convenience: write `value` into state slot `index` of `cell`.
 pub fn set_field(cell: CellId, index: usize, value: dregg_cell::FieldElement) -> Effect {
     Effect::SetField { cell, index, value }
+}
+
+/// Convenience: advance `cell`'s nonce by one (the loop's step counter — the
+/// monotone half of the exact shape a confined deos-js agent's `fire("bump")`
+/// commits alongside its `SetField`).
+pub fn increment_nonce(cell: CellId) -> Effect {
+    Effect::IncrementNonce { cell }
 }
 
 /// Convenience: re-program `cell`'s [`CellProgram`] (its caveat table) as an

@@ -34,30 +34,17 @@ use std::sync::Arc;
 use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
 use gpui_wgpu::CosmicTextSystem;
 
-use starbridge_v2::deos_desktop::{DOC_TEXT_BASE, DeosDesktop};
+use starbridge_v2::deos_desktop::DeosDesktop;
 use starbridge_v2::world::demo_world;
 
 static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
 static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
-/// Read prose back out of a cell's committed heap (the desktop's `read_doc_from_heap`).
+/// Read prose back out of a cell's committed **umem-heap** (`heap_map`, collection
+/// `dregg_doc::COLL_TEXT`) — the same read the desktop's `read_doc_from_heap` does.
 fn read_doc(w: &starbridge_v2::world::World, cell: &dregg_types::CellId) -> Option<String> {
-    const CHUNK: usize = 32;
-    const MAX: u64 = 1024;
     let state = &w.ledger().get(cell)?.state;
-    let len_fe = state.get_field_ext(DOC_TEXT_BASE)?;
-    let byte_len = u64::from_le_bytes(len_fe[..8].try_into().ok()?) as usize;
-    let mut bytes = Vec::with_capacity(byte_len);
-    let mut chunk = 0u64;
-    while bytes.len() < byte_len && chunk < MAX {
-        let fe = state
-            .get_field_ext(DOC_TEXT_BASE + 1 + chunk)
-            .unwrap_or([0u8; 32]);
-        let take = (byte_len - bytes.len()).min(CHUNK);
-        bytes.extend_from_slice(&fe[..take]);
-        chunk += 1;
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    dregg_doc::text_from_heap(&state.heap_map)
 }
 
 #[test]
