@@ -238,18 +238,24 @@ fn incremental_accumulate_verifies_whole_history() {
         .expect("the accumulated whole-chain proof verifies under the honest VK anchor");
 
     // Cross-check the whole-history CLAIM against the K-fold balanced-tree artifact of the same 3
-    // turns: both attest the IDENTICAL (genesis, final, num_turns, chain_digest). (The root proofs
-    // differ in tree shape — hence different VK fingerprints — but the public claim agrees.)
+    // turns: both attest the IDENTICAL (genesis, final, num_turns) — the load-bearing endpoints +
+    // count. (The root proofs differ in tree shape — hence different VK fingerprints — but the
+    // endpoints + count agree.)
+    //
+    // NOTE on the digest: the K-fold now uses the ORDERED SEGMENT-ACCUMULATOR (codex's fix for the
+    // mixed-root hole) — each descriptor leaf carries `[first_old, last_new, count, acc]` and the
+    // BALANCED-TREE combine folds `acc = H(L.acc, R.acc)`. The online accumulator instead carries
+    // the SEQUENTIAL binding-AIR `hash_4_to_1` chain digest over its LEFT-LINEAR fold. The two are
+    // each internally-sound ordered-history commitments but, being different fold structures over
+    // different per-step hashes, they are NOT bit-equal — so we deliberately do NOT assert digest
+    // equality here. Each artifact's own `verify_turn_chain_recursive` binds its own carried digest
+    // to its own root-exposed value (the segment tooth), which is what soundness requires.
     let (turns2, _g2, _f2) = make_chain(1000, 0, 11, 3);
     let kfold: WholeChainProof =
         prove_turn_chain_recursive(&turns2).expect("the K-fold of the same chain proves");
     assert_eq!(kfold.genesis_root, whole.genesis_root, "genesis agrees");
     assert_eq!(kfold.final_root, whole.final_root, "final agrees");
     assert_eq!(kfold.num_turns, whole.num_turns, "num_turns agrees");
-    assert_eq!(
-        kfold.chain_digest, whole.chain_digest,
-        "the ordered-history digest agrees (running fold == balanced tree)"
-    );
 }
 
 /// **THE VK-IDENTITY-PIN TOOTH (lever (a), in-band).** A child proof whose VK-identity (its
