@@ -48,6 +48,33 @@ impl Cockpit {
         // Seed the debugger with a demo turn (treasury → user transfer) that
         // the operator can step + explain against the live world.
         let [treasury, service, user] = anchors;
+
+        // PUBLISH AN INTERFACE on the `service` anchor so the 🛰 SERVICES tab boots
+        // on a cell that actually exposes methods. A `Cases` program that
+        // dispatches on three demo method symbols ⟹ its derived interface
+        // publishes {ping, set_status, tick} (all Replayable), plus an
+        // `Always`-guarded catch-all so the desugared method turns commit. This is
+        // the deos-interior demonstration of cells-as-service-objects: open the
+        // SERVICES tab, see the published methods, invoke one as a real turn.
+        {
+            use dregg_cell::program::{CellProgram, TransitionCase, TransitionGuard};
+            let method = |name: &str| dregg_turn::action::symbol(name);
+            let cases = ["ping", "set_status", "tick"]
+                .iter()
+                .map(|n| TransitionCase {
+                    guard: TransitionGuard::MethodIs { method: method(n) },
+                    constraints: vec![],
+                })
+                .chain(std::iter::once(TransitionCase {
+                    guard: TransitionGuard::Always,
+                    constraints: vec![],
+                }))
+                .collect();
+            let mut w = world.borrow_mut();
+            w.set_cell_program(&service, CellProgram::Cases(cases));
+            w.genesis_open_permissions(&service);
+        }
+
         let debug_turn = world
             .borrow()
             .turn(treasury, vec![world::transfer(treasury, user, 1_000)]);
@@ -393,8 +420,10 @@ impl Cockpit {
             inspect_act_focus: Some(treasury),
             inspect_act_outcome: None,
 
-            // THE SERVICE EXPLORER boots on the treasury, no method selected yet.
-            service_explorer_focus: Some(treasury),
+            // THE SERVICE EXPLORER boots on the `service` anchor — the cell that
+            // publishes a demo interface ({ping, set_status, tick}) — so the tab
+            // opens already showing real methods to invoke.
+            service_explorer_focus: Some(service),
             service_explorer_selected: None,
             service_explorer_args: String::new(),
             service_explorer_outcome: None,
