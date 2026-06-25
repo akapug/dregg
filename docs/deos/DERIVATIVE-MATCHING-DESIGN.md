@@ -1,13 +1,24 @@
 # dregg's Own Boolean-Closed Derivative-Matching Theory — over `Pred`
 
-Read-only design/research doc. It designs a Brzozowski/Antimirov **symbolic
-derivative** theory for matching, **built over dregg's existing `Pred` algebra**
-(`metatheory/Dregg2/Exec/PredAlgebra.lean`), proven in dregg's own Lean — using
-the Zhuchko–Veanes–Ebner ERE≤ formalization at `~/dev/_research/extended-regexes`
-purely as a **proven blueprint / reference architecture**, never as a code
-dependency. Nothing in dregg's kernel, effects, circuit, or Lean was changed to
-produce it. Several claims are flagged *unverified* / *to-be-checked*; this is a
-plan for the owner to decide on, not a landing.
+A Brzozowski/Antimirov **symbolic derivative** theory for matching, **built over
+dregg's existing `Pred` algebra** (`metatheory/Dregg2/Exec/PredAlgebra.lean`),
+proven in dregg's own Lean — using the Zhuchko–Veanes–Ebner ERE≤ formalization at
+`~/dev/_research/extended-regexes` purely as a **proven blueprint / reference
+architecture**, never as a code dependency. The in-circuit DFA-AIR is untouched.
+
+> **Status at HEAD.** This is now mostly LANDED, in `metatheory/Dregg2/Crypto/Deriv/`,
+> every file `#assert_axioms`-clean and `sorry`-free. The `PredRE` inductive +
+> `null`/`der`/`derives`/`Matches` (Stage 0, `Core.lean:39,81,97,110,221`), the
+> `correctness : derives ↔ Matches` re-proof (Stage 1, `Correctness.lean:267`), the
+> Rust `Pattern::Not` deny-filter through the derivative front-end (Stage 2,
+> `dfa/src/compiler.rs:404,911`), Brzozowski `der_finite` (Stage 3 capstone,
+> `Finiteness.lean:298`), and the `tableDfa_faithful` keystone + `determinizer_faithful`
+> close (Stage 4, `TableDfa.lean:133`, `Powerset.lean:150`) are all built. The single
+> remaining open obligation is `ThompsonRecognizes` (Thompson-construction
+> correctness — `Thompson.lean:131`), discharged for the canonical single-symbol
+> automaton (`symENfa_recognizes`, `Thompson.lean:215`) but open for the
+> concat/star/union induction (mathlib provides no Thompson correctness). The rest of
+> this doc reads as the grounded design; §5.1 carries the per-stage landed status.
 
 The owner's stance, made precise: **dregg's `Pred` is already the EBA shape**
 (a free Boolean algebra over predicate atoms, folded to `Bool` against a
@@ -454,43 +465,45 @@ real reduction in mathlib dependency versus the port route.
 
 ## 5. Staged path + honest scope, risks, and the right-skew hazard
 
-### 5.1 Staged path (additive-then-cutover; the circuit never changes shape)
+### 5.1 Staged path — per-stage status at HEAD
 
-Lands the always-good, low-risk pieces first; the speculative stateful lift last.
+The circuit never changes shape; the always-good low-risk pieces landed first, the
+speculative stateful lift is still gated.
 
-- **Stage 0 — `PredRE` + `der`/`derives` + `Matches`, with non-vacuity
-  `#guard`s.** Define the inductive and the three functions over `σ := Value`
-  (and a `σ := byte` instance for routing); ship `#guard`/`by decide` witnesses
-  that `der`/`derives` admit and reject real words (the dregg discipline:
-  non-vacuity both polarities, mirroring `PredAlgebra.lean:489-508`). *No
-  correctness yet, no circuit touch.* Pure new Lean, disjoint file.
-- **Stage 1 — `correctness : derives ↔ Matches` (Edge A).** Re-prove the seven
-  `derives_<ctor>` lemmas + `correctness` over `PredRE`, `star_metric`
-  termination. This is the bounded, reference-guided port (§4) — weeks, not
-  months. Delivers a *verified streaming matcher* (verified, not yet fast).
-- **Stage 2 — `Pattern::Not` + derivative `inter`/`neg` compiler (Rust,
-  out-of-circuit, the FilterTree payoff).** Add `Pattern::Not` (`compiler.rs`),
-  swap the FilterTree's eager `dfa_intersection` fold for the derivative
-  front-end emitting the same flat `Dfa`. Deny-filters become expressible. Still
-  emits a flat `Dfa`; AIR untouched.
-- **Stage 3 — `der_finite` (Edge B, hard core #1).** The Brzozowski
-  finiteness-up-to-similarity theorem over `PredRE`. Months. Reference:
-  `finiteness-derivatives` (ITP'25), read-only.
-- **Stage 4 — `derivativeCompile_eq_tableDfa` (Edge B, hard core #2 + the
-  faithfulness close).** The determinization-equivalence (likely up to
-  language/bisim, which suffices for the table-opaque AIR). Chains A ∘ B ∘ C into
-  the end-to-end "compiled boolean semantics is trusted" theorem. **This is the
-  whole reason to do the Lean work.** Months.
-- **Stage 5 — the stateful `(old,new)` lift (speculative, gated, last).** Only if
-  the σ-instantiation proves sound: lift `Pred` to `σ := (Value × Value)` so the
-  reactive atoms work, with the previous frame threaded as derivative residual
-  state. This is the policy/caveat-trace unification (`BOOLEAN-MATCHING-REGROUND.md`
-  §4.2(2), §4.3 Stage 5) — and the right-skew hazard (§5.3) lives *entirely*
-  here.
-
-Stages 0–2 are good independent of the unification (a verified matcher + the
-missing deny-filter). Stages 3–4 are the load-bearing faithfulness close. Stage 5
-is a genuine open research question, not a foregone conclusion.
+- **Stage 0 — `PredRE` + `der`/`derives` + `Matches`: LANDED** (`Core.lean:39,81,97,
+  110,221`). The inductive and the three functions over `σ := Value` (with a `σ :=
+  byte` routing instance), with non-vacuity `#guard`/`by decide` witnesses (both
+  polarities, the dregg discipline). `#assert_axioms`-clean.
+- **Stage 1 — `correctness : derives ↔ Matches` (Edge A): LANDED**
+  (`Correctness.lean:267`). The seven `derives_<ctor>` lemmas + `correctness` over
+  `PredRE` with `star_metric` termination, re-proven fresh over `Pred`. A verified
+  streaming matcher (verified, not engineered-fast). `#assert_axioms`-clean.
+- **Stage 2 — `Pattern::Not` + derivative compiler (Rust, out-of-circuit): LANDED**
+  (`dfa/src/compiler.rs:404` the `Not` variant, `:559` `to_re().not()`, `:692,911`
+  the deny-filter compiled through the derivative path emitting the same flat `Dfa`).
+  Deny-filters ("match everything except a revoked namespace") are now expressible;
+  the AIR is untouched.
+- **Stage 3 — `der_finite` (Edge B, hard core #1): LANDED** (`Finiteness.lean:298`,
+  capstone). Brzozowski finiteness-up-to-similarity over `PredRE`: a FIXED finite
+  list of regexes covers every derivative class. `#assert_axioms`-clean (subset
+  `{propext, Classical.choice, Quot.sound}`). Reference: `finiteness-derivatives`
+  (ITP'25), read-only.
+- **Stage 4 — the faithfulness close: LANDED MODULO one factor.** The keystone
+  `tableDfa_faithful` (`TableDfa.lean:133`) trusts ANY flat table whose `accepts`
+  agrees with `derives`; `determinizer_faithful` (`Powerset.lean:150`) discharges
+  that contract for the table the determinizer emits, making the compiled boolean
+  semantics a THEOREM. The deployed determinized table is shown faithful to
+  `Matches` (`legacy_determinized_faithful`, `Thompson.lean:141`) modulo the one
+  remaining obligation `ThompsonRecognizes` (`Thompson.lean:131`) — Thompson-
+  construction correctness — which mathlib does not provide (it routes regex→language
+  through Brzozowski derivatives, not Thompson). It is **inhabited / non-vacuous**
+  via `symENfa_recognizes` (`Thompson.lean:215`, the canonical single-symbol
+  automaton); the inductive concat/star/union case (ε-closure-across-the-join) is the
+  genuine remaining wall.
+- **Stage 5 — the stateful `(old,new)` lift: STILL GATED / open research.** Lift
+  `Pred` to `σ := (Value × Value)` so the reactive atoms work, with the previous
+  frame threaded as derivative residual state. The policy/caveat-trace unification —
+  and the right-skew hazard (§5.3) lives *entirely* here. Not a foregone conclusion.
 
 ### 5.2 What stays exactly as-is
 
@@ -609,19 +622,21 @@ no toolchain conflict) and inherits the proof *architecture* for free, paying
 only the bounded cost of re-deriving the lookaround-free fragment (Stages 0–1,
 weeks).
 
-What remains genuinely hard is unchanged by the stance and is the whole point:
-the **load-bearing new theorem `derivativeCompile ≡ tableDfa`** (§3) — Brzozowski
-**finiteness-up-to-similarity** (`der_finite`) plus the **determinization-
-equivalence** to dregg's powerset table — months of real automata theory that
-neither codebase has, that bridges "derivative-class" and "powerset-of-NFA-state"
-representations, and that makes the compiled boolean semantics *trusted* under
-the otherwise-clean AIR proof. The recommendation: land Stages 0–2 (a verified
-`PredRE` matcher + the missing `Pattern::Not` deny-filter — good independent of
-everything), then invest in Stages 3–4 (the faithfulness close), and treat Stage
-5 (the reactive `(old,new)` lift) as a gated open research question whose **single
-binding soundness constraint** is the right-skew: derivatives decide *language*
-questions, `decideRefines` decides *reactive-simulation* questions, and the two
-must never be conflated.
+The **load-bearing theorem `derivativeCompile ≡ tableDfa`** (§3) is now built —
+Brzozowski **finiteness-up-to-similarity** (`der_finite`, `Finiteness.lean:298`)
+plus the **determinization-equivalence** that makes the compiled boolean semantics
+*trusted* under the otherwise-clean AIR proof (`tableDfa_faithful` +
+`determinizer_faithful`, `TableDfa.lean:133` / `Powerset.lean:150`). The
+representation bridge ("derivative-class" ↔ "powerset-of-NFA-state") goes through
+mathlib's verified subset construction; the single remaining obligation is
+`ThompsonRecognizes` (`Thompson.lean:131`, the left/Thompson factor) — inhabited
+for the single-symbol case (`symENfa_recognizes`), open for the concat/star/union
+induction. Stages 0–2 (the verified `PredRE` matcher + the `Pattern::Not`
+deny-filter) and Stages 3–4 (the faithfulness close, modulo `ThompsonRecognizes`)
+are landed; Stage 5 (the reactive `(old,new)` lift) stays a gated open research
+question whose **single binding soundness constraint** is the right-skew:
+derivatives decide *language* questions, `decideRefines` decides *reactive-
+simulation* questions, and the two must never be conflated.
 
 ### Cited sources
 
