@@ -507,6 +507,103 @@ boot();\n",
     )
 }
 
+/// A full, browser-loadable HTML document for the **DOCUMENT-COLLABORATION surface** that is
+/// **LIVE** — the Pijul/conflicts-as-objects flow (fork → diverge → stitch → a first-class
+/// conflict → resolve → publish), node-less, in a browser tab.
+///
+/// Unlike the other live cards (whose tree SHAPE is static — a click only re-paints a `data-slot`
+/// bind), this surface's tree CHANGES on a resolve: a `stitch` surfaces a ConflictView (the two
+/// alternatives attributed side-by-side + a resolution `Button` per choice), and a `resolve`
+/// collapses it to the clean published document. So the bootstrap re-renders WHOLESALE after every
+/// affordance: the in-tab `DocCollabWorld` (`wasm/src/bindings_doc.rs`) renders its OWN view-tree
+/// to HTML through THIS gpui-free renderer (`card.viewHtml()`), and the page sets it as the doc
+/// container's `innerHTML`. A delegated click handler on the container fires each `.deos-button`'s
+/// `{turn, arg}` as a REAL cap-gated verified turn over the embedded executor; a `resolve`
+/// publishes the merged document to the doc-cell's umem-heap (the boundary `heap_root` moves) and
+/// the status strip re-reads the live umem boundary + receipt count.
+///
+/// `pkg_url` is the wasm bundle's JS-shim URL. Must be served over HTTP (`file://` is CORS-blocked
+/// for the module import + `.wasm` fetch).
+pub fn render_doccollab_live_document(title: &str, pkg_url: &str) -> String {
+    let bootstrap = format!(
+        "import init, {{ DocCollabWorld }} from '{pkg}';\n\
+async function boot() {{\n\
+  const status = document.getElementById('deos-status');\n\
+  const root = document.getElementById('deos-doc-root');\n\
+  try {{\n\
+    await init();                          // instantiate the wasm module\n\
+    const card = new DocCollabWorld();     // mint the in-tab doc-cell + verified executor (fork + publish base)\n\
+    window.__deosDoc = card;               // the affordance wire fires real turns into this\n\
+    function refreshStatus() {{\n\
+      if (!status || !window.__deosDoc) return;\n\
+      const c = window.__deosDoc;\n\
+      const state = c.hasConflict() ? 'conflict HELD off-heap' : 'published ✓';\n\
+      status.textContent = 'doc-cell ' + c.cellId().slice(0, 10) + '… · umem boundary ' + c.commitmentHex().slice(0, 12) + '… · receipts ' + c.receiptCount() + ' · ' + state;\n\
+    }}\n\
+    function rerender() {{\n\
+      // The in-tab DocCollabWorld renders its OWN view-tree to HTML via the SAME gpui-free web\n\
+      // renderer; the tree SHAPE changes (ConflictView ⇄ published doc) so we re-render wholesale.\n\
+      root.innerHTML = window.__deosDoc.viewHtml();\n\
+      refreshStatus();\n\
+    }}\n\
+    // Delegated affordance wire: dynamically-added resolution buttons work after a re-render.\n\
+    root.addEventListener('click', function(e) {{\n\
+      const b = e.target.closest('.deos-button');\n\
+      if (!b) return;\n\
+      const turn = b.getAttribute('data-turn');\n\
+      const arg = parseInt(b.getAttribute('data-arg') || '0', 10);\n\
+      document.dispatchEvent(new CustomEvent('deos-affordance', {{ detail: {{ turn: turn, arg: arg }} }}));\n\
+      try {{\n\
+        window.__deosDoc.fire(turn, arg);  // stitch (the pushout) OR resolve+publish (a verified turn)\n\
+        rerender();                        // the tree re-renders: ConflictView ⇄ published document\n\
+      }} catch (err) {{\n\
+        console.error('deos doc affordance refused (no turn committed):', turn, arg, err);\n\
+      }}\n\
+    }});\n\
+    rerender();\n\
+  }} catch (e) {{\n\
+    if (status) status.textContent = 'wasm load failed: ' + e;\n\
+    console.error('deos: doc-collab wasm executor failed to load', e);\n\
+  }}\n\
+}}\n\
+boot();\n",
+        pkg = pkg_url,
+    );
+    format!(
+        "<!doctype html>\n\
+<html lang=\"en\">\n\
+<head>\n\
+<meta charset=\"utf-8\">\n\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+<title>{title}</title>\n\
+<style>{CSS}{LIVE_CSS}{DOC_CSS}</style>\n\
+</head>\n\
+<body>\n\
+<a class=\"deos-back\" href=\"./\">&lsaquo; all cards</a>\n\
+<main class=\"deos-card\"><div id=\"deos-doc-root\"></div><div class=\"deos-status\" id=\"deos-status\">loading the in-tab verified executor…</div></main>\n\
+<script>{JS}</script>\n\
+<script type=\"module\">{bootstrap}</script>\n\
+</body>\n\
+</html>\n",
+        title = escape(title),
+        CSS = CSS,
+        LIVE_CSS = LIVE_CSS,
+        DOC_CSS = DOC_CSS,
+        JS = JS,
+        bootstrap = bootstrap,
+    )
+}
+
+/// Extra styling for the document-collaboration surface: the side-by-side ConflictView columns
+/// (one per attributed alternative) + readable prose runs. Shares the cockpit dark palette.
+const DOC_CSS: &str = "
+.deos-card .deos-text{white-space:pre-wrap;line-height:1.5;}
+#deos-doc-root > .deos-vstack > .deos-row{align-items:stretch;gap:1rem;}
+#deos-doc-root > .deos-vstack > .deos-row > .deos-vstack{flex:1;background:#15171d;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:.5rem .75rem;}
+#deos-doc-root > .deos-vstack > .deos-row > .deos-vstack > .deos-text:first-child{color:var(--accent);font-weight:700;}
+#deos-doc-root .deos-button{margin:.15rem 0;text-align:left;}
+";
+
 /// One card in the gallery: the page to open, its name, and a one-line blurb of what
 /// clicking it does. (`href` is a same-dir page in the served `dist/`, e.g.
 /// `"counter.html"`; `name`/`blurb` are the tile's title + subtitle.)

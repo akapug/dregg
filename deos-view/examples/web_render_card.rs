@@ -21,8 +21,8 @@ use std::path::PathBuf;
 
 use deos_view::{
     GalleryCard, parse_view_tree, render_card_document, render_card_live_document,
-    render_gallery_document, render_html, render_inspector_live_document,
-    render_kvstore_live_document, render_tally_live_document,
+    render_doccollab_live_document, render_gallery_document, render_html,
+    render_inspector_live_document, render_kvstore_live_document, render_tally_live_document,
 };
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the
@@ -446,6 +446,40 @@ fn main() {
         "the live store page imports + mints the in-tab service cell and re-paints each row + version"
     );
 
+    // ── 6d. Bake the LIVE DOCUMENT-COLLABORATION page — Pijul/conflicts-as-objects, node-less ──
+    // The in-tab `DocCollabWorld` (`wasm/src/bindings_doc.rs`) drives the WHOLE flow: a doc-cell
+    // carries a base document published to its umem-heap (the fork); clicking `stitch` diverges
+    // two authors off the shared tail and `merge`s them (the categorical pushout), surfacing a
+    // first-class conflict HELD off-heap; the ConflictView renders the two alternatives attributed
+    // side-by-side with a resolution `Button` per ready choice; clicking one collapses the conflict
+    // and PUBLISHES the merged document to the doc-cell's umem-heap as a REAL verified turn (the
+    // boundary `heap_root` moves, a receipt is left). The tree re-renders WHOLESALE after every
+    // affordance (the SHAPE changes), so the page sets `card.viewHtml()` as the container innerHTML
+    // — the SAME gpui-free web renderer, driven from the wasm side.
+    let live_doc =
+        render_doccollab_live_document("deos document collaboration — live", "./pkg/dregg_wasm.js");
+    let plive_doc = dist.join("doccollab.html");
+    std::fs::write(&plive_doc, &live_doc).expect("write the live doccollab.html");
+
+    // ── PROVE the doc-collab page is wired (not merely written) ───────────────────────
+    assert!(
+        live_doc.contains("./pkg/dregg_wasm.js")
+            && live_doc.contains("import init, { DocCollabWorld }"),
+        "the live doc-collab page imports the wasm bundle's `init` + `DocCollabWorld`"
+    );
+    assert!(
+        live_doc.contains("new DocCollabWorld()") && live_doc.contains("window.__deosDoc = card"),
+        "the live doc-collab page mints the in-tab doc-cell verified executor"
+    );
+    assert!(
+        live_doc.contains("window.__deosDoc.viewHtml()") && live_doc.contains("root.innerHTML"),
+        "the surface re-renders wholesale from the wasm-side web renderer (the ConflictView ⇄ published doc)"
+    );
+    assert!(
+        live_doc.contains(".fire(turn, arg)") && live_doc.contains("deos-doc-root"),
+        "a delegated click fires each affordance (stitch / resolve+publish) as a real verified turn"
+    );
+
     // ── 7. Bake the GALLERY / card-picker as the served home page (`/` = index.html) ──
     // Without a front door a visitor lands on one card and never finds the others. This is
     // a plain-HTML (no-wasm) landing of clickable tiles, one per live card — the
@@ -482,6 +516,15 @@ fn main() {
                         SetField effects — a real verified turn against the store, the monotone \
                         version bumping (a rollback is refused; get is a named OFE seam).",
             },
+            GalleryCard {
+                href: "doccollab.html",
+                name: "Document Collaboration",
+                blurb: "Pijul, in a tab. Fork a document, diverge two authors, then stitch — the \
+                        categorical pushout surfaces a first-class CONFLICT (both alternatives \
+                        attributed side-by-side, held off-heap). Click to resolve and the merged \
+                        document publishes to the doc-cell's umem-heap as a real verified turn — \
+                        the boundary heap_root moves, a receipt is left.",
+            },
         ],
     );
     let pgallery = dist.join("index.html");
@@ -492,15 +535,17 @@ fn main() {
         gallery.contains("href=\"counter.html\"")
             && gallery.contains("href=\"inspector.html\"")
             && gallery.contains("href=\"tally.html\"")
-            && gallery.contains("href=\"kvstore.html\""),
-        "the gallery links to ALL FOUR live card pages (the card-picker)"
+            && gallery.contains("href=\"kvstore.html\"")
+            && gallery.contains("href=\"doccollab.html\""),
+        "the gallery links to ALL FIVE live card pages (the card-picker)"
     );
     assert!(
         gallery.contains("Counter")
             && gallery.contains("Reflective Inspector")
             && gallery.contains("Tally Board")
-            && gallery.contains("KV-Store (service cell)"),
-        "the gallery names all four cards"
+            && gallery.contains("KV-Store (service cell)")
+            && gallery.contains("Document Collaboration"),
+        "the gallery names all five cards"
     );
 
     eprintln!("deos-view web projection baked (gpui-free):");
@@ -512,6 +557,7 @@ fn main() {
     eprintln!("  LIVE inspector page  : {}", plive_insp.display());
     eprintln!("  LIVE tally page      : {}", plive_tally.display());
     eprintln!("  LIVE kvstore page    : {}", plive_kv.display());
+    eprintln!("  LIVE doc-collab page : {}", plive_doc.display());
     eprintln!();
     eprintln!("To serve the LIVE deos (a card firing real cap-gated verified turns in a TAB):");
     eprintln!("  1. wasm-pack build wasm --target web --out-dir pkg --release");

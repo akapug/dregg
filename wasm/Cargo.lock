@@ -799,6 +799,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-view"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "der"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1065,6 +1074,14 @@ dependencies = [
  "blake3",
  "postcard",
  "serde",
+]
+
+[[package]]
+name = "dregg-doc"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
 ]
 
 [[package]]
@@ -1391,6 +1408,7 @@ dependencies = [
  "bs58",
  "clear_on_drop",
  "deos-reflect",
+ "deos-view",
  "dregg-captp",
  "dregg-cell",
  "dregg-cell-crypto",
@@ -1400,6 +1418,7 @@ dependencies = [
  "dregg-coord",
  "dregg-deploy",
  "dregg-dfa",
+ "dregg-doc",
  "dregg-federation",
  "dregg-intent",
  "dregg-lightclient",
