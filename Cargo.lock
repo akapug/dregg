@@ -3329,8 +3329,8 @@ dependencies = [
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui-component",
  "gpui-component-assets",
- "gpui_platform",
- "gpui_wgpu",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "hex",
  "image",
  "libc",
@@ -3382,8 +3382,8 @@ dependencies = [
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui-component",
  "gpui-component-assets",
- "gpui_platform",
- "gpui_wgpu",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "image",
  "matrix-sdk",
  "mime",
@@ -3419,7 +3419,7 @@ dependencies = [
  "bitflags 2.13.0",
  "futures-util",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
- "gpui_platform",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "js-sys",
  "libc",
  "log",
@@ -3442,10 +3442,10 @@ dependencies = [
  "deos-js",
  "dregg-cell",
  "dregg-types",
- "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
  "gpui-component",
- "gpui_platform",
- "gpui_wgpu",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
  "image",
  "serde",
  "serde_json",
@@ -3477,8 +3477,8 @@ dependencies = [
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui-component",
  "gpui-component-assets",
- "gpui_platform",
- "gpui_wgpu",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "image",
  "lockstitch",
  "ropey",
@@ -6386,6 +6386,7 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "async-task",
+ "backtrace",
  "bindgen 0.71.1",
  "bitflags 2.13.0",
  "block",
@@ -6429,6 +6430,7 @@ dependencies = [
  "pollster 0.4.0",
  "postage",
  "profiling",
+ "proptest 1.10.0",
  "rand 0.9.4",
  "raw-window-handle",
  "refineable 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
@@ -6659,7 +6661,7 @@ dependencies = [
  "anyhow",
  "futures",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
- "gpui_wgpu",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "jni 0.21.1",
  "libc",
  "log",
@@ -6669,6 +6671,57 @@ dependencies = [
  "raw-window-handle",
  "smallvec",
  "uuid",
+]
+
+[[package]]
+name = "gpui_linux"
+version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "accesskit",
+ "accesskit_unix",
+ "anyhow",
+ "as-raw-xcb-connection",
+ "ashpd",
+ "bitflags 2.13.0",
+ "bytemuck",
+ "calloop",
+ "calloop-wayland-source",
+ "collections 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "filedescriptor",
+ "futures",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "http_client 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "image",
+ "itertools 0.14.0",
+ "libc",
+ "log",
+ "oo7",
+ "open",
+ "parking_lot 0.12.5",
+ "pathfinder_geometry",
+ "pollster 0.4.0",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "smol",
+ "strum 0.27.2",
+ "swash",
+ "url",
+ "util 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "uuid",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-cursor",
+ "wayland-protocols",
+ "wayland-protocols-plasma",
+ "wayland-protocols-wlr",
+ "x11-clipboard",
+ "x11rb",
+ "xkbcommon",
+ "zed-scap",
+ "zed-xim",
 ]
 
 [[package]]
@@ -6689,7 +6742,7 @@ dependencies = [
  "filedescriptor",
  "futures",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
- "gpui_wgpu",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "http_client 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "image",
  "itertools 0.14.0",
@@ -6720,6 +6773,53 @@ dependencies = [
  "xkbcommon",
  "zed-scap",
  "zed-xim",
+]
+
+[[package]]
+name = "gpui_macos"
+version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "accesskit",
+ "accesskit_macos",
+ "anyhow",
+ "async-task",
+ "block",
+ "cbindgen",
+ "cocoa 0.26.0",
+ "collections 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "core-foundation 0.10.0",
+ "core-foundation-sys",
+ "core-graphics 0.24.0",
+ "core-text 21.0.0",
+ "core-video",
+ "ctor",
+ "derive_more 2.1.1",
+ "dispatch2",
+ "etagere",
+ "foreign-types 0.5.0",
+ "futures",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "image",
+ "itertools 0.14.0",
+ "libc",
+ "log",
+ "mach2 0.5.0",
+ "media 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "metal 0.33.0",
+ "objc",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "parking_lot 0.12.5",
+ "pathfinder_geometry",
+ "raw-window-handle",
+ "semver",
+ "smallvec",
+ "strum 0.27.2",
+ "util 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "uuid",
+ "zed-font-kit",
 ]
 
 [[package]]
@@ -6794,15 +6894,28 @@ dependencies = [
 [[package]]
 name = "gpui_platform"
 version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "console_error_panic_hook",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_linux 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_macos 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_web 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_windows 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+]
+
+[[package]]
+name = "gpui_platform"
+version = "0.1.0"
 source = "git+https://github.com/emberian/zed?rev=adb9026524#adb9026524d3fbc30dcf6e86ca016136435c285c"
 dependencies = [
  "console_error_panic_hook",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui_android",
- "gpui_linux",
- "gpui_macos",
- "gpui_web",
- "gpui_windows",
+ "gpui_linux 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_macos 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_web 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_windows 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
 ]
 
 [[package]]
@@ -6846,13 +6959,37 @@ dependencies = [
 [[package]]
 name = "gpui_web"
 version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "anyhow",
+ "console_error_panic_hook",
+ "futures",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "http_client 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "js-sys",
+ "log",
+ "parking_lot 0.12.5",
+ "raw-window-handle",
+ "smallvec",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm_thread",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "gpui_web"
+version = "0.1.0"
 source = "git+https://github.com/emberian/zed?rev=adb9026524#adb9026524d3fbc30dcf6e86ca016136435c285c"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
  "futures",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
- "gpui_wgpu",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "http_client 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "js-sys",
  "log",
@@ -6865,6 +7002,36 @@ dependencies = [
  "wasm_thread",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "gpui_wgpu"
+version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "collections 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "cosmic-text",
+ "etagere",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "gpui_util 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "image",
+ "itertools 0.14.0",
+ "js-sys",
+ "log",
+ "parking_lot 0.12.5",
+ "pollster 0.4.0",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "swash",
+ "unicode-segmentation",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+ "zed-font-kit",
 ]
 
 [[package]]
@@ -6895,6 +7062,33 @@ dependencies = [
  "web-sys",
  "wgpu",
  "zed-font-kit",
+]
+
+[[package]]
+name = "gpui_windows"
+version = "0.1.0"
+source = "git+https://github.com/emberian/zed?rev=54fbcb6943#54fbcb6943f86a742e3c33fa96e86a16281cf051"
+dependencies = [
+ "accesskit",
+ "accesskit_windows",
+ "anyhow",
+ "collections 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "etagere",
+ "futures",
+ "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "image",
+ "itertools 0.14.0",
+ "log",
+ "parking_lot 0.12.5",
+ "rand 0.9.4",
+ "raw-window-handle",
+ "smallvec",
+ "util 0.1.0 (git+https://github.com/emberian/zed?rev=54fbcb6943)",
+ "uuid",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+ "windows-numerics 0.2.0",
+ "windows-registry 0.5.3",
 ]
 
 [[package]]
@@ -11203,6 +11397,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=8d42900357f0140851e0098fab84b93995c498e9#8d42900357f0140851e0098fab84b93995c498e9"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -11229,6 +11424,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=8d42900357f0140851e0098fab84b93995c498e9#8d42900357f0140851e0098fab84b93995c498e9"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -11504,6 +11700,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=8d42900357f0140851e0098fab84b93995c498e9#8d42900357f0140851e0098fab84b93995c498e9"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -11553,6 +11750,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=8d42900357f0140851e0098fab84b93995c498e9#8d42900357f0140851e0098fab84b93995c498e9"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -11576,6 +11774,7 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=8d42900357f0140851e0098fab84b93995c498e9#8d42900357f0140851e0098fab84b93995c498e9"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -16800,8 +16999,8 @@ dependencies = [
  "getrandom 0.4.3",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui-component",
- "gpui_platform",
- "gpui_wgpu",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
+ "gpui_wgpu 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "hex",
  "image",
  "js-sys",
@@ -16849,7 +17048,7 @@ dependencies = [
  "getrandom 0.3.4",
  "gpui 0.2.2 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "gpui-component",
- "gpui_platform",
+ "gpui_platform 0.1.0 (git+https://github.com/emberian/zed?rev=adb9026524)",
  "hex",
  "js-sys",
  "log",
