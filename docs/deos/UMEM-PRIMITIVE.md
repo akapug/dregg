@@ -2,19 +2,20 @@
 
 A *umem* is **a witnessed key→value store whose committed root is its boundary**: a
 `(domain, key) → value` address space, a Blum memory-checking trace of the accesses to it,
-and a sorted-Poseidon2 root over its final present cells that any verifier can bind to. Today
-dregg has exactly ONE umem — the whole world's state, in five domains
-(`turn/src/umem.rs:90`, `metatheory/Dregg2/Crypto/UniversalMemory.lean:75`). This doc designs
-umem as a **reusable primitive**: per-cell heaps, transient working memories, *passable*
-intermediate states, and composed umems — all the same construct.
+and a sorted-Poseidon2 root over its final present cells that any verifier can bind to. dregg's
+whole-world state is one umem, in six domains (`turn/src/umem.rs:99–118` — `Registers`/`Heap`/
+`Caps`/`Nullifiers`/`Index`/`Working`; `metatheory/Dregg2/Crypto/UniversalMemory.lean:75`). The
+primitive is now **reusable**: per-cell
+heaps, transient working memories, *passable* intermediate states, and composed umem-refs — all
+the same construct, built and proven.
 
-The enabler this doc assumes (landing in parallel): **the boundary-binding keystone** —
-`boundary_init_root_bound` / `boundary_init_root_derived`
-(`metatheory/Dregg2/Crypto/UniversalMemory.lean:463,475`) welded into the circuit so a umem's
-*init* image is pinned to a committed root supplied as a public input, the same way the *final*
-image already is (`boundary_root_from_memcheck`, line 429). With both edges bound, a umem
-becomes a value you can **hand off and resume**: the receiver re-pins the init root and inherits
-soundness. That is what unlocks uses 2–4.
+**The boundary-binding keystone is landed** (`99a8dc94`): `boundary_init_root_derived` /
+`boundary_init_root_bound` (`metatheory/Dregg2/Crypto/UniversalMemory.lean:463,475`,
+`#assert_axioms`-clean lines 868–869) pin a umem's *init* image to a committed root supplied as
+a public input, the same way the *final* image already is (`boundary_root_from_memcheck`, line
+429). With both edges bound, a umem is a value you **hand off and resume**: the receiver re-pins
+the init root and inherits soundness — `boundary_init_root_bound` proves the binding refuses a
+tampered declared heap. That is the edge that unlocks §§2–5.
 
 ## 1. What a umem IS (the one construct)
 
@@ -39,7 +40,7 @@ The load-bearing properties, all `#assert_axioms`-clean (`UniversalMemory.lean:7
   op (`descriptor_ir2.rs:75`); freshness is ONE read row returning `none`, Merkle-path-free
   (`nullifier_fresh_sound`, line 554).
 
-The key design realization: **the five `Domain` values are not the alphabet — they are an
+The key design realization: **the `Domain` values are not the alphabet — they are an
 *instance*.** The construct is parametric in `κ` (the in-domain key) and the domain tag is just
 "which umem / which plane". A per-cell heap, a service's scratch, a checkpointed computation are
 all "another disjoint slice of the same `Domain × κ` algebra". Everything below is *naming a new
@@ -66,21 +67,19 @@ another cell's umem boundary* — you bind that cell's committed `heap_root` and
   etc. under `Heap` domain (`turn/src/umem.rs:274`). The per-cell view is *a filter of the
   global umem by `UKey::cell()`* (`turn/src/umem.rs:213`).
 
-**Gaps (new).**
-- Today `heap_root` is committed but NOT yet projected as accessible umem cells — `umem.rs:68`
-  deliberately drops `fields_root` (derived) and never enters `heap_map` entries into the
-  trace. To make the per-cell heap a *first-class* umem you add a `Heap` collection
-  `Heap{cell, collection, key}` whose values come from `heap_map`, and a domain code so a heap
-  access emits a `umem_op` row.
-- A cross-cell read needs the *other* cell's heap as a bound init image. Today reads stay within
-  one turn's projection. The keystone gives this directly: bind cell B's committed `heap_root`
-  as an init boundary, open key — `boundary_init_root_bound` (line 475) makes a tampered image
-  fail the published root.
-
-**First step.** Add a `Heap` `UKey` collection projecting `CellState.heap_map` entries (one
-`UVal::Bytes32` per `(collection,key)`), and emit a `umem_op` on `JournalEntry` heap writes.
-This is purely additive (the same recursion-gated witness path, `umem.rs:28`) and gives the
-per-cell heap genuine umem rows + a derived `heap_root` that already equals `boundary_root`.
+**Landed (Stage A, `7686c488`).** The per-cell heap is now a first-class umem. A `Heap`
+collection `Heap{cell, collection, key}` (`turn/src/umem.rs:165–175`) projects every
+`CellState.heap_map` entry as one umem cell under `UDomain::Heap` (`umem.rs:101,243`); a heap
+access emits a `umem_op` row on the recursion-gated witness path (`umem.rs:28`). The derived
+sorted-Poseidon2 root over those cells **equals** the committed `heap_root` (`umem.rs:396–398`,
+by `compute_heap_root`). The soundness is proven: `metatheory/Dregg2/Crypto/PerCellUmem.lean`
+(`f0372f220`) shows the `UKey::cell()` filter preserves the boundary = `heap_root` binding under
+the named `Poseidon2SpongeCR` floor (5 theorems, no new soundness machinery). A cross-cell read
+is lifted to a Lean theorem — circuit `MapOp::Read` REFINES `ObservedFieldEquals`
+(`crossCellRead_refines_observedField`, `metatheory/Dregg2/Exec/UniversalBridge.lean:1019,1028`,
+`bee42d4af`) — and the whole-image no-extra-cells direction is proved (`bf2009603`). A
+dreggverse document now rides this directly: its commitment IS the document cell's committed
+`heap_root` (`bf5e0154b`; §8).
 
 ---
 
@@ -100,16 +99,14 @@ domain projection regardless of whether its root is materialized; only domains t
 root pay the boundary cost (`boundary_root_from_memcheck` is per-domain, line 429). The
 no-chip-table measurement (`descriptor_ir2.rs:75`) is what makes transient scratch cheap.
 
-**Gaps (new).**
-- A general "working" domain (or a per-service tag) distinct from `registers`, so the
-  interpreter and service cells get their own non-aliasing scratch.
-- A *checkpoint* operation: derive the boundary root of the working domain on demand
-  (`boundary_root_derived` already does this for any domain) — see §4.
-
-**First step.** Reuse `Domain::registers` as-is for the interpreter's scratch (it already
-projects to nothing and its trace is already certified). No new code — this use is *unlocked by
-recognizing it's the register domain's contract*. A dedicated service-working domain is a later
-additive `Domain` value.
+**Landed (Stage D, `09bf81ce`).** A dedicated `UDomain::Working` (wire tag 5,
+`turn/src/umem.rs:118`) is a transient service/interpreter scratch umem. `UKey::Working{service,
+collection, key}` (`umem.rs:216`) keys it by the owning `service` so two services (or the
+interpreter) get disjoint, non-aliasing scratch. Like `Registers`, it projects to nothing from
+persistent state (`umem.rs:294`) — it rides the ONE memcheck trace (consistent for free via
+`universal_memory_sound`) but its boundary root never enters the state commitment, so it costs
+nothing on the consensus path. The on-demand *checkpoint* (derive its boundary root without
+publishing it) is `working_umem_root`. Tested in `turn/tests/umem_stage_d.rs`.
 
 ---
 
@@ -166,16 +163,30 @@ the root names exactly one content; (c) *re-bindable* — `boundary_init_root_bo
 receiver's init pin refuse any tampered image. Checkpoint = derive-final-root; resume =
 bind-as-init-root. The same theorem pair, used at the seam.
 
-**Gaps (new).**
-- A `UmemRef` value type: `{ domain(s), declared_addresses, root, optional sturdyref to store }`,
-  serializable, passable as an effect output / pipeline payload / fork attachment.
-- An effect (or effect-output) that *emits* a umem-ref (checkpoint) and one that *consumes* one
-  (resume-against-bound-init). This is the only genuinely new circuit-adjacent surface, and it
-  is small: the init-binding leg already exists in the keystone; the effect wires its root to a
-  public input.
-- Wiring `EventualRef` resolution / pipeline payloads / `SharedFork` to carry `UmemRef`.
+**Landed — the passable umem is live in two revolutions.**
+- **Time-travel via the boundary** (`b1bd3305`). The live cockpit's ⏳ TIME scrubber restores a
+  past image by an O(1) `reify_ledger` inverse fold over a captured umem boundary — *the
+  boundary IS the state* — instead of O(history) genesis replay. `History` captures
+  `project_ledger(post-state)` per recorded step and `History::reify_to(k)` restores via
+  `reify_ledger` over `boundaries[k]`, held to the same anti-substitution discipline as replay
+  (the reified ledger MUST reproduce the recorded root tooth, else `RootMismatch`, fail-closed; a
+  cell outside the faithful class makes reify refuse and the scrub falls back to root-verified
+  genesis replay). The inverse-fold seam is byte-identical (`reify_cell` = the inverse of
+  `project_cell`, `7c01210a4`). Tested in `turn/tests/umem_time_travel.rs`.
+- **Continuations as passable umems** (`087a4cd7`). A suspended turn resumes into the running
+  ledger rather than re-executing its whole `Turn` from pre-state. `turn/src/continuation.rs` +
+  the mid-forest yield (`TurnExecutor::capture_yielded_continuation`) capture suspend/resume as a
+  witnessed round-trip; `turn/src/continuation_resume.rs` makes it load-bearing in the live
+  promise path — the work already done is no longer thrown away.
 
-**First step (after the keystone) — see §6.**
+**Open seam — the checkpoint/resume EFFECT surface (Stage B, design `089f1cbf`).** The
+`UVal::UmemRef` *value* landed (Stage D, §5), but a first-class kernel-effect (or effect-output)
+that *emits* a umem-ref (checkpoint) and one that *consumes* one (resume-against-bound-init)
+remains a design — `docs/deos/UMEM-STAGE-B-DESIGN.md`. It is the only genuinely new
+circuit-adjacent surface left, and it is small: the init-binding leg already exists in the
+keystone; the effect would wire its root to a public input. Likewise the carrier wiring
+(`EventualRef` resolution / pipeline payloads / `SharedFork` to carry `UmemRef`) is named, not
+yet built.
 
 ---
 
@@ -198,15 +209,14 @@ a two-level bind, each level the same `boundary_init_root_bound` step.
 - Cross-cell heap reads (§2) are the degenerate composition: cell A's umem holds a key whose
   value is "go read cell B's `heap_root`".
 
-**Gaps (new).** A `UVal::UmemRef` variant (a value that IS another umem's boundary root), and a
-recursive open: bind the outer root, read a child root, bind the child root. The soundness is
-*compositional for free* — each level is an independent `boundary_init_root_bound` application;
-tag isolation (`consistentFrom_filter`) guarantees the levels don't alias. No new theorem; the
-keystone composes with itself.
-
-**First step.** Add `UVal::UmemRef([u8;32])` and a test that a two-level open (service umem →
-child cell heap) binds both roots. Pure composition over §2 + the keystone; no circuit change
-beyond a second init-binding leg.
+**Landed (Stage D, `09bf81ce`).** `UVal::UmemRef([u8;32])` (`turn/src/umem.rs:324`) is a value
+that IS another umem's boundary root. `open_through_umem_ref` (`umem.rs:691`) is the
+recursive open: bind the outer service umem (level 1), read the child `UmemRef`, bind the child
+cell's heap (level 2, against the named root), open the key. The two levels are two independent
+`boundary_init_root_bound` applications; tag isolation (`consistentFrom_filter`, `Working` vs
+`Heap`) keeps them disjoint — no new theorem, the keystone composes with itself. The test
+(`turn/tests/umem_stage_d.rs`) shows a two-level open binding both roots, and that a tamper at
+either level derives a different root and the matching bind refuses.
 
 ---
 
@@ -234,41 +244,39 @@ committed-root slice, passable and resumable".
 
 ---
 
-## 7. Staged build path
+## 7. Stage status
 
-The keystone (init-binding) lands in parallel — assume it. Then:
+The keystone (init-binding) is landed (`99a8dc94`). The stages built on it:
 
-- **STAGE A (recommended FIRST step): per-cell heap umem (§2).** Project `CellState.heap_map`
-  as a `Heap{cell, collection, key}` `UKey` collection and emit `umem_op` rows on heap writes.
-  Purely additive on the existing recursion-gated witness (`umem.rs:28`); the derived root
-  already equals the committed `heap_root` (`boundary_root_derived`), so it's a refactor of
-  *where* the commitment is read, not *what*. **This is the first step because** it is the
-  lowest-risk, exercises the keystone's cross-cell init-binding immediately (a cross-cell read
-  is the first real consumer), and it is the substrate every later stage stands on (passable
-  states and composition both checkpoint/embed *heap slices*).
+- **STAGE A — per-cell heap umem (§2): LANDED (`7686c488`, Lean `f0372f220`).** `CellState.heap_map`
+  projects as a `Heap{cell, collection, key}` `UKey` collection emitting `umem_op` rows; the
+  derived root equals the committed `heap_root` (`boundary_root_derived`); the soundness is
+  `PerCellUmem.lean` and the cross-cell read is `crossCellRead_refines_observedField`. The
+  substrate every later stage stands on.
 
-- **STAGE B: passable umem-ref (§4).** Define `UmemRef` + a checkpoint effect-output (emit final
-  root) and a resume input (bind as init root). Smallest new circuit surface; init leg already
-  exists.
+- **STAGE B — passable umem-ref EFFECT (§4): DESIGN (`089f1cbf`, `UMEM-STAGE-B-DESIGN.md`).** A
+  checkpoint effect-output (emit final root) + a resume input (bind as init root). The `UmemRef`
+  *value* exists (Stage D); the kernel-effect surface is the open seam. Smallest new circuit
+  surface; the init leg already exists in the keystone.
 
-- **STAGE C: wire the carriers (§4).** `EventualRef` resolution → `UmemRef`; CapTP pipeline
-  payload → `UmemRef`; `SharedFork` attachment → `UmemRef`. No circuit change — these consume
-  Stage B's value over existing transports.
+- **STAGE C — wire the carriers (§4): NAMED, not built.** `EventualRef` resolution → `UmemRef`;
+  CapTP pipeline payload → `UmemRef`; `SharedFork` attachment → `UmemRef`. No circuit change —
+  consumes Stage B's value over existing transports.
 
-- **STAGE D: working-domain split + composition (§3, §5).** A dedicated working domain beyond
-  `registers`; `UVal::UmemRef` + recursive open. Both are additive `Domain`/`UVal` values over
-  the proven base.
+- **STAGE D — working-domain split + composition (§3, §5): LANDED (`09bf81ce`).** `UDomain::Working`
+  (transient service/interpreter scratch, never published); `UVal::UmemRef` + `open_through_umem_ref`
+  (the recursive two-level open). Both additive `Domain`/`UVal` values over the proven base.
 
-**Recommended FIRST step:** *Stage A — project the per-cell `heap_map` as a first-class umem
-collection and emit its op rows.* It is honest (the root already exists and is committed),
-additive (recursion-gated witness only), and it is the keystone's first cross-cell consumer —
-the foundation passable + composable umems both build on.
+Beyond the staged path, two **revolutions are live** (§4): time-travel-via-the-boundary in the
+cockpit (`b1bd3305`) and continuations-as-passable-umems in the promise path (`087a4cd7`). An
+agent's working-set as a witnessed portable umem is a further prototype (`3911af58c`), not yet
+load-bearing.
 
-**Integration target (the worked example, §8):** once Stage A + B land, ride the dregg document
-language (`dregg-doc/`) onto the primitive — its commitment is already specified to become the
-document cell's `heap_root` (`commit.rs:30`). The document language exercises all four uses at
-once and is the proof that the primitive is general (sovereign docs · portable patches ·
-composable transclusion · conflicts-as-objects, all verified).
+**Integration target (the worked example, §8): landed.** The dregg document language
+(`dregg-doc/`) rides the primitive — its commitment IS the document cell's committed `heap_root`
+(`bf5e0154b`). The document language exercises all four uses at once and is the proof that the
+primitive is general (sovereign docs · portable patches · composable transclusion ·
+conflicts-as-objects).
 
 ---
 
@@ -286,12 +294,13 @@ is exactly what turns that elegant core into a *verified, sovereign, portable* o
 "Today a dreggverse document IS a cell (1:1)" (`composition.rs:3`). Its content — the atom
 graph (atoms with id/content/status/provenance + order-edges + the single-valued field store,
 `lib.rs:18`) — is exactly a `(collection, key) → value` map: **the cell's umem-heap.** The
-document's commitment is currently the crate's 128-bit stand-in (`commit.rs:38`), but the code
-already names the target: *"The real substrate commitment is sorted-Poseidon2 over the document
-cell's heap (the faithful 8-felt commitment floor); this crate rides that later"*
-(`commit.rs:30`). That ride-on IS Stage A: the document's `heap_root` becomes its boundary, so
-the doc commitment is a derived umem boundary (`boundary_root_derived`) — a **sovereign
-document**, its whole content (atoms + edges + fields + provenance) bound by one committed root.
+ride-on is built (`bf5e0154b`): `DocHeapCell` (`dregg-doc/src/doc_heap.rs`) projects a `DocGraph`
+into the cell's `heap_map` (atoms/edges/fields, each binding provenance) and reseals `heap_root`
+— the document's boundary. That commitment equals the canonical `compute_heap_root` /
+`substrate_commit` (a derived umem boundary, `boundary_root_derived`), so a **sovereign
+document** is bound by one committed umem root, whole content and all. (The `commit` module's
+double-`DefaultHasher` 128-bit digest, `commit.rs:24`, remains as a property-test stand-in for
+the soundness *property*; the real binding is the `heap_root` ride.)
 
 ### A patch = a passable witnessed umem (§4, passable-intermediate-state)
 
@@ -373,11 +382,14 @@ claim — sovereign, portable, composable, conflict-honest, all under one commit
 
 ---
 
-*Honest scope.* What EXISTS today: the single global umem (`turn/src/umem.rs`), its five
-domains, the Blum trace + agreement check, the no-chip-table circuit row
-(`descriptor_ir2.rs:363`), the final-boundary derivation + non-vacuity
-(`UniversalMemory.lean`), and the per-cell `heap_root`/`heap_map`/`fields_map` embryos
-(`cell/src/state.rs`). What is NEW: the init-binding keystone (landing in parallel), per-cell
-heap *projection*, the `UmemRef` value + checkpoint/resume effect surface, the carrier wiring,
-and the working-domain split. None of it requires a new soundness argument — every use is the
-two existing boundary theorems applied at a new seam.
+*Honest scope.* What EXISTS at HEAD: the whole-world umem (`turn/src/umem.rs`) now in six
+domains (the five + `Working`), the Blum trace + agreement check, the no-chip-table circuit row
+(`descriptor_ir2.rs:363`), the final-boundary derivation + non-vacuity (`UniversalMemory.lean`),
+the **init-binding keystone** (`boundary_init_root_bound`, `#assert_axioms`-clean), the per-cell
+heap *projection* + its soundness (`PerCellUmem.lean`) + the cross-cell-read theorem
+(`crossCellRead_refines_observedField`), the `UVal::UmemRef` value + `open_through_umem_ref`
+recursive composition, the `Working` transient domain, the document ride-on (`DocHeapCell`), and
+two live revolutions (time-travel-via-boundary, continuations). The remaining OPEN seam is the
+checkpoint/resume *kernel-effect* surface (Stage B, design `089f1cbf`) and its carrier wiring
+(Stage C). None of it requires a new soundness argument — every use is the two boundary theorems
+applied at a new seam.

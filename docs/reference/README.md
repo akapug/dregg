@@ -6,6 +6,8 @@ Per-subsystem reference docs grounded to `file:line` at HEAD — what each subsy
 
 - [cells.md](cells.md) — Cells & substances: the unit of sovereign capability-secure state (identity, signed-balance value, c-list, guarded state, lifecycle) folded into one canonical commitment.
 - [turns.md](turns.md) — `dregg-turn`: the call-forest transaction subsystem — Turn → CallForest → Action → Effect, executed atomically with journaled rollback and a chained receipt.
+- [umem.md](umem.md) — Universal memory: the witnessed key→value store whose committed root is its boundary — six domains, the init-binding keystone, per-cell heaps, the `Working` domain, composable umem-refs, and the time-travel / continuation revolutions.
+- [services.md](services.md) — Cells as service objects: the userspace `InterfaceDescriptor` (not a committed field), the `invoke()` front door (no `Effect::Invoke`), the kvstore exemplar, and the Service Explorer.
 - [circuit.md](circuit.md) — Descriptor circuit & light client: a turn proven as a batch STARK, folded into a constant-size recursive whole-chain aggregate, verified by a re-witnessing-nothing light client.
 - [persist.md](persist.md) — `dregg-persist`: the node's single durable redb store — crash-consistent commit log + index, torn-tail recovery, the Lean-verified recover = checkpoint ⊕ overlay model.
 - [deos-view.md](deos-view.md) — `deos-view`: renderer extraction over one gpui-free `deos.ui.*` view-tree, with native gpui-component and web HTML renderers.
