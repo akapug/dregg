@@ -107,6 +107,14 @@ dregg-cell = { path = "../cell" }
 # build graph. The bot surfaces them as Discord buttons/embeds/links
 # (`src/deos_surface.rs`).
 starbridge-web-surface = { path = "../starbridge-web-surface" }
+# The deos-view view-tree IR + its DISCORD backend — the FOURTH `ViewNode` renderer
+# (alongside native gpui / web HTML / seL4 framebuffer). `default-features = false` with
+# only `discord` keeps deos-view gpui-FREE + deos-js-FREE here (serde + serenity's
+# builder/model), so the bot pulls NONE of the gpui/mozjs elephants — just the embed/
+# component mapping. The bot authors its surfaces as `ViewNode` cards and renders them
+# through `deos_view::discord::render_card` (`src/cards.rs`): the SAME card the desktop
+# renders, posted as a Discord embed (the card-authored-once-renders-everywhere thesis).
+deos-view = { path = "../deos-view", default-features = false, features = ["discord"] }
 bs58 = "0.5"
 zeroize = { workspace = true }
 

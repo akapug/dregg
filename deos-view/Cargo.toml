@@ -103,6 +103,18 @@ gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "49
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# THE DISCORD RENDERER's builder/model types — `CreateEmbed`, `CreateButton`,
+# `CreateActionRow`, `ButtonStyle`. Gated on `discord` (like `web` on its renderer) so
+# the core / native / web builds NEVER pull serenity. `default-features = false` with only
+# `builder`+`model`+`rustls_backend` keeps it to the embed/component builders (no gateway,
+# no client, no framework) — and unifies to ONE serenity instance with the discord-bot
+# (which enables a superset), so the `CreateEmbed` this crate returns IS the bot's type.
+serenity = { version = "0.12", default-features = false, features = [
+    "builder",
+    "model",
+    "rustls_backend",
+], optional = true }
+
 # The headless capture path returns `anyhow::Result<image::RgbaImage>` (gpui's
 # `capture_screenshot` signature); the `headless` module re-encodes + saves the PNG.
 # 0.25 matches gpui_wgpu's `image` (one resolved version across the graph). NATIVE-ONLY.
@@ -124,6 +136,9 @@ native = [
 ]
 # web — `ViewNode` → an HTML/DOM string (gpui-free, deos-js-free): only serde.
 web = []
+# discord — `ViewNode` → a serenity `CreateEmbed` + button components (gpui-free,
+# deos-js-free): serde + serenity's builder/model. The FOURTH backend over the one IR.
+discord = ["dep:serenity"]
 
 # THE WEB-PROJECTION BAKE — render the SAME counter card view-tree (the EXACT JSON the
 # SpiderMonkey engine produces) to a browser-loadable `.html`, gpui-free. Build + run:

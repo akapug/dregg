@@ -14,7 +14,12 @@
 //! Discord<->dregg federation linking.
 
 mod activity_feed;
+// The bot's surfaces authored ONCE as `deos-view` `ViewNode` cards and rendered through
+// the Discord backend (`deos_view::discord`) — the card-authored-once-renders-everywhere
+// thesis extended to Discord (the FOURTH `ViewNode` backend, alongside native gpui / web
+// HTML / seL4 framebuffer). The activity feed routes through it live.
 pub mod captp_client;
+pub mod cards;
 mod cipherclerk;
 mod commands;
 // §4.7 canonical, Discord-independent capability-handoff flow: produces and

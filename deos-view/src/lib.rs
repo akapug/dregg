@@ -57,3 +57,13 @@ pub use web::{
     render_gallery_document, render_html, render_inspector_live_document,
     render_kvstore_live_document, render_tally_live_document,
 };
+
+// ── The DISCORD renderer: the SAME `ViewNode` → a serenity `CreateEmbed` + button
+//    components. gpui-free + deos-js-free (serde + serenity builder/model). The FOURTH
+//    backend — the discord-bot's surfaces ARE these cards. ──
+#[cfg(feature = "discord")]
+pub mod discord;
+#[cfg(feature = "discord")]
+pub use discord::{
+    DiscordCard, TURN_PREFIX, affordance_custom_id, parse_affordance_id, render_card,
+};
