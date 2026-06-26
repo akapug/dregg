@@ -216,9 +216,15 @@ impl RangeAttestation {
 pub struct ProofPublics {
     pub genesis_root: [u8; 32],
     pub final_root: [u8; 32],
-    pub chain_digest: [u8; 32],
+    /// The multi-felt Poseidon2 ordered-history digest (codex #3): `WHOLE_CHAIN_DIGEST_LANES`
+    /// `BabyBear` lanes, each packed little-endian into 32 bytes.
+    pub chain_digest: [[u8; 32]; WHOLE_CHAIN_DIGEST_LANES],
     pub num_turns: u64,
 }
+
+/// The number of `BabyBear` lanes in the whole-chain ordered-history digest — kept in
+/// sync with `dregg_circuit_prove::ivc_turn_chain::SEG_DIGEST_WIDTH` (codex re-review #3).
+pub const WHOLE_CHAIN_DIGEST_LANES: usize = 4;
 
 // ============================================================================
 // S1 — the SQL-crossable transport for a whole-chain proof.
@@ -295,8 +301,9 @@ pub struct SerializedWholeChainProof {
     pub genesis_root: [u8; 32],
     /// The final root the chain reaches.
     pub final_root: [u8; 32],
-    /// The running digest committing to the ordered (old_root, new_root) pairs.
-    pub chain_digest: [u8; 32],
+    /// The multi-felt Poseidon2 ordered-history digest (codex #3): `WHOLE_CHAIN_DIGEST_LANES`
+    /// `BabyBear` lanes, each packed little-endian into 32 bytes.
+    pub chain_digest: [[u8; 32]; WHOLE_CHAIN_DIGEST_LANES],
     /// The number of finalized turns folded.
     pub num_turns: u64,
 }
@@ -311,7 +318,7 @@ impl SerializedWholeChainProof {
         binding_proof: Vec<u8>,
         genesis_root: [u8; 32],
         final_root: [u8; 32],
-        chain_digest: [u8; 32],
+        chain_digest: [[u8; 32]; WHOLE_CHAIN_DIGEST_LANES],
         num_turns: u64,
     ) -> Self {
         SerializedWholeChainProof {
@@ -416,12 +423,13 @@ pub fn verify_serialized_proof(
         // circuit, or a relabeled public is REFUSED here (fail-closed) — never a false
         // attest. The publics ride as `[u8;32]` (a BabyBear is one field element,
         // packed little-endian, high bytes zero), so the low 4 bytes are its `u32`.
+        let digest_lanes: Vec<u32> = transport.chain_digest.iter().map(le32).collect();
         let publics = dregg_circuit_prove::ivc_turn_chain::verify_turn_chain_recursive_from_blobs(
             &transport.root_proof,
             &transport.binding_proof,
             le32(&transport.genesis_root),
             le32(&transport.final_root),
-            le32(&transport.chain_digest),
+            &digest_lanes,
             transport.num_turns as usize,
             vk_anchor,
         )
@@ -528,9 +536,9 @@ mod tests {
         SerializedWholeChainProof::new(
             vec![0xa1, 0xa2, 0xa3], // non-empty root-proof blob (stub never decodes it)
             vec![0xb1, 0xb2],       // non-empty binding-proof blob
-            [1u8; 32],              // genesis_root hint
-            [9u8; 32],              // final_root hint
-            [5u8; 32],              // chain_digest hint
+            [1u8; 32],                                 // genesis_root hint
+            [9u8; 32],                                 // final_root hint
+            [[5u8; 32]; WHOLE_CHAIN_DIGEST_LANES],     // multi-felt chain_digest hint
             num_turns,
         )
         .to_bytes()
@@ -661,7 +669,7 @@ mod tests {
             vec![9, 8, 7],
             [0x11; 32],
             [0x22; 32],
-            [0x33; 32],
+            [[0x33; 32]; WHOLE_CHAIN_DIGEST_LANES],
             42,
         );
         let bytes = t.to_bytes();
@@ -685,12 +693,12 @@ mod tests {
         // A transport with an EMPTY root proof component ⇒ refused (a half-proof is
         // never silently accepted).
         let empty_root =
-            SerializedWholeChainProof::new(vec![], vec![1], [0; 32], [0; 32], [0; 32], 1);
+            SerializedWholeChainProof::new(vec![], vec![1], [0; 32], [0; 32], [[0; 32]; WHOLE_CHAIN_DIGEST_LANES], 1);
         let e = SerializedWholeChainProof::from_bytes(&empty_root.to_bytes()).unwrap_err();
         assert!(e.contains("empty root proof"), "{e}");
         // ... and an empty binding proof component ⇒ refused.
         let empty_bind =
-            SerializedWholeChainProof::new(vec![1], vec![], [0; 32], [0; 32], [0; 32], 1);
+            SerializedWholeChainProof::new(vec![1], vec![], [0; 32], [0; 32], [[0; 32]; WHOLE_CHAIN_DIGEST_LANES], 1);
         let e = SerializedWholeChainProof::from_bytes(&empty_bind.to_bytes()).unwrap_err();
         assert!(e.contains("empty binding proof"), "{e}");
     }
@@ -699,7 +707,7 @@ mod tests {
     fn transport_wrong_version_is_refused() {
         // A transport tagged with an unknown version is refused (fail-closed) rather
         // than misread — the staged-format discipline.
-        let mut t = SerializedWholeChainProof::new(vec![1], vec![1], [0; 32], [0; 32], [0; 32], 1);
+        let mut t = SerializedWholeChainProof::new(vec![1], vec![1], [0; 32], [0; 32], [[0; 32]; WHOLE_CHAIN_DIGEST_LANES], 1);
         t.version = 9999;
         let e = SerializedWholeChainProof::from_bytes(&t.to_bytes()).unwrap_err();
         assert!(e.contains("unsupported") && e.contains("version"), "{e}");

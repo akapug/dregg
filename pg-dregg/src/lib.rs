@@ -3874,7 +3874,7 @@ mod pg {
                 vec![0xb1, 0xb2],       // non-empty binding-proof blob
                 [0u8; 32],
                 [9u8; 32],
-                [5u8; 32],
+                [[5u8; 32]; crate::attest::WHOLE_CHAIN_DIGEST_LANES],
                 4, // 4 turns — would cover [0,3] IF it verified
             )
             .to_bytes();
@@ -3959,7 +3959,7 @@ mod pg {
                 vec![0xb1; 8],
                 [0u8; 32],
                 [9u8; 32],
-                [5u8; 32],
+                [[5u8; 32]; crate::attest::WHOLE_CHAIN_DIGEST_LANES],
                 4,
             )
             .to_bytes();

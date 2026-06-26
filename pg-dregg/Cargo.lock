@@ -875,6 +875,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-circuit",
+ "dregg-dfa",
  "dregg-types",
  "postcard",
  "serde",
@@ -974,6 +975,15 @@ dependencies = [
  "blake3",
  "dregg-circuit",
  "dregg-dsl-runtime",
+ "serde",
+]
+
+[[package]]
+name = "dregg-dfa"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "postcard",
  "serde",
 ]
 
@@ -1085,6 +1095,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "web-time",
  "x25519-dalek",
 ]
 
@@ -2054,7 +2065,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=d959ff10f86495e81bd883e5d9dde1f0fcf00d81#d959ff10f86495e81bd883e5d9dde1f0fcf00d81"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -2081,7 +2092,7 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=d959ff10f86495e81bd883e5d9dde1f0fcf00d81#d959ff10f86495e81bd883e5d9dde1f0fcf00d81"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -2357,7 +2368,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=d959ff10f86495e81bd883e5d9dde1f0fcf00d81#d959ff10f86495e81bd883e5d9dde1f0fcf00d81"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -2407,7 +2418,7 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=d959ff10f86495e81bd883e5d9dde1f0fcf00d81#d959ff10f86495e81bd883e5d9dde1f0fcf00d81"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -2431,7 +2442,7 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=72ffc5646e90af9324ab17248b4beed31c036db3#72ffc5646e90af9324ab17248b4beed31c036db3"
+source = "git+https://github.com/emberian/plonky3-recursion?rev=d959ff10f86495e81bd883e5d9dde1f0fcf00d81#d959ff10f86495e81bd883e5d9dde1f0fcf00d81"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -4138,6 +4149,16 @@ name = "web-sys"
 version = "0.3.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6430a72df5eb332242960fe84b3002a241163998241eb596d4f739b9757061d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",

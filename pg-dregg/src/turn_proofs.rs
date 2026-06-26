@@ -135,9 +135,13 @@ impl ChainFolder for StandInFolder {
         // cryptographic — the real fold's `chain_digest` is the in-circuit running
         // hash; the stand-in only needs the transport to be decodable + carry the
         // true window bounds).
-        let mut chain_digest = [0u8; 32];
-        for (i, b) in chain_digest.iter_mut().enumerate() {
-            *b = genesis_root[i] ^ final_root[i] ^ (turns.len() as u8);
+        // A deterministic placeholder MULTI-FELT digest (codex #3 widened the transport digest
+        // to `WHOLE_CHAIN_DIGEST_LANES` lanes); the stub fills each lane deterministically.
+        let mut chain_digest = [[0u8; 32]; crate::attest::WHOLE_CHAIN_DIGEST_LANES];
+        for (lane, d) in chain_digest.iter_mut().enumerate() {
+            for (i, b) in d.iter_mut().enumerate() {
+                *b = genesis_root[i] ^ final_root[i] ^ (turns.len() as u8) ^ (lane as u8);
+            }
         }
         // Non-empty placeholder proof-component blobs so the transport passes the
         // S1 decode hygiene (the stub SRF never decodes them into circuit types).
@@ -594,7 +598,7 @@ mod tests {
                 vec![1],
                 genesis_root,
                 final_root,
-                [0; 32],
+                [[0; 32]; crate::attest::WHOLE_CHAIN_DIGEST_LANES],
                 1000,
             ))
         }
