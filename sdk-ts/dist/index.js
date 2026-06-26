@@ -451,6 +451,7 @@ function writeCapabilityRef(w, cap) {
   writeAuthRequired(w, cap.permissions);
   w.option(cap.breadstuff, (b) => w.bytes(exactBytes(b, 32, "cap.breadstuff")));
   w.option(cap.expiresAt, (e) => w.varint(e));
+  w.u8(0);
   w.option(cap.storedEpoch, (e) => w.varint(e));
 }
 function writeEffect(w, e) {

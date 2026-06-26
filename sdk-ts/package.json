@@ -37,7 +37,8 @@
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsup src/index.ts src/browser.ts src/raw.ts src/wasm.ts src/pg.ts --format cjs,esm --dts --clean && npm run build:browser-esm",
@@ -60,6 +61,9 @@
     "blake3"
   ],
   "license": "AGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "dregg-wasm": ">=0.1.0"
   },
