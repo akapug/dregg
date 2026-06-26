@@ -9,6 +9,19 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- DREGG-QUERY WIRED LIVE (2026-06-26). The mature attested-read engine is now DEPLOYED into the node: the two handlers
+  `/api/receipts/index/{root,range}` (`node/src/api.rs` `get_receipt_index_root`/`get_receipt_index_range`) serve real
+  attested slices over an incrementally-maintained MMR (`NodeStateInner::receipt_index` + `sync_receipt_index`, lazily synced
+  off the read path — ADDITIVE, never gates commit). Effect enrichment: `CommittedEvent` carries typed
+  `dregg_query::EffectSummary` (`node/src/state.rs`), populated at the submit-turn commit path via `summarize_turn_effects`
+  (from/to/asset/amount + post-state balances) so the live log yields `transfer`/`balance`/`granted` facts. Proven green by
+  `live_receipt_index_serves_verifying_attested_answer_and_teeth_bite` (api.rs tests): a real turn → typed fact → AttestedAnswer
+  over the LIVE log verifies, and the non-omission teeth bite (substituted leaf + dropped position both reject).
+  NAMED RESIDUAL — THE TRUST ANCHOR: the served root is blake3 (arity-separated domains), NOT the model's in-circuit Poseidon2.
+  Binding the MMR root into `recStateCommit` as its last sponge limb (`CommitBindsMMR`, `Dregg2/Lightclient/MMR.lean` §6) is
+  THE ROTATION's job — until then the root is an out-of-band trust anchor (the verifier takes it as a parameter, so the swap is
+  caller-side only). Also: enrichment populates only at the main submit-turn path + within the 1000-entry event-log window
+  (`MAX_EVENT_LOG`); receipts beyond it still carry certified identity, just no typed facts.
 - ZED/HERMES INTEGRATION ASSESS + STRUCTURE-PANE LANDED (2026-06-25). Honest assessment: the confined-Hermes seam is
   genuinely tight (ToolGateway-gated, metered, receipted dregg turns on the verified executor; tool side-effects ride the
   turn via `tool_effects`; per-tool/per-kind grants; live mandate inspector; real ndjson ACP transport + live `hermes-acp`

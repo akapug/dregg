@@ -329,6 +329,19 @@ pub struct NodeStateInner {
     /// endpoint (`GET /api/events?since_height=N`). Capped at `MAX_EVENT_LOG` entries.
     pub event_log: VecDeque<CommittedEvent>,
 
+    /// The receipt-index MMR — the non-omission certificate index dregg-query
+    /// serves over `/api/receipts/index/{root,range}`. Leaf `i` is the 32-byte
+    /// `receipt_hash()` of receipt-chain entry `i`. Maintained incrementally
+    /// (lazily synced from the chain by [`Self::sync_receipt_index`]) — ADDITIVE:
+    /// it hangs off the already-committed chain and NEVER gates the commit path.
+    ///
+    /// Trust-anchor residual (THE ROTATION): the root here is blake3 with
+    /// arity-separated domains, NOT the model's in-circuit Poseidon2. Binding
+    /// this root into `recStateCommit` (so the IVC aggregate pins it) is THE
+    /// ROTATION's `CommitBindsMMR` weld — until then the served root is an
+    /// out-of-band trust anchor.
+    pub receipt_index: dregg_query::Mmr<dregg_query::Blake3Mmr>,
+
     /// Node-local witness artifacts keyed by receipt hash.
     ///
     /// MCP/devnet mutation paths can produce `WitnessedReceipt`s at commit time.
@@ -543,6 +556,14 @@ pub struct CommittedEvent {
     pub cell_id: String,
     /// Effects applied (human-readable summary strings).
     pub effects: Vec<String>,
+    /// Typed per-effect summaries (the dregg-query EDB enrichment): from/to/
+    /// asset/amount for transfers, holder/cap for grants, and post-state balance
+    /// observations for touched cells. This is what lets the LIVE receipt log
+    /// yield `transfer`/`balance`/`granted` facts, not just effect-kind strings.
+    /// Empty when the commit path had no decoded effects in hand (e.g. encrypted
+    /// or blocklace-finalized turns).
+    #[serde(default)]
+    pub summaries: Vec<dregg_query::EffectSummary>,
     /// Unix timestamp (seconds).
     pub timestamp: i64,
 }
@@ -859,6 +880,7 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                receipt_index: dregg_query::Mmr::new(dregg_query::Blake3Mmr),
                 witnessed_receipts,
                 witnessed_receipt_order,
                 proof_pending: HashSet::new(),
@@ -1017,6 +1039,7 @@ impl NodeState {
                     dregg_intent::delay_pool::DelayPoolConfig::default(),
                 ),
                 event_log: VecDeque::new(),
+                receipt_index: dregg_query::Mmr::new(dregg_query::Blake3Mmr),
                 witnessed_receipts,
                 witnessed_receipt_order,
                 proof_pending: HashSet::new(),
@@ -1227,6 +1250,26 @@ impl NodeStateInner {
                 "pg-mirror: REFUSED a committed turn — local mirror chain disagrees \
                  with the durable commit log (a real finding; not silently dropped)"
             );
+        }
+    }
+
+    /// Bring the receipt-index MMR up to the receipt chain length: push the
+    /// `receipt_hash()` leaf of every chain entry not yet indexed. `O(new
+    /// leaves)` — the incremental maintenance the index needs, run lazily off
+    /// the read path (the query handlers call this before serving). It is purely
+    /// additive over the already-committed, append-only chain, so it can never
+    /// affect commit soundness.
+    pub fn sync_receipt_index(&mut self) {
+        let have = self.receipt_index.len() as usize;
+        let chain = self.cclerk.receipt_chain();
+        if have >= chain.len() {
+            return;
+        }
+        // Collect the new leaves first so the immutable chain borrow ends before
+        // the mutable push.
+        let new_leaves: Vec<[u8; 32]> = chain[have..].iter().map(|r| r.receipt_hash()).collect();
+        for leaf in new_leaves {
+            self.receipt_index.push(leaf);
         }
     }
 

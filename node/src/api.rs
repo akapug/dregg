@@ -1583,6 +1583,13 @@ pub fn router_with_cors(
         )
         .route("/api/receipts", get(get_receipts))
         .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
+        // The attested-query index (dregg-query): the receipt-log MMR root and
+        // certified positional slices. A query answer built over a slice from
+        // `/index/range` carries a non-omission certificate the caller verifies
+        // against the `/index/root` root — proving the answer was computed from
+        // EXACTLY the committed receipt range. Public (read-only over the log).
+        .route("/api/receipts/index/root", get(get_receipt_index_root))
+        .route("/api/receipts/index/range", get(get_receipt_index_range))
         // ORGANS identity rider — the KERI-shaped identity event-log export:
         // a cell's chained / signed / witness-receipted key-event history as
         // a PORTABLE artifact (independently checkable via
@@ -2165,6 +2172,86 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
     Json(tokens)
 }
 
+/// `GET /api/receipts/index/root` → [`dregg_query::client::IndexRootResponse`].
+///
+/// The MMR root over the node's receipt chain: leaf `i` is the 32-byte
+/// `receipt_hash()` of chain entry `i`, bagged per `dregg_query::Blake3Mmr`. The
+/// index is brought current from the chain before the read ([`NodeStateInner::
+/// sync_receipt_index`]) — additive, never gating commit. The verifier trusts
+/// only this root; `len` is served for UX (the verifier re-derives it from the
+/// root-pinned peak heights).
+async fn get_receipt_index_root(
+    State(state): State<NodeState>,
+) -> Json<dregg_query::client::IndexRootResponse> {
+    let mut s = state.write().await;
+    s.sync_receipt_index();
+    Json(dregg_query::client::IndexRootResponse {
+        root: hex_encode(&s.receipt_index.root()),
+        len: s.receipt_index.len(),
+    })
+}
+
+/// `GET /api/receipts/index/range?lo=&hi=` →
+/// [`dregg_query::client::IndexRangeResponse`].
+///
+/// The certified slice: the receipt rows at dense positions `[lo, min(hi,
+/// len-1)]` plus the `RangeOpening` (the honest prover, whose output always
+/// verifies against the root from `/index/root`). Each row carries the typed
+/// [`dregg_query::EffectSummary`] enrichment, joined from the commit event log
+/// by turn hash, so the slice is a complete EDB for transfer/balance/granted
+/// queries. The span is capped like other list endpoints.
+async fn get_receipt_index_range(
+    State(state): State<NodeState>,
+    Query(q): Query<dregg_query::client::RangeParams>,
+) -> Result<Json<dregg_query::client::IndexRangeResponse>, StatusCode> {
+    const MAX_SPAN: u64 = 1024;
+    if q.hi < q.lo || q.hi - q.lo >= MAX_SPAN {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut s = state.write().await;
+    s.sync_receipt_index();
+    let len = s.receipt_index.len();
+    if len == 0 || q.lo >= len {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let hi = q.hi.min(len - 1);
+    let root = s.receipt_index.root();
+    let (_values, opening) = s.receipt_index.open_range(q.lo, hi);
+
+    // Build the enriched receipt rows for [lo, hi]: identity/position from the
+    // chain entry, height + typed effect summaries joined from the commit event
+    // log by turn hash (absent for entries evicted past the event-log window —
+    // those rows still carry their certified identity, just no facts).
+    let chain = s.cclerk.receipt_chain();
+    let mut receipts = Vec::with_capacity((hi - q.lo + 1) as usize);
+    for pos in q.lo..=hi {
+        let r = &chain[pos as usize];
+        let turn_hash = hex_encode(&r.turn_hash);
+        let (height, summaries) = s
+            .event_log
+            .iter()
+            .rev()
+            .find(|e| e.turn_hash == turn_hash)
+            .map(|e| (e.height, e.summaries.clone()))
+            .unwrap_or((0, Vec::new()));
+        receipts.push(dregg_query::ReceiptRecord {
+            chain_index: pos,
+            receipt_hash: hex_encode(&r.receipt_hash()),
+            height,
+            agent: hex_encode(&r.agent.0),
+            effects: summaries,
+        });
+    }
+
+    Ok(Json(dregg_query::client::IndexRangeResponse {
+        receipts,
+        root: hex_encode(&root),
+        lo: q.lo,
+        hi,
+        opening,
+    }))
+}
+
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
     Json(receipt_infos_from_chain(&s, 50))
@@ -2491,6 +2578,21 @@ fn push_committed_event(
     effects: Vec<String>,
     proof_status: ActivityProofStatus,
 ) {
+    push_committed_event_enriched(s, turn_hash, cell_id, effects, Vec::new(), proof_status)
+}
+
+/// As [`push_committed_event`], but carrying the typed [`dregg_query::EffectSummary`]
+/// enrichment — from/to/asset/amount, grants, and post-state balances — so the
+/// LIVE receipt log yields `transfer`/`balance`/`granted` facts (not just
+/// effect-kind strings) when dregg-query reads `/api/receipts/index/range`.
+fn push_committed_event_enriched(
+    s: &mut crate::state::NodeStateInner,
+    turn_hash: String,
+    cell_id: String,
+    effects: Vec<String>,
+    summaries: Vec<dregg_query::EffectSummary>,
+    proof_status: ActivityProofStatus,
+) {
     let store_height = s
         .store
         .latest_attested_root()
@@ -2525,6 +2627,7 @@ fn push_committed_event(
         turn_hash,
         cell_id,
         effects,
+        summaries,
         timestamp,
     });
 }
@@ -2956,11 +3059,26 @@ async fn post_submit_turn(
             let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
-            push_committed_event(
+            // Typed effect enrichment from the REAL before/after actor ledger —
+            // so this committed turn's receipt yields transfer/balance/granted
+            // facts when dregg-query reads the live index.
+            let summaries = summarize_turn_effects(&turn, &pre_ledger, &s.ledger);
+            let kinds: Vec<String> = turn
+                .call_forest
+                .iter_dfs()
+                .flat_map(|t| t.action.effects.iter().map(effect_kind))
+                .collect();
+            let kinds = if kinds.is_empty() {
+                vec!["turn_committed".to_string()]
+            } else {
+                kinds
+            };
+            push_committed_event_enriched(
                 &mut s,
                 turn_hash.clone(),
                 agent,
-                vec!["turn_committed".to_string()],
+                kinds,
+                summaries,
                 proof_status,
             );
 
@@ -7327,6 +7445,95 @@ fn classify_starbridge_app(memo: Option<&str>, effect_summaries: &[String]) -> O
     }
 }
 
+/// A stable label for a granted/revoked capability (the `cap` term of the
+/// `granted`/`revoked` facts): the token hash when present, else `target#slot`.
+fn cap_ref_label(cap: &dregg_cell::CapabilityRef) -> String {
+    match cap.breadstuff {
+        Some(h) => hex_encode(&h),
+        None => format!("{}#{}", hex_encode(&cap.target.0), cap.slot),
+    }
+}
+
+/// Build the typed [`dregg_query::EffectSummary`] enrichment for a committed
+/// turn: the decoded per-effect disclosure (transfers / grants / revocations)
+/// plus a post-state balance observation for every cell the turn's transfers
+/// touched. Read off the ALREADY-committed before/after ledger — additive, never
+/// gates the commit. The `asset` of a transfer/balance is the token domain of
+/// the cell (pre-state for the source, post-state for the destination).
+fn summarize_turn_effects(
+    turn: &Turn,
+    pre: &dregg_cell::Ledger,
+    post: &dregg_cell::Ledger,
+) -> Vec<dregg_query::EffectSummary> {
+    use dregg_query::EffectSummary as ES;
+    use dregg_turn::Effect;
+
+    let asset_of = |id: &CellId, l: &dregg_cell::Ledger| -> String {
+        l.get(id)
+            .map(|c| hex_encode(c.token_id()))
+            .unwrap_or_default()
+    };
+
+    let mut out = Vec::new();
+    let mut touched: Vec<[u8; 32]> = Vec::new();
+    let note = |id: [u8; 32], touched: &mut Vec<[u8; 32]>| {
+        if !touched.contains(&id) {
+            touched.push(id);
+        }
+    };
+
+    for tree in turn.call_forest.iter_dfs() {
+        for effect in &tree.action.effects {
+            match effect {
+                Effect::Transfer { from, to, amount } => {
+                    let asset = {
+                        let a = asset_of(from, pre);
+                        if a.is_empty() { asset_of(to, post) } else { a }
+                    };
+                    out.push(ES::Transfer {
+                        from: hex_encode(&from.0),
+                        to: hex_encode(&to.0),
+                        asset,
+                        amount: *amount,
+                    });
+                    note(from.0, &mut touched);
+                    note(to.0, &mut touched);
+                }
+                Effect::GrantCapability { from, to, cap } => {
+                    out.push(ES::Granted {
+                        from: hex_encode(&from.0),
+                        to: hex_encode(&to.0),
+                        cap: cap_ref_label(cap),
+                    });
+                }
+                Effect::RevokeCapability { cell, slot } => {
+                    out.push(ES::Revoked {
+                        cap: format!("{}#{}", hex_encode(&cell.0), slot),
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Post-state balance observations for the cells the transfers touched —
+    // the stamped `balance(cell, asset, amount, height)` facts (clamped to a
+    // non-negative observation; a cell's balance register is bias-encoded).
+    for id in &touched {
+        let cell_id = CellId(*id);
+        if let Some(c) = post.get(&cell_id) {
+            let bal = c.state.balance();
+            out.push(ES::Balance {
+                cell: hex_encode(id),
+                asset: hex_encode(c.token_id()),
+                amount: bal.max(0) as u64,
+            });
+        }
+    }
+
+    out
+}
+
 fn effect_kind(effect: &dregg_turn::Effect) -> String {
     let debug = format!("{effect:?}");
     debug
@@ -7551,6 +7758,7 @@ mod tests {
             turn_hash: format!("turn-{height}"),
             cell_id: format!("cell-{height}"),
             effects: vec![format!("effect-{height}")],
+            summaries: Vec::new(),
             timestamp: height as i64,
         }
     }
@@ -7744,6 +7952,269 @@ mod tests {
         let decoded = dregg_turn::WitnessedReceipt::from_artifact_bytes(&artifact_bytes)
             .expect("DWR1 witness artifact decodes");
         assert_eq!(decoded.proof_bytes, vec![0x41, 0x42]);
+    }
+
+    /// The enrichment: a committed turn's decoded Transfer effect + the
+    /// before/after ledger yield a typed `Transfer` summary AND a post-state
+    /// `Balance` observation for the touched cells — the EDB rows dregg-query
+    /// turns into `transfer`/`balance` facts.
+    #[test]
+    fn summarize_turn_effects_yields_typed_transfer_and_balance() {
+        use dregg_query::EffectSummary as ES;
+
+        let agent_pk = [0x11u8; 32];
+        let recipient_pk = [0x22u8; 32];
+        let agent = CellId(dregg_cell::CellId::derive_raw(&agent_pk, &[0u8; 32]).0);
+        let recipient = CellId(dregg_cell::CellId::derive_raw(&recipient_pk, &[0u8; 32]).0);
+
+        let mut pre = dregg_cell::Ledger::new();
+        pre.insert_cell(dregg_cell::Cell::with_balance(agent_pk, [0u8; 32], 1_000))
+            .expect("agent insert");
+        pre.insert_cell(dregg_cell::Cell::with_balance(recipient_pk, [0u8; 32], 0))
+            .expect("recipient insert");
+
+        // Post-state: 250 moved agent -> recipient.
+        let mut post = pre.clone();
+        {
+            let a = post.get(&agent).expect("agent").clone();
+            let mut a = a;
+            a.state.set_balance(a.state.balance() - 250);
+            post.remove(&agent);
+            post.insert_cell(a).expect("reinsert agent");
+            let r = post.get(&recipient).expect("recipient").clone();
+            let mut r = r;
+            r.state.set_balance(r.state.balance() + 250);
+            post.remove(&recipient);
+            post.insert_cell(r).expect("reinsert recipient");
+        }
+
+        let mut forest = CallForest::new();
+        forest.add_root(
+            dregg_turn::ActionBuilder::new_unchecked_for_tests(agent, "transfer", agent)
+                .effect_transfer(agent, recipient, 250)
+                .build(),
+        );
+        let turn = make_min_turn(agent, 0, None, forest);
+
+        let summaries = summarize_turn_effects(&turn, &pre, &post);
+
+        assert!(
+            summaries.iter().any(|e| matches!(
+                e,
+                ES::Transfer { amount: 250, to, .. } if *to == hex_encode(&recipient.0)
+            )),
+            "expected a typed Transfer(250) summary, got {summaries:?}"
+        );
+        assert!(
+            summaries.iter().any(|e| matches!(
+                e,
+                ES::Balance { amount: 250, cell, .. } if *cell == hex_encode(&recipient.0)
+            )),
+            "expected a post-state Balance(250) for the recipient, got {summaries:?}"
+        );
+    }
+
+    /// End-to-end over the LIVE log: drive two real transfer turns through the
+    /// node (executor + cipherclerk commit, the same path `/turn/submit` runs),
+    /// then read the two new handlers — `/api/receipts/index/{root,range}` —
+    /// build a dregg-query `AttestedAnswer` over the served slice, and verify it
+    /// against the served root. Then show the non-omission teeth bite: a
+    /// substituted leaf and a dropped position both reject.
+    #[tokio::test]
+    async fn live_receipt_index_serves_verifying_attested_answer_and_teeth_bite() {
+        use dregg_turn::{ComputronCosts, TurnExecutor, TurnResult};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+
+        let recipient_pk = [0x77u8; 32];
+        let (agent, recipient) = {
+            let s = state.read().await;
+            let agent_pk = s.cclerk.public_key().0;
+            (
+                CellId(dregg_cell::CellId::derive_raw(&agent_pk, &[0u8; 32]).0),
+                CellId(dregg_cell::CellId::derive_raw(&recipient_pk, &[0u8; 32]).0),
+            )
+        };
+
+        // Open permissions so the unsigned test transfer commits (the
+        // executor still enforces the cell's Send permission; the real node
+        // path signs via the cipherclerk instead).
+        let open = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+
+        {
+            let mut s = state.write().await;
+            let cc_pk = s.cclerk.public_key().0;
+            let mut agent_cell = dregg_cell::Cell::with_balance(cc_pk, [0u8; 32], 1_000_000);
+            agent_cell.permissions = open.clone();
+            s.ledger.insert_cell(agent_cell).expect("agent provision");
+            let mut recipient_cell = dregg_cell::Cell::with_balance(recipient_pk, [0u8; 32], 0);
+            recipient_cell.permissions = open.clone();
+            s.ledger
+                .insert_cell(recipient_cell)
+                .expect("recipient provision");
+
+            let executor = TurnExecutor::new(ComputronCosts::default());
+            for nonce in 0u64..2 {
+                let prev = s.cclerk.receipt_head().map(|r| r.receipt_hash());
+                let mut forest = CallForest::new();
+                forest.add_root(
+                    dregg_turn::ActionBuilder::new_unchecked_for_tests(agent, "transfer", agent)
+                        .effect_transfer(agent, recipient, 100)
+                        .build(),
+                );
+                let turn = make_min_turn(agent, nonce, prev, forest);
+                let pre_ledger = s.ledger.clone();
+                let receipt = match executor.execute(&turn, &mut s.ledger) {
+                    TurnResult::Committed { receipt, .. } => receipt,
+                    other => panic!("transfer turn nonce={nonce} must commit: {other:?}"),
+                };
+                s.cclerk.append_receipt(receipt).expect("append receipt");
+                let summaries = summarize_turn_effects(&turn, &pre_ledger, &s.ledger);
+                assert!(
+                    summaries
+                        .iter()
+                        .any(|e| matches!(e, dregg_query::EffectSummary::Transfer { .. })),
+                    "real turn must yield a typed Transfer summary"
+                );
+                push_committed_event_enriched(
+                    &mut s,
+                    hex_encode(&turn.hash()),
+                    hex_encode(&agent.0),
+                    vec!["transfer".to_string()],
+                    summaries,
+                    ActivityProofStatus::NotRequired,
+                );
+            }
+        }
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        // (1) the live MMR root.
+        let root_resp: dregg_query::client::IndexRootResponse = {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/receipts/index/root")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            serde_json::from_slice(&body).expect("root json")
+        };
+        assert_eq!(root_resp.len, 2, "two committed receipts indexed");
+        let trusted_root = hex_decode(&root_resp.root).expect("32-byte root");
+
+        // (2) the certified slice over the whole log.
+        let range_resp: dregg_query::client::IndexRangeResponse = {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/receipts/index/range?lo=0&hi=1")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            serde_json::from_slice(&body).expect("range json")
+        };
+        assert_eq!(range_resp.receipts.len(), 2);
+
+        // (3) the attested answer verifies against the served root.
+        let query = dregg_query::Query::new().atom(
+            dregg_query::Pred::Transfer,
+            vec![
+                dregg_query::Term::var("from"),
+                dregg_query::Term::var("to"),
+                dregg_query::Term::var("asset"),
+                dregg_query::Term::var("amount"),
+                dregg_query::Term::var("h"),
+            ],
+        );
+        let slice = range_resp.clone().into_slice().expect("slice");
+        let answer = dregg_query::answer_whole_log(slice, query).expect("answer");
+        answer
+            .verify(&dregg_query::Blake3Mmr, &trusted_root)
+            .expect("live attested answer must verify against the served root");
+        assert!(
+            !answer.rows.is_empty(),
+            "the transfer query yields rows from the live receipts"
+        );
+
+        // (4a) teeth: a substituted receipt leaf rejects (SlotMismatch).
+        let mut tampered = range_resp.clone().into_slice().expect("slice");
+        tampered.receipts[0].receipt_hash = hex_encode(&[0xEEu8; 32]);
+        assert!(
+            tampered
+                .verify(&dregg_query::Blake3Mmr, &trusted_root)
+                .is_err(),
+            "a substituted leaf must reject"
+        );
+
+        // (4b) teeth: a dropped position rejects (CountMismatch — positions are dense).
+        let mut omitted = range_resp.into_slice().expect("slice");
+        omitted.receipts.pop();
+        assert!(
+            omitted
+                .verify(&dregg_query::Blake3Mmr, &trusted_root)
+                .is_err(),
+            "an omitted position must reject"
+        );
+    }
+
+    /// Build a minimal `Turn` with the given call forest (test helper).
+    fn make_min_turn(
+        agent: CellId,
+        nonce: u64,
+        prev: Option<[u8; 32]>,
+        call_forest: CallForest,
+    ) -> Turn {
+        Turn {
+            agent,
+            nonce,
+            fee: 100_000,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: prev,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        }
     }
 
     #[tokio::test]

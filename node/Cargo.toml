@@ -31,6 +31,11 @@ dregg-federation = { path = "../federation" }
 dregg-sdk = { path = "../sdk" }
 dregg-sdk-net = { path = "../dregg-sdk-net" }
 dregg-intent = { path = "../intent" }
+# The attested-query index (dregg-query): the receipt-log MMR (non-omission
+# certificate) + the typed EffectSummary EDB. The node maintains the MMR over
+# its receipt chain and serves `/api/receipts/index/{root,range}`; this leaf
+# crate is HTTP-free and pulls only serde + blake3 (already in the graph).
+dregg-query = { path = "../dregg-query" }
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
