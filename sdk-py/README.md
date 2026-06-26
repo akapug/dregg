@@ -154,41 +154,47 @@ the verified executor. See `examples/pg_durable_workflow.py` for the full
 recurring-billing story (cap-gated, instant-revocation, crash-resume) against live
 pg-dregg.
 
-## Two builds: the LIGHT client (default) vs the embedded kernel
+## Two builds: the Rust executor (default) vs the embedded Lean kernel
 
-`pip install dregg` gives you the **light, kernel-free client** — a small,
-toolchain-free wheel that carries the *whole* client surface: `Identity` +
+The SDK **always ships a local executor** — Rust by default, the verified Lean
+kernel when you opt in. The whole client surface (`Identity` +
 `turn`/`transfer`/`sign`/`submit`, the organs, `AttestedQuery`, `deploy.check`,
-`dregg.pg`, profiles, the receipt stream, the program atoms. That surface is
-Ed25519 + the canonical wire codec + blocking HTTP — it does **not** run the
-executor — so it needs neither `libleanshared` (~150 MB) nor the Lean toolchain
-on the host. The byte-for-byte signing and wire are identical to the kernel
-build; only the embedded executor is absent.
+`dregg.pg`, profiles, the receipt stream, the program atoms) is Ed25519 + the
+canonical wire codec + blocking HTTP and works identically in both builds.
 
-`dregg.kernel()` reports which build you have and degrades gracefully:
+`pip install dregg` gives you the **light** wheel: a small, toolchain-free wheel
+whose local executor is the pure-Rust `TurnExecutor` (`dregg-turn`). It links no
+`libleanshared` (~150 MB) and needs no Lean toolchain on the host. The Rust
+executor is at **parity with the verified Lean spec** (a dedicated lane
+strengthens + documents that Rust↔Lean parity — that parity is the justification
+for trusting the Rust producer). `dregg.kernel()` PROVES the active executor by
+driving one real transfer through it:
 
 ```python
 >>> dregg.kernel()                       # the default LIGHT wheel
-{'build': 'light', 'lean': False, 'producer': 'rust',
- 'verified_step_ok': False,
- 'verified_step_out': 'kernel-absent: this is the LIGHT, client-only build …'}
+{'build': 'light', 'lean': False, 'executor': 'rust', 'producer': 'rust',
+ 'executor_present': True, 'executor_step_ok': True, 'verified_step_ok': False,
+ 'executor_step_out': '{"executor":"rust","cells":[["src",…],["dst",15]],"transferred":5,"ok":1}'}
 ```
 
 The **embedded verified Lean kernel** (`metatheory/Dregg2`, via `dregg-lean-ffi`
 — the same executor every native dregg binary runs) is the optional heavy build,
 `dregg[kernel]`. It links `libdregg_lean.a` (the Dregg2 module objects) +
-`libleanshared`, and `dregg.kernel()` then PROVES the kernel by driving one
-transfer through the proved `Exec.recKExec`:
+`libleanshared`; the active executor is then `lean` and `dregg.kernel()` proves
+it by driving the transfer through the proved `Exec.recKExec`:
 
 ```python
 >>> dregg.kernel()                       # the dregg[kernel] wheel
-{'build': 'kernel', 'lean': True, 'producer': 'lean', 'verified_step_ok': True,
- 'verified_step_out': '{"cells":[[1,…45…],[2,…15…]],"ok":1}'}
+{'build': 'kernel', 'lean': True, 'executor': 'lean', 'producer': 'lean',
+ 'executor_present': True, 'executor_step_ok': True, 'verified_step_ok': True,
+ 'executor_step_out': '{"cells":[[1,…45…],[2,…15…]],"ok":1}'}
 ```
 
-The kernel wheel is the **same `dregg` package** compiled with the Rust `kernel`
-feature (see *Building*); its Lean runtime is initialized once, at `import
-dregg`, on the importing thread.
+`verified_step_ok` is true only when the executor that ran the step was the
+*verified Lean* one; the Rust producer is at-parity, not itself the proved
+kernel. The kernel wheel is the **same `dregg` package** compiled with the Rust
+`kernel` feature (see *Building*); its Lean runtime is initialized once, at
+`import dregg`, on the importing thread.
 
 ## How the link works (shared mode — the kernel build only)
 
@@ -263,8 +269,9 @@ python3 -m pytest tests/    # needs the module importable (maturin develop, or c
 ```
 
 `tests/test_smoke.py` covers profiles/signing/submit against an in-process mock
-node, plus the kernel probe (`test_kernel_probe_reports_build` — it asserts the
-light build reports `build="light"`, kernel-absent, and the kernel build runs a
-real `Exec.recKExec` step). The deploy/pg surfaces have their own files
+node, plus the executor probe (`test_kernel_probe_reports_executor` — it asserts
+the active executor ran a real transfer: the Rust `TurnExecutor` in the light
+build, the proved `Exec.recKExec` in the kernel build). The deploy/pg surfaces
+have their own files
 (`test_deploy.py`, `test_pg*.py`; pg integration is skip-gated on a live
 postgres).

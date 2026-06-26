@@ -256,9 +256,16 @@ def list_profiles() -> list[dict[str, Any]]:
     """List the local profile store (name / public_key / created_at / active)."""
 
 def kernel() -> dict[str, Any]:
-    """Report which kernel this module embeds — and PROVE it by running one
-    verified transfer through it (`{lean, producer, verified_step_ok,
-    verified_step_out}`)."""
+    """Report the active LOCAL EXECUTOR and PROVE it by running one real transfer
+    (`{build, lean, executor, producer, executor_present, executor_step_ok,
+    executor_step_out, verified_step_ok}`).
+
+    The SDK always ships a local executor. In the default `build="light"` wheel
+    it is the pure-Rust `TurnExecutor` (`executor`/`producer` "rust", at parity
+    with the verified Lean spec); `executor_step_ok` is a real signed transfer
+    the executor authorized + committed. In the `dregg[kernel]` build it is the
+    verified Lean kernel (`executor` "lean"), and `verified_step_ok` is a live
+    step through the proved `Exec.recKExec`."""
 
 # ─── dregg.program — the cell-program constraint language ───
 
