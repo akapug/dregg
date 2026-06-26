@@ -44,6 +44,14 @@ name = "firmament_pane"
 path = "tests/firmament_pane.rs"
 required-features = ["firmament", "cockpit-surface", "screenshot"]
 
+# THE STRUCTURE-PANE test — drives the REAL gpui `EditorSurface` (the cockpit
+# pane) in a headless gpui app and toggles the buffer⇄structure face, asserting
+# the `DocViewer` (blame + conflict objects) tracks the editor's live document.
+[[test]]
+name = "editor_structure_pane"
+path = "tests/editor_structure_pane.rs"
+required-features = ["firmament", "cockpit-surface", "screenshot"]
+
 [features]
 # By default the editor builds the full windowed gpui surface with
 # rust/json/toml/markdown tree-sitter grammars so a real source file highlights
