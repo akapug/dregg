@@ -57,6 +57,19 @@ surfaces / membranes / rehydration / affordances.
 import Dregg2.Deos.Surface
 import Dregg2.Deos.Membrane
 import Dregg2.Deos.DerivedCell
+-- The SEALED-ESCROW house-capacity, GROUNDED (`docs/deos/HOUSE-CAPACITY-FRAMEWORK.md`): an atomic
+-- 2-of-2 value swap completes all-or-nothing and ONCE, proven BY REUSE of the committed-heap root
+-- (`Substrate.Heap.root_binds_get`) + the one-shot Consumed discipline. deposit_both_ready (honest
+-- swap) + replay_rejected (the one-shot tooth: a settled leg is a spent nullifier) +
+-- nonconforming_claim_rejected + over_claim_rejected + leg_status_bound_in_root (the anti-ghost). The
+-- Rust escrow_sealed.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.SealedEscrow
+-- The STANDING-OBLIGATION house-capacity, GROUNDED: a recurring duty is discharged once-per-period,
+-- on-schedule, never early or skipped, proven BY REUSE of the committed-heap root + the
+-- StrictMonotonic cursor discipline (the version/supply-slot monotone law). cursor_strict_mono +
+-- replay_rejected (one-shot per period) + early/over/behind-schedule teeth + cursor_bound_in_root.
+-- The Rust obligation_standing.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.StandingObligation
 import Dregg2.Deos.Rehydration
 import Dregg2.Deos.Affordance
 -- The COMPOSITION / RERENDER / VISIBILITY widening (2026-06-14): the desktop's UI-composition
