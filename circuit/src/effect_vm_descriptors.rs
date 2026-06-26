@@ -942,6 +942,14 @@ pub const ROTATED_UMEM_WELD_SUFFIX: &str = "-umem-welded-staged";
 /// anchors); never a deployed-registry member.
 pub const WIDE_UMEM_WELD_SUFFIX: &str = "-umem-wide-welded-staged";
 
+/// The wire-name suffix marking a descriptor as the WIDE rotated+umem MULTI-DOMAIN WELD
+/// ([`weld_umem_multidomain_into_wide_descriptor`]) — the two-domain twin of
+/// [`WIDE_UMEM_WELD_SUFFIX`]. A descriptor whose `name` ends with this welds the MULTI-DOMAIN umem
+/// cohort (one guarded `umemOp` per touched domain — the NOTE/BRIDGE economic verbs' `heap` balance
+/// credit + `nullifiers` freshness insert) onto a WIDE descriptor, preserving the wide member's 16
+/// commit PIs (8-felt ~124-bit anchors). Never a deployed-registry member.
+pub const WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX: &str = "-umem-multidomain-wide-welded-staged";
+
 /// **THE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the last precursor before the gated VK epoch.**
 ///
 /// Weld the universal-memory COHORT leg INTO a rotated R=24 descriptor: keep the WHOLE rotated
@@ -1016,6 +1024,81 @@ pub fn weld_umem_into_wide_descriptor(
     domain: u32,
 ) -> crate::descriptor_ir2::EffectVmDescriptor2 {
     weld_umem_into_descriptor_with_suffix(wide, domain, WIDE_UMEM_WELD_SUFFIX, false)
+}
+
+/// **THE WIDE ROTATED+UMEM MULTI-DOMAIN WELD (STAGED, VK-RISK-FREE) — the last family tail.** The
+/// two-domain twin of [`weld_umem_into_wide_descriptor`]: weld the MULTI-DOMAIN umem cohort leg INTO
+/// a WIDE descriptor (a member of [`WIDE_REGISTRY_STAGED_TSV`]). Where the single-domain weld appends
+/// ONE `umemOp` over 7 fresh columns, this appends the FIXED multi-domain cohort shape (the verified
+/// Lean `EffectVmEmitUMemCohortMulti.umemCohortDesc2`, the byte-pinned
+/// [`UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV`]): `6 + domains.len()` fresh main columns
+/// `[base .. base + 6 + domains.len())` — `base+0..base+5` shared (`key · present · value ·
+/// prev_present · prev_value · prev_serial`), one PER-DOMAIN guard at `base + 6 + i` — and ONE
+/// `umemOp` per touched domain (in the supplied COLUMN order, the producer's sorted-domain-code order
+/// `{heap (1), nullifiers (3)}`), each guarded at its own column. The NOTE/BRIDGE economic verbs touch
+/// TWO domains in one effect (a `nullifiers` freshness insert + a `heap` balance credit), on which the
+/// single-domain weld fails closed; this is their WIDE weld.
+///
+/// IDENTICAL no-narrowing property to [`weld_umem_into_wide_descriptor`]: it PRESERVES
+/// `public_input_count` AND every existing constraint (incl. all 16 wide-commit `PiBinding`s), so the
+/// 8-felt before/after anchors ride through INTACT at the SAME PI offsets. The cross-DOMAIN economic
+/// invariant (the credit == the spent/minted value) is NOT a memory-reconciliation property — it rides
+/// the effect's own rotated AIR (the whole rotated constraint set the weld preserves), exactly as in the
+/// narrow multi-domain cohort. STAGED: a NEW descriptor BESIDE the deployed wide registry — no VK bump,
+/// nothing on the live wire. `domains` is the per-op domain set in column order (heap 1 / caps 2 /
+/// nullifiers 3), checked against the leg's actual domains by the prover.
+pub fn weld_umem_multidomain_into_wide_descriptor(
+    wide: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domains: &[u32],
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    use crate::descriptor_ir2::{
+        MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem, UMemOpSpec, VmConstraint2,
+    };
+    use crate::lean_descriptor_air::LeanExpr;
+
+    // The first fresh universal-memory operand column (the base form occupies `[0, base)`).
+    let base = wide.trace_width;
+    let mut welded = wide.clone();
+    welded.name = format!("{}{WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX}", wide.name);
+    // Shared base cols 0..5 + one guard per domain.
+    welded.trace_width = base + 6 + domains.len();
+    for t in welded.tables.iter_mut() {
+        if t.sem == TableSem::Main {
+            t.arity = welded.trace_width;
+        }
+    }
+    // The universal-memory tables: `umemory` (arity 8) + the GENERAL `umem_boundary` (arity 7) — the
+    // multi-domain cohort reconciles 2+ `(domain,key)` cells, so the single-row cohort boundary
+    // (whose `Nodup` is vacuous) does NOT apply; it carries the general lexicographic comparator (the
+    // byte-pinned multi-domain cohort descriptor declares the general `umem_boundary`).
+    welded.tables.push(TableDef2 {
+        id: TID_UMEMORY,
+        name: "umemory".to_string(),
+        arity: 8,
+        sem: TableSem::UMemory,
+    });
+    welded.tables.push(TableDef2 {
+        id: TID_UMEM_BOUNDARY,
+        name: "umem_boundary".to_string(),
+        arity: 7,
+        sem: TableSem::UMemBoundary,
+    });
+    // One welded universal-memory WRITE op per touched domain — byte-for-byte the multi-domain cohort
+    // `umemOp` shape (shared key/value/prev cols, per-domain guard), offset to `base`.
+    for (i, &domain) in domains.iter().enumerate() {
+        welded.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(base + 6 + i),
+            domain,
+            key: LeanExpr::Var(base),
+            present: LeanExpr::Var(base + 1),
+            value: LeanExpr::Var(base + 2),
+            prev_present: LeanExpr::Var(base + 3),
+            prev_value: LeanExpr::Var(base + 4),
+            prev_serial: LeanExpr::Var(base + 5),
+            kind: MemKind::Write,
+        }));
+    }
+    welded
 }
 
 /// The shared, purely-ADDITIVE umem-cohort weld (the body of both

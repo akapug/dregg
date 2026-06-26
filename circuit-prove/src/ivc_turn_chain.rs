@@ -1670,19 +1670,27 @@ pub struct WeldedChainHostSummary {
 /// proof against the leg's own descriptor and confirms the staged-weld marker.
 fn admit_welded_leg(t: &FinalizedTurn, index: usize) -> Result<(), TurnChainError> {
     use dregg_circuit::descriptor_ir2::verify_vm_descriptor2_with_config;
-    use dregg_circuit::effect_vm_descriptors::{ROTATED_UMEM_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX};
+    use dregg_circuit::effect_vm_descriptors::{
+        ROTATED_UMEM_WELD_SUFFIX, WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
+    };
     let leg = &t.participant.rotated;
-    // Accept BOTH staged weld forms: the NARROW rotated+umem weld (1-felt / 46-PI) and the WIDE
+    // Accept the staged weld forms: the NARROW rotated+umem weld (1-felt / 46-PI), the WIDE
     // rotated+umem weld (8-felt / ~124-bit, the wide commit PIs preserved through the additive
-    // weld). Either rides the SAME single-felt `old_root`/`new_root` (PI 34/35) the chain fold's
-    // temporal tooth binds; the wide form additionally carries the 8-felt anchors at its PI tail.
+    // weld), and the WIDE MULTI-DOMAIN weld (the NOTE/BRIDGE economic verbs — one guarded `umemOp`
+    // per domain, the same 8-felt anchors). Each rides the SAME single-felt `old_root`/`new_root`
+    // (PI 34/35) the chain fold's temporal tooth binds; the wide forms additionally carry the 8-felt
+    // anchors at their PI tail.
     if !(leg.descriptor.name.ends_with(ROTATED_UMEM_WELD_SUFFIX)
-        || leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX))
+        || leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+        || leg
+            .descriptor
+            .name
+            .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX))
     {
         return Err(TurnChainError::TurnProofInvalid {
             index,
             reason: format!(
-                "leg descriptor '{}' is not a staged rotated+umem weld (narrow or wide)",
+                "leg descriptor '{}' is not a staged rotated+umem weld (narrow / wide / wide-multidomain)",
                 leg.descriptor.name
             ),
         });
@@ -1881,6 +1889,501 @@ pub fn prove_welded_umem_turn_chain_recursive_staged(
         chain_digest,
         num_turns: turns.len(),
     })
+}
+
+// ============================================================================
+// THE IN-CIRCUIT RECURSIVE WIDE FOLD — the 8-felt generalization of the
+// single-felt chain-binding recursion (the named tail from the WIDE+umem weld
+// `d81f7f60`; the host fold `fold_wide_welded_umem_turn_chain_staged` is its
+// host-side twin). STAGED / VK-risk-free.
+//
+// The single-felt recursion exposes a per-leaf SEGMENT `[first_old, last_new,
+// count, acc]` whose `first_old`/`last_new` are the single-felt rotated commits
+// (PI 34/35), and combines segments up a binary tree binding single-felt
+// continuity `L.last_new == R.first_old` in-circuit. This is its 8-felt
+// generalization: the wide-welded leg retires the single-felt PIs (34/35) to
+// zero (the 8-felt wide commit is the sole binding), so the segment's endpoints
+// are the **8-felt** wide anchors (`wide_old_root8`/`wide_new_root8`, the leg's
+// last-16 PIs) and the combine binds 8-felt continuity
+// (`prev.wide_new_root8 == next.wide_old_root8`) lane-by-lane IN-CIRCUIT. The
+// ordered-history digest reuses the proven [`seg_poseidon_commit`] multi-felt
+// (~124-bit) Poseidon2 commitment — the load-bearing generalization is the
+// 8-felt anchor binding, not the digest width.
+// ============================================================================
+
+/// The number of base-field lanes in a WIDE state-commit anchor (the 8-felt /
+/// ~124-bit faithful commit a WIDE / wide-welded leg publishes).
+pub const WIDE_ANCHOR_WIDTH: usize = 8;
+
+// The WIDE segment lane layout exposed through the `expose_claim` table:
+// `[first_old8(8), last_new8(8), count(1), acc(SEG_DIGEST_WIDTH)]`.
+const WSEG_FIRST_OLD: usize = 0;
+const WSEG_LAST_NEW: usize = WIDE_ANCHOR_WIDTH;
+const WSEG_COUNT: usize = 2 * WIDE_ANCHOR_WIDTH;
+const WSEG_DIGEST_FIRST: usize = 2 * WIDE_ANCHOR_WIDTH + 1;
+/// A wide segment is exactly this many base-field lanes.
+pub const WIDE_SEG_WIDTH: usize = WSEG_DIGEST_FIRST + SEG_DIGEST_WIDTH;
+
+/// The host-side mirror of one WIDE descriptor-leaf / aggregation-node segment
+/// (the 8-felt twin of [`HostSeg`]): the base-field values it exposes through the
+/// `expose_claim` table, `[first_old8(8), last_new8(8), count(1), acc(W)]`. The
+/// prover folds these the SAME way the in-circuit combine does so it knows the
+/// root segment (hence the wide chain claims) to carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WideHostSeg {
+    pub first_old8: [BabyBear; WIDE_ANCHOR_WIDTH],
+    pub last_new8: [BabyBear; WIDE_ANCHOR_WIDTH],
+    pub count: BabyBear,
+    /// The multi-felt Poseidon2 ordered-history digest (the SAME [`seg_poseidon_commit_host`]
+    /// the single-felt recursion uses).
+    pub acc: [BabyBear; SEG_DIGEST_WIDTH],
+}
+
+/// The per-turn (wide descriptor-leaf) segment: `first_old8`/`last_new8` are the
+/// 8-felt wide anchors, `count = 1`, `acc = commit([first_old8 ++ last_new8])` —
+/// the SAME seed [`seg_poseidon_commit`] computes at the wide leaf wrap (16 inputs).
+pub(crate) fn leaf_wide_seg(
+    old8: [BabyBear; WIDE_ANCHOR_WIDTH],
+    new8: [BabyBear; WIDE_ANCHOR_WIDTH],
+) -> WideHostSeg {
+    let mut inputs = Vec::with_capacity(2 * WIDE_ANCHOR_WIDTH);
+    inputs.extend_from_slice(&old8);
+    inputs.extend_from_slice(&new8);
+    WideHostSeg {
+        first_old8: old8,
+        last_new8: new8,
+        count: BabyBear::ONE,
+        acc: seg_poseidon_commit_host(&inputs),
+    }
+}
+
+/// Combine two adjacent wide segments (the host mirror of the wide aggregation combine):
+/// 8-felt continuity `l.last_new8 == r.first_old8` (caller-checked upstream as
+/// `WideChainBreak`), `first_old8 = l.first_old8`, `last_new8 = r.last_new8`,
+/// `count = l.count + r.count`, `acc = commit(l.acc ++ r.acc)` (order-sensitive: l before r,
+/// the SAME 8-input commit the in-circuit combine runs).
+pub(crate) fn combine_wide_seg(l: WideHostSeg, r: WideHostSeg) -> WideHostSeg {
+    let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+    acc_inputs.extend_from_slice(&l.acc);
+    acc_inputs.extend_from_slice(&r.acc);
+    WideHostSeg {
+        first_old8: l.first_old8,
+        last_new8: r.last_new8,
+        count: l.count + r.count,
+        acc: seg_poseidon_commit_host(&acc_inputs),
+    }
+}
+
+/// Fold the per-turn wide leaf segments into the ROOT wide segment using the SAME pairwise
+/// left-to-right binary tree (with odd-element carry) that [`aggregate_tree_wide`] runs
+/// in-circuit — so the host-computed root `[first_old8, last_new8, count, acc]` equals what
+/// the wide root proof exposes.
+fn compute_root_wide_segment(
+    anchors: &[([BabyBear; WIDE_ANCHOR_WIDTH], [BabyBear; WIDE_ANCHOR_WIDTH])],
+) -> WideHostSeg {
+    let mut level: Vec<WideHostSeg> = anchors.iter().map(|(o, n)| leaf_wide_seg(*o, *n)).collect();
+    while level.len() > 1 {
+        let mut next: Vec<WideHostSeg> = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(combine_wide_seg(level[i], level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]);
+        }
+        level = next;
+    }
+    level[0]
+}
+
+/// Collect each welded leg's 8-felt wide anchors and check the **8-felt** temporal tooth
+/// (`prev.wide_new_root8 == next.wide_old_root8`). A narrow leg lacking the wide tail is
+/// `MissingWideAnchor`; a reorder/splice is `WideChainBreak`. The host twin of the in-circuit
+/// continuity the wide combine binds lane-by-lane.
+fn collect_wide_anchors(
+    turns: &[&FinalizedTurn],
+) -> Result<Vec<([BabyBear; WIDE_ANCHOR_WIDTH], [BabyBear; WIDE_ANCHOR_WIDTH])>, TurnChainError> {
+    if turns.len() < 2 {
+        return Err(TurnChainError::TooFewTurns { count: turns.len() });
+    }
+    let mut anchors = Vec::with_capacity(turns.len());
+    for (i, t) in turns.iter().enumerate() {
+        let leg = &t.participant.rotated;
+        let old8 = leg
+            .wide_old_root8()
+            .ok_or(TurnChainError::MissingWideAnchor { index: i })?;
+        let new8 = leg
+            .wide_new_root8()
+            .ok_or(TurnChainError::MissingWideAnchor { index: i })?;
+        anchors.push((old8, new8));
+    }
+    for i in 1..anchors.len() {
+        if anchors[i].0 != anchors[i - 1].1 {
+            return Err(TurnChainError::WideChainBreak { index: i });
+        }
+    }
+    Ok(anchors)
+}
+
+/// **THE WIDE SEGMENT-ACCUMULATOR DESCRIPTOR LEAF** (the 8-felt twin of
+/// [`prove_descriptor_leaf_rotated_with_segment`]). Wrap one WIDE welded finalized-turn
+/// descriptor batch in-circuit AND emit its constant-size ordered WIDE SEGMENT through the
+/// `expose_claim` table, BOUND in-circuit to the descriptor proof's REAL published 8-felt
+/// anchors:
+///
+///   `WideSeg = [first_old8(8), last_new8(8), count(1), acc(W)]`
+///     first_old8 := descriptor PIs `[n-16 .. n-8)` (the wide BEFORE 8-felt commit)
+///     last_new8  := descriptor PIs `[n-8  .. n)`   (the wide AFTER  8-felt commit)
+///     count      := 1
+///     acc        := commit([first_old8 ++ last_new8]) (the per-turn ordered-history seed)
+///
+/// Because `first_old8`/`last_new8` are READ from the descriptor proof's own verified
+/// `air_public_targets` (absolute PI indices `n-16..n`, the wide carrier PIs whose
+/// `PiBinding` makes a tampered anchor UNSAT), the segment is tied to the ACTUAL execution
+/// this leaf re-proves — a prover cannot expose 8-felt endpoints that differ from the wide
+/// descriptor it folded. The single-felt rotated PIs (34/35) are retired to zero on the wide
+/// form, so the 8-felt anchors are the sole binding.
+pub fn prove_descriptor_leaf_rotated_with_wide_segment(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    let n = descriptor_pis.len();
+    if n < 2 * WIDE_ANCHOR_WIDTH {
+        return Err(format!(
+            "wide segment leaf needs >= {} PIs to carry the two 8-felt anchors, got {n}",
+            2 * WIDE_ANCHOR_WIDTH
+        ));
+    }
+    // Absolute PI indices of the wide anchors (the SAME tail `RotatedParticipantLeg::
+    // wide_old_root8`/`wide_new_root8` read host-side): old8 at `[n-16 .. n-8)`, new8 at
+    // `[n-8 .. n)`. Indexed from the START so they are correct even if the main instance's
+    // target vector is padded past `n`.
+    let old_first = n - 2 * WIDE_ANCHOR_WIDTH;
+    let new_first = n - WIDE_ANCHOR_WIDTH;
+
+    let (airs, table_public_inputs, common) =
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
+
+    let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend();
+
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let main = apt
+            .first()
+            .expect("descriptor leaf has a main instance with descriptor PIs");
+        debug_assert!(
+            main.len() >= n,
+            "descriptor PI target vector must carry the 8-felt wide anchors at its tail"
+        );
+        let first_old8: Vec<p3_recursion::Target> = (0..WIDE_ANCHOR_WIDTH)
+            .map(|k| main[old_first + k])
+            .collect();
+        let last_new8: Vec<p3_recursion::Target> = (0..WIDE_ANCHOR_WIDTH)
+            .map(|k| main[new_first + k])
+            .collect();
+        let count = cb.define_const(RecursionChallenge::ONE);
+        // The per-turn seed: a genuine multi-felt Poseidon2 commitment over the leaf's REAL
+        // (descriptor-bound) 8-felt endpoints (16 inputs).
+        let mut acc_inputs = Vec::with_capacity(2 * WIDE_ANCHOR_WIDTH);
+        acc_inputs.extend_from_slice(&first_old8);
+        acc_inputs.extend_from_slice(&last_new8);
+        let acc = seg_poseidon_commit(cb, &acc_inputs);
+        let mut seg = Vec::with_capacity(WIDE_SEG_WIDTH);
+        seg.extend_from_slice(&first_old8);
+        seg.extend_from_slice(&last_new8);
+        seg.push(count);
+        seg.extend_from_slice(&acc);
+        debug_assert_eq!(seg.len(), WIDE_SEG_WIDTH);
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_next_layer_with_expose::<
+        DreggRecursionConfig,
+        dregg_circuit::descriptor_ir2::Ir2Air,
+        _,
+        D,
+    >(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("rotated native-batch WIDE segment leaf-wrap failed: {e:?}"))
+}
+
+/// Fold a vector of WIDE-segment-carrying batch-STARK proofs to ONE via 2-to-1 aggregation
+/// layers, combining the WIDE segments in-circuit at each node (8-felt continuity + count
+/// additivity + ordered-digest fold) — the 8-felt twin of [`aggregate_tree`].
+fn aggregate_tree_wide(
+    mut proofs: Vec<RecursionOutput<DreggRecursionConfig>>,
+    config: &DreggRecursionConfig,
+    backend: &p3_recursion::FriRecursionBackendForExt<D, 16, 8, p3_recursion::ops::Poseidon2Config>,
+    params: &ProveNextLayerParams,
+) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError> {
+    if proofs.is_empty() {
+        return Err(TurnChainError::RecursionFailed {
+            reason: "no wide leaves to aggregate".to_string(),
+        });
+    }
+    while proofs.len() > 1 {
+        let mut next_level: Vec<RecursionOutput<DreggRecursionConfig>> =
+            Vec::with_capacity(proofs.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < proofs.len() {
+            let left_idx = expose_claim_instance_index(&proofs[i].0).ok_or_else(|| {
+                TurnChainError::RecursionFailed {
+                    reason: "left wide aggregation child carries no segment (expose_claim) table"
+                        .to_string(),
+                }
+            })?;
+            let right_idx = expose_claim_instance_index(&proofs[i + 1].0).ok_or_else(|| {
+                TurnChainError::RecursionFailed {
+                    reason: "right wide aggregation child carries no segment (expose_claim) table"
+                        .to_string(),
+                }
+            })?;
+
+            let left = proofs[i].into_recursion_input::<BatchOnly>();
+            let right = proofs[i + 1].into_recursion_input::<BatchOnly>();
+
+            let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                               left_apt: &[Vec<p3_recursion::Target>],
+                               right_apt: &[Vec<p3_recursion::Target>]| {
+                let l = left_apt
+                    .get(left_idx)
+                    .expect("left wide segment instance present");
+                let r = right_apt
+                    .get(right_idx)
+                    .expect("right wide segment instance present");
+                debug_assert!(l.len() >= WIDE_SEG_WIDTH && r.len() >= WIDE_SEG_WIDTH);
+
+                // (1) THE 8-FELT STATE CONTINUITY tooth, IN-CIRCUIT: L.last_new8 == R.first_old8,
+                // lane-by-lane. The left subtree's final 8-felt root must be the right subtree's
+                // first 8-felt root. `connect` (not `assert_zero(sub(..))`) keeps the equality off
+                // the shared `ExprId::ZERO` witness — equal on the honest path, a conflict (a
+                // tampered/discontinuous chain) on a mismatch, fail-closed.
+                for k in 0..WIDE_ANCHOR_WIDTH {
+                    cb.connect(l[WSEG_LAST_NEW + k], r[WSEG_FIRST_OLD + k]);
+                }
+
+                // (2) parent wide segment: span [L.first_old8 .. R.last_new8], count L+R, ordered
+                // multi-felt digest acc = commit(L.acc ++ R.acc) (L absorbed before R ⇒
+                // order-sensitive).
+                let count = cb.add(l[WSEG_COUNT], r[WSEG_COUNT]);
+                let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+                acc_inputs
+                    .extend_from_slice(&l[WSEG_DIGEST_FIRST..WSEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                acc_inputs
+                    .extend_from_slice(&r[WSEG_DIGEST_FIRST..WSEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                let acc = seg_poseidon_commit(cb, &acc_inputs);
+                let mut parent = Vec::with_capacity(WIDE_SEG_WIDTH);
+                parent.extend_from_slice(&l[WSEG_FIRST_OLD..WSEG_FIRST_OLD + WIDE_ANCHOR_WIDTH]);
+                parent.extend_from_slice(&r[WSEG_LAST_NEW..WSEG_LAST_NEW + WIDE_ANCHOR_WIDTH]);
+                parent.push(count);
+                parent.extend_from_slice(&acc);
+                debug_assert_eq!(parent.len(), WIDE_SEG_WIDTH);
+                cb.expose_as_public_output(&parent);
+            };
+
+            let out = build_and_prove_aggregation_layer_with_expose::<
+                DreggRecursionConfig,
+                BatchOnly,
+                BatchOnly,
+                _,
+                D,
+            >(&left, &right, config, backend, params, None, Some(&expose))
+            .map_err(|e| TurnChainError::RecursionFailed {
+                reason: format!("wide aggregation layer failed: {e:?}"),
+            })?;
+            next_level.push(out);
+            i += 2;
+        }
+        if i < proofs.len() {
+            next_level.push(proofs.pop().unwrap());
+        }
+        proofs = next_level;
+    }
+    Ok(proofs.pop().unwrap())
+}
+
+/// The WIDE whole-chain IVC artifact (the 8-felt twin of [`WholeChainProof`]): ONE succinct
+/// recursive proof whose root's exposed WIDE segment IS the whole-chain claim
+/// `[genesis_root8, final_root8, num_turns, chain_digest]`, derived BY CONSTRUCTION from the
+/// real wide welded descriptor leaves and combined up the tree with 8-felt continuity. The
+/// verifier checks only the root; cost is independent of the number of folded turns.
+///
+/// There is no carried binding leaf (the single-felt `TurnChainBindingAir` binds PI 34/35,
+/// which the wide form retires to zero) — the wide segment tooth over the root's exposed
+/// segment is the sole binding, exactly as the codex ordered-segment-accumulator close intends.
+pub struct WideWholeChainProof {
+    /// The single root batch-STARK proof (the whole wide tree folded to one).
+    pub root: RecursionOutput<DreggRecursionConfig>,
+    /// The 8-felt genesis (the first turn's `wide_old_root8`).
+    pub genesis_root8: [BabyBear; WIDE_ANCHOR_WIDTH],
+    /// The 8-felt final root (the last turn's `wide_new_root8`).
+    pub final_root8: [BabyBear; WIDE_ANCHOR_WIDTH],
+    /// The multi-felt Poseidon2 ordered-history digest over the per-turn `(wide_old_root8,
+    /// wide_new_root8)` segments, tree-folded (the SAME [`seg_poseidon_commit`] the deployed
+    /// single-felt recursion uses).
+    pub chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
+    /// Number of finalized turns folded.
+    pub num_turns: usize,
+}
+
+impl WideWholeChainProof {
+    /// The root proof's verifier-key fingerprint (see [`RecursionVk`]). An honest setup party
+    /// extracts this ONCE and distributes it as the trust anchor; a verifier NEVER takes the
+    /// anchor from the artifact it verifies.
+    pub fn root_vk_fingerprint(&self) -> RecursionVk {
+        recursion_vk_fingerprint(&self.root.0)
+    }
+}
+
+/// **THE STAGED WIDE WELDED-UMEM IVC FOLD (RECURSIVE — VK-RISK-FREE).** The IN-CIRCUIT twin of
+/// [`fold_wide_welded_umem_turn_chain_staged`] and the 8-felt generalization of
+/// [`prove_welded_umem_turn_chain_recursive_staged`]: host-admit each WIDE welded leg, collect
+/// its 8-felt anchors + check 8-felt continuity, then mint ONE wide-segment-carrying recursion
+/// leaf per turn ([`prove_descriptor_leaf_rotated_with_wide_segment`] — which RE-VERIFIES the
+/// wide welded (umem-bearing) descriptor proof IN-CIRCUIT) and aggregate them to one root whose
+/// exposed WIDE segment is the whole-chain `[genesis_root8, final_root8, num_turns,
+/// chain_digest]`. The 8-felt continuity (`prev.wide_new_root8 == next.wide_old_root8`) is bound
+/// IN-CIRCUIT at each aggregation node (lane-by-lane `connect`), so the whole-history IVC folds
+/// the wide+umem legs in-circuit — not just host-side.
+///
+/// STAGED: the leaves carry wide welded (staged) descriptors; no VK epoch, no deployed-default
+/// flip. This is the genuine end-to-end in-circuit IVC fold over the rotated+umem WIDE form —
+/// the flip precursor whose ONLY remaining step to deployment is the gated VK epoch.
+pub fn prove_wide_welded_umem_turn_chain_recursive_staged(
+    turns: &[FinalizedTurn],
+) -> Result<WideWholeChainProof, TurnChainError> {
+    if turns.len() < 2 {
+        return Err(TurnChainError::TooFewTurns { count: turns.len() });
+    }
+    // (1) host admission: each WIDE welded leg's proof re-verifies against its welded descriptor.
+    for (i, t) in turns.iter().enumerate() {
+        admit_welded_leg(t, i)?;
+    }
+    let refs: Vec<&FinalizedTurn> = turns.iter().collect();
+    // (2) collect the 8-felt anchors + the 8-felt continuity tooth (host twin of the in-circuit
+    //     combine). A narrow leg is `MissingWideAnchor`; a reorder is `WideChainBreak`.
+    let anchors = collect_wide_anchors(&refs)?;
+    // CODEX #5: the count lane is a BabyBear (mod p), so num_turns must be < p (no modular wrap).
+    if (turns.len() as u64) >= BABY_BEAR_MODULUS as u64 {
+        return Err(TurnChainError::RecursionFailed {
+            reason: format!(
+                "num_turns {} >= BabyBear modulus {BABY_BEAR_MODULUS} (count lane would wrap mod p)",
+                turns.len()
+            ),
+        });
+    }
+    // (3) the ROOT wide segment the host computes by folding the per-turn leaf segments through
+    //     the SAME pairwise binary tree `aggregate_tree_wide` runs in-circuit.
+    let root_seg = compute_root_wide_segment(&anchors);
+    let genesis_root8 = root_seg.first_old8;
+    let final_root8 = root_seg.last_new8;
+    let chain_digest = root_seg.acc;
+
+    let config = ir2_leaf_wrap_config();
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    // (4) one WIDE-segment-carrying descriptor leaf per finalized turn (each re-verifying the wide
+    //     welded descriptor proof in-circuit, exposing its 8-felt segment bound to the real anchors).
+    let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
+        Vec::with_capacity(turns.len());
+    for (i, t) in refs.iter().enumerate() {
+        let leg = &t.participant.rotated;
+        let wrapped = prove_descriptor_leaf_rotated_with_wide_segment(
+            &leg.descriptor,
+            &leg.proof,
+            &leg.public_inputs,
+            &config,
+        )
+        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+        batch_leaves.push(wrapped);
+    }
+    // (5) aggregate to ONE root, combining the wide segments in-circuit (8-felt continuity + count
+    //     + ordered-digest fold). The root's exposed wide segment is the whole-chain claim.
+    let root = aggregate_tree_wide(batch_leaves, &config, &backend, &params)?;
+
+    Ok(WideWholeChainProof {
+        root,
+        genesis_root8,
+        final_root8,
+        chain_digest,
+        num_turns: turns.len(),
+    })
+}
+
+/// Verify a WIDE whole-chain artifact against a caller-held trust anchor (the 8-felt twin of
+/// [`verify_turn_chain_recursive`]). Cost is independent of the number of folded turns. Three
+/// teeth, in order:
+///
+///   1. **VK pin** — the presented root's verifier-key fingerprint must equal `expected_vk`
+///      (a root of a different circuit is refused).
+///   2. **The root** — the single root batch-STARK proof verifies under [`ir2_leaf_wrap_config`].
+///   3. **The WIDE segment tooth** — the root's exposed ordered WIDE segment
+///      `[first_old8, last_new8, count, acc]` (built BY CONSTRUCTION from the real wide
+///      descriptor leaves and combined up the tree with 8-felt continuity) must equal the carried
+///      `[genesis_root8, final_root8, num_turns, chain_digest]`. A root that executed history A
+///      cannot expose B's 8-felt endpoints, so a B-claim against an A-execution is refused.
+pub fn verify_wide_turn_chain_recursive(
+    proof: &WideWholeChainProof,
+    expected_vk: &RecursionVk,
+) -> Result<(), TurnChainError> {
+    // (1) VK pin.
+    let found = recursion_vk_fingerprint(&proof.root.0);
+    if found != *expected_vk {
+        return Err(TurnChainError::VkFingerprintMismatch {
+            expected: expected_vk.to_hex(),
+            found: found.to_hex(),
+        });
+    }
+
+    // (2) the root (at the rotated leaf-wrap config — the SAME FRI engine the whole wide tree
+    //     runs at).
+    verify_recursive_batch_proof_with_config(&proof.root.0, &ir2_leaf_wrap_config())
+        .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
+
+    // (3) THE WIDE SEGMENT TOOTH.
+    let exposed = root_exposed_claims(&proof.root.0).ok_or_else(|| {
+        TurnChainError::ClaimedPublicsUnattested {
+            reason: "root proof carries no exposed wide segment table (segment channel absent)"
+                .to_string(),
+        }
+    })?;
+    let mut expected = Vec::with_capacity(WIDE_SEG_WIDTH);
+    expected.extend_from_slice(&proof.genesis_root8);
+    expected.extend_from_slice(&proof.final_root8);
+    expected.push(BabyBear::new(proof.num_turns as u32));
+    expected.extend_from_slice(&proof.chain_digest);
+    if exposed != expected {
+        return Err(TurnChainError::ClaimedPublicsUnattested {
+            reason: format!(
+                "root-exposed wide segment {exposed:?} != carried claim {expected:?} \
+                 (the carried claim is not the fold of the real wide descriptor leaves)"
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 /// The rotated fold core: like [`prove_chain_core`] but mints rotated native-batch leaves and
