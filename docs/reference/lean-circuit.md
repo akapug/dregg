@@ -218,6 +218,27 @@ separately. The `custom_proof_commitment` column is 4-felt / ~62-bit
 (`custom_proof_bind.rs:61-70`), below the 8-felt / ~124-bit faithful-commitment floor.
 Full grounding: `docs/deos/CUSTOM-VK-AUTHORIZATION.md`.
 
+### Other trusted-out-of-circuit surfaces — the sovereign off-AIR pair
+
+`Effect::Custom` is not the only check the EffectVM AIR records-but-does-not-force.
+Two sovereign-cell surfaces are also off-AIR (honest, named in the Rust, but the
+bare aggregate STARK does not witness them):
+
+* **Sovereign witness signature + sequence** — the AIR carries only a 4-felt key
+  digest (`SOVEREIGN_WITNESS_KEY_COMMIT`) + a `SOVEREIGN_WITNESS_SEQUENCE`
+  (`pi.rs:223-235`); the actual Ed25519 signature is verified off-AIR
+  (`turn/src/executor/authorize.rs:889 verify_ed25519_signature`) and replay is the
+  off-AIR monotonic chain-walk. By design the signature binds the full 256-bit key
+  off-circuit (`pi.rs:217-222`).
+* **Sovereign inner transition proof (Phase 2)** — `SOVEREIGN_TRANSITION_PROOF_*`
+  (`pi.rs:240-250`) is recursively verified off-AIR (`pi.rs:209-213`;
+  `proof_verify.rs:2485`); the VK binding is **sentinel-zero today** (STAGED — the
+  recursive verifier is a follow-up).
+
+A full op-by-op audit (every AIR op classified genuinely-enforced / fail-closed-bus
+/ trusted-out-of-circuit, plus the re-verdict on "proofBind was the last vacuous
+gate" and `countOpenFronts = 0`) is `docs/deos/EFFECTVM-AIR-VERIFICATION-CENSUS.md`.
+
 ## Whole-history aggregation (the light client over a chain)
 
 `Dregg2.Circuit.RecursiveAggregation` lifts single-turn soundness to a whole history.
