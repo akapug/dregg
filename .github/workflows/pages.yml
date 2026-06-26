@@ -1,17 +1,24 @@
 name: Deploy deos to GitHub Pages
 
-# The site is a thin static launcher that drops a visitor straight into the live,
-# in-browser, node-LESS deos: the verified executor runs CLIENT-SIDE in the
-# visitor's own WebAssembly tab (no backend server — GitHub Pages is static).
-#   /              the deos cockpit (WebImage model skin) — land IN deos, fire a real turn
+# A LAYERED static site: a sober landing that opens into the live, in-browser,
+# node-LESS deos. The verified executor runs CLIENT-SIDE in the visitor's own
+# WebAssembly tab (no backend server — GitHub Pages is static).
+#   /              the sober landing (what-is / play / quickstart / does / enables)
+#   /deos/         the deos cockpit (WebImage model skin) — land IN deos, fire a real turn
 #   /cockpit-gpui/ the FULL gpui renderer on a WebGPU canvas (same in-tab executor)
-#   /cards/        the deos-js card gallery (counter + reflective inspector + tally board)
+#   /cards/        the deos-js card gallery (counter · inspector · tally · kv-store · doc-collab)
+#   /explorer/     caps-as-rows (your capabilities expressed as the rows you may read)
+#   /light-client/ verify a whole finalized history in ONE recursive proof, in-tab
 #   /atlas/        the interactive atlas
 # scripts/build-pages-dist.sh assembles site/dist; this workflow just builds + uploads it.
 
+# DEPLOY CONTROL — this workflow is MANUAL-ONLY (workflow_dispatch). Committing or
+# pushing the site source does NOT publish it. The owner goes live on purpose by
+# running the workflow:
+#   gh workflow run "Deploy deos to GitHub Pages" --ref main
+# (or the green "Run workflow" button on the Actions tab). To restore push-to-publish,
+# re-add the `push:` trigger below.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -57,25 +64,35 @@ jobs:
             git -C ../plonky3-recursion checkout 72ffc5646e90af9324ab17248b4beed31c036db3
           fi
 
-      - name: Build the in-browser deos dist (all wasm client-side, node-less)
+      - name: Build the layered deos site (sober landing + all wasm client-side, node-less)
         # GREEN-OR-BUST: a broken wasm crate fails the workflow — we fix the crate, never
-        # ship stale or placeholder artifacts. The script builds the WebImage cockpit
-        # (root), the gpui-web cockpit (/cockpit-gpui/), the card gallery (/cards/), and
-        # bundles the atlas (/atlas/), all into site/dist.
+        # ship stale or placeholder artifacts. The script assembles the sober landing (/),
+        # the WebImage cockpit (/deos/), the gpui-web cockpit (/cockpit-gpui/), the card
+        # gallery (/cards/), caps-as-rows (/explorer/), the light client (/light-client/),
+        # and the atlas (/atlas/), all into site/dist.
         run: scripts/build-pages-dist.sh
 
       - name: Sanity-check the dist
         run: |
           set -euo pipefail
+          # the sober landing + shared green stylesheet
           test -f site/dist/index.html
-          test -s site/dist/pkg/starbridge_web_bg.wasm
+          test -f site/dist/assets/style.css
+          grep -q 'A turn is the exercise' site/dist/index.html
+          # the deos cockpit (WebImage skin)
+          test -f site/dist/deos/index.html
+          test -s site/dist/deos/pkg/starbridge_web_bg.wasm
+          # the card gallery (re-themed green) — all five cards
           test -s site/dist/cards/pkg/dregg_wasm_bg.wasm
-          test -f site/dist/cards/index.html
-          test -f site/dist/cards/counter.html
-          test -f site/dist/cards/inspector.html
-          test -f site/dist/cards/tally.html
+          for c in index counter inspector tally kvstore doccollab; do test -f "site/dist/cards/$c.html"; done
+          # the reclaimed surfaces
+          test -f site/dist/explorer/index.html
+          test -f site/dist/explorer/caps-as-rows.js
+          test -f site/dist/light-client/index.html
+          # the real pre-folded whole-history aggregate the light-client page verifies in-tab
+          test -s site/dist/light-client/history.json
+          # the atlas + its materialized (non-LFS-stub) images
           test -f site/dist/atlas/index.html
-          # the atlas images must be materialized, not LFS pointer stubs
           if head -c 20 site/dist/atlas/ui-states/HOME_.jpg 2>/dev/null | grep -q '^version https://gi'; then
             echo "ERROR: atlas image is an unmaterialized LFS pointer — checkout needs lfs:true" && exit 1
           fi
