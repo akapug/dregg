@@ -496,12 +496,10 @@ mod tests {
         let uri = ContentUri::parse("content://com.android.contacts/people/3").unwrap();
 
         // A read is granted...
-        assert!(
-            resolver
-                .resolve(&uri, ContentAccess::Read)
-                .decision
-                .granted()
-        );
+        assert!(resolver
+            .resolve(&uri, ContentAccess::Read)
+            .decision
+            .granted());
         // ...but a write against the read-only grant is refused (no amplification).
         let w = resolver.resolve(&uri, ContentAccess::Write);
         assert!(w.decision.refused_read_only());

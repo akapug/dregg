@@ -34,14 +34,14 @@
 //! SpiderMonkey round-trip needed to prove the new button landed. [`ViewTree`] is the
 //! gpui-free mirror; [`CardEditor::view_tree`] is the re-folded shape a renderer paints.
 
-use dregg_cell::AuthRequired;
 use dregg_cell::state::FieldElement;
+use dregg_cell::AuthRequired;
 pub use dregg_doc::Author;
 use dregg_doc::BlameLine;
 use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Applet, Slot};
 use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use crate::program_doc::ProgramSource;
 

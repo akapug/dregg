@@ -58,11 +58,11 @@
 //! edit deferred per the touch-only-`cell_inspector.rs` rule (see the report).
 
 use dregg_cell::state::{
-    FieldVisibility, PublicFieldView, STATE_SLOTS, compute_heap_root, empty_heap_root,
+    compute_heap_root, empty_heap_root, FieldVisibility, PublicFieldView, STATE_SLOTS,
 };
 use dregg_cell::{
-    AuthRequired, Cell, CellId, CellLifecycle, CellMode, Permissions,
-    compute_canonical_state_commitment,
+    compute_canonical_state_commitment, AuthRequired, Cell, CellId, CellLifecycle, CellMode,
+    Permissions,
 };
 
 use crate::presentable::{
@@ -654,7 +654,7 @@ fn commitment_invariant(cell: &Cell) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{World, seal, set_field, transfer, unseal};
+    use crate::world::{seal, set_field, transfer, unseal, World};
 
     /// A two-cell world: a treasury (1_000) and a sink (0), no turns yet.
     fn two_cell_world() -> (World, CellId, CellId) {
@@ -835,11 +835,10 @@ mod tests {
             _ => unreachable!(),
         };
         assert_eq!(sm.current, "Live", "a fresh cell is Live (no payload)");
-        assert!(
-            sm.states
-                .iter()
-                .any(|s| s.name == "Destroyed" && s.terminal)
-        );
+        assert!(sm
+            .states
+            .iter()
+            .any(|s| s.name == "Destroyed" && s.terminal));
         assert!(sm.transitions.iter().any(|t| t.verb == "Seal"));
     }
 
@@ -961,10 +960,9 @@ mod tests {
         // A seal then unseal round-trips the live lifecycle readout.
         let mut w = World::new();
         let id = w.genesis_cell(0x44, 100);
-        assert!(
-            w.commit_turn(w.turn(id, vec![seal(id, "pause")]))
-                .is_committed()
-        );
+        assert!(w
+            .commit_turn(w.turn(id, vec![seal(id, "pause")]))
+            .is_committed());
         assert!(w.commit_turn(w.turn(id, vec![unseal(id)])).is_committed());
 
         let deep = DeepCell::from_world(&w, id).unwrap();

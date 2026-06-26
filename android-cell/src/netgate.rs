@@ -292,11 +292,9 @@ mod tests {
             }
             other => panic!("expected Dialed, got {other:?}"),
         }
-        assert!(
-            receipt
-                .status_line()
-                .contains("dialed through captp Netlayer")
-        );
+        assert!(receipt
+            .status_line()
+            .contains("dialed through captp Netlayer"));
     }
 
     /// Cap and transport are DISTINCT teeth: a wildcard cap still defers to the

@@ -7,7 +7,7 @@
 //! new window-type or dialog composes them rather than re-deriving the chrome.
 
 use gpui::{
-    BoxShadow, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled, div, point, px,
+    div, point, px, BoxShadow, FontWeight, Hsla, IntoElement, ParentElement, Pixels, Styled,
 };
 
 use dregg_types::CellId;
@@ -27,10 +27,10 @@ pub const NT_ICON_LABEL: u32 = 0xf0f0f0;
 pub const NT_SELECT: u32 = 0x000080;
 pub const NT_MENU_HILIGHT: u32 = 0x000080;
 pub const NT_DIM: u32 = 0x707070; // a disabled / unheld affordance
-// One coherent content-area face for every window body / explorer / dialog (the
-// near-white "client area" the chrome frames). Unifying it is what makes the
-// inspector, the explorers, and the dialogs read as ONE desktop rather than a
-// patchwork of slightly-different off-whites.
+                                  // One coherent content-area face for every window body / explorer / dialog (the
+                                  // near-white "client area" the chrome frames). Unifying it is what makes the
+                                  // inspector, the explorers, and the dialogs read as ONE desktop rather than a
+                                  // patchwork of slightly-different off-whites.
 pub const NT_PANEL: u32 = 0xf0f0f0; // the client-area background
 pub const NT_RULE: u32 = 0x808080; // a hairline rule / groove
 pub const NT_LABEL: u32 = 0x505050; // a property-row key label

@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use gpui::{Pixels, Point, px};
+use gpui::{px, Pixels, Point};
 
 use super::chrome::NT_DESKTOP_BG;
 

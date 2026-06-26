@@ -44,10 +44,10 @@
 use std::collections::BTreeMap;
 
 use dregg_cell::state::{FieldElement, STATE_SLOTS};
-use dregg_cell::{AuthRequired, Cell, is_attenuation};
+use dregg_cell::{is_attenuation, AuthRequired, Cell};
 use dregg_sdk::embed::{DreggEngine, EngineConfig};
-use dregg_turn::TurnReceipt;
 use dregg_turn::builder::{ActionBuilder, TurnBuilder};
+use dregg_turn::TurnReceipt;
 use dregg_types::CellId;
 
 use deos_reflect::frustum::Frustum;

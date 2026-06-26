@@ -26,7 +26,7 @@
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
 pub mod tree;
-pub use tree::{RawNode, RawProps, ViewNode, parse_view_tree};
+pub use tree::{parse_view_tree, RawNode, RawProps, ViewNode};
 
 // ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack
 //    + deos-js live verified turns). Gated on `native` so the `web` build stays tiny. ──
@@ -40,7 +40,7 @@ pub mod headless;
 pub mod render;
 
 #[cfg(feature = "native")]
-pub use bridge::{LiveView, build_live_view, view_tree_key};
+pub use bridge::{build_live_view, view_tree_key, LiveView};
 #[cfg(feature = "native")]
 pub use faces::FacesView;
 #[cfg(feature = "native")]
@@ -53,9 +53,9 @@ pub use render::{AppletView, SharedApplet};
 pub mod web;
 #[cfg(feature = "web")]
 pub use web::{
-    GalleryCard, render_card_document, render_card_live_document, render_doccollab_live_document,
+    render_card_document, render_card_live_document, render_doccollab_live_document,
     render_gallery_document, render_html, render_inspector_live_document,
-    render_kvstore_live_document, render_tally_live_document,
+    render_kvstore_live_document, render_tally_live_document, GalleryCard,
 };
 
 // ── The DISCORD renderer: the SAME `ViewNode` → a serenity `CreateEmbed` + button
@@ -65,5 +65,5 @@ pub use web::{
 pub mod discord;
 #[cfg(feature = "discord")]
 pub use discord::{
-    DiscordCard, TURN_PREFIX, affordance_custom_id, parse_affordance_id, render_card,
+    affordance_custom_id, parse_affordance_id, render_card, DiscordCard, TURN_PREFIX,
 };

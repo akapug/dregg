@@ -290,8 +290,8 @@ impl std::error::Error for DistributedCardError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deos_js::ViewPatch;
     use deos_js::coauthored_card::drive_view;
+    use deos_js::ViewPatch;
 
     /// The authoring authority the shared card requires (the broadest — `None`).
     fn authority() -> AuthRequired {

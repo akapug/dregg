@@ -10,7 +10,7 @@
 //! at the one seam that matters.
 
 use dregg_firmament::{CellId, CompositorPd, FrameCommit, Refusal};
-use servo_render::{FramePresentation, RgbaFrame, present_frame};
+use servo_render::{present_frame, FramePresentation, RgbaFrame};
 
 /// An android-cell's intent to show its app's frame: which cell presents, the region
 /// it owns + targets, the state-root the content projects, and whether it claims
@@ -54,7 +54,7 @@ mod tests {
     use super::*;
     use crate::frame::screencap_to_rgba;
     use dregg_firmament::emulated_kernel::EmulatedKernel;
-    use dregg_firmament::{Scene, Surface, cell_seed, label_of};
+    use dregg_firmament::{cell_seed, label_of, Scene, Surface};
 
     fn one_surface_scene(presenter: CellId) -> Scene {
         Scene {

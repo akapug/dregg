@@ -13,7 +13,7 @@
 //! modules); an *emulator* runs its own guest kernel, so it is a real confining
 //! Android runtime on the macOS dev host. The simulator host is the route across.
 
-use crate::frame::{ScreencapError, screencap_to_rgba};
+use crate::frame::{screencap_to_rgba, ScreencapError};
 use servo_render::RgbaFrame;
 
 /// Which host backs a runtime — for diagnostics + the cockpit's "what am I talking

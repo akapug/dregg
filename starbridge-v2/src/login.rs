@@ -26,17 +26,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, IntoElement, MouseButton, ParentElement, Render,
-    SharedString, Styled, Window, div, prelude::*, px,
+    div, prelude::*, px, App, Context, Entity, FocusHandle, IntoElement, MouseButton,
+    ParentElement, Render, SharedString, Styled, Window,
 };
 
 use crate::cockpit::Cockpit;
 use crate::views::theme;
 use starbridge_v2::reflect;
 use starbridge_v2::session::{
-    DemoIdentity, IdentityKeystore, IdentityKind, LoginManager, LoginOutcome, Session,
     demo_identities, open_session_world, provision_system_principal, session_base_dir,
-    start_fresh_session_world,
+    start_fresh_session_world, DemoIdentity, IdentityKeystore, IdentityKind, LoginManager,
+    LoginOutcome, Session,
 };
 use starbridge_v2::world::{self, World};
 
@@ -835,18 +835,16 @@ impl SessionShell {
         // THE LIVE-NODE PUMP — drain a connected node's SSE receipt stream off the
         // async executor (no-op + self-stopping for the embedded-only image).
         let pump_cockpit = shell.read(cx).cockpit.downgrade();
-        cx.spawn(async move |cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
-                    Ok(keep) => keep,
-                    Err(_) => break,
-                };
-                if !keep {
-                    break;
-                }
+        cx.spawn(async move |cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
+                Ok(keep) => keep,
+                Err(_) => break,
+            };
+            if !keep {
+                break;
             }
         })
         .detach();

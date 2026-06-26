@@ -125,9 +125,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, Stateful, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    div, px, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window,
 };
 
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -136,22 +137,22 @@ use dregg_cell::lifecycle::CellLifecycle;
 use dregg_types::CellId;
 
 use dregg_doc::{
-    Author, Doc, DocGraph, DocHeapCell, Granularity, History, PatchId, Regime, ResolutionChoice,
-    blame, blame_summary, content, resolutions_for, text_from_heap, walk_atoms,
+    blame, blame_summary, content, resolutions_for, text_from_heap, walk_atoms, Author, Doc,
+    DocGraph, DocHeapCell, Granularity, History, PatchId, Regime, ResolutionChoice,
 };
 
-use crate::world::{World, grant_capability, transfer};
+use crate::world::{grant_capability, transfer, World};
 
 // The chrome kit + persistence types are re-exported so existing call sites
 // (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
-pub use android_window::{ANDROID_WINDOW_TITLE, AndroidInputCmd, AndroidWindow};
+pub use android_window::{AndroidInputCmd, AndroidWindow, ANDROID_WINDOW_TITLE};
 pub use chrome::{
-    DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP,
-    GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE,
-    NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL, NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE,
-    NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT,
-    NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W, bevel_raised, bevel_sunken, bevel_window,
-    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
+    bevel_raised, bevel_sunken, bevel_window, face_gauge, face_row, face_row_color, face_section,
+    fmt_balance, id_hex, id_short, pxf, DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT,
+    DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP, GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W,
+    MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL,
+    NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
+    NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT, NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W,
 };
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
 
@@ -2745,7 +2746,7 @@ impl DeosDesktop {
         rt: &mut deos_js::JsRuntime,
         cx: &mut Context<Self>,
     ) -> Result<WorldBoardComposition, String> {
-        use crate::agent_attach::{WorldSinkAdapter, attach_agent};
+        use crate::agent_attach::{attach_agent, WorldSinkAdapter};
 
         // (1) READ THE LIVE WORLD (host side) — the real stats the board will surface. The
         //     ledger count is what the agent's crawl will independently report.

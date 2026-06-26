@@ -22,12 +22,12 @@
 //! admitted — the screenshot the doc's "definition of done" asks for.
 
 use android_cell::{
-    AndroidInput, AndroidInputGate, AndroidNetGate, AndroidPresentation, AndroidRuntime, AppLaunch,
-    DeviceSpec, IoDecision, present_android_frame,
+    present_android_frame, AndroidInput, AndroidInputGate, AndroidNetGate, AndroidPresentation,
+    AndroidRuntime, AppLaunch, DeviceSpec, IoDecision,
 };
 use dregg_captp::netlayer::InProcessFabric;
 use dregg_firmament::emulated_kernel::EmulatedKernel;
-use dregg_firmament::{CompositorPd, Scene, Surface, cell_seed, label_of};
+use dregg_firmament::{cell_seed, label_of, CompositorPd, Scene, Surface};
 use starbridge_web_surface::{AuthRequired, SurfaceCapability};
 
 #[cfg(target_os = "macos")]
@@ -274,7 +274,7 @@ fn android_input_changes_the_live_frame() {
 #[test]
 #[ignore = "needs a live, already-running Android emulator. Run with --ignored on the dev host."]
 fn live_android_cell_checkpoints_as_umem() {
-    use android_cell::checkpoint::{ServiceCellCheckpoint, UKey, diff, emit_boundary_trace, fold};
+    use android_cell::checkpoint::{diff, emit_boundary_trace, fold, ServiceCellCheckpoint, UKey};
     use android_cell::{AndroidInputGate, AndroidNetGate, AndroidRuntime, MacOsEmulatorRuntime};
     use std::io::Write;
 
@@ -440,8 +440,8 @@ fn live_intent_routes_through_the_gate_on_the_device() {
         AndroidIntent, AndroidIntentGate, IntentDecision, IntentFilter,
     };
     use android_cell::{
-        AndroidManifest, AndroidPermission, AppLaunch, InstalledApps, MacOsEmulatorRuntime,
-        launch_installed_app,
+        launch_installed_app, AndroidManifest, AndroidPermission, AppLaunch, InstalledApps,
+        MacOsEmulatorRuntime,
     };
     use std::collections::BTreeSet;
 

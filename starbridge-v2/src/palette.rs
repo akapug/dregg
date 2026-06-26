@@ -725,7 +725,11 @@ pub fn fuzzy_score(query: &str, haystack: &str) -> Option<i32> {
         prev_was_sep = is_sep;
     }
 
-    if qi == q.len() { Some(score) } else { None }
+    if qi == q.len() {
+        Some(score)
+    } else {
+        None
+    }
 }
 
 /// One ranked search hit: the command + its score (for the test/inspection).
@@ -970,16 +974,12 @@ mod tests {
         }
         // Found by concept: "killer demo" → run-all; "over-share" → the pixel-layer
         // refusal; "mint" → the advance (frame 1 mints); "four-surface" → the demo.
-        assert!(
-            search(&reg, "killer demo")
-                .iter()
-                .any(|h| h.command.id == CommandId::KillerDemoRunAll)
-        );
-        assert!(
-            search(&reg, "over-share")
-                .iter()
-                .any(|h| h.command.id == CommandId::KillerDemoOverShare)
-        );
+        assert!(search(&reg, "killer demo")
+            .iter()
+            .any(|h| h.command.id == CommandId::KillerDemoRunAll));
+        assert!(search(&reg, "over-share")
+            .iter()
+            .any(|h| h.command.id == CommandId::KillerDemoOverShare));
         assert!(search(&reg, "four-surface").iter().any(|h| {
             matches!(
                 h.command.id,
@@ -1016,31 +1016,21 @@ mod tests {
         }
         // Found by concept: "tile" → cycle-layout; "open window" → open-surface;
         // "delegate"/"amplify" → the real-executor window-share + its rejection.
-        assert!(
-            search(&reg, "tile")
-                .iter()
-                .any(|h| h.command.id == CommandId::ShellCycleLayout)
-        );
-        assert!(
-            search(&reg, "window")
-                .iter()
-                .any(|h| h.command.id == CommandId::ShellOpenSelected)
-        );
-        assert!(
-            search(&reg, "compositor")
-                .iter()
-                .any(|h| h.command.id == CommandId::GoShell)
-        );
-        assert!(
-            search(&reg, "delegate")
-                .iter()
-                .any(|h| h.command.id == CommandId::ShellShareFocused)
-        );
-        assert!(
-            search(&reg, "amplify")
-                .iter()
-                .any(|h| h.command.id == CommandId::ShellOverShareFocused)
-        );
+        assert!(search(&reg, "tile")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellCycleLayout));
+        assert!(search(&reg, "window")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellOpenSelected));
+        assert!(search(&reg, "compositor")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoShell));
+        assert!(search(&reg, "delegate")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellShareFocused));
+        assert!(search(&reg, "amplify")
+            .iter()
+            .any(|h| h.command.id == CommandId::ShellOverShareFocused));
     }
 
     #[test]
@@ -1068,32 +1058,22 @@ mod tests {
         }
         // Found by concept: "editor"/"buffer" → the buffer; "terminal"/"bash" →
         // the terminal; "read-only"/"commit"/"mandate" → the cap-gated ops.
-        assert!(
-            search(&reg, "editor buffer")
-                .iter()
-                .any(|h| h.command.id == CommandId::GoBuffer)
-        );
-        assert!(
-            search(&reg, "terminal bash")
-                .iter()
-                .any(|h| h.command.id == CommandId::GoTerminal)
-        );
-        assert!(
-            search(&reg, "commit")
-                .iter()
-                .any(|h| h.command.id == CommandId::BufferCommit)
-        );
-        assert!(
-            search(&reg, "read-only")
-                .iter()
-                .any(|h| h.command.id == CommandId::BufferReadOnlyWrite)
-        );
-        assert!(
-            search(&reg, "mandate")
-                .iter()
-                .any(|h| h.command.id == CommandId::TerminalRunInMandate
-                    || h.command.id == CommandId::TerminalRunOutOfMandate)
-        );
+        assert!(search(&reg, "editor buffer")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoBuffer));
+        assert!(search(&reg, "terminal bash")
+            .iter()
+            .any(|h| h.command.id == CommandId::GoTerminal));
+        assert!(search(&reg, "commit")
+            .iter()
+            .any(|h| h.command.id == CommandId::BufferCommit));
+        assert!(search(&reg, "read-only")
+            .iter()
+            .any(|h| h.command.id == CommandId::BufferReadOnlyWrite));
+        assert!(search(&reg, "mandate")
+            .iter()
+            .any(|h| h.command.id == CommandId::TerminalRunInMandate
+                || h.command.id == CommandId::TerminalRunOutOfMandate));
     }
 
     #[test]
@@ -1238,9 +1218,9 @@ mod tests {
         let mut p = CommandPalette::new();
         p.open();
         p.set_query("burnx"); // the trailing x breaks the burn subsequence
-        // Robust to a growing command set: assert the burn verb specifically is
-        // filtered out (the point of the test), not that the WHOLE list is empty —
-        // another command's keywords may legitimately contain b-u-r-n-…-x.
+                              // Robust to a growing command set: assert the burn verb specifically is
+                              // filtered out (the point of the test), not that the WHOLE list is empty —
+                              // another command's keywords may legitimately contain b-u-r-n-…-x.
         assert_ne!(
             p.current(),
             Some(CommandId::Burn),

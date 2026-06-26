@@ -38,7 +38,7 @@
 use dregg_cell::AuthRequired;
 use dregg_doc::{Author, Rendered};
 
-use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
 use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp};
 use crate::program_doc::ProgramSource;
@@ -256,11 +256,11 @@ impl SharedCard {
     /// in *content* (both readings are surfaced) while attributing each side.
     pub fn stitch(&self, a: &CardFork, b: &CardFork) -> CardStitch {
         let _ = b.as_branch(); // keep the branch-shape API exercised/honest
-        // Delegate to the string-driven core: the stitch consumes exactly the shared
-        // seed prefix + each principal's driven view-source fold. (The same three
-        // strings a card-fork envelope carries across an instance boundary — so the
-        // DISTRIBUTED stitch is byte-identical to this local one; see
-        // `starbridge_v2::distributed_card`.)
+                               // Delegate to the string-driven core: the stitch consumes exactly the shared
+                               // seed prefix + each principal's driven view-source fold. (The same three
+                               // strings a card-fork envelope carries across an instance boundary — so the
+                               // DISTRIBUTED stitch is byte-identical to this local one; see
+                               // `starbridge_v2::distributed_card`.)
         CardStitch::from_sources(
             self.seed_view_source(),
             a.who,

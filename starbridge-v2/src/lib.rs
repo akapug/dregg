@@ -296,9 +296,9 @@ pub mod world_chat;
 pub mod session;
 #[cfg(feature = "embedded-executor")]
 pub use session::{
-    CapEntry, CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal,
-    ROOT_TOKEN, Session, agent_template, default_user_template, demo_identities,
-    provision_system_principal,
+    agent_template, default_user_template, demo_identities, provision_system_principal, CapEntry,
+    CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal, Session,
+    ROOT_TOKEN,
 };
 
 #[cfg(feature = "embedded-executor")]
@@ -596,13 +596,13 @@ pub use agent::{AgentActivity, AgentSurface};
 pub use buffer::{BufferCell, BufferDoc, BufferError, BufferView};
 #[cfg(feature = "embedded-executor")]
 pub use compositor::{
-    CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError, RegionId,
-    label_of,
+    label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,
+    RegionId,
 };
 #[cfg(feature = "embedded-executor")]
 pub use coordination::{MandateArrow, NotifyArrow, SwarmGraph, SwarmNode};
 #[cfg(feature = "embedded-executor")]
-pub use demo::{DemoError, DemoFrame, HeadlineDemo, render_headless_report};
+pub use demo::{render_headless_report, DemoError, DemoFrame, HeadlineDemo};
 #[cfg(feature = "embedded-executor")]
 pub use doc_editor::{AttributedAlternative, ConflictView, DocAuthor, DocEditor, EditOutcome};
 #[cfg(feature = "embedded-executor")]
@@ -634,20 +634,20 @@ pub use powerbox::{
 pub use proofs::{AttachStatus, ProofBoard, ProofEntry, VerificationTier};
 #[cfg(feature = "embedded-executor")]
 pub use scene::{
-    PRESENT_DIGEST_SLOT, PresentVerdict, SURFACE_FACTORY_VK, VerifiedScene, baked_admit_table,
-    compositor_program, scene_admit, surface_factory,
+    baked_admit_table, compositor_program, scene_admit, surface_factory, PresentVerdict,
+    VerifiedScene, PRESENT_DIGEST_SLOT, SURFACE_FACTORY_VK,
 };
 #[cfg(feature = "embedded-executor")]
 pub use shell::{Layout, Scene, SceneItem, Shell, ShellError};
 #[cfg(feature = "embedded-executor")]
 pub use simulate::{
-    CellDelta, DraftAction, EffectKind, IntentDraft, SimOutcome, commit as simulate_commit,
-    render_outcome, simulate,
+    commit as simulate_commit, render_outcome, simulate, CellDelta, DraftAction, EffectKind,
+    IntentDraft, SimOutcome,
 };
 #[cfg(feature = "embedded-executor")]
 pub use snapshot_editor::{
-    ALL_LENSES, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor, Verification,
-    recipient_window_cap,
+    recipient_window_cap, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor,
+    Verification, ALL_LENSES,
 };
 #[cfg(feature = "embedded-executor")]
 pub use surface::{Rect, Surface, SurfaceCapability, SurfaceId, SurfaceKind};
@@ -658,7 +658,7 @@ pub use swarm::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use swarm_budget::{
-    SWARM_POOL_SILO, StingrayBudgetView, StingrayDrawError, StingraySwarmBudget,
+    StingrayBudgetView, StingrayDrawError, StingraySwarmBudget, SWARM_POOL_SILO,
 };
 #[cfg(feature = "embedded-executor")]
 pub use terminal::{Command, CommandError, OutputLine, TerminalCell, TerminalView};
@@ -667,7 +667,7 @@ pub use web_cells::{
     AffordanceRow, CellRow, SemiReinteractiveTransclusion, Transclusion, WebCellsBrowser,
 };
 #[cfg(feature = "embedded-executor")]
-pub use world::{CommitOutcome, DemoSeed, World, demo_genesis, demo_world};
+pub use world::{demo_genesis, demo_world, CommitOutcome, DemoSeed, World};
 
 // THE REFLEXIVE DISTRIBUTED IMAGE (n > 1) re-exports.
 #[cfg(feature = "embedded-executor")]
@@ -677,7 +677,7 @@ pub use branch_stitch::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use distributed_timetravel::{
-    AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick, run_collaborative_rewind,
+    run_collaborative_rewind, AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick,
 };
 #[cfg(feature = "embedded-executor")]
 pub use netlayer_image::{ImageResponder, MirrorFrame, NetlayerImage, ResponderError};
@@ -689,7 +689,7 @@ pub use remote_mirror::{
 #[cfg(feature = "embedded-executor")]
 pub use remote_mirror_live::{LiveMirror, LiveRefusal, LiveStep, LiveTail};
 #[cfg(feature = "embedded-executor")]
-pub use two_image_firmament::{TwoImageOutcome, TwoImageRefusal, run_two_image_firmament};
+pub use two_image_firmament::{run_two_image_firmament, TwoImageOutcome, TwoImageRefusal};
 
 // THE GPUI PRESENTATION PLANE — the cockpit + login + dock element trees, lifted
 // into the LIBRARY so they render on EITHER gpui platform:

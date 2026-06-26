@@ -362,23 +362,17 @@ mod tests {
         // The full standard roster is shown (nothing hidden behind a toggle tree).
         assert_eq!(lines.len(), AndroidPermission::all_standard().len());
         // INTERNET → lit, held at install.
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("● NET") && l.contains("held at install"))
-        );
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("● NET") && l.contains("held at install")));
         // LOCATION → dim, declared-awaiting-hand-over (a grantable cap).
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("○ LOCATION") && l.contains("awaiting hand-over"))
-        );
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("○ LOCATION") && l.contains("awaiting hand-over")));
         // MIC → dim, NOT declared (un-grantable, no ambient escalation).
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains("○ MIC") && l.contains("no ambient escalation"))
-        );
+        assert!(lines
+            .iter()
+            .any(|l| l.contains("○ MIC") && l.contains("no ambient escalation")));
     }
 
     /// **THE HAND-OVER SHEET lists exactly the declared-but-dim dangerous caps.** The maps
@@ -411,13 +405,11 @@ mod tests {
     fn handing_over_a_cap_flips_the_badge_lit_via_a_real_kernel_grant() {
         let mut chrome = maps_chrome();
         // Before: LOCATION is a dim grant-sheet row, not in the status bar.
-        assert!(
-            !chrome
-                .status_bar()
-                .held
-                .iter()
-                .any(|h| h.contains("LOCATION"))
-        );
+        assert!(!chrome
+            .status_bar()
+            .held
+            .iter()
+            .any(|h| h.contains("LOCATION")));
 
         let outcome = chrome.hand_over(AndroidPermission::AccessFineLocation);
         assert!(
@@ -474,13 +466,11 @@ mod tests {
         );
         assert!(SystemUiCapChrome::outcome_line(&outcome).contains("REFUSED"));
         // CAMERA stays dim (still a grant-sheet row, still not in the status bar).
-        assert!(
-            !chrome
-                .status_bar()
-                .held
-                .iter()
-                .any(|h| h.contains("CAMERA"))
-        );
+        assert!(!chrome
+            .status_bar()
+            .held
+            .iter()
+            .any(|h| h.contains("CAMERA")));
         assert!(
             chrome
                 .grant_sheet()

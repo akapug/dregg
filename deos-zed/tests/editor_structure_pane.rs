@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AppContext as _, HeadlessAppContext, IntoElement, PlatformTextSystem, Render, px, size,
+    px, size, AppContext as _, HeadlessAppContext, IntoElement, PlatformTextSystem, Render,
 };
 use gpui_wgpu::CosmicTextSystem;
 

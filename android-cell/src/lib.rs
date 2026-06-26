@@ -60,22 +60,22 @@ pub mod storagegate;
 pub use appfactory::{AndroidManifest, AndroidPermission, ProtectionLevel};
 pub use apps::{InstalledApp, InstalledApps};
 pub use broadcastgate::{
-    Broadcast, BroadcastDecision, BroadcastReceipt, BroadcastReceiver, BroadcastRouter, Delivery,
-    DeliveryOutcome, Sender, is_protected_action,
+    is_protected_action, Broadcast, BroadcastDecision, BroadcastReceipt, BroadcastReceiver,
+    BroadcastRouter, Delivery, DeliveryOutcome, Sender,
 };
 pub use checkpoint::{
-    ServiceCellCheckpoint, UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
-    diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold,
+    diff as checkpoint_diff, emit_boundary_trace, fold as checkpoint_fold, ServiceCellCheckpoint,
+    UDomain, UKey, UProjection, UVal, UmemKind, UmemOp,
 };
 pub use checkpointed_runtime::{CheckpointError, CheckpointedRuntime};
 pub use contentgate::{
     ContentAccess, ContentDecision, ContentProvider, ContentReceipt, ContentResolver, ContentUri,
     ProviderGrant,
 };
-pub use frame::{ANDROID_SCREENCAP_HEADER_LEN, ScreencapError, screencap_to_rgba};
+pub use frame::{screencap_to_rgba, ScreencapError, ANDROID_SCREENCAP_HEADER_LEN};
 pub use input::{
-    AndroidInput, AndroidInputGate, AndroidInputSink, InputDecision, InputError, InputReceipt,
-    RecordingInputSink, cap_admits_input,
+    cap_admits_input, AndroidInput, AndroidInputGate, AndroidInputSink, InputDecision, InputError,
+    InputReceipt, RecordingInputSink,
 };
 pub use intentgate::{
     AndroidIntent, AndroidIntentGate, AndroidIntentSink, IntentDecision, IntentError, IntentFilter,
@@ -83,8 +83,8 @@ pub use intentgate::{
 };
 pub use netgate::{AndroidNetGate, IoDecision, IoReceipt};
 pub use notifgate::{
-    ChannelCap, NotifDecision, NotifPoster, NotifReceipt, Notification, NotificationChannel,
-    NotificationImportance, PostClass, PostGrant, notification_shade_organ,
+    notification_shade_organ, ChannelCap, NotifDecision, NotifPoster, NotifReceipt, Notification,
+    NotificationChannel, NotificationImportance, PostClass, PostGrant,
 };
 pub use organgate::{
     ServiceCallKind, ServiceDecision, ServiceGrant, ServiceOp, ServiceOrgan, ServiceReceipt,
@@ -94,10 +94,10 @@ pub use permgate::{
     BadgeReason, BadgeState, CapBadge, CapBadgeSet, KernelGrantOutcome, PermBox, PermCheckReceipt,
     PermDecision, PermReceipt, PermWorld, PermissionCheck,
 };
-pub use present::{AndroidPresentation, present_android_frame};
+pub use present::{present_android_frame, AndroidPresentation};
 pub use runtime::{
-    AndroidRuntime, AppLaunch, CapturedFrameRuntime, DeviceSpec, RuntimeError, RuntimeKind,
-    launch_installed_app,
+    launch_installed_app, AndroidRuntime, AppLaunch, CapturedFrameRuntime, DeviceSpec,
+    RuntimeError, RuntimeKind,
 };
 pub use storagegate::{
     MediaKind, StorageAccess, StorageCell, StorageDecision, StorageGrant, StorageReach,

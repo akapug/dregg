@@ -38,7 +38,7 @@ use crate::broadcastgate::{BroadcastReceiver, BroadcastRouter};
 use crate::contentgate::{ContentProvider, ContentResolver, ProviderGrant};
 use crate::intentgate::{IntentHandler, IntentResolver};
 use crate::notifgate::{
-    ChannelCap, NotifPoster, NotificationChannel, POST_NOTIFICATIONS, PostGrant,
+    ChannelCap, NotifPoster, NotificationChannel, PostGrant, POST_NOTIFICATIONS,
 };
 use crate::organgate::{ServiceGrant, ServiceOrgan, ServiceResolver, SystemService};
 use crate::permgate::PermBox;
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn launch_then_dispatch_routes_to_a_granted_handler_on_the_runtime() {
         use crate::intentgate::AndroidIntentGate;
-        use crate::runtime::{CapturedFrameRuntime, launch_installed_app};
+        use crate::runtime::{launch_installed_app, CapturedFrameRuntime};
 
         let apps = registry();
         let me = cell_seed(9);
@@ -487,7 +487,7 @@ mod tests {
     /// Launching a cell that was never installed is an error (not a silent empty resolver).
     #[test]
     fn launch_unknown_app_errors() {
-        use crate::runtime::{CapturedFrameRuntime, launch_installed_app};
+        use crate::runtime::{launch_installed_app, CapturedFrameRuntime};
         let apps = registry();
         let mut rt = CapturedFrameRuntime::from_screencap_raw(Vec::new());
         let granted: BTreeSet<CellId> = BTreeSet::new();
@@ -510,11 +510,10 @@ mod tests {
         let none: BTreeSet<CellId> = BTreeSet::new();
         let r0 = apps.content_resolver_for(me, &none, ProviderGrant::ReadOnly);
         let uri = ContentUri::parse("content://com.android.contacts/people").unwrap();
-        assert!(
-            r0.resolve(&uri, ContentAccess::Read)
-                .decision
-                .refused_no_provider()
-        );
+        assert!(r0
+            .resolve(&uri, ContentAccess::Read)
+            .decision
+            .refused_no_provider());
 
         // Granted (read): a read is granted, but a write is refused by the read-only grant.
         let granted: BTreeSet<CellId> = [contacts_cell].into_iter().collect();
@@ -755,11 +754,9 @@ mod tests {
         // refused (no ambient post), even to the same channel set.
         let maps_poster = apps.notif_poster_for(maps_cell, channels, PostGrant::Standard);
         assert!(!maps_poster.holds_organ_cap());
-        assert!(
-            maps_poster
-                .post(&crate::notifgate::Notification::on("messages"))
-                .decision
-                .refused_no_organ()
-        );
+        assert!(maps_poster
+            .post(&crate::notifgate::Notification::on("messages"))
+            .decision
+            .refused_no_organ());
     }
 }

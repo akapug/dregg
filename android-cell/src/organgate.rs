@@ -772,11 +772,9 @@ mod tests {
         assert_eq!(w.kind, ServiceCallKind::StateChange);
         let receipt = resolver.resolve(&w);
         assert!(receipt.decision.refused_read_only());
-        assert!(
-            receipt
-                .status_line()
-                .contains("does not amplify to a state change")
-        );
+        assert!(receipt
+            .status_line()
+            .contains("does not amplify to a state change"));
         assert_eq!(
             receipt.decision,
             ServiceDecision::RefusedReadOnly {

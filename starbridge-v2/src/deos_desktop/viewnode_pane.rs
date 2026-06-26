@@ -51,7 +51,7 @@ use deos_js::applet::Slot;
 use deos_js::card_editor::{Author, BindProps, CardEditor, TextProps, ViewTree as EditorViewTree};
 use deos_js::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use deos_js::{Applet, JsRuntime};
-use deos_view::{AppletView, SharedApplet, ViewNode, parse_view_tree};
+use deos_view::{parse_view_tree, AppletView, SharedApplet, ViewNode};
 use dregg_cell::AuthRequired;
 use dregg_types::CellId;
 

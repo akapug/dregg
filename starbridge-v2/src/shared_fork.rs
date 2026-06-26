@@ -44,13 +44,13 @@ use std::collections::HashSet;
 use dregg_cell::{AuthRequired, CapabilityRef, CellId};
 use dregg_cell_crypto::ReadCap;
 use dregg_turn::conditional::{
-    ConditionProof, ConditionalResult, ConditionalTurn, DEFAULT_MAX_ROOT_AGE, ProofCondition,
-    compute_proof_hash, resolve_condition,
+    compute_proof_hash, resolve_condition, ConditionProof, ConditionalResult, ConditionalTurn,
+    ProofCondition, DEFAULT_MAX_ROOT_AGE,
 };
 use dregg_turn::turn::{Turn, TurnReceipt};
 
 use crate::powerbox::{Powerbox, PowerboxOutcome};
-use crate::world::{CommitOutcome, World, touched_cells};
+use crate::world::{touched_cells, CommitOutcome, World};
 
 /// **A cap fully granted into the fork — the EMBEDDED tier.**
 ///
@@ -1073,8 +1073,8 @@ mod membrane_host {
             b: &ForkHandle,
         ) -> Result<StitchOutcome, MembraneError> {
             use crate::umem_membrane::{
-                ConferredCap, UmemBranch, dropped_cap_event_id, settle_umem_stitch,
-                settlement_held_at_tip, stitch_projections, umem_event_id,
+                dropped_cap_event_id, settle_umem_stitch, settlement_held_at_tip,
+                stitch_projections, umem_event_id, ConferredCap, UmemBranch,
             };
             let forks = self.forks.lock().unwrap();
             let ea = forks
@@ -1253,7 +1253,7 @@ mod membrane_host {
         }
 
         fn stitch(&self, fork: &ForkHandle) -> Result<StitchOutcome, Self::Error> {
-            use crate::umem_membrane::{UmemBranch, stitch_projections, umem_event_id};
+            use crate::umem_membrane::{stitch_projections, umem_event_id, UmemBranch};
             let forks = self.forks.lock().unwrap();
             let entry = forks
                 .iter()
@@ -1391,7 +1391,7 @@ mod membrane_host {
         ///     opaque cell-granular `Atom` merge, now load-bearing in the live host.
         #[test]
         fn the_live_membrane_stitches_umems_field_granular() {
-            use crate::umem_membrane::{UmemBranch, umem_event_id};
+            use crate::umem_membrane::{umem_event_id, UmemBranch};
             use deos_matrix::membrane::ConflictReason;
             use dregg_turn::umem::UKey;
 
@@ -2706,13 +2706,12 @@ mod tests {
             vec![],
         );
         assert_eq!(sf.embedded.len(), 1, "docs is embedded");
-        assert!(
-            fork.ledger()
-                .get(&guest)
-                .unwrap()
-                .capabilities
-                .has_access(&docs)
-        );
+        assert!(fork
+            .ledger()
+            .get(&guest)
+            .unwrap()
+            .capabilities
+            .has_access(&docs));
 
         // The guest drives a REAL turn over its embedded cap — no consent door.
         let drive = fork.turn(guest, vec![crate::world::set_field(docs, 3, [9u8; 32])]);

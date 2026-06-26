@@ -30,12 +30,12 @@
 //! the composed workflow as turns rides the existing per-effect actuation path.
 
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, StatefulInteractiveElement, Styled, div, px,
+    div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, StatefulInteractiveElement, Styled,
 };
 
 use dregg_deploy::refine::{
-    FlowSpec, IntentEffect, Proc, RefineVerdict, decide_refines, describe_effect, flow_of_forest,
+    decide_refines, describe_effect, flow_of_forest, FlowSpec, IntentEffect, Proc, RefineVerdict,
 };
 use dregg_turn::action::Effect;
 use dregg_turn::forest::{CallForest, CallTree};
@@ -43,11 +43,11 @@ use dregg_types::CellId;
 
 use crate::world::{bare_action, grant_capability, transfer};
 
-use super::DeosDesktop;
 use super::chrome::{
-    DOC_REV_SLOT, GLYPH_ADD, GLYPH_PIN, GLYPH_REMOVE, NT_DIM, NT_FACE, NT_FACE_DARK, NT_OK,
-    NT_PANEL, NT_SHADOW, NT_TEXT, bevel_raised, face_row, face_section, id_short,
+    bevel_raised, face_row, face_section, id_short, DOC_REV_SLOT, GLYPH_ADD, GLYPH_PIN,
+    GLYPH_REMOVE, NT_DIM, NT_FACE, NT_FACE_DARK, NT_OK, NT_PANEL, NT_SHADOW, NT_TEXT,
 };
+use super::DeosDesktop;
 
 /// One step of a composed workflow — an INTENT (a declarative desired `Effect`) over
 /// a live cell. The `kind` is the intent's shape; `effect` is the concrete effect it

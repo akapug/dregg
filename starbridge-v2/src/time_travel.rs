@@ -301,7 +301,7 @@ impl TimeCockpitModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{ResumeMode, World, transfer};
+    use crate::world::{transfer, ResumeMode, World};
 
     /// A small world: a treasury (1_000) and a sink (0), three committed turns.
     fn fixture() -> (World, CellId, CellId) {
@@ -344,12 +344,11 @@ mod tests {
         assert_eq!(m.undo_floor(), turns[1].step);
         assert!(m.undo_floor_badge().contains("un-turn floor"));
         // Genesis / empty-root ticks have nothing to invert → None.
-        assert!(
-            m.ticks
-                .iter()
-                .filter(|t| !t.is_turn)
-                .all(|t| t.reversible.is_none())
-        );
+        assert!(m
+            .ticks
+            .iter()
+            .filter(|t| !t.is_turn)
+            .all(|t| t.reversible.is_none()));
     }
 
     #[test]
@@ -357,12 +356,11 @@ mod tests {
         let (w, _t, _s) = fixture(); // three transfers — all reversible
         let stack = MetaStack::new();
         let m = TimeCockpitModel::build(&w, w.recorded_turns().len(), &stack);
-        assert!(
-            m.ticks
-                .iter()
-                .filter(|t| t.is_turn)
-                .all(|t| t.reversible == Some(true))
-        );
+        assert!(m
+            .ticks
+            .iter()
+            .filter(|t| t.is_turn)
+            .all(|t| t.reversible == Some(true)));
         assert_eq!(
             m.undo_floor(),
             0,
@@ -558,15 +556,11 @@ mod tests {
         let (w, _t, _s) = fixture();
         let stack = MetaStack::new();
         let head = w.recorded_turns().len();
-        assert!(
-            TimeCockpitModel::build(&w, head, &stack)
-                .liveness_badge()
-                .contains("LIVE")
-        );
-        assert!(
-            TimeCockpitModel::build(&w, 0, &stack)
-                .liveness_badge()
-                .contains("REPLAYED")
-        );
+        assert!(TimeCockpitModel::build(&w, head, &stack)
+            .liveness_badge()
+            .contains("LIVE"));
+        assert!(TimeCockpitModel::build(&w, 0, &stack)
+            .liveness_badge()
+            .contains("REPLAYED"));
     }
 }

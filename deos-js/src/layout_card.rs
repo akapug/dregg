@@ -44,7 +44,7 @@ use dregg_doc::{Author, BlameLine};
 use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::card_editor::{ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewTree};
 use crate::program_doc::ProgramSource;
 

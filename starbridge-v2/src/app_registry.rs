@@ -43,7 +43,7 @@ use dregg_sdk::AgentCipherclerk;
 use dregg_types::CellId;
 
 #[cfg(feature = "embedded-executor")]
-use crate::app_worldspine::{AppWorldSpine, SeedField, WorldFireError, default_domain_token};
+use crate::app_worldspine::{default_domain_token, AppWorldSpine, SeedField, WorldFireError};
 #[cfg(feature = "embedded-executor")]
 use crate::world::World;
 #[cfg(feature = "embedded-executor")]
