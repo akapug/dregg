@@ -2637,6 +2637,200 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
     Ok((trace, dpis))
 }
 
+/// The host (pre-wide-append) width of the `heapWriteVmDescriptor2R24` 1-felt descriptor: the
+/// `heapWriteSpliceVmDescriptor` carries FEWER chip sites than the standard economic rotated host
+/// (no balance-hash economic sites — it is a Class-A heap-root recompute), so its graduated width is
+/// **595** (distinct from `GRAD_ROT_WIDTH = 609`). The wide carriers (the wide `heapWriteVmDescriptor2R24`
+/// member, width 803 / PI 20) land at THIS host width: `595 + 208 = 803`.
+pub const HEAP_WRITE_HOST_WIDTH: usize = 595;
+
+/// **THE WIDE HEAP-WRITE trace generator (`heapWriteVmDescriptor2R24` wide member, 803-wide / 20-PI).**
+///
+/// heapWrite is the Class-A heap-root-recompute member (Lean `RotatedKernelRefinementExercise.heapWriteV3`
+/// = `graduateV1 (rotateV3 heapWriteSpliceVmDescriptor)` ++ the `.write` splice `MapOp`). It rides the
+/// SAME rotated block as every cohort member, plus a genuine sorted-Merkle SPLICE on the heap root: the
+/// in-row `HEAP_ADDR` recompute (`col 102 = chip-absorb(coll, key)`) keys a `.write` `MapOp` that opens
+/// the committed BEFORE heap root (`col 65`, the per-cell `cap_root` register the heap-root rides) at
+/// that address for the written value (`col 72`) and FORCES the AFTER heap root (`col 87`) to the genuine
+/// `Heap.set` recompute. There is NO live `Effect::HeapWrite` selector (the descriptor is reached by the
+/// exercise-inner heap-write path, NOT the effect→descriptor resolvers), so this is the per-family wide
+/// PRODUCER for it — exactly mirroring the supplyMint wide producer (live base + the generic
+/// [`append_wide_carriers`] at the member's host width), preserving the 8-felt before/after anchors.
+///
+/// SOUNDNESS: `heap_leaves` MUST be the cell's GENUINE BEFORE heap and MUST contain a leaf at the
+/// addressed key (the in-row-recomputed `addr = chip-absorb(coll, key)`); the write is an UPDATE of a
+/// present key (`update_witness`), and the published AFTER root is the GENUINE sorted-tree splice — a
+/// missing key or a forged post-root fails closed (no fabricated post-root). Returns `(trace, dpis,
+/// map_heaps)` ready for `prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(),
+/// &map_heaps)` against the wide `heapWriteVmDescriptor2R24`.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_heap_write_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    coll: BabyBear,
+    key: BabyBear,
+    value: BabyBear,
+    heap_leaves: &[crate::heap_root::HeapLeaf],
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
+    use super::columns::{AUX_BASE, PARAM_BASE};
+    use crate::descriptor_ir2::chip_absorb_all_lanes;
+    use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+
+    // The live rotated base (cols 0..ROT_WIDTH) — the SAME machinery every cohort member rides; the
+    // heapWrite descriptor carries NO economic gates, so the lead effect's economic v1 columns are
+    // unconstrained (any cohort lead lays a valid rotated block).
+    let (mut trace, gen_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if trace[0].len() != ROT_WIDTH {
+        return Err(format!(
+            "heap-write wide: base trace width {} != {ROT_WIDTH}",
+            trace[0].len()
+        ));
+    }
+
+    // The in-row HEAP_ADDR recompute (`heapWriteVmDescriptor2R24`'s arity-2 chip lookup,
+    // `col 102 = chip-absorb(coll, key)`) — the genuine sorted KEY the splice opens. We compute it the
+    // SAME way `fill_chip_lanes` will (so the heap leaf the splice opens IS the recomputed address).
+    let mut absorb_in = [BabyBear::ZERO; 11];
+    absorb_in[0] = coll;
+    absorb_in[1] = key;
+    let addr = chip_absorb_all_lanes(2, &absorb_in)[0];
+    // The leaf-digest chip lookup `col 103 = chip-absorb(addr, value)` (out0). `fill_chip_lanes` lands
+    // only the exposed lanes 1..7; the producer must lay out0 itself (so the request matches the
+    // chip-table provide, which derives outputs from the genuine permutation).
+    let mut leaf_in = [BabyBear::ZERO; 11];
+    leaf_in[0] = addr;
+    leaf_in[1] = value;
+    let leaf_digest = chip_absorb_all_lanes(2, &leaf_in)[0];
+
+    // The BEFORE heap (the deployed openable sorted tree). The addressed key MUST be present — the
+    // splice `.write` is an UPDATE of a present key (`update_witness`); a missing key fails closed (no
+    // fabricated post-root).
+    let before_tree = CanonicalHeapTree::new(heap_leaves.to_vec(), HEAP_TREE_DEPTH);
+    let before_root = before_tree.root();
+    if !before_tree.sorted_leaves().iter().any(|l| l.addr == addr) {
+        return Err(format!(
+            "heap-write wide: recomputed addr {} is NOT in the BEFORE heap — the splice `.write` opens a \
+             present key and has no membership witness, so it refuses the turn (no silent forge)",
+            addr.as_u32()
+        ));
+    }
+    let after_root = before_tree
+        .update_witness(HeapLeaf { addr, value })
+        .ok_or_else(|| {
+            format!(
+                "heap-write wide: update witness for addr {} failed",
+                addr.as_u32()
+            )
+        })?
+        .new_root;
+
+    // Override the heap-root registers (`col 65` BEFORE / `col 87` AFTER — the per-cell `cap_root` the
+    // heap-root rides) AND their rotated-block limbs (the welds `65 == limb` / `87 == limb` are KEPT),
+    // lay the splice key/value params, then recompute the rotated commitments so the published rotated
+    // commit binds the written heap root.
+    let heap_root_before_col = STATE_BEFORE_BASE + state::CAP_ROOT; // 65
+    let heap_root_after_col = STATE_AFTER_BASE + state::CAP_ROOT; // 87
+    let coll_col = PARAM_BASE + 2; // 70 (HEAP_ADDR recompute input: collection)
+    let key_col = PARAM_BASE + 3; // 71 (HEAP_ADDR recompute input: key)
+    let value_col = PARAM_BASE + 4; // 72 (HEAP_VALUE)
+    // The HEAP_ADDR column (102) is the splice `MapOp`'s KEY. It is ALSO the output of the in-row
+    // arity-2 chip lookup `col 102 = chip-absorb(coll, key)`, which `fill_chip_lanes` lands at prove
+    // time — but the map-op pre-flight replay reads col 102 from the RAW trace (BEFORE lane-fill), so
+    // we set it explicitly to the recomputed `addr`. `fill_chip_lanes` then re-lands the SAME value
+    // (the addr lookup is chip-faithful over the same coll/key), so the lookup gate holds.
+    let heap_addr_col = AUX_BASE + 12; // 102 (HEAP_ADDR — out0 of the addr chip lookup)
+    let leaf_digest_col = AUX_BASE + 13; // 103 (out0 of the leaf-digest chip lookup)
+    let before_root_limb = BEFORE_BASE + B_CAP_ROOT;
+    let after_root_limb = AFTER_BASE + B_CAP_ROOT;
+    for row in trace.iter_mut() {
+        row[heap_root_before_col] = before_root;
+        row[before_root_limb] = before_root;
+        row[heap_root_after_col] = after_root;
+        row[after_root_limb] = after_root;
+        row[coll_col] = coll;
+        row[key_col] = key;
+        row[value_col] = value;
+        row[heap_addr_col] = addr;
+        row[leaf_digest_col] = leaf_digest;
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+
+    // The 4 heapWrite base PIs: the two rotated state-commit pins (pi 0/1) are RETIRED by the wide
+    // member (the 8-felt commit is the sole binding — they are unbound, zeroed for Fiat–Shamir
+    // agreement); the committed-height pin (pi 2 ← `col 270`) and the caveat-commit pin (pi 3 ←
+    // `col 328`) survive — both unaffected by the heap-root override, so read from the live base PIs.
+    let base_pis = vec![
+        BabyBear::ZERO,
+        BabyBear::ZERO,
+        gen_pis[V1_PI_COUNT + 2],
+        gen_pis[V1_PI_COUNT + 3],
+    ];
+    let dpis = append_wide_carriers(&mut trace, base_pis, HEAP_WRITE_HOST_WIDTH);
+    debug_assert_eq!(trace[0].len(), HEAP_WRITE_HOST_WIDTH + 208); // 803
+    debug_assert_eq!(dpis.len(), 20); // 4 base (2 retired) + 16 wide
+    Ok((trace, dpis, vec![heap_leaves.to_vec()]))
+}
+
+/// **THE WIDE TURN-BOUND CAP-OPEN trace generator (`transferCapOpenTBVmDescriptor2R24` wide member,
+/// 1029-wide / 65-PI).**
+///
+/// The wide twin of the #225 turn-identity weld (Lean `CapOpenTurnPins.effCapOpenV3TB`): it builds the
+/// LIVE rotated transfer base, widens it to the turn-bound cap-open shape ([`widen_to_cap_open_tb`] —
+/// the 91 cap-membership columns + the two `actor`/`dst` turn-identity columns), publishes the 49-PI
+/// turn-bound vector ([`cap_open_tb_dpis`]: 46 rotated + `src`/`actor`/`dst` at 46/47/48), and then
+/// appends the BEFORE/AFTER 13×8 wide carriers + 16 wide commit PIs at the cap-open-TB host width
+/// (`CAP_OPEN_TB_WIDTH = 821`). The cap-membership host columns, the turn-identity pins, and the live
+/// 1-felt carriers are CARRIED UNCHANGED — the wide append is purely additive, preserving the 8-felt
+/// before/after anchors. The verifier ANCHORS the three turn-identity PIs to the trusted turn
+/// ([`anchor_cap_open_turn_pins`]) exactly as on the narrow path; a forged published identity is UNSAT.
+///
+/// `cap_open` MUST be a genuine transfer-conferring cap-membership witness whose leaf `target` IS the
+/// turn's `src` (the `targetBind` gate roots it); `actor`/`dst` are the published turn identity the
+/// caller threads from the honest turn. Returns `(trace, dpis)` ready for `prove_vm_descriptor2(&desc,
+/// &trace, &dpis, &MemBoundaryWitness::default(), &[])` against the wide `transferCapOpenTBVmDescriptor2R24`.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_transfer_cap_open_tb_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    cap_open: &CapOpenWitness,
+    src: BabyBear,
+    actor: BabyBear,
+    dst: BabyBear,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "cap-open-TB wide generator: base PI vector {} != {ROT_PI_COUNT} (the cap-open-TB rides the \
+             bare-46-PI rotated transfer base)",
+            base_pis.len()
+        ));
+    }
+    widen_to_cap_open_tb(&mut trace, cap_open, actor, dst)
+        .map_err(|e| format!("cap-open-TB wide widen: {e}"))?;
+    let tb_pis = cap_open_tb_dpis(&base_pis, src, actor, dst);
+    debug_assert_eq!(tb_pis.len(), CAP_OPEN_TB_PI_BASE + 3); // 49
+    let dpis = append_wide_carriers(&mut trace, tb_pis, CAP_OPEN_TB_WIDTH);
+    debug_assert_eq!(trace[0].len(), CAP_OPEN_TB_WIDTH + 208); // 1029
+    debug_assert_eq!(dpis.len(), CAP_OPEN_TB_PI_BASE + 3 + 16); // 65
+    Ok((trace, dpis))
+}
+
 /// **THE WIDE NOTESPEND trace generator (grow-gate cohort).** Wraps the deployment-real nullifier-
 /// tree generator ([`generate_rotated_note_spend_trace_with_nullifier_tree`], which overrides limb 26
 /// with the openable accumulator roots + recomputes the block commits), then appends the wide
@@ -3165,6 +3359,15 @@ fn cap_write_wide_plan(effect: &Effect) -> Option<(Option<CapTreeWriteOp>, bool)
 /// whose base carries an in-circuit cap-tree `map_op` write — attenuate / revokeCapability — the
 /// honest cap-write is UNSAT without it). Fails closed (`Err`) on an empty / heterogeneous /
 /// non-cohort slice.
+///
+/// THE SEPARATELY-ROUTED WIDE MEMBERS (NOT effect-dispatched here): `heapWriteVmDescriptor2R24` (no live
+/// `Effect::HeapWrite` selector — reached by the exercise-inner heap-write path) and
+/// `transferCapOpenTBVmDescriptor2R24` (cap-PRESENCE-routed — widened from a transfer base when a
+/// consumed-cap witness is present, like every cap-open member) carry their own per-family wide
+/// producers — [`generate_rotated_heap_write_wide`] and [`generate_rotated_transfer_cap_open_tb_wide`] —
+/// since neither is reached by the effect→descriptor resolver this dispatcher keys on. Both preserve the
+/// SAME 8-felt before/after anchors via the generic [`append_wide_carriers`] at their member host width
+/// (595 → 803 / `CAP_OPEN_TB_WIDTH` → 1029), exactly as supplyMint rides the transfer-shape host.
 #[allow(clippy::type_complexity)]
 pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
     initial_state: &CellState,
