@@ -9,10 +9,11 @@ them ONE system rather than seven scattered modules: the common shape every
 capacity shares, the grounding-by-reuse template, and the clear path for the ones
 not yet grounded.
 
-The frame is not aspirational. Two capacities — **membrane** and **derived
-cells** — now sit fully on it, each with a Lean rung proven *by reuse* of an
-already-proven commitment, no VK bump, the Rust wired to the rung. They are the
-template the rest follow.
+The frame is not aspirational. Four capacities — **membrane**, **derived
+cells**, **sealed escrow**, and **standing obligation** — now sit fully on it,
+each with a Lean rung proven *by reuse* of an already-proven commitment, no VK
+bump, the Rust wired to the rung. They are the template the last one (the
+**hatchery** abstraction-mint) follows.
 
 ---
 
@@ -116,15 +117,22 @@ reuse.
 
 ---
 
-## 4. The grounded two — and the path for the rest
+## 4. The grounded four — and the path for the last
 
 | Capacity | Reuse base | Rung | Status |
 |---|---|---|---|
 | **membrane** | cap lattice (`attenuate_subset` / meet) | `Deos/Membrane.lean` | **GROUNDED** — `membrane_non_amplifies` + teeth, Rust `non_amp_floor_matches_lean_rung` |
 | **derived** | heap root (`root_binds_get`) | `Deos/DerivedCell.lean` | **GROUNDED** — `bind_verifies` + forge/stale/wrong-spec teeth + `claim_bound_in_root`, Rust `invariant_matches_lean_rung` |
-| **escrow** | heap root + factory constraints | `Apps/EscrowFactory.lean` (exists, probe PASS) — fold the standalone `escrow_sealed` 2-leg shape into a blueprint `SwapTerms` rung | path clear |
-| **hatchery** (abstraction-mint) | `CellProgram::evaluate_with_meta` + a proved `Verify.Contract.CellContract` | bind `HpresProof::Attested` to a machine-checked contract rung (the "forever-crown") | path clear |
-| **obligation** (standing/recurring) | heap root (`Monotonic` cursor) + factory | `Apps/StandingObligation.lean` twin: recurring schedule via a monotone `next_due` cursor + a `FieldGteHeight` due-gate | path clear |
+| **escrow** | heap root (`root_binds_get`) + one-shot Consumed | `Deos/SealedEscrow.lean` | **GROUNDED** — `deposit_both_ready` + `replay_rejected` (one-shot) + `nonconforming_claim_rejected` + `over_claim_rejected` + `leg_status_bound_in_root`, Rust `invariant_matches_lean_rung` |
+| **obligation** (standing/recurring) | heap root (`root_binds_get`) + `StrictMonotonic` cursor | `Deos/StandingObligation.lean` | **GROUNDED** — `cursor_strict_mono` + `replay_rejected` (one-shot/period) + early/over/behind-schedule teeth + `cursor_bound_in_root`, Rust `invariant_matches_lean_rung` |
+| **hatchery** (abstraction-mint) | `CellProgram::evaluate_with_meta` + a proved `Verify.Contract.CellContract` | bind `HpresProof::Attested` to a machine-checked contract rung (the "forever-crown") | path clear — the last ungrounded |
+
+The escrow and obligation rungs are the **invariant-capacity** route (a `Deos/*.lean` rung over the
+heap-root reuse base), not the factory route — the standalone `cell/src/{escrow_sealed,
+obligation_standing}.rs` 2-leg-swap / recurring-cursor shapes ground directly on
+`Substrate.Heap.root_binds_get` (escrow: + the one-shot `Consumed` discipline; obligation: + the
+`StrictMonotonic` `next_due` cursor, the version/supply monotone-slot law). The deeper light-client
+weld (the circuit witness) stays the named per-capacity VK-affecting follow-up (§5).
 
 The path for each follower is the same three steps the grounded two
 demonstrate:
@@ -153,5 +161,5 @@ capacity's circuit weld is a tracked rung, not a parking lot.
 
 **One sentence:** a house capacity is a heap-committed cell-program + an invariant
 + a Lean rung proven by reuse (no VK bump) + a forge-detector + a wiring test; the
-membrane and derived cells now sit fully on that frame, and escrow / hatchery /
-obligation each have a clear path along the same template.
+membrane, derived cells, sealed escrow, and standing obligation now sit fully on
+that frame, and the hatchery (the last) has a clear path along the same template.

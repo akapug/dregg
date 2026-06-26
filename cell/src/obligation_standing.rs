@@ -1051,4 +1051,156 @@ mod tests {
             assert_eq!(decode_i64(&encode_i64(v)), v);
         }
     }
+
+    /// **The Lean rung: this executor invariant is PROVEN, not just smoke-tested.**
+    ///
+    /// The recurring-discharge invariant enforced here — a period is discharged
+    /// once-per-period, on-schedule, never early, never double, never over/under,
+    /// never silently skipped — is the EXECUTOR image of the proven Lean rung
+    /// `metatheory/Dregg2/Deos/StandingObligation.lean`, grounded BY REUSE of the
+    /// committed-heap root (`Substrate.Heap.root_binds_get`) + the StrictMonotonic
+    /// `next_due` cursor discipline (`cursor_strict_mono`, the same monotone-slot
+    /// law the version/supply slots ride). This test mirrors that rung's `#guard`
+    /// witnesses (owe 50 every 100 blocks from block 1000) so the Rust is checked
+    /// against the proven statement:
+    ///
+    ///   * `opened_cursor` / `opened_discharge_accepts` — opening commits
+    ///     `next_due = start`; a period-0 discharge of exactly 50 at clock 1000
+    ///     accepts and advances the cursor strictly to 1100 (`cursor_strict_mono`),
+    ///     moving the committed root (`forged_cursor_moves_root`);
+    ///   * `replay_rejected` — a replay of period 0 is refused (the cursor now
+    ///     expects period 1: the one-shot tooth);
+    ///   * `early_discharge_rejected` — a discharge at clock 999 (due 1000) refused;
+    ///   * `over_discharge_rejected` — amounts 9999 and 1 both refused;
+    ///   * `behind_schedule_rejected` — by clock 1250 the schedule demands 3
+    ///     periods; a cell that discharged only 1 is behind (audit refuses), while
+    ///     an on-schedule cell passes the SAME audit.
+    #[test]
+    fn invariant_matches_lean_rung() {
+        let terms = sample_terms(); // owe 50 / 100 blocks / start 1000 / unbounded
+
+        // `opened_cursor` + `opened_discharge_accepts` + `cursor_strict_mono` +
+        // `forged_cursor_moves_root`: opening commits next_due = start; the period-0
+        // discharge accepts, advances the cursor strictly, and moves the root.
+        let mut cell = obligation_cell();
+        open_obligation(&mut cell, &terms).unwrap();
+        assert_eq!(ObligationState::read(&cell).unwrap().next_due, 1000);
+        let before = cell.state_commitment();
+        assert_eq!(
+            discharge(
+                &mut cell,
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
+            Ok(50)
+        );
+        let after = cell.state_commitment();
+        assert_ne!(
+            before, after,
+            "forged_cursor_moves_root: the cursor advance moves the root"
+        );
+        let view = ObligationState::read(&cell).unwrap();
+        assert_eq!(view.next_due, 1100, "cursor_strict_mono: 1000 < 1100");
+        assert_eq!(view.discharged_count, 1);
+
+        // `replay_rejected`: a replay of period 0 is refused (cursor expects 1).
+        assert_eq!(
+            view.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::WrongPeriod {
+                expected: 1,
+                presented: 0
+            })
+        );
+
+        // `early_discharge_rejected`: one block early (clock 999, due 1100 now).
+        let mut fresh = obligation_cell();
+        open_obligation(&mut fresh, &terms).unwrap();
+        let fview = ObligationState::read(&fresh).unwrap();
+        assert_eq!(
+            fview.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 50,
+                    clock: 999
+                }
+            ),
+            Err(ObligationError::NotYetDue {
+                due_block: 1000,
+                clock: 999
+            })
+        );
+
+        // `over_discharge_rejected`: amounts 9999 and 1 both refused.
+        assert!(matches!(
+            fview.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 9_999,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::AmountMismatch {
+                owed: 50,
+                presented: 9_999
+            })
+        ));
+        assert!(matches!(
+            fview.check_discharge(
+                &terms,
+                &Discharge {
+                    period_index: 0,
+                    amount: 1,
+                    clock: 1000
+                }
+            ),
+            Err(ObligationError::AmountMismatch {
+                owed: 50,
+                presented: 1
+            })
+        ));
+
+        // `behind_schedule_rejected`: by clock 1250 three periods are due; a cell
+        // that discharged only period 0 is behind, while an on-schedule cell passes.
+        assert_eq!(terms.periods_due_by(1250), 3);
+        assert_eq!(
+            view.audit(&terms, 1250),
+            Err(ObligationError::BehindSchedule {
+                required: 3,
+                committed: 1
+            })
+        );
+        let mut on_schedule = obligation_cell();
+        open_obligation(&mut on_schedule, &terms).unwrap();
+        for (k, clk) in [(0, 1000), (1, 1100), (2, 1200)] {
+            discharge(
+                &mut on_schedule,
+                &terms,
+                &Discharge {
+                    period_index: k,
+                    amount: 50,
+                    clock: clk,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            ObligationState::read(&on_schedule)
+                .unwrap()
+                .audit(&terms, 1250),
+            Ok(3)
+        );
+    }
 }
