@@ -87,6 +87,7 @@ pub(crate) use starbridge_v2::token_inspector::InspectedToken;
 pub(crate) use starbridge_v2::cap_inspector::{AttenuationDial, HeldCapability};
 pub(crate) use starbridge_v2::inspect_act::{InspectAct, InspectFocus, SendResult};
 pub(crate) use starbridge_v2::predicate_composer::{self, Atom, Composite, PredicateComposer};
+pub(crate) use starbridge_v2::service_explorer::{InvokeOutcome, ServiceExplorer};
 pub(crate) use starbridge_v2::token_inspector::TokenLoopGadget;
 pub(crate) use starbridge_v2::turn_builder::CommittingTurnGadget;
 pub(crate) use starbridge_v2::wonder::WonderRoom;
@@ -318,6 +319,17 @@ pub enum Tab {
     /// cap-gated affordances, each with a cap badge), sending one as a REAL verified
     /// turn and re-inspecting the post-state. See [`starbridge_v2::inspect_act`].
     InspectAct,
+    /// THE SERVICE EXPLORER (🛰 SERVICES) — the Postman-like surface over
+    /// CELLS-AS-SERVICE-OBJECTS: it discovers a focused cell's PUBLISHED INTERFACE
+    /// (the methods its program dispatches on, derived via
+    /// `InterfaceDescriptor::derive_replayable`), lists each method with its arity
+    /// / auth requirement / replay-vs-serviced semantics / a cap badge, and lets
+    /// you INVOKE a replayable method as a REAL verified turn — the deos-interior
+    /// face of the `invoke()` front door. The invocation DESUGARS to an ordinary
+    /// method-targeting turn (no kernel `Effect::Invoke`); an unknown / serviced /
+    /// unauthorized method is refused in-band. See
+    /// [`starbridge_v2::service_explorer`].
+    ServiceExplorer,
     /// THE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an intent,
     /// evaluate it in a FORKED throwaway world (predict, never mutate), print the
     /// predicted receipt, inspect the predicted post-state as live objects, then
@@ -382,7 +394,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 30] = [
+    const ALL: [Tab; 31] = [
         Tab::Docs,
         Tab::Trust,
         Tab::Devtools,
@@ -391,6 +403,7 @@ impl Tab {
         Tab::Time,
         Tab::Moldable,
         Tab::InspectAct,
+        Tab::ServiceExplorer,
         Tab::Workspace,
         Tab::Lanes,
         Tab::Shell,
@@ -442,6 +455,7 @@ impl Tab {
             Tab::Powerbox => "POWERBOX",
             Tab::Moldable => "INSPECTOR",
             Tab::InspectAct => "INSPECT-ACT",
+            Tab::ServiceExplorer => "🛰 SERVICES",
             Tab::Workspace => "WORKSPACE",
             Tab::Wonder => "WONDER",
             Tab::Lanes => "LANES",
@@ -661,6 +675,21 @@ pub struct Cockpit {
     /// receipts · authorization boundary), rendered as a Surface cell. The
     /// service cell stands in as a live, cap-holding, turn-committing agent.
     agent_surface: starbridge_v2::agent::AgentSurface,
+
+    // --- AGENT MEMORY as a umem (the revolution, made a clickable affordance) -
+    /// The last checkpoint of the LIVE agent's working-set
+    /// ([`agent_memory::AgentMemoryCheckpoint`]), captured off the live World by the
+    /// Agent tab's "⛂ checkpoint" affordance and resumed into a fresh verified
+    /// context by "↺ resume". `None` until the operator checkpoints. This makes
+    /// agent-memory-as-umem load-bearing in a user-facing flow — the sibling of the
+    /// TIME tab's `reify_ledger` verified reconstruction (`b1bd3305`).
+    agent_memory: Option<starbridge_v2::agent_memory::AgentMemoryCheckpoint>,
+    /// The last agent-memory action verdict (checkpoint captured / resumed-and-verified
+    /// / a fail-closed refusal), shown in the Agent panel's memory section.
+    agent_memory_status: Option<String>,
+    /// The resumed working-set witness from the last "↺ resume into fresh context":
+    /// `(working_slot_0, all_teeth_passed)` — the verified handoff readout shown live.
+    agent_memory_resumed: Option<(u64, bool)>,
 
     // --- the A1 EDITOR/BUFFER surface (a text buffer as a Surface cell) -----
     /// The editor buffer — a cap-confined text buffer backed by a real cell
@@ -902,6 +931,17 @@ pub struct Cockpit {
     inspect_act_focus: Option<CellId>,
     /// The last `send` outcome banner (a REAL committed receipt / an in-band refusal).
     inspect_act_outcome: Option<String>,
+
+    // --- THE SERVICE EXPLORER (the Postman-like invoke() surface) -----------
+    /// The cell the service explorer is focused on. `None` focuses the first cell.
+    service_explorer_focus: Option<CellId>,
+    /// The method symbol the explorer has selected to invoke (`None` = none picked).
+    service_explorer_selected: Option<[u8; 32]>,
+    /// The args string the user typed (comma-separated decimals → felts). The
+    /// explorer parses it into the `args` vector an invocation carries.
+    service_explorer_args: String,
+    /// The last invoke outcome banner (a REAL committed receipt / an in-band refusal).
+    service_explorer_outcome: Option<String>,
 
     // --- THE WORKSPACE (doIt / printIt / inspectIt) -------------------------
     /// The live workspace evaluator — composes an intent, evaluates it in a forked
@@ -1157,6 +1197,8 @@ pub enum NavAction {
     ToggleReflexive,
     CyclePresent,
     CycleInspectFocus,
+    /// Cycle the SERVICE EXPLORER's focused cell.
+    CycleServiceFocus,
     CycleSimTarget,
     CycleSimEffect,
     SetLane(usize),
@@ -1184,6 +1226,7 @@ pub struct CockpitNavState {
     iv_focus: Option<CellId>,
     iv_present: usize,
     inspect_act_focus: Option<CellId>,
+    service_explorer_focus: Option<CellId>,
     sim_target_idx: usize,
     sim_effect_idx: usize,
     lane_idx: usize,

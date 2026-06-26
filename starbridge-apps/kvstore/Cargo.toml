@@ -1,0 +1,32 @@
+[package]
+name = "starbridge-kvstore"
+version = "0.1.0"
+edition = "2024"
+description = "A verified key-value register store as a service cell — the first starbridge-app built on the invoke() front door (cells-as-service-objects). Typed InterfaceDescriptor (put/get/delete with auth + Replayable/Serviced), invokable via invoke(), inspectable in the Service Explorer."
+
+# The CELLS-AS-SERVICE-OBJECTS exemplar. Unlike the FactoryDescriptor +
+# turn-builder apps, this crate declares a first-class typed
+# `InterfaceDescriptor` and drives its methods through
+# `dregg_app_framework::invoke` — the userspace method-dispatch front door that
+# desugars to ordinary verified effects (no `Effect::Invoke`, no kernel change).
+# See `src/lib.rs` for the in-source design notes.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+[dev-dependencies]
+# The dreggverse document language patch-core (its OWN, empty workspace, like
+# the other standalone path deps — resolves its workspace inheritance from the
+# parent `../../Cargo.toml`). The `cell-heap` feature rides a `DocGraph` onto a
+# real `dregg_cell::Cell`'s committed umem `heap_root` (NO `dregg-turn`), which
+# the end-to-end coherence demo (`tests/coherent_stack_demo.rs`) publishes into
+# the same live `Ledger` the service cell + executor drive — so the document
+# fork/diverge/stitch/resolve narrative rides the SAME World as the invoke()
+# turns and the time-travel snapshot.
+dregg-doc = { path = "../../dregg-doc", features = ["cell-heap"] }
+
+[lints]
+workspace = true

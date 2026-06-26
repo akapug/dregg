@@ -92,6 +92,8 @@ pub mod collapse;
 pub mod composer;
 pub mod conditional;
 pub mod conflict;
+pub mod continuation;
+pub mod continuation_resume;
 pub mod cross_fed_cite;
 pub mod dsl;
 pub mod economics;

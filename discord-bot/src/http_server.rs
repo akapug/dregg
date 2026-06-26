@@ -37,7 +37,7 @@ use axum::{
         IntoResponse, Json,
         sse::{Event, Sse},
     },
-    routing::get,
+    routing::{get, post},
 };
 use futures_util::stream::{self, Stream};
 use serde::Serialize;
@@ -254,6 +254,13 @@ fn build_router(state: Arc<BotState>) -> Router {
         .route("/api/activity/recent", get(recent_activity))
         .route("/api/intents/recent", get(recent_intents))
         .route("/api/queues", get(list_queues))
+        // RELEGATED — NOT the desktop command path. The on-chain command path is a
+        // real dregg turn the desktop submits to the command cell, which the bot's
+        // `bot_reactor` WATCHES and reacts to (the chain is the message bus). This
+        // endpoint survives only as the bot's optional internal reaction-delivery
+        // surface — a peer that already speaks HTTP can still nudge the same
+        // custodial `drive` — but the desktop never uses it to command the bot.
+        .route("/api/op", post(drive_op))
         .route("/observability/stream", get(observability_stream))
         // Production middleware (order matters: trace outermost for full req)
         .layer(TraceLayer::new_for_http())
@@ -421,6 +428,38 @@ async fn list_queues(
         })?;
 
     Ok(Json(queue_views(queues, subscriptions)))
+}
+
+/// **RELEGATED reaction-delivery surface — NOT the desktop command path.**
+///
+/// The desktop commands the bot ON-CHAIN: it submits a real dregg turn to the
+/// command cell ([`crate::deos_drive::command_cell`]), and the bot's
+/// [`crate::bot_reactor`] watches that cell and reacts. This HTTP endpoint is no
+/// longer how the desktop drives the bot; it remains only as an optional internal
+/// nudge for a peer that already speaks HTTP, routing through the SAME custodial
+/// [`crate::deos_drive::drive`] the on-chain reactor uses. The command bus is the
+/// chain, not this POST.
+async fn drive_op(
+    State(state): State<Arc<BotState>>,
+    Json(req): Json<crate::deos_drive::DriveRequest>,
+) -> Result<Json<crate::deos_drive::DriveOutcome>, HttpError> {
+    match crate::deos_drive::drive(&state, &req).await {
+        Ok(outcome) => {
+            info!(
+                action = %outcome.action,
+                accepted = outcome.accepted,
+                "deos-desktop drove a bot op as a dregg turn"
+            );
+            Ok(Json(outcome))
+        }
+        Err(e) => {
+            warn!(error = %e, "deos-desktop drive failed");
+            Err(HttpError {
+                status: StatusCode::BAD_GATEWAY,
+                message: format!("drive failed: {e}"),
+            })
+        }
+    }
 }
 
 async fn recent_activity(

@@ -42,17 +42,31 @@
 //! fields), and (3) the root batch proof verifies.
 //!
 //! What remains NAMED, not discharged (the honest floor): `recursive_sound` — the recursion fork's
-//! FRI engine soundness — plus two precisely-scoped fork follow-ups the harness pins narrow but do
-//! not close (stated in full in `circuit/src/ivc_turn_chain.rs`'s module docs): (a) the VK pin fixes
-//! the ROOT circuit's structure, but the fork's aggregation circuit takes each CHILD proof's
-//! preprocessed commitment as a runtime public input living in the constraint-free `PublicAir` trace
-//! that host verification never checks, so leaf-circuit identity is not yet pinned in-band; (b) leaf
-//! public values are not re-exposed at the root (`into_recursion_input::<BatchOnly>` passes empty
-//! `table_public_inputs` and the fork ignores them when building the aggregation circuit), so the
-//! carried binding proof is not in-band linked to the binding leaf folded INSIDE the root. Both
-//! close with the same fork lever: thread `table_public_inputs` up the tree and host-check the
-//! circuit public vector. [`AttestedHistory`] is the `AggregateAttests` verdict under that named
-//! carrier, and [`verify_history`] is the light-client check.
+//! FRI/STARK engine soundness. This is the SAME standard assumption every recursive STARK chain
+//! carries (Mina/Plonky3-style: FRI soundness, like collision-resistance for a hash) — it is NOT a
+//! dregg-specific gap and is not provable in Lean. The two precisely-scoped fork follow-ups that
+//! once sat ALONGSIDE it are now DISCHARGED (in-band, in `circuit-prove/src/ivc_turn_chain.rs`'s
+//! `aggregate_tree`), so recursion soundness rests on `recursive_sound` ALONE:
+//!
+//! - (a) **leaf-circuit identity pinned in-band — CLOSED.** Every child of the K-fold tree (each
+//!   descriptor leaf and each interior aggregation node) is folded through the fork's
+//!   `into_recursion_input_pinned`: the child's own preprocessed commitment (its VK-identity core,
+//!   the Merkle cap binding its static op-list) is baked as a CONSTANT the parent aggregation
+//!   circuit `connect`s its child-commitment targets to. A foreign-circuit child is refused either
+//!   way — keep the honest constant and the foreign child's in-circuit preprocessed-trace FRI check
+//!   is UNSAT; bake the foreign commitment and the ROOT VK fingerprint (tooth 1) stops matching the
+//!   honest anchor. The pinned constants live in every node's op-list up to the root, so the root VK
+//!   pin TRANSITIVELY certifies the whole tree's leaf identity (no same-shape argument left).
+//! - (b) **leaf public values re-exposed at the root — CLOSED.** Each child is fed with its GENUINE
+//!   per-table public inputs threaded up (`into_recursion_input_pinned` calls
+//!   `genuine_table_public_inputs`, not the empty-vector legacy path), so a child's exposed segment
+//!   publics are re-verified IN-CIRCUIT at the next layer. Combined with the ordered SEGMENT
+//!   accumulator, the whole-chain `[genesis_root, final_root, num_turns, chain_digest]` is
+//!   re-exposed at the root (`expose_claim`) and host-checked (verify tooth 3) — the carried claim
+//!   is in-band linked to the REAL descriptor leaves folded INSIDE the root.
+//!
+//! [`AttestedHistory`] is the `AggregateAttests` verdict under that one named crypto carrier, and
+//! [`verify_history`] is the light-client check.
 //!
 //! ## Retrieving the bytes behind a verified commitment (data availability)
 //!
@@ -102,8 +116,9 @@
 
 use dregg_circuit::field::BabyBear;
 use dregg_circuit_prove::ivc_turn_chain::{
-    FinalizedTurn, RecursionVk, TurnChainError, WholeChainProof, WholeChainProofBytes,
-    prove_turn_chain_recursive, verify_turn_chain_recursive, verify_whole_chain_proof_bytes,
+    FinalizedTurn, RecursionVk, SEG_DIGEST_WIDTH, TurnChainError, WholeChainProof,
+    WholeChainProofBytes, prove_turn_chain_recursive, verify_turn_chain_recursive,
+    verify_whole_chain_proof_bytes,
 };
 
 /// The whole-history attestation a light client obtains from ONE verified aggregate — the Rust mirror
@@ -119,10 +134,10 @@ pub struct AttestedHistory {
     /// The final state root the attested history reaches — the genuine fold of the whole history
     /// (`WholeChainProof.final_root`, the Lean `AggregateAttests.final_is_genuine_fold`).
     pub final_root: BabyBear,
-    /// The running digest committing to the ORDERED `(old_root, new_root)` pairs — distinct histories
-    /// with the same endpoints still differ here (`WholeChainProof.chain_digest`; the AIR's
-    /// `acc_out = hash_4_to_1([acc_in, old, new, idx])` chain).
-    pub chain_digest: BabyBear,
+    /// The multi-felt Poseidon2 digest committing to the ORDERED `(old_root, new_root)` pairs —
+    /// distinct histories with the same endpoints still differ here (`WholeChainProof.chain_digest`;
+    /// codex #3 — a genuine `SEG_DIGEST_WIDTH`-felt collision-resistant commitment).
+    pub chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     /// How many finalized turns the attested history folds (`WholeChainProof.num_turns`). The light
     /// client learns ALL of them executed correctly without seeing any.
     pub num_turns: usize,
@@ -206,7 +221,7 @@ pub fn verify_history_bytes(
     Ok(AttestedHistory {
         genesis_root: BabyBear::new(env.genesis_root),
         final_root: BabyBear::new(env.final_root),
-        chain_digest: BabyBear::new(env.chain_digest),
+        chain_digest: core::array::from_fn(|i| BabyBear::new(env.chain_digest[i])),
         num_turns: env.num_turns as usize,
     })
 }
@@ -813,7 +828,7 @@ mod tests {
         // Corrupt the PUBLIC final root + digest the aggregate claims — splice foreign public
         // claims onto THIS aggregate's root proof.
         agg.final_root = agg.final_root + BabyBear::ONE;
-        agg.chain_digest = agg.chain_digest + BabyBear::ONE;
+        agg.chain_digest[0] = agg.chain_digest[0] + BabyBear::ONE;
 
         match verify_history(&agg, &vk) {
             Err(LightClientError::AggregateInvalid(
@@ -827,6 +842,125 @@ mod tests {
                 "spliced public claims must be REFUSED by the claimed-publics attestation; \
                  got {other:?}"
             ),
+        }
+    }
+
+    // =========================================================================
+    // THE THREE TAMPER TEETH — `lightclient_unfoolable` made real over arbitrary
+    // histories. An adversary who FORGES a turn's outcome, DROPS a turn, or
+    // REORDERS the finalized order cannot obtain a whole-history attestation. Each
+    // is refused BEFORE the expensive fold: the forged turn by the leaf tooth
+    // (`verify_descriptor_participant` re-verifies every turn's rotated proof
+    // against its claimed PIs → `TurnProofInvalid`), the dropped/reordered by the
+    // temporal tooth (`new_root[i] == old_root[i+1]` → `ChainBreak`).
+    // =========================================================================
+
+    /// **TAMPER TOOTH — FORGED TURN.** A malicious prover lies about a turn's resulting state. We
+    /// forge the LAST turn's claimed rotated post-state root (PI 35): the execution witness is
+    /// honest, only the CLAIM is forged, and because it is the last turn no successor's continuity
+    /// can catch it — ONLY the leaf tooth (host re-verifies the rotated proof against its claimed
+    /// PIs) can. `fold_and_attest` refuses with `TurnProofInvalid` and grants NO attestation.
+    #[test]
+    fn light_client_rejects_forged_turn() {
+        use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+        use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
+        use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+        let (mut turns, _g, real_final) = make_chain(1000, 0, 7, 3);
+        const PI_ROTATED_NEW: usize = V1_PI_COUNT + 1; // rotated NEW-commit (PI 35)
+
+        // Destructure the LAST turn's leg, forge its claimed post-state root, rebuild it.
+        let last = turns.len() - 1;
+        let DescriptorParticipant { rotated } = turns.remove(last).participant;
+        let RotatedParticipantLeg {
+            proof,
+            descriptor,
+            mut public_inputs,
+        } = rotated;
+        let lie = public_inputs[PI_ROTATED_NEW] + BabyBear::ONE;
+        public_inputs[PI_ROTATED_NEW] = lie;
+        assert_ne!(lie, real_final, "the forged final root must differ");
+        turns.push(FinalizedTurn::new(DescriptorParticipant::rotated(
+            RotatedParticipantLeg {
+                proof,
+                descriptor,
+                public_inputs,
+            },
+        )));
+
+        match fold_and_attest(&turns) {
+            Err(LightClientError::AggregateInvalid(TurnChainError::TurnProofInvalid {
+                index,
+                ..
+            })) => assert_eq!(index, last, "the forged turn's leaf is the one refused"),
+            Ok(_) => panic!("a forged turn outcome must NOT yield a whole-history attestation"),
+            Err(other) => {
+                panic!("a forged turn outcome must be refused by the leaf tooth; got {other:?}")
+            }
+        }
+    }
+
+    /// **TAMPER TOOTH — DROPPED TURN.** An adversary omits a turn from the middle of the history.
+    /// Removing turn 1 from a real 3-turn chain leaves turn 2's old_root unequal to turn 0's
+    /// new_root — the temporal tooth breaks. `fold_and_attest` refuses with `ChainBreak` and grants
+    /// NO attestation.
+    #[test]
+    fn light_client_rejects_dropped_turn() {
+        use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
+
+        let (mut turns, _g, _f) = make_chain(1000, 0, 7, 3);
+        let prev_new = turns[0].new_root();
+        let next_old = turns[2].old_root();
+        assert_ne!(
+            next_old, prev_new,
+            "after the drop the surviving turns must NOT be continuous"
+        );
+        turns.remove(1); // omit the middle turn
+
+        match fold_and_attest(&turns) {
+            Err(LightClientError::AggregateInvalid(TurnChainError::ChainBreak {
+                index,
+                expected_old_root,
+                found_old_root,
+            })) => {
+                assert_eq!(index, 1, "the gap surfaces at the now-second turn");
+                assert_eq!(expected_old_root, prev_new.as_u32());
+                assert_eq!(found_old_root, next_old.as_u32());
+            }
+            Ok(_) => panic!("a dropped turn must NOT yield a whole-history attestation"),
+            Err(other) => {
+                panic!("a dropped turn must be refused by the temporal tooth; got {other:?}")
+            }
+        }
+    }
+
+    /// **TAMPER TOOTH — REORDERED TURN.** An adversary permutes the finalized order. Swapping turns
+    /// 1 and 2 of a real 3-turn chain makes the turn now at position 1 consume turn 2's old_root,
+    /// which is not turn 0's new_root — continuity breaks. `fold_and_attest` refuses with
+    /// `ChainBreak` and grants NO attestation.
+    #[test]
+    fn light_client_rejects_reordered_turns() {
+        use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
+
+        let (mut turns, _g, _f) = make_chain(1000, 0, 7, 3);
+        let prev_new = turns[0].new_root();
+        let swapped_in_old = turns[2].old_root();
+        assert_ne!(
+            swapped_in_old, prev_new,
+            "the swapped-in turn must NOT continue turn 0"
+        );
+        turns.swap(1, 2);
+
+        match fold_and_attest(&turns) {
+            Err(LightClientError::AggregateInvalid(TurnChainError::ChainBreak {
+                index, ..
+            })) => {
+                assert_eq!(index, 1, "the reorder breaks continuity at position 1")
+            }
+            Ok(_) => panic!("a reordered history must NOT yield a whole-history attestation"),
+            Err(other) => {
+                panic!("a reordered history must be refused by the temporal tooth; got {other:?}")
+            }
         }
     }
 }

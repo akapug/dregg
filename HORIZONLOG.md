@@ -8,26 +8,422 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
-## ⚑ FULL ZED AS THE DEFAULT DEV EDITOR — one root-workspace version conflict left (2026-06-24)
+## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- ZED/HERMES INTEGRATION ASSESS + STRUCTURE-PANE LANDED (2026-06-25). Honest assessment: the confined-Hermes seam is
+  genuinely tight (ToolGateway-gated, metered, receipted dregg turns on the verified executor; tool side-effects ride the
+  turn via `tool_effects`; per-tool/per-kind grants; live mandate inspector; real ndjson ACP transport + live `hermes-acp`
+  subprocess spawner). The editor genuinely edits dregg-doc `RopeDoc` documents (saves = receipted `SetField` turns on the
+  live World; `DocViewer` renders blame + first-class conflict objects). LANDED: wired the `DocViewer` into the LIVE cockpit
+  `EditorSurface` as a `buffer⇄structure` toggle (`deos-zed/src/cockpit_surface.rs` `EditorPaneView`; `DocViewer::set_snapshot`
+  + read accessors) — the blame/conflict keystone is now reachable from the running pane, not just the `merge_demo` bin. Green:
+  new headless test `deos-zed/tests/editor_structure_pane.rs` + the two `firmament_pane` tests, lib builds clean.
+  NAMED BIGGER GAPS (none critical): (1) MEDIUM — no MERGE/CONFLICT action in the live editor: a single-author editing session
+  never produces a conflict object (those arise only via `RopeDoc::merge_branch`, exercised in `merge_demo`/tests), so the
+  Structure face shows blame-only until a branch/merge flow is wired into the surface. (2) MEDIUM — the cockpit interactive
+  Hermes dock's "brain" is `scripted_turn` (keyword heuristic) and `HermesSession::run` does NOT install the `run_js`
+  hands-on-glass hook, so the cockpit agent METERS scripted tool-calls but does not DRIVE the live World; the run_js→real-turns
+  path is proven in `deos-hermes` tests (`hermes_runs_js`, `hermes_authors_card_via_run_js`) but not wired into `AgentDockView`
+  (thread World + JsRuntime in; note SpiderMonkey is a process-singleton, conflicts with the card pane). (3) LOW/by-design —
+  the bridge SCOPE leg is structural (route to the right per-key worker), not a per-tool-name in-circuit scope check on the
+  ACP wire; RATE+DEADLINE do the live confinement (documented in `bridge.rs`).
+- IVC RUNNING-VK 2-STEP TRANSIENT — INVESTIGATED + CONFIRMED FORK-GATED (no wrapper close; precise primitive named,
+  2026-06-25). After 68088b1e mechanized the perpetual fixed point (`∀N, VK_N = VK_4`, RecursiveAggregation.lean §10) the
+  ONLY residual is the finite 2-step transient (the running-agg VK settles at depth 4, not depth 1). ROOT CAUSE re-confirmed
+  against the fork (rev d959ff1): `verify_p3_batch_proof_circuit` (recursion/src/verifier/batch_stark.rs:258) builds the
+  parent verifier OP-LIST deterministically from the input proof's SHAPE — `proof.rows` (Const/Public/Alu) + the
+  `proof.non_primitives` manifest (op_type/rows/lanes) + per-instance `public_values.len()` (lines 306-356). A LEAF, an
+  AGG(LEAF,LEAF), and an AGG(AGG,LEAF) input each carry a DIFFERENT such structure; it propagates exactly ONE level into the
+  parent op-list (measured rows 269→277, prep_commit ddaa…→830a…) before stabilizing — hence depth 4. CANNOT be closed in our
+  wrapper: `ProveNextLayerParams` (recursion/src/recursion.rs:304) exposes ONLY `table_packing` (the `min_trace_height`
+  trace-height ceiling we already use via `wrap_params`/`WRAP_LOG_CEIL`) + `constraint_profile` — there is NO op-list /
+  non-primitive padding knob, and the op-list is sized inside `build_next_layer_circuit`→`build_verifier_circuit` from the
+  actual `prev` input, not from params. A dummy-data multi-pass seed IS wrapper-constructible but is SEMANTICALLY WRONG (the
+  Poseidon2 segment combine has no identity element, so a seed cannot be folded as identity — it injects a phantom chain
+  prefix). The agg-shape regress (seed's left must recursively be agg-shaped) is genuine and resolves ONLY at the fork. PRECISE
+  FORK PRIMITIVE (either): (A) a CANONICAL/fixed-shape verifier op-list — a `verify_p3_batch_proof_circuit` variant (or a knob
+  threaded through `ProveNextLayerParams`/the backend) that allocates a fixed maximal op-list (pad `rows` to a canonical
+  ceiling + a canonical `non_primitives` manifest) independent of the input shape, padding smaller inputs — the op-list analog
+  of the `min_trace_height` ceiling, so the FIRST aggregation already emits the fixed point; OR (B) an identity/normalize fold
+  (the Pickles step∘wrap base case) — a single-input re-prove `normalize(P)→canonical-AGG-shaped P'` attesting the same
+  statement, used to seed the running proof at canonical shape from fold #1. NOT a soundness gate (the VK-identity pin TRACKS
+  the commitment through the transient; light client anchors on the perpetual fixed point). Accurately scoped already in
+  `circuit-prove/src/accumulator.rs` header + RecursiveAggregation.lean §10; supersedes the 2026-06-24 "WRAP step is the
+  remaining fork work" entry below (the trace-height half landed; only the op-list half remains).
+- EMBEDDABLE-LEAN §4.2 ELABORATOR-TRIM (build-side BUILT, source-side NAMED): the host static embed now has the
+  principled init-chain trim — `dregg-lean-ffi/build.rs::runtime_dead_init_trim` (OPT-IN `DREGG_LEAN_FFI_RUNTIME_TRIM=1`,
+  separate `libdregg_lean_trim.a`, default link byte-unchanged). Keeps only the `dregg_*` runtime-FUNCTION closure +
+  generated boundary no-ops for the dead module inits → closure archive **179MB→75MB** (dropped 2900 runtime-dead proof-time
+  mathlib/aesop/tactic members), kernel probe + direct/JSON differential GREEN. CORRECTED PREMISE: trimming `Tactics.o`
+  alone saves ~0.1MB (executor imports mathlib directly). NAMED TAIL (the 372→30MB / ~25-50MB win): the **190MB libLean.a
+  elaborator** stays init-pulled in BOTH binaries — anchored by 16 specialized `_lp_aesop_*` rule-declaration symbols baked
+  into Dregg2 executor-module INITS (via `import Dregg2.Tactics`→aesop), which reference 416 `l_Lean_Elab/Meta` functions
+  directly. Cannot be soundly stubbed → needs the SOURCE module-graph split (executor "code" modules with no tactic/aesop
+  import; proofs + `declare_aesop_rule_sets` to sibling "proof" modules). Blocked on `lake build` green (intermittently RED
+  under concurrent metatheory work). Same anchor explains the seL4 `dregg-executor.elf` still 372MB despite its 13MB closure.
+  Doc: `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §4.2.
+- ANDROID cap-graph COMPLETED: the whole ambient-AOSP surface reforged as cap-bounded gates — intent
+  (`intentgate.rs` `76165ec4`, transport leg `63dfdca3`), content-providers (`contentgate.rs` `7451f6a6`),
+  system-services→organs (`organgate.rs` `af7d1c00`), install=cap-gated-birth (`appfactory.rs` `63dfdca3`).
+  The permission model is REAL: visible cap-badges (`e826335e`), a dangerous-perm hand-over mints a genuine
+  `Effect::GrantCapability` over the verified executor (`542f640d`, `turn/src/action.rs:962`), and the confined
+  app's `checkSelfPermission` is interposed over the cap-badge set + DENIED in-runtime on a dim cap (`d9a2ffc8`).
+  SystemUI cap-chrome rendered ON THE GLASS for a focused AndroidCell window — status bar + quick-settings shade +
+  hand-over sheet, a tap drives a REAL `Effect::GrantCapability`, the badge flips lit (`d361cfc5`/`76b43970`).
+  NAMED TAIL: a clean painted gpui frame on-device still needs real arm64 Vulkan hw (emulator GPU wall, not a bug).
+- SERVICE CELLS: three citizens on `invoke()` — kvstore (`0d1a3f8b`), nameservice (`21afb73c`), escrow-market
+  (`d124ad8a`, first four-organ non-trivial). Non-degrading: identical canonical program ⇒ organ teeth re-enforce
+  on every desugared turn, cap-gate bites at front-door AND executor. No `Effect::Invoke`, no kernel change.
+- MATCHING faithfulness FULLY CLOSED both deployed paths: derivative determinizer (`Determinize.lean`) + legacy
+  Thompson (`c14aa325`, `Thompson.lean` sorry-free); inter/neg route through the determinizer (`compiler.rs:692`).
+- UMEM: the whole-image FOLD CHIP landed in-circuit (`74565bd5`, `dregg-circuit::whole_image_fold` discharges
+  fc679a5f's `hpin`). NAMED TAIL: the universal-map rotation flip (umem becomes the prover — `umem_witness_enabled`
+  still defaults FALSE, `turn/src/executor/mod.rs:815`) → Stage B heap-write effect.
+- UMEM WELD PRECURSOR (the last precursor before the gated VK epoch, STAGED / VK-RISK-FREE): the umem cohort leg is
+  WELDED INTO the rotated descriptor — `weld_umem_into_rotated_descriptor` (circuit, keeps the rotated 46-PI vector +
+  appends the cohort `umemOp` over 7 columns + the umemory/umem_boundary tables). A REAL turn proves through the welded
+  rotated+umem descriptor (`sdk::full_turn_proof::prove_rotated_umem_welded_staged` + gauntlet — control proves, forged-pre
+  tooth bites). The IVC half: `RotatedParticipantLeg::mint_welded_from_block_witnesses` (circuit-prove) +
+  `mint_welded_umem_rotated_participant_leg` (turn) mint a welded leg whose old_root/new_root PI accessors are INTACT
+  (resolving the 0-PI cohort-leg IVC incompatibility); a multi-turn history folds host-side through
+  `fold_welded_umem_turn_chain_staged` (continuity + ordered digest) — green; the in-circuit recursion fold is
+  `prove_welded_umem_turn_chain_recursive_staged` (`#[ignore]`, the staged end-to-end). Teeth bite the welded form
+  (ChainBreak on reorder, TurnProofInvalid on a forged welded post-commit). NAMED TAIL = THE VK EPOCH ITSELF: commit the
+  welded descriptor's VK + flip the deployed default off rotated+per-map (the ONLY remaining step — deliberately gated).
+- WIDE+UMEM WELD (STAGED / VK-RISK-FREE) — the GENUINE flip precursor the VK epoch needs (closes the no-narrowing scar
+  the VK epoch refused): the narrow weld `926124e6` welded onto the 1-felt/46-PI rotated descriptor — flipping the
+  deployed WIDE wire (8-felt/~124-bit faithful commit) onto it would NARROW the commitment to ~46-bit. THIS welds the
+  umem cohort leg onto the deployed WIDE descriptor (`WIDE_REGISTRY_STAGED_TSV`) via
+  `weld_umem_into_wide_descriptor` (circuit; the shared `weld_umem_into_descriptor_with_suffix` body, purely ADDITIVE —
+  appends the cohort `umemOp` over 7 cols PAST the wide carriers + umemory/umem_boundary tables, NEVER touches
+  `public_input_count` nor any PiBinding), so the 16 wide commit PIs (the 8-felt before/after anchors) ride through
+  UNCHANGED — NO narrowing, AND the umem reconciliation leg rides along. SDK prover
+  `sdk::full_turn_proof::prove_wide_umem_welded_staged` (reuses the EXACT deployed wide trace/PI production via the
+  extracted `generate_wide_descriptor_and_trace`, then welds + proves via the deployed-form `prove_vm_descriptor2_umem`
+  with a REAL boundary). SOUNDNESS PROVEN (gauntlet `sdk/tests/wide_umem_weld_staged_gauntlet.rs`, 3/3): the welded leg's
+  PI vector is BYTE-IDENTICAL to the wide-only leg's (0 PIs appended) so the last-16 PIs == the trusted
+  `wide_commit_anchors` 8-felt; `public_input_count` + every wide PiBinding survive the weld; and the ~124-bit BINDING
+  TOOTH bites — a forged 8-felt commit felt makes the welded proof UNSAT (`verify_vm_descriptor2`). + forged-pre umem
+  refuses, non-cohort fails closed. IVC half: `RotatedParticipantLeg::mint_welded_wide_from_block_witnesses` (circuit-prove)
+  + `mint_welded_wide_umem_rotated_participant_leg` (turn) mint a WIDE welded leg + `wide_old_root8`/`wide_new_root8`
+  accessors; `fold_wide_welded_umem_turn_chain_staged` (circuit-prove) binds the **8-felt** continuity (the wide form
+  RETIRES the single-felt PIs 34/35 to zero — the 8-felt wide commit is the sole binding), with a `WideChainBreak` tooth
+  on reorder + `MissingWideAnchor` fail-close + host admission refusing a forged 8-felt post-commit. Test
+  `circuit-prove/tests/ivc_turn_chain_wide_umem_welded.rs`. TAIL (1) CLOSED: the in-circuit RECURSIVE wide fold (the
+  8-felt generalization of the single-felt chain-binding recursion) — `prove_wide_welded_umem_turn_chain_recursive_staged`
+  + `verify_wide_turn_chain_recursive` + `WideWholeChainProof` (circuit-prove `ivc_turn_chain.rs`): per-turn wide segment
+  leaf (`prove_descriptor_leaf_rotated_with_wide_segment` reads the leg's last-16 PIs as the two 8-felt anchors, exposes
+  `[first_old8(8), last_new8(8), count, acc(4)]` bound to the descriptor's real anchors), `aggregate_tree_wide` binds the
+  8-felt continuity (`prev.wide_new_root8 == next.wide_old_root8`) lane-by-lane IN-CIRCUIT (`connect`) + count + ordered
+  Poseidon2 digest, root's exposed wide segment = the whole-chain claim (segment tooth). `#[ignore]` recursive test folds
+  3 turns + verifies under its honest VK anchor; the `WideChainBreak` tooth bites on reorder (fast test green). NAMED TAIL
+  (2): the IVC wide-welded leg currently scopes the Transfer lead — the other wide families extend identically. NAMED TAIL
+  = THE VK EPOCH ITSELF (now over the WIDE welded form, no narrowing): commit the wide-welded VK + flip the deployed
+  default (deliberately gated).
+- UMEM COHORT → MULTI-DOMAIN (STAGED / VK-RISK-FREE): the umem cohort now covers the FULL effect set. The
+  single-domain cohort (`c67796d8`, width-7) failed closed on effects whose touch spans >1 domain in one effect;
+  this completes it. `metatheory/Dregg2/Circuit/Emit/EffectVmEmitUMemCohortMulti.lean` (`#assert_axioms`-clean):
+  `umemCohortDesc2` = the width-8 two-domain shape (one guarded `umemOp` per domain, `heap` col 6 · `nullifiers`
+  col 7) = the producer's sorted-domain form with the domain set BAKED IN (so a FIXED descriptor backs one VK,
+  which the variable producer form cannot); members `noteSpendUMem` · `bridgeMintUMem` (NOTE/BRIDGE = a nullifiers
+  freshness insert + a heap balance credit). PER-DOMAIN survival (`noteSpend_post_root`/`_pre_root` parametric
+  over the touched domain — fire at BOTH planes) grounded by a two-row worked witness; codec injectivity
+  (`noteSpend_addr_faithful`). Byte-pinned → `circuit/descriptors/umem-cohort-multidomain-v1-staged-registry.tsv`.
+  Rust: `umem_cohort_multidomain_{lean_key_for_effect,descriptor_json}` (circuit) +
+  `umem_cohort_multidomain_proving_inputs_from` (turn) + `prove_umem_cohort_multidomain_staged` (sdk) — a real
+  NoteSpend/BridgeMint two-domain leg PROVES through the deployed-form `prove_vm_descriptor2_umem`; gauntlet 5/5
+  (control proves · forged-pre bites · single-domain/domain-mismatch/non-member fail closed). HONEST SCOPE: the
+  cohort leg reconciles each domain INDEPENDENTLY; the CROSS-domain economic invariant (credit==value) is NOT a
+  memory-reconciliation property — it rides the effect's rotated AIR gates (the weld preserves them), same division
+  as single-domain. No deeper wall. STAGED beside the deployed + single-domain registries; the VK epoch is the only
+  remaining flip.
+- FIRMAMENT: the semihost interactive cockpit now runs the REAL verified `DreggEngine` (live-repaint-on-turn,
+  `251692b7`) — closes `SEL4-INTERACTIVE-COCKPIT.md §3.5`. NAMED TAIL: §3.6 step 4, the executor-PD's bare-metal
+  Lean-ELF runtime link (the real-seL4 WALL; gated on Microkit SDK on PATH, not a semihost blocker).
+- MULTIPLAYER: a real two-instance session — two co-inhabitants sync via the membrane's field-granular stitch
+  (`8159d322`). SURFACES: the Spotter + menus now reach EVERY session surface, each landing mold-ready (`f7e6765a`).
+
+## ⚑ THE UMEM ROTATION-FLIP BURN-DOWN (the 5-rank plan, named in `6ec89500` + `UNIVERSAL-MAP-ROTATION.md`)
+*(The flip = make the universal-memory prover LOAD-BEARING on the wire: `umem_witness_enabled`
+still defaults FALSE (`turn/src/executor/mod.rs:815`), v1 is still the only prover. Each rank
+carries its closure shape. Pure-Lean ranks are VK-risk-free and can soak before any flag-day.)*
+- RANK 1 — the umem ADDRESS/VALUE CODEC ADAPTERS (the gating long pole, VK-RISK-FREE). ✅ DONE
+  (`metatheory/Dregg2/Crypto/UMemCodec.lean`, 17 theorems `#assert_axioms`-clean): the REAL
+  structured carriers replacing `effect_vm_umem_real_turn.rs`'s per-proof "dense injective
+  relabeling" — `uaddrEnc=hash[domainTag d, coll, key]` + `uaddrEnc_injective` (the structured
+  address codec, faithful under CR + injective tag); `capLeafOf=hash[holder,target,rights,op]` (=
+  the deployed `siteCapEdgeLeaf` by `rfl`) + value codec WHERE/WHAT split + `capRoot_injective`
+  (the cap boundary root binds its 4-felt cap cells, no new combinatorics); the MMR
+  boundary-derivation analogue for the index domain (`index_boundary_root_{derived,bound,
+  from_memcheck}`, riding `mroot_injective` + `memcheck_pins_final`). All on the SAME named
+  `Poseidon2SpongeCR` floor (no narrower bit-count), non-vacuity both polarities on `refSponge`.
+- RANK 2 — the `absent` map-op realization (`descriptor_ir2.rs:62-68`, declared in IR / refused by
+  assembly today; the nullifier-insert lane needs it regardless). CLOSURE: assembly + a refuse-test.
+- RANK 3 — the 3-verb EXECUTOR (the runtime long pole): `RecordKernelState` → the ONE universal
+  map (`VerbCompression.lean:87-89` "rides THE ONE ROTATION"; `turn/`+`cell/`-shaped). The 3-verb
+  circuit descriptors GATE on this — circuit semantics must not run ahead of runtime semantics.
+- RANK 4 — the per-domain WHOLE-IMAGE fold-chip generalization: the cap/nullifier/index boundary
+  folds reconciled against the universal boundary table (the `6ec89500` whole-image chip is the
+  heap-plane proof-of-shape; extend to the other domains via the Rank-1 codecs). Still
+  `umem_witness_enabled`-gated.
+- RANK 5 — the LAYOUT FLAG-DAY (one motion, AFTER GATE 0 = IR-v2 size GREEN): registers 8→16 +
+  `FactoryDescriptor.fields` · `heap_root`+`iroot` commitment limbs (`CommitBindsIndex`/
+  `CommitBindsMMR`) · PI v3 · RESERVED/selector-block death · universal-memory table assembly →
+  ONE descriptor regen → differential gauntlets (cell≡circuit per map · per-effect AGREE · the
+  memory-argument adversarial suite, `UniversalMemory.lean` §6 as the templates) → VK/commitment
+  bump → succession drill → persvati gauntlet → deploy when ember says deploy.
+
+## web-deos DEEPENED: a SERVICE CELL invoked node-less in the browser (2026-06-25)
+- WHAT: the web `ViewNode` path gained a fourth, richer surface — a KV-store SERVICE CELL driven entirely in a
+  browser tab (`wasm/src/bindings_card.rs::KvStoreWorld` + `deos-view/src/web.rs::render_kvstore_live_document` +
+  `deos-view/examples/web_render_card.rs` bakes `kvstore.html` + a gallery tile). Unlike counter/inspector/tally
+  (bare `SetField` on a cell's own slots), the store publishes a typed `InterfaceDescriptor` (put·delete·get);
+  clicking put/del ROUTES through `route_method` (the verified `dregg_dfa` router) BEFORE desugaring to the
+  version-bump + register `SetField`s — no `Effect::Invoke`. `runtime::app_programs::kvstore_program` (Monotonic on
+  the version slot, mirrors `starbridge_kvstore` which can't be a wasm dep) is installed on the store cell; the
+  caller is a separate agent granted a reach cap. `tryRollback` proves the Monotonic guarantee BITES in-tab (a real
+  executor refusal: "field[0] decreased"); `tryGet` proves get is the named Serviced OFE seam. VERIFIED by running:
+  wasm-pack build + served + `scripts/drive-deos-kvstore.mjs` headless-Chrome CDP driver — all asserts pass
+  (put 20→21, del 10→0, version 4→5→6, rollback refused, get named; receipts 5→6→7). Commit `f956a9514`.
+- NAMED TAILS (closure shape): (a) `put`'s value is currently a single-arg "bump the register" (the ViewNode
+  `Button` carries one `arg`); a richer put-with-explicit-value needs a text `Input`-bound value affordance (the web
+  renderer already renders `Input`, just not yet wired to fire a 2-arg method). (b) `get`'s Serviced answer is
+  NAMED-and-refused, not yet SERVED — closure = surface the OFE cross-cell-read result as a (read-only) bound row
+  when the serviced-answer carrier (S2) lands. (c) the in-tab service-cell is wasm-mirrored (program VALUE +
+  invoke() routing core re-expressed), like the subscription/governance app programs; if `starbridge_kvstore` ever
+  sheds its axum/tokio deps it could be a direct wasm dep instead.
+
+## deos-desktop document-collaboration UX DEEPENED: drivable branch→diverge→stitch→conflict→resolve + the umem boundary surfaced (2026-06-25)
+- WHAT: the deos_desktop document-language surface (`starbridge-v2/src/deos_desktop/mod.rs`) is now drivable end to end:
+  (a) a LIVE co-author draft editor — a second `InputState` (`branch_inputs`/`branch_subs`) so the co-author TYPES the
+  divergence by hand (`set_branch_text` as `author^1`), not only the canned button; (b) the document's UMEM-HEAP BOUNDARY
+  (`DocHeapCell::from_graph(...).commitment()`) is read out and watched MOVE through edit/branch/stitch/resolve — the
+  conflict's boundary is labelled "binds both alternatives" (the anti-forge tooth surfaced); (c) richer ConflictView —
+  alternatives attributed you-vs-co-author (`author_label`), a RESOLVED receipt row (the resolution patch id = the turn's
+  receipt, `last_resolution`). New bake `--render-doc-collab` drives the whole flow on one large editor window + asserts the
+  boundary moves, the conflict is held off-heap, and resolve publishes (height grows, receipt lands, boundary moves).
+- NAMED TAILS (closure shape): (a) CLOSED 2026-06-25 (`83352a35d`) — `edit_doc` now persists the document INTO the cell's
+  umem-heap (`commit_doc_to_umem_heap` → `DocHeapCell::from_graph_with_text` → `World::set_cell_heap`, an out-of-band
+  `set_heap`/`reseal_heap_root`, no kernel effect), so the cell's committed `heap_root` IS the document commitment (boundary ==
+  commitment, surfaced via `live_doc_boundary`); prose re-seeds on reopen from `dregg_doc::COLL_TEXT` (the one-way BLAKE3
+  projection stays recoverable). Conflict/stitch/resolve ride the same heap. RESIDUAL (durable-image seam): `set_cell_heap`
+  fail-fasts on a durable image whose doc cell a committed turn already touched (the genesis-mirror-after-turn guard) — the
+  demo world is ephemeral so it passes, but a DURABLE runtime heap write awaits an ordered heap effect (no `Effect::SetHeap`
+  exists; mirrors the `set_cell_program` runtime-vs-genesis tension). (b) the live branch editor re-seeds only on creation; a
+  programmatic diverge after the widget exists needs a `branch_resync` (mirror of `doc_resync`) — closure = add it if a flow
+  edits the branch out-of-band while its editor is open.
+
+## polyana seam WIRED: `polyana-bridge` realizes the sketch against real dregg cores (2026-06-25)
+- WHAT: `docs/deos/polyana-seam-sketch.rs` (was "ILLUSTRATIVE, NOT WIRED") is now the `polyana-bridge` crate
+  (workspace member). Slice 3 = `gate_effect_set`/`gate_auth` over the PROVEN `is_facet_attenuation`/`is_attenuation`;
+  Slice 1 = `witness_receipt` → real chained `dregg_turn::TurnReceipt` (v3 hash binds the chain link); Slice 1's payoff =
+  `attest_whole_log` + `dregg_query` `AttestedAnswer` non-omission certificate. 7 tests green (`polyana-bridge/tests/seam.rs`).
+- NAMED TAILS (closure shape): (a) the EffectMask bit-assignment is the bridge's polyana-vocab intern, NOT dregg protocol
+  bits — extend `POLYANA_EFFECT_BITS` as polyana's vocabulary grows (≤32 tokens, `u32`); promote to a richer set type if it
+  outgrows that. (b) `audit_records` leaves `EffectSummary`s empty — wire polyana's typed effect summaries (fn_name/intent
+  kind → `EffectSummary`) so the attested queries see real facts, not just the receipt-hash MMR. (c) ACTUAL adoption is in
+  polyana's own repo (`~/pug/polyana`, read-only here): a `pa_witness` call site that also emits the bridge receipt + a
+  `cap-bundle` parser → `CapBundle` — an ember/David seam, out-of-tree. (d) Slice 2 (`Target::HostPd` confinement) stays in
+  `sel4/dregg-firmament`, not re-exported.
+
+## umem Stage A LANDED: the per-cell heap is a first-class umem (additive); live producer is the named seam (2026-06-25)
+- WHAT: `UMEM-PRIMITIVE.md §2/§7` Stage A — the per-cell heap (`CellState.heap_map`) projected as a
+  first-class umem collection, additive on the recursion-gated bridge witness, the keystone's first
+  cross-cell consumer. Shipped in `turn/`:
+  - `UKey::Heap { cell, collection, key }` (heap domain) + `project_cell` emits one `UVal::Bytes32`
+    per `heap_map` entry. `heap_root` is now the DERIVED commitment of the `Heap` plane (NOT
+    separately projected — exactly the established `fields_root`/`Field` treatment; the sorted-
+    Poseidon2 root over the projected cells EQUALS `cell.state.heap_root` by `boundary_root_derived`).
+  - `JournalEntry::SetHeap` + `record_set_heap` + rollback + `touches_of_entry` → genuine `umem_op`
+    rows on a heap write (the bridge re-reads a journaled heap write as its Blum WRITE).
+  - `open_heap_against_committed` — the cross-cell read: binds another cell's committed `heap_root`
+    as an init image and opens a key; a tampered preimage derives a different root → the binding
+    REFUSES (the Rust shadow of the keystone `boundary_init_root_bound`).
+  - reify_seam RESIDUAL #1 CLOSED: `reify_cell` rebuilds `heap_map` from the `Heap` plane + re-derives
+    `heap_root`; a non-empty heap now round-trips. Tests: `turn/src/umem.rs` `heap_stage_a_tests` (3) +
+    `turn/tests/umem_time_travel.rs::reify_round_trips_non_empty_heap`. All umem suites green.
+- NAMED SEAM (closure lane, not parking): no live `Effect` journals a heap write yet — today the heap
+  is mutated out-of-band (`CellState::set_heap`, e.g. `deos-js`/`dregg-doc`). The producer is a
+  heap-writing effect = a NEW effect/circuit surface (Stage B+, with `UmemRef`/checkpoint), deliberately
+  NOT built here. `JournalEntry::SetHeap` + `record_set_heap` carry `#[allow(dead_code)]` until it lands.
+  Named in `turn/src/journal.rs` (the `SetHeap` NAMED SEAM doc).
+
+## DERIVATIVE-MATCHING faithfulness: Stages 0/1/3 LANDED kernel-clean over dregg's Pred; Stage 4 language-half done, table-equality unblocked (2026-06-25)
+- WHAT: a Brzozowski/Antimirov symbolic-derivative matcher built over dregg's OWN `Pred` algebra
+  (`PredRE` = ERE≤'s `RE` minus the four lookarounds, `Pred` leaf), in dregg's own Lean — ERE≤ +
+  ITP'25 `finiteness-derivatives` read as proof BLUEPRINTS only (no import; cloned to `~/dev/_research/`).
+  All `#assert_axioms`-clean (`{propext, Classical.choice, Quot.sound}`), zero `sorry`. Modules:
+  `metatheory/Dregg2/Crypto/Deriv/{Core,Correctness,Similarity,Determinize,Combinatorics,TTerm,Permute,
+  SymbolicDerivative,Pieces,Finite,Monotone,Finiteness}.lean` (wired into `Dregg2.lean`).
+  - Stage 0 (`Core`): `der`/`null`/`derives` + denotational `Matches` (starMetric termination) + non-vacuity `#guard`s (incl. the new `neg` deny-filter).
+  - Stage 1 (`Correctness`): `correctness : derives w R = true ↔ Matches w R` — the "weeks in the design" middle theorem (seven per-ctor lemmas + the Kleene-star tower).
+  - Stage 3 (`Finiteness.der_finite`): **Brzozowski FINITENESS** `∃ xs, ∀ {n}, steps r n ⊆[≅] xs` — the whole symbolic-derivative state space fits up to similarity in the fixed finite `⊕(pieces r)`. The full ITP'25 tower (TTerm/symbolic-derivative/pieces/neSubsets/Permute-nodup/`step_to_pieces`/`pieces_equiv'`) ported over `Pred`. `sim_sound` (`Similarity`) proves `≅` is language-sound so the finite ≅-quotient = finite recognized languages. (`DecidableEq PredRE` is CLASSICAL — kept clean.) The design rated this "months, not days"; it landed.
+  - Stage 4 (`Determinize`): the derivative automaton presented AS the in-circuit `Dfa.lean` `DfaAccepts` run — `derivativeDfa_correct/_matches` (accepts ↔ `derives` = `Matches`); the in-circuit `Dfa.lean` cascade is IMPORTED, untouched.
+- NAMED FOLLOW-UPS (closure lanes, not parking):
+  - **Stage 4 table faithfulness — SUBSTANTIVELY CLOSED** (`Deriv/TableDfa.lean`): `tableDfa_faithful` proves ANY flat-table DFA (model of `compiler.rs::Dfa::matches`) whose `accepts` agrees with `derives` on every word decides EXACTLY `Matches R` — the compiled table's boolean meaning is now a THEOREM, construction-agnostic (the table-opaque regime the design says suffices). `tableRun_dfaAccepts` bridges the deployed AIR's relation-δ to a table FUNCTION (closes `DfaAcceptanceAir` GAP-A). `derivativeMatcher_faithful` + `der_finite` give the faithful table EXISTS + is FINITE. RESIDUAL (optional, narrow): a Lean MODEL of `compiler.rs::determinize`'s powerset construction proving ITS `accepts` agrees with `derives` — only needed to name the DEPLOYED table specifically; any agreeing table is already trusted by `tableDfa_faithful`. Named in `Deriv/{TableDfa,Determinize}.lean`.
+  - **Stage 5 stateful `(old,new)` carrier** (policy/caveat trace) — gated open research; the binding soundness constraint is the right-skew (derivatives decide LANGUAGE; `FlowRefine.decideRefines` decides reactive SIMULATION; never conflate). Named in `docs/deos/DERIVATIVE-MATCHING-DESIGN.md §5.3`.
+
+## `invoke()` + the SERVICE EXPLORER LANDED end-to-end in deos; serviced-answer + registry-wire are the named follow-ups (2026-06-25)
+- WHAT: cells-as-service-objects INVOCATION shipped at the userspace layer (NO kernel `Effect::Invoke`, Effect enum
+  untouched), end-to-end into the live deos cockpit:
+  1. `dregg_app_framework::invoke` (`app-framework/src/invoke.rs`) — the front door: resolves a method against a cell's
+     interface (derive-from-program OR an `InterfaceRegistry`), routes via the verified DFA `route_method`, cap-gates on
+     `MethodSig::auth_required` (`InvokeAuthority` tiers), refuses Serviced methods as the named seam, desugars to an
+     ordinary method-targeting `Action` + fires through the executor. 5 unit tests.
+  2. `starbridge_v2::service_explorer::ServiceExplorer` (`starbridge-v2/src/service_explorer.rs`) — the deos-interior
+     Postman-like model (gpui-free, 6 tests): discover→list→invoke off the live `World`, re-inspecting the post-state.
+     New executor-entry `World::wrap_action_turn` (preserves the action's method symbol).
+  3. The `🛰 SERVICES` cockpit tab (`cockpit/{mod,construct,nav,panels_workspace,panels_moldable}.rs`) — method list +
+     args presets + underlying-effect picker + invoke buttons + outcome banner; `Tab::ServiceExplorer` registered, nav
+     capture/restore, `CycleServiceFocus`. The `service` anchor boots publishing {ping,set_status,tick}. Verified by a
+     headless render of the live element tree (the published methods + invoke affordances paint). 713 lib tests green.
+- NAMED FOLLOW-UPS (closure lanes, not parking):
+  - SERVICED-ANSWER CARRIER — a `Serviced` method's answer rides the OFE cross-cell-read (`crossCellRead_refines_observedField`);
+    today both `invoke()` and the explorer REFUSE it in-band (the seam). The receipt shape that witnesses the serviced
+    reads + produced result (so a light client re-checks a service answer) is the build. (Named in `cell/src/interface.rs` S2 list.)
+  - REGISTRY WIRE-THROUGH — the cockpit explorer resolves derive-from-program only (`invoke`); the richer
+    `InterfaceRegistry`/`build_with_descriptor` + `invoke_with_descriptor` (Signature-gated / Serviced methods) are built
+    and tested but not yet surfaced in the cockpit (no UI to register a descriptor). Wire a registry panel.
+  - METHOD CLEARTEXT NAMES — a `MethodSig` carries only the symbol; the explorer shows short-hex. A name-registry (or
+    carrying the cleartext alongside the descriptor) would show {ping,…} instead of {53ee61…}. Cosmetic, userspace.
+  - ARGS ENTRY — the args field uses preset buttons (the cockpit's text idiom); a live text input is the richer UX.
+
+## mid-forest `yield_point` LANDED; promise-pipelining lift of the live yield is the named follow-up (2026-06-25)
+- WHAT: the continuations lane's "THE SEAM — mid-forest checkpoint" is CLOSED. `TurnExecutor::maybe_umem_yield`
+  (called from `executor/execute_tree.rs` after each effect appends to the journal) snapshots
+  `project_executor_state(ledger)` LIVE between two effects when armed via `set_umem_yield_at`; the snapshot lands in
+  `last_umem_yield`. `Continuation::from_yield` BINDS the live boundary to the committed Blum trace (admits only a
+  snapshot equal to a trace-prefix fold; refuses foreign). Lean twin `Dregg2/Exec/Continuation.lean`:
+  `midturn_split`/`yield_resume_sound`/`resumed_tail_disciplined`, 7 keystones `#assert_all_clean`. Tests:
+  `turn/tests/mid_forest_yield_point.rs` (4 green). Banner in `turn/src/continuation.rs` rewritten LANDED + the
+  receipt/atomicity boundary named precisely (yield is observation-only; commit/rollback stays whole-turn).
+- THE NAMED INVARIANT (not a hole, by design): the captured mid-forest boundary is a REPRESENTATION of mid-flight
+  state, NOT independently committable — a turn is all-or-nothing, so if the remaining forest would fail, the
+  prefix boundary is a state the chain never commits. `midturn_split` proves only the STATE-fold half.
+- CLOSURE SHAPE (the forward lane): wire the live yield into the partial-turn/promise EFFECT vocabulary
+  (project-partial-turn-promises) — a `yield_point` that RETURNS a `Continuation` to a promise pipe (CapTP),
+  resumed when the dependency lands, so promise pipelining inherits light-client unfoolability. The state half is
+  proven; the lift is WIRE (ConditionalBatch ↔ the live yield), not new foundation.
+
+## Touch UI (graphideOS shape) LANDED as a bake; the live-on-Android frame is the named follow-up (2026-06-25)
+The touch-adapted deos UI shipped: `starbridge-v2/src/touch.rs` (`TouchShell`) — the bottom-bar five-mode
+switch (Inhabit/Author/Dev/Inspect/Operate via gpui-component `TabBar`), the tappable cell garden (reusing
+`wonder::WonderRoom` over the live `World`), and long-press → a bottom face-sheet (the reflected `Inspectable`
+faces + the lit ACTUATE affordance firing a real `wonder::DragValue` predict-then-commit turn). Distinct from
+the desktop cockpit; reuses the gpui-free view model. Baked headless via `--render-touch` (main.rs,
+`render_touch_headless`; phone 390x844 default, `--render-mode <name>` selects a clean mode surface). NAMED
+FOLLOW-UP (per MOBILE-DEOS.md §7 ⛔ STEP-2 wall, NOT this pass's scope): the SAME `TouchShell` painting a real
+frame ON an Android device needs the gpui `PlatformAndroid` backend (window from `ANativeWindow`, an android
+event/IME pump, lifecycle) — a gpui-fork change. CLOSURE SHAPE: lift upstream `gpui-mobile` + drive `TouchShell`
+through it (the bake proves the element tree; the device frame waits on the backend). Also: touch gestures are
+currently tap (`on_click`) + an explicit "⋯ faces" affordance standing in for long-press (gpui has no native
+long-press); a real press-and-hold recognizer is the gesture-layer follow-up.
+
+## reify_seam CLOSED at the value level; Lean uproj-injectivity is the named follow-up (2026-06-25)
+`reify_cell`/`reify_ledger`/`reify_executor_state` landed (`turn/src/umem.rs`) — the byte-identical inverse of
+`project_cell`/`project_ledger`, re-deriving the dropped commitments (`fields_root` from the `Field{slot≥16}`
+plane; the ledger Merkle root lazily on `root()`; leaf/cap caches) rather than storing them. The round-trip law
+`reify_ledger(project_ledger(L)) == L` is PROVEN over the faithful class (`turn/tests/umem_time_travel.rs`:
+`reify_ledger_round_trips_a_populated_ledger`, `reify_restores_a_live_ledger_to_height_h`). HONEST RESIDUAL
+(named precisely by `ReifyError` + two refusal tests `reify_refuses_heap_not_projected` /
+`reify_refuses_cap_revocation_gap`): FOUR value planes `project_cell` does NOT yet carry — heap preimage
+(`heap_map`; only the derived `heap_root` is projected), `Cell.interfaces`, `CapabilitySet.tombstones`, and the
+post-revoke `next_slot` gap. CLOSURE SHAPE: extend the projection address space (`UKey`) with heap/interface/
+tombstone planes (Rust + the Lean `UniversalBridge.UKey` twin + circuit domain codes, in lockstep), which makes
+the faithful class total. NAMED LEAN FOLLOW-UP: `uproj` injectivity over the account-membership-gated class
+(`metatheory/Dregg2/Exec/UniversalBridge.lean`) — the abstract reify witness (the projection determines the
+state). It is a real multi-plane `funext`+codec-injectivity proof (the Lean kernel projects all 17 fields, so it
+has NO heap/interface/tombstone gap — only the `accounts`-gating mirrors the Rust faithful-class restriction);
+deferred rather than faked to keep `#assert_axioms`-clean. Not vacuous: the Rust round-trip is the deployed-system
+guarantee and is green.
+
+## ⚑ IVC mixed-root #1 — SAME-ENDPOINT digest: BUILT but BLOCKED on an in-circuit-Poseidon↔FRI-PoW conflict (2026-06-25)
+Named by codex re-review #3 (`metatheory/docs/CODEX-IVC-REVIEW-3.md`). The distinct-endpoint mixed-root is
+already structurally closed (the segment tooth binds genesis/final/count to the real descriptor leaves); the
+residual is the SAME-genesis/final/count case, where the ordered-history `acc` was a one-felt QUADRATIC fold
+`a*M1+b*M2+a*b*M3` — algebraically collidable (a directly-solvable colliding partner + degeneracy roots).
+BUILT (`circuit-prove/src/ivc_turn_chain.rs`): `seg_hash2_in_circuit` → `seg_poseidon_commit`, a genuine
+`SEG_DIGEST_WIDTH=4`-felt Poseidon2 duplex SPONGE + its host dual `seg_poseidon_commit_host`; carried
+`chain_digest` widened to `[BabyBear;4]` (struct + `WholeChainProofBytes` envelope→v2 + consumers: lightclient
+`AttestedHistory`, wasm views, pg-dregg transport `[[u8;32];4]` — all compile); codex #5 `num_turns < p` bound
+added. **BLOCKER (empirically isolated, NOT yet fixed):** building the digest's in-circuit Poseidon2 perm via
+the recursion `add_poseidon2_perm_for_challenger` (BABY_BEAR_D4_W16 — the SAME op the FRI challenger uses) makes
+the real recursion fold PANIC at witness-gen: `WitnessConflict { WitnessId(0), existing [0,0,0,0], new <nonzero> }`
+in `run_aggregation_verification_circuit`, originating at the FRI verifier's `check_pow_witness` `assert_zero(bit)`.
+PROVEN cause (isolation runs, ~80s each): the EXACT original quadratic fold (no perm) PASSES `mixed_root` (is_err,
+forgery rejected); ANY Poseidon perm (W=1 or W=4) FAILS with the conflict; the bare sponge gadget passes
+standalone. ROOT (cross-agent diagnosis): a circuit-GLOBAL connect-DSU collapse — exposed segment endpoints +
+a challenger recompose output get unioned into `ExprId::ZERO`'s witness class (`WitnessId(0)`); the extra perm
+rows reshape the graph so a genuinely-NONZERO value lands in that class and clobbers W0 at runtime. The first
+"WitnessId(0) hazard via `decompose_ext_to_base_coeffs`" the task warned of was a RED HERRING (sidestepped by
+ext-perm), but a DEEPER same-class collapse via `check_pow_witness`/recompose remains.
+FIX IN PROGRESS (background agent `a7b40cb5d272fe949`): ISOLATE the digest onto a SEPARATE Poseidon2 op-type
+(`BABY_BEAR_D4_W24` — distinct `NpoTypeId`/variant_name ⇒ isolated chain-state + per-op CTL) so it doesn't share
+the FRI challenger's W16 machinery. RISK flagged: the connect-DSU is circuit-global (not per-op), so op-type
+isolation may NOT change the collapse — agent to validate at `runner.run` BEFORE full W24 table-plumbing; if W24
+doesn't help, pivot to the fork DSU root-fix (forbid a created/exposed NONZERO value from slot-aliasing into
+`ExprId::ZERO`; emit an equality CONSTRAINT instead — generalize fork commit `72ffc56`). Two fork-side attempts
+already tried + reverted (Add-executor verify-don't-clobber [sound but only moved the clobber]; NPO-output
+relocation [write-side only, insufficient]). DO NOT revert to the weak quadratic fold — making Poseidon work IS
+the task. NAMED RESIDUALS (by design): online accumulator scoped OUT (codex #4, single-felt binding leaf zero-
+padded); ~124-bit (4 lanes) floor liftable to 8.
+STATE: fork CLEAN @8d42900; dregg digest code BUILDS but the real folds (`mixed_root`, `k_fold`) FAIL until the
+perm-isolation fix lands. Cheap ivc teeth 4/4; consumers compile.
+
+## ⚑ FULL ZED AS THE DEFAULT DEV EDITOR — ONE native `links="sqlite3"` clash left (2026-06-24)
 Named by the feature-collapse + zed-full-default lane (`starbridge-v2/Cargo.toml` feature table;
-`deos-matrix/Cargo.toml` + `deos-matrix/src/client.rs`). The cockpit's Dev editor is still deos-zed's THIN
-integration, not the full Zed (`deos-zed-full`'s `ZedFullPane`, written + ready in
-`starbridge-v2/src/zed_full_pane.rs`). TWO blockers gate making the full Zed the default:
-BLOCKER 1 (`links="sqlite3"` collision: Zed's `sqlez` `libsqlite3-sys 0.30` vs matrix's
-`matrix-sdk-sqlite` `libsqlite3-sys 0.35`) — **RESOLVED**: `deos-matrix` now defaults to matrix-sdk's
-IN-MEMORY store (new `live-matrix` feature re-adds the on-disk `sqlite` store; `client.rs`'s `sqlite_store`
-call is gated on it), so matrix-sdk no longer pulls `matrix-sdk-sqlite` and `sqlez` becomes the sole
-`links="sqlite3"` package. BLOCKER 2 (a root-workspace VERSION conflict) — **STILL OPEN**: `deos-zed-full`
-→ editor → markdown → merman needs `unicode-width ^0.2.2`, but the root workspace's `dregg-tui` → `ratatui
-0.29` pins `unicode-width =0.2.0` (an exact upstream pin inside ratatui). Cargo cannot satisfy both, and
-merely DECLARING the optional `deos-zed-full` dep on the root-member `starbridge-v2` breaks WHOLE-workspace
-resolution even with the feature off — so the `deos-zed-full` dep + `zed-full`/`zed-full-pane`/
-`desktop-zed-full` features are left UNDECLARED (the exact re-add block is in `starbridge-v2/Cargo.toml`).
-CLOSURE (pick cleanest): (a) bump `ratatui` past the `=0.2.0` pin once upstream loosens it (0.29 + 0.28 both
-pin exactly 0.2.0 → needs a newer ratatui line), or (b) move `dregg-tui` (the only ratatui user) out of the
-root workspace into its own, or (c) a `[patch]` that loosens merman's `unicode-width` floor to `0.2.0`. Then
-uncomment the re-add block, fold `zed-full` into `desktop`, retire `desktop-zed-full`, and bake Dev showing
-the full Zed.
+`deos-zed-full/Cargo.toml`; root `Cargo.toml` exclude; `dregg-tui/`). The cockpit's Dev editor is still
+deos-zed's THIN integration, not the full Zed (`deos-zed-full`'s `ZedFullPane`, written + ready in
+`starbridge-v2/src/zed_full_pane.rs`).
+BLOCKER 2 (root-workspace `unicode-width` VERSION conflict) — **RESOLVED** (option b). `deos-zed-full` →
+editor → markdown → merman needs `unicode-width ^0.2.2`, but the former root member `dregg-tui` → `ratatui
+0.29` pinned `unicode-width =0.2.0` (exact). FIX: `dregg-tui` (the ONLY ratatui user) is now its OWN
+root-EXCLUDED workspace — root `Cargo.toml` `exclude` += `dregg-tui`; `dregg-tui/Cargo.toml` carries its own
+`[workspace]` + `[patch.crates-io]` (ark-serialize fork) + `dregg-tui/rust-toolchain.toml` (rolling nightly),
+exactly the `discord-bot`/`deos-zed-full` root-exclusion pattern. Its path-deps (sdk/turn/circuit/verifier)
+stay root members so their `workspace = true` deps resolve against root. Verified: root `cargo metadata`
+(full deps) green; `dregg-tui` resolves + compiles standalone (`cd dregg-tui && cargo build` — its leaf deps
+green; full build only hits the PRE-EXISTING root-wide `dregg-circuit-prove` `enable_expose_claim` breakage,
+another lane's in-flight API change, identical from root, NOT this lane's).
+BLOCKER 1 (native `links="sqlite3"` clash) — **STILL OPEN** (the prior "in-memory store RESOLVED it" note was
+INCOMPLETE). Zed's `sqlez` links `libsqlite3-sys 0.30`. The root member `deos-matrix` (pulled into the cockpit
+via `dev-surfaces`) cannot share a binary with it: cargo's links-UNIFIER pulls `matrix-sdk-sqlite` →
+`libsqlite3-sys 0.35` whenever `sqlez` is co-present — EVEN with `deos-matrix`'s on-disk `live-matrix` store
+OFF (measured: `cargo generate-lockfile` on `deos-zed-full[full-zed]` + `deos-matrix[cockpit-surface]` fails
+the links check). The default `desktop`'s `web-shell` libservo lane (→ `servo` → `servo-storage` → `rusqlite
+0.37` → `libsqlite3-sys 0.35`) is the SAME clash a second way. Two `links="sqlite3"` packages in one binary
+is forbidden, so merely DECLARING the optional `deos-zed-full` dep on the root member `starbridge-v2`
+re-breaks WHOLE-workspace resolution (the same "declaring breaks it" class the unicode-width pin used to
+cause) — the dep + `zed-full`/`zed-full-pane`/`desktop-zed-full` features stay UNDECLARED (re-add block in
+`starbridge-v2/Cargo.toml`). MEASURED-CLEAN in isolation: `deos-zed-full[full-zed]` + `servo`(swgl, no
+libservo) resolves green — only the `sqlez`↔`{matrix-sdk-sqlite, servo-storage}` `libsqlite3-sys` split gates
+it. CLOSURE — **VALIDATED, one line**: bump Zed's `sqlez` `libsqlite3-sys` pin from `0.30.1` → `0.35.0` in the
+emberian/zed fork's workspace `Cargo.toml` (line ~620). PROVEN this session via a full-source `[patch.
+"https://github.com/emberian/zed"]` to a local checkout with the bump: `deos-zed-full[full-zed]` +
+`servo-render[libservo]` then RESOLVE TOGETHER on ONE `libsqlite3-sys 0.35` (`sqlez` + `servo-storage` both
+present, exactly one libsqlite3-sys node) AND `sqlez` COMPILES unchanged against 0.35 (sqlite3 C ABI
+0.30→0.35 is backward-compatible — no source edits beyond the pin). SHIP: commit the pin bump to emberian/zed
+as a new rev + bump `rev = "54fbcb6943"` → new rev across breadstuffs (`grep -rl 54fbcb6943 --include=Cargo.toml`).
+THEN uncomment the re-add block (`starbridge-v2/Cargo.toml`), wire `ZedFullPane` into `open_editor_pane`
+(gated `zed-full-pane`) + build the live-cockpit `AppState` (the named mount seam in `zed_full_pane.rs` —
+real `client::Client`/`session::Session`/`UserStore`/`WorkspaceStore`/`LanguageRegistry`/`NodeRuntime`,
+`set_global`'d), fold `zed-full` into `desktop`, retire `desktop-zed-full`, and bake Dev showing the full Zed.
+(BLOCKER 2 unicode-width already CLOSED — `dregg-tui` extracted, commit `678d47ced`.)
+UPDATE 2026-06-24 (`9f339c98b`): the live-cockpit `AppState` MOUNT SEAM is CLOSED. `deos_zed_full::boot::
+build_live_app_state` builds a genuine non-test `workspace::AppState` (real `Client` over `RealSystemClock`
++ `HttpClientWithUrl`/`BlockedHttpClient`; `Session` over the real `db::AppDatabase` — `ZED_STATELESS` →
+in-mem fallback; real `LanguageRegistry`/`UserStore`/`WorkspaceStore`; `NodeRuntime::unavailable`) +
+`AppState::set_global`. starbridge-v2 gets the WINDOW-ABLE API `ZedWindow::open(id, root, files, window, cx)
+-> ZedWindowHandle{pane: ZedFullPane (CockpitSurface), project}` — each call an independent Zed window (own
+Workspace + own FirmamentZedFs ledger), so the desktop hosts ONE or MANY. VERIFIED: `deos-zed-full[full-zed]`
+green + new bake `tests/live_app_state_workspace_png_bake.rs` PASSES (a REAL Zed Workspace from the PRODUCTION
+AppState renders the file tree proj/{src,lib.rs,main.rs} + an open editor over a cell, 3600x2200 PNG).
+REMAINING SEAM (UNCHANGED, fork-gated): the `deos-zed-full` dep + `zed-full`/`zed-full-pane` features stay
+COMMENTED in `starbridge-v2/Cargo.toml` — merely declaring the dep re-injects `sqlez → libsqlite3-sys 0.30`
+into the ROOT lock graph, clashing (`links=sqlite3`) with `deos-matrix → libsqlite3-sys 0.35` (EMPIRICALLY
+re-confirmed this session: `cargo generate-lockfile` fails the links check at rev `54fbcb6943`). The ONE-LINE
+close is still pending: bump the emberian/zed fork's `sqlez` pin `0.30.1 → 0.35.0` + repin the rev across
+breadstuffs, THEN uncomment. (The cockpit-side code is DONE — only the fork-rev/repin step remains; it is
+fenced off as "don't touch the gpui fork" for this lane.)
 
 ## ✎ "MAKE YOUR FIRST CARD" — repeat entry from Author mode (2026-06-24)
 Named by the onboarding commit (`12d072eff`; `starbridge-v2/src/dock/card_surface.rs::build_first_card_surface`,
@@ -5525,3 +5921,98 @@ cannot distinguish them; the witness HONESTLY asserts `is_ok()` (hole open) and 
   `root_exposed_publics == [genesis, final, num_turns, digest]`, fail-closed. THIS PASS: precise root-cause recorded in
   `ivc_turn_chain.rs` module header + the witness doc; host/fork/lightclient build green; witness still honestly `is_ok()`
   (open). NO fork change ⇒ no rev bump (fork clean at fc12f233).
+
+## 2026-06-24 — gpui PlatformAndroid backend (graphideOS step 2): deos's renderer runs on android
+- BUILT the missing gpui android platform layer: `crates/gpui_android/` in the emberian/zed fork (modeled on gpui_web — the
+  non-native, single-surface, gpui_wgpu-over-raw_window_handle precedent). Platform + android-activity event loop & full
+  lifecycle (InitWindow/TerminateWindow/Resized/RedrawNeeded/Focus/Pause/Destroy) + window from `ANativeWindow`
+  (HasWindowHandle/HasDisplayHandle → `WgpuRenderer::new` raw-handle path) + real-thread dispatcher (à la gpui_linux) woken
+  via AndroidAppWaker + touch→mouse input + cosmic-text. Wired into `gpui_platform::current_platform()` under
+  cfg(target_os=android); gpui's PriorityQueue re-export + queue mod gained target_os=android; gpui_wgpu's instance() gained a
+  `GPUI_WGPU_BACKENDS` env knob. Other platforms UNTOUCHED (additive + cfg-gated).
+- PROVEN on-device: `mobile/deos-android-paint/` (gpui app painting a deos welcome frame) → cargo-apk APK → installs + launches
+  on the Pixel_7_API_35 emulator → android_main runs → the platform creates a VULKAN SURFACE FROM THE ANativeWindow → wgpu
+  selects an adapter + builds the renderer (`gpui_android: open_window: surface + renderer ready` in logcat, ~4s on host-GPU).
+- WALL = emulator GPU drivers, NOT the backend: SwiftShader (CPU Vulkan) is correct+stable but its LLVM JIT compiles gpui's
+  pipeline set pathologically slowly (>15min, observed 15:50 CPU still going); host-GPU MoltenVK loses the wgpu device at init
+  ("Unexpected error variant") → the sprite atlas (built once) is invalidated → frame fails; host-GPU GL advertises 0 compute
+  workgroups (gpui needs compute) → device creation rejected. Clean target = a PHYSICAL arm64 device (real Vulkan).
+- SHIPPED: fork commit adb9026524 (branch android-on-pinned = pinned-rev 54fbcb6943 + the one additive backend commit), pushed;
+  breadstuffs repinned 54fbcb6943→adb9026524 across 8 manifests (commit 496c89c65), resolve-verified, gpui itself compiles.
+  (deos-view's 29 errors are PRE-EXISTING gpui-component@b2deb2aa API drift — its gpui-component pin is untouched by the bump.)
+- EXACT REMAINING (named, not blockers): a clean painted frame needs real-Vulkan hardware; then the on-device backend ports —
+  keycode→Keystroke + IME commit (soft keyboard already shows; `AndroidWindowInner::is_composing` is the hook), pinch/
+  multi-touch, scroll-axis extraction, window insets. Status table + the debug.gpui.backends knob in mobile/README.md.
+
+### ✅ IVC #1 GENUINELY CLOSED — the un-forgeable-history floor (2026-06-25, multi-day marathon)
+The whole-chain mixed-root forgery (a claim for history B verifying against a root that executed A) is REJECTED end-to-end,
+distinct-endpoint AND same-endpoint. Confirmed by FOUR arbiters: both heavy folds (k_fold ok 176s, mixed_root_forgery is_err
+114s), native verify_all_tables (accepts), AND an adversarial codex final re-review (metatheory/docs/CODEX-IVC-FINAL-REVIEW.md:
+no critical hole). The close: an ordered segment-accumulator (codex's sound-by-construction design — each descriptor leaf carries
+[first_old,last_new,count,acc], the claim IS the segment summary of the execution leaves) + a real 4-lane W24 Poseidon2 digest
+(replacing the algebraically-broken quadratic fold). Fork at a45ee56 (pushed); dregg 968f2737. The arc: 4 refuted FRI hypotheses
+-> the FROZEN-PROOF technique (65s non-stationary oracle -> 0.2s deterministic) -> root cause was 2 WitnessChecks bus imbalances
+(NOT FRI) in the expose_claim/W24 path -> codex (the bus designer) named the accounting -> fixed + cleared.
+NAMED RESIDUALS (codex, none critical): (1) MEDIUM — the ONLINE ACCUMULATOR path (accumulator.rs:171/819/916) is still
+single-felt/zero-padded, scoped out; port the 4-lane segment digest to it. (2) LOW — doc drift: expose_claim_air.rs:23 +
+circuit_builder.rs:486 comments still describe the old scalar-only expose; fix them. (3) LOW — the digest is 4 BabyBear lanes
+(~124-bit); widen for a conservative 128-bit collision story.
+#9 (Lean EngineSound discharge) is now UNBLOCKED — the verifier genuinely enforces the binding, so acc_attests_whole_history can
+stop assuming EngineSound and derive it from the verifier soundness. The LAST IVC piece.
+
+### ✅✅ IVC #1 CLOSED ALL THE WAY UP THE STACK (2026-06-25) — #9 DISCHARGED
+The un-forgeable-history floor is now machine-PROVEN, not just tested. The whole-chain ordered binding (the claim is the
+genuine ordered segment-summary of the executed leaves) is DERIVED in Lean (RecursiveAggregation.lean §9, 8f4c1d7a) — was
+assumed (EngineSound projection), now subtree_binding derives GenuineSeg by induction on the aggregation tree. Dregg2 green
+(4183), 0 sorry, 18 new #assert_axioms-clean. Codex's 3-layer boundary: SegSound (per-node FRI/STARK, ASSUMED floor) +
+the induction (whole-chain ordered binding, DERIVED) + PoseidonSegBinding (4-lane W24 digest CR, ASSUMED floor for the
+same-endpoint case). no_mixed_root_distinct_endpoint = fully derived; no_mixed_root same-endpoint reduces to Poseidon2 CR.
+So IVC #1 rests on EXACTLY TWO named crypto floors (FRI soundness + Poseidon2 CR) with everything structural machine-derived.
+FOUR arbiters now agree: empirical (both heavy folds reject the forgery) + native (verify_all_tables) + adversarial (codex
+final, no critical hole) + DEDUCTIVE (this Lean discharge). The marathon (4 refuted FRI hypotheses -> frozen-proof technique
+-> root cause = 2 WitnessChecks bus imbalances in the expose_claim/W24 path -> fix -> codex-clear -> discharge) is at its
+summit. unfoolability_guarantee is a DERIVATION.
+Remaining (codex-named, NONE critical, scoped follow-ups): online-accumulator port to the 4-lane digest (MEDIUM); doc-drift
+comments (LOW); widen the digest past 4 lanes for conservative 128-bit (LOW).
+
+### ✅ SETTLEMENT-SOUND BRANCH-AND-STITCH ON THE LIVE MULTIPLAYER (2026-06-25)
+Distributed-Houyhnhnm deepening leg 2 BUILT + GREEN. Settlement Soundness already proven both ways and #assert_axioms-clean
+(Metatheory.SettlementSoundness — abstract; Dregg2.Circuit.SettlementSoundness — the deployed COMPOSE off the apex
+lightclient_unfoolable_circuit_sound; both lake-build clean). The new work: the operable realization on the LIVE two-instance
+umem multiplayer. Before this, the live umem stitch (umem_membrane.rs) was pushout-correct over STATE only; the second,
+non-monotone axis (AUTHORITY, the whole point of Settlement Soundness) was unmodeled on the live path. Now welded:
+settle_umem_stitch + ConferredCap + settlement_held_at_tip (= settledRevView read off the LIVE ledger AFTER any revoke) +
+SettledUmemStitch (admitted/dropped). State pushout and the authority gate are ORTHOGONAL — disjoint edits fold clean / a
+same-field clash is held fail-closed regardless of authority; a conferred cap rides in ONLY if held at the settlement tip.
+The live test (tests/branch_stitch_settlement_sound_multiplayer.rs): two co-inhabitants fork the SAME virtualized past
+(confined — offstage absent, a no-cap branch debit refused by the executor = imaginary); each drives real verified turns on
+independent Worlds; ada revokes her own gift cap on MAIN via a real RevokeCapability turn BETWEEN branch and settlement; the
+stitch LINEAR-DROPS the revoked-before-tip gift confer while admitting a still-held cap — with a counterfactual proving the
+drop is CAUSED by the revoke (against the branch-time view gift would ride), not a blanket refusal. The operable shadow of
+stitch_drops_revoked_authority. All green (7 lib unit tests + the live demo + the companion two_instance test).
+NAMED FOLLOW-UPS (none critical): (1) MEDIUM — wire settle_umem_stitch into the production ForkMembraneHost::stitch_pair /
+chat-lane path so the settlement gate runs live, not only in the demo (currently the membrane uses the abstract
+branch_stitch::Stitch::settle DocGraph gate; the umem-native CellId gate is the test-demonstrated bridge). (2) LOW (Lean,
+pre-existing, named in both SettlementSoundness headers) — the circuit-emit conformance: the deployed rest-hash must absorb
+the #139 revocation-channel wire root into the finalized commitment (RestHashIffFrame's revoked conjunct realized at the wire).
+
+### ✅ ATTENUATE v3-REGISTRY "RECOMPUTE DESCRIPTOR" RESIDUAL — CLOSED-AS-SUPERSEDED (2026-06-25)
+The circuit-soundness tail's reducible-open "route attenuate through the cap-reshape recompute descriptor as its
+v3-registry lead" (project-cap-reshape-plan; named in RotatedKernelRefinementAttenuate §"The registry cutover") is
+SUPERSEDED at HEAD — verified, not assumed. attenuate's deployed v3-registry lead is ALREADY `attenuateVmDescriptor2R24`
+(= `dregg-effectvm-attenuateA-v1-genuine-norecompute-tick-rot24-v3-capwrite`, the staged v3 + wide registries), rebased by
+the 2026-06-21 silent-forge close onto the MOVING cap-WRITE face: the ROTATED-limb cap-tree `map_op` write (heldReadOpRot +
+keepWriteOpRot, guarded on the FIRING sel.ATTENUATE_CAPABILITY=48, var264 GENUINELY bound) + the `granted ⊑ held` submask
+lookup + the depth-16 cap-tree MEMBERSHIP open (attenuateCapOpenEffVmDescriptor2R24). This forces the security crux
+(in-circuit non-amplification + genuine cap-root binding) at the `Satisfied2`/apex level the registry uses, name-stable,
+#assert_axioms-clean, GREEN at HEAD (lake build RotatedKernelRefinementCapFamily = 3094 jobs OK): attenuateV3_non_amp
+(granted⊑held FORCED) · attenuate_descriptorRefines_sat (CLASS-A, cap-tree UPDATE-AT-KEY write FORCED) ·
+attenuate_descriptorRefines_capOpenSat (apex rung, tag 12). The literal `attenuateVmDescriptorGenuineNonAmp` /
+capReshapeVmDescriptor recompute descriptor is a v1-level felt PREPEND-ACCUMULATOR explicitly classed VALUE_PARTIAL ("no
+theorem relates that felt accumulator to a sorted-Merkle commitment of the Caps function") — so routing attenuate to it
+would DOWNGRADE the deployed sorted-Merkle `map_op` write (writesTo functional under CR) to a weaker felt accumulator. NO
+registry swap warranted; NO VK action (the staged v3/wide leads are unchanged, name-stable; the live wire is still v1, the
+whole rotation cutover remains the one VK-epoch flag-day). Note "production-authority forced in attenuate" in the brief was a
+conflation — production-authority is the §4 MINT flavour of cap-reshape; attenuate is non-amplification only (§4D/§2). Change:
+corrected the stale named residual in RotatedKernelRefinementAttenuate.lean §"The registry cutover" to record
+CLOSED-AS-SUPERSEDED with the superseding rung names (Lean comment only — no proof/VK touched; module rebuilds green, 3033 jobs).

@@ -184,9 +184,17 @@ The honest pitch: **polyana is the substrate that runs everything; dregg is the 
 
 ---
 
-## Appendix: concrete seam sketch
+## Appendix: concrete seam sketch — now WIRED
 
-A compiling-shape sketch of Slice 1 lives at `docs/deos/polyana-seam-sketch.rs` (illustrative, not wired — names match the cited types). It shows a polyana-side `pa_witness` boundary constructing a dregg `TurnReceipt` from a polyana `TraceRecord`, and gating the call through `is_attenuation`.
+A compiling-shape sketch of Slice 1 lives at `docs/deos/polyana-seam-sketch.rs` (illustrative — names match the cited types). It shows a polyana-side `pa_witness` boundary constructing a dregg `TurnReceipt` from a polyana `TraceRecord`, and gating the call through `is_attenuation`.
+
+⚑ The sketch is now **realized** as the `polyana-bridge` crate (workspace member) — the Rust API surface polyana consumes, built against the real dregg crates:
+
+- **Slice 3** — `gate_effect_set` / `gate_auth` enforce the cap-bundle through the **proven** `dregg_cell::facet::is_facet_attenuation` (effect-set face) and `dregg_cell::is_attenuation` (auth-kind face); unknown effect tokens fail closed. The bit assignment is the bridge's stable intern of polyana's effect vocabulary; the *algebra* is dregg's Lean-backed monotone law (`polyana-bridge/src/caps.rs`).
+- **Slice 1** — `witness_receipt` builds a real chained `dregg_turn::TurnReceipt` whose `dregg-receipt-v3` hash binds `previous_receipt_hash` (tamper-evident chain) from a polyana `TraceRecord` (`polyana-bridge/src/witness.rs`).
+- **Slice 1's payoff** — `audit_records` + `attest_whole_log` assemble a `dregg_query::AttestedSlice`; `answer_whole_log(...).verify(&Blake3Mmr, &root)` is the **non-omission certificate** over the audit log (`server_cannot_omit_position`), proven in `tests/seam.rs` to verify against the genuine root and reject an omission or a wrong root (`polyana-bridge/src/attest.rs`).
+
+Slice 2 (the `Target::HostPd` confinement tier) remains in `sel4/dregg-firmament`, not re-exported by the bridge. The whole seam is tested in `polyana-bridge/tests/seam.rs` (7 tests, green).
 
 ## Provenance
 

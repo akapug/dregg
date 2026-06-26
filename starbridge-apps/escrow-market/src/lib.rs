@@ -49,6 +49,15 @@ use dregg_app_framework::{
     canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
+/// The escrow as a SERVICE CELL on the `invoke()` front door (the
+/// cells-as-service-objects face): a `list`/`fund`/`ship`/`settle` lifecycle
+/// published as a typed [`service::interface_descriptor`] and driven through
+/// `dregg_app_framework::invoke` — desugaring to the SAME canonical four-organ
+/// program this crate's `FactoryDescriptor` bakes in. The factory + `DeosApp`
+/// surfaces are untouched. See [`service`] for the third worked citizen after
+/// `starbridge-kvstore` and `starbridge-nameservice`.
+pub mod service;
+
 // =============================================================================
 // Escrow-cell state schema
 // =============================================================================

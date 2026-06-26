@@ -53,6 +53,13 @@ pub mod client;
 #[cfg(feature = "embedded-executor")]
 pub mod live_node;
 
+// AGENT MEMORY AS A umem — checkpoint/resume a live confined agent's working-set as a
+// witnessed portable umem-ref (`project_cell`/`reify_cell` over the per-cell umem Stage
+// A), fail-closed under the canonical root tooth. The agent-memory sibling of the
+// time-travel scrub's `reify_ledger` boundary restore — gpui-free, mozjs-free.
+#[cfg(feature = "embedded-executor")]
+pub mod agent_memory;
+
 // The native deos AFFORDANCE surface — htmx-on-crack with the firing→executed-turn
 // seam CLOSED through the embedded executor (the thesis `starbridge-web-surface`
 // could only model). gpui-free, `cargo test`-able.
@@ -163,6 +170,17 @@ pub mod xanadu_e2e;
 #[cfg(feature = "embedded-executor")]
 pub mod powerbox;
 
+// THE GRAPHIDEOS SYSTEMUI CAP-CHROME — the deos cockpit AS the android system UI
+// (GRAPHIDEOS.md §1 SystemUI row · §2 stage 4). Dresses a confined android-cell's live
+// cap-badge set (`android_cell::PermWorld`) as the two SystemUI surfaces a phone user
+// sees — the status bar (compact `🛡 held/total` cap strip) and the quick-settings shade
+// (the WHOLE roster lit ●/dim ○, no hidden Settings tree) — plus the powerbox hand-over
+// sheet, which grants a dangerous cap through the REAL `Effect::GrantCapability` so the
+// permission cap lands in the app's c-list with a kernel receipt. App/presentation over
+// proven machinery; no new kernel effect. gpui-free, `cargo test`-able (like `powerbox`).
+#[cfg(feature = "android-systemui")]
+pub mod systemui_caps;
+
 // DREGG-MUD — the first slice of a decentralized multi-user world: a room is a
 // cell, an inhabitant is a cap-rooted session, an item is a capability, an action
 // is a verified turn. `Room`/`Inhabitant`/`Item` over the REAL world+powerbox; the
@@ -208,6 +226,19 @@ pub mod app_worldspine;
 // branch_stitch; reinvents none of them.
 #[cfg(feature = "embedded-executor")]
 pub mod shared_fork;
+
+// THE MEMBRANE ON UMEMS — distributed branch-and-stitch recast as universal-memory
+// operations. The membrane's three moves over the ONE address space of `dregg_turn::umem`:
+// a FORK is a umem branch (a cap-bounded subgraph projected to a `UProjection`), a CARRY
+// is a passable umem (the projection serialized into a `UmemEnvelope` with an
+// anti-substitution root tooth), a STITCH is a umem merge (a per-`UKey` join of two driven
+// projections — conflicts surface as first-class `UmemConflict` objects keyed at the EXACT
+// address that diverged, so two principals editing DIFFERENT fields of the SAME cell fold
+// clean where the cell-granular `Atom` merge would collide). Distributed state-handoff
+// becomes witnessed-umem-handoff. The per-handoff Blum-trace witness (the carry binding
+// pre→post to the executor's op trace) is the named seam. gpui-free + `cargo test`-able.
+#[cfg(feature = "embedded-executor")]
+pub mod umem_membrane;
 
 // AGENT ATTACH — bind the confined agent's `run_js` (deos-js) to the cockpit's LIVE
 // World, so a Claude in Hermes drives the operator's ACTUAL cells (or a fork). The
@@ -265,9 +296,9 @@ pub mod world_chat;
 pub mod session;
 #[cfg(feature = "embedded-executor")]
 pub use session::{
-    agent_template, default_user_template, demo_identities, provision_system_principal, CapEntry,
-    CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal, Session,
-    ROOT_TOKEN,
+    CapEntry, CapTemplate, DemoIdentity, IdentityKind, LoginManager, LoginOutcome, Principal,
+    ROOT_TOKEN, Session, agent_template, default_user_template, demo_identities,
+    provision_system_principal,
 };
 
 #[cfg(feature = "embedded-executor")]
@@ -364,6 +395,14 @@ pub mod persistence;
 // gpui-free, `cargo test`-able (reuses `reflect` + `affordance` + `world`).
 #[cfg(feature = "embedded-executor")]
 pub mod inspect_act;
+// THE SERVICE EXPLORER — a Postman-like surface for INVOKING cell methods: it
+// discovers a cell's published interface (derive-from-program, or a registered
+// descriptor), lets you pick a method + fill args, and invokes it as a real
+// verified turn (the `invoke()` front door, deos-interior — no kernel effect).
+// gpui-free, `cargo test`-able (reuses `reflect` + `world` + dregg-cell's
+// InterfaceDescriptor routing). The cockpit renders this model.
+#[cfg(feature = "embedded-executor")]
+pub mod service_explorer;
 // THE LIVE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an
 // intent, evaluate it in a forked throwaway world (predict, never mutate), print
 // the predicted receipt, inspect the predicted post-state as live objects, then
@@ -557,13 +596,13 @@ pub use agent::{AgentActivity, AgentSurface};
 pub use buffer::{BufferCell, BufferDoc, BufferError, BufferView};
 #[cfg(feature = "embedded-executor")]
 pub use compositor::{
-    label_of, CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError,
-    RegionId,
+    CompositedSurface, Compositor, CompositorScene, FrameCommit, Present, PresentError, RegionId,
+    label_of,
 };
 #[cfg(feature = "embedded-executor")]
 pub use coordination::{MandateArrow, NotifyArrow, SwarmGraph, SwarmNode};
 #[cfg(feature = "embedded-executor")]
-pub use demo::{render_headless_report, DemoError, DemoFrame, HeadlineDemo};
+pub use demo::{DemoError, DemoFrame, HeadlineDemo, render_headless_report};
 #[cfg(feature = "embedded-executor")]
 pub use doc_editor::{AttributedAlternative, ConflictView, DocAuthor, DocEditor, EditOutcome};
 #[cfg(feature = "embedded-executor")]
@@ -595,20 +634,20 @@ pub use powerbox::{
 pub use proofs::{AttachStatus, ProofBoard, ProofEntry, VerificationTier};
 #[cfg(feature = "embedded-executor")]
 pub use scene::{
-    baked_admit_table, compositor_program, scene_admit, surface_factory, PresentVerdict,
-    VerifiedScene, PRESENT_DIGEST_SLOT, SURFACE_FACTORY_VK,
+    PRESENT_DIGEST_SLOT, PresentVerdict, SURFACE_FACTORY_VK, VerifiedScene, baked_admit_table,
+    compositor_program, scene_admit, surface_factory,
 };
 #[cfg(feature = "embedded-executor")]
 pub use shell::{Layout, Scene, SceneItem, Shell, ShellError};
 #[cfg(feature = "embedded-executor")]
 pub use simulate::{
-    commit as simulate_commit, render_outcome, simulate, CellDelta, DraftAction, EffectKind,
-    IntentDraft, SimOutcome,
+    CellDelta, DraftAction, EffectKind, IntentDraft, SimOutcome, commit as simulate_commit,
+    render_outcome, simulate,
 };
 #[cfg(feature = "embedded-executor")]
 pub use snapshot_editor::{
-    recipient_window_cap, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor,
-    Verification, ALL_LENSES,
+    ALL_LENSES, Frustum, PareOutcome, ShareError, SharedArtifact, SnapshotEditor, Verification,
+    recipient_window_cap,
 };
 #[cfg(feature = "embedded-executor")]
 pub use surface::{Rect, Surface, SurfaceCapability, SurfaceId, SurfaceKind};
@@ -619,7 +658,7 @@ pub use swarm::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use swarm_budget::{
-    StingrayBudgetView, StingrayDrawError, StingraySwarmBudget, SWARM_POOL_SILO,
+    SWARM_POOL_SILO, StingrayBudgetView, StingrayDrawError, StingraySwarmBudget,
 };
 #[cfg(feature = "embedded-executor")]
 pub use terminal::{Command, CommandError, OutputLine, TerminalCell, TerminalView};
@@ -628,7 +667,7 @@ pub use web_cells::{
     AffordanceRow, CellRow, SemiReinteractiveTransclusion, Transclusion, WebCellsBrowser,
 };
 #[cfg(feature = "embedded-executor")]
-pub use world::{demo_genesis, demo_world, CommitOutcome, DemoSeed, World};
+pub use world::{CommitOutcome, DemoSeed, World, demo_genesis, demo_world};
 
 // THE REFLEXIVE DISTRIBUTED IMAGE (n > 1) re-exports.
 #[cfg(feature = "embedded-executor")]
@@ -638,7 +677,7 @@ pub use branch_stitch::{
 };
 #[cfg(feature = "embedded-executor")]
 pub use distributed_timetravel::{
-    run_collaborative_rewind, AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick,
+    AlternateHistory, BranchEdit, Party, RewindRun, SharedTimeline, Tick, run_collaborative_rewind,
 };
 #[cfg(feature = "embedded-executor")]
 pub use netlayer_image::{ImageResponder, MirrorFrame, NetlayerImage, ResponderError};
@@ -650,7 +689,7 @@ pub use remote_mirror::{
 #[cfg(feature = "embedded-executor")]
 pub use remote_mirror_live::{LiveMirror, LiveRefusal, LiveStep, LiveTail};
 #[cfg(feature = "embedded-executor")]
-pub use two_image_firmament::{run_two_image_firmament, TwoImageOutcome, TwoImageRefusal};
+pub use two_image_firmament::{TwoImageOutcome, TwoImageRefusal, run_two_image_firmament};
 
 // THE GPUI PRESENTATION PLANE — the cockpit + login + dock element trees, lifted
 // into the LIBRARY so they render on EITHER gpui platform:
@@ -675,6 +714,14 @@ pub mod dock;
 // surfaces + the gpui-component widget set), rendering the live embedded `World`.
 #[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 pub mod cockpit;
+// THE TOUCH SHELL — deos on a phone (the graphideOS / mobile shape): the SAME live
+// `World` + the SAME gpui renderer, re-bodied for a thumb (a bottom-bar mode switch,
+// a tappable cell garden, long-press → a face sheet). DISTINCT from the desktop
+// cockpit (it does not disturb it); reuses the gpui-free view model
+// (`wonder::WonderRoom`, `reflect`). gpui-gated. See `docs/deos/MOBILE-DEOS.md` +
+// `docs/deos/HIG.md`, and `--render-touch` in main.rs.
+#[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
+pub mod touch;
 // THE SHOWCASE BAKE — a headless render of the full deos desktop with every dev
 // surface mounted + seeded (the marketing money shot). Needs the dock surface
 // wrappers (`dev-surfaces`) + gpui. See `--render-showcase` in main.rs.
@@ -735,6 +782,13 @@ pub mod unified_boot;
 // (`session::{open_session_world, session_base_dir}` + `LoginManager::logout_durable`),
 // all `cfg(not(wasm32))` filesystem code. The web boot mounts `Cockpit` directly
 // (the in-tab image is ephemeral), so it never needs the login front door.
+// THE deos DESKTOP — a Windows-NT / Pharo-Smalltalk workbench over the live verified
+// World: a desktop of cell-icons (draggable, spatially persisted), overlapping NT
+// windows (inspectors), right-click context menus that fire REAL verified turns
+// (the actuation), a menu bar, and drag-to-compose. Built NEW beside the cockpit;
+// gpui-gated. See `src/deos_desktop.rs`.
+#[cfg(all(feature = "gpui-ui", feature = "embedded-executor"))]
+pub mod deos_desktop;
 #[cfg(feature = "gpui-ui")]
 pub mod login;
 // The older NodeClient-bound rail components + the shared theme/pill/section_title

@@ -39,10 +39,10 @@
 
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::ivc_turn_chain::{
+use dregg_circuit_prove::ivc_turn_chain::{
     prove_turn_chain_recursive, FinalizedTurn, WholeChainProof,
 };
-use dregg_circuit::joint_turn_aggregation::DescriptorParticipant;
+use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 
 use pg_dregg::attest::{verify_serialized_proof, SerializedWholeChainProof, VkAnchor};
@@ -134,7 +134,7 @@ fn transport_from_proof(whole: &WholeChainProof) -> SerializedWholeChainProof {
         binding_proof,
         bb_to_bytes(whole.genesis_root),
         bb_to_bytes(whole.final_root),
-        bb_to_bytes(whole.chain_digest),
+        core::array::from_fn(|i| bb_to_bytes(whole.chain_digest[i])),
         whole.num_turns as u64,
     )
 }
@@ -161,7 +161,10 @@ fn tier_c_real_proof_attests_and_tamper_is_refused() {
     // The attested window summary is the proof's bound publics, surfaced for the SRF.
     assert_eq!(publics.genesis_root, bb_to_bytes(whole.genesis_root));
     assert_eq!(publics.final_root, bb_to_bytes(whole.final_root));
-    assert_eq!(publics.chain_digest, bb_to_bytes(whole.chain_digest));
+    assert_eq!(
+        publics.chain_digest,
+        core::array::from_fn::<_, 4, _>(|i| bb_to_bytes(whole.chain_digest[i]))
+    );
     assert_eq!(publics.num_turns, 3);
 
     // The full range-attest entry attests the matching window and emits tagged rows.

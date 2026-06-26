@@ -2225,6 +2225,17 @@ pub mod app_programs {
     pub const SUB_MESSAGE_ROOT_SLOT: u8 = 6;
     pub const SUB_LATEST_PAYLOAD_SLOT: u8 = 7;
 
+    // ---- kvstore slot layout (mirrors starbridge_kvstore) ----
+    /// The monotone store version — bumped on every `put`/`delete`. Scoped
+    /// [`StateConstraint::Monotonic`] in [`kvstore_program`] so it can never roll
+    /// back (a replay/reorder is an EXECUTOR REFUSAL). Mirrors
+    /// `starbridge_kvstore::VERSION_SLOT`.
+    pub const KV_VERSION_SLOT: u8 = 0;
+    /// The lowest key-addressed value register (`starbridge_kvstore::REG_MIN`).
+    pub const KV_REG_MIN: u8 = 1;
+    /// The highest key-addressed value register (`starbridge_kvstore::REG_MAX`).
+    pub const KV_REG_MAX: u8 = 15;
+
     // ---- governed-namespace slot layout (mirrors starbridge_governed_namespace) ----
     pub const GOV_ROUTE_TABLE_ROOT_SLOT: u8 = 0;
     pub const GOV_VERSION_SLOT: u8 = 1;
@@ -2607,6 +2618,57 @@ pub mod app_programs {
         state.fields[ESC_BUDGET_SLOT as usize] = u64_field(budget);
         state.fields[ESC_PAID_SLOT as usize] = u64_field(0);
         state.fields[ESC_JOB_HASH_SLOT as usize] = job_hash;
+        state
+    }
+
+    /// **The kvstore service-cell program** — mirrors `starbridge_kvstore::store_program`
+    /// (the crate itself can't be a wasm dep: it pulls `dregg-app-framework` →
+    /// axum/tokio/reqwest, so its program VALUE is re-materialized here, exactly as the
+    /// subscription/governance programs are).
+    ///
+    /// A [`CellProgram::Cases`] whose `put`/`delete` method cases each scope
+    /// [`StateConstraint::Monotonic`] on [`KV_VERSION_SLOT`] — so a replayed or reordered
+    /// mutation that would LOWER the store version is an EXECUTOR REFUSAL on the verified
+    /// commit path, not a userspace check. The `get` case carries no constraint (it is a
+    /// `Serviced` read — the OFE seam, never desugared to a turn). An `Always` catch-all
+    /// admits the agent's own bookkeeping turns (nonce bumps) so a non-method turn is not
+    /// default-denied. This is the verified guarantee the in-browser KvStore card exercises.
+    pub fn kvstore_program() -> CellProgram {
+        let bump_version = vec![StateConstraint::Monotonic {
+            index: KV_VERSION_SLOT,
+        }];
+        CellProgram::Cases(vec![
+            TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("put"),
+                },
+                constraints: bump_version.clone(),
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("delete"),
+                },
+                constraints: bump_version,
+            },
+            TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: symbol("get"),
+                },
+                constraints: vec![],
+            },
+            TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![],
+            },
+        ])
+    }
+
+    /// Build the initial kvstore cell state — version 0, all registers cleared.
+    /// `install_app_program` overwrites the whole cell state (preserving balance), so a
+    /// store is funded by a real transfer after install (as the escrow flow is).
+    pub fn kvstore_initial_state() -> CellState {
+        let mut state = CellState::new(1_000_000);
+        state.fields[KV_VERSION_SLOT as usize] = u64_field(0);
         state
     }
 }

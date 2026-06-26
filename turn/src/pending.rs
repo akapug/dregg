@@ -54,7 +54,7 @@ pub struct PendingEntry {
 }
 
 /// A condition that must be met before a pending turn can execute.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResolutionCondition {
     /// Waiting for a specific turn receipt to arrive.
     /// If `federation_id` is Some, the receipt comes from a remote federation.

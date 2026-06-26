@@ -15,6 +15,23 @@
 #                      and an "Affordances" section. Clicking an affordance (tick/add/score)
 #                      fires a real cap-gated verified turn and the bound field re-paints, with
 #                      a live balance/nonce/receipt readout.
+#   /tally.html      — the TALLY-BOARD card (TallyWorld): the FULL ViewNode layout vocabulary
+#                      (Row + Table + a multi-affordance row). A table of named tallies, each a
+#                      row with a live count and +1/−1 buttons; every click fires a real
+#                      cap-gated verified turn moving that one tally, and the row re-paints.
+#   /kvstore.html    — the KV-STORE SERVICE-CELL card (KvStoreWorld): a cell publishing a typed
+#                      interface (put · delete · get). Clicking put/del ROUTES the call through
+#                      the store's InterfaceDescriptor (the verified DFA) before it desugars to
+#                      the version-bump + register SetField effects — a real cap-gated verified
+#                      turn against the store cell, the monotone version advancing (a rollback is
+#                      refused by the program's Monotonic constraint; get is a named OFE seam).
+#   /doccollab.html  — the DOCUMENT-COLLABORATION surface (DocCollabWorld): Pijul, in a tab. A
+#                      doc-cell carries a base document published to its umem-heap (the fork).
+#                      Click `stitch` to diverge two authors and merge (the categorical pushout):
+#                      a first-class CONFLICT surfaces (both alternatives attributed side-by-side,
+#                      held off-heap). Click a resolution and the merged document publishes to the
+#                      doc-cell's umem-heap as a real cap-gated verified turn — the boundary
+#                      heap_root moves, a receipt is left. Conflicts-as-objects, node-less.
 #
 # Builds the wasm bundle, bakes the live pages, assembles a self-contained dist/, and serves it
 # (each page is a module-import + a .wasm fetch — file:// is CORS-blocked, so it MUST be served
@@ -51,6 +68,12 @@ echo "  GALLERY   : http://localhost:$PORT/            — the card-picker (open
 echo "  COUNTER   : http://localhost:$PORT/counter.html   — click +1 (a real cap-gated verified turn)"
 echo "  INSPECTOR : http://localhost:$PORT/inspector.html — a reflective cockpit surface; click an"
 echo "              affordance (tick/add/score) → a real verified turn → the bound field re-paints."
+echo "  TALLY     : http://localhost:$PORT/tally.html     — a table of named tallies (Row + Table);"
+echo "              click +1/−1 on any row → a real verified turn moves that one tally."
+echo "  KVSTORE   : http://localhost:$PORT/kvstore.html   — a SERVICE CELL (published put/delete/get);"
+echo "              click put/del → a method routed through the verified DFA → a real verified turn."
+echo "  DOCCOLLAB : http://localhost:$PORT/doccollab.html — Pijul, in a tab. Click stitch (the pushout)"
+echo "              → a first-class conflict; click resolve → the merged doc publishes to the umem-heap."
 echo "(Ctrl-C to stop.)"
 cd "$DIST"
 exec python3 -m http.server "$PORT"

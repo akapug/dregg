@@ -218,10 +218,13 @@ realization — strictly stronger). Cells are `Option`-valued: `(present, value)
 canonical encoding `none ↦ (0, 0)`, `some v ↦ (1, v)` — which is what makes nullifier freshness
 ONE read row returning `none` (`nullifier_fresh_sound`), Merkle-path-free. -/
 
-/-- The wire code of a state domain (`UniversalMemory.Domain`): the five collections of the
-commitment layout. A FUTURE state component is a new code, never a new table. -/
+/-- The wire code of a state domain (`UniversalMemory.Domain`): the five committed collections
+of the commitment layout, plus `working` (transient scratch, wire code `5`, IDENTICAL to the Rust
+`UDomain::Working` at `turn/src/umem.rs:118`). A FUTURE state component is a new code, never a new
+table. -/
 def domainCode : UniversalMemory.Domain → ℤ
   | .registers => 0 | .heap => 1 | .caps => 2 | .nullifiers => 3 | .index => 4
+  | .working => 5
 
 /-- Domain codes are collision-free on the wire. -/
 theorem domainCode_injective : Function.Injective domainCode := by
@@ -740,6 +743,55 @@ theorem satisfied2U_boundary_root (hash : List ℤ → ℤ) (d : EffectVmDescrip
       = Heap.root hash (UniversalMemory.boundaryCells (fun a => (ufin (dm, a)).1) as) :=
   UniversalMemory.boundary_root_from_memcheck hash dm
     h.umemAddrsNodup h.umemClosed h.umemDisciplined h.umemBalanced hs has hda hsem
+
+/-- **The INIT boundary is BOUND to committed pre-state — `boundary_init_root_derived` applied.**
+The companion of `satisfied2U_boundary_root` for the *init* column: for any map domain `dm`, if
+the committed PRE-state map `hpre` has the lookup semantics of the declared init image `uinit`
+over the touched keys `as` (declared, sorted), then today's committed pre-state root EQUALS the
+sorted-Poseidon2 root of the boundary view derived from `uinit`. This is what makes the universal
+boundary's init column TRUSTWORTHY: pinning that derived root to the committed pre-state root (the
+PI-v3 ride-along) forces the declared init image to be the committed pre-state — a tampered init
+CANNOT keep the published root (`boundary_init_root_bound`, under `Poseidon2SpongeCR`). The init
+side needs NO memcheck pinning: `uinit` is the given, not a prover-chosen final column. -/
+theorem satisfied2U_init_root (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (dm : UniversalMemory.Domain)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    {hpre : Heap.FeltHeap} {as : List ℤ}
+    (_h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t)
+    (hs : Heap.SortedKeys hpre) (has : as.Pairwise (· < ·))
+    (hsem : ∀ a : ℤ, Heap.get hpre a = if a ∈ as then uinit (dm, a) else none) :
+    Heap.root hash hpre
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => uinit (dm, a)) as) :=
+  UniversalMemory.boundary_init_root_derived hash hs has hsem
+
+/-- **THE WHOLE-IMAGE init binding at the IR — `boundary_whole_image_sem` applied (no extra
+cells).** The no-extra-cells direction `satisfied2U_init_root` could not reach by per-cell
+membership: if the committed pre-state root EQUALS the sorted-Poseidon2 fold of the ENTIRE
+declared boundary image (`boundaryCells (uinit dm·) as`) — the obligation the in-circuit
+whole-boundary root-fold discharges, riding the universal-map rotation — then under the named CR
+floor the committed heap agrees with the declared init image at EVERY address: declared cells
+open to their declared value AND every address OFF the declared list is ABSENT in the committed
+pre-state. So a committed heap holding any cell the boundary never declared CANNOT keep the
+published root; the boundary image is the WHOLE committed pre-state, not merely a subset. This is
+the init-side whole-image companion of `satisfied2U_init_root`; it ASSUMES the fold-root pin
+(`hpin`) rather than a per-cell `hsem`, which is exactly the in-circuit obligation that remains. -/
+theorem satisfied2U_init_whole_image (hash : List ℤ → ℤ)
+    (hCR : Poseidon2SpongeCR hash) (d : EffectVmDescriptor2)
+    (dm : UniversalMemory.Domain)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
+    {uinit : UniversalMemory.UAddr ℤ → Option ℤ}
+    {ufin : UniversalMemory.UAddr ℤ → Option ℤ × Nat}
+    {uaddrs : List (UniversalMemory.UAddr ℤ)} {t : VmTrace}
+    {hpre : Heap.FeltHeap} {as : List ℤ}
+    (_h : Satisfied2U hash d minit mfin maddrs uinit ufin uaddrs t)
+    (has : as.Pairwise (· < ·))
+    (hpin : Heap.root hash hpre
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => uinit (dm, a)) as)) :
+    ∀ a : ℤ, Heap.get hpre a = if a ∈ as then uinit (dm, a) else none :=
+  UniversalMemory.boundary_whole_image_sem hash hCR has hpin
 
 /-- **THE NULLIFIER WIN at the IR — `nullifier_fresh_sound` applied.** In a `Satisfied2U`
 witness whose universal log splits around a guarded read returning `none` at
@@ -1681,6 +1733,8 @@ def brokenEngine : ProofEngine :=
 #assert_axioms satisfied2U_umem_sound
 #assert_axioms satisfied2U_pins_final
 #assert_axioms satisfied2U_boundary_root
+#assert_axioms satisfied2U_init_root
+#assert_axioms satisfied2U_init_whole_image
 #assert_axioms satisfied2U_nullifier_fresh
 #assert_axioms demoU_satisfied
 #assert_axioms proofBind_bound

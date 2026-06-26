@@ -505,10 +505,19 @@ const PRELUDE: &str = r#"
         // `card()` names the editor's current card (the id editView/setField target).
         editor: {
             card: function() { var c = __deos_editor_card(); return c === "" ? null : c; },
+            // view() — the editor card's CURRENT view-tree (the {kind,props,children}
+            // JSON deos-view consumes), parsed to an object. The READ half of the
+            // reflective loop: an agent reads the live surface's own shape (reflect-on)
+            // before rewriting it. A pure read — NO patch, NO turn. null if no editor.
+            view: function() {
+                var j = __deos_editor_view();
+                return j === "null" ? null : JSON.parse(j);
+            },
             // editView(cardId, patchSpec) — apply a structural view-patch, re-fold the
             // view-source, leave a receipted patch + blame. patchSpec is a small object:
             //   {op:"addButton", label, affordance, arg}  — append a button (a turn);
             //   {op:"addText",   text}                     — append a text node;
+            //   {op:"addBind",   slot, label}             — append a live state-bound row;
             //   {op:"relabel",   target, text}            — relabel a text node.
             // Returns the re-folded view-tree (the {kind,props,children} JSON deos-view
             // consumes), or null on refusal (unauthorized / wrong card / no-op).
@@ -683,6 +692,7 @@ impl JsRuntime {
                 (c"__deos_search", native_search as RawNative, 1),
                 // author (the card editor) — view/field/affordance, cap-gated
                 (c"__deos_editor_card", native_editor_card as RawNative, 0),
+                (c"__deos_editor_view", native_editor_view as RawNative, 0),
                 (
                     c"__deos_editor_edit_view",
                     native_editor_edit_view as RawNative,
@@ -795,6 +805,34 @@ impl JsRuntime {
             take_current_editor().ok_or_else(|| "card editor vanished during run".to_string())?;
         match eval {
             Ok(result) => Ok((result, editor)),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// THE AUTHORING-WITH-CRAWL RUN — like [`Self::run_authoring`], but ALSO installs a
+    /// crawl/drive [`JsTarget`] (embedded or a live-World attach) so the authoring script
+    /// can READ the live image (`deos.world.*`, `deos.cell(id)`) *while* it composes. The
+    /// reflective-cockpit loop deepened from rewriting one surface to **composing a fresh
+    /// surface from the live world-state**: the agent reads the real ledger, decides a
+    /// layout, and authors it. The crawl read confers no authority (it is a witnessed
+    /// read); authoring stays bounded by the editor's `held` (the cap tooth).
+    ///
+    /// Returns `(script_result, the_editor_back, the_crawl_target_back)`.
+    pub fn run_authoring_with_crawl(
+        &mut self,
+        editor: CardEditor,
+        target: JsTarget,
+        source: &str,
+    ) -> Result<(Option<i32>, CardEditor, JsTarget), String> {
+        set_current_target(target);
+        set_current_editor(editor);
+        let eval = self.eval(source);
+        let editor =
+            take_current_editor().ok_or_else(|| "card editor vanished during run".to_string())?;
+        let target =
+            take_current_target().ok_or_else(|| "crawl target vanished during run".to_string())?;
+        match eval {
+            Ok(result) => Ok((result, editor, target)),
             Err(e) => Err(e),
         }
     }
@@ -1359,6 +1397,27 @@ unsafe extern "C" fn native_editor_card(
     return_string(&mut cx, &args, &id)
 }
 
+/// `__deos_editor_view()` → the editor card's CURRENT view-tree JSON (the
+/// `{kind,props,children}` shape `deos-view`'s `parse_view_tree` consumes), or `"null"`
+/// if no editor is installed. This is the READ half of the reflective loop: an agent
+/// reads the live surface's own tree (reflect-on) BEFORE it rewrites it — no patch, no
+/// turn, a pure cap-free read of the surface's current shape.
+unsafe extern "C" fn native_editor_view(
+    context: *mut RawJSContext,
+    argc: u32,
+    vp: *mut Value,
+) -> bool {
+    let mut cx = SmContext::from_ptr(NonNull::new(context).unwrap());
+    let args = CallArgs::from_vp(vp, argc);
+    let json = CURRENT_EDITOR.with(|c| {
+        c.borrow()
+            .as_ref()
+            .map(|e| e.view_source())
+            .unwrap_or_else(|| "null".to_string())
+    });
+    return_string(&mut cx, &args, &json)
+}
+
 /// Build a [`ViewPatch`] from the JS `patchSpec` JSON (`{op, ...}`). Returns the parse
 /// error string on a malformed/unknown spec.
 fn parse_view_patch(spec_json: &str) -> Result<ViewPatch, String> {
@@ -1374,6 +1433,10 @@ fn parse_view_patch(spec_json: &str) -> Result<ViewPatch, String> {
             arg: i("arg"),
         }),
         "addText" => Ok(ViewPatch::AddText { text: s("text") }),
+        "addBind" => Ok(ViewPatch::AddBind {
+            slot: i("slot").max(0) as usize,
+            label: s("label"),
+        }),
         "relabel" => Ok(ViewPatch::Relabel {
             from: s("target"),
             to: s("text"),

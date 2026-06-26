@@ -2637,6 +2637,200 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
     Ok((trace, dpis))
 }
 
+/// The host (pre-wide-append) width of the `heapWriteVmDescriptor2R24` 1-felt descriptor: the
+/// `heapWriteSpliceVmDescriptor` carries FEWER chip sites than the standard economic rotated host
+/// (no balance-hash economic sites — it is a Class-A heap-root recompute), so its graduated width is
+/// **595** (distinct from `GRAD_ROT_WIDTH = 609`). The wide carriers (the wide `heapWriteVmDescriptor2R24`
+/// member, width 803 / PI 20) land at THIS host width: `595 + 208 = 803`.
+pub const HEAP_WRITE_HOST_WIDTH: usize = 595;
+
+/// **THE WIDE HEAP-WRITE trace generator (`heapWriteVmDescriptor2R24` wide member, 803-wide / 20-PI).**
+///
+/// heapWrite is the Class-A heap-root-recompute member (Lean `RotatedKernelRefinementExercise.heapWriteV3`
+/// = `graduateV1 (rotateV3 heapWriteSpliceVmDescriptor)` ++ the `.write` splice `MapOp`). It rides the
+/// SAME rotated block as every cohort member, plus a genuine sorted-Merkle SPLICE on the heap root: the
+/// in-row `HEAP_ADDR` recompute (`col 102 = chip-absorb(coll, key)`) keys a `.write` `MapOp` that opens
+/// the committed BEFORE heap root (`col 65`, the per-cell `cap_root` register the heap-root rides) at
+/// that address for the written value (`col 72`) and FORCES the AFTER heap root (`col 87`) to the genuine
+/// `Heap.set` recompute. There is NO live `Effect::HeapWrite` selector (the descriptor is reached by the
+/// exercise-inner heap-write path, NOT the effect→descriptor resolvers), so this is the per-family wide
+/// PRODUCER for it — exactly mirroring the supplyMint wide producer (live base + the generic
+/// [`append_wide_carriers`] at the member's host width), preserving the 8-felt before/after anchors.
+///
+/// SOUNDNESS: `heap_leaves` MUST be the cell's GENUINE BEFORE heap and MUST contain a leaf at the
+/// addressed key (the in-row-recomputed `addr = chip-absorb(coll, key)`); the write is an UPDATE of a
+/// present key (`update_witness`), and the published AFTER root is the GENUINE sorted-tree splice — a
+/// missing key or a forged post-root fails closed (no fabricated post-root). Returns `(trace, dpis,
+/// map_heaps)` ready for `prove_vm_descriptor2(&desc, &trace, &dpis, &MemBoundaryWitness::default(),
+/// &map_heaps)` against the wide `heapWriteVmDescriptor2R24`.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_heap_write_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    coll: BabyBear,
+    key: BabyBear,
+    value: BabyBear,
+    heap_leaves: &[crate::heap_root::HeapLeaf],
+) -> Result<
+    (
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+    ),
+    String,
+> {
+    use super::columns::{AUX_BASE, PARAM_BASE};
+    use crate::descriptor_ir2::chip_absorb_all_lanes;
+    use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+
+    // The live rotated base (cols 0..ROT_WIDTH) — the SAME machinery every cohort member rides; the
+    // heapWrite descriptor carries NO economic gates, so the lead effect's economic v1 columns are
+    // unconstrained (any cohort lead lays a valid rotated block).
+    let (mut trace, gen_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if trace[0].len() != ROT_WIDTH {
+        return Err(format!(
+            "heap-write wide: base trace width {} != {ROT_WIDTH}",
+            trace[0].len()
+        ));
+    }
+
+    // The in-row HEAP_ADDR recompute (`heapWriteVmDescriptor2R24`'s arity-2 chip lookup,
+    // `col 102 = chip-absorb(coll, key)`) — the genuine sorted KEY the splice opens. We compute it the
+    // SAME way `fill_chip_lanes` will (so the heap leaf the splice opens IS the recomputed address).
+    let mut absorb_in = [BabyBear::ZERO; 11];
+    absorb_in[0] = coll;
+    absorb_in[1] = key;
+    let addr = chip_absorb_all_lanes(2, &absorb_in)[0];
+    // The leaf-digest chip lookup `col 103 = chip-absorb(addr, value)` (out0). `fill_chip_lanes` lands
+    // only the exposed lanes 1..7; the producer must lay out0 itself (so the request matches the
+    // chip-table provide, which derives outputs from the genuine permutation).
+    let mut leaf_in = [BabyBear::ZERO; 11];
+    leaf_in[0] = addr;
+    leaf_in[1] = value;
+    let leaf_digest = chip_absorb_all_lanes(2, &leaf_in)[0];
+
+    // The BEFORE heap (the deployed openable sorted tree). The addressed key MUST be present — the
+    // splice `.write` is an UPDATE of a present key (`update_witness`); a missing key fails closed (no
+    // fabricated post-root).
+    let before_tree = CanonicalHeapTree::new(heap_leaves.to_vec(), HEAP_TREE_DEPTH);
+    let before_root = before_tree.root();
+    if !before_tree.sorted_leaves().iter().any(|l| l.addr == addr) {
+        return Err(format!(
+            "heap-write wide: recomputed addr {} is NOT in the BEFORE heap — the splice `.write` opens a \
+             present key and has no membership witness, so it refuses the turn (no silent forge)",
+            addr.as_u32()
+        ));
+    }
+    let after_root = before_tree
+        .update_witness(HeapLeaf { addr, value })
+        .ok_or_else(|| {
+            format!(
+                "heap-write wide: update witness for addr {} failed",
+                addr.as_u32()
+            )
+        })?
+        .new_root;
+
+    // Override the heap-root registers (`col 65` BEFORE / `col 87` AFTER — the per-cell `cap_root` the
+    // heap-root rides) AND their rotated-block limbs (the welds `65 == limb` / `87 == limb` are KEPT),
+    // lay the splice key/value params, then recompute the rotated commitments so the published rotated
+    // commit binds the written heap root.
+    let heap_root_before_col = STATE_BEFORE_BASE + state::CAP_ROOT; // 65
+    let heap_root_after_col = STATE_AFTER_BASE + state::CAP_ROOT; // 87
+    let coll_col = PARAM_BASE + 2; // 70 (HEAP_ADDR recompute input: collection)
+    let key_col = PARAM_BASE + 3; // 71 (HEAP_ADDR recompute input: key)
+    let value_col = PARAM_BASE + 4; // 72 (HEAP_VALUE)
+    // The HEAP_ADDR column (102) is the splice `MapOp`'s KEY. It is ALSO the output of the in-row
+    // arity-2 chip lookup `col 102 = chip-absorb(coll, key)`, which `fill_chip_lanes` lands at prove
+    // time — but the map-op pre-flight replay reads col 102 from the RAW trace (BEFORE lane-fill), so
+    // we set it explicitly to the recomputed `addr`. `fill_chip_lanes` then re-lands the SAME value
+    // (the addr lookup is chip-faithful over the same coll/key), so the lookup gate holds.
+    let heap_addr_col = AUX_BASE + 12; // 102 (HEAP_ADDR — out0 of the addr chip lookup)
+    let leaf_digest_col = AUX_BASE + 13; // 103 (out0 of the leaf-digest chip lookup)
+    let before_root_limb = BEFORE_BASE + B_CAP_ROOT;
+    let after_root_limb = AFTER_BASE + B_CAP_ROOT;
+    for row in trace.iter_mut() {
+        row[heap_root_before_col] = before_root;
+        row[before_root_limb] = before_root;
+        row[heap_root_after_col] = after_root;
+        row[after_root_limb] = after_root;
+        row[coll_col] = coll;
+        row[key_col] = key;
+        row[value_col] = value;
+        row[heap_addr_col] = addr;
+        row[leaf_digest_col] = leaf_digest;
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+
+    // The 4 heapWrite base PIs: the two rotated state-commit pins (pi 0/1) are RETIRED by the wide
+    // member (the 8-felt commit is the sole binding — they are unbound, zeroed for Fiat–Shamir
+    // agreement); the committed-height pin (pi 2 ← `col 270`) and the caveat-commit pin (pi 3 ←
+    // `col 328`) survive — both unaffected by the heap-root override, so read from the live base PIs.
+    let base_pis = vec![
+        BabyBear::ZERO,
+        BabyBear::ZERO,
+        gen_pis[V1_PI_COUNT + 2],
+        gen_pis[V1_PI_COUNT + 3],
+    ];
+    let dpis = append_wide_carriers(&mut trace, base_pis, HEAP_WRITE_HOST_WIDTH);
+    debug_assert_eq!(trace[0].len(), HEAP_WRITE_HOST_WIDTH + 208); // 803
+    debug_assert_eq!(dpis.len(), 20); // 4 base (2 retired) + 16 wide
+    Ok((trace, dpis, vec![heap_leaves.to_vec()]))
+}
+
+/// **THE WIDE TURN-BOUND CAP-OPEN trace generator (`transferCapOpenTBVmDescriptor2R24` wide member,
+/// 1029-wide / 65-PI).**
+///
+/// The wide twin of the #225 turn-identity weld (Lean `CapOpenTurnPins.effCapOpenV3TB`): it builds the
+/// LIVE rotated transfer base, widens it to the turn-bound cap-open shape ([`widen_to_cap_open_tb`] —
+/// the 91 cap-membership columns + the two `actor`/`dst` turn-identity columns), publishes the 49-PI
+/// turn-bound vector ([`cap_open_tb_dpis`]: 46 rotated + `src`/`actor`/`dst` at 46/47/48), and then
+/// appends the BEFORE/AFTER 13×8 wide carriers + 16 wide commit PIs at the cap-open-TB host width
+/// (`CAP_OPEN_TB_WIDTH = 821`). The cap-membership host columns, the turn-identity pins, and the live
+/// 1-felt carriers are CARRIED UNCHANGED — the wide append is purely additive, preserving the 8-felt
+/// before/after anchors. The verifier ANCHORS the three turn-identity PIs to the trusted turn
+/// ([`anchor_cap_open_turn_pins`]) exactly as on the narrow path; a forged published identity is UNSAT.
+///
+/// `cap_open` MUST be a genuine transfer-conferring cap-membership witness whose leaf `target` IS the
+/// turn's `src` (the `targetBind` gate roots it); `actor`/`dst` are the published turn identity the
+/// caller threads from the honest turn. Returns `(trace, dpis)` ready for `prove_vm_descriptor2(&desc,
+/// &trace, &dpis, &MemBoundaryWitness::default(), &[])` against the wide `transferCapOpenTBVmDescriptor2R24`.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_transfer_cap_open_tb_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    cap_open: &CapOpenWitness,
+    src: BabyBear,
+    actor: BabyBear,
+    dst: BabyBear,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT {
+        return Err(format!(
+            "cap-open-TB wide generator: base PI vector {} != {ROT_PI_COUNT} (the cap-open-TB rides the \
+             bare-46-PI rotated transfer base)",
+            base_pis.len()
+        ));
+    }
+    widen_to_cap_open_tb(&mut trace, cap_open, actor, dst)
+        .map_err(|e| format!("cap-open-TB wide widen: {e}"))?;
+    let tb_pis = cap_open_tb_dpis(&base_pis, src, actor, dst);
+    debug_assert_eq!(tb_pis.len(), CAP_OPEN_TB_PI_BASE + 3); // 49
+    let dpis = append_wide_carriers(&mut trace, tb_pis, CAP_OPEN_TB_WIDTH);
+    debug_assert_eq!(trace[0].len(), CAP_OPEN_TB_WIDTH + 208); // 1029
+    debug_assert_eq!(dpis.len(), CAP_OPEN_TB_PI_BASE + 3 + 16); // 65
+    Ok((trace, dpis))
+}
+
 /// **THE WIDE NOTESPEND trace generator (grow-gate cohort).** Wraps the deployment-real nullifier-
 /// tree generator ([`generate_rotated_note_spend_trace_with_nullifier_tree`], which overrides limb 26
 /// with the openable accumulator roots + recomputes the block commits), then appends the wide
@@ -3105,6 +3299,273 @@ pub fn generate_rotated_custom_wide(
     debug_assert_eq!(trace[0].len(), CUSTOM_HOST_WIDTH + 208); // 789
     debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 16); // 46 base + 16 wide = 62
     Ok((trace, dpis))
+}
+
+/// **THE CAP-WRITE WIDE producer witness (the cap-open weld for the WIDE leg).** A cap-WRITE family
+/// lead (attenuate / revokeCapability) advances its AFTER cap-root through an in-circuit cap-tree
+/// `map_op` write the bare transfer-shape route leaves UNSAT; this carries the witness that write
+/// needs: the cell's FULL c-list (`clist_leaves`, the openable sorted-Poseidon2 accumulator the BEFORE
+/// cap-root IS the root of), the consumed/written anchor key (`anchor_key` = the slot's `slot_hash[0]`),
+/// and the op-specific `inserted` `(key, value)` payload (an `Update`/attenuate writes the narrowed
+/// KEEP_MASK as the value; a `Remove`/revokeCapability takes `None`). Threaded through
+/// [`generate_rotated_cap_write_base`] — a wrong post-root / a c-list missing the key is UNSAT (fails
+/// closed, never a fabricated post-cap-root).
+pub struct CapWriteWideWitness {
+    /// The cell's full c-list (the BEFORE cap-root is the root of this sorted-Poseidon2 tree).
+    pub clist_leaves: Vec<crate::heap_root::HeapLeaf>,
+    /// The written/anchor key (the consumed cap's `slot_hash[0]`). MUST be present in `clist_leaves`.
+    pub anchor_key: BabyBear,
+    /// The op-specific insert payload: `(key, value)` for `Update` (value = KEEP_MASK) — `None` for
+    /// `Remove`.
+    pub inserted: Option<(BabyBear, BabyBear)>,
+}
+
+/// **THE CAP-WRITE WIDE plan for a lead effect.** `Some((op, needs_freeze_patch))` for the cap-WRITE
+/// family whose AFTER cap-root the bare wide transfer-shape route cannot satisfy:
+///   * `AttenuateCapability` → `(Some(Update), false)` — in-place UPDATE-AT-KEY (read held mask, write
+///     the narrowed KEEP_MASK). The map_op WRITE base rides the nonce-TICK face (the v1 cap-root advance
+///     is the genuine in-trace transition), so NO freeze patch — exactly as the live cap-open path skips
+///     the patch when a write witness is threaded.
+///   * `RevokeCapability` → `(Some(Remove), false)` — ZERO-value REMOVE of the held slot, same tick face.
+///   * `GrantCapability` → `(None, true)` — the authority-only grant base FREEZES the cap-root
+///     (pass-through, no map_op write), and rides the nonce-FREEZE face the bare transfer-shape route
+///     (nonce-TICK) mis-shapes — so the freeze patch IS applied, but no cap-tree write witness.
+/// `None` for every other lead (the nonce-TICK passthrough cap bases revokeDelegation / introduce ride
+/// the transfer-shape route directly; the value/field/grow-gate/record families have their own arms).
+fn cap_write_wide_plan(effect: &Effect) -> Option<(Option<CapTreeWriteOp>, bool)> {
+    match effect {
+        Effect::AttenuateCapability { .. } => Some((Some(CapTreeWriteOp::Update), false)),
+        Effect::RevokeCapability { .. } => Some((Some(CapTreeWriteOp::Remove), false)),
+        Effect::GrantCapability { .. } => Some((None, true)),
+        _ => None,
+    }
+}
+
+/// **THE FULL-COHORT WIDE descriptor + trace dispatcher (the shared producer spine).** Resolve the
+/// WIDE descriptor (from [`crate::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV`]) for a turn's
+/// homogeneous cohort lead and generate its trace / PI vector / grow-gate `map_heaps` /
+/// (setFieldDyn-only) [`MemBoundaryWitness`](crate::descriptor_ir2::MemBoundaryWitness) through the
+/// per-family wide producer it routes to — the SAME family dispatch the live SDK wide prover
+/// (`dregg_sdk::full_turn_proof::prove_effect_vm_rotated_wide`) runs, lifted into `dregg-circuit` so
+/// the IVC welded-leg mint
+/// ([`crate::effect_vm::trace_rotated`] consumers in `dregg-circuit-prove`) shares ONE producer route
+/// (no hand-inlined twin). The wide PI vector's LAST 16 PIs are the 8-felt before/after commit
+/// anchors (~124-bit); the descriptor is the unwelded WIDE member (the caller welds the umem leg).
+///
+/// `before`/`after` are the rotated block witnesses; `caveat` the turn manifest; `before_nullifiers`
+/// the note-spend grow-gate's BEFORE nullifier set (`None` for non-spend leads); `refusal_fields`
+/// the refusal `fields_root` write witness (`Some` REQUIRED for a `Refusal` lead — the honest refusal
+/// is UNSAT without it); `cap_write` the cap-tree write witness (`Some` REQUIRED for a cap-WRITE lead
+/// whose base carries an in-circuit cap-tree `map_op` write — attenuate / revokeCapability — the
+/// honest cap-write is UNSAT without it). Fails closed (`Err`) on an empty / heterogeneous /
+/// non-cohort slice.
+///
+/// THE SEPARATELY-ROUTED WIDE MEMBERS (NOT effect-dispatched here): `heapWriteVmDescriptor2R24` (no live
+/// `Effect::HeapWrite` selector — reached by the exercise-inner heap-write path) and
+/// `transferCapOpenTBVmDescriptor2R24` (cap-PRESENCE-routed — widened from a transfer base when a
+/// consumed-cap witness is present, like every cap-open member) carry their own per-family wide
+/// producers — [`generate_rotated_heap_write_wide`] and [`generate_rotated_transfer_cap_open_tb_wide`] —
+/// since neither is reached by the effect→descriptor resolver this dispatcher keys on. Both preserve the
+/// SAME 8-felt before/after anchors via the generic [`append_wide_carriers`] at their member host width
+/// (595 → 803 / `CAP_OPEN_TB_WIDTH` → 1029), exactly as supplyMint rides the transfer-shape host.
+#[allow(clippy::type_complexity)]
+pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before: &RotatedBlockWitness,
+    after: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_nullifiers: Option<&[BabyBear]>,
+    refusal_fields: Option<(&[crate::heap_root::HeapLeaf], BabyBear)>,
+    cap_write: Option<&CapWriteWideWitness>,
+) -> Result<
+    (
+        crate::descriptor_ir2::EffectVmDescriptor2,
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<crate::heap_root::HeapLeaf>>,
+        crate::descriptor_ir2::MemBoundaryWitness,
+    ),
+    String,
+> {
+    use crate::descriptor_ir2::{MemBoundaryWitness, parse_vm_descriptor2};
+    use crate::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+    use crate::heap_root::HeapLeaf;
+
+    let lead = effects
+        .first()
+        .ok_or_else(|| "wide rotated prover: empty turn".to_string())?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        format!("wide rotated prover: effect {lead:?} is not in the rotated cohort")
+    })?;
+    if effects.len() > 1 {
+        for e in &effects[1..] {
+            if rotated_descriptor_name_for_effect(e) != Some(name) {
+                return Err("wide rotated prover: heterogeneous multi-effect turn".into());
+            }
+        }
+    }
+    // Resolve the WIDE descriptor JSON for that registry key.
+    let json = WIDE_REGISTRY_STAGED_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| format!("{name} not in WIDE_REGISTRY_STAGED_TSV"))?;
+    let desc =
+        parse_vm_descriptor2(json).map_err(|e| format!("wide rotated descriptor parse: {e}"))?;
+
+    // The per-family wide producer dispatch (the live SDK wide prover's route, lifted here).
+    let (mut trace, mut dpis, mut map_heaps) = if matches!(lead, Effect::NoteSpend { .. }) {
+        let leaves: Vec<HeapLeaf> = before_nullifiers
+            .unwrap_or(&[])
+            .iter()
+            .map(|nf| HeapLeaf {
+                addr: *nf,
+                value: BabyBear::new(1),
+            })
+            .collect();
+        generate_rotated_note_spend_wide(initial_state, effects, before, after, caveat, &leaves)
+            .map_err(|e| format!("wide note-spend generation: {e}"))?
+    } else if matches!(lead, Effect::NoteCreate { .. }) {
+        generate_rotated_note_create_wide(initial_state, effects, before, after, caveat, &[])
+            .map_err(|e| format!("wide note-create generation: {e}"))?
+    } else if matches!(lead, Effect::Refusal { .. }) {
+        let (leaves, audit_value) = refusal_fields.ok_or_else(|| {
+                "wide refusal prover: a Refusal lead requires `refusal_fields` (the BEFORE-cell \
+                 fields-tree leaf set + the audit felt) to satisfy the in-circuit `fields_root` \
+                 `.write` map-op gate; an empty fields tree is UNSAT (the honest refusal fails closed)"
+                    .to_string()
+            })?;
+        generate_rotated_refusal_wide(
+            initial_state,
+            effects,
+            before,
+            after,
+            caveat,
+            leaves,
+            audit_value,
+        )
+        .map_err(|e| format!("wide refusal generation: {e}"))?
+    } else if matches!(
+        lead,
+        Effect::SetPermissions { .. }
+            | Effect::SetVerificationKey { .. }
+            | Effect::CellSeal { .. }
+            | Effect::CellUnseal { .. }
+            | Effect::CellDestroy { .. }
+            | Effect::ReceiptArchive { .. }
+            | Effect::MakeSovereign
+    ) {
+        let (t, d) =
+            generate_rotated_record_pin_wide(initial_state, effects, before, after, caveat)
+                .map_err(|e| format!("wide record-pin generation: {e}"))?;
+        (t, d, vec![])
+    } else if matches!(lead, Effect::CreateCell { .. }) {
+        generate_rotated_create_cell_wide(initial_state, effects, before, after, caveat, &[])
+            .map_err(|e| format!("wide create-cell generation: {e}"))?
+    } else if matches!(lead, Effect::CreateCellFromFactory { .. }) {
+        generate_rotated_create_from_factory_wide(
+            initial_state,
+            effects,
+            before,
+            after,
+            caveat,
+            &[],
+        )
+        .map_err(|e| format!("wide create-from-factory generation: {e}"))?
+    } else if matches!(lead, Effect::SpawnWithDelegation { .. }) {
+        generate_rotated_spawn_wide(initial_state, effects, before, after, caveat, &[])
+            .map_err(|e| format!("wide spawn generation: {e}"))?
+    } else if matches!(lead, Effect::SetField { field_idx, .. } if *field_idx >= 8) {
+        // setFieldDyn carries the DISTINCT 581-wide V1Face geometry + a mem-boundary witness
+        // (NOT map_heaps); the dedicated block below overrides these placeholders.
+        (Vec::new(), Vec::new(), Vec::new())
+    } else if matches!(lead, Effect::Custom { .. }) {
+        generate_rotated_custom_wide(initial_state, effects, before, after, caveat)
+            .map(|(t, d)| (t, d, vec![]))
+            .map_err(|e| format!("wide custom generation: {e}"))?
+    } else if let Some((op_opt, needs_patch)) = cap_write_wide_plan(lead) {
+        // THE CAP-WRITE FAMILY (the cap-open weld for the WIDE leg): the nonce-FREEZE attenuate-family
+        // bases. Their AFTER cap-root is an in-circuit cap-tree `map_op` write (attenuate/revokeCapability)
+        // OR a frozen pass-through (grantCap — authority-only, no write), and they ride the nonce-FREEZE
+        // face — neither of which the bare transfer-shape route satisfies (the map_op is UNSAT, the nonce
+        // gate is FREEZE not TICK), so a cap-WRITE lead FAILS CLOSED there. Here we lay the genuine base
+        // trace, apply the nonce-FREEZE patch the base descriptor expects, thread the cap-tree write
+        // witness (when the base carries a map_op), and append the 8-felt wide carriers (the SAME additive
+        // append the value cohort rides — the ~124-bit anchors are preserved). A cap-WRITE lead with a
+        // map_op but no `cap_write` witness fails closed (the cap-open weld never fabricates a post-root).
+        let (mut t, base_pis) =
+            generate_rotated_effect_vm_trace(initial_state, effects, before, after, caveat)
+                .map_err(|e| format!("wide cap-write base trace: {e}"))?;
+        let mut d = if needs_patch {
+            patch_attenuate_base_for_cap_open(&mut t, &base_pis)
+                .map_err(|e| format!("wide cap-write nonce-freeze patch: {e}"))?
+        } else {
+            base_pis
+        };
+        let heaps = match op_opt {
+            Some(op) => {
+                let w = cap_write.ok_or_else(|| {
+                    format!(
+                        "wide cap-write prover: effect {lead:?} carries an in-circuit cap-tree map_op \
+                         write but no CapWriteWideWitness (c-list + anchor key) was threaded — fails \
+                         closed (the route is the cap-open weld, never a fabricated post-cap-root)"
+                    )
+                })?;
+                generate_rotated_cap_write_base(
+                    &mut t,
+                    &mut d,
+                    op,
+                    &w.clist_leaves,
+                    w.anchor_key,
+                    w.inserted,
+                )
+                .map_err(|e| format!("wide cap-write map_op witness: {e}"))?
+            }
+            None => Vec::new(),
+        };
+        let d = append_wide_carriers(&mut t, d, GRAD_ROT_WIDTH);
+        (t, d, heaps)
+    } else {
+        let (t, d) =
+            generate_rotated_transfer_shape_wide(initial_state, effects, before, after, caveat)
+                .map_err(|e| format!("wide transfer-shape generation: {e}"))?;
+        (t, d, vec![])
+    };
+
+    // setFieldDyn's witness is the mem-boundary, NOT map_heaps; resolve it here and override the
+    // placeholders the family dispatch produced above.
+    let mem_boundary = if let Effect::SetField { field_idx, .. } = lead {
+        if *field_idx >= 8 {
+            let slot = field_idx % 8;
+            let (t, d, mb) = generate_rotated_set_field_dyn_wide(
+                initial_state,
+                before,
+                after,
+                caveat,
+                slot,
+                BabyBear::new(0),
+            )
+            .map_err(|e| format!("wide set-field-dyn generation: {e}"))?;
+            trace = t;
+            dpis = d;
+            map_heaps = vec![];
+            mb
+        } else {
+            MemBoundaryWitness::default()
+        }
+    } else {
+        MemBoundaryWitness::default()
+    };
+
+    Ok((desc, trace, dpis, map_heaps, mem_boundary))
 }
 
 #[cfg(test)]

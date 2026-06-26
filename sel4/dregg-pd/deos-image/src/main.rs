@@ -52,7 +52,10 @@
 
 extern crate alloc;
 
-use sel4_microkit::{debug_println, protection_domain, Channel, ChannelSet, Handler, Infallible};
+use sel4_microkit::{
+    Channel, ChannelSet, Handler, Infallible, debug_println, memory_region_symbol,
+    protection_domain,
+};
 
 mod cockpit_frame;
 mod fb;
@@ -63,10 +66,102 @@ mod view;
 
 use fb::Canvas;
 use keyboard::{Keyboard, Nav};
-use view::{ViewState, N_SUBSTANCES};
+use view::{LiveTurn, N_SUBSTANCES, ViewState};
 
 /// The keyboard IRQ channel (matches `<irq id="0">` in deos-image.system).
 const KBD: Channel = Channel::new(0);
+
+/// The executor PD signals a COMMITTED turn here: "a verified turn landed, its
+/// receipt is in `commit_out` — repaint." Bound in `deos-live.system` to the
+/// executor's `commit ready` channel (executor id 2 ⇄ deos_image id 1). In the
+/// plain `deos-image.system` (no executor) this channel is simply never signalled.
+const REPAINT: Channel = Channel::new(1);
+
+/// The shared `commit_out` region (RW for the executor, R here): the executor
+/// writes the verified turn's JSON receipt here; on a REPAINT signal we read the
+/// genuine receipt and surface it on glass. Mapped in `deos-live.system`; in
+/// `deos-image.system` the symbol stays unmapped and `commit_out()` is unused.
+const COMMIT_OUT_SIZE: usize = 0x400000; // 4 MiB (matches dregg.system <memory_region commit_out>)
+
+fn commit_out() -> *const u8 {
+    memory_region_symbol!(commit_out_vaddr: *mut [u8], n = COMMIT_OUT_SIZE).as_ptr() as *const u8
+}
+
+/// Read the verified turn's receipt the executor PD wrote to `commit_out` and
+/// extract its load-bearing facts (`"status":`, `"ok":`, and the advanced nonce).
+/// The receipt is JSON the verified `dregg_exec_full_forest_auth` emitted; we scan
+/// it byte-for-byte (no alloc), bounded to the first NUL (the region is zero-init)
+/// or a 4 KiB cap (the receipt is ~313 bytes). A turn with `status:2 ok:1` is
+/// `committed` — the repaint fires; anything else is fail-closed (no banner).
+fn parse_receipt(seq: u32) -> LiveTurn {
+    let p = commit_out();
+    let read = |i: usize| -> u8 { unsafe { core::ptr::read_volatile(p.add(i)) } };
+
+    // receipt length: up to the first 0 byte within a generous cap.
+    let cap = 4096usize;
+    let mut n = 0usize;
+    while n < cap && read(n) != 0 {
+        n += 1;
+    }
+
+    let find = |pat: &[u8], from: usize| -> Option<usize> {
+        if pat.is_empty() || pat.len() > n {
+            return None;
+        }
+        let mut i = from;
+        while i + pat.len() <= n {
+            let mut hit = true;
+            for (k, &c) in pat.iter().enumerate() {
+                if read(i + k) != c {
+                    hit = false;
+                    break;
+                }
+            }
+            if hit {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    };
+    // the first unsigned integer at or after `i` (skipping non-digits up to it).
+    let uint_at = |mut i: usize| -> u64 {
+        while i < n && !read(i).is_ascii_digit() {
+            i += 1;
+        }
+        let mut v: u64 = 0;
+        while i < n {
+            let c = read(i);
+            if !c.is_ascii_digit() {
+                break;
+            }
+            v = v.saturating_mul(10).saturating_add((c - b'0') as u64);
+            i += 1;
+        }
+        v
+    };
+
+    let status = find(b"\"status\":", 0)
+        .map(|i| uint_at(i + 8) as u8)
+        .unwrap_or(0);
+    let ok = find(b"\"ok\":", 0)
+        .map(|i| uint_at(i + 4) as u8)
+        .unwrap_or(0);
+    // nonce: the first `"int":N` following the `nonce` key in the receipt.
+    let nonce = find(b"nonce", 0)
+        .and_then(|i| find(b"int", i))
+        .map(|j| uint_at(j + 3))
+        .unwrap_or(0);
+
+    LiveTurn {
+        committed: status == 2 && ok == 1,
+        status,
+        ok,
+        nonce,
+        bytes: n,
+        seq,
+    }
+}
 
 /// Which top-level MODE the viewer is in. TAB switches between them — two live
 /// faces of the same boot:
@@ -91,6 +186,8 @@ struct Viewer {
     /// This is the state cockpit mode navigates instead of discarding nav.
     cockpit_focus: usize,
     cockpit_selected: Option<usize>,
+    /// How many verified turns the executor PD has signalled a repaint for.
+    turns: u32,
 }
 
 impl Viewer {
@@ -118,7 +215,9 @@ impl Viewer {
             match self.mode {
                 Mode::Image => debug_println!("[deos-image]   -> MODE: the live image"),
                 Mode::Cockpit => {
-                    debug_println!("[deos-image]   -> MODE: the starbridge-v2 COCKPIT (real gpui render; LEFT/RIGHT focus a tab, ENTER selects)")
+                    debug_println!(
+                        "[deos-image]   -> MODE: the starbridge-v2 COCKPIT (real gpui render; LEFT/RIGHT focus a tab, ENTER selects)"
+                    )
                 }
             }
             self.paint();
@@ -153,8 +252,8 @@ impl Viewer {
                 }
                 Nav::None | Nav::Toggle => {}
             }
-            let changed = self.cockpit_focus != before_focus
-                || self.cockpit_selected != before_selected;
+            let changed =
+                self.cockpit_focus != before_focus || self.cockpit_selected != before_selected;
             if changed {
                 match self.cockpit_selected {
                     Some(s) => debug_println!(
@@ -243,14 +342,53 @@ impl Viewer {
 impl Handler for Viewer {
     type Error = Infallible;
 
-    /// A keyboard IRQ: drain the events, fold to a Nav, navigate + repaint, then
-    /// re-arm the IRQ so the next keypress notifies us again.
-    fn notified(&mut self, _channels: ChannelSet) -> Result<(), Self::Error> {
-        if let Some(dev) = self.kbd.as_mut() {
-            let nav = keyboard::drain(dev);
-            let _ = self.apply(nav);
+    /// A notification. Two sources, distinguished by channel:
+    ///   * `KBD` (id 0, the keyboard IRQ): drain events, navigate + repaint, then
+    ///     re-arm the IRQ so the next keypress notifies us again.
+    ///   * `REPAINT` (id 1, the executor PD's "commit ready" signal): a genuine
+    ///     verified turn landed — read its receipt from the shared `commit_out`
+    ///     region and repaint the framebuffer with the live-turn banner. This is
+    ///     LIVE-REPAINT-ON-TURN on real seL4: a real `dregg_exec_full_forest_auth`
+    ///     turn in its own PD drives a frame change in this PD, over a real
+    ///     cross-PD notification channel.
+    fn notified(&mut self, channels: ChannelSet) -> Result<(), Self::Error> {
+        for ch in channels.iter() {
+            if ch == KBD {
+                if let Some(dev) = self.kbd.as_mut() {
+                    let nav = keyboard::drain(dev);
+                    let _ = self.apply(nav);
+                }
+                let _ = KBD.irq_ack();
+            } else if ch == REPAINT {
+                self.turns += 1;
+                let lt = parse_receipt(self.turns);
+                if lt.committed {
+                    debug_println!(
+                        "[deos-image]   <== LIVE TURN #{}: the executor PD committed a VERIFIED turn (status:{} ok:{}, nonce->{}, receipt {}B) — repainting on glass ( ◕‿◕ )",
+                        lt.seq,
+                        lt.status,
+                        lt.ok,
+                        lt.nonce,
+                        lt.bytes
+                    );
+                } else {
+                    debug_println!(
+                        "[deos-image]   <== executor signalled, but the turn did NOT commit (status:{} ok:{}) — fail-closed, banner shows REJECTED",
+                        lt.status,
+                        lt.ok
+                    );
+                }
+                self.state.live_turn = Some(lt);
+                self.paint();
+            } else {
+                // The executor also signals a one-way verifier edge (id 3 ⇄ our
+                // id 2 in deos-live.system); it carries no repaint payload here.
+                debug_println!(
+                    "[deos-image]   notified on channel {} (ignored)",
+                    ch.index()
+                );
+            }
         }
-        let _ = KBD.irq_ack();
         Ok(())
     }
 }
@@ -276,6 +414,7 @@ fn init() -> Viewer {
         kbd: None,
         cockpit_focus: 0,
         cockpit_selected: None,
+        turns: 0,
     };
 
     // (A) DRAW the first cell's overview FIRST, so the bytes are present the
@@ -290,7 +429,9 @@ fn init() -> Viewer {
 
     // (B) configure ramfb so QEMU scans out this PD's framebuffer.
     if !fb::configure_ramfb() {
-        debug_println!("[deos-image]   (boot with `make run-image`; the window needs -device ramfb)");
+        debug_println!(
+            "[deos-image]   (boot with `make run-image`; the window needs -device ramfb)"
+        );
         return viewer;
     }
 
@@ -299,11 +440,17 @@ fn init() -> Viewer {
     viewer.kbd = keyboard::init();
     if viewer.kbd.is_some() {
         let _ = KBD.irq_ack();
-        debug_println!("[deos-image]   INTERACTIVE: UP/DOWN walk the cells, ENTER drills in, ESC backs out.");
-        debug_println!("[deos-image]   TAB switches to the starbridge-v2 COCKPIT (real gpui render of a cockpit-shaped Scene, on glass).");
+        debug_println!(
+            "[deos-image]   INTERACTIVE: UP/DOWN walk the cells, ENTER drills in, ESC backs out."
+        );
+        debug_println!(
+            "[deos-image]   TAB switches to the starbridge-v2 COCKPIT (real gpui render of a cockpit-shaped Scene, on glass)."
+        );
     } else {
         debug_println!("[deos-image]   NON-INTERACTIVE this boot (no keyboard device).");
-        debug_println!("[deos-image]   next rung: wire -device virtio-keyboard-device on mmio slot 30.");
+        debug_println!(
+            "[deos-image]   next rung: wire -device virtio-keyboard-device on mmio slot 30."
+        );
     }
 
     debug_println!("[deos-image]   the image is on glass, and it is alive to walk. ( o_o )");

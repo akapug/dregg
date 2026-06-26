@@ -6,12 +6,17 @@ The pyo3 binding for the dregg SDK's two-noun surface:
 import dregg
 
 ident = dregg.Identity.from_profile("ember")      # ~/.dregg/profiles, shared with the CLI
-receipt = (ident.turn("https://devnet.example")
+receipt = (ident.turn("http://localhost:8421")    # your local node — see QUICKSTART.md
                 .transfer("28c2cba0…", 100)
                 .sign()
                 .submit())
 print(receipt.turn_hash, receipt.has_proof)
 ```
+
+There is no public server (the former `devnet.dregg.fg-goose.online` is offline);
+run a node locally first (`QUICKSTART.md`). A remote/operator node gates the
+signed-turn ingress (`devnet_key=` / `$DREGG_API_TOKEN`); your own
+`--enable-faucet` dev node leaves it open.
 
 An unauthorized act is inexpressible: nothing leaves `.sign()` until it is a
 real Ed25519-signed canonical `SignedTurn`, and the node ingress verifies it.
@@ -49,7 +54,7 @@ aq = dregg.AttestedQuery(node)
 aq.checkpoint()                             # latest finalized checkpoint (+ qc votes)
 aq.turn_proof(turn_hash)                    # full-turn STARK bytes (verify elsewhere)
 
-# Devnet faucet — materialize + fund a hosted cell.
+# Faucet (a dev node started with --enable-faucet) — materialize + fund a cell.
 dregg.faucet(node, ident.cell_id, 2000, public_key=ident.public_key)
 ```
 
@@ -149,21 +154,49 @@ the verified executor. See `examples/pg_durable_workflow.py` for the full
 recurring-billing story (cap-gated, instant-revocation, crash-resume) against live
 pg-dregg.
 
-## The kernel this module embeds
+## Two builds: the Rust executor (default) vs the embedded Lean kernel
 
-The extension module links the **verified Lean kernel** (`metatheory/Dregg2`, via
-`dregg-lean-ffi`) — the same executor every native dregg binary runs. `dregg.kernel()`
-reports it and proves it by driving one transfer through the proved `Exec.recKExec`:
+The SDK **always ships a local executor** — Rust by default, the verified Lean
+kernel when you opt in. The whole client surface (`Identity` +
+`turn`/`transfer`/`sign`/`submit`, the organs, `AttestedQuery`, `deploy.check`,
+`dregg.pg`, profiles, the receipt stream, the program atoms) is Ed25519 + the
+canonical wire codec + blocking HTTP and works identically in both builds.
+
+`pip install dregg` gives you the **light** wheel: a small, toolchain-free wheel
+whose local executor is the pure-Rust `TurnExecutor` (`dregg-turn`). It links no
+`libleanshared` (~150 MB) and needs no Lean toolchain on the host. The Rust
+executor is at **parity with the verified Lean spec** (a dedicated lane
+strengthens + documents that Rust↔Lean parity — that parity is the justification
+for trusting the Rust producer). `dregg.kernel()` PROVES the active executor by
+driving one real transfer through it:
 
 ```python
->>> dregg.kernel()
-{'lean': True, 'producer': 'lean', 'verified_step_ok': True,
- 'verified_step_out': '{"cells":[[1,…45…],[2,…15…]],"ok":1}'}
+>>> dregg.kernel()                       # the default LIGHT wheel
+{'build': 'light', 'lean': False, 'executor': 'rust', 'producer': 'rust',
+ 'executor_present': True, 'executor_step_ok': True, 'verified_step_ok': False,
+ 'executor_step_out': '{"executor":"rust","cells":[["src",…],["dst",15]],"transferred":5,"ok":1}'}
 ```
 
-The Lean runtime is initialized once, at `import dregg`, on the importing thread.
+The **embedded verified Lean kernel** (`metatheory/Dregg2`, via `dregg-lean-ffi`
+— the same executor every native dregg binary runs) is the optional heavy build,
+`dregg[kernel]`. It links `libdregg_lean.a` (the Dregg2 module objects) +
+`libleanshared`; the active executor is then `lean` and `dregg.kernel()` proves
+it by driving the transfer through the proved `Exec.recKExec`:
 
-## How the link works (shared mode)
+```python
+>>> dregg.kernel()                       # the dregg[kernel] wheel
+{'build': 'kernel', 'lean': True, 'executor': 'lean', 'producer': 'lean',
+ 'executor_present': True, 'executor_step_ok': True, 'verified_step_ok': True,
+ 'executor_step_out': '{"cells":[[1,…45…],[2,…15…]],"ok":1}'}
+```
+
+`verified_step_ok` is true only when the executor that ran the step was the
+*verified Lean* one; the Rust producer is at-parity, not itself the proved
+kernel. The kernel wheel is the **same `dregg` package** compiled with the Rust
+`kernel` feature (see *Building*); its Lean runtime is initialized once, at
+`import dregg`, on the importing thread.
+
+## How the link works (shared mode — the kernel build only)
 
 A Python extension module is a shared object, and the Lean *static* runtime archives
 cannot be linked into one on ELF (`libleanrt.a`'s mimalloc objects use local-exec TLS —
@@ -181,36 +214,53 @@ so it can never feature-unify onto the native crates):
 
 ## Building
 
-Dev build + test (the elan toolchain and `lake` must be on PATH, exactly as for the
-rest of the workspace — `./scripts/bootstrap.sh` at the repo root checks everything):
+**Light (default) — the kernel-free client.** No Lean toolchain, no
+`libleanshared`; this is what `pip install dregg` ships:
 
 ```sh
 cd sdk-py
-cargo build                  # DREGG_LEAN_LINK=shared via .cargo/config.toml
-# maturin develop            # same thing, installed into the active venv
-python3 -c 'import dregg; print(dregg.kernel())'
+cargo build                  # default features = ["light"]; no `lake`/elan needed
+maturin build --release      # the small client wheel
+# maturin develop            # build + install into the active venv
+python3 -c 'import dregg; print(dregg.kernel())'   # → {'build': 'light', …}
 ```
 
 Without `maturin`, the built cdylib works directly: copy
 `target/debug/libdregg.dylib` (macOS) / `target/debug/libdregg.so` (Linux) to
 `dregg.so` somewhere on `sys.path`.
 
+**Kernel (`dregg[kernel]`) — the embedded verified Lean kernel.** The elan
+toolchain and `lake` must be on PATH (`./scripts/bootstrap.sh` at the repo root
+checks everything); the `kernel` feature leaves `no-lean-link` off, so
+`dregg-lean-ffi` links the archive + `libleanshared` in shared mode
+(`DREGG_LEAN_LINK=shared`, set by `.cargo/config.toml`):
+
+```sh
+cargo build --no-default-features --features kernel
+maturin build --release --no-default-features --features kernel
+python3 -c 'import dregg; print(dregg.kernel())'   # → {'build': 'kernel', 'lean': True, …}
+```
+
 ## Wheels (distribution)
 
-The rpath baked by `build.rs` points at the *building* machine's elan toolchain, so a
-wheel made from a dev build runs anywhere only if libleanshared is findable. Two
-supported stories:
+The **light** wheel is the publishing default: small, self-contained (it links
+no Lean runtime, bakes no rpath), and importable on any host with no toolchain.
 
-1. **Toolchain-on-host (current):** the host installs the pinned Lean toolchain (elan)
-   and, if the toolchain lives somewhere else, points the loader at it:
+The **kernel** wheel embeds `libleanshared`. The rpath baked by `build.rs` points
+at the *building* machine's elan toolchain, so a kernel wheel runs elsewhere only
+if libleanshared is findable. Two stories:
+
+1. **Toolchain-on-host:** the host installs the pinned Lean toolchain (elan) and,
+   if it lives elsewhere, points the loader at it:
    `LD_LIBRARY_PATH=$LEAN_SYSROOT/lib/lean` (Linux) /
    `DYLD_LIBRARY_PATH=$LEAN_SYSROOT/lib/lean` (macOS). Build-time override:
    `DREGG_LEAN_SYSROOT=<sysroot>` bakes that rpath instead.
-2. **Bundled (self-contained wheels):** graft the shared libraries into the wheel with
-   the standard repair tools — `auditwheel repair` (Linux) / `delocate-wheel` (macOS)
-   after `maturin build --release`. They rewrite the rpath to the wheel-internal copy.
-   Expect large wheels (libleanshared is ~150 MB unstripped); this is the path for
-   publishing, not for dev.
+2. **Bundled (self-contained kernel wheels):** graft the shared libraries into the
+   wheel with the standard repair tools — `auditwheel repair` (Linux) /
+   `delocate-wheel` (macOS) after `maturin build --release --features kernel`.
+   They rewrite the rpath to the wheel-internal copy. Expect large wheels
+   (libleanshared is ~150 MB unstripped) — this is exactly why the light client is
+   the default.
 
 ## Tests
 
@@ -218,6 +268,10 @@ supported stories:
 python3 -m pytest tests/    # needs the module importable (maturin develop, or copy the cdylib)
 ```
 
-`tests/test_smoke.py` covers profiles/signing/submit against an in-process mock node,
-plus the kernel probe (`test_kernel_is_lean` asserts this build embeds the Lean
-kernel — it is *supposed* to fail on a build that silently fell back to Rust).
+`tests/test_smoke.py` covers profiles/signing/submit against an in-process mock
+node, plus the executor probe (`test_kernel_probe_reports_executor` — it asserts
+the active executor ran a real transfer: the Rust `TurnExecutor` in the light
+build, the proved `Exec.recKExec` in the kernel build). The deploy/pg surfaces
+have their own files
+(`test_deploy.py`, `test_pg*.py`; pg integration is skip-gated on a live
+postgres).

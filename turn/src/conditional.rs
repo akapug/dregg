@@ -50,7 +50,7 @@ pub fn compute_conditional_deposit(timeout_height: u64, current_height: u64) -> 
 /// A condition that must be satisfied before a turn executes.
 ///
 /// Each variant represents a different class of provable statement.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProofCondition {
     /// HTLC-style: reveal preimage of this hash (BLAKE3).
     HashPreimage {

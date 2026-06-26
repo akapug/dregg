@@ -2177,6 +2177,323 @@ impl Cockpit {
         cx.notify();
     }
 
+    // =======================================================================
+    // THE SERVICE EXPLORER — the Postman-like invoke() surface.
+    // =======================================================================
+
+    /// THE SERVICE EXPLORER panel: discover a focused cell's PUBLISHED INTERFACE
+    /// (the methods its program dispatches on), pick a method, fill its args, and
+    /// INVOKE it as a REAL verified turn (the deos-interior `invoke()` front door).
+    pub(crate) fn service_explorer_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let w = self.world.borrow();
+        let cells = &self.cells;
+        let focus = self
+            .service_explorer_focus
+            .or_else(|| cells.first().copied());
+        let mut col = div()
+            .id("cockpit-scroll-body-service")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .size_full()
+            .overflow_y_scroll();
+        col = col.child(section_title(
+            "🛰 SERVICES · discover a cell's published methods → invoke",
+        ));
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "The Postman-like face of CELLS-AS-SERVICE-OBJECTS: a focused cell's published \
+             interface (the methods its program dispatches on, derived live), each with its \
+             arity / authority / replay-vs-serviced semantics + a cap badge. Pick a replayable \
+             method, fill its args, and INVOKE it — a REAL verified turn that DESUGARS to an \
+             ordinary method-targeting turn (no kernel Effect::Invoke). An unknown / serviced / \
+             unauthorized method is refused in-band.",
+        ));
+        let Some(focus) = focus else {
+            return col
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .child("(no cells yet)"),
+                )
+                .into_any_element();
+        };
+
+        // The focus chip (cycle through cells).
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("focus:"))
+                .child(cycle_chip(
+                    cx,
+                    "service-focus",
+                    format!("⬡ {} (cycle)", reflect::short_hex(focus.as_bytes())),
+                    theme::good(),
+                    Cockpit::service_explorer_cycle_focus,
+                )),
+        );
+
+        // Build the genuine service-explorer view (the cockpit acts as the cell
+        // itself — the highest authority over its own window).
+        let se = ServiceExplorer::build(&w, focus, focus, dregg_cell::AuthRequired::Either);
+
+        if let Some(insp) = &se.inspectable {
+            col = col.child(section_title("inspected state"));
+            col = col.child(inspectable_row(insp));
+        }
+
+        col = col.child(section_title(format!(
+            "published methods · interface {}",
+            reflect::short_hex(&se.interface_id)
+        )));
+        if se.methods.is_empty() {
+            col = col.child(div().text_xs().text_color(theme::muted()).child(
+                "(this cell publishes no methods — its program does not dispatch on a method \
+                 symbol. Set a Cases program with MethodIs guards to publish an interface.)",
+            ));
+        }
+        for m in &se.methods {
+            let selected = self.service_explorer_selected == Some(m.symbol);
+            let (badge, badge_color) = if !m.is_invokable() {
+                ("serviced — named seam", theme::muted())
+            } else if m.authorized {
+                ("you may invoke", theme::good())
+            } else {
+                ("refused: insufficient authority", theme::bad())
+            };
+            let sym = m.symbol;
+            let pick_id = SharedString::from(format!("svc-pick-{}", reflect::short_hex(&m.symbol)));
+            let row = div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .px_2()
+                .py_0p5()
+                .rounded_md()
+                .bg(if selected {
+                    theme::panel_hi()
+                } else {
+                    theme::panel()
+                })
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text())
+                                .child(format!("ƒ {}", m.name)),
+                        )
+                        .child(div().text_xs().text_color(theme::muted()).child(format!(
+                            "requires {:?} · {} args · {:?}",
+                            m.required,
+                            m.arity
+                                .map(|n| n.to_string())
+                                .unwrap_or_else(|| "variadic".to_string()),
+                            m.semantics,
+                        ))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(pill(badge, badge_color))
+                        .when(m.is_invokable(), |d| {
+                            d.child(
+                                Button::new(pick_id)
+                                    .label(if selected { "selected" } else { "select" })
+                                    .xsmall()
+                                    .outline()
+                                    .on_click(cx.listener(
+                                        move |this, _ev: &ClickEvent, _w, cx| {
+                                            this.service_explorer_select(sym, cx);
+                                        },
+                                    )),
+                            )
+                        }),
+                );
+            col = col.child(row);
+        }
+
+        // The args composer (preset buttons — the cockpit's text-entry idiom).
+        col = col.child(section_title("arguments"));
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child("args:"))
+                .child(div().text_xs().text_color(theme::text()).child(
+                    if self.service_explorer_args.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        self.service_explorer_args.clone()
+                    },
+                ))
+                .child(arg_preset_btn(cx, "svc-args-none", "clear", ""))
+                .child(arg_preset_btn(cx, "svc-args-1", "= 1", "1"))
+                .child(arg_preset_btn(cx, "svc-args-7", "= 7", "7"))
+                .child(arg_preset_btn(cx, "svc-args-42", "= 1,42", "1,42")),
+        );
+
+        // The underlying-effect picker + the INVOKE button. A replayable method
+        // desugars to its underlying effects; here the operator picks the body
+        // from the same palette the inspect→act surface uses (a real, conserving,
+        // observable effect), proving the method-targeting path end-to-end.
+        col = col.child(section_title("invoke"));
+        let can_invoke = self.service_explorer_selected.is_some();
+        col = col.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child(
+                    match self.service_explorer_selected {
+                        Some(s) => format!("selected method {}", reflect::short_hex(&s)),
+                        None => "(pick a method above)".to_string(),
+                    },
+                ))
+                .when(can_invoke, |d| {
+                    d.child(
+                        Button::new(SharedString::from("svc-invoke-nonce"))
+                            .label("invoke → touch (IncrementNonce)")
+                            .primary()
+                            .xsmall()
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                                this.service_explorer_invoke(SvcEffectKind::Nonce, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from("svc-invoke-setfield"))
+                            .label("invoke → write slot 1 (SetField)")
+                            .xsmall()
+                            .outline()
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                                this.service_explorer_invoke(SvcEffectKind::SetField, cx);
+                            })),
+                    )
+                }),
+        );
+
+        if let Some(b) = &self.service_explorer_outcome {
+            let color = if b.contains("REFUSED") {
+                theme::bad()
+            } else {
+                theme::good()
+            };
+            col = col.child(
+                div()
+                    .mt_1()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .text_xs()
+                    .text_color(color)
+                    .child(b.clone()),
+            );
+        }
+        col.into_any_element()
+    }
+
+    /// Cycle the service explorer's focused cell.
+    pub(crate) fn service_explorer_cycle_focus(&mut self, cx: &mut Context<Self>) {
+        let cells = &self.cells;
+        if cells.is_empty() {
+            return;
+        }
+        let cur = self
+            .service_explorer_focus
+            .and_then(|f| cells.iter().position(|c| *c == f))
+            .unwrap_or(0);
+        self.service_explorer_focus = Some(cells[(cur + 1) % cells.len()]);
+        self.service_explorer_selected = None;
+        self.service_explorer_outcome = None;
+        cx.notify();
+    }
+
+    /// Select a method to invoke (by its symbol).
+    pub(crate) fn service_explorer_select(&mut self, symbol: [u8; 32], cx: &mut Context<Self>) {
+        self.service_explorer_selected = Some(symbol);
+        self.service_explorer_outcome = None;
+        cx.notify();
+    }
+
+    /// Set the args string (the preset-button entry).
+    pub(crate) fn service_explorer_set_args(&mut self, args: &str, cx: &mut Context<Self>) {
+        self.service_explorer_args = args.to_string();
+        cx.notify();
+    }
+
+    /// INVOKE the selected method through the REAL service-explorer loop: parse
+    /// the args, build the chosen underlying effect, route+gate+desugar+commit a
+    /// real verified turn, and capture the verdict / in-band refusal into the
+    /// banner. Closes the loop (the post-state is re-read on the next render).
+    pub(crate) fn service_explorer_invoke(
+        &mut self,
+        effect_kind: SvcEffectKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(focus) = self
+            .service_explorer_focus
+            .or_else(|| self.cells.first().copied())
+        else {
+            return;
+        };
+        let Some(symbol) = self.service_explorer_selected else {
+            self.service_explorer_outcome =
+                Some("REFUSED: pick a method to invoke first".to_string());
+            cx.notify();
+            return;
+        };
+        let args = parse_felt_args(&self.service_explorer_args);
+        let effects = vec![match effect_kind {
+            SvcEffectKind::Nonce => dregg_turn::action::Effect::IncrementNonce { cell: focus },
+            SvcEffectKind::SetField => dregg_turn::action::Effect::SetField {
+                cell: focus,
+                index: 1,
+                value: [7u8; 32],
+            },
+        }];
+        let result = {
+            let mut w = self.world.borrow_mut();
+            let se = ServiceExplorer::build(&w, focus, focus, dregg_cell::AuthRequired::Either);
+            se.invoke(
+                &mut w,
+                symbol,
+                args,
+                effects,
+                dregg_cell::AuthRequired::Either,
+            )
+        };
+        self.service_explorer_outcome = Some(match result {
+            InvokeOutcome::Committed { receipt, .. } => format!(
+                "invoked {} · receipt {} · {} action(s)",
+                reflect::short_hex(&symbol),
+                reflect::short_hex(&receipt.receipt_hash()),
+                receipt.action_count
+            ),
+            InvokeOutcome::Refused {
+                reason,
+                by_executor,
+            } => format!(
+                "REFUSED invoke {} ({}): {reason}",
+                reflect::short_hex(&symbol),
+                if by_executor {
+                    "executor"
+                } else {
+                    "front-door"
+                }
+            ),
+        });
+        self.refresh_cells();
+        cx.notify();
+    }
+
     pub(crate) fn workspace_cycle_target(&mut self, cx: &mut Context<Self>) {
         let n = self.cells.len().max(1);
         self.workspace_target_idx = (self.workspace_target_idx + 1) % n;
@@ -2307,4 +2624,50 @@ fn mirror_in_another_pane_placeholder(title: &str) -> gpui::AnyElement {
                 )),
         )
         .into_any_element()
+}
+
+/// Which underlying existing effect a service-explorer invocation desugars to —
+/// the body the (replayable) method carries. The operator picks from this small
+/// palette (the same real, conserving, observable effects the inspect→act surface
+/// fires), so the invocation proves the method-targeting path end-to-end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SvcEffectKind {
+    /// `IncrementNonce` — the minimal observable self-mutation (a "touch").
+    Nonce,
+    /// `SetField` on slot 1 — a visible state write the re-inspection reflects.
+    SetField,
+}
+
+/// A small preset button that sets the service explorer's args string (the
+/// cockpit's text-entry idiom — canned presets rather than a live text field).
+fn arg_preset_btn(
+    cx: &mut Context<Cockpit>,
+    id: &'static str,
+    label: &'static str,
+    value: &'static str,
+) -> impl IntoElement {
+    Button::new(SharedString::from(id))
+        .label(label)
+        .xsmall()
+        .outline()
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+            this.service_explorer_set_args(value, cx);
+        }))
+}
+
+/// Parse a comma-separated list of decimal integers into the `args` felt vector
+/// an invocation carries. Each integer becomes a little-endian 32-byte field
+/// element (the cockpit's small-felt encoding); empty/blank entries are skipped.
+/// A non-numeric token is skipped (the surface stays robust to stray input).
+fn parse_felt_args(s: &str) -> Vec<[u8; 32]> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<u64>().ok())
+        .map(|n| {
+            let mut felt = [0u8; 32];
+            felt[..8].copy_from_slice(&n.to_le_bytes());
+            felt
+        })
+        .collect()
 }

@@ -151,50 +151,23 @@ fn batch_events(events: &[RecentEvent]) -> Vec<CreateEmbed> {
 }
 
 /// Convert a single event into a rich embed.
+///
+/// The STRUCTURE (title / summary / Time·Cell·Transaction fields) is authored as a
+/// `deos-view` [`ViewNode`] card and rendered through the Discord backend
+/// ([`crate::cards::activity_event_card`]) — the SAME card IR the desktop renders to gpui
+/// pixels and the web renders to HTML. The event-type color + footer are presentation this
+/// surface owns, chained onto the rendered embed.
 fn event_to_embed(event: &RecentEvent) -> CreateEmbed {
     let color = event_color(&event.event_type);
     let icon = event_icon(&event.event_type);
     let title = format!("{icon} {}", event.event_type);
 
-    let mut embed = CreateEmbed::new()
-        .title(&title)
-        .description(&event.summary)
+    crate::cards::activity_event_card(&title, event)
+        .embed
         .color(color)
         .footer(serenity::all::CreateEmbedFooter::new(
             "dregg devnet explorer",
-        ));
-
-    if !event.timestamp.is_empty() {
-        embed = embed.field("Time", &event.timestamp, true);
-    }
-
-    if let Some(cell_id) = &event.cell_id {
-        let short = if cell_id.len() > 16 {
-            &cell_id[..16]
-        } else {
-            cell_id
-        };
-        embed = embed.field(
-            "Cell",
-            format!("[`{short}...`](https://devnet.dregg.fg-goose.online/explorer/cell/{cell_id})"),
-            true,
-        );
-    }
-
-    if let Some(tx_hash) = &event.tx_hash {
-        let short = if tx_hash.len() > 12 {
-            &tx_hash[..12]
-        } else {
-            tx_hash
-        };
-        embed = embed.field(
-            "Transaction",
-            format!("[`{short}...`](https://devnet.dregg.fg-goose.online/explorer/tx/{tx_hash})"),
-            true,
-        );
-    }
-
-    embed
+        ))
 }
 
 /// Get the embed color for an event type.

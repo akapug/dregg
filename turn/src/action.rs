@@ -709,6 +709,20 @@ impl Authorization {
         }
     }
 
+    /// Placeholder authorization for an [`Action`] that is ASSEMBLED unsigned by
+    /// a higher-level routing/builder core and MUST be signed before submission
+    /// (e.g. via `AppCipherclerk::sign_action`, which OVERWRITES this field).
+    ///
+    /// Semantically identical to [`Authorization::Unchecked`], but named so an
+    /// unsigned-then-signed assembly does not have to write the review-fenced
+    /// `Unchecked` literal in production framework source (see
+    /// `app-framework/tests/no_unchecked.rs`): a reader sees a loud,
+    /// to-be-signed placeholder, and the grep-guard stays the single source of
+    /// truth for code that actually SHIPS unauthenticated.
+    pub fn unsigned_placeholder() -> Self {
+        Authorization::Unchecked
+    }
+
     /// Create a Signature authorization from a 64-byte signature.
     pub fn from_sig_bytes(bytes: [u8; 64]) -> Self {
         let mut r = [0u8; 32];

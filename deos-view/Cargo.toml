@@ -72,31 +72,48 @@ dregg-cell = { path = "../cell", optional = true }
 # re-render hook.)
 dregg-types = { path = "../types", optional = true }
 
-# THE GPUI STACK — the SAME fork rev the cockpit uses (emberian/zed@407a6ff), so
-# cargo resolves ONE gpui instance across this crate + gpui-component. `test-support`
-# lights up the HeadlessAppContext + offscreen wgpu renderer the render-capture proof
-# uses (the exact path starbridge-v2's `render_cockpit_headless` bakes through).
-# NATIVE-ONLY.
-gpui = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"], optional = true }
+# THE GPUI STACK — pinned to the SAME emberian/zed rev gpui-component@498321a4 pins
+# internally (`adb9026524`), so cargo resolves ONE gpui instance across this crate +
+# gpui-component. This is LOAD-BEARING: a different rev here makes `gpui-component`'s
+# `Div`/`Label`/`ActiveTheme` come from a SECOND gpui instance, so this crate's
+# `Styled`/`ActiveTheme` trait methods (`gap_*`, `p_*`, `text_color`, `font_weight`,
+# `theme()`) no longer resolve against them (~29 "multiple versions of crate gpui"
+# errors). Re-unify with gpui-component's pin whenever it bumps.
+# `test-support` lights up the HeadlessAppContext + offscreen wgpu renderer the
+# render-capture proof uses (the exact path starbridge-v2's `render_cockpit_headless`
+# bakes through). NATIVE-ONLY.
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"], optional = true }
 # `runtime_shaders` is LOAD-BEARING on macOS (mirrors starbridge-v2): it makes gpui
 # compile its Metal shaders AT RUNTIME (via `MTLDevice::newLibraryWithSource`) instead
 # of at BUILD time (`xcrun metal`, which needs the offline Metal Toolchain component).
 # Without it the `gpui_macos` build script fails "cannot execute tool 'metal'". `x11`/
 # `wayland` light up the Linux windowing backends (inert on macOS — gpui_linux is not
 # in the macOS graph).
-gpui_platform = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["font-kit", "runtime_shaders", "test-support", "x11", "wayland"], optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "runtime_shaders", "test-support", "x11", "wayland"], optional = true }
 # The wgpu renderer leaf — the CosmicTextSystem text system + the offscreen renderer.
-gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "54fbcb6943", features = ["test-support"], optional = true }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"], optional = true }
 
 # THE REAL WIDGET LIBRARY — the vendored longbridge fork the cockpit uses
 # (emberian/gpui-component@dregg-repoint, the `crates/ui` member). Button, Label,
 # v_flex/h_flex, Input, List, Table — the vocabulary the view-tree maps onto.
-gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "b2deb2aa", default-features = false, optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
 
 # JSON parse of the view-tree the JS engine stringifies (and the present() faces).
 # NEEDED BY BOTH renderers (the gpui-free `web` renderer parses the same view-tree).
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# THE DISCORD RENDERER's builder/model types — `CreateEmbed`, `CreateButton`,
+# `CreateActionRow`, `ButtonStyle`. Gated on `discord` (like `web` on its renderer) so
+# the core / native / web builds NEVER pull serenity. `default-features = false` with only
+# `builder`+`model`+`rustls_backend` keeps it to the embed/component builders (no gateway,
+# no client, no framework) — and unifies to ONE serenity instance with the discord-bot
+# (which enables a superset), so the `CreateEmbed` this crate returns IS the bot's type.
+serenity = { version = "0.12", default-features = false, features = [
+    "builder",
+    "model",
+    "rustls_backend",
+], optional = true }
 
 # The headless capture path returns `anyhow::Result<image::RgbaImage>` (gpui's
 # `capture_screenshot` signature); the `headless` module re-encodes + saves the PNG.
@@ -119,6 +136,9 @@ native = [
 ]
 # web — `ViewNode` → an HTML/DOM string (gpui-free, deos-js-free): only serde.
 web = []
+# discord — `ViewNode` → a serenity `CreateEmbed` + button components (gpui-free,
+# deos-js-free): serde + serenity's builder/model. The FOURTH backend over the one IR.
+discord = ["dep:serenity"]
 
 # THE WEB-PROJECTION BAKE — render the SAME counter card view-tree (the EXACT JSON the
 # SpiderMonkey engine produces) to a browser-loadable `.html`, gpui-free. Build + run:

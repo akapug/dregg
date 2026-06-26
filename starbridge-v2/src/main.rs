@@ -255,6 +255,102 @@ fn main() {
         }
     }
 
+    // `--render-desktop <out>`: THE deos DESKTOP BAKE — the Windows-NT / Pharo
+    // workbench over the live verified World. Bakes a desktop of cell-icons with two
+    // inspector windows open and a right-click context menu visible, then drives a
+    // real right-click actuation (a verified turn) + a drag-persist to prove the
+    // metaphors are live, baking `<out>.png`. Default 1600x1000.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_desktop_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1600.0, 1000.0));
+            match render_desktop_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-desktop FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-welcome <out>`: THE CALM WELCOME BAKE — the warm front door (the OTHER
+    // end of the bar from the dense `--render-desktop` workbench): a breathing room of
+    // cell-icons + a gentle "type anything" Spotter pill + the warm welcome card
+    // greeting a newcomer with the live image's real shape. Nothing else open. 1600x1000.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_welcome_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1600.0, 1000.0));
+            match render_welcome_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-welcome FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-woven <out>`: THE WOVEN DESKTOP BAKE — proves the surfaces are ONE
+    // place, not separate pieces. It walks a stranger's path end to end: land on the
+    // calm WELCOME front door over the live image → click a door → LAND in a live
+    // surface whose Pharo halo ring is already floating (mold-ready, the seam welded)
+    // → then use the Spotter (the unifying entry) to jump to a GLOBAL surface, which
+    // also lands mold-ready. Bakes `<out>.png` of the woven room: a molded live
+    // surface with its halo + the calm Spotter pill. Default 1600x1000.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_woven_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1600.0, 1000.0));
+            match render_woven_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-woven FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-doc-collab <out>`: THE FOCUSED DOCUMENT-COLLABORATION BAKE — drive the
+    // whole document-language flow on ONE big editor window: author a base, fork a
+    // confined co-author draft, the co-author TYPES a divergent line, the original author
+    // diverges the main, STITCH (the pushout) → a first-class CONFLICT (both live
+    // alternatives, attributed you-vs-co-author, HELD off the heap) rendered as the
+    // ConflictView with one-click resolution choices, and the umem-heap boundary read out
+    // at each step. The bake also resolves a copy to prove publish-to-heap, but leaves the
+    // conflict + resolve buttons IN FRAME (un-clipped) for the shot. Default 1100x1500.
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_doc_collab_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1100.0, 1500.0));
+            match render_doc_collab_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-doc-collab FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-guest <out>`: THE GUEST / APP-FORWARD BAKE — the welcoming,
     // low-verbosity desktop a newcomer lands on (the "after you dismiss the
     // inspector" view): the real app surfaces (browser · editor · terminal · chat)
@@ -420,6 +516,42 @@ fn main() {
                     std::process::exit(1);
                 }
             }
+        }
+    }
+
+    // `--render-touch <out>`: the TOUCH-UI bake (the graphideOS / mobile shape — the
+    // bottom-bar mode switch + the tappable cell garden + a long-press face sheet).
+    // `--render-size WxH` defaults to a phone 390x844; `--render-mode <name>` selects
+    // a mode (Inhabit/Author/Dev/Inspect/Operate) and shows it clean (no sheet).
+    #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+    {
+        if let Some(out) = render_touch_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((390.0, 844.0));
+            let mode = render_mode_arg(&args);
+            match render_touch_headless(&out, w, h, mode.as_deref()) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-touch FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--desktop`: BOOT THE LIVE WOVEN WORKBENCH — open an INTERACTIVE gpui window
+    // rooted at `DeosDesktop` (the woven desktop the `--render-woven` bake only ever
+    // renders to a PNG), over the embedded verified World, STARTING AT THE CALM
+    // WELCOME (a fresh layout shows the warm front door once — NOT the everything-
+    // cascade the bake drives). The doors, the Spotter, the halos, and every surface
+    // are live + clickable: each gesture fires a REAL verified turn through the
+    // embedded executor (exactly as the bake proves they do). This is the windowed
+    // twin of the bake — the playable deos_desktop. It returns when the window closes.
+    //   cargo run -p starbridge-v2 --features native-full --bin starbridge-v2 -- --desktop
+    #[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
+    {
+        if args.iter().any(|a| a == "--desktop") {
+            run_desktop_window();
+            return;
         }
     }
 
@@ -696,6 +828,103 @@ fn run_window(
     });
 }
 
+/// **THE LIVE WOVEN WORKBENCH** — open the interactive [`DeosDesktop`] (the woven
+/// desktop) in a real gpui window over the embedded verified World, starting at the
+/// calm WELCOME. This is the windowed twin of the `--render-woven` bake: the SAME
+/// `DeosDesktop::new(...)` over the SAME `world::demo_world()` image, but rooted in a
+/// live `cx.open_window` (exactly as [`run_window`] does for the cockpit) instead of a
+/// headless capture — so the doors, the Spotter, the halos, and every surface are
+/// clickable and fire real verified turns through the embedded executor. The desktop
+/// persists its arrangement to `DesktopLayout::default_path()` (drag to arrange); the
+/// calm welcome greets a never-greeted image exactly once, then opens onto the arranged
+/// room. NOT gated behind `render-capture`: this is the live windowed entry, `--desktop`.
+#[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
+fn run_desktop_window() {
+    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+    use gpui_platform::application;
+    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    // The live verified image — the SAME `World` the cockpit + the woven bake run.
+    let (world, anchors) = world::demo_world();
+    let [_treasury, _service, user] = anchors;
+
+    // STARTUP PROOF (the no-blank-screen receipt): the desktop opens onto the live
+    // image; report its real shape so a blank window reads as a render/display issue,
+    // not an empty UI. A never-greeted layout opens onto the calm WELCOME front door.
+    let layout_path = DesktopLayout::default_path();
+    {
+        let fresh = !DesktopLayout::load(&layout_path).prefs.welcomed;
+        println!("== Starbridge v2 · opening the woven DESKTOP — root: DeosDesktop ==");
+        println!(
+            "  live image: {} cells · height {} · {} receipts",
+            world.cell_count(),
+            world.height(),
+            world.receipts().len()
+        );
+        println!(
+            "  layout sidecar: {} ({})",
+            layout_path.display(),
+            if fresh {
+                "fresh — opens onto the calm WELCOME front door"
+            } else {
+                "remembered — opens onto your arranged room"
+            }
+        );
+        println!(
+            "  right-click ANYTHING · double-click to inspect · drag to arrange (persisted) · \
+             the Spotter, doors, halos + surfaces fire REAL verified turns"
+        );
+    }
+
+    let shared = Rc::new(RefCell::new(world));
+
+    application().run(move |cx: &mut App| {
+        // Register the embedded UI fonts (CoreText lacks "Lilex"/"IBM Plex"); without
+        // this every panel lays out but renders BLANK text — same as `run_window`.
+        {
+            static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+            static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+            if let Err(e) = cx.text_system().add_fonts(vec![
+                std::borrow::Cow::Borrowed(LILEX),
+                std::borrow::Cow::Borrowed(IBM_PLEX),
+            ]) {
+                eprintln!("warning: failed to register embedded UI fonts: {e}");
+            }
+        }
+        // The real widget kit + the deos dark theme (follow OS appearance, default
+        // Dark) — same boot pair as `run_window`.
+        gpui_component::init(cx);
+        apply_deos_theme(None, false, cx);
+
+        let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
+        let layout_path = layout_path.clone();
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("deos — desktop".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            |window, cx| {
+                // THE WINDOW ROOT IS `DeosDesktop` — built directly over the live World
+                // (no login ceremony; the desktop is its own front door, opening on the
+                // calm welcome). Wrapped in a gpui-component `Root` so the surfaces' kit
+                // text inputs (doc editor, branch prompts, the Spotter) paint.
+                let view = cx.new(|cx| {
+                    DeosDesktop::new(shared.clone(), user, layout_path.clone(), window, cx)
+                });
+                cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+            },
+        )
+        .expect("failed to open window");
+        cx.activate(true);
+    });
+}
+
 /// Install the deos theme on the gpui-component kit, the SINGLE call every init
 /// site makes immediately after `gpui_component::init(cx)`.
 ///
@@ -936,6 +1165,1259 @@ fn render_showcase_arg(args: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// Parse the `--render-desktop <out>` (or `=<out>`) argument — the output base path
+/// for the deos DESKTOP bake. Returns `None` when absent. `<out>.png` is written.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_desktop_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-desktop" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-desktop=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-welcome <out>` (or `=<out>`) argument — the output base path
+/// for the CALM WELCOME bake (the other end of the bar: the warm front door a stranger
+/// wakes up to, not the dense workbench). Returns `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_welcome_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-welcome" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-welcome=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-woven <out>` (or `=<out>`) argument — the output base path for
+/// the WOVEN DESKTOP bake (the stranger's path, welded end to end). Returns `None` when
+/// absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_woven_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-woven" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-woven=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-doc-collab <out>` (or `=<out>`) argument — the output base path
+/// for the focused DOCUMENT-COLLABORATION bake (branch · diverge · stitch · conflict ·
+/// resolve). Returns `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_doc_collab_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-doc-collab" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-doc-collab=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// **THE WOVEN DESKTOP BAKE** — the proof the surfaces are ONE inhabitable place, not a
+/// drawer of separate pieces. Where `--render-welcome` shows the calm front door and
+/// `--render-desktop` shows the dense workbench, THIS bake walks the SEAM BETWEEN them —
+/// a stranger's path, welded end to end:
+///
+///   1. A fresh image opens onto the calm WELCOME card (greeting the live world's real
+///      shape), with NOTHING else open — the calm default.
+///   2. Clicking a welcome door ("Write something") LANDS the newcomer in a live surface
+///      (a document editor on their own cell) that is already MOLD-READY: its Pharo halo
+///      ring floats around it the instant they arrive (the welded seam — open and "you
+///      can mold it" are the same arrival), and the welcome card is gone.
+///   3. The SPOTTER — the unifying entry — jumps to a GLOBAL surface (the World
+///      Explorer), which ALSO lands mold-ready (its halo floating). One entry, every
+///      surface; every landing hands you the mold-in-place gesture.
+///
+/// The bake ASSERTS each seam (welcome→landed-window-selected, halo ring present on the
+/// landed surface, Spotter ranks the global surface and dispatching it lands selected),
+/// then leaves a surface molded with its halo + the calm Spotter pill showing, and
+/// captures `<out>.png` of the woven room. Hermetic. Default 1600x1000.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::DeosDesktop;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A hermetic, fresh sidecar so `welcomed = false` → the warm card shows (a fresh
+    // image is exactly the newcomer's first run). Start clean.
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-woven-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    // The live verified image — the SAME `World` the cockpit runs.
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [_treasury, _service, user] = anchors;
+    let shared = Rc::new(RefCell::new(world));
+    let height = shared.borrow().height();
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // ── 1. THE CALM DEFAULT — the warm front door over the live image, nothing else. ──
+    let (shown, greeting, open_windows) = desk.update(&mut cx, |d, _cx| {
+        (
+            d.bake_welcome_is_shown(),
+            d.bake_welcome_greeting(),
+            d.bake_total_window_count(),
+        )
+    });
+    anyhow::ensure!(
+        shown,
+        "a fresh image must open onto the warm WELCOME card (the calm front door)"
+    );
+    anyhow::ensure!(
+        open_windows == 0,
+        "the calm default opens NOTHING else (got {open_windows} open window(s))"
+    );
+    anyhow::ensure!(
+        greeting.contains(&height.to_string()),
+        "the welcome greeting must name the live image's REAL history height ({height})"
+    );
+
+    // ── 2. THE DOOR LANDS YOU MOLD-READY — click "Write something" (door 2: 0-based). ──
+    // The door opens a live document surface AND leaves it selected, so its halo ring is
+    // already floating: open and "you can mold it" are the same arrival (the welded seam).
+    desk.update(&mut cx, |d, cx| {
+        d.bake_welcome_door(2); // 0:look 1:find 2:write 3:survey
+        cx.notify();
+    });
+    cx.run_until_parked();
+    anyhow::ensure!(
+        !desk.update(&mut cx, |d, _cx| d.bake_welcome_is_shown()),
+        "clicking a welcome door dismisses the front door — you have begun"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_total_window_count()) >= 1,
+        "the welcome door must LAND the newcomer in a live surface (a window opened)"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_selection_is_window()),
+        "the landed surface must be SELECTED (mold-ready) — the welcome door hands you \
+         straight to the mold-in-place gesture, not an unselected window to go hunt"
+    );
+    let door_handles = desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count());
+    anyhow::ensure!(
+        door_handles >= 5,
+        "the landed surface must float its Pharo halo ring (mold-in-place handles); got \
+         {door_handles}"
+    );
+
+    // ── 3. THE SPOTTER IS THE UNIFYING ENTRY — jump to a GLOBAL surface, land mold-ready. ──
+    // Open the Spotter and confirm it ranks the global World Explorer surface (not only
+    // per-cell actions) — the one entry to every surface.
+    desk.update(&mut cx, |d, _cx| d.bake_open_spotter("world explorer"));
+    let spot_matches = desk
+        .update(&mut cx, |d, _cx| d.bake_spotter_match_count())
+        .unwrap_or(0);
+    let top = desk
+        .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        spot_matches >= 1 && top.to_lowercase().contains("world explorer"),
+        "the Spotter must reach the GLOBAL World Explorer surface (top: {top:?}, {spot_matches} \
+         match(es)) — the unifying entry jumps to places, not only cells"
+    );
+    let before = desk.update(&mut cx, |d, _cx| d.bake_total_window_count());
+    desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_total_window_count()) > before,
+        "dispatching the Spotter's global surface opened it"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_selection_is_window())
+            && desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+        "a Spotter jump also LANDS mold-ready — the global surface arrives with its halo \
+         ring floating, exactly like the welcome door (one consistent gesture everywhere)"
+    );
+
+    // ── 4. THE SPOTTER REACHES THIS SESSION'S NEW SURFACES TOO — one entry, every place. ──
+    // Each lands mold-ready (selected + its halo floating), exactly like the welcome door
+    // and the World Explorer jump: the woven surfaces are ONE place, one gesture vocabulary,
+    // not a scatter of separate windows you have to know exist.
+
+    // 4a. A DOCUMENT-COLLABORATION session — the Spotter opens the editor WITH a confined
+    //     co-author draft already forked (branch · stitch · resolve), landed mold-ready.
+    desk.update(&mut cx, |d, _cx| d.bake_open_spotter("co-author document"));
+    let collab_top = desk
+        .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        collab_top.to_lowercase().contains("co-author"),
+        "the Spotter must reach the DOCUMENT-COLLABORATION surface (top: {collab_top:?})"
+    );
+    desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+    cx.run_until_parked();
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_selected_window_label()) == Some("Document")
+            && desk.update(&mut cx, |d, _cx| d.bake_doc_has_branch(user)),
+        "the doc-collab jump LANDS in a Document surface mold-ready, WITH a forked co-author \
+         draft already in flight (a real branch-and-stitch session, not a bare editor)"
+    );
+    anyhow::ensure!(
+        desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+        "the landed doc-collab surface floats its Pharo halo ring (mold-in-place)"
+    );
+
+    // 4b. THE WORLD-STATUS BOARD — the agent-composable ViewNode surface (the reflective
+    //     pane a confined agent rewrites). Reachable from the same Spotter. Gated on
+    //     `card-pane` (the default native-full build has it).
+    #[cfg(feature = "card-pane")]
+    {
+        desk.update(&mut cx, |d, _cx| d.bake_open_spotter("world status board"));
+        let board_top = desk
+            .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+            .unwrap_or_default();
+        anyhow::ensure!(
+            board_top.to_lowercase().contains("world-status board"),
+            "the Spotter must reach the agent-composable World-Status board (top: {board_top:?})"
+        );
+        desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+        cx.run_until_parked();
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_selected_window_label()) == Some("World Status")
+                && desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+            "the World-Status board jump lands its ViewNode surface mold-ready (the same \
+             gesture as every other surface)"
+        );
+    }
+
+    // 4c. A CONFINED ANDROID CELL with its SystemUI cap-chrome — reachable from the same
+    //     Spotter; landing mints the confined chrome (a real PermWorld + executor) and the
+    //     status bar reads its standing authorities. Gated on `android-systemui`.
+    #[cfg(feature = "android-systemui")]
+    {
+        desk.update(&mut cx, |d, _cx| {
+            d.bake_open_spotter("android cell systemui")
+        });
+        let android_top = desk
+            .update(&mut cx, |d, _cx| d.bake_spotter_top_label())
+            .unwrap_or_default();
+        anyhow::ensure!(
+            android_top.to_lowercase().contains("android cell"),
+            "the Spotter must reach the Android Cell / SystemUI cap-chrome (top: {android_top:?})"
+        );
+        desk.update(&mut cx, |d, _cx| d.bake_spotter_dispatch_top());
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        anyhow::ensure!(
+            desk.update(&mut cx, |d, _cx| d.bake_selected_window_label())
+                == Some("Android · SystemUI")
+                && desk.update(&mut cx, |d, _cx| d.bake_halo_handle_count()) >= 5,
+            "the Android Cell jump lands its SystemUI cap-chrome mold-ready (one gesture)"
+        );
+        let held = desk.update(&mut cx, |d, _cx| d.clone_status_held(user));
+        anyhow::ensure!(
+            !held.is_empty(),
+            "the landed Android cell's confined chrome must read its standing authorities on \
+             the status bar (the cap-chrome is live, not a mock)"
+        );
+    }
+
+    // 4d. THE AGENT AS CO-AUTHOR, IN THE SAME ROOM — a confined agent composes a brand-new
+    //     World Board from scratch (reading the live World) and it MOUNTS as a real window
+    //     beside the woven surfaces: the agent-composed surface is part of the one place,
+    //     not a separate demo. Gated on `card-pane` (drives a SpiderMonkey runtime).
+    #[cfg(feature = "card-pane")]
+    {
+        let mut rt = deos_js::JsRuntime::new()
+            .map_err(|e| anyhow::anyhow!("boot SpiderMonkey for the agent's compose loop: {e}"))?;
+        let board = desk
+            .update(&mut cx, |d, cx| {
+                d.bake_agent_composes_world_board(&mut rt, cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's compose-from-scratch loop failed: {e}"))?;
+        anyhow::ensure!(
+            board.started_empty && board.crawled_cells >= 1 && board.mounted_window,
+            "the agent must compose a NEW World Board from an empty root (crawling the live \
+             World) and mount it as a real window in the same room (empty={}, crawled={}, \
+             mounted={})",
+            board.started_empty,
+            board.crawled_cells,
+            board.mounted_window
+        );
+    }
+
+    // Leave the woven room in frame, every surface present at once: cascade the open
+    // windows so the doc-collab editor, the World-Status board, the Android cap-chrome, and
+    // the agent-composed board are all visible as ONE coherent workbench, with the calm
+    // "type anything" Spotter pill showing (the unifying entry that reached them all).
+    desk.update(&mut cx, |d, _cx| {
+        d.bake_cascade_windows();
+    });
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let open_now = desk.update(&mut cx, |d, _cx| d.bake_total_window_count());
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos WOVEN render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the stranger's path \
+         welded end to end — calm welcome over the live image ({} cells, height {height}) → a \
+         door LANDS you mold-ready in a live surface ({door_handles}-handle halo floating) → the \
+         Spotter (the unifying entry) reaches EVERY surface and lands each mold-ready: the World \
+         Explorer, a doc-collaboration session (branch · stitch · resolve), the agent-composable \
+         World-Status board, a confined Android cell's SystemUI cap-chrome — plus the agent \
+         composing a brand-new board, all mounted in ONE room ({open_now} windows). One place, \
+         one gesture.",
+        shared.borrow().ledger().iter().count()
+    );
+    Ok(())
+}
+
+/// **THE FOCUSED DOCUMENT-COLLABORATION BAKE** — the document language as a surface a
+/// user can actually drive, end to end, on ONE large editor window:
+///
+///   1. Author a base document → committed to the cell's umem-heap (boundary B0).
+///   2. FORK a confined co-author draft branch (BRANCH-AND-STITCH-PROTOCOL §1). The
+///      co-author TYPES a divergent line into the live draft editor (the second author's
+///      hand, not the canned button); the original author diverges the main too.
+///   3. STITCH (the pushout, §3). Two edits to the same region become a FIRST-CLASS
+///      conflict — an antichain of live alternatives, each attributed you-vs-co-author —
+///      HELD off the heap (no write while it stands). Rendered as the ConflictView with
+///      one-click resolution choices and the conflict's umem boundary (which binds BOTH
+///      alternatives — the anti-forge tooth).
+///   4. RESOLVE (asserted on a copy so the shot keeps the conflict in frame): a chosen
+///      resolution is itself a receipted patch; the merge PUBLISHES to the umem-heap and
+///      the boundary MOVES (B0 → B_published).
+///
+/// The bake ASSERTS each seam (boundary moves on edit; a real conflict arises and is
+/// held; resolving publishes + lands a receipt + moves the boundary), then leaves the
+/// live conflict + its resolution buttons un-clipped in a tall editor window and captures
+/// `<out>.png`. Hermetic. Default 1100x1500.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_doc_collab_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::DeosDesktop;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-doccollab-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [treasury, _service, user] = anchors;
+    let shared = Rc::new(RefCell::new(world));
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // ── 1. A base document, committed to the umem-heap. Place the editor window large so
+    //    the whole collaboration surface renders un-clipped. ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_dismiss_welcome(); // the focused shot wants the bare workbench
+        d.bake_open_doc(user);
+        d.bake_place_doc_window(user, 28.0, 44.0, w - 56.0, h - 96.0);
+        d.bake_edit_doc(user, "Shared opening line.\n");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let boundary_base = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(user))
+        .expect("the document has a umem boundary");
+
+    // ── 2. Fork a confined draft; the co-author TYPES a divergent line; the original
+    //    author diverges the main too (so the stitch genuinely contests the tail). ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_fork_branch(user);
+        d.bake_set_branch_text(user, "Shared opening line.\nThe co-author's reading.\n");
+        d.bake_edit_doc(
+            user,
+            "Shared opening line.\nThe original author's reading.\n",
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let boundary_edited = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(user))
+        .expect("boundary after edit");
+    anyhow::ensure!(
+        boundary_edited != boundary_base,
+        "an edit must MOVE the document's umem-heap boundary (the dregg-doc-on-umem ride)"
+    );
+
+    // ── 3. STITCH → a first-class conflict, held off the heap. ──
+    let pre_stitch = shared.borrow().height();
+    desk.update(&mut cx, |d, cx| {
+        d.bake_stitch_branch(user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let conflicts = desk
+        .update(&mut cx, |d, _cx| d.bake_conflict_count(user))
+        .unwrap_or(0);
+    anyhow::ensure!(
+        conflicts >= 1,
+        "a stitch of two divergent edits to one region must be a FIRST-CLASS conflict \
+         (got {conflicts})"
+    );
+    anyhow::ensure!(
+        shared.borrow().height() == pre_stitch,
+        "a CONFLICTED stitch is HELD, not committed (no heap write while the conflict stands)"
+    );
+
+    // ── 4. Prove resolve→publish on a SEPARATE document (so the shot keeps the live
+    //    conflict + resolution buttons in frame). Same flow on the treasury cell, then
+    //    resolve choice 0 and assert the merge publishes + a receipt lands + boundary
+    //    moves. The user-cell conflict stays live for the capture. ──
+    desk.update(&mut cx, |d, cx| {
+        d.bake_open_doc(treasury);
+        d.bake_edit_doc(treasury, "Proof base.\n");
+        d.bake_fork_branch(treasury);
+        d.bake_set_branch_text(treasury, "Proof base.\nco-author proof.\n");
+        d.bake_edit_doc(treasury, "Proof base.\nauthor proof.\n");
+        d.bake_stitch_branch(treasury);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let proof_conflicts = desk
+        .update(&mut cx, |d, _cx| d.bake_conflict_count(treasury))
+        .unwrap_or(0);
+    anyhow::ensure!(proof_conflicts >= 1, "the proof doc must also conflict");
+    let proof_b_before = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(treasury))
+        .expect("proof boundary before");
+    let h_pre_resolve = shared.borrow().height();
+    desk.update(&mut cx, |d, cx| {
+        d.bake_resolve_conflict(treasury, 0, 0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let remaining = desk.update(&mut cx, |d, _cx| d.bake_conflict_count(treasury));
+    anyhow::ensure!(
+        remaining.is_none() || remaining == Some(0),
+        "resolving collapses the antichain — no conflict remains (got {remaining:?})"
+    );
+    let h_post = shared.borrow().height();
+    anyhow::ensure!(
+        h_post > h_pre_resolve,
+        "publishing the resolved merge lands a REAL verified turn on the umem-heap \
+         ({h_pre_resolve} -> {h_post})"
+    );
+    let receipt = desk
+        .update(&mut cx, |d, _cx| d.bake_last_resolution_receipt(treasury))
+        .expect("the resolution must carry a receipt patch id");
+    let proof_b_after = desk
+        .update(&mut cx, |d, _cx| d.bake_doc_umem_boundary(treasury))
+        .expect("proof boundary after");
+    anyhow::ensure!(
+        proof_b_after != proof_b_before,
+        "publishing the resolution MOVES the document's umem boundary (B0 -> B_published)"
+    );
+
+    // Bring the user-cell editor (with its live ConflictView) to the front for the shot.
+    desk.update(&mut cx, |d, cx| {
+        d.bake_open_doc(user);
+        d.bake_place_doc_window(user, 28.0, 44.0, w - 56.0, h - 96.0);
+        cx.notify();
+    });
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos DOC-COLLAB render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the document \
+         language driven end to end: base committed (umem boundary {}…), fork + co-author \
+         types a divergence + author diverges (boundary moved to {}…), STITCH → {conflicts} \
+         first-class CONFLICT held off the heap (both alternatives attributed, one-click \
+         resolve); a proof doc RESOLVED → published to heap (h{h_pre_resolve} -> {h_post}, \
+         receipt patch #{receipt}, boundary moved). The live ConflictView is in frame.",
+        hex2(&boundary_base),
+        hex2(&boundary_edited),
+    );
+    Ok(())
+}
+
+/// First two bytes of a 32-byte root, hex — a compact boundary tag for bake logs.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn hex2(root: &[u8; 32]) -> String {
+    format!("{:02x}{:02x}", root[0], root[1])
+}
+
+/// **THE CALM WELCOME BAKE** — render the deos desktop's *warm front door*: the calm,
+/// breathing default a never-greeted newcomer wakes up to. The dense workbench bake
+/// (`--render-desktop`) shows the power end of the bar — every surface open; this bake
+/// shows the OTHER end: a bare room of glowing cell-icons, the live World summary, the
+/// gentle "type anything" Spotter pill, and the warm WELCOME card greeting the stranger
+/// with the image's REAL shape (its true cell count + history height) over four inviting
+/// doors. NOTHING else is opened — the litmus is a five-year-old gladly clicking around.
+///
+/// The bake asserts the calm default is genuinely calm (no windows open), the welcome is
+/// shown, and its greeting names the live world; then captures `<out>.png`. Hermetic
+/// (a throwaway sidecar). Default 1600x1000 (overridable via `--render-size`).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::DeosDesktop;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A hermetic, fresh sidecar so `welcomed = false` → the warm card shows (a fresh
+    // image is exactly the newcomer's first run). Start clean.
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-welcome-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    // The live verified image — the SAME `World` the cockpit runs.
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [_treasury, _service, user] = anchors;
+    let shared = Rc::new(RefCell::new(world));
+    let height = shared.borrow().height();
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk_h = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // The calm default is genuinely CALM: a fresh image opens onto the warm welcome,
+    // and NOTHING else is open (no windows) — breathing room, not everything-at-once.
+    let (shown, greeting, open_windows) = desk_h.update(&mut cx, |desk, _cx| {
+        (
+            desk.bake_welcome_is_shown(),
+            desk.bake_welcome_greeting(),
+            desk.bake_total_window_count(),
+        )
+    });
+    anyhow::ensure!(
+        shown,
+        "a fresh image must open onto the warm WELCOME card (the calm front door)"
+    );
+    anyhow::ensure!(
+        open_windows == 0,
+        "the calm default must open NOTHING else — a welcoming first view, not the dense \
+         workbench (got {open_windows} open window(s))"
+    );
+    anyhow::ensure!(
+        greeting.contains(&height.to_string()),
+        "the welcome greeting must name the live image's REAL history height ({height})"
+    );
+
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos WELCOME render -> {out}.png ({ww}x{hh}, logical {w}x{h}); the calm front \
+         door — a warm greeting over the live image ({} cells, height {height}), a gentle \
+         'type anything' Spotter pill, and four inviting doors; nothing else open.",
+        shared.borrow().ledger().iter().count()
+    );
+    Ok(())
+}
+
+/// **THE deos DESKTOP BAKE** — render the Windows-NT / Pharo-Smalltalk workbench
+/// over the live verified World, headless, and capture the PNG.
+///
+/// Mounts [`starbridge_v2::deos_desktop::DeosDesktop`] over the real `demo_world`
+/// image: each ledger cell becomes a draggable desktop icon; double-click opens an
+/// NT inspector window; right-click opens a context menu of REAL actuations (each a
+/// verified turn). To prove the metaphors are LIVE (not a static mock), the bake:
+///   1. opens two inspector windows (the treasury + the user cell),
+///   2. fires a REAL right-click actuation (transfer treasury → user) — a verified
+///      turn that advances `World::height`,
+///   3. drags an icon to a new position and asserts the layout PERSISTED to the
+///      sidecar (the #1 missing thing — spatial persistence),
+///   4. opens a context menu so the right-click ACTUATION surface is visible in the
+///      shot,
+/// then bakes `<out>.png`. Uses a throwaway sidecar path so the bake is hermetic.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "embedded-executor"
+))]
+fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, WinKindTag, id_hex};
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // A hermetic sidecar for this bake (so the persistence write/read is real but
+    // does not clobber a user's layout). Start clean.
+    let layout_path =
+        std::env::temp_dir().join(format!("deos-desktop-bake-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&layout_path);
+
+    // The live verified image — the SAME `World` the cockpit runs.
+    let (world, anchors) = starbridge_v2::world::demo_world();
+    let [treasury, service, user] = anchors;
+    let pre_height = world.height();
+    let shared = Rc::new(RefCell::new(world));
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+
+    let world_for_view = shared.clone();
+    let lp = layout_path.clone();
+    // The desktop is hosted under a `gpui_component::Root` (its document editors are
+    // real `InputState` widgets, which reach `Root` for overlay/focus plumbing). We
+    // keep a handle to the inner `DeosDesktop` entity to drive the bake steps.
+    let desk_cell: Rc<RefCell<Option<gpui::Entity<DeosDesktop>>>> = Rc::new(RefCell::new(None));
+    let desk_sink = desk_cell.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |window, cx| {
+        let view = cx.new(|cx| DeosDesktop::new(world_for_view, user, lp, window, cx));
+        *desk_sink.borrow_mut() = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+    cx.run_until_parked();
+    let desk_h = desk_cell.borrow().clone().expect("desktop entity captured");
+
+    // 1. Open an inspector + a TRANSCRIPT (receipt log) window — denser surfaces.
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_window(treasury);
+        desk.bake_open_transcript(user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // 2. Fire a REAL right-click actuation: transfer treasury → user (a verified
+    //    turn). Assert the World advanced.
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_actuate_transfer(treasury, user, 1_000);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let mid_height = shared.borrow().height();
+    anyhow::ensure!(
+        mid_height > pre_height,
+        "the desktop actuation must commit a REAL verified turn (height {pre_height} -> {mid_height})"
+    );
+
+    // 3. Open a DOCUMENT EDITOR on the user cell and TYPE into it — each edit is a
+    //    receipted patch + a verified revision turn (the document IS the cell).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_doc(user);
+        desk.bake_edit_doc(
+            user,
+            "# deos document\nA document is a cell.\nEditing is receipted patches.\n",
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let doc_height = shared.borrow().height();
+    anyhow::ensure!(
+        doc_height > mid_height,
+        "a document edit must land a REAL verified revision turn (height {mid_height} -> {doc_height})"
+    );
+    let doc_text = desk_h.update(&mut cx, |desk, _cx| desk.bake_doc_text(user));
+    anyhow::ensure!(
+        doc_text.contains("A document is a cell."),
+        "the document editor must hold the authored prose"
+    );
+
+    // 4. COMPOSE: transclude the treasury cell INTO the user's document — a genuine
+    //    cross-cell compose (receipted patch + verified turn).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_transclude(treasury, user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let post_height = shared.borrow().height();
+    anyhow::ensure!(
+        post_height > doc_height,
+        "the compose/transclude must land a REAL verified turn (height {doc_height} -> {post_height})"
+    );
+    let composed = desk_h.update(&mut cx, |desk, _cx| desk.bake_doc_text(user));
+    anyhow::ensure!(
+        composed.contains("{transclude dregg://"),
+        "the composed document must carry the transclusion"
+    );
+
+    // 4b. Open the LINKS window + an INSPECTOR on the user doc-cell — the document is
+    //     now wired into the rest of the desktop: the Links window resolves the
+    //     transclusion to treasury's LIVE faces (an outbound link →) and the inspector
+    //     reflects the committed prose. Assert the structured backlink resolves both
+    //     ways (user → treasury outbound, treasury ← user backlink).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_links(user);
+        desk.bake_open_window(user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let (out_links, back_links) =
+        desk_h.update(&mut cx, |desk, _cx| desk.bake_doc_links(user, treasury));
+    anyhow::ensure!(
+        out_links,
+        "the user document's Links must resolve an outbound transclusion → treasury"
+    );
+    anyhow::ensure!(
+        back_links,
+        "treasury's Links must show a backlink ← the user document that mentions it"
+    );
+
+    // 4c. THE DOCUMENT LANGUAGE — conflicts as first-class STATES. On the service cell:
+    //     author a base, fork a confined co-author draft, diverge it, AND diverge the
+    //     main — then STITCH (the pushout). Two edits to the same region become a
+    //     first-class CONFLICT (an antichain of live alternatives, each attributed),
+    //     HELD (no heap write) and rendered as the live ConflictView with one-click
+    //     resolution choices. We assert the conflict arose, RESOLVE it (the resolution
+    //     is itself a receipted patch), and assert the merge PUBLISHES to the heap.
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_doc(service);
+        desk.bake_edit_doc(service, "A shared opening line.\n");
+        desk.bake_fork_branch(service);
+        desk.bake_diverge_branch(service, "alice's ending.\n");
+        desk.bake_edit_doc(service, "A shared opening line.\nbob's ending.\n");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let pre_stitch = shared.borrow().height();
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_stitch_branch(service);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let conflict_n = desk_h
+        .update(&mut cx, |desk, _cx| desk.bake_conflict_count(service))
+        .unwrap_or(0);
+    anyhow::ensure!(
+        conflict_n >= 1,
+        "a stitch of two divergent edits to one region must be a FIRST-CLASS conflict \
+         (got {conflict_n})"
+    );
+    anyhow::ensure!(
+        shared.borrow().height() == pre_stitch,
+        "a CONFLICTED stitch is HELD, not committed (no heap write while the conflict stands)"
+    );
+    // The conflict is LEFT live so the final shot renders the ConflictView (both
+    // alternatives side-by-side, attributed, with one-click resolution choices). The
+    // full resolve→publish loop is asserted by the `deos_desktop_conflict_is_a_state`
+    // test; here the bake proves the conflict STATE arises + renders.
+
+    // 4d. THE DOCUMENT EXPLORER — the Pharo-moldable inspector of the user document's
+    //     patch substance. Open it, select the History face, and SCRUB to an early
+    //     revision (the time-travel scrubber, via `replay_to`). Assert the replayed
+    //     early revision differs from the tip — real history reflection, not a flat
+    //     readout. The window renders in the final shot (History · Graph · Blame tabs).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_doc_explorer(user);
+        desk.bake_doc_explorer_tab(user, 0); // History face
+        desk.bake_doc_explorer_scrub(user, Some(0)); // scrub to the first revision
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let tip_text = desk_h
+        .update(&mut cx, |desk, _cx| desk.bake_doc_explorer_at(user, None))
+        .unwrap_or_default();
+    let early_text = desk_h
+        .update(&mut cx, |desk, _cx| {
+            desk.bake_doc_explorer_at(user, Some(0))
+        })
+        .unwrap_or_default();
+    anyhow::ensure!(
+        early_text != tip_text,
+        "the Document Explorer's time-travel scrubber must replay an EARLIER revision \
+         distinct from the tip (real `replay_to` history, not a flat readout)"
+    );
+    let (atoms, _authors) = desk_h
+        .update(&mut cx, |desk, _cx| desk.bake_doc_explorer_stats(user))
+        .unwrap_or((0, 0));
+    anyhow::ensure!(
+        atoms >= 1,
+        "the Document Explorer's DocGraph face must reflect the document's live atoms"
+    );
+
+    // 4e. THE WORLD EXPLORER — the "My Computer" of the verified World. Open it on the
+    //     Conservation face (the Σ-balance breakdown over the live ledger). Renders in
+    //     the final shot (ledger · chronicle · conservation tabs).
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_world_explorer();
+        desk.bake_world_explorer_tab(2); // Conservation face
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // 4e′. THE CONTENT-IR BRIDGE — a desktop window whose body IS a real
+    //      `deos_view::ViewNode` (a card-as-cell) rendered through deos-view's NATIVE
+    //      renderer (`AppletView`), beside the native-chrome surfaces. Open it, render,
+    //      and assert (1) the desktop minted the IR renderer entity (its window body is a
+    //      rendered portable tree), and (2) the WEB renderer paints the IDENTICAL
+    //      `ViewNode` to HTML — the same tree, two backends; the native desktop is one.
+    //      Gated on `card-pane` (the default build has it; the gpui-free `headless` bake
+    //      does not, so the step is skipped there — the window-type still falls back to
+    //      the inspector body and compiles).
+    #[cfg(feature = "card-pane")]
+    {
+        // Open the World-Status pane (the reflective surface) as a real desktop window,
+        // render, and mint its live `AppletView` entity.
+        desk_h.update(&mut cx, |desk, cx| {
+            desk.bake_open_viewnode_pane();
+            cx.notify();
+        });
+        cx.run_until_parked();
+        // The live renderer entity is minted lazily when the window first renders.
+        let has_pane = desk_h.update(&mut cx, |desk, _cx| desk.bake_viewnode_has_pane());
+        anyhow::ensure!(
+            has_pane,
+            "the desktop must host the World-Status pane — a window whose body is a real \
+             deos_view::ViewNode rendered through deos-view's native renderer"
+        );
+
+        // THE REFLECTIVE-COCKPIT LOOP IN THE SHIPPED DESKTOP — capture the panel BEFORE
+        // the agent touches it, run the agent's reflect-then-rewrite loop against the
+        // SHIPPED pane, then capture AFTER. The two desktop frames differ: the agent
+        // rewrote a real cockpit surface and the change reached the glass.
+        // First dismiss the one-time welcome card + raise the World-Status pane into a
+        // clear area so its body (the surface the agent rewrites) is visible + unoccluded.
+        desk_h.update(&mut cx, |desk, cx| {
+            if desk.bake_welcome_is_shown() {
+                desk.bake_welcome_door(0);
+            }
+            desk.bake_place_viewnode_window(360.0, 110.0, 520.0, 360.0);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let vnode_before = cx.capture_screenshot(window.into())?;
+        vnode_before.save(format!("{out}.viewnode-before.png"))?;
+
+        // ONE process-global SpiderMonkey runtime drives BOTH agent loops (the rewrite +
+        // the compose) — its engine is one-shot per process, so it is booted once here.
+        let mut rt = deos_js::JsRuntime::new()
+            .map_err(|e| anyhow::anyhow!("boot SpiderMonkey for the agent loops: {e}"))?;
+
+        let rewrite = desk_h
+            .update(&mut cx, |desk, cx| {
+                desk.bake_agent_rewrites_viewnode_pane(&mut rt, cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's reflect-then-rewrite loop failed: {e}"))?;
+        anyhow::ensure!(
+            rewrite.reflected_header && rewrite.reflected_rows == 3,
+            "REFLECT-ON: the agent must read the live cockpit surface's own tree (the \
+             `World Status` header + its 3 status rows it did NOT author)"
+        );
+        anyhow::ensure!(
+            !rewrite.before_has_button && rewrite.after_has_button && rewrite.live_after_has_button,
+            "REWRITE: the agent must add a `refresh` button the live pane did not have — \
+             and the SHIPPED pane entity must now carry it (the surface re-rendered)"
+        );
+        anyhow::ensure!(
+            rewrite.receipt_count == 2 && rewrite.blamed_agent,
+            "ACCOUNTABLE: the rewrite's two gestures (addButton + relabel) must each commit \
+             a receipted provenance turn, blamed on the agent (got {} receipt(s), blamed={})",
+            rewrite.receipt_count,
+            rewrite.blamed_agent
+        );
+
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let vnode_after = cx.capture_screenshot(window.into())?;
+        vnode_after.save(format!("{out}.viewnode-after.png"))?;
+        anyhow::ensure!(
+            vnode_before.as_raw() != vnode_after.as_raw(),
+            "the agent's rewrite must change the SHIPPED desktop window — the World-Status \
+             pane's `refresh` button + `(live)` relabel must reach pixels (before == after)"
+        );
+
+        // The SAME portable tree the native pane hosts also renders to HTML — renderer
+        // independence (the same World-Status ViewNode, native + web).
+        let html = starbridge_v2::deos_desktop::viewnode_pane::status_panel_html();
+        anyhow::ensure!(
+            html.contains("World Status") && html.contains("receipts: 12"),
+            "the web renderer must render the IDENTICAL World-Status ViewNode the desktop \
+             hosts (renderer independence: the same tree, native + web)"
+        );
+
+        // 4e″. THE AGENT AS CO-AUTHOR — the DEEPER reflective loop. Past rewriting one
+        //      surface: a confined agent COMPOSES a BRAND-NEW cockpit surface — a World
+        //      Board — from an EMPTY root, informed by reading the live World, and the
+        //      board is mounted as a REAL second `viewnode_pane` window. Capture BEFORE
+        //      (no board) and AFTER (the agent's composed board on the glass); the frames
+        //      differ. The agent stopped editing the cockpit and co-authored a surface OF it.
+        let board_before = cx.capture_screenshot(window.into())?;
+        board_before.save(format!("{out}.world-board-before.png"))?;
+
+        let board = desk_h
+            .update(&mut cx, |desk, cx| {
+                desk.bake_agent_composes_world_board(&mut rt, cx)
+            })
+            .map_err(|e| anyhow::anyhow!("the agent's compose-from-scratch loop failed: {e}"))?;
+        anyhow::ensure!(
+            board.started_empty,
+            "COMPOSE-FROM-SCRATCH: the agent's authoring surface must begin as a bare empty \
+             root (it composes a NEW surface, it does not tweak a pre-existing pane)"
+        );
+        anyhow::ensure!(
+            board.crawled_cells >= 1,
+            "READ-THE-WORLD: the agent must crawl the live ledger's real cells to decide \
+             what to surface (got {})",
+            board.crawled_cells
+        );
+        anyhow::ensure!(
+            board.composed_title && board.composed_bind_rows == 3 && board.composed_button,
+            "COMPOSE: the agent must author the board from nothing — a title + 3 LIVE \
+             state-bound rows + a refresh button (title={}, binds={}, button={})",
+            board.composed_title,
+            board.composed_bind_rows,
+            board.composed_button
+        );
+        anyhow::ensure!(
+            board.receipt_count == 5 && board.blamed_agent,
+            "ACCOUNTABLE: the composition's 5 gestures (title + 3 binds + button) must each \
+             commit a receipted provenance turn, blamed on the agent (got {} receipt(s), \
+             blamed={})",
+            board.receipt_count,
+            board.blamed_agent
+        );
+        anyhow::ensure!(
+            board.mounted_window,
+            "MOUNT: a REAL second viewnode_pane window must host the agent-composed board"
+        );
+
+        // Raise the board window into a clear area so its composed body reaches pixels,
+        // then capture AFTER — the agent's from-scratch surface on the live desktop.
+        desk_h.update(&mut cx, |desk, cx| {
+            desk.bake_place_window(
+                starbridge_v2::deos_desktop::viewnode_pane::world_board_window_cell(),
+                170.0,
+                150.0,
+                480.0,
+                300.0,
+            );
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+        cx.run_until_parked();
+        let board_after = cx.capture_screenshot(window.into())?;
+        board_after.save(format!("{out}.world-board-after.png"))?;
+        anyhow::ensure!(
+            board_before.as_raw() != board_after.as_raw(),
+            "the agent's COMPOSED board must reach the SHIPPED desktop — a new surface the \
+             agent authored from scratch must appear on the glass (before == after)"
+        );
+    }
+
+    // 4f. THE SPOTTER — the Pharo command palette. Open it with a query, assert it ranks
+    //     real candidates over the live cells, then dispatch to prove it jumps. (We then
+    //     re-open it for the final shot so the palette renders over the desktop.)
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_spotter("doc");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let spot_matches = desk_h
+        .update(&mut cx, |desk, _cx| desk.bake_spotter_match_count())
+        .unwrap_or(0);
+    anyhow::ensure!(
+        spot_matches >= 1,
+        "the Spotter must rank at least one candidate for 'doc' over the live cells \
+         (got {spot_matches})"
+    );
+
+    // 5. Drag the treasury icon to a new position and assert the layout PERSISTED.
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_drag_icon(treasury, 720.0, 540.0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let persisted = DesktopLayout::load(&layout_path);
+    anyhow::ensure!(
+        persisted
+            .icons
+            .iter()
+            .any(|p| p.cell == id_hex(&treasury) && (p.x - 720.0).abs() < 1.0),
+        "the dragged icon position must PERSIST to the sidecar (spatial persistence)"
+    );
+    anyhow::ensure!(
+        persisted.docs.iter().any(|d| d.cell == id_hex(&user)),
+        "the authored document prose must PERSIST to the sidecar (content persistence)"
+    );
+
+    // 6. Open the WORKFLOW-COMPOSER over the service cell: compose intents into a
+    //    workflow, pin a baseline, then add a WIDENING intent (Seal) — and assert the
+    //    REAL flow-refinement decision (dregg_deploy::refine) flips from refines to
+    //    diverges. This exercises the proven `decide_refines` game, not a mock.
+    desk_h.update(&mut cx, |desk, cx| {
+        use starbridge_v2::deos_desktop::IntentKind;
+        desk.bake_open_workflow(service);
+        desk.bake_workflow_add(service, IntentKind::Transfer);
+        desk.bake_workflow_add(service, IntentKind::Grant);
+        // Pin the baseline B = {Transfer, Grant}.
+        desk.bake_workflow_pin_baseline(service);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    // Within the baseline's intent shapes → REFINES.
+    desk_h.update(&mut cx, |desk, cx| {
+        use starbridge_v2::deos_desktop::IntentKind;
+        desk.bake_workflow_add(service, IntentKind::Transfer);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let refines_within = desk_h.update(&mut cx, |desk, _cx| desk.bake_workflow_refines(service));
+    anyhow::ensure!(
+        refines_within,
+        "a workflow whose steps stay within the baseline envelope must REFINE it (the proven A ≤ᶠ B game)"
+    );
+    // A WIDENING intent (Seal) outside the envelope → DIVERGES.
+    desk_h.update(&mut cx, |desk, cx| {
+        use starbridge_v2::deos_desktop::IntentKind;
+        desk.bake_workflow_add(service, IntentKind::Seal);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let diverges_widened = desk_h.update(&mut cx, |desk, _cx| desk.bake_workflow_refines(service));
+    anyhow::ensure!(
+        !diverges_widened,
+        "a workflow that widens beyond its baseline (adds Seal) must NOT refine it — the refinement game must catch the widening"
+    );
+    let wf_letters = desk_h.update(&mut cx, |desk, _cx| desk.bake_workflow_letters(service));
+    anyhow::ensure!(
+        wf_letters == 4,
+        "the composed workflow's flow-Proc must fire one letter per step (4 steps -> 4 letters), got {wf_letters}"
+    );
+
+    // 7. CASCADE all open windows (the Window→Cascade command — a pure layout
+    //    actuation that fires NO verified turn) so the dense workbench reads legibly,
+    //    then assert the World's conservation invariant (Σ balance = 0) the new
+    //    World-summary widget reflects still holds after every committed turn.
+    let pre_cascade_height = shared.borrow().height();
+    let sigma_before = desk_h.update(&mut cx, |desk, _cx| desk.bake_world_balance_sum());
+    // TILE the windows into a grid so every surface (the enriched inspector with its
+    // state-slots + per-cell turns + balance gauge, the transcript, the document, the
+    // workflow composer) is visible at once — and prove it fires no verified turn.
+    let _tiled = desk_h.update(&mut cx, |desk, cx| {
+        let n = desk.bake_tile_windows();
+        cx.notify();
+        n
+    });
+    cx.run_until_parked();
+    let post_cascade_height = shared.borrow().height();
+    anyhow::ensure!(
+        post_cascade_height == pre_cascade_height,
+        "window arrangement (tile) is a PURE layout actuation — it must NOT fire a \
+         verified turn (height {pre_cascade_height} -> {post_cascade_height})"
+    );
+    // The conservation sum (Σ balance, reflected by the World-summary widget) is
+    // INVARIANT under value-conserving turns AND under the layout actuation — the
+    // net of issuer wells vs. accounts does not move.
+    let sigma = desk_h.update(&mut cx, |desk, _cx| desk.bake_world_balance_sum());
+    anyhow::ensure!(
+        sigma == sigma_before,
+        "the World's Σ balance (the conservation net the widget shows) must be invariant \
+         under the cascade layout actuation ({sigma_before} -> {sigma})"
+    );
+    let total_wins = desk_h.update(&mut cx, |desk, _cx| desk.bake_total_window_count());
+
+    // 8. Open the PROPERTY inspector/editor over the treasury cell, and a deep
+    //    right-click context menu over the service cell — both visible in the shot.
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_open_properties(treasury);
+        desk.bake_open_menu(service, 60.0, 250.0);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    // 9. THE PHARO HALO — the "mold it in place" gesture. Select a cell-icon and its
+    //    ring of direct-manipulation handles floats (inspect · explore · open-as-doc ·
+    //    fork · properties · the verified-turn affordance). Each handle fires the SAME
+    //    actuation the right-click menu does — prove it FUNCTIONALLY (the Inspect handle
+    //    opens a real inspector window), then leave a WINDOW selected so the ring renders
+    //    around it in the final shot (the halo over the live workbench).
+    let pre_halo_wins = desk_h.update(&mut cx, |desk, _cx| desk.bake_total_window_count());
+    let halo_handles = desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_select_icon(service);
+        cx.notify();
+        desk.bake_halo_handle_count()
+    });
+    anyhow::ensure!(
+        halo_handles >= 5,
+        "a selected cell-icon must float a ring of halo handles (got {halo_handles})"
+    );
+    desk_h.update(&mut cx, |desk, cx| {
+        desk.bake_halo_fire_inspect();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let post_halo_wins = desk_h.update(&mut cx, |desk, _cx| desk.bake_total_window_count());
+    anyhow::ensure!(
+        post_halo_wins > pre_halo_wins,
+        "firing the halo's Inspect handle must REUSE the actuation and open a window \
+         ({pre_halo_wins} -> {post_halo_wins}) — the ring is a spatial face on the same verbs"
+    );
+    // Leave a surface molded so the halo ring renders around it in the final shot.
+    // The user cell-icon sits in the clear top-left margin (above the context menu,
+    // clear of the centered overlays), so its full ring of handles reads unobstructed.
+    // Dismiss the one-time welcome card first so it does not cover the workbench.
+    desk_h.update(&mut cx, |desk, cx| {
+        if desk.bake_welcome_is_shown() {
+            desk.bake_welcome_door(0);
+        }
+        desk.bake_select_icon(user);
+        cx.notify();
+    });
+    cx.run_until_parked();
+
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+
+    let captured = cx.capture_screenshot(window.into())?;
+    let (ww, hh) = (captured.width(), captured.height());
+    captured.save(format!("{out}.png"))?;
+    let docwins = desk_h.update(&mut cx, |desk, _cx| desk.bake_window_count(true));
+    let _ = std::fs::remove_file(&layout_path);
+    println!(
+        "OK deos DESKTOP render -> {out}.png ({ww}x{hh}, logical {w}x{h}); NT/Pharo workbench \
+         over the live verified World — {} cell-icons; {total_wins} tiled window(s) \
+         (inspector with state-slots + per-cell turns + a balance gauge, transcript, {docwins} \
+         document editor); a TASKBAR of open-window stubs + a World-summary widget (height, \
+         cells, receipts, Σ balance = {sigma} — invariant under transfers + layout); a WORKFLOW COMPOSER (the proven \
+         dregg_deploy::refine A ≤ᶠ B game decides refinement — a widening Seal DIVERGES); a deep \
+         right-click context menu (now with Cascade/Tile/Close-all window commands) AND a \
+         property inspector/editor open; the PHARO HALO floating its ring of \
+         direct-manipulation handles on a molded surface (inspect · explore · open-as-doc · \
+         fork · properties · the verified-turn affordance · resize · close — each firing the \
+         SAME actuation the right-click menu does); a receipted document edit + a cross-cell \
+         TRANSCLUDE compose; REAL verified turns (height {pre_height} -> {post_height}); \
+         tile/cascade are pure layout actuations (no turn); icon drag + authored prose \
+         persisted to the sidecar.",
+        shared.borrow().cell_count()
+    );
+    Ok(())
 }
 
 /// Parse the `--render-guest <out>` (or `--render-guest=<out>`) argument — the
@@ -1193,6 +2675,40 @@ fn render_login_arg(args: &[String]) -> Option<String> {
             return it.next().cloned();
         }
         if let Some(rest) = a.strip_prefix("--render-login=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-touch <out>` (or `=<out>`) — the TOUCH-UI bake (the
+/// graphideOS / mobile shape: a bottom-bar mode switch, a tappable cell garden,
+/// a long-press face sheet). `<out>.png` is written. See `render_touch_headless`.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_touch_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-touch" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-touch=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse `--render-mode <name>` — the touch-shell mode the bake selects
+/// (Inhabit/Author/Dev/Inspect/Operate, matched case-insensitively against
+/// [`touch::TouchShell::select_mode_named`]). `None` keeps the default (Inhabit).
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_mode_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-mode" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-mode=") {
             return Some(rest.to_string());
         }
     }
@@ -4047,6 +5563,100 @@ fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         "OK headless login render -> {out}.png ({}x{}, logical {w}x{h}); LIVE login::LoginSurface.",
         captured.width(),
         captured.height()
+    );
+    Ok(())
+}
+
+/// THE HEADLESS TOUCH RENDER — bake the real [`touch::TouchShell`] element tree
+/// (the graphideOS / mobile shape) offscreen to a PNG, no GPU and no window, the
+/// same headless capture path the cockpit + login bakes use. Proves the three
+/// touch surfaces lay out: the thumb-reachable BOTTOM TAB BAR (the five modes),
+/// the tappable CELL GARDEN (the AOL-wonder home over the live image), and — by
+/// default — a LONG-PRESS FACE SHEET opened on the image's brightest cell (its
+/// faces + the lit ACTUATE affordance). `--render-mode <name>` selects a mode and
+/// shows it CLEAN (no sheet); `--render-size WxH` defaults to a phone 390x844.
+///
+/// The shell drives the SAME live `World` the desktop cockpit drives (the fully-
+/// seeded `demo_world` — real cells, real glows from the dynamics stream), so the
+/// garden's glowing cards + the sheet's reflected faces are the running image's
+/// actual state, never decorative.
+#[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
+fn render_touch_headless(out: &str, w: f32, h: f32, mode: Option<&str>) -> anyhow::Result<()> {
+    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::touch;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(|cx| gpui_component::init(cx));
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    // The fully-seeded demo image — the SAME `World` the desktop cockpit runs, so the
+    // garden's glows are the running image's actual recent activity.
+    let (world, _anchors) = world::demo_world();
+    // The brightest live cell — what the default bake opens its long-press sheet on
+    // (the image's current hotspot, so the sheet shows a cell with real faces + glow).
+    let hotspot = {
+        let room = starbridge_v2::wonder::WonderRoom::build(&world);
+        room.brightest()
+            .or_else(|| room.cells.first())
+            .map(|g| g.cell)
+    };
+    let shared = Rc::new(RefCell::new(world));
+    let mode_owned = mode.map(|s| s.to_string());
+
+    let window = cx.open_window(size(px(w), px(h)), |window, cx| {
+        let view = cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let mut shell = touch::TouchShell::new(shared.clone(), focus);
+            match &mode_owned {
+                // A named mode → show that surface CLEAN (no sheet over it).
+                Some(name) => {
+                    if !shell.select_mode_named(name) {
+                        eprintln!("render-mode: no mode named `{name}` — keeping default");
+                    }
+                }
+                // The default bake → the home garden with a LONG-PRESS SHEET open on
+                // the hotspot, so the one shot shows all three surfaces at once.
+                None => {
+                    if let Some(cell) = hotspot {
+                        shell.open_sheet(cell);
+                    }
+                }
+            }
+            shell
+        });
+        // Wrap in a gpui-component `Root` (the window-root weld) so any kit widget
+        // that reads the `Root` global paints clean (the cockpit pattern).
+        cx.new(|cx| gpui_component::Root::new(gpui::AnyView::from(view), window, cx))
+    })?;
+
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let captured = cx.capture_screenshot(window.into())?;
+    captured.save(format!("{out}.png"))?;
+    println!(
+        "OK headless touch render -> {out}.png ({}x{}, logical {w}x{h}{}); \
+         LIVE touch::TouchShell — bottom tab bar · cell garden · {}.",
+        captured.width(),
+        captured.height(),
+        mode.map(|m| format!(", mode={m}")).unwrap_or_default(),
+        if mode.is_some() {
+            "mode surface"
+        } else {
+            "long-press face sheet"
+        }
     );
     Ok(())
 }

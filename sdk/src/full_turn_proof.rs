@@ -990,6 +990,345 @@ pub fn prove_effect_vm_rotated_ir2_with_caveat(
         .map_err(|e| SdkError::InvalidWitness(format!("rotated IR-v2 proof: {e}")))
 }
 
+/// **THE STAGED UMEM-COHORT PROVER (VK-RISK-FREE — NOT the deployed default).** The
+/// rotation-flip's deployed-routing precursor: given one effect-leg's universal-memory touch
+/// (its pre-state projection + the Blum op trace), it routes to the FIXED per-effect cohort
+/// descriptor (`umem_cohort_lean_key_for_effect` → `umem_cohort_descriptor_json`, the byte-pinned
+/// `UMEM_COHORT_V1_STAGED_REGISTRY_TSV` emitted from the verified Lean
+/// `EffectVmEmitUMemCohort.umemCohortRegistry`), builds the single-domain width-7 rows + the REAL
+/// `UMemBoundaryWitness` ([`dregg_turn::umem::umem_cohort_proving_inputs_from`]), and proves
+/// through the DEPLOYED-form umem prover [`prove_vm_descriptor2_umem`] with that real boundary —
+/// NOT `UMemBoundaryWitness::default()`. Self-verifies before return.
+///
+/// This is the architectural-unknown resolution made executable: a real turn proves as PER-EFFECT
+/// fixed-cohort legs (mirroring the deployed rotated routing — one descriptor per leg), each
+/// single-domain. A multi-domain leg fails closed (the trace generator's single-domain gate); the
+/// fixed cohort descriptor's baked-in domain is checked against the leg's actual domain.
+///
+/// STAGED: the deployed default ([`prove_effect_vm_rotated_ir2_with_caveat`] / the IVC
+/// `mint_from_block_witnesses`) stays per-map / per-rotated-descriptor with a DEFAULT umem
+/// boundary; this entry is opt-in and never on the live wire. The VK flag-day welds the umem leg
+/// INTO the rotated descriptor — until then this proves the umem-form reconciliation STANDALONE,
+/// exactly as the cohort emitter's width-7 descriptors model it.
+#[cfg(feature = "prover")]
+pub fn prove_umem_cohort_staged(
+    effect: &VmEffectKind,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+) -> Result<
+    dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, UMemOpSpec, VmConstraint2, parse_vm_descriptor2,
+        prove_vm_descriptor2_umem, verify_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm_descriptors::{
+        umem_cohort_descriptor_json, umem_cohort_lean_key_for_effect,
+    };
+
+    // Resolve the FIXED cohort descriptor for this effect-leg (fail closed for non-members).
+    let key = umem_cohort_lean_key_for_effect(effect).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "umem cohort staged: effect {effect:?} is not a umem-cohort member (stays per-map)"
+        ))
+    })?;
+    let json = umem_cohort_descriptor_json(key).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "umem cohort staged: '{key}' not in the staged umem cohort registry"
+        ))
+    })?;
+    let desc = parse_vm_descriptor2(json)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort descriptor parse: {e}")))?;
+
+    // Bridge the leg's per-turn umem witness into the FIXED single-domain cohort form (the
+    // trace generator fails closed on a multi-domain leg).
+    let inputs = dregg_turn::umem::umem_cohort_proving_inputs_from(pre, ops)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort trace generation: {e}")))?;
+
+    // The fixed descriptor's baked-in domain MUST match the leg's actual domain (the cohort
+    // descriptor carries the domain as a constant; a mismatch would prove a different plane's
+    // reconciliation than the leg touched).
+    let desc_domain = match desc.constraints.first() {
+        Some(VmConstraint2::UMemOp(UMemOpSpec { domain, .. })) => *domain,
+        _ => {
+            return Err(SdkError::InvalidWitness(format!(
+                "umem cohort staged: descriptor '{key}' carries no umem-op constraint"
+            )));
+        }
+    };
+    if desc_domain != inputs.domain {
+        return Err(SdkError::InvalidWitness(format!(
+            "umem cohort staged: descriptor '{key}' is domain {desc_domain} but the leg touches \
+             domain {}",
+            inputs.domain
+        )));
+    }
+
+    // Prove through the DEPLOYED-form umem prover with the REAL boundary; self-verify.
+    let proof = prove_vm_descriptor2_umem(
+        &desc,
+        &inputs.rows,
+        &[],
+        &MemBoundaryWitness::default(),
+        &[],
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("umem cohort IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&desc, &proof, &[])
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort self-verify: {e}")))?;
+    Ok(proof)
+}
+
+/// **THE STAGED MULTI-DOMAIN UMEM-COHORT PROVER (VK-RISK-FREE — NOT the deployed default).** The
+/// completion of [`prove_umem_cohort_staged`] to the effects whose state touch spans MORE THAN ONE
+/// domain in a single effect (the NOTE/BRIDGE economic verbs — a `nullifiers`-domain freshness
+/// insert + a `heap`-domain balance write), on which the single-domain cohort path fails closed.
+///
+/// Given one effect-leg's multi-domain universal-memory touch (its pre-state projection + the Blum
+/// op trace), it routes to the FIXED per-effect MULTI-DOMAIN cohort descriptor
+/// (`umem_cohort_multidomain_lean_key_for_effect` → `umem_cohort_multidomain_descriptor_json`, the
+/// byte-pinned [`UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV`] emitted from the verified Lean
+/// `EffectVmEmitUMemCohortMulti.umemCohortMultiRegistry`), builds the multi-domain rows + the REAL
+/// `UMemBoundaryWitness` ([`dregg_turn::umem::umem_cohort_multidomain_proving_inputs_from`]), and
+/// proves through the DEPLOYED-form umem prover [`prove_vm_descriptor2_umem`] with that real
+/// boundary. Self-verifies before return.
+///
+/// The fixed descriptor's baked-in per-op domain set (in column order) is checked against the leg's
+/// actual domain set — a mismatch fails closed (the descriptor carries the FIXED domain set its
+/// committed VK backs; it must not prove a different plane-set than the leg touched).
+///
+/// SOUNDNESS SCOPE (honest): the multi-domain cohort leg reconciles each touched domain's boundary
+/// FAITHFULLY and INDEPENDENTLY (the per-domain survival keystones, `noteSpend_post_root` /
+/// `_pre_root`, parametric over the domain). It does NOT by itself bind the CROSS-domain economic
+/// invariant (e.g. balance-credit == spent-note-value) — that is not a memory-reconciliation
+/// property; it rides the effect's own rotated AIR gates (the weld preserves the whole rotated
+/// constraint set). This is the same division as the single-domain cohort.
+///
+/// STAGED: opt-in, never on the live wire; `umem_witness_enabled` untouched. The deployed default
+/// stays per-map until the gated VK epoch.
+#[cfg(feature = "prover")]
+pub fn prove_umem_cohort_multidomain_staged(
+    effect: &VmEffectKind,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+) -> Result<
+    dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, UMemOpSpec, VmConstraint2, parse_vm_descriptor2,
+        prove_vm_descriptor2_umem, verify_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm_descriptors::{
+        umem_cohort_multidomain_descriptor_json, umem_cohort_multidomain_lean_key_for_effect,
+    };
+
+    // Resolve the FIXED multi-domain cohort descriptor for this effect-leg (fail closed for
+    // non-members / single-domain effects).
+    let key = umem_cohort_multidomain_lean_key_for_effect(effect).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "umem multi-domain cohort staged: effect {effect:?} is not a multi-domain umem-cohort \
+             member (single-domain effects use prove_umem_cohort_staged)"
+        ))
+    })?;
+    let json = umem_cohort_multidomain_descriptor_json(key).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "umem multi-domain cohort staged: '{key}' not in the staged multi-domain registry"
+        ))
+    })?;
+    let desc = parse_vm_descriptor2(json).map_err(|e| {
+        SdkError::InvalidWitness(format!("umem multi-domain cohort descriptor parse: {e}"))
+    })?;
+
+    // Bridge the leg's per-turn umem witness into the FIXED multi-domain cohort form (fails closed
+    // on a single-domain or empty leg).
+    let inputs =
+        dregg_turn::umem::umem_cohort_multidomain_proving_inputs_from(pre, ops).map_err(|e| {
+            SdkError::InvalidWitness(format!("umem multi-domain cohort trace generation: {e}"))
+        })?;
+
+    // The fixed descriptor's per-op domains (in column order) MUST match the leg's actual domain
+    // set — the descriptor carries the FIXED plane-set its committed VK backs.
+    let desc_domains: Vec<u32> = desc
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            VmConstraint2::UMemOp(UMemOpSpec { domain, .. }) => Some(*domain),
+            _ => None,
+        })
+        .collect();
+    if desc_domains != inputs.domains {
+        return Err(SdkError::InvalidWitness(format!(
+            "umem multi-domain cohort staged: descriptor '{key}' bakes domains {desc_domains:?} but \
+             the leg touches domains {:?}",
+            inputs.domains
+        )));
+    }
+
+    // Prove through the DEPLOYED-form umem prover with the REAL boundary; self-verify.
+    let proof = prove_vm_descriptor2_umem(
+        &desc,
+        &inputs.rows,
+        &[],
+        &MemBoundaryWitness::default(),
+        &[],
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("umem multi-domain cohort IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&desc, &proof, &[]).map_err(|e| {
+        SdkError::InvalidWitness(format!("umem multi-domain cohort self-verify: {e}"))
+    })?;
+    Ok(proof)
+}
+
+/// **THE ROTATED+UMEM WELD PROVER (STAGED, VK-RISK-FREE) — the last precursor before the gated VK
+/// epoch.** Prove a REAL turn through the WELDED rotated+umem descriptor
+/// ([`dregg_circuit::effect_vm_descriptors::weld_umem_into_rotated_descriptor`]): the WHOLE rotated
+/// R=24 cohort proof (effect semantics, the rotated 46-PI vector with the OLD/NEW state-commit pins)
+/// PLUS the universal-memory reconciliation leg (the cohort `umemOp` over 7 appended columns + the
+/// real [`UMemBoundaryWitness`]), in ONE descriptor / ONE proof.
+///
+/// This is the deployed flag-day weld made executable BEFORE the switch: the per-map memory
+/// reconciliation moves INTO the rotated descriptor as the umem leg, while the rotated PIs stay
+/// intact. It welds the two reconciliation seams the staged cohort leg ([`prove_umem_cohort_staged`])
+/// named — the 0-PI umem leg now rides the rotated descriptor's committed PI vector (so the IVC
+/// fold's `old_root`/`new_root` accessors keep working over the welded leg).
+///
+/// `effects` is the turn's homogeneous rotated cohort slice (the lead resolves the rotated
+/// descriptor + the umem cohort domain); `pre`/`ops` are the same turn's universal-memory touch (its
+/// pre-state projection + Blum op trace) the standalone cohort prover consumes. Self-verifies before
+/// return.
+///
+/// STAGED: the deployed default ([`prove_effect_vm_rotated_ir2_with_caveat`]) stays rotated+per-map
+/// with a DEFAULT umem boundary; this entry is opt-in and never on the live wire. No VK epoch, no
+/// committed-VK change.
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn prove_rotated_umem_welded_staged(
+    initial_state: &CellState,
+    effects: &[VmEffectKind],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+) -> Result<
+    dregg_circuit::descriptor_ir2::Ir2BatchProof<dregg_circuit::descriptor_ir2::DreggStarkConfig>,
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_umem, verify_vm_descriptor2,
+    };
+    use dregg_circuit::effect_vm::trace_rotated::{
+        RotatedBlockWitness, generate_rotated_effect_vm_trace, rotated_descriptor_name_for_effect,
+    };
+    use dregg_circuit::effect_vm_descriptors::{
+        V3_STAGED_REGISTRY_TSV, weld_umem_into_rotated_descriptor,
+    };
+
+    // Resolve the rotated cohort descriptor for this turn's lead effect (homogeneous-cohort only,
+    // exactly as the deployed rotated prover routes). The welded form is single-leg by design.
+    let lead = effects
+        .first()
+        .ok_or_else(|| SdkError::InvalidWitness("rotated+umem weld: empty turn".into()))?;
+    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
+        SdkError::InvalidWitness(format!(
+            "rotated+umem weld: effect {lead:?} is not in the rotated cohort (no R=24 descriptor)"
+        ))
+    })?;
+    for e in &effects[1..] {
+        if rotated_descriptor_name_for_effect(e) != Some(name) {
+            return Err(SdkError::InvalidWitness(
+                "rotated+umem weld: heterogeneous multi-effect turn (one welded descriptor per proof)"
+                    .into(),
+            ));
+        }
+    }
+    let json = V3_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(name) {
+                let _name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            SdkError::InvalidWitness(format!("{name} not in staged rotated registry"))
+        })?;
+    let rotated_desc = parse_vm_descriptor2(json)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated descriptor parse: {e}")))?;
+
+    // The umem leg's single-domain cohort rows + the REAL boundary (fails closed on a multi-domain
+    // leg — such effects stay on the per-map path until their own cohort design).
+    let inputs = dregg_turn::umem::umem_cohort_proving_inputs_from(pre, ops)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort trace generation: {e}")))?;
+
+    // WELD: append the umem leg INTO the rotated descriptor (keeps the 46 rotated PIs).
+    let welded = weld_umem_into_rotated_descriptor(&rotated_desc, inputs.domain);
+    let base = rotated_desc.trace_width; // the first appended umem column
+
+    // The rotated trace + its 46-PI vector (the welded descriptor's PIs are the rotated PIs).
+    let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
+    };
+    let before = bridge(before_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated before-witness: {e}")))?;
+    let after = bridge(after_w)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated after-witness: {e}")))?;
+    let (rot_trace, dpis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, &before, &after, caveat)
+            .map_err(|e| SdkError::InvalidWitness(format!("rotated trace generation: {e}")))?;
+
+    // Assemble the WELDED base trace: each rotated row widened to the welded width, the REAL umem
+    // cohort rows (guard col 6 == 1) injected into the appended 7 columns of the first rows. The
+    // rotated leg occupies cols `[0, base)`; the umem leg occupies `[base, base+7)`; the cohort
+    // umem-op gathering reads its operands row-local (guard gates which rows contribute).
+    let real_umem_rows: Vec<&Vec<dregg_circuit::field::BabyBear>> = inputs
+        .rows
+        .iter()
+        .filter(|r| r.get(6).copied() == Some(dregg_circuit::field::BabyBear::ONE))
+        .collect();
+    if real_umem_rows.len() > rot_trace.len() {
+        return Err(SdkError::InvalidWitness(format!(
+            "rotated+umem weld: {} umem ops exceed the rotated trace height {} (cannot co-locate \
+             the umem leg on the rotated rows)",
+            real_umem_rows.len(),
+            rot_trace.len()
+        )));
+    }
+    let mut welded_base: Vec<Vec<dregg_circuit::field::BabyBear>> =
+        Vec::with_capacity(rot_trace.len());
+    for (ri, row) in rot_trace.iter().enumerate() {
+        let mut wr = row.clone();
+        wr.resize(base + 7, dregg_circuit::field::BabyBear::ZERO);
+        if let Some(umem_row) = real_umem_rows.get(ri) {
+            for (i, &v) in umem_row.iter().enumerate().take(7) {
+                wr[base + i] = v;
+            }
+        }
+        welded_base.push(wr);
+    }
+
+    // Prove the WELDED descriptor through the DEPLOYED-form umem prover with the REAL boundary.
+    let proof = prove_vm_descriptor2_umem(
+        &welded,
+        &welded_base,
+        &dpis,
+        &MemBoundaryWitness::default(),
+        &[],
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("rotated+umem welded IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&welded, &proof, &dpis)
+        .map_err(|e| SdkError::InvalidWitness(format!("rotated+umem welded self-verify: {e}")))?;
+    Ok(proof)
+}
+
 /// **THE FAITHFUL 8-FELT WIDE rotated prover (STAGED — the flip's producer leg).** The wide twin of
 /// [`prove_effect_vm_rotated_ir2_with_caveat`]: routes the WIDE descriptor (from
 /// `WIDE_REGISTRY_STAGED_TSV`, the verified Lean `v3RegistryCapOpenWide`), generates the trace
@@ -1017,54 +1356,56 @@ pub fn prove_effect_vm_rotated_wide(
     ),
     SdkError,
 > {
-    use dregg_circuit::descriptor_ir2::{
-        MemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2,
-    };
+    use dregg_circuit::descriptor_ir2::prove_vm_descriptor2;
+    let (desc, trace, dpis, map_heaps, mem_boundary) = generate_wide_descriptor_and_trace(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_nullifiers,
+        refusal_fields,
+    )?;
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
+    Ok((proof, dpis))
+}
+
+/// The shared WIDE descriptor + trace generation (the body of [`prove_effect_vm_rotated_wide`],
+/// extracted so the WIDE+umem weld prover [`prove_wide_umem_welded_staged`] reuses the EXACT same
+/// wide trace / PI vector / witness production then welds the umem leg onto it). Returns the
+/// resolved WIDE descriptor (from `WIDE_REGISTRY_STAGED_TSV`), its base trace, the wide PI vector
+/// (the 16 wide commit PIs at the tail = the 8-felt before/after anchors), the grow-gate
+/// `map_heaps`, and the (setFieldDyn-only) mem boundary.
+#[cfg(feature = "prover")]
+#[allow(clippy::type_complexity)]
+fn generate_wide_descriptor_and_trace(
+    initial_state: &CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    before_nullifiers: Option<&[BabyBear]>,
+    refusal_fields: Option<(&[dregg_circuit::heap_root::HeapLeaf], BabyBear)>,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+        Vec<Vec<BabyBear>>,
+        Vec<BabyBear>,
+        Vec<Vec<dregg_circuit::heap_root::HeapLeaf>>,
+        dregg_circuit::descriptor_ir2::MemBoundaryWitness,
+    ),
+    SdkError,
+> {
     use dregg_circuit::effect_vm::trace_rotated::{
-        RotatedBlockWitness, generate_rotated_create_cell_wide,
-        generate_rotated_create_from_factory_wide, generate_rotated_custom_wide,
-        generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
-        generate_rotated_record_pin_wide, generate_rotated_refusal_wide,
-        generate_rotated_set_field_dyn_wide, generate_rotated_spawn_wide,
-        generate_rotated_transfer_shape_wide, rotated_descriptor_name_for_effect,
+        RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
     };
-    use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 
-    let lead = effects
-        .first()
-        .ok_or_else(|| SdkError::InvalidWitness("wide rotated prover: empty turn".into()))?;
-    let name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
-        SdkError::InvalidWitness(format!(
-            "wide rotated prover: effect {lead:?} is not in the rotated cohort"
-        ))
-    })?;
-    if effects.len() > 1 {
-        for e in &effects[1..] {
-            if rotated_descriptor_name_for_effect(e) != Some(name) {
-                return Err(SdkError::InvalidWitness(
-                    "wide rotated prover: heterogeneous multi-effect turn".into(),
-                ));
-            }
-        }
-    }
-    // Resolve the WIDE descriptor JSON for that registry key.
-    let json = WIDE_REGISTRY_STAGED_TSV
-        .lines()
-        .find_map(|line| {
-            let mut it = line.splitn(3, '\t');
-            if it.next() == Some(name) {
-                let _name = it.next();
-                it.next()
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| {
-            SdkError::InvalidWitness(format!("{name} not in WIDE_REGISTRY_STAGED_TSV"))
-        })?;
-    let desc = parse_vm_descriptor2(json)
-        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated descriptor parse: {e}")))?;
-
+    // The per-family wide producer dispatch now lives in `dregg-circuit`
+    // (`generate_rotated_effect_vm_descriptor_and_trace_wide`) so the live SDK wide prover AND the
+    // IVC welded-leg mint (`dregg-circuit-prove`) share ONE producer route — no hand-inlined twin.
+    // This wrapper only bridges the `RotationWitness` pair the SDK consumes into the
+    // `RotatedBlockWitness` form the dispatcher takes, then maps the error.
     let bridge = |w: &dregg_turn::rotation_witness::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
             .map(|bw| bw.with_asset_class(w.asset_class))
@@ -1074,194 +1415,135 @@ pub fn prove_effect_vm_rotated_wide(
     let after = bridge(after_w)
         .map_err(|e| SdkError::InvalidWitness(format!("wide rotated after-witness: {e}")))?;
 
-    // NoteSpend routes through the grow-gate wide producer (the limb-26 accumulator); every other
-    // cohort lead routes through the transfer-shape wide producer (the bare-38-PI carrier). (The other
-    // grow-gate families — noteCreate/createCell/factory/spawn — extend identically when the sovereign
-    // producer routes them; transfer + noteSpend are the live sovereign leads.)
-    let (mut trace, mut dpis, mut map_heaps) = if matches!(
-        lead,
-        dregg_circuit::effect_vm::Effect::NoteSpend { .. }
-    ) {
-        use dregg_circuit::heap_root::HeapLeaf;
-        let leaves: Vec<HeapLeaf> = before_nullifiers
-            .unwrap_or(&[])
-            .iter()
-            .map(|nf| HeapLeaf {
-                addr: *nf,
-                value: BabyBear::new(1),
-            })
-            .collect();
-        generate_rotated_note_spend_wide(initial_state, effects, &before, &after, caveat, &leaves)
-            .map_err(|e| SdkError::InvalidWitness(format!("wide note-spend generation: {e}")))?
-    } else if matches!(lead, dregg_circuit::effect_vm::Effect::NoteCreate { .. }) {
-        // NoteCreate routes through the COMMITMENTS-SET grow-gate wide producer (the limb-27
-        // accumulator) — the append-only twin of note-spend. The before-commitments set is the
-        // openable sorted-Poseidon2 tree the `.insert` op forces against; this standalone wrapper
-        // threads no commitments-set context, so the empty set is the grow-gate's BEFORE.
-        generate_rotated_note_create_wide(initial_state, effects, &before, &after, caveat, &[])
-            .map_err(|e| SdkError::InvalidWitness(format!("wide note-create generation: {e}")))?
-    } else if matches!(lead, dregg_circuit::effect_vm::Effect::Refusal { .. }) {
-        // REFUSAL routes through the `fields_root` WRITE-gate wide producer (the limb-36
-        // accumulator) — the LIGHT-CLIENT close: `refusalVmDescriptor2R24` now carries an in-circuit
-        // `.write` map-op forcing `after_fields_root == write(before_fields_root, REFUSAL_AUDIT_KEY →
-        // audit_felt)`. The record-pin generator with an EMPTY `map_heaps` is UNSAT against that gate
-        // (the honest refusal would fail-close); the caller threads the BEFORE-cell's fields-tree
-        // leaf set + the audit felt so the genuine sorted write opens. (Exemplar: the NoteSpend leg
-        // above — the witness carries the digest limb only, NOT the leaf set, so the caller supplies
-        // it.) Without `refusal_fields`, the deployed prover cannot mint an honest refusal.
-        let (leaves, audit_value) = refusal_fields.ok_or_else(|| {
-                SdkError::InvalidWitness(
-                    "wide refusal prover: a Refusal lead requires `refusal_fields` (the BEFORE-cell \
-                     fields-tree leaf set + the audit felt) to satisfy the in-circuit `fields_root` \
-                     `.write` map-op gate; an empty fields tree is UNSAT (the honest refusal fails closed)"
-                        .into(),
-                )
-            })?;
-        generate_rotated_refusal_wide(
-            initial_state,
-            effects,
-            &before,
-            &after,
-            caveat,
-            leaves,
-            audit_value,
-        )
-        .map_err(|e| SdkError::InvalidWitness(format!("wide refusal generation: {e}")))?
-    } else if matches!(
-        lead,
-        dregg_circuit::effect_vm::Effect::SetPermissions { .. }
-            | dregg_circuit::effect_vm::Effect::SetVerificationKey { .. }
-            | dregg_circuit::effect_vm::Effect::CellSeal { .. }
-            | dregg_circuit::effect_vm::Effect::CellUnseal { .. }
-            | dregg_circuit::effect_vm::Effect::CellDestroy { .. }
-            | dregg_circuit::effect_vm::Effect::ReceiptArchive { .. }
-            | dregg_circuit::effect_vm::Effect::MakeSovereign
-    ) {
-        // The record-pin family carries the 39-PI base (record/lifecycle pin at PI 38).
-        // MakeSovereign joins: its record pin welds the AFTER authority-digest limb (which folds
-        // the flipped mode byte) — see `record_pin_offset`.
-        let (t, d) =
-            generate_rotated_record_pin_wide(initial_state, effects, &before, &after, caveat)
-                .map_err(|e| {
-                    SdkError::InvalidWitness(format!("wide record-pin generation: {e}"))
-                })?;
-        (t, d, vec![])
-    } else if matches!(lead, dregg_circuit::effect_vm::Effect::CreateCell { .. }) {
-        // createCell routes through the ACCOUNTS-SET grow-gate wide producer (the limb-0
-        // accumulator) — the sibling of note-create's commitments-set grow-gate. The new cell's
-        // commitment is inserted into the BEFORE accounts tree; the `.write` map-op forces the
-        // AFTER accounts-root (limb 0) to be the genuine sorted insert, so the createCell wide
-        // descriptor (which carries the extra grow-gate PI the transfer-shape cohort lacks) is
-        // SAT. This standalone wrapper threads no accounts-set context, so the empty set is the
-        // grow-gate's BEFORE (the live sovereign producer threads the real accounts set), exactly
-        // as note-create above. WITHOUT this route createCell fell through to the transfer-shape
-        // producer (bare-38-PI) and was UNSAT (PI-count mismatch) — i.e. NOT PROVABLE.
-        generate_rotated_create_cell_wide(initial_state, effects, &before, &after, caveat, &[])
-            .map_err(|e| SdkError::InvalidWitness(format!("wide create-cell generation: {e}")))?
-    } else if matches!(
-        lead,
-        dregg_circuit::effect_vm::Effect::CreateCellFromFactory { .. }
-    ) {
-        // createCellFromFactory routes through the FACTORY accounts-set grow-gate wide producer
-        // (`factoryVmDescriptor2R24`, root limb 0) — the same accounts birth-insert createCell
-        // carries, only the new-cell key column differs (param1 = child_vk_derived for factory).
-        // Without this route createCellFromFactory fell through to the transfer-shape producer
-        // (bare-38-PI) and was UNSAT vs the factory wide descriptor's extra grow-gate PI. The
-        // standalone wrapper threads no accounts-set context, so the empty set is the grow-gate's
-        // BEFORE (mirrors createCell); the live sovereign producer threads the real accounts set.
-        generate_rotated_create_from_factory_wide(
-            initial_state,
-            effects,
-            &before,
-            &after,
-            caveat,
-            &[],
-        )
-        .map_err(|e| {
-            SdkError::InvalidWitness(format!("wide create-from-factory generation: {e}"))
-        })?
-    } else if matches!(
-        lead,
-        dregg_circuit::effect_vm::Effect::SpawnWithDelegation { .. }
-    ) {
-        // spawn's BIRTH/accounts-grow leg routes through the spawn accounts-set grow-gate wide
-        // producer (`spawnVmDescriptor2R24`, root limb 0 — the born child id grown into the cells
-        // set). The wide spawn descriptor carries ONLY the accounts birth grow-gate (NO cap-tree
-        // map_op — the parent→child cap-handoff is the SEPARATE cap-open path's job, already
-        // wired). Without this route spawn fell through to the transfer-shape producer and was
-        // UNSAT vs the spawn wide descriptor's grow-gate PI. Empty BEFORE accounts = the standalone
-        // grow-gate BEFORE (mirrors createCell); the live sovereign producer threads the real set.
-        generate_rotated_spawn_wide(initial_state, effects, &before, &after, caveat, &[])
-            .map_err(|e| SdkError::InvalidWitness(format!("wide spawn generation: {e}")))?
-    } else if matches!(lead, dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } if *field_idx >= 8)
-    {
-        // setFieldDyn (the overflow `SetField { field_idx >= 8 }`) is the ONE effect whose witness
-        // is a `MemBoundaryWitness`, NOT a `map_heaps`, AND whose trace is the DISTINCT 581-wide
-        // V1Face geometry the transfer-shape generator cannot lay. Produce empty placeholders here;
-        // the dedicated block below generates the real trace/PIs + the mem-boundary and overrides
-        // these. (Routing it through the transfer-shape fallthrough would be UNSAT and wasteful.)
-        (Vec::new(), Vec::new(), Vec::new())
-    } else if matches!(lead, dregg_circuit::effect_vm::Effect::Custom { .. }) {
-        // custom routes through the DISTINCT 789-wide `customVmDescriptor2R24` member (host 581 +
-        // 208 carriers — the same V1Face host width as setFieldDyn, but a Custom row, NO Blum
-        // memory / grow-gate leg). BEFORE: Custom fell through to the transfer-shape producer
-        // (816-wide), UNSAT vs the 789-wide custom descriptor — so a custom turn minted NO wide
-        // receipt (the last liveness gap). AFTER routing it to `generate_rotated_custom_wide`: the
-        // Custom row's `(vk, commit)` columns (68 / 72) carry the genuine bound sub-proof's binding
-        // the descriptor's `proof_bind` op pins, and the row proves + light-client-verifies. The
-        // program-correctness recursion is the SDK-reachable `custom_proof_bind` engine (threaded
-        // via `Turn.custom_program_proofs`), NOT a row-local poly. The `Effect::Custom`'s
-        // `(program_vk_hash, proof_commitment)` MUST be a verifying `BoundCustomProof`'s exposed
-        // binding (`bound.vk_hash_felts()` / `bound.proof_commitment()`) for the wide receipt to
-        // bind the genuine sub-proof.
-        generate_rotated_custom_wide(initial_state, effects, &before, &after, caveat)
-            .map(|(t, d)| (t, d, vec![]))
-            .map_err(|e| SdkError::InvalidWitness(format!("wide custom generation: {e}")))?
-    } else {
-        let (t, d) =
-            generate_rotated_transfer_shape_wide(initial_state, effects, &before, &after, caveat)
-                .map_err(|e| {
-                SdkError::InvalidWitness(format!("wide transfer-shape generation: {e}"))
-            })?;
-        (t, d, vec![])
-    };
+    generate_rotated_effect_vm_descriptor_and_trace_wide(
+        initial_state,
+        effects,
+        &before,
+        &after,
+        caveat,
+        before_nullifiers,
+        refusal_fields,
+        // The live SDK wide prover routes cap-WRITE leads through the SEPARATE cap-open path
+        // (`prove_effect_vm_cap_open`), never this dispatcher — so no cap-write witness is threaded here
+        // (a cap-WRITE lead reaching this route fails closed, as it always has).
+        None,
+    )
+    .map_err(SdkError::InvalidWitness)
+}
 
-    // setFieldDyn carries a DISTINCT geometry (the 581-wide V1Face / 789-wide member): the overflow
-    // `SetField { field_idx >= 8 }` routes to `setFieldDynVmDescriptor2R24` and its Blum linear-memory
-    // gate is witnessed by a `MemBoundaryWitness`, NOT a `map_heaps`. Resolve it here (the dispatch
-    // above is the grow-gate/record-pin/transfer-shape family whose witness IS `map_heaps`; setFieldDyn
-    // is the one effect whose witness is the mem-boundary), then thread it into the final
-    // `prove_vm_descriptor2` mem_boundary param. The slot is the in-circuit overflow-memory address
-    // (`field_idx % 8`, 0..7 — the 8-cell Blum memory), and the standalone wrapper threads no prior
-    // field state, so `prev_value = 0` is the BEFORE (mirrors createCell's empty BEFORE accounts).
-    let mem_boundary = if let dregg_circuit::effect_vm::Effect::SetField { field_idx, .. } = lead {
-        if *field_idx >= 8 {
-            let slot = field_idx % 8;
-            let (t, d, mb) = generate_rotated_set_field_dyn_wide(
-                initial_state,
-                &before,
-                &after,
-                caveat,
-                slot,
-                BabyBear::new(0),
-            )
-            .map_err(|e| SdkError::InvalidWitness(format!("wide set-field-dyn generation: {e}")))?;
-            // setFieldDyn's witness is the mem-boundary, NOT map_heaps; override the trace/PIs the
-            // family dispatch above produced (it routed SetField{field_idx>=8} to the transfer-shape
-            // fallthrough, which is UNSAT against `setFieldDynVmDescriptor2R24`).
-            trace = t;
-            dpis = d;
-            map_heaps = vec![];
-            mb
-        } else {
-            MemBoundaryWitness::default()
+/// **THE WIDE ROTATED+UMEM WELD PROVER (STAGED, VK-RISK-FREE) — the genuine flip precursor the VK
+/// epoch needs.** The WIDE (8-felt / ~124-bit faithful commit) twin of
+/// [`prove_rotated_umem_welded_staged`]: it proves, in ONE descriptor / ONE proof, BOTH the WIDE
+/// rotated cohort proof (the effect semantics + the wide PI vector whose LAST 16 PIs are the 8-felt
+/// before/after commit anchors `verify_full_turn_bound` binds at ~124-bit) AND the universal-memory
+/// reconciliation leg (the cohort `umemOp` over 7 appended columns + a REAL [`UMemBoundaryWitness`]).
+///
+/// Where the NARROW weld ([`prove_rotated_umem_welded_staged`]) welded onto the 1-felt / 46-PI
+/// rotated descriptor (a correct staging artifact, but flipping the deployed WIDE wire onto it would
+/// NARROW the ~124-bit commitment to ~46-bit — the no-narrowing scar the VK epoch refused to cross),
+/// THIS welds onto the deployed WIDE descriptor ([`WIDE_REGISTRY_STAGED_TSV`]) via
+/// [`weld_umem_into_wide_descriptor`], which is purely ADDITIVE: it appends the umem leg PAST the
+/// wide carriers and NEVER touches `public_input_count` nor any PI binding, so the 16 wide commit
+/// PIs (the 8-felt anchors) ride through UNCHANGED. The welded form keeps the FULL ~124-bit faithful
+/// commitment AND carries the umem reconciliation leg.
+///
+/// `effects` is the turn's homogeneous wide cohort slice; `before_w`/`after_w` the rotation
+/// witnesses the wide producers consume; `pre`/`ops` the SAME turn's universal-memory touch (its
+/// pre-state projection + Blum op trace) the cohort prover folds. `before_nullifiers`/`refusal_fields`
+/// thread the grow-gate / refusal context the wide producers need (mirrors
+/// [`prove_effect_vm_rotated_wide`]). Self-verifies before return; returns `(proof, wide_dpis)` — the
+/// caller binds the 16 wide commit PIs.
+///
+/// STAGED: a NEW wide+umem welded descriptor BESIDE the deployed wide registry; no VK epoch, no
+/// deployed-default flip, no committed-VK change.
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn prove_wide_umem_welded_staged(
+    initial_state: &CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_w: &dregg_turn::rotation_witness::RotationWitness,
+    after_w: &dregg_turn::rotation_witness::RotationWitness,
+    caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
+    pre: &dregg_turn::umem::UProjection,
+    ops: &[dregg_turn::umem::UmemOp],
+    before_nullifiers: Option<&[BabyBear]>,
+    refusal_fields: Option<(&[dregg_circuit::heap_root::HeapLeaf], BabyBear)>,
+) -> Result<
+    (
+        dregg_circuit::descriptor_ir2::Ir2BatchProof<
+            dregg_circuit::descriptor_ir2::DreggStarkConfig,
+        >,
+        Vec<BabyBear>,
+    ),
+    SdkError,
+> {
+    use dregg_circuit::descriptor_ir2::{prove_vm_descriptor2_umem, verify_vm_descriptor2};
+    use dregg_circuit::effect_vm_descriptors::weld_umem_into_wide_descriptor;
+
+    // The umem leg's single-domain cohort rows + the REAL boundary (fails closed on a multi-domain
+    // leg — such effects stay on the per-map path until their own cohort design).
+    let inputs = dregg_turn::umem::umem_cohort_proving_inputs_from(pre, ops)
+        .map_err(|e| SdkError::InvalidWitness(format!("umem cohort trace generation: {e}")))?;
+
+    // Reuse the EXACT deployed wide trace / PI / witness production, then weld the umem leg ONTO it.
+    let (wide_desc, wide_trace, dpis, map_heaps, mem_boundary) =
+        generate_wide_descriptor_and_trace(
+            initial_state,
+            effects,
+            before_w,
+            after_w,
+            caveat,
+            before_nullifiers,
+            refusal_fields,
+        )?;
+
+    // WELD: append the umem leg INTO the WIDE descriptor (keeps the wide PI vector + the 16 wide
+    // commit PIs — the 8-felt anchors — INTACT). The first appended umem column is PAST the wide
+    // carriers (`base` = the wide trace width).
+    let welded = weld_umem_into_wide_descriptor(&wide_desc, inputs.domain);
+    let base = wide_desc.trace_width;
+
+    // Assemble the WELDED base trace: each wide row widened to the welded width, the REAL umem
+    // cohort rows (guard col 6 == 1) injected into the appended 7 columns of the first rows. The
+    // wide leg occupies cols `[0, base)`; the umem leg occupies `[base, base+7)`; the cohort
+    // umem-op gathering reads its operands row-local (guard gates which rows contribute).
+    let real_umem_rows: Vec<&Vec<BabyBear>> = inputs
+        .rows
+        .iter()
+        .filter(|r| r.get(6).copied() == Some(BabyBear::ONE))
+        .collect();
+    if real_umem_rows.len() > wide_trace.len() {
+        return Err(SdkError::InvalidWitness(format!(
+            "wide+umem weld: {} umem ops exceed the wide trace height {} (cannot co-locate the \
+             umem leg on the wide rows)",
+            real_umem_rows.len(),
+            wide_trace.len()
+        )));
+    }
+    let mut welded_base: Vec<Vec<BabyBear>> = Vec::with_capacity(wide_trace.len());
+    for (ri, row) in wide_trace.iter().enumerate() {
+        let mut wr = row.clone();
+        wr.resize(base + 7, BabyBear::ZERO);
+        if let Some(umem_row) = real_umem_rows.get(ri) {
+            for (i, &v) in umem_row.iter().enumerate().take(7) {
+                wr[base + i] = v;
+            }
         }
-    } else {
-        MemBoundaryWitness::default()
-    };
+        welded_base.push(wr);
+    }
 
-    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
-        .map_err(|e| SdkError::InvalidWitness(format!("wide rotated IR-v2 proof: {e}")))?;
+    // Prove the WELDED WIDE descriptor through the DEPLOYED-form umem prover with the REAL boundary.
+    let proof = prove_vm_descriptor2_umem(
+        &welded,
+        &welded_base,
+        &dpis,
+        &mem_boundary,
+        &map_heaps,
+        &inputs.boundary,
+    )
+    .map_err(|e| SdkError::InvalidWitness(format!("wide+umem welded IR-v2 proof: {e}")))?;
+    verify_vm_descriptor2(&welded, &proof, &dpis)
+        .map_err(|e| SdkError::InvalidWitness(format!("wide+umem welded self-verify: {e}")))?;
     Ok((proof, dpis))
 }
 

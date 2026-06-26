@@ -69,15 +69,28 @@ The five state structures become five DOMAINS of one address space. An address i
 content of that hashing). Domains are DISJOINT sub-multisets by construction: a tuple written in
 one domain can never cancel a claim in another (`Entry` equality requires address equality). -/
 
-/-- The state domains of the unified memory: the five collections of `EPOCH-DESIGN.md`'s
-commitment layout (registers · heap · capabilities · nullifiers · receipt index). A future state
-component is a NEW domain value, never a new table. -/
+/-- The state domains of the unified memory: the five COMMITTED collections of
+`EPOCH-DESIGN.md`'s commitment layout (registers · heap · capabilities · nullifiers · receipt
+index), plus the transient `working` scratch. A future state component is a NEW domain value,
+never a new table.
+
+`working` is the universal-memory realization of the Rust `UDomain::Working`
+(`turn/src/umem.rs:118`): a service cell's / the interpreter's / a long-running effect's
+TRANSIENT scratch. It rides the ONE memcheck trace exactly like every other domain — so it is
+consistent for free (`universal_memory_sound` quantifies over it like any `d`) and its cells
+get their OWN non-aliasing address class by the same tag isolation (`consistentFrom_filter`).
+But, exactly like `registers`, it is DESIGNED to publish NO committed boundary: it is never
+projected into the state commitment (`working_commitment_inert` below makes "never projected ⇒
+inert" a theorem, not a Rust `debug_assert`). Its boundary IS derivable on demand
+(`working_umem_root`, the §4 checkpoint, and the level-1 image of `recursive_open_sound`),
+it simply never enters consensus state. -/
 inductive Domain : Type where
   | registers
   | heap
   | caps
   | nullifiers
   | index
+  | working
 deriving DecidableEq, Repr
 
 /-- The unified address: a domain tag paired with the in-domain key. The abstract form of the
@@ -211,6 +224,24 @@ theorem universal_memory_sound
   exact consistentFrom_strip d
     (fun op hop => of_decide_eq_true (List.mem_filter.mp hop).2)
     (fun _ => rfl) hfil
+
+/-- **Single-cell universal soundness — the cohort-specialized single-row boundary.** With at most
+ONE declared `(domain, key)` address the `Nodup` hypothesis `universal_memory_sound` stands on is
+free (`List.nodup_singleton`), so the inter-row lexicographic comparator the general universal
+boundary uses to establish it is VACUOUS and the keystone still gives the whole-trace consistency
+AND every domain projection's consistency. This is the soundness obligation of the width-9
+`Ir2Air::UMemBoundaryCohort` AIR (the welded single-domain leg): it drops the comparator columns
+because at most one row exists, and Nodup follows from the row being alone — not from any
+in-circuit comparison. -/
+theorem universal_memory_sound_single
+    {init : UAddr κ → ν} {fin : UAddr κ → ν × Nat}
+    {a : UAddr κ} {tr : List (Op (UAddr κ) ν)}
+    (hcl : ∀ op ∈ tr, op.addr ∈ [a])
+    (hdisc : Disciplined tr) (hmc : MemCheck init fin [a] tr) :
+    Consistent init tr ∧
+      ∀ d : Domain,
+        Consistent (fun a => init (d, a)) ((domTrace d tr).map stripOp) :=
+  universal_memory_sound (List.nodup_singleton a) hcl hdisc hmc
 
 end Strip
 
@@ -443,6 +474,201 @@ theorem boundary_root_from_memcheck (hash : List ℤ → ℤ) (d : Domain)
   · rw [if_pos ha, if_pos ha,
       memcheck_pins_final hnd hcl hdisc hmc (d, a) (hda a ha)]
   · rw [if_neg ha, if_neg ha]
+
+/-! ### §4b — the INIT boundary is BOUND to committed PRE-state (the PI-v3 ride-along anchor).
+
+The FINAL boundary derivation (`boundary_root_from_memcheck`) shows the prover's *post*-state
+boundary view commits to the same object the deployed map roots commit to. Its mirror image is
+what makes the universal boundary's INIT column TRUSTWORTHY rather than free-witnessed: the
+boundary's declared init image must EQUAL the committed PRE-state, not be prover-chosen.
+
+`boundary_init_root_derived` is exactly `boundary_root_derived` instantiated at `fin' = init`
+(the init image is the GIVEN, so no memcheck pinning is needed — it is even simpler than the
+final side). Welded to the circuit by pinning the computed boundary-init root to a committed
+pre-state map root supplied as a public input, this is the soundness theorem behind the
+in-circuit init binding: under the named `Poseidon2SpongeCR` floor (`Heap.root_injective`),
+a boundary whose init image differs from the committed pre-state produces a DIFFERENT
+sorted-Poseidon2 leaf list, hence a different root, hence the pin REFUSES. The bound boundary
+init root = the committed map root, by canonicity, NO crypto in the derivation itself
+(the CR floor enters only at the injectivity tooth, exactly as on the final side). -/
+theorem boundary_init_root_derived (hash : List ℤ → ℤ) {h : FeltHeap}
+    {init : ℤ → Option ℤ} {as : List ℤ}
+    (hs : Heap.SortedKeys h) (has : as.Pairwise (· < ·))
+    (hsem : ∀ a, Heap.get h a = if a ∈ as then init a else none) :
+    Heap.root hash h = Heap.root hash (boundaryCells init as) :=
+  boundary_root_derived hash hs has hsem
+
+/-- **`boundary_init_root_bound` — the binding is sound (the anti-forgery tooth).** Under the
+named CR floor, a committed pre-state map `hcommitted` and the prover's declared init heap
+`hdeclared` carry the SAME root iff they ARE the same map. So pinning the boundary-init root to
+the committed root forces the declared init heap to be the committed pre-state — a tampered init
+image CANNOT keep the published root. The init-side companion of `nullifier_fresh_binds_root`. -/
+theorem boundary_init_root_bound (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {hcommitted hdeclared : FeltHeap}
+    (hroot : Heap.root hash hdeclared = Heap.root hash hcommitted) :
+    hdeclared = hcommitted :=
+  Heap.root_injective hash hCR hroot
+
+/-! ### §4c — the WHOLE-IMAGE boundary equality (the no-extra-cells direction).
+
+`boundary_init_root_bound` proves the binding REFUSES a tampered declared heap. §4b's per-cell
+realization (the deployed cross-cell-read, `satisfied2U_init_root`) proves only the SUBSET view:
+each TOUCHED address `(d, a)` with `a ∈ as` opens to its declared value under the committed root.
+That is sound for "this peer field IS the committed value" but it does NOT, on its own, forbid a
+committed heap that holds the declared cells AND EXTRA cells the boundary never declared.
+
+This section closes the no-extra-cells direction at the Lean level, by the route the in-circuit
+WHOLE-boundary root-fold realizes: recompute the sorted-Poseidon2 root of the ENTIRE declared
+boundary image `boundaryCells init as` and PIN it to the committed pre-state root. That single
+pin, via `root_injective`, forces the committed heap to BE the boundary view — so the committed
+heap's lookup semantics is EXACTLY the declared image: present-and-declared cells carry their
+declared value, and EVERY address off the declared list is ABSENT in the committed heap (no
+extra cells, no hidden cell). The two directions stated separately:
+  * `boundary_image_eq_of_root` — the committed heap equals the boundary view (the leaf-list
+    equality `root_injective` yields, the structural anti-ghost);
+  * `boundary_whole_image_sem` — its consequence in lookup terms: the committed heap agrees with
+    the declared image at EVERY address, INCLUDING absence off the declared list.
+
+NO new crypto: the CR floor enters once, exactly as in `boundary_init_root_bound`. This is the
+SAME `Poseidon2SpongeCR` tooth, applied to the whole-image fold instead of a per-cell opening.
+The deferred work is entirely the in-circuit AIR that COMPUTES `Heap.root hash (boundaryCells
+…)` over the universal boundary table and pins it to the committed-root public input; that fold
+rides the universal-map rotation (it needs the rotation's per-domain sorted-leaf fold chip). The
+Lean obligation it must discharge is precisely the hypothesis `hpin` below. -/
+
+/-- **`boundary_image_eq_of_root` — the committed heap IS the boundary view (no extra cells).**
+If the committed pre-state heap `hcommitted` carries the SAME root as the sorted-Poseidon2 fold
+of the ENTIRE declared boundary image `boundaryCells init as`, then under the named CR floor the
+committed heap EQUALS that boundary view as a leaf list. This is the structural no-extra-cells
+fact: the committed heap can hold NOTHING the boundary did not declare, because a single extra
+or altered leaf moves the root. The whole-image companion of `boundary_init_root_bound`, against
+the recomputed fold rather than a separately-declared heap. -/
+theorem boundary_image_eq_of_root (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {hcommitted : FeltHeap} {init : ℤ → Option ℤ} {as : List ℤ}
+    (hpin : Heap.root hash hcommitted = Heap.root hash (boundaryCells init as)) :
+    hcommitted = boundaryCells init as :=
+  Heap.root_injective hash hCR hpin
+
+/-- **`boundary_whole_image_sem` — the committed heap agrees with the declared image EVERYWHERE.**
+The lookup-world consequence of `boundary_image_eq_of_root`: under the CR floor, pinning the
+committed pre-state root to the whole-boundary fold forces the committed heap's `get` to equal
+the declared image at EVERY address — declared cells open to their declared value, and every
+address OFF the declared list is absent. This is the full whole-image equality `hsem` that the
+per-cell subset realization (`satisfied2U_init_root`'s hypothesis) had to ASSUME: here it is
+DERIVED from the single whole-boundary root pin, with the no-extra-cells direction included.
+(`as` sorted is needed for the boundary view to be the canonical sorted leaf list it folds as.) -/
+theorem boundary_whole_image_sem (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {hcommitted : FeltHeap} {init : ℤ → Option ℤ} {as : List ℤ}
+    (has : as.Pairwise (· < ·))
+    (hpin : Heap.root hash hcommitted = Heap.root hash (boundaryCells init as)) :
+    ∀ a, Heap.get hcommitted a = if a ∈ as then init a else none := by
+  intro a
+  rw [boundary_image_eq_of_root hash hCR hpin]
+  exact get_boundaryCells has a
+
+/-! ### §4d — the WORKING domain is INERT in the commitment (never-projected ⇒ a theorem).
+
+The Rust `UDomain::Working` (`turn/src/umem.rs:118`) is transient scratch: it rides the ONE
+memcheck trace (consistent for free) but is NEVER emitted by `project_cell`/`project_ledger`/
+`project_executor_state`, so its boundary root never enters the state commitment. That guarantee
+was load-bearing only by the Rust FACT that the projection happens to never construct a
+`UKey::Working` — a `debug_assert_no_working` comment (`turn/src/umem.rs:347`), not a checked
+property.
+
+`working_commitment_inert` makes it a THEOREM, by the same tag-disjointness that powers the whole
+module: the committed boundary view of ANY committed domain `d ≠ working` reads `fin` ONLY at the
+addresses `(d, a)` — addresses whose tag is `d`, never `working`. So two final memories that
+agree everywhere OFF the working domain (the only place a working write can differ) derive the
+IDENTICAL committed boundary view. A working address therefore cannot move any committed
+boundary: it is inert in the state commitment, exactly as `registers` is. -/
+
+/-- **`working_commitment_inert` — A WORKING ADDRESS NEVER ENTERS A COMMITTED BOUNDARY.** For any
+committed domain `d` (`d ≠ working`), two final memories that AGREE everywhere off the working
+domain produce the SAME committed boundary view. Working writes — the only cells where the two
+can differ — leave every committed domain's boundary untouched, because that boundary reads `fin`
+only at tag-`d` addresses (never tag-`working`). The "never projected ⇒ inert" Rust invariant,
+made a theorem by tag-disjointness (the dual of `consistentFrom_filter`'s class isolation). -/
+theorem working_commitment_inert {d : Domain} (hd : d ≠ Domain.working)
+    {fin₁ fin₂ : UAddr κ → Option ν} {as : List κ}
+    (hagree : ∀ a : UAddr κ, a.1 ≠ Domain.working → fin₁ a = fin₂ a) :
+    boundaryCells (fun a => fin₁ (d, a)) as = boundaryCells (fun a => fin₂ (d, a)) as := by
+  have hfun : (fun a => fin₁ (d, a)) = (fun a => fin₂ (d, a)) := by
+    funext a; exact hagree (d, a) hd
+  rw [hfun]
+
+/-- **`working_commitment_root_inert` — the committed boundary ROOT is inert to working cells.**
+The sorted-Poseidon2 root of a committed domain's boundary is INVARIANT under any change confined
+to the working domain (the value-world consequence of `working_commitment_inert`, by `congrArg`).
+A working umem cannot perturb a single committed map root — it costs nothing on the consensus
+path, regardless of how much working scratch a service writes. -/
+theorem working_commitment_root_inert (hash : List ℤ → ℤ) {d : Domain} (hd : d ≠ Domain.working)
+    {fin₁ fin₂ : UAddr ℤ → Option ℤ} {as : List ℤ}
+    (hagree : ∀ a : UAddr ℤ, a.1 ≠ Domain.working → fin₁ a = fin₂ a) :
+    Heap.root hash (boundaryCells (fun a => fin₁ (d, a)) as)
+      = Heap.root hash (boundaryCells (fun a => fin₂ (d, a)) as) :=
+  congrArg (Heap.root hash) (working_commitment_inert hd hagree)
+
+/-! ### §4e — COMPOSABLE umems: the recursive open is TWO binds at DISJOINT levels.
+
+A `UVal::UmemRef` (`turn/src/umem.rs:316`) makes one umem hold, at a key, the committed root of
+ANOTHER umem. Reading "through" the ref is `open_through_umem_ref` (`turn/src/umem.rs:716`): bind
+the OUTER service umem's committed boundary (the `working` domain) as an init image, read the
+child root it names there, then bind THAT root as the INNER cell heap's (the `heap` domain) init
+image and open the requested key. Two independent `boundary_init_root_bound` applications — the
+keystone composed with itself.
+
+The two levels CANNOT alias: the outer cells live in the `working` domain and the inner cells in
+the `heap` domain, disjoint by tag. `recursive_levels_disjoint` makes that disjointness a theorem
+(the two domain projections of ONE consistent trace are INDEPENDENT standalone memories,
+`universal_memory_sound` at `working` and at `heap`); `recursive_open_sound` is the two-level bind
+itself. A tamper at either level derives a different sorted-Poseidon2 root and the matching pin
+refuses — soundness compositional for free. -/
+
+/-- **`recursive_levels_disjoint` — the outer (working) and inner (heap) levels are independent.**
+From ONE Blum balance, the outer service umem (`working` domain) and the inner cell heap (`heap`
+domain) project to INDEPENDENT consistent standalone memories: a working op never moves a heap
+cell and vice versa (tag isolation, two instances of `universal_memory_sound`). So the two
+`boundary_init_root_bound` applications in `recursive_open_sound` bind genuinely independent
+images — no cross-level aliasing. -/
+theorem recursive_levels_disjoint [DecidableEq κ]
+    {init : UAddr κ → ν} {fin : UAddr κ → ν × Nat}
+    {addrs : List (UAddr κ)} {tr : List (Op (UAddr κ) ν)}
+    (hnd : addrs.Nodup) (hcl : ∀ op ∈ tr, op.addr ∈ addrs)
+    (hdisc : Disciplined tr) (hmc : MemCheck init fin addrs tr) :
+    Consistent (fun a => init (Domain.working, a))
+        ((domTrace Domain.working tr).map stripOp) ∧
+      Consistent (fun a => init (Domain.heap, a))
+        ((domTrace Domain.heap tr).map stripOp) :=
+  let h := (universal_memory_sound hnd hcl hdisc hmc).2
+  ⟨h Domain.working, h Domain.heap⟩
+
+/-- **`recursive_open_sound` — THE COMPOSABLE-UMEM RECURSIVE OPEN (Stage D).** The Rust
+`open_through_umem_ref` two-level bind made a theorem: `boundary_init_root_bound` applied at TWO
+levels.
+  * LEVEL 1 — the outer service umem's declared image carries the committed boundary root
+    (`houter`) ⟹ under the CR floor the declared OUTER image IS the committed working umem
+    (`outerDeclared = outerCommitted`).
+  * the bound outer umem NAMES `childRoot` at the ref address (`hnames`, the `UmemRef` cell), and
+    that named root IS the genuine inner umem's committed root (`hchildRoot`).
+  * LEVEL 2 — the declared inner heap is pinned to the named child root (`hchild`) ⟹ under the
+    SAME CR floor the declared INNER image IS the committed child heap
+    (`childDeclared = childCommitted`).
+Two independent `boundary_init_root_bound` teeth; the levels are tag-disjoint
+(`recursive_levels_disjoint`), so they cannot forge each other. The conclusion also re-exposes the
+named child root through the (now-forced) outer DECLARED image — what the reader actually holds. -/
+theorem recursive_open_sound (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {outerCommitted outerDeclared childCommitted childDeclared : FeltHeap}
+    {refKey childRoot : ℤ}
+    (houter : Heap.root hash outerDeclared = Heap.root hash outerCommitted)
+    (hnames : Heap.get outerCommitted refKey = some childRoot)
+    (hchildRoot : Heap.root hash childCommitted = childRoot)
+    (hchild : Heap.root hash childDeclared = childRoot) :
+    outerDeclared = outerCommitted ∧ childDeclared = childCommitted ∧
+      Heap.get outerDeclared refKey = some childRoot := by
+  have h1 : outerDeclared = outerCommitted := boundary_init_root_bound hash hCR houter
+  have h2 : childDeclared = childCommitted :=
+    boundary_init_root_bound hash hCR (hchild.trans hchildRoot.symm)
+  exact ⟨h1, h2, by rw [h1]; exact hnames⟩
 
 /-! ## §5 — THE NULLIFIER WIN: freshness is a memory property (no Merkle path intra-proof).
 
@@ -713,6 +939,102 @@ example :
     · rw [if_neg (fun h => ha (List.mem_singleton.mp h)),
         Heap.get_cons_ne _ _ ha, Heap.get_nil]
 
+/-- The INIT-side anchor fires too: the committed pre-state map `[(10, 7)]` (the heap-domain
+init image) has the same root as the boundary view derived from `uinit`. Both polarities of the
+boundary derivation (init AND final) are concrete-witnessed. -/
+private def uinit_one : UAddr ℤ → Option ℤ := fun a => if a = (Domain.heap, 10) then some 7 else none
+
+example :
+    Heap.root Heap.refSponge [((10 : ℤ), (7 : ℤ))]
+      = Heap.root Heap.refSponge
+          (boundaryCells (fun a => uinit_one (Domain.heap, a)) [10]) := by
+  refine boundary_init_root_derived Heap.refSponge ?_ ?_ ?_
+  · simp [Heap.SortedKeys, Heap.keys]
+  · simp
+  · intro a
+    by_cases ha : a = (10 : ℤ)
+    · subst ha; decide
+    · rw [if_neg (fun h => ha (List.mem_singleton.mp h)),
+        Heap.get_cons_ne _ _ ha, Heap.get_nil]
+
+/-! ### Whole-image (no-extra-cells) non-vacuity — the extra cell MOVES the fold root.
+
+`boundary_image_eq_of_root` / `boundary_whole_image_sem` carry the no-extra-cells punch under the
+abstract CR floor; these guards exhibit it on the computable `refSponge`, the executable shadow.
+A committed heap that holds the declared boundary cell `[(10, 7)]` AND an EXTRA cell `(20, 5)`
+the boundary never declared has a DIFFERENT root from the whole-boundary fold `boundaryCells uinit
+[10]` — so the whole-image root pin REFUSES it (a hidden cell cannot survive the fold), exactly
+the direction the per-cell subset opening could not see. -/
+
+-- The whole-boundary fold of the one-cell init image is the one-cell leaf list (positive):
+#guard boundaryCells (fun a => uinit_one (Domain.heap, a)) [10] == [((10 : ℤ), (7 : ℤ))]
+-- A committed heap with an EXTRA undeclared cell (20,5) has a DIFFERENT fold root — REFUSED:
+#guard (Heap.root Heap.refSponge [((10 : ℤ), (7 : ℤ)), ((20 : ℤ), (5 : ℤ))]
+  != Heap.root Heap.refSponge (boundaryCells (fun a => uinit_one (Domain.heap, a)) [10]))
+-- The honest committed heap (exactly the boundary cell) MATCHES the fold root — admitted:
+#guard (Heap.root Heap.refSponge [((10 : ℤ), (7 : ℤ))]
+  == Heap.root Heap.refSponge (boundaryCells (fun a => uinit_one (Domain.heap, a)) [10]))
+-- The whole-image lookup characterization: OFF-list address 20 is ABSENT in the boundary view
+-- (the no-extra-cells direction in lookup terms — `boundary_whole_image_sem`'s `else none`):
+#guard Heap.get (boundaryCells (fun a => uinit_one (Domain.heap, a)) [10]) (20 : ℤ) == none
+
+/-- `boundary_whole_image_sem` fires structurally on a concrete committed heap = its boundary
+view: the heap agrees with the declared image at the declared address AND is absent off-list.
+(Stated against an abstract CR `hash`/`hCR` since the theorem rides the named floor; the pin
+hypothesis is given by `rfl` on the matching heap, exercising the whole-image route end to end.) -/
+example (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (init : ℤ → Option ℤ) (as : List ℤ) (has : as.Pairwise (· < ·)) :
+    ∀ a, Heap.get (boundaryCells init as) a = if a ∈ as then init a else none :=
+  boundary_whole_image_sem hash hCR has rfl
+
+/-! ### Working-inert non-vacuity — a working write moves the working boundary but NOT a
+committed one, and the committed root is unchanged. -/
+
+-- Two final memories differing ONLY at a working cell `(working, 0)`: agree off the working
+-- domain. (The hypothesis `working_commitment_inert` takes, exhibited concretely.)
+private def finA : UAddr ℤ → Option ℤ := fun a => if a = (Domain.heap, 10) then some 99 else none
+private def finB : UAddr ℤ → Option ℤ := fun a =>
+  if a = (Domain.heap, 10) then some 99
+  else if a = (Domain.working, 0) then some 7 else none
+
+-- The committed HEAP boundary is IDENTICAL across the two (the working write is inert)…
+#guard boundaryCells (fun a => finA (Domain.heap, a)) [10]
+  == boundaryCells (fun a => finB (Domain.heap, a)) [10]
+-- …but the WORKING boundary genuinely DIFFERS (finB wrote a working cell finA did not) —
+-- the inert guarantee is about COMMITTED domains, and working really is a live (uncommitted) plane.
+#guard boundaryCells (fun a => finA (Domain.working, a)) [0]
+  != boundaryCells (fun a => finB (Domain.working, a)) [0]
+
+/-- `working_commitment_inert` fires: `finA`/`finB` agree off the working domain, so the heap
+domain's committed boundary view coincides — the working cell never enters it. -/
+example :
+    boundaryCells (fun a => finA (Domain.heap, a)) [10]
+      = boundaryCells (fun a => finB (Domain.heap, a)) [10] :=
+  working_commitment_inert (d := Domain.heap) (by decide)
+    (fun a ha => by
+      -- off the working domain finA and finB agree (they differ only at (working, 0))
+      simp only [finA, finB]
+      by_cases h0 : a = (Domain.working, 0)
+      · exact absurd (h0 ▸ rfl) ha
+      · rw [if_neg h0])
+
+/-! ### Recursive-open non-vacuity — the two-level bind fires on a concrete UmemRef shape.
+
+The inner umem `[(0, 99)]` has root `R`; the outer umem holds `R` at ref key `5` (a `UmemRef`).
+Both binds discharge by `rfl` on the matching declared/committed heaps. Stated against the
+abstract CR floor (as every boundary binder is): the recursive open is the keystone, twice. -/
+
+example (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) :
+    ([((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])] : FeltHeap)
+        = [((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])]
+      ∧ ([((0 : ℤ), (99 : ℤ))] : FeltHeap) = [((0 : ℤ), (99 : ℤ))]
+      ∧ Heap.get ([((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])] : FeltHeap) 5
+          = some (Heap.root hash [((0 : ℤ), (99 : ℤ))]) :=
+  recursive_open_sound hash hCR (refKey := 5)
+    (outerCommitted := [((5 : ℤ), Heap.root hash [((0 : ℤ), (99 : ℤ))])])
+    (childCommitted := [((0 : ℤ), (99 : ℤ))]) (childDeclared := [((0 : ℤ), (99 : ℤ))])
+    rfl (by simp) rfl rfl
+
 end NonVacuity
 
 /-! ## Axiom-hygiene pins -/
@@ -720,12 +1042,21 @@ end NonVacuity
 #assert_axioms consistentFrom_filter
 #assert_axioms consistentFrom_strip
 #assert_axioms universal_memory_sound
+#assert_axioms universal_memory_sound_single
 #assert_axioms chains_pin_fold
 #assert_axioms memcheck_pins_final
 #assert_axioms boundaryCells_sorted
 #assert_axioms get_boundaryCells
 #assert_axioms boundary_root_derived
 #assert_axioms boundary_root_from_memcheck
+#assert_axioms boundary_init_root_derived
+#assert_axioms boundary_init_root_bound
+#assert_axioms boundary_image_eq_of_root
+#assert_axioms boundary_whole_image_sem
+#assert_axioms working_commitment_inert
+#assert_axioms working_commitment_root_inert
+#assert_axioms recursive_levels_disjoint
+#assert_axioms recursive_open_sound
 #assert_axioms consistent_read_pins
 #assert_axioms fold_none_of_insert_only
 #assert_axioms nullifier_fresh_sound

@@ -21,7 +21,8 @@ use std::path::PathBuf;
 
 use deos_view::{
     GalleryCard, parse_view_tree, render_card_document, render_card_live_document,
-    render_gallery_document, render_html, render_inspector_live_document,
+    render_doccollab_live_document, render_gallery_document, render_html,
+    render_inspector_live_document, render_kvstore_live_document, render_tally_live_document,
 };
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the
@@ -82,6 +83,92 @@ const INSPECTOR_CARD_JSON: &str = r#"{
         { "kind": "button", "props": { "label": "tick", "on_click": { "turn": "tick", "arg": 1 } } },
         { "kind": "button", "props": { "label": "add", "on_click": { "turn": "add", "arg": 1 } } },
         { "kind": "button", "props": { "label": "score", "on_click": { "turn": "score", "arg": 1 } } }
+    ] }
+  ]
+}"#;
+
+/// THE TALLY-BOARD CARD's view-tree — byte-for-byte the shape `wasm/src/bindings_card.rs`'s
+/// `TallyWorld::view_tree_json` generates: a titled column over a `table` of `row`s, one per
+/// named tally (apples/oranges/pears = slots 0/1/2). Each `row` carries a `text` label, a live
+/// `bind` of its slot, and `+1`/`−1` affordance `button`s (`{turn:inc|dec, arg:slot}`). It
+/// exercises the view-tree's LAYOUT nodes (`Row`/`Table`) and a multi-affordance row — surfaces
+/// neither the counter nor the inspector touched — proving the FULL ViewNode vocabulary is
+/// renderer-independent (the SAME tree the cockpit walks into gpui widgets, fed to the WEB
+/// renderer). The static seeds below (3/1/4) are the first paint; the in-tab `TallyWorld`
+/// re-reads the live values after boot.
+const TALLY_CARD_JSON: &str = r#"{
+  "kind": "vstack",
+  "props": {},
+  "children": [
+    { "kind": "text", "props": { "text": "Tally board" } },
+    { "kind": "table", "props": {}, "children": [
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "apples: " } },
+            { "kind": "bind", "props": { "slot": 0, "label": "" } },
+            { "kind": "button", "props": { "label": "+1", "on_click": { "turn": "inc", "arg": 0 } } },
+            { "kind": "button", "props": { "label": "−1", "on_click": { "turn": "dec", "arg": 0 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "oranges: " } },
+            { "kind": "bind", "props": { "slot": 1, "label": "" } },
+            { "kind": "button", "props": { "label": "+1", "on_click": { "turn": "inc", "arg": 1 } } },
+            { "kind": "button", "props": { "label": "−1", "on_click": { "turn": "dec", "arg": 1 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "pears: " } },
+            { "kind": "bind", "props": { "slot": 2, "label": "" } },
+            { "kind": "button", "props": { "label": "+1", "on_click": { "turn": "inc", "arg": 2 } } },
+            { "kind": "button", "props": { "label": "−1", "on_click": { "turn": "dec", "arg": 2 } } }
+        ] }
+    ] }
+  ]
+}"#;
+
+/// THE KV-STORE SERVICE-CELL CARD's view-tree — byte-for-byte the shape
+/// `wasm/src/bindings_card.rs`'s `KvStoreWorld::view_tree_json` generates: a titled column with
+/// a version `row` and a `table` of register rows (slots 1–4), each `row(text label, bind slot,
+/// button "put", button "del")`. The `put`/`del` buttons carry `{turn: put|delete, arg: slot}`.
+/// Unlike the other cards (which write a cell's OWN slots through bare `SetField`), the KV-store
+/// is a SERVICE CELL: clicking `put`/`del` ROUTES the call through the store's published
+/// `InterfaceDescriptor` (the verified DFA) before it desugars to the version-bump + register
+/// `SetField`s — proving a published-interface service surface renders + drives in the web
+/// renderer. The static seeds below (version 4; regs 10/20/30/40) are the first paint; the
+/// in-tab `KvStoreWorld` re-reads the live values after boot.
+const KVSTORE_CARD_JSON: &str = r#"{
+  "kind": "vstack",
+  "props": {},
+  "children": [
+    { "kind": "text", "props": { "text": "Key-Value Store — service cell" } },
+    { "kind": "text", "props": { "text": "a published interface (put · delete · get) routed through the verified DFA" } },
+    { "kind": "row", "props": {}, "children": [
+        { "kind": "text", "props": { "text": "store version: " } },
+        { "kind": "bind", "props": { "slot": 0, "label": "" } }
+    ] },
+    { "kind": "table", "props": {}, "children": [
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 1: " } },
+            { "kind": "bind", "props": { "slot": 1, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 1 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 1 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 2: " } },
+            { "kind": "bind", "props": { "slot": 2, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 2 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 2 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 3: " } },
+            { "kind": "bind", "props": { "slot": 3, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 3 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 3 } } }
+        ] },
+        { "kind": "row", "props": {}, "children": [
+            { "kind": "text", "props": { "text": "reg 4: " } },
+            { "kind": "bind", "props": { "slot": 4, "label": "" } },
+            { "kind": "button", "props": { "label": "put", "on_click": { "turn": "put", "arg": 4 } } },
+            { "kind": "button", "props": { "label": "del", "on_click": { "turn": "delete", "arg": 4 } } }
+        ] }
     ] }
   ]
 }"#;
@@ -257,6 +344,142 @@ fn main() {
         "the SAME inspector markup carries the multi-slot bind + affordance contract the wire drives"
     );
 
+    // ── 6b. Bake the LIVE TALLY-BOARD page — the FULL ViewNode vocabulary, browser-native ──
+    // The SAME gpui-free web renderer paints the board's view-tree (a `Table` of `Row`s, each a
+    // named tally with its live `Bind` value + `+1`/`−1` `Button`s — the LAYOUT nodes the
+    // counter/inspector never exercised). The bootstrap mints an in-tab `TallyWorld` seeded to
+    // [3, 1, 4], binds `window.__deosCard`, and re-paints each bound row from the committed
+    // ledger. Clicking a `+1`/`−1` fires a REAL cap-gated verified turn over that executor (its
+    // `data-arg` is the tally's SLOT, `data-turn` the direction) and that one row re-paints.
+    let tally = parse_view_tree(TALLY_CARD_JSON).expect("parse the tally card view-tree");
+    let live_tally = render_tally_live_document(
+        "deos tally-board card — live",
+        &tally,
+        /*bind_values (tree-walk order)*/ &[3, 1, 4],
+        /*seeds*/ &[3, 1, 4],
+        "./pkg/dregg_wasm.js",
+    );
+    let plive_tally = dist.join("tally.html");
+    std::fs::write(&plive_tally, &live_tally).expect("write the live tally.html");
+
+    // ── PROVE the tally board exercises the LAYOUT vocabulary + is wired (not merely written) ─
+    let frag_tally = render_html(&tally, &[3, 1, 4]);
+    assert!(
+        frag_tally.contains("deos-table") && frag_tally.matches("deos-row").count() == 3,
+        "the board renders a Table of three Rows (the layout vocabulary)"
+    );
+    assert!(
+        frag_tally.contains("apples: ")
+            && frag_tally.contains("oranges: ")
+            && frag_tally.contains("pears: "),
+        "each Row paints its named tally's label"
+    );
+    assert!(
+        frag_tally.contains("data-slot=\"0\">3</span>")
+            && frag_tally.contains("data-slot=\"1\">1</span>")
+            && frag_tally.contains("data-slot=\"2\">4</span>"),
+        "each Row's Bind paints its slot's seeded value (3 / 1 / 4)"
+    );
+    assert!(
+        frag_tally.matches("data-turn=\"inc\"").count() == 3
+            && frag_tally.matches("data-turn=\"dec\"").count() == 3,
+        "each Row carries BOTH affordances (+1 inc / −1 dec) — a multi-affordance row"
+    );
+    assert!(
+        frag_tally.contains("data-arg=\"0\"")
+            && frag_tally.contains("data-arg=\"1\"")
+            && frag_tally.contains("data-arg=\"2\""),
+        "each affordance carries its tally's SLOT index as `data-arg`"
+    );
+    assert!(
+        live_tally.contains("import init, { TallyWorld }")
+            && live_tally.contains("new TallyWorld([3n, 1n, 4n])")
+            && live_tally.contains("card.read(slot)"),
+        "the live tally page imports + mints the in-tab executor and re-paints each row off its slot"
+    );
+
+    // ── 6c. Bake the LIVE KV-STORE page — a SERVICE CELL invoked client-side ─────────────
+    // The SAME gpui-free web renderer paints the store's view-tree (a version row + a `Table`
+    // of register rows with `put`/`del` buttons). The bootstrap mints an in-tab `KvStoreWorld`
+    // seeded to [10, 20, 30, 40], binds `window.__deosCard`, and re-paints each bound row from
+    // the committed ledger. Clicking `put`/`del` ROUTES the call through the store's published
+    // `InterfaceDescriptor` (the verified DFA) and fires a REAL cap-gated verified turn against
+    // the store cell, the monotone version bumping. The status strip additionally exercises the
+    // verified `Monotonic`-version guarantee (a refused rollback) and the `Serviced` `get` seam.
+    let kvstore = parse_view_tree(KVSTORE_CARD_JSON).expect("parse the kvstore card view-tree");
+    let live_kv = render_kvstore_live_document(
+        "deos KV-store service cell — live",
+        &kvstore,
+        /*bind_values (tree-walk order: version, reg1..reg4)*/ &[4, 10, 20, 30, 40],
+        /*seeds (reg1..reg4)*/ &[10, 20, 30, 40],
+        "./pkg/dregg_wasm.js",
+    );
+    let plive_kv = dist.join("kvstore.html");
+    std::fs::write(&plive_kv, &live_kv).expect("write the live kvstore.html");
+
+    // ── PROVE the kvstore service-cell card renders the published-interface surface + is wired ─
+    let frag_kv = render_html(&kvstore, &[4, 10, 20, 30, 40]);
+    assert!(
+        frag_kv.contains("Key-Value Store — service cell") && frag_kv.contains("store version: "),
+        "the store card paints its title + the version row"
+    );
+    assert!(
+        frag_kv.contains("deos-table") && frag_kv.matches("deos-row").count() == 5,
+        "the store renders a version Row + a Table of four register Rows"
+    );
+    assert!(
+        frag_kv.contains("data-slot=\"0\">4</span>")
+            && frag_kv.contains("data-slot=\"1\">10</span>")
+            && frag_kv.contains("data-slot=\"4\">40</span>"),
+        "the version + register Binds paint their seeded values (version 4; regs 10/40)"
+    );
+    assert!(
+        frag_kv.matches("data-turn=\"put\"").count() == 4
+            && frag_kv.matches("data-turn=\"delete\"").count() == 4,
+        "each register Row carries BOTH method affordances (put / del)"
+    );
+    assert!(
+        live_kv.contains("import init, { KvStoreWorld }")
+            && live_kv.contains("new KvStoreWorld([10n, 20n, 30n, 40n])")
+            && live_kv.contains("card.read(slot)")
+            && live_kv.contains("c.version()"),
+        "the live store page imports + mints the in-tab service cell and re-paints each row + version"
+    );
+
+    // ── 6d. Bake the LIVE DOCUMENT-COLLABORATION page — Pijul/conflicts-as-objects, node-less ──
+    // The in-tab `DocCollabWorld` (`wasm/src/bindings_doc.rs`) drives the WHOLE flow: a doc-cell
+    // carries a base document published to its umem-heap (the fork); clicking `stitch` diverges
+    // two authors off the shared tail and `merge`s them (the categorical pushout), surfacing a
+    // first-class conflict HELD off-heap; the ConflictView renders the two alternatives attributed
+    // side-by-side with a resolution `Button` per ready choice; clicking one collapses the conflict
+    // and PUBLISHES the merged document to the doc-cell's umem-heap as a REAL verified turn (the
+    // boundary `heap_root` moves, a receipt is left). The tree re-renders WHOLESALE after every
+    // affordance (the SHAPE changes), so the page sets `card.viewHtml()` as the container innerHTML
+    // — the SAME gpui-free web renderer, driven from the wasm side.
+    let live_doc =
+        render_doccollab_live_document("deos document collaboration — live", "./pkg/dregg_wasm.js");
+    let plive_doc = dist.join("doccollab.html");
+    std::fs::write(&plive_doc, &live_doc).expect("write the live doccollab.html");
+
+    // ── PROVE the doc-collab page is wired (not merely written) ───────────────────────
+    assert!(
+        live_doc.contains("./pkg/dregg_wasm.js")
+            && live_doc.contains("import init, { DocCollabWorld }"),
+        "the live doc-collab page imports the wasm bundle's `init` + `DocCollabWorld`"
+    );
+    assert!(
+        live_doc.contains("new DocCollabWorld()") && live_doc.contains("window.__deosDoc = card"),
+        "the live doc-collab page mints the in-tab doc-cell verified executor"
+    );
+    assert!(
+        live_doc.contains("window.__deosDoc.viewHtml()") && live_doc.contains("root.innerHTML"),
+        "the surface re-renders wholesale from the wasm-side web renderer (the ConflictView ⇄ published doc)"
+    );
+    assert!(
+        live_doc.contains(".fire(turn, arg)") && live_doc.contains("deos-doc-root"),
+        "a delegated click fires each affordance (stitch / resolve+publish) as a real verified turn"
+    );
+
     // ── 7. Bake the GALLERY / card-picker as the served home page (`/` = index.html) ──
     // Without a front door a visitor lands on one card and never finds the others. This is
     // a plain-HTML (no-wasm) landing of clickable tiles, one per live card — the
@@ -278,6 +501,30 @@ fn main() {
                         (state rows + affordances) render live; clicking tick/add/score fires a \
                         cap-gated verified turn and the bound field re-paints.",
             },
+            GalleryCard {
+                href: "tally.html",
+                name: "Tally Board",
+                blurb: "A table of named tallies, each a row with a live count and +1/−1 \
+                        buttons. The full ViewNode layout vocabulary (Row + Table + a \
+                        multi-affordance row); every click is a verified turn moving one tally.",
+            },
+            GalleryCard {
+                href: "kvstore.html",
+                name: "KV-Store (service cell)",
+                blurb: "A cell publishing a typed interface (put · delete · get). Clicking \
+                        put/del routes the call through the verified DFA before it desugars to \
+                        SetField effects — a real verified turn against the store, the monotone \
+                        version bumping (a rollback is refused; get is a named OFE seam).",
+            },
+            GalleryCard {
+                href: "doccollab.html",
+                name: "Document Collaboration",
+                blurb: "Pijul, in a tab. Fork a document, diverge two authors, then stitch — the \
+                        categorical pushout surfaces a first-class CONFLICT (both alternatives \
+                        attributed side-by-side, held off-heap). Click to resolve and the merged \
+                        document publishes to the doc-cell's umem-heap as a real verified turn — \
+                        the boundary heap_root moves, a receipt is left.",
+            },
         ],
     );
     let pgallery = dist.join("index.html");
@@ -285,12 +532,20 @@ fn main() {
 
     // ── PROVE the gallery is wired (not merely written) ───────────────────────────────
     assert!(
-        gallery.contains("href=\"counter.html\"") && gallery.contains("href=\"inspector.html\""),
-        "the gallery links to BOTH live card pages (the card-picker)"
+        gallery.contains("href=\"counter.html\"")
+            && gallery.contains("href=\"inspector.html\"")
+            && gallery.contains("href=\"tally.html\"")
+            && gallery.contains("href=\"kvstore.html\"")
+            && gallery.contains("href=\"doccollab.html\""),
+        "the gallery links to ALL FIVE live card pages (the card-picker)"
     );
     assert!(
-        gallery.contains("Counter") && gallery.contains("Reflective Inspector"),
-        "the gallery names both cards"
+        gallery.contains("Counter")
+            && gallery.contains("Reflective Inspector")
+            && gallery.contains("Tally Board")
+            && gallery.contains("KV-Store (service cell)")
+            && gallery.contains("Document Collaboration"),
+        "the gallery names all five cards"
     );
 
     eprintln!("deos-view web projection baked (gpui-free):");
@@ -300,6 +555,9 @@ fn main() {
     eprintln!("  LIVE gallery (home)  : {}", pgallery.display());
     eprintln!("  LIVE counter page    : {}", plive.display());
     eprintln!("  LIVE inspector page  : {}", plive_insp.display());
+    eprintln!("  LIVE tally page      : {}", plive_tally.display());
+    eprintln!("  LIVE kvstore page    : {}", plive_kv.display());
+    eprintln!("  LIVE doc-collab page : {}", plive_doc.display());
     eprintln!();
     eprintln!("To serve the LIVE deos (a card firing real cap-gated verified turns in a TAB):");
     eprintln!("  1. wasm-pack build wasm --target web --out-dir pkg --release");

@@ -14,8 +14,8 @@
 //! deos-tutorial PD's screens; here it serves ONE live cell among many you
 //! navigate.
 
-use crate::fb::{rgb, Canvas, HEIGHT, WIDTH};
-use crate::image_data::{ImageCell, BALANCE_SUM, IMAGE, N_CELLS};
+use crate::fb::{Canvas, HEIGHT, WIDTH, rgb};
+use crate::image_data::{BALANCE_SUM, IMAGE, ImageCell, N_CELLS};
 
 // ───────────────────────────── the deos palette ─────────────────────────────
 const INK_TOP: (u8, u8, u8) = (6, 16, 26);
@@ -48,7 +48,33 @@ pub type Substance = Option<usize>;
 pub const N_SUBSTANCES: usize = 4;
 const SUBSTANCE_NAME: [&str; N_SUBSTANCES] = ["VALUE", "STATE", "AUTHORITY", "EVIDENCE"];
 const SUBSTANCE_ACCENT: [u32; N_SUBSTANCES] = [AMBER, CYAN, TEAL, GREEN];
-const SUBSTANCE_GLYPH: [&str; N_SUBSTANCES] = ["the ledger", "16 fields + nonce", "the c-list", "vk + proof"];
+const SUBSTANCE_GLYPH: [&str; N_SUBSTANCES] = [
+    "the ledger",
+    "16 fields + nonce",
+    "the c-list",
+    "vk + proof",
+];
+
+/// A live verified-turn signal: the genuine receipt facts the executor PD
+/// produced for the turn that just committed (parsed from the shared `commit_out`
+/// region the executor wrote), surfaced as an on-glass banner. This is the
+/// PD-boundary form of the semihost `repaint.rs` `DirtyRegion` — a committed turn
+/// drives a frame change; a REJECTED turn drives nothing (fail-closed).
+#[derive(Clone, Copy)]
+pub struct LiveTurn {
+    /// status:2 ok:1 (bodyCommitted) — the verified turn ACCEPTED.
+    pub committed: bool,
+    /// the receipt's `"status":` field (2 = bodyCommitted).
+    pub status: u8,
+    /// the receipt's `"ok":` field (1 = accepted).
+    pub ok: u8,
+    /// the new nonce the verified turn advanced to (7 -> 8 on the demo wire).
+    pub nonce: u64,
+    /// the receipt byte length the executor wrote to `commit_out`.
+    pub bytes: usize,
+    /// which live turn this is (1, 2, … as the executor signals repaints).
+    pub seq: u32,
+}
 
 /// The viewer's full state: which cell is focused, and whether we are drilled
 /// into one of its substances.
@@ -59,11 +85,18 @@ pub struct ViewState {
     /// `None` = browsing the rail (overview pane); `Some(i)` = inspecting
     /// substance `i` of the focused cell full-pane.
     pub drill: Substance,
+    /// The last verified turn the executor PD signalled a repaint for, if any.
+    /// `None` until a genuine turn commits; then its banner rides every paint.
+    pub live_turn: Option<LiveTurn>,
 }
 
 impl ViewState {
     pub const fn new() -> Self {
-        ViewState { focus: 0, drill: None }
+        ViewState {
+            focus: 0,
+            drill: None,
+            live_turn: None,
+        }
     }
 
     pub fn n_cells(&self) -> usize {
@@ -90,6 +123,71 @@ pub fn draw(c: &mut Canvas, st: &ViewState) {
         }
     }
     bottom_bar(c, st, cell);
+
+    // The live verified-turn banner rides LAST (an overlay), so the instant the
+    // executor PD signals a committed turn it is unmissable on glass.
+    if let Some(lt) = st.live_turn {
+        live_turn_banner(c, &lt);
+    }
+}
+
+// ── the live verified-turn banner (the repaint-on-turn payload, on glass) ─────
+// Drawn when the executor PD signals that a genuine verified turn committed. The
+// facts are READ from the receipt the executor wrote to the shared `commit_out`
+// region — not faked: a real `dregg_exec_full_forest_auth` turn, on real seL4.
+fn live_turn_banner(c: &mut Canvas, lt: &LiveTurn) {
+    let w = 600u32;
+    let h = 72u32;
+    let x = (WIDTH - w) / 2;
+    let y = 48u32;
+    let accent = if lt.committed { GREEN } else { RED };
+
+    // drop shadow + panel + accent frame/spine
+    c.rect(x + 5, y + 5, w, h, rgb(2, 6, 10));
+    c.vgradient_rect(x, y, w, h, (10, 28, 20), (5, 14, 12));
+    c.frame(x, y, w, h, 2, accent);
+    c.rect(x, y, 6, h, accent);
+
+    // headline + the verified entry it ran
+    c.rect(x + 20, y + 16, 11, 11, accent);
+    c.text("VERIFIED TURN on seL4", x + 42, y + 12, 2, 1, accent);
+    c.text(
+        "dregg_exec_full_forest_auth  (execFullForestG + admission)",
+        x + 42,
+        y + 36,
+        1,
+        0,
+        GREY,
+    );
+
+    // the genuine receipt facts (or the fail-closed line for a rejected turn)
+    let mut b = [0u8; 72];
+    let line = {
+        let mut wr = Writer::new(&mut b);
+        if lt.committed {
+            wr.str("status:");
+            wr.u32(lt.status as u32);
+            wr.str(" ok:");
+            wr.u32(lt.ok as u32);
+            wr.str(" bodyCommitted  nonce->");
+            wr.u64(lt.nonce);
+            wr.str("  receipt ");
+            wr.usize(lt.bytes);
+            wr.str("B  #");
+            wr.u32(lt.seq);
+        } else {
+            wr.str("turn REJECTED — no repaint (fail-closed)");
+        }
+        wr.finish()
+    };
+    c.text(
+        line,
+        x + 42,
+        y + 54,
+        1,
+        1,
+        if lt.committed { WHITE } else { RED },
+    );
 }
 
 // A faint deterministic starfield — depth without noise, seeded by focus so
@@ -116,7 +214,14 @@ fn top_chrome(c: &mut Canvas, st: &ViewState) {
     c.rect(0, 0, WIDTH, 2, TEAL_DIM);
     c.text("deos", 24, 12, 2, 1, TEAL);
     c.text("image", 24 + 92, 14, 1, 1, DIM);
-    c.text("live cell browser", 24 + 92 + 56, 14, 1, 1, rgb(70, 100, 110));
+    c.text(
+        "live cell browser",
+        24 + 92 + 56,
+        14,
+        1,
+        1,
+        rgb(70, 100, 110),
+    );
 
     // a breadcrumb on the right: which cell, and (if drilled) which substance.
     let cell = &IMAGE[st.focus];
@@ -225,7 +330,14 @@ fn overview_pane(c: &mut Canvas, cell: &ImageCell) {
     let mut hx = px;
     let hy = py + 42;
     hx = chip(c, hx, hy, cell.mode, MAGENTA, rgb(24, 14, 28)) + 8;
-    let _ = chip(c, hx, hy, cell.life_tag, life_color(cell.life_tag), rgb(10, 24, 18));
+    let _ = chip(
+        c,
+        hx,
+        hy,
+        cell.life_tag,
+        life_color(cell.life_tag),
+        rgb(10, 24, 18),
+    );
 
     c.text(cell.blurb, px, hy + 26, 1, 1, GREY);
 
@@ -233,7 +345,14 @@ fn overview_pane(c: &mut Canvas, cell: &ImageCell) {
     let idy = hy + 52;
     c.text("id", px, idy, 1, 1, DIM);
     c.text(cell.id_hex, px + 40, idy, 1, 1, CYAN);
-    c.text("blake3(pk || token)", px + 40 + Canvas::text_w(cell.id_hex, 1, 1) + 16, idy, 1, 0, rgb(70, 100, 110));
+    c.text(
+        "blake3(pk || token)",
+        px + 40 + Canvas::text_w(cell.id_hex, 1, 1) + 16,
+        idy,
+        1,
+        0,
+        rgb(70, 100, 110),
+    );
     c.text("pk", px, idy + 18, 1, 1, DIM);
     c.text(cell.pk_hex, px + 40, idy + 18, 1, 1, GREY);
 
@@ -251,8 +370,24 @@ fn overview_pane(c: &mut Canvas, cell: &ImageCell) {
     let mut ab = [0u8; 32];
 
     sub_tile(c, gx, gy, tile_w, tile_h, 0, value_line(&mut vb, cell));
-    sub_tile(c, gx + tile_w + 24, gy, tile_w, tile_h, 1, state_line(&mut sb, cell));
-    sub_tile(c, gx, gy + tile_h + 16, tile_w, tile_h, 2, auth_line(&mut ab, cell));
+    sub_tile(
+        c,
+        gx + tile_w + 24,
+        gy,
+        tile_w,
+        tile_h,
+        1,
+        state_line(&mut sb, cell),
+    );
+    sub_tile(
+        c,
+        gx,
+        gy + tile_h + 16,
+        tile_w,
+        tile_h,
+        2,
+        auth_line(&mut ab, cell),
+    );
     sub_tile(
         c,
         gx + tile_w + 24,
@@ -260,13 +395,26 @@ fn overview_pane(c: &mut Canvas, cell: &ImageCell) {
         tile_w,
         tile_h,
         3,
-        if cell.proved_state { "proved: true" } else if cell.vk_hash != "none" { "vk set" } else { "no vk" },
+        if cell.proved_state {
+            "proved: true"
+        } else if cell.vk_hash != "none" {
+            "vk set"
+        } else {
+            "no vk"
+        },
     );
 
     // the drill-in hint, set apart.
     let hint_y = gy + 2 * (tile_h) + 16 + 18;
     c.rect(px, hint_y, 6, 18, TEAL);
-    c.text("press ENTER to walk this cell's substances", px + 16, hint_y + 3, 1, 1, CYAN);
+    c.text(
+        "press ENTER to walk this cell's substances",
+        px + 16,
+        hint_y + 3,
+        1,
+        1,
+        CYAN,
+    );
 }
 
 fn sub_tile(c: &mut Canvas, x: u32, y: u32, w: u32, h: u32, idx: usize, value: &str) {
@@ -323,7 +471,11 @@ fn substance_pane(c: &mut Canvas, cell: &ImageCell, idx: usize) {
     let dots_x = WIDTH - 24 - (N_SUBSTANCES as u32) * 18;
     for i in 0..N_SUBSTANCES {
         let dx = dots_x + i as u32 * 18;
-        let col = if i == idx { SUBSTANCE_ACCENT[i] } else { rgb(36, 56, 64) };
+        let col = if i == idx {
+            SUBSTANCE_ACCENT[i]
+        } else {
+            rgb(36, 56, 64)
+        };
         c.rect(dx, py + 8, 11, 5, col);
     }
 
@@ -348,13 +500,33 @@ fn value_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
         w.i64(cell.balance);
         w.finish()
     };
-    let col = if cell.balance < 0 { RED } else if cell.balance > 0 { AMBER } else { GREY };
+    let col = if cell.balance < 0 {
+        RED
+    } else if cell.balance > 0 {
+        AMBER
+    } else {
+        GREY
+    };
     c.text(n, px + 24, y + 42, 4, 1, col);
     c.text("computrons", px + 24, y + 96, 1, 1, DIM);
 
     if cell.is_well {
-        let _ = chip(c, px + pw - 180, y + 44, "ISSUER WELL", RED, rgb(28, 12, 12));
-        c.text("carries -supply", px + pw - 180, y + 70, 1, 0, rgb(200, 130, 130));
+        let _ = chip(
+            c,
+            px + pw - 180,
+            y + 44,
+            "ISSUER WELL",
+            RED,
+            rgb(28, 12, 12),
+        );
+        c.text(
+            "carries -supply",
+            px + pw - 180,
+            y + 70,
+            1,
+            0,
+            rgb(200, 130, 130),
+        );
     } else {
         let _ = chip(c, px + pw - 150, y + 44, "ORDINARY", GREEN, rgb(10, 26, 18));
         c.text("kept >= 0 by verb", px + pw - 156, y + 70, 1, 0, GREEN);
@@ -374,7 +546,14 @@ fn value_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
         w.finish()
     };
     c.text(line, px + 18, cy + 20, 1, 1, WHITE);
-    c.text("issuer wells carry -supply, so a closed image conserves to zero.", px + 18, cy + 36, 1, 0, GREY);
+    c.text(
+        "issuer wells carry -supply, so a closed image conserves to zero.",
+        px + 18,
+        cy + 36,
+        1,
+        0,
+        GREY,
+    );
 }
 
 // STATE: the 16 fields + nonce, rendered as a real table.
@@ -425,7 +604,14 @@ fn state_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
             "disclosable" => "zk",
             _ => "pub",
         };
-        c.text(vis, px + 240, ry, 1, 0, if f.kind == "public" { DIM } else { vcol });
+        c.text(
+            vis,
+            px + 240,
+            ry,
+            1,
+            0,
+            if f.kind == "public" { DIM } else { vcol },
+        );
         // value (clipped to the pane)
         let v = clip(f.value, ((pw - 312) / 8) as usize);
         c.text(v, px + 312, ry, 1, 0, vcol);
@@ -437,8 +623,28 @@ fn state_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
     let fy = HEIGHT - BAR_H - 44;
     let fmax = (pw / 8) as usize;
     c.rect(px, fy, 6, 30, CYAN);
-    c.text(clip("a committed field shows only its hash; plaintext stays private.", fmax), px + 16, fy + 2, 1, 0, GREY);
-    c.text(clip("a proof setting all 16 fields flips proved_state (see EVIDENCE).", fmax), px + 16, fy + 16, 1, 0, DIM);
+    c.text(
+        clip(
+            "a committed field shows only its hash; plaintext stays private.",
+            fmax,
+        ),
+        px + 16,
+        fy + 2,
+        1,
+        0,
+        GREY,
+    );
+    c.text(
+        clip(
+            "a proof setting all 16 fields flips proved_state (see EVIDENCE).",
+            fmax,
+        ),
+        px + 16,
+        fy + 16,
+        1,
+        0,
+        DIM,
+    );
 }
 
 // AUTHORITY: the c-list (caps held) + the permission gate table.
@@ -453,8 +659,22 @@ fn authority_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) 
         c.vgradient_rect(px, ry, half, 60, CARD_LO, (6, 12, 18));
         c.frame(px, ry, half, 60, 1, rgb(40, 60, 68));
         c.text("(holds no caps)", px + 16, ry + 14, 1, 0, DIM);
-        c.text("a leaf of the web -", px + 16, ry + 34, 1, 0, rgb(70, 100, 110));
-        c.text("only connectivity begets", px + 16, ry + 46, 1, 0, rgb(70, 100, 110));
+        c.text(
+            "a leaf of the web -",
+            px + 16,
+            ry + 34,
+            1,
+            0,
+            rgb(70, 100, 110),
+        );
+        c.text(
+            "only connectivity begets",
+            px + 16,
+            ry + 46,
+            1,
+            0,
+            rgb(70, 100, 110),
+        );
     } else {
         for cap in cell.caps.iter() {
             let ch = 64u32;
@@ -468,13 +688,27 @@ fn authority_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) 
             w.u32(cap.slot);
             let slot = w.finish();
             c.text(slot, px + 14, ry + 8, 1, 0, CYAN);
-            let _ = chip(c, px + half - 96, ry + 6, cap.auth, auth_color(cap.auth), rgb(8, 24, 28));
+            let _ = chip(
+                c,
+                px + half - 96,
+                ry + 6,
+                cap.auth,
+                auth_color(cap.auth),
+                rgb(8, 24, 28),
+            );
             // the note (-> which named cell)
             c.text(cap.note, px + 14, ry + 26, 1, 0, WHITE);
             // the target id (the real edge), clipped to the card's inner width
             // so it never bleeds into the permission-gates column.
             let id_max = ((half - 28) / 8) as usize;
-            c.text(clip(cap.target, id_max), px + 14, ry + 42, 1, 0, rgb(90, 130, 140));
+            c.text(
+                clip(cap.target, id_max),
+                px + 14,
+                ry + 42,
+                1,
+                0,
+                rgb(90, 130, 140),
+            );
             ry += ch;
             if ry + 64 > HEIGHT - BAR_H - 16 {
                 break;
@@ -498,8 +732,22 @@ fn authority_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) 
     }
     let fy = py2 + 8;
     let amax = (half / 8) as usize;
-    c.text(clip("AUTHORITY = permissions ^ c-list", amax), rx, fy, 1, 0, TEAL);
-    c.text(clip("to hold a cap is to prove it", amax), rx, fy + 14, 1, 0, DIM);
+    c.text(
+        clip("AUTHORITY = permissions ^ c-list", amax),
+        rx,
+        fy,
+        1,
+        0,
+        TEAL,
+    );
+    c.text(
+        clip("to hold a cap is to prove it", amax),
+        rx,
+        fy + 14,
+        1,
+        0,
+        DIM,
+    );
 }
 
 // EVIDENCE: the verification key + proved_state + the state commitment.
@@ -509,11 +757,25 @@ fn evidence_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
     c.text("proved_state", px + 24, y + 16, 1, 1, DIM);
     if cell.proved_state {
         c.text("true", px + 24, y + 36, 3, 1, GREEN);
-        c.text("all 16 fields were last set by a single verified proof.", px + 24, y + 74, 1, 0, GREY);
+        c.text(
+            "all 16 fields were last set by a single verified proof.",
+            px + 24,
+            y + 74,
+            1,
+            0,
+            GREY,
+        );
         let _ = chip(c, px + pw - 150, y + 30, "PROVEN", GREEN, rgb(10, 26, 18));
     } else {
         c.text("false", px + 24, y + 36, 3, 1, GREY);
-        c.text("not all fields are proof-set (ordinary signed writes).", px + 24, y + 74, 1, 0, DIM);
+        c.text(
+            "not all fields are proof-set (ordinary signed writes).",
+            px + 24,
+            y + 74,
+            1,
+            0,
+            DIM,
+        );
     }
 
     // the verification key
@@ -525,13 +787,37 @@ fn evidence_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
         c.text("hash", px + 20, vy + 32, 1, 1, DIM);
         c.text(cell.vk_hash, vx, vy + 32, 1, 0, CYAN);
         c.text("program", px + 20, vy + 52, 1, 1, DIM);
-        c.text(clip(cell.vk_program, ((pw - 124) / 8) as usize), vx, vy + 52, 1, 0, WHITE);
-        c.text(clip("blake3_keyed(\"dregg-vk-v2\", air | verifier | proving-system)", (pw / 8) as usize), px + 20, vy + 70, 1, 0, rgb(70, 100, 110));
+        c.text(
+            clip(cell.vk_program, ((pw - 124) / 8) as usize),
+            vx,
+            vy + 52,
+            1,
+            0,
+            WHITE,
+        );
+        c.text(
+            clip(
+                "blake3_keyed(\"dregg-vk-v2\", air | verifier | proving-system)",
+                (pw / 8) as usize,
+            ),
+            px + 20,
+            vy + 70,
+            1,
+            0,
+            rgb(70, 100, 110),
+        );
     } else {
         c.vgradient_rect(px, vy + 18, pw, 44, CARD_LO, (6, 12, 18));
         c.frame(px, vy + 18, pw, 44, 1, rgb(40, 60, 68));
         c.text("(no verification key set)", px + 20, vy + 32, 1, 0, DIM);
-        c.text("this cell authorizes by signature, not by proof.", px + 20, vy + 46, 1, 0, rgb(70, 100, 110));
+        c.text(
+            "this cell authorizes by signature, not by proof.",
+            px + 20,
+            vy + 46,
+            1,
+            0,
+            rgb(70, 100, 110),
+        );
     }
 
     // the state commitment (the carrier that binds the whole cell)
@@ -539,7 +825,14 @@ fn evidence_detail(c: &mut Canvas, cell: &ImageCell, px: u32, pw: u32, y: u32) {
     c.rect(px, cy, 6, 46, GREEN);
     c.text("state commitment", px + 18, cy, 1, 1, GREEN);
     c.text(cell.commitment, px + 18, cy + 18, 1, 1, CYAN);
-    c.text("one 32-byte hash binding value, fields, c-list, vk, lifecycle.", px + 18, cy + 36, 1, 0, GREY);
+    c.text(
+        "one 32-byte hash binding value, fields, c-list, vk, lifecycle.",
+        px + 18,
+        cy + 36,
+        1,
+        0,
+        GREY,
+    );
 }
 
 // ───────────────────────────── bottom bar ───────────────────────────────────

@@ -822,6 +822,358 @@ pub const V3_STAGED_REGISTRY_TSV: &str =
 pub const V3_STAGED_REGISTRY_FP: &str =
     "61af721aa9401249d15611fbf9d1f89dc4a44002b70b65a2b69af664dc6e50d7";
 
+/// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
+/// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
+/// `transferBalanceUMem` · `mintBalanceUMem` · `burnBalanceUMem` · `revokeUMem` ·
+/// `nullifierFreshUMem` — emitted from the verified Lean
+/// `Dregg2.Circuit.Emit.EffectVmEmitUMemCohort.umemCohortRegistry` (`#assert_axioms`-clean,
+/// byte-pinned). Each is single-domain, width-7, ONE `umem_op` guarded at column 6 — the FIXED
+/// shape a committed VK can back (the producer's per-turn `umem-turn-boundary` form is
+/// variable-width `6 + #domains` and cannot). `key\tname\tjson` per line (key = the lean def
+/// name, e.g. `setFieldUMem`; name = the wire descriptor name; json = the parseable descriptor).
+///
+/// ADDITIVE / STAGED: a NEW set BESIDE the deployed per-map / rotated registries, NO VK bump,
+/// nothing on the live wire. The deployed prover keeps using the per-map V3 registry until the
+/// gated VK epoch; this is the per-effect → umem-descriptor routing the flip rides through.
+pub const UMEM_COHORT_V1_STAGED_REGISTRY_TSV: &str =
+    include_str!("../descriptors/umem-cohort-v1-staged-registry.tsv");
+
+/// Resolve the umem-form COHORT lean-key (the [`UMEM_COHORT_V1_STAGED_REGISTRY_TSV`] first
+/// column) for an [`Effect`](crate::effect_vm::Effect) — the per-effect FIXED-cohort
+/// descriptor this effect's universal-memory touch proves against. `None` = the effect is not
+/// (yet) a umem-cohort member (it stays on the per-map path; e.g. multi-domain or
+/// state-passthrough effects). STAGED: this is the effect→umem-descriptor resolver the gated
+/// flip routes through; the deployed default never calls it.
+///
+/// The domain each member touches mirrors `turn/src/umem.rs` (`UKey::domain`): Field / Balance →
+/// `heap`(1), Cap planes → `caps`(2), nullifiers → `nullifiers`(3).
+pub fn umem_cohort_lean_key_for_effect(effect: &crate::effect_vm::Effect) -> Option<&'static str> {
+    use crate::effect_vm::Effect;
+    Some(match effect {
+        Effect::SetField { .. } => "setFieldUMem",
+        Effect::Transfer { .. } => "transferBalanceUMem",
+        Effect::GrantCapability { .. } => "grantUMem",
+        Effect::AttenuateCapability { .. } => "attenuateUMem",
+        Effect::RevokeCapability { .. } => "revokeUMem",
+        Effect::Mint { .. } | Effect::BridgeMint { .. } => "mintBalanceUMem",
+        Effect::Burn { .. } => "burnBalanceUMem",
+        Effect::NoteSpend { .. } => "nullifierFreshUMem",
+        _ => return None,
+    })
+}
+
+/// The parseable descriptor JSON (third column) for a umem-cohort lean-key in
+/// [`UMEM_COHORT_V1_STAGED_REGISTRY_TSV`]. `None` if the key is absent.
+pub fn umem_cohort_descriptor_json(lean_key: &str) -> Option<&'static str> {
+    UMEM_COHORT_V1_STAGED_REGISTRY_TSV.lines().find_map(|line| {
+        let mut it = line.splitn(3, '\t');
+        if it.next() == Some(lean_key) {
+            let _wire_name = it.next();
+            it.next()
+        } else {
+            None
+        }
+    })
+}
+
+/// The byte-pinned staged registry of the MULTI-DOMAIN umem-form COHORT descriptors (the verified
+/// Lean `EffectVmEmitUMemCohortMulti.umemCohortMultiRegistry`, `EmitUMemCohortMulti.lean`-emitted +
+/// `#guard` byte-pinned). Each is width-8, TWO `umem_op`s — one per touched domain, guarded at
+/// column 6 (`heap`, the balance credit) and column 7 (`nullifiers`, the freshness insert) — the
+/// FIXED twin of the producer's sorted-domain two-domain form (`turn/src/umem.rs`), the shape a
+/// committed VK can back. This COMPLETES the umem cohort to the effects whose state touch spans more
+/// than one domain in one effect (the NOTE/BRIDGE economic verbs), on which the single-domain cohort
+/// fails closed. `key\tname\tjson` per line.
+///
+/// ADDITIVE / STAGED: a NEW set BESIDE the single-domain [`UMEM_COHORT_V1_STAGED_REGISTRY_TSV`] and
+/// the deployed per-map / rotated registries, NO VK bump, nothing on the live wire.
+pub const UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV: &str =
+    include_str!("../descriptors/umem-cohort-multidomain-v1-staged-registry.tsv");
+
+/// Resolve the MULTI-DOMAIN umem-form COHORT lean-key for an [`Effect`](crate::effect_vm::Effect)
+/// whose state touch spans MORE THAN ONE domain in a single effect — the per-effect FIXED-cohort
+/// descriptor (`UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV`) this effect's universal-memory
+/// touch proves against. `None` = the effect is single-domain (resolve it through
+/// [`umem_cohort_lean_key_for_effect`]) or a non-member (stays per-map). STAGED: the deployed default
+/// never calls it.
+///
+/// The deployed multi-domain effects are the NOTE/BRIDGE economic verbs: each reveals/inserts a
+/// `nullifiers`-domain freshness cell AND writes the `heap`-domain balance — domains `{heap (1),
+/// nullifiers (3)}`, the producer's sorted-code order placing `heap` at guard column 6 and
+/// `nullifiers` at guard column 7.
+pub fn umem_cohort_multidomain_lean_key_for_effect(
+    effect: &crate::effect_vm::Effect,
+) -> Option<&'static str> {
+    use crate::effect_vm::Effect;
+    Some(match effect {
+        // reveal a nullifier (nullifiers) + credit the balance (heap)
+        Effect::NoteSpend { .. } => "noteSpendUMem",
+        // insert an inbound bridged nullifier (nullifiers) + credit the balance (heap)
+        Effect::BridgeMint { .. } => "bridgeMintUMem",
+        _ => return None,
+    })
+}
+
+/// The parseable descriptor JSON (third column) for a multi-domain umem-cohort lean-key in
+/// [`UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV`]. `None` if the key is absent.
+pub fn umem_cohort_multidomain_descriptor_json(lean_key: &str) -> Option<&'static str> {
+    UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(lean_key) {
+                let _wire_name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+}
+
+/// The wire-name suffix marking a descriptor as the rotated+umem WELD
+/// ([`weld_umem_into_rotated_descriptor`]). A descriptor whose `name` ends with this is a STAGED
+/// welded form — never a deployed-registry member.
+pub const ROTATED_UMEM_WELD_SUFFIX: &str = "-umem-welded-staged";
+
+/// The wire-name suffix marking a descriptor as the WIDE rotated+umem WELD
+/// ([`weld_umem_into_wide_descriptor`]) — the WIDE (8-felt / ~124-bit faithful commit) twin of
+/// [`ROTATED_UMEM_WELD_SUFFIX`]. A descriptor whose `name` ends with this is a STAGED welded form
+/// over a WIDE descriptor (preserving the wide member's 16 commit PIs / 8-felt before-after
+/// anchors); never a deployed-registry member.
+pub const WIDE_UMEM_WELD_SUFFIX: &str = "-umem-wide-welded-staged";
+
+/// The wire-name suffix marking a descriptor as the WIDE rotated+umem MULTI-DOMAIN WELD
+/// ([`weld_umem_multidomain_into_wide_descriptor`]) — the two-domain twin of
+/// [`WIDE_UMEM_WELD_SUFFIX`]. A descriptor whose `name` ends with this welds the MULTI-DOMAIN umem
+/// cohort (one guarded `umemOp` per touched domain — the NOTE/BRIDGE economic verbs' `heap` balance
+/// credit + `nullifiers` freshness insert) onto a WIDE descriptor, preserving the wide member's 16
+/// commit PIs (8-felt ~124-bit anchors). Never a deployed-registry member.
+pub const WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX: &str = "-umem-multidomain-wide-welded-staged";
+
+/// **THE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the last precursor before the gated VK epoch.**
+///
+/// Weld the universal-memory COHORT leg INTO a rotated R=24 descriptor: keep the WHOLE rotated
+/// constraint set (gates / transitions / pi-bindings / chip lookups) AND the rotated 46-PI vector
+/// (`ROT_PI_COUNT` — the OLD/NEW state-commit pins at PI `V1_PI_COUNT` / `+1` the IVC chain fold
+/// reads as `old_root` / `new_root`), and APPEND a SINGLE-domain `umem_op` reconciliation leg over
+/// 7 fresh main columns `[base .. base+7)` (`base` = the rotated trace width) plus the `umemory`
+/// (id 6, arity 8) / `umem_boundary` (id 7, arity 7) tables — exactly the cohort emitter's width-7
+/// `umemOp` shape (`key · present · value · prev_present · prev_value · prev_serial · guard`),
+/// offset to `base`.
+///
+/// This is the deployed flag-day weld in struct form: the per-map memory reconciliation moves INTO
+/// the rotated descriptor as the universal-memory leg (`prove_vm_descriptor2_umem` with a REAL
+/// `UMemBoundaryWitness`), while the rotated PIs stay INTACT — which is exactly what resolves the
+/// two reconciliation seams the staged cohort leg named: (a) the umem leg now rides the rotated
+/// descriptor's committed PI vector, and (b) the IVC fold's `old_root`/`new_root` PI accessors keep
+/// working over the welded leg (the 0-PI cohort form could not supply them).
+///
+/// STAGED: a NEW descriptor BESIDE the deployed rotated registry — no VK bump, nothing on the live
+/// wire. `domain` is the cohort domain the welded effect touches (heap 1 / caps 2 / nullifiers 3),
+/// checked against the leg's actual domain by the prover.
+pub fn weld_umem_into_rotated_descriptor(
+    rotated: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(rotated, domain, ROTATED_UMEM_WELD_SUFFIX, false)
+}
+
+/// **THE COHORT-SPECIALIZED ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the IVC-fold perf lever.**
+///
+/// Identical to [`weld_umem_into_rotated_descriptor`] except the universal boundary table (id 7) is
+/// declared with [`TableSem::UMemBoundaryCohort`](crate::descriptor_ir2::TableSem::UMemBoundaryCohort)
+/// — the SINGLE-ROW specialization. The single-domain welded leg (e.g. a `Transfer`'s lone Balance
+/// touch) reconciles AT MOST ONE `(domain, key)` cell, so the general boundary's ~29 columns of key
+/// decomposition + lexicographic strict-increase comparator (which exist SOLELY to prove the declared
+/// address list is `Nodup`) are dead weight: with one row, `Nodup` is `List.nodup_singleton` (Lean
+/// `UniversalMemory.universal_memory_sound_single`, `#assert_axioms`-clean). This weld routes the leg
+/// through the width-9 `Ir2Air::UMemBoundaryCohort`, quartering the boundary instance's FRI columns —
+/// and that instance is re-paid up the WHOLE IVC aggregation tree, so the saving compounds. The
+/// single-row discipline is enforced in-circuit (`next.is_real = 0` on every transition); a
+/// multi-address witness is REFUSED at assembly and in the AIR, never silently mis-proved. A
+/// multi-address single-domain leg must use the general [`weld_umem_into_rotated_descriptor`].
+pub fn weld_umem_into_rotated_descriptor_cohort(
+    rotated: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(rotated, domain, ROTATED_UMEM_WELD_SUFFIX, true)
+}
+
+/// **THE WIDE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the real flip precursor the VK epoch
+/// needs.** Weld the universal-memory COHORT leg INTO a WIDE descriptor (a member of
+/// [`WIDE_REGISTRY_STAGED_TSV`], the verified Lean `v3RegistryCapOpenWide`, carrying the two 13×8
+/// BEFORE/AFTER carriers + the 16 wide commit PIs = the 8-felt ~124-bit before/after anchors).
+///
+/// IDENTICAL append shape to [`weld_umem_into_rotated_descriptor`] — the single-domain cohort
+/// `umemOp` over 7 fresh main columns `[base .. base+7)` (`base` = the WIDE trace width, PAST the
+/// wide carriers) plus the `umemory` / `umem_boundary` tables — but onto the WIDE base. **Crucially
+/// it PRESERVES the wide descriptor's `public_input_count` AND every existing constraint (incl. all
+/// 16 wide-commit `PiBinding`s), so the welded form keeps the 8-felt before/after anchors at the
+/// SAME PI offsets (the leg's LAST 16 PIs) — NO narrowing.** The weld is purely ADDITIVE (it appends
+/// columns / tables / one `umemOp` constraint and NEVER edits `public_input_count` or any PI
+/// binding), which is exactly why a proof under the welded descriptor binds the ~124-bit commitment
+/// identically to the wide descriptor — the no-narrowing scar the VK epoch refused to cross.
+///
+/// This is the genuine deployable flag-day weld: the per-map memory reconciliation moves INTO the
+/// WIDE rotated descriptor as the universal-memory leg, while the WIDE PIs (the 8-felt commit
+/// `verify_full_turn_bound` binds) stay intact. STAGED: a NEW descriptor BESIDE the deployed wide
+/// registry — no VK bump, nothing on the live wire. `domain` is the cohort domain the welded effect
+/// touches (heap 1 / caps 2 / nullifiers 3), checked against the leg's actual domain by the prover.
+pub fn weld_umem_into_wide_descriptor(
+    wide: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    weld_umem_into_descriptor_with_suffix(wide, domain, WIDE_UMEM_WELD_SUFFIX, false)
+}
+
+/// **THE WIDE ROTATED+UMEM MULTI-DOMAIN WELD (STAGED, VK-RISK-FREE) — the last family tail.** The
+/// two-domain twin of [`weld_umem_into_wide_descriptor`]: weld the MULTI-DOMAIN umem cohort leg INTO
+/// a WIDE descriptor (a member of [`WIDE_REGISTRY_STAGED_TSV`]). Where the single-domain weld appends
+/// ONE `umemOp` over 7 fresh columns, this appends the FIXED multi-domain cohort shape (the verified
+/// Lean `EffectVmEmitUMemCohortMulti.umemCohortDesc2`, the byte-pinned
+/// [`UMEM_COHORT_MULTIDOMAIN_V1_STAGED_REGISTRY_TSV`]): `6 + domains.len()` fresh main columns
+/// `[base .. base + 6 + domains.len())` — `base+0..base+5` shared (`key · present · value ·
+/// prev_present · prev_value · prev_serial`), one PER-DOMAIN guard at `base + 6 + i` — and ONE
+/// `umemOp` per touched domain (in the supplied COLUMN order, the producer's sorted-domain-code order
+/// `{heap (1), nullifiers (3)}`), each guarded at its own column. The NOTE/BRIDGE economic verbs touch
+/// TWO domains in one effect (a `nullifiers` freshness insert + a `heap` balance credit), on which the
+/// single-domain weld fails closed; this is their WIDE weld.
+///
+/// IDENTICAL no-narrowing property to [`weld_umem_into_wide_descriptor`]: it PRESERVES
+/// `public_input_count` AND every existing constraint (incl. all 16 wide-commit `PiBinding`s), so the
+/// 8-felt before/after anchors ride through INTACT at the SAME PI offsets. The cross-DOMAIN economic
+/// invariant (the credit == the spent/minted value) is NOT a memory-reconciliation property — it rides
+/// the effect's own rotated AIR (the whole rotated constraint set the weld preserves), exactly as in the
+/// narrow multi-domain cohort. STAGED: a NEW descriptor BESIDE the deployed wide registry — no VK bump,
+/// nothing on the live wire. `domains` is the per-op domain set in column order (heap 1 / caps 2 /
+/// nullifiers 3), checked against the leg's actual domains by the prover.
+pub fn weld_umem_multidomain_into_wide_descriptor(
+    wide: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domains: &[u32],
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    use crate::descriptor_ir2::{
+        MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem, UMemOpSpec, VmConstraint2,
+    };
+    use crate::lean_descriptor_air::LeanExpr;
+
+    // The first fresh universal-memory operand column (the base form occupies `[0, base)`).
+    let base = wide.trace_width;
+    let mut welded = wide.clone();
+    welded.name = format!("{}{WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX}", wide.name);
+    // Shared base cols 0..5 + one guard per domain.
+    welded.trace_width = base + 6 + domains.len();
+    for t in welded.tables.iter_mut() {
+        if t.sem == TableSem::Main {
+            t.arity = welded.trace_width;
+        }
+    }
+    // The universal-memory tables: `umemory` (arity 8) + the GENERAL `umem_boundary` (arity 7) — the
+    // multi-domain cohort reconciles 2+ `(domain,key)` cells, so the single-row cohort boundary
+    // (whose `Nodup` is vacuous) does NOT apply; it carries the general lexicographic comparator (the
+    // byte-pinned multi-domain cohort descriptor declares the general `umem_boundary`).
+    welded.tables.push(TableDef2 {
+        id: TID_UMEMORY,
+        name: "umemory".to_string(),
+        arity: 8,
+        sem: TableSem::UMemory,
+    });
+    welded.tables.push(TableDef2 {
+        id: TID_UMEM_BOUNDARY,
+        name: "umem_boundary".to_string(),
+        arity: 7,
+        sem: TableSem::UMemBoundary,
+    });
+    // One welded universal-memory WRITE op per touched domain — byte-for-byte the multi-domain cohort
+    // `umemOp` shape (shared key/value/prev cols, per-domain guard), offset to `base`.
+    for (i, &domain) in domains.iter().enumerate() {
+        welded.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+            guard: LeanExpr::Var(base + 6 + i),
+            domain,
+            key: LeanExpr::Var(base),
+            present: LeanExpr::Var(base + 1),
+            value: LeanExpr::Var(base + 2),
+            prev_present: LeanExpr::Var(base + 3),
+            prev_value: LeanExpr::Var(base + 4),
+            prev_serial: LeanExpr::Var(base + 5),
+            kind: MemKind::Write,
+        }));
+    }
+    welded
+}
+
+/// The shared, purely-ADDITIVE umem-cohort weld (the body of both
+/// [`weld_umem_into_rotated_descriptor`] and [`weld_umem_into_wide_descriptor`]): append the
+/// single-domain cohort `umemOp` over 7 fresh main columns + the `umemory` / `umem_boundary` tables
+/// onto `desc`, marking the result with `suffix`. It NEVER touches `public_input_count` nor any
+/// existing constraint, so the base descriptor's whole PI vector + every PI binding survive
+/// unchanged — the property that lets the WIDE weld keep the 16 wide-commit PIs (the 8-felt
+/// ~124-bit anchors) intact.
+fn weld_umem_into_descriptor_with_suffix(
+    desc: &crate::descriptor_ir2::EffectVmDescriptor2,
+    domain: u32,
+    suffix: &str,
+    cohort: bool,
+) -> crate::descriptor_ir2::EffectVmDescriptor2 {
+    use crate::descriptor_ir2::{
+        MemKind, TID_UMEM_BOUNDARY, TID_UMEMORY, TableDef2, TableSem, UMemOpSpec, VmConstraint2,
+    };
+    use crate::lean_descriptor_air::LeanExpr;
+
+    // The first fresh universal-memory operand column (the base form occupies `[0, base)`).
+    let base = desc.trace_width;
+    let mut welded = desc.clone();
+    welded.name = format!("{}{suffix}", desc.name);
+    welded.trace_width = base + 7;
+    // Widen the MAIN table arity (sem `Main`) to the welded width; the rotated chip/range/memory/
+    // map tables keep their arities (the umem leg adds its own tables, below).
+    for t in welded.tables.iter_mut() {
+        if t.sem == TableSem::Main {
+            t.arity = welded.trace_width;
+        }
+    }
+    // Declare the universal-memory tables (the cohort emitter shape: `umemory` arity 8 carries the
+    // domain-tagged Blum tuple + serial/gap lanes; `umem_boundary` arity 7 the declared
+    // `(domain,key)` init/final image).
+    welded.tables.push(TableDef2 {
+        id: TID_UMEMORY,
+        name: "umemory".to_string(),
+        arity: 8,
+        sem: TableSem::UMemory,
+    });
+    // The cohort weld declares the SINGLE-ROW boundary specialization: at most one declared
+    // `(domain,key)` cell ⇒ the inter-row comparator + key decomposition are dropped (width 9 vs
+    // 38; `Nodup` is free). The arity stays 7 (the witness-supplied init/final image shape is
+    // unchanged); only the AIR routing + assembled trace width differ.
+    welded.tables.push(TableDef2 {
+        id: TID_UMEM_BOUNDARY,
+        name: if cohort {
+            "umem_boundary_cohort".to_string()
+        } else {
+            "umem_boundary".to_string()
+        },
+        arity: 7,
+        sem: if cohort {
+            TableSem::UMemBoundaryCohort
+        } else {
+            TableSem::UMemBoundary
+        },
+    });
+    // The single welded universal-memory WRITE op over the appended 7 columns — byte-for-byte the
+    // cohort `umemOp` (`circuit/descriptors/umem-cohort-v1-staged-registry.tsv`), offset to `base`.
+    welded.constraints.push(VmConstraint2::UMemOp(UMemOpSpec {
+        guard: LeanExpr::Var(base + 6),
+        domain,
+        key: LeanExpr::Var(base),
+        present: LeanExpr::Var(base + 1),
+        value: LeanExpr::Var(base + 2),
+        prev_present: LeanExpr::Var(base + 3),
+        prev_value: LeanExpr::Var(base + 4),
+        prev_serial: LeanExpr::Var(base + 5),
+        kind: MemKind::Write,
+    }));
+    welded
+}
+
 /// **THE FAITHFUL 8-FELT WIDE TRANSFER descriptor (STAGED-ADDITIVE slice).** The
 /// `v3RegistryWide` transfer member (`wideAppend transferV3 bb (bb+51)`, width 816 / PI 54) —
 /// the byte source of the first wide prove+verify roundtrip. Emitted from the verified Lean
@@ -833,21 +1185,24 @@ pub const V3_STAGED_REGISTRY_FP: &str =
 pub const WIDE_TRANSFER_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-transfer-staged.tsv");
 
-/// **THE FAITHFUL 8-FELT WIDE REGISTRY (STAGED-ADDITIVE slice 2).** The FULL 45-member emit-source
-/// registry made 8-felt-wide: each `v3RegistryCapOpen` member wrapped through the proven
-/// `wideAppend member bb (bb+51)` (`bb = 187` uniform — the rotated BEFORE-limb base). The `key\t
-/// name\tjson` per line (key = the live registry key, e.g. `burnVmDescriptor2R24`, mirroring
-/// `rotation-v3-staged-registry.tsv`), emitted from the verified Lean
-/// `CapOpenEmit.v3RegistryCapOpenWide` (`metatheory/EmitWideRegistryProbe.lean`). ADDITIVE: the live
-/// 1-felt `V3_STAGED_REGISTRY_TSV` / FP / VK are UNTOUCHED — this is the parallel wide path beside
-/// them. The transfer row (row 0) is byte-identical to `WIDE_TRANSFER_STAGED_TSV`. The wide carriers
-/// land PAST each member's host width (608 for the 816-wide families, 818 for the 1026-wide cap-open
-/// tail), re-absorbing the SAME rotated limbs the 1-felt block lays into a genuine 8-felt
-/// (~124-bit) commitment.
+/// **THE FAITHFUL 8-FELT WIDE REGISTRY (STAGED-ADDITIVE slice 2).** A member-for-member, name-stable
+/// COVER of the live V3 registry (`rotation-v3-staged-registry.tsv`, 57 members) made 8-felt-wide:
+/// each live member wrapped through the proven `wideAppend host bb (bb+51)` at its real per-member
+/// BEFORE-limb base `bb` (the underlying v1 FACE width). The `key\tname\tjson` per line (key = the
+/// live registry key, e.g. `burnVmDescriptor2R24`), emitted from the verified Lean
+/// `CapOpenEmit.v3RegistryCapOpenWide` + the WRITE-bearing tail + the three live-only members
+/// (`transferCapOpenTB` / `heapWrite` / `supplyMint`), in the LIVE order
+/// (`metatheory/EmitWideRegistryProbe.lean`). `grantCapWriteCapOpen` is reconciled OUT (it is not a
+/// live `V3_STAGED_REGISTRY_TSV` member). ADDITIVE: the live 1-felt `V3_STAGED_REGISTRY_TSV` / FP / VK
+/// are UNTOUCHED — this is the parallel wide path beside them. The transfer row (row 0) is
+/// byte-identical to `WIDE_TRANSFER_STAGED_TSV`. The wide carriers land PAST each member's host width
+/// (581/595/609/819/821), re-absorbing the SAME rotated limbs the 1-felt block lays into a genuine
+/// 8-felt (~124-bit) commitment (wide widths 789/803/817/1027/1029, each carrying the 16 wide commit
+/// PIs = the 8-felt before/after anchors).
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "d9573d0dae0b2fb0e201bea893ef908392f307cd0054ae962709ad0f6be6ea8d";
+    "d446ab8a72d0f9a5b95bda545de43c86e4568c0acc93456da5ed37b2842a8cf2";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2037,16 +2392,23 @@ mod tests {
             );
             let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
             // the wide member is `host + 208` (two 13×8 carrier blocks) and `host.piCount + 16`.
-            // The host widths in play are 581 (custom/setFieldDyn), 609 (817-wide), 819 (cap-open):
-            // every wide width is one of 789 / 817 / 1027 (188-base EffectVM row).
+            // The host widths in play are 581 (custom/setFieldDyn → 789), 595 (heapWrite splice → 803),
+            // 609 (the rotated cohort → 817), 819 (cap-open → 1027) and 821 (the turn-identity-pinned
+            // transfer cap-open → 1029): every wide width is `host + 208` (188-base EffectVM row).
             assert!(
-                matches!(d.trace_width, 789 | 817 | 1027),
-                "{key}: wide width {} is a known wide geometry (789 / 817 / 1027)",
+                matches!(d.trace_width, 789 | 803 | 817 | 1027 | 1029),
+                "{key}: wide width {} is a known wide geometry (789 / 803 / 817 / 1027 / 1029)",
                 d.trace_width
             );
+            // Every wide member carries the 16 wide-commit PIs (the 8-felt ~124-bit before/after
+            // anchors) appended PAST its host's PI vector, so `piCount = host.piCount + 16`. The
+            // rotated cohort / `-eff` / cap-open / write members host the full 46-PI rotated vector →
+            // 62; the turn-identity-pinned `transferCapOpenTB` hosts 49 → 65; the minimal-PI Class-A
+            // `heapWrite` hosts just 4 → 20. The floor (≥ 20) is exactly the 16 anchors + heapWrite's
+            // 4 host PIs — every member fits the 16 wide PIs, NO narrowing.
             assert!(
-                d.public_input_count >= 62,
-                "{key}: wide PI count {} carries the 16 wide PIs (base ≥ 46)",
+                d.public_input_count >= 20,
+                "{key}: wide PI count {} carries the 16 wide-commit PIs",
                 d.public_input_count
             );
             if i == 0 {
@@ -2063,7 +2425,12 @@ mod tests {
                 );
             }
         }
-        assert_eq!(n, 45, "the wide registry covers all 45 emit-source members");
+        assert_eq!(
+            n,
+            live_keys.len(),
+            "the wide registry is a member-for-member cover of the live V3 registry (57 members)"
+        );
+        assert_eq!(n, 57, "the wide registry covers all 57 live V3 members");
     }
 
     /// The widened-entry codec teeth: round-trip + FAIL-CLOSED decode. A forged

@@ -46,6 +46,13 @@ pub mod bindings_transclusion;
 // turn seam — a browser button-click fires its `{turn, arg}` affordance as a REAL
 // cap-gated verified turn over the embedded executor, and the bound slot re-paints.
 pub mod bindings_card;
+// The document-collaboration surface in the tab: the Pijul/conflicts-as-objects flow
+// (fork → diverge → stitch → a first-class conflict → resolve → publish), node-less, over an
+// in-tab verified executor. `DocCollabWorld` rides `dregg-doc`'s patch theory (DocGraph · merge
+// as the pushout · conflicts-as-first-class-objects · resolve patches) + its umem-heap commitment;
+// a resolve publishes the merged document to the doc-cell's umem-heap as a REAL verified turn, and
+// the conflict view re-renders wholesale through `deos-view`'s gpui-free web renderer.
+pub mod bindings_doc;
 
 // ============================================================================
 // Token operations (Macaroon backend)

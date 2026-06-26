@@ -37,6 +37,12 @@ pub mod escrow_sealed;
 pub mod facet;
 pub mod factory;
 pub mod id;
+/// First-class typed cell interfaces (CELLS-AS-SERVICE-OBJECTS): a
+/// content-addressed [`interface::InterfaceDescriptor`] auto-derived from a
+/// cell's method-dispatch program. A standalone, NON-committed type — the
+/// service-object / `invoke()` layer lives ABOVE the effectvm/commitment, so the
+/// descriptor is not folded into the cell commitment.
+pub mod interface;
 pub mod ledger;
 pub mod lifecycle;
 pub mod membrane;
@@ -117,6 +123,9 @@ pub use factory::{
     FactoryError, FactoryRegistry, FieldConstraint, Provenance, canonical_program_vk,
 };
 pub use id::CellId;
+pub use interface::{
+    ArgsSchema, InterfaceDescriptor, InterfaceRef, MethodSig, Semantics, method_symbol,
+};
 pub use ledger::{
     CellStateDelta, DEFAULT_SOVEREIGN_TTL, Ledger, LedgerDelta, LedgerError, MembershipProof, Side,
     SovereignHistory, SovereignRegistration, WitnessDiff,

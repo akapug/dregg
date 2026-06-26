@@ -1859,6 +1859,118 @@ mod tests {
         }
     }
 
+    /// ARGUS fidelity rung 3 (node leg-iterate): a tampered NON-LEAD chain leg is REFUSED at the
+    /// node's verify->accept gate — the verifier checks EVERY cohort leg, not just the lead. The
+    /// node's gate is `dregg_sdk::verify_full_turn` (the same one the heterogeneous chain proves
+    /// through, and the same one a remote peer / light client runs); since PATH-PRESERVE it COLLECTS
+    /// all `"effect-vm-rotated"` legs, re-verifies each cryptographically (step 3) and chain-checks
+    /// endpoints + adjacency (step 4). This test is the missing witness: the prior anti-ghost test
+    /// (`flow_b_heterogeneous_chain_tampered_leg_is_rejected`) tampered the LEAD leg (index 0); a
+    /// lead-only verifier would have caught THAT but SLIPPED a forged tail. Here we corrupt the
+    /// SECOND (non-lead) rotated leg and assert the rejection lands on THAT leg (not index 0) — so a
+    /// forged interior/tail cohort cannot ride a valid lead onto the chain.
+    #[test]
+    fn flow_b_heterogeneous_chain_tampered_NON_LEAD_leg_is_rejected() {
+        let bob = CellId::from_bytes([0xB2; 32]);
+        let pre_balance: u64 = 1_000;
+        let pre_nonce: u64 = 0;
+
+        let before_cell = dregg_cell::Cell::with_balance([0xA1; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let after_cell = before_cell.clone();
+
+        // HETEROGENEOUS: Transfer THEN self-SetField — two distinct cohorts ⇒ two chained legs.
+        let effects = vec![
+            dregg_turn::Effect::Transfer {
+                from: alice,
+                to: bob,
+                amount: 100,
+            },
+            dregg_turn::Effect::SetField {
+                cell: alice,
+                index: 0,
+                value: [0x09u8; 32],
+            },
+        ];
+        let rotation = rotation_witness_for_self_sovereign(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &[[0x11u8; 32]],
+            &effects,
+        )
+        .expect("heterogeneous all-cohort turn yields a rotation witness");
+
+        let mut proven = prove_and_verify_finalized_turn(
+            &alice,
+            pre_balance,
+            pre_nonce,
+            &effects,
+            [0x7Cu8; 32],
+            Some(rotation),
+        )
+        .expect("honest heterogeneous chain must prove");
+
+        // Locate EVERY rotated leg in sub-proof order; there must be >= 2 (one per cohort run).
+        let rotated_indices: Vec<usize> = proven
+            .proof
+            .composed
+            .sub_proofs
+            .iter()
+            .enumerate()
+            .filter(|(_, sp)| sp.label == "effect-vm-rotated")
+            .map(|(i, _)| i)
+            .collect();
+        assert!(
+            rotated_indices.len() >= 2,
+            "the heterogeneous turn must carry >= 2 chained rotated legs; got {rotated_indices:?}"
+        );
+        let lead_idx = rotated_indices[0];
+        let non_lead_idx = rotated_indices[1];
+
+        // Corrupt the NON-LEAD (second) leg's NEW_COMMIT PI (offset 4) by one felt. For a wide leg
+        // this desyncs the PI from the committed trace (step-3 crypto rejects THIS leg); for a narrow
+        // leg the last-leg endpoint / adjacency tooth bites (step-4). Either way the rejection must
+        // land on the non-lead leg — a lead-only verifier would have ACCEPTED this forged tail.
+        let new_commit_off = dregg_circuit::effect_vm::pi::NEW_COMMIT;
+        proven.proof.composed.sub_proofs[non_lead_idx].sub_public_inputs[new_commit_off] +=
+            BabyBear::new(1);
+
+        let result =
+            dregg_sdk::verify_full_turn(&proven.proof, proven.old_commit, proven.new_commit);
+        match result {
+            Err(FullTurnVerifyError::SubProofInvalid { index, label, .. }) => {
+                assert_eq!(
+                    index, non_lead_idx,
+                    "the NON-LEAD leg must be the rejected sub-proof — the verifier checks beyond the lead"
+                );
+                assert_ne!(
+                    index, lead_idx,
+                    "the rejection must NOT be the lead leg (that would prove only the lead is checked)"
+                );
+                assert_eq!(
+                    label, "effect-vm-rotated",
+                    "the rejected leg is the corrupted rotated chain leg"
+                );
+            }
+            Err(FullTurnVerifyError::CommitmentMismatch { which, .. }) => {
+                assert!(
+                    which == "chain_adjacency" || which == "new_commitment",
+                    "a tampered non-lead-leg NEW must fail adjacency or the endpoint, got which={which}"
+                );
+            }
+            Ok(()) => panic!(
+                "ARGUS rung 3 REGRESSION: a tampered NON-LEAD cohort leg was ACCEPTED — the node \
+                 verifier checks only the lead leg and a forged tail cohort SLIPPED!"
+            ),
+            Err(other) => panic!(
+                "expected SubProofInvalid (step-3 crypto, non-lead index) or CommitmentMismatch \
+                 (step-4 chain), got {other:?}"
+            ),
+        }
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // FRESHNESS / no-double-spend routing (the LIVE bindings this module wires)
     // ──────────────────────────────────────────────────────────────────────

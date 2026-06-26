@@ -554,15 +554,39 @@ def test_mailbox_nonces_are_fresh(mock_node):
     assert len(nonces) == 2 and nonces[0] != nonces[1]
 
 
-# ─── kernel: this build embeds the verified Lean kernel ───
+# ─── kernel: the probe reports the active local executor (Rust by default) ───
 
 
-def test_kernel_is_lean():
-    """The whole point of the shared link mode: the Python module runs the REAL
-    verified Lean kernel, not the Rust fallback. verified_step_ok is a live call
-    through the proved Exec.recKExec (transfer 5: 50/10 → 45/15)."""
+def test_kernel_probe_reports_executor():
+    """`dregg.kernel()` self-describes the wheel and PROVES its active executor
+    by running one real transfer through it. The SDK ALWAYS has a local executor.
+
+    * LIGHT (default) build: the pure-Rust `TurnExecutor` — `executor`/`producer`
+      "rust", `executor_present` True, `executor_step_ok` True (a real signed
+      transfer the executor authorized + committed). `lean`/`verified_step_ok`
+      are False (Rust is at parity with the verified Lean spec, not itself the
+      proved kernel).
+    * HEAVY (`--features kernel`) build: the REAL verified Lean kernel —
+      `executor` "lean" and `verified_step_ok` a live call through the proved
+      Exec.recKExec (transfer 5: 50/10 → 45/15).
+
+    Either way the sign/submit/read surface above is unaffected (it is Ed25519 +
+    wire-codec + HTTP, independent of the executor)."""
     k = dregg.kernel()
-    assert k["lean"] is True
-    assert k["producer"] == "lean"
-    assert k["verified_step_ok"] is True
-    assert '"ok":1' in k["verified_step_out"]
+    assert k["build"] in ("light", "kernel")
+    assert k["executor_present"] is True
+    assert k["executor"] in ("rust", "lean")
+    assert k["executor"] == k["producer"]
+    # The active executor ran a real transfer (the destination cell landed at 15).
+    assert k["executor_step_ok"] is True
+    assert '"ok":1' in k["executor_step_out"]
+    if k["executor"] == "lean":
+        # The heavy build: the proved Lean kernel ran the step.
+        assert k["lean"] is True
+        assert k["verified_step_ok"] is True
+    else:
+        # The light client default: the pure-Rust executor, at parity.
+        assert k["executor"] == "rust"
+        assert k["build"] == "light"
+        assert k["lean"] is False
+        assert k["verified_step_ok"] is False

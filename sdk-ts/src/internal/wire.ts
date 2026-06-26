@@ -98,11 +98,12 @@ export interface CapabilityRef {
   breadstuff?: Bytes32;
   expiresAt?: number | bigint;
   /**
-   * NOTE: `allowed_effects` is intentionally not modeled. The Rust field
-   * carries `#[serde(skip_serializing_if = "Option::is_none")]`
-   * (cell/src/capability.rs:70), so a `None` is OMITTED from the postcard
-   * stream — this encoder mirrors that omission byte-for-byte (parity with
-   * the Rust serializer, including its wire quirks, is what keeps the
+   * NOTE: `allowed_effects` is intentionally not modeled on this surface.
+   * The Rust field carries `#[serde(default)]` ONLY (NOT
+   * `skip_serializing_if`, see cell/src/capability.rs) — a skipped field
+   * cannot round-trip the non-self-describing `postcard` codec, so its
+   * `None` discriminant IS emitted into the stream. The encoder writes a
+   * literal `None` for it (parity with the Rust serializer keeps the
    * differential green).
    */
   storedEpoch?: number | bigint;
@@ -276,8 +277,12 @@ function writeCapabilityRef(w: Writer, cap: CapabilityRef): void {
   writeAuthRequired(w, cap.permissions);
   w.option(cap.breadstuff, (b) => w.bytes(exactBytes(b, 32, "cap.breadstuff")));
   w.option(cap.expiresAt, (e) => w.varint(e));
-  // allowed_effects: None is SKIPPED by the Rust serializer
-  // (#[serde(skip_serializing_if)]); mirror the omission.
+  // allowed_effects: not modeled on this surface, but the Rust field is
+  // `#[serde(default)]` ONLY (NOT skip_serializing_if — cell/src/capability.rs)
+  // so its `None` discriminant IS emitted into the non-self-describing postcard
+  // stream (a skipped field cannot round-trip the durable codec). Emit it as a
+  // literal `None` to stay byte-identical to the Rust serializer.
+  w.u8(0);
   w.option(cap.storedEpoch, (e) => w.varint(e));
 }
 

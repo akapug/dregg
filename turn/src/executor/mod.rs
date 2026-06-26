@@ -739,6 +739,25 @@ pub struct TurnExecutor {
     /// Blum write trace whose fold connects them), or the emitter's refusal. `None`
     /// until a turn commits with [`Self::umem_witness_enabled`] set.
     pub last_umem_witness: Mutex<Option<Result<crate::umem::UmemTurnWitness, String>>>,
+    /// THE MID-FOREST YIELD POINT (`crate::continuation`; Lean twin
+    /// `Dregg2/Exec/Continuation.midturn_split`). When set to a journal-prefix LENGTH
+    /// `k` (the default sentinel `u64::MAX` = OFF), the live forest walk
+    /// (`execute_tree`'s depth-first effect loop) checkpoints the FIRST time its journal
+    /// reaches `k` entries — snapshotting `project_executor_state(ledger)` BETWEEN two
+    /// effects into [`Self::last_umem_yield`]. This is the live mid-flight capture the
+    /// continuations lane needs (vs. the post-commit whole-turn trace cut). It is
+    /// recursion-gated by [`Self::umem_witness_enabled`] (the yield only fires when the
+    /// umem witness lane is on) so the live proving path is untouched. ATOMICITY: a yield
+    /// is an OBSERVATION only — it never short-circuits the walk or emits a receipt; the
+    /// turn still commits or rolls back as a whole. See the module banner of
+    /// `crate::continuation` for the precise receipt-boundary honesty.
+    pub umem_yield_at: std::sync::atomic::AtomicU64,
+    /// The mid-flight executor-state projection captured at the [`Self::umem_yield_at`]
+    /// journal boundary (the live snapshot taken BETWEEN two effects). `None` until a
+    /// yield fires. Paired with [`Self::last_umem_witness`]'s pre-projection + journal
+    /// prefix, this is the captured boundary a [`crate::continuation::Continuation`]
+    /// suspends into.
+    pub last_umem_yield: Mutex<Option<crate::umem::UProjection>>,
     /// THE WITNESS MODE (SYMBOLIC EXECUTION — `crate::collapse`). `0` = Full
     /// (the correct default: materialize every per-turn Merkle witness), `1` =
     /// Symbolic (apply the full state transition but DEFER witness
@@ -795,6 +814,8 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }
@@ -854,6 +875,8 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }
@@ -895,6 +918,8 @@ impl TurnExecutor {
             consumed_cap_witnesses: Mutex::new(Vec::new()),
             umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
             last_umem_witness: Mutex::new(None),
+            umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
+            last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
         }

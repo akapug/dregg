@@ -216,9 +216,10 @@ fn k_fold_turn_chain_proves_and_verifies() {
     }
     whole.final_root = honest_final;
 
-    // REFUSED: relabeled chain_digest (claiming a different ordered history).
+    // REFUSED: relabeled chain_digest (claiming a different ordered history) — the digest
+    // is now a multi-felt Poseidon2 commitment; relabel any lane.
     let honest_digest = whole.chain_digest;
-    whole.chain_digest = honest_digest + BabyBear::ONE;
+    whole.chain_digest[0] = honest_digest[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled chain_digest must be refused; got {other:?}"),
@@ -273,7 +274,10 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     let bytes = whole.to_bytes();
     assert!(!bytes.is_empty(), "the byte envelope must be non-empty");
     let env = WholeChainProofBytes::from_postcard(&bytes).expect("the honest envelope must decode");
-    assert_eq!(env.version, 1);
+    assert_eq!(
+        env.version,
+        dregg_circuit_prove::ivc_turn_chain::WHOLE_CHAIN_PROOF_ENVELOPE_V1
+    );
     assert_eq!(env.genesis_root, genesis.as_u32());
     assert_eq!(env.final_root, final_root.as_u32());
     assert_eq!(env.num_turns, 3);
@@ -289,7 +293,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         &env.binding_proof,
         env.genesis_root,
         env.final_root,
-        env.chain_digest,
+        &env.chain_digest,
         env.num_turns as usize,
         &vk.0,
     )
@@ -593,8 +597,8 @@ fn foreign_circuit_root_is_refused_by_vk_pin() {
 /// tooth 1 cannot tell them apart. They have DIFFERENT data ⇒ different roots/digests, so
 /// the cross-paired claim is genuinely false.
 #[test]
-#[ignore = "SLOW: two real folds (~minutes); run with --ignored — DEMONSTRATES the open #1 hole"]
-fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
+#[ignore = "SLOW: two real folds (~minutes); run with --ignored — the CLOSE of IVC hole #1/#6"]
+fn carried_binding_proof_unlinked_to_root_is_rejected() {
     // History A: the GENUINE root we keep.
     let (turns_a, _ga, _fa) = make_chain(1000, 0, 7, 2);
     let whole_a = prove_turn_chain_recursive(&turns_a).expect("chain A folds");
@@ -618,7 +622,7 @@ fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
 
     // THE FORGERY: keep A's GENUINE root, but swap in B's GENUINE binding proof + B's
     // publics. Every field is internally consistent (B's binding proof attests B's
-    // publics), and the root is a genuine same-shape root — nothing ties them.
+    // publics), and the root is a genuine same-shape root.
     let mut forged = whole_a;
     forged.binding_proof = whole_b.binding_proof;
     forged.genesis_root = gb;
@@ -627,13 +631,17 @@ fn carried_binding_proof_unlinked_to_root_is_an_open_hole() {
     forged.num_turns = whole_b.num_turns;
 
     let verdict = verify_turn_chain_recursive(&forged, &vk);
-    // OPEN HOLE: today this VERIFIES (the false claim is accepted). When the binding↔root
-    // linkage lands, flip this to `verdict.is_err()`.
+    // CLOSED (IVC hole #1/#6). The EXPOSED-CLAIM CHANNEL ties the carried binding proof
+    // to THIS root: A's root proof carries an `expose_claim` non-primitive table whose
+    // public_values are A's 4 chain claims, bus-bound (WitnessChecks reader mult -1) to
+    // the binding proof the fold actually verified and re-bound at every aggregation layer.
+    // Tooth (4) compares the carried claim against those root-exposed publics — so A's
+    // root paired with B's binding proof + B's claims now FAILS: A's root exposes A's
+    // endpoints, while the swapped claim is B's.
     assert!(
-        verdict.is_ok(),
-        "WITNESS of codex finding #1: a genuine root for history A paired with a genuine \
-         binding proof for history B currently VERIFIES — the binding↔root linkage is \
-         missing. (If this now ERRORS, the hole has been CLOSED — update the assertion.) \
+        verdict.is_err(),
+        "the binding↔root linkage REJECTS a genuine root for history A paired with a \
+         genuine binding proof for a DIFFERENT history B (the cross-pairing forgery). \
          got: {verdict:?}"
     );
 }
@@ -837,6 +845,394 @@ fn two_step_core_rejects_discontinuity() {
         Err(TurnChainError::ChainBreak { index, .. }) => assert_eq!(index, 1),
         Ok(_) => panic!("a discontinuous pair must not fold"),
         Err(other) => panic!("expected ChainBreak, got {other:?}"),
+    }
+}
+
+// ============================================================================
+// CODEX RE-REVIEW #2 — THE DEEPER MIXED-ROOT FORGERY (binding-leaf vs descriptor-leaf).
+//
+// THE FIX (codex's ordered segment-accumulator). The separate binding leaf is GONE
+// from the soundness path. Every DESCRIPTOR leaf now carries a constant-size ordered
+// SEGMENT `[first_old, last_new, count, acc]`, with `first_old`/`last_new` bound
+// IN-CIRCUIT to that leaf's descriptor proof's REAL rotated roots; aggregation COMBINES
+// the segments (state continuity `L.last_new == R.first_old`, count additivity, ordered
+// digest `acc = H(L.acc, R.acc)`) up to the root. The root's exposed segment is thus
+// derived from the ACTUAL descriptor leaves it folded — there is no swappable binding
+// leaf whose endpoints can disagree with the execution.
+//
+// The deeper attack codex described (fold A's descriptor leaves but make the root expose
+// B's endpoints via a separately-injected B binding leaf) is now INEXPRESSIBLE: the only
+// segment table at the root is the descriptor-derived one. The strongest remaining
+// forgery is "fold A's REAL leaves, then carry B's claims" — which this test does, and
+// which the SEGMENT tooth REJECTS (A's root exposes A's [genesis, final, num_turns,
+// digest], so a B-claim mismatches).
+//
+// This test mirrors the lib-private `prove_chain_core_rotated` + `aggregate_tree` from
+// the PUBLIC building blocks (`prove_descriptor_leaf_rotated_with_segment` + the segment
+// combine), folds A's REAL descriptor leaves to a root, then runs the REAL verifier
+// (`verify_turn_chain_recursive_from_parts`) carrying B's claims and asserts it REJECTS.
+// THIS is the close of the mixed-root hole.
+// ============================================================================
+
+/// Find the instance index of the `expose_claim` (segment) non-primitive table in a
+/// batch proof, in the same order the in-circuit verifier allocates `air_public_targets`
+/// (primitive tables first, then non-primitives in order). Re-implemented here because
+/// the lib's `expose_claim_instance_index` is `pub(crate)`.
+fn expose_claim_idx(
+    proof: &p3_circuit_prover::BatchStarkProof<
+        dregg_circuit_prove::plonky3_recursion_impl::recursive::DreggRecursionConfig,
+    >,
+) -> Option<usize> {
+    let num_primitive = p3_circuit_prover::batch_stark_prover::NUM_PRIMITIVE_TABLES;
+    proof
+        .non_primitives
+        .iter()
+        .position(|e| e.op_type.as_str() == "expose_claim")
+        .map(|pos| num_primitive + pos)
+}
+
+// The in-circuit segment digest is the lib's `pub seg_poseidon_commit` (a multi-felt
+// Poseidon2 sponge); the test calls it DIRECTLY so its combine matches the lib EXACTLY.
+
+/// **CODEX RE-REVIEW #2 — THE MIXED-ROOT FORGERY, REJECTED (the close).**
+///
+/// Fold history A's GENUINE segment-bearing descriptor leaves into ONE root (the real
+/// segment-accumulator fold), then carry B's claims to the verifier. The whole-chain
+/// claim for B must FAIL against a root that executed A — the segment tooth fires because
+/// A's root exposes A's endpoints, not B's. There is no separate binding leaf to inject
+/// B's endpoints into the root.
+#[test]
+#[ignore = "SLOW: a real segment fold (~minutes); run with --ignored — codex re-review #2 CLOSE"]
+fn mixed_root_forgery_executes_A_claims_B() {
+    use dregg_circuit_prove::ivc_turn_chain::TurnChainBindingAir;
+    use dregg_circuit_prove::ivc_turn_chain::{
+        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
+        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
+        verify_turn_chain_recursive_from_parts,
+    };
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
+        DreggRecursionConfig, create_recursion_backend, prove_inner_for_air_with_config,
+        recursion_vk_fingerprint, verify_inner_for_air_with_config,
+    };
+    use p3_recursion::{
+        BatchOnly, ProveNextLayerParams, RecursionOutput,
+        build_and_prove_aggregation_layer_with_expose,
+    };
+
+    const D: usize = 4;
+
+    // ----- The two histories (same K=2 transfer shape ⇒ same root VK fingerprint). -----
+    // History A: the descriptor/execution leaves we fold (the REAL executed history).
+    let (turns_a, _ga, _fa) = make_chain(1000, 0, 7, 2);
+    // History B: a DIFFERENT history; its CLAIMS are what the forgery carries (so the
+    // whole-chain CLAIM is B while the EXECUTION was A).
+    let (turns_b, gb, fb) = make_chain(500, 0, 3, 2);
+    let refs_a: Vec<&FinalizedTurn> = turns_a.iter().collect();
+
+    let config: DreggRecursionConfig = ir2_leaf_wrap_config();
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    // ----- B's carried claims. The attacker carries B's chain endpoints + a binding proof
+    // (which is no longer a soundness dependency). B's `chain_digest` here is irrelevant to
+    // the rejection — the segment tooth fails on B's genesis/final/count already — but we
+    // build a real B binding proof so the carried artifact is internally well-formed. -----
+    let b_genesis = turns_b[0].old_root();
+    let b_mid = turns_b[0].new_root();
+    let b_final = turns_b[1].new_root();
+    assert_eq!(b_mid, turns_b[1].old_root(), "B chains by construction");
+    assert_eq!(b_genesis, gb);
+    assert_eq!(b_final, fb);
+    let (b_rows, b_pis) = honest_binding_2row(b_genesis, b_mid, b_final);
+    let b_binding_inner = prove_inner_for_air_with_config(
+        &TurnChainBindingAir,
+        to_binding_matrix(&b_rows),
+        &b_pis,
+        &config,
+    );
+    verify_inner_for_air_with_config(&TurnChainBindingAir, &b_binding_inner, &b_pis, &config)
+        .expect("B's binding leaf proves + self-verifies");
+    let b_genesis_root = b_pis[0];
+    let b_final_root = b_pis[1];
+    let b_num_turns = 2usize;
+    // B's carried multi-felt digest (irrelevant to the rejection — the segment tooth fails on
+    // B's genesis/final/count first — but well-formed: the single binding digest, zero-padded).
+    let mut b_chain_digest = [BabyBear::ZERO; SEG_DIGEST_WIDTH];
+    b_chain_digest[0] = b_pis[3];
+
+    // ----- The fold: A's REAL segment-bearing descriptor leaves -> one root. -----
+    let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> = Vec::with_capacity(2);
+    for t in &refs_a {
+        let leg = &t.participant.rotated;
+        let wrapped = prove_descriptor_leaf_rotated_with_segment(
+            &leg.descriptor,
+            &leg.proof,
+            &leg.public_inputs,
+            &config,
+        )
+        .expect("A's rotated descriptor leaf wraps with its segment");
+        batch_leaves.push(wrapped);
+    }
+
+    // Aggregate the segment leaves to ONE root (mirror the lib `aggregate_tree` combine:
+    // continuity + count additivity + ordered-digest fold, re-exposing the parent segment).
+    let mut proofs = batch_leaves;
+    while proofs.len() > 1 {
+        let mut next_level: Vec<RecursionOutput<DreggRecursionConfig>> =
+            Vec::with_capacity(proofs.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < proofs.len() {
+            let left_idx = expose_claim_idx(&proofs[i].0).expect("left segment");
+            let right_idx = expose_claim_idx(&proofs[i + 1].0).expect("right segment");
+            let left = proofs[i].into_recursion_input::<BatchOnly>();
+            let right = proofs[i + 1].into_recursion_input::<BatchOnly>();
+            let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                               left_apt: &[Vec<p3_recursion::Target>],
+                               right_apt: &[Vec<p3_recursion::Target>]| {
+                let l = left_apt.get(left_idx).expect("left seg present");
+                let r = right_apt.get(right_idx).expect("right seg present");
+                assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
+                // Continuity via direct connect (mirrors the lib `aggregate_tree`): avoids the
+                // `sub`+`assert_zero` backward-add that would clobber the shared `WitnessId(0)`.
+                cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+                let first_old = l[SEG_FIRST_OLD];
+                let last_new = r[SEG_LAST_NEW];
+                let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
+                let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+                acc_inputs
+                    .extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                acc_inputs
+                    .extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+                let acc = seg_poseidon_commit(cb, &acc_inputs);
+                let mut parent = Vec::with_capacity(SEG_WIDTH);
+                parent.push(first_old);
+                parent.push(last_new);
+                parent.push(count);
+                parent.extend_from_slice(&acc);
+                cb.expose_as_public_output(&parent);
+            };
+            let out = build_and_prove_aggregation_layer_with_expose::<
+                DreggRecursionConfig,
+                BatchOnly,
+                BatchOnly,
+                _,
+                D,
+            >(
+                &left,
+                &right,
+                &config,
+                &backend,
+                &params,
+                None,
+                Some(&expose),
+            )
+            .expect("segment aggregation layer");
+            next_level.push(out);
+            i += 2;
+        }
+        if i < proofs.len() {
+            next_level.push(proofs.pop().unwrap());
+        }
+        proofs = next_level;
+    }
+    let a_root: RecursionOutput<DreggRecursionConfig> = proofs.pop().unwrap();
+
+    // The honest anchor: recomputed from A's root (an honest setup over THIS same circuit
+    // shape would distribute exactly this fingerprint — the attacker forges only the claim).
+    let vk = recursion_vk_fingerprint(&a_root.0);
+
+    // RUN THE REAL VERIFIER carrying B's claims against A's root (A's execution). The
+    // segment tooth reads A's root-exposed segment (= A's genesis/final/count/digest) and
+    // compares it to the carried B-claim — which MISMATCHES, so verification REJECTS.
+    let verdict = verify_turn_chain_recursive_from_parts(
+        &a_root.0,
+        &b_binding_inner,
+        b_genesis_root,
+        b_final_root,
+        b_chain_digest,
+        b_num_turns,
+        &vk,
+    );
+
+    eprintln!("[codex-#2 mixed-root] verdict = {verdict:?}  (is_err = CLOSED; is_ok = STILL OPEN)");
+
+    // THE CLOSE: a whole-chain claim for B against a root that executed A is REJECTED. The
+    // ordered segment-accumulator binds the root-exposed [genesis, final, num_turns,
+    // digest] to the REAL descriptor leaves, so the B-claim cannot ride an A-execution.
+    assert!(
+        verdict.is_err(),
+        "MIXED-ROOT HOLE CLOSED (codex re-review #2): a root that folded A's descriptor \
+         leaves carrying a B whole-chain claim MUST be REJECTED by the segment tooth — A's \
+         root exposes A's endpoints, not B's. got: {verdict:?}"
+    );
+}
+
+/// **FORK FOLLOW-UP (a) — LEAF-CIRCUIT IDENTITY PINNED IN-BAND (the close).**
+///
+/// [`aggregate_tree`](dregg_circuit_prove::ivc_turn_chain) now folds every child of the K-fold
+/// tree through `into_recursion_input_pinned`, baking each child's OWN preprocessed commitment
+/// (its VK-identity core — the Merkle cap binding its static op-list) as a CONSTANT the parent
+/// aggregation circuit `connect`s its child-commitment targets to. This test walks that exact
+/// descriptor-leaf segment-combine path and witnesses BOTH sides:
+///   1. the honest pin (each child pinned to its own genuine commitment) PROVES;
+///   2. a FORGED leaf-identity — the left child pinned to a FOREIGN commitment (one field element
+///      flipped, i.e. a different-circuit op-list) — is refused IN-BAND (the parent aggregation
+///      circuit is UNSAT), NOT via a same-shape argument.
+///
+/// Previously the child's preprocessed commitment rode as unconstrained runtime targets the host
+/// never checked, so a from-scratch prover could fold a proof of a DIFFERENT circuit. The pin
+/// closes that: the constant lives in every node's op-list up to the root, so the root VK pin
+/// (verify tooth 1) transitively certifies the whole tree's leaf identity. (The sibling
+/// `accumulator::pinned_fold_rejects_foreign_vk_in_circuit` exercises the same fork lever on the
+/// ONLINE fixed-point path; this is the K-fold light-client path.)
+#[test]
+#[ignore = "SLOW: a real segment fold (~minutes); run with --ignored — fork follow-up (a) close"]
+fn pinned_leaf_identity_rejects_foreign_child_in_band() {
+    use dregg_circuit_prove::ivc_turn_chain::{
+        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
+        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
+    };
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
+        DreggRecursionConfig, create_recursion_backend,
+    };
+    use p3_baby_bear::BabyBear as P3BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_recursion::{
+        BatchOnly, ProveNextLayerParams, RecursionOutput,
+        build_and_prove_aggregation_layer_with_expose,
+    };
+    use p3_symmetric::MerkleCap;
+
+    const D: usize = 4;
+
+    // Two genuine segment-bearing descriptor leaves of one continuous K=2 chain.
+    let (turns, _g, _f) = make_chain(1000, 0, 7, 2);
+    let config: DreggRecursionConfig = ir2_leaf_wrap_config();
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let mut leaves: Vec<RecursionOutput<DreggRecursionConfig>> = Vec::with_capacity(2);
+    for t in &turns {
+        let leg = &t.participant.rotated;
+        leaves.push(
+            prove_descriptor_leaf_rotated_with_segment(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                &config,
+            )
+            .expect("rotated descriptor leaf wraps with its segment"),
+        );
+    }
+
+    let left_idx = expose_claim_idx(&leaves[0].0).expect("left segment");
+    let right_idx = expose_claim_idx(&leaves[1].0).expect("right segment");
+
+    // The children's GENUINE preprocessed commitments (their VK-identity cores).
+    let left_commit = leaves[0]
+        .running_preprocessed_commit()
+        .expect("a recursion leaf-wrap has a preprocessed commitment");
+    let right_commit = leaves[1]
+        .running_preprocessed_commit()
+        .expect("a recursion leaf-wrap has a preprocessed commitment");
+
+    // (1) HONEST pin: each child pinned to its OWN commitment ⇒ the in-circuit connect +
+    //     preprocessed-trace FRI check is satisfiable, the layer PROVES (exactly the combine
+    //     `aggregate_tree` walks for the light client).
+    {
+        let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                           left_apt: &[Vec<p3_recursion::Target>],
+                           right_apt: &[Vec<p3_recursion::Target>]| {
+            let l = left_apt.get(left_idx).expect("left seg present");
+            let r = right_apt.get(right_idx).expect("right seg present");
+            assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
+            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+            let first_old = l[SEG_FIRST_OLD];
+            let last_new = r[SEG_LAST_NEW];
+            let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
+            let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+            acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+            acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+            let acc = seg_poseidon_commit(cb, &acc_inputs);
+            let mut parent = Vec::with_capacity(SEG_WIDTH);
+            parent.push(first_old);
+            parent.push(last_new);
+            parent.push(count);
+            parent.extend_from_slice(&acc);
+            cb.expose_as_public_output(&parent);
+        };
+        let left = leaves[0].into_recursion_input_pinned::<BatchOnly>(left_commit.clone());
+        let right = leaves[1].into_recursion_input_pinned::<BatchOnly>(right_commit.clone());
+        build_and_prove_aggregation_layer_with_expose::<
+            DreggRecursionConfig,
+            BatchOnly,
+            BatchOnly,
+            _,
+            D,
+        >(
+            &left,
+            &right,
+            &config,
+            &backend,
+            &params,
+            None,
+            Some(&expose),
+        )
+        .expect("a pinned segment fold against the GENUINE child VK identities must prove");
+    }
+
+    // (2) FORGED leaf-identity: pin the LEFT child to a FOREIGN commitment (one field element
+    //     flipped — a different-circuit op-list). The left child's real preprocessed commitment
+    //     no longer matches the pinned constant, so the parent aggregation circuit is UNSAT — the
+    //     foreign leaf-circuit identity is refused IN-BAND, not via a same-shape argument.
+    let mut roots = left_commit.into_roots();
+    assert!(!roots.is_empty(), "the cap has at least one root");
+    roots[0][0] += P3BabyBear::ONE; // a different-circuit preprocessed commitment
+    let foreign_left = MerkleCap::new(roots);
+    {
+        let expose = move |cb: &mut p3_circuit::CircuitBuilder<_>,
+                           left_apt: &[Vec<p3_recursion::Target>],
+                           right_apt: &[Vec<p3_recursion::Target>]| {
+            let l = left_apt.get(left_idx).expect("left seg present");
+            let r = right_apt.get(right_idx).expect("right seg present");
+            assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
+            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+            let first_old = l[SEG_FIRST_OLD];
+            let last_new = r[SEG_LAST_NEW];
+            let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
+            let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
+            acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+            acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
+            let acc = seg_poseidon_commit(cb, &acc_inputs);
+            let mut parent = Vec::with_capacity(SEG_WIDTH);
+            parent.push(first_old);
+            parent.push(last_new);
+            parent.push(count);
+            parent.extend_from_slice(&acc);
+            cb.expose_as_public_output(&parent);
+        };
+        let left = leaves[0].into_recursion_input_pinned::<BatchOnly>(foreign_left);
+        let right = leaves[1].into_recursion_input_pinned::<BatchOnly>(right_commit);
+        let res = build_and_prove_aggregation_layer_with_expose::<
+            DreggRecursionConfig,
+            BatchOnly,
+            BatchOnly,
+            _,
+            D,
+        >(
+            &left,
+            &right,
+            &config,
+            &backend,
+            &params,
+            None,
+            Some(&expose),
+        );
+        assert!(
+            res.is_err(),
+            "FORK FOLLOW-UP (a) CLOSED: a child pinned to a FOREIGN preprocessed commitment \
+             (a different-circuit leaf identity) MUST be refused in-band (UNSAT), got Ok"
+        );
     }
 }
 

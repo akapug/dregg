@@ -33,16 +33,16 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 
 use dregg_cell::{
-    lifecycle::{DeathCertificate, DeathReason},
     AuthRequired, Cell, CellId, Ledger, Permissions,
+    lifecycle::{DeathCertificate, DeathReason},
 };
 use dregg_sdk::embed::{DreggEngine, EmbedError, EngineConfig};
 use dregg_turn::{
+    ComputronCosts, TurnExecutor,
     action::{Action, Authorization, DelegationMode, Effect, Event},
-    collapse::{is_deferred, WitnessMode},
+    collapse::{WitnessMode, is_deferred},
     forest::CallForest,
     turn::{Turn, TurnReceipt},
-    ComputronCosts, TurnExecutor,
 };
 
 use crate::dynamics::{Dynamics, WorldEvent};
@@ -1024,6 +1024,59 @@ impl World {
         existed
     }
 
+    /// **Write a cell's universal-memory heap out-of-band and reseal its
+    /// committed `heap_root`** — the per-cell umem boundary (`UMEM-PRIMITIVE` §2,
+    /// §8; `cell/src/state.rs`: `set_heap` / `reseal_heap_root`). Replaces the
+    /// cell's `heap_map` wholesale (so a dropped leaf simply vanishes from the
+    /// boundary) and recomputes `heap_root` = sorted-Poseidon2 over the present
+    /// leaves, so the resealed boundary IS the cell's committed commitment.
+    ///
+    /// This is the document-on-umem ride ([`dregg_doc::DocHeapCell`]): the desktop
+    /// projects a document into its cell's umem-heap and reseals, so the
+    /// document's commitment IS that `heap_root`. The heap register is orthogonal
+    /// to `fields_map`/`fields_root` (a later `SetField` turn re-executes against,
+    /// and preserves, the written heap). Like [`Self::set_cell_program`] /
+    /// [`Self::genesis_grant_cap`], it installs committed state on a cell without
+    /// moving value or running a turn — there is no kernel heap effect, the writes
+    /// are ordinary heap writes the substrate already commits. Mirrored into the
+    /// replay-recorder's ledger so the recorded roots stay in lock-step.
+    ///
+    /// FAIL-FAST on a DURABLE image whose cell a committed turn already touched
+    /// (the genesis-mirror-after-turn bug): returns `false` rather than poison
+    /// reopen. The desktop's demo world is ephemeral, so this passes; a durable
+    /// runtime heap write awaits an ordered heap effect (HORIZONLOG seam). Returns
+    /// `true` if the cell existed and its boundary was resealed.
+    pub fn set_cell_heap(
+        &mut self,
+        cell: &CellId,
+        heap_map: std::collections::BTreeMap<(u32, u32), dregg_cell::FieldElement>,
+    ) -> bool {
+        if self.genesis_mutation_would_break_reopen(cell) {
+            return false;
+        }
+        let existed = if let Some(c) = self.engine.ledger_mut().get_mut(cell) {
+            c.state.heap_map = heap_map.clone();
+            c.state.reseal_heap_root();
+            true
+        } else {
+            false
+        };
+        // Keep the replay tape's ledger in lock-step so its recorded roots match
+        // the live engine's (the document cell carries the SAME umem boundary).
+        if let Some(c) = self.record_ledger.get_mut(cell) {
+            c.state.heap_map = heap_map;
+            c.state.reseal_heap_root();
+        }
+        // Durable genesis re-record (SEAM §2): the in-place heap write carries no
+        // `CommitRecord`, so persist the cell's new post-state for reopen.
+        if existed {
+            self.durable_regenesis(cell);
+        }
+        // Genesis-path ledger mutation without a height bump — bust the memo.
+        self.state_root_memo.set(None);
+        existed
+    }
+
     /// Deploy a [`FactoryDescriptor`] into the embedded executor's factory
     /// registry (the out-of-band genesis path — a node registers its factories
     /// the way it seeds genesis cells). Returns the factory's content-addressed
@@ -1452,6 +1505,22 @@ impl World {
         t
     }
 
+    /// Wrap a PRE-BUILT [`Action`] (its `method`/`args`/`effects` already set by
+    /// the caller) into a single-root [`Turn`] with `agent` and its next nonce —
+    /// the executor entry a userspace dispatcher (e.g.
+    /// [`crate::service_explorer::ServiceExplorer::invoke`]) drives. Unlike
+    /// [`Self::turn`] (which builds a bare zero-method action), this preserves the
+    /// caller's action verbatim, so a method-targeting invocation keeps its
+    /// `method` symbol (the cell program's `MethodIs` guard matches it).
+    pub fn wrap_action_turn(&self, agent: CellId, action: Action) -> Turn {
+        let nonce = self.next_nonce(&agent);
+        let mut forest = CallForest::new();
+        forest.add_root(action);
+        let mut t = wrap_turn(agent, nonce, forest);
+        t.fee = self.turn_fee;
+        t
+    }
+
     fn next_nonce(&self, agent: &CellId) -> u64 {
         self.engine
             .ledger()
@@ -1590,11 +1659,11 @@ fn collect_effect_events(action: &Action, out: &mut Vec<WorldEvent>) {
                 // topic string, as hashed by `emit_event()`).
                 let topic_hash = event.topic;
                 let data_len = event.data.len() * 32; // each FieldElement is 32 B
-                                                      // `action.target` is the cell acting (the sender); `cell` is the
-                                                      // cell the event is emitted ON (the notify recipient). When the
-                                                      // sender emits to itself, sender == cell (a self-notification,
-                                                      // valid and useful for checkpointing). The swarm coordinator uses
-                                                      // this distinction to route the wake signal to `cell`'s inbox.
+                // `action.target` is the cell acting (the sender); `cell` is the
+                // cell the event is emitted ON (the notify recipient). When the
+                // sender emits to itself, sender == cell (a self-notification,
+                // valid and useful for checkpointing). The swarm coordinator uses
+                // this distinction to route the wake signal to `cell`'s inbox.
                 out.push(WorldEvent::EventEmitted {
                     sender: action.target,
                     cell: *cell,
@@ -1766,6 +1835,13 @@ pub fn create_cell(seed: u8) -> Effect {
 /// Convenience: write `value` into state slot `index` of `cell`.
 pub fn set_field(cell: CellId, index: usize, value: dregg_cell::FieldElement) -> Effect {
     Effect::SetField { cell, index, value }
+}
+
+/// Convenience: advance `cell`'s nonce by one (the loop's step counter — the
+/// monotone half of the exact shape a confined deos-js agent's `fire("bump")`
+/// commits alongside its `SetField`).
+pub fn increment_nonce(cell: CellId) -> Effect {
+    Effect::IncrementNonce { cell }
 }
 
 /// Convenience: re-program `cell`'s [`CellProgram`] (its caveat table) as an
@@ -2150,32 +2226,83 @@ impl SemihostCockpit {
     /// cockpit uses the inline drive so a turn commits deterministically with no
     /// thread timing.)
     pub fn commit_turn_via_semihost(&mut self, turn: Turn) -> CommitOutcome {
+        self.commit_turn_via_semihost_projecting(turn, None).0
+    }
+
+    /// **COMMIT A TURN THROUGH THE SEMIHOST executor-PD, PROJECTING THE REPAINT.**
+    ///
+    /// The full §3 live-repaint-on-turn loop with the cockpit's REAL verified
+    /// `DreggEngine` behind the heart (not the stub `AttenuationRunner`
+    /// `dregg-firmament/src/repaint.rs` proves the wire with): the turn is staged,
+    /// the executor-PD runs the REAL `World` commit path, and — on COMMIT — the
+    /// served turn's REAL [`TurnReceipt`] is projected into a
+    /// [`dregg_firmament::DirtyRegion`] (`owner`'s surface ⟼ its new
+    /// state-root/content-digest) the compositor-PD re-paints. A REJECTED turn
+    /// projects `None` (fail-closed — a refused turn re-paints NOTHING), exactly the
+    /// binding `repaint.rs` proves, now driven by the genuine verified semantics.
+    ///
+    /// This is the seam `SEL4-INTERACTIVE-COCKPIT.md §3.5` named between the proven
+    /// halves: the executor-PD's REAL turn path and the compositor-PD's present gate
+    /// were both green but the live-repaint loop was only exercised with the stub
+    /// runner. This connects the cockpit's REAL `DreggEngine` to the SAME projection
+    /// — a genuine committed transfer re-paints the focused cell. No new primitive.
+    pub fn commit_turn_via_semihost_with_repaint(
+        &mut self,
+        turn: Turn,
+        owner: CellId,
+    ) -> (CommitOutcome, Option<dregg_firmament::DirtyRegion>) {
+        self.commit_turn_via_semihost_projecting(turn, Some(owner))
+    }
+
+    /// The shared stage → step → commit_out path, optionally projecting the §3
+    /// repaint signal from the REAL served turn. `repaint_owner = Some(cell)` asks
+    /// for the [`DirtyRegion`](dregg_firmament::DirtyRegion) a committed turn
+    /// projects toward the compositor (the focused cell that re-paints); `None`
+    /// skips the projection (the plain commit path). The projection reads the SAME
+    /// served turn the commit does — a committed turn's REAL receipt ⟼ a dirty
+    /// region; a rejected turn ⟼ `None` (fail-closed).
+    fn commit_turn_via_semihost_projecting(
+        &mut self,
+        turn: Turn,
+        repaint_owner: Option<CellId>,
+    ) -> (CommitOutcome, Option<dregg_firmament::DirtyRegion>) {
         // Encode + STAGE the turn into the executor-PD's turn_in region (the
         // app-PD's turn_in write before it signals the heart).
         let turn_bytes = match postcard::to_stdvec(&turn) {
             Ok(b) => b,
             Err(e) => {
-                return CommitOutcome::Rejected {
-                    reason: format!("turn encode failed: {e}"),
-                    at_action: vec![],
-                }
+                return (
+                    CommitOutcome::Rejected {
+                        reason: format!("turn encode failed: {e}"),
+                        at_action: vec![],
+                    },
+                    None,
+                );
             }
         };
         if self.executor.stage_turn(&turn_bytes).is_none() {
-            return CommitOutcome::Rejected {
-                reason: format!(
-                    "turn ({} bytes) does not fit the executor-PD turn_in region",
-                    turn_bytes.len()
-                ),
-                at_action: vec![],
-            };
+            return (
+                CommitOutcome::Rejected {
+                    reason: format!(
+                        "turn ({} bytes) does not fit the executor-PD turn_in region",
+                        turn_bytes.len()
+                    ),
+                    at_action: vec![],
+                },
+                None,
+            );
         }
         // DRIVE the executor-PD's protected-procedure body (read turn_in + step +
         // write commit_out). This is the heart running the turn over the
         // EmulatedKernel; on the cross-PD path this is a `serve_turn` off the
         // Endpoint, here the inline single-thread collapse.
         let served = self.executor.step_staged_turn();
-        match served {
+        // PROJECT the §3 repaint from the REAL served turn (its REAL TurnReceipt):
+        // a committed turn ⟼ Some(DirtyRegion); a rejected turn ⟼ None (fail-closed,
+        // re-paints nothing). This borrow ends before `served` is matched/moved.
+        let dirty = repaint_owner
+            .and_then(|owner| dregg_firmament::repaint::project_dirty_from_turn(&owner, &served));
+        let outcome = match served {
             dregg_firmament::ServedTurn::Committed { .. } => {
                 // Read the receipt back out of commit_out and decode it — proving
                 // it genuinely round-tripped through the PD wire (not returned
@@ -2183,10 +2310,13 @@ impl SemihostCockpit {
                 let receipt_bytes = match self.executor.commit_out_read() {
                     Some(b) => b,
                     None => {
-                        return CommitOutcome::Rejected {
-                            reason: "executor-PD committed but commit_out was empty".into(),
-                            at_action: vec![],
-                        }
+                        return (
+                            CommitOutcome::Rejected {
+                                reason: "executor-PD committed but commit_out was empty".into(),
+                                at_action: vec![],
+                            },
+                            None,
+                        );
                     }
                 };
                 match postcard::from_bytes::<TurnReceipt>(&receipt_bytes) {
@@ -2210,7 +2340,8 @@ impl SemihostCockpit {
                 reason,
                 at_action: vec![],
             },
-        }
+        };
+        (outcome, dirty)
     }
 
     /// The run-turn Endpoint id (for the cross-PD `serve_turn` path / future
@@ -2266,12 +2397,14 @@ mod tests {
 
         // Dynamics: the transition was observed (a TurnCommitted + a flow each).
         let evs = w.dynamics().since(0);
-        assert!(evs
-            .iter()
-            .any(|e| matches!(e, WorldEvent::TurnCommitted { .. })));
-        assert!(evs
-            .iter()
-            .any(|e| matches!(e, WorldEvent::BalanceFlowed { .. })));
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, WorldEvent::TurnCommitted { .. }))
+        );
+        assert!(
+            evs.iter()
+                .any(|e| matches!(e, WorldEvent::BalanceFlowed { .. }))
+        );
     }
 
     #[test]
@@ -2551,8 +2684,8 @@ mod tests {
 
     #[test]
     fn deploy_factory_then_birth_a_child_cell() {
-        use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor};
         use dregg_cell::CellMode;
+        use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor};
 
         let mut w = World::new();
         let agent = w.genesis_cell(1, 0);
@@ -2602,8 +2735,8 @@ mod tests {
 
     #[test]
     fn factory_birth_against_an_unregistered_factory_is_rejected() {
-        use dregg_cell::factory::FactoryCreationParams;
         use dregg_cell::CellMode;
+        use dregg_cell::factory::FactoryCreationParams;
         let mut w = World::new();
         let agent = w.genesis_cell(1, 0);
         let owner = [0xC2u8; 32];
@@ -2640,12 +2773,13 @@ mod tests {
         assert!(w.ledger().get(&user).unwrap().state.balance() > 0);
         let _ = treasury;
         // The ocap grant landed (service reaches user).
-        assert!(w
-            .ledger()
-            .get(&service)
-            .unwrap()
-            .capabilities
-            .has_access(&user));
+        assert!(
+            w.ledger()
+                .get(&service)
+                .unwrap()
+                .capabilities
+                .has_access(&user)
+        );
     }
 
     #[test]
@@ -2700,12 +2834,13 @@ mod tests {
         assert_eq!(w.receipts().len(), 5);
         assert_eq!(w.ledger().get(&service).unwrap().state.balance(), 251_000);
         assert!(w.ledger().get(&user).unwrap().state.balance() > 0);
-        assert!(w
-            .ledger()
-            .get(&service)
-            .unwrap()
-            .capabilities
-            .has_access(&user));
+        assert!(
+            w.ledger()
+                .get(&service)
+                .unwrap()
+                .capabilities
+                .has_access(&user)
+        );
     }
 
     // ── THE SEMIHOSTED COCKPIT — a turn flowing through the executor-PD over the
@@ -2839,6 +2974,176 @@ mod tests {
             cockpit.world().state_root(),
             "the semihost path advances the SAME image the direct path does"
         );
+    }
+
+    // ── LIVE-REPAINT-ON-TURN, with the REAL verified DreggEngine behind the heart
+    //    (`docs/desktop-os-research/SEL4-INTERACTIVE-COCKPIT.md §3.5`) ────────────
+    //
+    // `dregg-firmament/tests/live_repaint_on_turn.rs` proves the executor-PD →
+    // compositor-PD repaint loop with a STUB runner (the 2-byte `AttenuationRunner`).
+    // These tests close the named seam between that and the cockpit's REAL `World`:
+    // a GENUINE verified transfer turn, committed through the semihost executor-PD,
+    // projects a `DirtyRegion` from its REAL `TurnReceipt` that the compositor-PD
+    // re-paints — and a rejected overspend re-paints nothing, and a SEQUENCE of real
+    // turns re-paints to DISTINCT frames (the "the cells CHANGE while you watch"
+    // rung). No new primitive — it rides the proven executor-PD turn path, the
+    // proven compositor present gate, and the SAME projection the stub proves.
+
+    /// Boot a compositor-PD whose focused surface is the genesis wallet `owner`,
+    /// owning regions {10, 11}, starting blank (digest 0) — the cell a turn
+    /// re-paints. Shares the cockpit's n=1 kernel so the regions live on ONE
+    /// microkernel (the deos-live.system equivalent: executor-PD ⊕ compositor-PD).
+    fn focused_compositor(
+        kernel: dregg_firmament::emulated_kernel::EmulatedKernel,
+        owner: CellId,
+    ) -> dregg_firmament::CompositorPd {
+        use dregg_firmament::compositor_pd::{Scene, Surface};
+        dregg_firmament::CompositorPd::boot(
+            kernel,
+            Scene {
+                surfaces: vec![Surface {
+                    owner,
+                    regions: vec![10, 11],
+                    content_digest: 0,
+                    source_state_root: 0,
+                    z_layer: 0,
+                    focus_flag: true,
+                }],
+            },
+        )
+    }
+
+    #[test]
+    fn a_real_verified_turn_repaints_the_focused_cell_through_the_executor_pd() {
+        // The cockpit's REAL `World` hosted in the executor-PD, sharing its n=1
+        // kernel with a compositor-PD that focuses the wallet `a`.
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 1_000);
+        let b = w.genesis_cell(2, 0);
+        let mut cockpit = SemihostCockpit::boot(w);
+        let mut compositor = focused_compositor(cockpit.kernel().clone(), a);
+
+        // The framebuffer BEFORE any turn — the focused cell's tile 10 is blank.
+        let fb_before = compositor.framebuffer_snapshot();
+        assert_eq!(fb_before[10], 0, "the focused cell starts blank");
+
+        // A GENUINE verified transfer a→b, committed THROUGH the executor-PD, with
+        // the §3 repaint projected from its REAL `TurnReceipt`.
+        let turn = cockpit.world().turn(a, vec![transfer(a, b, 250)]);
+        let (outcome, dirty) = cockpit.commit_turn_via_semihost_with_repaint(turn, a);
+        assert!(
+            outcome.is_committed(),
+            "the real transfer committed at the heart"
+        );
+        let dirty = dirty.expect("a committed real turn projects a DirtyRegion");
+        assert_eq!(
+            dirty.owner, a,
+            "the dirty region names the wallet that committed"
+        );
+
+        // THE COMPOSITOR RE-PAINTS: present the dirty region onto the focused cell's
+        // region 10 — the scene gate ADMITS the honest repaint, the framebuffer
+        // advances at exactly tile 10 (the cell re-painted to its new committed
+        // state's frame).
+        let commit = compositor
+            .present(&dirty.owner, dirty.to_present(vec![10]))
+            .expect("the scene gate admits the honest repaint");
+        let fb_after = compositor.framebuffer_snapshot();
+        assert_ne!(
+            fb_after[10], fb_before[10],
+            "the REAL committed turn re-painted the focused cell"
+        );
+        assert_eq!(
+            fb_after[10],
+            (commit.digest & 0xFF) as u8,
+            "tile 10 holds the frame the real turn projected"
+        );
+
+        // The post-state confirms the SAME heart advanced the ledger (250 moved).
+        assert_eq!(
+            cockpit.world().ledger().get(&a).unwrap().state.balance(),
+            750
+        );
+        assert_eq!(
+            cockpit.world().ledger().get(&b).unwrap().state.balance(),
+            250
+        );
+    }
+
+    #[test]
+    fn a_rejected_real_turn_repaints_nothing_fail_closed() {
+        // An overspend is rejected AT THE HEART through the PD wire; the projection
+        // is None (fail-closed — no dirty signal), and the framebuffer is untouched.
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 100);
+        let b = w.genesis_cell(2, 0);
+        let mut cockpit = SemihostCockpit::boot(w);
+        let mut compositor = focused_compositor(cockpit.kernel().clone(), a);
+        let fb_before = compositor.framebuffer_snapshot();
+
+        let turn = cockpit.world().turn(a, vec![transfer(a, b, 1_000)]); // overspend
+        let (outcome, dirty) = cockpit.commit_turn_via_semihost_with_repaint(turn, a);
+        assert!(
+            !outcome.is_committed(),
+            "the overspend is REJECTED at the heart"
+        );
+        assert!(
+            dirty.is_none(),
+            "a rejected real turn projects no dirty region (re-paints nothing)"
+        );
+
+        // The framebuffer is BYTE-IDENTICAL — a refused turn re-painted nothing.
+        assert_eq!(
+            compositor.framebuffer_snapshot(),
+            fb_before,
+            "the rejected turn left the framebuffer byte-identical (fail-closed)"
+        );
+        assert_eq!(compositor.frames().len(), 0, "no frame committed");
+    }
+
+    #[test]
+    fn a_sequence_of_real_turns_repaints_to_distinct_frames() {
+        // "The cells CHANGE while you watch": each committed turn in a SEQUENCE
+        // advances the ledger AND re-paints the focused cell to a DISTINCT frame
+        // (distinct committed receipt ⟹ distinct state-root ⟹ distinct content
+        // digest ⟹ a genuine frame advance — the binding the compositor's
+        // frame-advance leg relies on). This is the umem "passable intermediate
+        // states" made visible: each boundary the heart commits re-paints the glass.
+        let mut w = World::new();
+        let a = w.genesis_cell(1, 1_000);
+        let b = w.genesis_cell(2, 0);
+        let mut cockpit = SemihostCockpit::boot(w);
+        let mut compositor = focused_compositor(cockpit.kernel().clone(), a);
+
+        let mut frames: Vec<u8> = vec![compositor.framebuffer_snapshot()[10]]; // blank=0
+        for _ in 0..3 {
+            let turn = cockpit.world().turn(a, vec![transfer(a, b, 50)]);
+            let (outcome, dirty) = cockpit.commit_turn_via_semihost_with_repaint(turn, a);
+            assert!(outcome.is_committed(), "each real transfer commits");
+            let dirty = dirty.expect("each committed turn projects a dirty region");
+            compositor
+                .present(&dirty.owner, dirty.to_present(vec![10]))
+                .expect("each honest repaint is admitted");
+            frames.push(compositor.framebuffer_snapshot()[10]);
+        }
+
+        // Each successive committed turn re-painted to a DISTINCT frame from the
+        // one before it (the chain-head advanced ⟹ a distinct receipt ⟹ a distinct
+        // frame). The framebuffer genuinely CHANGED on every turn.
+        for win in frames.windows(2) {
+            assert_ne!(
+                win[0], win[1],
+                "each committed turn re-paints to a frame distinct from the last"
+            );
+        }
+        // The ledger advanced once per turn (3 × 50 moved a→b).
+        assert_eq!(
+            cockpit.world().ledger().get(&b).unwrap().state.balance(),
+            150
+        );
+        assert_eq!(cockpit.world().height(), 3, "three turns committed");
+        // Four distinct framebuffer states straddled the three turns (blank + 3).
+        assert_eq!(compositor.frames().len(), 3, "three repaints logged");
     }
 
     // =======================================================================
@@ -3218,15 +3523,18 @@ mod tests {
         let b = sym.genesis_cell(2, 0);
         let c = sym.genesis_cell(3, 0);
         sym.set_witness_mode(WitnessMode::Symbolic);
-        assert!(sym
-            .commit_turn(sym.turn(a, vec![transfer(a, b, 300)]))
-            .is_committed());
-        assert!(sym
-            .commit_turn(sym.turn(b, vec![transfer(b, c, 100)]))
-            .is_committed());
-        assert!(sym
-            .commit_turn(sym.turn(a, vec![transfer(a, c, 50)]))
-            .is_committed());
+        assert!(
+            sym.commit_turn(sym.turn(a, vec![transfer(a, b, 300)]))
+                .is_committed()
+        );
+        assert!(
+            sym.commit_turn(sym.turn(b, vec![transfer(b, c, 100)]))
+                .is_committed()
+        );
+        assert!(
+            sym.commit_turn(sym.turn(a, vec![transfer(a, c, 50)]))
+                .is_committed()
+        );
         assert_eq!(sym.symbolic_pending(), 3);
 
         // A FULL world: the SAME genesis + the SAME three turns (the ground truth).
@@ -3235,15 +3543,18 @@ mod tests {
         let b2 = full.genesis_cell(2, 0);
         let c2 = full.genesis_cell(3, 0);
         assert_eq!((a, b, c), (a2, b2, c2), "deterministic genesis ids");
-        assert!(full
-            .commit_turn(full.turn(a2, vec![transfer(a2, b2, 300)]))
-            .is_committed());
-        assert!(full
-            .commit_turn(full.turn(b2, vec![transfer(b2, c2, 100)]))
-            .is_committed());
-        assert!(full
-            .commit_turn(full.turn(a2, vec![transfer(a2, c2, 50)]))
-            .is_committed());
+        assert!(
+            full.commit_turn(full.turn(a2, vec![transfer(a2, b2, 300)]))
+                .is_committed()
+        );
+        assert!(
+            full.commit_turn(full.turn(b2, vec![transfer(b2, c2, 100)]))
+                .is_committed()
+        );
+        assert!(
+            full.commit_turn(full.turn(a2, vec![transfer(a2, c2, 50)]))
+                .is_committed()
+        );
 
         // COLLAPSE the symbolic world.
         let n = sym.collapse().expect("collapse must succeed");
@@ -3285,9 +3596,10 @@ mod tests {
         let b = w.genesis_cell(2, 0);
         assert!(!w.is_symbolic(), "Full is the default");
         let tape_before = w.recorded_turns().len();
-        assert!(w
-            .commit_turn(w.turn(a, vec![transfer(a, b, 250)]))
-            .is_committed());
+        assert!(
+            w.commit_turn(w.turn(a, vec![transfer(a, b, 250)]))
+                .is_committed()
+        );
         // The tape grew (eager record) and the receipt carries a REAL witness.
         assert_eq!(w.recorded_turns().len(), tape_before + 1);
         assert_eq!(w.symbolic_pending(), 0);

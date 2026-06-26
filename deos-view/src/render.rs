@@ -43,12 +43,12 @@ use deos_js::applet::Applet;
 use deos_js::signals::{BindingId, BindingRegistry, Slot, SourceEvent};
 use dregg_types::CellId;
 use gpui::{
-    div, px, App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled,
-    Window,
+    App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
+    px,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::label::Label;
-use gpui_component::{h_flex, v_flex, ActiveTheme};
+use gpui_component::{ActiveTheme, h_flex, v_flex};
 
 use crate::tree::ViewNode;
 
@@ -139,6 +139,38 @@ impl AppletView {
     /// The shared applet handle (for the caller to inspect receipts after a turn).
     pub fn applet(&self) -> SharedApplet {
         self.applet.clone()
+    }
+
+    /// The view-tree this surface currently paints (read-only) — the REFLECT-ON half:
+    /// a host (or a confined agent reading through it) reads the live surface's own
+    /// view-tree before rewriting it.
+    pub fn tree(&self) -> &ViewNode {
+        &self.tree
+    }
+
+    /// **Swap the painted view-tree — the REWRITE half (the view is data, not code).**
+    /// After an authoring gesture re-folds the card's view-source (e.g. a
+    /// [`deos-js` `CardEditor`] view-patch), the host hands the re-parsed [`ViewNode`]
+    /// here and the next paint draws the reshaped surface. The binding plan is rebuilt
+    /// from the new tree (so a `bind` added/removed by the rewrite re-registers) and the
+    /// value cache is cleared (each `bind` re-reads its live slot on the next paint). The
+    /// live applet — the substance binds read and buttons fire against — is untouched;
+    /// only the view changed.
+    pub fn set_tree(&mut self, tree: ViewNode) {
+        let mut bind_slots = Vec::new();
+        bind_plan(&tree, &mut bind_slots);
+
+        let mut registry = BindingRegistry::new();
+        for (n, slot) in bind_slots.iter().enumerate() {
+            registry.register(BindingId(n as u64), self.cell, *slot);
+        }
+
+        self.tree = tree;
+        self.registry = registry;
+        self.bind_slots = bind_slots;
+        self.cache = RefCell::new(BTreeMap::new());
+        self.render_cursor = Cell::new(0);
+        self.last_dirty = RefCell::new(Vec::new());
     }
 
     /// THE FINE-GRAINED HOOK — fold a committed turn's touched slots through the registry

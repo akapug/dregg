@@ -29,14 +29,221 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    div, AnyElement, App, AppContext as _, Entity, FocusHandle, IntoElement, ParentElement as _,
-    SharedString, Styled as _, Window,
+    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, px,
 };
-use gpui_component::h_flex;
+use gpui_component::{ActiveTheme as _, h_flex, v_flex};
 
+use crate::doc_viewer::DocViewer;
 use crate::editor::Editor;
 use crate::file_tree::FileTree;
 use crate::fs::Fs;
+
+/// Which face of the document the editor pane shows: the editable BUFFER, or the
+/// document's STRUCTURE — the blame timeline + first-class conflict objects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewMode {
+    /// The rope-backed editable buffer (the authoring face).
+    Buffer,
+    /// The provenance + conflicts inspector (the [`DocViewer`]): who wrote each
+    /// live span, and any two-pens-at-one-tail clash as a first-class object.
+    Structure,
+}
+
+impl ViewMode {
+    fn tab_id(self) -> &'static str {
+        match self {
+            ViewMode::Buffer => "editor-mode-buffer",
+            ViewMode::Structure => "editor-mode-structure",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            ViewMode::Buffer => "buffer",
+            ViewMode::Structure => "structure · blame / conflicts",
+        }
+    }
+}
+
+/// The live, interactive editor pane: a file tree, a mode toggle, and — by mode —
+/// either the editable [`Editor`] buffer or the [`DocViewer`] structure (blame +
+/// conflict objects) of the SAME open document. A single gpui [`Render`] entity so
+/// a toggle click re-renders the whole pane (mirrors the hermes dock's owned view).
+pub struct EditorPaneView {
+    editor: Entity<Editor>,
+    tree: Arc<FileTree>,
+    /// The provenance/conflicts inspector over the editor's live document. Snapshot
+    /// is refreshed from `editor.document()` on open + on each switch to Structure.
+    docviewer: Entity<DocViewer>,
+    mode: ViewMode,
+    focus: FocusHandle,
+}
+
+impl EditorPaneView {
+    /// Build the pane over an editor + tree, seeding the structure snapshot from
+    /// whatever document the editor already has open (firmament mounts open the
+    /// first seed file in their constructor, so the snapshot is live immediately).
+    pub fn new(
+        editor: Entity<Editor>,
+        tree: Arc<FileTree>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let docviewer = cx.new(|cx| DocViewer::new(cx));
+        let focus = cx.focus_handle();
+        let mut me = Self {
+            editor,
+            tree,
+            docviewer,
+            mode: ViewMode::Buffer,
+            focus,
+        };
+        me.refresh_structure(cx);
+        me
+    }
+
+    /// The editor entity (host-side open/save).
+    pub fn editor(&self) -> &Entity<Editor> {
+        &self.editor
+    }
+
+    /// The structure inspector entity.
+    pub fn doc_viewer(&self) -> &Entity<DocViewer> {
+        &self.docviewer
+    }
+
+    /// The current face shown.
+    pub fn mode(&self) -> ViewMode {
+        self.mode
+    }
+
+    /// Re-snapshot the structure inspector from the editor's LIVE document. Reads
+    /// the open document's blame + rendered structure ONCE (owned) so no borrow on
+    /// the live `RopeDoc` is held across the `docviewer` update.
+    pub fn refresh_structure(&mut self, cx: &mut Context<Self>) {
+        let (blame, rendered, title, patches) = {
+            let ed = self.editor.read(cx);
+            (ed.blame(), ed.rendered(), ed.title(), ed.patch_count())
+        };
+        self.docviewer.update(cx, |v, _cx| {
+            v.set_snapshot(blame, rendered, title, patches);
+        });
+    }
+
+    /// Switch the shown face; refresh the structure snapshot when entering it.
+    pub fn set_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        if mode == ViewMode::Structure {
+            self.refresh_structure(cx);
+        }
+        cx.notify();
+    }
+
+    /// One mode toggle tab (active = highlighted; click switches the face).
+    fn mode_tab(&self, mode: ViewMode, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = self.mode == mode;
+        let (bg, fg) = {
+            let theme = cx.theme();
+            if active {
+                (theme.secondary, theme.foreground)
+            } else {
+                (theme.background, theme.muted_foreground)
+            }
+        };
+        div()
+            .id(mode.tab_id())
+            .px_3()
+            .py_1()
+            .cursor_pointer()
+            .bg(bg)
+            .text_color(fg)
+            .text_xs()
+            .child(SharedString::from(mode.label()))
+            .on_click(cx.listener(move |this, _ev, _window, cx| {
+                this.set_mode(mode, cx);
+            }))
+    }
+
+    /// The left file-tree column. Clicking a file opens it in the editor AND
+    /// re-snapshots the structure inspector, so the structure follows the open doc.
+    fn tree_column(&self, cx: &mut Context<Self>) -> AnyElement {
+        let tree_el = self.tree.render(
+            cx.entity(),
+            move |this: &mut EditorPaneView, path, window, cx| {
+                this.editor.update(cx, |ed, cx| {
+                    let _ = ed.open(path, window, cx);
+                });
+                this.refresh_structure(cx);
+            },
+            cx,
+        );
+        div()
+            .w(px(220.))
+            .h_full()
+            .min_h(px(0.))
+            .child(tree_el)
+            .into_any_element()
+    }
+}
+
+impl Focusable for EditorPaneView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for EditorPaneView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let toggle = h_flex()
+            .w_full()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .bg(cx.theme().secondary)
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(self.mode_tab(ViewMode::Buffer, cx))
+            .child(self.mode_tab(ViewMode::Structure, cx));
+
+        // The right column is the editor buffer or the structure inspector.
+        let right: AnyElement = match self.mode {
+            ViewMode::Buffer => div()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.))
+                .min_w(px(0.))
+                .child(self.editor.clone())
+                .into_any_element(),
+            ViewMode::Structure => div()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.))
+                .min_w(px(0.))
+                .border_l_1()
+                .border_color(cx.theme().border)
+                .child(self.docviewer.clone())
+                .into_any_element(),
+        };
+
+        let body = h_flex()
+            .size_full()
+            .flex_1()
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .child(self.tree_column(cx))
+            .child(right);
+
+        v_flex()
+            .size_full()
+            .track_focus(&self.focus)
+            .child(toggle)
+            .child(body)
+    }
+}
 
 /// A mounted editor: the editor entity + a side file tree, addressable by a
 /// stable surface id. Hand this to `starbridge-v2`'s `CockpitSurface` impl.
@@ -50,12 +257,25 @@ use crate::fs::Fs;
 pub struct EditorSurface {
     id: u64,
     editor: Entity<Editor>,
-    tree: Arc<FileTree>,
+    /// The live interactive pane: file tree + a buffer/structure toggle. The
+    /// `editor` handle above is the SAME entity this view holds (one editor, one
+    /// document) — kept on the surface too so host/test open/save reach it directly.
+    view: Entity<EditorPaneView>,
     /// The typed firmament handle, when this surface is firmament-backed. Lets
     /// the host surface the live receipt count (the real on-ledger save count)
     /// rather than re-deriving it from the gpui-side document patch history.
     #[cfg(feature = "firmament")]
     firmament: Option<Arc<crate::fs::FirmamentFs>>,
+}
+
+/// Build the interactive pane view over an editor + tree.
+fn build_pane_view(
+    editor: Entity<Editor>,
+    tree: Arc<FileTree>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<EditorPaneView> {
+    cx.new(|cx| EditorPaneView::new(editor, tree, window, cx))
 }
 
 impl EditorSurface {
@@ -65,10 +285,11 @@ impl EditorSurface {
     pub fn new(id: u64, fs: Arc<dyn Fs>, root: PathBuf, window: &mut Window, cx: &mut App) -> Self {
         let editor = cx.new(|cx| Editor::new(fs.clone(), window, cx));
         let tree = Arc::new(FileTree::new(fs, root, cx));
+        let view = build_pane_view(editor.clone(), tree, window, cx);
         Self {
             id,
             editor,
-            tree,
+            view,
             #[cfg(feature = "firmament")]
             firmament: None,
         }
@@ -76,11 +297,18 @@ impl EditorSurface {
 
     /// Wrap an already-built editor entity (e.g. one the host opened a file in)
     /// with a file tree.
-    pub fn from_editor(id: u64, editor: Entity<Editor>, tree: Arc<FileTree>) -> Self {
+    pub fn from_editor(
+        id: u64,
+        editor: Entity<Editor>,
+        tree: Arc<FileTree>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
+        let view = build_pane_view(editor.clone(), tree, window, cx);
         Self {
             id,
             editor,
-            tree,
+            view,
             #[cfg(feature = "firmament")]
             firmament: None,
         }
@@ -159,10 +387,11 @@ impl EditorSurface {
             ed
         });
         let tree = Arc::new(FileTree::new(fs, root, cx));
+        let view = build_pane_view(editor.clone(), tree, window, cx);
         Ok(Self {
             id,
             editor,
-            tree,
+            view,
             firmament: Some(firm),
         })
     }
@@ -204,10 +433,11 @@ impl EditorSurface {
             ed
         });
         let tree = Arc::new(FileTree::new(fs, root, cx));
+        let view = build_pane_view(editor.clone(), tree, window, cx);
         Self {
             id,
             editor,
-            tree,
+            view,
             #[cfg(feature = "firmament")]
             firmament: None,
         }
@@ -250,50 +480,38 @@ impl EditorSurface {
         self.editor.read(cx).focus_handle(cx)
     }
 
-    /// `CockpitSurface::render_body`: file tree on the left, editor on the
-    /// right. Returns an `AnyElement` so the host trait stays object-safe.
-    pub fn render_body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
-        let editor = self.editor.clone();
-        // Clicking a tree file opens it into THIS surface's editor.
-        let open_editor = self.editor.clone();
-        let tree_el = self.tree.render(
-            self.editor.clone(),
-            move |ed: &mut Editor, path, window, cx| {
-                let _ = ed.open(path, window, cx);
-            },
-            cx,
-        );
-        // NOTE: the tree's host view is the Editor entity itself, so on-open
-        // runs in the editor's own context — no extra wiring.
-        let _ = open_editor;
-
-        // `flex_1().min_h(0).min_w(0)` on the row (in addition to `size_full`) makes
-        // the body claim its parent's full measured height robustly whether the
-        // pane is laid out in a flex COLUMN (showcase) or directly in a flex ROW
-        // (self-hosting) — a bare `size_full` here left the editor body 0-height in
-        // the single-row self-hosting bake, so the InputState had no visible lines
-        // to paint (the dark/empty editor body). The tree + editor columns carry
-        // `min_h(0)` so they too resolve a definite height to fill.
-        h_flex()
+    /// `CockpitSurface::render_body`: the live interactive pane — a file tree, a
+    /// buffer/structure toggle, and (by mode) the editor buffer or the document's
+    /// blame + conflict-objects inspector. Renders the one owned [`EditorPaneView`]
+    /// entity, so a toggle click (which `cx.notify()`s that entity) re-renders the
+    /// pane without the host re-driving it. Returns an `AnyElement` so the host
+    /// trait stays object-safe.
+    pub fn render_body(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {
+        // `flex_1().min_h(0).min_w(0)` makes the pane claim its parent's full
+        // measured height robustly whether laid out in a flex COLUMN (showcase) or
+        // directly in a flex ROW (self-hosting).
+        div()
             .size_full()
             .flex_1()
-            .min_h(gpui::px(0.))
-            .min_w(gpui::px(0.))
-            .child(
-                div()
-                    .w(gpui::px(220.))
-                    .h_full()
-                    .min_h(gpui::px(0.))
-                    .child(tree_el),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_h(gpui::px(0.))
-                    .min_w(gpui::px(0.))
-                    .child(editor),
-            )
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .child(self.view.clone())
             .into_any_element()
+    }
+
+    /// The interactive pane view (host-side: read/set the buffer/structure mode).
+    pub fn view(&self) -> &Entity<EditorPaneView> {
+        &self.view
+    }
+
+    /// Switch the pane's shown face (buffer ⇄ structure) host-side — what a test or
+    /// a host menu drives to surface the blame/conflicts inspector.
+    pub fn set_mode(&self, mode: ViewMode, cx: &mut App) {
+        self.view.update(cx, |v, cx| v.set_mode(mode, cx));
+    }
+
+    /// The face currently shown.
+    pub fn mode(&self, cx: &App) -> ViewMode {
+        self.view.read(cx).mode()
     }
 }

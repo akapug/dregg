@@ -238,17 +238,113 @@ fn incremental_accumulate_verifies_whole_history() {
         .expect("the accumulated whole-chain proof verifies under the honest VK anchor");
 
     // Cross-check the whole-history CLAIM against the K-fold balanced-tree artifact of the same 3
-    // turns: both attest the IDENTICAL (genesis, final, num_turns, chain_digest). (The root proofs
-    // differ in tree shape — hence different VK fingerprints — but the public claim agrees.)
+    // turns: both attest the IDENTICAL (genesis, final, num_turns) — the load-bearing endpoints +
+    // count. (The root proofs differ in tree shape — hence different VK fingerprints — but the
+    // endpoints + count agree.)
+    //
+    // NOTE on the digest: BOTH paths now carry the SAME ordered SEGMENT-ACCUMULATOR digest (codex's
+    // fix for the mixed-root hole) — each descriptor leaf carries `[first_old, last_new, count,
+    // acc]` with the genuine 4-lane W24 Poseidon2 `acc`, and the combine folds `acc = commit(L.acc,
+    // R.acc)`. They differ ONLY in fold SHAPE: the K-fold uses the BALANCED binary tree, the online
+    // accumulator the LEFT-LINEAR fold. Both are sound ordered-history commitments, but the two fold
+    // shapes give different digests, so we deliberately do NOT assert digest equality here. Each
+    // artifact's own `verify_turn_chain_recursive` binds its own carried digest to its own
+    // root-exposed segment (the segment tooth), which is what soundness requires.
     let (turns2, _g2, _f2) = make_chain(1000, 0, 11, 3);
     let kfold: WholeChainProof =
         prove_turn_chain_recursive(&turns2).expect("the K-fold of the same chain proves");
     assert_eq!(kfold.genesis_root, whole.genesis_root, "genesis agrees");
     assert_eq!(kfold.final_root, whole.final_root, "final agrees");
     assert_eq!(kfold.num_turns, whole.num_turns, "num_turns agrees");
-    assert_eq!(
-        kfold.chain_digest, whole.chain_digest,
-        "the ordered-history digest agrees (running fold == balanced tree)"
+}
+
+/// **THE ONLINE MIXED-ROOT CLOSE (the port of `mixed_root_forgery_executes_A_claims_B` to the
+/// online accumulator).** Drive the ONLINE accumulator over history A's REAL segment-bearing
+/// descriptor leaves, finalize to A's whole-chain proof, then carry a DIFFERENT history B's claims
+/// to the verifier. Because every `accumulate` fold combined A's leaf segments in-circuit, A's root
+/// exposes A's `[genesis, final, num_turns, digest]` BY CONSTRUCTION — so a B-claim against an
+/// A-execution is REJECTED by the segment tooth. There is no swappable binding leaf to inject B's
+/// endpoints into the root (the binding proof is carried but is not a soundness dependency).
+///
+/// The SECOND assertion exercises the SAME-ENDPOINT close specifically: carry A's REAL
+/// genesis/final/count but a TAMPERED 4-lane digest. The old single-felt zero-padded carrier could
+/// not bind this lane; now the root exposes the genuine 4-lane W24 Poseidon2 segment digest, so a
+/// same-endpoint wrong-digest claim is rejected too (~124-bit collision resistance).
+#[test]
+#[ignore = "SLOW: a real online segment fold over 2 turns (~minutes); run with --ignored — the online mixed-root CLOSE"]
+fn online_mixed_root_forgery_rejected() {
+    use dregg_circuit_prove::ivc_turn_chain::{
+        SEG_DIGEST_WIDTH, verify_turn_chain_recursive_from_parts,
+    };
+    use dregg_circuit_prove::plonky3_recursion_impl::recursive::recursion_vk_fingerprint;
+
+    // History A: the REAL executed online history (the descriptor leaves the accumulator folds).
+    let (turns_a, _ga, _fa) = make_chain(1000, 0, 7, 2);
+    // History B: a DIFFERENT history; only its CLAIMS are carried (the execution was A).
+    let (turns_b, gb, fb) = make_chain(500, 0, 3, 2);
+
+    // Drive the ONLINE accumulator over A and finalize to A's whole-chain proof.
+    let mut acc = Accumulator::genesis();
+    for (i, t) in turns_a.iter().enumerate() {
+        acc.accumulate(t)
+            .unwrap_or_else(|e| panic!("A turn {i} must accumulate: {e}"));
+    }
+    let whole_a = acc.finalize().expect("A finalizes to a whole-chain proof");
+
+    // The honest anchor recomputed from A's root (an honest setup over THIS shape distributes
+    // exactly this fingerprint — the attacker forges only the carried claim).
+    let vk = recursion_vk_fingerprint(&whole_a.root.0);
+
+    // Sanity: A's own claim verifies (the honest online path).
+    verify_turn_chain_recursive(&whole_a, &vk).expect("A's honest whole-chain proof verifies");
+
+    // ----- (1) DIFFERENT-ENDPOINT forgery: carry B's claims against A's online root. -----
+    let b_genesis = turns_b[0].old_root();
+    let b_final = turns_b[1].new_root();
+    assert_eq!(b_genesis, gb);
+    assert_eq!(b_final, fb);
+    assert_ne!(
+        b_genesis, whole_a.genesis_root,
+        "B's history must differ from A's"
+    );
+    let b_chain_digest = [BabyBear::ZERO; SEG_DIGEST_WIDTH];
+
+    let verdict = verify_turn_chain_recursive_from_parts(
+        &whole_a.root.0,
+        &whole_a.binding_proof,
+        b_genesis,
+        b_final,
+        b_chain_digest,
+        2,
+        &vk,
+    );
+    eprintln!("[online mixed-root] B-claim verdict = {verdict:?}  (is_err = CLOSED)");
+    assert!(
+        verdict.is_err(),
+        "ONLINE MIXED-ROOT CLOSED: a B whole-chain claim against an online root that folded A's \
+         REAL descriptor leaves MUST be REJECTED by the segment tooth (A's root exposes A's \
+         endpoints, not B's). got: {verdict:?}"
+    );
+
+    // ----- (2) SAME-ENDPOINT forgery: A's real endpoints + a TAMPERED 4-lane digest. -----
+    let mut bad_digest = whole_a.chain_digest;
+    bad_digest[0] += BabyBear::ONE;
+    let verdict2 = verify_turn_chain_recursive_from_parts(
+        &whole_a.root.0,
+        &whole_a.binding_proof,
+        whole_a.genesis_root,
+        whole_a.final_root,
+        bad_digest,
+        whole_a.num_turns,
+        &vk,
+    );
+    eprintln!(
+        "[online mixed-root] same-endpoint wrong-digest verdict = {verdict2:?}  (is_err = CLOSED)"
+    );
+    assert!(
+        verdict2.is_err(),
+        "SAME-ENDPOINT CLOSED: a claim carrying A's real genesis/final/count but a WRONG 4-lane \
+         digest MUST be REJECTED — the root exposes the genuine segment digest. got: {verdict2:?}"
     );
 }
 
@@ -397,12 +493,22 @@ fn accumulate_rejects_pin_mismatch_fail_closed() {
 ///   - depth 5+: IDENTICAL to depth 4 (full VK material — `rows`, `degree_bits`, AND the preprocessed
 ///     commitment all byte-equal). The fold has reached its perpetual fixed point.
 ///
-/// So this tooth asserts the GENUINE depth-invariance: **depth-4 == depth-5** (the fixed point holds),
-/// and characterizes the transient (depth 2 ≠ 3 ≠ 4). The `degree_bits` are constant THROUGHOUT
+/// So this tooth asserts the GENUINE depth-invariance: **depth-4 == depth-5 == depth-6** (the fixed
+/// point holds across TWO further iterations of the fold-shape transition, not just one), and
+/// characterizes the transient (depth 2 ≠ 3 ≠ 4). The `degree_bits` are constant THROUGHOUT
 /// (`[9,9,15,14,15]`) — the transient lives entirely in the op-list (logical `rows` + preprocessed
 /// commitment), which self-stabilizes once the running input is a fixed-shape aggregation. The A/B
 /// companion (`wrap_grows_vk_when_disabled`) confirms the transient is real (the early fingerprints
 /// genuinely DIFFER), so the fixed-point equality is non-vacuous.
+///
+/// **THE MECHANIZED PERPETUAL CLAIM (no longer prose).** The measured fixed point this tooth asserts
+/// (`step anchor = anchor`, one application of the fold-shape transition reproduces the depth-4 shape)
+/// is the SINGLE hypothesis the Lean `Dregg2.Circuit.RecursiveAggregation.running_vk_perpetually_-
+/// constant` rides to `∀N, VK_N = VK_4` (`#assert_axioms`-clean) — the deterministic-iteration
+/// induction the old "structural idempotence" prose named, now machine-checked. Its other premise —
+/// that the transition is a function of SHAPE alone — is discharged empirically by
+/// `running_vk_fixed_point_is_value_independent` (two value-streams reach the same depth-4 VK). The two
+/// extra measured iterations here (depth-5, depth-6) are the empirical corroboration of that induction.
 ///
 /// The WRAP-step `min_trace_height` ceiling ([`WRAP_LOG_CEIL`], ON by default) pins the FRI trace shape
 /// but is empirically a near-no-op here (heights were already constant); the constant-VK property comes
@@ -423,9 +529,9 @@ fn accumulate_rejects_pin_mismatch_fail_closed() {
 /// canonical-shape/normalize/re-prove primitive today, so it is genuinely multi-pass outstanding fork
 /// work. See the accumulator module header for the full statement.
 #[test]
-#[ignore = "SLOW: real incremental recursion fold over 5 turns (~minutes); run with --ignored"]
+#[ignore = "SLOW: real incremental recursion fold over 6 turns (~minutes); run with --ignored"]
 fn wrapped_running_vk_is_constant_across_depth() {
-    let (turns, _genesis, _final_root) = make_chain(1000, 0, 7, 5);
+    let (turns, _genesis, _final_root) = make_chain(1000, 0, 7, 6);
 
     let mut acc = Accumulator::genesis(); // wrap ENABLED by default
     let mut fps: Vec<dregg_circuit_prove::plonky3_recursion_impl::recursive::RecursionVk> =
@@ -443,13 +549,17 @@ fn wrapped_running_vk_is_constant_across_depth() {
             mats.push(acc.running_vk_material_debug().expect("material"));
         }
     }
-    assert!(fps.len() >= 4, "captured depths 2,3,4,5");
+    assert!(fps.len() >= 5, "captured depths 2,3,4,5,6");
     for (k, m) in mats.iter().enumerate() {
         eprintln!("depth-{} VK fp={} material: {}", k + 2, fps[k].to_hex(), m);
     }
 
-    // THE FIXED POINT: depth-4 == depth-5 (the running VK has stopped changing — fixed-size verifier
-    // forever from here). `fps` is indexed from depth 2: fps[2] = depth-4, fps[3] = depth-5.
+    // THE FIXED POINT, ACROSS TWO ITERATIONS: depth-4 == depth-5 == depth-6 (the running VK has
+    // stopped changing — fixed-size verifier forever from here). `fps` is indexed from depth 2:
+    // fps[2] = depth-4, fps[3] = depth-5, fps[4] = depth-6. The depth-4 == depth-5 equality is the
+    // SINGLE measured hypothesis (`step anchor = anchor`) the Lean `running_vk_perpetually_constant`
+    // rides to `∀N, VK_N = VK_4`; the depth-5 == depth-6 equality is a second iteration corroborating
+    // it empirically.
     assert_eq!(
         fps[2],
         fps[3],
@@ -460,11 +570,25 @@ fn wrapped_running_vk_is_constant_across_depth() {
         mats[2],
         mats[3],
     );
+    assert_eq!(
+        fps[3],
+        fps[4],
+        "the running VK fixed point must HOLD across a second iteration: depth-5 {} != depth-6 {} \
+         (material depth-5 [{}] vs depth-6 [{}])",
+        fps[3].to_hex(),
+        fps[4].to_hex(),
+        mats[3],
+        mats[4],
+    );
     // And the FULL VK material (not just the blake3) is byte-identical at the fixed point — so the
     // equality is the genuine op-list/preprocessed-commitment identity, not a hash coincidence.
     assert_eq!(
         mats[2], mats[3],
         "the running VK MATERIAL must be identical at the fixed point (depth-4 == depth-5)"
+    );
+    assert_eq!(
+        mats[3], mats[4],
+        "the running VK MATERIAL must be identical across the second iteration (depth-5 == depth-6)"
     );
 }
 
@@ -525,6 +649,76 @@ fn wrap_grows_vk_when_disabled() {
         "the running VK must reach a fixed point by depth 4 (depth-4 {} != depth-5 {})",
         fps[2].to_hex(),
         fps[3].to_hex(),
+    );
+}
+
+/// **THE VALUE-INDEPENDENCE TOOTH — the empirical discharge of the mechanized fixed-point's modeling
+/// assumption.** The Lean mechanization (`Dregg2.Circuit.RecursiveAggregation.running_vk_perpetually_-
+/// constant`) proves `∀N, VK_N = VK_4` from a SINGLE measured fixed point (`step anchor = anchor`,
+/// the depth-4 == depth-5 reproduction asserted by `wrapped_running_vk_is_constant_across_depth`) by
+/// modeling the fold-shape transition as a DETERMINISTIC FUNCTION of the running VK SHAPE alone —
+/// `step : VkShape → VkShape`. That "shape alone, not the witness values" is the fork's
+/// content-independence (`verify_p3_batch_proof_circuit` builds the parent op-list from `rows`,
+/// `table_packing`, the `non_primitives` manifest, and per-instance public-value COUNTS — never the
+/// values; `recursion_vk_fingerprint` is correspondingly content-independent). THIS tooth discharges
+/// that modeling assumption EMPIRICALLY: two DIFFERENT continuous value-streams (different
+/// amounts/balances/nonces, hence different roots and witness values, but the SAME Transfer effect
+/// shape ⇒ the same leaf shape) driven to the depth-4 fixed point reach the BYTE-IDENTICAL running VK
+/// material. So the fixed point is independent of WHICH values were folded — it is a property of the
+/// SHAPE — which is exactly what makes the single-measurement → `∀N` induction sound.
+#[test]
+#[ignore = "SLOW: two real 4-turn folds to the fixed point (~minutes); run with --ignored — the value-independence discharge"]
+fn running_vk_fixed_point_is_value_independent() {
+    // Two DISTINCT value-streams: different start balances, different debit steps (hence different
+    // roots + witness values at every turn), but both pure-Transfer (same leaf SHAPE). Four turns
+    // each so the running proof reaches the depth-4 fixed point.
+    let (stream_a, _ga, _fa) = make_chain(1000, 0, 7, 4);
+    let (stream_b, _gb, _fb) = make_chain(900, 3, 13, 4);
+
+    let drive = |turns: &[FinalizedTurn]| {
+        let mut acc = Accumulator::genesis(); // wrap ENABLED (the fixed-shape ceiling)
+        for (i, t) in turns.iter().enumerate() {
+            acc.accumulate(t)
+                .unwrap_or_else(|e| panic!("turn {i} must accumulate: {e}"));
+        }
+        (
+            acc.running_vk_fingerprint()
+                .expect("a running aggregation proof exists at depth 4"),
+            acc.running_vk_material_debug().expect("material"),
+        )
+    };
+
+    let (fp_a, mat_a) = drive(&stream_a);
+    let (fp_b, mat_b) = drive(&stream_b);
+    eprintln!(
+        "[value-indep] stream A depth-4 VK fp={} material: {}",
+        fp_a.to_hex(),
+        mat_a
+    );
+    eprintln!(
+        "[value-indep] stream B depth-4 VK fp={} material: {}",
+        fp_b.to_hex(),
+        mat_b
+    );
+
+    // The depth-4 fixed-point VK is the SAME for both value-streams — the fold-shape transition
+    // depends on the SHAPE alone, not the witness values. This is the Rust discharge of the Lean
+    // `step : VkShape → VkShape` modeling assumption (shape-only determinism), under which one
+    // measured fixed point gives `∀N, VK_N = VK_4`.
+    assert_eq!(
+        fp_a,
+        fp_b,
+        "the depth-4 fixed-point VK must be VALUE-INDEPENDENT: stream-A fp {} != stream-B fp {} \
+         (material A [{}] vs B [{}]) — if these differ the op-list depends on witness values, \
+         breaking the shape-only-determinism the perpetual-constancy induction rests on",
+        fp_a.to_hex(),
+        fp_b.to_hex(),
+        mat_a,
+        mat_b,
+    );
+    assert_eq!(
+        mat_a, mat_b,
+        "the depth-4 fixed-point VK MATERIAL must be byte-identical across value-streams"
     );
 }
 
