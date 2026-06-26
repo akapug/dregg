@@ -100,17 +100,35 @@ pg_test = []
 # authorizes the circuit link for Tier C) so `attest::verify_serialized_proof` becomes the
 # REAL `verify_turn_chain_recursive_from_parts` instead of the fail-closed stub.
 tier-c = ["dep:dregg-circuit-prove"]
-# Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. Links the
-# verified Lean executor (`dregg-lean-ffi`) so the drainer's PRODUCE gate runs the
-# REAL `execFullForestG` SINGLE-THREADED, IN the backend process
-# (`docs/EMBEDDABLE-LEAN-RUNTIME.md`: mimalloc is private + the task manager is
-# lazy + the libuv-thread-free init `dregg_ffi_init_st`, so the verified executor
-# lives in a single-threaded `palloc`/`longjmp`/`fork` backend). Implies tier-c
-# (executing implies verifying); pulls the optional `dregg-lean-ffi` dep, which
-# links `libdregg_lean.a`. The default build never sees it (keeps the `FoldProducer`
-# stand-in, no archive). Build the cdylib with `DREGG_LEAN_LINK=shared` (the cdylib
-# link mode, per `dregg-lean-ffi/build.rs` / `sdk-py`).
+# Tier D (docs/PG-DREGG.md §11) — the EXECUTOR-IN-POSTGRES endgame. There are now
+# TWO executor producers, the same ship-Rust-default split `sdk-py` took
+# (`3dd988be`); both supersede the default `FoldProducer` stand-in on the live path.
+#
+#   * `tier-d-rust` (the LIGHT executor) — the drainer's PRODUCE gate runs the REAL
+#     pure-Rust `dregg_turn::TurnExecutor` (`src/rust_producer.rs`). It links NO
+#     Lean (`dregg-turn` carries no `dregg-lean-ffi` edge), needs no `libleanshared`
+#     and no Lean toolchain (`elan`/`lake`), and is at parity with the verified Lean
+#     spec (`docs/RUST-LEAN-EXECUTOR-PARITY.md`: audited under-enforcement alignment
+#     + the differential gauntlet). This is the genuine, lightweight in-Postgres
+#     executor — the default-grade producer a node ships. `dregg-turn`/`dregg-cell`
+#     are pulled with default-features OFF (no `prover`/recursion, no `threshold-sig`,
+#     no Lean), so the executor builds verify-light.
+#   * `tier-d` (alias `tier-d-lean`, the HEAVY executor) — the drainer's PRODUCE gate
+#     runs the verified Lean `execFullForestG` SINGLE-THREADED, IN the backend
+#     process (`docs/EMBEDDABLE-LEAN-RUNTIME.md`: mimalloc is private + the task
+#     manager is lazy + the libuv-thread-free init `dregg_ffi_init_st`, so the
+#     verified executor lives in a single-threaded `palloc`/`longjmp`/`fork`
+#     backend). Implies tier-c (executing implies verifying); pulls the optional
+#     `dregg-lean-ffi` dep, which links `libdregg_lean.a` (~150 MB). Build the cdylib
+#     with `DREGG_LEAN_LINK=shared`. This is the verified opt-in: a node that wants
+#     the verified guarantee end-to-end links it as the authoritative producer.
+#
+# The default build sees NEITHER (keeps the `FoldProducer` stand-in, no executor, no
+# archive). When both are on, `tier-d` (Lean) wins the producer selection.
+tier-d-rust = ["dep:dregg-turn", "dep:dregg-cell"]
 tier-d = ["tier-c", "dep:dregg-lean-ffi"]
+# `tier-d-lean` is a readable alias for the verified Lean executor tier.
+tier-d-lean = ["tier-d"]
 
 [dependencies]
 # pgrx is OPTIONAL: only the extension build pulls it (and its postgres
@@ -143,6 +161,23 @@ dregg-lean-ffi = { path = "../dregg-lean-ffi", optional = true }
 # floor). tier-c depends on it directly; it re-deps `dregg-circuit` (the verify
 # floor) transitively. The default `cargo test` core never pulls it.
 dregg-circuit-prove = { path = "../circuit-prove", optional = true }
+# The pure-Rust verified executor — OPTIONAL, pulled ONLY by `tier-d-rust` (the
+# LIGHT executor-in-backend producer, `src/rust_producer.rs`). The decisive point is
+# that `dregg-turn` carries NO `dregg-lean-ffi` edge, so this links NO
+# `libleanshared`/`libdregg_lean.a` and needs no Lean toolchain (`elan`/`lake`) — the
+# "light" in ship-Rust-default is Lean-freeness, exactly as `sdk-py` (`3dd988be`).
+# `threshold-sig` is OFF (no arkworks: the synthesized transfer uses a plain
+# signature/unchecked auth, never the governance-VK `Authorization::Custom`); `prover`
+# stays ON (the verify path's `*_wide` PI reconstruction + turn's own gating need the
+# circuit-prove crate `tier-c` already pulls — NOT the Lean runtime). This is the SAME
+# feature set as the tier-c dev-dep below; cargo unifies them. The default `cargo test`
+# core + the `pgNN` extension never pull it (they keep the `FoldProducer` stand-in).
+dregg-turn = { path = "../turn", default-features = false, features = ["prover"], optional = true }
+# `dregg-cell` for the executor's `Cell`/`Ledger`/`Permissions` types the Rust
+# producer builds its synthesized turn over. Pulled with `tier-d-rust` (and already a
+# transitive dep of `dregg-turn`); default-features OFF, Lean-free. Also a dev-dep
+# (for the tier-c test); cargo unifies the two.
+dregg-cell = { path = "../cell", default-features = false, optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # postcard backs the S1 whole-chain-proof transport (`attest::SerializedWholeChainProof`)

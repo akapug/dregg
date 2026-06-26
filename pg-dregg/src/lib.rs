@@ -34,7 +34,14 @@ pub mod jsonpath;
 // pulls the archive. See `docs/EMBEDDABLE-LEAN-RUNTIME.md` + the module header.
 #[cfg(feature = "tier-d")]
 pub mod lean_producer;
+// The Tier-D-rust in-backend executor producer (the drainer's PRODUCE gate run
+// through the pure-Rust `dregg_turn::TurnExecutor`). Lightweight + Lean-FREE: it
+// links no `libleanshared`/archive and needs no Lean toolchain, at parity with the
+// verified Lean spec (`docs/RUST-LEAN-EXECUTOR-PARITY.md`). Gated behind
+// `tier-d-rust`; the default build keeps the `FoldProducer` stand-in.
 pub mod mirror;
+#[cfg(feature = "tier-d-rust")]
+pub mod rust_producer;
 pub mod synth;
 // S2 (docs/PG-DREGG.md §10.2): the node-side whole-chain PROOF producer — fold
 // finalized turns into ONE recursive proof (the `circuit::ivc_turn_chain` fold,
@@ -910,12 +917,20 @@ mod pg {
         // The runtime init is LAZY (first produce), so it runs AFTER the postmaster
         // fork, in the draining backend — never in the postmaster. The drain
         // sequencing below is identical for both producers.
+        // Producer selection, in descending order of guarantee. `tier-d` (the
+        // verified Lean executor) wins when present; else `tier-d-rust` (the
+        // lightweight pure-Rust executor); else the `FoldProducer` stand-in.
         #[cfg(feature = "tier-d")]
         {
             let mut drainer = lean_drain_engine_resumed_from_turns();
             run_drain_pass(&mut drainer, limit)
         }
-        #[cfg(not(feature = "tier-d"))]
+        #[cfg(all(feature = "tier-d-rust", not(feature = "tier-d")))]
+        {
+            let mut drainer = rust_drain_engine_resumed_from_turns();
+            run_drain_pass(&mut drainer, limit)
+        }
+        #[cfg(all(not(feature = "tier-d"), not(feature = "tier-d-rust")))]
         {
             let mut drainer = drain_engine_resumed_from_turns();
             run_drain_pass(&mut drainer, limit)
@@ -1048,8 +1063,9 @@ mod pg {
     /// A drainer with the deterministic stand-in producer, resumed from the durable
     /// `dregg.turns` head (so the next drained turn chains onto exactly where the
     /// store left off). Used by the default + every `pgNN` build; a `tier-d` build
-    /// uses [`lean_drain_engine_resumed_from_turns`] instead.
-    #[cfg(not(feature = "tier-d"))]
+    /// uses [`lean_drain_engine_resumed_from_turns`] and a `tier-d-rust` build uses
+    /// [`rust_drain_engine_resumed_from_turns`] instead.
+    #[cfg(all(not(feature = "tier-d"), not(feature = "tier-d-rust")))]
     fn drain_engine_resumed_from_turns() -> crate::drainer::Drainer<crate::drainer::FoldProducer> {
         // The stand-in's float source is a fixed reserved cell; the unit is 1. A
         // `tier-d` build replaces this whole producer with the verified executor.
@@ -1075,12 +1091,37 @@ mod pg {
     /// initialized LAZILY on the first produce — i.e. in this draining backend,
     /// after the postmaster fork, never in the postmaster.
     #[cfg(feature = "tier-d")]
-    fn lean_drain_engine_resumed_from_turns(
-    ) -> crate::drainer::Drainer<crate::lean_producer::LeanProducer> {
+    fn lean_drain_engine_resumed_from_turns()
+    -> crate::drainer::Drainer<crate::lean_producer::LeanProducer> {
         // The same fixed reserved float source + unit the stand-in used, so the
         // produced post-images line up across a producer switch.
         let source = [0xc0u8; 32];
         let mut d = crate::drainer::Drainer::new(crate::lean_producer::LeanProducer::new(
+            source,
+            1_000_000_000,
+            1,
+        ))
+        .with_clock(now_epoch());
+        if let Some((head, next_ordinal)) = durable_head_from_turns() {
+            d.resume_chain(head, next_ordinal);
+        }
+        d
+    }
+
+    /// THE TIER-D-RUST drainer: the same chaining engine, but its PRODUCE gate is
+    /// the REAL pure-Rust `dregg_turn::TurnExecutor::execute` run IN this backend
+    /// ([`crate::rust_producer::RustProducer`], `docs/RUST-LEAN-EXECUTOR-PARITY.md`).
+    /// Lightweight + Lean-FREE: no `libleanshared`, no archive, no Lean toolchain.
+    /// Resumed from the durable `dregg.turns` head exactly as the stand-in is, and it
+    /// derives the SAME chaining root (`crate::drainer::fold_chain_root`), so a store
+    /// written by any producer chains seamlessly.
+    #[cfg(all(feature = "tier-d-rust", not(feature = "tier-d")))]
+    fn rust_drain_engine_resumed_from_turns()
+    -> crate::drainer::Drainer<crate::rust_producer::RustProducer> {
+        // The same fixed reserved float source + unit the stand-in used, so the
+        // produced post-images line up across a producer switch.
+        let source = [0xc0u8; 32];
+        let mut d = crate::drainer::Drainer::new(crate::rust_producer::RustProducer::new(
             source,
             1_000_000_000,
             1,
@@ -1229,8 +1270,8 @@ mod pg {
     #[pg_extern(stable, parallel_safe, strict)]
     fn dregg_verify_turn(prev_root: &[u8], ledger_root: &[u8], ordinal: i64) -> bool {
         let _ = ledger_root; // recorded by the trigger; the chain gate is on prev_root/ordinal
-                             // Read the current head + next-expected ordinal from dregg.turns.
-                             // No rows ⇒ genesis (head = None, next = 0).
+        // Read the current head + next-expected ordinal from dregg.turns.
+        // No rows ⇒ genesis (head = None, next = 0).
         let head_hex: Option<String> = Spi::get_one(
             "SELECT encode(ledger_root, 'hex') FROM dregg.turns ORDER BY ordinal DESC LIMIT 1",
         )
@@ -3671,7 +3712,8 @@ mod pg {
                 .unwrap()
                 .unwrap();
             assert!(
-                alarmed.starts_with("ALARM (3 apply conflict(s))") && alarmed.contains("chain re-validates"),
+                alarmed.starts_with("ALARM (3 apply conflict(s))")
+                    && alarmed.contains("chain re-validates"),
                 "a non-zero conflict fires the alarm AND triggers re-validation (chain intact): {alarmed}"
             );
 
