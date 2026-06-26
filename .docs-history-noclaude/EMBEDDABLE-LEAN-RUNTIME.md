@@ -300,6 +300,44 @@ The PD boots and runs a turn; it is **not** yet a production executor PD:
    into the init chain. The cut is sound for the turn but is a stub the production
    build should make principled (trim the tactic import from the executor's module
    closure so the elaborator is never pulled, rather than no-op'd).
+
+   **§4.2 UPDATE (host static embed — built + the precise anchor named).** The
+   build-side half of the principled trim is now built and verified on the HOST
+   seed-splice path (`dregg-lean-ffi/build.rs::runtime_dead_init_trim`, OPT-IN via
+   `DREGG_LEAN_FFI_RUNTIME_TRIM=1`, written to a SEPARATE `libdregg_lean_trim.a` so the
+   default verified link is byte-for-byte unchanged). It computes the executor's true
+   runtime-FUNCTION reachable set from the `dregg_*` exports (every edge EXCEPT the
+   per-module `initialize_*` chain, which is the boundary), keeps only those members, and
+   supplies a generated boundary no-op for each runtime-dead module initializer the kept
+   chain still references. MEASURED: the closure archive drops **179 MB → 75 MB** (kept
+   959 runtime-live of 3859 members; dropped 2900 runtime-dead = the proof-time mathlib +
+   aesop + tactic objects), with the kernel probe + the direct/JSON differential GREEN —
+   a real transfer (100→70, 5→35) and the whole corpus run through the verified executor
+   at the trimmed size.
+
+   The premise "the closure is big ONLY because `Dregg2.Tactics`" is REFINED by the
+   measurement: trimming `Tactics.o` alone saves ~0.1 MB, because the executor's modules
+   (`Exec.Kernel` &c.) import mathlib DIRECTLY and the init-chain drags ~2676 mathlib
+   members regardless. The trim above sheds all of that proof-time CODE from the embed.
+
+   THE DEEPER SNAG (the genuine remaining work, now named precisely). The **190 MB
+   `libLean.a` elaborator** is NOT droppable by this archive-level trim and stays
+   init-pulled in BOTH the default and the trimmed binary. The anchor: ~10 aesop members
+   that define 16 specialized `_lp_aesop_*` symbols (e.g. `..._ElabM_run`,
+   `..._Frontend_declareRuleSetUnchecked`) are referenced from Dregg2 executor modules'
+   own INITIALIZERS — the `declare_aesop_rule_sets` registrations that `import Dregg2.Tactics`
+   (→ aesop) bakes into each module's compiled init. Those aesop members in turn reference
+   **416 `l_Lean_Elab_*` / `l_Lean_Meta_*` functions** directly. So the elaborator is held
+   by genuine, reachable symbol edges — it cannot be soundly severed by dropping members or
+   stubbing function symbols (that would risk the verified executor). This is the same
+   coupling that keeps the seL4 `dregg-executor.elf` at 372 MB despite its 13 MB closure
+   trim. Reaching ~25–50 MB / 372→30 MB therefore requires the SOURCE-level module-graph
+   split — executor "code" modules with NO tactic/aesop import (the proofs + `declare_aesop_rule_sets`
+   move to sibling "proof" modules) — so the specialized aesop closures are never emitted
+   into the executor's runtime objects in the first place. That split needs `lake build`
+   green (intermittently RED under concurrent metatheory work) and per-module proof
+   relocation; the build-side no-op infrastructure above is already in place to drop the
+   elaborator the instant the source anchor is removed.
 3. **One re-emission fidelity gap** (`l_String_instDecidableLtRaw___aux__1`),
    characterized and recovered exactly in `executor-pd/WALL.md` (`aux-defs.c`,
    `lean_nat_dec_lt(p1,p2)`).
