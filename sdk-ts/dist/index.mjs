@@ -20,7 +20,7 @@ import {
   explainEffect,
   explainTurn,
   renderTurn
-} from "./chunk-YGJKQPPO.mjs";
+} from "./chunk-GEUMN22R.mjs";
 import {
   DreggPgError,
   KERNEL_ROLE,
@@ -32,7 +32,7 @@ import {
   Blake3Hasher,
   fieldFromU64,
   symbol
-} from "./chunk-ZGTBFXNB.mjs";
+} from "./chunk-OARFHYBQ.mjs";
 import {
   exactBytes,
   hexDecode,
