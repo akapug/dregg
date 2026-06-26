@@ -8,11 +8,11 @@
 use dregg_cell::facet::is_facet_attenuation;
 use dregg_cell::{AuthRequired, CellId};
 use dregg_query::{Blake3Mmr, Coverage, EffectSummary, Pred, Query, Term, answer_whole_log};
+use polyana_bridge::trace::TraceRecord;
 use polyana_bridge::{
     CapBundle, GateRefusal, attest_whole_log, audit_records, gate_auth, gate_effect_set,
     intern_effects, witness_receipt,
 };
-use polyana_bridge::trace::TraceRecord;
 
 fn agent(b: u8) -> CellId {
     let mut k = [0u8; 32];

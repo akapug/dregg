@@ -14,9 +14,7 @@
 //! `dregg_query::answer_whole_log(slice, query)` and ships the answer; any
 //! verifier checks it with only a trusted root via `AttestedAnswer::verify`.
 
-use dregg_query::{
-    AttestedSlice, Blake3Mmr, Height, Mmr, RangeCertificate, ReceiptRecord,
-};
+use dregg_query::{AttestedSlice, Blake3Mmr, Height, Mmr, RangeCertificate, ReceiptRecord};
 use dregg_turn::TurnReceipt;
 use thiserror::Error;
 

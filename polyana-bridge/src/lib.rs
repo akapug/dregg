@@ -52,7 +52,9 @@ pub mod trace;
 pub mod witness;
 
 pub use attest::{AttestBuildError, attest_whole_log, audit_records};
-pub use caps::{CapBundle, EffectInternError, GateRefusal, gate_auth, gate_effect_set, intern_effects};
+pub use caps::{
+    CapBundle, EffectInternError, GateRefusal, gate_auth, gate_effect_set, intern_effects,
+};
 pub use trace::TraceRecord;
 pub use witness::witness_receipt;
 
