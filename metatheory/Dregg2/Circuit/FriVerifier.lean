@@ -113,18 +113,30 @@ def sampleBase [Inhabited F] (perm : List F → List F) (RATE : Nat)
   let v := (c.outputBuffer.getLast?).getD default
   (v, { c with outputBuffer := c.outputBuffer.dropLast })
 
+/-- Sample `n` base-field coefficients in order (top-level so its length is
+provable; `sampleN_length`). -/
+def sampleN [Inhabited F] (perm : List F → List F) (RATE : Nat) :
+    Nat → Challenger F → List F × Challenger F
+  | 0, c => ([], c)
+  | (n+1), c =>
+      let (v, c) := sampleBase perm RATE c
+      let (vs, c) := sampleN perm RATE n c
+      (v :: vs, c)
+
 /-- Sample an extension-field element as `D` base coefficients
 (`EF::from_basis_coefficients_fn`, BabyBear deg-4 ⇒ `D = 4`). Returns the coeff
 list in basis order. -/
 def sampleExt [Inhabited F] (perm : List F → List F) (RATE : Nat)
     (D : Nat) (c : Challenger F) : List F × Challenger F :=
-  let rec go : Nat → Challenger F → List F × Challenger F
-    | 0, c => ([], c)
-    | (n+1), c =>
-        let (v, c) := sampleBase perm RATE c
-        let (vs, c) := go n c
-        (v :: vs, c)
-  go D c
+  sampleN perm RATE D c
+
+/-- A `D`-coefficient extension squeeze yields exactly `D` base lanes. -/
+theorem sampleN_length [Inhabited F] (perm : List F → List F) (RATE : Nat) :
+    ∀ (n : Nat) (c : Challenger F), (sampleN perm RATE n c).1.length = n := by
+  intro n
+  induction n with
+  | zero => intro c; rfl
+  | succ k ih => intro c; simp only [sampleN]; rw [List.length_cons, ih]
 
 /-- `sample_bits b`: the canonical representative of a sampled base element, masked
 to `b` bits (`rand & ((1<<b)-1)` ⇒ `rand % 2^b`). The query-index draw. -/
@@ -387,18 +399,41 @@ def deriveFri [Inhabited F] (perm : List F → List F) (RATE : Nat) (params : Fr
   let c := Challenger.observeList perm RATE c proof.finalPoly
   (betas, c)
 
+/-- Draw `n` query indices via `sampleBits` (each masked to `logN`). Top-level so
+its length is provable (`drawQueries_length`). -/
+def drawQueries [Inhabited F] (perm : List F → List F) (RATE : Nat) (toNat : F → Nat)
+    (logN : Nat) : Nat → Challenger F → List Nat × Challenger F
+  | 0, c => ([], c)
+  | (n+1), c =>
+      let (idx, c) := Challenger.sampleBits perm RATE toNat logN c
+      let (rest, c) := drawQueries perm RATE toNat logN n c
+      (idx :: rest, c)
+
 /-- Draw the `numQueries` query indices via `sampleBits` (each masked to the proof's
 log-domain size `logN`). The grinding PoW (`powBits`) is a separate witness check
 folded into `FriChecks.queryPow`; the index draws themselves are these. -/
 def deriveQueryIndices [Inhabited F] (perm : List F → List F) (RATE : Nat) (toNat : F → Nat)
     (params : FriParams) (logN : Nat) (c0 : Challenger F) : List Nat × Challenger F :=
-  let rec go : Nat → Challenger F → List Nat × Challenger F
-    | 0, c => ([], c)
-    | (n+1), c =>
-        let (idx, c) := Challenger.sampleBits perm RATE toNat logN c
-        let (rest, c) := go n c
-        (idx :: rest, c)
-  go params.numQueries c0
+  drawQueries perm RATE toNat logN params.numQueries c0
+
+/-- The transcript draws exactly `n` query indices. -/
+theorem drawQueries_length [Inhabited F] (perm : List F → List F) (RATE : Nat)
+    (toNat : F → Nat) (logN : Nat) :
+    ∀ (n : Nat) (c : Challenger F), (drawQueries perm RATE toNat logN n c).1.length = n := by
+  intro n
+  induction n with
+  | zero => intro c; rfl
+  | succ k ih => intro c; simp only [drawQueries]; rw [List.length_cons, ih]
+
+/-- **The transcript ALWAYS yields exactly `numQueries` indices.** This is what makes
+`concreteFriChecks`'s count-binding tooth bind the proof's query count to the
+FRI parameter: combined with `concreteFriChecks_rejects_query_count`, a proof whose
+opened-query count differs from `numQueries` is rejected, because the transcript-
+derived `qidx` has length exactly `numQueries`. -/
+theorem deriveQueryIndices_length [Inhabited F] (perm : List F → List F) (RATE : Nat)
+    (toNat : F → Nat) (params : FriParams) (logN : Nat) (c0 : Challenger F) :
+    (deriveQueryIndices perm RATE toNat params logN c0).1.length = params.numQueries :=
+  drawQueries_length perm RATE toNat logN params.numQueries c0
 
 /-- The verifier sub-checks, as EXPLICIT Boolean functions of the proof + the DERIVED
 transcript challenges (`betas`, query indices `qidx`). `foldConsistent` and
@@ -491,9 +526,10 @@ def verifyAlgo [Inhabited F] [DecidableEq F]
     (proof : BatchProofData F) (pub : WrapPublics F) : Bool :=
   let c0 := Challenger.init initState
   -- tooth 2a: commit-phase transcript ⇒ FRI betas + post-commit challenger
-  let (betas, c1) := deriveFri perm RATE params proof c0
+  let betas := (deriveFri perm RATE params proof c0).1
+  let c1 := (deriveFri perm RATE params proof c0).2
   -- tooth 2a: query-index transcript
-  let (qidx, _c2) := deriveQueryIndices perm RATE toNat params logN c1
+  let qidx := (deriveQueryIndices perm RATE toNat params logN c1).1
   -- tooth 1: VK shape pin (blake3 out of band, baked as a constant)
   vk.shapeMatches proof
   -- tooth 2b: the per-query arithmetic checks over the DERIVED challenges
@@ -503,6 +539,31 @@ def verifyAlgo [Inhabited F] [DecidableEq F]
     && checks.queryPow proof
   -- tooth 3: the segment equality
     && segmentTooth proof pub
+
+/-- **Integration tooth: the transcript binds the query count end-to-end.** Running
+`verifyAlgo` with the concrete FRI checks, a proof whose opened-query count differs
+from the FRI parameter `numQueries` is REJECTED — because the transcript ALWAYS
+derives exactly `numQueries` indices (`deriveQueryIndices_length`) and
+`concreteFriChecks` binds the opened count to the derived count. Composes the two
+landed lemmas through the real `verifyAlgo`. -/
+theorem verifyAlgo_concrete_rejects_wrong_query_count [Inhabited F] [DecidableEq F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat)
+    (params : FriParams) (vk : RecursionVk F) (core : FriCore F)
+    (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
+    (finalConst : F) (hfp : proof.finalPoly = [finalConst])
+    (hcount : proof.queries.length ≠ params.numQueries) :
+    verifyAlgo perm RATE toNat params vk (concreteFriChecks core) initState logN proof pub
+      = false := by
+  have hqlen := deriveQueryIndices_length perm RATE toNat params logN
+      (deriveFri perm RATE params proof (Challenger.init initState)).2
+  have hfold : (concreteFriChecks core).foldConsistent proof
+      (deriveFri perm RATE params proof (Challenger.init initState)).1
+      (deriveQueryIndices perm RATE toNat params logN
+        (deriveFri perm RATE params proof (Challenger.init initState)).2).1 = false := by
+    apply concreteFriChecks_rejects_query_count core proof _ _ finalConst hfp
+    rw [hqlen]; exact hcount
+  unfold verifyAlgo
+  simp only [hfold, Bool.and_false, Bool.false_and]
 
 /-! ## 4. The carriers + the refinement statement (the payoff).
 
