@@ -1,186 +1,330 @@
 <!doctype html>
-<html lang=en>
+<html lang="en">
 <head>
-<meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<title>deos · the verified ocap desktop, live in your browser</title>
-<style>
-:root{--bg:#0d1117;--bg2:#161b22;--bg3:#0a0e14;--line:#21262d;--fg:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--orange:#f0883e;--purple:#bc8cff}
-*{box-sizing:border-box}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:13px/1.5 ui-monospace,Menlo,monospace}
-.app{display:flex;flex-direction:column;height:100vh}
-header{display:flex;align-items:center;gap:14px;padding:9px 16px;border-bottom:1px solid var(--line);background:var(--bg3)}
-header h1{font-size:15px;margin:0;color:var(--accent);white-space:nowrap}
-header h1 small{color:var(--muted);font-weight:normal;font-size:11px}
-.live{color:var(--green)}.stat{color:var(--muted);font-size:11px}
-nav{margin-left:auto;display:flex;gap:6px;align-items:center}
-nav a{color:var(--muted);text-decoration:none;border:1px solid var(--line);border-radius:7px;padding:4px 10px;font-size:11px;white-space:nowrap}
-nav a:hover{border-color:var(--accent);color:var(--accent)}
-.main{flex:1;display:flex;min-height:0}
-.col{overflow:auto;padding:12px}
-.rail{width:280px;border-right:1px solid var(--line);background:var(--bg3)}
-.center{flex:1;border-right:1px solid var(--line)}
-.acts{width:340px;background:var(--bg3)}
-h2{font-size:13px;color:var(--accent);margin:0 0 8px}
-h3{font-size:12px;color:var(--green);border-bottom:1px solid var(--line);padding-bottom:3px;margin:16px 0 6px}
-.cell{padding:7px 9px;border:1px solid var(--line);border-radius:7px;margin-bottom:6px;cursor:pointer;background:var(--bg2)}
-.cell:hover{border-color:var(--accent)}.cell.sel{border-color:var(--orange);background:#1c2128}
-.cell .id{color:var(--accent)}.cell .bal{color:var(--orange);float:right}
-.muted{color:var(--muted)}.bal{color:var(--orange)}.id{color:var(--accent)}
-table{border-collapse:collapse;width:100%}td{padding:2px 7px;border-bottom:1px solid var(--bg2);vertical-align:top}
-td.k{color:var(--muted);width:38%}
-.face{margin:8px 0;border:1px solid var(--line);border-radius:7px;padding:9px;background:var(--bg2)}
-.prose{white-space:pre-wrap;color:#a5d6ff}
-.msg{display:flex;justify-content:space-between;align-items:center;padding:6px 9px;border:1px solid var(--line);border-radius:7px;margin-bottom:6px;background:var(--bg2)}
-.msg.ok{cursor:pointer}.msg.ok:hover{border-color:var(--green)}.msg.no{opacity:.65}
-.send{font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--green);color:var(--green)}
-.no .send{border-color:var(--red);color:var(--red)}
-.log{font-size:11px}.log .committed{color:var(--green)}.log .refused{color:var(--red)}
-.log div{padding:3px 0;border-bottom:1px solid var(--bg2)}
-/* boot splash */
-#splash{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .35s}
-#splash.gone{opacity:0;pointer-events:none}
-#splash h1{font-size:22px;color:var(--accent);margin:0;letter-spacing:.5px}
-#splash p{color:var(--muted);max-width:520px;text-align:center;margin:0;line-height:1.6}
-#splash .dot{color:var(--green)}
-#splash .err{color:var(--red);white-space:pre-wrap;font-size:11px;max-width:680px}
-.spin{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);animation:pulse 1s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
-</style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dregg / deos — a capability-secure, witnessed substrate</title>
+  <meta name="description" content="dregg is a capability-secure, proof-carrying substrate. A turn is the exercise of an attenuable proof-carrying token over owned state, leaving a verifiable receipt. deos is the desktop you can run on it — live in your browser, no backend.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="dregg / deos — a capability-secure, witnessed substrate">
+  <meta property="og:description" content="A turn is the exercise of an attenuable proof-carrying token over owned state, leaving a verifiable receipt. Play with it in your browser — every click is a real verified turn.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+  <style>
+    /* page-local: the demo tiles + quickstart tabs, on the shared green tokens */
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--s4); }
+    .tile { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s5);
+      border-radius: var(--r3); border: 1px solid var(--line); background: var(--bg-raised);
+      text-decoration: none; transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease); }
+    .tile:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .tile__eyebrow { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent); }
+    .tile__name { font-family: var(--font-display); font-size: 1.2rem; color: var(--chalk); }
+    .tile__desc { font-size: 0.86rem; color: var(--fg-muted); line-height: 1.55; }
+    .tile__go { font-family: var(--font-mono); font-size: 0.76rem; color: var(--accent-bright); margin-top: auto; }
+    .live-note { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono);
+      font-size: 0.78rem; color: var(--fg-dim); margin: var(--s4) 0 var(--s5); }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-bright);
+      box-shadow: 0 0 8px var(--accent-bright); animation: lpulse 1.6s ease-in-out infinite; }
+    @keyframes lpulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
+    .qs-tabs { display: flex; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s4); }
+    .qs-tab { font-family: var(--font-mono); font-size: 0.8rem; padding: 6px 14px; border-radius: var(--r2);
+      border: 1px solid var(--line-strong); background: transparent; color: var(--fg-dim); cursor: pointer; }
+    .qs-tab.active { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-bright); }
+    .qs-panel { display: none; }
+    .qs-panel.active { display: block; }
+    .qs-panel p { font-size: 0.9rem; margin-bottom: var(--s3); }
+    .defn { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s4); margin-top: var(--s5); }
+    .defn__term { padding: var(--s5); border-radius: var(--r3); border: 1px solid var(--line);
+      border-left: 3px solid var(--accent); background: var(--bg-raised); }
+    .defn__k { font-family: var(--font-mono); font-size: 0.82rem; color: var(--accent-bright); margin-bottom: var(--s2); }
+    .defn__v { font-size: 0.88rem; color: var(--fg-dim); line-height: 1.6; }
+    .thesis { font-family: var(--font-display); font-size: clamp(1.15rem, 2.4vw, 1.6rem);
+      color: var(--chalk); line-height: 1.5; max-width: 40ch; }
+    .thesis em { font-style: italic; color: var(--accent-bright); }
+  </style>
 </head>
 <body>
-<div id=splash>
-  <h1>deos</h1>
-  <p><span class=spin></span> launching the verified ocap desktop in your browser…</p>
-  <p class=muted style="font-size:11px">no install · no backend server · the verified executor runs in <em>this tab</em>, in WebAssembly. Every act you take is a real cap-gated turn through it, leaving a receipt.</p>
-  <p id=sperr class=err></p>
-</div>
-<div class=app>
-  <header>
-    <h1>deos <small>· the verified ocap desktop, live in your browser</small></h1>
-    <span class=live id=live>● booting wasm…</span>
-    <span id=modebar style="margin-left:8px"></span>
-    <span class=stat id=stat></span>
-    <nav id=nav>
-      <a id=navgpui href="./cockpit-gpui/" title="The full gpui renderer (the same one the native desktop draws with), on a WebGPU canvas. Heavier; needs WebGPU." style="display:none">full gpui cockpit ▸</a>
-      <a href="./cards/" title="The deos-js card gallery: a counter + a reflective inspector, each firing real verified turns in-tab.">card gallery ▸</a>
-      <a href="./atlas/" title="The interactive atlas: the whole protocol + UI surfaces.">atlas ▸</a>
-      <a href="https://github.com/emberian/dregg" title="source (AGPL-3.0-or-later)">source ▸</a>
-    </nav>
-  </header>
-  <div class=main>
-    <div class="col rail"><h2>cells</h2><div id=cells></div>
-      <p class=muted style="margin-top:14px">Every act here is a REAL cap-gated turn through the verified executor — running in wasm, in this tab. No server.</p>
-    </div>
-    <div class="col center" id=center><h2>inspector</h2><p class=muted>select a cell</p></div>
-    <div class="col acts" id=acts><h2>affordances</h2><p class=muted>select a cell</p></div>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name"><code>dregg</code> / deos</span>
+  <span class="nav__tag">capability-secure &middot; proof-carrying &middot; witnessed</span>
+  <div class="nav__links">
+    <a class="nav__link" href="#what">What it is</a>
+    <a class="nav__link" href="#play">Play</a>
+    <a class="nav__link" href="#quickstart">Quickstart</a>
+    <a class="nav__link" href="#enables">What it enables</a>
+    <a class="nav__link" href="https://github.com/emberian/dregg">Source</a>
   </div>
-</div>
-<script type=module>
-import init, { WebImage } from './pkg/starbridge_web.js';
-const $ = s => document.querySelector(s);
-// Reveal the full-gpui-cockpit nav link only if that surface actually shipped
-// (the gpui-web build is gated on the matrix+zed sqlite resolution; the rest of
-// in-browser deos ships regardless).
-fetch('./cockpit-gpui/', { method: 'HEAD' }).then(r => { if (r.ok) $('#navgpui').style.display = ''; }).catch(() => {});
-const esc = s => String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-let img, sel = 'user', log = [], mode = (new URLSearchParams(location.search).get('mode') || 'inspect');
+</nav>
 
-async function boot() {
-  await init();
-  img = new WebImage();
-  // expose the live in-tab image for headless driving / scripting
-  window.__deosImage = img;
-  $('#live').textContent = '● live · wasm executor';
-  render();
-  // dismiss the splash once the live image is on screen
-  const sp = $('#splash');
-  sp.classList.add('gone');
-  setTimeout(() => sp.remove(), 400);
-}
+<!-- ==================== HERO ==================== -->
+<header class="hero">
+  <div class="hero__inner">
+    <p class="hero__eyebrow">a capability-secure, witnessed substrate</p>
+    <h1>A turn is the exercise of an attenuable proof-carrying token over owned state, <em>leaving a verifiable receipt.</em></h1>
+    <p class="hero__sub">
+      <code>dregg</code> is the substrate: cells own state and hold capabilities, a turn changes state
+      only as those capabilities permit, and every turn proves itself — leaving a receipt anyone can check.
+      <strong>deos</strong> is a desktop built on it. Everything below runs client-side, in your browser tab,
+      in WebAssembly: the verified executor runs <em>here</em>, with no backend server. Every click you make is a real, cap-gated, verified turn.
+    </p>
+    <div class="hero__cta">
+      <a class="btn btn--primary" href="./deos/">Open deos in your browser</a>
+      <a class="btn btn--secondary" href="./cards/">Play with the live cards</a>
+      <a class="btn btn--secondary" href="https://github.com/emberian/dregg">Read the source</a>
+    </div>
+  </div>
+</header>
 
-function render() {
-  const s = JSON.parse(img.survey());
-  $('#stat').textContent = `${s.cell_count} cells · ${log.length} acts committed/refused`;
-  $('#cells').innerHTML = s.cells.map(c =>
-    `<div class="cell ${c.short.replace(/…/g,'_')===sel||resolveShort(c)===sel?'sel':''}" data-id="${esc(c.id)}">
-       <span class=bal>${c.balance==null?'':c.balance}</span>
-       <span class=id>${esc(c.short)}</span><div class=muted>${esc(c.kind)} · ${c.cap_edges} caps</div></div>`).join('');
-  $('#cells').querySelectorAll('.cell').forEach(el => el.onclick = () => { sel = el.dataset.id; render(); });
-  $('#modebar').innerHTML = ['inspect','ocap web'].map(m =>
-    `<span class="msg ${mode===(m==='ocap web'?'ocap':'inspect')?'ok':'no'}" data-mode="${m==='ocap web'?'ocap':'inspect'}" style="display:inline-block;padding:2px 8px;margin-right:4px;cursor:pointer">${m}</span>`).join('');
-  $('#modebar').querySelectorAll('[data-mode]').forEach(el => el.onclick = () => { mode = el.dataset.mode; render(); });
-  renderCenter(); renderActs();
-}
-function resolveShort(c){ return c.id; }
+<main class="wrap">
 
-function renderCenter() {
-  if (mode === 'ocap') return renderOcap();
-  const r = JSON.parse(img.inspect(sel));
-  if (r.error) { $('#center').innerHTML = `<h2>inspector</h2><p class=muted>${esc(r.error)}</p>`; return; }
-  let h = `<h2>inspector · <span class=id>${esc(r.short)}</span></h2>`;
-  for (const f of r.faces) {
-    h += `<h3>${esc(f.kind)} · ${esc(f.label)}</h3>` + faceHtml(f.body);
+<!-- ==================== WHAT IT IS ==================== -->
+<section class="section" id="what">
+  <span class="section__label">What it is</span>
+  <h2 class="section__title">Six words, and what they mean</h2>
+  <p class="section__intro">
+    The model is small. State lives in cells; capabilities say what may touch it; a turn is one atomic
+    change; effects are the fixed vocabulary of changes a turn can make; a proof witnesses that the change
+    obeyed the rules; a receipt is the record a third party can verify without trusting you.
+  </p>
+  <div class="defn">
+    <div class="defn__term">
+      <div class="defn__k">cell</div>
+      <div class="defn__v">An owned object: some state, a balance, and a capability list — the set of things it is allowed to reference. A cell can only act on what its c-list names.</div>
+    </div>
+    <div class="defn__term">
+      <div class="defn__k">capability</div>
+      <div class="defn__v">An unforgeable, attenuable token of authority. You can hand someone a strictly weaker copy; you cannot hand them more than you hold. Authority only ever narrows.</div>
+    </div>
+    <div class="defn__term">
+      <div class="defn__k">turn</div>
+      <div class="defn__v">One atomic state transition. A call forest runs depth-first across cells; if any step is refused, the whole turn rolls back. Nothing partial commits.</div>
+    </div>
+    <div class="defn__term">
+      <div class="defn__k">effect</div>
+      <div class="defn__v">The fixed verb vocabulary a turn may use — transfer, set a field, mint, hand off a capability, and so on. The vocabulary is closed: an unauthorized act is not expressible.</div>
+    </div>
+    <div class="defn__term">
+      <div class="defn__k">proof</div>
+      <div class="defn__v">A turn carries a witness that it obeyed the rules — produced once, verified cheaply. The check does not re-run the work; it checks the proof.</div>
+    </div>
+    <div class="defn__term">
+      <div class="defn__k">receipt</div>
+      <div class="defn__v">The verifiable record a turn leaves behind: the before-state, the after-state, the effects, the proof. A light client can fold a whole history of receipts into one proof and check it, re-witnessing nothing.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== PLAY WITH IT ==================== -->
+<section class="section" id="play">
+  <span class="section__label">Play with it</span>
+  <h2 class="section__title">Everything here is live, in your tab</h2>
+  <p class="section__intro">
+    Each surface below loads a verified executor compiled to WebAssembly and runs it in your browser.
+    Click an affordance and you fire a real cap-gated turn against an in-tab ledger; the bound fields
+    re-paint from the committed state. No install, no account, no server.
+  </p>
+  <p class="live-note"><span class="live-dot"></span> client-side WebAssembly &middot; real verified turns &middot; nothing leaves your machine</p>
+  <div class="tiles">
+    <a class="tile" href="./deos/">
+      <span class="tile__eyebrow">the desktop</span>
+      <span class="tile__name">deos cockpit</span>
+      <span class="tile__desc">Land inside deos: cells, a moldable inspector, the affordances each cell exposes, and the ocap graph. Click an authorized affordance and a real verified turn commits, leaving a receipt in the log.</span>
+      <span class="tile__go">open the cockpit &rsaquo;</span>
+    </a>
+    <a class="tile" href="./cards/">
+      <span class="tile__eyebrow">live cards</span>
+      <span class="tile__name">Card gallery</span>
+      <span class="tile__desc">A counter, a reflective inspector, a tally board, a key-value store cell, and document collaboration with conflicts as first-class objects — each a real verified turn over an in-tab executor.</span>
+      <span class="tile__go">open the gallery &rsaquo;</span>
+    </a>
+    <a class="tile" href="./explorer/">
+      <span class="tile__eyebrow">capabilities</span>
+      <span class="tile__name">Caps as rows</span>
+      <span class="tile__desc">Your capabilities expressed as the rows you may read. Present a token, change its caveats, and watch the cell rows narrow exactly as the row-level-security gate narrows them — fail-closed, no amplification.</span>
+      <span class="tile__go">open the explorer &rsaquo;</span>
+    </a>
+    <a class="tile" href="./light-client/">
+      <span class="tile__eyebrow">light client</span>
+      <span class="tile__name">Verify a whole history</span>
+      <span class="tile__desc">Fold a multi-turn history into one succinct recursive proof, in your tab, then verify it — re-executing nothing. Check it against a config anchor; a tampered anchor is refused, not laundered.</span>
+      <span class="tile__go">run the verifier &rsaquo;</span>
+    </a>
+    <a class="tile" href="./atlas/">
+      <span class="tile__eyebrow">reference</span>
+      <span class="tile__name">The atlas</span>
+      <span class="tile__desc">An interactive map of the whole protocol and its UI surfaces — the nouns, the effects, the screens — browsable end to end.</span>
+      <span class="tile__go">open the atlas &rsaquo;</span>
+    </a>
+    <a class="tile" href="./cockpit-gpui/">
+      <span class="tile__eyebrow">full renderer · needs WebGPU</span>
+      <span class="tile__name">gpui cockpit</span>
+      <span class="tile__desc">The full native gpui renderer — the same one the desktop draws with — on a WebGPU canvas, driving the same in-tab executor. Heavier; shown when the build is available in this deploy.</span>
+      <span class="tile__go">open the full cockpit &rsaquo;</span>
+    </a>
+  </div>
+</section>
+
+<!-- ==================== QUICKSTART ==================== -->
+<section class="section" id="quickstart">
+  <span class="section__label">Quickstart</span>
+  <h2 class="section__title">Call it from your own code</h2>
+  <p class="section__intro">
+    The shape is the same in every language: an identity makes a turn, signs it, and submits it; you get
+    back a receipt. An unauthorized act is not expressible on the public surface — every action carries a
+    real signature over the canonical, federation-bound message.
+  </p>
+  <div class="qs-tabs">
+    <button class="qs-tab active" data-qs="ts">TypeScript &mdash; @dregg/sdk</button>
+    <button class="qs-tab" data-qs="py">Python &mdash; dregg</button>
+    <button class="qs-tab" data-qs="pg">Postgres &mdash; pg-dregg</button>
+  </div>
+
+  <div class="qs-panel active" data-qs="ts">
+    <p>Install the SDK and run a turn against a local dev node.</p>
+    <pre><code>npm install @dregg/sdk</code></pre>
+    <pre><code>import { AgentRuntime, NodeClient, profiles } from "@dregg/sdk";
+
+// 1. a named identity (the same store as the `dregg id` CLI)
+const identity = profiles.loadActive() ?? (profiles.create("me"), profiles.load("me"));
+
+// 2. bind to a node (your local dev node, or a remote node + its operator token)
+const node = new NodeClient("http://localhost:8421");
+const runtime = new AgentRuntime(identity, node);
+
+// 3. identity -&gt; turn -&gt; sign -&gt; submit -&gt; receipt
+const receipt = await runtime.turn()
+  .transfer({ to: "cell:...", amount: 10n })
+  .sign()
+  .submit();
+
+console.log(receipt.committed, receipt.postState);</code></pre>
+    <p class="hero__sub" style="font-size:0.82rem;margin:0;">There is no public server today; run a node locally first (<code>dregg-node init &amp;&amp; dregg-node run --enable-faucet --port 8421</code>). See the SDK's <code>QUICKSTART.md</code>.</p>
+  </div>
+
+  <div class="qs-panel" data-qs="py">
+    <p>The default wheel is the light, kernel-free client. The same shape: identity &rarr; turn &rarr; sign &rarr; submit &rarr; receipt.</p>
+    <pre><code>pip install dregg</code></pre>
+    <pre><code>from dregg import Identity, NodeClient
+
+identity = Identity.load_active() or Identity.create("me")
+node = NodeClient("http://localhost:8421")
+
+receipt = (
+    node.turn(identity)
+        .transfer(to="cell:...", amount=10)
+        .sign()
+        .submit()
+)
+print(receipt.committed, receipt.post_state)</code></pre>
+    <p class="hero__sub" style="font-size:0.82rem;margin:0;">For the embedded verified Lean kernel, install the heavy build: <code>pip install "dregg[kernel]"</code>.</p>
+  </div>
+
+  <div class="qs-panel" data-qs="pg">
+    <p>pg-dregg adds three things to a database — cap-secure row-level security, a verified store that refuses a tampered batch, and proof-attested ranges. See them end to end without installing Postgres:</p>
+    <pre><code>git clone https://github.com/emberian/dregg
+cd dregg/pg-dregg
+cargo run --example three_pillars</code></pre>
+    <p>The same behaviour runs through real SQL on pg18 via <code>cargo pgrx test pg18</code> / <code>cargo pgrx run pg18</code>. The browser twin of pillar one is the <a href="./explorer/">caps-as-rows explorer</a>.</p>
+  </div>
+</section>
+
+<!-- ==================== WHAT IT DOES ==================== -->
+<section class="section" id="does">
+  <span class="section__label">What it does</span>
+  <h2 class="section__title">The guarantees, stated plainly</h2>
+  <div class="problems">
+    <div class="problem">
+      <p class="problem__label problem__label--solve">cap-gating</p>
+      <p class="problem__text"><strong>No amplification.</strong> Authority only narrows. An attenuated token sees a strict subset of what its parent saw and can do a strict subset of what its parent could do. There is no path from a weaker token to a stronger one.</p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">conservation</p>
+      <p class="problem__text"><strong>Nothing is created or destroyed off the books.</strong> Balances are conserved across a turn by construction; a turn that would violate conservation does not commit.</p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">verified store</p>
+      <p class="problem__text"><strong>A tampered or reordered batch is refused</strong> by the chain tooth the database engine itself runs — without re-running any prover. The store checks the proof, not the work.</p>
+    </div>
+    <div class="problem">
+      <p class="problem__label problem__label--solve">light-client</p>
+      <p class="problem__text"><strong>A whole history folds into one proof.</strong> A client can verify that every finalized turn executed correctly, in order, from genesis to the final root — re-witnessing nothing. The trust anchor is configuration, never read off the artifact under verification.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== WHAT IT ENABLES ==================== -->
+<section class="section" id="enables">
+  <span class="section__label">What it enables</span>
+  <h2 class="section__title">What you can build on it</h2>
+  <div class="usecases">
+    <div class="usecase">
+      <div class="usecase__icon">sovereign apps</div>
+      <div class="usecase__title">Apps that own their state</div>
+      <div class="usecase__desc">An application is a set of cells and the capabilities between them. It runs the same way on your phone, on a server, or fully in a browser tab — the executor is the same verified code.</div>
+    </div>
+    <div class="usecase">
+      <div class="usecase__icon">agent memory</div>
+      <div class="usecase__title">Witnessed memory for agents</div>
+      <div class="usecase__desc">Per-cell heaps, working memory, and passable intermediate states — a portable, witnessed primitive. An agent's memory becomes something you can attenuate, hand off, and verify.</div>
+    </div>
+    <div class="usecase">
+      <div class="usecase__icon">collaboration</div>
+      <div class="usecase__title">Documents with conflicts as objects</div>
+      <div class="usecase__desc">Fork a document, diverge, then stitch. A merge surfaces conflicts as first-class objects — both alternatives held side by side — and resolving one is itself a verified turn.</div>
+    </div>
+    <div class="usecase">
+      <div class="usecase__icon">disclosure</div>
+      <div class="usecase__title">Cross-org selective disclosure</div>
+      <div class="usecase__desc">Reveal exactly the facts you choose, with a proof — or reveal one allow/deny bit and nothing else. The verifier learns the verdict without learning the data behind it.</div>
+    </div>
+    <div class="usecase">
+      <div class="usecase__icon">settlement</div>
+      <div class="usecase__title">Settlement across chains</div>
+      <div class="usecase__desc">A finalized history can be wrapped for an external chain to settle against — the recursive aggregate is the bridge. The same receipts, checked elsewhere.</div>
+    </div>
+    <div class="usecase">
+      <div class="usecase__icon">databases</div>
+      <div class="usecase__title">A database that checks itself</div>
+      <div class="usecase__desc">pg-dregg makes row-level security a capability predicate, refuses a tampered commit log, and attests ranges with a proof — inside the engine, with no separate trusted service.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== CLOSING THESIS ==================== -->
+<section class="section">
+  <div class="arch" style="display:flex;align-items:center;justify-content:center;padding:var(--s8) var(--s6);">
+    <p class="thesis">A turn is the exercise of an attenuable proof-carrying token over owned state, <em>leaving a verifiable receipt.</em></p>
+  </div>
+</section>
+
+</main>
+
+<footer class="site-foot">
+  <div class="site-foot__inner">
+    <span class="site-foot__left"><code>dregg</code> / deos &mdash; a capability-secure, witnessed substrate. AGPL-3.0-or-later.</span>
+    <div class="site-foot__links">
+      <a href="./deos/">deos</a>
+      <a href="./cards/">Cards</a>
+      <a href="./explorer/">Explorer</a>
+      <a href="./light-client/">Light client</a>
+      <a href="./atlas/">Atlas</a>
+      <a href="https://github.com/emberian/dregg">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // quickstart tabs
+  for (const tab of document.querySelectorAll('.qs-tab')) {
+    tab.addEventListener('click', () => {
+      const which = tab.dataset.qs;
+      for (const t of document.querySelectorAll('.qs-tab')) t.classList.toggle('active', t === tab);
+      for (const p of document.querySelectorAll('.qs-panel')) p.classList.toggle('active', p.dataset.qs === which);
+    });
   }
-  $('#center').innerHTML = h;
-}
-
-function renderOcap() {
-  const g = JSON.parse(img.ocap());
-  let h = `<h2>ocap web <span class=muted>· the whole-image capability graph</span></h2>`;
-  h += `<h3>cells (${g.nodes.length})</h3><table>` + g.nodes.map(n =>
-    `<tr><td class=id>${esc(n.id)}</td><td><span class=bal>${n.balance==null?'':n.balance}</span> ${esc(n.lifecycle||'')} · out ${n.out} · in ${n.in}</td></tr>`).join('') + '</table>';
-  h += `<h3>capability edges (${g.edges.length})</h3><table>` + (g.edges.length ? g.edges.map(e =>
-    `<tr><td class=id>${esc(e.from)}</td><td>→ <span class=id>${esc(e.to)}</span> · slot ${e.slot} · ${esc(e.rights)}</td></tr>`).join('') : '<tr><td class=muted>(no edges)</td></tr>') + '</table>';
-  $('#center').innerHTML = h;
-}
-function faceHtml(b) {
-  if (b.shape==='fields') return '<table>' + b.fields.fields.map(f=>`<tr><td class=k>${esc(f.key)}</td><td>${fieldVal(f.value)}</td></tr>`).join('') + '</table>';
-  if (b.shape==='graph') return '<table>' + (b.edges||[]).map(e=>`<tr><td class=id>${esc(e.from)}</td><td>→ ${esc(e.to)} · slot ${e.slot} · ${esc(e.rights)}</td></tr>`).join('') + (b.edges&&b.edges.length?'':'<tr><td class=muted>(no capability edges)</td></tr>') + '</table>';
-  if (b.shape==='prose') return `<div class=face prose>${esc(b.text)}</div>`;
-  if (b.shape==='timeline') return '<table>' + (b.events||[]).map(e=>`<tr><td class=k>@${e.at}</td><td>${esc(e.label)}</td></tr>`).join('') + '</table>';
-  if (b.shape==='state-machine') return `<div>current: <b>${esc(b.current)}</b></div>`;
-  return `<div class=prose>${esc(JSON.stringify(b).slice(0,300))}</div>`;
-}
-function fieldVal(v){
-  if(!v) return '';
-  if(v.t==='balance') return `<span class=bal>${v.v}</span>`;
-  if(v.t==='id'||v.t==='hash') return `<span class=id>${esc(v.short)}</span>`;
-  if(v.t==='cap-edge') return `→ <span class=id>${esc(v.short)}</span> slot ${v.slot}`;
-  if(v.t==='count'||v.t==='bool') return esc(v.v);
-  return esc(v.v);
-}
-
-function renderActs() {
-  const a = JSON.parse(img.affordances(sel));
-  if (a.error) { $('#acts').innerHTML = `<h2>affordances</h2><p class=muted>${esc(a.error)}</p>`; return; }
-  let h = `<h2>affordances · <span class=id>${esc(a.cell)}</span></h2><p class=muted>click an authorized message to fire a real turn</p>`;
-  for (const m of a.messages) {
-    h += `<div class="msg ${m.authorized?'ok':'no'}" data-msg="${esc(m.name)}">
-      <span><b>${esc(m.name)}</b> <span class=muted>${esc(m.effect)} · ${esc(m.required)}</span></span>
-      <span class=send>${m.authorized?'▶ send':'○ refused'}</span></div>`;
-  }
-  h += `<h3>act log</h3><div class=log id=log>${log.slice().reverse().map(l=>`<div><span class=${l.outcome}>${l.outcome==='committed'?'✓':'✕'}</span> ${esc(l.cell)} · ${esc(l.message)} ${l.note?'<span class=muted>'+esc(l.note)+'</span>':''}</div>`).join('')||'<div class=muted>(none yet)</div>'}</div>`;
-  $('#acts').innerHTML = h;
-  $('#acts').querySelectorAll('.msg.ok').forEach(el => el.onclick = () => fire(el.dataset.msg));
-}
-
-function fire(message) {
-  const res = JSON.parse(img.act(sel, message));
-  log.push({
-    cell: res.cell, message,
-    outcome: res.outcome,
-    note: res.outcome==='committed' ? `post ${res.receipt.post_state} · ${res.receipt.computrons} computrons`
-        : `${res.by_executor?'executor':'cap-gate'}: ${(res.reason||'').slice(0,40)}`,
-  });
-  render();
-}
-
-boot().catch(e => {
-  $('#live').textContent = 'wasm error';
-  $('#sperr').textContent = String(e) + '\n' + (e.stack||'');
-  $('#center').innerHTML = '<pre>'+esc(e+'\n'+(e.stack||''))+'</pre>';
-});
 </script>
 </body>
 </html>
