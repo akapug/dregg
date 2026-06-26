@@ -58,6 +58,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DREGG_LEAN_SYSROOT");
     println!("cargo:rerun-if-env-changed=DREGG_METATHEORY_DIR");
 
+    // LIGHT (default) build: the `kernel` feature is OFF, `dregg-lean-ffi` is
+    // built `no-lean-link`, and the cdylib links NO Lean runtime — so there is
+    // nothing to point an rpath at. Skip entirely (and never shell out to
+    // `lake`), keeping the light build fully toolchain-free.
+    if std::env::var_os("CARGO_FEATURE_KERNEL").is_none() {
+        return;
+    }
+
     if std::env::var("DREGG_LEAN_LINK").as_deref() != Ok("shared") {
         return;
     }

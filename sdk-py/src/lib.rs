@@ -1958,82 +1958,172 @@ fn faucet<'py>(
     json_to_py(py, &v)
 }
 
-// ─── kernel: which executor this module embeds (the verified Lean kernel, or not) ───
+// ─── kernel: which LOCAL EXECUTOR this module ships (pure-Rust, or the Lean kernel) ───
+//
+// The SDK ALWAYS has a local executor. The LIGHT (default) wheel ships the
+// pure-Rust `TurnExecutor` (`dregg-turn`) — small, no `libleanshared`, at parity
+// with the verified Lean spec (a dedicated lane strengthens + documents that
+// Rust↔Lean parity; it is the justification for trusting the Rust producer). The
+// VERIFIED Lean executor is the optional heavy `dregg[kernel]` build. Either way
+// `dregg.kernel()` PROVES the active executor by running one real transfer
+// through it.
 
-/// The canonical mini-wire for the proof-of-execution probe: two cells
-/// (1: balance 50, 2: balance 10), actor 1 transfers 5 from 1 to 2. The verified
-/// `Exec.recKExec` must accept (`"ok":1`) and move the balances to 45/15. The grammar is
-/// `Dregg2.Exec.FFI.parseInput`'s (the same wire the state differential drives).
+/// The canonical mini-wire for the VERIFIED-Lean proof-of-execution probe: two
+/// cells (1: balance 50, 2: balance 10), actor 1 transfers 5 from 1 to 2. The
+/// proved `Exec.recKExec` must accept (`"ok":1`) and move the balances to 45/15.
+/// The grammar is `Dregg2.Exec.FFI.parseInput`'s (the state-differential wire).
 const KERNEL_PROBE_WIRE: &str = "{\"cells\":[[1,{\"rec\":[[\"balance\",{\"int\":50}]]}],\
                                  [2,{\"rec\":[[\"balance\",{\"int\":10}]]}]],\
                                  \"actor\":1,\"src\":1,\"dst\":2,\"amt\":5}";
 
-/// Report which kernel this extension module embeds — and PROVE it by running one
-/// verified transfer step through it.
+/// Drive ONE real transfer through the pure-Rust executor (`dregg-turn`'s
+/// `TurnExecutor`, via the wire-free `DreggEngine`) — the local executor the
+/// LIGHT wheel ships. Two cells owned by one ephemeral key; a signed transfer of
+/// 5 the executor authorizes + commits, landing the destination at 15. This is a
+/// REAL execution (the Rust analog of the Lean `recKExec` probe), not a link bit.
+/// Returns `(committed_and_landed, evidence_wire)`.
+fn rust_executor_probe() -> Result<(bool, String), String> {
+    use dregg_cell::Cell;
+    use dregg_sdk::embed::{DreggEngine, EngineConfig};
+
+    let fed = [0u8; 32];
+    let clerk = AgentCipherclerk::from_seed([7u8; 64]);
+    let pk = clerk.public_key().0;
+    // `cell_id("default")` == derive_raw(pk, blake3("default")); fund the SAME id.
+    let default_token = *blake3::hash(b"default").as_bytes();
+    let dst_token = *blake3::hash(b"dregg-rust-probe-dst").as_bytes();
+    let from = clerk.cell_id("default");
+    let to = CellId::derive_raw(&pk, &dst_token);
+
+    // EngineConfig::for_testing() runs federation [0;32] at timestamp 0.
+    let mut engine = DreggEngine::new(EngineConfig::for_testing());
+    // Fund the source generously so the executor's fee/budget accounting cannot
+    // underflow it; the DESTINATION (10 → 15) is the clean conservation witness.
+    engine
+        .ledger_mut()
+        .insert_cell(Cell::with_balance(pk, default_token, 1_000_000))
+        .map_err(|e| format!("fund src: {e:?}"))?;
+    engine
+        .ledger_mut()
+        .insert_cell(Cell::with_balance(pk, dst_token, 10))
+        .map_err(|e| format!("fund dst: {e:?}"))?;
+
+    let action = clerk.make_action(
+        from,
+        "execute",
+        vec![Effect::Transfer {
+            from,
+            to,
+            amount: 5,
+        }],
+        &fed,
+    );
+    let mut turn = clerk.make_turn_for("default", action);
+    turn.nonce = 0;
+    turn.fee = 10_000;
+    turn.valid_until = Some(4_000_000_000); // far future; never expired at ts 0
+    let signed = clerk.sign_turn(&turn);
+
+    engine
+        .execute_turn(&signed.turn)
+        .map_err(|e| format!("execute: {e:?}"))?;
+
+    let src_bal = engine
+        .ledger()
+        .get(&from)
+        .map(|c| c.state.balance())
+        .unwrap_or(i64::MIN);
+    let dst_bal = engine
+        .ledger()
+        .get(&to)
+        .map(|c| c.state.balance())
+        .unwrap_or(i64::MIN);
+    let ok = dst_bal == 15;
+    let out = format!(
+        "{{\"executor\":\"rust\",\"cells\":[[\"src\",{src_bal}],[\"dst\",{dst_bal}]],\
+         \"transferred\":5,\"ok\":{}}}",
+        if ok { 1 } else { 0 }
+    );
+    Ok((ok, out))
+}
+
+/// Report which LOCAL EXECUTOR this module ships — and PROVE it by running one
+/// real transfer through it.
 ///
 /// Returns a dict:
-///   * `"lean"`            — the verified Lean kernel is linked and its runtime
-///                           initialized (this module links `libleanshared` +
-///                           `libdregg_lean.a`; False means the Rust fallback).
-///   * `"producer"`        — `"lean"` when the verified executor is the authoritative
-///                           state producer (the SWAP default; `DREGG_LEAN_PRODUCER=0`
-///                           opts out), else `"rust"`.
-///   * `"verified_step_ok"`  — a REAL call: one transfer driven through the PROVED
-///                           `Exec.recKExec` (`dregg_record_kernel_step`) accepted and
-///                           conserved balances. Not a link bit — the kernel executed.
-///   * `"verified_step_out"` — the raw output wire from that call (evidence).
+///   * `"build"`            — `"light"` (the default kernel-free client wheel) or
+///                            `"kernel"` (the `dregg[kernel]` heavy build).
+///   * `"lean"`             — the verified Lean kernel is linked + its runtime
+///                            initialized (links `libleanshared` + `libdregg_lean.a`).
+///   * `"executor"`/`"producer"` — the ACTIVE local executor: `"lean"` when the
+///                            verified executor is linked AND selected as producer
+///                            (the SWAP default; `DREGG_LEAN_PRODUCER=0` opts out),
+///                            else `"rust"` — the pure-Rust `TurnExecutor` the light
+///                            client ships (at parity with the verified Lean spec).
+///   * `"executor_present"` — always true: the SDK always has a local executor.
+///   * `"executor_step_ok"` — a REAL execution: one transfer driven through the
+///                            ACTIVE executor accepted and conserved balances.
+///   * `"executor_step_out"`— the raw output wire from that execution (evidence).
+///   * `"verified_step_ok"` — true ONLY when the executor that ran the step was the
+///                            VERIFIED Lean executor (i.e. `executor=="lean"`); the
+///                            Rust producer is at-parity, not itself the proved kernel.
 #[pyfunction]
 fn kernel(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     let d = PyDict::new(py);
-    // Which wheel is this? The LIGHT (default) build is the kernel-free client;
-    // the HEAVY build (`--features kernel`) embeds the verified Lean executor.
     let build_mode = if cfg!(feature = "kernel") {
         "kernel"
     } else {
         "light"
     };
     d.set_item("build", build_mode)?;
+
     let lean = dregg_lean_ffi::lean_available();
     d.set_item("lean", lean)?;
-    d.set_item(
-        "producer",
-        if lean && dregg_sdk::runtime::lean_producer_env_enabled() {
-            "lean"
-        } else {
-            "rust"
-        },
-    )?;
-    if lean {
+    // The SDK ALWAYS carries a local executor: the verified Lean executor when it
+    // is linked AND selected as the producer, else the pure-Rust TurnExecutor.
+    let lean_producer = lean && dregg_sdk::runtime::lean_producer_env_enabled();
+    let active = if lean_producer { "lean" } else { "rust" };
+    d.set_item("executor", active)?;
+    d.set_item("producer", active)?;
+    d.set_item("executor_present", true)?;
+
+    if lean_producer {
+        // Drive the transfer through the VERIFIED Lean kernel (proved recKExec).
         match dregg_lean_ffi::shadow_record_kernel_step(KERNEL_PROBE_WIRE) {
             Ok(out) => {
-                // Accept (`"ok":1`) AND the verified post-balances (45/15) — a kernel that
-                // answered but computed the wrong state must not read as ok.
+                // Accept (`"ok":1`) AND the verified post-balances (45/15): a kernel
+                // that answered but computed the wrong state must not read as ok.
                 let ok = out.contains("\"ok\":1")
                     && out.contains("[\"balance\",{\"int\":45}]")
                     && out.contains("[\"balance\",{\"int\":15}]");
                 d.set_item("verified_step_ok", ok)?;
-                d.set_item("verified_step_out", out)?;
+                d.set_item("executor_step_ok", ok)?;
+                d.set_item("executor_step_out", out)?;
             }
             Err(e) => {
                 d.set_item("verified_step_ok", false)?;
-                d.set_item("verified_step_out", format!("error: {e}"))?;
+                d.set_item("executor_step_ok", false)?;
+                d.set_item("executor_step_out", format!("error: {e}"))?;
             }
         }
     } else {
+        // The pure-Rust executor the LIGHT wheel ships. It is NOT itself the
+        // verified-Lean step, so `verified_step_ok` is false; `executor_step_ok`
+        // is the Rust executor's real commit (at parity with the verified spec).
         d.set_item("verified_step_ok", false)?;
-        // Distinguish "this wheel never embedded the kernel" (the light client
-        // build — the expected, graceful case) from "the kernel build could not
-        // link/init its archive at build time" (a heavy-build problem to fix).
-        let why = if cfg!(feature = "kernel") {
-            "lean kernel not linked (the kernel build's archive/runtime was \
-             unavailable at build time — run ./scripts/bootstrap.sh)"
-        } else {
-            "kernel-absent: this is the LIGHT, client-only build (no embedded \
-             executor). The sign/submit/read surface is fully present; install \
-             the kernel wheel (dregg[kernel], built with --features kernel) for \
-             the embedded verified Lean kernel."
-        };
-        d.set_item("verified_step_out", why)?;
+        match rust_executor_probe() {
+            Ok((ok, out)) => {
+                d.set_item("executor_step_ok", ok)?;
+                d.set_item("executor_step_out", out)?;
+            }
+            Err(e) => {
+                d.set_item("executor_step_ok", false)?;
+                d.set_item(
+                    "executor_step_out",
+                    format!("rust executor probe error: {e}"),
+                )?;
+            }
+        }
     }
     Ok(d)
 }

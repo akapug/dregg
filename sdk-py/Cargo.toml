@@ -16,6 +16,33 @@ description = "Python (pyo3) binding for the dregg SDK's two-noun surface: Ident
 name = "dregg"
 crate-type = ["cdylib", "rlib"]
 
+# ─── build modes: the LIGHT (kernel-free) client vs the HEAVY embedded kernel ───
+#
+# The DEFAULT build is the LIGHT, client-only wheel: small, no `libleanshared`
+# (~150 MB), NO Lean toolchain required on the building host. The whole CLIENT
+# surface — Identity.turn/transfer/sign/submit, the organs, AttestedQuery,
+# deploy.check, dregg.pg — is Ed25519 + wire-codec + HTTP, NOT the executor, so
+# it needs none of the verified kernel. `dregg.kernel()` degrades gracefully
+# (reports kernel-absent) in this build.
+#
+# HOW: `default = ["light"]` forwards `no-lean-link` to the single shared
+# `dregg-lean-ffi` instance (cargo features UNIFY: one request flips that one
+# node for the whole sdk-py graph). Its build.rs then early-returns — no `lake`,
+# no archive splice, no shim, no link directives — so the cdylib links WITHOUT
+# the Lean runtime and `lean_available()` is false. This is the SAME polarity-
+# inverted platform opt-out wasm32/zkvm use (docs/FEATURE-HYGIENE.md §Lean).
+#
+# The HEAVY wheel (the embedded verified kernel — `dregg[kernel]`) is built with
+#   maturin build --release --no-default-features --features kernel
+# which leaves `no-lean-link` OFF, so `dregg-lean-ffi` links `libdregg_lean.a`
+# (the Dregg2 module objects) + `libleanshared` in SHARED mode (set by
+# `.cargo/config.toml`'s `DREGG_LEAN_LINK=shared`). That build DOES need the
+# Lean toolchain (`./scripts/bootstrap.sh`) and produces a much larger wheel.
+[features]
+default = ["light"]
+light = ["dregg-lean-ffi/no-lean-link"]
+kernel = []
+
 [dependencies]
 # Authorization-first SDK surface only. `default-features = false` drops the
 # `network`/`captp`/`federation-client` features (tokio, quinn, dregg-wire,

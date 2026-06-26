@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "dregg"
-description = "Python SDK for the dregg federation: Identity → turn → sign → submit → Receipt (the verified Lean kernel embedded), with the organ nouns (trustline, channels, mailbox), attested-query reads, profiles, the receipt stream, and the cell-program constraint language"
+description = "Python SDK for the dregg federation: Identity → turn → sign → submit → Receipt, with the organ nouns (trustline, channels, mailbox), attested-query reads, profiles, the receipt stream, deploy.check, and the cell-program constraint language. The default wheel is the LIGHT, kernel-free client (small, pip-friendly); the embedded verified Lean kernel is the optional heavy `dregg[kernel]` build."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "AGPL-3.0-or-later" }
@@ -32,6 +32,21 @@ classifiers = [
 # `dregg.pg` — the pg-dregg-native binding. Pure Python; needs psycopg (v3) at
 # runtime, imported lazily so the rest of the SDK loads without it.
 pg = ["psycopg[binary]>=3.1"]
+# `dregg[kernel]` (alias `dregg[lean-executor]`) — swap the default pure-Rust
+# executor for the embedded VERIFIED LEAN KERNEL. This is a BUILD-MODE extra, not
+# a pure-Python dependency: the kernel wheel is the SAME `dregg` package compiled
+# with the Rust `kernel` feature (it statically links `libdregg_lean.a` +
+# `libleanshared`), so it is a separate, much larger wheel:
+#
+#   maturin build --release --no-default-features --features kernel
+#
+# (requires the Lean toolchain — `./scripts/bootstrap.sh`). The marker keeps
+# `pip install 'dregg[kernel]'` valid as the documented install surface; install
+# the kernel-feature wheel to actually embed the Lean executor. The default
+# `dregg` wheel ships the pure-Rust executor (at parity with the verified Lean
+# spec) and `dregg.kernel()` reports `build="light"`, `executor="rust"`.
+kernel = []
+lean-executor = []
 
 [dependency-groups]
 # Dev/test deps (uv reads these; `uv run pytest` installs them). psycopg is here
