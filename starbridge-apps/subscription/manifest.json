@@ -6,7 +6,7 @@
   "factory_vks": [
     "737461726272696467652d737562736372697074696f6e2d666163746f727921"
   ],
-  "page": "/starbridge-apps/subscription/pages/index.html",
+  "page": null,
   "inspectors": [
     "subscription",
     "subscription-publish-form",
