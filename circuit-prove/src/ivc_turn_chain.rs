@@ -242,24 +242,36 @@ type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericCon
 
 /// **The segment digest width** — the multi-felt Poseidon2 commitment carried as the
 /// ordered-history `acc`. Codex re-review #3 replaced the algebraically-broken one-felt
-/// quadratic fold with this genuine collision-resistant commitment. Four BabyBear lanes
-/// ⇒ ~124-bit collision resistance (the host's tooth-4 check compares all four), and the
-/// commitment is a real full-round Poseidon2 permutation — there is no algebraic
-/// shortcut and no degeneracy root (the quadratic fold's weakness).
-pub const SEG_DIGEST_WIDTH: usize = 4;
+/// quadratic fold with a genuine collision-resistant commitment; the FAITHFUL-FLOOR lift
+/// (`docs/FAITHFUL-STATE-COMMITMENT.md`, `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1) widened it
+/// from 4 lanes (~62-bit) to **8** lanes ⇒ ~124-bit collision resistance, MATCHING the
+/// per-turn leg's 8-felt faithful floor. The host's tooth compares all eight; the
+/// commitment is a real full-round Poseidon2 sponge ([`seg_poseidon_commit`] squeezes exactly
+/// `SEG_DIGEST_WIDTH` DISTINCT lanes, no zero-pad) — there is no algebraic shortcut and no
+/// degeneracy root (the quadratic fold's weakness).
+pub const SEG_DIGEST_WIDTH: usize = 8;
 
-/// The number of exposed chain claims: `[first_old, last_new, count, acc_0..acc_{W-1}]`
-/// where `W = SEG_DIGEST_WIDTH`. The host verifier's tooth-4 reads these directly,
-/// comparing against `[genesis_root, final_root, num_turns, chain_digest_0..]`.
+/// The number of exposed chain claims: `[first_old8(8), last_new8(8), count(1),
+/// acc_0..acc_{W-1}(W)]` where `W = SEG_DIGEST_WIDTH`. The host verifier's segment tooth reads
+/// these directly, comparing against `[genesis_root8, final_root8, num_turns, chain_digest_0..]`.
+/// The FAITHFUL-FLOOR lift widened the state endpoints from single felts (~15-bit birthday) to
+/// the 8-felt (~124-bit) anchors the per-turn legs already publish.
 pub const NUM_CHAIN_CLAIMS: usize = SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH;
 
-/// Segment field lanes (the order they are exposed in the `expose_claim` table).
+/// The number of base-field lanes in a state-commit anchor exposed by a segment — the 8-felt
+/// (~124-bit) faithful commit. The state endpoints (`first_old8`/`last_new8`) each occupy this
+/// many lanes; a WIDE / wide-welded leg sources them genuinely, a narrow leg broadcasts its
+/// single rotated commit felt across all eight (no entropy gain, structural type-compat only).
+pub const SEG_ANCHOR_WIDTH: usize = 8;
+
+/// Segment field lanes (the order they are exposed in the `expose_claim` table). The two
+/// 8-felt state anchors come first, then the count, then the multi-felt digest.
 pub const SEG_FIRST_OLD: usize = 0;
-pub const SEG_LAST_NEW: usize = 1;
-pub const SEG_COUNT: usize = 2;
+pub const SEG_LAST_NEW: usize = SEG_ANCHOR_WIDTH;
+pub const SEG_COUNT: usize = 2 * SEG_ANCHOR_WIDTH;
 /// First lane of the multi-felt digest block (`acc_0`); the digest occupies
 /// `[SEG_DIGEST_FIRST .. SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]`.
-pub const SEG_DIGEST_FIRST: usize = 3;
+pub const SEG_DIGEST_FIRST: usize = 2 * SEG_ANCHOR_WIDTH + 1;
 /// A segment is exactly [`NUM_CHAIN_CLAIMS`] base-field lanes.
 pub const SEG_WIDTH: usize = NUM_CHAIN_CLAIMS;
 
@@ -871,41 +883,89 @@ fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
 
 /// The host-side mirror of one descriptor leaf / aggregation node's ORDERED SEGMENT
 /// (the base-field values it exposes through the `expose_claim` table):
-/// `[first_old, last_new, count, acc_0..acc_{W-1}]` (`W = SEG_DIGEST_WIDTH`). The prover
-/// folds these the SAME way the in-circuit combine does so it knows the root segment
-/// (hence the chain claims) to carry.
+/// `[first_old8(8), last_new8(8), count(1), acc_0..acc_{W-1}(W)]` (`W = SEG_DIGEST_WIDTH`). The
+/// prover folds these the SAME way the in-circuit combine does so it knows the root segment
+/// (hence the chain claims) to carry. The FAITHFUL-FLOOR lift widened the state endpoints from
+/// single felts to the 8-felt (~124-bit) anchors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HostSeg {
-    pub first_old: BabyBear,
-    pub last_new: BabyBear,
+    pub first_old8: [BabyBear; SEG_ANCHOR_WIDTH],
+    pub last_new8: [BabyBear; SEG_ANCHOR_WIDTH],
     pub count: BabyBear,
-    /// The multi-felt Poseidon2 ordered-history digest (codex #3).
+    /// The multi-felt Poseidon2 ordered-history digest (codex #3, widened to 8 lanes).
     pub acc: [BabyBear; SEG_DIGEST_WIDTH],
 }
 
-/// The per-turn (descriptor-leaf) segment: `first_old = old_root`, `last_new =
-/// new_root`, `count = 1`, `acc = commit([old_root, new_root])` — the SAME seed
-/// [`seg_poseidon_commit`] computes at the leaf wrap.
-pub(crate) fn leaf_seg(old_root: BabyBear, new_root: BabyBear) -> HostSeg {
+/// The 8-felt state anchors a finalized turn publishes, sourced the SAME way the in-circuit
+/// descriptor leaf binds them (so the host root segment equals what the root proof exposes):
+///   - a WIDE / wide-welded leg (descriptor carries a wide-weld suffix AND a 16-felt PI tail)
+///     sources the GENUINE 8-felt `wide_old_root8`/`wide_new_root8` (~124-bit faithful anchor);
+///   - a narrow leg BROADCASTS its single rotated commit felt (PI 34/35) across all eight lanes
+///     (the back-compat fallback — no entropy gain, structural type-compat only; the in-circuit
+///     leaf replicates the SAME bound PI target across the eight lanes, matching this host value).
+pub(crate) fn turn_anchors8(
+    t: &FinalizedTurn,
+) -> ([BabyBear; SEG_ANCHOR_WIDTH], [BabyBear; SEG_ANCHOR_WIDTH]) {
+    let leg = &t.participant.rotated;
+    if leg_is_wide_anchored(leg) {
+        // Safe: `leg_is_wide_anchored` already confirmed the 16-felt wide tail is present.
+        (
+            leg.wide_old_root8().expect("wide leg carries old8"),
+            leg.wide_new_root8().expect("wide leg carries new8"),
+        )
+    } else {
+        let (o, n) = (leg.old_root(), leg.new_root());
+        ([o; SEG_ANCHOR_WIDTH], [n; SEG_ANCHOR_WIDTH])
+    }
+}
+
+/// Whether a leg genuinely publishes the 8-felt wide anchors at its PI tail (a WIDE / wide-welded
+/// leg), as opposed to a narrow leg whose `[n-16..n]` PIs are NOT the wide commit. Decided by the
+/// descriptor name (the staged wide-weld suffixes) AND a PI vector long enough to carry the tail —
+/// the SAME predicate the in-circuit leaf branches on, so host and circuit agree lane-for-lane.
+pub(crate) fn leg_is_wide_anchored(
+    leg: &crate::joint_turn_aggregation::RotatedParticipantLeg,
+) -> bool {
+    use dregg_circuit::effect_vm_descriptors::{
+        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
+    };
+    leg.public_inputs.len() >= 2 * SEG_ANCHOR_WIDTH
+        && (leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+            || leg
+                .descriptor
+                .name
+                .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX))
+}
+
+/// The per-turn (descriptor-leaf) segment: `first_old8`/`last_new8` are the leg's 8-felt anchors
+/// ([`turn_anchors8`]), `count = 1`, `acc = commit([first_old8 ++ last_new8])` (16 inputs) — the
+/// SAME seed [`seg_poseidon_commit`] computes at the leaf wrap.
+pub(crate) fn leaf_seg(
+    old8: [BabyBear; SEG_ANCHOR_WIDTH],
+    new8: [BabyBear; SEG_ANCHOR_WIDTH],
+) -> HostSeg {
+    let mut inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+    inputs.extend_from_slice(&old8);
+    inputs.extend_from_slice(&new8);
     HostSeg {
-        first_old: old_root,
-        last_new: new_root,
+        first_old8: old8,
+        last_new8: new8,
         count: BabyBear::ONE,
-        acc: seg_poseidon_commit_host(&[old_root, new_root]),
+        acc: seg_poseidon_commit_host(&inputs),
     }
 }
 
 /// Combine two adjacent segments (the host mirror of the aggregation combine):
-/// continuity `l.last_new == r.first_old` (caller-checked upstream as `ChainBreak`),
-/// `first_old = l.first_old`, `last_new = r.last_new`, `count = l.count + r.count`,
+/// continuity `l.last_new8 == r.first_old8` lane-by-lane (caller-checked upstream as `ChainBreak`),
+/// `first_old8 = l.first_old8`, `last_new8 = r.last_new8`, `count = l.count + r.count`,
 /// `acc = commit(l.acc ++ r.acc)` (order-sensitive: l before r).
 pub(crate) fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
     let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
     acc_inputs.extend_from_slice(&l.acc);
     acc_inputs.extend_from_slice(&r.acc);
     HostSeg {
-        first_old: l.first_old,
-        last_new: r.last_new,
+        first_old8: l.first_old8,
+        last_new8: r.last_new8,
         count: l.count + r.count,
         acc: seg_poseidon_commit_host(&acc_inputs),
     }
@@ -913,14 +973,14 @@ pub(crate) fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
 
 /// Fold the per-turn leaf segments into the ROOT segment using the SAME pairwise
 /// left-to-right binary tree (with odd-element carry) that [`aggregate_tree`] runs
-/// in-circuit — so the host-computed root `[first_old, last_new, count, acc]`
+/// in-circuit — so the host-computed root `[first_old8, last_new8, count, acc]`
 /// equals what the root proof exposes.
 fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
     let mut level: Vec<HostSeg> = turns
         .iter()
         .map(|t| {
-            let (o, n) = rotated_roots(t);
-            leaf_seg(o, n)
+            let (o8, n8) = turn_anchors8(t);
+            leaf_seg(o8, n8)
         })
         .collect();
     while level.len() > 1 {
@@ -1214,6 +1274,22 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
     config: &DreggRecursionConfig,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
     use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+    use dregg_circuit::effect_vm_descriptors::{
+        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
+    };
+
+    // FAITHFUL-FLOOR: source the two 8-felt state anchors the SAME way [`turn_anchors8`] does
+    // host-side, so the in-circuit segment is byte-identical to the host root segment.
+    //   - WIDE / wide-welded leg: the GENUINE 8-felt `wide_old_root8`/`wide_new_root8` ride at the
+    //     PI tail `[n-16..n]`, bound in-circuit (their `PiBinding` makes a tampered anchor UNSAT);
+    //   - narrow leg: BROADCAST the single rotated commit PIs (34/35) across all eight lanes —
+    //     the SAME bound PI target replicated, matching the host broadcast in `turn_anchors8`.
+    let n = descriptor_pis.len();
+    let wide = n >= 2 * SEG_ANCHOR_WIDTH
+        && (desc.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+            || desc.name.ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX));
+    let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
+    let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
 
     let (airs, table_public_inputs, common) =
         dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
@@ -1233,9 +1309,9 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
 
     let backend = create_recursion_backend();
 
-    // The expose hook: the main instance (instance 0) carries the descriptor PIs, so its
-    // `air_public_targets[V1_PI_COUNT] / [V1_PI_COUNT+1]` are the verified rotated OLD/NEW
-    // commitments. Build the segment over them and expose it.
+    // The expose hook: the main instance (instance 0) carries the descriptor PIs. Build the two
+    // 8-felt anchor blocks (genuine wide tail, or replicated single felt for a narrow leg), the
+    // per-turn digest seed over them, and expose the 8-wide segment.
     let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
                        apt: &[Vec<p3_recursion::Target>]| {
         let main = apt
@@ -1245,15 +1321,34 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
             main.len() > V1_PI_COUNT + 1,
             "descriptor PI vector must carry the rotated OLD/NEW commitments"
         );
-        let first_old = main[V1_PI_COUNT];
-        let last_new = main[V1_PI_COUNT + 1];
+        let (first_old8, last_new8): (Vec<p3_recursion::Target>, Vec<p3_recursion::Target>) =
+            if wide {
+                debug_assert!(
+                    main.len() >= n,
+                    "wide descriptor PI target vector must carry the 8-felt anchors at its tail"
+                );
+                (
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[old_first + k]).collect(),
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[new_first + k]).collect(),
+                )
+            } else {
+                // Narrow: replicate the single bound PI target across all eight lanes (no zero
+                // constants — keeps the sponge off the shared `WitnessId(0)` class entirely).
+                (
+                    vec![main[V1_PI_COUNT]; SEG_ANCHOR_WIDTH],
+                    vec![main[V1_PI_COUNT + 1]; SEG_ANCHOR_WIDTH],
+                )
+            };
         let count = cb.define_const(RecursionChallenge::ONE);
         // The per-turn seed: a genuine multi-felt Poseidon2 commitment over the leaf's
-        // REAL (descriptor-bound) endpoints (codex #3).
-        let acc = seg_poseidon_commit(cb, &[first_old, last_new]);
+        // REAL (descriptor-bound) 8-felt endpoints (16 inputs).
+        let mut acc_inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+        acc_inputs.extend_from_slice(&first_old8);
+        acc_inputs.extend_from_slice(&last_new8);
+        let acc = seg_poseidon_commit(cb, &acc_inputs);
         let mut seg = Vec::with_capacity(SEG_WIDTH);
-        seg.push(first_old);
-        seg.push(last_new);
+        seg.extend_from_slice(&first_old8);
+        seg.extend_from_slice(&last_new8);
         seg.push(count);
         seg.extend_from_slice(&acc);
         debug_assert_eq!(seg.len(), SEG_WIDTH);
@@ -1292,13 +1387,15 @@ pub struct WholeChainProof {
     /// Fiat–Shamir binds `[genesis_root, final_root, num_turns, chain_digest]`
     /// into this proof, so relabeling any of them is refused at verify time.
     pub binding_proof: RecursionCompatibleProof,
-    /// The genesis root the chain starts from.
-    pub genesis_root: BabyBear,
-    /// The final root the chain reaches.
-    pub final_root: BabyBear,
+    /// The 8-felt (~124-bit faithful) genesis state anchor the chain starts from. A WIDE leg
+    /// sources it genuinely; a narrow leg broadcasts its single rotated commit felt across the
+    /// eight lanes (FAITHFUL-FLOOR lift — `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1).
+    pub genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    /// The 8-felt final state anchor the chain reaches.
+    pub final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     /// The multi-felt Poseidon2 digest committing to the ordered (old_root, new_root)
-    /// pairs (codex re-review #3 — a genuine [`SEG_DIGEST_WIDTH`]-felt collision-resistant
-    /// commitment, replacing the algebraically-broken one-felt fold).
+    /// pairs (codex re-review #3, widened to [`SEG_DIGEST_WIDTH`] = 8 lanes ⇒ ~124-bit —
+    /// a genuine collision-resistant commitment, replacing the algebraically-broken one-felt fold).
     pub chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     /// Number of finalized turns folded.
     pub num_turns: usize,
@@ -1368,13 +1465,15 @@ pub struct WholeChainProofBytes {
     /// Postcard bytes of `WholeChainProof.binding_proof` — the chain-binding
     /// uni-STARK `Proof`. Tooth 2 verifies the four publics AS its public inputs.
     pub binding_proof: Vec<u8>,
-    /// The genesis root the chain starts from (canonical `BabyBear` as `u32`).
-    pub genesis_root: u32,
-    /// The final root the chain reaches.
-    pub final_root: u32,
+    /// The 8-felt genesis state anchor ([`SEG_ANCHOR_WIDTH`] canonical `BabyBear` lanes as `u32`).
+    /// FAITHFUL-FLOOR lift: widened from a single felt; the envelope version was bumped to
+    /// fail-close old readers.
+    pub genesis_root: [u32; SEG_ANCHOR_WIDTH],
+    /// The 8-felt final state anchor ([`SEG_ANCHOR_WIDTH`] canonical `BabyBear` lanes as `u32`).
+    pub final_root: [u32; SEG_ANCHOR_WIDTH],
     /// The multi-felt Poseidon2 ordered-history digest over the (old_root, new_root)
-    /// pairs ([`SEG_DIGEST_WIDTH`] canonical `BabyBear` lanes as `u32`). Codex #3 widened
-    /// this from a single felt; the envelope version was bumped to fail-close old readers.
+    /// pairs ([`SEG_DIGEST_WIDTH`] = 8 canonical `BabyBear` lanes as `u32`). Codex #3 widened
+    /// this from a single felt; the FAITHFUL-FLOOR lift widened it again 4→8.
     pub chain_digest: [u32; SEG_DIGEST_WIDTH],
     /// The number of finalized turns folded.
     pub num_turns: u64,
@@ -1385,7 +1484,9 @@ pub struct WholeChainProofBytes {
 ///
 /// **v2** (codex re-review #3): `chain_digest` widened from one `u32` to
 /// `[u32; SEG_DIGEST_WIDTH]` — the multi-felt Poseidon2 commitment.
-pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 2;
+/// **v3** (FAITHFUL-FLOOR lift): the state endpoints `genesis_root`/`final_root` widened from one
+/// `u32` to `[u32; SEG_ANCHOR_WIDTH]` (8-felt anchors), and `SEG_DIGEST_WIDTH` widened 4→8.
+pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 3;
 
 impl WholeChainProofBytes {
     /// Project a [`WholeChainProof`] to its verify-sufficient byte envelope.
@@ -1399,8 +1500,8 @@ impl WholeChainProofBytes {
             vk_fingerprint_hex: proof.root_vk_fingerprint().to_hex(),
             root_proof,
             binding_proof,
-            genesis_root: proof.genesis_root.as_u32(),
-            final_root: proof.final_root.as_u32(),
+            genesis_root: core::array::from_fn(|i| proof.genesis_root[i].as_u32()),
+            final_root: core::array::from_fn(|i| proof.final_root[i].as_u32()),
             chain_digest: core::array::from_fn(|i| proof.chain_digest[i].as_u32()),
             num_turns: proof.num_turns as u64,
         }
@@ -1499,8 +1600,8 @@ pub fn verify_whole_chain_proof_bytes(
     verify_turn_chain_recursive_from_parts(
         &root_proof,
         &binding_proof,
-        BabyBear::new(env.genesis_root),
-        BabyBear::new(env.final_root),
+        core::array::from_fn(|i| BabyBear::new(env.genesis_root[i])),
+        core::array::from_fn(|i| BabyBear::new(env.final_root[i])),
         core::array::from_fn(|i| BabyBear::new(env.chain_digest[i])),
         env.num_turns as usize,
         expected_vk,
@@ -1524,8 +1625,8 @@ pub fn verify_whole_chain_proof_bytes(
 pub fn verify_turn_chain_recursive_from_blobs(
     root_blob: &[u8],
     binding_blob: &[u8],
-    genesis_root: u32,
-    final_root: u32,
+    genesis_root: &[u32],
+    final_root: &[u32],
     chain_digest: &[u32],
     num_turns: usize,
     vk_anchor: &[u8; 32],
@@ -1535,6 +1636,15 @@ pub fn verify_turn_chain_recursive_from_blobs(
             reason: format!(
                 "chain_digest must be {SEG_DIGEST_WIDTH} lanes, got {}",
                 chain_digest.len()
+            ),
+        });
+    }
+    if genesis_root.len() != SEG_ANCHOR_WIDTH || final_root.len() != SEG_ANCHOR_WIDTH {
+        return Err(TurnChainError::EnvelopeDecode {
+            reason: format!(
+                "genesis_root/final_root must be {SEG_ANCHOR_WIDTH} lanes each, got {}/{}",
+                genesis_root.len(),
+                final_root.len()
             ),
         });
     }
@@ -1564,8 +1674,8 @@ pub fn verify_turn_chain_recursive_from_blobs(
     verify_turn_chain_recursive_from_parts(
         &root_proof,
         &binding_proof,
-        BabyBear::new(genesis_root),
-        BabyBear::new(final_root),
+        core::array::from_fn(|i| BabyBear::new(genesis_root[i])),
+        core::array::from_fn(|i| BabyBear::new(final_root[i])),
         core::array::from_fn(|i| BabyBear::new(chain_digest[i])),
         num_turns,
         &RecursionVk(*vk_anchor),
@@ -1671,10 +1781,10 @@ pub fn prove_turn_chain_recursive_rotated(
 /// aggregation runs in-circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeldedChainHostSummary {
-    /// The first turn's `old_root` (the chain genesis).
-    pub genesis_root: BabyBear,
-    /// The last turn's `new_root` (the chain head).
-    pub final_root: BabyBear,
+    /// The first turn's 8-felt genesis anchor (broadcast of `old_root` for a narrow leg).
+    pub genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    /// The last turn's 8-felt final anchor (broadcast of `new_root` for a narrow leg).
+    pub final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     /// The number of folded turns.
     pub num_turns: usize,
     /// The multi-felt Poseidon2 ordered-history digest over the `(old_root, new_root)` triples.
@@ -1797,8 +1907,8 @@ pub fn fold_welded_umem_turn_chain_staged(
     // The ordered root segment — the SAME pairwise binary fold the in-circuit aggregation runs.
     let root_seg = compute_root_segment(&refs);
     Ok(WeldedChainHostSummary {
-        genesis_root: root_seg.first_old,
-        final_root: root_seg.last_new,
+        genesis_root: root_seg.first_old8,
+        final_root: root_seg.last_new8,
         num_turns: turns.len(),
         chain_digest: root_seg.acc,
     })
@@ -1913,8 +2023,8 @@ pub fn prove_welded_umem_turn_chain_recursive_staged(
         });
     }
     let root_seg = compute_root_segment(&refs);
-    let genesis_root = root_seg.first_old;
-    let final_root = root_seg.last_new;
+    let genesis_root = root_seg.first_old8;
+    let final_root = root_seg.last_new8;
     let chain_digest = root_seg.acc;
 
     let config = ir2_leaf_wrap_config();
@@ -2482,8 +2592,8 @@ fn prove_chain_core_rotated(
     // claims the artifact carries — derived from the REAL descriptor leaves' rotated roots, NOT
     // from a separate (swappable) binding leaf.
     let root_seg = compute_root_segment(turns);
-    let genesis_root = root_seg.first_old;
-    let final_root = root_seg.last_new;
+    let genesis_root = root_seg.first_old8;
+    let final_root = root_seg.last_new8;
     let chain_digest = root_seg.acc;
 
     // The ONE FRI engine the whole rotated tree runs at (inner proof + leaf-wrap +
@@ -2615,21 +2725,22 @@ pub(crate) fn segment_combine_expose(
         .expect("right segment instance present");
     debug_assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
 
-    // (1) STATE CONTINUITY: L.last_new == R.first_old (the temporal tooth, off the zero slot).
-    cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+    // (1) STATE CONTINUITY: L.last_new8 == R.first_old8, lane-by-lane over the 8-felt anchors
+    //     (the temporal tooth, off the zero slot — `connect`, never `sub`+`assert_zero`).
+    for k in 0..SEG_ANCHOR_WIDTH {
+        cb.connect(l[SEG_LAST_NEW + k], r[SEG_FIRST_OLD + k]);
+    }
 
-    // (2) parent segment: span [L.first_old .. R.last_new], count L+R, ordered multi-felt digest
+    // (2) parent segment: span [L.first_old8 .. R.last_new8], count L+R, ordered multi-felt digest
     //     acc = commit(L.acc ++ R.acc).
-    let first_old = l[SEG_FIRST_OLD];
-    let last_new = r[SEG_LAST_NEW];
     let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
     let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
     acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
     acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
     let acc = seg_poseidon_commit(cb, &acc_inputs);
     let mut parent = Vec::with_capacity(SEG_WIDTH);
-    parent.push(first_old);
-    parent.push(last_new);
+    parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+    parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
     parent.push(count);
     parent.extend_from_slice(&acc);
     debug_assert_eq!(parent.len(), SEG_WIDTH);
@@ -2845,8 +2956,8 @@ pub fn verify_turn_chain_recursive(
 pub fn verify_turn_chain_recursive_from_parts(
     root_proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
     binding_proof: &RecursionCompatibleProof,
-    genesis_root: BabyBear,
-    final_root: BabyBear,
+    genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     num_turns: usize,
     expected_vk: &RecursionVk,
@@ -2891,8 +3002,8 @@ pub fn verify_turn_chain_recursive_from_parts(
         }
     })?;
     let mut expected = Vec::with_capacity(SEG_WIDTH);
-    expected.push(genesis_root);
-    expected.push(final_root);
+    expected.extend_from_slice(&genesis_root);
+    expected.extend_from_slice(&final_root);
     expected.push(BabyBear::new(num_turns as u32));
     expected.extend_from_slice(&chain_digest);
     if exposed != expected {

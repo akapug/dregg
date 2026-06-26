@@ -191,8 +191,8 @@ fn k_fold_turn_chain_proves_and_verifies() {
     let mut whole: WholeChainProof = prove_turn_chain_recursive(&turns)
         .expect("a continuous 3-turn rotated finalized chain must fold recursively");
     assert_eq!(whole.num_turns, 3);
-    assert_eq!(whole.genesis_root, genesis);
-    assert_eq!(whole.final_root, final_root);
+    assert_eq!(whole.genesis_root, [genesis; 8]);
+    assert_eq!(whole.final_root, [final_root; 8]);
 
     // The trust anchor an honest setup would distribute.
     let vk = whole.root_vk_fingerprint();
@@ -209,7 +209,7 @@ fn k_fold_turn_chain_proves_and_verifies() {
 
     // REFUSED: relabeled final_root (splicing a foreign endpoint onto the artifact).
     let honest_final = whole.final_root;
-    whole.final_root = honest_final + BabyBear::ONE;
+    whole.final_root[0] = honest_final[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled final_root must be refused; got {other:?}"),
@@ -237,7 +237,7 @@ fn k_fold_turn_chain_proves_and_verifies() {
 
     // REFUSED: relabeled genesis_root.
     let honest_genesis = whole.genesis_root;
-    whole.genesis_root = honest_genesis + BabyBear::ONE;
+    whole.genesis_root[0] = honest_genesis[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled genesis_root must be refused; got {other:?}"),
@@ -278,8 +278,8 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         env.version,
         dregg_circuit_prove::ivc_turn_chain::WHOLE_CHAIN_PROOF_ENVELOPE_V1
     );
-    assert_eq!(env.genesis_root, genesis.as_u32());
-    assert_eq!(env.final_root, final_root.as_u32());
+    assert_eq!(env.genesis_root, [genesis.as_u32(); 8]);
+    assert_eq!(env.final_root, [final_root.as_u32(); 8]);
     assert_eq!(env.num_turns, 3);
     assert_eq!(env.vk_fingerprint_hex, vk.to_hex());
 
@@ -291,8 +291,8 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     verify_turn_chain_recursive_from_blobs(
         &env.root_proof,
         &env.binding_proof,
-        env.genesis_root,
-        env.final_root,
+        &env.genesis_root,
+        &env.final_root,
         &env.chain_digest,
         env.num_turns as usize,
         &vk.0,
@@ -321,7 +321,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     // The claimed-publics tooth reads the publics against the binding proof.
     {
         let mut bad = env.clone();
-        bad.final_root = bad.final_root.wrapping_add(1);
+        bad.final_root[0] = bad.final_root[0].wrapping_add(1);
         let bad_bytes = bad.to_postcard();
         match verify_whole_chain_proof_bytes(&bad_bytes, &vk) {
             Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
@@ -625,8 +625,8 @@ fn carried_binding_proof_unlinked_to_root_is_rejected() {
     // publics), and the root is a genuine same-shape root.
     let mut forged = whole_a;
     forged.binding_proof = whole_b.binding_proof;
-    forged.genesis_root = gb;
-    forged.final_root = fb;
+    forged.genesis_root = [gb; 8];
+    forged.final_root = [fb; 8];
     forged.chain_digest = whole_b.chain_digest;
     forged.num_turns = whole_b.num_turns;
 
@@ -825,8 +825,8 @@ fn two_step_inductive_core_proves_and_verifies() {
     let folded =
         fold_two_turns(&turns[0], &turns[1]).expect("a continuous pair must fold via the core");
     assert_eq!(folded.num_turns, 2);
-    assert_eq!(folded.genesis_root, genesis);
-    assert_eq!(folded.final_root, final_root);
+    assert_eq!(folded.genesis_root, [genesis; 8]);
+    assert_eq!(folded.final_root, [final_root; 8]);
     let vk = folded.root_vk_fingerprint();
     verify_turn_chain_recursive(&folded, &vk).expect("the 2-step folded proof must verify");
 }
@@ -906,9 +906,9 @@ fn expose_claim_idx(
 fn mixed_root_forgery_executes_A_claims_B() {
     use dregg_circuit_prove::ivc_turn_chain::TurnChainBindingAir;
     use dregg_circuit_prove::ivc_turn_chain::{
-        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
-        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
-        verify_turn_chain_recursive_from_parts,
+        SEG_ANCHOR_WIDTH, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD,
+        SEG_LAST_NEW, SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
+        seg_poseidon_commit, verify_turn_chain_recursive_from_parts,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
         DreggRecursionConfig, create_recursion_backend, prove_inner_for_air_with_config,
@@ -994,9 +994,9 @@ fn mixed_root_forgery_executes_A_claims_B() {
                 assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
                 // Continuity via direct connect (mirrors the lib `aggregate_tree`): avoids the
                 // `sub`+`assert_zero` backward-add that would clobber the shared `WitnessId(0)`.
-                cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-                let first_old = l[SEG_FIRST_OLD];
-                let last_new = r[SEG_LAST_NEW];
+                for __k in 0..SEG_ANCHOR_WIDTH {
+                    cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+                }
                 let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
                 let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
                 acc_inputs
@@ -1005,8 +1005,8 @@ fn mixed_root_forgery_executes_A_claims_B() {
                     .extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
                 let acc = seg_poseidon_commit(cb, &acc_inputs);
                 let mut parent = Vec::with_capacity(SEG_WIDTH);
-                parent.push(first_old);
-                parent.push(last_new);
+                parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+                parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
                 parent.push(count);
                 parent.extend_from_slice(&acc);
                 cb.expose_as_public_output(&parent);
@@ -1047,8 +1047,8 @@ fn mixed_root_forgery_executes_A_claims_B() {
     let verdict = verify_turn_chain_recursive_from_parts(
         &a_root.0,
         &b_binding_inner,
-        b_genesis_root,
-        b_final_root,
+        [b_genesis_root; 8],
+        [b_final_root; 8],
         b_chain_digest,
         b_num_turns,
         &vk,
@@ -1089,8 +1089,9 @@ fn mixed_root_forgery_executes_A_claims_B() {
 #[ignore = "SLOW: a real segment fold (~minutes); run with --ignored — fork follow-up (a) close"]
 fn pinned_leaf_identity_rejects_foreign_child_in_band() {
     use dregg_circuit_prove::ivc_turn_chain::{
-        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
-        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
+        SEG_ANCHOR_WIDTH, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD,
+        SEG_LAST_NEW, SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
+        seg_poseidon_commit,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
         DreggRecursionConfig, create_recursion_backend,
@@ -1146,17 +1147,17 @@ fn pinned_leaf_identity_rejects_foreign_child_in_band() {
             let l = left_apt.get(left_idx).expect("left seg present");
             let r = right_apt.get(right_idx).expect("right seg present");
             assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-            let first_old = l[SEG_FIRST_OLD];
-            let last_new = r[SEG_LAST_NEW];
+            for __k in 0..SEG_ANCHOR_WIDTH {
+                cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+            }
             let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
             let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
             acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             let acc = seg_poseidon_commit(cb, &acc_inputs);
             let mut parent = Vec::with_capacity(SEG_WIDTH);
-            parent.push(first_old);
-            parent.push(last_new);
+            parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+            parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
             parent.push(count);
             parent.extend_from_slice(&acc);
             cb.expose_as_public_output(&parent);
@@ -1196,17 +1197,17 @@ fn pinned_leaf_identity_rejects_foreign_child_in_band() {
             let l = left_apt.get(left_idx).expect("left seg present");
             let r = right_apt.get(right_idx).expect("right seg present");
             assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-            let first_old = l[SEG_FIRST_OLD];
-            let last_new = r[SEG_LAST_NEW];
+            for __k in 0..SEG_ANCHOR_WIDTH {
+                cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+            }
             let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
             let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
             acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             let acc = seg_poseidon_commit(cb, &acc_inputs);
             let mut parent = Vec::with_capacity(SEG_WIDTH);
-            parent.push(first_old);
-            parent.push(last_new);
+            parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+            parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
             parent.push(count);
             parent.extend_from_slice(&acc);
             cb.expose_as_public_output(&parent);

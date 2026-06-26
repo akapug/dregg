@@ -256,8 +256,8 @@ fn scan_state_root_equals_serial_root() {
     let serial: WholeChainProof =
         prove_turn_chain_recursive(&turns).expect("the serial 4-turn chain folds");
     assert_eq!(serial.num_turns, 4);
-    assert_eq!(serial.genesis_root, genesis);
-    assert_eq!(serial.final_root, final_root);
+    assert_eq!(serial.genesis_root, [genesis; 8]);
+    assert_eq!(serial.final_root, [final_root; 8]);
     let serial_vk = serial.root_vk_fingerprint();
     verify_turn_chain_recursive(&serial, &serial_vk).expect("serial root verifies");
     let serial_bytes = WholeChainProofBytes::from_proof(&serial).to_postcard();
