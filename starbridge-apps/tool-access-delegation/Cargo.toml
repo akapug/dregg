@@ -19,6 +19,7 @@ name = "starbridge_tool_access_delegation"
 [dependencies]
 dregg-app-framework = { path = "../../app-framework" }
 dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
 dregg-types = { path = "../../types" }
 
 blake3 = "1"

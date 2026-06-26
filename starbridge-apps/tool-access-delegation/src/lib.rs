@@ -59,6 +59,24 @@ use dregg_app_framework::{
 
 pub use dregg_app_framework::{FieldElement, field_from_bytes};
 
+// The four modern app-framework axes this app demonstrates (the unified template):
+//   - AX1/AX2 the FactoryDescriptor + DeosApp composition surface (this file:
+//     `tad_factory_descriptor` + `tad_app` / `register`, the gated lifecycle fires);
+//   - AX3 the SERVICE-CELL `invoke()` front door (typed `InterfaceDescriptor` + method
+//     dispatch over the delegation vocabulary — `service`, `tests/service.rs`);
+//   - AX4 the deos-view CARD (a renderer-independent `deos.ui.*` view-tree — `card`);
+//   - AX5 the reactive `Reactor` twin (an exhausted mandate auto-retires — `reactor`).
+
+/// AX4 — the deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// AX5 — the reactive twin of `invoke()`: a [`Reactor`](dregg_app_framework::Reactor) that
+/// watches the mandate for budget-exhausting exercises and auto-revokes the spent grant.
+pub mod reactor;
+/// AX3 — the CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the delegation vocabulary (`grant` / `exercise` / `delegate` /
+/// `revoke` / `view`).
+pub mod service;
+
 // =============================================================================
 // Slot layout (mandate cell) — mirrors the Lean `*Slot` names.
 // =============================================================================
@@ -213,6 +231,51 @@ pub fn tad_child_program_vk() -> [u8; 32] {
     canonical_program_vk(&tad_cell_program())
 }
 
+/// The mandate's **flat structural caveats** — the `state_constraints` the
+/// [`tad_factory_descriptor`] bakes into every factory-born mandate cell (the program a
+/// born cell carries for life, per `tests/factory_birth.rs`):
+///
+///   * `tool_id` / `rate_limit` / `deadline` are `WriteOnce` — the SCOPE, the RATE ceiling,
+///     and the EXPIRY are bound once by the grant turn (from zero on the born-empty cell)
+///     and frozen thereafter;
+///   * `calls_made` is `Monotonic` (the meter never rolls back to forge head-room) AND
+///     `FieldLteField(calls_made <= rate_limit)` (the RATE bound — the consumption budget can
+///     never exceed the granted ceiling).
+///
+/// These bite method-agnostically (an `Always` case), so a born mandate re-enforces them on
+/// `grant`, `exercise`, `delegate`, and `revoke` turns alike. (The deos AX2 surface's
+/// [`tad_cell_program`] adds the height-aware `FieldLteHeight(DEADLINE)` deadline tooth on a
+/// dedicated `invoke_tool` dispatch case; the flat program is the method-agnostic floor the
+/// factory + the AX3 service share.)
+pub fn tad_state_constraints() -> Vec<StateConstraint> {
+    vec![
+        StateConstraint::WriteOnce {
+            index: TOOL_ID_SLOT,
+        },
+        StateConstraint::WriteOnce {
+            index: RATE_LIMIT_SLOT,
+        },
+        StateConstraint::WriteOnce {
+            index: DEADLINE_SLOT,
+        },
+        StateConstraint::Monotonic {
+            index: CALLS_MADE_SLOT,
+        },
+        StateConstraint::FieldLteField {
+            left_index: CALLS_MADE_SLOT,
+            right_index: RATE_LIMIT_SLOT,
+        },
+    ]
+}
+
+/// The mandate program a factory-born cell carries — the [`tad_state_constraints`] flat
+/// caveats as a method-agnostic `Always` program. The AX3 [`service`] installs THIS (the
+/// same caveats the [`tad_factory_descriptor`] bakes) so an invoke()-desugared turn is
+/// re-enforced exactly as a factory-born cell's turn is.
+pub fn tad_born_cell_program() -> CellProgram {
+    CellProgram::always(tad_state_constraints())
+}
+
 /// Build the `FactoryDescriptor` for tool-access-delegation mandate cells.
 pub fn tad_factory_descriptor() -> FactoryDescriptor {
     FactoryDescriptor {
@@ -237,27 +300,11 @@ pub fn tad_factory_descriptor() -> FactoryDescriptor {
         // Mirror privacy-voting/bounty-board: born empty, bound by the grant
         // turn under `WriteOnce`.
         field_constraints: vec![],
-        state_constraints: vec![
-            // SCOPE + ceiling + expiry: bound once by the grant turn (from
-            // zero), frozen thereafter. (`Immutable` would freeze the
-            // born-empty slots AT ZERO and refuse the grant turn itself.)
-            StateConstraint::WriteOnce {
-                index: TOOL_ID_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: RATE_LIMIT_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: DEADLINE_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: CALLS_MADE_SLOT,
-            },
-            StateConstraint::FieldLteField {
-                left_index: CALLS_MADE_SLOT,
-                right_index: RATE_LIMIT_SLOT,
-            },
-        ],
+        // SCOPE + ceiling + expiry: bound once by the grant turn (from zero),
+        // frozen thereafter; the metered counter Monotonic + under the ceiling.
+        // (`Immutable` would freeze the born-empty slots AT ZERO and refuse the
+        // grant turn itself.) Single source of truth: [`tad_state_constraints`].
+        state_constraints: tad_state_constraints(),
         default_mode: CellMode::Sovereign,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),
     }
