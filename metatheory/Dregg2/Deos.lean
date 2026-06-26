@@ -77,6 +77,17 @@ import Dregg2.Deos.StandingObligation
 -- share-price pattern; the Rust vault.rs share-vault is wired via share_vault_matches_lean_rung.
 -- #assert_all_clean. The proven share-price is stronger than ERC-4626's exploit-prone share math.
 import Dregg2.Deos.Vault
+-- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
+-- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
+-- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →
+-- ConstraintViolated; the "holds forever" crown is the REUSE of the Hatchery's `Verify.Contract.
+-- CellContract` carry skeleton (Inv + step_ob ⟹ forever). THE KEY BINDING: `HpresProof::Attested` ⟺ a
+-- machine-checked `CellContract` — the `Attested` structure cannot be built without a real contract
+-- (hence a real step_ob), so an attestation is a PROVED forever-crown (attested_enforces_forever), not
+-- a trusted flag; binds_pending_is_false + forged_attestation_rejected are the negative teeth.
+-- Forge-detector: program_missing_invariant_rejected (ProgramMissingInvariant). The Rust
+-- sdk/src/hatchery_mint.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.Hatchery
 import Dregg2.Deos.Rehydration
 import Dregg2.Deos.Affordance
 -- The COMPOSITION / RERENDER / VISIBILITY widening (2026-06-14): the desktop's UI-composition
