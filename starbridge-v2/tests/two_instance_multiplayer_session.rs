@@ -37,9 +37,9 @@ use dregg_turn::umem::{UKey, UVal};
 
 use starbridge_v2::shared_fork::{ForkMembraneHost, MembraneFrustum};
 use starbridge_v2::umem_membrane::{
-    UmemBranch, UmemEnvelope, open_umem_envelope, stitch_umem_forks, umem_event_id,
+    open_umem_envelope, stitch_umem_forks, umem_event_id, UmemBranch, UmemEnvelope,
 };
-use starbridge_v2::world::{World, make_open_cell, set_field};
+use starbridge_v2::world::{make_open_cell, set_field, World};
 
 /// The shared world the two co-inhabitants live in — built with ORDINARY genesis grants
 /// (a principal can only hold what it was granted; nobody self-grants). Returns the role

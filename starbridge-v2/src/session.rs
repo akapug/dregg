@@ -1342,7 +1342,7 @@ fn next_free_slot(world: &World, cell: &CellId) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{World, make_open_cell};
+    use crate::world::{make_open_cell, World};
 
     /// A login world: a SYSTEM PRINCIPAL holding caps to two home/app cells (the
     /// authority a session is provisioned from), and two resource cells (`home`,

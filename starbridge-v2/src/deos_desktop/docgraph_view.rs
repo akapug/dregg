@@ -23,12 +23,12 @@
 //! match the rest of the desktop.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, Styled, div, px};
+use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
 
-use dregg_doc::{AtomId, Doc, DocGraph, Op, merge, merge_base, render_three_way, walk_atoms};
+use dregg_doc::{merge, merge_base, render_three_way, walk_atoms, AtomId, Doc, DocGraph, Op};
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, bevel_raised, bevel_sunken, face_row, face_section,
+    bevel_raised, bevel_sunken, face_row, face_section, NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT,
 };
 
 /// A short legible atom id (the low 16 bits, hex) — matches the `a%04x` style the

@@ -16,13 +16,13 @@
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, Point, SharedString, StatefulInteractiveElement, Styled, div, px,
+    div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, Point, SharedString, StatefulInteractiveElement, Styled,
 };
 
 use dregg_types::CellId;
 
-use super::chrome::{ICON_H, ICON_W, MENUBAR_H, NT_TITLE_TEXT, id_hex, id_short};
+use super::chrome::{id_hex, id_short, ICON_H, ICON_W, MENUBAR_H, NT_TITLE_TEXT};
 use super::{ActionKind, DeosDesktop, Drag, OpenMenu, WinKey, WinKindTag};
 
 /// **What the halo is wrapped around** — a desktop cell-icon, or one open window

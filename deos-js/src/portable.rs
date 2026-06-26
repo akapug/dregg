@@ -29,7 +29,7 @@ use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, Cell};
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{Affordance, Applet, CellModel, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, CellModel, Slot};
 
 /// The heap collection id reserved for the applet's program blob. Disjoint from any
 /// model/heap collection an applet would use for data.

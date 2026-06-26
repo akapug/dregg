@@ -38,7 +38,7 @@ use dregg_cell::interface::{InterfaceDescriptor, MethodSig, Semantics};
 use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, CellId};
 use dregg_turn::action::{
-    Action, Authorization, CommitmentMode, DelegationMode, Effect, symbol as method_symbol,
+    symbol as method_symbol, Action, Authorization, CommitmentMode, DelegationMode, Effect,
 };
 use dregg_turn::turn::{Turn, TurnReceipt};
 
@@ -480,11 +480,10 @@ mod tests {
         }
 
         // The rendered text names the interface + the methods (a non-empty tree).
-        assert!(
-            se.all_text()
-                .iter()
-                .any(|l| l.contains("methods published: 2"))
-        );
+        assert!(se
+            .all_text()
+            .iter()
+            .any(|l| l.contains("methods published: 2")));
     }
 
     #[test]

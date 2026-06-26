@@ -43,12 +43,12 @@ use deos_js::applet::Applet;
 use deos_js::signals::{BindingId, BindingRegistry, Slot, SourceEvent};
 use dregg_types::CellId;
 use gpui::{
-    App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
-    px,
+    div, px, App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled,
+    Window,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::label::Label;
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme};
 
 use crate::tree::ViewNode;
 

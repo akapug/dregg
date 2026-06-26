@@ -25,9 +25,9 @@ pub(crate) use std::cell::RefCell;
 pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, Render, ScrollStrategy, SharedString, Styled, UniformListScrollHandle,
-    WeakEntity, Window, div, prelude::*, px, uniform_list,
+    div, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle, Hsla,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, ScrollStrategy, SharedString,
+    Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 
 pub(crate) use dregg_cell::CellId;
@@ -64,7 +64,7 @@ pub(crate) use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
 // THE ⤳ SHARE surface — the frustum / snapshot editor (cull + pare + verify + share).
 pub(crate) use starbridge_v2::affordance::{AffordanceSurface, CellAffordance};
 pub(crate) use starbridge_v2::snapshot_editor::{
-    PareOutcome, ShareError, SnapshotEditor, recipient_window_cap,
+    recipient_window_cap, PareOutcome, ShareError, SnapshotEditor,
 };
 // The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
 pub(crate) use starbridge_v2::cv_provenance::CvProvenance;

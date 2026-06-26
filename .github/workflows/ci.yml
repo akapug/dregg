@@ -61,7 +61,10 @@ jobs:
         with:
           toolchain: nightly
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      # If this fails, format-drift landed. The local pre-commit hook formats every staged .rs at
+      # its crate's edition so this stays green automatically — install it once with
+      # `bash scripts/install-hooks.sh`, and commit WITHOUT `--no-verify` (that skips the hook).
+      - run: cargo fmt --all -- --check || { echo '::error::format drift — run `cargo fmt --all` (and install the pre-commit hook: bash scripts/install-hooks.sh)'; exit 1; }
 
   audit:
     name: Security Audit

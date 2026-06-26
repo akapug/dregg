@@ -29,11 +29,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Window,
 };
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _};
 
 use dregg_doc::Author;
 

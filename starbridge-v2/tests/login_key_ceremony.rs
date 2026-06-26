@@ -27,8 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use dregg_secrets::EncryptedFileStore;
 use dregg_turn::ComputronCosts;
 use starbridge_v2::session::{
-    Challenge, IdentityKeystore, LoginManager, LoginOutcome, Principal, ROOT_TOKEN, agent_template,
-    default_user_template, open_session_world,
+    agent_template, default_user_template, open_session_world, Challenge, IdentityKeystore,
+    LoginManager, LoginOutcome, Principal, ROOT_TOKEN,
 };
 
 static COUNTER: AtomicU64 = AtomicU64::new(0);

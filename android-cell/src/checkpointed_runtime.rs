@@ -46,7 +46,7 @@ use dregg_firmament::CellId;
 use servo_render::RgbaFrame;
 
 use crate::checkpoint::{
-    ServiceCellCheckpoint, UKey, UProjection, UmemOp, diff, emit_boundary_trace, fold,
+    diff, emit_boundary_trace, fold, ServiceCellCheckpoint, UKey, UProjection, UmemOp,
 };
 use crate::input::{AndroidInput, AndroidInputSink, InputError, InputReceipt};
 use crate::intentgate::{AndroidIntent, AndroidIntentSink, IntentError};

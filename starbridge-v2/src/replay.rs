@@ -45,10 +45,10 @@
 use std::collections::BTreeMap;
 
 use dregg_cell::{Cell, CellId, Ledger};
-use dregg_turn::umem::{UProjection, project_ledger, reify_ledger};
+use dregg_turn::umem::{project_ledger, reify_ledger, UProjection};
 use dregg_turn::{
-    ComputronCosts, TurnExecutor,
     turn::{Turn, TurnReceipt, TurnResult},
+    ComputronCosts, TurnExecutor,
 };
 
 // ===========================================================================
@@ -162,7 +162,7 @@ impl History {
     pub fn with_costs(timestamp: i64, costs: ComputronCosts) -> Self {
         let mut roots = Vec::new();
         roots.push(Ledger::new().root()); // root after 0 steps (the empty ledger)
-        // The umem boundary after 0 steps: the empty-ledger projection.
+                                          // The umem boundary after 0 steps: the empty-ledger projection.
         let boundaries = vec![project_ledger(&Ledger::new())];
         History {
             steps: Vec::new(),
@@ -911,7 +911,7 @@ fn short(bytes: &[u8]) -> String {
 
 #[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 mod palette {
-    use gpui::{Hsla, rgb};
+    use gpui::{rgb, Hsla};
     pub fn panel() -> Hsla {
         rgb(0x161b22).into()
     }
@@ -951,7 +951,7 @@ mod palette {
 /// `Context<Cockpit>` type.
 #[cfg(any(feature = "gpui-ui", feature = "gpui-web"))]
 pub fn replay_panel(model: &ReplayPanelModel) -> impl gpui::IntoElement {
-    use gpui::{ParentElement, Styled, div, px};
+    use gpui::{div, px, ParentElement, Styled};
     use palette as p;
 
     let mut col = div().flex().flex_col().gap_1().p_3().size_full();

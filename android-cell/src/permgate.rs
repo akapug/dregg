@@ -1154,11 +1154,9 @@ mod tests {
         let receipt = pb.grant(AndroidPermission::Camera);
         assert!(receipt.decision.refused_not_held_by_granter());
         assert!(!pb.holds(&AndroidPermission::Camera));
-        assert!(
-            receipt
-                .status_line()
-                .contains("cannot hand over what you do not hold")
-        );
+        assert!(receipt
+            .status_line()
+            .contains("cannot hand over what you do not hold"));
     }
 
     /// A normal permission is already held at install — the hand-over is a no-op (no dialog ever

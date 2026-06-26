@@ -14,8 +14,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use dregg_doc::{Author, BlameLine, Granularity, Rendered, RopeDoc};
 use gpui::{
-    App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Window, div, px,
+    div, px, App, AppContext as _, Context, Entity, FocusHandle, Focusable, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window,
 };
 use gpui_component::input::{Input, InputEvent, InputState, TabSize};
 use gpui_component::{ActiveTheme as _, StyledExt as _};

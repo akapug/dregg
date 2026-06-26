@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
 use gpui_wgpu::CosmicTextSystem;
 
 use starbridge_v2::deos_desktop::DeosDesktop;

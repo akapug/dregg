@@ -41,10 +41,18 @@ use std::process::Command;
 // non-Windows they return exactly `"ar"`/`"nm"`/`"ranlib"`, so the unix paths are
 // byte-identical to before. See `windows_gnu_link_env` for the matching link arm.
 fn ar_tool() -> &'static str {
-    if cfg!(windows) { "llvm-ar" } else { "ar" }
+    if cfg!(windows) {
+        "llvm-ar"
+    } else {
+        "ar"
+    }
 }
 fn nm_tool() -> &'static str {
-    if cfg!(windows) { "llvm-nm" } else { "nm" }
+    if cfg!(windows) {
+        "llvm-nm"
+    } else {
+        "nm"
+    }
 }
 /// `ranlib` regenerates an archive's symbol index. `llvm-ar` writes the index on
 /// every `rcs`/`r` op (and `llvm-ranlib` may not be on PATH), so on Windows we run

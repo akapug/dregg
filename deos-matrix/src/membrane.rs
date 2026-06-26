@@ -246,7 +246,7 @@ pub trait MembraneHost {
     /// program guarantees, a byte-identical receipt. The fork holds NO cap to
     /// mainline, so side effects are structurally confined (nesting IS safety).
     fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8])
-    -> Result<TurnReceiptDigest, Self::Error>;
+        -> Result<TurnReceiptDigest, Self::Error>;
 
     /// Stitch a driven fork back toward mainline. Implementation (roadmap for the
     /// proof, buildable for the mechanism): compute the pushout against the

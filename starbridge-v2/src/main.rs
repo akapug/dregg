@@ -718,7 +718,7 @@ fn run_window(
     seed: world::DemoSeed,
     node_url: Option<String>,
 ) {
-    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -840,7 +840,7 @@ fn run_window(
 /// room. NOT gated behind `render-capture`: this is the live windowed entry, `--desktop`.
 #[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
 fn run_desktop_window() {
-    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
     use std::cell::RefCell;
@@ -946,7 +946,7 @@ fn run_desktop_window() {
 ///     slate.
 #[cfg(feature = "gpui-ui")]
 fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mut gpui::App) {
-    use gpui::{Hsla, rgb};
+    use gpui::{rgb, Hsla};
     use gpui_component::{Theme, ThemeMode};
 
     let mode = if force_dark {
@@ -977,9 +977,9 @@ fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mu
     let muted: Hsla = rgb(0x7d8794).into();
     let accent: Hsla = rgb(0x6cb6ff).into(); // the blue the cockpit accents with
     let on_accent: Hsla = rgb(0x0e1116).into(); // dark text on the bright accent
-    // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
-    // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
-    // matches a hand-rolled status pill exactly.
+                                                // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
+                                                // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
+                                                // matches a hand-rolled status pill exactly.
     let good: Hsla = rgb(0x57d977).into();
     let warn: Hsla = rgb(0xe3b341).into();
     let bad: Hsla = rgb(0xe5534b).into();
@@ -1275,7 +1275,7 @@ fn render_doc_collab_arg(args: &[String]) -> Option<String> {
     feature = "embedded-executor"
 ))]
 fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
     use std::borrow::Cow;
@@ -1560,7 +1560,7 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "embedded-executor"
 ))]
 fn render_doc_collab_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
     use std::borrow::Cow;
@@ -1755,7 +1755,7 @@ fn hex2(root: &[u8; 32]) -> String {
     feature = "embedded-executor"
 ))]
 fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
     use std::borrow::Cow;
@@ -1858,9 +1858,9 @@ fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "embedded-executor"
 ))]
 fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, WinKindTag, id_hex};
+    use starbridge_v2::deos_desktop::{id_hex, DeosDesktop, DesktopLayout, WinKindTag};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -2813,7 +2813,7 @@ fn serve_ie6_arg(args: &[String]) -> Option<u16> {
 /// the real verified cockpit — server-side state, a round-trip per click.
 #[cfg(feature = "render-capture")]
 fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3054,7 +3054,7 @@ fn html_escape(s: &str) -> String {
 #[cfg(feature = "render-capture")]
 fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     use cockpit::NavAction;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3247,7 +3247,7 @@ fn render_cockpit_headless(
     tab: Option<&str>,
     first_run: bool,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3404,9 +3404,9 @@ fn render_cockpit_headless(
 ///    `<out>.png` — the agent's modified field is on the glass.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
 fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
+    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -3553,10 +3553,10 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
 ///      differ (the card tracked a real live turn).
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
-    use starbridge_v2::card_pane::{CardPane, build_card_over_live};
+    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use starbridge_v2::card_pane::{build_card_over_live, CardPane};
     use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -3731,7 +3731,7 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// verified turn on it, and edited it live — using only the onboarding UI flow.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::agent_attach::AGENT_COUNTER_SLOT;
     use std::borrow::Cow;
@@ -3884,7 +3884,7 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// spike uses, now driven through the cockpit's gpui event bridge.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
 fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -4072,7 +4072,7 @@ fn bake_inspector_over_world(
     w: f32,
     h: f32,
 ) -> anyhow::Result<(u32, u32)> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::sync::Arc;
@@ -4142,7 +4142,7 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         AcpClient, AcpTransport, GrantRegistry, HermesGateway, RunJsTool, ToolCallRequest,
     };
     use dregg_cell::AuthRequired;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter};
+    use starbridge_v2::agent_attach::{WorldSinkAdapter, AGENT_COUNTER_SLOT};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, RwLock};
@@ -4422,7 +4422,7 @@ fn extract_js_block(text: &str) -> String {
     feature = "dev-surfaces"
 ))]
 fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -4497,7 +4497,7 @@ fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "app-registry"
 ))]
 fn render_guest_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -4606,7 +4606,7 @@ fn render_self_hosting_headless(
     h: f32,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -4767,7 +4767,7 @@ fn render_unified_boot_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -4836,7 +4836,8 @@ fn render_unified_boot_headless(
     // (2) Fire a REAL editor save on the LOCAL ledger, then re-read the NODE's
     // receipt count over the wire — the empirical write-back probe.
     let local_before = window.read_with(&cx, |v, _| v.world_receipt_count())?;
-    let new_content = "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
+    let new_content =
+        "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
          fn main() {\n    println!(\"a save is a verified turn on the local World\");\n}\n";
     let local_after = window.update(&mut cx, |v, window, cx| {
         v.fire_save(new_content, window, cx)
@@ -4994,7 +4995,7 @@ fn render_client_signed_turn_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -5157,7 +5158,7 @@ fn render_interactive_node_save_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -5354,7 +5355,7 @@ fn render_interactive_node_save_headless(
     feature = "embedded-executor"
 ))]
 fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -5520,7 +5521,7 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
 /// system principal over the demo image's anchors and offers the seed identities.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
 fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -5582,7 +5583,7 @@ fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// actual state, never decorative.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
 fn render_touch_headless(out: &str, w: f32, h: f32, mode: Option<&str>) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::touch;
     use std::borrow::Cow;

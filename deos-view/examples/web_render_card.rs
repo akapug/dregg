@@ -20,9 +20,10 @@
 use std::path::PathBuf;
 
 use deos_view::{
-    GalleryCard, parse_view_tree, render_card_document, render_card_live_document,
+    parse_view_tree, render_card_document, render_card_live_document,
     render_doccollab_live_document, render_gallery_document, render_html,
     render_inspector_live_document, render_kvstore_live_document, render_tally_live_document,
+    GalleryCard,
 };
 
 /// The EXACT `JSON.stringify(tree)` shape the SpiderMonkey engine produces for the

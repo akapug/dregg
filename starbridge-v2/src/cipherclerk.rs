@@ -46,7 +46,7 @@ use dregg_types::PublicKey;
 // type). The clerk's `attenuate`/`delegate` already enforce narrowing.
 pub use dregg_sdk::{Attenuation, DelegatedToken as RecipientEnvelope};
 
-use crate::reflect::{Field, FieldValue, Inspectable, ObjectKind, short_hex};
+use crate::reflect::{short_hex, Field, FieldValue, Inspectable, ObjectKind};
 use crate::world::World;
 
 // =============================================================================
@@ -900,7 +900,7 @@ mod tests {
 
     #[test]
     fn embodied_identity_owns_its_derived_cell_and_acts() {
-        use crate::world::{World, transfer};
+        use crate::world::{transfer, World};
         let mut world = World::new();
         let clerk = Cipherclerk::new();
         let alice = Identity::from_byte("alice", DOMAIN, 0xA1);
@@ -970,27 +970,21 @@ mod tests {
         assert_eq!(panel.delegations.len(), 1);
 
         // The identity panel surfaces the real held-token count.
-        assert!(
-            panel.identities[0]
-                .fields
-                .iter()
-                .any(|f| f.key == "held_tokens")
-        );
+        assert!(panel.identities[0]
+            .fields
+            .iter()
+            .any(|f| f.key == "held_tokens"));
         // A token panel surfaces the real authority flags.
         assert!(panel.tokens[0].fields.iter().any(|f| f.key == "can_mint"));
-        assert!(
-            panel.tokens[0]
-                .fields
-                .iter()
-                .any(|f| f.key == "is_verified")
-        );
+        assert!(panel.tokens[0]
+            .fields
+            .iter()
+            .any(|f| f.key == "is_verified"));
         // The delegation panel surfaces the real recipient.
-        assert!(
-            panel.delegations[0]
-                .fields
-                .iter()
-                .any(|f| f.key == "delegatee")
-        );
+        assert!(panel.delegations[0]
+            .fields
+            .iter()
+            .any(|f| f.key == "delegatee"));
     }
 
     // --- THE ACTION LAYER: mint · attenuate · delegate · discharge --------
@@ -1232,11 +1226,9 @@ mod tests {
         clerk.create_identity("bob", DOMAIN, 0xB0);
 
         assert!(clerk.mint("alice", "dns").is_ok());
-        assert!(
-            clerk
-                .attenuate_latest("alice", "dns", "r", Some(2_000_000))
-                .is_ok()
-        );
+        assert!(clerk
+            .attenuate_latest("alice", "dns", "r", Some(2_000_000))
+            .is_ok());
         assert!(clerk.delegate_to("alice", "bob", "dns", "r").is_ok());
         let discharge = clerk.discharge("alice", "dns", "r", 1_000);
         assert!(matches!(

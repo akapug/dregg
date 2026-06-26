@@ -17,12 +17,12 @@
 //! test without a renderer.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, Styled, div, px};
+use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
 
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, NT_TITLE_TEXT, bevel_raised, id_short,
+    bevel_raised, id_short, NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, NT_TITLE_TEXT,
 };
 
 // ── The candidate model ───────────────────────────────────────────────────────────

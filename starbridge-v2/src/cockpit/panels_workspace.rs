@@ -2007,7 +2007,7 @@ impl Cockpit {
     /// working-set move PAST a checkpoint — then ↺ resume recovers the checkpointed
     /// past. The method symbol is what lets a confined agent's turn through the gate.
     pub(crate) fn agent_memory_advance(&mut self, cx: &mut Context<Self>) {
-        use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, symbol};
+        use dregg_turn::action::{symbol, Action, Authorization, CommitmentMode, DelegationMode};
         let agent = self.agent_surface.agent;
         let outcome = {
             let mut w = self.world.borrow_mut();
@@ -3093,7 +3093,7 @@ impl Cockpit {
 #[cfg(all(test, feature = "render-capture"))]
 mod popout_crash_repro {
     use super::*;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3221,7 +3221,7 @@ mod popout_crash_repro {
 #[cfg(all(test, feature = "render-capture"))]
 mod agent_memory_cockpit_affordance {
     use super::*;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;

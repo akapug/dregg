@@ -28,7 +28,7 @@ use mozjs::rust::wrappers2::{
     EncodeStringToUTF8, JS_DefineFunction, JS_NewGlobalObject, JS_NewStringCopyN,
 };
 use mozjs::rust::{
-    CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS, evaluate_script,
+    evaluate_script, CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
 };
 
 use crate::applet::{Applet, FireError};

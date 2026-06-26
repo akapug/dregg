@@ -44,7 +44,7 @@
 //! exactly these rows, so the `cargo test` that asserts the grant is real + attenuated
 //! + held-bounded proves the flow without a GPU.
 
-use dregg_cell::{AuthRequired, CapabilityRef, CellId, is_attenuation};
+use dregg_cell::{is_attenuation, AuthRequired, CapabilityRef, CellId};
 use dregg_turn::action::Effect;
 use dregg_turn::turn::TurnReceipt;
 
@@ -727,11 +727,10 @@ mod tests {
             pb.grantable.is_empty(),
             "an empty-c-list principal has nothing to grant"
         );
-        assert!(
-            pb.all_text()
-                .iter()
-                .any(|l| l.contains("can confer nothing"))
-        );
+        assert!(pb
+            .all_text()
+            .iter()
+            .any(|l| l.contains("can confer nothing")));
     }
 
     #[test]

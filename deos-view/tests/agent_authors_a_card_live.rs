@@ -39,7 +39,7 @@ use dregg_cell::AuthRequired;
 use gpui::AppContext;
 
 use deos_view::headless::HeadlessRender;
-use deos_view::{AppletView, parse_view_tree};
+use deos_view::{parse_view_tree, AppletView};
 
 static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
 static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");

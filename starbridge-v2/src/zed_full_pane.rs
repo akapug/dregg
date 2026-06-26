@@ -55,13 +55,13 @@
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Entity, FocusHandle, IntoElement, ParentElement as _, SharedString,
-    Styled as _, Window, div,
+    div, AnyElement, App, Entity, FocusHandle, IntoElement, ParentElement as _, SharedString,
+    Styled as _, Window,
 };
 
-use deos_zed_full::FirmamentZedFs;
 use deos_zed_full::fs;
 use deos_zed_full::zed::{project, settings, theme, workspace};
+use deos_zed_full::FirmamentZedFs;
 use workspace::{AppState, Workspace};
 
 use crate::dock::surface::{CockpitSurface, SurfaceId};

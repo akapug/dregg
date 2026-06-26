@@ -57,7 +57,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dregg_cell::CellId;
-use dregg_turn::umem::{UKey, UProjection, UVal, project_cell, project_ledger};
+use dregg_turn::umem::{project_cell, project_ledger, UKey, UProjection, UVal};
 use serde::{Deserialize, Serialize};
 
 use crate::world::World;

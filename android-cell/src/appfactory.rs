@@ -423,22 +423,18 @@ mod tests {
             "the descriptor grants exactly the two declared permissions"
         );
         // The declared ones are present as their typed templates.
-        assert!(
-            desc.allowed_cap_templates
-                .contains(&AndroidPermission::Internet.cap_template())
-        );
-        assert!(
-            desc.allowed_cap_templates
-                .contains(&AndroidPermission::AccessFineLocation.cap_template())
-        );
+        assert!(desc
+            .allowed_cap_templates
+            .contains(&AndroidPermission::Internet.cap_template()));
+        assert!(desc
+            .allowed_cap_templates
+            .contains(&AndroidPermission::AccessFineLocation.cap_template()));
         // A permission the manifest did NOT declare (camera) is absent — the minted cell
         // can never hold camera authority. No ambient escalation.
         assert!(!manifest.declares(&AndroidPermission::Camera));
-        assert!(
-            !desc
-                .allowed_cap_templates
-                .contains(&AndroidPermission::Camera.cap_template())
-        );
+        assert!(!desc
+            .allowed_cap_templates
+            .contains(&AndroidPermission::Camera.cap_template()));
     }
 
     /// A foreign-APK child is hosted + carries no native program VK (its program is the

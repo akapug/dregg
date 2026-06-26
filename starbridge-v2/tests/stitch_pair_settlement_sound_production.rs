@@ -31,7 +31,7 @@ use dregg_cell::{AuthRequired, CellId};
 
 use starbridge_v2::shared_fork::{ForkMembraneHost, MembraneFrustum};
 use starbridge_v2::umem_membrane::dropped_cap_event_id;
-use starbridge_v2::world::{World, make_open_cell, revoke_capability, set_field};
+use starbridge_v2::world::{make_open_cell, revoke_capability, set_field, World};
 
 /// A world whose `focus` principal holds the shared `board` (the disjoint-edit surface) and a
 /// `gift` cap (the conferrable authority later REVOKED on main). Returns `(world, focus, board,
