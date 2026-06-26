@@ -193,30 +193,55 @@ hypothesis. The closure layer *discharges* that family from genuine per-effect r
   `lightclient_unfoolable_assembled` (`:440`) and
   `lightclient_turn_unfoolable_forest_assembled` (`:463`) are the capstones.
 
-### Scope carve-out — `Effect::Custom` is NOT discharged in-circuit
+### `Effect::Custom` — apex-covered IN LEAN under the named recursion carrier (VK-lift remains)
 
-The per-effect discharge above covers the kernel effect families that have a
-`FullActionA` constructor and a `<effect>_closedLog` rung. `Effect::Custom`
-(`circuit/src/effect_vm/effect.rs:281` — custom cell-program dispatch) has
-**neither**: there is no `customA` constructor in `FullActionA` and no
-`closedLogExtract_custom_closed` rung in the 36-way `closedLogExtract_all_genuine`
-(`ClosureFanoutGenuine.lean:1009`), which routes any non-cohort index through its
-`| (n+1) => rds.other (n+1)` catch-all (the `ClosureReadouts.other` field, a carried
-hypothesis labelled "off-cohort indices (not real effects)" at `:808`). The deployed
-custom descriptor `customV3` (`v3Registry`, `EffectVmEmitRotationV3.lean:3933`) *is*
-in the registry the apex commits, but its in-AIR `proofBind` op is row-locally `True`
-(`DescriptorIR2.lean:570` — the AIR records the proof commitment and trusts it). The
-stronger `Satisfied2Custom` / `proofBind_determined` predicate, which requires the
-bound external sub-proof to *verify* under a named `EngineBinding E` hypothesis, is
-proven as local lemmas in the Emit modules (`EffectVmEmitV2.lean:1286`,
-`EffectVmEmitRotationV3.lean:4307`) but is **never threaded into the apex chain**.
-Consequently a light client running only the aggregate STARK does **not** witness a
-custom program's correctness; that check is the out-of-circuit Rust
-`dregg_circuit_prove::custom_proof_bind::verify_proof_bind`
-(`circuit-prove/src/custom_proof_bind.rs`), which the light client / SDK must run
-separately. The `custom_proof_commitment` column is 4-felt / ~62-bit
-(`custom_proof_bind.rs:61-70`), below the 8-felt / ~124-bit faithful-commitment floor.
-Full grounding: `docs/deos/CUSTOM-VK-AUTHORIZATION.md`.
+`Effect::Custom` (`circuit/src/effect_vm/effect.rs:281` — custom cell-program
+dispatch) is the deployed AUTHORIZATION MODE (`Authorization::Custom { predicate }`,
+`turn/src/action.rs`), not a kernel state-transition verb: it carries a recursive
+sub-proof and binds it to the row's `custom_proof_commitment` / `custom_program_vk_hash`
+columns. Its in-circuit soundness content is therefore the PROOF-BINDING (the bound
+sub-proof verified, its PI-commitment determines its program VK), not a `FullActionA`
+state move. That content is now **discharged in Lean** by `Dregg2.Circuit.CustomApex`,
+under the named `EngineBinding E` (FRI-recursion) carrier — closing the
+program-correctness gap the deployed STARK leaves:
+
+- **The STAGED in-AIR verifier.** `VmConstraint2.holdsAtStaged` is the deployed row
+  semantics with the ONE flip the VK epoch will carry: the `proofBind` row gate goes
+  from the vacuous `True` (`DescriptorIR2.lean:570`, deployed — UNCHANGED) to the
+  in-AIR recursion check `ProofBind.boundAt E env` (the row commits to a VERIFYING
+  sub-proof). It is the Lean twin of laying `verify_p3_batch_proof_circuit`
+  (`~/dev/plonky3-recursion`) through the Custom columns, mirroring the turn-leaf wrap
+  in `circuit-prove/src/joint_turn_recursive.rs` / `ivc_turn_chain.rs`. STAGED beside
+  the deployed gate — additive, no VK / registry / default touched.
+  `satisfied2Staged_toCustom` PROVES a staged witness IS a `Satisfied2Custom` (the
+  binding leg is CIRCUIT-FORCED, not assumed externally).
+- **The companion apex.** `lightclient_unfoolable_custom` /
+  `lightclient_unfoolable_custom_binds` route the Custom index through
+  `Satisfied2Custom` / `proofBind_bound` / `proofBind_determined` (the §6c keystones,
+  `DescriptorIR2.lean:885,911`; the local Emit lemmas `EffectVmEmitV2.lean:1286`,
+  `EffectVmEmitRotationV3.lean:4307`) under a `StarkSoundCustom` staged-AIR extraction
+  carrier (the exact analog of `StarkSound`). The apex now genuinely CLAIMS, for a
+  verifying Custom batch: a genuine decoded kernel boundary committing to
+  `pi.pre`/`pi.post` AND every active proof-binding row binds to a VERIFYING sub-proof
+  whose attested VK is DETERMINED by its commitment (the anti-ghost — a forged
+  commitment cannot ride). `lightclient_custom_v3_binds` CONSUMES
+  `customV3_binds_proof` at the deployed `customV3` columns
+  (`prmCol CUSTOM_COMMIT`/`CUSTOM_VK`). `#assert_axioms`-clean (carriers
+  `EngineBinding`/`StarkSoundCustom`/`Poseidon2SpongeCR` are HYPOTHESES).
+
+So the custom claim no longer rests on an out-of-circuit Rust trust step: it rests on
+the staged in-AIR verifier + the named recursion carrier. **What remains is the
+deployed VK epoch ONLY** (out of scope here): flipping the deployed `holdsAt`
+`proofBind` gate `True → boundAt` is VK-affecting (re-emit the effect-VM descriptor),
+and the `custom_proof_commitment` column is 4-felt / ~62-bit
+(`custom_proof_bind.rs:61-70`), below the 8-felt / ~124-bit faithful-commitment floor —
+the 4→8-felt lift + column re-pin is the same gated VK epoch (coordinated with the
+parked umem flip). A `FullActionA.customA` executor verb is likewise bundled there (it
+is a deployed-semantics change; the companion apex needs no such constructor). The
+deployed Rust `dregg_circuit_prove::custom_proof_bind::verify_proof_bind`
+(`circuit-prove/src/custom_proof_bind.rs`) is the realization of the staged in-AIR
+verifier the light client / SDK runs until that epoch lands. Full grounding:
+`docs/deos/CUSTOM-VK-AUTHORIZATION.md`; the Lean close is `Dregg2/Circuit/CustomApex.lean`.
 
 ### Other trusted-out-of-circuit surfaces — the sovereign off-AIR pair
 
