@@ -326,10 +326,20 @@ impl PeerNode {
         // preventing unauthenticated connections.
         let client_cert_verifier = Arc::new(MutualTlsClientVerifier);
 
-        let mut server_crypto = rustls::ServerConfig::builder()
-            .with_client_cert_verifier(client_cert_verifier)
-            .with_single_cert(vec![cert], key)
-            .map_err(|e| PeerError::Tls(e.to_string()))?;
+        // Pin the `ring` provider explicitly rather than relying on rustls's
+        // process-level default: when the workspace links BOTH `ring` and
+        // `aws-lc-rs` (e.g. via a `reqwest`/`hyper-rustls` sibling crate),
+        // feature-unification leaves rustls with no unambiguous default and the
+        // bare `builder()` panics ("no process-level CryptoProvider installed").
+        // `ring` is the provider every signature path in this file already uses.
+        let mut server_crypto = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| PeerError::Tls(e.to_string()))?
+        .with_client_cert_verifier(client_cert_verifier)
+        .with_single_cert(vec![cert], key)
+        .map_err(|e| PeerError::Tls(e.to_string()))?;
 
         server_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
 
@@ -356,11 +366,15 @@ impl PeerNode {
         let cert = CertificateDer::from(cert_der.to_vec());
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der.to_vec()));
 
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(GossipCertVerifier))
-            .with_client_auth_cert(vec![cert], key)
-            .map_err(|e| PeerError::Tls(e.to_string()))?;
+        let mut client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| PeerError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(GossipCertVerifier))
+        .with_client_auth_cert(vec![cert], key)
+        .map_err(|e| PeerError::Tls(e.to_string()))?;
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
 
@@ -408,11 +422,15 @@ impl PeerNode {
         let cert_der = CertificateDer::from(cert.der().to_vec());
         let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
 
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(GossipCertVerifier))
-            .with_client_auth_cert(vec![cert_der], key_der)
-            .map_err(|e| PeerError::Tls(e.to_string()))?;
+        let mut client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| PeerError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(GossipCertVerifier))
+        .with_client_auth_cert(vec![cert_der], key_der)
+        .map_err(|e| PeerError::Tls(e.to_string()))?;
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
         let mut client_config = ClientConfig::new(Arc::new(
@@ -709,10 +727,14 @@ impl AllowlistVerifier {
 
     /// Build a `ClientConfig` that verifies peers against this allowlist.
     pub fn build_client_config(&self) -> Result<ClientConfig, PeerError> {
-        let mut client_crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(self.clone()))
-            .with_no_client_auth();
+        let mut client_crypto = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| PeerError::Tls(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(self.clone()))
+        .with_no_client_auth();
 
         client_crypto.alpn_protocols = vec![DREGG_ALPN.to_vec()];
 
