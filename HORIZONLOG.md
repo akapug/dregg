@@ -9,6 +9,25 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- FRI-VERIFIER PROOF-ENGINEERING — milestone 1 LANDED (2026-06-26). The deployed batch-STARK FRI verifier gets a LEAN SPEC
+  so the gnark/BN254 ETH-wrap (`chain/gnark/fri_verifier.go`, `docs/deos/ETH-NATIVE-WRAP.md`) becomes a LEAN-DERIVED circuit
+  proven to REFINE it — turning the wrap's load-bearing unknown (bit-exact Fiat-Shamir transcript fidelity / silent soundness
+  break) into a refinement THEOREM. CENSUS finding: the existing apex models the verifier as an OPAQUE verdict
+  (`CircuitSoundness.verifyBatch` + `StarkSound`/`RecursiveAggregation.verify`); NO Lean spec of the verifier ALGORITHM
+  existed — only the soundness carrier. NEW `metatheory/Dregg2/Circuit/FriVerifier.lean` (727 lines, sorry-free, axiom-clean,
+  wired into `Dregg2.lean`) + `docs/deos/FRI-VERIFIER-PROOF-ENGINEERING.md`. LANDED: the `Challenger` transcript model
+  (byte-faithful DuplexChallenger-w16, pinned against p3-challenger's OWN reference vectors via `#guard` — cross-impl
+  fidelity), the CONCRETE FRI query core (`merkleRecompute` + `merkleRecompute_binds` anti-forgery tooth under Poseidon2-CR +
+  `friChainGo` fold-chain + `concreteFriChecks` with TRANSCRIPT-BOUND query positions), the count-binding integration
+  (`deriveQueryIndices_length` + `verifyAlgo_concrete_rejects_wrong_query_count` — numQueries is enforced by the transcript),
+  and the payoff `wrap_sound` (gnark refines verifyAlgo + FRI carrier ⟹ gnark accept ⟹ ∃ genuine transition; axiom-free).
+  NAMED REMAINING (the burn-down): (1) `batchTables`/`queryPow` FriChecks fields — the per-table quotient + logup interaction
+  bus + the four NPO tables (Poseidon2-w16/w24/recompose/expose_claim) + grinding PoW, still explicit record fields to be
+  specified. (2) Poseidon2-w16 round-constant instantiation in Lean for a REAL BabyBear transcript fixture (today's fidelity
+  is the reverse-perm reference vectors). (3) the `verifyAlgo → StarkSound` bridge (compose into the existing light-client
+  apex). (4) the gnark-side discharge (implement the challenger/merkle/fold gadgets, fixture-anchored accept/reject agreement).
+  Closure shape: each is a specify-and-prove lane over the landed skeleton; the FRI low-degree soundness stays a NAMED TERMINAL
+  CARRIER (`FriLowDegreeSound`, like StarkSound) — NOT re-derived.
 - CI-GREEN GRIND (2026-06-26). Drove the workspace toward green after the wide-registry/umem churn. LANDED (committed):
   (1) `circuit/src/dsl/garbled.rs` — the DSL garbled prover/verifier pushed a 16-felt PI vector (`as_slice()` over the
   now-8-felt WideHash ×2) while the descriptor reuses the deprecated 4-felt GarbledEvaluationAir columns + expects 8 PIs;
