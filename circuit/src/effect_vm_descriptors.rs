@@ -1205,13 +1205,17 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
     "d446ab8a72d0f9a5b95bda545de43c86e4568c0acc93456da5ed37b2842a8cf2";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
-/// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the 45-member emit-source
-/// wide registry (`CapOpenEmit.v3RegistryCapOpenWide`): each wide member welded with the
-/// universal-memory cohort leg (`umemOp` over 7 fresh columns PAST the wide carriers + the
-/// `umemory` / `umem_boundary` tables) at the domain its effect touches, emitted from the verified
-/// Lean `EffectVmEmitUMemWeldWide.weldedWideRegistry` (driver
-/// `metatheory/EmitWideUMemWeldRegistryProbe.lean`). The `key\tname\tjson` per line; the KEY is the
-/// LIVE registry key (`transferVmDescriptor2R24` etc.), the NAME carries [`WIDE_UMEM_WELD_SUFFIX`].
+/// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
+/// registry: the 45 AUTHORITY-crown emit-source members (`CapOpenEmit.v3RegistryCapOpenWide`) PLUS
+/// the 9 §10 WRITE-bearing cap-open tail wrappers (`CapOpenEmit.v3RegistryCapOpenWriteWide` minus
+/// `grantCapWriteCapOpen`, which has no bare wide twin) — the `…WriteCapOpenVmDescriptor2R24`
+/// descriptors the deployed wire routes a cap WRITE turn to (delegate / introduce / refresh / revoke
+/// (Delegation/Capability) / spawn-via-cap). Each member is welded with the universal-memory cohort
+/// leg (`umemOp` over 7 fresh columns PAST the wide carriers + the `umemory` / `umem_boundary`
+/// tables) at the domain its effect touches, emitted from the verified Lean
+/// `EffectVmEmitUMemWeldWide.weldedWideRegistry` (driver `metatheory/EmitWideUMemWeldRegistryProbe.lean`).
+/// The `key\tname\tjson` per line; the KEY is the LIVE registry key (`transferVmDescriptor2R24` /
+/// `delegateWriteCapOpenVmDescriptor2R24` etc.), the NAME carries [`WIDE_UMEM_WELD_SUFFIX`].
 ///
 /// The weld is purely ADDITIVE — it appends columns / tables / one `umemOp` and NEVER edits
 /// `public_input_count` nor any PI binding — so every welded member keeps the 16 wide-commit PIs
@@ -1224,7 +1228,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "e5ada75326838152af5669685c722cf6e1f0eb6c5ac3c97080a0f698eee87cfe";
+    "47d8d6a7376fd061a49c5a4d9a1e4beb85b0329559b4a9d862b5f738e5991d55";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2469,7 +2473,8 @@ mod tests {
         use crate::descriptor_ir2::{VmConstraint2, parse_vm_descriptor2};
 
         // The bare wide members, keyed (the welded registry covers v3RegistryCapOpenWide = the first
-        // 45 of the 57 bare members).
+        // 45 of the 57 bare members, PLUS the 9 §10 WRITE-bearing cap-open tail wrappers — every
+        // welded key is a bare WIDE_REGISTRY_STAGED_TSV key).
         let bare: std::collections::HashMap<&str, &str> = WIDE_REGISTRY_STAGED_TSV
             .lines()
             .filter(|l| !l.is_empty())
@@ -2535,8 +2540,10 @@ mod tests {
             );
         }
         assert_eq!(
-            n, 45,
-            "the welded registry covers all 45 v3RegistryCapOpenWide emit-source members"
+            n, 54,
+            "the welded registry covers all 45 v3RegistryCapOpenWide emit-source members + the 9 §10 \
+             WRITE-bearing cap-open tail wrappers (the write twins the wire routes cap WRITE turns to, \
+             minus grantCapWriteCapOpen which has no bare wide twin)"
         );
 
         // The byte fingerprint pin (the committed-descriptor discipline; Lean is the byte source).
