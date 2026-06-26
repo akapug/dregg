@@ -4500,6 +4500,7 @@ dependencies = [
  "dregg-macaroon",
  "dregg-net",
  "dregg-persist",
+ "dregg-query",
  "dregg-sdk",
  "dregg-sdk-net",
  "dregg-storage",
