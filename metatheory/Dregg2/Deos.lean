@@ -56,6 +56,7 @@ surfaces / membranes / rehydration / affordances.
 -/
 import Dregg2.Deos.Surface
 import Dregg2.Deos.Membrane
+import Dregg2.Deos.DerivedCell
 import Dregg2.Deos.Rehydration
 import Dregg2.Deos.Affordance
 -- The COMPOSITION / RERENDER / VISIBILITY widening (2026-06-14): the desktop's UI-composition
