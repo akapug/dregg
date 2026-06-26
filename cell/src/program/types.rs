@@ -1040,6 +1040,60 @@ pub enum StateConstraint {
         not_after: Option<u64>,
     },
 
+    // ─── Register-reading temporal atoms (the proven-but-was-unwired
+    //     `TemporalAlgebra` family, now deployable). Each mirrors a
+    //     `#assert_axioms`-clean Lean atom whose soundness is discharged by
+    //     `temporalStateStepGuarded` / `temporalAtomsAdmit`
+    //     (`metatheory/Dregg2/Authority/TemporalAlgebra{,2}.lean`). They read
+    //     the COMMITTED PRE-state register the way the Lean atoms read the
+    //     target cell's pre-state record (absent register ⇒ `FIELD_ZERO` ⇒ 0).
+    //     See `docs/deos/TEMPORAL-LOGIC-STATUS.md` §3. ───
+    /// **"stayed under k":** admit iff the cell's committed PRE-state
+    /// admission COUNTER register `new`/`old[counter_index]` reads `< k`. The
+    /// running-rate gate — at most `k` admissions per window (the program bumps
+    /// the counter on each admission and rotates it at window boundaries, e.g.
+    /// a [`Self::MonotonicSequence`] caveat on the counter slot). Mirrors Lean
+    /// `TemporalAtom.rateBound`. Reads the OLD register (one-cell pre-state
+    /// read; the bound is exact within the cell's serialized history).
+    RateBound { counter_index: u8, k: u64 },
+
+    /// **"only after it cooled":** admit iff `staged_at + period <=
+    /// ctx.block_height` — the staged object (amendment, recovery, parameter
+    /// change) has COOLED for at least `period` since it was staged at
+    /// `staged_at`. THE polis cooling primitive, generalized. Height-only:
+    /// definitionally `afterHeight (staged_at + period)`, lowered to a
+    /// one-sided [`Self::TemporalGate`] for the AIR. Mirrors Lean
+    /// `TemporalAtom.cooledSince` (`cooledSince_eq_afterHeight`).
+    CooledSince { staged_at: u64, period: u64 },
+
+    /// **"P until Y":** admit WHILE the event register `[flag_index]` reads `0`
+    /// (the event has not happened) — the temporal **U** operator over history
+    /// ("bids are admitted UNTIL the auction closes"). Reads the OLD register
+    /// (absent ⇒ 0 ⇒ admits). Exact complement of [`Self::SinceEvent`]. Mirrors
+    /// Lean `EventAtom.untilEvent` (`until_holds_EU_flip`: U is the in-tree lfp
+    /// `EU`).
+    UntilEvent { flag_index: u8 },
+
+    /// **"since the event":** admit only ONCE the event register `[flag_index]`
+    /// is set (`≠ 0`) — the temporal **S** operator ("payout is admitted only
+    /// SINCE the auction closed"). Reads the OLD register (absent ⇒ 0 ⇒
+    /// refuses, fail-closed). Mirrors Lean `EventAtom.sinceEvent`
+    /// (`sinceEvent_iff_AG`: once set, set on every future).
+    SinceEvent { flag_index: u8 },
+
+    /// **The optimistic-rollup / fraud-proof settlement gate:** admit iff the
+    /// challenge window has ELAPSED (`staged_at + period <= ctx.block_height`)
+    /// AND no challenge has been filed (the challenge register `[challenge_index]`
+    /// reads `0`). Anyone may file a challenge during the window (a write
+    /// setting the register non-zero); settlement is admissible only after a
+    /// challenge-free window. Reads the OLD challenge register (absent ⇒ 0).
+    /// Mirrors Lean `TemporalAtom.challengeWindow`.
+    ChallengeWindow {
+        challenge_index: u8,
+        staged_at: u64,
+        period: u64,
+    },
+
     /// The action must reveal a preimage whose hash equals
     /// `slot[commitment_index]`. `hash_kind` selects Poseidon2 vs BLAKE3.
     PreimageGate {

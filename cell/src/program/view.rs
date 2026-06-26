@@ -150,6 +150,30 @@ pub enum StateConstraintView {
         not_before: Option<u64>,
         not_after: Option<u64>,
     },
+    /// "stayed under k": pre-state counter register `< k`.
+    RateBound {
+        counter_index: u8,
+        k: u64,
+    },
+    /// "only after it cooled": `staged_at + period <= block_height`.
+    CooledSince {
+        staged_at: u64,
+        period: u64,
+    },
+    /// "P until Y": admit while the event register reads 0 (U operator).
+    UntilEvent {
+        flag_index: u8,
+    },
+    /// "since the event": admit once the event register is set (S operator).
+    SinceEvent {
+        flag_index: u8,
+    },
+    /// Optimistic settlement: window elapsed AND no challenge filed.
+    ChallengeWindow {
+        challenge_index: u8,
+        staged_at: u64,
+        period: u64,
+    },
     PreimageGate {
         commitment_index: u8,
         hash_kind: String,
@@ -793,6 +817,31 @@ impl StateConstraint {
             } => StateConstraintView::TemporalGate {
                 not_before: *not_before,
                 not_after: *not_after,
+            },
+            StateConstraint::RateBound { counter_index, k } => StateConstraintView::RateBound {
+                counter_index: *counter_index,
+                k: *k,
+            },
+            StateConstraint::CooledSince { staged_at, period } => {
+                StateConstraintView::CooledSince {
+                    staged_at: *staged_at,
+                    period: *period,
+                }
+            }
+            StateConstraint::UntilEvent { flag_index } => StateConstraintView::UntilEvent {
+                flag_index: *flag_index,
+            },
+            StateConstraint::SinceEvent { flag_index } => StateConstraintView::SinceEvent {
+                flag_index: *flag_index,
+            },
+            StateConstraint::ChallengeWindow {
+                challenge_index,
+                staged_at,
+                period,
+            } => StateConstraintView::ChallengeWindow {
+                challenge_index: *challenge_index,
+                staged_at: *staged_at,
+                period: *period,
             },
             StateConstraint::PreimageGate {
                 commitment_index,

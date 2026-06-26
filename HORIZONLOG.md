@@ -9,6 +9,17 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- TEMPORAL ALGEBRA NOW WRITABLE (STAGED) — the proven-but-unwired register-reading temporal atoms became deployable caveats
+  (2026-06-26). `StateConstraint::{RateBound, CooledSince, UntilEvent, SinceEvent, ChallengeWindow}` (`cell/src/program/types.rs`)
+  honor the discharged Lean semantics (`temporalStateStepGuarded`/`temporalAtomsAdmit`, `TemporalAlgebra{,2}.lean`): rate < k,
+  P-until-Y (U), since-the-event (S), cooled-since, optimistic challenge window — each reads the committed PRE-state register.
+  Executor-enforced (`cell/src/program/eval.rs` scalar evaluator) + circuit-witnessed (Effect-VM slot-caveat manifest, new tags
+  13–16 in `circuit/src/effect_vm/{pi,verify}.rs`; projection in `turn/src/executor/mod.rs`). Teeth bite both polarities,
+  mirroring the Lean `#guard`s (`cell/src/program/tests.rs`, `circuit/tests/state_constraint_air_teeth.rs`). NAMED FOLLOW-UP =
+  **the temporal-caveat verifier epoch** (the deploy flip): the manifest rides public inputs + an off-AIR verifier re-eval, so
+  the VK bytes are unchanged, but old verifiers reject the new tags as `unknown type_tag` → all verifiers upgrade in lockstep.
+  No existing cell declares the variants, so the deployed default is UNCHANGED (staged, not flipped). Closure = coordinate the
+  lockstep verifier rollout with the other staged VK/verifier epochs. Doc: `docs/deos/TEMPORAL-LOGIC-STATUS.md` §3.
 - FRI-VERIFIER PROOF-ENGINEERING — milestone 1 LANDED (2026-06-26). The deployed batch-STARK FRI verifier gets a LEAN SPEC
   so the gnark/BN254 ETH-wrap (`chain/gnark/fri_verifier.go`, `docs/deos/ETH-NATIVE-WRAP.md`) becomes a LEAN-DERIVED circuit
   proven to REFINE it — turning the wrap's load-bearing unknown (bit-exact Fiat-Shamir transcript fidelity / silent soundness

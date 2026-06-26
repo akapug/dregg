@@ -17,7 +17,7 @@ capability is **proven in Lean but not yet a writable guard or a query operator*
 | --- | --- | --- |
 | **Temporal-logic meta-theory over the real executor** | LTL (□/◇/◯), CTL (EX/AX/EU/AU/EF/AF/EG/AG), modal μ-calculus, justness/liveness — over the actual living-cell executor's turn trajectories | **ACHIEVED + grounded.** Proven, axiom-clean, wired to the real 46-effect executor. But it is a *proof/reasoning* surface, not a runtime query. |
 | **Deployed, enforced temporal guard** | A cell caveat the executor + circuit actually check | **NARROW.** Only the height window `TemporalGate { not_before, not_after }` reaches the executor and the AIR. |
-| **The "historical predicate / running-range" algebra** | `afterHeight` / `beforeHeight` / `withinWindow` / `cooledSince` / `rateBound` / `challengeWindow` / `untilEvent` / `sinceEvent` | **PROVEN-BUT-UNWIRED.** A full, axiom-clean Lean algebra over real cell state; only the pure-height members reduce to the deployed window gate. The register-reading members (rate / until / since / challenge) are not yet deployable guards. |
+| **The "historical predicate / running-range" algebra** | `afterHeight` / `beforeHeight` / `withinWindow` / `cooledSince` / `rateBound` / `challengeWindow` / `untilEvent` / `sinceEvent` | **WIRED (STAGED).** A full, axiom-clean Lean algebra over real cell state. The register-reading members are now deployable caveats: `StateConstraint::{RateBound, CooledSince, UntilEvent, SinceEvent, ChallengeWindow}` — executor-enforced by the scalar evaluator (`cell/src/program/eval.rs`) and witnessed by the Effect-VM slot-caveat manifest (new tags 13–16, `circuit/src/effect_vm/{pi,verify}.rs`). STAGED behind the named *temporal-caveat verifier epoch* (old verifiers reject the new tags, so the rollout is lockstep); no existing cell declares them, so the deployed default is unchanged. |
 | **Decidable flow / policy refinement** | `decideRefines : Flow → Flow → Bool`, the right-skewed simulation order | **PROVEN + WIRED** — but as a *deploy-time gate*, not a runtime predicate or a history query. |
 | **Temporal queries over history** (`dregg-query`) | eventually/always/until/since over the receipt sequence | **NOT-SURVIVED.** `dregg-query` is conjunctive + safe-negation + aggregation with a freshness grade; it has zero temporal operators. Running aggregates exist but are point-in-time-at-frontier. |
 | **`Pred` / derivative matching** | the caveat predicate algebra; Brzozowski/ERE matching | **NOT TEMPORAL.** `Pred` is boolean over a single state (or a single old→new transition). The derivative matcher is finite-string, not ω-regular/streams. |
@@ -145,13 +145,35 @@ fixpoint (`until_holds_EU_flip`). `CausalGuard.lean` adds blocklace-order causal
 (`causallyAfter`, commit-reveal). All `#assert_axioms`-clean; non-vacuity by `#guard`
 both polarities on concrete demo states.
 
-**The honest gap.** Only the pure-height members reach the Rust executor (as
-`TemporalGate`). The register-reading members — `rateBound`, `challengeWindow`,
-`untilEvent`, `sinceEvent` — are **proven correct but have no executor path and no AIR
-projection**. There is no `StateConstraint` variant for them, so a user cannot write
-"this counter stayed under k" or "P held until the flag flipped" into a cell and have
-it enforced. This is the precise sense in which the historical-predicate capability is
-*built and proven but not wired*.
+**The wiring (staged).** The register-reading members are now writable, enforced
+caveats — the plumbing the proofs were waiting for:
+
+- `StateConstraint::RateBound { counter_index, k }` — "stayed under k" (`rateBound`).
+- `StateConstraint::CooledSince { staged_at, period }` — "only after it cooled"
+  (height-only; lowers to the deployed `TemporalGate` AIR teeth).
+- `StateConstraint::UntilEvent { flag_index }` — "P until Y" (the U operator).
+- `StateConstraint::SinceEvent { flag_index }` — "since the event" (the S operator).
+- `StateConstraint::ChallengeWindow { challenge_index, staged_at, period }` — the
+  optimistic-settlement gate (window elapsed AND no challenge filed).
+
+Each reads the **committed pre-state register** (`old_state`; absent ⇒ `FIELD_ZERO`)
+exactly as the Lean atom reads the target cell's pre-state record, honoring the proven
+`temporalStateStepGuarded` / `temporalAtomsAdmit` semantics. They are **executor-enforced**
+by the scalar evaluator (`cell/src/program/eval.rs`) and **circuit-witnessed** by the
+Effect-VM slot-caveat manifest: the projection (`turn/src/executor/mod.rs::project_slot_caveat_manifest`)
+emits new tags `SLOT_CAVEAT_TAG_{RATE_BOUND, UNTIL_EVENT, SINCE_EVENT, CHALLENGE_WINDOW}`
+(13–16) that any proof consumer re-evaluates against the bound `state_before` slot view
+(`circuit/src/effect_vm/verify.rs::verify_slot_caveat_manifest`). Teeth bite both
+polarities in `cell/src/program/tests.rs` and `circuit/tests/state_constraint_air_teeth.rs`,
+mirroring the Lean `#guard` non-vacuity examples value-for-value.
+
+**Staged, not flipped.** This is a new caveat + verifier re-evaluation: the slot-caveat
+manifest is carried in **public inputs** and enforced by an off-AIR verifier check, so the
+AIR constraint polynomials (the VK bytes) are unchanged — but an old verifier rejects the
+new tags as `unknown type_tag`, so deploying cells that USE these caveats requires every
+verifier to upgrade in lockstep (the **temporal-caveat verifier epoch**). No existing cell
+declares the new variants, so nothing flips by default; the epoch is the coordinate-with-
+future-rollout step, deliberately deferred.
 
 ---
 
@@ -217,25 +239,26 @@ they do not have them:
   μ-calculus + justness over the real executor, axiom-clean. This is real "full
   temporal-logic stuff," it just lives in the metatheory and certifies the protocol
   rather than running inside it.
-- *Historical predicates / running ranges as a deployable guard*: **PROVEN-BUT-UNWIRED.**
+- *Historical predicates / running ranges as a deployable guard*: **WIRED (STAGED).**
   The `TemporalAlgebra` atoms (cooledSince / rateBound / untilEvent / sinceEvent /
-  challengeWindow) are the capability you remember; they are built and proven, but only
-  the pure-height members reach the executor (as `TemporalGate`). The register-reading
-  members have no `StateConstraint`, no executor path, no AIR.
+  challengeWindow) are now first-class `StateConstraint` variants, executor-enforced and
+  circuit-witnessed (slot-caveat tags 13–16). Staged behind the temporal-caveat verifier
+  epoch; no existing cell uses them, so the deployed default is unchanged.
 - *Temporal queries over history*: **NOT-SURVIVED** as a feature — `dregg-query` never
   grew temporal operators; it stops at freshness-graded aggregation.
 
 **What wiring would make temporal guards usable** (lowest-effort first, because the
 Lean is already proven — this is plumbing, not invention):
 
-1. **Lift the register-reading `TemporalAtom`s into `StateConstraint` + the AIR.** Add
-   variants mirroring `TemporalGate` for `RateBound { counter_field, k }`,
-   `UntilEvent { flag_field }`, `SinceEvent { flag_field }`, `ChallengeWindow { … }`;
-   give each a `SLOT_CAVEAT_TAG_*` and a lowering in `turn/src/executor/mod.rs` next to
-   the existing `TemporalGate` case (253), and a slot-caveat AIR check. The soundness
-   obligation is *already discharged* by `temporalStateStepGuarded` /
-   `temporalAtomsAdmit` in `TemporalAlgebra.lean` — wiring inherits the proof. This
-   directly delivers "stayed under k," "P held until Y," "S since the event."
+1. **Lift the register-reading `TemporalAtom`s into `StateConstraint` + the AIR.**
+   ✅ **DONE (staged).** `RateBound`, `CooledSince`, `UntilEvent`, `SinceEvent`,
+   `ChallengeWindow` are first-class `StateConstraint` variants; each has a
+   `SLOT_CAVEAT_TAG_*` (13–16; `CooledSince` lowers to the height-only `TemporalGate`
+   tag) and a projection in `turn/src/executor/mod.rs::project_slot_caveat_manifest`
+   beside the existing `TemporalGate` case, plus a re-evaluation arm in
+   `verify_slot_caveat_manifest`. The soundness obligation was *already discharged* by
+   `temporalStateStepGuarded` / `temporalAtomsAdmit` — the wiring inherits the proof.
+   Deploying it is the named temporal-caveat verifier epoch (§3). Remaining: items 2–3.
 
 2. **Give `dregg-query` history/window operators over the attested receipt slice.** The
    trace is already available and non-omission-attested (`mmr.rs`); only the operator

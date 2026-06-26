@@ -421,6 +421,14 @@ pub const SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE: u32 = 9;
 pub const SLOT_CAVEAT_TAG_TEMPORAL_GATE: u32 = 10;
 pub const SLOT_CAVEAT_TAG_SENDER_AUTHORIZED: u32 = 11;
 pub const SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS: u32 = 12;
+// Register-reading temporal atoms (the proven `TemporalAlgebra` family).
+// These re-evaluate against the PRE-state slot view (`initial_fields`), the
+// way the Lean atoms read the target cell's committed pre-state record.
+// `CooledSince` is height-only and lowers to `TEMPORAL_GATE` (no tag here).
+pub const SLOT_CAVEAT_TAG_RATE_BOUND: u32 = 13;
+pub const SLOT_CAVEAT_TAG_UNTIL_EVENT: u32 = 14;
+pub const SLOT_CAVEAT_TAG_SINCE_EVENT: u32 = 15;
+pub const SLOT_CAVEAT_TAG_CHALLENGE_WINDOW: u32 = 16;
 
 // ---- Cross-effect within-turn chain pinning (Proof-to-Action Binding §3.3) ----
 //

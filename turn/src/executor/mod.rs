@@ -265,6 +265,64 @@ pub fn project_slot_caveat_manifest(
                     BabyBear::ZERO,
                 ],
             }),
+            // Register-reading temporal atoms (the proven `TemporalAlgebra`
+            // family, now AIR-projected). The re-evaluation reads the PRE-state
+            // slot view (`initial_fields[slot]`), matching the executor's
+            // committed-pre-state register read and the Lean atom semantics.
+            dregg_cell::StateConstraint::RateBound { counter_index, k } => {
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_RATE_BOUND,
+                    slot_index: *counter_index,
+                    params: [
+                        BabyBear::new((*k & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
+            // Height-only: lower to the deployed `TemporalGate` AIR teeth
+            // (not_before = staged_at + period; cell-scoped, slot 0).
+            dregg_cell::StateConstraint::CooledSince { staged_at, period } => {
+                let boundary = staged_at.saturating_add(*period);
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_TEMPORAL_GATE,
+                    slot_index: 0,
+                    params: [
+                        BabyBear::new((boundary & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
+            dregg_cell::StateConstraint::UntilEvent { flag_index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_UNTIL_EVENT,
+                slot_index: *flag_index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            dregg_cell::StateConstraint::SinceEvent { flag_index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_SINCE_EVENT,
+                slot_index: *flag_index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            dregg_cell::StateConstraint::ChallengeWindow {
+                challenge_index,
+                staged_at,
+                period,
+            } => {
+                let boundary = staged_at.saturating_add(*period);
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_CHALLENGE_WINDOW,
+                    slot_index: *challenge_index,
+                    params: [
+                        BabyBear::new((boundary & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
             dregg_cell::StateConstraint::SenderAuthorized { set } => {
                 let slot_index = match set {
                     dregg_cell::program::AuthorizedSet::PublicRoot { set_root_index } => {
