@@ -850,6 +850,16 @@ fn constraint_dissect(
             Some(*actor_label_index),
             vec![*root_index],
         ),
+        // The register-reading temporal-algebra caveats (rate/until/since/cooled/
+        // challenge). Primary slot = the register/counter each reads; the
+        // height-relative `CooledSince` binds no slot (it reads block height).
+        SC::RateBound { counter_index, .. } => ("rate_bound", Some(*counter_index), vec![]),
+        SC::CooledSince { .. } => ("cooled_since", None, vec![]),
+        SC::UntilEvent { flag_index } => ("until_event", Some(*flag_index), vec![]),
+        SC::SinceEvent { flag_index } => ("since_event", Some(*flag_index), vec![]),
+        SC::ChallengeWindow {
+            challenge_index, ..
+        } => ("challenge_window", Some(*challenge_index), vec![]),
     }
 }
 
