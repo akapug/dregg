@@ -3777,13 +3777,24 @@ async fn execute_finalized_turn(
                                 &full_turn_previously_spent,
                                 rotation,
                                 clist_leaves,
-                                // STAGED / VK-RISK-FREE: the deployed commit path keeps minting the BARE
-                                // wide cap-open leg (no welded umem witness threaded) — the welded
-                                // DOMAIN-2 producer path is BUILT + loud-probe-validated and ready for
-                                // the gated VK epoch (attempt #13) to flip this to
-                                // `caps_umem_weld_witness(before, after)`. Flipping it here now would
-                                // change the deployed default before the VK is committed.
-                                None,
+                                // VK EPOCH (umem flip): the DOMAIN-2 welded producer is ARMED. When the
+                                // actor's GENUINE before→after record-kernel projection diff is a
+                                // NON-EMPTY single-domain CAPS change, mint the WIDE+UMEM welded cap-open
+                                // form (the universal-memory leg BESIDE the 8-felt commit, accepted
+                                // ADDITIVELY). An empty / heap-domain / multi-domain diff (incl. the 12
+                                // live-only members) yields `None` ⇒ the byte-identical BARE wide leg.
+                                match (
+                                    full_turn_pre_cell.as_ref(),
+                                    s.ledger.get(&signed_turn.turn.agent),
+                                ) {
+                                    (Some(before_cell), Some(after_cell)) => {
+                                        crate::turn_proving::caps_umem_weld_witness(
+                                            before_cell,
+                                            after_cell,
+                                        )
+                                    }
+                                    _ => None,
+                                },
                             )
                         }
                         (None, Some((consumed, holder_cap_root)), spent_nullifier) => {
@@ -3832,9 +3843,21 @@ async fn execute_finalized_turn(
                                 // (not the actor's) — the bearer write wrapper is the named fan-out
                                 // residual; the authority-only route proves until it lands.
                                 Vec::new(),
-                                // STAGED: bare wide cap-open leg (no welded umem witness) — the welded
-                                // producer path is ready for the gated VK epoch to flip on.
-                                None,
+                                // VK EPOCH (umem flip): DOMAIN-2 welded producer ARMED on the bearer arm
+                                // too — built from the ACTOR's genuine before→after projection diff (the
+                                // producer fails closed to `None` ⇒ bare for any non-single-caps diff).
+                                match (
+                                    full_turn_pre_cell.as_ref(),
+                                    s.ledger.get(&signed_turn.turn.agent),
+                                ) {
+                                    (Some(before_cell), Some(after_cell)) => {
+                                        crate::turn_proving::caps_umem_weld_witness(
+                                            before_cell,
+                                            after_cell,
+                                        )
+                                    }
+                                    _ => None,
+                                },
                             )
                         }
                         (None, None, Some(spent_nullifier)) => {
