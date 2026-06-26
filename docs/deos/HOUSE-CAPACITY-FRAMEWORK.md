@@ -9,11 +9,11 @@ them ONE system rather than seven scattered modules: the common shape every
 capacity shares, the grounding-by-reuse template, and the clear path for the ones
 not yet grounded.
 
-The frame is not aspirational. Four capacities — **membrane**, **derived
-cells**, **sealed escrow**, and **standing obligation** — now sit fully on it,
-each with a Lean rung proven *by reuse* of an already-proven commitment, no VK
-bump, the Rust wired to the rung. They are the template the last one (the
-**hatchery** abstraction-mint) follows.
+The frame is not aspirational. All six capacities — **membrane**, **derived
+cells**, **sealed escrow**, **standing obligation**, **share-vault**, and the
+**hatchery** abstraction-mint — now sit fully on it, each with a Lean rung
+proven *by reuse* of an already-proven commitment/skeleton, no VK bump, the Rust
+wired to the rung. The house is COMPLETE.
 
 ---
 
@@ -117,7 +117,7 @@ reuse.
 
 ---
 
-## 4. The grounded four — and the path for the last
+## 4. The grounded house — all six on the frame
 
 | Capacity | Reuse base | Rung | Status |
 |---|---|---|---|
@@ -125,7 +125,7 @@ reuse.
 | **derived** | heap root (`root_binds_get`) | `Deos/DerivedCell.lean` | **GROUNDED** — `bind_verifies` + forge/stale/wrong-spec teeth + `claim_bound_in_root`, Rust `invariant_matches_lean_rung` |
 | **escrow** | heap root (`root_binds_get`) + one-shot Consumed | `Deos/SealedEscrow.lean` | **GROUNDED** — `deposit_both_ready` + `replay_rejected` (one-shot) + `nonconforming_claim_rejected` + `over_claim_rejected` + `leg_status_bound_in_root`, Rust `invariant_matches_lean_rung` |
 | **obligation** (standing/recurring) | heap root (`root_binds_get`) + `StrictMonotonic` cursor | `Deos/StandingObligation.lean` | **GROUNDED** — `cursor_strict_mono` + `replay_rejected` (one-shot/period) + early/over/behind-schedule teeth + `cursor_bound_in_root`, Rust `invariant_matches_lean_rung` |
-| **hatchery** (abstraction-mint) | `CellProgram::evaluate_with_meta` + a proved `Verify.Contract.CellContract` | bind `HpresProof::Attested` to a machine-checked contract rung (the "forever-crown") | path clear — the last ungrounded |
+| **hatchery** (abstraction-mint) | `CellProgram::evaluate_with_meta` + a proved `Verify.Contract.CellContract` | `Deos/Hatchery.lean` | **GROUNDED** — `evalStep_admits_iff_*` + `step_preserves` (the hpres) + `invariant_forever` (the `CellContract` carry skeleton reused) + `Attested`/`attested_enforces_forever` (`HpresProof::Attested` ⟺ a machine-checked contract) + `program_missing_invariant_rejected` + `violating_*_rejected`, Rust `invariant_matches_lean_rung` |
 
 The escrow and obligation rungs are the **invariant-capacity** route (a `Deos/*.lean` rung over the
 heap-root reuse base), not the factory route — the standalone `cell/src/{escrow_sealed,
@@ -161,5 +161,6 @@ capacity's circuit weld is a tracked rung, not a parking lot.
 
 **One sentence:** a house capacity is a heap-committed cell-program + an invariant
 + a Lean rung proven by reuse (no VK bump) + a forge-detector + a wiring test; the
-membrane, derived cells, sealed escrow, and standing obligation now sit fully on
-that frame, and the hatchery (the last) has a clear path along the same template.
+all six — membrane, derived cells, sealed escrow, standing obligation,
+share-vault, and the hatchery abstraction-mint — now sit fully on that frame.
+The house is COMPLETE.
