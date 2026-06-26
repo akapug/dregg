@@ -63,6 +63,15 @@ use dregg_app_framework::{
     field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// The reactive twin of `invoke()`: a `Reactor` that watches the ballot and records
+/// cast votes into the poll's tally feed.
+pub mod reactor;
+/// The CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the poll + ballot lifecycle.
+pub mod service;
+
 // =============================================================================
 // Poll-cell state schema
 // =============================================================================
