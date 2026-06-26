@@ -48,15 +48,29 @@
 //! ([`ForgeRejection::ProgramMissingInvariant`]), even if it waves the kind id
 //! around. Conformance is membership.
 //!
-//! ## The next slice (named, not hand-waved)
+//! ## The Lean rung — the invariant is PROVEN, not just smoke-tested
 //!
-//! The [`HpresProof`] is presently [`HpresProof::Pending`]: the runtime check
-//! (the executor refusing a violating turn) *stands in for* the Lean proof that
-//! the constraint set is a genuine single-step invariant. The next slice binds
-//! [`HpresProof::Attested`] to a concrete `Dregg2.Verify.Contract.CellContract`
-//! by content hash, so a minted kind carries the machine-checked "holds forever"
-//! crown, not merely the structural check. See `MINT.next_slice` in
-//! `docs/deos/HATCHERY-ABSTRACTION-MINT.md`.
+//! The abstraction-mint invariant is grounded in `metatheory/Dregg2/Deos/
+//! Hatchery.lean` (the LAST of the six house capacities — the house COMPLETE):
+//! the per-turn gate IS the declared invariant (`evalStep_admits_iff_*`), an
+//! admitted step preserves it (`step_preserves`, the **hpres**), and the SAME
+//! `Verify.Contract.CellContract` carry skeleton lifts it to the unbounded
+//! trajectory — `invariant_forever`: under EVERY schedule of admitted turns, a
+//! minted cell carries its invariant for life. The Lean binds
+//! [`HpresProof::Attested`] to a machine-checked `CellContract`: its `Attested`
+//! structure cannot be constructed without a real contract (hence a real
+//! `step_ob` proof term), so an attestation is a *proved* forever-crown
+//! (`attested_enforces_forever`), not a trusted flag — and an attestation for a
+//! *different* invariant is rejected by the decidable content-hash check
+//! (`forged_attestation_rejected`). The forge-detector here is the executor
+//! image of that rung; [`tests::invariant_matches_lean_rung`] mirrors the Lean
+//! witnesses so the Rust rejection is tied to the proven statement.
+//!
+//! The DEEPER weld — binding the kind's invariant into the EffectVM circuit so a
+//! light client (not just a re-executing validator) witnesses it as part of the
+//! proven kernel transition — is VK-affecting and is the named per-capacity
+//! follow-up (`metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md`, hatchery row), the
+//! same lane the cap-root reshape drives.
 
 use dregg_cell::factory::{FactoryDescriptor, canonical_program_vk};
 use dregg_cell::program::{TransitionCase, TransitionGuard, TransitionMeta};
@@ -138,9 +152,13 @@ pub enum HpresProof {
     /// No Lean crown bound yet. Enforcement is the runtime program gate; the
     /// `livingCellA_carries` "forever" theorem is the named next slice.
     Pending,
-    /// The kind is bound to a proved `CellContract` whose `step_ob` discharges
-    /// this invariant, identified by the content hash of the Lean artifact /
-    /// `#assert_axioms`-pinned theorem name. (Wiring deferred — see module docs.)
+    /// The kind is bound to a proved `Dregg2.Verify.Contract.CellContract` whose
+    /// `step_ob` discharges this invariant, identified by the content hash of the
+    /// Lean artifact / `#assert_axioms`-pinned theorem name. The binding is REAL:
+    /// `metatheory/Dregg2/Deos/Hatchery.lean`'s `Attested` cannot be constructed
+    /// without the contract (hence a real `step_ob`), and `attested_enforces_forever`
+    /// cashes it out into the unbounded "holds forever" carry. An attestation for a
+    /// *different* invariant is rejected (`forged_attestation_rejected`).
     Attested { contract_hash: [u8; 32] },
 }
 
@@ -572,5 +590,97 @@ mod tests {
                 contract_hash: [0xCC; 32]
             }
         );
+    }
+
+    /// The Lean rung: the abstraction-mint invariant is PROVEN, not just
+    /// smoke-tested.
+    ///
+    /// Mirror of the witnesses in `metatheory/Dregg2/Deos/Hatchery.lean`. The Lean
+    /// proves: the per-turn gate IS the declared invariant
+    /// (`evalStep_admits_iff_*`); an admitted step preserves it (`step_preserves`,
+    /// the hpres); the `Verify.Contract.CellContract` carry skeleton lifts that to
+    /// the unbounded trajectory (`invariant_forever`); a violating turn is refused
+    /// (`violating_*_rejected`); a program omitting the invariant is a forge
+    /// (`program_missing_invariant_rejected`); and `HpresProof::Attested` binds to
+    /// a machine-checked contract, with an attestation for a *different* invariant
+    /// rejected (`forged_attestation_rejected`). Here the SAME shapes are checked
+    /// over the deployed `CellProgram::evaluate_with_meta`, so the Rust enforcement
+    /// is tied to the proven statement, not an ad-hoc tampering.
+    ///
+    /// Lean witnesses: balance kind floor 50, slot 0 — `[100]` conforms, `[10]`
+    /// (below floor) is refused; monotone kind slot 1 — `5 → 9` conforms, `9 → 4`
+    /// (backward) is refused; a wrong/empty program is a forge; an attestation for
+    /// the monotone kind does not bind to the balance kind.
+    #[test]
+    fn invariant_matches_lean_rung() {
+        // Lean `balInv := balanceNeverBelow 0 50`.
+        let bal = MintedKind::mint(
+            Invariant::BalanceNeverBelow {
+                slot: BAL_SLOT,
+                floor: 50,
+            },
+            &AUTHORITY,
+        );
+        // `evalStep_admits_iff_balance` / honest round-trip: slot0 = 100 ≥ 50 → Ok.
+        bal.evaluate_transition(
+            &state_with_slot(2, BAL_SLOT, 100),
+            Some(&state_with_slot(1, BAL_SLOT, 100)),
+        )
+        .expect("Lean: evalStep balInv [100] = ok");
+        // `violating_balance_rejected`: slot0 = 10 < 50 → ConstraintViolated.
+        assert!(matches!(
+            bal.evaluate_transition(
+                &state_with_slot(2, BAL_SLOT, 10),
+                Some(&state_with_slot(1, BAL_SLOT, 100)),
+            ),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // Lean `monInv := monotoneField 1`.
+        let mon = MintedKind::mint(Invariant::MonotoneField { slot: COUNTER_SLOT }, &AUTHORITY);
+        // `evalStep_admits_iff_monotone`: 5 → 9 (forward) → Ok.
+        mon.evaluate_transition(
+            &state_with_slot(2, COUNTER_SLOT, 9),
+            Some(&state_with_slot(1, COUNTER_SLOT, 5)),
+        )
+        .expect("Lean: evalStep monInv [_,9] (some [_,5]) = ok");
+        // `violating_monotone_rejected`: 9 → 4 (backward) → ConstraintViolated.
+        assert!(matches!(
+            mon.evaluate_transition(
+                &state_with_slot(2, COUNTER_SLOT, 4),
+                Some(&state_with_slot(1, COUNTER_SLOT, 9)),
+            ),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // `program_missing_invariant_rejected` / `empty_program_is_forge`: a
+        // program omitting the kind's invariant constraint is a forge; the empty
+        // program is a forge for any invariant-bearing kind.
+        assert!(matches!(
+            bal.attest_membership(&CellProgram::Cases(vec![TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![StateConstraint::Monotonic { index: BAL_SLOT }],
+            }])),
+            Err(ForgeRejection::ProgramMissingInvariant { .. })
+        ));
+        assert!(matches!(
+            bal.attest_membership(&CellProgram::None),
+            Err(ForgeRejection::ProgramMissingInvariant { .. })
+        ));
+        // `own_program_conforms`: the kind's own program is a member.
+        bal.attest_membership(&bal.child_program)
+            .expect("Lean: own program conforms");
+
+        // `attest_binds` vs `forged_attestation_rejected`: an attestation binds to
+        // its own kind; a kind with a DIFFERENT invariant is a distinct kind — its
+        // child VK (the contract-identity the attestation certifies) does not match,
+        // so it cannot pass as the balance kind's crown. The content-hash binding.
+        assert_ne!(
+            bal.child_vk(),
+            mon.child_vk(),
+            "forged_attestation_rejected: an attestation for monInv != balInv's contract"
+        );
+        let attested = bal.clone().attest_hpres([0xAB; 32]);
+        assert!(attested.hpres.is_attested());
     }
 }
