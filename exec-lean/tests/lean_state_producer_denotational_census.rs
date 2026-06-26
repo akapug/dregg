@@ -751,6 +751,13 @@ const CENSUS_NAMED_RESIDUALS: &[(&str, &str)] = &[
          until the value-well migration — so there is no committed scalar-denotational round-trip.",
     ),
     (
+        "Mint",
+        "NO-CONSERVING-IMAGE: the supply-model `Effect::Mint` (cap-gated issuer mint, `sel::MINT`) \
+         injects value with no conserving scalar image on the 1-cell numbering — same class as \
+         BridgeMint/Burn, awaiting the value-well migration. No committed scalar-denotational \
+         round-trip yet.",
+    ),
+    (
         "CreateCell",
         "NOT-MAPPABLE / CREATION-AUTHORITY WIRE LEG (a bigger design question, precise remaining \
          work): the Lean codec DOES carry a `{\"createcell\":[actor,newCell]}` arm and \
@@ -828,6 +835,7 @@ fn vm_effect_kind_name(eff: &dregg_circuit::effect_vm::Effect) -> &'static str {
         Vm::Introduce { .. } => "Introduce",
         Vm::PipelinedSend { .. } => "PipelinedSend",
         Vm::BridgeMint { .. } => "BridgeMint",
+        Vm::Mint { .. } => "Mint",
         Vm::NoteSpend { .. } => "NoteSpend",
         Vm::NoteCreate { .. } => "NoteCreate",
         Vm::Custom { .. } => "Custom",
@@ -866,6 +874,7 @@ const VM_EFFECT_UNIVERSE: &[&str] = &[
     "Introduce",
     "PipelinedSend",
     "BridgeMint",
+    "Mint",
     "NoteSpend",
     "NoteCreate",
     "Custom",
@@ -889,8 +898,8 @@ fn census_covers_or_names_residual_for_all_29_vm_effects() {
     let universe: std::collections::HashSet<&str> = VM_EFFECT_UNIVERSE.iter().copied().collect();
     assert_eq!(
         universe.len(),
-        29,
-        "the VmEffect universe must be exactly 29 distinct variants; got {}",
+        30,
+        "the VmEffect universe must be exactly 30 distinct variants; got {}",
         universe.len()
     );
 
@@ -939,8 +948,8 @@ fn census_covers_or_names_residual_for_all_29_vm_effects() {
     // (4) Cardinality witness of the tally: N covered + M residual == 29, disjoint.
     assert_eq!(
         covered.len() + residual.len(),
-        29,
-        "tally: {} covered + {} named-residual must equal 29 (disjoint, exhaustive)",
+        30,
+        "tally: {} covered + {} named-residual must equal 30 (disjoint, exhaustive)",
         covered.len(),
         residual.len()
     );
@@ -996,8 +1005,8 @@ fn vm_effect_universe_is_complete() {
             "vm_effect_kind_name produced {name:?} which is absent from VM_EFFECT_UNIVERSE"
         );
     }
-    // The universe is exactly 29 (the match is exhaustive over the 29-variant enum).
-    assert_eq!(VM_EFFECT_UNIVERSE.len(), 29);
+    // The universe is exactly 30 (the match is exhaustive over the 30-variant enum).
+    assert_eq!(VM_EFFECT_UNIVERSE.len(), 30);
 }
 
 /// LEGACY continuity view: every kind the swap classifies as root-AGREEING is ACCOUNTED FOR by this
