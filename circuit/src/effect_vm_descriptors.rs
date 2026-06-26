@@ -1204,6 +1204,28 @@ pub const WIDE_REGISTRY_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_FP: &str =
     "d446ab8a72d0f9a5b95bda545de43c86e4568c0acc93456da5ed37b2842a8cf2";
 
+/// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
+/// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the 45-member emit-source
+/// wide registry (`CapOpenEmit.v3RegistryCapOpenWide`): each wide member welded with the
+/// universal-memory cohort leg (`umemOp` over 7 fresh columns PAST the wide carriers + the
+/// `umemory` / `umem_boundary` tables) at the domain its effect touches, emitted from the verified
+/// Lean `EffectVmEmitUMemWeldWide.weldedWideRegistry` (driver
+/// `metatheory/EmitWideUMemWeldRegistryProbe.lean`). The `key\tname\tjson` per line; the KEY is the
+/// LIVE registry key (`transferVmDescriptor2R24` etc.), the NAME carries [`WIDE_UMEM_WELD_SUFFIX`].
+///
+/// The weld is purely ADDITIVE — it appends columns / tables / one `umemOp` and NEVER edits
+/// `public_input_count` nor any PI binding — so every welded member keeps the 16 wide-commit PIs
+/// (the 8-felt ~124-bit before/after anchors) at the SAME offsets (NO narrowing). A welded proof
+/// from [`prove_wide_umem_welded_staged`] verifies UNIQUELY against its member here (the Lean weld is
+/// byte-parity-pinned to the Rust [`weld_umem_into_wide_descriptor`] — the `wide_umem_weld_registry_*`
+/// tests). This is the descriptor set the wire verifiers (`verify_effect_vm_rotated_with_cutover`,
+/// the IVC `admit_welded_leg`) iterate as a NEW accepted form BESIDE the bare wide registry. ADDITIVE:
+/// the live 1-felt / bare wide registries / FP / VK are UNTOUCHED; `umem_witness_enabled` stays false.
+pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
+    include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
+pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
+    "e5ada75326838152af5669685c722cf6e1f0eb6c5ac3c97080a0f698eee87cfe";
+
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
 /// 3-wide chip groups while ≥ 3 remain, singletons after — arity ∈ {2,4}, NEVER 3 — and the
@@ -2431,6 +2453,100 @@ mod tests {
             "the wide registry is a member-for-member cover of the live V3 registry (57 members)"
         );
         assert_eq!(n, 57, "the wide registry covers all 57 live V3 members");
+    }
+
+    /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY: drift pin + per-member weld parity (the
+    /// MISSING VERIFIER LEG, grounded).** The welded registry TSV is fingerprint-stable (the Lean
+    /// `EmitWideUMemWeldRegistryProbe.lean` is the byte source), parses member-for-member, is
+    /// name-stable on the KEYS with the bare wide registry, and — the load-bearing tooth — each Lean
+    /// welded member is BYTE-IDENTICAL to applying the Rust additive [`weld_umem_into_wide_descriptor`]
+    /// to the corresponding bare wide member at the welded member's own domain. That parity is what
+    /// makes a welded proof (built Rust-side via `weld_umem_into_wide_descriptor`) verify UNIQUELY
+    /// against the Lean-grounded registry member on the wire. The NO-NARROWING invariant
+    /// (`piCount` unchanged, `traceWidth = host + 7`) is checked per member.
+    #[test]
+    fn wide_umem_weld_registry_parity_and_no_narrowing() {
+        use crate::descriptor_ir2::{VmConstraint2, parse_vm_descriptor2};
+
+        // The bare wide members, keyed (the welded registry covers v3RegistryCapOpenWide = the first
+        // 45 of the 57 bare members).
+        let bare: std::collections::HashMap<&str, &str> = WIDE_REGISTRY_STAGED_TSV
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                let mut it = l.splitn(3, '\t');
+                let k = it.next().expect("bare key");
+                let _n = it.next();
+                let j = it.next().expect("bare json");
+                (k, j)
+            })
+            .collect();
+
+        let mut n = 0usize;
+        for line in WIDE_UMEM_WELD_REGISTRY_TSV.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            n += 1;
+            let mut it = line.splitn(3, '\t');
+            let key = it.next().expect("welded key");
+            let name = it.next().expect("welded name");
+            let json = it.next().expect("welded json");
+            assert!(
+                name.ends_with(WIDE_UMEM_WELD_SUFFIX),
+                "{key}: welded member name carries the WIDE_UMEM_WELD_SUFFIX"
+            );
+            let welded = parse_vm_descriptor2(json)
+                .unwrap_or_else(|e| panic!("{key} welded member parses: {e}"));
+            // Extract the welded leg's domain (the single appended umemOp).
+            let domain = welded
+                .constraints
+                .iter()
+                .find_map(|c| match c {
+                    VmConstraint2::UMemOp(spec) => Some(spec.domain),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{key}: welded member declares a umemOp"));
+
+            let bare_json = bare
+                .get(key)
+                .unwrap_or_else(|| panic!("{key}: welded key is a bare wide registry key"));
+            let bare_desc = parse_vm_descriptor2(bare_json)
+                .unwrap_or_else(|e| panic!("{key} bare member parses: {e}"));
+
+            // THE PARITY TOOTH: the Lean-emitted welded member == the Rust additive weld of the bare
+            // member at the same domain. The welded VK is Lean-grounded AND the Rust producer's weld
+            // agrees with it (the ONE-circuit/VK invariant).
+            let rust_welded = weld_umem_into_wide_descriptor(&bare_desc, domain);
+            assert_eq!(
+                welded, rust_welded,
+                "{key}: Lean-emitted welded member must byte-match the Rust weld_umem_into_wide_descriptor"
+            );
+
+            // NO-NARROWING: `piCount` unchanged, `traceWidth = host + 7`.
+            assert_eq!(
+                welded.public_input_count, bare_desc.public_input_count,
+                "{key}: the weld must NOT change public_input_count (the 8-felt anchors stay put)"
+            );
+            assert_eq!(
+                welded.trace_width,
+                bare_desc.trace_width + 7,
+                "{key}: the weld appends exactly the 7 umem columns"
+            );
+        }
+        assert_eq!(
+            n, 45,
+            "the welded registry covers all 45 v3RegistryCapOpenWide emit-source members"
+        );
+
+        // The byte fingerprint pin (the committed-descriptor discipline; Lean is the byte source).
+        // Mirrors how `WIDE_REGISTRY_STAGED_FP` pins the bare wide registry.
+        assert_eq!(
+            sha256_hex(WIDE_UMEM_WELD_REGISTRY_TSV.as_bytes()),
+            WIDE_UMEM_WELD_REGISTRY_FP,
+            "the welded-wide registry TSV drifted from its committed fingerprint — regenerate via \
+             `lake env lean --run EmitWideUMemWeldRegistryProbe.lean` and update WIDE_UMEM_WELD_REGISTRY_FP"
+        );
     }
 
     /// The widened-entry codec teeth: round-trip + FAIL-CLOSED decode. A forged

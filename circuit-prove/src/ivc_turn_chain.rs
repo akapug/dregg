@@ -1714,8 +1714,48 @@ fn admit_welded_leg(t: &FinalizedTurn, index: usize) -> Result<(), TurnChainErro
             ),
         });
     }
+    // GROUND THE VERIFIER LEG against the Lean-emitted welded registry. The WIDE single-domain weld
+    // (`-umem-wide-welded-staged`, NOT the multidomain twin) has a committed, Lean-grounded descriptor
+    // set ([`WIDE_UMEM_WELD_REGISTRY_TSV`], the verified `EffectVmEmitUMemWeldWide.weldedWideRegistry`).
+    // For such a leg we REQUIRE the carried descriptor to be byte-equal to a registry member and verify
+    // the proof against THAT member — so a producer cannot carry an off-registry welded descriptor (the
+    // ungrounded gap the missing verifier leg left). The narrow / wide-multidomain weld forms keep
+    // their carried-descriptor admission (separate staged forms, out of this registry's scope).
+    let is_wide_single = leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+        && !leg
+            .descriptor
+            .name
+            .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX);
+    let verify_desc = if is_wide_single {
+        use dregg_circuit::descriptor_ir2::parse_vm_descriptor2;
+        use dregg_circuit::effect_vm_descriptors::WIDE_UMEM_WELD_REGISTRY_TSV;
+        let grounded = WIDE_UMEM_WELD_REGISTRY_TSV.lines().find_map(|line| {
+            let json = line.splitn(3, '\t').nth(2)?;
+            let desc = parse_vm_descriptor2(json).ok()?;
+            if desc == leg.descriptor {
+                Some(desc)
+            } else {
+                None
+            }
+        });
+        match grounded {
+            Some(d) => d,
+            None => {
+                return Err(TurnChainError::TurnProofInvalid {
+                    index,
+                    reason: format!(
+                        "WIDE welded leg descriptor '{}' is NOT a member of the Lean-emitted \
+                         WIDE_UMEM_WELD_REGISTRY (off-registry welded descriptor refused)",
+                        leg.descriptor.name
+                    ),
+                });
+            }
+        }
+    } else {
+        leg.descriptor.clone()
+    };
     verify_vm_descriptor2_with_config(
-        &leg.descriptor,
+        &verify_desc,
         &leg.proof,
         &leg.public_inputs,
         &ir2_leaf_wrap_config(),

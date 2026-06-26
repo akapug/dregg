@@ -46,12 +46,13 @@ use dregg_circuit::effect_vm::trace_rotated::{
 };
 use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
 use dregg_circuit::effect_vm_descriptors::{
-    WIDE_REGISTRY_STAGED_TSV, weld_umem_into_wide_descriptor,
+    WIDE_REGISTRY_STAGED_TSV, WIDE_UMEM_WELD_REGISTRY_TSV, weld_umem_into_wide_descriptor,
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::VmConstraint;
 use dregg_sdk::full_turn_proof::{
     RotationTurnWitness, prove_effect_vm_rotated_wide, prove_wide_umem_welded_staged,
+    verify_effect_vm_rotated_with_cutover,
 };
 use dregg_turn::rotation_witness as rw;
 use dregg_turn::umem::{
@@ -253,6 +254,69 @@ fn wide_umem_welded_transfer_proves_and_preserves_8felt() {
     // (And the honest PI vector still verifies — sanity that the tooth is the forgery, not the weld.)
     verify_vm_descriptor2(&welded_desc, &welded_proof, &welded_dpis)
         .expect("the honest welded WIDE proof verifies against its true PI vector");
+}
+
+/// **THE VERIFIER LEG — RE-POINTED OFF SELF-VERIFY (the flip's last real precursor).** The welded
+/// proof now verifies through the DEPLOYED WIRE VERIFIER `verify_effect_vm_rotated_with_cutover`
+/// (the light-client rotated-leg path that iterates the registries), NOT against the descriptor it
+/// just built. This is the missing verifier leg: a welded proof verifies under a DEPLOYED (Lean-
+/// emitted, byte-pinned) descriptor — the `WIDE_UMEM_WELD_REGISTRY_TSV` member — as a STAGED accepted
+/// form beside the bare wide registry. The 8-felt anchors stay bound (the tooth below), the deployed
+/// bare default is untouched.
+#[test]
+fn wide_umem_welded_transfer_verifies_through_wire_verifier() {
+    let (before_w, after_w, proj_pre, ops, st, effects) = transfer_fixture(100_000, 50);
+    let caveat = transfer_caveat_manifest();
+
+    let (welded_proof, welded_dpis) = prove_wide_umem_welded_staged(
+        &st, &effects, &before_w, &after_w, &caveat, &proj_pre, &ops, None, None,
+    )
+    .expect("the welded WIDE+umem descriptor proves the genuine transfer turn");
+
+    // The DEPLOYED wire verifier consumes the serialized proof + the published PI vector + the leg's
+    // vk_hash. The vk_hash is the blake3 fingerprint of the accepting registry member's committed JSON
+    // (the SAME fingerprint `verify_effect_vm_rotated_with_cutover` re-derives from the uniquely-
+    // accepting descriptor). For the welded transfer that member is the welded twin of
+    // `transferVmDescriptor2R24` in the Lean-emitted `WIDE_UMEM_WELD_REGISTRY_TSV`.
+    let proof_bytes = postcard::to_allocvec(&welded_proof).expect("serialize welded leg");
+    let welded_json = WIDE_UMEM_WELD_REGISTRY_TSV
+        .lines()
+        .find_map(|l| {
+            let mut it = l.splitn(3, '\t');
+            if it.next() == Some("transferVmDescriptor2R24") {
+                let _name = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .expect("the welded transfer member is in the Lean-emitted welded registry");
+    let vk_hash: [u8; 32] = *blake3::hash(welded_json.as_bytes()).as_bytes();
+
+    // THE RE-POINT: verifies through the REAL wire path (not self-verify).
+    verify_effect_vm_rotated_with_cutover(&proof_bytes, &welded_dpis, &vk_hash).expect(
+        "the welded WIDE transfer proof MUST verify through the deployed wire verifier under the \
+         Lean-emitted welded-wide registry member (the staged verifier leg)",
+    );
+
+    // THE 8-FELT BINDING TOOTH on the WIRE: tampering a published 8-felt commit felt makes the wire
+    // verifier REJECT (the welded member's wide PiBindings ride through the weld and bite on the wire).
+    let mut forged_dpis = welded_dpis.clone();
+    let n = forged_dpis.len();
+    forged_dpis[n - 1] = forged_dpis[n - 1] + BabyBear::new(0x7777);
+    assert!(
+        verify_effect_vm_rotated_with_cutover(&proof_bytes, &forged_dpis, &vk_hash).is_err(),
+        "a forged 8-felt commit felt MUST be rejected by the wire verifier (the ~124-bit anchor binds)"
+    );
+
+    // THE vk_hash TOOTH: a tampered vk_hash (descriptor-identity metadata) is rejected even though the
+    // proof itself is selector-bound.
+    let mut bad_vk = vk_hash;
+    bad_vk[0] ^= 0xff;
+    assert!(
+        verify_effect_vm_rotated_with_cutover(&proof_bytes, &welded_dpis, &bad_vk).is_err(),
+        "a tampered welded-member vk_hash MUST be rejected by the wire verifier"
+    );
 }
 
 #[test]

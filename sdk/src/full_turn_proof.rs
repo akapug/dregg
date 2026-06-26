@@ -2655,6 +2655,46 @@ fn prove_effect_vm_cap_open(
     // is irrelevant; concatenating yields one heap per distinct tree the descriptor opens.
     let all_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> =
         cap_write_heaps.into_iter().chain(accounts_heaps).collect();
+    if std::env::var("DBG_CAPWRITE").is_ok() {
+        use dregg_circuit::descriptor_ir2::{VmConstraint2, eval_lean_expr, fill_chip_lanes};
+        use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+        let z = BabyBear::ZERO;
+        let n = trace.len();
+        let mut rows: Vec<Vec<BabyBear>> = trace.to_vec();
+        for r in &mut rows {
+            fill_chip_lanes(&desc, r);
+        }
+        eprintln!(
+            "DBG key={effective_key} width={} rows={}",
+            trace[0].len(),
+            n
+        );
+        // Walk every JSON constraint; evaluate gate/transition/boundary on row 0 (and 0->1).
+        for (ci, k) in desc.constraints.iter().enumerate() {
+            let bad = match k {
+                VmConstraint2::Base(VmConstraint::Gate(b)) => {
+                    // transition gate fires rows 0..n-2
+                    Some(eval_lean_expr(b, &rows[0]))
+                }
+                VmConstraint2::Base(VmConstraint::Transition { hi, lo }) => {
+                    use dregg_circuit::effect_vm::columns::{STATE_AFTER_BASE, STATE_BEFORE_BASE};
+                    let nn = rows[1.min(n - 1)][STATE_BEFORE_BASE + hi];
+                    let ll = rows[0][STATE_AFTER_BASE + lo];
+                    Some(nn - ll)
+                }
+                VmConstraint2::Base(VmConstraint::Boundary {
+                    row: VmRow::First,
+                    body,
+                }) => Some(eval_lean_expr(body, &rows[0])),
+                _ => None,
+            };
+            if let Some(v) = bad {
+                if v != z {
+                    eprintln!("DBG VIOLATED json#{ci} = {} :: {:?}", v.as_u32(), k);
+                }
+            }
+        }
+    }
     let proof = prove_vm_descriptor2(
         &desc,
         &trace,
@@ -3133,7 +3173,7 @@ fn is_forbidden_plain_cap_descriptor(name: &str) -> bool {
 /// cohort member accepts. Zero ⇒ not a rotated cohort proof (reject); more than one ⇒ ambiguous
 /// (reject rather than launder a wrong-descriptor acceptance).
 #[cfg(feature = "prover")]
-fn verify_effect_vm_rotated_with_cutover(
+pub fn verify_effect_vm_rotated_with_cutover(
     proof_bytes: &[u8],
     public_inputs: &[BabyBear],
     expected_vk_hash: &[u8; 32],
@@ -3157,7 +3197,9 @@ fn verify_effect_vm_rotated_with_cutover(
     // filtered OUT of the V3 fallback, so a narrow 1-felt write-cap leg is REJECTED (the reject tooth).
     // `verify_full_turn_bound` discriminates per-leg by the accepting registry. A forged plain-cap
     // descriptor still hits the AUTHORITY FLOOR below.
-    use dregg_circuit::effect_vm_descriptors::{V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV};
+    use dregg_circuit::effect_vm_descriptors::{
+        V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV, WIDE_UMEM_WELD_REGISTRY_TSV,
+    };
 
     let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(proof_bytes)
         .map_err(|e| format!("rotated effect-vm proof deserialize: {e}"))?;
@@ -3196,6 +3238,14 @@ fn verify_effect_vm_rotated_with_cutover(
     // descriptor ⇒ REJECTED. Only genuine cap-open legs (the wide-twin-pending residual) survive the
     // fallback, and they bind their 1-felt commit (the residual waist for cap-gated turns only).
     let mut bound = collect_bound(WIDE_REGISTRY_STAGED_TSV);
+    // STAGED VERIFIER LEG (VK-RISK-FREE): the Lean-emitted WIDE+UMEM WELDED registry is a NEW accepted
+    // descriptor set BESIDE the bare wide registry. A welded proof (`prove_wide_umem_welded_staged`)
+    // binds the welded member here UNIQUELY — its welded width / extra umemOp constraint cannot verify
+    // against any BARE wide member (and a bare wide proof cannot verify against a welded member), so the
+    // 8-felt ~124-bit anchors stay bound and the uniqueness/ambiguity tooth below still holds. The
+    // deployed DEFAULT prover stays bare — this only ADMITS the staged welded form on the wire; it does
+    // not flip `umem_witness_enabled` nor the default route.
+    bound.extend(collect_bound(WIDE_UMEM_WELD_REGISTRY_TSV));
     if bound.is_empty() {
         bound = collect_bound(V3_STAGED_REGISTRY_TSV)
             .into_iter()
@@ -6354,13 +6404,13 @@ mod tests {
         // routes pending the wide DELEG-REMOVE carrier fix; the narrow route is kept here to surface the
         // tooth-rejection rather than masking the real gap.
         let (proof, dpis) =
-            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, false)
+            prove_effect_vm_cap_open(&initial, &effects, &before_w, &after_w, &cap, &route, None, true)
                 .expect(
                     "the WRITE-bearing revoke cap-open MUST genuinely prove — cap-root on the rotated limb \
                      (213→264) over the real c-list, v1-state frozen, nonce ticks (tick face, no freeze)",
                 );
         let proof_bytes = postcard::to_allocvec(&proof).expect("serialize write cap-open leg");
-        let vk_hash = cap_open_vk_hash_by_key(effective_key).expect("write wrapper vk_hash");
+        let vk_hash = cap_open_wide_vk_hash_by_key(effective_key).expect("write wrapper vk_hash");
         verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).expect(
             "the WRITE-bearing revoke cap-open MUST verify on the light-client path — the genuine \
              post-cap-root is on-the-wire light-client-verifiable",
