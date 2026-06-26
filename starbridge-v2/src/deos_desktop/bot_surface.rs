@@ -182,14 +182,20 @@ pub fn drive_on_world(world: &mut World, bot_cell: CellId, op: &BotOp) -> bool {
 
 // ─── The on-chain command path (the chain is the message bus) ─────────────────────
 //
-// The desktop commands the bot by submitting a real dregg turn to a well-known
-// COMMAND CELL whose committed state carries the op. The bot's `bot_reactor`
-// watches that cell and reacts. This mirrors `discord-bot`'s `deos_drive` command
-// encoding byte-for-byte so the bot decodes the desktop's on-chain command.
+// The desktop commands the bot by submitting a real dregg turn to a COMMAND CELL
+// whose committed state carries the op. Faithfully to dregg's ownership model, the
+// desktop authors the command on a cell IT controls — its own **command outbox** —
+// and the bot's `bot_reactor` WATCHES that cell and reacts. (The canonical
+// well-known mailbox address `0xC0…` — [`command_cell`] — is the configured
+// rendezvous a deployment can point the reactor + a permissive node at; the
+// in-session embedded executor authors on the signer's own cell, which it is
+// authorized to write.) The encoding mirrors `discord-bot`'s `deos_drive`
+// byte-for-byte so the bot decodes the desktop's on-chain command.
 
-/// The deterministic, well-known **bot-command cell** — the on-chain mailbox the
-/// desktop submits command turns to (mirrors `discord-bot`'s
-/// `deos_drive::command_cell`, `0xC0…`).
+/// The canonical, well-known **bot-command rendezvous address** (mirrors
+/// `discord-bot`'s `deos_drive::command_cell`, `0xC0…`) — the configured mailbox a
+/// deployment's reactor watches. The in-session demo authors on the signer's own
+/// command outbox instead (ownership), but the encoding is identical.
 pub fn command_cell() -> CellId {
     CellId::from_bytes([0xC0u8; 32])
 }
@@ -217,34 +223,41 @@ fn fe_u64_be(value: u64) -> dregg_cell::FieldElement {
 /// **Build the on-chain command turn's effects** — the SetField sequence that
 /// writes a serialized [`DriveRequest`] (`{user_id, guild_id?, op}`) into the
 /// command cell's committed state, exactly as the bot's `deos_drive::decode_command`
-/// reconstructs it. The op is delivered as cell STATE (faithfully readable off any
-/// node), not an HTTP body.
-pub fn command_effects(user_id: u64, guild_id: Option<&str>, op: &BotOp, seq: u64) -> Vec<Effect> {
+/// reconstructs it. `command_cell` is the cell to author the command on (the
+/// signer's own outbox in-session, the configured mailbox against a node). The op
+/// is delivered as cell STATE (faithfully readable off any node), not an HTTP body.
+pub fn command_effects(
+    command_cell: CellId,
+    user_id: u64,
+    guild_id: Option<&str>,
+    op: &BotOp,
+    seq: u64,
+) -> Vec<Effect> {
     let req = DriveRequest {
         user_id,
         guild_id: guild_id.map(str::to_string),
         op: op.clone(),
     };
     let payload = serde_json::to_vec(&req).expect("a DriveRequest always serializes");
-    let cell = command_cell();
 
     let mut effects = vec![
-        set_field(cell, CMD_SEQ_SLOT, fe_u64_be(seq)),
-        set_field(cell, CMD_LEN_SLOT, fe_u64_be(payload.len() as u64)),
+        set_field(command_cell, CMD_SEQ_SLOT, fe_u64_be(seq)),
+        set_field(command_cell, CMD_LEN_SLOT, fe_u64_be(payload.len() as u64)),
     ];
     for (i, chunk) in payload.chunks(CMD_CHUNK).enumerate() {
         let mut fe = [0u8; 32];
         fe[..chunk.len()].copy_from_slice(chunk);
-        effects.push(set_field(cell, CMD_PAYLOAD_BASE + i, fe));
+        effects.push(set_field(command_cell, CMD_PAYLOAD_BASE + i, fe));
     }
     effects
 }
 
 /// **Drive a bot op as a real dregg COMMAND turn on the embedded verified World** —
 /// the on-chain command path (no HTTP, no live bot needed for the in-session
-/// half). Submits a turn (signed by `signer_cell`) to the [`command_cell`] whose
-/// committed state carries the op; the bot's reactor watches that cell and reacts.
-/// Returns whether the command turn committed.
+/// half). The desktop authors the command on its OWN cell (`signer_cell`, its
+/// command outbox) — a turn it is authorized to commit — whose committed state
+/// carries the op; the bot's reactor watches that cell and reacts. Returns whether
+/// the command turn committed.
 pub fn drive_command_on_world(
     world: &mut World,
     signer_cell: CellId,
@@ -253,7 +266,7 @@ pub fn drive_command_on_world(
     op: &BotOp,
     seq: u64,
 ) -> bool {
-    let effects = command_effects(user_id, guild_id, op, seq);
+    let effects = command_effects(signer_cell, user_id, guild_id, op, seq);
     let turn = world.turn(signer_cell, effects);
     world.commit_turn(turn).is_committed()
 }
@@ -448,10 +461,11 @@ mod tests {
         // command cell's state, receipted.
         let (mut world, anchors) = crate::world::demo_world();
         let signer = anchors[0];
-        let cmd = command_cell();
+        // The desktop authors the command on its OWN cell (its command outbox) —
+        // the cell it is authorized to write; the bot watches it.
+        let cmd = signer;
 
         let before_height = world.height();
-        assert_eq!(read_field_u64(&world, cmd, CMD_SEQ_SLOT), 0);
 
         let committed = drive_command_on_world(
             &mut world,

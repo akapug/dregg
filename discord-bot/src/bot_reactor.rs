@@ -44,11 +44,10 @@ use dregg_app_framework::{
     AuthRequired, InvokeAuthority, ObservedReceipt, ReactionPlan, Reactor, ReceiptFilter,
     plan_reaction, symbol,
 };
-use dregg_turn::{Action, Effect};
+use dregg_turn::Effect;
 
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
-use crate::db::StarbridgeActivity;
 use crate::deos_drive::{
     self, COMMAND_METHOD, DriveRequest, build_op_action, command_cell, decode_command,
 };
@@ -264,6 +263,7 @@ mod tests {
     use super::*;
     use crate::deos_drive::{BotOp, build_command_action};
     use dregg_app_framework::react_build;
+    use dregg_turn::Action;
 
     const TEST_SECRET: [u8; 32] = [7u8; 32];
     const TEST_FED: [u8; 32] = [0u8; 32];
