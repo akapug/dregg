@@ -3593,9 +3593,10 @@ fn descriptor_authority_class(key: &str) -> Option<DescriptorAuthorityClass> {
         | "spawnVmDescriptor2R24" => Some(NotAuthority),
         // Anything else: force review if it LOOKS authority-shaped, else it is a benign normal effect.
         _ => {
-            let cap_management_prefix = ["introduce", "revoke", "attenuate", "grantCap", "delegate"]
-                .iter()
-                .any(|p| key.starts_with(p));
+            let cap_management_prefix =
+                ["introduce", "revoke", "attenuate", "grantCap", "delegate"]
+                    .iter()
+                    .any(|p| key.starts_with(p));
             if key.contains("CapOpen") || cap_management_prefix {
                 None
             } else {

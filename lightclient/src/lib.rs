@@ -120,6 +120,7 @@ use dregg_circuit_prove::ivc_turn_chain::{
     WholeChainProofBytes, prove_turn_chain_recursive, verify_turn_chain_recursive,
     verify_whole_chain_proof_bytes,
 };
+use ed25519_dalek::{Signature, VerifyingKey};
 
 /// The whole-history attestation a light client obtains from ONE verified aggregate — the Rust mirror
 /// of `Dregg2.Circuit.RecursiveAggregation.AggregateAttests`. It carries ONLY public commitments; the
@@ -266,15 +267,51 @@ pub fn fold_and_attest(
 /// ratify the finalized head, counted against the REAL supermajority threshold
 /// (`dregg_blocklace::ordering::supermajority_threshold = 2n/3 + 1`).
 ///
-/// The Rust mirror of `FinalizedLightClient.FinalityCert` + `CertValid`: `signers` are the distinct
-/// participants of the ratifying quorum (the cert's evidence payload), `participant_count` is the
-/// group size the supermajority is taken over, and `finalized_root` is the root the quorum certifies.
+/// The domain-separated message each validator's Ed25519 vote signs to certify a finalization. It
+/// binds BOTH the finalized root AND the participant count the supermajority is taken over, so a
+/// signature is meaningful only for one `(root, committee-size)` pair: an adversary cannot replay a
+/// genuine vote over root `R` in a committee of `N` as a vote over a different root, nor shrink the
+/// claimed `participant_count` to lower the `2n/3+1` threshold (the count is inside what was signed).
+/// The leading domain tag prevents cross-protocol signature reuse.
+pub fn finality_signing_message(finalized_root: BabyBear, participant_count: usize) -> Vec<u8> {
+    let mut m = Vec::with_capacity(23 + 4 + 8);
+    m.extend_from_slice(b"dregg-finality-cert-v1\0");
+    m.extend_from_slice(&finalized_root.as_u32().to_le_bytes());
+    m.extend_from_slice(&(participant_count as u64).to_le_bytes());
+    m
+}
+
+/// One validator's signed ratification vote in a [`FinalityCert`] — an Ed25519 verifying key plus its
+/// signature over [`finality_signing_message`]. The light client counts a vote toward the quorum ONLY
+/// when the signature verifies under the claimed key over the cert's `(finalized_root, participant_count)`
+/// — the `CertValid` binding leg, not a bare pubkey count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedVote {
+    /// The validator's Ed25519 verifying-key bytes (the participant id).
+    pub validator: [u8; 32],
+    /// The Ed25519 signature over [`finality_signing_message`] for this cert's root + committee size.
+    pub signature: [u8; 64],
+}
+
+/// The Rust mirror of `FinalizedLightClient.FinalityCert` + `CertValid`: `votes` are the ratifying
+/// quorum's SIGNED votes (each an Ed25519 signature OVER the finalized root — the `CertValid` binding,
+/// not just a distinct-pubkey count), `participant_count` is the group size the supermajority is taken
+/// over, and `finalized_root` is the root the quorum certifies.
+///
+/// **What changed (the `CertValid` binding leg).** The node finalizes by SUPER-RATIFICATION — a
+/// supermajority of distinct participants' *signed* wave-end blocks ratify the head. The light client,
+/// which never sees the lace, was previously handed only the participant pubkeys and counted them
+/// (`CertQuorum` alone). That admits a FORGED cert: any list of `2n/3+1` honest pubkeys (with no real
+/// signatures, or signatures over a different root) passed. This type now carries the signatures and
+/// [`distinct_signers`](Self::distinct_signers) counts a participant ONLY when its Ed25519 signature
+/// verifies over THIS cert's `(finalized_root, participant_count)` — discharging the full `CertValid`
+/// predicate (quorum + signature binding to the finalized root), so an unbound/forged cert is rejected.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FinalityCert {
-    /// The DISTINCT participant ids whose signed votes ratify the finalized head (the quorum). A
-    /// participant appearing twice is counted ONCE — the node's super-ratification counts distinct
-    /// creators (`ratifyingCreators.dedup`), so the cert's quorum is over distinct signers too.
-    pub signers: Vec<[u8; 32]>,
+    /// The ratifying quorum's signed votes. A participant appearing twice is counted ONCE — the node's
+    /// super-ratification counts distinct creators (`ratifyingCreators.dedup`) — and a vote whose
+    /// signature does NOT verify over the finalized root is not counted at all.
+    pub votes: Vec<SignedVote>,
     /// The total number of participants in the finalizing group — the `n` the supermajority
     /// threshold `2n/3 + 1` is computed against.
     pub participant_count: usize,
@@ -284,22 +321,57 @@ pub struct FinalityCert {
 }
 
 impl FinalityCert {
-    /// The count of DISTINCT signers in the quorum (a doubly-listed participant counts once — the
-    /// node's super-ratification dedups ratifying creators).
+    /// The message every valid vote in this cert must sign (binds the root + committee size).
+    fn signing_message(&self) -> Vec<u8> {
+        finality_signing_message(self.finalized_root, self.participant_count)
+    }
+
+    /// **The signature-bound quorum count.** The number of DISTINCT validators whose Ed25519 signature
+    /// VERIFIES over this cert's `(finalized_root, participant_count)` (the `CertValid` binding leg). A
+    /// vote with an invalid/forged/unbound signature, or a malformed key, contributes NOTHING; a
+    /// validator listed twice counts once (mirroring the node's `ratifyingCreators.dedup`). This is the
+    /// genuine super-ratification evidence — not a bare pubkey count — so it is the count the quorum
+    /// threshold and the `NoQuorum` rejection are taken against.
     pub fn distinct_signers(&self) -> usize {
-        let mut seen: Vec<&[u8; 32]> = Vec::with_capacity(self.signers.len());
-        for s in &self.signers {
-            if !seen.contains(&s) {
-                seen.push(s);
+        let msg = self.signing_message();
+        let mut verified: Vec<[u8; 32]> = Vec::with_capacity(self.votes.len());
+        for vote in &self.votes {
+            // Already counted this validator — distinct only.
+            if verified.contains(&vote.validator) {
+                continue;
+            }
+            // A malformed verifying key cannot ratify (it is not a real participant signature).
+            let Ok(vk) = VerifyingKey::from_bytes(&vote.validator) else {
+                continue;
+            };
+            let sig = Signature::from_bytes(&vote.signature);
+            // `verify_strict` rejects non-canonical signatures / small-order keys — a forged or
+            // unbound (wrong-root) signature does NOT verify, so it is not counted.
+            if vk.verify_strict(&msg, &sig).is_ok() {
+                verified.push(vote.validator);
+            }
+        }
+        verified.len()
+    }
+
+    /// The number of DISTINCT validator keys the cert LISTS, regardless of signature validity — a raw
+    /// diagnostic (NOT the quorum count). Use [`distinct_signers`](Self::distinct_signers) for any
+    /// soundness decision; this only reports how many keys were presented.
+    pub fn listed_signers(&self) -> usize {
+        let mut seen: Vec<[u8; 32]> = Vec::with_capacity(self.votes.len());
+        for vote in &self.votes {
+            if !seen.contains(&vote.validator) {
+                seen.push(vote.validator);
             }
         }
         seen.len()
     }
 
-    /// **The quorum leg.** True iff a supermajority of DISTINCT participants signed — counted against
-    /// the REAL node threshold `dregg_blocklace::ordering::supermajority_threshold(participant_count)
-    /// = 2*participant_count/3 + 1`. This is the Rust mirror of `FinalizedLightClient.CertQuorum`
-    /// (`isSuperRatified`'s `ratifyingCreators.length ≥ superMajority`).
+    /// **The quorum leg.** True iff a supermajority of DISTINCT participants signed a vote that VERIFIES
+    /// over the finalized root — counted against the REAL node threshold
+    /// `dregg_blocklace::ordering::supermajority_threshold(participant_count) = 2*participant_count/3 + 1`.
+    /// The Rust mirror of `FinalizedLightClient.CertQuorum` AND the `CertValid` signature binding: a
+    /// cert padded with unsigned/forged/wrong-root pubkeys fails because those votes don't verify.
     pub fn has_quorum(&self) -> bool {
         self.distinct_signers()
             >= dregg_blocklace::ordering::supermajority_threshold(self.participant_count)
@@ -386,7 +458,9 @@ pub struct FinalizedAttestation {
 /// Runs exactly: (1) `verify_history` on the aggregate against the client's trust anchor (VK pin +
 /// binding attestation + one recursive STARK verify, cost independent of history length); (2) the
 /// root seam `agg.final_root == finalized_root == cert.finalized_root`; (3) the quorum check
-/// `cert.has_quorum()` (count distinct signers ≥ `2n/3 + 1`). On success returns
+/// `cert.has_quorum()` — a supermajority (`≥ 2n/3 + 1`) of DISTINCT validators whose Ed25519 signature
+/// VERIFIES over the finalized root (the full `CertValid`: quorum + signature binding, not a bare
+/// pubkey count). On success returns
 /// `FinalizedAttestation` — the Rust embodiment of `light_client_accepts_finalized_history`'s
 /// conclusion. Additive attestation: the aggregate verify + the quorum count IS the trust in the whole
 /// finalized history.
@@ -438,6 +512,25 @@ mod tests {
     use dregg_circuit::field::BabyBear;
     use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
     use dregg_turn::rotation_witness::mint_rotated_participant_leg;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    /// A deterministic Ed25519 signing key for validator `i` (test fixtures only).
+    fn validator_key(i: u8) -> SigningKey {
+        let mut seed = [0u8; 32];
+        seed[0] = i;
+        seed[31] = 0xA5; // keep the seed non-trivial across indices
+        SigningKey::from_bytes(&seed)
+    }
+
+    /// A genuine signed vote: validator `i` signs THIS cert's `(root, participant_count)` message.
+    fn signed_vote(i: u8, root: BabyBear, participant_count: usize) -> SignedVote {
+        let sk = validator_key(i);
+        let sig = sk.sign(&finality_signing_message(root, participant_count));
+        SignedVote {
+            validator: sk.verifying_key().to_bytes(),
+            signature: sig.to_bytes(),
+        }
+    }
 
     /// OPEN permissions so the rotated producer-witness path admits the actor cell without auth
     /// gating (mirrors `circuit/tests/rotation_batchstark_leaf_smoke.rs`).
@@ -630,15 +723,11 @@ mod tests {
     /// Build a finality cert with `k_signers` DISTINCT participants over `participant_count` total,
     /// certifying `root`. With `k_signers >= 2*participant_count/3 + 1` this is a genuine quorum.
     fn make_cert(k_signers: usize, participant_count: usize, root: BabyBear) -> FinalityCert {
-        let signers: Vec<[u8; 32]> = (0..k_signers)
-            .map(|i| {
-                let mut id = [0u8; 32];
-                id[0] = i as u8;
-                id
-            })
+        let votes: Vec<SignedVote> = (0..k_signers)
+            .map(|i| signed_vote(i as u8, root, participant_count))
             .collect();
         FinalityCert {
-            signers,
+            votes,
             participant_count,
             finalized_root: root,
         }
@@ -787,10 +876,9 @@ mod tests {
         let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
         let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
 
-        let mut id = [0u8; 32];
-        id[0] = 7;
+        let vote = signed_vote(7, final_root, 4);
         let padded_cert = FinalityCert {
-            signers: vec![id, id, id], // one distinct signer, listed thrice
+            votes: vec![vote.clone(), vote.clone(), vote], // one distinct signer, listed thrice
             participant_count: 4,
             finalized_root: final_root,
         };
@@ -809,6 +897,77 @@ mod tests {
             }
             other => panic!("a repeat-padded sub-quorum cert must be rejected; got {other:?}"),
         }
+    }
+
+    /// **REJECTION TOOTH 5 — a FORGED/UNBOUND finality cert (signatures don't bind the root).** The
+    /// gap this closes: counting bare pubkeys admits a cert listing `2n/3+1` honest *keys* with no real
+    /// signatures (or signatures over a DIFFERENT root) over a forged finalized root. Here a cert
+    /// carries a genuine supermajority of distinct, well-formed validator KEYS, but the signatures are
+    /// (a) absent/zero, or (b) bound to a different root. In both cases the Ed25519 verification fails,
+    /// so `distinct_signers` (the `CertValid` binding leg) counts ZERO and the client REJECTS with
+    /// `NoQuorum`. A forged finality cert is unbound — exactly `FinalizedLightClient.CertValid`.
+    #[test]
+    fn finalized_light_client_rejects_unbound_finality_cert() {
+        let (turns, _g, final_root) = make_chain(1000, 0, 7, 2);
+        let (agg, _att) = fold_and_attest(&turns).expect("the honest chain must fold");
+        let vk = agg.root_vk_fingerprint();
+
+        // (a) UNSIGNED: 3-of-4 distinct, well-formed validator keys but ZERO signatures. Under the old
+        // count-only check this was a "quorum"; now no vote verifies, so it is sub-quorum.
+        let unsigned = FinalityCert {
+            votes: (0..3u8)
+                .map(|i| SignedVote {
+                    validator: validator_key(i).verifying_key().to_bytes(),
+                    signature: [0u8; 64],
+                })
+                .collect(),
+            participant_count: 4,
+            finalized_root: final_root,
+        };
+        assert_eq!(
+            unsigned.listed_signers(),
+            3,
+            "three distinct keys ARE listed"
+        );
+        assert_eq!(
+            unsigned.distinct_signers(),
+            0,
+            "but NONE carry a valid signature — the binding leg counts zero"
+        );
+        assert!(!unsigned.has_quorum(), "an unsigned cert is not a quorum");
+        match verify_finalized_history(&agg, &vk, final_root, &unsigned) {
+            Err(FinalizedError::NoQuorum {
+                distinct_signers, ..
+            }) => assert_eq!(distinct_signers, 0),
+            other => panic!("an unsigned finality cert must be rejected; got {other:?}"),
+        }
+
+        // (b) WRONG-ROOT: a genuine 3-of-4 quorum, but every signature is over a DIFFERENT root. The
+        // signatures are real Ed25519 sigs by real validators — just not over THIS cert's root — so the
+        // sig→root binding fails and the cert is rejected (no replay of a cert for root B onto root A).
+        let other_root = final_root + BabyBear::ONE;
+        let wrong_root = FinalityCert {
+            votes: (0..3u8)
+                .map(|i| signed_vote(i, other_root, 4)) // signed over other_root, presented as final_root
+                .collect(),
+            participant_count: 4,
+            finalized_root: final_root,
+        };
+        assert_eq!(
+            wrong_root.distinct_signers(),
+            0,
+            "signatures bound to a different root do not verify over this cert's root"
+        );
+        match verify_finalized_history(&agg, &vk, final_root, &wrong_root) {
+            Err(FinalizedError::NoQuorum { .. }) => {}
+            other => panic!("a wrong-root-bound finality cert must be rejected; got {other:?}"),
+        }
+
+        // CONTROL: the SAME validators signing THIS cert's root DO finalize it (the tooth bites the
+        // forgery, not the honest cert).
+        let honest = make_cert(3, 4, final_root);
+        assert_eq!(honest.distinct_signers(), 3);
+        assert!(verify_finalized_history(&agg, &vk, final_root, &honest).is_ok());
     }
 
     /// **THE REJECTION TOOTH (Rust witness).** A light client REFUSES a corrupted aggregate
