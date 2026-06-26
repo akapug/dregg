@@ -348,13 +348,26 @@ fn main() {
 
     for (i, worker_id) in worker_ids.iter().enumerate() {
         let nonce = ledger.get(worker_id).unwrap().state.nonce();
+        // The genuine refreshed snapshot: the commitment over the CONTROLLER's live
+        // c-list (what apply_refresh_delegation re-arms from; the executor refuses a
+        // mismatching declaration — the forge antibody).
+        let refresh_snapshot = {
+            let controller = ledger.get(&controller_id).unwrap();
+            let snap: Vec<dregg_cell::CapabilityRef> =
+                controller.capabilities.iter().cloned().collect();
+            let bytes = postcard::to_allocvec(&snap).unwrap_or_default();
+            DelegatedRef::compute_clist_commitment(&bytes)
+        };
         let refresh = Action {
             target: *worker_id,
             method: symbol("refresh_delegation"),
             args: vec![],
             authorization: Authorization::Unchecked,
             preconditions: Default::default(),
-            effects: vec![Effect::RefreshDelegation],
+            effects: vec![Effect::RefreshDelegation {
+                child: *worker_id,
+                snapshot: refresh_snapshot,
+            }],
             may_delegate: DelegationMode::None,
             commitment_mode: CommitmentMode::Full,
             balance_change: None,
@@ -635,13 +648,23 @@ fn main() {
 
     executor.set_timestamp(2100);
     let w0_nonce = ledger.get(&worker_0_id).unwrap().state.nonce();
+    let refresh_again_snapshot = {
+        let controller = ledger.get(&controller_id).unwrap();
+        let snap: Vec<dregg_cell::CapabilityRef> =
+            controller.capabilities.iter().cloned().collect();
+        let bytes = postcard::to_allocvec(&snap).unwrap_or_default();
+        DelegatedRef::compute_clist_commitment(&bytes)
+    };
     let refresh_again = Action {
         target: worker_0_id,
         method: symbol("refresh_after_stale"),
         args: vec![],
         authorization: Authorization::Unchecked,
         preconditions: Default::default(),
-        effects: vec![Effect::RefreshDelegation],
+        effects: vec![Effect::RefreshDelegation {
+            child: worker_0_id,
+            snapshot: refresh_again_snapshot,
+        }],
         may_delegate: DelegationMode::None,
         commitment_mode: CommitmentMode::Full,
         balance_change: None,
