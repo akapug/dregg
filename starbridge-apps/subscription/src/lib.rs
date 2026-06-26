@@ -164,6 +164,31 @@ use dregg_cell::program::SimpleStateConstraint;
 pub use dregg_app_framework::field_from_bytes;
 
 // =============================================================================
+// The four-axis (+ reactor) template
+// =============================================================================
+//
+// This crate is the 4-axis starbridge-app template, plus the FIRST `Reactor`
+// (AX5) exemplar:
+//
+//   - AX1 (factory): [`subscription_factory_descriptor`] + [`subscription_program`]
+//     — the AIR-bound, operation-scoped cell program pinned by the child VK.
+//   - AX2 (deos): [`subscription_deos_app`] / [`register_deos`] / [`seed_feed`] /
+//     [`fire_publish`] / [`fire_consume`] — the composed `DeosApp` surface.
+//   - AX3 (service): [`service`] — the queue as a typed `InterfaceDescriptor` on the
+//     `invoke()` front door.
+//   - AX4 (card): [`card`] — the UI as a renderer-independent `deos.ui.*` view-tree.
+//   - AX5 (reactor): [`reactor`] — the auto-draining consumer as a `Reactor`, the
+//     reactive twin of `invoke()`.
+//
+// AX2/AX3/AX5 all install/assume the SAME shared runtime program
+// ([`feed_invariants_program`], the flat invariants); the full operation-scoped
+// [`subscription_program`] `Cases` is the AIR-bound AX1 program.
+
+pub mod card;
+pub mod reactor;
+pub mod service;
+
+// =============================================================================
 // Slot layout
 // =============================================================================
 
@@ -1294,9 +1319,10 @@ pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
 // StarbridgeAppContext mount
 // =============================================================================
 
-/// The canonical web-constants module — the single source of truth the
-/// `pages/constants.generated.js` is rendered from (slot layout + the four
-/// subscription event topics + the factory-vk hex).
+/// The canonical web-constants module — the single Rust source of truth for the
+/// slot layout + the four subscription event topics + the factory-vk hex. A host
+/// renders it into JS/JSON for its web surface; the legacy `pages/` static surface
+/// it once backed has been retired in favour of the deos card (AX4, [`card`]).
 pub fn web_constants() -> ConstantsModule {
     ConstantsModule::new("subscription")
         .slot("SEQ_HEAD_SLOT", SEQ_HEAD_SLOT as u64)
