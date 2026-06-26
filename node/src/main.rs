@@ -34,13 +34,6 @@ mod mud_client_e2e;
 // THE LIVE SHARED WORLD (`deos-host` feature): two distinct identities co-inhabit ONE
 // hosted world, each seeing the other's turns LIVE via the node's receipt event stream —
 // the first real rung of MULTI-PERSON deos. Headless engine + its co-acting e2e proof.
-#[cfg(feature = "deos-host")]
-mod shared_world;
-#[cfg(all(test, feature = "deos-host"))]
-mod shared_world_e2e;
-// The old `bridge` module is removed. Cross-group communication now happens
-// via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
-// See: `dregg-node run --groups` for multi-group participation.
 #[cfg(test)]
 mod captp_handoff_e2e;
 mod equivocation_court_service;
@@ -55,7 +48,6 @@ mod identity_export;
 mod mailbox_crank_e2e;
 mod mcp;
 pub mod metrics;
-pub mod multi_group;
 #[cfg(test)]
 mod node_integrator_e2e;
 mod pg_mirror;
@@ -63,6 +55,10 @@ mod prove_pool;
 mod relay_service;
 mod routing_table;
 mod self_cell;
+#[cfg(feature = "deos-host")]
+mod shared_world;
+#[cfg(all(test, feature = "deos-host"))]
+mod shared_world_e2e;
 mod starbridge_seed;
 mod state;
 mod storage_service;
@@ -578,6 +574,9 @@ async fn run_node(
         std::process::exit(1);
     }
 
+    // devnet *mode* is LIVE: `Genesis` config-gen, `--enable-faucet`, and the `.devnet`
+    // marker below are first-class local-devnet plumbing (NOT the decommissioned hosted
+    // devnet, which is gone). Do not strip this mode thinking it's dead.
     // Check for `.devnet` marker and warn prominently.
     if data_path.join(".devnet").exists() {
         tracing::warn!("Running in DEVNET mode \u{2014} keys are not production-grade");
