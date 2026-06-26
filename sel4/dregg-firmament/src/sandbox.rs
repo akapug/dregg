@@ -309,10 +309,8 @@ mod linux {
         use std::io::Write;
         // The real uid/gid to map root-in-namespace back to.
         let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        let flags = libc::CLONE_NEWUSER
-            | libc::CLONE_NEWNET
-            | libc::CLONE_NEWNS
-            | libc::CLONE_NEWPID;
+        let flags =
+            libc::CLONE_NEWUSER | libc::CLONE_NEWNET | libc::CLONE_NEWNS | libc::CLONE_NEWPID;
         let rc = unsafe { libc::unshare(flags) };
         if rc != 0 {
             return Err(ConfineError::Linux(format!(
@@ -353,9 +351,7 @@ mod linux {
     /// rest (notably `socket`, `open`, `openat`, `execve`) to EPERM. Built with
     /// the `seccompiler` crate.
     fn apply_seccomp() -> Result<(), ConfineError> {
-        use seccompiler::{
-            apply_filter, BpfProgram, SeccompAction, SeccompFilter, TargetArch,
-        };
+        use seccompiler::{apply_filter, BpfProgram, SeccompAction, SeccompFilter, TargetArch};
         use std::collections::BTreeMap;
 
         #[cfg(target_arch = "x86_64")]

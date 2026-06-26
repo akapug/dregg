@@ -65,7 +65,10 @@ fn auth_of(b: u8) -> AuthRequired {
 impl TurnRunner for AttenuationRunner {
     fn run_turn_bytes(&mut self, turn_bytes: &[u8]) -> Result<Vec<u8>, String> {
         if turn_bytes.len() != 2 {
-            return Err(format!("malformed turn: expected 2 bytes, got {}", turn_bytes.len()));
+            return Err(format!(
+                "malformed turn: expected 2 bytes, got {}",
+                turn_bytes.len()
+            ));
         }
         let held = auth_of(turn_bytes[0]);
         let granted = auth_of(turn_bytes[1]);
@@ -138,7 +141,10 @@ fn a_committed_turn_repaints_the_focused_cell_a_rejected_turn_does_not() {
         "the turn fits turn_in"
     );
     let served = executor.step_staged_turn();
-    assert!(served.is_committed(), "the attenuating turn COMMITS at the heart");
+    assert!(
+        served.is_committed(),
+        "the attenuating turn COMMITS at the heart"
+    );
 
     // THE PROJECTION + THE WIRE: the executor projects the committed turn into a
     // DirtyRegion and writes it into repaint_out, then would CH_REPAINT.notify()
@@ -156,7 +162,10 @@ fn a_committed_turn_repaints_the_focused_cell_a_rejected_turn_does_not() {
     // composite. (On a real PD this is the body of `notified(CH_REPAINT)`.)
     let read = kernel.region_read(repaint_out).expect("repaint_out region");
     let dirty_read = decode_dirty(&read).expect("the dirty signal decodes");
-    assert_eq!(dirty_read, dirty, "the dirty signal round-tripped through repaint_out");
+    assert_eq!(
+        dirty_read, dirty,
+        "the dirty signal round-tripped through repaint_out"
+    );
     // The compositor presents the focused cell's region 10 with the new digest.
     let commit = compositor
         .present(&dirty_read.owner, dirty_read.to_present(vec![10]))
@@ -191,7 +200,10 @@ fn a_committed_turn_repaints_the_focused_cell_a_rejected_turn_does_not() {
     // The verified gate REJECTS it.
     assert!(executor.stage_turn(&[1, 2]).is_some());
     let served = executor.step_staged_turn();
-    assert!(!served.is_committed(), "the widening turn is REJECTED at the heart");
+    assert!(
+        !served.is_committed(),
+        "the widening turn is REJECTED at the heart"
+    );
 
     // THE PROJECTION: a rejected turn projects NOTHING — there is no dirty signal
     // to write, no notify to send. The compositor is never woken; the framebuffer
@@ -294,9 +306,14 @@ fn a_repaint_outside_the_cells_owned_region_is_refused() {
 
     // The wallet's OWN region 10 re-paints fine (the honest repaint).
     let ok = compositor.present(&dirty.owner, dirty.to_present(vec![10]));
-    assert!(ok.is_ok(), "the wallet's repaint of its OWN region 10 is admitted");
+    assert!(
+        ok.is_ok(),
+        "the wallet's repaint of its OWN region 10 is admitted"
+    );
 
-    let _ = ServedTurn::Rejected { reason: String::new() }; // keep the import honest
+    let _ = ServedTurn::Rejected {
+        reason: String::new(),
+    }; // keep the import honest
 
     println!(
         "REPAINT GATE: the wallet's turn could NOT re-paint the browser's region 20 \

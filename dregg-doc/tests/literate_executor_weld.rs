@@ -46,7 +46,7 @@
 #![cfg(feature = "substrate")]
 
 use dregg_doc::{
-    Author, AtomId, ExecutorDrivenDoc, LiterateDoc, content, merge, parsed_conflicts_of,
+    AtomId, Author, ExecutorDrivenDoc, LiterateDoc, content, merge, parsed_conflicts_of,
     parsed_shape, render,
 };
 use dregg_turn::{Finality, TurnError};
@@ -81,7 +81,11 @@ fn literate_text_drives_the_real_executor() {
         Finality::Final,
         "the literate edit drove the real executor → a FINAL receipt"
     );
-    assert_eq!(receipt.agent, region.editor_id(), "the editor is the turn's agent");
+    assert_eq!(
+        receipt.agent,
+        region.editor_id(),
+        "the editor is the turn's agent"
+    );
     assert_ne!(
         region.state_commitment(),
         pre,
@@ -182,9 +186,18 @@ fn concurrent_literate_authors_yield_a_first_class_conflict_over_the_cell() {
 
     // The conflict renders a legible `<<<`-block with BOTH alternatives + authors.
     let src = render(&rendered);
-    assert!(src.contains("<<< prose"), "renders a prose conflict block:\n{src}");
-    assert!(src.contains("|| @1: alpha"), "alternative A with its author:\n{src}");
-    assert!(src.contains("|| @2: beta"), "alternative B with its author:\n{src}");
+    assert!(
+        src.contains("<<< prose"),
+        "renders a prose conflict block:\n{src}"
+    );
+    assert!(
+        src.contains("|| @1: alpha"),
+        "alternative A with its author:\n{src}"
+    );
+    assert!(
+        src.contains("|| @2: beta"),
+        "alternative B with its author:\n{src}"
+    );
 
     // And it ROUND-TRIPS: the rendered block parses back to the same region the
     // fold surfaced — a conflict is a first-class, legible, round-tripping STATE.
@@ -196,7 +209,10 @@ fn concurrent_literate_authors_yield_a_first_class_conflict_over_the_cell() {
     );
 
     // Sanity: the shared prefix is still clean and usable.
-    assert!(src.starts_with("shared\n"), "the shared base line is clean:\n{src}");
+    assert!(
+        src.starts_with("shared\n"),
+        "the shared base line is clean:\n{src}"
+    );
     let _ = AtomId::ROOT; // keep the surface import honest if the helper changes
 }
 

@@ -88,7 +88,10 @@ fn make_chain(k: usize, step: u64) -> Vec<FinalizedTurn> {
     let mut nonce: u32 = 0;
     for _ in 0..k {
         let state = CellState::new(balance, nonce);
-        let effects = vec![Effect::Transfer { amount: step, direction: 1 }];
+        let effects = vec![Effect::Transfer {
+            amount: step,
+            direction: 1,
+        }];
         let before_cell = producer_cell(balance as i64, nonce as u64);
         let after_cell = producer_cell((balance as i64) - (step as i64), nonce as u64);
         let nullifier_root = [0u8; 32];
@@ -127,8 +130,7 @@ fn bb_to_bytes(b: BabyBear) -> [u8; 32] {
 /// `postcard(&binding_proof)` + the four `BabyBear → [u8;32]` publics).
 fn transport_from_proof(whole: &WholeChainProof) -> SerializedWholeChainProof {
     let root_proof = postcard::to_allocvec(&whole.root.0).expect("root BatchStarkProof encodes");
-    let binding_proof =
-        postcard::to_allocvec(&whole.binding_proof).expect("binding Proof encodes");
+    let binding_proof = postcard::to_allocvec(&whole.binding_proof).expect("binding Proof encodes");
     SerializedWholeChainProof::new(
         root_proof,
         binding_proof,
