@@ -1168,7 +1168,12 @@ impl AgentCipherclerk {
             sovereign_cells: HashMap::new(),
             sovereign_witness_sequences: HashMap::new(),
             local_revocations: std::collections::HashSet::new(),
-            umem_weld_staged_enabled: false,
+            // VK EPOCH (umem flip): the DOMAIN-1 welded producer is ARMED by default — a single-cohort
+            // sovereign turn whose descriptor key has a Lean-emitted welded twin mints the WIDE+UMEM
+            // welded form (the universal-memory leg BESIDE the 8-felt commit, accepted ADDITIVELY). A
+            // turn whose key has no welded twin (the 12 live-only members) falls through to the
+            // byte-identical BARE leg (the registry gate in `execute_sovereign_turn_with_proof`).
+            umem_weld_staged_enabled: true,
         }
     }
 
@@ -1234,7 +1239,12 @@ impl AgentCipherclerk {
             sovereign_cells: HashMap::new(),
             sovereign_witness_sequences: HashMap::new(),
             local_revocations: std::collections::HashSet::new(),
-            umem_weld_staged_enabled: false,
+            // VK EPOCH (umem flip): the DOMAIN-1 welded producer is ARMED by default — a single-cohort
+            // sovereign turn whose descriptor key has a Lean-emitted welded twin mints the WIDE+UMEM
+            // welded form (the universal-memory leg BESIDE the 8-felt commit, accepted ADDITIVELY). A
+            // turn whose key has no welded twin (the 12 live-only members) falls through to the
+            // byte-identical BARE leg (the registry gate in `execute_sovereign_turn_with_proof`).
+            umem_weld_staged_enabled: true,
         }
     }
 

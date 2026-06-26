@@ -257,6 +257,9 @@ fn welded_transfer_commits_through_executor() {
 #[test]
 fn bare_transfer_still_commits_through_welded_aware_executor() {
     let (mut cclerk, cell_id, mut ledger) = setup_bare(1000);
+    // The VK epoch ARMED the domain-1 producer by default; this control explicitly DISARMS to keep
+    // exercising the bare leg (the byte-identical fall-back the welded-aware executor still admits).
+    cclerk.set_umem_weld_staged_enabled(false);
 
     let dest_cell =
         Cell::with_balance([42u8; 32], *blake3::hash(b"weld-exec-domain").as_bytes(), 0);
