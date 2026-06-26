@@ -37,7 +37,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
 
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Crypto.UniversalMemory (Domain)
-open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide)
+open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide v3RegistryCapOpenWriteWide)
 
 set_option autoImplicit false
 
@@ -89,26 +89,53 @@ def weldUMemIntoWide (d : EffectVmDescriptor2) (dom : Domain) : EffectVmDescript
             , prevSerial := .var (base + 5)
             , kind := Dregg2.Crypto.MemoryChecking.Kind.write } ] }
 
-/-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of
-`v3RegistryCapOpenWide`: every wide member welded with the domain its effect touches, keyed by the
-SAME live registry key (name-stable, so the by-name executor verifier resolves the welded member as
-`<live key>`). The driver writes these exact bytes to the staged TSV. -/
+/-- The §10 WRITE-bearing cap-open tail key the wide registry RECONCILES OUT (`grantCapWriteCapOpen` is
+NOT a live `V3_STAGED_REGISTRY_TSV` member, so it has no bare wide twin in `WIDE_REGISTRY_STAGED_TSV`).
+The welded write tail mirrors the wide registry's membership, so it drops the same key. -/
+def grantCapWriteKey : String := "grantCapWriteCapOpenVmDescriptor2R24"
+
+/-- **The welded WRITE-bearing cap-open tail (STAGED).** The §10 `v3RegistryCapOpenWriteWide` members
+(the `…WriteCapOpenVmDescriptor2R24` wrappers a domain-2 cap WRITE turn actually routes to on the
+deployed wire, plus the `spawnCapOpen` / `exerciseCapOpen` read legs) welded with the CAPS domain,
+MINUS `grantCapWriteCapOpen` (reconciled out, exactly as `EmitWideRegistryProbe` does — it is not a
+bare `WIDE_REGISTRY_STAGED_TSV` member). These are the welded twins the wire verifier resolves for the
+write-routed cap siblings (delegate/grantCap, introduce, refreshDelegation, revokeCapability,
+revokeDelegation): without them a write-routed welded proof verified under NO cohort descriptor. -/
+def weldedWriteTail : List (String × EffectVmDescriptor2) :=
+  (v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).map
+    (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
+
+/-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of the wire's WIDE
+cap-open registry: every `v3RegistryCapOpenWide` AUTHORITY-crown member welded with the domain its
+effect touches, PLUS the §10 WRITE-bearing cap-open tail welded the same way (`weldedWriteTail`) — the
+write wrappers the deployed wire routes the write-bearing cap siblings to. Keyed by the SAME live
+registry key (name-stable, so the by-name executor verifier resolves the welded member as `<live
+key>`). The driver writes these exact bytes to the staged TSV. -/
 def weldedWideRegistry : List (String × EffectVmDescriptor2) :=
   v3RegistryCapOpenWide.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
+    ++ weldedWriteTail
 
 /-! ## STRUCTURAL pins (the committed-descriptor discipline — the byte-level pin is the Rust
 `WIDE_UMEM_WELD_REGISTRY_FP` sha256 over the whole emitted TSV, matching how `WIDE_REGISTRY_STAGED`
 is pinned; these `#guard`s pin the SHAPE the bytes realize). -/
 
--- Member-for-member cover of the wide registry, name-stable on the keys.
-#guard weldedWideRegistry.length == 45
-#guard weldedWideRegistry.map (·.1) == v3RegistryCapOpenWide.map (·.1)
+-- Cover: the 45 AUTHORITY-crown wide members + the 9 WRITE-tail wrappers (the §10 write tail MINUS
+-- `grantCapWriteCapOpen`), name-stable on the keys with their bare wide twins.
+#guard weldedWideRegistry.length == 54
+#guard weldedWriteTail.length == 9
+#guard (weldedWideRegistry.take 45).map (·.1) == v3RegistryCapOpenWide.map (·.1)
+#guard (weldedWideRegistry.drop 45).map (·.1) ==
+  (v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).map (·.1)
 -- Every welded member carries the staged weld marker + EXACTLY ONE welded umem op.
 #guard weldedWideRegistry.all (fun e => e.2.name.endsWith wideUMemWeldSuffix)
 #guard weldedWideRegistry.all (fun e => (umemOpsOf e.2).length == 1)
 -- THE NO-NARROWING INVARIANT: the weld is additive — `traceWidth = host + 7` and `piCount` is
--- UNCHANGED (the 16 wide-commit PIs / the 8-felt anchors ride through at the same offsets).
-#guard (v3RegistryCapOpenWide.zip weldedWideRegistry).all
+-- UNCHANGED (the 16 wide-commit PIs / the 8-felt anchors ride through at the same offsets). Checked on
+-- BOTH the crown members and the welded write tail.
+#guard (v3RegistryCapOpenWide.zip (weldedWideRegistry.take 45)).all
+  (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
+#guard ((v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).zip
+    (weldedWideRegistry.drop 45)).all
   (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
 -- The welded member declares the two universal-memory tables (umemory id 6, umem_boundary id 7).
 #guard weldedWideRegistry.all (fun e =>
