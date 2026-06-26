@@ -175,11 +175,10 @@ type RecursionCommit = <<DreggRecursionConfig as StarkGenericConfig>::Pcs as Pcs
 >>::Commitment;
 
 use crate::ivc_turn_chain::{
-    FinalizedTurn, HostSeg, RecursionVk, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH,
-    SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH, TurnChainBindingAir, WholeChainProof, combine_seg,
-    expose_claim_instance_index, ir2_leaf_wrap_config, leaf_seg,
+    FinalizedTurn, HostSeg, RecursionVk, SEG_ANCHOR_WIDTH, SEG_DIGEST_WIDTH, TurnChainBindingAir,
+    WholeChainProof, combine_seg, expose_claim_instance_index, ir2_leaf_wrap_config, leaf_seg,
     prove_descriptor_leaf_rotated_with_config, prove_descriptor_leaf_rotated_with_segment,
-    seg_poseidon_commit, verify_turn_chain_recursive,
+    segment_combine_expose, verify_turn_chain_recursive,
 };
 use crate::joint_turn_aggregation::verify_descriptor_participant;
 use crate::plonky3_recursion_impl::recursive::{
@@ -211,34 +210,10 @@ fn combine_segments_expose(
     left_idx: usize,
     right_idx: usize,
 ) {
-    let l = left_apt
-        .get(left_idx)
-        .expect("left (running) segment instance present");
-    let r = right_apt
-        .get(right_idx)
-        .expect("right (new-leaf) segment instance present");
-    debug_assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-
-    // (1) STATE CONTINUITY: the running subtree's final root must be the new leaf's first
-    // root — the temporal tooth, in-circuit, by direct `connect` (off the zero slot).
-    cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-
-    // (2) parent segment: span [L.first_old .. R.last_new], count L+R, ordered multi-felt
-    // digest acc = commit(L.acc ++ R.acc).
-    let first_old = l[SEG_FIRST_OLD];
-    let last_new = r[SEG_LAST_NEW];
-    let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
-    let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
-    acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
-    acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
-    let acc = seg_poseidon_commit(cb, &acc_inputs);
-    let mut parent = Vec::with_capacity(SEG_WIDTH);
-    parent.push(first_old);
-    parent.push(last_new);
-    parent.push(count);
-    parent.extend_from_slice(&acc);
-    debug_assert_eq!(parent.len(), SEG_WIDTH);
-    cb.expose_as_public_output(&parent);
+    // The online running combine is byte-identical to the K-fold `aggregate_tree` combine (the
+    // 8-felt FAITHFUL-FLOOR segment: 8-lane state continuity + count additivity + ordered multi-felt
+    // digest fold). Delegate to the ONE shared primitive so the two paths cannot drift.
+    segment_combine_expose(cb, left_apt, right_apt, left_idx, right_idx);
 }
 
 /// **THE WRAP-STEP TRACE-HEIGHT CEILING (the `min_trace_height` half of the fixed-shape knob).**
@@ -380,9 +355,12 @@ impl ChainSummary {
     /// The running segment as a [`HostSeg`] (the host mirror of the running proof's exposed
     /// segment), so the next fold can `combine_seg(running, new_leaf)` exactly as the circuit does.
     fn as_seg(&self) -> HostSeg {
+        // The online path keeps a single-felt running summary (scoped OUT of the FAITHFUL-FLOOR
+        // anchor lift — codex #4 mixed-root weakness unchanged); broadcast it across the eight
+        // anchor lanes to match the narrow-leg replicate the in-circuit leaf binds.
         HostSeg {
-            first_old: self.genesis_root,
-            last_new: self.head_root,
+            first_old8: [self.genesis_root; SEG_ANCHOR_WIDTH],
+            last_new8: [self.head_root; SEG_ANCHOR_WIDTH],
             count: BabyBear::new(self.num_turns as u32),
             acc: self.chain_digest,
         }
@@ -823,21 +801,25 @@ impl Accumulator {
         //     `acc = commit(running.acc ++ leaf.acc)`. The result EQUALS the digest the running
         //     proof exposes, so `finalize`'s carried `chain_digest` matches the root-exposed
         //     segment tooth (O(1) memory: only the running 4-lane segment is kept).
+        // Narrow legs: broadcast the single rotated commit felt across the eight anchor lanes (the
+        // host mirror of the in-circuit replicate). The running summary keeps the single felt
+        // (lane 0 of the broadcast anchors), which all eight lanes equal.
+        let leaf = || leaf_seg([old_root; SEG_ANCHOR_WIDTH], [new_root; SEG_ANCHOR_WIDTH]);
         let new_summary = match self.summary {
             None => {
-                let seg = leaf_seg(old_root, new_root);
+                let seg = leaf();
                 ChainSummary {
-                    genesis_root: seg.first_old,
-                    head_root: seg.last_new,
+                    genesis_root: seg.first_old8[0],
+                    head_root: seg.last_new8[0],
                     chain_digest: seg.acc,
                     num_turns: 1,
                 }
             }
             Some(s) => {
-                let seg = combine_seg(s.as_seg(), leaf_seg(old_root, new_root));
+                let seg = combine_seg(s.as_seg(), leaf());
                 ChainSummary {
-                    genesis_root: seg.first_old,
-                    head_root: seg.last_new,
+                    genesis_root: seg.first_old8[0],
+                    head_root: seg.last_new8[0],
                     chain_digest: seg.acc,
                     num_turns: s.num_turns + 1,
                 }
@@ -915,8 +897,10 @@ impl Accumulator {
         Ok(WholeChainProof {
             root: running,
             binding_proof: binding_inner,
-            genesis_root: summary.genesis_root,
-            final_root: summary.head_root,
+            // Broadcast the single-felt running endpoints across the eight anchor lanes (the host
+            // mirror of the narrow-leg replicate the running proof's segment exposes).
+            genesis_root: [summary.genesis_root; SEG_ANCHOR_WIDTH],
+            final_root: [summary.head_root; SEG_ANCHOR_WIDTH],
             chain_digest: summary.chain_digest,
             num_turns: summary.num_turns,
         })

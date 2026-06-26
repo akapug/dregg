@@ -230,8 +230,8 @@ fn incremental_accumulate_verifies_whole_history() {
         .finalize_and_self_verify()
         .expect("the accumulated artifact must finalize + verify under its honest anchor");
     assert_eq!(whole.num_turns, 3);
-    assert_eq!(whole.genesis_root, genesis);
-    assert_eq!(whole.final_root, final_root);
+    assert_eq!(whole.genesis_root, [genesis; 8]);
+    assert_eq!(whole.final_root, [final_root; 8]);
 
     // A light client re-runs the SAME check against the configured anchor — cost independent of n.
     verify_turn_chain_recursive(&whole, &vk)
@@ -304,7 +304,7 @@ fn online_mixed_root_forgery_rejected() {
     assert_eq!(b_genesis, gb);
     assert_eq!(b_final, fb);
     assert_ne!(
-        b_genesis, whole_a.genesis_root,
+        b_genesis, whole_a.genesis_root[0],
         "B's history must differ from A's"
     );
     let b_chain_digest = [BabyBear::ZERO; SEG_DIGEST_WIDTH];
@@ -312,8 +312,8 @@ fn online_mixed_root_forgery_rejected() {
     let verdict = verify_turn_chain_recursive_from_parts(
         &whole_a.root.0,
         &whole_a.binding_proof,
-        b_genesis,
-        b_final,
+        [b_genesis; 8],
+        [b_final; 8],
         b_chain_digest,
         2,
         &vk,

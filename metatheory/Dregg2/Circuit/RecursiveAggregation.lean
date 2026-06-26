@@ -87,11 +87,17 @@ structure Aggregate where
   leafProofs  : List Proof
   /-- The `TurnChainBindingAir` chain-binding leaf proof (the temporal tooth). -/
   bindingProof : Proof
-  /-- Public: the genesis root the chain starts from (`WholeChainProof.genesis_root`). -/
+  /-- Public: the genesis root the chain starts from (`WholeChainProof.genesis_root`). This abstract
+  field element denotes the FAITHFUL-FLOOR commitment the Rust waist exposes — the 8-felt (~124-bit)
+  state anchor (`SEG_ANCHOR_WIDTH` lanes), NOT a single ~15-bit felt; the genuine 8-felt binding is
+  proven in `Dregg2.Circuit.Emit.EffectVmEmitRotationWide` (`wireCommitR8_binds`). -/
   genesisRoot : ℤ
-  /-- Public: the final root the chain reaches (`WholeChainProof.final_root`). -/
+  /-- Public: the final root the chain reaches (`WholeChainProof.final_root`) — the 8-felt faithful
+  state anchor, as for `genesisRoot`. -/
   finalRoot   : ℤ
-  /-- Public: the running digest of the ordered (old,new) pairs (`WholeChainProof.chain_digest`). -/
+  /-- Public: the running digest of the ordered (old,new) pairs (`WholeChainProof.chain_digest`) —
+  the `SEG_DIGEST_WIDTH` = 8-lane (~124-bit) Poseidon2 ordered-history commitment (FAITHFUL-FLOOR
+  lift; 4 lanes ~62-bit before). -/
   chainDigest : ℤ
   /-- Public: the number of finalized turns folded (`WholeChainProof.num_turns`). -/
   numTurns    : Nat

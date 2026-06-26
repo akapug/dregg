@@ -330,4 +330,12 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.dregg-lightclient]
 opt-level = 3
+# `dregg-circuit-prove` holds the recursion proving + AGGREGATION hot path —
+# `aggregate_tree`/`merge_two_segment_proofs`, the in-circuit `seg_poseidon_commit`
+# sponge + `segment_combine_expose`, the descriptor-leaf AIR construction. At
+# opt-level 0 a single whole-chain fold pins a core for tens of minutes (the debug
+# `-p dregg-lightclient` / `ivc_turn_chain` recursion tests never finish); at
+# opt-level 3 it is the usual minutes. ALWAYS optimize it.
+[profile.dev.package.dregg-circuit-prove]
+opt-level = 3
 

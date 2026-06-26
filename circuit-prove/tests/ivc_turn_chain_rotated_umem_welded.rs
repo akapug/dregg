@@ -126,8 +126,8 @@ fn welded_umem_chain_folds_host() {
     let summary = fold_welded_umem_turn_chain_staged(&turns)
         .expect("a continuous 3-turn welded rotated+umem history must fold (host)");
     assert_eq!(summary.num_turns, 3);
-    assert_eq!(summary.genesis_root, genesis);
-    assert_eq!(summary.final_root, final_root);
+    assert_eq!(summary.genesis_root, [genesis; 8]);
+    assert_eq!(summary.final_root, [final_root; 8]);
     assert!(
         summary.chain_digest.iter().any(|&x| x != BabyBear::ZERO),
         "the ordered-history digest is a real Poseidon2 commitment"
@@ -213,8 +213,8 @@ fn welded_umem_chain_folds_recursive() {
     let whole = prove_welded_umem_turn_chain_recursive_staged(&turns)
         .expect("a continuous 3-turn welded history must fold recursively");
     assert_eq!(whole.num_turns, 3);
-    assert_eq!(whole.genesis_root, genesis);
-    assert_eq!(whole.final_root, final_root);
+    assert_eq!(whole.genesis_root, [genesis; 8]);
+    assert_eq!(whole.final_root, [final_root; 8]);
     let vk = whole.root_vk_fingerprint();
     verify_turn_chain_recursive(&whole, &vk)
         .expect("the welded whole-chain root proof must verify under its honest anchor");
