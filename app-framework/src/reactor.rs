@@ -282,7 +282,7 @@ pub fn plan_reaction<R: Reactor + ?Sized>(
         target: plan.target,
         method: symbol(&plan.method),
         args: plan.args,
-        authorization: dregg_turn::action::Authorization::Unchecked,
+        authorization: dregg_turn::action::Authorization::unsigned_placeholder(),
         preconditions: Default::default(),
         effects: plan.effects,
         may_delegate: dregg_turn::action::DelegationMode::None,
