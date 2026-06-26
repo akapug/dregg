@@ -844,6 +844,238 @@ fn gc_unreachable_members(archive: &Path, out_dir: &Path) {
     );
 }
 
+/// **The PRINCIPLED elaborator / proof-time TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2).**
+///
+/// `gc_unreachable_members` keeps every member reachable by ANY undefined-symbol edge — and the
+/// per-module `initialize_*` chain is such an edge. So the executor's import closure drags in the
+/// initializer of every TRANSITIVELY-imported module: `Dregg2.Exec.Kernel`'s init alone chains into
+/// `initialize_Dregg2_Dregg2_Tactics` (→ `initialize_Lean`, the whole elaborator) AND the mathlib
+/// `Tactic.Ring` / `Algebra.BigOperators` inits, which in turn chain across ~2600 mathlib members.
+/// None of that proof-time code is CALLED by the executor's compute path (`Exec.recKExec` /
+/// `execFullForestG`) — it enters ONLY through the init chain. The measured shape: the executor's
+/// true runtime-FUNCTION closure is ~960 members / ~67 MB; the init-chain inflates the kept archive
+/// to ~3000 members / ~138 MB (the elaborator + the proof-time mathlib/aesop).
+///
+/// This pass severs the init-chain edge at the SHAPE of the closure. It computes the
+/// runtime-function/data reachable set from the `dregg_*` exports (following EVERY edge EXCEPT the
+/// `initialize_*` ones, which are the boundary), keeps exactly those members in a separate trimmed
+/// archive, and supplies a boundary NO-OP for each runtime-DEAD module initializer the kept members'
+/// own init-chains still reference (the same mechanism the seL4 lane proved with `init-stubs.c` —
+/// generalized from the single `Dregg2.Tactics` leaf to the whole runtime-dead frontier). The result
+/// is a dead-stripped static embed of the VERIFIED executor at a fraction of the size, with the
+/// elaborator/Mathlib never init-pulled.
+///
+/// Soundness: a module is dropped ONLY when no live member references any of its function/data
+/// symbols — i.e. the executor never calls into it. Its initializer (which only built proof-time
+/// constants) is replaced by an idempotent no-op so the live init-chain still links. The verified
+/// `def`s and their proofs are untouched (proofs build in the full metatheory; this trims the RUNTIME
+/// embed only). The kernel probe (`embeddable_runtime_probe`) drives a real transfer through the
+/// trimmed archive as the empirical safety check. OPT-IN (`DREGG_LEAN_FFI_RUNTIME_TRIM=1`) and written
+/// to a SEPARATE archive so the default verified link (node / dregg-turn) is byte-for-byte unchanged.
+///
+/// Returns `Some(stub_c_path)` when the trim ran — the caller compiles that stub into the whole-archive
+/// shim and links `dregg_lean_trim` instead of `dregg_lean`. Returns `None` (fall back to the full
+/// archive) on any parse failure / implausibly-small live set / no-members-dead.
+fn runtime_dead_init_trim(
+    full_archive: &Path,
+    trim_archive: &Path,
+    out_dir: &Path,
+) -> Option<PathBuf> {
+    use std::collections::{HashMap, HashSet};
+    let out = Command::new(nm_tool())
+        .arg("-A")
+        .arg(full_archive)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // member -> undefined NON-init syms / undefined init syms;  sym -> members defining it.
+    let mut undef_func: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut undef_init: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut sym_def_in: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut members: HashSet<String> = HashSet::new();
+    let mut roots: HashSet<String> = HashSet::new();
+    for line in text.lines() {
+        let Some((prefix, rest)) = line.split_once(": ") else {
+            continue;
+        };
+        let prefix = prefix.trim_end_matches(']');
+        let member = prefix.rsplit(['/', ':', '[']).next().unwrap_or(prefix);
+        if !member.ends_with(".o") {
+            continue;
+        }
+        let toks: Vec<&str> = rest.split_whitespace().collect();
+        let (ty, sym) = match toks.as_slice() {
+            [ty, sym] if ty.len() == 1 => (*ty, *sym),
+            [_addr, ty, sym] if ty.len() == 1 => (*ty, *sym),
+            _ => continue,
+        };
+        members.insert(member.to_string());
+        let bare = sym.trim_start_matches('_');
+        let is_init = bare.starts_with("initialize_");
+        if ty == "U" || ty == "u" {
+            if is_init {
+                undef_init
+                    .entry(member.to_string())
+                    .or_default()
+                    .insert(sym.to_string());
+            } else {
+                undef_func
+                    .entry(member.to_string())
+                    .or_default()
+                    .insert(sym.to_string());
+            }
+        } else {
+            sym_def_in
+                .entry(sym.to_string())
+                .or_default()
+                .insert(member.to_string());
+            if bare.starts_with("dregg_") {
+                roots.insert(member.to_string());
+            }
+        }
+    }
+    if members.is_empty() || roots.is_empty() {
+        return None;
+    }
+
+    // RUNTIME-FUNCTION reachability: chase ONLY non-init edges. A module reached purely through an
+    // `initialize_*` chain (never by a call/data reference) is runtime-dead and excluded.
+    let mut live: HashSet<String> = HashSet::new();
+    let mut queue: Vec<String> = roots.iter().cloned().collect();
+    while let Some(member) = queue.pop() {
+        if !live.insert(member.clone()) {
+            continue;
+        }
+        if let Some(us) = undef_func.get(&member) {
+            for u in us {
+                if let Some(defs) = sym_def_in.get(u) {
+                    for dm in defs {
+                        if !live.contains(dm) {
+                            queue.push(dm.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Plausibility floor (mirrors gc_unreachable_members): a misfired parse must not silently
+    // produce a tiny broken archive. And if nothing is dead the trim is a no-op — fall back.
+    if live.len() < 200 || live.len() >= members.len() {
+        return None;
+    }
+
+    // The dangling init edges AFTER the trim: an `initialize_*` referenced by a KEPT member but
+    // defined only by a DROPPED member needs a boundary no-op so the kept init-chain links.
+    // Toolchain inits (Init/Std/Lean/Lake) come from the sysroot static libs the final link pulls,
+    // so never no-op those — if a live member genuinely references `initialize_Lean`, let the real
+    // (sysroot) init run rather than silently skip it.
+    let is_toolchain = |bare: &str| -> bool {
+        match bare.strip_prefix("initialize_") {
+            Some(rest) => ["Init", "Std", "Lean", "Lake"]
+                .iter()
+                .any(|lib| rest == *lib || rest.starts_with(&format!("{lib}_"))),
+            None => false,
+        }
+    };
+    let mut dangling: HashSet<String> = HashSet::new();
+    for m in &live {
+        if let Some(us) = undef_init.get(m) {
+            for u in us {
+                let bare = u.trim_start_matches('_').to_string();
+                if is_toolchain(&bare) {
+                    continue;
+                }
+                let defined_by_kept = sym_def_in
+                    .get(u)
+                    .map(|d| d.iter().any(|dm| live.contains(dm)))
+                    .unwrap_or(false);
+                if defined_by_kept {
+                    continue;
+                }
+                dangling.insert(bare);
+            }
+        }
+    }
+
+    // Repack the trimmed archive: extract the full archive into scratch, keep only live members.
+    let work = out_dir.join("dregg2_runtime_trim_work");
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).ok()?;
+    if !matches!(Command::new(ar_tool()).arg("x").arg(full_archive).current_dir(&work).status(), Ok(s) if s.success())
+    {
+        return None;
+    }
+    let mut kept: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&work) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".o") {
+                continue;
+            }
+            if live.contains(&name) {
+                kept.push(name);
+            } else {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    kept.sort();
+    let _ = std::fs::remove_file(trim_archive);
+    if !matches!(
+        Command::new(ar_tool()).arg("rcs").arg(trim_archive).args(&kept).current_dir(&work).status(),
+        Ok(s) if s.success()
+    ) {
+        return None;
+    }
+    let _ = run_ranlib(trim_archive);
+    let _ = std::fs::remove_dir_all(&work);
+
+    // Generate the boundary no-op stub for the runtime-dead module inits the kept chain references.
+    let stub = out_dir.join("runtime_trim_init_stubs.c");
+    let mut sorted: Vec<&String> = dangling.iter().collect();
+    sorted.sort();
+    let mut body = String::new();
+    body.push_str(
+        "/* GENERATED by dregg-lean-ffi/build.rs::runtime_dead_init_trim — the\n\
+         * EMBEDDABLE-LEAN-RUNTIME §4.2 principled elaborator/proof-time trim.\n\
+         *\n\
+         * Boundary no-op initializers for the RUNTIME-DEAD modules (the proof-time tactics, the\n\
+         * Lean elaborator, and the mathlib/aesop the verified executor never CALLS) that were\n\
+         * dropped from the trimmed archive. The kept (runtime-live) members' own init-chains still\n\
+         * reference these symbols; resolving them HERE severs the elaborator/Mathlib init-pull at\n\
+         * the closure boundary. Linked +whole-archive, so these win over any archive definition.\n\
+         *\n\
+         * Init ABI (Lean v4.30.0): lean_object* initialize_X(uint8_t builtin); idempotent. */\n\
+         #include <lean/lean.h>\n\
+         #define NOOP_INIT(name)                                            \\\n\
+           static uint8_t name##_done = 0;                                  \\\n\
+           lean_object *name(uint8_t builtin) {                             \\\n\
+             (void)builtin;                                                 \\\n\
+             if (name##_done) return lean_io_result_mk_ok(lean_box(0));     \\\n\
+             name##_done = 1;                                               \\\n\
+             return lean_io_result_mk_ok(lean_box(0));                      \\\n\
+           }\n",
+    );
+    for d in &sorted {
+        body.push_str(&format!("NOOP_INIT({d})\n"));
+    }
+    std::fs::write(&stub, body).ok()?;
+
+    println!(
+        "cargo:warning=dregg-lean-ffi: RUNTIME TRIM (EMBEDDABLE §4.2) — kept {} runtime-live of {} \
+         members (dropped {} runtime-dead: elaborator + proof-time mathlib/aesop), {} boundary init \
+         no-ops. Linking libdregg_lean_trim.a.",
+        kept.len(),
+        members.len(),
+        members.len() - kept.len(),
+        sorted.len(),
+    );
+    Some(stub)
+}
+
 /// Add (replace) the given objects into the archive, preserving everything else. Like `splice_objects`
 /// but for an arbitrary object set (the dependency-closure additions), and incremental — it does NOT
 /// re-extract the whole archive; it uses `ar r` to insert/replace members by name, then `ranlib`.
@@ -1131,10 +1363,19 @@ fn main() {
     // what we link against. Per-(crate,feature-set,profile) ⇒ concurrent multi-feature
     // lanes never tear a shared file. See the SWARM-SAFE ARCHIVE note at the top of file.
     let build_archive = out_dir.join("libdregg_lean.a");
+    // The SEPARATE trimmed archive (the EMBEDDABLE §4.2 elaborator/proof-time trim). Written ONLY
+    // when `DREGG_LEAN_FFI_RUNTIME_TRIM=1`; the default link never touches it, so the verified node /
+    // dregg-turn closure is byte-for-byte unchanged.
+    let trim_archive = out_dir.join("libdregg_lean_trim.a");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/lean_init.c");
     println!("cargo:rerun-if-changed=src/lean_init_st.cpp");
+    // OPT-IN runtime trim. rerun-if-env-changed so toggling it re-runs build.rs (and re-derives the
+    // trimmed archive / restores the full link).
+    println!("cargo:rerun-if-env-changed=DREGG_LEAN_FFI_RUNTIME_TRIM");
+    let runtime_trim_requested =
+        std::env::var("DREGG_LEAN_FFI_RUNTIME_TRIM").as_deref() == Ok("1");
 
     // Resolve the toolchain + metatheory location up front so we can both (a) refresh the archive
     // from the Lean source when it changed and (b) drive the link below. `lean_sysroot()` honours
@@ -1219,6 +1460,18 @@ fn main() {
     let lean_include = sysroot.join("include");
 
     println!("cargo:rustc-cfg=lean_lib_present");
+
+    // ── THE PRINCIPLED ELABORATOR / PROOF-TIME TRIM (docs/EMBEDDABLE-LEAN-RUNTIME.md §4.2) ──
+    // OPT-IN (`DREGG_LEAN_FFI_RUNTIME_TRIM=1`): derive a SEPARATE trimmed archive holding only the
+    // executor's runtime-FUNCTION closure (the elaborator + proof-time mathlib/aesop, reachable only
+    // via the per-module init-chain, are dropped), plus a boundary no-op stub for the dead inits the
+    // kept chain references. Returns the stub path on success; falls back to the full archive on any
+    // snag. The DEFAULT (env unset) path skips this entirely — the verified link is unchanged.
+    let runtime_trim_stub = if runtime_trim_requested {
+        runtime_dead_init_trim(&build_archive, &trim_archive, &out_dir)
+    } else {
+        None
+    };
 
     // The handler-cutover export is a SECONDARY path; older archives predate it. Only wire its
     // string bridge when the archive actually exports it (otherwise the dangling ref breaks the
@@ -1344,6 +1597,13 @@ fn main() {
     // its `dregg_ffi_init_st` symbol propagates with the C bridges; purely additive (the
     // default `dregg_ffi_init` path is unchanged). `.cpp` ⇒ cc drives the C++ compiler.
     shim.file("src/lean_init_st.cpp");
+    // The runtime-trim boundary no-op initializers (only present under DREGG_LEAN_FFI_RUNTIME_TRIM=1):
+    // resolves the runtime-dead module inits the trimmed archive's kept chain still references, so the
+    // elaborator/Mathlib init-pull is severed at the closure boundary. Compiled into the SAME
+    // whole-archive shim so the no-ops win over any archive definition.
+    if let Some(stub) = &runtime_trim_stub {
+        shim.file(stub);
+    }
     // SHARED link mode (the cdylib path, `DREGG_LEAN_LINK=shared`): `libleanshared`
     // exports the C-ABI `lean_initialize_runtime_module` but HIDES the individual
     // `lean::initialize_*` C++ symbols `dregg_ffi_init_st` calls. Supplying them from
@@ -1411,7 +1671,15 @@ fn main() {
     // (b) link a non-GC'd (full-closure) archive. One search root for our static libs: OUT_DIR.
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static:+whole-archive=dregg_ffi_shim");
-    println!("cargo:rustc-link-lib=static=dregg_lean");
+    // Under the runtime trim, link the SEPARATE trimmed archive (`libdregg_lean_trim.a`); otherwise
+    // the full verified closure (`libdregg_lean.a`). The trimmed archive holds the same verified
+    // executor objects (the `dregg_*` exports + their runtime-function closure), only without the
+    // proof-time elaborator/Mathlib members.
+    if runtime_trim_stub.is_some() {
+        println!("cargo:rustc-link-lib=static=dregg_lean_trim");
+    } else {
+        println!("cargo:rustc-link-lib=static=dregg_lean");
+    }
     println!("cargo:rustc-link-search=native={}", lean_lib.display());
     println!(
         "cargo:rustc-link-search=native={}",

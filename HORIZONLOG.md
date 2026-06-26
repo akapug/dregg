@@ -9,6 +9,18 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- EMBEDDABLE-LEAN §4.2 ELABORATOR-TRIM (build-side BUILT, source-side NAMED): the host static embed now has the
+  principled init-chain trim — `dregg-lean-ffi/build.rs::runtime_dead_init_trim` (OPT-IN `DREGG_LEAN_FFI_RUNTIME_TRIM=1`,
+  separate `libdregg_lean_trim.a`, default link byte-unchanged). Keeps only the `dregg_*` runtime-FUNCTION closure +
+  generated boundary no-ops for the dead module inits → closure archive **179MB→75MB** (dropped 2900 runtime-dead proof-time
+  mathlib/aesop/tactic members), kernel probe + direct/JSON differential GREEN. CORRECTED PREMISE: trimming `Tactics.o`
+  alone saves ~0.1MB (executor imports mathlib directly). NAMED TAIL (the 372→30MB / ~25-50MB win): the **190MB libLean.a
+  elaborator** stays init-pulled in BOTH binaries — anchored by 16 specialized `_lp_aesop_*` rule-declaration symbols baked
+  into Dregg2 executor-module INITS (via `import Dregg2.Tactics`→aesop), which reference 416 `l_Lean_Elab/Meta` functions
+  directly. Cannot be soundly stubbed → needs the SOURCE module-graph split (executor "code" modules with no tactic/aesop
+  import; proofs + `declare_aesop_rule_sets` to sibling "proof" modules). Blocked on `lake build` green (intermittently RED
+  under concurrent metatheory work). Same anchor explains the seL4 `dregg-executor.elf` still 372MB despite its 13MB closure.
+  Doc: `.docs-history-noclaude/EMBEDDABLE-LEAN-RUNTIME.md` §4.2.
 - ANDROID cap-graph COMPLETED: the whole ambient-AOSP surface reforged as cap-bounded gates — intent
   (`intentgate.rs` `76165ec4`, transport leg `63dfdca3`), content-providers (`contentgate.rs` `7451f6a6`),
   system-services→organs (`organgate.rs` `af7d1c00`), install=cap-gated-birth (`appfactory.rs` `63dfdca3`).
@@ -56,11 +68,17 @@ reason.)*
   accessors; `fold_wide_welded_umem_turn_chain_staged` (circuit-prove) binds the **8-felt** continuity (the wide form
   RETIRES the single-felt PIs 34/35 to zero — the 8-felt wide commit is the sole binding), with a `WideChainBreak` tooth
   on reorder + `MissingWideAnchor` fail-close + host admission refusing a forged 8-felt post-commit. Test
-  `circuit-prove/tests/ivc_turn_chain_wide_umem_welded.rs` 3/3. NAMED TAILS: (1) the in-circuit RECURSIVE wide fold (an
-  8-felt generalization of the single-felt chain-binding AIR) is a clean follow-on beyond this host precursor; (2) the
-  IVC wide-welded leg currently scopes the Transfer lead (transfer-shape wide producer) — the other wide families extend
-  identically. NAMED TAIL = THE VK EPOCH ITSELF (now over the WIDE welded form, no narrowing): commit the wide-welded VK
-  + flip the deployed default (deliberately gated).
+  `circuit-prove/tests/ivc_turn_chain_wide_umem_welded.rs`. TAIL (1) CLOSED: the in-circuit RECURSIVE wide fold (the
+  8-felt generalization of the single-felt chain-binding recursion) — `prove_wide_welded_umem_turn_chain_recursive_staged`
+  + `verify_wide_turn_chain_recursive` + `WideWholeChainProof` (circuit-prove `ivc_turn_chain.rs`): per-turn wide segment
+  leaf (`prove_descriptor_leaf_rotated_with_wide_segment` reads the leg's last-16 PIs as the two 8-felt anchors, exposes
+  `[first_old8(8), last_new8(8), count, acc(4)]` bound to the descriptor's real anchors), `aggregate_tree_wide` binds the
+  8-felt continuity (`prev.wide_new_root8 == next.wide_old_root8`) lane-by-lane IN-CIRCUIT (`connect`) + count + ordered
+  Poseidon2 digest, root's exposed wide segment = the whole-chain claim (segment tooth). `#[ignore]` recursive test folds
+  3 turns + verifies under its honest VK anchor; the `WideChainBreak` tooth bites on reorder (fast test green). NAMED TAIL
+  (2): the IVC wide-welded leg currently scopes the Transfer lead — the other wide families extend identically. NAMED TAIL
+  = THE VK EPOCH ITSELF (now over the WIDE welded form, no narrowing): commit the wide-welded VK + flip the deployed
+  default (deliberately gated).
 - UMEM COHORT → MULTI-DOMAIN (STAGED / VK-RISK-FREE): the umem cohort now covers the FULL effect set. The
   single-domain cohort (`c67796d8`, width-7) failed closed on effects whose touch spans >1 domain in one effect;
   this completes it. `metatheory/Dregg2/Circuit/Emit/EffectVmEmitUMemCohortMulti.lean` (`#assert_axioms`-clean):
