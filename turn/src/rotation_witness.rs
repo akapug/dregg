@@ -717,6 +717,87 @@ pub fn mint_welded_wide_umem_cap_write_rotated_participant_leg(
     )
 }
 
+/// **THE WIDE+umem MULTI-DOMAIN WELDED LEG (STAGED, VK-RISK-FREE) — the last family tail.** The
+/// two-domain twin of [`mint_welded_wide_umem_rotated_participant_leg`] for the NOTE/BRIDGE economic
+/// verbs (`NoteSpend` / `BridgeMint`) whose state touch spans TWO domains in one effect — a
+/// `nullifiers` freshness insert + a `heap` balance credit. It bridges the leg's MULTI-DOMAIN
+/// universal-memory touch (`pre` + the Blum op trace `ops`, the same shape the standalone multi-domain
+/// cohort prover consumes) into the width-`6 + #domains` cohort rows + the REAL boundary via
+/// [`crate::umem::umem_cohort_multidomain_proving_inputs_from`] (fails closed on a single-domain leg),
+/// then hands it to
+/// [`RotatedParticipantLeg::mint_welded_wide_multidomain_from_block_witnesses`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg::mint_welded_wide_multidomain_from_block_witnesses),
+/// which welds one guarded `umemOp` per domain onto the WIDE descriptor — purely additive, so the
+/// 8-felt (~124-bit) anchors ride through INTACT (no narrowing). The cross-DOMAIN economic invariant
+/// (credit == spent/minted value) rides the effect's rotated AIR, NOT the memory reconciliation — the
+/// same division as the narrow multi-domain cohort.
+///
+/// `before_nullifiers` is the note-spend grow-gate's BEFORE nullifier accumulator (a `NoteSpend` lead
+/// routes through the wide note-spend producer, which requires it; `BridgeMint` rides the
+/// transfer-shape producer — pass `None`). `before_cell`/`after_cell` supply the rotated block
+/// witnesses. STAGED: a welded WIDE descriptor BESIDE the deployed wide registry; no VK bump, nothing
+/// on the wire.
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn mint_welded_wide_umem_multidomain_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    commitments_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+    pre: &crate::umem::UProjection,
+    ops: &[crate::umem::UmemOp],
+    before_nullifiers: Option<&[BabyBear]>,
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use crate::umem::umem_cohort_multidomain_proving_inputs_from;
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+    let mut ledger = Ledger::new();
+    ledger
+        .insert_cell(after_cell.clone())
+        .map_err(|e| format!("mint_welded_wide_umem_multidomain: ledger seed failed: {e:?}"))?;
+
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
+            .map(|bw| bw.with_asset_class(w.asset_class))
+            .map_err(|e| format!("mint_welded_wide_umem_multidomain: rotated block witness: {e}"))
+    };
+
+    // Bridge the leg's MULTI-DOMAIN universal-memory touch into the width-`6 + #domains` cohort rows
+    // + REAL boundary (fails closed on a single-domain leg — that uses the single-domain entry).
+    let inputs = umem_cohort_multidomain_proving_inputs_from(pre, ops)
+        .map_err(|e| format!("mint_welded_wide_umem_multidomain: umem multi-domain inputs: {e}"))?;
+
+    RotatedParticipantLeg::mint_welded_wide_multidomain_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+        &inputs.rows,
+        &inputs.boundary,
+        &inputs.domains,
+        before_nullifiers,
+    )
+}
+
 /// **The shared single-effect state projection onto a cell — the anti-drift weld.**
 ///
 /// Applies ONE kernel effect's STATE change to `cell`, mirroring exactly what the executor's

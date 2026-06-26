@@ -522,6 +522,146 @@ impl RotatedParticipantLeg {
         })
     }
 
+    /// **THE WIDE WELDED ROTATED+UMEM MULTI-DOMAIN LEG (STAGED, VK-RISK-FREE) — the last family
+    /// tail.** The two-domain twin of
+    /// [`mint_welded_wide_from_block_witnesses`](Self::mint_welded_wide_from_block_witnesses): mints
+    /// ONE leaf proving BOTH the WIDE rotated cohort proof (the wide PI vector whose LAST 16 PIs are
+    /// the 8-felt before/after commit anchors) AND the MULTI-DOMAIN universal-memory reconciliation
+    /// leg (one guarded `umemOp` per touched domain). It welds the multi-domain umem leg onto the WIDE
+    /// descriptor ([`weld_umem_multidomain_into_wide_descriptor`]) — purely additive, so the 16 wide
+    /// commit PIs ride through INTACT (no narrowing) — and the leg carries `wide_old_root8`/
+    /// `wide_new_root8` the ~124-bit binding reads.
+    ///
+    /// SCOPE: the NOTE/BRIDGE economic verbs (`NoteSpend` / `BridgeMint`) whose state touch spans TWO
+    /// domains in one effect — a `nullifiers` freshness insert + a `heap` balance credit. `umem_rows`
+    /// are the multi-domain cohort rows (width `6 + domains.len()`, the
+    /// `dregg_turn::umem::UmemCohortMultiProvingInputs::rows`); `umem_boundary` is that leg's REAL
+    /// boundary (touched addresses across BOTH domains); `domains` the per-op domain set in COLUMN
+    /// order. `before_nullifiers` is the note-spend grow-gate's BEFORE nullifier set (`None` for
+    /// BridgeMint, which rides the transfer-shape wide producer). The cross-DOMAIN economic invariant
+    /// (credit == spent/minted value) rides the effect's rotated AIR, NOT the memory reconciliation —
+    /// the same division as the narrow multi-domain cohort. A heterogeneous / non-cohort slice fails
+    /// closed at the dispatcher. STAGED: a welded WIDE descriptor BESIDE the deployed wide registry; no
+    /// VK bump, nothing on the wire.
+    #[allow(clippy::too_many_arguments)]
+    pub fn mint_welded_wide_multidomain_from_block_witnesses(
+        initial_state: &dregg_circuit::effect_vm::CellState,
+        effects: &[dregg_circuit::effect_vm::Effect],
+        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+        umem_rows: &[Vec<BabyBear>],
+        umem_boundary: &dregg_circuit::descriptor_ir2::UMemBoundaryWitness,
+        domains: &[u32],
+        before_nullifiers: Option<&[BabyBear]>,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+        use dregg_circuit::descriptor_ir2::{
+            prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+        };
+        use dregg_circuit::effect_vm::trace_rotated::{
+            empty_caveat_manifest, generate_rotated_effect_vm_descriptor_and_trace_wide,
+            transfer_caveat_manifest,
+        };
+        use dregg_circuit::effect_vm_descriptors::weld_umem_multidomain_into_wide_descriptor;
+
+        if effects.is_empty() {
+            return Err("mint_welded_wide_multidomain: empty effect slice".to_string());
+        }
+        if domains.len() < 2 {
+            return Err(format!(
+                "mint_welded_wide_multidomain: the multi-domain weld needs >= 2 domains, got {} (a \
+                 single-domain leg uses mint_welded_wide_from_block_witnesses)",
+                domains.len()
+            ));
+        }
+
+        // The shared full-cohort wide producer route — resolves the WIDE descriptor + lays the
+        // per-family trace / PI vector / grow-gate `map_heaps`. NoteSpend threads `before_nullifiers`
+        // (the grow-gate accumulator); BridgeMint rides the transfer-shape producer (None). No
+        // cap-write witness on the economic-verb path.
+        let caveat = match effects {
+            [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
+            _ => empty_caveat_manifest(),
+        };
+        let (wide_desc, wide_trace, mut dpis, map_heaps, mem_boundary) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                initial_state,
+                effects,
+                before,
+                after,
+                &caveat,
+                before_nullifiers,
+                None,
+                None,
+            )
+            .map_err(|e| {
+                format!("mint_welded_wide_multidomain: wide producer dispatch failed: {e}")
+            })?;
+
+        // WELD: the MULTI-DOMAIN universal-memory leg INTO the WIDE descriptor (keeps the 16 wide
+        // commit PIs).
+        let welded = weld_umem_multidomain_into_wide_descriptor(&wide_desc, domains);
+        let base = wide_desc.trace_width;
+        let umem_cols = 6 + domains.len();
+
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        // Assemble the welded base trace: inject the REAL umem rows (a row is REAL if ANY per-domain
+        // guard col `6 .. 6 + domains.len()` is 1) into the appended `6 + domains.len()` columns of
+        // the first rows (the umem-op gathering reads operands row-local; each row fires the ONE
+        // umemOp whose guard it sets).
+        let real_umem_rows: Vec<&Vec<BabyBear>> = umem_rows
+            .iter()
+            .filter(|r| (6..umem_cols).any(|c| r.get(c).copied() == Some(BabyBear::ONE)))
+            .collect();
+        if real_umem_rows.len() > wide_trace.len() {
+            return Err(format!(
+                "mint_welded_wide_multidomain: {} umem ops exceed wide trace height {}",
+                real_umem_rows.len(),
+                wide_trace.len()
+            ));
+        }
+        let mut welded_trace: Vec<Vec<BabyBear>> = Vec::with_capacity(wide_trace.len());
+        for (ri, row) in wide_trace.iter().enumerate() {
+            let mut wr = row.clone();
+            wr.resize(base + umem_cols, BabyBear::ZERO);
+            if let Some(umem_row) = real_umem_rows.get(ri) {
+                for (i, &v) in umem_row.iter().enumerate().take(umem_cols) {
+                    wr[base + i] = v;
+                }
+            }
+            welded_trace.push(wr);
+        }
+
+        let wrap_config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config(
+            &welded,
+            &welded_trace,
+            &dpis,
+            &mem_boundary,
+            &map_heaps,
+            umem_boundary,
+            &wrap_config,
+        )
+        .map_err(|e| {
+            format!("mint_welded_wide_multidomain: IR-v2 welded wide batch prove failed: {e}")
+        })?;
+        verify_vm_descriptor2_with_config(&welded, &proof, &dpis, &wrap_config).map_err(|e| {
+            format!(
+                "mint_welded_wide_multidomain: minted welded wide proof self-verify failed: {e}"
+            )
+        })?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: welded,
+            public_inputs: dpis,
+        })
+    }
+
     /// The rotated OLD-state commitment (PI 34 — the row-0 before-block `state_commit`).
     pub fn old_root(&self) -> BabyBear {
         self.public_inputs[dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT]
