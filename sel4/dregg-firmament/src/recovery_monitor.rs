@@ -584,7 +584,10 @@ where
     fn probe(&mut self) -> ActualState {
         match self.backing.invoke(self.pd, &self.rights) {
             Ok(_resolution) => ActualState::Healthy,
-            Err(e) => ActualState::Wedged(format!("host-PD {:?} Endpoint probe failed: {:?}", self.pd, e)),
+            Err(e) => ActualState::Wedged(format!(
+                "host-PD {:?} Endpoint probe failed: {:?}",
+                self.pd, e
+            )),
         }
     }
 
@@ -783,7 +786,10 @@ mod tests {
         }
         assert!(mon.has_escalated());
         let restarts_after_escalate = st.borrow().restarts;
-        assert_eq!(restarts_after_escalate, 3, "exactly 3 restarts, then it STOPS");
+        assert_eq!(
+            restarts_after_escalate, 3,
+            "exactly 3 restarts, then it STOPS"
+        );
 
         // Further ticks attempt NO new restart — the loop is broken for good.
         let _ = mon.tick();
@@ -818,7 +824,11 @@ mod tests {
         for _ in 0..(policy.rewedge_window + 1) {
             assert_eq!(mon.tick(), Verdict::Healthy);
         }
-        assert_eq!(mon.attempts(), 0, "held recovery should forgive the counter");
+        assert_eq!(
+            mon.attempts(),
+            0,
+            "held recovery should forgive the counter"
+        );
     }
 
     /// (e) RECURSIVE: a monitor watching a monitor. The inner monitor gives up
@@ -847,10 +857,8 @@ mod tests {
 
         // Now wrap the escalated inner monitor as a SUBSYSTEM and watch it with
         // an OUTER monitor. The outer reads the inner's ARTIFACT (escalated).
-        let mut outer = RecoveryMonitor::with_default_policy(MonitorSubsystem::new(
-            inner,
-            "inner-monitor",
-        ));
+        let mut outer =
+            RecoveryMonitor::with_default_policy(MonitorSubsystem::new(inner, "inner-monitor"));
 
         // Before the outer acts, make the underlying CHARGE fixable, so that when
         // the outer "restarts" the inner (reset + re-tick), the inner's charge

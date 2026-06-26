@@ -43,9 +43,7 @@
 //! refuses, is vacuous): a live credential clears the gate; a same-value
 //! concurrent authority assign is I-confluent and needs no gate at all.
 
-use dregg_doc::{
-    Author, History, Patch, Regime, content, merge,
-};
+use dregg_doc::{Author, History, Patch, Regime, content, merge};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The settlement view — the finalized-tip revocation registry (the keystone).
@@ -175,10 +173,11 @@ fn paired_devices(base_text_atoms: &[(u64, &str)]) -> (History, History) {
 
 /// The last atom id of a shared base (the tail both devices append after).
 fn tail_of(base: &[(u64, &str)]) -> dregg_doc::AtomId {
-    base.iter().fold(dregg_doc::AtomId::ROOT, |prev, (seed, text)| {
-        let (id, _) = Patch::add(*seed, text, prev);
-        id
-    })
+    base.iter()
+        .fold(dregg_doc::AtomId::ROOT, |prev, (seed, text)| {
+            let (id, _) = Patch::add(*seed, text, prev);
+            id
+        })
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -212,7 +211,10 @@ fn concurrent_compatible_edits_merge_clean() {
     match verdict {
         StitchVerdict::Settled { text, .. } => {
             assert!(text.contains("shared note."), "base survives: {text:?}");
-            assert!(text.contains("[A: groceries]"), "device A survives: {text:?}");
+            assert!(
+                text.contains("[A: groceries]"),
+                "device A survives: {text:?}"
+            );
             assert!(text.contains("[B: errands]"), "device B survives: {text:?}");
         }
         other => panic!("expected a clean settled stitch, got {other:?}"),
@@ -221,8 +223,14 @@ fn concurrent_compatible_edits_merge_clean() {
     // And the merge is the SAME whichever direction we stitch (commutativity of
     // the pushout — the offline order does not matter). Cross-check via `merge`.
     let (mut a2, mut b2) = paired_devices(&base);
-    a2.commit(Patch::by(DEVICE_A, [Patch::add(20, " [A: groceries]", tail).1]));
-    b2.commit(Patch::by(DEVICE_B, [Patch::add(21, " [B: errands]", tail).1]));
+    a2.commit(Patch::by(
+        DEVICE_A,
+        [Patch::add(20, " [A: groceries]", tail).1],
+    ));
+    b2.commit(Patch::by(
+        DEVICE_B,
+        [Patch::add(21, " [B: errands]", tail).1],
+    ));
     let ab = merge(&a2.stitch(&b2), &b2.replay());
     let ba = merge(&b2.replay(), &a2.replay());
     assert_eq!(
@@ -435,6 +443,8 @@ fn same_value_authority_assign_is_iconfluent() {
             assert_eq!(settled.field("owner").len(), 1);
             assert_eq!(settled.field("owner")[0].value, "the-household");
         }
-        other => panic!("an I-confluent same-value assign settles with nothing to arbitrate: {other:?}"),
+        other => {
+            panic!("an I-confluent same-value assign settles with nothing to arbitrate: {other:?}")
+        }
     }
 }

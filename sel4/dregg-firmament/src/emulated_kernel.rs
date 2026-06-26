@@ -197,7 +197,11 @@ impl NotifyCap {
     /// through the attenuated cap is admissible through this one) is the test
     /// `attenuated_notify_cap_admits_only_a_subset`.
     #[must_use]
-    pub fn attenuate(&self, narrower_rights: crate::Rights, narrower_mask: u64) -> Option<NotifyCap> {
+    pub fn attenuate(
+        &self,
+        narrower_rights: crate::Rights,
+        narrower_mask: u64,
+    ) -> Option<NotifyCap> {
         let rights_ok = narrower_rights.is_narrower_or_equal(&self.rights);
         let mask_ok = (narrower_mask & self.badge_mask) == narrower_mask;
         if rights_ok && mask_ok {
@@ -887,9 +891,11 @@ mod tests {
             badge_mask: 0b101,
         };
         // ADMITS: badge 0b001 is within the mask ⇒ commits, OR'ing exactly 0b001.
-        k.signal_gated(&cap, n, 0b001).expect("within-mask signal commits");
+        k.signal_gated(&cap, n, 0b001)
+            .expect("within-mask signal commits");
         // ADMITS: badge 0b100 (the OTHER held bit) is within the mask ⇒ commits.
-        k.signal_gated(&cap, n, 0b100).expect("the other held bit commits");
+        k.signal_gated(&cap, n, 0b100)
+            .expect("the other held bit commits");
         // The accumulator now holds the OR of the two committed badges (0b101),
         // and a single read-and-clear returns it (the seL4 badge-OR, gated).
         assert_eq!(k.poll_notification(n).unwrap(), 0b101);
@@ -931,15 +937,22 @@ mod tests {
         // NON-AMPLIFICATION (the keystone, witnessed): the attenuated child now
         // REFUSES badge 0b100 — which the parent ADMITTED — but STILL admits 0b001.
         // Attenuation strictly shrank the admissible set; it did not go dark.
-        assert!(!child.signal_admissible(n, 0b100), "attenuated cap drops 0b100");
-        assert!(child.signal_admissible(n, 0b001), "attenuated cap keeps 0b001");
+        assert!(
+            !child.signal_admissible(n, 0b100),
+            "attenuated cap drops 0b100"
+        );
+        assert!(
+            child.signal_admissible(n, 0b001),
+            "attenuated cap keeps 0b001"
+        );
         // And the gate AGREES with the cap: signalling 0b100 through the child is
         // refused at the kernel seam, while 0b001 commits.
         assert!(matches!(
             k.signal_gated(&child, n, 0b100).unwrap_err(),
             IpcError::NotPermitted
         ));
-        k.signal_gated(&child, n, 0b001).expect("the kept bit commits");
+        k.signal_gated(&child, n, 0b001)
+            .expect("the kept bit commits");
         // REFUSES a MASK WIDENING: a child mask with a bit the parent does not
         // hold (0b010 ∉ 0b101) is rejected — `None`, no amplification.
         assert!(
@@ -952,7 +965,9 @@ mod tests {
             .attenuate(AuthRequired::Signature, 0b001)
             .expect("narrow first");
         assert!(
-            narrow_rights.attenuate(AuthRequired::Either, 0b001).is_none(),
+            narrow_rights
+                .attenuate(AuthRequired::Either, 0b001)
+                .is_none(),
             "a rights widening (Signature → Either) must be refused"
         );
     }

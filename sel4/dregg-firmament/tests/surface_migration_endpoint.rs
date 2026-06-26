@@ -26,9 +26,7 @@
 
 use dregg_cell::AuthRequired;
 use dregg_firmament::process_kernel::ProcessKernel;
-use dregg_firmament::{
-    serve_one_surface_event, HostPdBacking, SurfaceEvent, SurfaceFrame,
-};
+use dregg_firmament::{serve_one_surface_event, HostPdBacking, SurfaceEvent, SurfaceFrame};
 
 /// THE GLASS-FOLLOWS-THE-CAP TEST: a confined child PD hosts a surface renderer
 /// over its firmament SURFACE Endpoint; an input event and a present request
@@ -112,7 +110,11 @@ fn migrated_surface_glass_follows_the_cap_to_a_confined_child() {
     // child folds it into its private state and renders a frame that crosses
     // back. This is the input half of "the glass follows the cap".
     let f1 = host
-        .present_over_endpoint(pd_id, &AuthRequired::Either, SurfaceEvent::Input { code: 7 })
+        .present_over_endpoint(
+            pd_id,
+            &AuthRequired::Either,
+            SurfaceEvent::Input { code: 7 },
+        )
         .expect("input crosses to the confined child and a frame returns");
     // The frame digest matches what a child that received exactly code=7 renders.
     let expected_acc = 0u64.wrapping_mul(31).wrapping_add(7);
@@ -127,7 +129,11 @@ fn migrated_surface_glass_follows_the_cap_to_a_confined_child() {
 
     // A second input compounds the surface state in the child.
     let f2 = host
-        .present_over_endpoint(pd_id, &AuthRequired::Either, SurfaceEvent::Input { code: 13 })
+        .present_over_endpoint(
+            pd_id,
+            &AuthRequired::Either,
+            SurfaceEvent::Input { code: 13 },
+        )
         .expect("second input round-trips");
     let expected_acc2 = expected_acc.wrapping_mul(31).wrapping_add(13);
     assert_eq!(f2.seq, 2);
@@ -138,7 +144,11 @@ fn migrated_surface_glass_follows_the_cap_to_a_confined_child() {
     // OUTPUT (frame) comes back from the child — the output half of the glass
     // following the cap.
     let f3 = host
-        .present_over_endpoint(pd_id, &AuthRequired::Either, SurfaceEvent::Present { seq: 42 })
+        .present_over_endpoint(
+            pd_id,
+            &AuthRequired::Either,
+            SurfaceEvent::Present { seq: 42 },
+        )
         .expect("present renders the child's surface and the frame returns");
     assert_eq!(f3.seq, 42);
     assert_eq!(

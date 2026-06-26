@@ -13,11 +13,11 @@
 //! desktop inherits, through the SAME fold, the per-viewer membrane (fog-of-war on
 //! the desktop), the forkable layout pushout, and the cycle guard.
 
-use dregg_doc::composition::{
-    close_surface, content_composed, scene_to_composed, surface_embed_id, workspace_resolver,
-    CellId, ChildRef, ChildResolution, DesktopSurface, EmbedRole, Op, Segment, Viewer,
-};
 use dregg_doc::Author;
+use dregg_doc::composition::{
+    CellId, ChildRef, ChildResolution, DesktopSurface, EmbedRole, Op, Segment, Viewer,
+    close_surface, content_composed, scene_to_composed, surface_embed_id, workspace_resolver,
+};
 
 fn win(tag: u128, z: i64) -> DesktopSurface {
     DesktopSurface::new(CellId(tag), z)
@@ -39,14 +39,28 @@ fn the_live_workspace_projects_and_round_trips_through_the_real_fold() {
         vec![CellId(0xA1), CellId(0xB2), CellId(0xC3)],
         "the composed desktop embeds each window's owner cell in paint order"
     );
-    assert!(!r.has_darkened(), "a full-authority viewer reads every window");
+    assert!(
+        !r.has_darkened(),
+        "a full-authority viewer reads every window"
+    );
     // Each embedded surface genuinely RESOLVED (the fold recursed into its cell).
     let rendered = r
         .segments
         .iter()
-        .filter(|s| matches!(s, Segment::Embedded { resolution: ChildResolution::Rendered(_), .. }))
+        .filter(|s| {
+            matches!(
+                s,
+                Segment::Embedded {
+                    resolution: ChildResolution::Rendered(_),
+                    ..
+                }
+            )
+        })
         .count();
-    assert_eq!(rendered, 3, "all three windows resolved through the membrane fold");
+    assert_eq!(
+        rendered, 3,
+        "all three windows resolved through the membrane fold"
+    );
 }
 
 /// (EDIT DRIVES A WORKSPACE CHANGE) Closing a window is an `Op::Remove` authored on
@@ -59,7 +73,12 @@ fn closing_a_window_is_a_real_edit_that_changes_the_rendered_desktop() {
     let resolver = workspace_resolver(&surfaces);
     let viewer = Viewer::able(surfaces.iter().map(|s| s.owner));
 
-    assert_eq!(content_composed(&layout, &viewer, &resolver).embedded_cells().len(), 3);
+    assert_eq!(
+        content_composed(&layout, &viewer, &resolver)
+            .embedded_cells()
+            .len(),
+        3
+    );
 
     layout.apply_patch(Author(1), &[close_surface(&surfaces[1])]);
     let after = content_composed(&layout, &viewer, &resolver);
@@ -92,11 +111,19 @@ fn an_out_of_cap_window_darkens_while_the_rest_of_the_desktop_renders() {
         .segments
         .iter()
         .find_map(|s| match s {
-            Segment::Embedded { resolved_cell: Some(c), resolution: ChildResolution::Darkened { .. }, .. } => Some(*c),
+            Segment::Embedded {
+                resolved_cell: Some(c),
+                resolution: ChildResolution::Darkened { .. },
+                ..
+            } => Some(*c),
             _ => None,
         })
         .expect("the secret window is darkened");
-    assert_eq!(darkened, CellId(0x5EC), "exactly the out-of-cap window darkened");
+    assert_eq!(
+        darkened,
+        CellId(0x5EC),
+        "exactly the out-of-cap window darkened"
+    );
 
     // The membrane is the ONLY gate: a fully-capped viewer reads the whole desktop.
     let cleared = Viewer::able(surfaces.iter().map(|s| s.owner));
@@ -116,12 +143,22 @@ fn two_devices_opening_windows_merge_as_a_layout_pushout_with_a_first_class_fork
     let mut d1 = base.clone();
     d1.apply_patch(
         Author(1),
-        &[Op::Embed { id: surface_embed_id(&win(0xB2, 1)), child: ChildRef::live(CellId(0xB2)), after: a1, role: EmbedRole::Section }],
+        &[Op::Embed {
+            id: surface_embed_id(&win(0xB2, 1)),
+            child: ChildRef::live(CellId(0xB2)),
+            after: a1,
+            role: EmbedRole::Section,
+        }],
     );
     let mut d2 = base.clone();
     d2.apply_patch(
         Author(2),
-        &[Op::Embed { id: surface_embed_id(&win(0xC3, 1)), child: ChildRef::live(CellId(0xC3)), after: a1, role: EmbedRole::Section }],
+        &[Op::Embed {
+            id: surface_embed_id(&win(0xC3, 1)),
+            child: ChildRef::live(CellId(0xC3)),
+            after: a1,
+            role: EmbedRole::Section,
+        }],
     );
 
     let merged = merge_layout(&d1, &d2);
@@ -130,7 +167,9 @@ fn two_devices_opening_windows_merge_as_a_layout_pushout_with_a_first_class_fork
     let viewer = Viewer::able([CellId(0xA1), CellId(0xB2), CellId(0xC3)]);
     let r = content_composed(&merged, &viewer, &resolver);
     assert!(
-        r.segments.iter().any(|s| matches!(s, Segment::LayoutConflict { .. })),
+        r.segments
+            .iter()
+            .any(|s| matches!(s, Segment::LayoutConflict { .. })),
         "two windows opened at the same position are a first-class layout fork, never lost"
     );
 }

@@ -28,8 +28,8 @@
 
 use dregg_auth::credential::{Caveat, Pred, RootKey};
 use pg_dregg::attest::{
-    AttestRequest, SerializedWholeChainProof, WHOLE_CHAIN_DIGEST_LANES, attest_range,
-    verify_serialized_proof,
+    attest_range, verify_serialized_proof, AttestRequest, SerializedWholeChainProof,
+    WHOLE_CHAIN_DIGEST_LANES,
 };
 use pg_dregg::authz;
 use pg_dregg::jsonpath::{pred_to_jsonpath, predicate_attrs};

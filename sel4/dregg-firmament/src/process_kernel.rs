@@ -1419,8 +1419,8 @@ impl ProcessKernel {
             // Endpoint; close every other fd; drop file/network/exec authority.
             #[cfg(all(feature = "process-pd-sandbox", unix))]
             if confine {
-                let c = crate::sandbox::Confinement::endpoint_only(child_fd)
-                    .with_fds([child_extra_fd]);
+                let c =
+                    crate::sandbox::Confinement::endpoint_only(child_fd).with_fds([child_extra_fd]);
                 if let Err(e) = crate::sandbox::confine_child(&c) {
                     eprintln!("[pd] CONFINEMENT FAILED — refusing to run body: {e}");
                     use std::io::Write as _;

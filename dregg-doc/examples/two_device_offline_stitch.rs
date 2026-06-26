@@ -138,7 +138,10 @@ enum StitchVerdict {
     /// The merge settled: I-confluent parts unioned clean, every authority field
     /// cleared the gate. Carries the flat rendering and the count of benign prose
     /// conflicts (first-class states, NOT failures).
-    Settled { text: String, prose_conflicts: usize },
+    Settled {
+        text: String,
+        prose_conflicts: usize,
+    },
     /// REFUSED at settlement: an authority field was authored under a credential the
     /// settlement tip has revoked. Names the field + the revoked credential (WHY).
     RefusedAtSettlement {
@@ -241,9 +244,15 @@ fn main() {
     let phone_offline = OfflineBranch {
         author: 7, // the phone's branch-author cell, distinct from any main cell
         main: main_frontier.clone(),
-        caps: vec![Cap { target: 9, debit_reach: true }], // a cap to a BRANCH cell only
+        caps: vec![Cap {
+            target: 9,
+            debit_reach: true,
+        }], // a cap to a BRANCH cell only
     };
-    run.check("offline phone is confined (owns no main cell, reaches none)", phone_offline.confined());
+    run.check(
+        "offline phone is confined (owns no main cell, reaches none)",
+        phone_offline.confined(),
+    );
     run.check(
         "offline debit of a main cell (100) is IMAGINARY — never reaches official reality",
         phone_offline.debit_is_imaginary(100),
@@ -259,7 +268,10 @@ fn main() {
     let phone_unconfined = OfflineBranch {
         author: 7,
         main: main_frontier.clone(),
-        caps: vec![Cap { target: 100, debit_reach: true }], // reaches MAIN ⇒ NOT confined
+        caps: vec![Cap {
+            target: 100,
+            debit_reach: true,
+        }], // reaches MAIN ⇒ NOT confined
     };
     run.check(
         "control: an UN-confined branch is not confined (load-bearing hypothesis)",
@@ -282,26 +294,47 @@ fn main() {
     let (mut device_a, mut device_b, tail) = paired_devices(&base);
 
     // OFFLINE: each device appends disjoint prose after the shared tail.
-    device_a.commit(Patch::by(DEVICE_A, [Patch::add(20, " [A: groceries]", tail).1]));
-    device_b.commit(Patch::by(DEVICE_B, [Patch::add(21, " [B: errands]", tail).1]));
+    device_a.commit(Patch::by(
+        DEVICE_A,
+        [Patch::add(20, " [A: groceries]", tail).1],
+    ));
+    device_b.commit(Patch::by(
+        DEVICE_B,
+        [Patch::add(21, " [B: errands]", tail).1],
+    ));
 
     // ONLINE: the stitch. Pure prose — no authority fields.
-    let gate = SettlementGate { revoked_at_settlement: vec![], authority_fields: vec![] };
+    let gate = SettlementGate {
+        revoked_at_settlement: vec![],
+        authority_fields: vec![],
+    };
     let verdict = gate.stitch_at_settlement(&mut device_a, &device_b);
     match &verdict {
         StitchVerdict::Settled { text, .. } => {
             println!("   settled image: {text:?}");
             run.check("base survives the union", text.contains("shared note."));
-            run.check("device A's offline work survives", text.contains("[A: groceries]"));
-            run.check("device B's offline work survives", text.contains("[B: errands]"));
+            run.check(
+                "device A's offline work survives",
+                text.contains("[A: groceries]"),
+            );
+            run.check(
+                "device B's offline work survives",
+                text.contains("[B: errands]"),
+            );
         }
-        other => run.check(&format!("expected a clean settled stitch, got {other:?}"), false),
+        other => run.check(
+            &format!("expected a clean settled stitch, got {other:?}"),
+            false,
+        ),
     }
 
     // The stitch is direction-independent (pushout commutativity — offline order is
     // irrelevant). Cross-check by merging both directions.
     let (mut a2, mut b2, t2) = paired_devices(&base);
-    a2.commit(Patch::by(DEVICE_A, [Patch::add(20, " [A: groceries]", t2).1]));
+    a2.commit(Patch::by(
+        DEVICE_A,
+        [Patch::add(20, " [A: groceries]", t2).1],
+    ));
     b2.commit(Patch::by(DEVICE_B, [Patch::add(21, " [B: errands]", t2).1]));
     let ab = merge(&a2.replay(), &b2.replay());
     let ba = merge(&b2.replay(), &a2.replay());
@@ -323,7 +356,11 @@ fn main() {
     let (mut a3, mut b3, _) = paired_devices(&abase);
     b3.commit(Patch::by(
         DEVICE_B,
-        [Op::SetField { name: "owner".into(), value: "device-b".into(), superseding: false }],
+        [Op::SetField {
+            name: "owner".into(),
+            value: "device-b".into(),
+            superseding: false,
+        }],
     ));
     let gate_live = SettlementGate {
         revoked_at_settlement: vec![99], // some OTHER credential revoked — NOT 2
@@ -353,7 +390,11 @@ fn main() {
     let (mut a4, mut b4, _) = paired_devices(&abase);
     b4.commit(Patch::by(
         DEVICE_B,
-        [Op::SetField { name: "owner".into(), value: "device-b".into(), superseding: false }],
+        [Op::SetField {
+            name: "owner".into(),
+            value: "device-b".into(),
+            superseding: false,
+        }],
     ));
     let gate_revoked = SettlementGate {
         revoked_at_settlement: vec![2], // credential 2 revoked AT THE SETTLEMENT TIP
@@ -382,11 +423,19 @@ fn main() {
     let (mut a5, mut b5, _) = paired_devices(&abase);
     a5.commit(Patch::by(
         DEVICE_A,
-        [Op::SetField { name: "owner".into(), value: "device-a".into(), superseding: false }],
+        [Op::SetField {
+            name: "owner".into(),
+            value: "device-a".into(),
+            superseding: false,
+        }],
     ));
     b5.commit(Patch::by(
         DEVICE_B,
-        [Op::SetField { name: "owner".into(), value: "device-b".into(), superseding: false }],
+        [Op::SetField {
+            name: "owner".into(),
+            value: "device-b".into(),
+            superseding: false,
+        }],
     ));
     let merged = merge(&a5.replay(), &b5.replay());
     let field_clashes = content(&merged)

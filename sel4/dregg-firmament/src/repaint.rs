@@ -174,7 +174,9 @@ pub fn project_dirty_from_turn(owner: &CellId, served: &ServedTurn) -> Option<Di
         // mix the owner in so two cells reaching the same root still get distinct
         // frames (the renderer paints per-surface). Renderer-agnostic — the
         // BINDING (distinct committed state ⟹ distinct frame) is the fidelity.
-        new_content_digest: root.wrapping_mul(1_000_003).wrapping_add(owner_scalar(owner)),
+        new_content_digest: root
+            .wrapping_mul(1_000_003)
+            .wrapping_add(owner_scalar(owner)),
     })
 }
 
@@ -307,7 +309,10 @@ mod tests {
         let p = d.to_present(vec![10, 11]);
         assert_eq!(p.target, vec![10, 11]);
         assert_eq!(p.declared_label, label_of(&wallet, d.new_source_state_root));
-        assert!(!p.claims_focus, "a repaint is a content advance, not a focus claim");
+        assert!(
+            !p.claims_focus,
+            "a repaint is a content advance, not a focus claim"
+        );
         assert_eq!(p.new_digest, d.new_content_digest);
     }
 
@@ -336,6 +341,9 @@ mod tests {
         // (0 = "never composited" in the framebuffer; a commit must advance).
         let wallet = cell_seed(1);
         let d = project_dirty_from_turn(&wallet, &committed(vec![])).unwrap();
-        assert_ne!(d.new_content_digest, 0, "a committed turn always advances the frame");
+        assert_ne!(
+            d.new_content_digest, 0,
+            "a committed turn always advances the frame"
+        );
     }
 }

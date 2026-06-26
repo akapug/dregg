@@ -39,7 +39,7 @@ use std::io::Write;
 use dregg_cell::AuthRequired;
 use dregg_firmament::process_kernel::{KernelReply, ProcessKernel};
 use dregg_firmament::{
-    Backing, Capability, FirmamentRouter, HostPdBacking, Router, DistributedBacking, LocalBacking,
+    Backing, Capability, DistributedBacking, FirmamentRouter, HostPdBacking, LocalBacking, Router,
 };
 
 // ── the four probe result bits the confined child folds into its exit code ──
@@ -146,7 +146,8 @@ fn host_pd_target_resolves_through_the_router() {
         .spawn_pd_confined(vec![], |client, _granted| {
             // Keep the Endpoint open briefly so the parent can invoke it, then
             // exit. A single validate round-trip keeps the socket serviced.
-            let _ = client.validate(dregg_firmament::process_kernel::CapHandle { slot: 0, epoch: 0 });
+            let _ =
+                client.validate(dregg_firmament::process_kernel::CapHandle { slot: 0, epoch: 0 });
             std::thread::sleep(std::time::Duration::from_millis(80));
             0
         })
@@ -180,8 +181,12 @@ fn host_pd_target_resolves_through_the_router() {
     // Signature→Either widens (refused) — the SAME `granted ⊆ held` law.
     let narrowed = cap.attenuate(AuthRequired::Signature).expect("narrow ok");
     assert_eq!(narrowed.rights, AuthRequired::Signature);
-    let widened = Capability::host_pd(pd_id, AuthRequired::Signature).attenuate(AuthRequired::Either);
-    assert!(widened.is_none(), "a widening host-PD grant must be refused");
+    let widened =
+        Capability::host_pd(pd_id, AuthRequired::Signature).attenuate(AuthRequired::Either);
+    assert!(
+        widened.is_none(),
+        "a widening host-PD grant must be refused"
+    );
 
     // A requested op within the held authority (Signature ⊆ Either) resolves —
     // the backing's `granted ⊆ held` gate authorizes it.
@@ -247,7 +252,10 @@ fn can_inet_socket() -> bool {
     !matches!(
         errno,
         libc::ENETUNREACH | libc::EPERM | libc::EHOSTUNREACH | libc::EACCES | libc::EAFNOSUPPORT
-    ) && matches!(errno, libc::EINPROGRESS | libc::ECONNREFUSED | libc::ETIMEDOUT)
+    ) && matches!(
+        errno,
+        libc::EINPROGRESS | libc::ECONNREFUSED | libc::ETIMEDOUT
+    )
 }
 
 /// Count open fds in `3..max` (above the std streams). Under confinement exactly

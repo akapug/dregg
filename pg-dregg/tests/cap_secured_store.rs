@@ -54,11 +54,26 @@ struct Row {
 /// exactly the kind of multi-tenant data a deos app (or builders-dev) holds.
 fn table() -> Vec<Row> {
     vec![
-        Row { row_cap: "org/42/public/readme", payload: "org42 public readme" },
-        Row { row_cap: "org/42/public/changelog", payload: "org42 public changelog" },
-        Row { row_cap: "org/42/private/secrets", payload: "org42 PRIVATE secrets" },
-        Row { row_cap: "org/99/public/readme", payload: "org99 public readme" },
-        Row { row_cap: "org/99/private/secrets", payload: "org99 PRIVATE secrets" },
+        Row {
+            row_cap: "org/42/public/readme",
+            payload: "org42 public readme",
+        },
+        Row {
+            row_cap: "org/42/public/changelog",
+            payload: "org42 public changelog",
+        },
+        Row {
+            row_cap: "org/42/private/secrets",
+            payload: "org42 PRIVATE secrets",
+        },
+        Row {
+            row_cap: "org/99/public/readme",
+            payload: "org99 public readme",
+        },
+        Row {
+            row_cap: "org/99/private/secrets",
+            payload: "org99 PRIVATE secrets",
+        },
     ]
 }
 
@@ -90,9 +105,18 @@ fn install(root: &RootKey) {
 /// at clock 10_000 — the canonical row-cap-bearing token.
 fn mint_read(root: &RootKey, subject: &str, prefix: &str) -> String {
     root.mint([
-        Caveat::FirstParty(Pred::AttrEq { key: "subject".into(), value: subject.into() }),
-        Caveat::FirstParty(Pred::AttrEq { key: "action".into(), value: "read".into() }),
-        Caveat::FirstParty(Pred::AttrPrefix { key: "resource".into(), prefix: prefix.into() }),
+        Caveat::FirstParty(Pred::AttrEq {
+            key: "subject".into(),
+            value: subject.into(),
+        }),
+        Caveat::FirstParty(Pred::AttrEq {
+            key: "action".into(),
+            value: "read".into(),
+        }),
+        Caveat::FirstParty(Pred::AttrPrefix {
+            key: "resource".into(),
+            prefix: prefix.into(),
+        }),
         Caveat::FirstParty(Pred::NotAfter { at: 10_000 }),
     ])
     .encode()
@@ -109,7 +133,11 @@ fn rls_shows_only_cap_reachable_rows() {
     // the RLS USING clause), not errored.
     let org42 = mint_read(&root, "alice", "org/42/");
     let seen = visible_rows(&org42, 1000);
-    assert_eq!(seen.len(), 3, "org/42 token must see exactly the three org/42 rows");
+    assert_eq!(
+        seen.len(),
+        3,
+        "org/42 token must see exactly the three org/42 rows"
+    );
     assert!(seen.iter().all(|r| r.row_cap.starts_with("org/42/")));
     assert!(
         !seen.iter().any(|r| r.row_cap.starts_with("org/99/")),
@@ -140,14 +168,19 @@ fn attenuated_token_sees_a_strict_subset() {
     // subset of the parent's three. This is the no-amplify property observed
     // through the store: attenuation can only HIDE rows, never reveal new ones.
     assert_eq!(child_seen.len(), 2);
-    assert!(child_seen.iter().all(|r| r.row_cap.starts_with("org/42/public/")));
+    assert!(child_seen
+        .iter()
+        .all(|r| r.row_cap.starts_with("org/42/public/")));
     assert!(
         !child_seen.iter().any(|r| r.row_cap.contains("/private/")),
         "the attenuated token must not reach the private row the parent reached"
     );
     // subset: every row the child sees, the parent sees.
     for c in &child_seen {
-        assert!(parent_seen.contains(c), "child saw a row the parent did not");
+        assert!(
+            parent_seen.contains(c),
+            "child saw a row the parent did not"
+        );
     }
     // strict: the parent sees at least one row (the private secrets) the child does not.
     assert!(
@@ -192,7 +225,11 @@ fn instant_revocation_vanishes_rows_on_the_next_scan() {
     install(&root);
 
     let org42 = mint_read(&root, "alice", "org/42/");
-    assert_eq!(visible_rows(&org42, 1000).len(), 3, "rows visible before revocation");
+    assert_eq!(
+        visible_rows(&org42, 1000).len(),
+        3,
+        "rows visible before revocation"
+    );
 
     // Revoke the exact credential. The next scan — the very next statement in
     // SQL terms — shows ZERO rows, even though the chain-verify is cached hot.

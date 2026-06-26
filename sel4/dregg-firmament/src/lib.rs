@@ -176,9 +176,6 @@ pub use compositor_pd::{
     LABEL_PRESENT_REFUSED,
 };
 pub use distributed::DistributedBacking;
-pub use host_pd::{HostPdBacking, SurfaceEvent, SurfaceFrame};
-#[cfg(all(feature = "process-pd", unix))]
-pub use host_pd::{serve_one_surface_event, surface_read_framed, surface_write_framed};
 pub use emulated_kernel::{
     EmulatedKernel, IpcError, Message, NotifyCap, ObjectId, ObjectType, ReplyToken, RetypeError,
 };
@@ -186,19 +183,22 @@ pub use executor_pd::{
     stage_turn_into, ExecutorPd, ServedTurn, TurnRunner, LABEL_RUN_TURN, LABEL_TURN_COMMITTED,
     LABEL_TURN_REJECTED,
 };
-pub use repaint::{
-    decode_dirty, encode_dirty, project_dirty_from_turn, DirtyRegion, REPAINT_FIDELITY,
-};
+#[cfg(all(feature = "process-pd", unix))]
+pub use host_pd::{serve_one_surface_event, surface_read_framed, surface_write_framed};
+pub use host_pd::{HostPdBacking, SurfaceEvent, SurfaceFrame};
 pub use local::LocalBacking;
+pub use microkit_facade::{
+    Channel, ChannelSet, ChannelTable, ChannelWiring, EventLoop, Handler, MessageInfo, NullHandler,
+    ProtectionDomain, Region,
+};
+#[cfg(all(feature = "process-pd", unix))]
+pub use recovery_monitor::HostPdSubsystem;
 pub use recovery_monitor::{
     ActualState, Claim, Divergence, Escalation, MonitorPolicy, MonitorSubsystem, RecoveryMonitor,
     Subsystem, Verdict,
 };
-#[cfg(all(feature = "process-pd", unix))]
-pub use recovery_monitor::HostPdSubsystem;
-pub use microkit_facade::{
-    Channel, ChannelSet, ChannelTable, ChannelWiring, EventLoop, Handler, MessageInfo, NullHandler,
-    ProtectionDomain, Region,
+pub use repaint::{
+    decode_dirty, encode_dirty, project_dirty_from_turn, DirtyRegion, REPAINT_FIDELITY,
 };
 pub use router::{FirmamentRouter, Router};
 pub use surface::SurfaceBacking;
@@ -214,9 +214,9 @@ pub use process_kernel::{
 
 // The Phase-0 sandbox confinement surface (Unix + `process-pd-sandbox`).
 #[cfg(all(feature = "process-pd-sandbox", unix))]
-pub use sandbox::{confine_child, ConfineError, Confinement};
-#[cfg(all(feature = "process-pd-sandbox", unix))]
 pub use process_kernel::CONFINE_FAILED_EXIT;
+#[cfg(all(feature = "process-pd-sandbox", unix))]
+pub use sandbox::{confine_child, ConfineError, Confinement};
 
 // Re-export the REAL dregg rights lattice and id so app code names the genuine
 // types, not a parallel model.
