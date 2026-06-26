@@ -130,6 +130,15 @@ x25519-dalek = { workspace = true }
 # discharges. No new crypto; the test welds the green parts.
 dregg-federation = { path = "../federation" }
 hints = { path = "../hints", package = "dregg-hints" }
+# The cipherclerk federation-membership unit tests (`prove_authorization` /
+# `authorize` over the SYNTHETIC single-tenant federation root) exercise
+# dregg-bridge's synthetic Merkle-path builder, gated behind bridge's `test-utils`
+# feature. When dregg-bridge is a *dependency* (not the crate under test) its own
+# `#[cfg(test)]` is inactive, so a consumer must opt the feature in for its test
+# builds — the same idiom circuit/ and credentials/ use. Without it the synthetic
+# path falls through to `Err(IssuerNotInFederation)`. Scoped to dev-deps
+# (resolver 3) so production sdk builds never carry test-utils.
+dregg-bridge = { path = "../bridge", features = ["test-utils"] }
 
 [[example]]
 name = "agent_demo"
