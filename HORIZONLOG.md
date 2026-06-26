@@ -9,6 +9,29 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- IVC RUNNING-VK 2-STEP TRANSIENT — INVESTIGATED + CONFIRMED FORK-GATED (no wrapper close; precise primitive named,
+  2026-06-25). After 68088b1e mechanized the perpetual fixed point (`∀N, VK_N = VK_4`, RecursiveAggregation.lean §10) the
+  ONLY residual is the finite 2-step transient (the running-agg VK settles at depth 4, not depth 1). ROOT CAUSE re-confirmed
+  against the fork (rev d959ff1): `verify_p3_batch_proof_circuit` (recursion/src/verifier/batch_stark.rs:258) builds the
+  parent verifier OP-LIST deterministically from the input proof's SHAPE — `proof.rows` (Const/Public/Alu) + the
+  `proof.non_primitives` manifest (op_type/rows/lanes) + per-instance `public_values.len()` (lines 306-356). A LEAF, an
+  AGG(LEAF,LEAF), and an AGG(AGG,LEAF) input each carry a DIFFERENT such structure; it propagates exactly ONE level into the
+  parent op-list (measured rows 269→277, prep_commit ddaa…→830a…) before stabilizing — hence depth 4. CANNOT be closed in our
+  wrapper: `ProveNextLayerParams` (recursion/src/recursion.rs:304) exposes ONLY `table_packing` (the `min_trace_height`
+  trace-height ceiling we already use via `wrap_params`/`WRAP_LOG_CEIL`) + `constraint_profile` — there is NO op-list /
+  non-primitive padding knob, and the op-list is sized inside `build_next_layer_circuit`→`build_verifier_circuit` from the
+  actual `prev` input, not from params. A dummy-data multi-pass seed IS wrapper-constructible but is SEMANTICALLY WRONG (the
+  Poseidon2 segment combine has no identity element, so a seed cannot be folded as identity — it injects a phantom chain
+  prefix). The agg-shape regress (seed's left must recursively be agg-shaped) is genuine and resolves ONLY at the fork. PRECISE
+  FORK PRIMITIVE (either): (A) a CANONICAL/fixed-shape verifier op-list — a `verify_p3_batch_proof_circuit` variant (or a knob
+  threaded through `ProveNextLayerParams`/the backend) that allocates a fixed maximal op-list (pad `rows` to a canonical
+  ceiling + a canonical `non_primitives` manifest) independent of the input shape, padding smaller inputs — the op-list analog
+  of the `min_trace_height` ceiling, so the FIRST aggregation already emits the fixed point; OR (B) an identity/normalize fold
+  (the Pickles step∘wrap base case) — a single-input re-prove `normalize(P)→canonical-AGG-shaped P'` attesting the same
+  statement, used to seed the running proof at canonical shape from fold #1. NOT a soundness gate (the VK-identity pin TRACKS
+  the commitment through the transient; light client anchors on the perpetual fixed point). Accurately scoped already in
+  `circuit-prove/src/accumulator.rs` header + RecursiveAggregation.lean §10; supersedes the 2026-06-24 "WRAP step is the
+  remaining fork work" entry below (the trace-height half landed; only the op-list half remains).
 - EMBEDDABLE-LEAN §4.2 ELABORATOR-TRIM (build-side BUILT, source-side NAMED): the host static embed now has the
   principled init-chain trim — `dregg-lean-ffi/build.rs::runtime_dead_init_trim` (OPT-IN `DREGG_LEAN_FFI_RUNTIME_TRIM=1`,
   separate `libdregg_lean_trim.a`, default link byte-unchanged). Keeps only the `dregg_*` runtime-FUNCTION closure +
