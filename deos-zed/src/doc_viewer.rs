@@ -23,12 +23,12 @@
 //! [`DocViewer::refresh_from`] re-snapshot from a document (e.g. after a save or a
 //! merge). It is `Render`-shaped, so it drops into a dock tab or a window pane.
 
-use dregg_doc::{BlameLine, ConflictRegion, Regime, RopeDoc, Segment};
+use dregg_doc::{BlameLine, ConflictRegion, Regime, Rendered, RopeDoc, Segment};
 use gpui::{
-    div, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Window,
+    App, Context, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
 };
-use gpui_component::{h_flex, v_flex, ActiveTheme as _, StyledExt as _};
+use gpui_component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
 
 /// A read-only view over a document's provenance + conflicts. Holds a snapshot of
 /// the blame lines and the rendered structure (clean runs + conflict objects), so
@@ -67,6 +67,24 @@ impl DocViewer {
         self.patch_count = doc.history().len();
     }
 
+    /// Push an ALREADY-EXTRACTED snapshot (blame + rendered structure) — the live
+    /// editor-pane path. The pane reads its open document's blame + `rendered()`
+    /// ONCE (owned), then hands them here, so the viewer never holds a borrow on
+    /// the live `RopeDoc` across a gpui update. Equivalent to [`DocViewer::refresh_from`]
+    /// but from owned pieces a caller already has in hand.
+    pub fn set_snapshot(
+        &mut self,
+        blame: Vec<BlameLine>,
+        rendered: Option<Rendered>,
+        title: impl Into<SharedString>,
+        patch_count: usize,
+    ) {
+        self.blame = blame;
+        self.segments = rendered.map(|r| r.segments).unwrap_or_default();
+        self.title = title.into();
+        self.patch_count = patch_count;
+    }
+
     /// Build a viewer already populated from a document.
     pub fn from_doc(doc: &RopeDoc, title: impl Into<SharedString>, cx: &mut App) -> Self {
         let mut v = Self::new(cx);
@@ -79,6 +97,22 @@ impl DocViewer {
         self.segments
             .iter()
             .any(|s| matches!(s, Segment::Conflict(_)))
+    }
+
+    /// How many patches the snapshotted document's history holds (host/test read).
+    pub fn patch_count(&self) -> usize {
+        self.patch_count
+    }
+
+    /// How many live blame spans the snapshot carries (host/test read — non-zero
+    /// once a document is open).
+    pub fn blame_len(&self) -> usize {
+        self.blame.len()
+    }
+
+    /// How many rendered segments (clean runs + conflict objects) the snapshot has.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
     }
 }
 

@@ -9,6 +9,23 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- ZED/HERMES INTEGRATION ASSESS + STRUCTURE-PANE LANDED (2026-06-25). Honest assessment: the confined-Hermes seam is
+  genuinely tight (ToolGateway-gated, metered, receipted dregg turns on the verified executor; tool side-effects ride the
+  turn via `tool_effects`; per-tool/per-kind grants; live mandate inspector; real ndjson ACP transport + live `hermes-acp`
+  subprocess spawner). The editor genuinely edits dregg-doc `RopeDoc` documents (saves = receipted `SetField` turns on the
+  live World; `DocViewer` renders blame + first-class conflict objects). LANDED: wired the `DocViewer` into the LIVE cockpit
+  `EditorSurface` as a `buffer⇄structure` toggle (`deos-zed/src/cockpit_surface.rs` `EditorPaneView`; `DocViewer::set_snapshot`
+  + read accessors) — the blame/conflict keystone is now reachable from the running pane, not just the `merge_demo` bin. Green:
+  new headless test `deos-zed/tests/editor_structure_pane.rs` + the two `firmament_pane` tests, lib builds clean.
+  NAMED BIGGER GAPS (none critical): (1) MEDIUM — no MERGE/CONFLICT action in the live editor: a single-author editing session
+  never produces a conflict object (those arise only via `RopeDoc::merge_branch`, exercised in `merge_demo`/tests), so the
+  Structure face shows blame-only until a branch/merge flow is wired into the surface. (2) MEDIUM — the cockpit interactive
+  Hermes dock's "brain" is `scripted_turn` (keyword heuristic) and `HermesSession::run` does NOT install the `run_js`
+  hands-on-glass hook, so the cockpit agent METERS scripted tool-calls but does not DRIVE the live World; the run_js→real-turns
+  path is proven in `deos-hermes` tests (`hermes_runs_js`, `hermes_authors_card_via_run_js`) but not wired into `AgentDockView`
+  (thread World + JsRuntime in; note SpiderMonkey is a process-singleton, conflicts with the card pane). (3) LOW/by-design —
+  the bridge SCOPE leg is structural (route to the right per-key worker), not a per-tool-name in-circuit scope check on the
+  ACP wire; RATE+DEADLINE do the live confinement (documented in `bridge.rs`).
 - IVC RUNNING-VK 2-STEP TRANSIENT — INVESTIGATED + CONFIRMED FORK-GATED (no wrapper close; precise primitive named,
   2026-06-25). After 68088b1e mechanized the perpetual fixed point (`∀N, VK_N = VK_4`, RecursiveAggregation.lean §10) the
   ONLY residual is the finite 2-step transient (the running-agg VK settles at depth 4, not depth 1). ROOT CAUSE re-confirmed
