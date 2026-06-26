@@ -3481,6 +3481,15 @@ fn is_forbidden_authority_only_cap_write_descriptor(name: &str) -> bool {
         name,
         "revokeCapOpenVmDescriptor2R24"        // RevokeDelegation — the REMOVE write wrapper proves
             | "grantCapCapOpenVmDescriptor2R24" // delegate / delegateAtten — the INSERT write wrapper proves
+            | "delegateCapOpenVmDescriptor2R24" // delegate (GrantCapability) — an AUTHORITY-only cap-open
+                                                // twin that the honest producer NEVER routes to (it routes to
+                                                // `delegateWriteCapOpen` / `grantCapCapOpen`-fallback), so it
+                                                // carries the membership crown but NO on-the-wire cap-tree write:
+                                                // its post-cap-root (the inserted delegation edge) is host-trusted.
+                                                // Forbidding it forces the `delegateWriteCapOpen` route, exactly
+                                                // like its `grantCapCapOpen` sibling. (Registry-vs-list completeness
+                                                // diff: it was classified `Forbidden` by the weld matrix gauntlet but
+                                                // the deny-list did not enforce it — the laundering gap this closes.)
             | "introduceCapOpenVmDescriptor2R24" // Introduce — the INSERT write wrapper proves
             | "revokeCapabilityCapOpenVmDescriptor2R24" // RevokeCapability — the REMOVE write wrapper proves
                                                         // (`cap_write_revoke_cap_route_proves_and_verifies_light_client`)
@@ -3504,6 +3513,96 @@ fn is_forbidden_plain_cap_descriptor(name: &str) -> bool {
             | "grantCapVmDescriptor2R24"   // GrantCapability    (EFFECT_GRANT_CAPABILITY)
             | "revokeCapabilityVmDescriptor2R24" // RevokeCapability (EFFECT_REVOKE_CAPABILITY)
         )
+}
+
+/// The light-client AUTHORITY class of a deployed effect-vm descriptor key — the basis the authority
+/// floor (`is_forbidden_plain_cap_descriptor`) must agree with. This makes the deny-list's
+/// COMPLETENESS mechanical rather than a hand census: the test
+/// `authority_deny_list_is_complete_over_deployed_registry` enumerates EVERY descriptor in EVERY
+/// deployed registry, requires each to be classified (an UNCLASSIFIED, authority-shaped descriptor —
+/// e.g. a new authority effect or a welded twin entering the registry un-listed — returns `None` and
+/// FAILS the test instead of silently laundering), and asserts the deny-list forbids EXACTLY the
+/// laundering classes. The per-descriptor crown/write semantics are Lean-modeled (the cap-reshape
+/// crown + the `…WriteCapOpen…` cap-tree write); this closes the *list-completeness* leg the
+/// `RUST-ONLY-LOGIC-CENSUS` named (Tier-1 #1).
+#[cfg(all(test, feature = "prover"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DescriptorAuthorityClass {
+    /// Not a capability-AUTHORITY descriptor: the owner/normal path (transfer/mint/setField/spawn
+    /// (no delegation)/exercise/…) plus the ACCESS-gated cap-open routes (transfer/exercise CapOpen)
+    /// that gate an OWNED action behind a cap but confer NO authority. A light-client accept here is
+    /// not an authority launder. NOT forbidden.
+    NotAuthority,
+    /// A capability-MANAGEMENT effect (introduce / grant·delegate / revoke / attenuate /
+    /// revokeCapability / refreshDelegation / spawn-with-delegation) proven WITHOUT the on-the-wire
+    /// in-circuit proof of its authority: either a PLAIN descriptor (no membership crown) or an
+    /// AUTHORITY-ONLY cap-open (crown present, but NO `…WriteCapOpen…` cap-tree write — the
+    /// post-cap-root is host-trusted). Accepting it would launder forged authority into a light-client
+    /// proof. MUST be forbidden.
+    LaundersAuthority,
+    /// A capability-MANAGEMENT effect proven through its FULL in-circuit route — the
+    /// `…WriteCapOpen…` cap-tree-write wrapper (or `attenuateCapOpenEff`'s embedded Update) — so both
+    /// the membership crown AND the post-cap-root write are verified in-circuit. Light-client
+    /// verifiable; NOT forbidden.
+    CrownedWriteRoute,
+    /// `refreshVmDescriptor2R24` — the deliberately-plain NAMED RESIDUAL: a plain RefreshDelegation
+    /// re-arms an EXISTING delegation (confers no NEW authority), so it stays on the plain route. NOT
+    /// forbidden.
+    NamedResidual,
+}
+
+/// Classify a deployed descriptor key. `None` ⇒ the key is authority-SHAPED (a cap-open, or a
+/// cap-management verb prefix) but is NOT explicitly classified — a new such descriptor must be
+/// classified (and, if laundering, added to the deny-list) before it can ride the wire. Benign
+/// non-authority effects fall through to `NotAuthority`.
+#[cfg(all(test, feature = "prover"))]
+fn descriptor_authority_class(key: &str) -> Option<DescriptorAuthorityClass> {
+    use DescriptorAuthorityClass::*;
+    match key {
+        // PLAIN cap-management (crownless authority) — LAUNDERS.
+        "introduceVmDescriptor2R24"
+        | "revokeVmDescriptor2R24"
+        | "attenuateVmDescriptor2R24"
+        | "grantCapVmDescriptor2R24"
+        | "revokeCapabilityVmDescriptor2R24" => Some(LaundersAuthority),
+        // AUTHORITY-ONLY cap-open (crown, NO cap-tree write) for a CONFERRING effect — LAUNDERS
+        // (post-cap-root host-trusted; the honest route is the `…WriteCapOpen…` wrapper).
+        "grantCapCapOpenVmDescriptor2R24"
+        | "delegateCapOpenVmDescriptor2R24"
+        | "introduceCapOpenVmDescriptor2R24"
+        | "revokeCapOpenVmDescriptor2R24"
+        | "revokeCapabilityCapOpenVmDescriptor2R24"
+        | "refreshDelegationCapOpenVmDescriptor2R24"
+        | "spawnCapOpenVmDescriptor2R24" => Some(LaundersAuthority),
+        // FULL crowned WRITE route (membership + post-cap-root write verified in-circuit) — ALLOWED.
+        "delegateWriteCapOpenVmDescriptor2R24"
+        | "delegateAttenWriteCapOpenVmDescriptor2R24"
+        | "introduceWriteCapOpenVmDescriptor2R24"
+        | "revokeDelegationWriteCapOpenVmDescriptor2R24"
+        | "revokeCapabilityWriteCapOpenVmDescriptor2R24"
+        | "refreshDelegationWriteCapOpenVmDescriptor2R24"
+        | "spawnWriteCapOpenVmDescriptor2R24"
+        | "attenuateCapOpenEffVmDescriptor2R24" => Some(CrownedWriteRoute),
+        // NAMED RESIDUAL — re-arms an existing delegation; confers no new authority — ALLOWED plain.
+        "refreshVmDescriptor2R24" => Some(NamedResidual),
+        // ACCESS-gated (non-conferring) cap-open routes + the plain owner paths for cap-shaped verbs.
+        "transferCapOpenTBVmDescriptor2R24"
+        | "transferCapOpenEffVmDescriptor2R24"
+        | "exerciseCapOpenVmDescriptor2R24"
+        | "exerciseVmDescriptor2R24"
+        | "spawnVmDescriptor2R24" => Some(NotAuthority),
+        // Anything else: force review if it LOOKS authority-shaped, else it is a benign normal effect.
+        _ => {
+            let cap_management_prefix = ["introduce", "revoke", "attenuate", "grantCap", "delegate"]
+                .iter()
+                .any(|p| key.starts_with(p));
+            if key.contains("CapOpen") || cap_management_prefix {
+                None
+            } else {
+                Some(NotAuthority)
+            }
+        }
+    }
 }
 
 /// Verify a ROTATED effect-vm sub-proof (the C4 `"effect-vm-rotated"` leg): deserialize the
@@ -5117,6 +5216,107 @@ mod tests {
     use super::*;
     use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
     use dregg_circuit::field::BabyBear;
+
+    /// **THE AUTHORITY-FLOOR DENY-LIST IS COMPLETE OVER THE DEPLOYED REGISTRY** (the mechanical
+    /// completeness leg — `RUST-ONLY-LOGIC-CENSUS` Tier-1 #1). The authority floor
+    /// (`is_forbidden_plain_cap_descriptor`) is the ONLY barrier stopping a membership-free / write-free
+    /// cap-management descriptor from laundering host-trusted authority into a light-client proof. This
+    /// test makes the deny-list's COMPLETENESS mechanical instead of a hand census:
+    ///
+    /// 1. It enumerates EVERY descriptor key in EVERY deployed registry the wire verifier iterates
+    ///    (`V3_STAGED`, `WIDE`, and the umem-`WIDE_UMEM_WELD` registry — so WELDED authority descriptors
+    ///    are covered too, exactly the umem-flip concern).
+    /// 2. It requires each key to be CLASSIFIED (`descriptor_authority_class` ≠ `None`). A NEW
+    ///    authority-shaped descriptor entering a registry un-classified FAILS here — it cannot ride the
+    ///    wire silently.
+    /// 3. It asserts the deny-list forbids EXACTLY the laundering class
+    ///    (`LaundersAuthority`) and NOTHING in the allowed classes — so an authority descriptor that is
+    ///    classified as laundering but NOT added to `is_forbidden_plain_cap_descriptor` (the original
+    ///    gap, which let `delegateCapOpenVmDescriptor2R24` through) FAILS.
+    #[cfg(feature = "prover")]
+    #[test]
+    fn authority_deny_list_is_complete_over_deployed_registry() {
+        use dregg_circuit::effect_vm_descriptors::{
+            V3_STAGED_REGISTRY_TSV, WIDE_REGISTRY_STAGED_TSV, WIDE_UMEM_WELD_REGISTRY_TSV,
+        };
+        use std::collections::BTreeSet;
+
+        // The wire verifier (`verify_effect_vm_rotated_with_cutover`) passes the registry KEY (TSV
+        // col-0 — bare for every registry, including the welded one) to the deny-list, so we classify
+        // and check the SAME value.
+        let keys: BTreeSet<&str> = [
+            V3_STAGED_REGISTRY_TSV,
+            WIDE_REGISTRY_STAGED_TSV,
+            WIDE_UMEM_WELD_REGISTRY_TSV,
+        ]
+        .iter()
+        .flat_map(|tsv| tsv.lines())
+        .filter(|l| !l.is_empty())
+        .map(|l| l.split('\t').next().expect("registry line has a key"))
+        .collect();
+
+        assert!(
+            keys.len() > 40,
+            "sanity: the deployed registries enumerate the full descriptor set (got {})",
+            keys.len()
+        );
+
+        for key in &keys {
+            let class = descriptor_authority_class(key).unwrap_or_else(|| {
+                panic!(
+                    "deployed descriptor {key} is NOT classified by `descriptor_authority_class` — \
+                     a new authority-shaped descriptor entered a registry un-classified. Classify it \
+                     (and, if it is a membership-free / write-free cap-management descriptor, add it to \
+                     `is_forbidden_plain_cap_descriptor`) before it can ride the light-client wire."
+                )
+            });
+            let must_forbid = class == DescriptorAuthorityClass::LaundersAuthority;
+            assert_eq!(
+                is_forbidden_plain_cap_descriptor(key),
+                must_forbid,
+                "AUTHORITY-FLOOR DRIFT for {key}: classified {class:?} (must_forbid={must_forbid}) but \
+                 the deny-list says is_forbidden={}. A laundering authority descriptor MUST be \
+                 forbidden; an allowed route MUST NOT be.",
+                is_forbidden_plain_cap_descriptor(key)
+            );
+        }
+    }
+
+    /// The completeness check BITES: a *synthetic* new authority descriptor (a cap-open / cap-management
+    /// verb the registry did not declare before) is UNCLASSIFIED (`None`), so the enumeration test above
+    /// would panic on it rather than silently admit it. (Mirrors the umem-flip risk: a welded authority
+    /// twin landing in the registry without a deny-list entry.)
+    #[test]
+    fn new_unlisted_authority_descriptor_is_unclassified_and_bites() {
+        // A brand-new cap-open authority descriptor (the laundering shape) — not yet in any match arm.
+        assert_eq!(
+            descriptor_authority_class("superGrantCapOpenVmDescriptor2R24"),
+            None,
+            "a new cap-open authority descriptor must force review (None), not slip through"
+        );
+        // A new PLAIN cap-management verb is also caught by the verb-prefix net.
+        assert_eq!(
+            descriptor_authority_class("delegateSuperVmDescriptor2R24"),
+            None,
+            "a new cap-management verb descriptor must force review (None)"
+        );
+        // A benign non-authority effect is NOT spuriously flagged (no false-positive churn).
+        assert_eq!(
+            descriptor_authority_class("transferVmDescriptor2R24"),
+            Some(DescriptorAuthorityClass::NotAuthority),
+            "a plain owner transfer is the normal path, not an authority launder"
+        );
+        // The closed gap: the authority-only delegate cap-open is now classified as laundering AND
+        // forbidden by the deny-list.
+        assert_eq!(
+            descriptor_authority_class("delegateCapOpenVmDescriptor2R24"),
+            Some(DescriptorAuthorityClass::LaundersAuthority)
+        );
+        #[cfg(feature = "prover")]
+        assert!(is_forbidden_plain_cap_descriptor(
+            "delegateCapOpenVmDescriptor2R24"
+        ));
+    }
 
     /// **The 6 fan-out cap-effects + transfer/attenuate each route to their OWN cap-open descriptor at
     /// their OWN effect-kind bit.** This is the wire-side mirror of the apex authority leg's re-key
