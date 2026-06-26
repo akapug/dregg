@@ -2655,8 +2655,9 @@ fn build_effect_vm_cap_open_leg(
 > {
     use dregg_circuit::descriptor_ir2::parse_vm_descriptor2;
     use dregg_circuit::effect_vm::trace_rotated::{
-        CapOpenWitness, RotatedBlockWitness, append_wide_carriers_cap_open, cap_open_tb_dpis,
-        empty_caveat_manifest, generate_rotated_cap_write_base, generate_rotated_effect_vm_trace,
+        CAP_OPEN_TB_WIDTH, CapOpenWitness, RotatedBlockWitness, append_wide_carriers,
+        append_wide_carriers_cap_open, cap_open_tb_dpis, empty_caveat_manifest,
+        generate_rotated_cap_write_base, generate_rotated_effect_vm_trace,
         patch_attenuate_base_for_cap_open, transfer_caveat_manifest, widen_to_cap_open,
         widen_to_cap_open_tb,
     };
@@ -2679,11 +2680,14 @@ fn build_effect_vm_cap_open_leg(
     // GRANT_CAPABILITY) when the write route is active; else the route's authority-only facet.
     let crown_eff_bit = cap_write.map(|(_, _, eb)| eb).unwrap_or(route.eff_bit);
 
-    // WIDE eligibility: the effective key must have a proven wide twin AND the route must NOT be
-    // turn-bound (the TB widen lands the identity columns at CAP_OPEN_TB width, which the
-    // `append_wide_carriers_cap_open` 818-width lift does not accept). Write-bearing keys are excluded
-    // by `cap_open_key_has_wide_twin`. Eligible ⇒ resolve the WIDE descriptor; else the 1-felt V3.
-    let go_wide = wide && !route.turn_bound && cap_open_key_has_wide_twin(effective_key);
+    // WIDE eligibility: the effective key must have a PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV`.
+    // EVERY live cap-open key — the authority crown, the §10 WRITE tail, AND the turn-bound
+    // `transferCapOpenTB` (its wide twin at `CAP_OPEN_TB_WIDTH + 208 = 1029`, the `wideAppend` at the
+    // transfer face, emitted by `EmitWideRegistryProbe`) — now has a wide twin, so the resolver is a
+    // straight registry lookup (no TB exclusion). The TB branch below lands its 8-felt carriers at the
+    // CAP_OPEN_TB host width (the 2 turn-identity columns ride UNDER the carriers); the non-TB branch
+    // uses the `CAP_OPEN_WIDTH` lift. Eligible ⇒ resolve the WIDE descriptor; else the 1-felt V3.
+    let go_wide = wide && cap_open_wide_descriptor_json_by_key(effective_key).is_ok();
     let json = if go_wide {
         cap_open_wide_descriptor_json_by_key(effective_key)?
     } else {
@@ -2839,7 +2843,20 @@ fn build_effect_vm_cap_open_leg(
         widen_to_cap_open_tb(&mut trace, &cap_open, actor, dst).map_err(|e| {
             SdkError::InvalidWitness(format!("cap-open TB widen ({}): {e}", route.key))
         })?;
-        cap_open_tb_dpis(&dpis, src, actor, dst)
+        let tb_pis = cap_open_tb_dpis(&dpis, src, actor, dst);
+        if go_wide {
+            // THE WIDE TB LIFT: append the two 13×8 BEFORE/AFTER wide carriers PAST the cap-open-TB host
+            // (`append_wide_carriers` at `CAP_OPEN_TB_WIDTH`, geometry-identical to
+            // `generate_rotated_transfer_cap_open_tb_wide`) + the 16 wide commit PIs. The cap-membership
+            // host columns AND the two turn-identity columns are CARRIED UNCHANGED; the carriers re-absorb
+            // the SAME limbs into the 8-felt commit, so the leg publishes the full ~124-bit before/after
+            // anchor at its LAST 16 PIs (the wide anchor `verify_full_turn_bound` binds) WHILE preserving
+            // the #225 turn-identity pins at PI 38/39/40. Closes the ~31-bit waist for the cap-gated
+            // (cross-vat / self) Transfer route — the route the deployed node cap path proves.
+            append_wide_carriers(&mut trace, tb_pis, CAP_OPEN_TB_WIDTH)
+        } else {
+            tb_pis
+        }
     } else {
         widen_to_cap_open(&mut trace, &cap_open).map_err(|e| {
             SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key))
@@ -3347,15 +3364,18 @@ fn prove_cohort_run_chain(
             let route = cap_open_route_for_run(run_effects).ok_or_else(|| {
                 SdkError::InvalidWitness("cap-open routing: unreachable (gated above)".into())
             })?;
-            // THE WIDE CAP-OPEN FLAG-DAY: an AUTHORITY-CROWN cap-open key (non-Write, non-TB) has a
-            // PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV` (Lean `v3RegistryCapOpenWide`), so this
-            // run goes WIDE — its leg publishes the full ~124-bit 8-felt commit (the wide carriers
-            // appended past the membership crown). A WRITE/TB key has no proven wide twin yet, so it
-            // stays 1-felt (the named residual). The producer-side `go_wide` gate inside
-            // `prove_effect_vm_cap_open` mirrors this `cap_open_key_has_wide_twin` check, and the leg's
-            // vk_hash is pinned to whichever descriptor (wide vs V3) was actually proven.
+            // THE WIDE CAP-OPEN FLAG-DAY (cap-open tail CLOSED): EVERY live cap-open key — the
+            // authority crown, the §10 WRITE tail, AND the turn-bound `transferCapOpenTB` — now has a
+            // PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV` (Lean `v3RegistryCapOpenWide` + the
+            // `EmitWideRegistryProbe` transfer-face `wideAppend` for TB), so this run goes WIDE — its
+            // leg publishes the full ~124-bit 8-felt commit (the wide carriers appended past the
+            // membership crown / turn-identity pins). The producer-side `go_wide` gate inside
+            // `build_effect_vm_cap_open_leg` is the SAME registry lookup, and the leg's vk_hash is
+            // pinned to the wide descriptor that was proven so `verify_full_turn_bound`'s `leg_is_wide`
+            // binds the 8-felt tail. The ~31-bit waist is GONE for cap-gated turns (the deployed node
+            // cap path proves the TB Transfer route — see `node::turn_proving`'s wide commit anchors).
             let effective_key = cap_open_effective_key(&route, cap);
-            let go_wide = cap_open_key_has_wide_twin(effective_key);
+            let go_wide = cap_open_wide_descriptor_json_by_key(effective_key).is_ok();
             let (proof, dpis) = prove_effect_vm_cap_open(
                 &s_k,
                 run_effects,

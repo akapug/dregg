@@ -1137,20 +1137,32 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
     };
     let (_trace, pi) = generate_effect_vm_trace(&initial_vm_state, &vm_effects);
 
-    // WIDE FLAG-DAY — THE NAMED RESIDUAL (cap-open tail). A capability-gated turn threads
-    // `cap_membership` (below), so `prove_cohort_run_chain` routes the run through the CAP-OPEN
-    // producer (`prove_effect_vm_cap_open`), which still emits the 1-felt V3 cap-open descriptor (the
-    // wide twins of the `…CapOpen…` members are NOT yet in `WIDE_REGISTRY_STAGED_TSV`). The
-    // light-client verifier's V3 fallback accepts that cap-open leg and binds its 1-felt commit
-    // broadcast into slot 0 (`leg_commit`'s narrow branch). So the trusted anchor here is the SAME
-    // 1-felt-in-slot-0 form — the residual ~31-bit waist for cap-gated turns ONLY, until the wide
-    // cap-open descriptors land. (Normal owner-authorized turns are fully wide; see
-    // `prove_and_verify_finalized_turn`.) `pi[NEW_COMMIT]` is the v1-prefix post-commit the cap-open
-    // leg also publishes at `pi::NEW_COMMIT`.
-    let (old_commit, new_commit) = (
-        wide_from_felt(initial_vm_state.state_commitment),
-        wide_from_felt(pi[dregg_circuit::effect_vm::pi::NEW_COMMIT]),
-    );
+    // WIDE FLAG-DAY — THE CAP-OPEN TAIL CLOSED. A capability-gated turn threads `cap_membership`
+    // (below), so `prove_cohort_run_chain` routes the run through the CAP-OPEN producer
+    // (`prove_effect_vm_cap_open`). EVERY live cap-open key — the authority crown, the §10 WRITE tail,
+    // AND the turn-bound `transferCapOpenTB` (the route THIS deployed cap path proves) — now has a
+    // PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV`, so the cap-open leg publishes the FULL 8-felt
+    // (~124-bit) BEFORE/AFTER commit at its LAST 16 PIs (the wide carriers appended past the membership
+    // crown / turn-identity pins). `verify_full_turn_bound`'s `leg_is_wide` (keyed on the wide-registry
+    // fingerprint the leg's vk_hash pins) binds those 8-felt slices — so the trusted anchor here must be
+    // the GENUINE wide chain endpoints, NOT the 1-felt-in-slot-0 form. We derive them exactly as the
+    // owner-authorized path does (`rotation.wide_commit_anchors`, generate-only, the SAME wide carriers
+    // the producer absorbs), threading the BEFORE nullifier-set leaves for a cap-turn that also spends.
+    // The ~31-bit waist is GONE for cap-gated turns. (Without a rotation witness the retired v1 cap leg
+    // runs and the verifier broadcasts its 1-felt commit into slot 0 — matched by `wide_from_felt`.)
+    let before_nullifiers: Vec<BabyBear> = non_revocation
+        .as_ref()
+        .map(|(tree, _)| tree.revoked_leaves())
+        .unwrap_or_default();
+    let (old_commit, new_commit) = match &rotation {
+        Some(rot) => rot
+            .wide_commit_anchors(&initial_vm_state, &vm_effects, Some(&before_nullifiers))
+            .map_err(FullTurnProvingError::Prove)?,
+        None => (
+            wide_from_felt(initial_vm_state.state_commitment),
+            wide_from_felt(pi[dregg_circuit::effect_vm::pi::NEW_COMMIT]),
+        ),
+    };
 
     // #225 TURN-IDENTITY (cross-vat close): derive the genuine `(actor, src, dst)` single-felt
     // identity from the REAL turn so a cap-gated transfer where the cap HOLDER/actor (`agent`)
