@@ -1899,6 +1899,106 @@ fn evaluate_constraint_full(
                 )
             }
         }
+
+        // ─── Register-reading temporal atoms (the proven `TemporalAlgebra`
+        //     family). Each honors the discharged Lean semantics
+        //     (`TemporalAtom.eval` / `EventAtom.eval`,
+        //     `metatheory/Dregg2/Authority/TemporalAlgebra{,2}.lean`): read the
+        //     COMMITTED PRE-state register (`old_state`; absent ⇒ 0 ⇒
+        //     `FIELD_ZERO`), fail closed. ───
+        StateConstraint::RateBound { counter_index, k } => {
+            let idx = check_index(*counter_index)?;
+            // Lean `TemporalAtom.rateBound`: admit iff `fieldOf counter rec < k`
+            // over the committed PRE-state record.
+            let count = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if count >= *k {
+                return violated(
+                    constraint,
+                    format!("rate counter field[{idx}] = {count} not < k = {k}"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::CooledSince { staged_at, period } => {
+            let ctx = ctx.ok_or(ProgramError::MissingContextField {
+                field: "block_height",
+            })?;
+            // Lean `TemporalAtom.cooledSince` ≡ `afterHeight (staged_at + period)`.
+            let boundary = staged_at.saturating_add(*period);
+            if ctx.block_height < boundary {
+                return violated(
+                    constraint,
+                    format!(
+                        "height {} < cooled boundary staged_at({staged_at}) + period({period}) = {boundary}",
+                        ctx.block_height
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::UntilEvent { flag_index } => {
+            let idx = check_index(*flag_index)?;
+            // Lean `EventAtom.untilEvent`: admit WHILE the pre-state flag reads 0.
+            let flag = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if flag != 0 {
+                return violated(
+                    constraint,
+                    format!(
+                        "event flag field[{idx}] already set ({flag} != 0); UntilEvent (U) closed"
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::SinceEvent { flag_index } => {
+            let idx = check_index(*flag_index)?;
+            // Lean `EventAtom.sinceEvent`: admit only SINCE the pre-state flag
+            // is set (absent ⇒ 0 ⇒ refuse, fail-closed).
+            let flag = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if flag == 0 {
+                return violated(
+                    constraint,
+                    format!("event flag field[{idx}] not yet set; SinceEvent (S) fails closed"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::ChallengeWindow {
+            challenge_index,
+            staged_at,
+            period,
+        } => {
+            let idx = check_index(*challenge_index)?;
+            let ctx = ctx.ok_or(ProgramError::MissingContextField {
+                field: "block_height",
+            })?;
+            // Lean `TemporalAtom.challengeWindow`: window elapsed AND no
+            // challenge filed (pre-state challenge register reads 0).
+            let boundary = staged_at.saturating_add(*period);
+            if ctx.block_height < boundary {
+                return violated(
+                    constraint,
+                    format!(
+                        "challenge window not elapsed: height {} < staged_at({staged_at}) + period({period}) = {boundary}",
+                        ctx.block_height
+                    ),
+                );
+            }
+            let challenge = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if challenge != 0 {
+                return violated(
+                    constraint,
+                    format!(
+                        "challenge filed (field[{idx}] = {challenge} != 0); settlement refused"
+                    ),
+                );
+            }
+            Ok(())
+        }
     }
 }
 

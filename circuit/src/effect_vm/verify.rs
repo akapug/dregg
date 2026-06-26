@@ -297,6 +297,51 @@ pub fn verify_slot_caveat_manifest(
                     ));
                 }
             }
+            // Register-reading temporal atoms (the proven `TemporalAlgebra`
+            // family). Each reads the PRE-state slot view (`old_v`), the way
+            // the Lean atoms read the committed pre-state record. As with the
+            // other scalar slot caveats, the AIR-teeth view is the 4-byte slot
+            // truncation (`SLOT-CAVEATS-DESIGN.md` §4); the executor does the
+            // full-width check.
+            t if t == pi::SLOT_CAVEAT_TAG_RATE_BOUND => {
+                // rateBound: pre-state counter register `old_v < k` (p0 = k).
+                if !(old_v < p0) {
+                    return Err(format!(
+                        "slot-caveat[{i}] RateBound on slot {slot_idx}: counter {old_v:?} not < k {p0:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_UNTIL_EVENT => {
+                // untilEvent (U): admit WHILE the pre-state flag register reads 0.
+                if old_v != BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] UntilEvent on slot {slot_idx}: flag {old_v:?} already set"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_SINCE_EVENT => {
+                // sinceEvent (S): admit only SINCE the pre-state flag is set (≠ 0).
+                if old_v == BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] SinceEvent on slot {slot_idx}: flag not yet set"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_CHALLENGE_WINDOW => {
+                // challengeWindow: window elapsed (height >= p0 = staged_at +
+                // period) AND no challenge filed (pre-state register reads 0).
+                let boundary = p0.0 as u64;
+                if block_height < boundary {
+                    return Err(format!(
+                        "slot-caveat[{i}] ChallengeWindow on slot {slot_idx}: height {block_height} < boundary {boundary}"
+                    ));
+                }
+                if old_v != BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] ChallengeWindow on slot {slot_idx}: challenge filed ({old_v:?})"
+                    ));
+                }
+            }
             t if t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS => {
                 // Bounded AIR-teeth lane: singleton transition table.
                 //

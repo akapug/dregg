@@ -3119,6 +3119,30 @@ fn view_projection_is_total_and_kind_tagged() {
             },
             "ClearanceDominates",
         ),
+        (
+            StateConstraint::RateBound {
+                counter_index: 1,
+                k: 5,
+            },
+            "RateBound",
+        ),
+        (
+            StateConstraint::CooledSince {
+                staged_at: 100,
+                period: 50,
+            },
+            "CooledSince",
+        ),
+        (StateConstraint::UntilEvent { flag_index: 2 }, "UntilEvent"),
+        (StateConstraint::SinceEvent { flag_index: 2 }, "SinceEvent"),
+        (
+            StateConstraint::ChallengeWindow {
+                challenge_index: 2,
+                staged_at: 100,
+                period: 50,
+            },
+            "ChallengeWindow",
+        ),
     ];
 
     // COVERAGE TOOTH: this match must name every variant exactly once.
@@ -3184,7 +3208,12 @@ fn view_projection_is_total_and_kind_tagged() {
             | StateConstraint::SymMemberOf { .. }
             | StateConstraint::DigEq { .. }
             | StateConstraint::DigFieldEq { .. }
-            | StateConstraint::ClearanceDominates { .. } => {}
+            | StateConstraint::ClearanceDominates { .. }
+            | StateConstraint::RateBound { .. }
+            | StateConstraint::CooledSince { .. }
+            | StateConstraint::UntilEvent { .. }
+            | StateConstraint::SinceEvent { .. }
+            | StateConstraint::ChallengeWindow { .. } => {}
         }
     }
 
@@ -3361,4 +3390,153 @@ fn view_projection_is_total_and_kind_tagged() {
         j["inner"]["kind"], "FieldEquals",
         "Not view nests its inner view"
     );
+}
+
+// ── Register-reading temporal atoms (the proven `TemporalAlgebra` family) ──
+//
+// PLUMBING-ON-PROOF: these mirror, value-for-value, the `#assert_axioms`-clean
+// Lean `#guard` non-vacuity examples in
+// `metatheory/Dregg2/Authority/TemporalAlgebra{,2}.lean` (§6 / §1). Each atom
+// reads the COMMITTED PRE-state register (`old_state`) the way the Lean atoms
+// read the target cell's pre-state record; both polarities must bite.
+
+/// Pre-state record carrying the two registers the register atoms read:
+/// an admission counter `bids_count` at slot 1 = 3, an empty `challenge`
+/// register at slot 2 = 0 (the Lean `tRec`).
+fn t_rec(counter: u64, challenge: u64) -> CellState {
+    let mut s = CellState::new(0);
+    s.fields[1] = field_from_u64(counter);
+    s.fields[2] = field_from_u64(challenge);
+    s
+}
+
+#[test]
+fn rate_bound_under_and_at_limit() {
+    // Lean: rateBound "bids_count" 5 .eval _ tRec == true (3 < 5);
+    //       rateBound "bids_count" 3 .eval _ tRec == false (3 ≮ 3).
+    let old = t_rec(3, 0);
+    let new_s = t_rec(3, 0);
+    let under = CellProgram::Predicate(vec![StateConstraint::RateBound {
+        counter_index: 1,
+        k: 5,
+    }]);
+    assert!(
+        under.evaluate(&new_s, Some(&old), None).is_ok(),
+        "3 < 5 admits"
+    );
+    let at = CellProgram::Predicate(vec![StateConstraint::RateBound {
+        counter_index: 1,
+        k: 3,
+    }]);
+    assert!(
+        at.evaluate(&new_s, Some(&old), None).is_err(),
+        "3 ≮ 3 rejects"
+    );
+}
+
+#[test]
+fn until_since_event_flip() {
+    // Lean: untilEvent admits while flag = 0, rejects once set; sinceEvent the
+    // exact complement (until_since_complement).
+    let until = CellProgram::Predicate(vec![StateConstraint::UntilEvent { flag_index: 2 }]);
+    let since = CellProgram::Predicate(vec![StateConstraint::SinceEvent { flag_index: 2 }]);
+
+    let open = t_rec(3, 0); // challenge register 0 = event not yet fired
+    assert!(
+        until.evaluate(&open, Some(&open), None).is_ok(),
+        "U admits before event"
+    );
+    assert!(
+        since.evaluate(&open, Some(&open), None).is_err(),
+        "S fails closed before event"
+    );
+
+    let fired = t_rec(3, 1); // the event register flipped non-zero
+    assert!(
+        until.evaluate(&fired, Some(&fired), None).is_err(),
+        "U closed after event"
+    );
+    assert!(
+        since.evaluate(&fired, Some(&fired), None).is_ok(),
+        "S admits since event"
+    );
+}
+
+#[test]
+fn cooled_since_boundary() {
+    // Lean: cooledSince 100 50 refuses at 149 (still cooling), admits at 150.
+    let p = CellProgram::Predicate(vec![StateConstraint::CooledSince {
+        staged_at: 100,
+        period: 50,
+    }]);
+    assert!(
+        p.evaluate(&t_rec(3, 0), None, Some(&ctx_at(149))).is_err(),
+        "still cooling at 149"
+    );
+    assert!(
+        p.evaluate(&t_rec(3, 0), None, Some(&ctx_at(150))).is_ok(),
+        "cooled at 150"
+    );
+}
+
+#[test]
+fn challenge_window_three_polarities() {
+    // Lean: challengeWindow "challenge" 100 50 — true after a challenge-free
+    // window (height 150, register 0); false while the window is open (120);
+    // false once challenged (height 150, register != 0).
+    let p = CellProgram::Predicate(vec![StateConstraint::ChallengeWindow {
+        challenge_index: 2,
+        staged_at: 100,
+        period: 50,
+    }]);
+    let clean = t_rec(3, 0);
+    let challenged = t_rec(3, 1);
+    assert!(
+        p.evaluate(&clean, Some(&clean), Some(&ctx_at(150))).is_ok(),
+        "elapsed + unchallenged"
+    );
+    assert!(
+        p.evaluate(&clean, Some(&clean), Some(&ctx_at(120)))
+            .is_err(),
+        "window still open"
+    );
+    assert!(
+        p.evaluate(&challenged, Some(&challenged), Some(&ctx_at(150)))
+            .is_err(),
+        "challenge filed"
+    );
+}
+
+#[test]
+fn temporal_register_atoms_round_trip_views() {
+    // The new caveats are first-class in the self-describing live view.
+    for (sc, kind) in [
+        (
+            StateConstraint::RateBound {
+                counter_index: 1,
+                k: 5,
+            },
+            "RateBound",
+        ),
+        (
+            StateConstraint::CooledSince {
+                staged_at: 100,
+                period: 50,
+            },
+            "CooledSince",
+        ),
+        (StateConstraint::UntilEvent { flag_index: 2 }, "UntilEvent"),
+        (StateConstraint::SinceEvent { flag_index: 2 }, "SinceEvent"),
+        (
+            StateConstraint::ChallengeWindow {
+                challenge_index: 2,
+                staged_at: 100,
+                period: 50,
+            },
+            "ChallengeWindow",
+        ),
+    ] {
+        let json = serde_json::to_value(sc.to_view()).expect("view serializes");
+        assert_eq!(json.get("kind").and_then(|k| k.as_str()), Some(kind));
+    }
 }

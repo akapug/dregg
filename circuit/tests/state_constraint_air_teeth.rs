@@ -294,6 +294,119 @@ fn temporal_gate_rejects_above_not_after() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Register-reading temporal atoms (the proven `TemporalAlgebra` family).
+// Each reads the PRE-state slot view (`initial`), mirroring the Lean atom
+// reading the committed pre-state record. Both polarities must bite.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn rate_bound_accepts_under_and_rejects_at_limit() {
+    // Lean tRec: counter register (slot 1) reads 3.
+    let initial = fields_with(1, 3);
+    let final_ = fields_with(1, 3);
+    let under = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_RATE_BOUND,
+        slot_index: 1,
+        params: [
+            BabyBear::new(5),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let pi_under = pi_with_manifest(&[under]);
+    assert!(
+        verify_slot_caveat_manifest(&pi_under, &initial, &final_, 0).is_ok(),
+        "3 < 5 admits"
+    );
+    let at = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_RATE_BOUND,
+        slot_index: 1,
+        params: [
+            BabyBear::new(3),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let pi_at = pi_with_manifest(&[at]);
+    assert!(
+        verify_slot_caveat_manifest(&pi_at, &initial, &final_, 0).is_err(),
+        "3 ≮ 3 rejects"
+    );
+}
+
+#[test]
+fn until_event_admits_while_clear_rejects_once_set() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_UNTIL_EVENT,
+        slot_index: 2,
+        params: [BabyBear::ZERO; 4],
+    };
+    let pi_vec = pi_with_manifest(&[entry]);
+    let clear = fields_with(2, 0);
+    let set = fields_with(2, 1);
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &clear, &clear, 0).is_ok(),
+        "U admits before event"
+    );
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &set, &set, 0).is_err(),
+        "U closed after event"
+    );
+}
+
+#[test]
+fn since_event_rejects_while_clear_admits_once_set() {
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_SINCE_EVENT,
+        slot_index: 2,
+        params: [BabyBear::ZERO; 4],
+    };
+    let pi_vec = pi_with_manifest(&[entry]);
+    let clear = fields_with(2, 0);
+    let set = fields_with(2, 1);
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &clear, &clear, 0).is_err(),
+        "S fails closed before event"
+    );
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &set, &set, 0).is_ok(),
+        "S admits since event"
+    );
+}
+
+#[test]
+fn challenge_window_three_polarities() {
+    // boundary = staged_at(100) + period(50) = 150 carried in p0.
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_CHALLENGE_WINDOW,
+        slot_index: 2,
+        params: [
+            BabyBear::new(150),
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+            BabyBear::ZERO,
+        ],
+    };
+    let pi_vec = pi_with_manifest(&[entry]);
+    let clean = fields_with(2, 0);
+    let challenged = fields_with(2, 1);
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &clean, &clean, 150).is_ok(),
+        "elapsed + unchallenged admits"
+    );
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &clean, &clean, 120).is_err(),
+        "window still open rejects"
+    );
+    assert!(
+        verify_slot_caveat_manifest(&pi_vec, &challenged, &challenged, 150).is_err(),
+        "challenge filed rejects"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Manifest hygiene: padding entries must be zero
 // ─────────────────────────────────────────────────────────────────────
 
