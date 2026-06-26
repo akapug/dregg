@@ -140,7 +140,8 @@ mod tests {
         );
 
         // 2) The reactor OBSERVES the publish (off its committed effects) and reacts.
-        let observed = ObservedReceipt::from_action(&action, receipt.turn_hash, cclerk.public_key().0);
+        let observed =
+            ObservedReceipt::from_action(&action, receipt.turn_hash, cclerk.public_key().0);
         let reactor = SubscriptionConsumerReactor::new(feed);
         let turn = react_build(&cclerk, &reactor, &observed, InvokeAuthority::Signature)
             .expect("a Signature-holding reactor is authorized")
@@ -187,7 +188,8 @@ mod tests {
         let receipt = executor
             .submit_action(&cclerk, action.clone())
             .expect("publish commits");
-        let observed = ObservedReceipt::from_action(&action, receipt.turn_hash, cclerk.public_key().0);
+        let observed =
+            ObservedReceipt::from_action(&action, receipt.turn_hash, cclerk.public_key().0);
         let reactor = SubscriptionConsumerReactor::new(feed);
 
         // A None-authority reactor cannot satisfy the Signature-required reaction.

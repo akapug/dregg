@@ -602,7 +602,9 @@ mod tests {
 
     fn assert_only_real_ops(json: &serde_json::Value) {
         for instr in json["instructions"].as_array().expect("instructions array") {
-            let op = instr["op"].as_str().expect("each instruction has a string `op`");
+            let op = instr["op"]
+                .as_str()
+                .expect("each instruction has a string `op`");
             assert!(
                 REAL_ZKIR_OPS.contains(&op),
                 "emitted ZKIR op `{op}` is not a real ZKIR v3 instruction"
@@ -615,8 +617,16 @@ mod tests {
         let ir = ConstraintIr {
             name: ident("floor_caveat"),
             params: vec![
-                Param { name: ident("balance"), ty: ParamType::U64, mutable: false },
-                Param { name: ident("floor"), ty: ParamType::U64, mutable: false },
+                Param {
+                    name: ident("balance"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("floor"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
             ],
             statements: vec![Statement::Require(Requirement {
                 kind: RequirementKind::GreaterEqual {
@@ -631,7 +641,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         // `IrSource::version` is an `IrMinorVersion` (serde_repr u8), not a
         // `{major, minor}` object — emit the faithful numeric form.
-        assert!(v["version"].is_number(), "version must be the numeric minor-version repr");
+        assert!(
+            v["version"].is_number(),
+            "version must be the numeric minor-version repr"
+        );
         assert_only_real_ops(&v);
     }
 
@@ -641,10 +654,26 @@ mod tests {
         let ir = ConstraintIr {
             name: ident("merkle_caveat"),
             params: vec![
-                Param { name: ident("root"), ty: ParamType::ByteArray32, mutable: false },
-                Param { name: ident("leaf"), ty: ParamType::ByteArray32, mutable: false },
-                Param { name: ident("position"), ty: ParamType::U64, mutable: false },
-                Param { name: ident("siblings"), ty: ParamType::ByteMatrix32(depth), mutable: false },
+                Param {
+                    name: ident("root"),
+                    ty: ParamType::ByteArray32,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("leaf"),
+                    ty: ParamType::ByteArray32,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("position"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("siblings"),
+                    ty: ParamType::ByteMatrix32(depth),
+                    mutable: false,
+                },
             ],
             statements: vec![Statement::Require(Requirement {
                 kind: RequirementKind::MerkleAtPosition {
@@ -662,7 +691,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).expect("emitted ZKIR is valid JSON");
 
         // No placeholder/stub op survives.
-        assert!(!json.contains("_stub"), "MerkleAtPosition must not emit a placeholder op:\n{json}");
+        assert!(
+            !json.contains("_stub"),
+            "MerkleAtPosition must not emit a placeholder op:\n{json}"
+        );
         // Real ops only, and one fold (transient_hash) per Merkle level.
         assert_only_real_ops(&v);
         assert_eq!(
@@ -670,9 +702,18 @@ mod tests {
             depth as usize,
             "one TransientHash fold per Merkle level"
         );
-        assert!(json.contains(r#""op": "div_mod_power_of_two""#), "path-bit extraction");
-        assert!(json.contains(r#""op": "cond_select""#), "ordered-pair selection");
-        assert!(json.contains(r#""op": "private_input""#), "witnessed sibling");
+        assert!(
+            json.contains(r#""op": "div_mod_power_of_two""#),
+            "path-bit extraction"
+        );
+        assert!(
+            json.contains(r#""op": "cond_select""#),
+            "ordered-pair selection"
+        );
+        assert!(
+            json.contains(r#""op": "private_input""#),
+            "witnessed sibling"
+        );
         // Terminator is `output`.
         let last = v["instructions"].as_array().unwrap().last().unwrap();
         assert_eq!(last["op"], "output");

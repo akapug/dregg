@@ -26,7 +26,30 @@ use dregg_circuit_prove::ivc_turn_chain::FinalizedTurn;
 use dregg_circuit_prove::joint_turn_aggregation::{DescriptorParticipant, RotatedParticipantLeg};
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 
-use dregg_lightclient::{FinalityCert, fold_and_attest, verify_finalized_history, verify_history};
+use dregg_lightclient::{
+    FinalityCert, SignedVote, finality_signing_message, fold_and_attest, verify_finalized_history,
+    verify_history,
+};
+use ed25519_dalek::{Signer, SigningKey};
+
+/// A genuine signed ratification vote for validator `i` over `(root, participant_count)` — the demo's
+/// validators sign the finalized root, so the light client's signature-bound quorum check (the
+/// `CertValid` binding leg) accepts them.
+fn demo_signed_vote(
+    i: u8,
+    root: dregg_circuit::field::BabyBear,
+    participant_count: usize,
+) -> SignedVote {
+    let mut seed = [0u8; 32];
+    seed[0] = i;
+    seed[31] = 0xA5;
+    let sk = SigningKey::from_bytes(&seed);
+    let sig = sk.sign(&finality_signing_message(root, participant_count));
+    SignedVote {
+        validator: sk.verifying_key().to_bytes(),
+        signature: sig.to_bytes(),
+    }
+}
 
 /// OPEN permissions so the rotated producer-witness path admits the actor cell without auth gating
 /// (mirrors `circuit/tests/rotation_batchstark_leaf_smoke.rs`).
@@ -298,15 +321,10 @@ fn main() {
     // --- 6. The THIRD leg — finality (a correct history must also be FINALIZED) ------------------
     rule("6. FINALITY LEG — the trusted root was QUORUM-finalized (three-leg client)");
     // n=4 participants ⇒ supermajority threshold 2*4/3 + 1 = 3. A genuine 3-of-4 quorum.
-    let signers: Vec<[u8; 32]> = (0..3u8)
-        .map(|i| {
-            let mut id = [0u8; 32];
-            id[0] = i;
-            id
-        })
-        .collect();
     let cert = FinalityCert {
-        signers,
+        votes: (0..3u8)
+            .map(|i| demo_signed_vote(i, final_root, 4))
+            .collect(),
         participant_count: 4,
         finalized_root: final_root,
     };
@@ -327,7 +345,9 @@ fn main() {
 
     // Sub-quorum is refused (the fork-attack defense).
     let weak = FinalityCert {
-        signers: vec![[1u8; 32], [2u8; 32]], // 2 of 4 — below the threshold of 3
+        votes: (0..2u8)
+            .map(|i| demo_signed_vote(i, final_root, 4))
+            .collect(), // 2 of 4 — below the threshold of 3
         participant_count: 4,
         finalized_root: final_root,
     };
