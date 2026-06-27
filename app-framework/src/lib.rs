@@ -64,6 +64,7 @@ pub mod invoke;
 pub mod middleware;
 pub mod multi_group;
 pub mod optimistic_fire;
+pub mod payable;
 pub mod persistence;
 pub mod queue_endpoint;
 pub mod reactor;
@@ -155,6 +156,16 @@ pub use invoke::{
 pub use reactor::{
     ObservedReceipt, ReactRefused, ReactionPlan, Reactor, ReceiptFilter, WatchCells, WatchMethods,
     plan_reaction, react, react_build, react_to_stream,
+};
+
+// The `Payable` DSI: the dregg standard interface for cross-app VALUE FLOW. A
+// `pay(asset, amount, to)` routes through the shared interface and desugars to a
+// real conserving `Effect::Transfer`, so any two `Payable` apps interoperate by
+// default (`docs/deos/APPS-INTEROP-CENSUS.md` gap #1/#3). No `Effect::Invoke`, no
+// new commitment — value flows through one shared, standardized interface.
+pub use payable::{
+    AssetId, BALANCE_METHOD, PAY_METHOD, Payable, balance_method_sig, pay, pay_effects,
+    pay_method_sig, payable_descriptor,
 };
 
 // Re-export the SDK cipherclerk at the framework root so applications
