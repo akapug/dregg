@@ -1,0 +1,36 @@
+{
+  "id": "first-room",
+  "name": "The First Room (Composition Exemplar)",
+  "description": "THE FIRST ROOM of the living world — a room containing an inhabitant (a cell holding a workflow-mandate = its JOB) and a payer (who escrows the reward from a conserved pool). The inhabitant does its mandated job step-by-step (each a receipted turn), finishes, the escrow releases, it is paid (a conserving transfer). Then the headline: a try-to-cheat battery — skip a prerequisite, overspend the budget, reach outside its compartment, take an ungranted verb, release the escrow without approval — each REFUSED in-band by the real executor, rendered in-room with the receipt-why. WELDS three landed organs (the colonist-job mandate, the escrow economy, the room model) into ONE runnable, cargo-testable scenario through one shared EmbeddedExecutor. gpui-free.",
+  "version": "0.1.0",
+  "status": "composition-exemplar",
+  "crate": "starbridge-first-room",
+  "runtime_mode": "starbridge-native",
+  "caddy_prefix": null,
+  "factory_vks": [],
+  "page": null,
+  "inspectors": [],
+  "turn_builders": [],
+  "required_apis": [],
+  "composition": {
+    "kind": "weld",
+    "note": "first-room owns no verified primitive of its own; it COMPOSES other apps' organs through ONE shared EmbeddedExecutor. It is NOT a four-axis app — it has no FactoryDescriptor, no service interface, and no DeosApp (those belong to the organs it welds). It ships the one modern-app axis that fits a composition: the renderer-independent deos-view CARD that SHOWS the composed room.",
+    "organs": {
+      "colonist_job": "starbridge-compartment-workflow-mandate (the DAG mandate: no-skip · clearance · spend-budget)",
+      "escrow_economy": "starbridge-escrow-market (list→fund→ship→settle, released + refunded == escrowed)",
+      "room_model": "src/room.rs (gpui-free mirror of starbridge-v2/src/room.rs)",
+      "gateway": "starbridge-storage-gateway-mandate (DAVID'S DOOR — the entry physics; see scenario::davids_door)"
+    },
+    "entrypoint": "run_first_room() -> Transcript (the honest cycle + the try-to-cheat battery)"
+  },
+  "axes": {
+    "4_deos_view_card": "card::room_card_value/json (src/card.rs) — the composed room as a deos.ui.* view-tree (genuine actions + in-room refusals, tagged distinctly)"
+  },
+  "manifest_health": {
+    "status": "composition-exemplar",
+    "embedded": true,
+    "source_of_truth": "starbridge-apps/first-room/src/scenario.rs",
+    "owns_primitive": false,
+    "cheats_refused": ["skip-prerequisite", "overspend-budget", "reach-outside-compartment", "ungranted-verb", "release-without-approval"]
+  }
+}

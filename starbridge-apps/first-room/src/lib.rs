@@ -30,9 +30,13 @@
 //!     walks IN as a new inhabitant: it births a job cell under the gateway's physics and advances
 //!     it with the same three legs; see [`davids_door`] for the seam note.
 
+/// The composed room as a renderer-independent `deos.ui.*` view-tree (the CARD axis — the
+/// one modern-app surface that fits a composition exemplar; see `README.md`).
+pub mod card;
 pub mod room;
 pub mod scenario;
 
+pub use card::{card_for_room, room_card_json, room_card_value};
 pub use room::{InRoomRefusal, InhabitantView, Room, RoomView};
 pub use scenario::{
     CheatClass, CheatOutcome, JobStepRecord, Transcript, davids_door, run_first_room,
