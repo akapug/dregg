@@ -855,6 +855,19 @@ pub struct Cockpit {
     /// currently mediating (`powerbox_app` points at it). Pressing "+ launch confined
     /// app" births a NEW one and routes its request through the existing powerbox.
     launched_apps: Vec<starbridge_v2::powerbox::LaunchedApp>,
+    /// THE PRE-BUILT APP LAUNCHER roster — the wired starbridge-apps (gallery /
+    /// sealed-auction / bounty-board / … / polis) LAUNCHED onto the cockpit's live
+    /// World from the POWERBOX/LAUNCHER surface. Each is a real app cell + program
+    /// seeded onto the live ledger, its representative affordance fired as a real
+    /// verified turn (so the cell + receipt are on `World::ledger()` /
+    /// `World::receipts()`, inspectable). Pressing a "launch" row appends one (a fresh
+    /// app instance). See [`super::panels_app_launcher`].
+    #[cfg(feature = "app-registry")]
+    apps_launched: Vec<panels_app_launcher::LaunchedAppRecord>,
+    /// The last pre-built-app launch outcome banner (the executor's verdict — a real
+    /// committed receipt, or the in-band launch refusal).
+    #[cfg(feature = "app-registry")]
+    apps_outcome: Option<String>,
 
     // --- the WHAT-IF / SIMULATE intent composer (studio-parity) -------------
     /// The intent under composition: the agent + a forest of actions/effects the
@@ -1265,6 +1278,7 @@ mod frame;
 pub use frame::CockpitMode;
 mod live;
 mod nav;
+mod panels_app_launcher;
 mod panels_devtools;
 mod panels_main;
 mod panels_moldable;

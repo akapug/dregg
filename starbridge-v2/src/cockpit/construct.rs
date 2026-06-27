@@ -383,6 +383,13 @@ impl Cockpit {
             // The boot-seeded demo app (above) is the FIRST entry — the launcher
             // appends a fresh confined app per "+ launch" press.
             launched_apps: Vec::new(),
+            // THE PRE-BUILT APP LAUNCHER — empty until the operator launches a wired
+            // starbridge-app from the POWERBOX/LAUNCHER surface (each launch seeds the
+            // app onto the live World + fires its representative verified turn).
+            #[cfg(feature = "app-registry")]
+            apps_launched: Vec::new(),
+            #[cfg(feature = "app-registry")]
+            apps_outcome: None,
             // The SIMULATE composer boots with the treasury as agent, the target
             // picker on the first cell, the effect picker on the first palette
             // entry, and a seeded example action (a small treasury→user transfer)

@@ -1,0 +1,260 @@
+//! THE PRE-BUILT APP LAUNCHER — the cockpit surface that makes the wired
+//! starbridge-apps (gallery / sealed-auction / bounty-board / escrow-market /
+//! subscription / nameservice / compute-exchange / privacy-voting / identity /
+//! governed-namespace / supply-chain-provenance / tool-access-delegation /
+//! swarm-orchestration / agent-provenance / compartment-workflow-mandate /
+//! storage-gateway-mandate / agent-orchestration / polis / …) LAUNCHABLE +
+//! INTERACTIVE from within the live desktop.
+//!
+//! The infrastructure already exists ([`crate::app_registry::AppRegistry`] +
+//! [`starbridge_v2::powerbox::RegistryLauncher`], both built + tested): the registry
+//! lists each app (id · name · what-it-does) and `launch_on_world` seeds an app's
+//! cell + program onto the cockpit's LIVE [`World`](crate::world::World) and commits
+//! its representative affordance as a REAL verified turn through the embedded
+//! executor. This module is the missing UI: it renders the launcher rows as a
+//! section of the POWERBOX/LAUNCHER surface (each a "launch" button), and on a launch
+//! it drives [`RegistryLauncher::launch_on_world`] so the app's cell + receipt land on
+//! `World::ledger()` / `World::receipts()` — the SAME ledger the cockpit's cell
+//! inspector reads. So launching gallery mounts gallery's cell on your world, fires
+//! gallery's `submit` verified turn, and the cell is immediately inspectable
+//! (clickable → OBJECTS / INSPECTOR).
+//!
+//! Gated on `app-registry` (the feature that pulls the pre-built starbridge-apps into
+//! the cockpit). The launch + the real verified turn run on the cockpit's own World.
+
+#![cfg(feature = "app-registry")]
+
+use super::*;
+
+use starbridge_v2::powerbox::RegistryLauncher;
+
+/// The federation the launcher births app substrates into (the app cipherclerk is a
+/// fresh random identity per launch, so re-launching never collides — each press
+/// births a distinct app instance on the live world).
+const APPS_FEDERATION: [u8; 32] = [0x5Eu8; 32];
+
+/// One **pre-built app launched onto the cockpit's LIVE World** — a real app cell
+/// seeded onto the live ledger, its representative affordance fired as a real
+/// verified turn. The cell is on `World::ledger()` (inspectable). Held by the cockpit
+/// so the launcher surface can render the roster + let each be clicked to inspect.
+#[derive(Clone)]
+pub(crate) struct LaunchedAppRecord {
+    /// The registry id of the app launched (e.g. `"gallery"`).
+    pub id: String,
+    /// The display name shown in the roster.
+    pub name: String,
+    /// The launched app's primary cell on the live World ledger (the inspector pointer).
+    pub cell: CellId,
+}
+
+impl Cockpit {
+    /// **The pre-built app launcher section** — one row per wired starbridge-app
+    /// ([`RegistryLauncher::rows`]): its name + what-it-does + a "launch" button that
+    /// mounts the app onto the live World and fires its representative verified turn.
+    /// Plus the roster of already-launched apps (each a live cell, clickable to
+    /// inspect). Rendered as a section of the POWERBOX/LAUNCHER surface.
+    pub(crate) fn apps_launcher_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let launcher = RegistryLauncher::standard(APPS_FEDERATION);
+        let rows = launcher.rows();
+        let launched = self.apps_launched.clone();
+
+        let mut col = div().flex().flex_col().gap_1().mt_3();
+        col = col.child(
+            section_title(format!(
+                "LAUNCH A PRE-BUILT APP · {} wired starbridge-app(s)",
+                rows.len()
+            ))
+            .mb_1(),
+        );
+        col = col.child(div().text_xs().text_color(theme::muted()).child(
+            "Each is a fully-built deos app (cells × cap-gated affordances). LAUNCH seeds its \
+             cell + program onto your LIVE World and fires its representative VERIFIED turn \
+             through the real executor — the cell + receipt land on your own ledger (click a \
+             launched app below, or open OBJECTS / INSPECTOR, to inspect it). Launch again to \
+             fire another real verified turn on a fresh instance.",
+        ));
+
+        // The last launch outcome banner (the executor's verdict — a real committed
+        // receipt, or the in-band launch refusal).
+        if let Some(banner) = &self.apps_outcome {
+            let good = banner.starts_with("launched");
+            col = col.child(
+                div()
+                    .mt_1()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme::panel_hi())
+                    .text_xs()
+                    .text_color(if good { theme::good() } else { theme::warn() })
+                    .child(banner.clone()),
+            );
+        }
+
+        // ── one row per wired app: name · what-it-does · launch ──
+        for r in &rows {
+            let id = r.id.clone();
+            let name = r.name.clone();
+            let instances = launched.iter().filter(|a| a.id == r.id).count();
+            let id_for_btn = id.clone();
+            let name_for_btn = name.clone();
+            col = col.child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .gap_2()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text())
+                                    .child(format!("{} ({})", name, r.id)),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::muted())
+                                    .child(r.description.clone()),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .when(instances > 0, |d| {
+                                d.child(pill(format!("{instances} launched"), theme::good()))
+                            })
+                            .child(
+                                Button::new(SharedString::from(format!("launch-app-{}", r.id)))
+                                    .label(if instances > 0 {
+                                        "launch ↻"
+                                    } else {
+                                        "launch"
+                                    })
+                                    .primary()
+                                    .xsmall()
+                                    .on_click(cx.listener(
+                                        move |this, _ev: &ClickEvent, _w, cx| {
+                                            this.run_launch_registry_app(
+                                                id_for_btn.clone(),
+                                                name_for_btn.clone(),
+                                                cx,
+                                            );
+                                        },
+                                    )),
+                            ),
+                    ),
+            );
+        }
+
+        // ── the roster of launched apps (each a live cell on your World — click to inspect) ──
+        if !launched.is_empty() {
+            col = col.child(
+                section_title(format!(
+                    "{} app(s) launched · live on your World (click to inspect)",
+                    launched.len()
+                ))
+                .mt_2()
+                .mb_1(),
+            );
+            for a in &launched {
+                let cell = a.cell;
+                col = col.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "launched-app-{}",
+                            reflect::short_hex(&cell.0)
+                        )))
+                        .flex()
+                        .justify_between()
+                        .items_center()
+                        .px_2()
+                        .py_0p5()
+                        .rounded_md()
+                        .bg(theme::panel())
+                        .cursor_pointer()
+                        .hover(|s| s.bg(theme::panel_hi()))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _ev, _w, cx| {
+                                // Focus the launched app's cell in the inspector + jump to
+                                // the OBJECTS surface (the cell roster + reflective inspector).
+                                this.selection = Selection::Cell(cell);
+                                this.tab = Tab::Objects;
+                                cx.notify();
+                            }),
+                        )
+                        .child(div().text_xs().text_color(theme::text()).child(format!(
+                            "{} · {}",
+                            a.name,
+                            reflect::short_hex(&cell.0)
+                        )))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::accent())
+                                .child("inspect →"),
+                        ),
+                );
+            }
+        }
+
+        col
+    }
+
+    /// **LAUNCH a pre-built app onto the cockpit's LIVE World** — drive
+    /// [`RegistryLauncher::launch_on_world`]: seed the app `id`'s cell + program onto
+    /// the live world and commit its representative affordance as a REAL verified turn
+    /// through the embedded executor. The app's cell + receipt land on `World::ledger()`
+    /// / `World::receipts()` (the cockpit inspector path); the launched cell becomes the
+    /// inspector's focus + is recorded in the launched-apps roster. Re-runnable: each
+    /// press births a distinct app instance (a fresh random app identity), so a launch
+    /// always fires a NEW real verified turn.
+    pub(crate) fn run_launch_registry_app(
+        &mut self,
+        id: String,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        let world = Rc::clone(&self.world);
+        let result = RegistryLauncher::standard(APPS_FEDERATION).launch_on_world(&id, world);
+        match result {
+            Some(Ok(launched)) => {
+                let cell = launched.primary_cell();
+                let rhex = reflect::short_hex(&launched.receipt.receipt_hash());
+                let actions = launched.receipt.action_count;
+                self.apps_launched.push(LaunchedAppRecord {
+                    id: id.clone(),
+                    name: name.clone(),
+                    cell,
+                });
+                self.selection = Selection::Cell(cell);
+                self.apps_outcome = Some(format!(
+                    "launched {name}: cell {} on your live World — fired its representative \
+                     verified turn (receipt {rhex}, {actions} action(s)). Inspect it in \
+                     OBJECTS / INSPECTOR.",
+                    reflect::short_hex(&cell.0)
+                ));
+            }
+            Some(Err(e)) => {
+                self.apps_outcome = Some(format!("launch {id} refused: {e}"));
+            }
+            None => {
+                self.apps_outcome = Some(format!("no wired app with id '{id}'"));
+            }
+        }
+        self.refresh_cells();
+        cx.notify();
+    }
+}
