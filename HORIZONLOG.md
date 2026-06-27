@@ -6103,3 +6103,22 @@ whole rotation cutover remains the one VK-epoch flag-day). Note "production-auth
 conflation — production-authority is the §4 MINT flavour of cap-reshape; attenuate is non-amplification only (§4D/§2). Change:
 corrected the stale named residual in RotatedKernelRefinementAttenuate.lean §"The registry cutover" to record
 CLOSED-AS-SUPERSEDED with the superseding rung names (Lean comment only — no proof/VK touched; module rebuilds green, 3033 jobs).
+
+— 2026-06-26 (kernel-align, CellUnseal/Attenuate differential): the Lean↔Rust differential rejected CellUnseal +
+AttenuateCapability ("commit-bit divergence: Rust committed, Lean did not"). VERDICT: neither was a Rust under-enforcement.
+CellUnseal = VERIFIED-SPEC OVER-REJECTION: the admission gate gated the AGENT on `cellLifecycleLive` (Live-ONLY), refusing a
+SEALED agent (`deadAgent`) — but sealing is *reversible* quiescence (`docs/reference/cells.md`: is_terminal = Destroyed-or-
+Migrated; Sealed is NOT terminal), so a Sealed cell MUST author its own unseal (Rust `lifecycle_seal_then_unseal_restores_live`
+proves the intent). Fixed: new `cellLifecycleCanAuthor` (RecordKernel) admits non-terminal agents, rejects only
+Destroyed/Migrated; the per-effect arms keep gating `cellLifecycleLive` on the TARGET so a Sealed agent's ordinary effects
+still fail. Admission keystones re-verify #assert_axioms-clean. AttenuateCapability = wire-faithfulness gap in the harness
+(held-cap target dropped from the id-map → in-bounds leg fail-closed); fixed by the HELD-CAP-TARGET CLOSURE in
+`lean_shadow::build_pre_ledger`. Both now BothAcceptStateAgree, OFF the gauntlet allowlist (enforced). Commit 9e2c0e708.
+FOLLOW-UP (named, untouched — safe-direction, no failing test): the Rust executor (`turn/src/executor/execute.rs`) has NO
+agent-lifecycle admission gate at all, so it admits TERMINAL (Destroyed/Migrated) agents that the verified spec now rejects
+via `cellLifecycleCanAuthor`. Narrow Rust under-enforcement (a terminal cell could author cap/lifecycle effects the per-effect
+arms don't all gate). Mirror the alignment: reject `agent_cell.is_terminal()` at admission (both execute entries ~L382/L1436).
+Not done here to avoid touching untested Migrated-agent flows; out of the CellUnseal/Attenuate authority lane. PRE-EXISTING,
+SEPARATE LANE (not this fix, provably unaffected — Live agents/no caps): speculative_audit.rs (full-ledger-root / slot-6
+"target" field fidelity in the streaming audit) + dregg-lean-ffi direct_vs_json_differential (auth_0 direct-vs-JSON
+marshalling-conformance) still fail; they are state-fidelity/marshalling lanes, NOT the authority lane.
