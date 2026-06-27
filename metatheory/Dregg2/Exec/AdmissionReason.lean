@@ -41,8 +41,9 @@ inductive AdmissionReason where
   | emptyForest
   /-- Gate 2 (`agent ∈ accounts`): the agent cell is not a member account of this ledger. -/
   | noSuchAgent (agent : CellId)
-  /-- Gate 3 (`cellLifecycleLive`): the agent cell is a member but NOT lifecycle-live (Destroyed
-  or Sealed) — a dead cell cannot author a turn. -/
+  /-- Gate 3 (`cellLifecycleCanAuthor`): the agent cell is a member but in a TERMINAL lifecycle state
+  (Destroyed or Migrated) — a terminal cell cannot author a turn. A Sealed cell is NOT terminal
+  (reversible quiescence) and IS admitted, so it can author its own unseal. -/
   | deadAgent (agent : CellId)
   /-- Gate 4 (Expiry): the turn's `validUntil` has passed relative to the host clock. -/
   | expired (clock validUntil : Nat)
@@ -78,7 +79,7 @@ def admissionReason (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) : Admissi
   -- 2. AgentLive (membership)
   else if h.agent ∉ s.kernel.accounts then .noSuchAgent h.agent
   -- 3. AgentLive (lifecycle)
-  else if cellLifecycleLive s.kernel h.agent = false then .deadAgent h.agent
+  else if cellLifecycleCanAuthor s.kernel h.agent = false then .deadAgent h.agent
   -- 4. Expiry
   else if (match h.validUntil with | none => false | some vu => decide (admissionClock ctx > vu)) = true then
     .expired (admissionClock ctx) (h.validUntil.getD 0)
@@ -121,7 +122,7 @@ single bridge keeps the `&&`-fold reasoning in ONE place. -/
 theorem admissible_iff_gates (ctx : AdmCtx) (h : TurnHdr) (s : RecChainedState) :
     admissible ctx h s = true ↔
       (h.forestNonEmpty = true ∧ h.agent ∈ s.kernel.accounts ∧
-       cellLifecycleLive s.kernel h.agent = true ∧ ¬ expiryGuardFails ctx h ∧
+       cellLifecycleCanAuthor s.kernel h.agent = true ∧ ¬ expiryGuardFails ctx h ∧
        h.nonce = storedNonce s h.agent ∧ ¬ (h.fee < 0) ∧ ¬ (storedBalance s h.agent < h.fee) ∧
        ¬ (isFrozen ctx h.agent = true) ∧
        (h.writeSet.find? (fun c => isFrozen ctx c)).isNone = true ∧
@@ -180,7 +181,7 @@ theorem admissionReason_eq_admitted_iff (ctx : AdmCtx) (h : TurnHdr) (s : RecCha
     · rw [if_pos g1] at hr; exact absurd hr (by simp)
     by_cases g2 : h.agent ∉ s.kernel.accounts
     · rw [if_neg g1, if_pos g2] at hr; exact absurd hr (by simp)
-    by_cases g3 : cellLifecycleLive s.kernel h.agent = false
+    by_cases g3 : cellLifecycleCanAuthor s.kernel h.agent = false
     · rw [if_neg g1, if_neg g2, if_pos g3] at hr; exact absurd hr (by simp)
     by_cases g4 : (match h.validUntil with | none => false | some vu => decide (admissionClock ctx > vu)) = true
     · rw [if_neg g1, if_neg g2, if_neg g3, if_pos g4] at hr; exact absurd hr (by simp)
@@ -206,7 +207,7 @@ theorem admissionReason_eq_admitted_iff (ctx : AdmCtx) (h : TurnHdr) (s : RecCha
       · rw [if_neg g8, if_pos g9] at hr; exact absurd hr (by simp)
       -- all gates pass
       exact ⟨by simpa using g1, by simpa using g2, by
-        cases hb : cellLifecycleLive s.kernel h.agent with
+        cases hb : cellLifecycleCanAuthor s.kernel h.agent with
         | true => rfl
         | false => exact absurd hb g3,
         g4, by simpa using g5, g6a, g6b, by simpa using g7a,
@@ -216,7 +217,7 @@ theorem admissionReason_eq_admitted_iff (ctx : AdmCtx) (h : TurnHdr) (s : RecCha
     rintro ⟨h1, h2, h3, h4, h5, h6a, h6b, h7a, h7b, h8, h9⟩
     have g1 : ¬ (h.forestNonEmpty = false) := by simp [h1]
     have g2 : ¬ (h.agent ∉ s.kernel.accounts) := by simp [h2]
-    have g3 : ¬ (cellLifecycleLive s.kernel h.agent = false) := by simp [h3]
+    have g3 : ¬ (cellLifecycleCanAuthor s.kernel h.agent = false) := by simp [h3]
     have g5 : ¬ (h.nonce ≠ storedNonce s h.agent) := by simp [h5]
     have g8 : ¬ (h.prevReceipt ≠ ctx.storedHead) := by simp [h8]
     have hfindnone : h.writeSet.find? (fun c => isFrozen ctx c) = none :=

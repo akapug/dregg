@@ -1075,6 +1075,34 @@ pub(crate) fn build_pre_ledger(turn: &Turn, ledger: &Ledger) -> ShadowPreLedger 
         }
     }
 
+    // HELD-CAP-TARGET CLOSURE (the cap-fidelity-of-the-HELD-leg fix). `ledger_to_wire_state` projects
+    // each cell's c-list to wire `caps` by mapping every held `CapabilityRef { target, .. }` to
+    // `Cap::Node(target_nat)` — but DROPS any edge whose `target` is absent from the id_map. The
+    // verified `attenuateStepA actor idx keep` arm gates on `idx < (caps actor).length` (the actor must
+    // actually HOLD the slot it narrows); the SAME held cap also feeds `confersEdgeTo`/`authorizedB`.
+    // A self-`AttenuateCapability { cell, slot }` references only `cell`, so a cap A holds OVER ANOTHER
+    // cell B (B unreferenced) is dropped, A's wire c-list goes empty, and the in-bounds gate
+    // fail-closes a narrowing the Rust producer commits. Pull each snapshotted cell's held-cap targets
+    // into the id_map so the c-list crosses the wire FAITHFULLY (same length + positions). A cap target
+    // not in the ledger still gets a Nat (no snapshot) so the edge projects; a Node edge to an
+    // unreferenced cell confers NO spurious authority (it never matches a referenced `src`/`target`),
+    // so this only restores the dropped held caps — the genuine, non-vacuous in-bounds leg.
+    let cap_targets: Vec<CellId> = cells
+        .values()
+        .flat_map(|c| c.capabilities.iter().map(|cref| cref.target))
+        .filter(|t| !id_map.contains_key(t))
+        .collect();
+    for target in cap_targets {
+        if id_map.contains_key(&target) {
+            continue;
+        }
+        let nat = id_map.len() as u64;
+        id_map.insert(target, nat);
+        if let Some(cell) = ledger.get(&target) {
+            cells.insert(target, cell.clone());
+        }
+    }
+
     ShadowPreLedger { cells, id_map }
 }
 

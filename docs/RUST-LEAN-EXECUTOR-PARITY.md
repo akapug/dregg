@@ -63,10 +63,11 @@ corpus** of turns through **both** executors over the same pre-state and classif
 The corpus covers the full effect **cohort** with a representative committing turn each, an edge-case
 set, and an adversarial should-reject battery. As of the last green run:
 
-- **17 cohort effects achieve `BothAcceptStateAgree`** (byte-identical post-state, including
+- **19 cohort effects achieve `BothAcceptStateAgree`** (byte-identical post-state, including
   `.root()`): Transfer, SetField (developer and reserved slots), EmitEvent, IncrementNonce,
-  NoteCreate, GrantCapability, Introduce, RevokeCapability, RevokeDelegation, CellSeal, CellDestroy,
-  SetPermissions, SetVerificationKey, MakeSovereign, Refusal, ReceiptArchive.
+  NoteCreate, GrantCapability, Introduce, RevokeCapability, RevokeDelegation, CellSeal, **CellUnseal**,
+  CellDestroy, **AttenuateCapability**, SetPermissions, SetVerificationKey, MakeSovereign, Refusal,
+  ReceiptArchive.
 - **8 adversarial turns achieve `BothReject`**: overspend, self-transfer, transfer-from-sealed,
   set-field-on-sealed, emit-on-sealed, proofless note-spend, unauthorized mint, cross-cell grant
   with no held edge.
@@ -78,9 +79,42 @@ rejections) so it cannot pass by trivially gapping or rejecting everything.
 The gauntlet self-skips (does not fail) when `lean_available()` is false — it cannot run the verified
 kernel without the linked archive.
 
+## Two alignments closed (2026-06-26): CellUnseal + AttenuateCapability
+
+These two cohort effects were previously `RustAcceptsLeanRejects` residuals; both are now
+`BothAcceptStateAgree` (byte-identical post-state, including `.root()`), enforced by the gauntlet (off
+the allowlist). The investigation found the divergences were **not** Rust under-enforcements — Rust
+was correct on both — so the fix was on the verified/harness side:
+
+- **`CellUnseal`** — the divergence was a **verified-spec over-rejection**, not a wire artifact. The
+  admission gate (`Admission.admissible` / `AdmissionReason.admissionReason`) gated the AGENT on
+  `cellLifecycleLive` (Live-ONLY), so a **Sealed** agent was refused with `deadAgent`. But sealing is
+  *reversible* quiescence (`docs/reference/cells.md`: `is_terminal()` is Destroyed-or-Migrated; Sealed
+  is **not** terminal), so a Sealed cell MUST be able to author its own `cellUnseal` (the reversibility
+  promise; the Rust integration test `lifecycle_seal_then_unseal_restores_live` exercises exactly this
+  self-unseal). The gate is now `cellLifecycleCanAuthor` (`RecordKernel.lean`): it admits non-terminal
+  agents (Live / Sealed / Archived) and rejects only the terminal states (Destroyed / Migrated). The
+  per-effect arms still gate `cellLifecycleLive` (Live-only) on the TARGET, so a Sealed agent's
+  ordinary effects still fail the body — only the lifecycle-control effects (`cellUnseal`, which
+  requires Sealed; `cellDestroy`, which requires non-Destroyed) succeed. The admission keystones
+  (`admissionReason_eq_admitted_iff`, `reasonCode_eq_zero_iff_admits`, the rejection teeth) re-verify
+  `#assert_axioms`-clean. **No soundness was weakened** — admitting a Sealed agent introduces no
+  unsound transition (the per-effect arms preserve every invariant); it only restores a documented
+  liveness the Live-only gate had broken.
+- **`AttenuateCapability`** — a genuine **wire-faithfulness** gap in the differential harness, not an
+  executor disagreement (both gate on the actor HOLDING the slot it narrows). `ledger_to_wire_state`
+  projected a cell's c-list to wire `caps` but DROPPED any edge whose target was absent from the turn's
+  id-map; a self-`AttenuateCapability { cell, slot }` references only `cell`, so a cap A holds over
+  another cell B (B unreferenced) was dropped, A's wire c-list went empty, and the verified
+  `attenuateStepA`'s in-bounds leg (`idx < (caps actor).length`) fail-closed. The HELD-CAP-TARGET
+  CLOSURE in `lean_shadow::build_pre_ledger` (mirroring the existing delegation-parent closure) now
+  pulls each snapshotted cell's held-cap targets into the id-map, so the c-list crosses the wire
+  faithfully — and a Node edge to an unreferenced cell confers no spurious authority, so this only
+  restores the genuine in-bounds leg.
+
 ## The honest residual
 
-Four cohort effects classify as `RustAcceptsLeanRejects` — Rust commits, the verified kernel refuses
+Two cohort effects classify as `RustAcceptsLeanRejects` — Rust commits, the verified kernel refuses
 — and are allowlisted as **characterised, safe-direction residuals**. The direction is safe because
 the verified kernel is the *stricter* one: a shadow-gated node takes the Lean verdict as
 authoritative and **vetoes** these commits. For the **pure-Rust SDK** (no Lean linked) these are the
@@ -97,11 +131,9 @@ honestly-named residuals — Rust would accept these turns where the verified sp
   synthetic `asset: 0`, so the verified gate cannot see the held node-cap over the marshalled issuer.
   The native cap graph is exercised without the wire limit in
   `dregg-turn::conservation_mint_property`.
-- **`AttenuateCapability`** and **`CellUnseal`** — cap-/lifecycle-reshape effects whose **commit bit**
-  currently diverges in the safe direction: the held cap (for the monotone-narrowing check) and the
-  sealed payload (for the unseal) are not faithfully numbered on the marshalled wire, so the verified
-  kernel fail-closes. When both *do* commit, the reconstituted post-state agrees; only the commit bit
-  diverges. Same wire-faithfulness class as `Mint`.
+
+(`AttenuateCapability` and `CellUnseal` were formerly listed here; both are now aligned —
+`BothAcceptStateAgree` — see "Two alignments closed" above.)
 
 Each residual is a divergence **of the wire boundary or a staged value-model migration**, not a
 demonstrated case of Rust committing an *unsound* state. None is a `BothAcceptStateDiverge`. The
@@ -121,7 +153,8 @@ Shipping the Rust executor by default is justified when:
    byte-identical post-state**, with **zero silent state divergence** and **zero new
    under-enforcement** — **demonstrated** by `rust_lean_parity_gauntlet.rs`;
 4. every divergence that remains is **named, characterised, and in the safe direction** (the verified
-   kernel is stricter), with a closure path — **true** of the four residuals above.
+   kernel is stricter), with a closure path — **true** of the two residuals above (`Burn`, `Mint`;
+   `CellUnseal` and `AttenuateCapability` are now aligned, not residuals).
 
 All four hold. A node that wants the verified guarantee end-to-end links the Lean archive and runs it
 as the authoritative shadow; the SDK default is the Rust executor, justified by the parity above.
