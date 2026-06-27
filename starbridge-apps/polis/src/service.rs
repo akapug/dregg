@@ -260,8 +260,8 @@ pub fn register_interface(registry: &mut InterfaceRegistry, cell: CellId) {
 // =============================================================================
 
 /// **A handle to a deployed council proposal cell** — bundles the proposal cell
-/// + its charter (the published membership/threshold) with its typed interface,
-/// and builds method invocations through the `invoke()` front door.
+/// with its charter (the published membership/threshold) and its typed
+/// interface, and builds method invocations through the `invoke()` front door.
 ///
 /// Each builder returns a fully-signed [`Turn`] (the build half); submit it
 /// through an executor ([`EmbeddedExecutor::submit_turn`], a node `/turns/submit`,
