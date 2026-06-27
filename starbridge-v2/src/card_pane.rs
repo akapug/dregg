@@ -208,7 +208,156 @@ impl CardPane {
                 }
                 col.into_any_element()
             }
+
+            // ── The RICHNESS EXPANSION (batch 1) — mirror `deos_view::render`'s arms, but
+            //    bound + fired against the LIVE attached applet. ──────────────────────────
+            ViewNode::Section {
+                title,
+                tag,
+                children,
+            } => {
+                // A titled, bordered container — the uniform "styled section". `tag=="genuine"`
+                // accents the border (the existing `props.tag` styling convention).
+                let accent = if tag == "genuine" {
+                    theme_fg
+                } else {
+                    cx.theme().border
+                };
+                let mut card = v_flex().gap_1().p_2().border_1().border_color(accent);
+                if !title.is_empty() {
+                    card = card.child(
+                        Label::new(title.clone())
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme_fg),
+                    );
+                }
+                for c in children {
+                    card = card.child(self.node(c, _window, cx));
+                }
+                card.into_any_element()
+            }
+            ViewNode::Tabs {
+                tabs,
+                selected_slot,
+                select_turn,
+                panels,
+            } => {
+                // The active tab index lives in a MODEL SLOT (read live off the ledger), so a
+                // tab switch is a REAL cap-gated verified turn — reflective + replayable.
+                let active = self.applet.borrow().get_u64(*selected_slot) as usize;
+                // The tab strip: one Button per label, the active one `.primary()`; each fires
+                // `select_turn` with `arg = its index` (a verified turn through the live applet).
+                let mut strip = h_flex().gap_1();
+                for (i, label) in tabs.iter().enumerate() {
+                    let applet = self.applet.clone();
+                    let turn = select_turn.clone();
+                    let idx = i as i64;
+                    let mut b =
+                        Button::new(("deos-card-tab", label_hash(&format!("{select_turn}:{i}"))))
+                            .label(label.clone());
+                    if i == active {
+                        b = b.primary();
+                    }
+                    strip = strip.child(b.on_click(move |_ev: &ClickEvent, _window, _cx| {
+                        // Same nounwind-boundary guard as a `button` fire (the gpui Obj-C
+                        // callback is `nounwind`; contain a re-entrant-borrow panic as a no-op).
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            if let Err(e) = applet.borrow_mut().fire(&turn, idx) {
+                                eprintln!("card-pane: tab select '{turn}' did not commit: {e}");
+                            }
+                        }))
+                        .map_err(|_| {
+                            eprintln!(
+                                "card-pane: tab select '{turn}' PANICKED — contained (no-op)."
+                            );
+                        });
+                    }));
+                }
+                // card_pane reads slots immediate-mode (no bind cursor), so render ONLY the
+                // selected panel; out-of-range falls back to the first.
+                let shown = if active < panels.len() { active } else { 0 };
+                let mut col = v_flex().gap_2().child(strip);
+                if let Some(panel) = panels.get(shown) {
+                    col = col.child(self.node(panel, _window, cx));
+                }
+                col.into_any_element()
+            }
+            ViewNode::Gauge { slot, max, label } => {
+                // A bound progress / balance bar — reads its slot IMMEDIATE-MODE off the live
+                // ledger. The fill width is `value / max`, clamped to `[0,1]`.
+                let value = self.applet.borrow().get_u64(*slot);
+                let ratio = if *max == 0 {
+                    0.0
+                } else {
+                    (value as f64 / *max as f64).clamp(0.0, 1.0)
+                };
+                let track_w = 140.0_f32;
+                let fill_w = (track_w as f64 * ratio) as f32;
+                let text = if label.is_empty() {
+                    format!("{value}/{max}")
+                } else {
+                    format!("{label}{value}/{max}")
+                };
+                v_flex()
+                    .gap_1()
+                    .child(Label::new(text).text_color(theme_fg))
+                    .child(
+                        div()
+                            .w(px(track_w))
+                            .h(px(8.))
+                            .rounded(px(4.))
+                            .bg(cx.theme().border)
+                            .child(
+                                div()
+                                    .w(px(fill_w.max(0.0)))
+                                    .h(px(8.))
+                                    .rounded(px(4.))
+                                    .bg(theme_fg),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ViewNode::Divider => div()
+                .h(px(1.))
+                .w_full()
+                .bg(cx.theme().border)
+                .into_any_element(),
+            ViewNode::Host { cell, view } => {
+                // The COMPOSITION KEYSTONE — mount a cell's WHOLE hosted view-tree as a
+                // subtree. A bordered frame with a muted `⌂ <cell>` header; an UNRESOLVED host
+                // paints an honest placeholder (it has no tree to mount yet).
+                let head = format!("⌂ {}", short_cell(cell));
+                let mut frame = v_flex()
+                    .gap_1()
+                    .p_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Label::new(head)
+                            .text_color(cx.theme().muted_foreground)
+                            .into_any_element(),
+                    );
+                match view {
+                    Some(v) => frame = frame.child(self.node(v, _window, cx)),
+                    None => {
+                        frame = frame.child(
+                            Label::new(format!("‹mount cell {}: unresolved›", short_cell(cell)))
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    }
+                }
+                frame.into_any_element()
+            }
         }
+    }
+}
+
+/// Truncate a hex cell-id for a compact host header (mirrors `deos_view::render::short_cell`).
+fn short_cell(cell: &str) -> String {
+    if cell.len() > 12 {
+        format!("{}…", &cell[..12])
+    } else {
+        cell.to_string()
     }
 }
 
