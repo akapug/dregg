@@ -31,7 +31,10 @@ use crate::marshal::{WForest, WireHostCtx, WireState};
 // import to match its consumer, or it reads as unused when the FFI is absent.
 #[cfg(dregg_direct_present)]
 use crate::marshal::{Auth, Cap, WireAuth, WireCaveat, WireValue};
-use crate::{ShadowState, ShadowVerdict, TurnStatus};
+use crate::ShadowState;
+// ShadowVerdict/TurnStatus are only produced by the FFI-present marshalling path.
+#[cfg(dregg_direct_present)]
+use crate::{ShadowVerdict, TurnStatus};
 
 /// Whether the no-copy direct boundary is available in this build (the archive exported
 /// `dregg_exec_full_forest_auth_direct` AND the Lean runtime initialised). The caller uses this to
@@ -49,6 +52,8 @@ static PROF_EXEC: AtomicU64 = AtomicU64::new(0);
 static PROF_READ: AtomicU64 = AtomicU64::new(0);
 static PROF_N: AtomicU64 = AtomicU64::new(0);
 
+// Called only from the FFI-present `run_direct` path; dead when the FFI is absent.
+#[cfg(dregg_direct_present)]
 fn prof_accum(in_s: f64, exec_s: f64, read_s: f64) {
     PROF_IN.fetch_add((in_s * 1e9) as u64, Ordering::Relaxed);
     PROF_EXEC.fetch_add((exec_s * 1e9) as u64, Ordering::Relaxed);
