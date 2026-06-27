@@ -70,8 +70,27 @@ fn bind_plan(tree: &ViewNode, out: &mut Vec<Slot>) {
                 bind_plan(c, out);
             }
         }
-        // Leaves that hold no bind source.
-        ViewNode::Text(_) | ViewNode::Button { .. } | ViewNode::Input { .. } => {}
+        // The richness-expansion containers recurse their children in declaration order so
+        // the Nth `Bind` stays `BindingId(n)`. `tabs` registers EVERY panel's binds (render
+        // walks all panels too, displaying only the selected one) so the cursor never
+        // desyncs on a tab switch.
+        ViewNode::Section { children, .. } => {
+            for c in children {
+                bind_plan(c, out);
+            }
+        }
+        ViewNode::Tabs { panels, .. } => {
+            for p in panels {
+                bind_plan(p, out);
+            }
+        }
+        // Leaves that hold no bind source. `Gauge` reads its slot immediate-mode (NOT via the
+        // bind cursor), so it registers nothing here.
+        ViewNode::Text(_)
+        | ViewNode::Button { .. }
+        | ViewNode::Input { .. }
+        | ViewNode::Gauge { .. }
+        | ViewNode::Divider => {}
     }
 }
 
@@ -330,6 +349,117 @@ impl AppletView {
                 }
                 col.into_any_element()
             }
+
+            // ── The RICHNESS EXPANSION (batch 1) ──────────────────────────────────────────
+            ViewNode::Section {
+                title,
+                tag,
+                children,
+            } => {
+                // A titled, bordered container — the uniform "styled section". `tag=="genuine"`
+                // accents the border (the existing `props.tag` styling convention).
+                let accent = if tag == "genuine" {
+                    theme_fg
+                } else {
+                    cx.theme().border
+                };
+                let mut card = v_flex().gap_1().p_2().border_1().border_color(accent);
+                if !title.is_empty() {
+                    card = card.child(
+                        Label::new(title.clone())
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme_fg),
+                    );
+                }
+                for c in children {
+                    card = card.child(self.node(c, _window, cx));
+                }
+                card.into_any_element()
+            }
+            ViewNode::Tabs {
+                tabs,
+                selected_slot,
+                select_turn,
+                panels,
+            } => {
+                // The active tab index lives in a MODEL SLOT (read live), so a tab switch is a
+                // verified turn — reflective + replayable, surviving an agent rewrite.
+                let active = self.applet.borrow().get_u64(*selected_slot) as usize;
+                // The tab strip: one Button per label, the active one `.primary()`; each fires
+                // `select_turn` with `arg = its index` (a REAL cap-gated verified turn).
+                let mut strip = h_flex().gap_1();
+                for (i, label) in tabs.iter().enumerate() {
+                    let applet = self.applet.clone();
+                    let turn = select_turn.clone();
+                    let idx = i as i64;
+                    let mut b =
+                        Button::new(("deos-tab", label_hash(&format!("{select_turn}:{i}"))))
+                            .label(label.clone());
+                    if i == active {
+                        b = b.primary();
+                    }
+                    strip = strip.child(b.on_click(move |_ev: &ClickEvent, _window, _cx| {
+                        if let Err(e) = applet.borrow_mut().fire(&turn, idx) {
+                            eprintln!("deos-view: tab select '{turn}' did not commit: {e}");
+                        }
+                    }));
+                }
+                // Walk ALL panels (advancing the bind cursor in registration order) but keep
+                // only the selected one's element — so a tab switch never desyncs the cursor.
+                let shown = if active < panels.len() { active } else { 0 };
+                let mut body = None;
+                for (i, panel) in panels.iter().enumerate() {
+                    let el = self.node(panel, _window, cx);
+                    if i == shown {
+                        body = Some(el);
+                    }
+                }
+                let mut col = v_flex().gap_2().child(strip);
+                if let Some(el) = body {
+                    col = col.child(el);
+                }
+                col.into_any_element()
+            }
+            ViewNode::Gauge { slot, max, label } => {
+                // A bound progress / balance bar — reads its slot IMMEDIATE-MODE (not the bind
+                // cursor). The fill width is `value / max`, clamped to `[0,1]`.
+                let value = self.applet.borrow().get_u64(*slot);
+                let ratio = if *max == 0 {
+                    0.0
+                } else {
+                    (value as f64 / *max as f64).clamp(0.0, 1.0)
+                };
+                let track_w = 140.0_f32;
+                let fill_w = (track_w as f64 * ratio) as f32;
+                let text = if label.is_empty() {
+                    format!("{value}/{max}")
+                } else {
+                    format!("{label}{value}/{max}")
+                };
+                v_flex()
+                    .gap_1()
+                    .child(Label::new(text).text_color(theme_fg))
+                    .child(
+                        div()
+                            .w(px(track_w))
+                            .h(px(8.))
+                            .rounded(px(4.))
+                            .bg(cx.theme().border)
+                            .child(
+                                div()
+                                    .w(px(fill_w.max(0.0)))
+                                    .h(px(8.))
+                                    .rounded(px(4.))
+                                    .bg(theme_fg),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ViewNode::Divider => div()
+                .h(px(1.))
+                .w_full()
+                .bg(cx.theme().border)
+                .into_any_element(),
         }
     }
 }

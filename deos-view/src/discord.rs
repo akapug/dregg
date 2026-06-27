@@ -144,6 +144,34 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
                 &format!("\u{2039}{bind_view}\u{203a}"),
             );
         }
+        // The richness-expansion nodes flatten gracefully into the embed: a `section` is a
+        // header line + its children; `tabs` is a labels line + all panels (cursor-aligned);
+        // a `gauge` is a value line; a `divider` is a rule line.
+        ViewNode::Section {
+            title, children, ..
+        } => {
+            if !title.is_empty() {
+                push_line(&mut acc.description, &format!("**{title}**"));
+            }
+            for c in children {
+                block(c, binds, cursor, acc);
+            }
+        }
+        ViewNode::Tabs { tabs, panels, .. } => {
+            if !tabs.is_empty() {
+                push_line(&mut acc.description, &format!("[{}]", tabs.join(" | ")));
+            }
+            for p in panels {
+                block(p, binds, cursor, acc);
+            }
+        }
+        ViewNode::Gauge { slot, max, label } => {
+            push_line(
+                &mut acc.description,
+                &format!("{label}\u{2039}gauge slot {slot} / {max}\u{203a}"),
+            );
+        }
+        ViewNode::Divider => push_line(&mut acc.description, "\u{2500}\u{2500}\u{2500}"),
     }
 }
 
@@ -197,6 +225,22 @@ fn inline(
             buttons.push((label.clone(), affordance_custom_id(turn, *arg)));
         }
         ViewNode::Input { bind_view } => parts.push(format!("\u{2039}{bind_view}\u{203a}")),
+        // The richness-expansion nodes inline into a row: a `section`/`tabs` recurses; a
+        // `gauge` shows its bounds; a `divider` is a dash.
+        ViewNode::Section { children, .. } => {
+            for c in children {
+                inline(c, binds, cursor, parts, buttons);
+            }
+        }
+        ViewNode::Tabs { panels, .. } => {
+            for p in panels {
+                inline(p, binds, cursor, parts, buttons);
+            }
+        }
+        ViewNode::Gauge { slot, max, label } => {
+            parts.push(format!("{label}\u{2039}{slot}/{max}\u{203a}"))
+        }
+        ViewNode::Divider => parts.push("\u{2014}".into()),
     }
 }
 
