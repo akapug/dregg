@@ -1,7 +1,14 @@
 {
   "id": "escrow-market",
   "name": "Escrow Market",
-  "description": "Escrowed-delivery marketplace starbridge-app: a factory-born escrow cell composing TRUSTLINE (escrowed <= ceiling) + MAILBOX (write-once sealed delivery) + FLASHWELL (conserving settlement) + LIFECYCLE (one-way LISTED -> FUNDED -> SHIPPED -> SETTLED), re-enforced by the verified executor every turn.",
+  "description": "Sealed-escrow atomic-swap marketplace: the app's escrow IS the protocol-proven dregg_cell::escrow_sealed SealedEscrow capacity (SealedEscrowMarket — open/deposit/settle/reclaim), a real witnessed escrow commitment. Two mutually-distrustful parties exchange value with no intermediary: each locks a conforming leg, the swap settles atomically (all-or-none), value is conserved per asset, and the half-open-trade attack is defeated by reclaim (the depositor made whole). A legacy slot-caveat delivery lifecycle (list/fund/ship/settle, the TRUSTLINE/MAILBOX/FLASHWELL/LIFECYCLE CellProgram + its DeosApp/service/factory faces below) is RETAINED for out-of-scope dependents (first-room, starbridge-v2).",
+  "sealed_escrow": {
+    "capacity": "dregg_cell::escrow_sealed (the proven SealedEscrow; Lean rung metatheory/Dregg2/Deos/SealedEscrow.lean)",
+    "driver": "SealedEscrowMarket (src/lib.rs) — open/deposit/settle/reclaim, conserving value moves",
+    "proven": "tests/atomic_swap.rs — witnessed deposit, atomic settle, conservation, half-open defeated by reclaim, over-claim refused",
+    "service": "service::EscrowService publishes the typed open/deposit/settle/reclaim/view interface and drives the capacity",
+    "value_face": "EscrowVault (Payable) — receives + settles value onward through the shared Payable interface (per-asset Sigma-delta=0)"
+  },
   "version": "0.1.0",
   "factory_vks": [
     "737461726272696467652d657363726f772d6d61726b65742d666163746f7279"
