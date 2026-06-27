@@ -16,6 +16,12 @@ dregg-cell = { path = "../../cell", default-features = false }
 
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
+# The AX4 deos-view CARD (`src/card.rs`) is a renderer-independent `deos.ui.*`
+# view-tree built as PURE `serde_json` — no `deos-view`, no `app-framework`, so it
+# carries no package-cycle edge and ships in the default build (the only normal
+# library module of the four runtime axes; the service/reactor/deos faces are
+# test-compiled, see below).
+serde_json = { workspace = true }
 
 [features]
 # Default is EMPTY: the pure library compiles with no app-framework, no turn,
@@ -34,6 +40,13 @@ default = []
 # The pure `cargo test`/`cargo build` never touches any of them. Enabling the
 # `deos` feature only flips the `#[cfg]` the test files gate on — it adds no
 # dependency edge to the library graph (so the cycle never forms).
+#
+# The `deos` feature ALSO gates the AX3 SERVICE (`src/service.rs`, the council
+# governance lifecycle on the `invoke()` front door) and the AX5 REACTOR
+# (`src/reactor.rs`, the quorum auto-certifier) — they pull `dregg-app-framework`
+# too, so they ride the SAME `#[path]`-into-test-binaries dance as the deos
+# surface (`tests/service.rs`, `tests/reactor.rs`). The AX4 card (`src/card.rs`)
+# is the exception: pure `serde_json`, a normal library module, no feature.
 deos = []
 
 [dev-dependencies]
@@ -53,8 +66,8 @@ dregg-sdk = { path = "../../sdk" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-# The manifest / projection assertions decode the surface's JSON.
-serde_json = { workspace = true }
+# (`serde_json` is a normal dependency — the AX4 card needs it in the default
+# build — so the manifest / projection assertions get it for free here.)
 
 [lints]
 workspace = true
