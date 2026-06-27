@@ -468,13 +468,12 @@ fn cmd_make_captp_delivered(
     // Build a tampered variant: flip a byte in the sender signature. The
     // executor's `verify_strict` MUST reject this — that's the must_not_pass.
     let mut tampered_turn = turn.clone();
-    if let Some(root) = tampered_turn.call_forest.roots.first_mut() {
-        if let Authorization::CapTpDelivered {
+    if let Some(root) = tampered_turn.call_forest.roots.first_mut()
+        && let Authorization::CapTpDelivered {
             sender_signature, ..
         } = &mut root.action.authorization
-        {
-            sender_signature[0] ^= 0xFF;
-        }
+    {
+        sender_signature[0] ^= 0xFF;
     }
     let tampered_bytes = postcard::to_allocvec(&tampered_turn).expect("tampered serialize");
 

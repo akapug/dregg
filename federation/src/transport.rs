@@ -545,7 +545,7 @@ impl TcpFederationTransport {
         envelope: &FederationEnvelope,
     ) -> Result<(), TransportError> {
         // Try to connect if not already connected.
-        if let Err(_) = self.get_connection(peer_id).await {
+        if self.get_connection(peer_id).await.is_err() {
             // Retry once after a short delay.
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             self.get_connection(peer_id).await?;

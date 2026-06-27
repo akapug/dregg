@@ -188,22 +188,22 @@ impl CapSession {
 
     /// Fulfill a promise with a resolved capability.
     pub fn fulfill_promise(&mut self, promise_id: u64, cell_id: CellId) -> bool {
-        if let Some(state) = self.promises.get_mut(&promise_id) {
-            if matches!(state, PromiseState::Pending) {
-                *state = PromiseState::Fulfilled { cell_id };
-                return true;
-            }
+        if let Some(state) = self.promises.get_mut(&promise_id)
+            && matches!(state, PromiseState::Pending)
+        {
+            *state = PromiseState::Fulfilled { cell_id };
+            return true;
         }
         false
     }
 
     /// Break a promise (e.g., remote disconnected).
     pub fn break_promise(&mut self, promise_id: u64, reason: String) -> bool {
-        if let Some(state) = self.promises.get_mut(&promise_id) {
-            if matches!(state, PromiseState::Pending) {
-                *state = PromiseState::Broken { reason };
-                return true;
-            }
+        if let Some(state) = self.promises.get_mut(&promise_id)
+            && matches!(state, PromiseState::Pending)
+        {
+            *state = PromiseState::Broken { reason };
+            return true;
         }
         false
     }

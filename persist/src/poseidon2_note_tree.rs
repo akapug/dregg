@@ -108,7 +108,7 @@ impl Poseidon2NoteTree {
 
     /// Rebuild from a list of BLAKE3 commitments (for recovery from persistence).
     pub fn from_blake3_commitments(commitments: &[[u8; 32]], depth: usize) -> Self {
-        let leaves: Vec<BabyBear> = commitments.iter().map(|c| commitment_to_field(c)).collect();
+        let leaves: Vec<BabyBear> = commitments.iter().map(commitment_to_field).collect();
         Self::from_leaves(leaves, depth)
     }
 }

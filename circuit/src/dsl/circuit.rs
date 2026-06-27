@@ -328,9 +328,9 @@ impl ConstraintExpr {
                 for term in terms {
                     let mut prod = term.coeff;
                     for &ci in &term.col_indices {
-                        prod = prod * local[ci];
+                        prod *= local[ci];
                     }
-                    sum = sum + prod;
+                    sum += prod;
                 }
                 sum
             }
@@ -373,7 +373,7 @@ impl ConstraintExpr {
                 // (1-f0)*(1-f1)*...*(1-fn) == 0 iff at least one fi=1
                 let mut product = BabyBear::ONE;
                 for &col in flag_cols {
-                    product = product * (BabyBear::ONE - local[col]);
+                    product *= BabyBear::ONE - local[col];
                 }
                 product
             }
@@ -525,8 +525,8 @@ fn eval_table_function(
                         continue;
                     }
                     let xk_f = BabyBear::new(xk);
-                    num = num * (x - xk_f);
-                    den = den * (xi_f - xk_f);
+                    num *= x - xk_f;
+                    den *= xi_f - xk_f;
                 }
                 // Distinct nodes ⇒ den ≠ 0.
                 num * den.inverse().unwrap_or(BabyBear::ZERO)
@@ -541,7 +541,7 @@ fn eval_table_function(
     for (i, lai) in la.iter().enumerate() {
         for (j, lbj) in lb.iter().enumerate() {
             let out = outputs.get(i * nb + j).copied().unwrap_or(0);
-            acc = acc + (*lai) * (*lbj) * BabyBear::new(out);
+            acc += (*lai) * (*lbj) * BabyBear::new(out);
         }
     }
     acc
@@ -624,8 +624,8 @@ impl StarkAir for DslCircuit {
                 public_inputs,
                 &self.descriptor.lookup_tables,
             );
-            result = result + alpha_power * value;
-            alpha_power = alpha_power * alpha;
+            result += alpha_power * value;
+            alpha_power *= alpha;
         }
         result
     }
@@ -1026,14 +1026,14 @@ impl CircuitDescriptor {
 
         // Validate column indices, degree, and PiBinding bounds in constraints
         for (i, constraint) in self.constraints.iter().enumerate() {
-            if let Some(max_col) = constraint.max_column_index() {
-                if max_col >= self.trace_width {
-                    return Err(ProgramValidationError::ColumnOutOfBounds {
-                        constraint_index: i,
-                        col: max_col,
-                        trace_width: self.trace_width,
-                    });
-                }
+            if let Some(max_col) = constraint.max_column_index()
+                && max_col >= self.trace_width
+            {
+                return Err(ProgramValidationError::ColumnOutOfBounds {
+                    constraint_index: i,
+                    col: max_col,
+                    trace_width: self.trace_width,
+                });
             }
 
             // Check that the constraint's algebraic degree does not exceed max_degree
@@ -1211,10 +1211,8 @@ impl CellProgram {
         let circuit = DslCircuit {
             descriptor: self.descriptor.clone(),
         };
-        let proof =
-            stark::proof_from_bytes(proof_bytes).map_err(|e| ProgramError::InvalidProof(e))?;
-        stark::verify(&circuit, &proof, public_inputs)
-            .map_err(|e| ProgramError::VerificationFailed(e))
+        let proof = stark::proof_from_bytes(proof_bytes).map_err(ProgramError::InvalidProof)?;
+        stark::verify(&circuit, &proof, public_inputs).map_err(ProgramError::VerificationFailed)
     }
 
     /// Generate an execution trace for this program from provided witness values.

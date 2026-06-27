@@ -1106,7 +1106,7 @@ impl RealPresentationProof {
                 .iter()
                 .map(|&v| BabyBear::new_canonical(v))
                 .collect();
-            if let Err(_) = fold_air::verify_fold_stark(fold_stark, &fold_pi) {
+            if fold_air::verify_fold_stark(fold_stark, &fold_pi).is_err() {
                 return PresentationVerification::InvalidFoldProof { index: i };
             }
         }
@@ -1118,7 +1118,7 @@ impl RealPresentationProof {
                 .iter()
                 .map(|&v| BabyBear::new_canonical(v))
                 .collect();
-            if let Err(_) = derivation_air::verify_derivation_stark(deriv_stark, &deriv_pi) {
+            if derivation_air::verify_derivation_stark(deriv_stark, &deriv_pi).is_err() {
                 return PresentationVerification::InvalidDerivation;
             }
         }
@@ -1332,11 +1332,11 @@ pub fn generate_merkle_poseidon2_stark_proof_bound(
     }
 
     // Append the composition commitment if provided (sub-proof binding, 4 elements).
-    if let Some(cc) = composition_commitment {
-        if !cc.is_zero() {
-            for &elem in cc.as_slice() {
-                public_inputs.push(elem);
-            }
+    if let Some(cc) = composition_commitment
+        && !cc.is_zero()
+    {
+        for &elem in cc.as_slice() {
+            public_inputs.push(elem);
         }
     }
 
@@ -1344,11 +1344,11 @@ pub fn generate_merkle_poseidon2_stark_proof_bound(
     // SECURITY: This cryptographically binds the revealed facts to the STARK proof.
     // The verifier recomputes the commitment from the plaintext facts and checks it
     // matches this value, ensuring the prover cannot lie about which facts were revealed.
-    if let Some(rfc) = revealed_facts_commitment {
-        if !rfc.is_zero() {
-            for &elem in rfc.as_slice() {
-                public_inputs.push(elem);
-            }
+    if let Some(rfc) = revealed_facts_commitment
+        && !rfc.is_zero()
+    {
+        for &elem in rfc.as_slice() {
+            public_inputs.push(elem);
         }
     }
 
@@ -1416,11 +1416,11 @@ pub fn generate_blinded_merkle_poseidon2_stark_proof(
     }
 
     // Append the composition commitment if provided (sub-proof binding, 4 elements).
-    if let Some(cc) = composition_commitment {
-        if !cc.is_zero() {
-            for &elem in cc.as_slice() {
-                public_inputs.push(elem);
-            }
+    if let Some(cc) = composition_commitment
+        && !cc.is_zero()
+    {
+        for &elem in cc.as_slice() {
+            public_inputs.push(elem);
         }
     }
 
@@ -1428,11 +1428,11 @@ pub fn generate_blinded_merkle_poseidon2_stark_proof(
     // SECURITY: This cryptographically binds the revealed facts to the STARK proof.
     // The verifier recomputes the commitment from the plaintext facts and checks it
     // matches this value, ensuring the prover cannot lie about which facts were revealed.
-    if let Some(rfc) = revealed_facts_commitment {
-        if !rfc.is_zero() {
-            for &elem in rfc.as_slice() {
-                public_inputs.push(elem);
-            }
+    if let Some(rfc) = revealed_facts_commitment
+        && !rfc.is_zero()
+    {
+        for &elem in rfc.as_slice() {
+            public_inputs.push(elem);
         }
     }
 

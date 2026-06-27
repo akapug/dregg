@@ -625,13 +625,13 @@ impl Accumulator {
         let new_root = turn.new_root();
 
         // (2) continuity against the running head.
-        if let Some(s) = self.summary {
-            if s.head_root != old_root {
-                return Err(AccError::ChainBreak {
-                    expected_old_root: s.head_root.0,
-                    found_old_root: old_root.0,
-                });
-            }
+        if let Some(s) = self.summary
+            && s.head_root != old_root
+        {
+            return Err(AccError::ChainBreak {
+                expected_old_root: s.head_root.0,
+                found_old_root: old_root.0,
+            });
         }
 
         let config = ir2_leaf_wrap_config();

@@ -458,10 +458,10 @@ impl Verifier {
 /// (e.g. a raw core credential not minted through [`Policy::issue`]).
 fn recover_subject(cred: &Credential) -> Option<String> {
     for (_, caveat) in cred.caveats() {
-        if let Caveat::FirstParty(Pred::AttrEq { key, value }) = caveat {
-            if key == SUBJECT_KEY {
-                return Some(value.clone());
-            }
+        if let Caveat::FirstParty(Pred::AttrEq { key, value }) = caveat
+            && key == SUBJECT_KEY
+        {
+            return Some(value.clone());
         }
     }
     None

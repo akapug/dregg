@@ -722,7 +722,7 @@ fn compile_boolean_composition(
 ///
 /// Returns a `PredicateExpr` that can be fed to `compile_predicate`.
 pub fn compile_nor(predicates: &[PredicateExpr]) -> PredicateExpr {
-    let flipped: Vec<PredicateExpr> = predicates.iter().map(|p| flip_predicate(p)).collect();
+    let flipped: Vec<PredicateExpr> = predicates.iter().map(flip_predicate).collect();
     PredicateExpr::And(flipped)
 }
 
@@ -1248,7 +1248,7 @@ fn prove_single(
                 .collect();
             let aggregate_commitment = poseidon2::hash_many(&fact_commitments);
 
-            let proof = prove_arithmetic_dsl(&input_values, &predicate, aggregate_commitment)
+            let proof = prove_arithmetic_dsl(&input_values, predicate, aggregate_commitment)
                 .map_err(|e| {
                     ProveError::NotSatisfiable(format!(
                         "arithmetic predicate over {:?} is not satisfiable: {}",

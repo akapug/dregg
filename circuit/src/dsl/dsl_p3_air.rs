@@ -440,9 +440,9 @@ fn eval_expr<AB: AirBuilder>(c: &ConstraintExpr, local: &[AB::Var], next: &[AB::
             for term in terms {
                 let mut prod: AB::Expr = lift::<AB>(term.coeff);
                 for &ci in &term.col_indices {
-                    prod = prod * col(ci);
+                    prod *= col(ci);
                 }
-                sum = sum + prod;
+                sum += prod;
             }
             sum
         }
@@ -466,7 +466,7 @@ fn eval_expr<AB: AirBuilder>(c: &ConstraintExpr, local: &[AB::Var], next: &[AB::
         ConstraintExpr::AtLeastOne { flag_cols } => {
             let mut product = one.clone();
             for &cc in flag_cols {
-                product = product * (one.clone() - col(cc));
+                product *= one.clone() - col(cc);
             }
             product
         }

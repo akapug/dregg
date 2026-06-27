@@ -172,7 +172,7 @@ impl ExtElem {
 
             let inv_pivot = mat[c][c].inverse()?;
             for j in 0..5 {
-                mat[c][j] = mat[c][j] * inv_pivot;
+                mat[c][j] *= inv_pivot;
             }
 
             for row in 0..4 {
@@ -181,7 +181,7 @@ impl ExtElem {
                 }
                 let factor = mat[row][c];
                 for j in 0..5 {
-                    mat[row][j] = mat[row][j] - factor * mat[c][j];
+                    mat[row][j] -= factor * mat[c][j];
                 }
             }
         }
@@ -266,7 +266,7 @@ pub(crate) fn build_evaluation_domain(num_points: usize) -> Vec<BabyBear> {
     let mut x = BabyBear::ONE;
     for _ in 0..num_points {
         domain.push(x);
-        x = x * omega;
+        x *= omega;
     }
     domain
 }
@@ -287,16 +287,16 @@ pub(crate) fn interpolate(xs: &[BabyBear], ys: &[BabyBear]) -> Vec<BabyBear> {
             }
             let mut new_basis = vec![BabyBear::ZERO; basis.len() + 1];
             for k in 0..basis.len() {
-                new_basis[k + 1] = new_basis[k + 1] + basis[k];
-                new_basis[k] = new_basis[k] - basis[k] * xs[j];
+                new_basis[k + 1] += basis[k];
+                new_basis[k] -= basis[k] * xs[j];
             }
             basis = new_basis;
-            denom = denom * (xs[i] - xs[j]);
+            denom *= xs[i] - xs[j];
         }
         let scale = ys[i] * denom.inverse().unwrap();
         for k in 0..basis.len() {
             if k < result.len() {
-                result[k] = result[k] + basis[k] * scale;
+                result[k] += basis[k] * scale;
             }
         }
     }
@@ -1058,7 +1058,7 @@ pub fn try_prove_full(
 
     // Temporal binding: absorb optional nonce/timestamp
     let nonce = context.and_then(|c| c.nonce);
-    if let Some(ref ctx) = context {
+    if let Some(ctx) = context {
         if let Some(ref n) = ctx.nonce {
             transcript.absorb_bytes(n);
         }
@@ -1455,7 +1455,7 @@ pub fn verify_full(
     transcript.absorb_bytes(&(NUM_QUERIES as u32).to_le_bytes());
 
     // Temporal binding (must match prover)
-    if let Some(ref ctx) = context {
+    if let Some(ctx) = context {
         if let Some(ref n) = ctx.nonce {
             transcript.absorb_bytes(n);
         }
@@ -1790,7 +1790,7 @@ pub fn verify_full(
                 }
                 let layer0 = &query.fri_layers[0];
                 if layer0.query_pos != idx % first_half {
-                    return Err(format!("FRI layer 0: position mismatch"));
+                    return Err("FRI layer 0: position mismatch".to_string());
                 }
                 if BabyBear::new_canonical(layer0.query_value) != expected_folded {
                     return Err(format!(

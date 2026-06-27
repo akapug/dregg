@@ -82,10 +82,8 @@ pub fn compute_real_fold_delta(
     }
 
     // Convert removed facts to commit facts.
-    let removed_commit_facts: Vec<CommitFact> = removed_facts
-        .iter()
-        .map(|f| demo_fact_to_commit_fact(f))
-        .collect();
+    let removed_commit_facts: Vec<CommitFact> =
+        removed_facts.iter().map(demo_fact_to_commit_fact).collect();
 
     // Convert added checks to commit facts.
     let added_check_facts: Vec<CommitFact> = added_checks

@@ -1166,10 +1166,10 @@ pub fn verify_bridge_receipt(receipt: &BridgeReceipt, trusted_keys: &[[u8; 32]])
     let signature = Signature::from_bytes(&receipt.signature);
 
     for key_bytes in trusted_keys {
-        if let Ok(vk) = VerifyingKey::from_bytes(key_bytes) {
-            if vk.verify_strict(&message, &signature).is_ok() {
-                return true;
-            }
+        if let Ok(vk) = VerifyingKey::from_bytes(key_bytes)
+            && vk.verify_strict(&message, &signature).is_ok()
+        {
+            return true;
         }
     }
 

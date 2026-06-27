@@ -143,7 +143,7 @@ fn parse_hex32(site: &str, s: &str) -> Result<[u8; 32], LowerError> {
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd number of hex digits".to_string());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

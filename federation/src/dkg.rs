@@ -719,10 +719,10 @@ impl DkgParticipant {
             if r.recipient != self.index {
                 continue;
             }
-            if let Some(dealing) = self.dealings.get(&r.dealer) {
-                if let Some(s) = verified_share(&dealing.commitments, self.index, &r.share_bytes) {
-                    my_shares.insert(r.dealer, s);
-                }
+            if let Some(dealing) = self.dealings.get(&r.dealer)
+                && let Some(s) = verified_share(&dealing.commitments, self.index, &r.share_bytes)
+            {
+                my_shares.insert(r.dealer, s);
             }
         }
 

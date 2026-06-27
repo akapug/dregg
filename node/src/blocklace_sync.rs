@@ -2375,19 +2375,19 @@ async fn handle_pull(handle: &BlocklaceHandle, from: SocketAddr, missing_ids: Ve
         // Include the causal past of the requested block.
         let past = lace.causal_past(block_id);
         for past_id in &past {
-            if !sent_ids.contains(past_id) {
-                if let Some(block) = lace.get(past_id) {
-                    to_send.push(block.clone());
-                    sent_ids.insert(*past_id);
-                }
+            if !sent_ids.contains(past_id)
+                && let Some(block) = lace.get(past_id)
+            {
+                to_send.push(block.clone());
+                sent_ids.insert(*past_id);
             }
         }
         // Include the block itself.
-        if !sent_ids.contains(block_id) {
-            if let Some(block) = lace.get(block_id) {
-                to_send.push(block.clone());
-                sent_ids.insert(*block_id);
-            }
+        if !sent_ids.contains(block_id)
+            && let Some(block) = lace.get(block_id)
+        {
+            to_send.push(block.clone());
+            sent_ids.insert(*block_id);
         }
     }
     drop(lace);
@@ -2446,8 +2446,7 @@ async fn handle_frontier(
             .values()
             .filter(|tip_id| lace.contains(tip_id))
             .collect();
-        let their_known: std::collections::HashSet<BlockId> =
-            lace.causal_past_union(known_tips.into_iter());
+        let their_known: std::collections::HashSet<BlockId> = lace.causal_past_union(known_tips);
 
         // Collect blocks they don't have, sorted in causal order.
         let mut candidates: Vec<(&BlockId, &Block)> = lace
@@ -3148,18 +3147,16 @@ fn spawn_peer_prober(handle: BlocklaceHandle, state: NodeState, interval_ms: u64
             // reconnected, or were graylisted) so memory stays bounded and a
             // later re-drop starts fresh.
             for addr in &unconnected {
-                if backoff.should_request(*addr) {
-                    if handle.gossip.reconnect_peer(*addr).await {
-                        info!(peer = %addr, "peer reconnect prober: (re)established link");
-                        backoff.clear(addr);
-                        crate::metrics::set_federation_peers_connected(
-                            handle.gossip.connected_peer_count().await as f64,
-                        );
-                        // A freshly (re)connected peer wants our frontier so it
-                        // pushes whatever we are missing (and vice-versa) — the
-                        // same catch-up nudge a fresh boot does.
-                        handle.send_frontier().await;
-                    }
+                if backoff.should_request(*addr) && handle.gossip.reconnect_peer(*addr).await {
+                    info!(peer = %addr, "peer reconnect prober: (re)established link");
+                    backoff.clear(addr);
+                    crate::metrics::set_federation_peers_connected(
+                        handle.gossip.connected_peer_count().await as f64,
+                    );
+                    // A freshly (re)connected peer wants our frontier so it
+                    // pushes whatever we are missing (and vice-versa) — the
+                    // same catch-up nudge a fresh boot does.
+                    handle.send_frontier().await;
                 }
             }
             // Bound the backoff map: forget entries for peers no longer in the
@@ -4028,7 +4025,7 @@ async fn execute_finalized_turn(
                 receipt_stream_root,
             };
             let signing_msg = attested.signing_message();
-            let local_pk = s.cclerk.public_key().clone();
+            let local_pk = s.cclerk.public_key();
             let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
             let sig = dregg_types::sign(&signing_key, &signing_msg);
             // In solo / single-validator mode our signature alone meets the
@@ -6278,7 +6275,7 @@ async fn fetch_checkpoint_http(url: &str) -> Option<Vec<u8>> {
 }
 
 fn hex_decode_var(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -6588,7 +6585,7 @@ fn build_federation_receipt(
     let signing_key_bytes = state_guard.cclerk.gossip_signing_key().to_bytes();
     let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
     let sig = dregg_types::sign(&signing_key, &body_hash);
-    let local_pk = state_guard.cclerk.public_key().clone();
+    let local_pk = state_guard.cclerk.public_key();
 
     Some(FederationReceipt::with_vote_signatures(
         federation_id,
@@ -6658,11 +6655,11 @@ pub(crate) fn provision_transfer_destinations(
     call_forest: &dregg_turn::CallForest,
 ) {
     for effect in call_forest.total_effects() {
-        if let dregg_turn::Effect::Transfer { to, .. } = effect {
-            if ledger.get(to).is_none() {
-                let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
-                let _ = ledger.insert_cell(stub);
-            }
+        if let dregg_turn::Effect::Transfer { to, .. } = effect
+            && ledger.get(to).is_none()
+        {
+            let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
+            let _ = ledger.insert_cell(stub);
         }
     }
 }

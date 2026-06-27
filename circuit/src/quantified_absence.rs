@@ -476,22 +476,22 @@ impl StarkAir for QuotientAccumulatorAir {
         // C1: diff == alpha - elem
         let expected_diff = alpha_challenge.sub(elem);
         for i in 0..4 {
-            combined = combined + pow * (diff.0[i] - expected_diff.0[i]);
-            pow = pow * alpha_random;
+            combined += pow * (diff.0[i] - expected_diff.0[i]);
+            pow *= alpha_random;
         }
 
         // C2: prod == w * diff
         let expected_prod = w.mul(diff);
         for i in 0..4 {
-            combined = combined + pow * (prod.0[i] - expected_prod.0[i]);
-            pow = pow * alpha_random;
+            combined += pow * (prod.0[i] - expected_prod.0[i]);
+            pow *= alpha_random;
         }
 
         // C3: sum == prod + v
         let expected_sum = prod.add(v);
         for i in 0..4 {
-            combined = combined + pow * (sum.0[i] - expected_sum.0[i]);
-            pow = pow * alpha_random;
+            combined += pow * (sum.0[i] - expected_sum.0[i]);
+            pow *= alpha_random;
         }
 
         combined
@@ -633,7 +633,7 @@ pub fn prove_quantified_absence_accumulator(
         let mut remainder_base = BabyBear::ONE;
         for (j, &other_h) in element_hashes.iter().enumerate() {
             if j != idx {
-                remainder_base = remainder_base * (h - other_h);
+                remainder_base *= h - other_h;
             }
         }
         let remainder = ExtElem::from_base(remainder_base);

@@ -62,8 +62,8 @@ mod temporal_predicate {
             let mut p2 = BabyBear::ONE;
             let two = BabyBear::new(2);
             for i in 0..col::NUM_DIFF_BITS {
-                rec = rec + local[col::DIFF_BITS_START + i] * p2;
-                p2 = p2 * two;
+                rec += local[col::DIFF_BITS_START + i] * p2;
+                p2 *= two;
             }
             cs.push(rec - local[col::DIFF]);
         }

@@ -162,7 +162,7 @@ impl std::error::Error for EpochError {}
 /// An epoch boundary occurs at heights that are exact multiples of the epoch length.
 /// Height 0 is NOT a boundary (it is genesis).
 pub fn is_epoch_boundary(height: u64, epoch_length: u64) -> bool {
-    height > 0 && epoch_length > 0 && height % epoch_length == 0
+    height > 0 && epoch_length > 0 && height.is_multiple_of(epoch_length)
 }
 
 /// Compute the epoch number for a given block height.
@@ -330,11 +330,7 @@ pub fn verify_epoch_transition(transition: &EpochTransition, old_config: &EpochC
     // Verify each vote's signature against old-epoch member keys.
     // This prevents forged attestations where votes are merely counted without
     // verifying that the signers are actually members of the old epoch.
-    let member_keys: Vec<PublicKey> = old_config
-        .members
-        .iter()
-        .map(|v| v.public_key.clone())
-        .collect();
+    let member_keys: Vec<PublicKey> = old_config.members.iter().map(|v| v.public_key).collect();
     let vote_message = QuorumCertificate::vote_message(
         &transition.attestation.block_hash,
         transition.attestation.height,
@@ -565,7 +561,7 @@ impl EpochConfig {
 
     /// Extract the public keys of all members (for compatibility with ConsensusConfig).
     pub fn member_public_keys(&self) -> Vec<PublicKey> {
-        self.members.iter().map(|m| m.public_key.clone()).collect()
+        self.members.iter().map(|m| m.public_key).collect()
     }
 
     /// The height at which the current epoch ends (exclusive).

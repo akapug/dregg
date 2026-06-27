@@ -749,10 +749,9 @@ impl Cell {
         if let CellLifecycle::Archived {
             archived_through, ..
         } = &self.lifecycle
+            && attestation.archive_end_height <= *archived_through
         {
-            if attestation.archive_end_height <= *archived_through {
-                return Err(LifecycleTransitionError::ArchiveNotMonotone);
-            }
+            return Err(LifecycleTransitionError::ArchiveNotMonotone);
         }
         self.lifecycle = CellLifecycle::Archived {
             checkpoint_hash: attestation.checkpoint_hash(),

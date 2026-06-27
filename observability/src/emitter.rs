@@ -70,18 +70,17 @@ fn serialize_event(event: &TraceEvent) -> Value {
     // the body's content shape is already `{ envelope, payload }` and the
     // flat form is friendlier for Studio's TS bindings.
     let raw = serde_json::to_value(event).expect("event serializes");
-    if let Some(obj) = raw.as_object() {
-        if let (Some(kind), Some(body)) = (obj.get("kind"), obj.get("body")) {
-            if let Some(body_obj) = body.as_object() {
-                let envelope = body_obj.get("envelope").cloned().unwrap_or(Value::Null);
-                let payload = body_obj.get("payload").cloned().unwrap_or(Value::Null);
-                return serde_json::json!({
-                    "kind": kind,
-                    "envelope": envelope,
-                    "payload": payload,
-                });
-            }
-        }
+    if let Some(obj) = raw.as_object()
+        && let (Some(kind), Some(body)) = (obj.get("kind"), obj.get("body"))
+        && let Some(body_obj) = body.as_object()
+    {
+        let envelope = body_obj.get("envelope").cloned().unwrap_or(Value::Null);
+        let payload = body_obj.get("payload").cloned().unwrap_or(Value::Null);
+        return serde_json::json!({
+            "kind": kind,
+            "envelope": envelope,
+            "payload": payload,
+        });
     }
     raw
 }

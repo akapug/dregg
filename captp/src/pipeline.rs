@@ -658,7 +658,7 @@ impl CrossFedPipelineBridge {
         action: PipelinedAction,
         result_promise_id: Option<u64>,
     ) -> Result<(), PipelineError> {
-        let registry = self.peers.entry(from).or_insert_with(PipelineRegistry::new);
+        let registry = self.peers.entry(from).or_default();
 
         // Ensure the promise exists in the peer's registry.
         // If it doesn't, it might be a promise we track in our local registry.

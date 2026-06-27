@@ -619,10 +619,10 @@ async fn run_node(
                         if let Some(validators) = genesis["validators"].as_array() {
                             let mut fed_keys = Vec::new();
                             for v in validators {
-                                if let Some(pk_hex) = v["public_key"].as_str() {
-                                    if let Some(pk_bytes) = hex_decode_32(pk_hex) {
-                                        fed_keys.push(dregg_types::PublicKey(pk_bytes));
-                                    }
+                                if let Some(pk_hex) = v["public_key"].as_str()
+                                    && let Some(pk_bytes) = hex_decode_32(pk_hex)
+                                {
+                                    fed_keys.push(dregg_types::PublicKey(pk_bytes));
                                 }
                             }
                             if !fed_keys.is_empty() {
@@ -1100,10 +1100,10 @@ async fn check_status(port: u16) {
 
 /// Expand `~` in a path string.
 fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
-        if let Some(home) = dirs_home() {
-            return home.join(&path[2..]);
-        }
+    if path.starts_with("~/")
+        && let Some(home) = dirs_home()
+    {
+        return home.join(&path[2..]);
     }
     PathBuf::from(path)
 }

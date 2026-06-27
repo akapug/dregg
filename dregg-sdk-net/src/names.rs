@@ -448,10 +448,10 @@ impl<'a> NameResolver<'a> {
         // 3. Check proposed name cache (local cached community names).
         if let Some(proposed) = self.db.get_proposed(name) {
             // Check expiry.
-            if let Some(expires_at) = proposed.expires_at {
-                if self.current_epoch >= expires_at {
-                    return Err(NameError::NotFound(name.to_string()));
-                }
+            if let Some(expires_at) = proposed.expires_at
+                && self.current_epoch >= expires_at
+            {
+                return Err(NameError::NotFound(name.to_string()));
             }
             // Confidence based on vote weight.
             let confidence = (proposed.vote_weight as f64 / 1000.0).clamp(0.5, 0.95);

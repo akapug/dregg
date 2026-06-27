@@ -1962,10 +1962,10 @@ pub fn prove_effect_vm_rotated_ir2_with_fee(
 ///     `<effect>CapOpenVmDescriptor2R24` = that effect's base + the appendix has not been registered).
 ///     These fail CLOSED here with a precise error. This is the remaining NAMED per-effect residual:
 ///     the routing + appendix are general, the per-effect descriptor coverage is attenuate + transfer.
-/// The cap-open ROUTE for a single-effect run: the registry key of its cap-open descriptor, the
-/// effect-kind bit (`EFFECT_<kind> = 1 << n`) the appendix's `effBitGateFor`/`facetEffGate` bind, and
-/// whether the base needs the attenuate phase-B nonce-freeze patch (`patch_attenuate_base_for_cap_open`).
-/// `None` (the fallthrough) means no cap-open descriptor for that effect-kind.
+///     The cap-open ROUTE for a single-effect run: the registry key of its cap-open descriptor, the
+///     effect-kind bit (`EFFECT_<kind> = 1 << n`) the appendix's `effBitGateFor`/`facetEffGate` bind, and
+///     whether the base needs the attenuate phase-B nonce-freeze patch (`patch_attenuate_base_for_cap_open`).
+///     `None` (the fallthrough) means no cap-open descriptor for that effect-kind.
 #[cfg(feature = "prover")]
 struct CapOpenRoute {
     key: &'static str,
@@ -2713,10 +2713,10 @@ fn prove_effect_vm_cap_open(
 /// **THE SHARED CAP-OPEN LEG BUILDER** — resolve the `<effect>CapOpenVmDescriptor2R24` descriptor and
 /// assemble its rotated base trace + membership-crown appendix + (when `wide`) the 8-felt wide carriers
 /// + the cap-tree `map_op` witness heaps, returning `(descriptor, trace, dpis, map_op_heaps)` WITHOUT
-/// proving. Extracted from [`prove_effect_vm_cap_open`] so the bare prover AND the welded domain-2 twin
-/// ([`prove_wide_umem_welded_cap_open_staged`]) share ONE descriptor/trace route (no hand-inlined twin):
-/// the welded twin welds the universal-memory caps leg onto THIS descriptor + trace before proving. See
-/// [`prove_effect_vm_cap_open`] for the per-step semantics.
+///   proving. Extracted from [`prove_effect_vm_cap_open`] so the bare prover AND the welded domain-2 twin
+///   ([`prove_wide_umem_welded_cap_open_staged`]) share ONE descriptor/trace route (no hand-inlined twin):
+///   the welded twin welds the universal-memory caps leg onto THIS descriptor + trace before proving. See
+///   [`prove_effect_vm_cap_open`] for the per-step semantics.
 #[cfg(feature = "prover")]
 #[allow(clippy::type_complexity)]
 fn build_effect_vm_cap_open_leg(
@@ -3836,12 +3836,12 @@ pub fn verify_effect_vm_rotated_with_cutover(
                 Some(j) => j,
                 None => continue,
             };
-            if let Ok(desc) = parse_vm_descriptor2(json) {
-                if public_inputs.len() >= desc.public_input_count {
-                    let dpis = &public_inputs[..desc.public_input_count];
-                    if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                        bound.push((name, json));
-                    }
+            if let Ok(desc) = parse_vm_descriptor2(json)
+                && public_inputs.len() >= desc.public_input_count
+            {
+                let dpis = &public_inputs[..desc.public_input_count];
+                if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
+                    bound.push((name, json));
                 }
             }
         }
@@ -4764,32 +4764,32 @@ pub fn verify_full_turn_bound(
     //    internal-soundness-only behaviour. The companion tooth (item == this
     //    turn's nullifier) is a circuit residual — see the
     //    [`verify_full_turn_bound`] SOUNDNESS BOUNDARY doc.
-    if let Some(expected_root) = expected_revocation_root {
-        if proof.components.has_non_revocation {
-            let revoc_sub = proof
-                .composed
-                .sub_proofs
-                .iter()
-                .find(|sp| sp.label == "non-revocation")
-                .ok_or(FullTurnVerifyError::MissingComponent(
-                    "non-revocation".into(),
-                ))?;
-            // Non-revocation PI is [revocation_root].
-            let proof_root = revoc_sub
-                .sub_public_inputs
-                .first()
-                .copied()
-                .ok_or_else(|| {
-                    FullTurnVerifyError::MalformedPublicInputs(
-                        "non-revocation PI missing revocation_root".into(),
-                    )
-                })?;
-            if proof_root != expected_root {
-                return Err(FullTurnVerifyError::RevocationRootMismatch {
-                    expected: expected_root,
-                    got: proof_root,
-                });
-            }
+    if let Some(expected_root) = expected_revocation_root
+        && proof.components.has_non_revocation
+    {
+        let revoc_sub = proof
+            .composed
+            .sub_proofs
+            .iter()
+            .find(|sp| sp.label == "non-revocation")
+            .ok_or(FullTurnVerifyError::MissingComponent(
+                "non-revocation".into(),
+            ))?;
+        // Non-revocation PI is [revocation_root].
+        let proof_root = revoc_sub
+            .sub_public_inputs
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                FullTurnVerifyError::MalformedPublicInputs(
+                    "non-revocation PI missing revocation_root".into(),
+                )
+            })?;
+        if proof_root != expected_root {
+            return Err(FullTurnVerifyError::RevocationRootMismatch {
+                expected: expected_root,
+                got: proof_root,
+            });
         }
     }
 

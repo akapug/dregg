@@ -408,7 +408,7 @@ pub mod recursive {
     -> p3_recursion::FriRecursionBackendForExt<D, WIDTH, RATE, Poseidon2Config> {
         thread_local! {
             static BACKEND: p3_recursion::FriRecursionBackendForExt<D, WIDTH, RATE, Poseidon2Config> =
-                FriRecursionBackend::new(Poseidon2Config::BABY_BEAR_D4_W16).for_extension_degree::<D>();
+                const { FriRecursionBackend::new(Poseidon2Config::BABY_BEAR_D4_W16).for_extension_degree::<D>() };
         }
         BACKEND.with(|b| b.clone())
     }

@@ -100,9 +100,9 @@ impl Federation {
             verification_key: vk,
             roles,
         };
-        let key = PublicKeyWrapper(authority.public_key.clone());
+        let key = PublicKeyWrapper(authority.public_key);
         self.members.insert(key, member);
-        self.member_order.push(authority.public_key.clone());
+        self.member_order.push(authority.public_key);
     }
 
     /// Compute the federation root from the current member set.
@@ -131,13 +131,13 @@ impl Federation {
 
     /// Check if a public key is a member of this federation.
     pub fn is_member(&self, public_key: &PublicKey) -> bool {
-        let key = PublicKeyWrapper(public_key.clone());
+        let key = PublicKeyWrapper(*public_key);
         self.members.contains_key(&key)
     }
 
     /// Check if a public key has a specific role in the federation.
     pub fn has_role(&self, public_key: &PublicKey, role: &FederationRole) -> bool {
-        let key = PublicKeyWrapper(public_key.clone());
+        let key = PublicKeyWrapper(*public_key);
         self.members
             .get(&key)
             .is_some_and(|m| m.roles.contains(role))
@@ -145,7 +145,7 @@ impl Federation {
 
     /// Get the verification key for a member.
     pub fn get_verification_key(&self, public_key: &PublicKey) -> Option<&VerificationKey> {
-        let key = PublicKeyWrapper(public_key.clone());
+        let key = PublicKeyWrapper(*public_key);
         self.members.get(&key).map(|m| &m.verification_key)
     }
 }

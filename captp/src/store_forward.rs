@@ -813,11 +813,11 @@ pub fn scan_and_decrypt_blocklace(
     let mut results = Vec::new();
 
     for payload in payloads {
-        if let Some(envelope) = BlocklaceEnvelope::from_payload(payload) {
-            if envelope.is_for(our_federation) {
-                let plaintext = envelope.decrypt(our_secret)?;
-                results.push((envelope.causal_sequence, plaintext));
-            }
+        if let Some(envelope) = BlocklaceEnvelope::from_payload(payload)
+            && envelope.is_for(our_federation)
+        {
+            let plaintext = envelope.decrypt(our_secret)?;
+            results.push((envelope.causal_sequence, plaintext));
         }
     }
 

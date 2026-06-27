@@ -204,17 +204,17 @@ impl DelegationManager {
         let client = delegation.client;
 
         // Check for existing active delegation.
-        if let Some(existing) = self.delegations.get(&client) {
-            if !self.is_expired(existing) {
-                return Err(DelegationError::AlreadyDelegated);
-            }
+        if let Some(existing) = self.delegations.get(&client)
+            && !self.is_expired(existing)
+        {
+            return Err(DelegationError::AlreadyDelegated);
         }
 
         // Check expiry of the new delegation.
-        if let Some(expires) = delegation.expires_at {
-            if expires <= self.current_height {
-                return Err(DelegationError::Expired);
-            }
+        if let Some(expires) = delegation.expires_at
+            && expires <= self.current_height
+        {
+            return Err(DelegationError::Expired);
         }
 
         self.delegations.insert(client, delegation);
@@ -283,12 +283,11 @@ impl DelegationManager {
         let executor = batch.executor;
 
         // Check monotonicity of batch_seq.
-        if let Some(existing) = self.executed_batches.get(&executor) {
-            if let Some(last) = existing.last() {
-                if batch.batch_seq <= last.batch_seq {
-                    return Err(DelegationError::BatchSeqNotMonotonic);
-                }
-            }
+        if let Some(existing) = self.executed_batches.get(&executor)
+            && let Some(last) = existing.last()
+            && batch.batch_seq <= last.batch_seq
+        {
+            return Err(DelegationError::BatchSeqNotMonotonic);
         }
 
         self.executed_batches
@@ -377,10 +376,10 @@ impl DelegationManager {
         self.delegations.remove(client);
 
         // Delegate the new one (bypassing the AlreadyDelegated check since we just revoked).
-        if let Some(expires) = new_delegation.expires_at {
-            if expires <= self.current_height {
-                return Err(DelegationError::Expired);
-            }
+        if let Some(expires) = new_delegation.expires_at
+            && expires <= self.current_height
+        {
+            return Err(DelegationError::Expired);
         }
 
         self.delegations.insert(*client, new_delegation);

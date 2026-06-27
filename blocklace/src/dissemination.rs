@@ -755,15 +755,14 @@ impl Disseminator {
         let mut peer_will_know = peer_known;
 
         for block_id in &ordered {
-            if let Some(block) = self.blocklace.get(block_id) {
-                if block
+            if let Some(block) = self.blocklace.get(block_id)
+                && block
                     .predecessors
                     .iter()
                     .all(|p| peer_will_know.contains(p))
-                {
-                    sendable.push(block.clone());
-                    peer_will_know.insert(*block_id);
-                }
+            {
+                sendable.push(block.clone());
+                peer_will_know.insert(*block_id);
             }
         }
 
@@ -855,15 +854,14 @@ impl Disseminator {
         let mut they_will_know = their_known;
 
         for block_id in &ordered {
-            if let Some(block) = self.blocklace.get(block_id) {
-                if block
+            if let Some(block) = self.blocklace.get(block_id)
+                && block
                     .predecessors
                     .iter()
                     .all(|p| they_will_know.contains(p))
-                {
-                    result.push(block.clone());
-                    they_will_know.insert(*block_id);
-                }
+            {
+                result.push(block.clone());
+                they_will_know.insert(*block_id);
             }
         }
 
@@ -1053,7 +1051,7 @@ impl Disseminator {
     /// Get the list of block IDs we're missing (referenced by pending blocks).
     pub fn missing_blocks(&self) -> HashSet<BlockId> {
         let mut missing = HashSet::new();
-        for (_, (_, deps)) in &self.pending {
+        for (_, deps) in self.pending.values() {
             for dep in deps {
                 if !self.blocklace.contains(dep) {
                     missing.insert(*dep);
@@ -1104,15 +1102,14 @@ impl Disseminator {
         let mut they_will_know = their_known.clone();
 
         for block_id in &ordered {
-            if let Some(block) = self.blocklace.get(block_id) {
-                if block
+            if let Some(block) = self.blocklace.get(block_id)
+                && block
                     .predecessors
                     .iter()
                     .all(|p| they_will_know.contains(p))
-                {
-                    sendable.push(block.clone());
-                    they_will_know.insert(*block_id);
-                }
+            {
+                sendable.push(block.clone());
+                they_will_know.insert(*block_id);
             }
         }
 

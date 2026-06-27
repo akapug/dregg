@@ -348,7 +348,7 @@ pub fn evaluate_fold_constraints(trace: &[Vec<BabyBear>], public_inputs: &[BabyB
             // We use addition (over the field) -- if all constraints are zero,
             // total remains zero. A single non-zero term makes total non-zero
             // (with overwhelming probability over BabyBear).
-            total = total + value * value; // square to avoid cancellation
+            total += value * value; // square to avoid cancellation
         }
     }
 

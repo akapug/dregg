@@ -295,8 +295,8 @@ impl StarkAir for BridgeActionAir {
         let mut alpha_pow = BabyBear::ONE;
         for c in 0..BRIDGE_ACTION_WIDTH {
             let diff = next[c] - local[c];
-            combined = combined + alpha_pow * diff;
-            alpha_pow = alpha_pow * alpha;
+            combined += alpha_pow * diff;
+            alpha_pow *= alpha;
         }
         combined
     }

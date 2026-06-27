@@ -191,12 +191,12 @@ pub fn verify_rotated_leg(leg: &RotatedReplayLeg) -> Result<(), String> {
             Some(j) => j,
             None => continue,
         };
-        if let Ok(desc) = parse_vm_descriptor2(json) {
-            if public_inputs.len() >= desc.public_input_count {
-                let dpis = &public_inputs[..desc.public_input_count];
-                if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
-                    bound.push((name, json));
-                }
+        if let Ok(desc) = parse_vm_descriptor2(json)
+            && public_inputs.len() >= desc.public_input_count
+        {
+            let dpis = &public_inputs[..desc.public_input_count];
+            if verify_vm_descriptor2(&desc, &proof, dpis).is_ok() {
+                bound.push((name, json));
             }
         }
     }
@@ -297,7 +297,7 @@ pub fn verify_rotated_replay_chain(
                 reason: reason.clone(),
             };
         }
-        if first_failure.map_or(true, |f| idx < f) {
+        if first_failure.is_none_or(|f| idx < f) {
             first_failure = Some(idx);
         }
     }

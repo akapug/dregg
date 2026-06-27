@@ -736,19 +736,16 @@ pub fn delegator_pre_state_cap_roots(
     use dregg_turn::{Authorization, DelegationProofData};
     let mut out = std::collections::HashMap::new();
     for tree in forest.iter_dfs() {
-        if let Authorization::Bearer(proof) = &tree.action.authorization {
-            if let DelegationProofData::SignedDelegation { delegator_pk, .. } =
+        if let Authorization::Bearer(proof) = &tree.action.authorization
+            && let DelegationProofData::SignedDelegation { delegator_pk, .. } =
                 &proof.delegation_proof
-            {
-                // Resolve the delegator cell by public key (the executor's own
-                // lookup), then snapshot its pre-state canonical cap root.
-                if let Some((id, cell)) =
-                    ledger.iter().find(|(_, c)| c.public_key() == delegator_pk)
-                {
-                    out.entry(*id).or_insert_with(|| {
-                        dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities)
-                    });
-                }
+        {
+            // Resolve the delegator cell by public key (the executor's own
+            // lookup), then snapshot its pre-state canonical cap root.
+            if let Some((id, cell)) = ledger.iter().find(|(_, c)| c.public_key() == delegator_pk) {
+                out.entry(*id).or_insert_with(|| {
+                    dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities)
+                });
             }
         }
     }

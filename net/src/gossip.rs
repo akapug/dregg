@@ -300,10 +300,10 @@ impl BoundedSeenSet {
         }
 
         // Hard cap eviction
-        if self.entries.len() >= self.max_size {
-            if let Some(evicted) = self.entries.pop_front() {
-                self.index.remove(&evicted.hash);
-            }
+        if self.entries.len() >= self.max_size
+            && let Some(evicted) = self.entries.pop_front()
+        {
+            self.index.remove(&evicted.hash);
         }
 
         self.entries.push_back(SeenEntry {
@@ -375,10 +375,10 @@ impl BoundedPendingIhaves {
             return;
         }
 
-        if self.entries.len() >= self.max_size {
-            if let Some((evicted_key, _)) = self.entries.pop_front() {
-                self.index.remove(&evicted_key);
-            }
+        if self.entries.len() >= self.max_size
+            && let Some((evicted_key, _)) = self.entries.pop_front()
+        {
+            self.index.remove(&evicted_key);
         }
 
         self.entries.push_back((key, value));
@@ -1193,11 +1193,9 @@ impl GossipNetwork {
                 let state = self.state.read().await;
                 state.links_to(&addr).is_empty()
             };
-            if needs_connect {
-                if let Ok(conn) = self.connect_peer_bounded(addr).await {
-                    let mut state = self.state.write().await;
-                    state.add_peer_link(addr, conn);
-                }
+            if needs_connect && let Ok(conn) = self.connect_peer_bounded(addr).await {
+                let mut state = self.state.write().await;
+                state.add_peer_link(addr, conn);
             }
         }
 
@@ -2218,14 +2216,14 @@ impl GossipNetwork {
 
                     if is_new {
                         let s = state.read().await;
-                        if let Some(topic_state) = s.topics.get(&topic_id) {
-                            if let Ok(msg) = PeerMessage::decode_raw(&payload) {
-                                for sub in &topic_state.subscribers {
-                                    let _ = sub.send(GossipEvent::Message {
-                                        from: remote_addr,
-                                        message: msg.clone(),
-                                    });
-                                }
+                        if let Some(topic_state) = s.topics.get(&topic_id)
+                            && let Ok(msg) = PeerMessage::decode_raw(&payload)
+                        {
+                            for sub in &topic_state.subscribers {
+                                let _ = sub.send(GossipEvent::Message {
+                                    from: remote_addr,
+                                    message: msg.clone(),
+                                });
                             }
                         }
                     }

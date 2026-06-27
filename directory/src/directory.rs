@@ -257,10 +257,10 @@ impl Directory for InMemoryDirectory {
         if entry.revoked {
             return Err(DirectoryError::Revoked(name.to_string()));
         }
-        if let Some(exp) = entry.expires_at {
-            if current_height > exp {
-                return Err(DirectoryError::Expired(name.to_string()));
-            }
+        if let Some(exp) = entry.expires_at
+            && current_height > exp
+        {
+            return Err(DirectoryError::Expired(name.to_string()));
         }
         Ok(entry)
     }
@@ -287,15 +287,15 @@ impl Directory for InMemoryDirectory {
                 if !filter.include_revoked && entry.revoked {
                     return false;
                 }
-                if let Some(prefix) = &filter.name_prefix {
-                    if !name.starts_with(prefix) {
-                        return false;
-                    }
+                if let Some(prefix) = &filter.name_prefix
+                    && !name.starts_with(prefix)
+                {
+                    return false;
                 }
-                if let Some(kind) = &filter.kind {
-                    if &entry.kind != kind {
-                        return false;
-                    }
+                if let Some(kind) = &filter.kind
+                    && &entry.kind != kind
+                {
+                    return false;
                 }
                 if !filter.required_tags.is_empty() {
                     // Index this entry's tags once so the "has ALL required tags" check

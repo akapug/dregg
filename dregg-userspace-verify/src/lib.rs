@@ -524,16 +524,16 @@ pub fn check_wellformed(forest: &CallForest) -> Verdict {
         }
         // no-op exercise
         for (ei, eff) in node.action.effects.iter().enumerate() {
-            if let Effect::ExerciseViaCapability { inner_effects, .. } = eff {
-                if inner_effects.is_empty() {
-                    findings.push(Finding {
-                        guarantee: "well-formedness".to_string(),
-                        locus: Locus::node(path.to_vec()).at_effect(ei),
-                        message: "ExerciseViaCapability with empty inner_effects \
+            if let Effect::ExerciseViaCapability { inner_effects, .. } = eff
+                && inner_effects.is_empty()
+            {
+                findings.push(Finding {
+                    guarantee: "well-formedness".to_string(),
+                    locus: Locus::node(path.to_vec()).at_effect(ei),
+                    message: "ExerciseViaCapability with empty inner_effects \
                                   (a no-op exercise — pays gas, changes nothing)"
-                            .to_string(),
-                    });
-                }
+                        .to_string(),
+                });
             }
         }
     });

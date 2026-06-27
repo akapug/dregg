@@ -723,7 +723,7 @@ impl PersistentStore {
             }
         }
         if (cell_index_count as usize) < latest_cell_writer.len() {
-            for (cell_id, _) in &latest_cell_writer {
+            for cell_id in latest_cell_writer.keys() {
                 if idx_cell.get(cell_id)?.is_none() {
                     report
                         .missing_entries

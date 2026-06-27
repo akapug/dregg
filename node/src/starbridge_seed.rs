@@ -198,10 +198,10 @@ fn seed_starbridge_cells(
         }
     }
 
-    if stats.created > 0 {
-        if let Err(e) = save_seed_marker(data_dir, &marker) {
-            warn!(error = %e, "failed to persist starbridge seed marker");
-        }
+    if stats.created > 0
+        && let Err(e) = save_seed_marker(data_dir, &marker)
+    {
+        warn!(error = %e, "failed to persist starbridge seed marker");
     }
 
     if stats.total() > 0 {

@@ -287,16 +287,16 @@ pub fn verify_chunked_authorization(
         }
 
         // Check that the next chunk's initial root matches this chunk's evolved root.
-        if chunk_idx + 1 < num_chunks {
-            if proof.evolved_roots[chunk_idx] != proof.chunk_initial_roots[chunk_idx + 1] {
-                return Err(format!(
-                    "Root discontinuity: chunk {} evolved_root ({}) != chunk {} initial_root ({})",
-                    chunk_idx,
-                    proof.evolved_roots[chunk_idx].0,
-                    chunk_idx + 1,
-                    proof.chunk_initial_roots[chunk_idx + 1].0
-                ));
-            }
+        if chunk_idx + 1 < num_chunks
+            && proof.evolved_roots[chunk_idx] != proof.chunk_initial_roots[chunk_idx + 1]
+        {
+            return Err(format!(
+                "Root discontinuity: chunk {} evolved_root ({}) != chunk {} initial_root ({})",
+                chunk_idx,
+                proof.evolved_roots[chunk_idx].0,
+                chunk_idx + 1,
+                proof.chunk_initial_roots[chunk_idx + 1].0
+            ));
         }
     }
 

@@ -162,8 +162,8 @@ impl StarkAir for TemporalPredicateDsl {
                 let mut power_of_two = BabyBear::ONE;
                 let two = BabyBear::new(2);
                 for i in 0..col::NUM_DIFF_BITS {
-                    reconstructed = reconstructed + local[col::DIFF_BITS_START + i] * power_of_two;
-                    power_of_two = power_of_two * two;
+                    reconstructed += local[col::DIFF_BITS_START + i] * power_of_two;
+                    power_of_two *= two;
                 }
                 cs.push(reconstructed - local[col::DIFF]);
             }
@@ -202,8 +202,8 @@ impl StarkAir for TemporalPredicateDsl {
         let mut result = BabyBear::ZERO;
         let mut alpha_power = BabyBear::ONE;
         for c in constraint_values.iter().chain(transition_values.iter()) {
-            result = result + alpha_power * *c;
-            alpha_power = alpha_power * alpha;
+            result += alpha_power * *c;
+            alpha_power *= alpha;
         }
         result
     }
@@ -465,8 +465,8 @@ impl StarkAir for TemporalPredicateAir {
             let mut power_of_two = BabyBear::ONE;
             let two = BabyBear::new(2);
             for i in 0..col::NUM_DIFF_BITS {
-                reconstructed = reconstructed + local[col::DIFF_BITS_START + i] * power_of_two;
-                power_of_two = power_of_two * two;
+                reconstructed += local[col::DIFF_BITS_START + i] * power_of_two;
+                power_of_two *= two;
             }
             cs.push(reconstructed - local[col::DIFF]);
         }
@@ -493,8 +493,8 @@ impl StarkAir for TemporalPredicateAir {
         let mut result = BabyBear::ZERO;
         let mut alpha_power = BabyBear::ONE;
         for c in cs.iter().chain(transitions.iter()) {
-            result = result + alpha_power * *c;
-            alpha_power = alpha_power * alpha;
+            result += alpha_power * *c;
+            alpha_power *= alpha;
         }
         result
     }

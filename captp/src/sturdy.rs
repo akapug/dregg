@@ -219,17 +219,17 @@ impl SwissTable {
         let entry = self.entries.get_mut(swiss).ok_or(EnlivenError::NotFound)?;
 
         // Check expiration
-        if let Some(exp) = entry.expires_at {
-            if current_height > exp {
-                return Err(EnlivenError::Expired);
-            }
+        if let Some(exp) = entry.expires_at
+            && current_height > exp
+        {
+            return Err(EnlivenError::Expired);
         }
 
         // Check use limit
-        if let Some(max) = entry.max_uses {
-            if entry.use_count >= max {
-                return Err(EnlivenError::ExhaustedUses);
-            }
+        if let Some(max) = entry.max_uses
+            && entry.use_count >= max
+        {
+            return Err(EnlivenError::ExhaustedUses);
         }
 
         entry.use_count += 1;
@@ -280,16 +280,16 @@ impl SwissTable {
     pub fn check(&self, swiss: &[u8; 32], current_height: u64) -> Result<SwissEntry, EnlivenError> {
         let entry = self.entries.get(swiss).ok_or(EnlivenError::NotFound)?;
 
-        if let Some(exp) = entry.expires_at {
-            if current_height > exp {
-                return Err(EnlivenError::Expired);
-            }
+        if let Some(exp) = entry.expires_at
+            && current_height > exp
+        {
+            return Err(EnlivenError::Expired);
         }
 
-        if let Some(max) = entry.max_uses {
-            if entry.use_count >= max {
-                return Err(EnlivenError::ExhaustedUses);
-            }
+        if let Some(max) = entry.max_uses
+            && entry.use_count >= max
+        {
+            return Err(EnlivenError::ExhaustedUses);
         }
 
         Ok(entry.clone())

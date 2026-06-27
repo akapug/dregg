@@ -1136,9 +1136,9 @@ pub fn seed_board(executor: &EmbeddedExecutor, budget: u64, lead: &str) -> u64 {
 /// **Mount the deos-native surface** ([`crate::deos::orchestration_app`]) on a shared context: build
 /// the composed [`DeosApp`] from the context's cipherclerk + executor, seed the board cell's program
 /// + genesis state (so the gated `worker_step` fire bites — the budget gate is REAL on the born
-/// cell), and fold the app into the context's affordance registry ([`DeosApp::register`]). Returns
-/// the live [`DeosApp`] (so a host can also [`DeosApp::mount`] its axum router /
-/// [`DeosApp::publish_all`] into the web-of-cells).
+///   cell), and fold the app into the context's affordance registry ([`DeosApp::register`]). Returns
+///   the live [`DeosApp`] (so a host can also [`DeosApp::mount`] its axum router /
+///   [`DeosApp::publish_all`] into the web-of-cells).
 ///
 /// This is the same fold every other deos starbridge-app does in its `register` — agent-orchestration
 /// was the lone app that registered only the factory + inspector and never mounted the composed

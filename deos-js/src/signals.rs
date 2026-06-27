@@ -54,8 +54,8 @@ pub struct BindingId(pub u64);
 ///   - `WorldEvent::FieldSet { cell, index }`        → `SourceEvent { cell, slot: index }`
 ///   - `WorldEvent::CapabilityRevoked { cell, slot }`→ `SourceEvent { cell, slot }`
 ///   - `WorldEvent::CellMutated { cell }`            → one `SourceEvent` per bound slot
-///        of `cell` (the generic "this cell changed" tooth invalidates ALL of its
-///        bindings; use [`BindingRegistry::invalidate_cell`]).
+///     of `cell` (the generic "this cell changed" tooth invalidates ALL of its
+///     bindings; use [`BindingRegistry::invalidate_cell`]).
 ///
 /// Events that name no `(cell, slot)` source a binding can read (TurnCommitted height,
 /// EventEmitted, etc.) are simply not projected — they invalidate nothing.

@@ -293,7 +293,7 @@ fn check_constitution_membership() -> Result<(), String> {
 
     // Auto-evict via equivocation proof.
     let equivocator = participants[0];
-    let evil_key = make_key(format!("participant-0").as_bytes());
+    let evil_key = make_key("participant-0".to_string().as_bytes());
     let proof = EquivocationProof {
         creator: equivocator,
         block_a: Block::new(&evil_key, 1, Payload::Data(b"a".to_vec()), vec![]),

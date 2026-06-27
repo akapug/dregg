@@ -731,8 +731,8 @@ impl StarkAir for CrossSideExistenceAir {
         let mut combined = BabyBear::ZERO;
         let mut pow = BabyBear::ONE;
         let mut add = |c: BabyBear| {
-            combined = combined + pow * c;
-            pow = pow * alpha;
+            combined += pow * c;
+            pow *= alpha;
         };
 
         let one = BabyBear::ONE;
@@ -812,7 +812,7 @@ pub fn build_cross_side_trace(half_edges: &[CrossSideHalfEdge]) -> Vec<Vec<BabyB
             // p - 1 == -1 in BabyBear.
             BabyBear::ZERO - BabyBear::ONE
         };
-        balance = balance + sign * fp;
+        balance += sign * fp;
         let mut row = vec![BabyBear::ZERO; CSE_WIDTH];
         row[CSE_EDGE_ID_BASE..CSE_EDGE_ID_BASE + 4].copy_from_slice(&he.edge_id);
         row[CSE_EDGE_FP_COL] = fp;
@@ -912,7 +912,7 @@ pub fn build_cross_side_trace_v2(
         } else {
             BabyBear::ZERO - BabyBear::ONE
         };
-        balance = balance + sign * fp;
+        balance += sign * fp;
         let commit_in = commit;
         let commit_out = crate::poseidon2::hash_2_to_1(commit_in, fp);
         commit = commit_out;
@@ -1085,8 +1085,8 @@ impl StarkAir for BundleTreeFoldAir {
         let mut combined = BabyBear::ZERO;
         let mut pow = BabyBear::ONE;
         let mut add = |c: BabyBear| {
-            combined = combined + pow * c;
-            pow = pow * alpha;
+            combined += pow * c;
+            pow *= alpha;
         };
         // Chain continuity: acc_out[i] - acc_in[i+1] == 0 (rows 0..n-2).
         add(local[FOLD_ACC_OUT_COL] - next[FOLD_ACC_IN_COL]);

@@ -834,21 +834,21 @@ fn evaluate_constraint_full(
             let ctx = ctx.ok_or(ProgramError::MissingContextField {
                 field: "block_height",
             })?;
-            if let Some(nb) = not_before {
-                if ctx.block_height < *nb {
-                    return violated(
-                        constraint,
-                        format!("height {} < not_before {nb}", ctx.block_height),
-                    );
-                }
+            if let Some(nb) = not_before
+                && ctx.block_height < *nb
+            {
+                return violated(
+                    constraint,
+                    format!("height {} < not_before {nb}", ctx.block_height),
+                );
             }
-            if let Some(na) = not_after {
-                if ctx.block_height > *na {
-                    return violated(
-                        constraint,
-                        format!("height {} > not_after {na}", ctx.block_height),
-                    );
-                }
+            if let Some(na) = not_after
+                && ctx.block_height > *na
+            {
+                return violated(
+                    constraint,
+                    format!("height {} > not_after {na}", ctx.block_height),
+                );
             }
             Ok(())
         }

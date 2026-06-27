@@ -201,8 +201,14 @@ fn real_http_page_rasterized_through_the_cap_gate() {
         // servo lays them out, SWGL rasterizes. ──
         let allowed_surface =
             SurfaceCapability::scoped(presenter, AuthRequired::Either, [origin.clone()], []);
-        let (frame, outcome) =
-            engine.render(&page_url, allowed_surface, &[origin.clone()], W, H, 4096);
+        let (frame, outcome) = engine.render(
+            &page_url,
+            allowed_surface,
+            std::slice::from_ref(&origin),
+            W,
+            H,
+            4096,
+        );
         let outcomes = engine.handler().outcomes();
         let last_fetch = engine.handler().last_fetch();
         (

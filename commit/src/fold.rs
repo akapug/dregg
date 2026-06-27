@@ -329,10 +329,8 @@ pub fn verify_fold_chain(deltas: &[FoldDelta]) -> bool {
         }
 
         // Chain continuity: each delta's new_root must equal the next delta's old_root.
-        if i + 1 < deltas.len() {
-            if delta.new_root != deltas[i + 1].old_root {
-                return false;
-            }
+        if i + 1 < deltas.len() && delta.new_root != deltas[i + 1].old_root {
+            return false;
         }
     }
 

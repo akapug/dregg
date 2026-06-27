@@ -396,11 +396,11 @@ impl Re {
                 }
                 let entry = by_target.entry(next).or_default();
                 // extend a run if contiguous
-                if let Some(last) = entry.last_mut() {
-                    if last.1 as u16 + 1 == b {
-                        last.1 = b as u8;
-                        continue;
-                    }
+                if let Some(last) = entry.last_mut()
+                    && last.1 as u16 + 1 == b
+                {
+                    last.1 = b as u8;
+                    continue;
                 }
                 entry.push((b as u8, b as u8));
             }

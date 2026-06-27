@@ -111,23 +111,23 @@ async fn inspect(
     ctx.boxed(&title, &row_refs);
 
     // Print c-list entries underneath if present.
-    if let Some(entries) = clist {
-        if !entries.is_empty() {
-            let children: Vec<TreeNode> = entries
-                .iter()
-                .enumerate()
-                .map(|(i, entry)| {
-                    let label_str = entry["label"].as_str().unwrap_or("?");
-                    let target = entry["target"].as_str().unwrap_or("?");
-                    TreeNode::leaf(format!(
-                        "[{i}] {:<12} \u{2192} {}",
-                        label_str,
-                        abbrev_hex(target, 6, 4)
-                    ))
-                })
-                .collect();
-            ctx.tree("  C-list:", &children);
-        }
+    if let Some(entries) = clist
+        && !entries.is_empty()
+    {
+        let children: Vec<TreeNode> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let label_str = entry["label"].as_str().unwrap_or("?");
+                let target = entry["target"].as_str().unwrap_or("?");
+                TreeNode::leaf(format!(
+                    "[{i}] {:<12} \u{2192} {}",
+                    label_str,
+                    abbrev_hex(target, 6, 4)
+                ))
+            })
+            .collect();
+        ctx.tree("  C-list:", &children);
     }
 
     Ok(())
@@ -254,8 +254,7 @@ async fn history(
             let display: Vec<Vec<String>> = entries
                 .iter()
                 .take(limit)
-                .enumerate()
-                .map(|(_i, t)| {
+                .map(|t| {
                     let height = t["height"].as_u64().unwrap_or(0);
                     let hash = t["hash"].as_str().unwrap_or("?");
                     let effects = t["effect_count"].as_u64().unwrap_or(0);

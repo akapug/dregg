@@ -69,10 +69,10 @@ impl Default for Config {
 /// sandboxes so `dregg config init` never mutates the operator's real `~/.dregg`.
 /// Falls back to `~/.dregg/config.toml`.
 pub fn config_path() -> PathBuf {
-    if let Ok(home) = std::env::var("DREGG_HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join("config.toml");
-        }
+    if let Ok(home) = std::env::var("DREGG_HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home).join("config.toml");
     }
     let base = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join(".dregg").join("config.toml")

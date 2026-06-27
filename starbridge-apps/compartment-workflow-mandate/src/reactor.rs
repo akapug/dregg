@@ -67,10 +67,10 @@ impl Reactor for WorkflowAdvanceReactor {
         // reaction advances FROM.
         let mut new_cursor: Option<u64> = None;
         for effect in &observed.effects {
-            if let Effect::SetField { index, value, .. } = effect {
-                if *index == STEP_CURSOR_SLOT as usize {
-                    new_cursor = Some(field_to_u64(value));
-                }
+            if let Effect::SetField { index, value, .. } = effect
+                && *index == STEP_CURSOR_SLOT as usize
+            {
+                new_cursor = Some(field_to_u64(value));
             }
         }
         // No cursor advance in the observed step → nothing to react to.

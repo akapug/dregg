@@ -437,10 +437,10 @@ impl IntentPool {
         if self.intents.len() >= self.config.max_intents {
             self.gc(now);
             // If still full after GC, drop the oldest by arrival time
-            if self.intents.len() >= self.config.max_intents {
-                if let Some(oldest_id) = self.find_oldest_by_arrival() {
-                    self.intents.remove(&oldest_id);
-                }
+            if self.intents.len() >= self.config.max_intents
+                && let Some(oldest_id) = self.find_oldest_by_arrival()
+            {
+                self.intents.remove(&oldest_id);
             }
         }
 
@@ -723,16 +723,15 @@ impl IntentPool {
     // -----------------------------------------------------------------------
 
     fn check_rate_limit(&self, creator: &CommitmentId, now: u64) -> Result<(), ReceiveError> {
-        if let Some(&(window_start, count)) = self.recent_by_creator.get(creator) {
-            if now.saturating_sub(window_start) < RATE_LIMIT_WINDOW_SECS
-                && count >= MAX_INTENTS_PER_CREATOR_PER_MINUTE
-            {
-                return Err(ReceiveError::RateLimited {
-                    creator: *creator,
-                    count,
-                    max: MAX_INTENTS_PER_CREATOR_PER_MINUTE,
-                });
-            }
+        if let Some(&(window_start, count)) = self.recent_by_creator.get(creator)
+            && now.saturating_sub(window_start) < RATE_LIMIT_WINDOW_SECS
+            && count >= MAX_INTENTS_PER_CREATOR_PER_MINUTE
+        {
+            return Err(ReceiveError::RateLimited {
+                creator: *creator,
+                count,
+                max: MAX_INTENTS_PER_CREATOR_PER_MINUTE,
+            });
         }
         Ok(())
     }

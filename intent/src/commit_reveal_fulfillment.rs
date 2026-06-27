@@ -204,13 +204,13 @@ impl FulfillmentRegistry {
 
         // SECURITY: Check if this commitment ID has been penalized for too many
         // abandoned commitments in this epoch.
-        if let Some(&count) = self.abandoned_count.get(&commitment_hash) {
-            if count >= MAX_ABANDONS_PER_EPOCH {
-                return Err(CommitRevealFulfillmentError::AbandonPenalty {
-                    abandons: count,
-                    max: MAX_ABANDONS_PER_EPOCH,
-                });
-            }
+        if let Some(&count) = self.abandoned_count.get(&commitment_hash)
+            && count >= MAX_ABANDONS_PER_EPOCH
+        {
+            return Err(CommitRevealFulfillmentError::AbandonPenalty {
+                abandons: count,
+                max: MAX_ABANDONS_PER_EPOCH,
+            });
         }
 
         let commitment = FulfillmentCommitment {
@@ -279,12 +279,12 @@ impl FulfillmentRegistry {
             .filter(|c| now.saturating_sub(c.committed_at) <= COMMITMENT_EXPIRY_SECS)
             .min_by_key(|c| c.committed_at);
 
-        if let Some(earliest) = earliest_valid {
-            if earliest.committed_at < matching.committed_at {
-                return Err(CommitRevealFulfillmentError::PriorityConflict {
-                    first_committed_at: earliest.committed_at,
-                });
-            }
+        if let Some(earliest) = earliest_valid
+            && earliest.committed_at < matching.committed_at
+        {
+            return Err(CommitRevealFulfillmentError::PriorityConflict {
+                first_committed_at: earliest.committed_at,
+            });
         }
 
         Ok(matching)

@@ -26,7 +26,7 @@ use tracing::{debug, warn};
 use crate::state::{NodeEvent, NodeState};
 
 /// Maximum WebSocket message size (1 MiB). Prevents OOM from oversized frames.
-const WS_MAX_MESSAGE_SIZE: usize = 1 * 1024 * 1024;
+const WS_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 /// Maximum WebSocket frame size (256 KiB).
 const WS_MAX_FRAME_SIZE: usize = 256 * 1024;
 
@@ -244,8 +244,7 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                 // content-addressed ID verification, and pool size limit.
                                 if let Ok(typed_intent) =
                                     serde_json::from_value::<dregg_intent::Intent>(intent.clone())
-                                {
-                                    if dregg_intent::validation::validate_intent(&typed_intent)
+                                    && dregg_intent::validation::validate_intent(&typed_intent)
                                         .is_ok()
                                     {
                                         // Verify content-addressed ID (prevents ID spoofing).
@@ -312,7 +311,6 @@ async fn handle_socket(socket: WebSocket, state: NodeState) {
                                             }
                                         }
                                     }
-                                }
                             }
                             Ok(ClientMessage::Unlock { passphrase }) => {
                                 // Rate limit unlock attempts per connection.

@@ -175,7 +175,7 @@ fn spawn_local_https_server(n: usize) -> (String, thread::JoinHandle<()>) {
                     let _ = tls.write_all(body);
                     let _ = tls.flush();
                     // Send a graceful close_notify so the client's read terminates clean.
-                    let _ = tls.conn.send_close_notify();
+                    tls.conn.send_close_notify();
                     let _ = tls.flush();
                 }
                 Err(_) => break,
@@ -256,8 +256,14 @@ fn real_https_page_rasterized_through_the_cap_gated_tls_socket() {
         // out, SWGL rasterizes. ──
         let allowed_surface =
             SurfaceCapability::scoped(presenter, AuthRequired::Either, [origin.clone()], []);
-        let (frame, outcome) =
-            engine.render(&page_url, allowed_surface, &[origin.clone()], W, H, 4096);
+        let (frame, outcome) = engine.render(
+            &page_url,
+            allowed_surface,
+            std::slice::from_ref(&origin),
+            W,
+            H,
+            4096,
+        );
         let outcomes = engine.handler().outcomes();
         let last_fetch = engine.handler().last_fetch();
         let tls_handshook = engine.handler().last_tls_handshake();

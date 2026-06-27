@@ -991,10 +991,10 @@ impl GovernedReferenceGroup {
 
     /// Record activity from a member at a given wave.
     pub fn record_activity(&mut self, strand: &[u8; 32], wave: u64) {
-        if let Some(entry) = self.last_active.get_mut(strand) {
-            if wave > *entry {
-                *entry = wave;
-            }
+        if let Some(entry) = self.last_active.get_mut(strand)
+            && wave > *entry
+        {
+            *entry = wave;
         }
     }
 

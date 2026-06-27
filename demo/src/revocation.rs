@@ -94,7 +94,7 @@ impl RevocationRegistry {
     /// Register an accumulator for an authority.
     pub fn register(&mut self, authority: &PublicKey) {
         let acc = RevocationAccumulator::new(authority);
-        self.accumulators.push((authority.clone(), acc));
+        self.accumulators.push((*authority, acc));
     }
 
     /// Get the accumulator for an authority.

@@ -1208,12 +1208,12 @@ fn check_descriptor2(desc: &EffectVmDescriptor2) -> Result<MainLayout, String> {
     }
     let w = desc.trace_width;
     let chk = |e: &LeanExpr, what: &str, ci: usize| -> Result<(), String> {
-        if let Some(m) = e.max_var() {
-            if m >= w {
-                return Err(format!(
-                    "constraint {ci}: {what} references column {m} >= trace_width {w}"
-                ));
-            }
+        if let Some(m) = e.max_var()
+            && m >= w
+        {
+            return Err(format!(
+                "constraint {ci}: {what} references column {m} >= trace_width {w}"
+            ));
         }
         Ok(())
     };
@@ -1307,13 +1307,13 @@ fn check_descriptor2(desc: &EffectVmDescriptor2) -> Result<MainLayout, String> {
             VmConstraint2::WindowGate(g) => {
                 // The window body reads BOTH rows; every referenced column (`loc`/`nxt`) must
                 // lie inside the main width.
-                if let Some(m) = g.body.max_var() {
-                    if m >= w {
-                        return Err(format!(
-                            "constraint {ci}: window_gate body references column {m} >= \
+                if let Some(m) = g.body.max_var()
+                    && m >= w
+                {
+                    return Err(format!(
+                        "constraint {ci}: window_gate body references column {m} >= \
                              trace_width {w}"
-                        ));
-                    }
+                    ));
                 }
             }
         }
@@ -1876,7 +1876,7 @@ where
     let mut weight = AB::Expr::ONE;
     for i in 0..n {
         let limb: AB::Expr = limbs[i].into();
-        recomposed = recomposed + limb.clone() * weight.clone();
+        recomposed += limb.clone() * weight.clone();
         weight = weight.clone() * limb_base.clone();
         if i == n - 1 && partial {
             // Tight top-limb bound: bit-decompose into `top_bits` booleans.
@@ -1885,7 +1885,7 @@ where
             for b in 0..top_bits {
                 let bit: AB::Expr = limbs[n + b].into();
                 builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
-                top_recomp = top_recomp + bit * bw.clone();
+                top_recomp += bit * bw.clone();
                 bw = bw.clone() + bw;
             }
             builder.assert_zero(top_recomp - limb);
@@ -2060,22 +2060,22 @@ where
                 //    the body vanishes on every row (the wrap row included). None of the shipped
                 //    descriptors emit this form today; it is carried for grammar completeness. --
                 for k in &desc.constraints {
-                    if let VmConstraint2::WindowGate(w) = k {
-                        if !w.on_transition {
-                            builder.assert_zero(w.body.eval_expr::<AB>(&local, &next));
-                        }
+                    if let VmConstraint2::WindowGate(w) = k
+                        && !w.on_transition
+                    {
+                        builder.assert_zero(w.body.eval_expr::<AB>(&local, &next));
                     }
                 }
 
                 // -- Chip lookups: each declared tuple queried on the chip bus, every row. --
                 let p2 = LookupBus::new(BUS_P2);
                 for k in &desc.constraints {
-                    if let VmConstraint2::Lookup(l) = k {
-                        if l.table == TID_P2 {
-                            let tuple: Vec<AB::Expr> =
-                                l.tuple.iter().map(|e| e.eval_expr::<AB>(&local)).collect();
-                            p2.lookup_key(builder, tuple, AB::Expr::ONE);
-                        }
+                    if let VmConstraint2::Lookup(l) = k
+                        && l.table == TID_P2
+                    {
+                        let tuple: Vec<AB::Expr> =
+                            l.tuple.iter().map(|e| e.eval_expr::<AB>(&local)).collect();
+                        p2.lookup_key(builder, tuple, AB::Expr::ONE);
                     }
                 }
 
@@ -2098,8 +2098,8 @@ where
                         builder.assert_zero(hb.clone() * (hb.clone() - AB::Expr::ONE));
                         // Non-amplification, bitwise: keep ⇒ held.
                         builder.assert_zero(kb.clone() * (AB::Expr::ONE - hb.clone()));
-                        keep_recomp = keep_recomp + kb * w.clone();
-                        held_recomp = held_recomp + hb * w.clone();
+                        keep_recomp += kb * w.clone();
+                        held_recomp += hb * w.clone();
                         w = w.clone() + w;
                     }
                     builder.assert_zero(keep_recomp - sb.keep.eval_expr::<AB>(&local));
@@ -2652,9 +2652,8 @@ where
                     let mut diff = AB::Expr::ZERO;
                     let mut w = AB::Expr::ONE;
                     for lvl in 0..HEAP_TREE_DEPTH {
-                        diff = diff
-                            + (local[MA_HI_DIR0 + lvl].into() - local[MA_LO_DIR0 + lvl].into())
-                                * w.clone();
+                        diff += (local[MA_HI_DIR0 + lvl].into() - local[MA_LO_DIR0 + lvl].into())
+                            * w.clone();
                         w = w.clone() + w;
                     }
                     builder.assert_zero(is_real.clone() * (diff - AB::Expr::ONE));
@@ -3225,7 +3224,7 @@ fn fill_decomp(
     let (n, top_bits) = limb_geom(bits);
     let partial = top_bits < LIMB_BITS;
     for i in 0..n {
-        let byte = ((val >> (i * LIMB_BITS)) & ((1 << LIMB_BITS) - 1)) as u32;
+        let byte = (val >> (i * LIMB_BITS)) & ((1 << LIMB_BITS) - 1);
         out.push(BabyBear::new(byte));
         if !(i == n - 1 && partial) {
             hist[byte as usize] += 1;
@@ -3471,15 +3470,15 @@ fn build_traces(
     if presence.chip {
         for base_row in base_trace {
             for k in &desc.constraints {
-                if let VmConstraint2::Lookup(l) = k {
-                    if l.table == TID_P2 {
-                        let tuple: Vec<u32> = l
-                            .tuple
-                            .iter()
-                            .map(|e| eval_c(e, base_row).as_u32())
-                            .collect();
-                        *chip_hist.entry(tuple).or_insert(0) += 1;
-                    }
+                if let VmConstraint2::Lookup(l) = k
+                    && l.table == TID_P2
+                {
+                    let tuple: Vec<u32> = l
+                        .tuple
+                        .iter()
+                        .map(|e| eval_c(e, base_row).as_u32())
+                        .collect();
+                    *chip_hist.entry(tuple).or_insert(0) += 1;
                 }
             }
         }

@@ -1308,14 +1308,14 @@ impl TrustlessIntentEngine {
         let now = self.current_height;
         for ring in &submission.solution {
             for intent_id in &ring.participants {
-                if let Some(intent) = by_id.get(intent_id) {
-                    if intent.is_expired(now) {
-                        return Err(EngineError::ExpiredIntent {
-                            intent_id: *intent_id,
-                            expiry: intent.expiry,
-                            now,
-                        });
-                    }
+                if let Some(intent) = by_id.get(intent_id)
+                    && intent.is_expired(now)
+                {
+                    return Err(EngineError::ExpiredIntent {
+                        intent_id: *intent_id,
+                        expiry: intent.expiry,
+                        now,
+                    });
                 }
                 // Intents not in the batch were already rejected by the
                 // structural check inside verify_submission.
@@ -1454,10 +1454,10 @@ impl TrustlessIntentEngine {
         }
 
         // Check challenge window hasn't expired
-        if let Some(start) = self.current_batch.challenge_start_height {
-            if self.current_height > start + self.challenge_window {
-                return Err(EngineError::ChallengeWindowExpired);
-            }
+        if let Some(start) = self.current_batch.challenge_start_height
+            && self.current_height > start + self.challenge_window
+        {
+            return Err(EngineError::ChallengeWindowExpired);
         }
 
         // The challenge must have a higher score than the current winner
@@ -1528,14 +1528,14 @@ impl TrustlessIntentEngine {
         }
 
         // Verify challenge window has expired
-        if let Some(start) = self.current_batch.challenge_start_height {
-            if self.current_height <= start + self.challenge_window {
-                // Challenge window still open
-                return Err(EngineError::WrongState {
-                    expected: BatchState::Challenging,
-                    actual: self.current_batch.state,
-                });
-            }
+        if let Some(start) = self.current_batch.challenge_start_height
+            && self.current_height <= start + self.challenge_window
+        {
+            // Challenge window still open
+            return Err(EngineError::WrongState {
+                expected: BatchState::Challenging,
+                actual: self.current_batch.state,
+            });
         }
 
         let winner = self

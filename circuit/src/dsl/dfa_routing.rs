@@ -348,7 +348,7 @@ pub fn compute_table_commitment(transitions: &[(u32, u32, u32)]) -> BabyBear {
     assert!(!level.is_empty(), "transition table must be non-empty");
     while level.len() > 1 {
         assert!(
-            level.len() % 4 == 0,
+            level.len().is_multiple_of(4),
             "transition-table commitment needs a 4-ary-clean entry count (got {})",
             level.len()
         );

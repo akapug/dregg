@@ -58,7 +58,7 @@ impl AdminToken {
     /// Read the admin token from `DREGG_ADMIN_TOKEN` with a specified fallback mode.
     pub fn from_env_with_mode(mode: AdminMode) -> Self {
         Self {
-            inner: std::env::var("DREGG_ADMIN_TOKEN").ok().map(|s| Arc::new(s)),
+            inner: std::env::var("DREGG_ADMIN_TOKEN").ok().map(Arc::new),
             mode,
         }
     }

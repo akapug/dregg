@@ -187,7 +187,7 @@ impl Poseidon2MerkleTree {
             siblings.push(sibs);
 
             // Move up: the parent's index is sibling_base / 4
-            idx = idx / 4;
+            idx /= 4;
         }
 
         Some(Poseidon2MerkleProof {

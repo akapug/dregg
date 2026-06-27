@@ -77,10 +77,10 @@ impl Reactor for VotingTallyReactor {
         // on VOTE_SLOT is the voter's choice code.
         let mut choice: Option<FieldElement> = None;
         for effect in &observed.effects {
-            if let Effect::SetField { index, value, .. } = effect {
-                if *index == VOTE_SLOT {
-                    choice = Some(*value);
-                }
+            if let Effect::SetField { index, value, .. } = effect
+                && *index == VOTE_SLOT
+            {
+                choice = Some(*value);
             }
         }
         // No vote write in the observed turn → nothing to forward.

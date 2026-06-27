@@ -753,12 +753,11 @@ pub(super) async fn tool_exercise_bearer_cap(params: &Value, state: &NodeState) 
     match exec_result {
         dregg_turn::TurnResult::Committed { receipt, .. } => {
             let receipt_hash = receipt.receipt_hash();
-            if let Some(proof) = proof_material.as_ref() {
-                if let Some(witnessed) =
+            if let Some(proof) = proof_material.as_ref()
+                && let Some(witnessed) =
                     witnessed_receipt_from_effect_material(receipt.clone(), proof)
-                {
-                    s.push_witnessed_receipt(receipt_hash, witnessed);
-                }
+            {
+                s.push_witnessed_receipt(receipt_hash, witnessed);
             }
             s.cclerk
                 .append_receipt(receipt)

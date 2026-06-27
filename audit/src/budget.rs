@@ -218,10 +218,10 @@ impl BudgetEnforcer {
         let mut count = 0u64;
 
         for &idx in indices {
-            if let Some(event) = self.log.get_event(idx) {
-                if event.timestamp >= window_start {
-                    count += 1;
-                }
+            if let Some(event) = self.log.get_event(idx)
+                && event.timestamp >= window_start
+            {
+                count += 1;
             }
         }
 

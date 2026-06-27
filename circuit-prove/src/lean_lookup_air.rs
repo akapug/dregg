@@ -251,7 +251,7 @@ where
                     let mut weight: AB::Expr = AB::Expr::ONE;
                     for i in 0..n {
                         let limb: AB::Expr = local[r.limb0_col + i].into();
-                        recomposed = recomposed + limb.clone() * weight.clone();
+                        recomposed += limb.clone() * weight.clone();
                         weight = weight.clone() * limb_base.clone();
 
                         let is_top = i == n - 1;
@@ -268,7 +268,7 @@ where
                                 let bit: AB::Expr = local[r.topbit0_col + b].into();
                                 // booleanity: bit·(bit − 1) = 0
                                 builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
-                                top_recomp = top_recomp + bit * bw.clone();
+                                top_recomp += bit * bw.clone();
                                 bw = bw.clone() + bw;
                             }
                             // the top limb equals its bit recomposition

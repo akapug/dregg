@@ -65,10 +65,10 @@ impl Reactor for MandateAuditReactor {
         // `SetField` on CALLS_MADE is the metered counter the worker just advanced.
         let mut new_calls: Option<FieldElement> = None;
         for effect in &observed.effects {
-            if let Effect::SetField { index, value, .. } = effect {
-                if *index == CALLS_MADE_SLOT as usize {
-                    new_calls = Some(*value);
-                }
+            if let Effect::SetField { index, value, .. } = effect
+                && *index == CALLS_MADE_SLOT as usize
+            {
+                new_calls = Some(*value);
             }
         }
         // No metered advance in the observed op → nothing to audit.

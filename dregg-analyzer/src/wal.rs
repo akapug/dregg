@@ -188,10 +188,10 @@ pub fn analyze(capture: &WalCapture) -> AnalysisReport {
     let mut prev_height: Option<u64> = None;
     let mut prev_hwm: Option<u64> = None;
     for rec in records {
-        if let Some(ph) = prev_height {
-            if rec.height < ph {
-                height_regressions += 1;
-            }
+        if let Some(ph) = prev_height
+            && rec.height < ph
+        {
+            height_regressions += 1;
         }
         if let Some(pw) = prev_hwm {
             // The block high-water mark is monotone non-decreasing: each turn's

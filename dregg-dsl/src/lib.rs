@@ -215,14 +215,14 @@ fn parse_effect_attr(attr: TokenStream) -> Option<String> {
         return None;
     }
     // Simple parsing: look for `requires = "..."`
-    if let Some(start) = attr_str.find("requires") {
-        if let Some(eq_pos) = attr_str[start..].find('=') {
-            let after_eq = &attr_str[start + eq_pos + 1..];
-            let trimmed = after_eq.trim();
-            if trimmed.starts_with('"') {
-                let end = trimmed[1..].find('"').unwrap_or(trimmed.len() - 1);
-                return Some(trimmed[1..1 + end].to_string());
-            }
+    if let Some(start) = attr_str.find("requires")
+        && let Some(eq_pos) = attr_str[start..].find('=')
+    {
+        let after_eq = &attr_str[start + eq_pos + 1..];
+        let trimmed = after_eq.trim();
+        if trimmed.starts_with('"') {
+            let end = trimmed[1..].find('"').unwrap_or(trimmed.len() - 1);
+            return Some(trimmed[1..1 + end].to_string());
         }
     }
     None

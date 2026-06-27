@@ -113,7 +113,7 @@ pub fn cell_json(ledger: &Ledger, id: &CellId) -> Option<String> {
 
 /// `deos.cell(id).as(viewer)` — the cap-bounded view: which cells `viewer` may crawl
 /// + whether it observes `id`. An unobservable cell yields `observable:false` (an
-/// absence, never a forged read).
+///   absence, never a forged read).
 pub fn frustum_json(ledger: &Ledger, viewer: &CellId) -> String {
     let f = Frustum::project(ledger, *viewer);
     let visible: Vec<String> = f
@@ -385,7 +385,7 @@ pub fn spotter_json(ledger: &Ledger, query: &str) -> String {
             }
         }
     }
-    hits.sort_by(|a, b| b.0.cmp(&a.0));
+    hits.sort_by_key(|b| std::cmp::Reverse(b.0));
     let items: Vec<String> = hits
         .iter()
         .map(|(score, cell, title)| {

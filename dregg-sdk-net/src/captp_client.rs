@@ -297,14 +297,14 @@ impl Drop for LiveRef {
             } else {
                 None
             };
-            if let Some(m) = drop_msg {
-                if let Ok(mut outbox) = self.outbox.lock() {
-                    outbox.push(WireMessage::DropRemoteRef {
-                        from_strand: self.local_federation.0,
-                        cell_id: m.cell_id.0,
-                        session_epoch: self.session_epoch,
-                    });
-                }
+            if let Some(m) = drop_msg
+                && let Ok(mut outbox) = self.outbox.lock()
+            {
+                outbox.push(WireMessage::DropRemoteRef {
+                    from_strand: self.local_federation.0,
+                    cell_id: m.cell_id.0,
+                    session_epoch: self.session_epoch,
+                });
             }
         }
     }
@@ -567,14 +567,14 @@ impl CapTpClient {
         }
 
         // (4) Expiry (if set, current_height must be strictly less).
-        if let Some(expires_at) = handoff_cert.expires_at {
-            if self.config.current_height >= expires_at {
-                return Err(SdkError::Wire(format!(
-                    "handoff certificate expired at height {expires_at} \
+        if let Some(expires_at) = handoff_cert.expires_at
+            && self.config.current_height >= expires_at
+        {
+            return Err(SdkError::Wire(format!(
+                "handoff certificate expired at height {expires_at} \
                      (current height {})",
-                    self.config.current_height,
-                )));
-            }
+                self.config.current_height,
+            )));
         }
 
         Ok(self.enliven_internal(uri, handoff_cert.permissions.clone()))

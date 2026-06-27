@@ -274,10 +274,12 @@ impl AdmissionRegistry {
         let mut seen: BTreeSet<[u8; 32]> = BTreeSet::new();
         let mut out = Vec::new();
         for v in &self.vouches {
-            if &v.candidate == candidate && self.is_root(&v.voucher) && v.verify_sig() {
-                if seen.insert(*v.voucher.as_bytes()) {
-                    out.push(v.voucher);
-                }
+            if &v.candidate == candidate
+                && self.is_root(&v.voucher)
+                && v.verify_sig()
+                && seen.insert(*v.voucher.as_bytes())
+            {
+                out.push(v.voucher);
             }
         }
         out

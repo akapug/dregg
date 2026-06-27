@@ -299,11 +299,7 @@ impl QuorumCertificate {
     pub fn quorum_signatures(&self, nodes: &[NodeIdentity]) -> Vec<(PublicKey, Signature)> {
         self.votes
             .iter()
-            .filter_map(|(voter_id, sig)| {
-                nodes
-                    .get(*voter_id)
-                    .map(|node| (node.public_key.clone(), sig.clone()))
-            })
+            .filter_map(|(voter_id, sig)| nodes.get(*voter_id).map(|node| (node.public_key, *sig)))
             .collect()
     }
 }
@@ -361,14 +357,14 @@ pub fn verify_via_receipt_chain(
     expected_post_state: Option<[u8; 32]>,
 ) -> Result<(), dregg_turn::VerifyError> {
     let head_state = dregg_turn::verify_receipt_chain_head(receipts)?;
-    if let Some(expected) = expected_post_state {
-        if head_state != expected {
-            return Err(dregg_turn::VerifyError::StateChainBreak {
-                index: receipts.len() - 1,
-                expected_pre_state: expected,
-                actual_pre_state: head_state,
-            });
-        }
+    if let Some(expected) = expected_post_state
+        && head_state != expected
+    {
+        return Err(dregg_turn::VerifyError::StateChainBreak {
+            index: receipts.len() - 1,
+            expected_pre_state: expected,
+            actual_pre_state: head_state,
+        });
     }
     Ok(())
 }
