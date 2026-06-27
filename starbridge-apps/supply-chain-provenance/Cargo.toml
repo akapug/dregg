@@ -38,6 +38,11 @@ dregg-cell = { path = "../../cell", default-features = false }
 dregg-turn = { path = "../../turn" }
 dregg-types = { path = "../../types" }
 dregg-coord = { path = "../../coord" }
+# The attested-query face (the derived-cell / attested-query showcase): the Q1
+# conjunctive-query surface + the Q2 non-omission certificate (the receipt-log MMR
+# `server_cannot_omit_position`). Used by `src/derived.rs` to certify the
+# completeness of an item's custody-handoff log to a light client.
+dregg-query = { path = "../../dregg-query" }
 
 blake3 = "1"
 serde = { workspace = true }

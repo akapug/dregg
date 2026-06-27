@@ -100,6 +100,28 @@ use dregg_cell::state::STATE_SLOTS;
 
 pub use dregg_app_framework::field_from_bytes;
 
+// The four modern app-framework axes this app demonstrates (the unified template),
+// plus the derived-cell / attested-query showcase:
+//   - the FactoryDescriptor + DeosApp composition surface (this file: `item_app`,
+//     `register_deos`, the gated custody fires — `tests/deos_seam.rs`);
+//   - the SERVICE-CELL `invoke()` front door (typed `InterfaceDescriptor` + method
+//     dispatch over the custody lifecycle — `service`, `tests/service.rs`);
+//   - the deos-view CARD (a renderer-independent `deos.ui.*` view-tree — `card`);
+//   - the DERIVED-CELL + ATTESTED-QUERY showcase (a provenance summary is a derived
+//     view `f(events)`; the grounded `dregg_cell::derived` forge/stale detector and
+//     the grounded `dregg_query` non-omission certificate over the custody log —
+//     `derived`).
+
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// The DERIVED-CELL + ATTESTED-QUERY showcase: the provenance summary as a derived
+/// view `f(events)`, grounded on `dregg_cell::derived` (forge/stale-rejecting
+/// derived cells) and `dregg_query` (the non-omission completeness certificate).
+pub mod derived;
+/// The CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the custody lifecycle (mint / handoff / view).
+pub mod service;
+
 // =============================================================================
 // Slot layout (the ITEM cell) — the custody register + the provenance chain.
 // =============================================================================
