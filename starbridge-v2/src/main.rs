@@ -185,6 +185,61 @@ fn main() {
         }
     }
 
+    // `--render-apps <out>`: THE APP STORE + APPS GOING. Two PNGs of the NEW pre-built
+    // app-launcher capability: `<out>.launcher.png` lists the 19 wired starbridge-apps
+    // (name · what-it-does) the real `RegistryLauncher` exposes — the "app store" shot —
+    // and `<out>.png` LAUNCHES three of them (gallery / bounty-board / sealed-auction)
+    // ONTO a shared live `World` (each launch fires its representative VERIFIED turn
+    // through the real executor) and mounts each app's BESPOKE deos-view card live, bound
+    // to its just-seeded cell — the "apps going" shot. Asserts the ledger height grew and
+    // each launch landed a real receipt. Default 2560x1600 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_apps_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((2560.0, 1600.0));
+            match render_apps_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-apps FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-app-fire <out>`: THE CLICK → VERIFIED TURN close-up. Launches a real app
+    // (gallery) onto a live `World`, mounts its bespoke deos-view card, bakes
+    // `<out>.before.png`, FIRES the card's `submit` button = ONE cap-gated VERIFIED turn
+    // committed through `World::commit_turn` onto the live ledger (filling the next free
+    // sealed-submission slot), then re-renders + bakes `<out>.after.png` (== `<out>.png`,
+    // the card with the turn committed). Asserts the ledger height advanced by ONE and a
+    // real receipt landed. Default 1100x780 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_app_fire_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1100.0, 780.0));
+            match render_app_card_fire_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-app-fire FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-webshell-live <out>`: THE LIVE WEB-SHELL — open the full cockpit on the
     // WEB-SHELL tab, drive the persistent live `servo::WebView` to load a tall `data:`
     // page (a real cap-gated Servo render in the pane), bake `<out>.before.png`, deliver
@@ -2492,6 +2547,51 @@ fn render_first_card_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-apps <out>` (or `=<out>`) argument — the output base path for the
+/// APP STORE + APPS GOING bake (`<out>.launcher.png` + `<out>.png`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-apps" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-apps=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-app-fire <out>` (or `=<out>`) argument — the output base path for
+/// the CLICK→VERIFIED-TURN app-card-button bake (`<out>.before.png` / `<out>.after.png` /
+/// `<out>.png`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_app_fire_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-app-fire" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-app-fire=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// Parse the `--render-webshell-live <out>` (or `=<out>`) argument — the output base
 /// path for THE LIVE WEB-SHELL bake (a real page in the cockpit web-shell pane, then
 /// a scroll input causing a re-render). `<out>.before.png` / `<out>.after.png`.
@@ -3865,6 +3965,497 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
          editable card over their own home cell, fired its +1 (a verified turn: cell slot-0 \
          {pre_field}->{post_field}, height {pre_height}->{post_height}), and edited it live (a \
          receipted view-patch added a button — now in the card's view_source). The AFTER frame differs."
+    );
+    Ok(())
+}
+
+/// THE APP-STORE VIEW — a standalone gpui surface listing the real
+/// [`RegistryLauncher`](starbridge_v2::powerbox::RegistryLauncher) rows (the wired
+/// starbridge-apps: id · name · what-it-does), styled in the deos dark palette. The
+/// content is the registry's own truth (the same rows the cockpit's app-launcher renders);
+/// this view bakes it as one crisp "app store" PNG for the site/tweeters.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+struct AppStoreView {
+    rows: Vec<starbridge_v2::powerbox::AppLaunchRow>,
+}
+
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+impl gpui::Render for AppStoreView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{div, px, rgb, FontWeight, ParentElement, Styled};
+        let bg = rgb(0x0e1116);
+        let panel = rgb(0x161b22);
+        let panel_hi = rgb(0x1f2630);
+        let border = rgb(0x2b3340);
+        let text = rgb(0xd7dee8);
+        let muted = rgb(0x7d8794);
+        let accent = rgb(0x6cb6ff);
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mb_4()
+            .child(
+                div()
+                    .text_color(text)
+                    .text_2xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child("deos · app store"),
+            )
+            .child(div().text_color(muted).text_sm().child(format!(
+                "{} pre-built starbridge-apps — launch any onto your LIVE World; each is \
+                 cells × cap-gated affordances that fire REAL verified turns.",
+                self.rows.len()
+            )));
+
+        let mut grid = div().flex().flex_row().flex_wrap().gap_4();
+        for r in &self.rows {
+            grid = grid.child(
+                div()
+                    .w(px(740.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_color(text)
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(r.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(accent)
+                                    .text_color(bg)
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("launch →"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_color(accent)
+                            .text_xs()
+                            .child(format!("({})", r.id)),
+                    )
+                    .child(
+                        div()
+                            .mt_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(panel_hi)
+                            .text_color(muted)
+                            .text_xs()
+                            .child(r.description.clone()),
+                    ),
+            );
+        }
+
+        div()
+            .size_full()
+            .bg(bg)
+            .p_8()
+            .flex()
+            .flex_col()
+            .font_family("IBM Plex Sans")
+            .child(header)
+            .child(grid)
+    }
+}
+
+/// THE APPS-GOING VIEW — a standalone gpui surface hosting several launched
+/// starbridge-apps' BESPOKE [`CardPane`](starbridge_v2::card_pane::CardPane)s side by
+/// side, each bound to its own just-seeded cell on the shared live World (its `bind`s
+/// re-read live ledger state, its buttons fire the app's real verified turns). Bakes the
+/// "apps going" PNG — multiple real apps running inside the live image at once.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+struct AppsRowView {
+    subtitle: String,
+    cards: Vec<gpui::Entity<starbridge_v2::card_pane::CardPane>>,
+}
+
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+impl gpui::Render for AppsRowView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{div, rgb, FontWeight, ParentElement, Styled};
+        let bg = rgb(0x0e1116);
+        let panel = rgb(0x161b22);
+        let border = rgb(0x2b3340);
+        let text = rgb(0xd7dee8);
+        let muted = rgb(0x7d8794);
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mb_4()
+            .child(
+                div()
+                    .text_color(text)
+                    .text_2xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child("apps going · live on your World"),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .text_sm()
+                    .child(self.subtitle.clone()),
+            );
+
+        let mut row = div().flex().flex_row().gap_4().flex_1().min_h_0();
+        for entity in &self.cards {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .p_3()
+                    .rounded_lg()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(border)
+                    .overflow_hidden()
+                    .child(entity.clone()),
+            );
+        }
+
+        div()
+            .size_full()
+            .bg(bg)
+            .p_8()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .font_family("IBM Plex Sans")
+            .child(header)
+            .child(row)
+    }
+}
+
+/// **THE APP STORE + APPS GOING BAKE.** Two PNGs of the pre-built app-launcher
+/// capability over the REAL registry + executor:
+///   1. `<out>.launcher.png` — the app store: every wired starbridge-app the live
+///      [`RegistryLauncher`](starbridge_v2::powerbox::RegistryLauncher) exposes (name ·
+///      id · what-it-does), the catalog a stranger picks from.
+///   2. `<out>.png` — apps going: LAUNCH three apps (gallery / bounty-board /
+///      sealed-auction) onto ONE shared live [`World`](starbridge_v2::world::World).
+///      Each `launch_on_world` seeds the app's cell + program and commits its
+///      representative affordance as a REAL cap-gated VERIFIED turn through the embedded
+///      executor; we mount each app's bespoke deos-view
+///      [`CardPane`](starbridge_v2::card_pane::CardPane) over its launched cell (the SAME
+///      path the cockpit's full-view-mount uses) and render them side by side.
+///
+/// Asserts the live ledger height GREW and at least one new receipt landed per launch —
+/// the bake's stdout names each launched cell + receipt + the height/receipt deltas, so
+/// the "apps going" frame is the running image's real state, never decorative.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    // The federation the cockpit's launcher births app substrates into (mirrors
+    // `panels_app_launcher::APPS_FEDERATION`).
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    // ── (A) THE APP STORE — the real registry's launch rows ──
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let rows = launcher.rows();
+    let row_count = rows.len();
+    let store_rows = rows.clone();
+    let store = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        cx.new(|_cx| AppStoreView { rows: store_rows })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(store.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let launcher_png = cx.capture_screenshot(store.into())?;
+    let (lw, lh) = (launcher_png.width(), launcher_png.height());
+    launcher_png.save(format!("{out}.launcher.png"))?;
+
+    // ── (B) APPS GOING — launch three real apps onto a shared live World ──
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+
+    struct Pending {
+        name: String,
+        substance: AppCardSubstance,
+        tree: deos_view::ViewNode,
+    }
+    let launch_ids = ["gallery", "bounty-board", "sealed-auction"];
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut launched_summ: Vec<String> = Vec::new();
+    for id in launch_ids {
+        let name = rows
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| id.to_string());
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let cell = launched.primary_cell();
+        let rh = launched.receipt.receipt_hash();
+        let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+        let tree = deos_view::parse_view_tree(&card.json)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(launched.spine, card.fire);
+        launched_summ.push(format!(
+            "{name} (cell {}, receipt {})",
+            reflect::short_hex(&cell.0),
+            hex::encode(&rh[..6])
+        ));
+        pending.push(Pending {
+            name,
+            substance,
+            tree,
+        });
+    }
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "no verified turns committed on launch ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts >= pre_receipts + launch_ids.len(),
+        "expected at least {} new receipts on launch, got {}",
+        launch_ids.len(),
+        post_receipts.saturating_sub(pre_receipts)
+    );
+
+    let subtitle = format!(
+        "{} pre-built apps launched onto ONE shared live World — each fired its \
+         representative VERIFIED turn (ledger {pre_height}→{post_height}); the cards below \
+         are bound to their just-seeded cells and their buttons fire the apps' real turns.",
+        launch_ids.len()
+    );
+    let apps = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        let cards = pending
+            .into_iter()
+            .map(|p| {
+                let sub: CardSubstanceRef = Rc::new(RefCell::new(p.substance));
+                let title = format!("{} · live app card (deos-view)", p.name);
+                cx.new(|_cx| CardPane::new_substance(sub, p.tree, title))
+            })
+            .collect();
+        cx.new(|_cx| AppsRowView { subtitle, cards })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(apps.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let apps_png = cx.capture_screenshot(apps.into())?;
+    let (aw, ah) = (apps_png.width(), apps_png.height());
+    apps_png.save(format!("{out}.png"))?;
+
+    println!(
+        "OK apps render -> {out}.launcher.png ({lw}x{lh}) + {out}.png ({aw}x{ah}), logical {w}x{h}; \
+         the APP STORE lists {row_count} wired starbridge-apps, and {} were LAUNCHED onto a live \
+         World (each fired its representative VERIFIED turn: ledger height {pre_height}->{post_height}, \
+         receipts {pre_receipts}->{post_receipts}) with their BESPOKE deos-view cards mounted live: {}.",
+        launch_ids.len(),
+        launched_summ.join("; ")
+    );
+    Ok(())
+}
+
+/// **THE CLICK → VERIFIED-TURN BAKE.** Launches the gallery app onto a live
+/// [`World`](starbridge_v2::world::World), mounts its bespoke deos-view
+/// [`CardPane`](starbridge_v2::card_pane::CardPane), bakes `<out>.before.png`, then FIRES
+/// the card's `submit` button — ONE cap-gated VERIFIED turn committed through
+/// `World::commit_turn` onto the live ledger (sealing a submission into the next free
+/// WriteOnce slot) — and bakes `<out>.after.png` (== `<out>.png`). Asserts the ledger
+/// height advanced by EXACTLY one and exactly one new receipt landed; the bake's stdout
+/// names the launched cell + the receipt + the height/receipt deltas. The single
+/// load-bearing truth: a click on the app card committed a real verified turn on the live
+/// World.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_app_card_fire_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let id = "gallery";
+    let name = launcher
+        .rows()
+        .into_iter()
+        .find(|r| r.id == id)
+        .map(|r| r.name)
+        .unwrap_or_else(|| id.to_string());
+
+    let launched = launcher
+        .launch_on_world(id, live.clone())
+        .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+        .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+    let cell = launched.primary_cell();
+    let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+    let tree = deos_view::parse_view_tree(&card.json)
+        .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+    let substance = Rc::new(RefCell::new(AppCardSubstance::new(
+        launched.spine,
+        card.fire,
+    )));
+    let sub_dyn: CardSubstanceRef = substance.clone();
+
+    let title = format!("{name} · live app card (deos-view)");
+    let pane_sub = sub_dyn.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        cx.new(|_cx| CardPane::new_substance(pane_sub, tree, title))
+    })?;
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let before = cx.capture_screenshot(window.into())?;
+    let (bw, bh) = (before.width(), before.height());
+    before.save(format!("{out}.before.png"))?;
+
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+    // FIRE the card's `submit` button — the EXACT cap-gated verified turn the rendered
+    // button's on_click fires (the inherent `AppCardSubstance::fire` returns the receipt).
+    let receipt = substance
+        .borrow()
+        .fire("submit", 0)
+        .map_err(|e| anyhow::anyhow!("the {name} card's submit did not commit: {e}"))?;
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height == pre_height + 1,
+        "the submit did not advance the ledger by ONE ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts == pre_receipts + 1,
+        "the submit did not land EXACTLY one new receipt ({pre_receipts} -> {post_receipts})"
+    );
+
+    cx.update(|cx| cx.refresh_windows());
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let after = cx.capture_screenshot(window.into())?;
+    let (aw, ah) = (after.width(), after.height());
+    after.save(format!("{out}.after.png"))?;
+    after.save(format!("{out}.png"))?;
+
+    let changed = before.as_raw() != after.as_raw();
+    let rh = receipt.receipt_hash();
+    println!(
+        "OK app-fire render -> {out}.before.png ({bw}x{bh}) / {out}.after.png == {out}.png \
+         ({aw}x{ah}), logical {w}x{h}; the {name} app card's SUBMIT button fired a REAL cap-gated \
+         VERIFIED turn on the live World (cell {}, receipt {}): ledger height \
+         {pre_height}->{post_height}, receipts {pre_receipts}->{post_receipts}{}.",
+        reflect::short_hex(&cell.0),
+        hex::encode(&rh[..6]),
+        if changed {
+            " — the bound card frame changed"
+        } else {
+            " — the sealed-phase bind holds steady; the receipt + height advance are the witness"
+        }
     );
     Ok(())
 }
