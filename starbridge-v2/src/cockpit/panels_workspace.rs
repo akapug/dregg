@@ -790,7 +790,7 @@ impl Cockpit {
     /// [`Self::split_pane`]'s `PaneGroup::split` + active-pane + notify). Seeds
     /// the pane group first if the window has not rendered yet.
     #[cfg(feature = "dev-surfaces")]
-    fn graft_dev_pane(
+    pub(crate) fn graft_dev_pane(
         &mut self,
         surface: Box<dyn CockpitSurface>,
         window: &mut Window,
