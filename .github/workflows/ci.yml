@@ -37,7 +37,26 @@ jobs:
         with:
           toolchain: nightly
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      # macOS links the full workspace (incl. deos-zed's windowed gpui editor) via
+      # ld64 — green, so keep it whole.
+      - if: runner.os == 'macOS'
+        run: cargo test --workspace
+      # Linux: exclude ONLY deos-zed's heavy gpui executables from the link. deos-zed
+      # is a vendored Zed-editor integration (a whole IDE fork), not core protocol.
+      # Its windowed targets (bins demo/merge_demo, the gpui screenshot tests) link
+      # the ENTIRE Linux desktop/accessibility static graph (gpui-platform/linux,
+      # accesskit, atspi, wayland, x11rb, zbus) and crash GNU ld with SIGBUS
+      # ("ld terminated with signal 7 [Bus error]") on the hosted runner — a linker
+      # resource crash, NOT a missing system lib (the log shows no `cannot find -l*`,
+      # so no apt package can satisfy it). It is built/linked separately, not in the
+      # core-protocol test gate.
+      - if: runner.os == 'Linux'
+        run: cargo test --workspace --exclude deos-zed
+      # ...but still test deos-zed's gpui-FREE core on Linux: the FirmamentFs seam
+      # (a file is a cell, a save is a receipted turn) links only the light executor
+      # spine, so it links cleanly. This keeps the protocol-relevant half covered.
+      - if: runner.os == 'Linux'
+        run: cargo test -p deos-zed --no-default-features --features firmament
 
   clippy:
     name: Clippy
