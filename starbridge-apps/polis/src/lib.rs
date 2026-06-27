@@ -120,6 +120,13 @@ use dregg_cell::{CellId, CellMode};
 /// Lifecycle state-code slot — slot 0 in every polis cell family.
 pub const STATE_SLOT: u8 = 0;
 
+// The AX4 deos-view CARD: the council board as a renderer-independent
+// `deos.ui.*` view-tree. A NORMAL library module (unlike the deos surface /
+// service / reactor below) because it is pure `serde_json` — no `deos-view`, no
+// `app-framework`, so it carries no package-cycle edge and ships in the default
+// build. See `src/card.rs`.
+pub mod card;
+
 // THE DEOS SURFACE LIVES IN `src/deos.rs`, but it is NOT a library module here.
 //
 // `dregg-sdk` depends on THIS crate (`sdk/src/polis.rs` re-exports the pure cell
@@ -396,6 +403,34 @@ pub mod council {
     /// Terminal: the proposed action was executed (its effects ride in the
     /// same turn as this step). Inert — no double execute.
     pub const STATE_EXECUTED: u64 = 4;
+
+    // -------------------------------------------------------------------------
+    // The governance lifecycle as a method vocabulary (AX3 service / AX4 card /
+    // AX5 reactor). These string symbols are the ONE shared name set the
+    // `invoke()` service face routes on (`src/service.rs`), the deos-view card
+    // labels its buttons with (`src/card.rs`), and the auto-certify reactor
+    // watches/fires (`src/reactor.rs`). They live in the pure library so the card
+    // (a pure-`serde_json` library module, no app-framework edge) and the
+    // test-compiled service/reactor (which DO pull app-framework, hence the
+    // package-cycle dev-dependency dance — see `Cargo.toml`) all speak the same
+    // lifecycle. Each maps to the matching `STATE_*` step the installed
+    // `council_cell_program` re-enforces on the produced transition.
+    /// `propose(hash)` — DRAFT → PROPOSED: stage the action hash + publish the
+    /// membership commitment.
+    pub const METHOD_PROPOSE: &str = "propose";
+    /// `approve(member_index, running_count)` — a member flips their approval bit
+    /// (stays PROPOSED) and carries the running approval count for the reactor.
+    pub const METHOD_APPROVE: &str = "approve";
+    /// `certify()` — PROPOSED → APPROVED: arm the threshold flag (the executor's
+    /// `AffineLe { M·flag − Σ approvals <= 0 }` re-enforces `Σ approvals >= M`).
+    pub const METHOD_CERTIFY: &str = "certify";
+    /// `reject()` — PROPOSED → REJECTED (terminal, inert).
+    pub const METHOD_REJECT: &str = "reject";
+    /// `execute()` — APPROVED → EXECUTED (terminal; demands the certified flag).
+    pub const METHOD_EXECUTE: &str = "execute";
+    /// `view()` — the named OFE serviced seam: the proposal's committed machine
+    /// IS the answer (a pure read, never desugared to a turn).
+    pub const METHOD_VIEW: &str = "view";
 
     /// A council charter: the published membership + threshold. Identifies
     /// the council — the factory vk is content-addressed over it.
