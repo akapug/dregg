@@ -56,6 +56,8 @@
 mod dfa_routed;
 mod directory;
 mod meta;
+mod service_factory;
+mod service_index;
 
 #[cfg(test)]
 mod directory_diff;
@@ -66,6 +68,10 @@ pub use directory::{
     Listing, Version,
 };
 pub use meta::{MetaDirectory, PeerHandle};
+pub use service_factory::{AnnounceRecord, BornService, ServiceFactory, announce_topic};
+pub use service_index::{
+    FederatedHit, FederatedServiceIndex, ServiceIndex, ServiceIndexError, ServiceRecord,
+};
 
 /// A sturdy-ref-shaped resource handle. Decoupled from
 /// `captp::uri::DreggUri` so this crate does not pull in the full CapTP
