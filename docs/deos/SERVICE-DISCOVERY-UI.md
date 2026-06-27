@@ -238,6 +238,83 @@ in the shared tree (the deos-view card lane, mid-build).
 
 ---
 
+## 4b. The directory backend (built this pass) — service-factory crafting + deepened discovery
+
+The first slice (§4) lives *inside* the cockpit's embedded `World`
+(`starbridge-v2`). This pass deepens the **renderer-independent backend** in the
+canonical `dregg-directory` crate, so the model the card reads is grounded where
+the directory primitive itself lives. Three new pieces, all gpui-free,
+`cargo test`-able (40 tests green in `dregg-directory`), no `dregg-turn`
+dependency.
+
+### (i) Service-FACTORY crafting — `directory/src/service_factory.rs`
+
+You can now **craft a factory whose creations ARE services.**
+`ServiceFactory::craft(&["send", "dequeue"], CellMode::Hosted)` builds:
+
+1. the **interface-publishing child program** — a `CellProgram::Cases` whose
+   `MethodIs` guards are exactly the crafted methods (plus an `Always` catch-all),
+2. the `InterfaceDescriptor` that program publishes (auto-derived), and
+3. a `dregg_cell::factory::FactoryDescriptor` bound to it
+   (`child_program_vk = canonical_program_vk(child_program)`). The `factory_vk` is
+   `derive_key(interface_id ‖ mode)`, so **a service factory's identity is a
+   function of the service it produces** — same interface + mode ⇒ same factory.
+
+`ServiceFactory::birth(owner, token, height)` validates the creation against the
+real `FactoryDescriptor::validate_creation` gate (a forged child VK / out-of-
+template cap / mode mismatch is refused *before any cell is born*), derives the
+new cell id exactly as the executor does (`CellId::derive_raw(owner, token)`), and
+returns a `BornService` carrying the program, the published interface, and a
+factory `Provenance`. The key fact is *checked, not trusted*:
+`BornService::publishes(interface_id)` re-derives the interface from the born
+cell's live program. `BornService::announce(announcer)` then yields an
+`AnnounceRecord` whose `event_data()` (`[interface_id, cell, method_count]`,
+topic `dregg.directory.announce`) is **byte-identical to the `starbridge-v2`
+slice's announce payload** — the two announce models agree.
+
+> **The honest seam (named).** The deployed `Effect::CreateCellFromFactory` arm
+> (`turn/src/executor/apply.rs:2233`) installs the born cell's `program` from the
+> descriptor's *perpetual slot caveats* as `CellProgram::Predicate(...)` plus the
+> child-VK identifier — it does **not** yet install a `Cases` interface-publishing
+> program, so a literal on-ledger birth would publish the *empty* interface. The
+> service-factory models the birth at the crafting layer (binding the `Cases`
+> program by VK, carrying it on `BornService`); installing the child program
+> through the executor (a VK-touching change) is the named follow-on.
+
+### (ii) Discover by INTERFACE + by METHOD — `directory/src/service_index.rs`
+
+`ServiceIndex` keys announced services by name (like the base directory) but each
+record carries the service's `InterfaceDescriptor`, so discovery deepens past
+name/tag:
+
+- `discover_by_interface(interface_id, height)` — every live service whose
+  interface content-address matches.
+- `discover_by_method(&symbol, height)` — every live service that offers a method,
+  resolved through the **same verified `dregg-dfa` router** the executor's
+  dispatch uses (`InterfaceDescriptor::route_method`), not an ad-hoc scan; an
+  undeclared method finds nothing (fail-closed).
+- `membership_witness(name, method, height)` — the **light-client-witnessable**
+  proof a discovered service genuinely offers a method (the existing DFA
+  route-membership `AirTrace` + route-table root), so discovery is not a trusted
+  claim.
+- `announce` carries the anti-forgery tooth `InterfaceDescriptor::verify_id`: a
+  record whose carried `interface_id` does not match its own methods is refused
+  (`ServiceIndexError::ForgedInterface`). `announce_born` is the slice-1↔slice-2
+  weld: a crafted factory births a service, the service announces itself in.
+- `discover(filter, height)` (kind / tags / prefix), `revoke`, `lookup`, and
+  `gc_expired` mirror the base directory's revocation + expiry semantics.
+
+### (iii) Federation scope — `FederatedServiceIndex`
+
+`FederatedServiceIndex` composes a local `ServiceIndex` with peer indices
+catalogued by `MetaDirectory` (the directory-of-directories). `add_peer(peer,
+index)` registers the peer in the meta-directory and attaches its index;
+`discover_by_interface` / `discover_by_method` then sweep the local image **and
+every peer federation** in the meta-directory's peer order, tagging each
+`FederatedHit` with its origin federation (`local: bool` + `federation_id`). This
+is the model the "local ⇄ federation" toggle (§3a) reads — the same query, widened
+to peers, ready to be fed by the assembled `discovery.json` (§1.4).
+
 ## 5. The cleanest next builds (named, ordered)
 
 1. **The cockpit panel + tab** — `panels_discovery.rs` rendering
@@ -250,14 +327,20 @@ in the shared tree (the deos-view card lane, mid-build).
 2. **The deos-view card binding** — express the panel as a real deos-view card
    (mount on the sibling lane's `card_pane`/`card_surface`) so the surface is
    renderer-independent and the buttons fire `announce`/`invoke` turns.
-3. **Canonical `dregg-directory` backing** — register announcements into a
-   real `InMemoryDirectory` / on-ledger directory cell (name → `ResourceHandle`,
-   tags, expiry, revoke), replacing the local view-model `ServiceKind` with
-   `dregg_directory::{EntryKind, DiscoveryFilter, Listing}`. Gives named lookup,
-   revocation, and tag-discovery — the full §1.1 surface.
+3. **Canonical `dregg-directory` backing** — the backend landed (§4b):
+   `ServiceIndex` (`directory/src/service_index.rs`) gives announce / named
+   lookup / revocation / expiry / discover-by-interface / discover-by-method over
+   `dregg_directory::{EntryKind, DiscoveryFilter}`. Remaining: bind the cockpit
+   `ServiceDirectory` view-model to it (replace the local `ServiceKind` mirror).
 4. **Cap-gated announce** — gate `announce` on the announcer holding authority
    over the service (the attenuation lattice `service_explorer` already
    threads), so announcement is an authorized act, not ambient.
-5. **Federation scope** — a "federation" toggle backed by `MetaDirectory` +
-   the assembled `discovery.json`, so the directory browses peers, not just the
-   local image.
+5. **Service-factory crafting** — landed (§4b): `ServiceFactory`
+   (`directory/src/service_factory.rs`) crafts a factory whose creations are
+   services, births them, and auto-announces. Remaining: install the `Cases`
+   child program through the executor's `CreateCellFromFactory` arm (the named
+   VK-touching seam) so an on-ledger birth publishes the interface, not just the
+   Predicate caveats.
+6. **Federation scope** — backend landed (§4b): `FederatedServiceIndex` sweeps
+   the local image + peer federations via `MetaDirectory`. Remaining: a
+   "federation" toggle feeding it the assembled `discovery.json` (§1.4).
