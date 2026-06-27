@@ -132,6 +132,80 @@ fn node(n: &ViewNode, binds: &BindValues, cursor: &mut usize, out: &mut String) 
             }
             out.push_str("</div>");
         }
+
+        // ── The RICHNESS EXPANSION (batch 1) — the IDENTICAL ViewNode → HTML, mirroring the
+        //    gpui renderer node-for-node so the card stays renderer-independent. ───────────
+        ViewNode::Section {
+            title,
+            tag,
+            children,
+        } => {
+            out.push_str(&format!(
+                "<section class=\"deos-section\" data-tag=\"{}\">",
+                escape(tag)
+            ));
+            if !title.is_empty() {
+                out.push_str(&format!(
+                    "<div class=\"deos-section-title\">{}</div>",
+                    escape(title)
+                ));
+            }
+            for c in children {
+                node(c, binds, cursor, out);
+            }
+            out.push_str("</section>");
+        }
+        ViewNode::Tabs {
+            tabs,
+            selected_slot,
+            select_turn,
+            panels,
+        } => {
+            // The tab strip carries each tab's `{selectTurn, index}` as data-attributes (the
+            // exact payload a click fires); the active panel is `selectedSlot`'s live value, a
+            // JS layer toggling `deos-tabpanel` visibility. ALL panels are emitted (same order
+            // the native renderer + bind cursor walk them) so the cursor never desyncs.
+            out.push_str(&format!(
+                "<div class=\"deos-tabs\" data-selected-slot=\"{selected_slot}\">"
+            ));
+            out.push_str("<div class=\"deos-tabstrip\">");
+            for (i, label) in tabs.iter().enumerate() {
+                out.push_str(&format!(
+                    "<button class=\"deos-tab\" data-turn=\"{}\" data-arg=\"{}\" data-index=\"{}\">{}</button>",
+                    escape(select_turn),
+                    i,
+                    i,
+                    escape(label)
+                ));
+            }
+            out.push_str("</div>");
+            for (i, panel) in panels.iter().enumerate() {
+                out.push_str(&format!("<div class=\"deos-tabpanel\" data-index=\"{i}\">"));
+                node(panel, binds, cursor, out);
+                out.push_str("</div>");
+            }
+            out.push_str("</div>");
+        }
+        ViewNode::Gauge { slot, max, label } => {
+            // The bar carries `data-slot`/`data-max` so the in-tab executor drives the fill
+            // live (the witnessed re-read); a static bake shows an empty track + the label.
+            out.push_str(&format!(
+                "<div class=\"deos-gauge\" data-slot=\"{slot}\" data-max=\"{max}\">"
+            ));
+            if !label.is_empty() {
+                out.push_str(&format!(
+                    "<span class=\"deos-gauge-label\">{}</span>",
+                    escape(label)
+                ));
+            }
+            out.push_str(
+                "<div class=\"deos-gauge-track\"><div class=\"deos-gauge-fill\"></div></div>",
+            );
+            out.push_str("</div>");
+        }
+        ViewNode::Divider => {
+            out.push_str("<hr class=\"deos-divider\">");
+        }
     }
 }
 
@@ -724,6 +798,20 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',s
 .deos-button:hover{filter:brightness(1.1);}
 .deos-list,.deos-table{display:flex;flex-direction:column;gap:.25rem;}
 .deos-table{border:1px solid var(--border);border-radius:6px;padding:.25rem;}
+.deos-section{display:flex;flex-direction:column;gap:.4rem;border:1px solid var(--border);border-radius:6px;padding:.5rem .6rem;}
+.deos-section[data-tag=genuine]{border-color:var(--fg);}
+.deos-section-title{font-weight:700;color:var(--fg);}
+.deos-tabs{display:flex;flex-direction:column;gap:.5rem;}
+.deos-tabstrip{display:flex;flex-direction:row;gap:.4rem;}
+.deos-tab{background:var(--panel,#22242c);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:.3rem .7rem;font:inherit;cursor:pointer;}
+.deos-tab[data-index='0']{background:var(--accent);color:#fff;border-color:var(--accent);}
+.deos-tabpanel{display:block;}
+.deos-tabpanel:not([data-index='0']){display:none;}
+.deos-gauge{display:flex;flex-direction:column;gap:.25rem;}
+.deos-gauge-label{color:var(--fg);font-weight:700;}
+.deos-gauge-track{width:140px;height:8px;background:var(--border);border-radius:4px;overflow:hidden;}
+.deos-gauge-fill{height:8px;background:var(--fg);border-radius:4px;width:0;}
+.deos-divider{border:none;border-top:1px solid var(--border);width:100%;margin:.25rem 0;}
 ";
 
 /// The browser-side affordance wire — a button click reads its `data-turn`/`data-arg`,

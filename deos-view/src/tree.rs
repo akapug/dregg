@@ -45,6 +45,45 @@ pub enum ViewNode {
     List(Vec<ViewNode>),
     /// `table(rows)` → a table; each row is itself a node (a `row` of cells).
     Table(Vec<ViewNode>),
+
+    // ── The RICHNESS EXPANSION (docs/deos/DEOS-VIEW-RICHNESS-EXPANSION.md) — growing the
+    //    vocabulary toward native-cockpit parity so liberating a surface into a card is
+    //    LOSSLESS. Batch 1: a container, an actuation+selection node, a bound visual, a leaf.
+    /// `section(title, ...children)` → a titled, bordered container (the uniform "styled
+    /// section"). `tag` selects a styling accent (the existing `props.tag` convention —
+    /// `genuine`/`refusal`/…). Unlocks Organs, the Trust/Devtools blocks, every panel's
+    /// `section_title` + bordered-box idiom.
+    Section {
+        title: String,
+        tag: String,
+        children: Vec<ViewNode>,
+    },
+    /// `tabs({tabs, selectedSlot, selectTurn}, ...panels)` → a tab-strip whose visible panel
+    /// is bound to model slot `selected_slot`. A tab click fires `select_turn` with `arg =
+    /// the tab index` (a REAL verified turn that writes the slot). Unlocks Lanes, Devtools,
+    /// Moldable. The renderer walks ALL panels (keeping the bind cursor aligned) and displays
+    /// only the selected one.
+    Tabs {
+        /// The tab labels, one per panel (in `panels` order).
+        tabs: Vec<String>,
+        /// The model slot holding the active tab index (read live each paint).
+        selected_slot: usize,
+        /// The affordance a tab click fires (`arg` is the clicked tab's index).
+        select_turn: String,
+        /// The tab bodies — one per label; only the selected one is displayed.
+        panels: Vec<ViewNode>,
+    },
+    /// `gauge({slot, max, label})` → a bound progress / balance bar. The fill is
+    /// `get_u64(slot) / max`, clamped to `[0,1]`. Reads its slot IMMEDIATE-MODE (it does not
+    /// consume the tree-walk bind cursor — it is not a `Bind`). Unlocks `face_gauge`, the
+    /// Time liveness bar, any "glow = activity" indicator.
+    Gauge {
+        slot: usize,
+        max: u64,
+        label: String,
+    },
+    /// `divider()` → a thin full-width horizontal rule (a groove / separator). A pure leaf.
+    Divider,
 }
 
 /// The raw JSON mirror of a `deos.ui.*` node (`{ kind, props, children }`). The
@@ -77,9 +116,32 @@ pub struct RawProps {
     pub bind_view: Option<String>,
     /// For a `bind` node the renderer needs to know WHICH model slot to re-read.
     /// The JS closure isn't serializable, so the applet author tags the bind node's
-    /// props with `slot` (the counter shape uses slot 0). Absent → slot 0.
+    /// props with `slot` (the counter shape uses slot 0). Absent → slot 0. Also the
+    /// model slot a `gauge` reads its fill ratio from.
     #[serde(default)]
     pub slot: Option<usize>,
+
+    // ── The richness-expansion props (batch 1: section / tabs / gauge). Every field
+    //    optional; a node reads only the ones for its kind (the raw `props` bag idiom). ──
+    /// A `section`'s header title.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// A styling accent / disclosure tag (`section`, `pill`, …): the existing `props.tag`
+    /// convention (`genuine`/`refusal`/…), reused by the disclosure filter.
+    #[serde(default)]
+    pub tag: Option<String>,
+    /// A `gauge`'s denominator (the fill is `slot_value / max`, clamped to `[0,1]`).
+    #[serde(default)]
+    pub max: Option<u64>,
+    /// A `tabs` node's tab labels, one per panel (camelCase `tabs`, snake alias).
+    #[serde(default, alias = "tab_labels")]
+    pub tabs: Option<Vec<String>>,
+    /// A `tabs` node's model slot holding the active tab index (camelCase `selectedSlot`).
+    #[serde(default, rename = "selectedSlot", alias = "selected_slot")]
+    pub selected_slot: Option<usize>,
+    /// A `tabs` node's select affordance (`arg` is the clicked tab index; camelCase).
+    #[serde(default, rename = "selectTurn", alias = "select_turn")]
+    pub select_turn: Option<String>,
 }
 
 /// `onClick = { turn, arg }` — the affordance a button fires.
@@ -119,6 +181,23 @@ impl RawNode {
             },
             "list" => ViewNode::List(kids()),
             "table" => ViewNode::Table(kids()),
+            "section" => ViewNode::Section {
+                title: self.props.title.clone().unwrap_or_default(),
+                tag: self.props.tag.clone().unwrap_or_default(),
+                children: kids(),
+            },
+            "tabs" => ViewNode::Tabs {
+                tabs: self.props.tabs.clone().unwrap_or_default(),
+                selected_slot: self.props.selected_slot.unwrap_or(0),
+                select_turn: self.props.select_turn.clone().unwrap_or_default(),
+                panels: kids(),
+            },
+            "gauge" => ViewNode::Gauge {
+                slot: self.props.slot.unwrap_or(0),
+                max: self.props.max.unwrap_or(0),
+                label: self.props.label.clone().unwrap_or_default(),
+            },
+            "divider" => ViewNode::Divider,
             other => ViewNode::Text(format!("‹unmapped node: {other}›")),
         }
     }
