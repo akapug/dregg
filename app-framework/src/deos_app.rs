@@ -642,13 +642,12 @@ impl DeosApp {
         };
         let mut uris = Vec::new();
         for c in &self.cells {
-            if let Some(authority) = &c.published_at {
-                if let Some(uri) = captp
+            if let Some(authority) = &c.published_at
+                && let Some(uri) = captp
                     .export(c.cell(), authority.clone(), current_height, None)
                     .await
-                {
-                    uris.push(uri.to_uri_string());
-                }
+            {
+                uris.push(uri.to_uri_string());
             }
         }
         uris

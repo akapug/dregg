@@ -320,7 +320,7 @@ pub fn attest_descriptor(predicate: &Predicate) -> CircuitDescriptor {
                     coeff: pow,
                     col_indices: vec![bit0 + i],
                 });
-                pow = pow * two;
+                pow *= two;
             }
             terms.push(PolyTerm {
                 coeff: BabyBear::new(p - 1),

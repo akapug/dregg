@@ -813,10 +813,10 @@ impl Coordinator {
     /// construction. The native Rust [`Self::evaluate_votes_native`] stays as the DIFFERENTIAL sibling
     /// and the fallback when the archive is not linked / the gate is unavailable.
     fn evaluate_votes(&self) -> Decision {
-        if let Some((yes, no, n, thr)) = self.current_tally() {
-            if let Some(d) = verified_decision(yes, no, n, thr) {
-                return d;
-            }
+        if let Some((yes, no, n, thr)) = self.current_tally()
+            && let Some(d) = verified_decision(yes, no, n, thr)
+        {
+            return d;
         }
         self.evaluate_votes_native()
     }

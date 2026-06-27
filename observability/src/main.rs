@@ -255,7 +255,7 @@ fn emit_turn_lifecycle(em: &Emitter) -> [u8; 32] {
                     post_state_hash: hex32(&receipt.post_state_hash),
                     effects_hash: hex32(&receipt.effects_hash),
                     timestamp: receipt.timestamp,
-                    action_count: receipt.action_count as usize,
+                    action_count: receipt.action_count,
                     computrons_used,
                     finality: format!("{:?}", receipt.finality),
                 },

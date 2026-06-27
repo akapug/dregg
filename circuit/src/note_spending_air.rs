@@ -919,8 +919,8 @@ impl StarkAir for NoteSpendingAir {
 
         // Constraint 5: is_merkle binary
         let c_binary = is_merkle * (is_merkle - BabyBear::ONE);
-        combined = combined + alpha_pow * c_binary;
-        alpha_pow = alpha_pow * alpha;
+        combined += alpha_pow * c_binary;
+        alpha_pow *= alpha;
 
         // Constraint 2: Merkle hash binding (only on Merkle rows: gated by is_merkle)
         let current = local[merkle_col::CURRENT];
@@ -951,8 +951,8 @@ impl StarkAir for NoteSpendingAir {
 
         let expected_parent = hash_4_to_1(&[child0, child1, child2, child3]);
         let c_hash = is_merkle * (parent - expected_parent);
-        combined = combined + alpha_pow * c_hash;
-        alpha_pow = alpha_pow * alpha;
+        combined += alpha_pow * c_hash;
+        alpha_pow *= alpha;
 
         // Constraint 3: Commitment preimage (only on commitment row: gated by 1-is_merkle)
         let owner = local[col::OWNER];
@@ -966,8 +966,8 @@ impl StarkAir for NoteSpendingAir {
         let expected_commitment =
             hash_many(&[owner, value, asset_type, creation_nonce, randomness]);
         let c_commitment = is_commitment_row * (commitment - expected_commitment);
-        combined = combined + alpha_pow * c_commitment;
-        alpha_pow = alpha_pow * alpha;
+        combined += alpha_pow * c_commitment;
+        alpha_pow *= alpha;
 
         // Constraint 4: Nullifier derivation (only on commitment row)
         // Hash all 8 spending key limbs: nullifier = hash(commitment, key[0..8], creation_nonce)
@@ -980,7 +980,7 @@ impl StarkAir for NoteSpendingAir {
         nullifier_inputs.push(creation_nonce);
         let expected_nullifier = hash_many(&nullifier_inputs);
         let c_nullifier = is_commitment_row * (nullifier - expected_nullifier);
-        combined = combined + alpha_pow * c_nullifier;
+        combined += alpha_pow * c_nullifier;
 
         combined
     }

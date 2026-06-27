@@ -559,7 +559,7 @@ pub fn generate_effect_vm_trace_ext(
 
                 // Store old value at target index in aux[0] for the constraint.
                 let idx = *field_idx as usize;
-                row[AUX_BASE + 0] = current_state.fields[idx.min(7)];
+                row[AUX_BASE] = current_state.fields[idx.min(7)];
 
                 new_state.fields[idx.min(7)] = *value;
                 new_state.nonce += 1;
@@ -655,19 +655,19 @@ pub fn generate_effect_vm_trace_ext(
                 // 32-byte widening: anchor limb[0] into params[0]; AIR forbids
                 // any state column change; nonce ticks. Full 8 limbs bind via
                 // compute_effects_hash.
-                row[PARAM_BASE + 0] = permissions_hash[0];
+                row[PARAM_BASE] = permissions_hash[0];
                 new_state.nonce += 1;
             }
             Effect::SetVerificationKey { vk_hash } => {
                 // Same shape as SetPermissions: VK lives off-trace. Anchor limb[0].
-                row[PARAM_BASE + 0] = vk_hash[0];
+                row[PARAM_BASE] = vk_hash[0];
                 new_state.nonce += 1;
             }
 
             Effect::RefreshDelegation { child_hash, .. } => {
                 // 32-byte widening: anchor the refreshed child key limb[0]; all
                 // 16 limbs (child + snapshot) bind via compute_effects_hash.
-                row[PARAM_BASE + 0] = child_hash[0];
+                row[PARAM_BASE] = child_hash[0];
                 new_state.nonce += 1;
             }
             Effect::IncrementNonce => {
@@ -677,28 +677,28 @@ pub fn generate_effect_vm_trace_ext(
             }
             Effect::RevokeDelegation { child_hash } => {
                 // 32-byte widening: anchor limb[0]; full 8 limbs bind via effects_hash.
-                row[PARAM_BASE + 0] = child_hash[0];
+                row[PARAM_BASE] = child_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CreateCell { create_hash } => {
-                row[PARAM_BASE + 0] = create_hash[0];
+                row[PARAM_BASE] = create_hash[0];
                 new_state.nonce += 1;
             }
             Effect::SpawnWithDelegation { spawn_hash } => {
-                row[PARAM_BASE + 0] = spawn_hash[0];
+                row[PARAM_BASE] = spawn_hash[0];
                 new_state.nonce += 1;
             }
 
             Effect::ExerciseViaCapability { exercise_hash } => {
-                row[PARAM_BASE + 0] = exercise_hash[0];
+                row[PARAM_BASE] = exercise_hash[0];
                 new_state.nonce += 1;
             }
             Effect::Introduce { intro_hash } => {
-                row[PARAM_BASE + 0] = intro_hash[0];
+                row[PARAM_BASE] = intro_hash[0];
                 new_state.nonce += 1;
             }
             Effect::PipelinedSend { send_hash } => {
-                row[PARAM_BASE + 0] = send_hash[0];
+                row[PARAM_BASE] = send_hash[0];
                 new_state.nonce += 1;
             }
 
@@ -708,7 +708,7 @@ pub fn generate_effect_vm_trace_ext(
                 value_full: _,
             } => {
                 // Mirror NoteSpend: balance credit by value_lo.
-                row[PARAM_BASE + 0] = *mint_hash;
+                row[PARAM_BASE] = *mint_hash;
                 row[PARAM_BASE + 1] = *value_lo;
                 let value_u64 = value_lo.as_u32() as u64;
                 new_state.balance = new_state.balance.saturating_add(value_u64);
@@ -725,7 +725,7 @@ pub fn generate_effect_vm_trace_ext(
                 // byte-identical in body to BridgeMint (credit at param1), but
                 // sits on `sel::MINT` (set by `effect_selector`), so it routes
                 // to `supplyMintVmDescriptor2R24` rather than the bridge member.
-                row[PARAM_BASE + 0] = *mint_hash;
+                row[PARAM_BASE] = *mint_hash;
                 row[PARAM_BASE + 1] = *value_lo;
                 let value_u64 = value_lo.as_u32() as u64;
                 new_state.balance = new_state.balance.saturating_add(value_u64);

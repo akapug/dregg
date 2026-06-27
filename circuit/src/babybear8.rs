@@ -131,7 +131,7 @@ impl BabyBear8 {
                 continue;
             }
             for j in 0..8 {
-                conv[i + j] = conv[i + j] + a[i] * b[j];
+                conv[i + j] += a[i] * b[j];
             }
         }
 
@@ -177,9 +177,9 @@ impl BabyBear8 {
             for i in 0..8 {
                 let deg = i + j;
                 if deg < 8 {
-                    mat[deg][j] = mat[deg][j] + a[i];
+                    mat[deg][j] += a[i];
                 } else {
-                    mat[deg - 8][j] = mat[deg - 8][j] + W * a[i];
+                    mat[deg - 8][j] += W * a[i];
                 }
             }
         }
@@ -204,7 +204,7 @@ impl BabyBear8 {
             }
             let inv_pivot = mat[c][c].inverse()?;
             for j in 0..9 {
-                mat[c][j] = mat[c][j] * inv_pivot;
+                mat[c][j] *= inv_pivot;
             }
             for row in 0..8 {
                 if row == c {
@@ -215,7 +215,7 @@ impl BabyBear8 {
                     continue;
                 }
                 for j in 0..9 {
-                    mat[row][j] = mat[row][j] - factor * mat[c][j];
+                    mat[row][j] -= factor * mat[c][j];
                 }
             }
         }

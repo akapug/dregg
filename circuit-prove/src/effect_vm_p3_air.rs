@@ -125,7 +125,7 @@ impl<AB: AirBuilder> Air<AB> for EffectVmShapeAir {
         let mut sum: AB::Expr = AB::Expr::ZERO;
         for i in 0..NUM_EFFECTS {
             let s: AB::Expr = local[i].into();
-            sum = sum + s;
+            sum += s;
         }
         builder.assert_zero(sum - one.clone());
 

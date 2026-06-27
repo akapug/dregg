@@ -47,10 +47,10 @@
 //!   tallies them at close. The base form is roster-bound (one vote per
 //!   registered voter); the unlinkable extension ([`SealedBallot::new_unlinkable`]
 //!   + [`seal_unlinkable_ballot`]) binds an anonymous eligibility nullifier INTO
-//!   the seal plaintext so the OPENED ballot cannot be linked to the voter who
-//!   cast it (vote privacy survives the reveal), AND so the nullifier is
-//!   opened-and-verified at tally — a borrowed valid nullifier cannot ride a
-//!   substituted choice.
+//!     the seal plaintext so the OPENED ballot cannot be linked to the voter who
+//!     cast it (vote privacy survives the reveal), AND so the nullifier is
+//!     opened-and-verified at tally — a borrowed valid nullifier cannot ride a
+//!     substituted choice.
 //!
 //! ## Both-polarity guarantees (the tests at the bottom)
 //!

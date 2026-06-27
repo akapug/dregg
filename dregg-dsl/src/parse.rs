@@ -187,18 +187,16 @@ fn parse_stmts(stmts: &[Stmt], is_effect: bool) -> Result<Vec<Statement>, syn::E
 
 fn try_parse_statement_expr(expr: &Expr, is_effect: bool) -> Result<Option<Statement>, syn::Error> {
     // Check for require!() macro
-    if let Expr::Macro(em) = expr {
-        if is_require_macro(&em.mac) {
-            let req = parse_require_macro(&em.mac)?;
-            return Ok(Some(Statement::Require(req)));
-        }
+    if let Expr::Macro(em) = expr
+        && is_require_macro(&em.mac)
+    {
+        let req = parse_require_macro(&em.mac)?;
+        return Ok(Some(Statement::Require(req)));
     }
 
     // Check for mutation: `*target -= operand` or `*target += operand`
-    if is_effect {
-        if let Some(mutation) = try_parse_mutation(expr)? {
-            return Ok(Some(Statement::Mutate(mutation)));
-        }
+    if is_effect && let Some(mutation) = try_parse_mutation(expr)? {
+        return Ok(Some(Statement::Mutate(mutation)));
     }
 
     // Check for match expression
@@ -407,7 +405,7 @@ fn classify_expr(expr: &Expr) -> Result<Requirement, syn::Error> {
                     .ok_or_else(|| {
                         syn::Error::new(mc.method.span(), "contains() requires one argument")
                     })
-                    .and_then(|arg| expr_to_ident_string(arg))?;
+                    .and_then(expr_to_ident_string)?;
                 Ok(Requirement {
                     kind: RequirementKind::Membership { set, element },
                 })

@@ -1742,13 +1742,11 @@ impl SiloServer {
             &captp_state,
         )
         .await
-        {
-            if crate::codec::write_message(&mut writer, &response)
+            && crate::codec::write_message(&mut writer, &response)
                 .await
                 .is_err()
-            {
-                return;
-            }
+        {
+            return;
         }
 
         // --- Federation Boundary: Challenge-Response Authentication ---
@@ -2032,16 +2030,16 @@ impl SiloServer {
             // When participant_source is configured (authentication enabled),
             // reject messages that require higher privilege than the peer has.
             // When NOT configured (backward compat), allow everything.
-            if participant_source.is_some() {
-                if let Some(rejection) = Self::check_role_permission(&msg, &conn_auth) {
-                    if crate::codec::write_message(&mut writer, &rejection)
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                    continue;
+            if participant_source.is_some()
+                && let Some(rejection) = Self::check_role_permission(&msg, &conn_auth)
+            {
+                if crate::codec::write_message(&mut writer, &rejection)
+                    .await
+                    .is_err()
+                {
+                    break;
                 }
+                continue;
             }
 
             // Handle CapHello promoting Anonymous -> CapTpPeer (only effective

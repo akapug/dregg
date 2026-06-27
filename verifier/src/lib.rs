@@ -343,9 +343,9 @@ pub fn replay_chain(entries: &[ReplayEntry]) -> ReplayChainOutput {
     // alpha sampling is a redundancy check on the witness side).
     let alphas: [BabyBear; 4] = [
         BabyBear::new(0xdead_beefu32 % (1u32 << 31)),
-        BabyBear::new(0x1234_5678u32 % (1u32 << 31)),
+        BabyBear::new(0x1234_5678u32),
         BabyBear::new(0xfeed_face_u32 % (1u32 << 31)),
-        BabyBear::new(0x0bad_c0deu32 % (1u32 << 31)),
+        BabyBear::new(0x0bad_c0deu32),
     ];
 
     let mut prev_receipt_hash: Option<[u8; 32]> = None;

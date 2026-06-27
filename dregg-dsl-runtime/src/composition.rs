@@ -200,8 +200,8 @@ impl StarkAir for ComposedDslCircuit {
         // 1. Evaluate main circuit constraints
         for constraint in &self.descriptor.circuit.constraints {
             let value = constraint.evaluate(local, next, public_inputs);
-            result = result + alpha_power * value;
-            alpha_power = alpha_power * alpha;
+            result += alpha_power * value;
+            alpha_power *= alpha;
         }
 
         // 2. Sub-proof binding constraints: valid_flag must be 1
@@ -210,33 +210,32 @@ impl StarkAir for ComposedDslCircuit {
             if valid_col < local.len() {
                 // valid_flag - 1 == 0 (must be valid)
                 let valid_constraint = local[valid_col] - BabyBear::ONE;
-                result = result + alpha_power * valid_constraint;
-                alpha_power = alpha_power * alpha;
+                result += alpha_power * valid_constraint;
+                alpha_power *= alpha;
 
                 // valid_flag is binary
                 let binary_constraint = local[valid_col] * (local[valid_col] - BabyBear::ONE);
-                result = result + alpha_power * binary_constraint;
-                alpha_power = alpha_power * alpha;
+                result += alpha_power * binary_constraint;
+                alpha_power *= alpha;
             }
         }
 
         // 3. IVC hash chain constraint (if present)
-        if let Some(ref ivc) = self.descriptor.transition {
-            if ivc.accumulated_hash_col < local.len()
-                && ivc.previous_hash_col < local.len()
-                && ivc.final_state_col < local.len()
-                && ivc.step_count_col < local.len()
-            {
-                // accumulated_hash == extend(previous_hash, final_state, step_count)
-                let expected = dregg_circuit::ivc::extend_accumulated_hash(
-                    local[ivc.previous_hash_col],
-                    local[ivc.final_state_col],
-                    local[ivc.step_count_col].0,
-                );
-                let hash_constraint = local[ivc.accumulated_hash_col] - expected;
-                result = result + alpha_power * hash_constraint;
-                let _ = alpha_power * alpha; // suppress unused warning
-            }
+        if let Some(ref ivc) = self.descriptor.transition
+            && ivc.accumulated_hash_col < local.len()
+            && ivc.previous_hash_col < local.len()
+            && ivc.final_state_col < local.len()
+            && ivc.step_count_col < local.len()
+        {
+            // accumulated_hash == extend(previous_hash, final_state, step_count)
+            let expected = dregg_circuit::ivc::extend_accumulated_hash(
+                local[ivc.previous_hash_col],
+                local[ivc.final_state_col],
+                local[ivc.step_count_col].0,
+            );
+            let hash_constraint = local[ivc.accumulated_hash_col] - expected;
+            result += alpha_power * hash_constraint;
+            let _ = alpha_power * alpha; // suppress unused warning
         }
 
         result
@@ -900,13 +899,14 @@ pub fn verify_composed_full(
         // Check PI bindings: sub-proof PIs must match the corresponding main trace values
         // (bound via public inputs of the composed circuit)
         for (pi_idx, &col) in binding.pi_binding_cols.iter().enumerate() {
-            if pi_idx < attached.sub_public_inputs.len() && col < proof.public_inputs.len() {
-                if attached.sub_public_inputs[pi_idx] != proof.public_inputs[col] {
-                    return ComposedVerification::PiMismatch {
-                        index: i,
-                        pi_index: pi_idx,
-                    };
-                }
+            if pi_idx < attached.sub_public_inputs.len()
+                && col < proof.public_inputs.len()
+                && attached.sub_public_inputs[pi_idx] != proof.public_inputs[col]
+            {
+                return ComposedVerification::PiMismatch {
+                    index: i,
+                    pi_index: pi_idx,
+                };
             }
         }
     }

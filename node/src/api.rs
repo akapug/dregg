@@ -1213,10 +1213,10 @@ pub fn resolve_client_ip(
     // leading entries cannot move this rightmost-untrusted boundary.
     if let Some(xff) = forwarded_for {
         for hop in xff.split(',').rev() {
-            if let Ok(ip) = hop.trim().parse::<IpAddr>() {
-                if !trusted.contains(&ip) {
-                    return ip;
-                }
+            if let Ok(ip) = hop.trim().parse::<IpAddr>()
+                && !trusted.contains(&ip)
+            {
+                return ip;
             }
         }
     }
@@ -2989,17 +2989,17 @@ async fn post_submit_turn(
 
             // Solo mode: record in nullifier log, mark receipt as Tentative,
             // and advance the solo consensus height.
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    // Record any nullifiers from this turn in the solo nullifier log.
-                    // The turn_hash itself serves as the sequencing entry for ordering.
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                // Record any nullifiers from this turn in the solo nullifier log.
+                // The turn_hash itself serves as the sequencing entry for ordering.
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the authoritative executor ALREADY
@@ -3240,19 +3240,19 @@ async fn post_submit_signed_turn(
     }
 
     let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
-    if let Some(claimed_prev) = signed.turn.previous_receipt_hash {
-        if Some(claimed_prev) != expected_prev {
-            return Ok(Json(SubmitSignedTurnResponse {
-                accepted: false,
-                turn_hash: Some(turn_hash),
-                signer: Some(signer),
-                action_count,
-                proof_status: ActivityProofStatus::NotCommitted,
-                has_witness: false,
-                witness_count: 0,
-                error: Some("receipt chain mismatch".to_string()),
-            }));
-        }
+    if let Some(claimed_prev) = signed.turn.previous_receipt_hash
+        && Some(claimed_prev) != expected_prev
+    {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(turn_hash),
+            signer: Some(signer),
+            action_count,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("receipt chain mismatch".to_string()),
+        }));
     }
 
     let pre_ledger = s.ledger.clone();
@@ -3277,15 +3277,15 @@ async fn post_submit_signed_turn(
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
 
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the executor already validated +
@@ -3732,15 +3732,15 @@ async fn post_submit_encrypted_turn(
             // the cleartext path (post_submit_turn). The encrypted path
             // doesn't change consensus semantics — only privacy.
             let turn_hash_bytes = receipt.turn_hash;
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             let turn_hash = hex_encode(&turn_hash_bytes);
@@ -4428,7 +4428,7 @@ async fn get_starbridge_identity_events(
                 turn_hash: hex_encode(&receipt.turn_hash),
                 cell_id: hex_encode(&event.cell.0),
                 timestamp: receipt.timestamp,
-                topic: Some(serde_json::to_value(&event.topic).unwrap_or(serde_json::Value::Null)),
+                topic: Some(serde_json::to_value(event.topic).unwrap_or(serde_json::Value::Null)),
                 data: Some(serde_json::to_value(&event.data).unwrap_or(serde_json::Value::Null)),
                 effects: Vec::new(),
                 proof_status: receipt_proof_status(receipt),
@@ -5314,17 +5314,15 @@ async fn post_resolve_conditional(
             match exec_result {
                 dregg_turn::TurnResult::Committed { mut receipt, .. } => {
                     // Solo mode: mark receipt as Tentative and log in nullifier log.
-                    if let Some(ref mut solo) = s.solo_consensus {
-                        if solo.is_solo {
-                            receipt.finality = dregg_turn::Finality::Tentative;
-                            let height = solo.height;
-                            let _ = solo.nullifier_log.insert(
-                                receipt.turn_hash,
-                                receipt.turn_hash,
-                                height,
-                            );
-                            solo.advance_height();
-                        }
+                    if let Some(ref mut solo) = s.solo_consensus
+                        && solo.is_solo
+                    {
+                        receipt.finality = dregg_turn::Finality::Tentative;
+                        let height = solo.height;
+                        let _ =
+                            solo.nullifier_log
+                                .insert(receipt.turn_hash, receipt.turn_hash, height);
+                        solo.advance_height();
                     }
                     let turn_hash = hex_encode(&receipt.turn_hash);
                     s.cclerk.append_receipt(receipt).expect(
@@ -6295,10 +6293,10 @@ impl FaucetRateLimiter {
     async fn check(&self, recipient: &str) -> bool {
         let mut map = self.state.lock().await;
         let now = Instant::now();
-        if let Some(last) = map.get(recipient) {
-            if now.duration_since(*last).as_secs() < 60 {
-                return false;
-            }
+        if let Some(last) = map.get(recipient)
+            && now.duration_since(*last).as_secs() < 60
+        {
+            return false;
         }
         map.insert(recipient.to_string(), now);
         true
@@ -6626,15 +6624,15 @@ async fn post_faucet(
 
             // Solo mode: tentative finality + height advance, exactly like the
             // /turn/submit commit path.
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // The faucet turn is a REAL committed turn: append its receipt to
@@ -7651,7 +7649,7 @@ fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
 
 /// Decode variable-length hex strings into byte vectors.
 fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

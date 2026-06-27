@@ -1493,7 +1493,7 @@ impl Ledger {
         let (tx, rx) = mpsc::channel();
         self.witness_subscribers
             .entry(cell_id)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(tx);
         rx
     }

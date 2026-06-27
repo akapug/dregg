@@ -150,10 +150,10 @@ pub fn verify_trace(facts: &[Fact], rules: &[Rule], trace: &AuthorizationTrace) 
     // A malicious prover can omit deny derivation steps. After verifying all
     // provided steps, we re-derive using deny-relevant rules to check if any
     // deny fact is derivable but missing from the trace.
-    if matches!(trace.conclusion, Conclusion::Allow { .. }) {
-        if has_derivable_deny(&known_facts, rules) {
-            return false;
-        }
+    if matches!(trace.conclusion, Conclusion::Allow { .. })
+        && has_derivable_deny(&known_facts, rules)
+    {
+        return false;
     }
 
     // Verify the conclusion is consistent
@@ -270,10 +270,10 @@ fn verify_step(step: &DerivationStep, known_facts: &[Fact], rules: &[Rule]) -> b
 fn substitutions_consistent(claimed: &Substitution, reconstructed: &Substitution) -> bool {
     // All reconstructed bindings must match claimed bindings
     for (var, term) in &reconstructed.bindings {
-        if let Some(claimed_term) = claimed.get(*var) {
-            if claimed_term != term {
-                return false;
-            }
+        if let Some(claimed_term) = claimed.get(*var)
+            && claimed_term != term
+        {
+            return false;
         }
     }
     // Reject extra variables in claimed substitution that were never bound

@@ -252,10 +252,9 @@ impl GeneralizedIntentGraph {
                 }
                 if let Some(score) =
                     can_satisfy(&nodes[i].exchange.offering, &nodes[j].exchange.wanting)
+                    && score >= min_score
                 {
-                    if score >= min_score {
-                        edges[i].push((j, score));
-                    }
+                    edges[i].push((j, score));
                 }
             }
         }

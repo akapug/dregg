@@ -1249,10 +1249,10 @@ impl Blocklace {
 
         // Derive self_seq from our own (authenticated) tip.
         let self_creator = lace.self_creator();
-        if let Some(tip_id) = lace.tips.get(&self_creator) {
-            if let Some(tip_block) = lace.blocks.get(tip_id) {
-                lace.self_seq = tip_block.seq;
-            }
+        if let Some(tip_id) = lace.tips.get(&self_creator)
+            && let Some(tip_block) = lace.blocks.get(tip_id)
+        {
+            lace.self_seq = tip_block.seq;
         }
 
         Ok(lace)
@@ -1287,10 +1287,10 @@ impl Blocklace {
         lace.finality.ordering.attested = checkpoint.attested_block_ids.iter().copied().collect();
 
         let self_creator = lace.self_creator();
-        if let Some(tip_id) = lace.tips.get(&self_creator) {
-            if let Some(tip_block) = lace.blocks.get(tip_id) {
-                lace.self_seq = tip_block.seq;
-            }
+        if let Some(tip_id) = lace.tips.get(&self_creator)
+            && let Some(tip_block) = lace.blocks.get(tip_id)
+        {
+            lace.self_seq = tip_block.seq;
         }
 
         Ok(lace)

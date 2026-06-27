@@ -1101,10 +1101,10 @@ pub fn verify_ivc(proof: &IvcProof, expected_initial_root: Option<BabyBear>) -> 
     }
 
     // Check initial root if expected
-    if let Some(expected) = expected_initial_root {
-        if proof.initial_root != expected {
-            return IvcVerification::InitialRootMismatch;
-        }
+    if let Some(expected) = expected_initial_root
+        && proof.initial_root != expected
+    {
+        return IvcVerification::InitialRootMismatch;
     }
 
     // If a real STARK proof is present, verify it cryptographically.
@@ -2349,10 +2349,10 @@ pub fn verify_multi_turn_ivc(
     if proof.num_turns > MAX_TURN_CHAIN_LEN {
         return MultiTurnVerification::ChainTooLong;
     }
-    if let Some(expected) = expected_initial_state_root {
-        if proof.initial_state_root != expected {
-            return MultiTurnVerification::InitialStateMismatch;
-        }
+    if let Some(expected) = expected_initial_state_root
+        && proof.initial_state_root != expected
+    {
+        return MultiTurnVerification::InitialStateMismatch;
     }
 
     let public_inputs = vec![

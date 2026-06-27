@@ -1086,7 +1086,7 @@ impl DeliveryWire {
 /// odd length). The channels data plane carries opaque ciphertext, so this is
 /// the only decode it needs beyond the fixed-32 helper.
 fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
@@ -1490,10 +1490,10 @@ async fn messages_stream(
                 let room = inner.channels.room(&c.channel)?;
                 // Skip past evicted history.
                 let front_seq = room.messages.front().map(|m| m.seq);
-                if let Some(front) = front_seq {
-                    if c.next < front {
-                        c.next = front;
-                    }
+                if let Some(front) = front_seq
+                    && c.next < front
+                {
+                    c.next = front;
                 }
                 let found = room
                     .messages
@@ -1504,10 +1504,10 @@ async fn messages_stream(
                 // Bus inbox for this channel is already drained by an earlier
                 // consumer — the witness is sticky, so re-delivery to another SSE
                 // client does not double-count).
-                if found.is_some() {
-                    if let Some(bus) = inner.channels.bus_mut() {
-                        let _ = bus.drain_one(&recipient);
-                    }
+                if found.is_some()
+                    && let Some(bus) = inner.channels.bus_mut()
+                {
+                    let _ = bus.drain_one(&recipient);
                 }
                 found
             };

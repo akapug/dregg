@@ -501,7 +501,7 @@ impl CapabilitySet {
         self.refs.iter().any(|r| {
             &r.target == target
                 && r.permissions != AuthRequired::Impossible
-                && r.expires_at.map_or(true, |exp| current_height <= exp)
+                && r.expires_at.is_none_or(|exp| current_height <= exp)
         })
     }
 

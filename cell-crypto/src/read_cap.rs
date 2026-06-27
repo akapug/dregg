@@ -392,10 +392,10 @@ impl ReadCap {
     ) -> std::collections::BTreeMap<usize, [u8; 32]> {
         let mut out = std::collections::BTreeMap::new();
         for slot in self.slots.iter() {
-            if let Some(es) = encrypted.get(&slot) {
-                if let Ok(opening) = self.open_slot(slot, es) {
-                    out.insert(slot, opening.value);
-                }
+            if let Some(es) = encrypted.get(&slot)
+                && let Ok(opening) = self.open_slot(slot, es)
+            {
+                out.insert(slot, opening.value);
             }
         }
         out

@@ -1788,16 +1788,15 @@ impl AgentCipherclerk {
 
         // (a.1) P1-6: depth bound on membership proof to prevent DoS via
         // maliciously-deserialized proofs with `usize::MAX`-sized paths.
-        if let Some(ref mp) = delegated.membership_proof {
-            if mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
-                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
-            {
-                return Err(SdkError::InvalidDelegation(format!(
-                    "membership proof depth exceeds maximum ({} > {})",
-                    mp.siblings.len().max(mp.path_indices.len()),
-                    Self::MAX_MEMBERSHIP_PROOF_DEPTH,
-                )));
-            }
+        if let Some(ref mp) = delegated.membership_proof
+            && (mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH)
+        {
+            return Err(SdkError::InvalidDelegation(format!(
+                "membership proof depth exceeds maximum ({} > {})",
+                mp.siblings.len().max(mp.path_indices.len()),
+                Self::MAX_MEMBERSHIP_PROOF_DEPTH,
+            )));
         }
 
         // (b) Structural validity (parse only; HMAC chain not verifiable without root key).
@@ -1851,7 +1850,7 @@ impl AgentCipherclerk {
             kind: DelegationBindingKind::ExternalV2,
             delegatee: delegated.delegatee,
             delegator_public_key: delegated.delegator_public_key,
-            delegator_signature: delegated.delegator_signature.clone(),
+            delegator_signature: delegated.delegator_signature,
             restrictions: delegated.restrictions.clone(),
             proof_key: delegated.proof_key,
             membership_leaf,
@@ -1867,10 +1866,10 @@ impl AgentCipherclerk {
         );
         held.verified = false;
 
-        if let Some(proof_key) = delegated.proof_key {
-            if proof_key != [0u8; 32] {
-                held.issuer_key = proof_key;
-            }
+        if let Some(proof_key) = delegated.proof_key
+            && proof_key != [0u8; 32]
+        {
+            held.issuer_key = proof_key;
         }
         held.membership_proof = delegated.membership_proof;
         held.caveat_chain_hash = delegated.caveat_chain_hash;
@@ -1911,16 +1910,15 @@ impl AgentCipherclerk {
         }
 
         // P1-6: membership-proof depth bound (mirror of receive_signed_delegation).
-        if let Some(ref mp) = local.membership_proof {
-            if mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
-                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
-            {
-                return Err(SdkError::InvalidDelegation(format!(
-                    "membership proof depth exceeds maximum ({} > {})",
-                    mp.siblings.len().max(mp.path_indices.len()),
-                    Self::MAX_MEMBERSHIP_PROOF_DEPTH,
-                )));
-            }
+        if let Some(ref mp) = local.membership_proof
+            && (mp.siblings.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH
+                || mp.path_indices.len() > Self::MAX_MEMBERSHIP_PROOF_DEPTH)
+        {
+            return Err(SdkError::InvalidDelegation(format!(
+                "membership proof depth exceeds maximum ({} > {})",
+                mp.siblings.len().max(mp.path_indices.len()),
+                Self::MAX_MEMBERSHIP_PROOF_DEPTH,
+            )));
         }
 
         let _decoded = MacaroonToken::from_encoded(&local.token_bytes, [0u8; 32]).map_err(|e| {
@@ -1972,7 +1970,7 @@ impl AgentCipherclerk {
             kind: DelegationBindingKind::Local,
             delegatee: local.delegatee,
             delegator_public_key: local.delegator_public_key,
-            delegator_signature: local.delegator_signature.clone(),
+            delegator_signature: local.delegator_signature,
             restrictions: local.restrictions.clone(),
             proof_key: local.proof_key,
             membership_leaf,
@@ -1988,10 +1986,10 @@ impl AgentCipherclerk {
         );
         held.verified = false;
 
-        if let Some(proof_key) = local.proof_key {
-            if proof_key != [0u8; 32] {
-                held.issuer_key = proof_key;
-            }
+        if let Some(proof_key) = local.proof_key
+            && proof_key != [0u8; 32]
+        {
+            held.issuer_key = proof_key;
         }
         held.membership_proof = local.membership_proof;
         held.caveat_chain_hash = local.caveat_chain_hash;
@@ -2127,13 +2125,13 @@ impl AgentCipherclerk {
         // an executor that disagreed with the cipherclerk about the chain head
         // would still have its receipt appended, after which cipherclerk's
         // chain and the federation's chain would silently diverge.
-        if let Some(claimed) = receipt.previous_receipt_hash {
-            if Some(claimed) != expected_prev {
-                return Err(ChainAppendError::ReceiptChainMismatch {
-                    expected: expected_prev,
-                    got: Some(claimed),
-                });
-            }
+        if let Some(claimed) = receipt.previous_receipt_hash
+            && Some(claimed) != expected_prev
+        {
+            return Err(ChainAppendError::ReceiptChainMismatch {
+                expected: expected_prev,
+                got: Some(claimed),
+            });
         }
 
         // Link to the previous receipt (no-op if already set to the matching
@@ -4563,16 +4561,15 @@ impl AgentCipherclerk {
         // and the caller can detect the divergence by comparing
         // `receipt_chain_length()` against the number of `Ok` results.
         for result in &results {
-            if let Ok(receipt) = result {
-                if receipt.agent == self.cell_id("default") {
-                    if let Err(e) = self.append_receipt(receipt.clone()) {
-                        tracing::error!(
-                            "cipherclerk chain divergence in submit_pipeline: {} \
+            if let Ok(receipt) = result
+                && receipt.agent == self.cell_id("default")
+                && let Err(e) = self.append_receipt(receipt.clone())
+            {
+                tracing::error!(
+                    "cipherclerk chain divergence in submit_pipeline: {} \
                              (receipt dropped; caller must reconcile)",
-                            e
-                        );
-                    }
-                }
+                    e
+                );
             }
         }
 

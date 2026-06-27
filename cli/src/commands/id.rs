@@ -356,13 +356,14 @@ fn use_profile(cfg: &Config, ctx: &Context, name: &str) -> Result<(), Box<dyn st
         return Ok(());
     }
     ctx.success(&format!("Active profile is now '{name}'"));
-    if let Ok(env) = std::env::var(PROFILE_ENV) {
-        if !env.trim().is_empty() && env.trim() != name {
-            ctx.warn(&format!(
-                "{PROFILE_ENV}={} is set and overrides this default in this shell.",
-                env.trim()
-            ));
-        }
+    if let Ok(env) = std::env::var(PROFILE_ENV)
+        && !env.trim().is_empty()
+        && env.trim() != name
+    {
+        ctx.warn(&format!(
+            "{PROFILE_ENV}={} is set and overrides this default in this shell.",
+            env.trim()
+        ));
     }
     Ok(())
 }

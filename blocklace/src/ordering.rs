@@ -169,12 +169,11 @@ fn has_equivocation_in_past(
     // Group blocks in the past by (creator, round).
     let mut by_round: HashMap<u64, Vec<BlockId>> = HashMap::new();
     for &bid in past.iter() {
-        if let Some(block) = blocklace.get(&bid) {
-            if &block.creator == creator {
-                if let Some(&round) = rounds.get(&bid) {
-                    by_round.entry(round).or_default().push(bid);
-                }
-            }
+        if let Some(block) = blocklace.get(&bid)
+            && &block.creator == creator
+            && let Some(&round) = rounds.get(&bid)
+        {
+            by_round.entry(round).or_default().push(bid);
         }
     }
 
@@ -521,8 +520,8 @@ pub fn tau_with_config(
         // Collect the union of causal pasts of all wave-end blocks that ratify.
         let mut coverage: HashSet<BlockId> = HashSet::new();
         for (id, r) in &rounds {
-            if *r == wave_end {
-                if ratifies(
+            if *r == wave_end
+                && ratifies(
                     &cache,
                     blocklace,
                     &rounds,
@@ -530,10 +529,10 @@ pub fn tau_with_config(
                     leader_id,
                     &leader_creator,
                     participants,
-                ) {
-                    let past = causal_past_inclusive(&cache, blocklace, id);
-                    coverage.extend(past.iter().copied());
-                }
+                )
+            {
+                let past = causal_past_inclusive(&cache, blocklace, id);
+                coverage.extend(past.iter().copied());
             }
         }
 
@@ -828,8 +827,8 @@ pub fn tau_unified(
         // Collect the union of causal pasts of all wave-end blocks that ratify.
         let mut coverage: HashSet<BlockId> = HashSet::new();
         for (id, r) in &rounds {
-            if *r == wave_end {
-                if ratifies(
+            if *r == wave_end
+                && ratifies(
                     &cache,
                     blocklace,
                     &rounds,
@@ -837,10 +836,10 @@ pub fn tau_unified(
                     leader_id,
                     &leader_creator,
                     participants,
-                ) {
-                    let past = causal_past_inclusive(&cache, blocklace, id);
-                    coverage.extend(past.iter().copied());
-                }
+                )
+            {
+                let past = causal_past_inclusive(&cache, blocklace, id);
+                coverage.extend(past.iter().copied());
             }
         }
 

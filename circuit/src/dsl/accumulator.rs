@@ -17,9 +17,9 @@
 //! # Public Inputs
 //!
 //! 9 BabyBear elements:
-//! - [0..3]: Acc (accumulator value in BabyBear^4)
-//! - [4..7]: alpha (public challenge in BabyBear^4)
-//! - [8]: num_ancestors (number of active rows)
+//! - [0..3][]: Acc (accumulator value in BabyBear^4)
+//! - [4..7][]: alpha (public challenge in BabyBear^4)
+//! - [8][]: num_ancestors (number of active rows)
 
 use crate::accumulator_types::{
     ACCUMULATOR_WIDTH, AccumulatorNonMembershipWitness, AccumulatorNonRevocationWitness, ExtElem,
@@ -591,7 +591,7 @@ pub fn prove_accumulator_non_revocation_dsl(
         // Compute remainder: v = product(h - h_j) for all h_j in revocation_set.
         let mut remainder_base = BabyBear::ONE;
         for &rev_h in revocation_set {
-            remainder_base = remainder_base * (h - rev_h);
+            remainder_base *= h - rev_h;
         }
 
         if remainder_base == BabyBear::ZERO {

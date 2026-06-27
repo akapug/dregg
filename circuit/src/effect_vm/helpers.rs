@@ -141,7 +141,7 @@ pub fn u64_from_4_limbs_16(limbs: &[BabyBear; 4]) -> Option<u64> {
 /// row's reserved-bit aux slots. The AIR's per-row unconditional decomposition
 /// constraint verifies the witness against `state_before.RESERVED`.
 pub(crate) fn fill_reserved_bits(row: &mut [BabyBear], sealed_mask: u32, mode_flag: u32) {
-    row[AUX_BASE + aux_off::RESERVED_BIT_0] = BabyBear::new((sealed_mask >> 0) & 1);
+    row[AUX_BASE + aux_off::RESERVED_BIT_0] = BabyBear::new(sealed_mask & 1);
     row[AUX_BASE + aux_off::RESERVED_BIT_1] = BabyBear::new((sealed_mask >> 1) & 1);
     row[AUX_BASE + aux_off::RESERVED_BIT_2] = BabyBear::new((sealed_mask >> 2) & 1);
     row[AUX_BASE + aux_off::RESERVED_BIT_3] = BabyBear::new((sealed_mask >> 3) & 1);
@@ -168,9 +168,9 @@ pub(crate) fn fill_reserved_bits(row: &mut [BabyBear], sealed_mask: u32, mode_fl
 /// cannot produce a consistent 30-bit decomposition; the AIR then rejects.
 pub(crate) fn fill_balance_limb_bits(row: &mut [BabyBear], new_balance: u64) {
     let lo = (new_balance & 0x3FFF_FFFF) as u32; // low 30 bits
-    let hi = (new_balance >> 30) as u64; // remaining bits
+    let hi = new_balance >> 30; // remaining bits
     debug_assert!(
-        (hi as u64) < (1u64 << super::BAL_LIMB_BITS),
+        hi < (1u64 << super::BAL_LIMB_BITS),
         "balance_hi {} exceeds 2^{} — out of the in-circuit range proof",
         hi,
         super::BAL_LIMB_BITS

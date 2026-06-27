@@ -519,7 +519,7 @@ pub mod ffi {
         let out = gate
             .record_kernel_step(&input)
             .map_err(VerifiedSettleError::FfiUnavailable)?;
-        parse_leg_output(&out).map_err(|e| VerifiedSettleError::FfiUnavailable(e))
+        parse_leg_output(&out).map_err(VerifiedSettleError::FfiUnavailable)
     }
 
     /// Cross-check the in-process verified transition `expected` (the post-ledger `rec_exec_asset`

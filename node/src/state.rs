@@ -931,39 +931,39 @@ impl NodeState {
             Ok(Some((height, restored_ledger))) => (restored_ledger, height),
             _ => (Ledger::new(), 0),
         };
-        if let Ok(overlay) = store.cell_overlay_since(checkpoint_height) {
-            if !overlay.is_empty() {
-                for cell in overlay {
-                    // Last-writer-wins point update (`CrashRecovery.upd`); a strict
-                    // `insert_cell` would silently drop a post-checkpoint write to an
-                    // already-checkpointed cell. See `new_with_key_file` / `upsert_cell`.
-                    upsert_cell(&mut ledger, cell);
-                }
-                // Convergence assertion, mirroring `new_with_key_file`: the
-                // reconstructed root MUST equal the root the committing node durably
-                // recorded. A mismatch means serving a SILENTLY-WRONG ledger as truth
-                // — a soundness event. FAIL CLOSED rather than fall through. (Parity
-                // fix: this secondary recovery entry previously applied the overlay
-                // without the convergence check the primary path enforces.)
-                let recovered_root = crate::blocklace_sync::canonical_ledger_root(&ledger);
-                if let Ok(Some(expected)) = store.recovered_ledger_root() {
-                    if expected != recovered_root {
-                        tracing::error!(
-                            recovered_root = %dregg_types::hex_encode(&recovered_root),
-                            expected_root = %dregg_types::hex_encode(&expected),
-                            "commit-log overlay (cclerk path) recovered a ledger root that does \
-                             NOT match the durably recorded finalized root — STORE INTEGRITY \
-                             EVENT, refusing to start"
-                        );
-                        return Err(format!(
-                            "recovery convergence failed: reconstructed ledger root {} does not \
+        if let Ok(overlay) = store.cell_overlay_since(checkpoint_height)
+            && !overlay.is_empty()
+        {
+            for cell in overlay {
+                // Last-writer-wins point update (`CrashRecovery.upd`); a strict
+                // `insert_cell` would silently drop a post-checkpoint write to an
+                // already-checkpointed cell. See `new_with_key_file` / `upsert_cell`.
+                upsert_cell(&mut ledger, cell);
+            }
+            // Convergence assertion, mirroring `new_with_key_file`: the
+            // reconstructed root MUST equal the root the committing node durably
+            // recorded. A mismatch means serving a SILENTLY-WRONG ledger as truth
+            // — a soundness event. FAIL CLOSED rather than fall through. (Parity
+            // fix: this secondary recovery entry previously applied the overlay
+            // without the convergence check the primary path enforces.)
+            let recovered_root = crate::blocklace_sync::canonical_ledger_root(&ledger);
+            if let Ok(Some(expected)) = store.recovered_ledger_root()
+                && expected != recovered_root
+            {
+                tracing::error!(
+                    recovered_root = %dregg_types::hex_encode(&recovered_root),
+                    expected_root = %dregg_types::hex_encode(&expected),
+                    "commit-log overlay (cclerk path) recovered a ledger root that does \
+                     NOT match the durably recorded finalized root — STORE INTEGRITY \
+                     EVENT, refusing to start"
+                );
+                return Err(format!(
+                    "recovery convergence failed: reconstructed ledger root {} does not \
                              match the durably recorded finalized root {} — refusing to serve a \
                              divergent ledger (STORE INTEGRITY EVENT)",
-                            dregg_types::hex_encode(&recovered_root),
-                            dregg_types::hex_encode(&expected),
-                        ));
-                    }
-                }
+                    dregg_types::hex_encode(&recovered_root),
+                    dregg_types::hex_encode(&expected),
+                ));
             }
         }
 
@@ -1286,16 +1286,16 @@ impl NodeStateInner {
     /// bilateral turn with per-side witnessed receipts.
     pub fn push_witnessed_receipt(&mut self, receipt_hash: [u8; 32], witnessed: WitnessedReceipt) {
         if !self.witnessed_receipts.contains_key(&receipt_hash) {
-            if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS {
-                if let Some(oldest) = self.witnessed_receipt_order.pop_front() {
-                    self.witnessed_receipts.remove(&oldest);
-                    if let Err(e) = self.store.remove_witnessed_receipts_raw(&oldest) {
-                        tracing::warn!(
-                            receipt_hash = ?oldest,
-                            error = %e,
-                            "failed to remove evicted persisted witnessed receipt artifacts"
-                        );
-                    }
+            if self.witnessed_receipt_order.len() >= MAX_WITNESSED_RECEIPTS
+                && let Some(oldest) = self.witnessed_receipt_order.pop_front()
+            {
+                self.witnessed_receipts.remove(&oldest);
+                if let Err(e) = self.store.remove_witnessed_receipts_raw(&oldest) {
+                    tracing::warn!(
+                        receipt_hash = ?oldest,
+                        error = %e,
+                        "failed to remove evicted persisted witnessed receipt artifacts"
+                    );
                 }
             }
             self.witnessed_receipt_order.push_back(receipt_hash);
@@ -1456,10 +1456,10 @@ impl NodeStateInner {
         let signing_key_bytes = &signing_key.to_bytes();
         let mut certificates = Vec::new();
         for coordinator in self.budget_coordinators.values() {
-            if let Some(slice) = coordinator.silo_states.get(&silo_id) {
-                if slice.spent > 0 {
-                    certificates.push(slice.certificate(silo_id, signing_key_bytes));
-                }
+            if let Some(slice) = coordinator.silo_states.get(&silo_id)
+                && slice.spent > 0
+            {
+                certificates.push(slice.certificate(silo_id, signing_key_bytes));
             }
         }
         certificates

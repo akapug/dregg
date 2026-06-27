@@ -329,13 +329,13 @@ pub fn attenuation_to_wire_caveats(att: &Attenuation) -> Vec<WireCaveat> {
     for scope in &att.oauth_scopes {
         caveats.push(WireCaveat::new(CAV_OAUTH_SCOPE, encode_string(scope)));
     }
-    if let Some(fg) = &att.feature_globs {
-        if !fg.include.is_empty() || !fg.exclude.is_empty() {
-            caveats.push(WireCaveat::new(
-                CAV_FEATURE_GLOB,
-                encode_feature_glob(&fg.include, &fg.exclude),
-            ));
-        }
+    if let Some(fg) = &att.feature_globs
+        && (!fg.include.is_empty() || !fg.exclude.is_empty())
+    {
+        caveats.push(WireCaveat::new(
+            CAV_FEATURE_GLOB,
+            encode_feature_glob(&fg.include, &fg.exclude),
+        ));
     }
     if let Some(budget) = &att.budget {
         caveats.push(WireCaveat::new(
@@ -437,15 +437,15 @@ pub fn verify_caveats(
 
     // --- Time checks (ALL windows must be satisfied) ---
     for (not_before, not_after) in &validity_windows {
-        if let Some(nb) = not_before {
-            if now < *nb {
-                return Err(TokenError::Expired);
-            }
+        if let Some(nb) = not_before
+            && now < *nb
+        {
+            return Err(TokenError::Expired);
         }
-        if let Some(na) = not_after {
-            if now > *na {
-                return Err(TokenError::Expired);
-            }
+        if let Some(na) = not_after
+            && now > *na
+        {
+            return Err(TokenError::Expired);
         }
     }
 
@@ -468,51 +468,51 @@ pub fn verify_caveats(
     }
 
     // --- App: match-any with action containment ---
-    if let Some(req_app) = &request.app_id {
-        if !apps.is_empty() {
-            let matched = apps.iter().find(|(id, _)| id == req_app);
-            match matched {
-                Some((_, allowed)) => {
-                    if let Some(ra) = &req_action {
-                        if !allowed.contains(*ra) {
-                            return Err(TokenError::Denied(format!(
-                                "app '{}' grants {}, request needs {}",
-                                req_app, allowed, ra
-                            )));
-                        }
-                    }
-                }
-                None => {
+    if let Some(req_app) = &request.app_id
+        && !apps.is_empty()
+    {
+        let matched = apps.iter().find(|(id, _)| id == req_app);
+        match matched {
+            Some((_, allowed)) => {
+                if let Some(ra) = &req_action
+                    && !allowed.contains(*ra)
+                {
                     return Err(TokenError::Denied(format!(
-                        "token not valid for app '{}'",
-                        req_app
+                        "app '{}' grants {}, request needs {}",
+                        req_app, allowed, ra
                     )));
                 }
+            }
+            None => {
+                return Err(TokenError::Denied(format!(
+                    "token not valid for app '{}'",
+                    req_app
+                )));
             }
         }
     }
 
     // --- Service: match-any with action containment ---
-    if let Some(req_svc) = &request.service {
-        if !services.is_empty() {
-            let matched = services.iter().find(|(name, _)| name == req_svc);
-            match matched {
-                Some((_, allowed)) => {
-                    if let Some(ra) = &req_action {
-                        if !allowed.contains(*ra) {
-                            return Err(TokenError::Denied(format!(
-                                "service '{}' grants {}, request needs {}",
-                                req_svc, allowed, ra
-                            )));
-                        }
-                    }
-                }
-                None => {
+    if let Some(req_svc) = &request.service
+        && !services.is_empty()
+    {
+        let matched = services.iter().find(|(name, _)| name == req_svc);
+        match matched {
+            Some((_, allowed)) => {
+                if let Some(ra) = &req_action
+                    && !allowed.contains(*ra)
+                {
                     return Err(TokenError::Denied(format!(
-                        "token not valid for service '{}'",
-                        req_svc
+                        "service '{}' grants {}, request needs {}",
+                        req_svc, allowed, ra
                     )));
                 }
+            }
+            None => {
+                return Err(TokenError::Denied(format!(
+                    "token not valid for service '{}'",
+                    req_svc
+                )));
             }
         }
     }

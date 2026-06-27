@@ -465,7 +465,7 @@ pub fn generate_valid_accumulator_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>)
     for &h in &ancestors {
         let mut remainder_base = BabyBear::ONE;
         for &rev_h in &revocation_set {
-            remainder_base = remainder_base * (h - rev_h);
+            remainder_base *= h - rev_h;
         }
         let remainder = ExtElem::from_base(remainder_base);
         let h_ext = ExtElem::from_base(h);

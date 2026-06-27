@@ -30,7 +30,7 @@ fn check_petname_lifecycle() -> Result<(), String> {
     let uri = make_test_uri("alice");
 
     // Set a petname.
-    db.set_petname("alice", uri.clone(), 1);
+    db.set_petname("alice", uri, 1);
 
     // Resolve it.
     let resolved = db.get_petname("alice");
@@ -103,10 +103,10 @@ fn check_delegation_subname() -> Result<(), String> {
     let child_uri = make_test_uri("alice-project");
 
     // Set parent petname.
-    db.set_petname("alice", parent_uri.clone(), 1);
+    db.set_petname("alice", parent_uri, 1);
 
     // Set a sub-petname (simulating delegation awareness).
-    db.set_petname_with_notes("project.alice", child_uri.clone(), 2, "Alice's project");
+    db.set_petname_with_notes("project.alice", child_uri, 2, "Alice's project");
 
     // Both should resolve independently.
     let parent = db.get_petname("alice");

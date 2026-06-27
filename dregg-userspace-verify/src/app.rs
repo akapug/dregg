@@ -140,18 +140,18 @@ pub fn check_escrow_conservation(
         ("released", schema.released_slot),
         ("refunded", schema.refunded_slot),
     ] {
-        if let Some((path, raw)) = writes.get(&slot) {
-            if decode_u64_field(raw).is_none() {
-                findings.push(Finding {
-                    guarantee: "escrow (conservation)".to_string(),
-                    locus: Locus::node(path.clone()),
-                    message: format!(
-                        "escrow {name} slot {slot} is written with a non-integer field \
+        if let Some((path, raw)) = writes.get(&slot)
+            && decode_u64_field(raw).is_none()
+        {
+            findings.push(Finding {
+                guarantee: "escrow (conservation)".to_string(),
+                locus: Locus::node(path.clone()),
+                message: format!(
+                    "escrow {name} slot {slot} is written with a non-integer field \
                          (leading bytes nonzero — looks like a hash, not an amount); \
                          the conservation arithmetic cannot net it"
-                    ),
-                });
-            }
+                ),
+            });
         }
     }
 
@@ -298,22 +298,22 @@ pub fn check_bounty_lifecycle(
             // still fold it into prev so we don't double-report a later step
         }
 
-        if let Some(p) = prev {
-            if code <= p {
-                findings.push(Finding {
-                    guarantee: "bounty (lifecycle)".to_string(),
-                    locus: Locus::node(path.clone()),
-                    message: format!(
-                        "lifecycle is not strictly monotone: state {code} does not exceed the \
+        if let Some(p) = prev
+            && code <= p
+        {
+            findings.push(Finding {
+                guarantee: "bounty (lifecycle)".to_string(),
+                locus: Locus::node(path.clone()),
+                message: format!(
+                    "lifecycle is not strictly monotone: state {code} does not exceed the \
                          previous state {p} (StrictMonotonic requires new > old). {}",
-                        if code == p {
-                            "Re-entering the same state is a double-claim / replay."
-                        } else {
-                            "Stepping backward re-opens a closed lifecycle."
-                        }
-                    ),
-                });
-            }
+                    if code == p {
+                        "Re-entering the same state is a double-claim / replay."
+                    } else {
+                        "Stepping backward re-opens a closed lifecycle."
+                    }
+                ),
+            });
         }
         prev = Some(code);
     }
@@ -505,20 +505,20 @@ pub fn check_writeonce_slots(
     let mut findings = Vec::new();
     let writes = last_field_writes(forest, cell);
     for &slot in writeonce_slots {
-        if let (Some((path, new)), Some(old)) = (writes.get(&slot), prior.get(&slot)) {
-            if new != old {
-                findings.push(Finding {
-                    guarantee: "app (write-once)".to_string(),
-                    locus: Locus::node(path.clone()),
-                    message: format!(
-                        "write-once slot {slot} is overwritten with a different value \
+        if let (Some((path, new)), Some(old)) = (writes.get(&slot), prior.get(&slot))
+            && new != old
+        {
+            findings.push(Finding {
+                guarantee: "app (write-once)".to_string(),
+                locus: Locus::node(path.clone()),
+                message: format!(
+                    "write-once slot {slot} is overwritten with a different value \
                          ({} → {}); the WriteOnce caveat freezes a committed slot — this \
                          is a tamper the executor rejects",
-                        hex_prefix(old),
-                        hex_prefix(new)
-                    ),
-                });
-            }
+                    hex_prefix(old),
+                    hex_prefix(new)
+                ),
+            });
         }
     }
     Verdict::from_findings(findings)
@@ -538,10 +538,9 @@ fn last_field_writes(forest: &CallForest, cell: CellId) -> BTreeMap<usize, (Vec<
                 index,
                 value,
             } = eff
+                && *c == cell
             {
-                if *c == cell {
-                    out.insert(*index, (path.to_vec(), *value));
-                }
+                out.insert(*index, (path.to_vec(), *value));
             }
         }
     });
@@ -563,10 +562,10 @@ fn ordered_field_writes(
                 index,
                 value,
             } = eff
+                && *c == cell
+                && *index == slot
             {
-                if *c == cell && *index == slot {
-                    out.push((path.to_vec(), decode_u64_field(value), *value));
-                }
+                out.push((path.to_vec(), decode_u64_field(value), *value));
             }
         }
     });

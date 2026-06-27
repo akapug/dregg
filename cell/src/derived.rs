@@ -281,7 +281,7 @@ impl Aggregate {
                 let v = c
                     .state
                     .get_field(*field_index)
-                    .map(|f| field_to_i64(f))
+                    .map(field_to_i64)
                     .unwrap_or(0);
                 acc.saturating_add(v)
             }),

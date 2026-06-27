@@ -631,7 +631,7 @@ impl DischargeGateway {
     /// The input must be a sequence of 32-byte hashes (as produced by
     /// `serialize_issued_set`). Invalid-length data is silently ignored.
     pub fn load_issued_set(&self, data: &[u8]) {
-        if data.len() % 32 != 0 {
+        if !data.len().is_multiple_of(32) {
             return;
         }
         let mut issued = match self.issued.lock() {

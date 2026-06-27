@@ -168,7 +168,7 @@ pub fn verify_bilateral_bundle(bundle: &BilateralBundle) -> BilateralVerdict {
     let mut sched = dregg_turn::bilateral_schedule::ExpectedBilateral::from_turn(&bundle.turn);
     for (cell, attestations) in &bundle.unilateral_attestations {
         for att in attestations {
-            sched.push_unilateral(cell.clone(), att.clone());
+            sched.push_unilateral(*cell, att.clone());
         }
     }
     let sched_counts = (
@@ -182,7 +182,7 @@ pub fn verify_bilateral_bundle(bundle: &BilateralBundle) -> BilateralVerdict {
     let view: Vec<(CellId, &WitnessedReceipt)> = bundle
         .entries
         .iter()
-        .map(|e| (e.cell_id.clone(), &e.witnessed_receipt))
+        .map(|e| (e.cell_id, &e.witnessed_receipt))
         .collect();
 
     match WitnessedReceipt::verify_bilateral_chain_with_schedule(&view, &bundle.turn, &sched) {

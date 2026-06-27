@@ -102,10 +102,10 @@ impl KindRegistry {
     pub fn validate_table(&self, table: &RouteTable) -> Result<(), Vec<String>> {
         let mut bad: BTreeSet<String> = BTreeSet::new();
         for tgt in table.accept_map.values() {
-            if let RouteTarget::Userspace(u) = tgt {
-                if !self.contains(&u.kind) {
-                    bad.insert(u.kind.clone());
-                }
+            if let RouteTarget::Userspace(u) = tgt
+                && !self.contains(&u.kind)
+            {
+                bad.insert(u.kind.clone());
             }
         }
         if bad.is_empty() {

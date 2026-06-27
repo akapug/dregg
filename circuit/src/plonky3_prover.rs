@@ -469,7 +469,7 @@ where
     let sums: [AB::Expr; 4] = core::array::from_fn(|k| {
         let mut s = state[k].clone();
         for j in (4..WIDTH).step_by(4) {
-            s = s + state[j + k].clone();
+            s += state[j + k].clone();
         }
         s
     });
@@ -490,7 +490,7 @@ fn internal_linear_layer_expr<AB: AirBuilder>(
     // Compute sum of all state elements
     let mut sum: AB::Expr = state[0].clone();
     for i in 1..WIDTH {
-        sum = sum + state[i].clone();
+        sum += state[i].clone();
     }
 
     // x_i' = sum + (d_i - 1) * x_i

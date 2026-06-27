@@ -237,9 +237,9 @@ where
             for term in terms {
                 let mut prod: AB::Expr = AB::Expr::from(AB::F::from_u32(term.coeff.0));
                 for &ci in &term.col_indices {
-                    prod = prod * local_exprs[ci].clone();
+                    prod *= local_exprs[ci].clone();
                 }
-                sum = sum + prod;
+                sum += prod;
             }
             (sum, false)
         }
@@ -280,7 +280,7 @@ where
         ConstraintExpr::AtLeastOne { flag_cols } => {
             let mut product = AB::Expr::ONE;
             for &col in flag_cols {
-                product = product * (AB::Expr::ONE - local_exprs[col].clone());
+                product *= AB::Expr::ONE - local_exprs[col].clone();
             }
             (product, false)
         }

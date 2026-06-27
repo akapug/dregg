@@ -84,10 +84,10 @@ impl fmt::Display for PreflightReport {
 
             // Print failed check details
             for check in &subsystem.checks {
-                if !check.passed {
-                    if let Some(ref err) = check.error {
-                        writeln!(f, "       \x1b[31m^ {}: {}\x1b[0m", check.name, err)?;
-                    }
+                if !check.passed
+                    && let Some(ref err) = check.error
+                {
+                    writeln!(f, "       \x1b[31m^ {}: {}\x1b[0m", check.name, err)?;
                 }
             }
         }

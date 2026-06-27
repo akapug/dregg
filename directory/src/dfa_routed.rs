@@ -200,7 +200,7 @@ impl Directory for DfaRoutedDirectory {
     fn discover(&self, filter: &DiscoveryFilter) -> Listing {
         // Discovery merges across local + sub-directories.
         let mut entries = self.local.discover(filter).entries;
-        for (_handler, sub) in &self.sub_directories {
+        for sub in self.sub_directories.values() {
             entries.extend(sub.discover(filter).entries);
         }
         Listing {

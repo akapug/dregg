@@ -189,11 +189,11 @@ impl Poseidon2State {
         let mut sums = [BabyBear::ZERO; 4];
         for k in 0..4 {
             for j in (0..WIDTH).step_by(4) {
-                sums[k] = sums[k] + self.state[j + k];
+                sums[k] += self.state[j + k];
             }
         }
         for i in 0..WIDTH {
-            self.state[i] = self.state[i] + sums[i % 4];
+            self.state[i] += sums[i % 4];
         }
     }
 

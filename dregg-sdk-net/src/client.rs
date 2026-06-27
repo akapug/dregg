@@ -211,10 +211,10 @@ impl SiloClient {
                 // verify the remote's federation root matches. This prevents MITM
                 // attacks where an attacker intercepts the TCP connection and
                 // injects a controlled federation root.
-                if let Some(expected) = self.expected_federation_root {
-                    if federation_root != expected {
-                        return Err(SdkError::FederationRootMismatch);
-                    }
+                if let Some(expected) = self.expected_federation_root
+                    && federation_root != expected
+                {
+                    return Err(SdkError::FederationRootMismatch);
                 }
 
                 // SECURITY: Store the federation root from the trusted handshake.
@@ -275,7 +275,7 @@ impl SiloClient {
         let wire_request = AuthorizationRequest::new(
             wire_resource,
             request.action.as_deref().unwrap_or(""),
-            &self.cclerk.public_key().hex(),
+            self.cclerk.public_key().hex(),
         );
 
         // Serialize the STARK proof for transmission using the canonical binary format
@@ -370,7 +370,7 @@ impl SiloClient {
         let wire_request = AuthorizationRequest::new(
             wire_resource,
             request.action.as_deref().unwrap_or(""),
-            &self.cclerk.public_key().hex(),
+            self.cclerk.public_key().hex(),
         );
 
         // No binding tag — wire-layer nonce/timestamp checks provide replay protection.

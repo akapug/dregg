@@ -261,13 +261,13 @@ impl LeanDescriptor {
     fn check_var_bounds(&self) -> Result<(), String> {
         for (ci, c) in self.constraints.iter().enumerate() {
             let mv = c.lhs.max_var().into_iter().chain(c.rhs.max_var()).max();
-            if let Some(m) = mv {
-                if m >= self.trace_width {
-                    return Err(format!(
-                        "constraint {} references column {} but trace_width is {}",
-                        ci, m, self.trace_width
-                    ));
-                }
+            if let Some(m) = mv
+                && m >= self.trace_width
+            {
+                return Err(format!(
+                    "constraint {} references column {} but trace_width is {}",
+                    ci, m, self.trace_width
+                ));
             }
         }
         for (ri, r) in self.ranges.iter().enumerate() {
@@ -707,7 +707,7 @@ where
                 // (1) booleanity: b·(b − 1) = 0.
                 builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
                 // (2) accumulate b·2ⁱ.
-                recomposed = recomposed + bit * weight.clone();
+                recomposed += bit * weight.clone();
                 weight = weight.clone() + weight; // 2ⁱ → 2ⁱ⁺¹
             }
             let wire: AB::Expr = local[r.wire].into();
@@ -1052,13 +1052,13 @@ impl EffectVmDescriptor {
         for (ci, c) in self.constraints.iter().enumerate() {
             match c {
                 VmConstraint::Gate(body) => {
-                    if let Some(m) = body.max_var() {
-                        if m >= self.trace_width {
-                            return Err(format!(
-                                "gate {} references column {} >= trace_width {}",
-                                ci, m, self.trace_width
-                            ));
-                        }
+                    if let Some(m) = body.max_var()
+                        && m >= self.trace_width
+                    {
+                        return Err(format!(
+                            "gate {} references column {} >= trace_width {}",
+                            ci, m, self.trace_width
+                        ));
                     }
                 }
                 VmConstraint::Transition { hi, lo } => {
@@ -1069,13 +1069,13 @@ impl EffectVmDescriptor {
                     }
                 }
                 VmConstraint::Boundary { body, .. } => {
-                    if let Some(m) = body.max_var() {
-                        if m >= self.trace_width {
-                            return Err(format!(
-                                "boundary {} references column {} >= trace_width {}",
-                                ci, m, self.trace_width
-                            ));
-                        }
+                    if let Some(m) = body.max_var()
+                        && m >= self.trace_width
+                    {
+                        return Err(format!(
+                            "boundary {} references column {} >= trace_width {}",
+                            ci, m, self.trace_width
+                        ));
                     }
                 }
                 VmConstraint::PiBinding { col, pi_index, .. } => {
@@ -1653,7 +1653,7 @@ where
             for i in 0..r.bits {
                 let bit: AB::Expr = local[off + i].into();
                 builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
-                recomposed = recomposed + bit * weight.clone();
+                recomposed += bit * weight.clone();
                 weight = weight.clone() + weight;
             }
             let wire: AB::Expr = local[r.wire].into();

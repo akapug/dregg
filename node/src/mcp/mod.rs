@@ -102,7 +102,7 @@ fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
 
 /// Decode a variable-length hex string into bytes.
 fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

@@ -381,7 +381,7 @@ impl ConsensusState {
                 votes: self
                     .collected_votes
                     .iter()
-                    .map(|v| (v.voter, v.signature.clone()))
+                    .map(|v| (v.voter, v.signature))
                     .collect(),
                 threshold: self.config.threshold,
             };
@@ -553,8 +553,8 @@ impl ConsensusOrchestrator {
         }
 
         let proposal_hash = proposal.hash();
-        let proposer_sig = proposal.signature.clone();
-        let voters = vec![(proposal.proposer.clone(), proposer_sig)];
+        let proposer_sig = proposal.signature;
+        let voters = vec![(proposal.proposer, proposer_sig)];
 
         self.pending_reconfig = Some(ReconfigurationVotes {
             proposal,
@@ -699,10 +699,10 @@ impl ConsensusOrchestrator {
                 }
             }
 
-            if bls_shares.len() >= committee.threshold_value as usize {
-                if let Ok(threshold_qc) = committee.aggregate(&bls_shares, &message) {
-                    qc.aggregate_qc = Some(threshold_qc);
-                }
+            if bls_shares.len() >= committee.threshold_value as usize
+                && let Ok(threshold_qc) = committee.aggregate(&bls_shares, &message)
+            {
+                qc.aggregate_qc = Some(threshold_qc);
             }
         }
 
@@ -716,14 +716,15 @@ impl ConsensusOrchestrator {
         let at_epoch_boundary = self.epoch_length == 0
             || crate::epoch::is_epoch_boundary(finalized_height, self.epoch_length);
 
-        if self.reconfig_has_quorum() && at_epoch_boundary {
-            if let Some(new_config) = self.apply_pending_reconfiguration() {
-                for state in states.iter_mut() {
-                    if state.is_online {
-                        state.config = new_config.clone();
-                        state.epoch = new_config.epoch;
-                        state.pending_reconfig = None;
-                    }
+        if self.reconfig_has_quorum()
+            && at_epoch_boundary
+            && let Some(new_config) = self.apply_pending_reconfiguration()
+        {
+            for state in states.iter_mut() {
+                if state.is_online {
+                    state.config = new_config.clone();
+                    state.epoch = new_config.epoch;
+                    state.pending_reconfig = None;
                 }
             }
         }
@@ -797,7 +798,7 @@ impl FederationNode {
             id: token_id,
             holder: holder.to_string(),
             issuer_id: self.identity.id,
-            issuer_key: self.identity.public_key.clone(),
+            issuer_key: self.identity.public_key,
             signature,
         };
 
@@ -989,12 +990,7 @@ impl Federation {
         self.nodes
             .iter()
             .filter(|n| n.is_online)
-            .map(|n| {
-                (
-                    n.identity.public_key.clone(),
-                    sign(&n.signing_key, &message),
-                )
-            })
+            .map(|n| (n.identity.public_key, sign(&n.signing_key, &message)))
             .collect()
     }
 

@@ -282,7 +282,7 @@ impl MidnightBridgeConfig {
     /// Look up the federation public key for a given epoch.
     pub fn key_for_epoch(&self, epoch: u64) -> Option<&[u8; 32]> {
         self.federation_keys.iter().find_map(|ek| {
-            let in_range = epoch >= ek.from_epoch && ek.to_epoch.map_or(true, |to| epoch <= to);
+            let in_range = epoch >= ek.from_epoch && ek.to_epoch.is_none_or(|to| epoch <= to);
             if in_range { Some(&ek.pubkey) } else { None }
         })
     }

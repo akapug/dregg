@@ -133,10 +133,10 @@ pub fn match_intent(
     }
 
     // Handle compound intents: ALL sub-specs must be satisfiable.
-    if let Some(sub_specs) = &intent.matcher.compound {
-        if !sub_specs.is_empty() {
-            return match_compound(intent, sub_specs, held_tokens, our_commitment, mode, now);
-        }
+    if let Some(sub_specs) = &intent.matcher.compound
+        && !sub_specs.is_empty()
+    {
+        return match_compound(intent, sub_specs, held_tokens, our_commitment, mode, now);
     }
 
     // Simple (non-compound) matching: find the first token that satisfies the spec.
@@ -582,12 +582,11 @@ fn actions_match(token: &HeldCapability, patterns: &[ActionPattern]) -> bool {
         }
         // If action is None (wildcard), any token action satisfies it.
         // Just check resource if specified.
-        if pattern.action.is_none() {
-            if let Some(resource) = &pattern.resource {
-                if !resource_matches(&token.resource, resource) {
-                    return false;
-                }
-            }
+        if pattern.action.is_none()
+            && let Some(resource) = &pattern.resource
+            && !resource_matches(&token.resource, resource)
+        {
+            return false;
         }
     }
     true

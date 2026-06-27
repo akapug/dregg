@@ -111,10 +111,11 @@ fn parent_cap_for<'a>(
         cur_path.push(step);
         if let Some(node) = node_at(forest, &cur_path) {
             for eff in &node.action.effects {
-                if let Effect::GrantCapability { to, cap, .. } = eff {
-                    if to == grantor && &cap.target == target {
-                        found = Some(cap);
-                    }
+                if let Effect::GrantCapability { to, cap, .. } = eff
+                    && to == grantor
+                    && &cap.target == target
+                {
+                    found = Some(cap);
                 }
             }
         }

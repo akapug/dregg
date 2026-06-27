@@ -175,18 +175,17 @@ fn print_human(v: &dregg_deploy::DeployVerdict, text: &str) {
     println!();
     // On a FAIL, print the ENRICHED diagnostics: a no-amplification finding named
     // by spec name + human facet + the parent cap it exceeded (not a hex prefix).
-    if !v.pass() {
-        if let Ok(dep) = parse_toml(text) {
-            if let Ok(lowered) = Lowered::from_deployment(&dep) {
-                let diag = explain_assurance(&lowered, &a);
-                if !diag.is_clean() {
-                    println!("why (named):");
-                    for l in diag.lines() {
-                        println!("  • {l}");
-                    }
-                    println!();
-                }
+    if !v.pass()
+        && let Ok(dep) = parse_toml(text)
+        && let Ok(lowered) = Lowered::from_deployment(&dep)
+    {
+        let diag = explain_assurance(&lowered, a);
+        if !diag.is_clean() {
+            println!("why (named):");
+            for l in diag.lines() {
+                println!("  • {l}");
             }
+            println!();
         }
     }
     if v.pass() {

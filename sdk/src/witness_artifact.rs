@@ -31,7 +31,7 @@ pub fn decode_witnessed_receipt_artifact_hex(hex: &str) -> Result<WitnessedRecei
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("hex string has odd length".into());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

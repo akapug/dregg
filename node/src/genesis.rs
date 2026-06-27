@@ -148,7 +148,7 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
 
         // Write the key file as raw 32 bytes (matching what the runtime expects).
         let key_path = output.join(format!("node-{i}.key"));
-        std::fs::write(&key_path, &key_bytes).unwrap_or_else(|e| {
+        std::fs::write(&key_path, key_bytes).unwrap_or_else(|e| {
             eprintln!("error: failed to write {}: {e}", key_path.display());
             std::process::exit(1);
         });

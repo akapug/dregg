@@ -283,7 +283,7 @@ pub fn further_attenuation_delta(
     let mut builder = FoldDeltaBuilder::new(current_state.clone());
 
     // Each new restriction becomes a check.
-    for (_i, fact) in new_restrictions.iter().enumerate() {
+    for fact in new_restrictions.iter() {
         let pred_name = symbols.resolve(fact.predicate).unwrap_or("check");
 
         // SECURITY: Validate the predicate is a known restriction type.

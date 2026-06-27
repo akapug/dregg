@@ -254,7 +254,7 @@ impl PersistentStore {
         // instead use the authenticating `Blocklace::from_checkpoint`.
         let blocklace =
             Blocklace::from_checkpoint_trusted(&checkpoint, signing_key, quorum_threshold)
-                .map_err(|e| StoreError::Integrity(e))?;
+                .map_err(StoreError::Integrity)?;
 
         Ok(Some((blocklace, executed_up_to)))
     }

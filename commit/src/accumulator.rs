@@ -251,7 +251,7 @@ impl BabyBear4 {
             // Scale pivot row.
             let inv_pivot = mat[col][col].inverse()?;
             for j in 0..5 {
-                mat[col][j] = mat[col][j] * inv_pivot;
+                mat[col][j] *= inv_pivot;
             }
 
             // Eliminate other rows.
@@ -261,7 +261,7 @@ impl BabyBear4 {
                 }
                 let factor = mat[row][col];
                 for j in 0..5 {
-                    mat[row][j] = mat[row][j] - factor * mat[col][j];
+                    mat[row][j] -= factor * mat[col][j];
                 }
             }
         }
@@ -461,7 +461,7 @@ impl PolynomialAccumulator {
         // In base field since all values are base field elements.
         let mut remainder_base = BabyBear::ONE;
         for &h_i in &self.elements {
-            remainder_base = remainder_base * (element - h_i);
+            remainder_base *= element - h_i;
         }
 
         // The remainder should be nonzero (element not in set).

@@ -390,7 +390,7 @@ pub fn verify_fulfillment_with_key(
             }
 
             verify_authorization_dsl(conclusion, accumulated_hash, &proof)
-                .map_err(|e| FulfillmentError::ProofVerificationFailed(e))?;
+                .map_err(FulfillmentError::ProofVerificationFailed)?;
 
             // SECURITY: Verify the proof is bound to THIS intent's requirements.
             // The proof's request_hash (public input) must match the intent's
@@ -432,32 +432,31 @@ pub fn verify_fulfillment_with_key(
     // The fulfiller shouldn't be able to claim more actions than the intent requested.
     // In Private/Selective mode the fulfiller is not trusted, so this prevents
     // a malicious fulfiller from escalating privileges.
-    if fulfillment.mode == VerificationMode::Private
-        || fulfillment.mode == VerificationMode::Selective
+    if (fulfillment.mode == VerificationMode::Private
+        || fulfillment.mode == VerificationMode::Selective)
+        && !intent_actions.is_empty()
     {
-        if !intent_actions.is_empty() {
-            for granted in &fulfillment.granted_actions {
-                if granted != "*"
-                    && !intent_actions.contains(granted)
-                    && !intent_actions.iter().any(|a| a == "*")
-                {
-                    return Err(FulfillmentError::ActionsMismatch(format!(
-                        "granted action '{}' not in intent's requested actions (privilege escalation)",
-                        granted
-                    )));
-                }
+        for granted in &fulfillment.granted_actions {
+            if granted != "*"
+                && !intent_actions.contains(granted)
+                && !intent_actions.iter().any(|a| a == "*")
+            {
+                return Err(FulfillmentError::ActionsMismatch(format!(
+                    "granted action '{}' not in intent's requested actions (privilege escalation)",
+                    granted
+                )));
             }
         }
     }
 
     // 3. Check granted_resource matches the intent's resource_pattern
-    if let Some(pattern) = &intent.matcher.resource_pattern {
-        if !resource_matches(&fulfillment.granted_resource, pattern) {
-            return Err(FulfillmentError::ResourceMismatch(format!(
-                "granted '{}' does not cover required '{}'",
-                fulfillment.granted_resource, pattern
-            )));
-        }
+    if let Some(pattern) = &intent.matcher.resource_pattern
+        && !resource_matches(&fulfillment.granted_resource, pattern)
+    {
+        return Err(FulfillmentError::ResourceMismatch(format!(
+            "granted '{}' does not cover required '{}'",
+            fulfillment.granted_resource, pattern
+        )));
     }
 
     Ok(())

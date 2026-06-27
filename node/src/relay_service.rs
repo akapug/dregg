@@ -680,7 +680,7 @@ fn verify_owner_signature(
 }
 
 fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);

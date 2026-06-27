@@ -148,8 +148,8 @@ fn main() {
 
     let root_token = MacaroonToken::mint(issuer_key, b"demo-kid-001", "dregg.fg-goose.online");
     item("Root token minted (unrestricted, full access)");
-    item(&format!("  Location: dregg.fg-goose.online"));
-    item(&format!("  Key ID: demo-kid-001"));
+    item("  Location: dregg.fg-goose.online");
+    item("  Key ID: demo-kid-001");
 
     // ─── Step 3: Attenuate the token ────────────────────────────────────────
 
@@ -363,9 +363,7 @@ fn main() {
         "  Authorization: STARK proof ({} bytes)",
         proof_bytes.len()
     ));
-    item(&format!(
-        "  Effect: SetField(target, slot=0, computation_result)"
-    ));
+    item("  Effect: SetField(target, slot=0, computation_result)");
 
     // ─── Step 8: Execute and verify ─────────────────────────────────────────
 

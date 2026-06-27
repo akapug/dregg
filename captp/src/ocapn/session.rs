@@ -462,10 +462,10 @@ pub mod desc {
         // one level inside an <ecc …> (or <ecc-flags …>) wrapper.
         let params = unwrap_single_inner(fields);
         // If a curve is named, it must be Ed25519 (reject p256/etc. early).
-        if let Some(curve) = named_symbol(params, "curve") {
-            if curve != CURVE_ED25519 {
-                return Err(LocationVerifyError::MalformedPublicKey);
-            }
+        if let Some(curve) = named_symbol(params, "curve")
+            && curve != CURVE_ED25519
+        {
+            return Err(LocationVerifyError::MalformedPublicKey);
         }
         let q = named_bytes(params, "q").ok_or(LocationVerifyError::MalformedPublicKey)?;
         let arr: [u8; 32] = q

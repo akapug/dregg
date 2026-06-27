@@ -194,25 +194,25 @@ pub fn analyze(capture: &BlocklaceCapture) -> AnalysisReport {
             // present as slashable evidence — not a reconstruction. We probe each
             // of this creator's blocks against the loaded lace; the first that
             // yields a proof names the two conflicting block ids + their seqs.
-            if let Some(lace) = lace_for_forks {
-                if let Some(proof) = fork_witness(lace, &forks) {
-                    report.push(Finding::verified(
-                        Severity::Critical,
-                        "dregg_blocklace::finality::Blocklace::detect_equivocation",
-                        "blocklace.equivocation_fork_witness",
-                        format!(
-                            "  fork witness for {}: block_a=(id {}, seq {}) ∥ \
+            if let Some(lace) = lace_for_forks
+                && let Some(proof) = fork_witness(lace, &forks)
+            {
+                report.push(Finding::verified(
+                    Severity::Critical,
+                    "dregg_blocklace::finality::Blocklace::detect_equivocation",
+                    "blocklace.equivocation_fork_witness",
+                    format!(
+                        "  fork witness for {}: block_a=(id {}, seq {}) ∥ \
                              block_b=(id {}, seq {}) are causally incomparable \
                              (neither is in the other's causal past) — this pair IS \
                              the slashable equivocation proof",
-                            short_hex(&proof.creator),
-                            short_hex(&proof.block_a.id().0),
-                            proof.block_a.seq,
-                            short_hex(&proof.block_b.id().0),
-                            proof.block_b.seq,
-                        ),
-                    ));
-                }
+                        short_hex(&proof.creator),
+                        short_hex(&proof.block_a.id().0),
+                        proof.block_a.seq,
+                        short_hex(&proof.block_b.id().0),
+                        proof.block_b.seq,
+                    ),
+                ));
             }
         }
         report.summarize(

@@ -238,7 +238,7 @@ fn statement_degree(stmt: &Statement) -> usize {
             let inner_max = arms
                 .iter()
                 .flat_map(|arm| arm.body.iter())
-                .map(|s| statement_degree(s))
+                .map(statement_degree)
                 .max()
                 .unwrap_or(1);
             1 + inner_max

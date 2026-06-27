@@ -278,10 +278,7 @@ fn can_execve_shell() -> bool {
         let arg0 = b"sh\0";
         let argv = [arg0.as_ptr() as *const libc::c_char, std::ptr::null()];
         unsafe {
-            libc::execv(
-                path.as_ptr() as *const libc::c_char,
-                argv.as_ptr() as *const *const libc::c_char,
-            );
+            libc::execv(path.as_ptr() as *const libc::c_char, argv.as_ptr());
             // execv returned ⇒ denied.
             libc::_exit(1);
         }

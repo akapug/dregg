@@ -459,10 +459,10 @@ mod bearer {
                     .iter()
                     .find(|f| f["is_local"].as_bool() == Some(true))
                     .or_else(|| feds.first());
-                if let Some(hex_str) = chosen.and_then(|f| f["federation_id"].as_str()) {
-                    if let Ok(id) = decode_cell_id(hex_str) {
-                        return (id, "node");
-                    }
+                if let Some(hex_str) = chosen.and_then(|f| f["federation_id"].as_str())
+                    && let Ok(id) = decode_cell_id(hex_str)
+                {
+                    return (id, "node");
                 }
                 ([0u8; 32], "sim (no local federation reported)")
             }

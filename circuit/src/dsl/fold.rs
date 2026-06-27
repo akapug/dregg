@@ -464,7 +464,7 @@ pub fn create_test_fold(num_removals: usize, num_checks: usize) -> FoldWitness {
     let (old_root, proofs) = build_shared_tree(&fact_hashes, 4);
     let removed_facts: Vec<RemovedFact> = facts_data
         .into_iter()
-        .zip(proofs.into_iter())
+        .zip(proofs)
         .map(|((predicate, terms), proof)| RemovedFact {
             predicate,
             terms,
@@ -854,10 +854,11 @@ pub fn verify_fold_dsl(proof: &StarkProof, public_inputs: &[BabyBear]) -> Result
 
     // Validate checks_commitment_zero_when_no_checks at the verifier level.
     // pi[3] == check_count, pi[5] == checks_commitment_narrow.
-    if public_inputs.len() >= 6 {
-        if public_inputs[3] == BabyBear::ZERO && public_inputs[5] != BabyBear::ZERO {
-            return Err("non-zero checks commitment with zero check count".to_string());
-        }
+    if public_inputs.len() >= 6
+        && public_inputs[3] == BabyBear::ZERO
+        && public_inputs[5] != BabyBear::ZERO
+    {
+        return Err("non-zero checks commitment with zero check count".to_string());
     }
 
     stark::verify(&circuit, proof, public_inputs)

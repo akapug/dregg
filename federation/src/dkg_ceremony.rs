@@ -966,10 +966,10 @@ impl CeremonyDriver {
     /// second dealing is evidence, not state).
     pub fn observe(&mut self, signed: &SignedCeremonyMsg) -> Result<Recorded, CeremonyError> {
         let recorded = self.view.record(signed)?;
-        if recorded == Recorded::Fresh {
-            if let CeremonyMsg::Dealing(d) = &signed.msg {
-                self.participant.receive_dealing(d)?;
-            }
+        if recorded == Recorded::Fresh
+            && let CeremonyMsg::Dealing(d) = &signed.msg
+        {
+            self.participant.receive_dealing(d)?;
         }
         Ok(recorded)
     }
@@ -1000,7 +1000,7 @@ impl CeremonyDriver {
     /// deadline).
     pub fn missing_share_complaints(&self) -> Vec<SignedCeremonyMsg> {
         let mut out = Vec::new();
-        for (&dealer, _) in self.view.dealings.iter() {
+        for &dealer in self.view.dealings.keys() {
             let acked = self.view.acks.contains(&(dealer, self.index));
             let complained = self.view.complaints.contains(&(dealer, self.index));
             if !acked && !complained {
