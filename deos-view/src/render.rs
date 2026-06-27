@@ -84,6 +84,14 @@ fn bind_plan(tree: &ViewNode, out: &mut Vec<Slot>) {
                 bind_plan(p, out);
             }
         }
+        // A `host`'s resolved hosted subtree is recursed at the host's position so the bind
+        // cursor stays aligned across all renderers; an unresolved host (`view: None`)
+        // consumes no cursor positions (so it can't desync them).
+        ViewNode::Host { view, .. } => {
+            if let Some(v) = view {
+                bind_plan(v, out);
+            }
+        }
         // Leaves that hold no bind source. `Gauge` reads its slot immediate-mode (NOT via the
         // bind cursor), so it registers nothing here.
         ViewNode::Text(_)
@@ -460,7 +468,45 @@ impl AppletView {
                 .w_full()
                 .bg(cx.theme().border)
                 .into_any_element(),
+
+            // ── The COMPOSITION KEYSTONE — mount a cell's WHOLE hosted view-tree as a
+            //    subtree (the cell is a component, not a leaf). A bordered frame with a muted
+            //    `⌂ <cell>` header wrapping the hosted subtree; an UNRESOLVED host paints an
+            //    honest placeholder (it has no tree to mount yet).
+            ViewNode::Host { cell, view } => {
+                let head = format!("⌂ {}", short_cell(cell));
+                let mut frame = v_flex()
+                    .gap_1()
+                    .p_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Label::new(head)
+                            .text_color(cx.theme().muted_foreground)
+                            .into_any_element(),
+                    );
+                match view {
+                    Some(v) => frame = frame.child(self.node(v, _window, cx)),
+                    None => {
+                        frame = frame.child(
+                            Label::new(format!("‹mount cell {}: unresolved›", short_cell(cell)))
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    }
+                }
+                frame.into_any_element()
+            }
         }
+    }
+}
+
+/// A short, human prefix of a (hex) cell id for a host frame header. Long ids elide; short
+/// ones (the test labels) show whole.
+fn short_cell(cell: &str) -> String {
+    if cell.len() > 12 {
+        format!("{}…", &cell[..12])
+    } else {
+        cell.to_string()
     }
 }
 

@@ -26,7 +26,10 @@
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
 pub mod tree;
-pub use tree::{parse_view_tree, RawNode, RawProps, ViewNode};
+pub use tree::{
+    parse_view_tree, resolve_mounts, MapMountSource, MountSource, RawNode, RawProps, ViewNode,
+    MAX_MOUNT_DEPTH,
+};
 
 // ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack
 //    + deos-js live verified turns). Gated on `native` so the `web` build stays tiny. ──
@@ -36,6 +39,10 @@ pub mod bridge;
 pub mod faces;
 #[cfg(feature = "native")]
 pub mod headless;
+// The cell-heap-as-view-source — read a cell's hosted view-tree out of its committed heap
+// (the native half of the composition keystone). Needs dregg-cell, so native-only.
+#[cfg(feature = "native")]
+pub mod mount;
 #[cfg(feature = "native")]
 pub mod render;
 
@@ -43,6 +50,10 @@ pub mod render;
 pub use bridge::{build_live_view, view_tree_key, LiveView};
 #[cfg(feature = "native")]
 pub use faces::FacesView;
+#[cfg(feature = "native")]
+pub use mount::{
+    cell_id_from_hex, cell_id_hex, ledger_mount_source, view_tree_from_cell_heap, VIEWTREE_COLL,
+};
 #[cfg(feature = "native")]
 pub use render::{AppletView, SharedApplet};
 
