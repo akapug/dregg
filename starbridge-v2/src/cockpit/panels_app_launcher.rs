@@ -145,10 +145,11 @@ impl Cockpit {
                                     .primary()
                                     .xsmall()
                                     .on_click(cx.listener(
-                                        move |this, _ev: &ClickEvent, _w, cx| {
+                                        move |this, _ev: &ClickEvent, window, cx| {
                                             this.run_launch_registry_app(
                                                 id_for_btn.clone(),
                                                 name_for_btn.clone(),
+                                                window,
                                                 cx,
                                             );
                                         },
@@ -225,6 +226,7 @@ impl Cockpit {
         &mut self,
         id: String,
         name: String,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let world = Rc::clone(&self.world);
@@ -240,12 +242,26 @@ impl Cockpit {
                     cell,
                 });
                 self.selection = Selection::Cell(cell);
+                let has_card = self.has_live_card(&id);
                 self.apps_outcome = Some(format!(
                     "launched {name}: cell {} on your live World — fired its representative \
-                     verified turn (receipt {rhex}, {actions} action(s)). Inspect it in \
+                     verified turn (receipt {rhex}, {actions} action(s)). {} Inspect it in \
                      OBJECTS / INSPECTOR.",
-                    reflect::short_hex(&cell.0)
+                    reflect::short_hex(&cell.0),
+                    if has_card {
+                        "Its live CARD opened in a dock pane (its buttons fire real verified turns)."
+                    } else {
+                        ""
+                    }
                 ));
+                // FULL VIEW MOUNTING: open the app's BESPOKE deos-view card as a live dock
+                // surface, bound to the just-launched cell on the live World — so the app
+                // shows its OWN card UI and its buttons fire the app's real verified turns.
+                // Additive: an app without a wired card keeps only the inspect behavior.
+                #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+                self.mount_launched_app_card(&id, &name, launched, window, cx);
+                #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
+                let _ = (window, launched);
             }
             Some(Err(e)) => {
                 self.apps_outcome = Some(format!("launch {id} refused: {e}"));
@@ -256,5 +272,51 @@ impl Cockpit {
         }
         self.refresh_cells();
         cx.notify();
+    }
+
+    /// Whether the app with `id` ships a bespoke card wired for live firing (so the
+    /// launcher can tell the operator their launch opened a clickable card pane).
+    fn has_live_card(&self, id: &str) -> bool {
+        #[cfg(feature = "embedded-executor")]
+        {
+            starbridge_v2::app_registry::app_card(id).is_some()
+        }
+        #[cfg(not(feature = "embedded-executor"))]
+        {
+            let _ = id;
+            false
+        }
+    }
+
+    /// **Mount a launched app's bespoke card as a live dock pane** — the full-view-mount
+    /// keystone. Builds an [`AppCardSurface`](starbridge_v2::dock::card_surface::AppCardSurface)
+    /// over the just-launched [`LaunchedOnWorld`](starbridge_v2::app_registry::LaunchedOnWorld)
+    /// (no relaunch — the SAME cell already on the live World) and grafts it beside the
+    /// active pane (the editor/terminal/card dev-pane machinery). The card's buttons fire
+    /// the app's REAL cap-gated verified turns through its spine. Fail-soft: an app without
+    /// a wired card (or a parse failure) leaves the launch's inspect behavior untouched.
+    #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    fn mount_launched_app_card(
+        &mut self,
+        app_id: &str,
+        app_name: &str,
+        launched: starbridge_v2::app_registry::LaunchedOnWorld,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use starbridge_v2::dock::card_surface::build_app_card_surface;
+        use starbridge_v2::dock::surface::CockpitSurface;
+
+        let surface_id = self.next_dev_surface_id();
+        match build_app_card_surface(surface_id, app_id, app_name, launched, cx) {
+            Ok(surface) => {
+                let boxed: Box<dyn CockpitSurface> = Box::new(surface);
+                self.graft_dev_pane(boxed, window, cx);
+            }
+            Err(e) => {
+                // No wired card / parse failure — the launch's inspect behavior stands.
+                eprintln!("app-launcher: no live card surface for '{app_id}': {e}");
+            }
+        }
     }
 }

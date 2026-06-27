@@ -51,13 +51,68 @@ use deos_view::{parse_view_tree, ViewNode};
 /// shared by every widget — the single sovereign cell behind the whole card.
 pub type SharedAttached = Rc<RefCell<AttachedApplet>>;
 
+/// **The read+fire SUBSTANCE a [`CardPane`] renders over** — the three operations the
+/// renderer needs from a live card backing: read a bound model slot, read ephemeral
+/// view-state, and fire an affordance as a real verified turn. Abstracting it lets ONE
+/// exhaustive renderer ([`CardPane::node`]) drive two backings: the deos-js
+/// [`AttachedApplet`] (the operator/agent + inspector cards) and the app-framework
+/// [`crate::app_registry::AppCardSubstance`] (a launched starbridge-app's BESPOKE card,
+/// whose buttons fire the app's real cap-gated verified turns through its
+/// [`crate::app_worldspine::AppWorldSpine`]).
+pub trait CardSubstance {
+    /// Read the bound model slot off the live ledger (a `bind`/`gauge`/`slider`/… read).
+    fn get_u64(&self, slot: usize) -> u64;
+    /// Read an ephemeral view-state draft (an `input` field), if the backing keeps one.
+    fn get_view(&self, key: &str) -> Option<String>;
+    /// Fire an affordance as ONE real verified turn (a button's `{turn, arg}`). A cap
+    /// refusal / executor reject is surfaced as the `Err` string (the live model simply
+    /// does not advance).
+    fn fire(&mut self, method: &str, arg: i64) -> Result<(), String>;
+}
+
+/// A shared, interior-mutable [`CardSubstance`] — what a [`CardPane`] holds and every
+/// widget closure clones. One handle, shared by the whole card.
+pub type CardSubstanceRef = Rc<RefCell<dyn CardSubstance>>;
+
+impl CardSubstance for AttachedApplet {
+    fn get_u64(&self, slot: usize) -> u64 {
+        AttachedApplet::get_u64(self, slot)
+    }
+    fn get_view(&self, key: &str) -> Option<String> {
+        AttachedApplet::get_view(self, key).map(str::to_string)
+    }
+    fn fire(&mut self, method: &str, arg: i64) -> Result<(), String> {
+        AttachedApplet::fire(self, method, arg)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// A launched starbridge-app's card backing fires through its [`AppWorldSpine`] (the
+/// app-framework→World bridge), reads bound slots off the live World ledger, and keeps
+/// no ephemeral view-state (its cards are pure server-state views).
+#[cfg(feature = "app-registry")]
+impl CardSubstance for crate::app_registry::AppCardSubstance {
+    fn get_u64(&self, slot: usize) -> u64 {
+        crate::app_registry::AppCardSubstance::get_u64(self, slot)
+    }
+    fn get_view(&self, _key: &str) -> Option<String> {
+        None
+    }
+    fn fire(&mut self, method: &str, arg: i64) -> Result<(), String> {
+        crate::app_registry::AppCardSubstance::fire(self, method, arg)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// The cockpit surface that renders a deos-js CARD over the LIVE `World`. A real gpui
 /// `Render` entity: open it in a (headless or windowed) window and it paints the card's
 /// widgets, and a button fires a real verified turn on the live ledger.
 pub struct CardPane {
-    /// The live attached applet (shared so button handlers fire live turns + binds
-    /// re-read the live ledger).
-    applet: SharedAttached,
+    /// The live card substance (shared so button handlers fire live turns + binds
+    /// re-read the live ledger) — a deos-js applet or a launched app's spine.
+    applet: CardSubstanceRef,
     /// The extracted view-tree (the real `deos.ui.*` element-tree the JS authored).
     tree: ViewNode,
     /// A short title shown above the card (the surface chrome).
@@ -65,8 +120,11 @@ pub struct CardPane {
 }
 
 impl CardPane {
-    /// Build a card pane from a shared live applet + its view-tree + a title.
+    /// Build a card pane from a shared live applet + its view-tree + a title. The
+    /// [`SharedAttached`] coerces into the [`CardSubstanceRef`] the pane holds (a deos-js
+    /// applet IS a [`CardSubstance`]).
     pub fn new(applet: SharedAttached, tree: ViewNode, title: impl Into<String>) -> Self {
+        let applet: CardSubstanceRef = applet;
         Self {
             applet,
             tree,
@@ -74,9 +132,25 @@ impl CardPane {
         }
     }
 
-    /// The shared live applet handle (for the caller to inspect receipts / the live
-    /// ledger after a turn fires — the SAME applet the widgets drive).
-    pub fn applet(&self) -> SharedAttached {
+    /// Build a card pane over an arbitrary [`CardSubstance`] — the generalization of
+    /// [`Self::new`] used to mount a launched starbridge-app's BESPOKE card (over a
+    /// [`crate::app_registry::AppCardSubstance`]), so its buttons fire the app's real
+    /// verified turns through its spine.
+    pub fn new_substance(
+        substance: CardSubstanceRef,
+        tree: ViewNode,
+        title: impl Into<String>,
+    ) -> Self {
+        Self {
+            applet: substance,
+            tree,
+            title: title.into(),
+        }
+    }
+
+    /// The shared live substance handle (for the caller to inspect receipts / the live
+    /// ledger after a turn fires — the SAME backing the widgets drive).
+    pub fn substance(&self) -> CardSubstanceRef {
         self.applet.clone()
     }
 
@@ -181,12 +255,7 @@ impl CardPane {
                 // Ephemeral view-state (draft text) — NOT cell state. When `fire_turn` is set a
                 // paired submit button parses the draft into the turn's `arg` and fires a REAL
                 // verified turn on the live World (input → verified turn).
-                let draft = self
-                    .applet
-                    .borrow()
-                    .get_view(bind_view)
-                    .unwrap_or("")
-                    .to_string();
+                let draft = self.applet.borrow().get_view(bind_view).unwrap_or_default();
                 let field = h_flex()
                     .px_2()
                     .py_1()
@@ -654,7 +723,7 @@ impl CardPane {
 /// Obj-C callback is `nounwind`, so a re-entrant-borrow panic would `process::abort` the whole
 /// cockpit — contain it as a logged no-op instead). The shared weld every batch-2 actuating node
 /// (menu / halo / slider / toggle / breadcrumb / input-submit) routes its click through.
-fn guarded_fire(applet: &SharedAttached, turn: &str, arg: i64) {
+fn guarded_fire(applet: &CardSubstanceRef, turn: &str, arg: i64) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if let Err(e) = applet.borrow_mut().fire(turn, arg) {
             eprintln!("card-pane: live affordance '{turn}' did not commit: {e}");

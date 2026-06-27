@@ -42,6 +42,9 @@ use crate::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
 use crate::card_pane::{build_card_over_live, CardPane, SharedAttached};
 use crate::world::World;
 
+#[cfg(feature = "app-registry")]
+use crate::card_pane::CardSubstanceRef;
+
 use super::surface::{CockpitSurface, SurfaceId};
 
 /// The card's authoring JS: a `deos.ui.*` view-tree — a title, a `bind` re-reading
@@ -731,6 +734,129 @@ impl CockpitSurface for ModeCardSurface {
             applet: self.applet.clone(),
             editor: self.editor.clone(),
             focus: self.focus,
+        })
+    }
+}
+
+// ===========================================================================
+// FULL VIEW MOUNTING — a launched starbridge-app's BESPOKE card as a dock pane.
+//
+// Where `build_*card_surface` mount the cockpit's own reflective cards (counter /
+// inspector / mode cards) over a deos-js `AttachedApplet`, THIS mounts a launched
+// app's OWN `deos.ui.*` card (`starbridge-apps/<app>/src/card.rs`) over the
+// app-framework substance (`crate::app_registry::AppCardSubstance`) — so launching
+// gallery shows GALLERY's card UI, and clicking its "Submit" button fires gallery's
+// REAL cap-gated verified turn through the app's spine onto the cockpit's live World
+// (the SAME ledger the inspector reads). Same `CardPane` renderer, same dock-mount,
+// a different substance.
+// ===========================================================================
+
+/// A launched starbridge-app's bespoke card mounted as a [`CockpitSurface`] — the
+/// [`CardPane`] gpui entity (over the live World) + the shared [`AppCardSubstance`]
+/// (the app's spine the rendered buttons fire through + the binds re-read).
+#[cfg(feature = "app-registry")]
+pub struct AppCardSurface {
+    id: SurfaceId,
+    /// The launched app's display name (the dock tab label).
+    name: SharedString,
+    entity: Entity<CardPane>,
+    /// The shared app-card substance (kept so a host can read live state / fire count;
+    /// the SAME backing the rendered widgets drive).
+    substance: Rc<RefCell<crate::app_registry::AppCardSubstance>>,
+    focus: FocusHandle,
+}
+
+#[cfg(feature = "app-registry")]
+impl AppCardSurface {
+    /// The launched app's primary cell on the live World (the inspector's pointer).
+    pub fn app_cell(&self) -> CellId {
+        self.substance.borrow().app_cell()
+    }
+
+    /// The [`CardPane`] gpui entity (so a host can mount the card body directly).
+    pub fn entity_handle(&self) -> Entity<CardPane> {
+        self.entity.clone()
+    }
+}
+
+/// **Mount a LAUNCHED app's bespoke card as a dock surface.** Takes the
+/// [`crate::app_registry::LaunchedOnWorld`] the launcher already produced (so the app is
+/// launched ONCE — its cell + first receipt are already on the live World), resolves the
+/// app's wired card ([`crate::app_registry::app_card`]), parses its `deos.ui.*` JSON into
+/// a [`ViewNode`] ([`deos_view::parse_view_tree`]), and hosts it as a [`CardPane`] over an
+/// [`crate::app_registry::AppCardSubstance`] built on the launch's spine. The card's
+/// buttons then fire the app's REAL verified turns; its `bind`s re-read the app cell off
+/// the live World ledger.
+///
+/// `None` (an `Err`) if the app ships no wired card, or its JSON fails to parse — the
+/// caller keeps the launch's inspect behavior as the fallback (the card is additive).
+#[cfg(feature = "app-registry")]
+#[allow(clippy::result_large_err)]
+pub fn build_app_card_surface(
+    id: u64,
+    app_id: &str,
+    app_name: &str,
+    launched: crate::app_registry::LaunchedOnWorld,
+    cx: &mut App,
+) -> Result<AppCardSurface, String> {
+    let card = crate::app_registry::app_card(app_id)
+        .ok_or_else(|| format!("app '{app_id}' ships no wired card"))?;
+
+    // Parse the app's renderer-independent `deos.ui.*` card into the renderer's `ViewNode`.
+    let tree: ViewNode = deos_view::parse_view_tree(&card.json)
+        .map_err(|e| format!("'{app_id}' card view-tree parse: {e}"))?;
+
+    // Build the live substance over the launch's spine + the card's fire dispatch (the
+    // app is NOT relaunched — `launched.spine` is the cell already on the live World).
+    let substance = Rc::new(RefCell::new(crate::app_registry::AppCardSubstance::new(
+        launched.spine,
+        card.fire,
+    )));
+
+    let sub_dyn: CardSubstanceRef = substance.clone();
+    let title = format!("{app_name} · live app card (deos-view)");
+    let entity = cx.new(|_cx| CardPane::new_substance(sub_dyn, tree, title));
+
+    Ok(AppCardSurface {
+        id: SurfaceId(id),
+        name: SharedString::from(app_name.to_string()),
+        entity,
+        substance,
+        focus: cx.focus_handle(),
+    })
+}
+
+#[cfg(feature = "app-registry")]
+impl CockpitSurface for AppCardSurface {
+    fn item_id(&self) -> SurfaceId {
+        self.id
+    }
+
+    fn tab_label(&self) -> SharedString {
+        self.name.clone()
+    }
+
+    fn render_body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        // Immediate-mode binds re-read the live World at render time, so notify each
+        // frame keeps a bound row current after a fire (mirrors `CardSurface`).
+        self.entity.update(cx, |_card, cx| cx.notify());
+        div()
+            .size_full()
+            .child(self.entity.clone())
+            .into_any_element()
+    }
+
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
+        Box::new(AppCardSurface {
+            id: self.id,
+            name: self.name.clone(),
+            entity: self.entity.clone(),
+            substance: self.substance.clone(),
+            focus: self.focus.clone(),
         })
     }
 }

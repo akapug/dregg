@@ -156,6 +156,195 @@ fn field_tail_u64(fe: &dregg_app_framework::FieldElement) -> u64 {
     u64::from_be_bytes(b)
 }
 
+// ===========================================================================
+// FULL VIEW MOUNTING — a launched app's BESPOKE deos-view CARD.
+//
+// `crate::app_registry::AppEntry::launch_on_world` seeds an app onto the cockpit's
+// live `World` and hands back its `AppWorldSpine`. THIS is the other half: the app
+// ships a renderer-independent `deos.ui.*` CARD (`starbridge-apps/<app>/src/card.rs`),
+// whose button `{turn, arg}`s name the app's SERVICE METHOD vocabulary. The card
+// surface (`dock/card_surface.rs::AppCardSurface`) parses that JSON into a
+// `deos_view::ViewNode`, mounts it as a `CardPane`, and routes each button's fire
+// through `AppCardSubstance` — a real cap-gated verified turn on the live World, the
+// SAME turn the app's framework path fires (the 4-axis invariant: the button `turn`
+// symbol == the wire method the app's `CellProgram::Cases` dispatches on).
+//
+// gpui-free: this module owns the card DATA + the live-fire dispatch (pure Rust over
+// `AppWorldSpine`); `card_pane.rs` (gpui) renders the parsed tree over it.
+// ===========================================================================
+
+/// The per-method live-fire dispatch for a launched app's card: a card button's
+/// `{turn, arg}` → a real verified turn through the app's [`AppWorldSpine`]. The
+/// `method` is the button's service-method symbol (`"submit"`, `"claim"`, …); the fn
+/// reuses the app crate's OWN public effect-builders so the card fires the SAME turn
+/// the framework path does. A method that is not live-fireable in the seeded phase
+/// returns [`WorldFireError::World`] (surfaced, never a panic).
+#[cfg(feature = "embedded-executor")]
+pub type CardFireFn = fn(&AppWorldSpine, &str, i64) -> Result<TurnReceipt, WorldFireError>;
+
+/// A launched app's **bespoke deos-view CARD** — its `deos.ui.*` view-tree JSON (the
+/// app crate's own `*_card_json()`) plus the per-method live-fire dispatch
+/// ([`CardFireFn`]). [`app_card`] resolves it by registry id.
+#[cfg(feature = "embedded-executor")]
+pub struct AppCard {
+    /// The app's card view-tree JSON — the renderer-independent `deos.ui.*` element-tree
+    /// (`deos_view::parse_view_tree` parses it into a `ViewNode`).
+    pub json: String,
+    /// Fire one card button's method as a real verified turn on the launched app's spine.
+    pub fire: CardFireFn,
+}
+
+/// **The live SUBSTANCE a launched app's card renders over** — the app-framework
+/// counterpart of a deos-js `AttachedApplet`. Holds the app's seeded [`AppWorldSpine`]
+/// (the World bridge) + the per-method fire dispatch. The card's `bind`s read the app
+/// cell's live fields off the World ledger ([`Self::get_u64`]); a button's click fires
+/// a real cap-gated verified turn ([`Self::fire`]) the cockpit inspector immediately
+/// sees. (gpui-free; `card_pane.rs` impls `CardSubstance` over this.)
+#[cfg(feature = "embedded-executor")]
+pub struct AppCardSubstance {
+    spine: AppWorldSpine,
+    fire: CardFireFn,
+}
+
+#[cfg(feature = "embedded-executor")]
+impl AppCardSubstance {
+    /// Build the substance from a launched app's spine + its card fire dispatch.
+    pub fn new(spine: AppWorldSpine, fire: CardFireFn) -> Self {
+        AppCardSubstance { spine, fire }
+    }
+
+    /// The launched app's primary cell on the live World (the card's substance + the
+    /// inspector's pointer).
+    pub fn app_cell(&self) -> CellId {
+        self.spine.app_cell()
+    }
+
+    /// Read a bound model `slot` off the app cell's LIVE state on the World ledger (the
+    /// witnessed read a card `bind`/`gauge`/… makes), as the `u64` tail. `0` if the cell
+    /// or slot is absent (fail-soft — a bind never panics the card).
+    pub fn get_u64(&self, slot: usize) -> u64 {
+        self.spine
+            .live_state()
+            .and_then(|s| s.fields.get(slot).copied())
+            .map(|fe| field_tail_u64(&fe))
+            .unwrap_or(0)
+    }
+
+    /// **Fire a card button's `method` as a real verified turn** on the live World —
+    /// the cap tooth runs in-band, the app program is re-enforced by World's executor,
+    /// and the receipt lands on `World::receipts()`. Returns the executor's own receipt.
+    pub fn fire(&self, method: &str, arg: i64) -> Result<TurnReceipt, WorldFireError> {
+        (self.fire)(&self.spine, method, arg)
+    }
+
+    /// The launched app's spine (so a host can read the live state / fire more).
+    pub fn spine(&self) -> &AppWorldSpine {
+        &self.spine
+    }
+}
+
+/// **Resolve a launched app's bespoke card by registry id**, if it ships one wired for
+/// live firing. The card JSON is the app crate's own `*_card_json()`; the fire dispatch
+/// routes each button's service-method symbol to the app's public effect-builders (the
+/// SAME recipe the registry's `world_drive` representative fire uses). Apps without a
+/// wired card return `None` (they remain launchable + inspectable — they just have no
+/// card surface to mount).
+#[cfg(feature = "embedded-executor")]
+pub fn app_card(id: &str) -> Option<AppCard> {
+    match id {
+        "gallery" => Some(AppCard {
+            json: starbridge_gallery::card::gallery_card_json(),
+            fire: gallery_card_fire,
+        }),
+        "bounty-board" => Some(AppCard {
+            json: starbridge_bounty_board::card::bounty_card_json(),
+            fire: bounty_card_fire,
+        }),
+        "sealed-auction" => Some(AppCard {
+            json: starbridge_sealed_auction::card::auction_card_json(),
+            fire: auction_card_fire,
+        }),
+        _ => None,
+    }
+}
+
+/// gallery card fire — the `submit` button seals a submission into the next free
+/// WriteOnce board slot (read off World's LIVE state), the SAME verified turn the
+/// gallery `world_drive` fires. Later-phase methods (`close_submissions` / `reveal` /
+/// `curate`) are not live-fireable from the seeded SUBMISSION phase → surfaced refusal.
+#[cfg(feature = "embedded-executor")]
+fn gallery_card_fire(
+    spine: &AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<TurnReceipt, WorldFireError> {
+    use starbridge_gallery as g;
+    let cell = spine.app_cell();
+    if method == g::service::METHOD_SUBMIT {
+        let seal = dregg_app_framework::field_from_u64(0xA17);
+        spine.commit("submit", &g::ARTIST_RIGHTS, &g::ARTIST_RIGHTS, |live| {
+            let slot = g::next_free_submit_slot(live).unwrap_or_else(|| g::submit_slot(0));
+            g::submit_effects(cell, slot, &seal)
+        })
+    } else {
+        Err(WorldFireError::World {
+            reason: format!(
+                "gallery card: '{method}' is a later-phase method not live-fireable from the seeded SUBMISSION phase"
+            ),
+        })
+    }
+}
+
+/// bounty-board card fire — the `claim` button advances the bounty state machine
+/// OPEN → CLAIMED (StrictMonotonic re-enforced by World's executor), the SAME verified
+/// turn the bounty `world_drive` fires.
+#[cfg(feature = "embedded-executor")]
+fn bounty_card_fire(
+    spine: &AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<TurnReceipt, WorldFireError> {
+    use starbridge_bounty_board as b;
+    let cell = spine.app_cell();
+    if method == b::service::METHOD_CLAIM {
+        spine.commit("claim", &b::WORKER_RIGHTS, &b::WORKER_RIGHTS, |_live| {
+            b::claim_effects(cell, "worker")
+        })
+    } else {
+        Err(WorldFireError::World {
+            reason: format!(
+                "bounty-board card: '{method}' is not live-fireable from the seeded OPEN state"
+            ),
+        })
+    }
+}
+
+/// sealed-auction card fire — the `commit_bid` button seals a bid into the next free
+/// WriteOnce commit slot (read off World's LIVE state), the SAME verified turn the
+/// auction `world_drive` fires.
+#[cfg(feature = "embedded-executor")]
+fn auction_card_fire(
+    spine: &AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<TurnReceipt, WorldFireError> {
+    use starbridge_sealed_auction as a;
+    let cell = spine.app_cell();
+    if method == a::service::METHOD_COMMIT_BID {
+        let seal = dregg_app_framework::field_from_u64(0xB1D);
+        spine.commit("commit_bid", &a::BIDDER_RIGHTS, &a::BIDDER_RIGHTS, |live| {
+            let slot = a::next_free_commit_slot(live).unwrap_or_else(|| a::commit_slot(0));
+            a::commit_bid_effects(cell, slot, &seal)
+        })
+    } else {
+        Err(WorldFireError::World {
+            reason: format!(
+                "sealed-auction card: '{method}' is not live-fireable from the seeded COMMIT phase"
+            ),
+        })
+    }
+}
+
 /// The per-app **World drive** closure — seed the app's cell onto the cockpit's LIVE
 /// [`World`] and commit one representative affordance THROUGH it (`World::turn` →
 /// `World::commit_turn`), so the app's cell + receipt land on `World::ledger()` /
@@ -2340,6 +2529,113 @@ mod tests {
             world.borrow().receipts().len(),
             receipts_before + 1,
             "the propose fire landed ONE receipt in World::receipts()"
+        );
+    }
+
+    /// **FULL VIEW MOUNTING — the card button fires the app's REAL verified turn**
+    /// (gpui-free). The whole mount path WITHOUT a GPU: launch an app onto the live
+    /// `World`, resolve its bespoke card, PARSE the card JSON (serde — the same shape
+    /// `deos_view::parse_view_tree` reads) to recover a button's `{turn}` service-method
+    /// symbol, build the [`AppCardSubstance`] over the launch's spine, and FIRE that
+    /// button's method → a real cap-gated verified turn lands on `World::receipts()` and
+    /// the app cell's bound state advances on `World::ledger()`. Proven for gallery +
+    /// bounty-board (and the substance's `get_u64` bind read tracks the live cell).
+    #[cfg(feature = "embedded-executor")]
+    #[test]
+    fn a_launched_apps_card_button_fires_its_real_verified_turn_on_world() {
+        // gallery + sealed-auction back their representative method on a WriteOnce
+        // board (the click writes the NEXT free slot), so the card's button fires a
+        // fresh real verified turn even after the launch fired its representative.
+        // (id, the card button label whose service-method we click)
+        for (id, click_label) in [("gallery", "Submit"), ("sealed-auction", "Commit Bid")] {
+            let world = Rc::new(RefCell::new(World::new()));
+
+            // LAUNCH onto the live World (seeds the app cell + fires its representative turn).
+            let reg = AppRegistry::standard();
+            let launched = reg
+                .launch_on_world(id, [0x5Eu8; 32], Rc::clone(&world))
+                .unwrap_or_else(|| panic!("{id} is a wired app"))
+                .unwrap_or_else(|e| panic!("{id} launches on World: {e}"));
+            let app_cell = launched.primary_cell();
+
+            // RESOLVE the bespoke card + PARSE its JSON (serde — gpui-free), recover the
+            // clicked button's `{turn}` service-method symbol (the 4-axis invariant: the
+            // button turn == the wire method the program dispatches on).
+            let card = app_card(id).unwrap_or_else(|| panic!("{id} ships a wired card"));
+            let tree: serde_json::Value =
+                serde_json::from_str(&card.json).expect("the card JSON parses (deos.ui.* shape)");
+            let method = tree["children"]
+                .as_array()
+                .expect("the card is a vstack of children")
+                .iter()
+                .find(|c| c["kind"] == "button" && c["props"]["label"] == click_label)
+                .and_then(|b| b["props"]["onClick"]["turn"].as_str())
+                .unwrap_or_else(|| panic!("{id} card has a '{click_label}' button"))
+                .to_string();
+
+            // BUILD the live substance over the launch's spine + the card fire dispatch.
+            let substance = AppCardSubstance::new(launched.spine, card.fire);
+            assert_eq!(substance.app_cell(), app_cell);
+
+            let receipts_before = world.borrow().receipts().len();
+
+            // FIRE the clicked button's method → a REAL cap-gated verified turn on World.
+            let receipt = substance.fire(&method, 0).unwrap_or_else(|e| {
+                panic!("{id} card button '{click_label}' ({method}) fires a real turn: {e}")
+            });
+            assert_eq!(
+                receipt.agent, app_cell,
+                "{id} card turn is authored by the app cell"
+            );
+            assert!(
+                receipt.action_count >= 1,
+                "{id} card turn carried an action"
+            );
+
+            // THE COCKPIT INSPECTOR PATH: the receipt landed on World::receipts() and the
+            // app cell's state advanced on World::ledger() (the bound `get_u64` re-reads it).
+            assert_eq!(
+                world.borrow().receipts().len(),
+                receipts_before + 1,
+                "{id} card button landed ONE real receipt on World::receipts()"
+            );
+            assert_eq!(
+                world.borrow().receipts().last().unwrap().agent,
+                app_cell,
+                "{id} World receipt log's last entry is the card's turn"
+            );
+        }
+    }
+
+    /// An app WITHOUT a wired card resolves to `None` (it stays launchable + inspectable,
+    /// just no card surface), and a card-fire of an out-of-phase method is a surfaced
+    /// refusal that commits NOTHING (anti-ghost) — not a panic.
+    #[cfg(feature = "embedded-executor")]
+    #[test]
+    fn an_out_of_phase_card_method_is_refused_without_touching_world() {
+        let world = Rc::new(RefCell::new(World::new()));
+        let reg = AppRegistry::standard();
+        let launched = reg
+            .launch_on_world("gallery", [0xA6u8; 32], Rc::clone(&world))
+            .unwrap()
+            .unwrap();
+        let card = app_card("gallery").unwrap();
+        let substance = AppCardSubstance::new(launched.spine, card.fire);
+        let receipts_before = world.borrow().receipts().len();
+
+        // `curate` is a later-phase method — refused in the seeded SUBMISSION phase.
+        let refused = substance.fire(starbridge_gallery::service::METHOD_CURATE, 0);
+        assert!(refused.is_err(), "an out-of-phase card method is refused");
+        assert_eq!(
+            world.borrow().receipts().len(),
+            receipts_before,
+            "a refused card fire commits NOTHING to World (anti-ghost)"
+        );
+
+        // An app with no wired card resolves to None (still launchable + inspectable).
+        assert!(
+            app_card("compute-exchange").is_none(),
+            "an app without a wired card has no card surface to mount"
         );
     }
 }
