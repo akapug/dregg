@@ -434,6 +434,19 @@ definitionally (`acceptsEffects_eq_cellLifecycleLive`), so the two are interchan
 transfer/mint/burn guards bind it (the source/issuer must be Live — "Destroyed is terminal"). -/
 def cellLifecycleLive (k : RecordKernelState) (c : CellId) : Bool := k.lifecycle c == 0
 
+/-- **`cellLifecycleCanAuthor k c` — the AGENT-admission lifecycle leg.** May cell `c` AUTHOR a turn?
+`true` UNLESS `c` is in a TERMINAL lifecycle state — Destroyed (`3`) or Migrated (`2`)
+(`docs/reference/cells.md`: `is_terminal()` is Destroyed-or-Migrated). Live (`0`), **Sealed (`1`)**,
+and Archived (`4`) may all author a turn. This is WEAKER than `cellLifecycleLive` (Live-ONLY) by
+design: sealing is *reversible* quiescence (`cell.rs:671`) — a Sealed cell must be able to author its
+OWN `cellUnseal` (the reversibility promise) and its own `cellDestroy` (seal is the prelude to
+destruction). The per-effect arms still gate `cellLifecycleLive` on the TARGET (Live-ONLY), so a
+Sealed agent's transfer/set-field/etc. STILL fails the body — only the lifecycle-control effects
+(`cellUnseal`, which requires Sealed; `cellDestroy`, which requires non-Destroyed) succeed. A
+Destroyed/Migrated cell is genuinely terminal and authors nothing. -/
+def cellLifecycleCanAuthor (k : RecordKernelState) (c : CellId) : Bool :=
+  k.lifecycle c != 3 && k.lifecycle c != 2
+
 /-! ## The record-cell transfer: debit/credit the `balance` FIELD. -/
 
 /-- Set the `balance` field of a record cell to `v` (overwriting in place; a non-record value
