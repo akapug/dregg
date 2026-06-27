@@ -1196,6 +1196,17 @@ impl Cockpit {
             );
         }
 
+        // ── THE PRE-BUILT APP LAUNCHER ──────────────────────────────────────────
+        // Beneath the bare-confined-app powerbox flow: the LAUNCHER for the wired
+        // pre-built starbridge-apps (gallery / sealed-auction / … / polis). Each row
+        // launches the app onto the cockpit's LIVE World and fires its representative
+        // VERIFIED turn through the real executor — the cell + receipt land on the
+        // cockpit ledger (inspectable). See [`super::panels_app_launcher`].
+        #[cfg(feature = "app-registry")]
+        {
+            col = col.child(self.apps_launcher_section(cx));
+        }
+
         col
     }
 

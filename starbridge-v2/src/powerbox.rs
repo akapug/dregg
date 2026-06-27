@@ -511,6 +511,27 @@ impl RegistryLauncher {
         self.registry.launch(id, self.federation)
     }
 
+    /// **Launch the app named `id` ONTO the cockpit's LIVE [`World`]** — the
+    /// shared-ledger launcher the cockpit's app-launcher surface calls. Where
+    /// [`Self::launch`] runs the app on the framework's OWN side-substrate, this seeds
+    /// the app's cell + program onto `world` and commits its representative affordance
+    /// through the real executor, so the app's cell + its receipt land on
+    /// `World::ledger()` / `World::receipts()` — the SAME reads the cockpit's cell
+    /// inspector makes (the launched app becomes a live, inspectable cell on the
+    /// operator's own world). `None` if no row has that id; otherwise the
+    /// [`crate::app_registry::AppEntry::launch_on_world`] result (the seeded
+    /// [`crate::app_registry::LaunchedOnWorld`] + first committed receipt, or the
+    /// in-band launch refusal).
+    #[cfg(feature = "embedded-executor")]
+    pub fn launch_on_world(
+        &self,
+        id: &str,
+        world: std::rc::Rc<std::cell::RefCell<crate::world::World>>,
+    ) -> Option<Result<crate::app_registry::LaunchedOnWorld, crate::app_worldspine::WorldFireError>>
+    {
+        self.registry.launch_on_world(id, self.federation, world)
+    }
+
     /// Every line of text the launcher renders (the rows), flattened — used by tests
     /// + the cockpit to assert the launcher speaks real text about each wired app.
     pub fn all_text(&self) -> Vec<String> {
@@ -1004,6 +1025,69 @@ mod tests {
             receipt.action_count >= 1,
             "a real turn landed from the launched app"
         );
+    }
+
+    #[cfg(all(feature = "app-registry", feature = "embedded-executor"))]
+    #[test]
+    fn the_registry_launcher_launches_a_prebuilt_app_onto_the_live_world() {
+        // THE COCKPIT LAUNCH PATH the app-launcher panel drives: the launcher lists
+        // the wired starbridge-apps (the rows the panel renders), and `launch_on_world`
+        // seeds a chosen app's cell onto the LIVE cockpit `World` and fires its
+        // representative affordance as a REAL verified turn — the cell + receipt land on
+        // the cockpit ledger (inspectable), not a framework side-ledger.
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let launcher = RegistryLauncher::standard([0x5Eu8; 32]);
+
+        // The launcher lists the wired apps (the launcher rows + their text).
+        let rows = launcher.rows();
+        assert!(rows.iter().any(|r| r.id == "gallery"), "gallery is listed");
+        assert!(
+            rows.iter().any(|r| r.id == "sealed-auction") && rows.iter().any(|r| r.id == "polis"),
+            "the wider wired set is listed"
+        );
+        assert!(
+            rows.len() >= 18,
+            "the full wired starbridge-app set is launchable from the cockpit, got {}",
+            rows.len()
+        );
+
+        let world = Rc::new(RefCell::new(World::new()));
+        let receipts_before = world.borrow().receipts().len();
+        let cells_before = world.borrow().cell_count();
+
+        // LAUNCH gallery ONTO the live World — seeds its cell + fires its representative
+        // verified turn through the real executor.
+        let launched = launcher
+            .launch_on_world("gallery", Rc::clone(&world))
+            .expect("gallery is a wired app")
+            .expect("gallery seeds + commits onto the live World");
+        let app_cell = launched.primary_cell();
+
+        // The launched app is now a live cell on the cockpit World ledger (the inspector
+        // path), and its turn landed a real receipt authored by that cell.
+        assert!(
+            world.borrow().ledger().get(&app_cell).is_some(),
+            "the launched app cell is on the cockpit World ledger (inspectable)"
+        );
+        assert_eq!(
+            world.borrow().cell_count(),
+            cells_before + 1,
+            "the launch added the app cell to the cockpit World"
+        );
+        assert_eq!(
+            world.borrow().receipts().len(),
+            receipts_before + 1,
+            "the launch fired ONE real verified turn onto World::receipts()"
+        );
+        assert_eq!(launched.receipt.agent, app_cell);
+        assert!(launched.receipt.action_count >= 1);
+
+        // An unknown id yields `None` (the panel surfaces it as a banner, never panics).
+        assert!(launcher
+            .launch_on_world("no-such-app", Rc::clone(&world))
+            .is_none());
     }
 
     #[test]
