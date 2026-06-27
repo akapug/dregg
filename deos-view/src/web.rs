@@ -206,6 +206,29 @@ fn node(n: &ViewNode, binds: &BindValues, cursor: &mut usize, out: &mut String) 
         ViewNode::Divider => {
             out.push_str("<hr class=\"deos-divider\">");
         }
+
+        // ── The COMPOSITION KEYSTONE — the IDENTICAL host node → HTML: a framed region with a
+        //    `⌂ <cell>` header carrying the mounted cell's whole hosted subtree (or the honest
+        //    unresolved placeholder). `data-cell` carries the mount reference for the in-tab
+        //    resolver to re-read the cell's heap. ──────────────────────────────────────────
+        ViewNode::Host { cell, view } => {
+            out.push_str(&format!(
+                "<section class=\"deos-host\" data-cell=\"{}\">",
+                escape(cell)
+            ));
+            out.push_str(&format!(
+                "<div class=\"deos-host-head\">&#8962; {}</div>",
+                escape(cell)
+            ));
+            match view {
+                Some(v) => node(v, binds, cursor, out),
+                None => out.push_str(&format!(
+                    "<div class=\"deos-host-unresolved\">&lsaquo;mount cell {}: unresolved&rsaquo;</div>",
+                    escape(cell)
+                )),
+            }
+            out.push_str("</section>");
+        }
     }
 }
 
@@ -812,6 +835,9 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:'IBM Plex Sans',s
 .deos-gauge-track{width:140px;height:8px;background:var(--border);border-radius:4px;overflow:hidden;}
 .deos-gauge-fill{height:8px;background:var(--fg);border-radius:4px;width:0;}
 .deos-divider{border:none;border-top:1px solid var(--border);width:100%;margin:.25rem 0;}
+.deos-host{display:flex;flex-direction:column;gap:.4rem;border:1px solid var(--border);border-radius:8px;padding:.5rem .6rem;}
+.deos-host-head{color:var(--muted);font-size:.8rem;font-weight:600;}
+.deos-host-unresolved{color:var(--muted);font-style:italic;}
 ";
 
 /// The browser-side affordance wire — a button click reads its `data-turn`/`data-arg`,

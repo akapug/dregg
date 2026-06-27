@@ -84,6 +84,32 @@ pub enum ViewNode {
     },
     /// `divider()` → a thin full-width horizontal rule (a groove / separator). A pure leaf.
     Divider,
+
+    // ── The COMPOSITION KEYSTONE (docs/deos/CELL-HOSTED-VIEWTREE.md) — a cell is a
+    //    first-class hostable COMPONENT whose committed heap stores its own evolving
+    //    view-tree; `host` MOUNTS that whole tree here as a subtree. This is distinct from
+    //    `bind` (reads ONE scalar value off `(cell, slot)`) and from value-transclusion (a
+    //    value snapshot from another cell): `host` mounts an ENTIRE view-tree sourced from the
+    //    hosted cell's committed heap. Hosted trees contain `host` nodes for OTHER cells →
+    //    fractal recursion (cells-host-cells-host-view-trees, to arbitrary depth). ──
+    /// `host(cellId)` → mount the hosted cell's WHOLE view-tree here, as a subtree.
+    ///
+    /// `cell` is the hosted cell's id (hex). `view` is the RESOLVED hosted view-tree:
+    /// - `None` — an UNRESOLVED mount (a bare reference). The renderer paints an honest
+    ///   `‹mount cell …: unresolved›` placeholder until [`resolve_mounts`] fills it from the
+    ///   cell's committed heap (the cell-heap-as-view-source — see [`crate::mount`]).
+    /// - `Some(tree)` — the resolved/provided subtree, mounted whole. A resolver emits this;
+    ///   an author may also carry a pre-baked subtree inline (the first-cut provided source).
+    ///
+    /// `host` stays PURE DATA (a cell-id string + an optional resolved subtree, NO live
+    /// `Applet`/`Ledger` handle) so the gpui-free + deos-js-free `web`/`discord` renderers
+    /// walk the IDENTICAL resolved tree — the heap read happens OUTSIDE the IR, at the
+    /// boundary, and the result is spliced back in. The hosted subtree participates in the
+    /// SAME pre-order bind cursor (every renderer recurses `view` at the host's position).
+    Host {
+        cell: String,
+        view: Option<Box<ViewNode>>,
+    },
 }
 
 /// The raw JSON mirror of a `deos.ui.*` node (`{ kind, props, children }`). The
@@ -142,6 +168,10 @@ pub struct RawProps {
     /// A `tabs` node's select affordance (`arg` is the clicked tab index; camelCase).
     #[serde(default, rename = "selectTurn", alias = "select_turn")]
     pub select_turn: Option<String>,
+    /// A `host` node's hosted cell id (hex) — the mount reference. The hosted cell's WHOLE
+    /// view-tree is read from its committed heap and mounted here (see [`ViewNode::Host`]).
+    #[serde(default, alias = "cellId")]
+    pub cell: Option<String>,
 }
 
 /// `onClick = { turn, arg }` — the affordance a button fires.
@@ -198,8 +228,154 @@ impl RawNode {
                 label: self.props.label.clone().unwrap_or_default(),
             },
             "divider" => ViewNode::Divider,
+            // `host(cellId)` — a child (if present) is the provided/pre-baked hosted subtree;
+            // no child = an UNRESOLVED mount (filled later from the cell heap by
+            // [`resolve_mounts`]). At most one hosted subtree (a host mounts ONE cell's tree).
+            "host" => ViewNode::Host {
+                cell: self.props.cell.clone().unwrap_or_default(),
+                view: self.children.first().map(|c| Box::new(c.lift())),
+            },
             other => ViewNode::Text(format!("‹unmapped node: {other}›")),
         }
+    }
+}
+
+/// A source of cells' hosted view-trees — the cell-heap-as-view-source seen abstractly. A
+/// [`resolve_mounts`] walk asks it for the hosted view-tree of each [`ViewNode::Host`]'s
+/// cell. The native [`crate::mount`] impl reads the tree out of the cell's committed heap;
+/// tests / provided sources use an in-memory [`MapMountSource`]. Any
+/// `Fn(&str) -> Option<ViewNode>` is a `MountSource` (the blanket impl below).
+pub trait MountSource {
+    /// The hosted view-tree of `cell` (hex id), or `None` if the cell hosts no tree (the
+    /// host then stays an unresolved placeholder — honest, never a crash).
+    fn hosted_tree(&self, cell: &str) -> Option<ViewNode>;
+}
+
+impl<F: Fn(&str) -> Option<ViewNode>> MountSource for F {
+    fn hosted_tree(&self, cell: &str) -> Option<ViewNode> {
+        self(cell)
+    }
+}
+
+/// An in-memory `cell-id → hosted view-tree` source (a provided source / the test source).
+#[derive(Debug, Default, Clone)]
+pub struct MapMountSource(pub std::collections::BTreeMap<String, ViewNode>);
+
+impl MapMountSource {
+    /// Insert a cell's hosted view-tree (builder-style).
+    pub fn with(mut self, cell: impl Into<String>, tree: ViewNode) -> Self {
+        self.0.insert(cell.into(), tree);
+        self
+    }
+}
+
+impl MountSource for MapMountSource {
+    fn hosted_tree(&self, cell: &str) -> Option<ViewNode> {
+        self.0.get(cell).cloned()
+    }
+}
+
+/// The maximum mount DEPTH (`host` nesting) the resolver unfolds before fail-safing. Bounds
+/// a huge-but-acyclic mount tree so it can never blow the stack (cycles are caught separately
+/// by the visited-path check). 16 levels of cells-host-cells is far past any real surface.
+pub const MAX_MOUNT_DEPTH: usize = 16;
+
+/// **Resolve every `host` mount against a [`MountSource`]** — the cell-hosted-view-tree
+/// composition keystone. Walks `tree`, and for each [`ViewNode::Host`] fills its `view` from
+/// the source's hosted tree for that cell (recursing into it so nested `host`s — fractal
+/// cells-host-cells — resolve too). Returns a fully-resolved tree every renderer walks
+/// identically.
+///
+/// FAIL-SAFE BY CONSTRUCTION (the recursion contract):
+/// - **cycle** — a `host{cell}` naming a cell already on the mount path (self-host, or an
+///   a→b→a cycle) resolves to a `‹mount cycle: …›` body inside the host frame (the cell is
+///   still shown; only the self-reference is cut). Never an infinite unfold.
+/// - **depth** — at [`MAX_MOUNT_DEPTH`] the resolver stops with a `‹mount depth exceeded›`
+///   body (a huge acyclic tree can't blow the stack).
+/// - **source miss** — a cell the source can't supply stays `view: None` (the unresolved
+///   placeholder). A `host` already carrying a `view` (provided/pre-baked) is recursed for
+///   nested hosts but otherwise kept.
+pub fn resolve_mounts(tree: &ViewNode, source: &dyn MountSource) -> ViewNode {
+    let mut path: Vec<String> = Vec::new();
+    resolve_rec(tree, source, &mut path, 0)
+}
+
+fn resolve_rec(
+    node: &ViewNode,
+    source: &dyn MountSource,
+    path: &mut Vec<String>,
+    depth: usize,
+) -> ViewNode {
+    let recur = |children: &[ViewNode], path: &mut Vec<String>| -> Vec<ViewNode> {
+        children
+            .iter()
+            .map(|c| resolve_rec(c, source, path, depth))
+            .collect()
+    };
+    match node {
+        ViewNode::Host { cell, view } => {
+            // Cycle: this cell is already being mounted on the current path.
+            if path.iter().any(|c| c == cell) {
+                return ViewNode::Host {
+                    cell: cell.clone(),
+                    view: Some(Box::new(ViewNode::Text(format!("‹mount cycle: {cell}›")))),
+                };
+            }
+            // Depth: a huge (acyclic) mount chain fail-safes rather than blowing the stack.
+            if depth >= MAX_MOUNT_DEPTH {
+                return ViewNode::Host {
+                    cell: cell.clone(),
+                    view: Some(Box::new(ViewNode::Text("‹mount depth exceeded›".into()))),
+                };
+            }
+            // The hosted subtree: the provided/pre-baked `view`, else the source's tree for
+            // this cell. A miss leaves it unresolved (the honest placeholder).
+            let hosted = match view {
+                Some(v) => Some((**v).clone()),
+                None => source.hosted_tree(cell),
+            };
+            let resolved = hosted.map(|h| {
+                path.push(cell.clone());
+                let r = resolve_rec(&h, source, path, depth + 1);
+                path.pop();
+                Box::new(r)
+            });
+            ViewNode::Host {
+                cell: cell.clone(),
+                view: resolved,
+            }
+        }
+        ViewNode::VStack(cs) => ViewNode::VStack(recur(cs, path)),
+        ViewNode::Row(cs) => ViewNode::Row(recur(cs, path)),
+        ViewNode::List(cs) => ViewNode::List(recur(cs, path)),
+        ViewNode::Table(cs) => ViewNode::Table(recur(cs, path)),
+        ViewNode::Section {
+            title,
+            tag,
+            children,
+        } => ViewNode::Section {
+            title: title.clone(),
+            tag: tag.clone(),
+            children: recur(children, path),
+        },
+        ViewNode::Tabs {
+            tabs,
+            selected_slot,
+            select_turn,
+            panels,
+        } => ViewNode::Tabs {
+            tabs: tabs.clone(),
+            selected_slot: *selected_slot,
+            select_turn: select_turn.clone(),
+            panels: recur(panels, path),
+        },
+        // Leaves carry no mounts — cloned through unchanged.
+        ViewNode::Text(_)
+        | ViewNode::Bind { .. }
+        | ViewNode::Button { .. }
+        | ViewNode::Input { .. }
+        | ViewNode::Gauge { .. }
+        | ViewNode::Divider => node.clone(),
     }
 }
 
@@ -207,4 +383,169 @@ impl RawNode {
 pub fn parse_view_tree(json: &str) -> Result<ViewNode, String> {
     let raw: RawNode = serde_json::from_str(json).map_err(|e| format!("view-tree JSON: {e}"))?;
     Ok(raw.lift())
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+
+    /// A `host(cell)` with no child lifts to an UNRESOLVED mount (`view: None`).
+    #[test]
+    fn host_lifts_unresolved_from_bare_reference() {
+        let tree =
+            parse_view_tree(r#"{ "kind":"host", "props":{ "cell":"abcd" } }"#).expect("parse host");
+        match tree {
+            ViewNode::Host { cell, view } => {
+                assert_eq!(cell, "abcd", "the host carries the cell ref");
+                assert!(view.is_none(), "a bare host reference is unresolved");
+            }
+            _ => panic!("root is a host node"),
+        }
+    }
+
+    /// `resolve_mounts` fills a host's `view` from the source — and recurses, so a FRACTAL
+    /// 2-level nest (parent hosts child, child hosts grandchild) resolves end-to-end.
+    #[test]
+    fn resolve_mounts_unfolds_a_fractal_two_level_nest() {
+        let grandchild = ViewNode::Section {
+            title: "G".into(),
+            tag: String::new(),
+            children: vec![ViewNode::Text("grandchild leaf".into())],
+        };
+        // The child hosts the grandchild (a host node inside the child's own tree).
+        let child = ViewNode::Section {
+            title: "C".into(),
+            tag: String::new(),
+            children: vec![
+                ViewNode::Text("child body".into()),
+                ViewNode::Host {
+                    cell: "gc".into(),
+                    view: None,
+                },
+            ],
+        };
+        let source = MapMountSource::default()
+            .with("child", child)
+            .with("gc", grandchild);
+        let parent = ViewNode::VStack(vec![
+            ViewNode::Text("parent".into()),
+            ViewNode::Host {
+                cell: "child".into(),
+                view: None,
+            },
+        ]);
+
+        let resolved = resolve_mounts(&parent, &source);
+        // Walk down: parent → host(child) → child Section → host(gc) → grandchild Section.
+        let ViewNode::VStack(top) = &resolved else {
+            panic!("root vstack")
+        };
+        let ViewNode::Host {
+            view: Some(child_v),
+            ..
+        } = &top[1]
+        else {
+            panic!("host(child) resolved")
+        };
+        let ViewNode::Section {
+            children: child_kids,
+            ..
+        } = &**child_v
+        else {
+            panic!("child is a section")
+        };
+        let ViewNode::Host {
+            view: Some(gc_v), ..
+        } = &child_kids[1]
+        else {
+            panic!("host(gc) resolved INSIDE the child — the fractal nest")
+        };
+        let ViewNode::Section {
+            title: gc_title, ..
+        } = &**gc_v
+        else {
+            panic!("grandchild is a section")
+        };
+        assert_eq!(gc_title, "G", "the grandchild tree mounted two levels deep");
+    }
+
+    /// A cell hosting ITSELF is caught — the resolver fail-safes to a cycle placeholder
+    /// rather than unfolding forever.
+    #[test]
+    fn resolve_mounts_breaks_a_self_cycle() {
+        // `loop` hosts a tree that hosts `loop` again.
+        let looping = ViewNode::Host {
+            cell: "loop".into(),
+            view: None,
+        };
+        let source = MapMountSource::default().with("loop", looping.clone());
+        let resolved = resolve_mounts(&looping, &source);
+        let ViewNode::Host { view: Some(v), .. } = &resolved else {
+            panic!("the outer host resolved once")
+        };
+        // Its body is the inner host(loop), which is a CYCLE — its body is the placeholder.
+        let ViewNode::Host {
+            view: Some(inner), ..
+        } = &**v
+        else {
+            panic!("inner host present")
+        };
+        match &**inner {
+            ViewNode::Text(t) => assert!(t.contains("mount cycle"), "self-cycle is cut: {t}"),
+            _ => panic!("the self-cycle resolves to the cycle placeholder"),
+        }
+    }
+
+    /// A mutual a→b→a cycle is caught the same way (the visited PATH, not just self).
+    #[test]
+    fn resolve_mounts_breaks_a_mutual_cycle() {
+        let a = ViewNode::Host {
+            cell: "b".into(),
+            view: None,
+        };
+        let b = ViewNode::Host {
+            cell: "a".into(),
+            view: None,
+        };
+        let source = MapMountSource::default().with("a", a).with("b", b);
+        let root = ViewNode::Host {
+            cell: "a".into(),
+            view: None,
+        };
+        // Just terminating (no stack overflow / hang) + producing a tree is the property.
+        let resolved = resolve_mounts(&root, &source);
+        let rendered = format!("{resolved:?}");
+        assert!(
+            rendered.contains("mount cycle"),
+            "the mutual cycle is cut with a placeholder"
+        );
+    }
+
+    /// A pre-baked (provided) `view` is kept AND recursed for nested hosts.
+    #[test]
+    fn resolve_mounts_keeps_and_recurses_a_provided_subtree() {
+        let provided = ViewNode::Host {
+            cell: "outer".into(),
+            view: Some(Box::new(ViewNode::Host {
+                cell: "inner".into(),
+                view: None,
+            })),
+        };
+        let source =
+            MapMountSource::default().with("inner", ViewNode::Text("inner resolved".into()));
+        let resolved = resolve_mounts(&provided, &source);
+        let ViewNode::Host { view: Some(v), .. } = &resolved else {
+            panic!("outer kept its provided view")
+        };
+        let ViewNode::Host {
+            view: Some(inner), ..
+        } = &**v
+        else {
+            panic!("the nested host inside the provided subtree was visited")
+        };
+        assert!(
+            matches!(&**inner, ViewNode::Text(t) if t == "inner resolved"),
+            "the nested host inside a provided subtree resolved from the source"
+        );
+    }
 }

@@ -172,6 +172,18 @@ fn block(n: &ViewNode, binds: &[u64], cursor: &mut usize, acc: &mut Accum) {
             );
         }
         ViewNode::Divider => push_line(&mut acc.description, "\u{2500}\u{2500}\u{2500}"),
+        // The COMPOSITION KEYSTONE flattens gracefully: a `⌂ <cell>` header line + the mounted
+        // cell's hosted subtree (cursor-aligned), or an unresolved placeholder line.
+        ViewNode::Host { cell, view } => {
+            push_line(&mut acc.description, &format!("\u{2302} {cell}"));
+            match view {
+                Some(v) => block(v, binds, cursor, acc),
+                None => push_line(
+                    &mut acc.description,
+                    &format!("\u{2039}mount cell {cell}: unresolved\u{203a}"),
+                ),
+            }
+        }
     }
 }
 
@@ -241,6 +253,14 @@ fn inline(
             parts.push(format!("{label}\u{2039}{slot}/{max}\u{203a}"))
         }
         ViewNode::Divider => parts.push("\u{2014}".into()),
+        // A host inlined into a row: a `⌂ <cell>` marker + the hosted subtree's inline parts.
+        ViewNode::Host { cell, view } => {
+            parts.push(format!("\u{2302}{cell}"));
+            match view {
+                Some(v) => inline(v, binds, cursor, parts, buttons),
+                None => parts.push(format!("\u{2039}{cell}\u{203a}")),
+            }
+        }
     }
 }
 
