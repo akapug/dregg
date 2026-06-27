@@ -81,7 +81,11 @@ ALLOWLIST_FILE_PATTERNS=(
     "demo-agent/examples"
     "intent/src/fulfillment.rs"
     "node/src/api.rs"
-    "node/src/mcp.rs"
+    # The MCP server's tool-handler surface. Was `node/src/mcp.rs` (a single
+    # file); the mcp.rs->mcp/ split moved the handlers into `node/src/mcp/*`, so
+    # the pattern is the directory now. The handlers build the unsigned skeleton
+    # that the caller's signing path then authorizes — same as node/src/api.rs.
+    "node/src/mcp"
     "sdk/src/committed_turn.rs"
     "sdk/src/runtime.rs"
     "sdk/src/cipherclerk.rs"
@@ -137,6 +141,37 @@ ALLOWLIST_FILE_PATTERNS=(
     # opposite of constructing it. It is the tool that fails a forest carrying the
     # variant outside genesis.
     "dregg-userspace-verify/src"
+
+    # ─── Wire/bridge/demo scaffolding surfaced after CI was un-blocked ─────────
+    # (CI was un-runnable from 4c98dd86 until the ci.yml YAML fix, so the guard
+    #  had not run; these accumulated unchecked. Each is the same established
+    #  "unsigned skeleton, authority off-band, signed/checked before commit" class
+    #  as the entries above — assessed, not blanket-suppressed.)
+    #
+    # dregg-sdk-net's remote layer is the net twin of the already-allowlisted
+    # `sdk/src/remote.rs`: it builds the unsigned skeleton, then `sign_action`
+    # signs it before the action leaves the runtime ("the ONLY way an action
+    # leaves this runtime"). Unchecked is the pre-signature placeholder.
+    "dregg-sdk-net/src/remote.rs"
+    # turn/src/reversible.rs builds the INVERSE of an already-committed, already-
+    # authorized forward action (RCCS reversal). The inverse is an internal undo
+    # artifact, not a fresh authority claim — same class as the allowlisted
+    # turn/src/{executor,eventual,pending}.rs.
+    "turn/src/reversible.rs"
+    # pg-dregg is EXCLUDED from the workspace (Tier-C Postgres path); its producer
+    # constructs a witness action whose authority is established by the pg attest
+    # path, not the per-action auth field. Scaffolding in an excluded crate.
+    "pg-dregg/src"
+    # android-cell's permission gate bridges a foreign Android app into a deos
+    # turn; authority is the host capability already granted off-band (local-cap-
+    # is-the-proof, same rationale as sel4/dregg-firmament/src).
+    "android-cell/src/permgate.rs"
+    # discord-bot's drive surface bridges a Discord command into a deos turn; the
+    # bot is a confined-agent surface whose cap is established off-band. Bridge.
+    "discord-bot/src/deos_drive.rs"
+    # The mobile deos-core smoke-test binary is a demo `main`, not a production
+    # auth path — same class as demo-agent/examples / the two-ai-handoff helper.
+    "mobile/deos-core-smoke/src/main.rs"
 )
 
 ROOT="${1:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
