@@ -35,40 +35,68 @@ pub fn unpack_u64(fe: &FieldElement) -> u64 {
 
 /// A declarative apply rule — the portable shape of an affordance's effect, mirroring
 /// `deos-js::portable::ApplyOp`. Reconstituting an affordance from this is what makes a
-/// fire deterministic (the same writes for the same model + arg).
+/// fire deterministic (the same writes for the same model + args).
+///
+/// Every variant lowers to the SAME ordinary `Effect::SetField` the executor already
+/// enforces and a light client already witnesses — the op is purely a runtime-layer
+/// *write-shape*, NOT a kernel/effect-vocabulary or circuit change. The literal-write
+/// variants ([`ApplyOp::SetSlotFromArg`], [`ApplyOp::SetRegisterFromArgs`]) are the named
+/// power-up that lets a JS affordance write the JS-supplied VALUE to a register, instead
+/// of riding `AddToSlot` over a zeroed slot (which only lands `v` on a *fresh* `0`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApplyOp {
-    /// `slot := slot + max(arg, 0)` (the counter `inc`).
+    /// `slot := slot + max(args[0], 0)` (the counter `inc`).
     AddToSlot { slot: Slot },
-    /// `slot := slot - max(arg, 0)` saturating at 0 (the counter `dec`).
+    /// `slot := slot - max(args[0], 0)` saturating at 0 (the counter `dec`).
     SubFromSlot { slot: Slot },
     /// `slot := value` — set a slot to a fixed `u64` (e.g. `reset` to 0).
     SetSlot { slot: Slot, value: u64 },
+    /// `slot := max(args[0], 0)` — a **literal write**: write the JS-supplied value
+    /// DIRECTLY to a fixed register, overwriting whatever was there (a `put(v)` lands `v`
+    /// exactly, even over a non-zero slot — the gap `AddToSlot` left). The named power-up.
+    SetSlotFromArg { slot: Slot },
+    /// `args[0] := max(args[1], 0)` — a **register-addressed literal write**: write the
+    /// JS-supplied VALUE (`args[1]`) to the JS-supplied REGISTER (`args[0]`). This lets a
+    /// JS affordance reach an ARBITRARY register chosen at call time — exactly the kvstore
+    /// `put(reg, value)` shape, expressed in pure JS.
+    SetRegisterFromArgs,
 }
 
 impl ApplyOp {
-    /// The (slot, new-value) write this op produces against the current slot value and
-    /// the JS-supplied `arg`.
-    pub fn write(&self, current: u64, arg: i64) -> (Slot, FieldElement) {
+    /// The (slot, new-value) write this op produces against the current slot value and the
+    /// JS-supplied `args` (`args[0]` is the legacy single arg; later positions feed the
+    /// register-addressed write).
+    pub fn write(&self, current: u64, args: &[i64]) -> (Slot, FieldElement) {
+        let a0 = args.first().copied().unwrap_or(0);
         match *self {
             ApplyOp::AddToSlot { slot } => {
-                let next = current.saturating_add(arg.max(0) as u64);
+                let next = current.saturating_add(a0.max(0) as u64);
                 (slot, pack_u64(next))
             }
             ApplyOp::SubFromSlot { slot } => {
-                let next = current.saturating_sub(arg.max(0) as u64);
+                let next = current.saturating_sub(a0.max(0) as u64);
                 (slot, pack_u64(next))
             }
             ApplyOp::SetSlot { slot, value } => (slot, pack_u64(value)),
+            ApplyOp::SetSlotFromArg { slot } => (slot, pack_u64(a0.max(0) as u64)),
+            ApplyOp::SetRegisterFromArgs => {
+                let reg = a0.max(0) as usize;
+                let value = args.get(1).copied().unwrap_or(0).max(0) as u64;
+                (reg, pack_u64(value))
+            }
         }
     }
 
-    /// The model slot this op writes.
+    /// The model slot this op reads for its `current` value before writing. For the
+    /// register-addressed write the target is dynamic (it comes from `args[0]`), and the
+    /// op ignores `current`, so slot `0` is reported as an innocuous read site.
     pub fn slot(&self) -> Slot {
         match *self {
             ApplyOp::AddToSlot { slot }
             | ApplyOp::SubFromSlot { slot }
-            | ApplyOp::SetSlot { slot, .. } => slot,
+            | ApplyOp::SetSlot { slot, .. }
+            | ApplyOp::SetSlotFromArg { slot } => slot,
+            ApplyOp::SetRegisterFromArgs => 0,
         }
     }
 }
@@ -97,6 +125,16 @@ pub enum FireError {
     /// would have pointed at is never touched. (The keystone confinement refusal for the
     /// cross-cell host fns.)
     NoCapability(String),
+    /// The JS named a method that does NOT route through the target cell's published
+    /// [`dregg_cell::interface::InterfaceDescriptor`] (the verified DFA
+    /// `route_method` path `invoke()` speaks). The method is not a member of the
+    /// committed interface — fail-closed, nothing committed.
+    MethodNotRouted(String),
+    /// The JS named a [`dregg_cell::interface::Semantics::Serviced`] method through
+    /// `tCell` — a serviced read is answered by the OFE cross-cell read, NOT a replay
+    /// turn, so the bridge refuses to fire it (mirroring `invoke()`'s `ServicedSeam`
+    /// refusal). The seam is named honestly rather than faked into a write.
+    ServicedSeam(String),
     /// The executor rejected the (authorized) turn.
     Executor(String),
 }
@@ -107,6 +145,15 @@ impl std::fmt::Display for FireError {
             FireError::UnknownAffordance(n) => write!(f, "unknown affordance: {n}"),
             FireError::Unauthorized(n) => write!(f, "unauthorized affordance: {n}"),
             FireError::NoCapability(n) => write!(f, "no capability to cell: {n}"),
+            FireError::MethodNotRouted(n) => {
+                write!(
+                    f,
+                    "method does not route through the published interface: {n}"
+                )
+            }
+            FireError::ServicedSeam(n) => {
+                write!(f, "serviced method is a read, not a turn (no desugar): {n}")
+            }
             FireError::Executor(e) => write!(f, "executor rejected the turn: {e}"),
         }
     }
@@ -245,7 +292,7 @@ impl CellApplet {
 
         // (3) write = pure function of the live model.
         let current = self.get_u64(aff.op.slot());
-        let (slot, value) = aff.op.write(current, arg);
+        let (slot, value) = aff.op.write(current, &[arg]);
 
         // (4) build + execute the verified turn (the cap tooth already ran in-band, so
         //     the action carries `Unchecked` authorization — single-custody embedded

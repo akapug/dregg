@@ -122,8 +122,8 @@ which is the sandbox.
 
 | host fn | meaning | verified? |
 |---|---|---|
-| `t(turn, arg)` | **fire an affordance on the HOME cell** — commit ONE cap-gated verified turn | yes — `is_attenuation` + executor + `TurnReceipt` |
-| `tCell(cell, turn, arg)` | **fire an affordance on ANOTHER cell** the JS holds a cap to — the multi-cell coordination keystone | yes — same `is_attenuation` tooth, against the cap held for THAT cell |
+| `t(turn, ...args)` | **fire an affordance/typed method on the HOME cell** — commit ONE cap-gated verified turn | yes — `is_attenuation` + executor + `TurnReceipt` |
+| `tCell(cell, method, ...args)` | **fire a typed method on ANOTHER cell** the JS holds a cap to — resolved through THAT cell's published `InterfaceDescriptor::route_method` (the verified DFA dispatch `invoke()` speaks) when one is published, else a bare affordance name | yes — same `is_attenuation` tooth, against the cap held for THAT cell + the published `MethodSig`'s requirement |
 | `transfer(from, to, amount)` | **move value** between two cells the JS holds caps to | yes — `Effect::Transfer`, conservation enforced by the executor |
 | `get(slot)` / `get(cell, slot)` | witnessed read of a home / named-cell model slot off the live ledger | read, confers no authority |
 | `viewPatch(node)` | append a `{kind,props,children}` node to the home cell's view-tree, seal the blob into its committed heap, and bump the view version via a turn | yes — a receipted heap write moving `heap_root` + a `SetField` provenance turn |
@@ -213,12 +213,32 @@ web shell binds the (SpiderMonkey today, boa-on-wasm tomorrow) `Context` to its
 - **Next rung — cockpit wiring:** resolve a cell's `SCRIPT_COLL` handler on a
   surface event in `card_surface`/`card_pane` and run it in the native runtime bound
   to the live `World` (additive to the static `{turn,arg}` path).
-- **Next power-up — a literal-write `ApplyOp` + a published-interface bridge:** today an
-  affordance's effect is one of `AddToSlot`/`SubFromSlot`/`SetSlot{fixed}`; `put(reg,v)`
-  rides `AddToSlot` over a zeroed slot (post-state = `v`). A `SetSlotFromArg`/multi-write
-  `ApplyOp`, and a bridge that reads a cell's published `InterfaceDescriptor`
-  (`route_method`) so `tCell` names a *typed method* rather than a local affordance, close
-  the gap to expressing an arbitrary starbridge-app `CellProgram` in pure JS.
+- **Power-up — a literal-write `ApplyOp` + a published-interface bridge — DONE:** the two
+  named gaps to expressing an arbitrary starbridge-app `CellProgram` in pure JS are closed.
+  1. **Literal / register-addressed writes.** `ApplyOp` gains `SetSlotFromArg { slot }`
+     (`slot := arg` — write the JS value DIRECTLY, overwriting, so a `put(v)` lands `v`
+     exactly even over a non-zero slot) and `SetRegisterFromArgs` (`args[0] := args[1]` —
+     write the JS-supplied VALUE to the JS-supplied REGISTER, the kvstore `put(reg, value)`
+     shape). Both lower to the SAME ordinary `Effect::SetField` the executor already
+     enforces and a light client already witnesses — the op is a runtime-layer *write-shape*,
+     **NOT a kernel/effect-vocabulary or circuit change, so there is no VK seam** (the
+     `ApplyOp` enum is a `deos-js-runtime`/`deos-js` local, not a `cell/` effect). `t`/`tCell`
+     now take variadic numeric args to feed it.
+  2. **The `route_method` bridge.** A cell may `CellWorld::publish_interface` its first-class
+     typed `InterfaceDescriptor` (the same content-addressed descriptor the real
+     kvstore/escrow cells publish). When present, `tCell(cell, "method", ..)` resolves the
+     method through the verified DFA `InterfaceDescriptor::route_method` — the SAME dispatch
+     `dregg_app_framework::invoke()` speaks: an undeclared method is fail-closed
+     (`MethodNotRouted`), a `Semantics::Serviced` method is refused as a non-turn read
+     (`ServicedSeam`, mirroring `invoke()`'s seam), and the cap requirement is the published
+     `MethodSig`'s — so the JS names a TYPED METHOD, not a bare affordance index.
+
+  Proven by running: `tests/native_js_kvstore_pure_js.rs` rebuilds the `starbridge-kvstore`
+  service cell as pure JS-on-cells — `tCell("store", "put", reg, value)` writes the JS value
+  to the JS register through the published `put` method (typed, `Signature`-gated,
+  DFA-routed), overwrites it with a second literal write, refuses `get` as a serviced seam,
+  refuses an undeclared method, and gates on the published interface's cap — all real
+  verified turns, with NO servo.
 - **Follow-up — `deos-js-core`:** lift the engine-free substance out of `deos-js` so
   both engines share one turn path and the cockpit crate never links mozjs.
 - **Follow-up — boa-on-wasm in the web shell:** retire the servo-only constraint by

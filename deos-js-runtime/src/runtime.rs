@@ -168,18 +168,28 @@ fn with_world<R>(f: impl FnOnce(&mut CellWorld) -> R) -> R {
     })
 }
 
-/// `t(turn, arg)` — fire an affordance on the **home** cell (one cap-gated verified turn).
+/// `t(turn, ...args)` — fire an affordance/typed method on the **home** cell (one cap-gated
+/// verified turn). Trailing numeric args feed the write (`args[0]` the legacy single arg,
+/// `args[1]` the value for a register-addressed `put(reg, value)`).
 fn world_t(_this: &JsValue, args: &[JsValue], ctx: &mut Context) -> boa_engine::JsResult<JsValue> {
-    let name = arg_string(args.first(), ctx, "t(turn, arg): missing affordance name")?;
-    let arg = arg_i64(args.get(1), ctx)?;
-    match with_world(|w| w.fire_home(&name, arg)) {
+    let name = arg_string(
+        args.first(),
+        ctx,
+        "t(turn, ...args): missing affordance name",
+    )?;
+    let fire_args = arg_i64_rest(args.get(1..).unwrap_or(&[]), ctx)?;
+    match with_world(|w| w.fire_home(&name, &fire_args)) {
         Ok(fired) => Ok(JsValue::from(fired.value)),
         Err(e) => Err(refuse(&format!("t({name:?})"), e).into()),
     }
 }
 
-/// `tCell(cell, turn, arg)` — **fire an affordance on ANOTHER cell** the JS holds a cap to
-/// (the multi-cell-coordination keystone). A cell the JS holds no cap to is unreachable.
+/// `tCell(cell, method, ...args)` — **fire a typed method on ANOTHER cell** the JS holds a
+/// cap to (the multi-cell-coordination keystone). When the target cell publishes an
+/// [`crate::world::CellWorld::publish_interface`] interface, `method` is resolved through
+/// the verified DFA `route_method` — the JS names a TYPED METHOD, not a bare affordance
+/// index. A cell the JS holds no cap to is unreachable. Trailing numeric args feed the
+/// write (e.g. `tCell("store", "put", reg, value)`).
 fn world_t_cell(
     _this: &JsValue,
     args: &[JsValue],
@@ -188,15 +198,15 @@ fn world_t_cell(
     let cell = arg_string(
         args.first(),
         ctx,
-        "tCell(cell, turn, arg): missing cell handle",
+        "tCell(cell, method, ...args): missing cell handle",
     )?;
     let name = arg_string(
         args.get(1),
         ctx,
-        "tCell(cell, turn, arg): missing affordance",
+        "tCell(cell, method, ...args): missing method",
     )?;
-    let arg = arg_i64(args.get(2), ctx)?;
-    match with_world(|w| w.fire_on(&cell, &name, arg)) {
+    let fire_args = arg_i64_rest(args.get(2..).unwrap_or(&[]), ctx)?;
+    match with_world(|w| w.fire_on(&cell, &name, &fire_args)) {
         Ok(fired) => Ok(JsValue::from(fired.value)),
         Err(e) => Err(refuse(&format!("tCell({cell:?}, {name:?})"), e).into()),
     }
@@ -283,6 +293,20 @@ fn arg_i64(v: Option<&JsValue>, ctx: &mut Context) -> boa_engine::JsResult<i64> 
         Some(v) if !v.is_undefined() => Ok(v.to_i32(ctx)? as i64),
         _ => Ok(0),
     }
+}
+
+/// Coerce a tail of JS values into a `Vec<i64>` (each `undefined` becomes 0) — the variadic
+/// write args a `t`/`tCell` fire feeds to the affordance's [`crate::applet::ApplyOp`].
+fn arg_i64_rest(vs: &[JsValue], ctx: &mut Context) -> boa_engine::JsResult<Vec<i64>> {
+    vs.iter()
+        .map(|v| {
+            if v.is_undefined() {
+                Ok(0)
+            } else {
+                Ok(v.to_i32(ctx)? as i64)
+            }
+        })
+        .collect()
 }
 
 /// What a [`NativeRuntime::run_world`] produced — the world handed back with its committed
