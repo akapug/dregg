@@ -23,6 +23,19 @@ reason.)*
   is the TERMINAL blocker to a SOUND pure-light-client flip (without it a forger dodges by sel=0 or by routing through the bare wide
   transfer descriptor — a pure light client has only the commit, not the declaration preimage); (c) commit the welded VK + admit it on
   the live `verify_effect_vm_rotated_with_cutover` path as the default. Doc: `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6 BLOCKER 1.
+- PERF-CHARACTERIZATION campaign — the perf-engineering FOUNDATION for DreggNet-as-a-cloud (2026-06-28). `docs/PERF-CHARACTERIZATION.md`
+  inventories what exists (breadstuffs `dregg-perf` 16-bench suite + 13 per-crate criterion benches with last-known numbers; DreggNet
+  (WIDE / VERTICAL / FEDERATION), methodology, and targets. NAMED GAPS the bench-building lanes close (in execution order): (1) the
+  DreggNet service-layer crates `exec`/`durable`/`bridge`/`control`/`gateway`/`webapp` have ZERO benches — integration-tested only — so
+  no lease-lifecycle-throughput / gateway-req-sec / webapp-req-sec / per-tier-workload-latency number exists; (2) NO macro/throughput
+  load-gen harness (everything is criterion micro) — build one driving N concurrent leases/workloads with the agent-business loop
+  (pay→lease→run→meter→reap, seeded by `perf/src/bin/orchestration_demo.rs`) as the default scenario, p50/p99/p99.9 tail; (3) NO WIDE
+  multi-node measurement — N cells / N agents / N leases sweeps + the named contention points (shared ledger `Ledger::root()`, nullifier
+  set, scheduler/`LeaseWatcher`, gateway, durable store); (4) cap-tier end-to-end workload latency (native-CPython / wasmtime / wasmi)
+  unmeasured wall-to-wall; (5) only a SMOKE baseline committed (`perf/baselines/smoke-2026-06-22-m2max`) — capture FULL on persvati;
+  (6) no flamegraph/`perf` bottleneck artifacts per axis. FEDERATION scaling is ANALYTIC now (one staging box) — real fleet bench
+  DEFERRED, named honestly. The DATED `~130,000×` per-turn-commit note (`metatheory/docs/CODEX-DISCHARGE-SKELETON.md:2505`) is flagged
+  NOT-live; the measured story is executor ~8.2µs / embedded-commit ~157µs / symbolic ~7,000× / proving-multiplier ~21,000×.
 - CAPACITY-SATISFACTION tags 18/19 (Piece 2 of the constraint-binding VK epoch) — SATISFACTION SOUNDNESS RUNGS LANDED STAGED,
   the VK FLIP **NOT** taken (left staged, default unflipped — 2026-06-28). `metatheory/Dregg2/Deos/CapacitySatisfaction.lean` now
   carries the discharge (tag 18) + vault (tag 19) field-column satisfaction keystones beside escrow's: `discharge_satisfaction_witnessed`
