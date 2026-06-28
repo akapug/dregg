@@ -122,13 +122,14 @@ pub use solana_mirror::{
     SolanaLockAttestation, SolanaUnlockRequest, VerifiedLock, lock_nullifier,
 };
 pub use solana_provenance::{
-    Delegation, DerivedStakeTable, ProvenAccount, ProvenanceError, RotationStep, STAKE_PROGRAM_ID,
-    VerifiedStakeTable, WeakSubjectivityAnchor, active_stake, decode_authorized_voter,
-    decode_stake_delegation, derive_stake_table, rotate, vote_program_id,
+    Delegation, DerivedStakeTable, ProvenAccount, ProvenanceError, RotationStep,
+    STAKE_HISTORY_SYSVAR_ID, STAKE_PROGRAM_ID, SYSVAR_OWNER_ID, VerifiedStakeTable,
+    WeakSubjectivityAnchor, active_stake, decode_authorized_voter, decode_stake_delegation,
+    decode_stake_history, derive_stake_table, effective_stake, rotate, vote_program_id,
 };
 pub use solana_trustless::{
     AccountInclusionProof, ConsensusEvidence, LockProofError, LockProofTrust, ProofMintError,
-    SolanaLockProof, verify_lock_proof, verify_lock_proof_consensus,
+    SolanaConsensusStatement, SolanaLockProof, verify_lock_proof, verify_lock_proof_consensus,
 };
 pub use solana_wire::{
     AccountsInclusionProof16, IngestedVote, MERKLE_FANOUT, MerkleLevel, WireError,
