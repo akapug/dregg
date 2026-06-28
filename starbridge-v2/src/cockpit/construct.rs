@@ -330,6 +330,7 @@ impl Cockpit {
             replay_fork: None,
             time_cursor,
             meta_stack: MetaStack::new(),
+            time_branch: None,
             clerk,
             clerk_outcome: None,
             editor,

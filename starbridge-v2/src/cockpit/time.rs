@@ -50,6 +50,43 @@ impl Cockpit {
         cx.notify();
     }
 
+    /// ⑂ BRANCH HERE — fork the PAST at the scrubber cursor and drive a DIVERGENT
+    /// verified turn from it ([`dregg_turn::reversible::ReversibleHistory::fork_at`]).
+    /// The cockpit mirrors the live world's recorded history into a reversible
+    /// history, `fork_at`s the shared `[0,k]` config-lattice down-set (an `Arc`-handle
+    /// prefix clone, NOT a re-execution), and commits a small transfer the live
+    /// timeline never made — so the branch root visibly diverges. The parent timeline
+    /// stands untouched (the down-set is immutable); the result is pinned for the
+    /// panel to paint the divergent future beside the live line.
+    pub(crate) fn time_branch_here(&mut self, cx: &mut Context<Self>) {
+        let [treasury, _service, user] = self.anchors;
+        let k = self.time_cursor;
+        let result = {
+            let w = self.world.borrow();
+            TimeBranch::fork_and_drive(&w, k, treasury, vec![world::transfer(treasury, user, 7)])
+        };
+        match result {
+            Ok(branch) => {
+                self.last_outcome = Some(branch.headline());
+                self.time_branch = Some(branch);
+            }
+            Err(e) => {
+                self.last_outcome = Some(format!("⑂ branch refused · {e}"));
+            }
+        }
+        cx.notify();
+    }
+
+    /// ✕ DROP BRANCH — discard the pinned divergent branch and return the TIME tab
+    /// to the single live line. (The branch was never on the live history anyway —
+    /// it lived only in the fork; dropping it just stops painting it.)
+    pub(crate) fn time_branch_clear(&mut self, cx: &mut Context<Self>) {
+        self.time_branch = None;
+        self.last_outcome =
+            Some("⑂ dropped the divergent branch (back to the live line)".to_string());
+        cx.notify();
+    }
+
     /// ⏸ SUSPEND — halt the live loop via the M5 gate ([`World::suspend`]). The head
     /// FREEZES; a turn submitted while suspended STAGES in the pending queue (the
     /// continuation) instead of committing. Distinct from the scrubber being in the
@@ -501,6 +538,131 @@ impl Cockpit {
                             reflect::short_hex(id.as_bytes()),
                             change.label()
                         )),
+                );
+            }
+        }
+
+        // ====================================================================
+        // (1b) ⑂ FORK THE PAST — branch the timeline at the cursor (fork_at).
+        // ====================================================================
+        col =
+            col.child(section_title("⑂ FORK THE PAST · branch a divergent verified future").mt_2());
+        col = col.child(div().text_xs().text_color(theme::muted()).child(format!(
+            "fork the shared down-set at k{} → drive a divergent verified turn; \
+                     the live line stays untouched",
+            self.time_cursor
+        )));
+        {
+            let mut branch_row = div().flex().flex_wrap().gap_1().mt_1().child(time_button(
+                cx,
+                "time-branch",
+                "⑂ BRANCH HERE",
+                theme::accent(),
+                Cockpit::time_branch_here,
+            ));
+            if self.time_branch.is_some() {
+                branch_row = branch_row.child(time_button(
+                    cx,
+                    "time-branch-clear",
+                    "✕ drop branch",
+                    theme::muted(),
+                    Cockpit::time_branch_clear,
+                ));
+            }
+            col = col.child(branch_row);
+        }
+        if let Some(branch) = &self.time_branch {
+            // The verdict pills — the shared down-set, the divergence, the untouched parent.
+            col = col.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .mt_1()
+                    .child(pill(
+                        format!("fork @k{}", branch.fork_step),
+                        theme::accent(),
+                    ))
+                    .child(pill(
+                        format!("⊆ {} shared prefix step(s)", branch.shared_prefix),
+                        theme::good(),
+                    ))
+                    .child(if branch.diverged {
+                        pill("⇄ divergent root", theme::warn())
+                    } else {
+                        pill("= same root", theme::muted())
+                    })
+                    .child(if branch.verified {
+                        pill("✓ verified", theme::good())
+                    } else {
+                        pill("✗ rejected", theme::bad())
+                    })
+                    .child(if branch.parent_untouched {
+                        pill(
+                            format!("parent k{} untouched", branch.parent_head),
+                            theme::good(),
+                        )
+                    } else {
+                        pill("parent CHANGED".to_string(), theme::bad())
+                    }),
+            );
+            // The root teeth: where the fork sat vs where the divergent head landed.
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child(format!(
+                        "fork root {} → branch head k{} root {}",
+                        short_root(&branch.fork_root),
+                        branch.branch_head,
+                        short_root(&branch.branch_root)
+                    )),
+            );
+            // The DIVERGENT image — built ON the past, distinct from the live head.
+            col = col.child(
+                div()
+                    .text_xs()
+                    .text_color(theme::muted())
+                    .mt_1()
+                    .child(format!(
+                        "DIVERGENT IMAGE @branch k{} ({} cells, verified)",
+                        branch.branch_head,
+                        branch.cells.len()
+                    )),
+            );
+            for (id, bal, caps) in &branch.cells {
+                col = col.child(
+                    div()
+                        .flex()
+                        .justify_between()
+                        .px_2()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme::text())
+                                .child(format!("⬡ {}", reflect::short_hex(id.as_bytes()))),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(if *bal < 0 {
+                                    theme::warn()
+                                } else {
+                                    theme::text()
+                                })
+                                .child(format!("{bal} · {caps} caps")),
+                        ),
+                );
+            }
+            // The narrative log of the fork.
+            for line in &branch.log {
+                col = col.child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::muted())
+                        .px_2()
+                        .child(format!("· {line}")),
                 );
             }
         }
