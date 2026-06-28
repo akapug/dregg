@@ -266,6 +266,30 @@ VK beside the deployed, and flip. The deployed descriptors/VK are byte-identical
     the selector 0); and the prover/verify-path routing. The teeth bite in-PROOF today at the LEAN
     refinement level + the EMITTED-descriptor constraint-eval level, NOT yet a full STARK prove.
 
+    **SUB-GAP (1) — "1-felt V3, not WIDE" — CLOSED at the proof level (2026-06-28, the GENTIAN
+    FULCRUM).** The GENTIAN verifier lane (`b63f75da3`) named the first structural blocker precisely:
+    `settleEscrowSatVmDescriptor2R24` was a 1-felt V3 staged member, so its satisfaction-gate field
+    columns were NOT absorbed into the ~124-bit wide commit a pure light client binds.
+    `metatheory/Dregg2/Deos/SettleEscrowSatWideDescriptor.lean` (`#assert_all_clean`, 9 keystones,
+    lake green, wired into `Dregg2.Deos`) graduates the welded descriptor to the WIDE form:
+    `settleEscrowSatVmDescriptor2R24Wide = wideAppend (graduateV1 (rotateV3 settle-base)) bb (bb+51)`
+    + the four satisfaction gates + the selector PI pin (the EXACT graduation `EmitWideRegistryProbe.lean`
+    applies to every cohort member; `piCount = 63` = 46 rotated + 16 wide commit anchors + the selector
+    at PI 62). The V3 refinement (`settleEscrowWide_forces_settle_gate`) + partial/phantom UNSAT teeth
+    carry verbatim over the wide form (the gate bodies are byte-identical). The **GRADUATION keystone**
+    (`beforeFieldCol_absorbed` / `afterFieldCol_absorbed`) proves the satisfaction-gate field columns
+    `bb + 4 + k` / `bb + 51 + 4 + k` (k ≤ 7) lie INSIDE the 37 pre-iroot BEFORE/AFTER limbs the wide
+    carriers consume (`bb = (settleEscrowV1Base _ _).traceWidth = EFFECT_VM_WIDTH`, by `rfl`); the
+    deployed `EffectVmEmitRotationWide.rotV3Wide_binds_published` (equal published 8-felt commits ⟹
+    equal limbs, under `Poseidon2WideCR`) then carries the binding — so a pure light client binding the
+    wide commit binds those columns, exactly the `CapacitySatisfaction.fieldAt_bound_in_commit` chain
+    over the DEPLOYED wide carriers. STAGED — this is a Lean definition (the source of truth); NOTHING
+    is emitted into the deployed wide registry / VK and nothing routes through it. The producer +
+    committed VK + live admission (sub-gap above) and the in-AIR selector forcing (§6 item 2 below)
+    remain; **the flip is NOT taken** — the selector forcing is the terminal blocker (a pure light
+    client cannot force `sel = 1` from the committed digest without the in-AIR authority-digest
+    recompute, so a forger would dodge by `sel = 0` or by the bare wide transfer route).
+
   * **BLOCKER 2 — tags 18/19 in-AIR gates are NOT a mirror of the escrow EQUALITY template.** The
     escrow gate is pure status-code equality (`sel·(col − const) == 0`), the whole gate. The discharge
     gate adds a DUE-NESS INEQUALITY (`due_block ≤ clock`) — a range-check aux column, not an equality

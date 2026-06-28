@@ -121,6 +121,18 @@ import Dregg2.Deos.SettleEscrowSatDescriptor
 -- weld neither by an alternate declaration nor by sel=0. SPEC + soundness of the verifier obligation
 -- the still-unbuilt realization must meet; the weld is NOT yet flipped. #assert_all_clean.
 import Dregg2.Deos.SettleEscrowSelectorBinding
+-- The welded sealed-escrow satisfaction descriptor GRADUATED to a WIDE (8-felt, ~124-bit) member
+-- (§6 BLOCKER 1, sub-gap (1) — the GENTIAN FULCRUM): settleEscrowSatVmDescriptor2R24Wide =
+-- wideAppend (graduateV1 (rotateV3 settle-base)) bb (bb+51) + the four satisfaction gates + the
+-- selector PI pin. The refinement (settleEscrowWide_forces_settle_gate) + partial/phantom UNSAT teeth
+-- carry the V3 proof verbatim over the wide form; the GRADUATION keystone (beforeFieldCol_absorbed /
+-- afterFieldCol_absorbed) proves the satisfaction-gate field columns bb+4+k / bb+51+4+k lie INSIDE the
+-- 37 pre-iroot limbs the wide carriers absorb into the published 8-felt commit, so a PURE light client
+-- binding the wide commit now binds those columns (closing the "1-felt V3, columns not absorbed" gap
+-- at the proof level). STAGED — no producer, no committed VK, no live routing, no flip. The remaining
+-- flip distance: the wide producer + STARK prove, the in-AIR B_AUTHORITY_DIGEST→selector forcing
+-- (§6 item 2, the terminal blocker), and live-path admission. #assert_all_clean.
+import Dregg2.Deos.SettleEscrowSatWideDescriptor
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →
