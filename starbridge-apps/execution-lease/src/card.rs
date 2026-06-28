@@ -7,67 +7,95 @@
 //! DATA. The app's contribution is the view-tree JSON (pure `serde_json`, no
 //! renderer dependency): the deos world's renderers consume it.
 //!
-//! ## The card shape — a live durable-execution-lease dashboard
+//! ## The card shape — a live "rent durable execution, metered, pay-or-lapse" dashboard
 //!
-//! A titled column built from the rich deos-view vocabulary:
+//! A titled column built from the rich deos-view vocabulary, surfacing the WHOLE
+//! economic story of a durable-execution lease:
 //!
 //!   * a **status header** — the app name + a LIVE `pill` reading
 //!     [`LAPSED_SLOT`](crate::LAPSED_SLOT) and naming the lease state
-//!     (`LIVE` / `LAPSED`), and a `breadcrumb` of the lease lifecycle
+//!     (`LIVE` / `LAPSED`), a row of static **cap-tier** `pill`s naming the two roles
+//!     on the attenuation lattice (the AGENT pays + drives; the PROVIDER owns the
+//!     slot + may lapse it), and a `breadcrumb` of the lease lifecycle
 //!     (Open → Running → Lapsed) with the current band marked;
-//!   * a **"Lease" `section`** surfacing the LIVE cell state: the KILLER VISUAL is a
-//!     `gauge` bound to [`PERIODS_PAID_SLOT`](crate::PERIODS_PAID_SLOT) over a demo
-//!     lease length (the rent paid as periods elapse) plus `bind`s on the durable
-//!     checkpoint [`STEP_SLOT`](crate::STEP_SLOT), the
-//!     [`STATE_DIGEST_SLOT`](crate::STATE_DIGEST_SLOT), the
-//!     [`RENT_SLOT`](crate::RENT_SLOT) and the [`PROVIDER_SLOT`](crate::PROVIDER_SLOT);
+//!   * a **"Meter" `section`** — the "metered, pay-or-lapse" half: the KILLER VISUAL
+//!     is a `gauge` bound to [`PERIODS_PAID_SLOT`](crate::PERIODS_PAID_SLOT) over the
+//!     demo lease length (the budget consumed as rent periods elapse), plus `bind`s on
+//!     the per-period rent ([`RENT_SLOT`](crate::RENT_SLOT)), the period length in
+//!     blocks ([`PERIOD_SLOT`](crate::PERIOD_SLOT)), and the periods-paid count
+//!     (adept — the gauge already shows it);
+//!   * a **"Durable execution" `section`** — the durable-step half: the checkpoint
+//!     cursor ([`STEP_SLOT`](crate::STEP_SLOT) — the umem heap image step that only
+//!     moves forward), the committed [`STATE_DIGEST_SLOT`](crate::STATE_DIGEST_SLOT)
+//!     (adept), and the [`PROVIDER_SLOT`](crate::PROVIDER_SLOT) as an avatar handle;
 //!   * an **"Actions" `section`** of one `icon`+`button` row per service operation
-//!     (`pay` / `advance` / `status`), each `button` carrying its `onClick`.
+//!     (`open` / `pay` / `advance` / `status`), each `button` carrying its `onClick`.
 //!
 //! The button `turn` names match the [`service`](crate::service) method vocabulary.
 
 use serde_json::{Value, json};
 
-use crate::service::{METHOD_ADVANCE, METHOD_PAY, METHOD_STATUS};
+use crate::service::{METHOD_ADVANCE, METHOD_OPEN, METHOD_PAY, METHOD_STATUS};
 use crate::{
-    LAPSED_SLOT, PERIODS_PAID_SLOT, PROVIDER_SLOT, RENT_SLOT, STATE_DIGEST_SLOT, STEP_SLOT,
+    LAPSED_SLOT, PERIOD_SLOT, PERIODS_PAID_SLOT, PROVIDER_SLOT, RENT_SLOT, STATE_DIGEST_SLOT,
+    STEP_SLOT,
 };
 
-/// The demo lease length the periods-paid gauge fills over.
+/// The demo lease length the periods-paid gauge fills over — the budget the lease
+/// is metered against (the "spent / budget" denominator made visible).
 pub const DEMO_LEASE_PERIODS: u64 = 12;
 
+/// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
+/// A static `deos.ui.pill` node — a colored status badge (no live slot).
+fn pill(label: &str, tag: &str) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
 fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
+/// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
 }
 
+/// A `deos.ui.divider` node — a full-width groove rule.
 fn divider() -> Value {
     json!({ "kind": "divider", "props": {} })
 }
 
+/// A `deos.ui.row` node — a horizontal flex of children.
 fn row(children: Vec<Value>) -> Value {
     json!({ "kind": "row", "props": {}, "children": children })
 }
 
+/// A `deos.ui.section` node — a titled, bordered container.
 fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain). `adept` hides a dev-y row (a raw digest / a count the gauge already
+/// shows) from the simple projection; revealed in the adept "see the bones" view.
 fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
     json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
+/// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
 fn gauge(slot: usize, max: u64, label: &str) -> Value {
     json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
 }
 
+/// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
 fn breadcrumb(steps: &[&str], active: usize) -> Value {
     let items: Vec<Value> = steps
         .iter()
@@ -84,6 +112,7 @@ fn breadcrumb(steps: &[&str], active: usize) -> Value {
     json!({ "kind": "breadcrumb", "props": { "items": items } })
 }
 
+/// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
 fn button(label: &str, turn: &str, arg: i64) -> Value {
     json!({
         "kind": "button",
@@ -91,18 +120,21 @@ fn button(label: &str, turn: &str, arg: i64) -> Value {
     })
 }
 
+/// An action row — an `icon` + a service `button` (the verified-turn affordance).
 fn action(glyph: &str, label: &str, turn: &str) -> Value {
     row(vec![icon(glyph, "accent"), button(label, turn, 0)])
 }
 
 /// **The execution-lease card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
 ///
-/// A live durable-execution-lease dashboard: a status header (name + LIVE/LAPSED
-/// pill + lease-lifecycle breadcrumb), a "Lease" section whose KILLER VISUAL is the
-/// periods-paid gauge (rent paid as periods elapse) plus the durable-checkpoint
-/// step / state-digest / rent / provider binds, and an "Actions" section of the
-/// pay / advance / status buttons. Renderer-independent DATA. The button `turn`
-/// names are the [`service`](crate::service) method symbols.
+/// A live durable-execution-lease dashboard telling the full "rent durable
+/// execution, metered, pay-or-lapse" story: a status header (name + LIVE/LAPSED pill
+/// + the two cap-tier pills + the lease-lifecycle breadcrumb), a "Meter" section
+/// whose KILLER VISUAL is the periods-paid gauge (the budget consumed) plus the
+/// rent/period + period-length + periods-paid binds, a "Durable execution" section
+/// surfacing the checkpoint cursor + state digest + provider, and an "Actions"
+/// section of the open / pay / advance / status buttons. Renderer-independent DATA.
+/// The button `turn` names are the [`service`](crate::service) method symbols.
 pub fn lease_card_value() -> Value {
     json!({
         "kind": "vstack",
@@ -113,21 +145,33 @@ pub fn lease_card_value() -> Value {
                 { "value": 0, "label": "LIVE",   "tag": "good" },
                 { "value": 1, "label": "LAPSED", "tag": "danger" },
             ]))]),
+            // The two roles on the attenuation lattice (cap tiers).
+            row(vec![
+                pill("agent · pays", "accent"),
+                pill("provider · owns", "muted"),
+            ]),
             breadcrumb(&["Open", "Running", "Lapsed"], 1),
             divider(),
-            section("Lease", "genuine", vec![
-                // THE KILLER VISUAL: the rent paid as periods elapse.
-                gauge(PERIODS_PAID_SLOT as usize, DEMO_LEASE_PERIODS, "periods paid "),
+            section("Meter", "genuine", vec![
+                // THE KILLER VISUAL: the budget consumed as rent periods elapse.
+                gauge(PERIODS_PAID_SLOT as usize, DEMO_LEASE_PERIODS, "rent paid "),
+                bind(RENT_SLOT as usize, "rent/period · ", "amount", false),
+                bind(PERIOD_SLOT as usize, "period · ", "raw", false),
+                // The count the gauge already shows — adept bones.
+                bind(PERIODS_PAID_SLOT as usize, "periods paid · ", "raw", true),
+            ]),
+            section("Durable execution", "", vec![
                 // The durable checkpoint cursor (the umem heap image step).
                 bind(STEP_SLOT as usize, "checkpoint · ", "amount", false),
-                bind(STATE_DIGEST_SLOT as usize, "state digest · ", "hash", false),
-                bind(RENT_SLOT as usize, "rent/period · ", "amount", false),
+                // The committed state digest — a dev-y bone.
+                bind(STATE_DIGEST_SLOT as usize, "state digest · ", "hash", true),
                 bind(PROVIDER_SLOT as usize, "provider · ", "id", false),
             ]),
             section("Actions", "", vec![
-                action("$", "Pay rent",   METHOD_PAY),
-                action("→", "Advance",    METHOD_ADVANCE),
-                action("≡", "Status",     METHOD_STATUS),
+                action("⊕", "Open",      METHOD_OPEN),
+                action("$", "Pay rent",  METHOD_PAY),
+                action("→", "Advance",   METHOD_ADVANCE),
+                action("≡", "Status",    METHOD_STATUS),
             ]),
         ]
     })
@@ -170,16 +214,42 @@ mod tests {
                 .iter()
                 .any(|t| t["props"]["text"] == "Durable Execution Lease")
         );
-        let pills = of_kind(&card, "pill");
-        assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["slot"], LAPSED_SLOT as usize);
-        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        // The header pill is LIVE: it reads LAPSED_SLOT and maps to LIVE / LAPSED.
+        let live_pills: Vec<&Value> = of_kind(&card, "pill")
+            .into_iter()
+            .filter(|p| p["props"].get("slot").is_some())
+            .collect();
+        assert_eq!(live_pills.len(), 1, "exactly one LIVE status pill");
+        assert_eq!(live_pills[0]["props"]["slot"], LAPSED_SLOT as usize);
+        let cases = live_pills[0]["props"]["cases"].as_array().unwrap();
         assert_eq!(cases.len(), 2, "LIVE / LAPSED");
         assert_eq!(cases[1]["label"], "LAPSED");
     }
 
     #[test]
-    fn the_periods_gauge_reads_the_live_periods_paid_slot() {
+    fn the_two_cap_tiers_are_named_as_static_pills() {
+        let card = lease_card_value();
+        // The static (no-slot) pills name the two roles on the attenuation lattice.
+        let static_pills: Vec<String> = of_kind(&card, "pill")
+            .into_iter()
+            .filter(|p| p["props"].get("slot").is_none())
+            .map(|p| p["props"]["text"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(static_pills, vec!["agent · pays", "provider · owns"]);
+    }
+
+    #[test]
+    fn the_lifecycle_breadcrumb_marks_the_running_band() {
+        let card = lease_card_value();
+        let crumbs = of_kind(&card, "breadcrumb");
+        assert_eq!(crumbs.len(), 1);
+        let items = crumbs[0]["props"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3, "Open → Running → Lapsed");
+        assert_eq!(items[1]["label"], "› Running", "the active band is marked");
+    }
+
+    #[test]
+    fn the_meter_gauge_reads_the_live_periods_paid_slot() {
         let card = lease_card_value();
         let gauges = of_kind(&card, "gauge");
         assert_eq!(gauges.len(), 1, "the killer visual: the periods-paid gauge");
@@ -188,8 +258,17 @@ mod tests {
     }
 
     #[test]
-    fn the_lease_binds_surface_the_durable_cursor() {
+    fn the_meter_and_durable_sections_surface_the_lease_state() {
         let card = lease_card_value();
+        // The two titled sections (plus Actions) split the meter from the durable image.
+        let titles: Vec<&str> = of_kind(&card, "section")
+            .iter()
+            .map(|s| s["props"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["Meter", "Durable execution", "Actions"]);
+
+        // The binds surface rent / period / periods-paid (meter), then checkpoint /
+        // digest / provider (durable image), in pre-order (the bind-cursor order).
         let binds = of_kind(&card, "bind");
         let slots: Vec<u64> = binds
             .iter()
@@ -198,12 +277,55 @@ mod tests {
         assert_eq!(
             slots,
             vec![
+                RENT_SLOT as u64,
+                PERIOD_SLOT as u64,
+                PERIODS_PAID_SLOT as u64,
                 STEP_SLOT as u64,
                 STATE_DIGEST_SLOT as u64,
-                RENT_SLOT as u64,
-                PROVIDER_SLOT as u64
+                PROVIDER_SLOT as u64,
             ],
-            "the binds surface checkpoint / digest / rent / provider"
+        );
+    }
+
+    #[test]
+    fn the_dev_y_rows_are_marked_adept_and_the_human_terms_stay_visible() {
+        let card = lease_card_value();
+        let adept = |slot: usize| -> bool {
+            of_kind(&card, "bind")
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The raw periods-paid count (the gauge shows it) + the sealed state digest hide.
+        assert!(adept(PERIODS_PAID_SLOT as usize), "the raw periods count");
+        assert!(adept(STATE_DIGEST_SLOT as usize), "the committed digest");
+        // The human-meaningful economics + cursor stay visible.
+        assert!(!adept(RENT_SLOT as usize));
+        assert!(!adept(PERIOD_SLOT as usize));
+        assert!(!adept(STEP_SLOT as usize));
+        assert!(!adept(PROVIDER_SLOT as usize));
+    }
+
+    #[test]
+    fn the_amount_and_identity_binds_carry_their_display_fmt() {
+        let card = lease_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(RENT_SLOT as usize), "amount", "rent groups digits");
+        assert_eq!(fmt(STEP_SLOT as usize), "amount", "the checkpoint cursor");
+        assert_eq!(fmt(STATE_DIGEST_SLOT as usize), "hash", "digest paints hex");
+        assert_eq!(
+            fmt(PROVIDER_SLOT as usize),
+            "id",
+            "the provider paints an avatar handle"
         );
     }
 
@@ -211,12 +333,15 @@ mod tests {
     fn every_button_carries_its_service_method_as_the_turn_payload() {
         let card = lease_card_value();
         let buttons = of_kind(&card, "button");
-        assert_eq!(buttons.len(), 3);
+        assert_eq!(buttons.len(), 4);
         let turns: Vec<&str> = buttons
             .iter()
             .map(|b| b["props"]["onClick"]["turn"].as_str().unwrap())
             .collect();
-        assert_eq!(turns, vec![METHOD_PAY, METHOD_ADVANCE, METHOD_STATUS]);
+        assert_eq!(
+            turns,
+            vec![METHOD_OPEN, METHOD_PAY, METHOD_ADVANCE, METHOD_STATUS]
+        );
     }
 
     #[test]
@@ -224,6 +349,7 @@ mod tests {
         let s = lease_card_json();
         let back: Value = serde_json::from_str(&s).expect("the card JSON parses");
         assert_eq!(back["kind"], "vstack");
-        assert_eq!(back["children"].as_array().unwrap().len(), 5);
+        // header row, cap-tier row, breadcrumb, divider, Meter, Durable, Actions.
+        assert_eq!(back["children"].as_array().unwrap().len(), 7);
     }
 }
