@@ -879,6 +879,13 @@ fn constraint_dissect(
             Some(*cursor_slot),
             vec![*due_slot, *amount_slot],
         ),
+        // The share-vault no-dilution deposit gate: primary slot = the committed
+        // `total_assets` mirror; the `total_shares` mirror is the extra (both bound
+        // jointly so a minted share can't dilute an existing holder).
+        SC::VaultDeposit {
+            assets_slot,
+            shares_slot,
+        } => ("vault_deposit", Some(*assets_slot), vec![*shares_slot]),
     }
 }
 
