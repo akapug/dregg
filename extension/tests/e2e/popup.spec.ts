@@ -6,7 +6,7 @@ test.describe('Tab navigation', () => {
     await expect(tabs).toHaveCount(5);
 
     const tabTexts = await tabs.allTextContents();
-    expect(tabTexts).toEqual(['Cipherclerk', 'Account', 'Caps', 'Directory', 'Storage']);
+    expect(tabTexts).toEqual(['Cipherclerk', 'Node Ops', 'Caps', 'Directory', 'Storage']);
   });
 
   test('cipherclerk tab is active by default', async ({ popup }) => {
