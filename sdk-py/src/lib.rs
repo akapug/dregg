@@ -2489,6 +2489,52 @@ struct ServiceRuntime {
     domain: String,
 }
 
+impl ServiceRuntime {
+    /// Shared parse for the invoke surface: the arg field-elements, the optional
+    /// `(provider, amount, asset)` pay leg, and the caller authority.
+    fn parse_invoke(
+        &self,
+        args: Option<&Bound<'_, PyAny>>,
+        pay: Option<&Bound<'_, PyAny>>,
+        authority: &str,
+    ) -> PyResult<(Vec<FieldElement>, Option<PayLeg>, InvokeAuthority)> {
+        let mut arg_felts: Vec<FieldElement> = Vec::new();
+        if let Some(args) = args {
+            for item in args.try_iter()? {
+                arg_felts.push(parse_32(&item?, "args[]")?);
+            }
+        }
+
+        let pay_leg = match pay {
+            None => None,
+            Some(p) => {
+                let (prov, amt, asset): (Bound<'_, PyAny>, u64, Bound<'_, PyAny>) =
+                    p.extract().map_err(|_| {
+                        PyTypeError::new_err("pay: expected a (provider, amount, asset) tuple")
+                    })?;
+                Some(PayLeg::new(
+                    parse_cell(&prov, "pay.provider")?,
+                    amt,
+                    parse_32(&asset, "pay.asset")?,
+                ))
+            }
+        };
+
+        let authority = match authority.to_ascii_lowercase().as_str() {
+            "none" => InvokeAuthority::None,
+            "signature" => InvokeAuthority::Signature,
+            "proof" => InvokeAuthority::Proof,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "authority: expected one of none/signature/proof, got {other:?}"
+                )));
+            }
+        };
+
+        Ok((arg_felts, pay_leg, authority))
+    }
+}
+
 #[pymethods]
 impl ServiceRuntime {
     /// A fresh in-process runtime (real cipherclerk + ledger + executor) in
@@ -2538,8 +2584,12 @@ impl ServiceRuntime {
 
     /// Install a service cell whose program dispatches `methods` (its derived
     /// interface exposes them, all Replayable), in this runtime's asset. Returns
-    /// the cell id (hex). A test/provisioning helper for `invoke_service`.
-    fn install_service_cell(&self, methods: Vec<String>) -> PyResult<String> {
+    /// the cell id (hex). When `owned` is true the cell is owned by THIS runtime's
+    /// key (in a distinct asset, so its id differs from the agent cell) —
+    /// required for the submitting `invoke_service`, whose signature the executor
+    /// verifies against the target's owner. A provisioning helper.
+    #[pyo3(signature = (methods, owned=false))]
+    fn install_service_cell(&self, methods: Vec<String>, owned: bool) -> PyResult<String> {
         let cases = methods
             .iter()
             .map(|m| TransitionCase {
@@ -2549,11 +2599,21 @@ impl ServiceRuntime {
                 constraints: Vec::new(),
             })
             .collect();
-        let mut cell = Cell::with_balance(
-            [5u8; 32],
-            *blake3::hash(self.domain.as_bytes()).as_bytes(),
-            0,
-        );
+        let (pk, token) = if owned {
+            let pk = self
+                .runtime
+                .cipherclerk()
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .public_key();
+            (
+                pk.0,
+                *blake3::hash(format!("{}:svc", self.domain).as_bytes()).as_bytes(),
+            )
+        } else {
+            ([5u8; 32], *blake3::hash(self.domain.as_bytes()).as_bytes())
+        };
+        let mut cell = Cell::with_balance(pk, token, 0);
         cell.program = CellProgram::Cases(cases);
         let id = cell.id();
         let _ = self.runtime.ledger().lock().unwrap().insert_cell(cell);
@@ -2583,17 +2643,18 @@ impl ServiceRuntime {
         Ok(TxReceipt::from_receipt(&receipt))
     }
 
-    /// **`invoke_service`** — route `method` against `target`'s interface through
+    /// **`resolve_invoke`** — route `method` against `target`'s interface through
     /// the verified DFA router, optionally PREPENDING the canonical `Payable`
-    /// pay leg, and return the verified DESUGAR (the `Action` the executor runs)
-    /// as a dict (`target`/`method`/`args`/`effects`). Forwards to
-    /// `AgentRuntime::invoke_service_resolved`. Fail-closed: an unknown method, a
-    /// serviced seam, or an under-authority call raises `DreggRefused`.
+    /// pay leg, and return the verified DESUGAR (the `Action` the executor would
+    /// run) as a dict (`target`/`method`/`args`/`effects`) WITHOUT submitting.
+    /// Forwards to `AgentRuntime::invoke_service_resolved` (the pure core). Fail-
+    /// closed: an unknown method, a serviced seam, or an under-authority call
+    /// raises `DreggRefused`.
     ///
     /// `pay` is a `(provider, amount, asset)` tuple; `authority` is one of
     /// `none`/`signature`/`proof`.
     #[pyo3(signature = (target, method, args=None, pay=None, authority="none"))]
-    fn invoke_service<'py>(
+    fn resolve_invoke<'py>(
         &self,
         py: Python<'py>,
         target: &Bound<'_, PyAny>,
@@ -2603,45 +2664,39 @@ impl ServiceRuntime {
         authority: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
         let target = parse_cell(target, "target")?;
-
-        let mut arg_felts: Vec<FieldElement> = Vec::new();
-        if let Some(args) = args {
-            for item in args.try_iter()? {
-                arg_felts.push(parse_32(&item?, "args[]")?);
-            }
-        }
-
-        let pay_leg = match pay {
-            None => None,
-            Some(p) => {
-                let (prov, amt, asset): (Bound<'_, PyAny>, u64, Bound<'_, PyAny>) =
-                    p.extract().map_err(|_| {
-                        PyTypeError::new_err("pay: expected a (provider, amount, asset) tuple")
-                    })?;
-                Some(PayLeg::new(
-                    parse_cell(&prov, "pay.provider")?,
-                    amt,
-                    parse_32(&asset, "pay.asset")?,
-                ))
-            }
-        };
-
-        let authority = match authority.to_ascii_lowercase().as_str() {
-            "none" => InvokeAuthority::None,
-            "signature" => InvokeAuthority::Signature,
-            "proof" => InvokeAuthority::Proof,
-            other => {
-                return Err(PyValueError::new_err(format!(
-                    "authority: expected one of none/signature/proof, got {other:?}"
-                )));
-            }
-        };
-
+        let (arg_felts, pay_leg, authority) = self.parse_invoke(args, pay, authority)?;
         let (action, _sig) = self
             .runtime
             .invoke_service_resolved(target, method, arg_felts, Vec::new(), authority, pay_leg)
             .map_err(|e| refused(e.to_string()))?;
         action_to_py(py, &action)
+    }
+
+    /// **`invoke_service`** — route `method` against `target` (optionally
+    /// prepending the canonical pay leg), SIGN it, and SUBMIT it to the
+    /// in-process executor, returning the committed `TxReceipt`. Forwards to
+    /// `AgentRuntime::invoke_service`. The executor verifies this runtime's
+    /// signature against `target`'s owner, so it commits for a target this
+    /// runtime administers (e.g. `install_service_cell(..., owned=True)`). Use
+    /// `resolve_invoke` to inspect the desugar without submitting. Fail-closed:
+    /// an unknown method / serviced seam / under-authority / executor refusal
+    /// raises `DreggRefused`.
+    #[pyo3(signature = (target, method, args=None, pay=None, authority="none"))]
+    fn invoke_service(
+        &self,
+        target: &Bound<'_, PyAny>,
+        method: &str,
+        args: Option<&Bound<'_, PyAny>>,
+        pay: Option<&Bound<'_, PyAny>>,
+        authority: &str,
+    ) -> PyResult<TxReceipt> {
+        let target = parse_cell(target, "target")?;
+        let (arg_felts, pay_leg, authority) = self.parse_invoke(args, pay, authority)?;
+        let receipt = self
+            .runtime
+            .invoke_service(target, method, arg_felts, Vec::new(), authority, pay_leg)
+            .map_err(|e| refused(e.to_string()))?;
+        Ok(TxReceipt::from_receipt(&receipt))
     }
 
     /// **`lease`** — open a durable, metered execution lease admitting

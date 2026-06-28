@@ -53,26 +53,26 @@ def test_pay_desugars_to_one_conserving_transfer_and_conserves_value():
     assert total_decrease == payer_loss - 1_000
 
 
-def test_invoke_service_routes_method_and_refuses_unknown():
+def test_resolve_invoke_routes_method_and_refuses_unknown():
     rt = dregg.ServiceRuntime()
     svc = rt.install_service_cell(["render"])
 
-    action = rt.invoke_service(svc, "render")
+    action = rt.resolve_invoke(svc, "render")
     assert action["target"] == svc
     assert action["method"] == dregg.method_symbol("render")
     # No pay leg, no work: the desugar carries no effects.
     assert action["effects"] == []
 
     with pytest.raises(dregg.DreggRefused):
-        rt.invoke_service(svc, "undeclared")
+        rt.resolve_invoke(svc, "undeclared")
 
 
-def test_invoke_service_prepends_canonical_pay_leg():
+def test_resolve_invoke_prepends_canonical_pay_leg():
     rt = dregg.ServiceRuntime()
     svc = rt.install_service_cell(["render"])
     asset = rt.native_asset
 
-    action = rt.invoke_service(svc, "render", pay=(svc, 250, asset))
+    action = rt.resolve_invoke(svc, "render", pay=(svc, 250, asset))
 
     # Effect 0 is the canonical pay Transfer (caller -> provider).
     assert len(action["effects"]) == 1
@@ -81,6 +81,19 @@ def test_invoke_service_prepends_canonical_pay_leg():
     assert leg["from"] == rt.cell_id
     assert leg["to"] == svc
     assert leg["amount"] == 250
+
+
+def test_invoke_service_submit_is_fail_closed_without_a_reach_capability():
+    # The submitting `invoke_service` forwards to the real executor, which
+    # verifies the caller holds a capability to REACH the target. Owning the
+    # target by key is not enough — without a reach-cap the executor fail-closes
+    # (the same precondition the Rust facade notes: "a target this runtime
+    # administers"). The desugar is still the verified one (resolve_invoke); only
+    # the capability gate bites at submit.
+    rt = dregg.ServiceRuntime()
+    svc = rt.install_service_cell(["render"], owned=True)
+    with pytest.raises(dregg.DreggRefused):
+        rt.invoke_service(svc, "render")
 
 
 def test_lease_open_fund_run_advances_checkpoint():
