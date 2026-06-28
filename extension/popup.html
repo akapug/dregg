@@ -123,10 +123,47 @@
     Cryptographic module failed to load. Cipherclerk operations requiring proof generation or key derivation are unavailable. Ensure your browser supports WebAssembly.
   </div>
 
+  <!-- First-run onboarding: forces passphrase + recovery-phrase backup BEFORE
+       any key is created. No wallet exists until both steps complete. -->
+  <div id="onboardingSection" class="hidden">
+    <div class="section">
+      <div class="section-title">Welcome — set up your wallet</div>
+      <p style="font-size:12px;color:#9ca3af;margin-bottom:12px;">
+        Your signing keys are generated and stored only on this device. To
+        protect them, you must set a passphrase and back up your recovery
+        phrase before the wallet is created.
+      </p>
+
+      <!-- Step 1: passphrase -->
+      <div id="onbStep1">
+        <p style="font-size:12px;color:#fbbf24;margin-bottom:8px;">Step 1 of 2 — Choose a passphrase (encrypts your keys at rest).</p>
+        <input type="password" id="onbPass" class="passphrase-input" placeholder="Passphrase (at least 8 characters)">
+        <input type="password" id="onbPassConfirm" class="passphrase-input" placeholder="Confirm passphrase">
+        <div id="onbErr1" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+        <button id="onbNextBtn" style="background:#a78bfa;color:#1a1a2e;">Continue</button>
+      </div>
+
+      <!-- Step 2: recovery phrase backup + confirm -->
+      <div id="onbStep2" class="hidden">
+        <p style="font-size:12px;color:#fbbf24;margin-bottom:8px;">Step 2 of 2 — Write down these 24 words and store them safely.</p>
+        <div id="onbMnemonic" class="mnemonic-display" style="display:block;"></div>
+        <div class="warning" style="display:block;">
+          This recovery phrase is the ONLY way to restore your wallet. Anyone with
+          these words can take your funds. Never share them or store them online.
+        </div>
+        <p style="font-size:12px;color:#9ca3af;margin:8px 0 4px;">Confirm: re-type all 24 words in order.</p>
+        <textarea id="onbConfirm" class="passphrase-input" rows="3" style="font-family:'Courier New',monospace;resize:vertical;" placeholder="word1 word2 word3 ..."></textarea>
+        <div id="onbErr2" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+        <button id="onbCreateBtn" style="background:#4ade80;color:#1a1a2e;margin-bottom:6px;">Create wallet</button>
+        <button id="onbBackBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;">Back</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Tab navigation -->
-  <div class="tabs">
+  <div class="tabs" id="tabsNav">
     <button class="tab-btn active" data-tab="cipherclerk">Cipherclerk</button>
-    <button class="tab-btn" data-tab="account">Account</button>
+    <button class="tab-btn" data-tab="account">Node Ops</button>
     <button class="tab-btn" data-tab="capabilities">Caps</button>
     <button class="tab-btn" data-tab="directory">Directory</button>
     <button class="tab-btn" data-tab="storage">Storage</button>
@@ -205,8 +242,14 @@
     <button id="recoverBtn">Recover Cipherclerk</button>
   </div>
 
-  <!-- Account / Devnet tab -->
+  <!-- Node Ops / Devnet tab -->
   <div class="tab-content" id="tab-account">
+    <div class="warning" style="display:block;">
+      Operator tools. Actions here are signed by the connected node operator's
+      key and act on the operator's cell — NOT your self-custody wallet. To move
+      your own funds, a dApp builds a turn you review and sign on the Cipherclerk
+      tab.
+    </div>
     <div class="section">
       <div class="section-title">Node</div>
       <div class="stat">
@@ -233,10 +276,11 @@
       <button id="acctFaucetBtn" style="background:#065f46;color:#6ee7b7;margin-top:6px;">Faucet: fund 1000 DEC</button>
     </div>
     <div class="section">
-      <div class="section-title">Send Transfer</div>
+      <div class="section-title">Operator Send (node-signed)</div>
+      <div class="ref-meta" style="color:#6b7280;font-size:10px;margin-bottom:6px;">Moves the node operator's funds, not yours.</div>
       <input type="text" id="acctSendTo" class="accept-input" placeholder="Recipient cell ID (64-char hex)">
       <input type="number" id="acctSendAmount" class="accept-input" placeholder="Amount (DEC)" min="1">
-      <button id="acctSendBtn" style="background:#a78bfa;color:#1a1a2e;margin-top:6px;">Send</button>
+      <button id="acctSendBtn" style="background:#a78bfa;color:#1a1a2e;margin-top:6px;">Operator Send</button>
       <div id="acctResult" style="display:none;margin-top:8px;font-size:11px;"></div>
     </div>
   </div>

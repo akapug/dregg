@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <radialGradient id="egg" cx="42%" cy="34%" r="75%">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="55%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </radialGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1f2547"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="26" fill="url(#bg)"/>
+  <!-- egg body -->
+  <path d="M64 18 C 90 18, 104 56, 104 80 C 104 104, 86 116, 64 116 C 42 116, 24 104, 24 80 C 24 56, 38 18, 64 18 Z" fill="url(#egg)" stroke="#5b21b6" stroke-width="2"/>
+  <!-- scale chevrons -->
+  <g fill="none" stroke="#5b21b6" stroke-width="2.4" stroke-linecap="round" opacity="0.55">
+    <path d="M48 44 q16 -10 32 0"/>
+    <path d="M44 60 q20 -12 40 0"/>
+    <path d="M44 78 q20 -12 40 0"/>
+    <path d="M48 96 q16 -10 32 0"/>
+  </g>
+  <!-- glowing crack -->
+  <path d="M64 30 L 58 52 L 70 60 L 60 84 L 72 92 L 64 110" fill="none" stroke="#fde68a" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M64 30 L 58 52 L 70 60 L 60 84 L 72 92 L 64 110" fill="none" stroke="#fbbf24" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+</svg>

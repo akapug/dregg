@@ -7,7 +7,61 @@ a rewrite. No code was changed.
 
 ---
 
-## VERDICT: NOT READY — fix 3 must-fix items before upload
+## RESOLUTION (2026-06-28) — VERDICT: READY (must-fix items resolved)
+
+The three must-fix items and the high-value mediums have been fixed in
+`extension/`. Build green: `./build.sh` and `./build.sh package` exit 0,
+`npm run typecheck` clean, `npm test` = **20/20** (the 15 prior + 5 new
+onboarding-gate tests). Fresh `dist/dregg-cipherclerk-chrome.zip` /
+`.xpi` (~4.1 MB) now carry the icons and the shrunk wasm.
+
+- **MF-1 (silent fund loss) — FIXED.** First run no longer auto-generates a
+  wallet under an ephemeral `chrome.storage.session` "internal key." `loadState`
+  returns an *uninitialized* state; the popup runs a two-step onboarding that
+  **requires** (a) a passphrase (≥8 chars) and (b) re-typing the recovery phrase
+  to confirm the backup before any key is generated. Only then is the keypair
+  derived and the state + mnemonic encrypted under the user's passphrase
+  (`beginOnboarding` / `completeOnboarding`, `background.ts`). No key can exist
+  protected solely by a restart-clearable session key. The same orphan path on
+  *recovery* is closed too: `recoverFromMnemonic` now requires a separate
+  wallet-encryption passphrase (distinct from the optional BIP39 passphrase).
+  The pure gate predicates are unit-tested (`test/onboarding.test.mjs`).
+  *Note:* dev wallets created by the OLD auto-create path before this change may
+  already be orphaned after a restart — nothing can recover a key whose session
+  encryption key Chrome already cleared; this fix prevents it going forward.
+- **MF-2 (icons) — FIXED.** A Dragon's Egg mark (`icons/icon.svg` → 16/32/48/128
+  PNGs) is wired into both manifests' `icons` and `action.default_icon`, and
+  bundled by `build.sh`.
+- **MF-3 (privacy policy) — FIXED.** `extension/PRIVACY.md` written to match the
+  code (keys never leave the device, only the configured node is contacted, no
+  telemetry/PII); referenced from the README "Store listing" section for the
+  hosted listing URL.
+- **MED-1 (devnet/localhost defaults) — ADDRESSED.** Defaults are TLS-only
+  (`https`/`wss` devnet); plaintext localhost is removed from the install-time
+  host permissions and moved to `optional_host_permissions` (a dev toggle). The
+  Firefox manifest's duplicated host perms are removed (the LOW item).
+- **MED-2 (27 MB wasm) — FIXED.** `build.sh` runs `wasm-opt -Oz` (installing
+  binaryen if missing) in both the wasm build and the `package` step:
+  27.16 MB → 17.57 MB.
+- **MED-3 (forgeable membership hash) — ADDRESSED.** The live authorize receipt
+  seed now uses a real CR hash (blake3) instead of `generate_demo_stark_proof`
+  (`MerkleStarkAir`, forgeable). The `composeProofs` page API — which verified
+  STARK membership proofs over that forgeable AIR — is gated off with an honest
+  error until the circuit moves to a Poseidon2 Merkle hash. Sound range
+  predicate proofs (Bulletproofs) are unaffected.
+- **MED-4 (Send signed by operator key) — ADDRESSED.** The Account tab is
+  relabeled "Node Ops" with a banner stating its actions are signed by the node
+  operator's key (not your self-custody wallet); "Send" → "Operator Send
+  (node-signed)". Self-custody transfers remain the `signTurnV3` path.
+
+Remaining (non-blocking): the `composeProofs` STARK feature stays disabled until
+the circuit's collision-resistant Merkle hash lands; the version is still
+`0.1.0` (alpha messaging); the Playwright e2e suite should run in CI before
+upload. None gate the must-fix.
+
+---
+
+## VERDICT: NOT READY — fix 3 must-fix items before upload  *(superseded above)*
 
 The **core security architecture is genuinely solid** — well above typical
 hobby-wallet quality, and I did **not** find a key-exfiltration vulnerability.
@@ -264,12 +318,13 @@ them from the data-loss footgun.
       'self'`, `frame-ancestors 'none'`)
 - [x] No remote code execution; WASM is bundled, not fetched remotely
 - [x] No `externally_connectable`; minimal `permissions`
-- [ ] **Icons** (MF-2) — required, missing
-- [ ] **Privacy policy** (MF-3) — required, missing
-- [ ] **Permission justifications** for `<all_urls>` content script + localhost
-      host perms (MED-1) — prepare for reviewers
-- [ ] Production (non-devnet) default endpoint, or documented rationale (MED-1)
-- [ ] Firefox: remove duplicated host perms in `permissions` (LOW)
+- [x] **Icons** (MF-2) — `icons/icon-{16,32,48,128}.png` in both manifests
+- [x] **Privacy policy** (MF-3) — `PRIVACY.md` (host it + link in both listings)
+- [x] **Permission justifications** — `<all_urls>` content script is the
+      `window.dregg` provider (MetaMask-style); localhost moved to optional
+      (MED-1). Still: write the one-line reviewer justification in the listing.
+- [x] TLS-only default endpoint; plaintext localhost is an opt-in dev toggle (MED-1)
+- [x] Firefox: duplicated host perms in `permissions` removed (LOW)
 - [ ] Screenshots + listing copy for both stores
 
 ---
