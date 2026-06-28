@@ -72,6 +72,7 @@ pub mod rehydration;
 pub mod ring_trade;
 pub mod scaffold;
 pub mod server;
+pub mod service_promise;
 pub mod starbridge;
 pub mod stark_rehydrate;
 pub mod store;
