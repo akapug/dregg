@@ -350,37 +350,60 @@ impl MirrorState {
             return Err(MirrorError::AttestationInvalid);
         }
 
+        self.credit_lock(att.lock_id, att.amount, att.dregg_recipient)
+    }
+
+    /// The shared lock-accounting routine, independent of how the lock is
+    /// evidenced (trusted attestation vs trustless proof). It enforces replay
+    /// dedup, the conservation invariant, and emits the REAL [`Effect::Mint`].
+    ///
+    /// Callers MUST have verified the lock evidence (signature or proof) and the
+    /// amount bounds / mint match BEFORE calling this; `credit_lock` is the part
+    /// that is identical across trust models (see
+    /// `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`, "Migration").
+    ///
+    /// On any error the state is left unchanged.
+    pub(crate) fn credit_lock(
+        &mut self,
+        lock_id: [u8; 32],
+        amount: u64,
+        recipient: CellId,
+    ) -> Result<MirrorMint, MirrorError> {
+        if self.seen_locks.contains(&lock_id) {
+            return Err(MirrorError::DuplicateLock);
+        }
+
         // Credit the lock, then check the mint stays within it.
         let new_locked = self
             .currently_locked
-            .checked_add(att.amount)
+            .checked_add(amount)
             .ok_or(MirrorError::Overflow)?;
         let new_live = self
             .live_supply
-            .checked_add(att.amount)
+            .checked_add(amount)
             .ok_or(MirrorError::Overflow)?;
         if new_live > new_locked {
             return Err(MirrorError::InsufficientLocked {
                 live: self.live_supply,
                 locked: new_locked,
-                amount: att.amount,
+                amount,
             });
         }
 
         // Commit.
         self.currently_locked = new_locked;
         self.live_supply = new_live;
-        self.seen_locks.insert(att.lock_id);
+        self.seen_locks.insert(lock_id);
         debug_assert!(self.invariant_holds());
 
         Ok(MirrorMint {
             effect: Effect::Mint {
-                target: att.dregg_recipient,
+                target: recipient,
                 slot: 0,
-                amount: att.amount,
+                amount,
             },
-            recipient: att.dregg_recipient,
-            amount: att.amount,
+            recipient,
+            amount,
         })
     }
 

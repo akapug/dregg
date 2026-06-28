@@ -45,6 +45,13 @@ pub mod present;
 /// conserved, `Payable` asset. See `docs/deos/TOKEN-MIRROR-BRIDGE.md`.
 pub mod solana_mirror;
 
+/// The TRUSTLESS inbound proof-of-lock for the Solana mirror — the honest
+/// upgrade from the trusted-oracle attestation: verify a `SolanaLockProof`
+/// (consensus evidence + account inclusion) instead of trusting a signature.
+/// The Solana-consensus verification itself is the named-hard stubbed core.
+/// See `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
+pub mod solana_trustless;
+
 /// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
 /// the new sibling AIR `dregg_circuit::bridge_action_air` that pins
 /// (nullifier, recipient, destination_federation, amount) at full byte/bit
@@ -85,5 +92,9 @@ pub use present::{
 pub use solana_mirror::{
     MirrorConfig, MirrorError, MirrorMint, MirrorRedeem, MirrorState, SolanaLockAttestation,
     SolanaUnlockRequest,
+};
+pub use solana_trustless::{
+    AccountInclusionProof, ConsensusEvidence, LockProofError, LockProofTrust, ProofMintError,
+    SolanaLockProof, verify_lock_proof,
 };
 pub use verifier::{DslAwareProofVerifier, StarkProofVerifier};
