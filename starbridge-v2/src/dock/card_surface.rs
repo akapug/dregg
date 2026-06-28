@@ -898,11 +898,26 @@ fn wonder_view(room: &WonderRoom) -> ViewTree {
         } else {
             format!("holds {}", gc.balance)
         };
+        // A warm liveliness read — "just stirred" for a cell the recent stream touched,
+        // "resting" for a quiet one. No jargon; a child reads the glow, an adept the count.
+        let pulse = if gc.is_glowing() {
+            card_pill(
+                if gc.recent_touches > 1 {
+                    "alive · just stirred".to_string()
+                } else {
+                    "alive".to_string()
+                },
+                "good",
+            )
+        } else {
+            card_pill("resting".to_string(), "muted")
+        };
         tiles.push(card_section(
             "",
             vec![
                 card_row(vec![card_icon(glyph, tag), card_text(short.clone())]),
                 card_text(holds),
+                pulse,
                 card_button("look", format!("inspect:{short}"), 1),
             ],
         ));

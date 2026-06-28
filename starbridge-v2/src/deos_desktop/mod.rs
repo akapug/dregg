@@ -3255,16 +3255,27 @@ impl DeosDesktop {
                 }),
             )
             .child(
-                // The 32x32 glyph tile (a raised NT bevel face).
-                bevel_raised(div())
-                    .w(px(40.0))
-                    .h(px(40.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(22.0))
-                    .when(!held, |d| d.opacity(0.55))
-                    .child(glyph),
+                // The 40x40 glyph tile. A HELD/live cell wears its kind-tinted glow
+                // (the glowing-room warmth — see `bevel_raised_glow`); a quiet cell
+                // keeps the plain raised face, dimmed.
+                {
+                    // Every cell is a glowing thing in the room (the 1999-AOL warmth):
+                    // its kind-tinted halo + colored glyph. A cell the viewer HOLDS burns
+                    // full; one they don't is the same glow, just a touch quieter — alive,
+                    // never washed-out.
+                    let glow = crate::deos_desktop::chrome::kind_glow(kind);
+                    crate::deos_desktop::chrome::bevel_raised_glow(div(), glow)
+                        .when(!held, |d| d.opacity(0.82))
+                        .text_color(gpui::rgb(glow))
+                        .w(px(40.0))
+                        .h(px(40.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(22.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(glyph)
+                },
             )
             .child(
                 div()

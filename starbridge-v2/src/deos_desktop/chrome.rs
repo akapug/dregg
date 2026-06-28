@@ -128,6 +128,54 @@ fn bevel<E: Styled>(d: E, tl: u32, br: u32, w: f32) -> E {
     ])
 }
 
+/// The warm GLOW color for a cell's kind — the quiet "this thing is alive" hue a
+/// held/live cell-icon casts on the teal void (treasury gold · well cyan · service
+/// violet · account green). A small, friendly palette so a desktop of cells reads as
+/// a room of glowing things, not a grid of gray boxes — the 1999-AOL delight end of
+/// the same NT image.
+pub fn kind_glow(kind: &str) -> u32 {
+    match kind {
+        "treasury" => 0xffcf4d,    // warm gold
+        "issuer well" => 0x4dd0ff, // spring-cyan
+        "service" => 0xb98cff,     // violet
+        _ => 0x6fe08f,             // account green
+    }
+}
+
+/// A RAISED bevel that also casts a soft colored OUTER halo — a cell-icon reading as
+/// quietly *alive* (the glowing-room warmth) without losing its NT 3D face. The two
+/// inset bevel tones plus one blurred outer glow, painted in one shadow list (gpui
+/// carries a single shadow vec, so the glow rides alongside the bevel rather than
+/// overwriting it).
+pub fn bevel_raised_glow<E: Styled>(d: E, glow: u32) -> E {
+    let halo: Hsla = gpui::rgba((glow << 8) | 0xB0).into();
+    d.bg(gpui::rgb(NT_FACE)).shadow(vec![
+        // The outer glow — soft, blurred, spread a touch beyond the tile.
+        BoxShadow {
+            color: halo,
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(11.0),
+            spread_radius: px(1.5),
+            inset: false,
+        },
+        // The raised two-tone bevel face (lit top-left, shadowed bottom-right).
+        BoxShadow {
+            color: hsla_of(NT_HILIGHT),
+            offset: point(px(2.0), px(2.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(0.0),
+            inset: true,
+        },
+        BoxShadow {
+            color: hsla_of(NT_SHADOW),
+            offset: point(px(-2.0), px(-2.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(0.0),
+            inset: true,
+        },
+    ])
+}
+
 /// An NT 3D bevel (RAISED) — a light face lit top-left, shadowed bottom-right (the
 /// raised-button look). Generic over any [`Styled`] element so it composes onto a
 /// plain `div()` or an `.id()`'d `Stateful<Div>`.
