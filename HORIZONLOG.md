@@ -9,6 +9,20 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- GENTIAN FULCRUM — escrow welded descriptor GRADUATED to a WIDE member (2026-06-28). `metatheory/Dregg2/Deos/SettleEscrowSatWideDescriptor.lean`
+  (`#assert_all_clean`, 9 keystones, lake green, wired into `Dregg2.Deos`): `settleEscrowSatVmDescriptor2R24Wide = wideAppend (graduateV1
+  (rotateV3 settle-base)) bb (bb+51)` + the four satisfaction gates + the selector PI pin (piCount 63 = 46 rotated + 16 wide anchors +
+  selector at PI 62). The V3 refinement (`settleEscrowWide_forces_settle_gate`) + partial/phantom UNSAT teeth carry verbatim over the
+  wide form; the GRADUATION keystone (`beforeFieldCol_absorbed`/`afterFieldCol_absorbed`) proves the satisfaction-gate field columns
+  `bb+4+k`/`bb+51+4+k` (k≤7) lie INSIDE the 37 pre-iroot limbs the wide carriers absorb into the published 8-felt commit (`bb =
+  EFFECT_VM_WIDTH`, `rfl`) — so via the deployed `rotV3Wide_binds_published` a PURE light client binding the wide commit binds those
+  columns. CLOSES §6 BLOCKER-1 sub-gap (1) ("1-felt V3, columns not absorbed") at the PROOF level. STAGED — no producer, no committed
+  VK, no live routing, FLIP NOT taken. NAMED REMAINING (the precise flip distance): (a) a satisfying WIDE producer + full STARK
+  prove/verify against a committed VK; (b) the IN-AIR `B_AUTHORITY_DIGEST`→selector forcing (§6 item 2) — recompute the authority digest
+  over the witnessed declaration in-AIR + decode the required-tag floor + FORCE sel=1; this is a Poseidon2-preimage-and-decode gadget and
+  is the TERMINAL blocker to a SOUND pure-light-client flip (without it a forger dodges by sel=0 or by routing through the bare wide
+  transfer descriptor — a pure light client has only the commit, not the declaration preimage); (c) commit the welded VK + admit it on
+  the live `verify_effect_vm_rotated_with_cutover` path as the default. Doc: `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6 BLOCKER 1.
 - CAPACITY-SATISFACTION tags 18/19 (Piece 2 of the constraint-binding VK epoch) — SATISFACTION SOUNDNESS RUNGS LANDED STAGED,
   the VK FLIP **NOT** taken (left staged, default unflipped — 2026-06-28). `metatheory/Dregg2/Deos/CapacitySatisfaction.lean` now
   carries the discharge (tag 18) + vault (tag 19) field-column satisfaction keystones beside escrow's: `discharge_satisfaction_witnessed`
