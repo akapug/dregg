@@ -15,18 +15,31 @@
 //! the elephants onto the main build. So the app's contribution is the
 //! **view-tree JSON** (this module): pure `serde_json`, no elephant.
 //!
-//! ## The card shape
+//! ## The card shape — a rich, live trustless-swap surface
 //!
-//! A titled column ([`deos.ui.vstack`](deos_view)) carrying:
-//!   - a `text` header (`"Sealed Escrow"`) and a LIVE leg-status `pill` reading
-//!     [`STATE_SLOT`](crate::STATE_SLOT) — the value maps to a word + color
-//!     (`LISTED`/`FUNDED`/`SHIPPED`/`SETTLED`);
-//!   - an "Escrow" `section` surfacing the live parties + amounts: the seller /
-//!     buyer key `bind`s paint emoji-avatar handles (`fmt:"id"`), the ceiling /
-//!     escrowed `bind`s group their digits (`fmt:"amount"`);
-//!   - one `button` per swap-lifecycle method (`open` / `deposit` / `settle` /
-//!     `reclaim`), each carrying its `onClick = { turn, arg }` — the method symbol
-//!     the [`service`](crate::service) face routes.
+//! A titled column ([`deos.ui.vstack`](deos_view)) built from the rich deos-view
+//! vocabulary (`section` / `pill` / `gauge` / `breadcrumb` / `divider` / `icon`),
+//! telling the whole "I give you X iff you give me Y" escrow story:
+//!
+//!   - a **status header** — the app name + a LIVE leg-status `pill` reading
+//!     [`STATE_SLOT`](crate::STATE_SLOT) (the value maps to a word + color:
+//!     `LISTED`/`FUNDED`/`SHIPPED`/`SETTLED`), a row of static **cap-tier** `pill`s
+//!     naming the three roles on the `observer ⊂ buyer ⊂ seller` lattice, and a
+//!     `breadcrumb` of the whole lifecycle with the current step marked;
+//!   - an **"Escrow" `section`** — the trustline + parties: the KILLER VISUAL is a
+//!     `gauge` of the escrowed amount ([`ESCROWED_SLOT`](crate::ESCROWED_SLOT)) read
+//!     against the listing ceiling (the TRUSTLINE draw `ESCROWED ≤ CEILING`,
+//!     visualized), plus `bind`s on the ceiling / escrowed amounts (grouped digits),
+//!     the seller / buyer keys (avatar handles), and the sealed-delivery digest
+//!     (adept — the mailbox commitment bone);
+//!   - a **"Settlement" `section`** — the FLASHWELL split: `bind`s on the funds
+//!     released to the seller ([`RELEASED_SLOT`](crate::RELEASED_SLOT)) and refunded
+//!     to the buyer ([`REFUNDED_SLOT`](crate::REFUNDED_SLOT)) — the conserving
+//!     `RELEASED + REFUNDED == ESCROWED` payout, shown live;
+//!   - an **"Actions" `section`** of one `icon`+`button` row per sealed-escrow method
+//!     (`open` / `deposit` / `settle` / `reclaim`), each carrying its
+//!     `onClick = { turn, arg }` — the method symbol the [`service`](crate::service)
+//!     face routes.
 //!
 //! The button `turn` names match the [`service`](crate::service) method vocabulary
 //! ([`METHOD_OPEN`](crate::service::METHOD_OPEN), …) so the card and the service
@@ -36,13 +49,24 @@ use serde_json::{Value, json};
 
 use crate::service::{METHOD_DEPOSIT, METHOD_OPEN, METHOD_RECLAIM, METHOD_SETTLE};
 use crate::{
-    BUYER_HASH_SLOT, CEILING_SLOT, ESCROWED_SLOT, SELLER_HASH_SLOT, STATE_FUNDED, STATE_LISTED,
-    STATE_SETTLED, STATE_SHIPPED, STATE_SLOT,
+    BUYER_HASH_SLOT, CEILING_SLOT, DELIVERY_HASH_SLOT, ESCROWED_SLOT, REFUNDED_SLOT, RELEASED_SLOT,
+    SELLER_HASH_SLOT, STATE_FUNDED, STATE_LISTED, STATE_SETTLED, STATE_SHIPPED, STATE_SLOT,
 };
+
+/// The escrow gauge's denominator — a representative listing ceiling so a fully-drawn
+/// escrow fills the gauge (the seeded ceiling is `1_000`). The TRUSTLINE invariant
+/// (`FieldLteField { ESCROWED ≤ CEILING }`) means a live escrow never exceeds it, so
+/// the bar is the trustline-draw ratio made visible.
+const CEILING_GAUGE_MAX: u64 = 1_000;
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
+}
+
+/// A static `deos.ui.pill` node — a colored status badge (no live slot).
+fn pill(label: &str, tag: &str) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
 /// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
@@ -50,6 +74,16 @@ fn text(s: &str) -> Value {
 /// `text`/`tag` are the static fallback (discord, or no match).
 fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
+/// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
+fn icon(glyph: &str, tag: &str) -> Value {
+    json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
+}
+
+/// A `deos.ui.divider` node — a full-width groove rule.
+fn divider() -> Value {
+    json!({ "kind": "divider", "props": {} })
 }
 
 /// A `deos.ui.section` node — a titled, bordered container.
@@ -64,9 +98,32 @@ fn row(children: Vec<Value>) -> Value {
 
 /// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and
 /// a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
-/// `"raw"` plain) so an opaque 20-digit key/amount paints short + friendly.
-fn bind(slot: usize, label: &str, fmt: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt } })
+/// `"raw"` plain). `adept` hides a dev-y row (the sealed delivery digest) from the
+/// simple projection; revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
+}
+
+/// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
+fn gauge(slot: usize, max: u64, label: &str) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+}
+
+/// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
+fn breadcrumb(steps: &[&str], active: usize) -> Value {
+    let items: Vec<Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let label = if i == active {
+                format!("› {s}")
+            } else {
+                s.to_string()
+            };
+            json!({ "label": label })
+        })
+        .collect();
+    json!({ "kind": "breadcrumb", "props": { "items": items } })
 }
 
 /// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
@@ -77,12 +134,20 @@ fn button(label: &str, turn: &str, arg: i64) -> Value {
     })
 }
 
+/// An action row — an `icon` + a sealed-escrow `button` (the verified-turn affordance).
+fn action(glyph: &str, label: &str, turn: &str) -> Value {
+    row(vec![icon(glyph, "accent"), button(label, turn, 0)])
+}
+
 /// **The escrow-market card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
 ///
-/// A `vstack` of a header + LIVE status pill, an "Escrow" section surfacing the live
-/// parties (avatar handles) + amounts (grouped digits), and the four sealed-escrow
-/// lifecycle buttons. Renderer-independent DATA: hand it to any `deos-view` renderer
-/// (native / web / discord) to paint the SAME card. The button `turn` names are the
+/// A rich, live trustless-swap surface: a status header (name + LIVE leg-status pill
+/// + the three cap-tier pills + lifecycle breadcrumb), an "Escrow" section surfacing
+/// the trustline-draw gauge (escrowed vs ceiling), the ceiling / escrowed amounts,
+/// the seller / buyer avatar handles, and the sealed-delivery digest (adept), a
+/// "Settlement" section with the live released / refunded binds (the FLASHWELL
+/// split), and an "Actions" section of the four icon-labelled sealed-escrow buttons.
+/// Renderer-independent DATA. The button `turn` names are the
 /// [`service`](crate::service) method symbols.
 pub fn escrow_card_value() -> Value {
     json!({
@@ -95,16 +160,34 @@ pub fn escrow_card_value() -> Value {
                 { "value": STATE_SHIPPED, "label": "SHIPPED", "tag": "accent" },
                 { "value": STATE_SETTLED, "label": "SETTLED", "tag": "good" },
             ]))]),
-            section("Escrow", "genuine", vec![
-                bind(SELLER_HASH_SLOT, "seller · ", "id"),
-                bind(BUYER_HASH_SLOT,  "buyer · ",  "id"),
-                bind(CEILING_SLOT,     "ceiling · ", "amount"),
-                bind(ESCROWED_SLOT,    "escrowed · ", "amount"),
+            // The three roles on the attenuation lattice (observer ⊂ buyer ⊂ seller).
+            row(vec![
+                pill("observer · reads", "muted"),
+                pill("buyer · funds", "accent"),
+                pill("seller · settles", "good"),
             ]),
-            button("Open",    METHOD_OPEN,    0),
-            button("Deposit", METHOD_DEPOSIT, 0),
-            button("Settle",  METHOD_SETTLE,  0),
-            button("Reclaim", METHOD_RECLAIM, 0),
+            breadcrumb(&["Listed", "Funded", "Shipped", "Settled"], 1),
+            divider(),
+            section("Escrow", "genuine", vec![
+                // THE KILLER VISUAL: the trustline draw (escrowed bounded by the ceiling).
+                gauge(ESCROWED_SLOT, CEILING_GAUGE_MAX, "escrowed vs ceiling "),
+                bind(CEILING_SLOT,      "ceiling · ",  "amount", false),
+                bind(ESCROWED_SLOT,     "escrowed · ", "amount", false),
+                bind(SELLER_HASH_SLOT,  "seller · ",   "id",     false),
+                bind(BUYER_HASH_SLOT,   "buyer · ",    "id",     false),
+                // The sealed mailbox delivery digest — a dev-y bone.
+                bind(DELIVERY_HASH_SLOT, "delivery · ", "hash",  true),
+            ]),
+            section("Settlement", "", vec![
+                bind(RELEASED_SLOT, "released · ", "amount", false),
+                bind(REFUNDED_SLOT, "refunded · ", "amount", false),
+            ]),
+            section("Actions", "", vec![
+                action("⊕", "Open",    METHOD_OPEN),
+                action("$", "Deposit", METHOD_DEPOSIT),
+                action("✓", "Settle",  METHOD_SETTLE),
+                action("↩", "Reclaim", METHOD_RECLAIM),
+            ]),
         ]
     })
 }
@@ -138,52 +221,119 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_header_a_live_status_pill_and_four_buttons() {
+    fn the_card_is_a_vstack_with_a_header_a_live_status_pill_and_sections() {
         let card = escrow_card_value();
         assert_eq!(card["kind"], "vstack");
         let children = card["children"].as_array().expect("children");
-        // header row, escrow section, open, deposit, settle, reclaim
-        assert_eq!(children.len(), 6);
+        // header row, cap-tier row, breadcrumb, divider, Escrow, Settlement, Actions
+        assert_eq!(children.len(), 7);
         let texts = of_kind(&card, "text");
         assert!(texts.iter().any(|t| t["props"]["text"] == "Sealed Escrow"));
+        let titles: Vec<&str> = of_kind(&card, "section")
+            .iter()
+            .map(|s| s["props"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["Escrow", "Settlement", "Actions"]);
     }
 
     #[test]
     fn the_status_pill_reads_the_leg_state_live() {
         let card = escrow_card_value();
-        let pills = of_kind(&card, "pill");
-        assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["slot"], STATE_SLOT as u64);
-        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        let live_pills: Vec<&Value> = of_kind(&card, "pill")
+            .into_iter()
+            .filter(|p| p["props"].get("slot").is_some())
+            .collect();
+        assert_eq!(live_pills.len(), 1);
+        assert_eq!(live_pills[0]["props"]["slot"], STATE_SLOT as u64);
+        let cases = live_pills[0]["props"]["cases"].as_array().unwrap();
         assert_eq!(cases.len(), 4, "LISTED / FUNDED / SHIPPED / SETTLED");
         assert_eq!(cases[3]["value"], STATE_SETTLED);
         assert_eq!(cases[3]["label"], "SETTLED");
     }
 
     #[test]
-    fn the_party_and_amount_binds_carry_their_display_fmt() {
+    fn the_three_cap_tiers_are_named_as_static_pills() {
+        let card = escrow_card_value();
+        let static_pills: Vec<String> = of_kind(&card, "pill")
+            .into_iter()
+            .filter(|p| p["props"].get("slot").is_none())
+            .map(|p| p["props"]["text"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            static_pills,
+            vec!["observer · reads", "buyer · funds", "seller · settles"]
+        );
+    }
+
+    #[test]
+    fn the_trustline_gauge_reads_the_live_escrowed_slot() {
+        let card = escrow_card_value();
+        let gauges = of_kind(&card, "gauge");
+        assert_eq!(gauges.len(), 1, "the trustline-draw gauge");
+        assert_eq!(gauges[0]["props"]["slot"], ESCROWED_SLOT as u64);
+        assert_eq!(gauges[0]["props"]["max"], CEILING_GAUGE_MAX);
+    }
+
+    #[test]
+    fn the_lifecycle_breadcrumb_marks_the_current_step() {
+        let card = escrow_card_value();
+        let crumbs = of_kind(&card, "breadcrumb");
+        assert_eq!(crumbs.len(), 1);
+        let items = crumbs[0]["props"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 4, "Listed → Funded → Shipped → Settled");
+        assert_eq!(items[1]["label"], "› Funded", "the active step is marked");
+    }
+
+    #[test]
+    fn the_binds_surface_the_full_escrow_and_settlement_terms() {
         let card = escrow_card_value();
         let binds = of_kind(&card, "bind");
-        let fmt = |slot: usize| -> String {
+        let slots: Vec<u64> = binds
+            .iter()
+            .map(|b| b["props"]["slot"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                CEILING_SLOT as u64,
+                ESCROWED_SLOT as u64,
+                SELLER_HASH_SLOT as u64,
+                BUYER_HASH_SLOT as u64,
+                DELIVERY_HASH_SLOT as u64,
+                RELEASED_SLOT as u64,
+                REFUNDED_SLOT as u64,
+            ],
+            "ceiling / escrowed / seller / buyer / delivery, then released / refunded"
+        );
+    }
+
+    #[test]
+    fn the_party_and_amount_binds_carry_their_display_fmt_and_the_digest_is_adept() {
+        let card = escrow_card_value();
+        let binds = of_kind(&card, "bind");
+        let find = |slot: usize| -> &Value {
             binds
                 .iter()
                 .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
-                .and_then(|b| b["props"]["fmt"].as_str())
+                .copied()
                 .unwrap()
-                .to_string()
         };
+        assert_eq!(find(SELLER_HASH_SLOT)["props"]["fmt"], "id");
+        assert_eq!(find(BUYER_HASH_SLOT)["props"]["fmt"], "id");
+        assert_eq!(find(CEILING_SLOT)["props"]["fmt"], "amount");
+        assert_eq!(find(ESCROWED_SLOT)["props"]["fmt"], "amount");
+        assert_eq!(find(RELEASED_SLOT)["props"]["fmt"], "amount");
+        assert_eq!(find(REFUNDED_SLOT)["props"]["fmt"], "amount");
+        // The sealed delivery digest paints short hex and hides in the simple view.
+        assert_eq!(find(DELIVERY_HASH_SLOT)["props"]["fmt"], "hash");
         assert_eq!(
-            fmt(SELLER_HASH_SLOT),
-            "id",
-            "seller paints an avatar handle"
+            find(DELIVERY_HASH_SLOT)["props"]["adept"],
+            true,
+            "the sealed delivery digest is adept-only"
         );
-        assert_eq!(fmt(BUYER_HASH_SLOT), "id", "buyer paints an avatar handle");
-        assert_eq!(fmt(CEILING_SLOT), "amount", "the ceiling groups digits");
-        assert_eq!(
-            fmt(ESCROWED_SLOT),
-            "amount",
-            "the escrowed amount groups digits"
-        );
+        // The human-meaningful terms stay visible.
+        assert_eq!(find(CEILING_SLOT)["props"]["adept"], false);
+        assert_eq!(find(ESCROWED_SLOT)["props"]["adept"], false);
     }
 
     #[test]
@@ -195,7 +345,6 @@ mod tests {
             .iter()
             .map(|b| b["props"]["onClick"]["turn"].as_str().unwrap())
             .collect();
-        // The card's button turns ARE the service method vocabulary.
         assert_eq!(
             turns,
             vec![METHOD_OPEN, METHOD_DEPOSIT, METHOD_SETTLE, METHOD_RECLAIM]
@@ -207,6 +356,6 @@ mod tests {
         let s = escrow_card_json();
         let back: Value = serde_json::from_str(&s).expect("the card JSON parses");
         assert_eq!(back["kind"], "vstack");
-        assert_eq!(back["children"].as_array().unwrap().len(), 6);
+        assert_eq!(back["children"].as_array().unwrap().len(), 7);
     }
 }
