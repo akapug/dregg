@@ -76,8 +76,11 @@
 use std::collections::VecDeque;
 
 use dregg_cell::CellId;
+use dregg_cell::interface::MethodSig;
 use dregg_cell::program::{CellProgram, StateConstraint, field_from_u64};
+use dregg_payable::{AssetId, InvokeAuthority, InvokeRefused, Payable};
 use dregg_token::Attenuation;
+use dregg_turn::action::Action;
 use dregg_turn::{
     Effect, PendingTurnRegistry, ResolutionCondition, ResolutionOutcome, TurnReceipt,
 };
@@ -172,6 +175,32 @@ impl Charge {
             provider,
             budget,
         }
+    }
+}
+
+/// **The consumer's spend account, as a [`Payable`] cell.**
+///
+/// The gateway's worker cell IS the consumer's spend account: it holds the value
+/// (`asset` = its `token_id`) the per-call charge moves out of. Implementing
+/// [`Payable`] on this handle is what makes the gateway charge go through the REAL
+/// `Payable::pay` desugar — [`Payable::pay_resolved`] routes `pay` through the
+/// canonical [`dregg_payable::payable_descriptor`] (verified DFA → `Signature`
+/// cap-gate → conserving [`Effect::Transfer`]), the SAME route the app
+/// framework's `Payable::pay` uses. Not a parallel hand-rolled `Transfer`.
+#[derive(Clone, Copy, Debug)]
+struct ConsumerSpendAccount {
+    /// The consumer's value cell (the gateway worker cell) — the `from` of the pay.
+    cell: CellId,
+    /// The asset the consumer denominates value in (its `token_id`).
+    asset: AssetId,
+}
+
+impl Payable for ConsumerSpendAccount {
+    fn payable_cell(&self) -> CellId {
+        self.cell
+    }
+    fn payable_asset(&self) -> AssetId {
+        self.asset
     }
 }
 
@@ -447,6 +476,10 @@ pub struct ToolGateway {
     /// Cumulative value spent under this mandate (advances by `charge.price` on
     /// each committed/reserved paid call). Capped at `charge.budget` in-band.
     spent: u64,
+    /// The asset (the worker cell's `token_id`) the consumer denominates value in
+    /// — bound into the `Payable` charge route as the payment's asset tag so the
+    /// charge desugars to a Transfer in the consumer's own asset.
+    consumer_asset: AssetId,
     /// The cap-gated worker the gateway drives.
     worker: SubAgent,
     /// The worker cell id (the mandate cell carrying `calls_made`).
@@ -547,20 +580,27 @@ impl ToolGateway {
         // Install the mandate program (rate ceiling + monotonic counter) on the
         // worker cell — the executor's own realization of the rate conjunct, the
         // backstop under the in-band `deleg_admit`. The worker cell lives in the
-        // runtime's shared ledger, so we reach it via the runtime handle.
-        {
+        // runtime's shared ledger, so we reach it via the runtime handle. We also
+        // read the worker cell's `token_id` here — the asset the consumer spends
+        // in, bound into the `Payable` charge route.
+        let consumer_asset = {
             let mut ledger = runtime.ledger().lock().unwrap();
             ledger
                 .update_with(&worker_cell, |cell| {
                     cell.program = mandate_program(grant.rate_limit);
                 })
                 .map_err(|e| SdkError::Rejected(format!("install mandate program: {e}")))?;
-        }
+            ledger
+                .get(&worker_cell)
+                .map(|c| *c.token_id())
+                .unwrap_or([0u8; 32])
+        };
 
         Ok(ToolGateway {
             grant,
             charge,
             spent: 0,
+            consumer_asset,
             worker,
             worker_cell,
             calls_made: 0,
@@ -568,6 +608,29 @@ impl ToolGateway {
             pending: PendingTurnRegistry::new(),
             results: std::collections::HashMap::new(),
         })
+    }
+
+    /// **Fund the consumer's spend account from a REAL funded source.**
+    ///
+    /// The gateway's worker cell IS the consumer's spend account — the cell the
+    /// per-call charge debits. By default a worker is born with a fixed balance;
+    /// this is the path that funds it for real: it moves `amount` from `funder`'s
+    /// cell INTO the spend account via a conserving [`Effect::Transfer`],
+    /// authorized by the funder's OWN capability credential (the funder signs the
+    /// funding turn — the value genuinely leaves the consumer's account). The
+    /// charges this gateway then settles debit value the consumer ACTUALLY
+    /// transferred in, not a magic birth-balance.
+    ///
+    /// The funder must hold value in the same asset as the worker cell (same
+    /// `token_id` / domain — e.g. another worker the same runtime spawned) for the
+    /// transfer to conserve. Returns the funding turn's receipt.
+    #[must_use = "dropping the TurnReceipt silently discards proof the funding committed"]
+    pub fn fund(&self, funder: &SubAgent, amount: u64) -> Result<TurnReceipt, SdkError> {
+        funder.execute(vec![Effect::Transfer {
+            from: funder.cell_id(),
+            to: self.worker_cell,
+            amount,
+        }])
     }
 
     /// The grantor's pinned mandate.
@@ -640,24 +703,52 @@ impl ToolGateway {
         }
     }
 
-    /// Prepend the per-call charge [`Effect::Transfer`] (consumer → provider) to
-    /// the tool's work, if this is a paid mandate. The conserving transfer rides
-    /// the SAME metered turn the counter advance does, so the charge commits
-    /// atomically with the meter (or the whole turn is rejected — e.g. the
-    /// consumer cannot pay, the conserved backstop under the in-band budget cap).
-    fn charged_effects(&self, work: Vec<Effect>) -> Vec<Effect> {
-        match self.charge.as_ref() {
-            Some(charge) => {
-                let mut v = Vec::with_capacity(work.len() + 1);
-                v.push(Effect::Transfer {
-                    from: self.worker_cell,
-                    to: charge.provider,
-                    amount: charge.price,
-                });
+    /// The consumer's spend account as a [`Payable`] cell — the worker cell + its
+    /// asset. `None` for a free mandate.
+    fn consumer_account(&self) -> Option<ConsumerSpendAccount> {
+        self.charge.as_ref().map(|_| ConsumerSpendAccount {
+            cell: self.worker_cell,
+            asset: self.consumer_asset,
+        })
+    }
+
+    /// **Resolve THIS mandate's per-call charge through the REAL `Payable::pay`
+    /// path.** Routes a `pay` of `charge.price` from the consumer's spend account
+    /// (the worker cell) to `charge.provider` through the canonical
+    /// [`dregg_payable::payable_descriptor`] — verified DFA route → `Signature`
+    /// cap-gate → desugar to the ONE conserving [`Effect::Transfer`]. Returns the
+    /// resolved `(Action, MethodSig)` so a caller can confirm the charge IS a
+    /// `Payable` pay (`action.method == pay`, the `MethodSig` from the canonical
+    /// descriptor), not a hand-rolled Transfer. `None` for a free mandate.
+    ///
+    /// This is the one source of truth the app framework's `Payable::pay` also
+    /// uses; the gateway and the apps transact over the same value medium.
+    pub fn charge_invocation(&self) -> Option<Result<(Action, MethodSig), InvokeRefused>> {
+        let (account, charge) = (self.consumer_account()?, self.charge.as_ref()?);
+        Some(account.pay_resolved(charge.price, charge.provider, InvokeAuthority::Signature))
+    }
+
+    /// Prepend the per-call charge's conserving [`Effect::Transfer`] (consumer →
+    /// provider) to the tool's work, if this is a paid mandate. The transfer is
+    /// the desugar of a REAL `Payable::pay` ([`Self::charge_invocation`]) — the
+    /// SAME verified, route-table-dispatched effect the apps transact over, not a
+    /// parallel hand-rolled one. It rides the SAME metered turn the counter
+    /// advance does, so the charge commits atomically with the meter (or the whole
+    /// turn is rejected — e.g. the consumer cannot pay, the conserved backstop
+    /// under the in-band budget cap).
+    fn charged_effects(&self, work: Vec<Effect>) -> Result<Vec<Effect>, ToolCallError> {
+        match self.charge_invocation() {
+            Some(Ok((action, _sig))) => {
+                // `action.effects` is exactly the conserving Transfer the canonical
+                // `Payable::pay` desugars to — one source of truth.
+                let mut v = action.effects;
                 v.extend(work);
-                v
+                Ok(v)
             }
-            None => work,
+            Some(Err(e)) => Err(ToolCallError::Sdk(SdkError::Rejected(format!(
+                "payable charge route refused: {e}"
+            )))),
+            None => Ok(work),
         }
     }
 
@@ -711,7 +802,7 @@ impl ToolGateway {
         // kernel's per-asset conservation check enforces the charge (an
         // insolvent consumer's turn is rejected — the conserved backstop under
         // the in-band budget cap).
-        let charged = self.charged_effects(work);
+        let charged = self.charged_effects(work)?;
         let mut effects = Vec::with_capacity(charged.len() + 1);
         effects.push(Effect::SetField {
             cell: self.worker_cell,
@@ -779,6 +870,11 @@ impl ToolGateway {
             return Err(ToolCallError::Refused(refusal));
         }
 
+        // Build the charge desugar FIRST (through the real `Payable::pay` route)
+        // so a (theoretical) route refusal short-circuits BEFORE any reservation —
+        // no leaked rate/value budget on an un-enqueued call.
+        let charged_work = self.charged_effects(work.clone())?;
+
         // RESERVE the counter slot AND the spend: the admitted call now owns
         // `old → new` of the rate budget and `price` of the value budget, so a
         // second enqueue this turn gates against both reservations (no
@@ -793,7 +889,6 @@ impl ToolGateway {
         // commit, and the EventualRef::source_turn / pending-registry key for the
         // result channel. The charge + work ride this turn; the executor reruns
         // the same shape at drain time through the cap-gated worker.
-        let charged_work = self.charged_effects(work.clone());
         let mut effects = Vec::with_capacity(charged_work.len() + 1);
         effects.push(Effect::SetField {
             cell: self.worker_cell,
@@ -850,8 +945,28 @@ impl ToolGateway {
 
             // The metered write + the charge + the tool's payload ride one turn —
             // identical to the inline path, but executed at DRAIN time, not
-            // enqueue time.
-            let charged_work = self.charged_effects(item.work.clone());
+            // enqueue time. A route refusal (theoretical) breaks the route and
+            // releases the reservation, same as an executor rejection.
+            let charged_work = match self.charged_effects(item.work.clone()) {
+                Ok(c) => c,
+                Err(e) => {
+                    if self.calls_made == item.new_count {
+                        self.calls_made = item.new_count - 1;
+                    }
+                    self.spent = self.spent.saturating_sub(item.charged);
+                    let reason = format!("routed charge route refused: {e}");
+                    let _events = self.pending.resolve(
+                        item.routed_hash,
+                        ResolutionOutcome::Broken(dregg_turn::BrokenReason::TurnRejected(
+                            dregg_turn::TurnError::PreconditionFailed {
+                                description: reason.clone(),
+                            },
+                        )),
+                    );
+                    self.results.insert(item.routed_hash, Err(reason));
+                    continue;
+                }
+            };
             let mut effects = Vec::with_capacity(charged_work.len() + 1);
             effects.push(Effect::SetField {
                 cell: self.worker_cell,

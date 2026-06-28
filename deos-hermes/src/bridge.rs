@@ -23,9 +23,10 @@
 use std::collections::HashMap;
 
 use dregg_sdk::{
-    AgentRuntime, CellId, Charge, GatewayRefusal, HeldToken, ToolCallError, ToolGateway, ToolGrant,
+    AgentRuntime, CellId, Charge, GatewayRefusal, HeldToken, SubAgent, ToolCallError, ToolGateway,
+    ToolGrant,
 };
-use dregg_turn::Effect;
+use dregg_turn::{Effect, TurnReceipt};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest, ToolKind};
 use crate::grant_registry::{GrantRegistry, MandateKey};
@@ -48,6 +49,13 @@ pub struct ToolMarket {
     /// The spend budget per mandate (per [`MandateKey`] worker) — the value
     /// ceiling that, like the rate ceiling, refuses a call in-band once reached.
     pub budget: u64,
+    /// The SESSION-WIDE spend ceiling, pooled across EVERY worker this session
+    /// admits. Where [`ToolMarket::budget`] bounds spend per [`MandateKey`] worker,
+    /// this bounds the consumer's TOTAL spend across all its tool-calls: once
+    /// cumulative session spend (`HermesGateway::total_spent`) plus the next call's
+    /// price would exceed it, the call is refused in-band even if the per-worker
+    /// budget still has head-room. `None` = no session cap (per-worker only).
+    pub session_budget: Option<u64>,
     /// Per-tool price overrides, keyed by exact Hermes tool name (a scarcer /
     /// dearer tool charges more than the default).
     pub price_overrides: HashMap<String, u64>,
@@ -55,12 +63,14 @@ pub struct ToolMarket {
 
 impl ToolMarket {
     /// A flat market: every tool-call costs `default_price`, paid to `provider`,
-    /// each mandate budgeted at `budget`.
+    /// each mandate budgeted at `budget`. No session-wide cap (per-worker only) —
+    /// add one with [`ToolMarket::with_session_budget`].
     pub fn flat(provider: CellId, default_price: u64, budget: u64) -> ToolMarket {
         ToolMarket {
             provider,
             default_price,
             budget,
+            session_budget: None,
             price_overrides: HashMap::new(),
         }
     }
@@ -69,6 +79,13 @@ impl ToolMarket {
     /// `web_search`).
     pub fn with_price(mut self, tool: &str, price: u64) -> ToolMarket {
         self.price_overrides.insert(tool.to_string(), price);
+        self
+    }
+
+    /// Pin a SESSION-WIDE spend ceiling pooled across every worker this session
+    /// admits — the consumer's TOTAL spend bound (see [`ToolMarket::session_budget`]).
+    pub fn with_session_budget(mut self, session_budget: u64) -> ToolMarket {
+        self.session_budget = Some(session_budget);
         self
     }
 
@@ -156,6 +173,30 @@ impl<'rt> HermesGateway<'rt> {
             .map(|m| Charge::new(m.price_for_key(key), m.provider, m.budget))
     }
 
+    /// **The SESSION-WIDE budget check** (GAP 2) — pool spend across EVERY worker.
+    ///
+    /// Returns `Some(reason)` iff this session carries a [`ToolMarket::session_budget`]
+    /// and paying for one more call routed to `key` would push the consumer's TOTAL
+    /// spend across ALL its workers ([`HermesGateway::total_spent`]) past that
+    /// ceiling. This bites even when the per-worker [`ToolMarket::budget`] still has
+    /// head-room — a consumer's whole-session spend is bounded, not just per-worker.
+    /// `None` (admit) for a free session, a session with no cap, or one with
+    /// session head-room.
+    fn session_budget_refusal(&self, key: &MandateKey) -> Option<String> {
+        let market = self.market.as_ref()?;
+        let session_cap = market.session_budget?;
+        let price = market.price_for_key(key);
+        let session_spent = self.total_spent();
+        if session_spent + price > session_cap {
+            Some(format!(
+                "session budget exhausted: {session_spent} spent across the session + {price} \
+                 price exceeds the {session_cap} session allowance"
+            ))
+        } else {
+            None
+        }
+    }
+
     /// The grant deos pinned for a kind (for inspection / a session dock).
     pub fn grant_for(&self, kind: ToolKind) -> &ToolGrant {
         self.registry.grant_for(kind)
@@ -224,6 +265,17 @@ impl<'rt> HermesGateway<'rt> {
         // the RATE + DEADLINE legs do the live confinement.
         let tool_id = self.registry.tool_id_for_key(&key);
 
+        // GAP 2 — the SESSION-WIDE budget cap, checked BEFORE the per-worker gate:
+        // pool spend across every worker so the consumer's TOTAL spend is bounded.
+        // Refused in-band (no worker touched, no turn, no charge) once the session
+        // cap is hit, even if this worker's per-mandate budget still has head-room.
+        if let Some(reason) = self.session_budget_refusal(&key) {
+            return PermissionOutcome::Reject {
+                tool_call_id: call.tool_call_id.clone(),
+                reason,
+            };
+        }
+
         let gw = match self.gateway_for(&key) {
             Ok(gw) => gw,
             Err(e) => {
@@ -253,6 +305,26 @@ impl<'rt> HermesGateway<'rt> {
                 reason: format!("executor rejected the metered turn: {e}"),
             },
         }
+    }
+
+    /// **Fund a session worker's spend account for real** (GAP 3).
+    ///
+    /// By default a worker cell is born with a fixed balance. This is the path that
+    /// funds it from the consumer's OWN account: it moves `amount` from `funder`'s
+    /// cell into the worker the given `tool_name` routes to (admitting that worker
+    /// if needed), via a conserving [`Effect::Transfer`] the funder authorizes. The
+    /// charges that worker subsequently settles debit value the consumer GENUINELY
+    /// transferred in, not a magic birth-balance. `funder` must hold value in the
+    /// worker's asset (same runtime/domain).
+    pub fn fund_worker(
+        &mut self,
+        tool_name: &str,
+        funder: &SubAgent,
+        amount: u64,
+    ) -> Result<TurnReceipt, ToolCallError> {
+        let key = self.registry.key_for_tool(tool_name);
+        let gw = self.gateway_for(&key)?;
+        gw.fund(funder, amount).map_err(ToolCallError::Sdk)
     }
 
     /// Calls made so far on a kind's mandate (0 if never invoked). Counts only

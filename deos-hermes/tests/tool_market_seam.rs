@@ -104,6 +104,59 @@ fn confined_agent_pays_provider_per_tool_call_then_refused_over_budget() {
 }
 
 #[test]
+fn session_wide_budget_pools_spend_across_workers_and_refuses_when_hit() {
+    // GAP 2 ✓ — the SESSION-WIDE cap pools spend across DIFFERENT workers. Two
+    // tools of different kinds route to two different MandateKey workers; each
+    // worker's per-mandate budget has ample head-room, but the SESSION budget is
+    // the binding limit: once cumulative spend across BOTH workers would exceed it,
+    // the call is refused in-band — even though the second worker has never spent.
+    let (runtime, root) = grantor();
+    let provider = spawn_provider(&runtime, &root);
+
+    let price = 1_000u64;
+    let per_worker_budget = 100_000u64; // huge — NOT the binding limit.
+    let session_budget = 2_500u64; // the binding limit, pooled across workers.
+    let registry = GrantRegistry::default_for_session(1000);
+    let market =
+        ToolMarket::flat(provider, price, per_worker_budget).with_session_budget(session_budget);
+    let mut gw = HermesGateway::new_paid(&runtime, root, registry, market);
+
+    // `web_search` (Fetch kind) and `search_files` (Search kind) route to TWO
+    // different workers.
+    let a1 = ToolCallRequest::new("s1", "tc-a1", "web_search", args());
+    let a2 = ToolCallRequest::new("s1", "tc-a2", "web_search", args());
+    let b1 = ToolCallRequest::new("s1", "tc-b1", "search_files", args());
+
+    // Two calls on worker A — session spend climbs to 2_000.
+    assert!(gw.admit_with_work(&a1, 50, Some(vec![])).allowed());
+    assert!(gw.admit_with_work(&a2, 50, Some(vec![])).allowed());
+    assert_eq!(gw.total_spent(), 2 * price, "session spend pooled to 2_000");
+
+    // A call on worker B (which has spent NOTHING, per-worker budget wide open)
+    // would push SESSION spend to 3_000 > 2_500 — refused by the session cap.
+    match gw.admit_with_work(&b1, 50, Some(vec![])) {
+        PermissionOutcome::Reject { reason, .. } => {
+            assert!(
+                reason.contains("session budget exhausted"),
+                "the refusal names the SESSION cap, not the per-worker budget: {reason}"
+            );
+        }
+        other => panic!("the cross-worker call must be refused by the session cap, got {other:?}"),
+    }
+    // The session-cap refusal touched no worker: nothing spent, provider unpaid.
+    assert_eq!(
+        gw.total_spent(),
+        2 * price,
+        "a session-cap refusal does not spend"
+    );
+    assert_eq!(
+        gw.calls_made_for_tool("search_files"),
+        0,
+        "worker B was never invoked — the session cap bit before the per-worker gate"
+    );
+}
+
+#[test]
 fn free_session_charges_nothing() {
     // A non-paid session (the original shape) behaves exactly as before: paid 0.
     let (runtime, root) = grantor();
