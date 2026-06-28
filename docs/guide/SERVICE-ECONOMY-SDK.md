@@ -302,7 +302,7 @@ The service-economy surface in Python is **SHIPPED** as `#[pyclass]` bindings in
 (`dregg_sdk::AgentRuntime` + `ExecutionLease`). Unlike the wire `Identity →
 turn(node) → submit` flow, the `ServiceRuntime` binding drives the REAL verified
 kernel executor in-process, so `pay` / `lease` produce REAL committed
-`TurnReceipt`s and `invoke_service` returns the REAL verified desugar — thin
+`TurnReceipt`s and `resolve_invoke` returns the REAL verified desugar — thin
 forwards, no faking:
 
 ```python
@@ -314,11 +314,15 @@ rt = dregg.ServiceRuntime()                 # a real in-process runtime (self-fu
 recipient = rt.spawn()
 rt.pay(recipient.cell_id, 1_000)            # -> TxReceipt
 
-# invoke_service → AgentRuntime::invoke_service_resolved: the verified desugar
+# resolve_invoke → AgentRuntime::invoke_service_resolved: the verified desugar
 # (method routed through the DFA router; unknown method raises DreggRefused).
 svc = rt.install_service_cell(["render"])
-action = rt.invoke_service(svc, "render", pay=(svc, 250, rt.native_asset))
+action = rt.resolve_invoke(svc, "render", pay=(svc, 250, rt.native_asset))
 assert action["effects"][0]["kind"] == "transfer"   # the canonical pay leg
+
+# invoke_service → AgentRuntime::invoke_service: sign + submit the desugar to the
+# executor (commits for a target this runtime administers — i.e. holds a reach
+# capability on; the executor fail-closes otherwise).
 
 # lease → ExecutionLease::open/fund/run: the durable, metered checkpoint.
 funder = rt.spawn()
@@ -329,11 +333,15 @@ lease.run()                                 # advances the checkpoint; FieldLte�
 
 `ServiceRuntime` / `Worker` / `Lease` / `TxReceipt` are each a `#[pyclass]`
 wrapping the real Rust type; `dregg.method_symbol(name)` exposes the routing
-symbol. `sdk-py/tests/test_service_economy.py` is the Python twin of the Rust
-facade's tests (conservation, routing + unknown-method refusal, the canonical pay
-leg, checkpoint advance, and the executor refusing a run past the capacity
-ceiling). Built green with `maturin develop` / `maturin build --release` (the
-default `light`, kernel-free wheel — no Lean toolchain required).
+symbol. `resolve_invoke` returns the verified desugar (the pure core the Rust
+suite asserts) without submitting; `invoke_service` signs + submits it (its
+executor precondition is the reach-capability the Rust facade also requires).
+`sdk-py/tests/test_service_economy.py` is the Python twin of the Rust facade's
+tests (conservation, routing + unknown-method refusal, the canonical pay leg,
+the fail-closed capability gate at submit, checkpoint advance, and the executor
+refusing a run past the capacity ceiling). Built green with `maturin develop` /
+`maturin build --release` (the default `light`, kernel-free wheel — no Lean
+toolchain required).
 
 ## Status — real vs designed
 

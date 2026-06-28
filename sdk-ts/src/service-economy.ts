@@ -41,6 +41,7 @@ import type { Receipt } from "./receipt";
 import type { TurnBuilder } from "./turns";
 import type { Bytes32, CellId, Effect } from "./internal/wire";
 import { fieldFromU64 } from "./internal/wire";
+import type { StateConstraint } from "./program";
 
 /**
  * A payment leg to ride alongside a service invocation: pay `amount` of `asset`
@@ -79,28 +80,22 @@ export interface LeaseTerms {
   method?: string;
 }
 
-/** One constraint of the lease meter program (a description of the
- * executor-side tooth, not the postcard encoding). */
-export type LeaseMeterConstraint =
-  | { kind: "fieldLte"; index: number; value: Bytes32 }
-  | { kind: "monotonic"; index: number };
-
 /**
  * The executor-side meter program a lease cell carries —
  * `FieldLte { step ≤ maxSteps } ∧ Monotonic { step }` on {@link LEASE_STEP_SLOT}.
- * This is the SAME shape the Rust `lease_program` installs and the standalone
- * execution-lease app's `advance_checkpoint` relies on: the `FieldLte` binds
- * the capacity ceiling into every committed transition (a `run` past the
- * ceiling is rejected by the executor) and `Monotonic` forbids rewinding the
- * checkpoint to forge head-room or replay a stale image.
+ * This is the EXACT program the Rust `lease_program` installs and the standalone
+ * execution-lease app's `advance_checkpoint` relies on: the `FieldLte` binds the
+ * capacity ceiling into every committed transition (a `run` past the ceiling is
+ * rejected by the executor) and `Monotonic` forbids rewinding the checkpoint to
+ * forge head-room or replay a stale image.
  *
- * Returned as a description of the two teeth so a caller can see what the lease
- * cell's program enforces. The program itself is installed at cell
- * provisioning (the in-process Rust `lease_program`); the outer-`Monotonic`
- * postcard encoding is not modeled on this wire surface, so this is the meter
- * shape, not a content-addressable program blob.
+ * Returned as the `StateConstraint[]` that postcard-encodes BYTE-IDENTICALLY to
+ * the Rust side, so `program.canonicalProgramVk(leaseProgramConstraints(n))`
+ * equals the Rust `canonical_program_vk(lease_program(n))` — a provisioner can
+ * install this program and a Rust verifier agrees on its content address. (Pinned
+ * in `sdk-ts/test/service-economy.test.mjs`.)
  */
-export function leaseProgramConstraints(maxSteps: number): LeaseMeterConstraint[] {
+export function leaseProgramConstraints(maxSteps: number): StateConstraint[] {
   const ceiling = maxSteps < 0 ? 0 : maxSteps;
   return [
     { kind: "fieldLte", index: LEASE_STEP_SLOT, value: fieldFromU64(ceiling) },

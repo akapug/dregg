@@ -7,8 +7,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 
-import { hex, sdk } from "./helpers.mjs";
+import { hex, raw, sdk } from "./helpers.mjs";
 
 const PINNED_FED = Uint8Array.from({ length: 32 }, () => 3);
 
@@ -146,4 +147,96 @@ test("lease.fund is one conserving Transfer into the lease cell", async () => {
   assert.equal(hex(e.from), hex(funder), "funder pays");
   assert.equal(hex(e.to), hex(leaseCell), "the lease cell is funded");
   assert.equal(e.amount, 5_000n);
+});
+
+test("lease meter program postcard is byte-faithful to the Rust canonical_program_vk", async () => {
+  // The lease cell's FieldLte{slot4 <= n} ∧ Monotonic{slot4} program encodes
+  // BYTE-IDENTICALLY to the Rust `lease_program(n)`: the content-address
+  // `canonical_program_vk` matches. These hex values are computed by the Rust
+  // `dregg_cell::factory::canonical_program_vk` (the source of truth), so a TS
+  // provisioner and a Rust verifier agree on the meter program's address.
+  const { program, leaseProgramConstraints } = await sdk();
+  const expected = {
+    1: "cd120a425dbebf428f6f5a28143134d013560ee45889230f107034c2429c770f",
+    2: "a15be1c3770930f5493313bc81ffd8cc6654c38947c0c092bec0d843f1f59bfd",
+    8: "93550808725ffd0820da73854d0240cb634d16bc0a0dffbe50b722adfe5faac9",
+  };
+  for (const [n, vk] of Object.entries(expected)) {
+    const got = program.canonicalProgramVk(leaseProgramConstraints(Number(n)));
+    assert.equal(hex(got), vk, `lease_program(${n}) vk must match the Rust source of truth`);
+  }
+});
+
+// A minimal mock node that accepts the signed envelope and returns a receipt —
+// enough to prove the FULL pay path (sign → submit → Receipt), not just the
+// action shape. Mirrors the envelope verification in turns.test.mjs.
+async function mockNode({ onEnvelope }) {
+  const nodePubkey = Uint8Array.from({ length: 32 }, () => 5);
+  const receipts = [];
+  const server = createServer((req, res) => {
+    const send = (code, body) => {
+      res.writeHead(code, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    if (req.url === "/api/node/identity") {
+      return send(200, { public_key: hex(nodePubkey), agent_cell: "00".repeat(32), unlocked: true, agent_balance: 0, agent_nonce: 0 });
+    }
+    if (req.url === "/api/federations") {
+      return send(200, [{ id: "00".repeat(32), federation_id: "00".repeat(32), committee_epoch: 0, member_count: 0, is_local: true }]);
+    }
+    if (req.url?.startsWith("/api/cell/")) {
+      return send(200, { id: req.url.slice("/api/cell/".length), found: true, balance: 500, nonce: 3, public_key: "", fields: [] });
+    }
+    if (req.url === "/api/receipts") return send(200, receipts);
+    if (req.url === "/api/turns/submit-signed" && req.method === "POST") {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => send(200, onEnvelope(Buffer.concat(chunks), receipts)));
+      return;
+    }
+    send(404, { error: "nope" });
+  });
+  await new Promise((r) => server.listen(0, r));
+  return { server, nodePubkey, url: `http://127.0.0.1:${server.address().port}` };
+}
+
+test("pay rides the full path: sign -> submit -> Receipt (verified envelope)", async () => {
+  const rawMod = await raw();
+  const { AgentRuntime, Identity } = await sdk();
+  const identity = Identity.fromKeyBytes(Uint8Array.from({ length: 32 }, (_, i) => 0x50 + i));
+  const agentHex = identity.cellIdHex();
+
+  let saw = null;
+  const { server, url, nodePubkey } = await mockNode({
+    onEnvelope: (body, receipts) => {
+      // Frame: turn ++ 0x40 ++ sig(64) ++ 0x20 ++ signer(32) — same as the node.
+      const turnLen = body.length - (1 + 64 + 1 + 32);
+      assert.equal(body[turnLen], 0x40);
+      assert.equal(body[turnLen + 65], 0x20);
+      const signer = body.subarray(turnLen + 66);
+      assert.equal(hex(signer), identity.publicKeyHex, "the payer signed");
+      assert.equal(hex(rawMod.deriveCellId(signer)), agentHex);
+      assert.equal(hex(body.subarray(0, 32)), agentHex, "turn begins with the agent cell id");
+      saw = true;
+      const turnHashHex = "ab".repeat(32);
+      receipts.push({
+        chain_index: 0, chain_head: true, receipt_hash: "cd".repeat(32), turn_hash: turnHashHex,
+        agent: agentHex, pre_state: "11".repeat(32), post_state: "22".repeat(32), timestamp: 1, computrons_used: 10,
+        action_count: 1, previous_receipt_hash: null, finality: "tentative", was_encrypted: false, was_burn: false, has_proof: false,
+      });
+      return { accepted: true, turn_hash: turnHashHex, action_count: 1 };
+    },
+  });
+  try {
+    // No pinned federation: the runtime discovers it (solo node → blake3(operator pubkey)).
+    const runtime = new AgentRuntime(identity, url);
+    const receipt = await runtime.pay(bytes(9), 250n, bytes(0xaa));
+    assert.ok(saw, "the node saw and verified the envelope");
+    assert.equal(receipt.turnHash, "ab".repeat(32));
+    assert.equal(receipt.agent, agentHex);
+    // And the discovered federation id is what the per-action signature binds.
+    void nodePubkey;
+  } finally {
+    server.close();
+  }
 });

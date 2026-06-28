@@ -391,6 +391,7 @@ __export(program_exports, {
   fieldFromU64: () => fieldFromU642,
   immutable: () => immutable,
   implies: () => implies,
+  monotonic: () => monotonic,
   preimageGate: () => preimageGate,
   programmedCellDescriptor: () => programmedCellDescriptor,
   senderInSlot: () => senderInSlot,
@@ -428,6 +429,9 @@ function immutable(index) {
 }
 function writeOnce(index) {
   return { kind: "writeOnce", index };
+}
+function monotonic(index) {
+  return { kind: "monotonic", index };
 }
 function fieldEquals(index, value) {
   return { kind: "fieldEquals", index, value: exactBytes(value, 32, "fieldEquals value") };
@@ -561,6 +565,9 @@ function writeConstraint(w, c) {
       break;
     case "immutable":
       w.varint(7).u8(c.index);
+      break;
+    case "monotonic":
+      w.varint(8).u8(c.index);
       break;
     case "preimageGate":
       w.varint(21).u8(c.commitmentIndex).varint(hashKindIndex(c.hashKind));

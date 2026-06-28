@@ -84,7 +84,7 @@ export {
   ServiceEconomy,
   leaseProgramConstraints,
 } from "./service-economy";
-export type { LeaseMeterConstraint, LeaseStep, LeaseTerms, PayLeg } from "./service-economy";
+export type { LeaseStep, LeaseTerms, PayLeg } from "./service-economy";
 
 // The receipt noun (lazy proof).
 export { Receipt, TurnProof, WrongTurnProofError } from "./receipt";
