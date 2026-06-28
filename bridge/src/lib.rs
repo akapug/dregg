@@ -45,6 +45,12 @@ pub mod present;
 /// conserved, `Payable` asset. See `docs/deos/TOKEN-MIRROR-BRIDGE.md`.
 pub mod solana_mirror;
 
+/// Mirror a verified **Stripe payment** (a signed `payment_intent.succeeded` /
+/// `charge.succeeded` webhook) into dregg's value layer as a conserved, `Payable`
+/// USD-credit asset — the `solana_mirror` pattern with Stripe as the trusted
+/// payment oracle. An agent's Stripe payment funds its DreggNet execution-lease.
+pub mod stripe_mirror;
+
 /// The TRUSTLESS inbound proof-of-lock for the Solana mirror — the honest
 /// upgrade from the trusted-oracle attestation: verify a `SolanaLockProof`
 /// (consensus evidence + account inclusion) instead of trusting a signature.
@@ -61,6 +67,13 @@ pub mod solana_consensus;
 /// [`solana_consensus::ValidatorVote`]) and the real 16-ary fan-out accounts-hash
 /// Merkle over blake3 per-account hashes. See `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
 pub mod solana_wire;
+
+/// **Bank-state provenance** (pass 3): source the per-epoch stake table + the
+/// authorized-voter binding from Solana's own bank state (verified against the
+/// voted accounts hash), rotated across epochs from an irreducible
+/// weak-subjectivity anchor. Replaces the trusted `EpochStakeTable` input with a
+/// proven-from-the-bank-hash derivation. See `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
+pub mod solana_provenance;
 
 /// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
 /// the new sibling AIR `dregg_circuit::bridge_action_air` that pins
@@ -108,6 +121,11 @@ pub use solana_mirror::{
     MirrorConfig, MirrorError, MirrorMint, MirrorRedeem, MirrorState, SolanaLockAttestation,
     SolanaUnlockRequest,
 };
+pub use solana_provenance::{
+    Delegation, DerivedStakeTable, ProvenAccount, ProvenanceError, RotationStep, STAKE_PROGRAM_ID,
+    VerifiedStakeTable, WeakSubjectivityAnchor, active_stake, decode_authorized_voter,
+    decode_stake_delegation, derive_stake_table, rotate, vote_program_id,
+};
 pub use solana_trustless::{
     AccountInclusionProof, ConsensusEvidence, LockProofError, LockProofTrust, ProofMintError,
     SolanaLockProof, verify_lock_proof, verify_lock_proof_consensus,
@@ -117,5 +135,9 @@ pub use solana_wire::{
     accounts_merkle_node, compute_accounts_merkle_root, decode_lock_record, encode_lock_record,
     fold_account_inclusion_16ary, ingest_vote_transaction, parse_verified_vote_tx,
     solana_account_hash, verify_account_inclusion_16ary, witness_binds,
+};
+pub use stripe_mirror::{
+    DEFAULT_TOLERANCE_SECS, RECIPIENT_METADATA_KEY, StripeMint, StripeMirrorConfig,
+    StripeMirrorError, StripeMirrorState, StripePaymentAttestation, StripeWebhookEvent,
 };
 pub use verifier::{DslAwareProofVerifier, StarkProofVerifier};
