@@ -205,6 +205,13 @@ pub use tool_gateway::{
     RoutedStatus, ToolCallError, ToolGateway, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
 };
 
+// The `Payable` DSI core the metered tool-gateway charge routes through (one
+// verified `pay` source of truth, shared with the app framework's `Payable::pay`).
+pub use dregg_payable::{
+    AssetId, InvokeAuthority, InvokeRefused, PAY_METHOD, Payable, pay_method_sig,
+    payable_descriptor, resolve_pay,
+};
+
 // Receipt-chain verification (the chain the Receipt noun links into).
 pub use dregg_turn::{
     VerifyError, verify_receipt_chain, verify_receipt_chain_head, verify_receipt_extends,

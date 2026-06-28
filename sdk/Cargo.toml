@@ -18,6 +18,11 @@ dregg-types = { path = "../types" }
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-turn = { path = "../turn" }
+# The Payable DSI + the verified `pay` route core. The metered tool-gateway charge
+# routes its consumer→provider payment through the SAME `dregg_payable::resolve_pay`
+# desugar the app-framework `Payable::pay` uses — one verified source of truth, not
+# a parallel hand-rolled `Effect::Transfer`.
+dregg-payable = { path = "../dregg-payable" }
 starbridge-polis = { path = "../starbridge-apps/polis" }
 dregg-bridge = { path = "../bridge" }
 # UNCONDITIONAL (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): THE SWAP producer-mode
