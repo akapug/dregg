@@ -118,5 +118,10 @@ deos-view = { path = "../deos-view", default-features = false, features = ["disc
 bs58 = "0.5"
 zeroize = { workspace = true }
 
+[dev-dependencies]
+# `ServiceExt::oneshot` drives the admin webportal router in tests without
+# binding a socket (already in the lockfile transitively via tower-http).
+tower = { version = "0.5", features = ["util"] }
+
 [lints]
 workspace = true

@@ -14,6 +14,12 @@
 //! Discord<->dregg federation linking.
 
 mod activity_feed;
+// DreggNet Cloud — semi-private per-user channels (the visibility plan + name).
+pub mod channels;
+// DreggNet Cloud — drive-your-Hermes-from-your-channel: a channel message becomes
+// a cap-gated, metered, receipted dregg turn through the proven `ToolGateway`,
+// bounded by the user's own cell. The confined per-user agent loop.
+pub mod hermes_channel;
 // The bot's surfaces authored ONCE as `deos-view` `ViewNode` cards and rendered through
 // the Discord backend (`deos_view::discord`) — the card-authored-once-renders-everywhere
 // thesis extended to Discord (the FOURTH `ViewNode` backend, alongside native gpui / web
@@ -137,6 +143,8 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "deos",
     // ─── interactive ViewNode card (buttons fire real verified turns) ───────────
     "card",
+    // ─── DreggNet Cloud: claim a semi-private channel to drive your Hermes ───────
+    "channel",
 ];
 
 #[cfg(test)]
@@ -172,6 +180,12 @@ pub struct BotState {
     /// a real cap-gated verified turn on the pressing user's card and re-renders it
     /// (`viewnode_applet`).
     pub card_applets: viewnode_applet::CardApplets,
+    /// DreggNet Cloud — the per-user confined Hermes sessions, keyed by Discord
+    /// user id. Held here so a user's rate budgets accumulate across the messages
+    /// they post in their channel. Each session is bounded by the user's own cell
+    /// (derived from their custodial seed). See [`hermes_channel`].
+    pub channel_hermes:
+        std::sync::Mutex<std::collections::HashMap<u64, hermes_channel::ChannelHermes>>,
 }
 
 /// The main event handler for Discord gateway events.
@@ -250,6 +264,8 @@ impl EventHandler for Handler {
             commands::deos::register(),
             // ─── interactive ViewNode card ──────────────────────────────────
             commands::card::register(),
+            // ─── DreggNet Cloud per-user channel ────────────────────────────
+            commands::channel::register(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -367,6 +383,7 @@ impl EventHandler for Handler {
                 "bounty" => commands::bounty::handle(&ctx, &command, &self.state).await,
                 "deos" => commands::deos::handle(&ctx, &command, &self.state).await,
                 "card" => commands::card::handle(&ctx, &command, &self.state).await,
+                "channel" => commands::channel::handle(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
@@ -391,9 +408,12 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn message(&self, _ctx: Context, msg: Message) {
+    async fn message(&self, ctx: Context, msg: Message) {
         // Bridge messages to dregg queues if the channel is linked.
         self.state.event_bridge.on_message(&msg).await;
+        // DreggNet Cloud: if this is a per-user channel, the message drives the
+        // owner's confined Hermes (a cap-gated, metered, receipted dregg turn).
+        hermes_channel::on_message(&ctx, &msg, &self.state).await;
     }
 
     async fn presence_update(&self, _ctx: Context, data: Presence) {
@@ -567,6 +587,7 @@ async fn main() {
             federation_id_bytes,
         ))),
         card_applets: viewnode_applet::CardApplets::new(),
+        channel_hermes: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).
