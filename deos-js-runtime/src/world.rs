@@ -29,6 +29,7 @@
 
 use std::collections::BTreeMap;
 
+use dregg_cell::interface::{method_symbol, InterfaceDescriptor, Semantics};
 use dregg_cell::{AuthRequired, Cell, Permissions};
 use dregg_sdk::embed::{DreggEngine, EngineConfig};
 use dregg_turn::builder::{ActionBuilder, TurnBuilder};
@@ -71,8 +72,17 @@ struct CellEntry {
     /// The authority the JS app holds toward this cell (the cap tooth's left side). A
     /// fire/self-edit succeeds only if this satisfies the affordance's `required`.
     held: AuthRequired,
-    /// The cell's affordance surface (the directions of its interface).
+    /// The cell's affordance surface (the directions of its interface) — the *execution
+    /// bodies* (each [`Affordance::op`] computes the write). When a typed `interface` is
+    /// published, the affordance is found by the method name the interface routed to.
     affordances: Vec<Affordance>,
+    /// The cell's **published, typed interface** (the same content-addressed
+    /// [`InterfaceDescriptor`] the real kvstore/escrow cells publish). When present, a
+    /// `tCell(cell, "method", ..)` resolves the method through the verified DFA
+    /// `route_method` — the SAME dispatch path `invoke()` speaks — so the JS names a TYPED
+    /// METHOD (cap + replayable-vs-serviced semantics come from the published `MethodSig`),
+    /// not a bare local affordance. Absent ⇒ the legacy affordance-name path.
+    interface: Option<InterfaceDescriptor>,
 }
 
 /// What a successful fire produced — the receipt that joined the audit tape and the new
@@ -149,9 +159,28 @@ impl CellWorld {
                 id,
                 held,
                 affordances,
+                interface: None,
             },
         );
         id
+    }
+
+    /// **Publish a typed [`InterfaceDescriptor`] on a capped cell** — the route_method
+    /// bridge. After this, a `tCell(name, "method", ..)` resolves the method through the
+    /// cell's published interface via the verified DFA [`InterfaceDescriptor::route_method`]
+    /// (the SAME dispatch `invoke()` speaks), so the JS names a TYPED METHOD: the cap gate
+    /// and the replayable-vs-serviced bit come from the published `MethodSig`, and a method
+    /// absent from the interface is fail-closed [`FireError::MethodNotRouted`]. The
+    /// descriptor mirrors what the cell commits as its `InterfaceRef`, exactly the
+    /// kvstore/escrow shape. Panics in debug if `name` is not a capped cell.
+    pub fn publish_interface(&mut self, name: &str, descriptor: InterfaceDescriptor) {
+        debug_assert!(
+            self.cells.contains_key(name),
+            "publish_interface: {name} must be a capped cell"
+        );
+        if let Some(entry) = self.cells.get_mut(name) {
+            entry.interface = Some(descriptor);
+        }
     }
 
     /// Mint a cell onto the shared ledger but record **no** cap-table row: the JS app holds
@@ -278,35 +307,68 @@ impl CellWorld {
         read_view_blob(self.engine.ledger().get(&id)?)
     }
 
-    /// **Fire an affordance on the home cell** (the `t(turn,arg)` host fn).
-    pub fn fire_home(&mut self, affordance: &str, arg: i64) -> Result<Fired, FireError> {
+    /// **Fire an affordance on the home cell** (the `t(turn, ...args)` host fn).
+    pub fn fire_home(&mut self, affordance: &str, args: &[i64]) -> Result<Fired, FireError> {
         let home = self
             .home
             .clone()
             .ok_or_else(|| FireError::NoCapability("<home>".into()))?;
-        self.fire_on(&home, affordance, arg)
+        self.fire_on(&home, affordance, args)
     }
 
-    /// **Fire an affordance on ANOTHER cell** (the `tCell(cell,turn,arg)` host fn) — the
-    /// keystone of multi-cell coordination. Goes through the SAME path a home fire does:
+    /// **Fire an affordance/method on ANOTHER cell** (the `tCell(cell, method, ...args)`
+    /// host fn) — the keystone of multi-cell coordination. Goes through the SAME path a home
+    /// fire does:
     ///
     /// 1. resolve the cell handle (absent ⇒ [`FireError::NoCapability`], the cell is never
     ///    touched);
-    /// 2. resolve the affordance (unknown ⇒ no turn);
-    /// 3. **cap tooth, in-band**: the held cap for THIS cell must satisfy the affordance's
-    ///    `required` (`dregg_cell::is_attenuation`) — an over-reach commits NOTHING;
-    /// 4. compute the write as a pure function of the live model;
-    /// 5. build + `execute_turn` the verified turn, AS the target cell (single-custody
+    /// 2. **typed-method routing (the bridge)**: if the cell publishes an
+    ///    [`InterfaceDescriptor`], `affordance` must route through it via the verified DFA
+    ///    [`InterfaceDescriptor::route_method`] (the same dispatch `invoke()` speaks) — an
+    ///    undeclared method is [`FireError::MethodNotRouted`], a
+    ///    [`Semantics::Serviced`] method is [`FireError::ServicedSeam`] (a read, not a
+    ///    turn), and the cap requirement comes from the published `MethodSig`. With no
+    ///    published interface, `affordance` is resolved as a bare local affordance name and
+    ///    the cap requirement is the affordance's own `required` (the legacy path);
+    /// 3. resolve the execution body (the [`Affordance`] named by the method, unknown ⇒ no
+    ///    turn);
+    /// 4. **cap tooth, in-band**: the held cap for THIS cell must satisfy the resolved
+    ///    requirement (`dregg_cell::is_attenuation`) — an over-reach commits NOTHING;
+    /// 5. compute the write as a pure function of the live model + the JS args;
+    /// 6. build + `execute_turn` the verified turn, AS the target cell (single-custody
     ///    embedded world — the JS holds the cap, acts as the cell), chaining that cell's
     ///    own authority head.
     pub fn fire_on(
         &mut self,
         cell_name: &str,
         affordance: &str,
-        arg: i64,
+        args: &[i64],
     ) -> Result<Fired, FireError> {
         let entry = self.entry(cell_name)?;
         let id = entry.id;
+
+        // (2) typed-method routing: resolve the cap requirement either from the published
+        //     interface (the route_method bridge) or the bare affordance (legacy path).
+        let required = match &entry.interface {
+            Some(iface) => {
+                let sym = method_symbol(affordance);
+                let method = iface
+                    .route_method(&sym)
+                    .ok_or_else(|| FireError::MethodNotRouted(affordance.to_string()))?;
+                if method.semantics == Semantics::Serviced {
+                    return Err(FireError::ServicedSeam(affordance.to_string()));
+                }
+                method.auth_required.clone()
+            }
+            None => entry
+                .affordances
+                .iter()
+                .find(|a| a.name == affordance)
+                .map(|a| a.required.clone())
+                .ok_or_else(|| FireError::UnknownAffordance(affordance.to_string()))?,
+        };
+
+        // (3) resolve the execution body — the affordance the method name maps to.
         let aff = entry
             .affordances
             .iter()
@@ -314,17 +376,17 @@ impl CellWorld {
             .cloned()
             .ok_or_else(|| FireError::UnknownAffordance(affordance.to_string()))?;
 
-        // (3) the REAL cap tooth, in-band, against the cap held FOR THIS cell.
-        if !dregg_cell::is_attenuation(&entry.held, &aff.required) {
+        // (4) the REAL cap tooth, in-band, against the cap held FOR THIS cell.
+        if !dregg_cell::is_attenuation(&entry.held, &required) {
             return Err(FireError::Unauthorized(affordance.to_string()));
         }
 
-        // (4) write = pure function of the live model.
+        // (5) write = pure function of the live model + the JS args.
         let slot = aff.op.slot();
         let current = self.get_slot(cell_name, slot)?;
-        let (slot, value) = aff.op.write(current, arg);
+        let (slot, value) = aff.op.write(current, args);
 
-        // (5) build + execute the verified turn AS the target cell.
+        // (6) build + execute the verified turn AS the target cell.
         let action = ActionBuilder::new_unchecked_for_tests(id, affordance, id)
             .effect_set_field(id, slot, value)
             .effect_increment_nonce(id)
