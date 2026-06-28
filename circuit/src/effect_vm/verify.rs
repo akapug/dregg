@@ -545,3 +545,71 @@ pub fn verify_slot_caveat_manifest(
     }
     Ok(())
 }
+
+/// **The OMISSION-PROOF coverage check (constraint-binding weld, the soundness
+/// core).** Given the set of capacity caveat tags a cell's COMMITTED declaration
+/// REQUIRES (re-derived by the caller from the cell's declared `state_constraints`,
+/// which are bound into committed state via
+/// `cell::commitment::compute_authority_digest_felt` → `record_digest` → the
+/// `B_AUTHORITY_DIGEST` limb of the ~124-bit wide commit), assert each required tag
+/// is PRESENT in the prover-published manifest. Returns `Ok` iff every required tag
+/// appears in some published entry; otherwise the first missing tag.
+///
+/// This closes the load-bearing gap that [`verify_slot_caveat_manifest`] alone
+/// leaves: that function re-evaluates the entries that ARE present (the SATISFACTION
+/// half), but a forger who simply OMITS a declared capacity entry (publishes
+/// `count = 0`, or a manifest with no tag-N entry) leaves it nothing to check — the
+/// gate is prover-OPTIONAL. Pairing the two — coverage (this function: every
+/// required entry PRESENT) + satisfaction ([`verify_slot_caveat_manifest`]: every
+/// present entry's gate HOLDS) — makes the declared gate omission-proof: a turn on a
+/// capacity cell that drops its declared entry is rejected.
+///
+/// This is the Rust shadow of the Lean
+/// `Dregg2.Deos.ConstraintBinding.omission_caught_under_binding`: the caller's
+/// `required_tags` is the `requiredTags(committed declaration)` re-derivation, and a
+/// forger cannot escape by presenting a hollow declaration because the declaration
+/// is bound in committed state (the Lean `DeclCommitBinds` floor = the authority
+/// digest's collision-resistance). STAGED: the manifest still rides public inputs
+/// and the AIR constraint polynomials (the VK bytes) are UNCHANGED; the binding it
+/// re-derives against already exists in committed state. See
+/// `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`.
+pub fn verify_slot_caveat_coverage(
+    public_inputs: &[BabyBear],
+    required_tags: &[u32],
+) -> Result<(), String> {
+    if required_tags.is_empty() {
+        return Ok(());
+    }
+    if public_inputs.len() < pi::BASE_COUNT {
+        return Err(format!(
+            "PI vector too short for slot-caveat coverage: {} < {}",
+            public_inputs.len(),
+            pi::BASE_COUNT
+        ));
+    }
+    let count = public_inputs[pi::SLOT_CAVEAT_COUNT].0 as usize;
+    if count > pi::MAX_SLOT_CAVEATS {
+        return Err(format!(
+            "SLOT_CAVEAT_COUNT {} exceeds MAX_SLOT_CAVEATS {}",
+            count,
+            pi::MAX_SLOT_CAVEATS
+        ));
+    }
+    for &req in required_tags {
+        let mut present = false;
+        for i in 0..count {
+            let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+            if public_inputs[base].0 == req {
+                present = true;
+                break;
+            }
+        }
+        if !present {
+            return Err(format!(
+                "slot-caveat coverage: declared capacity tag {req} is REQUIRED by the committed \
+                 declaration but ABSENT from the manifest (count={count}) — omission rejected"
+            ));
+        }
+    }
+    Ok(())
+}

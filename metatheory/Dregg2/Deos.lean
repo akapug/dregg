@@ -77,6 +77,15 @@ import Dregg2.Deos.StandingObligation
 -- share-price pattern; the Rust vault.rs share-vault is wired via share_vault_matches_lean_rung.
 -- #assert_all_clean. The proven share-price is stronger than ERC-4626's exploit-prone share math.
 import Dregg2.Deos.Vault
+-- The CONSTRAINT-BINDING soundness core for the house-capacity in-circuit welds: a DECLARED capacity
+-- caveat cannot be OMITTED. The §6 weld rungs prove a PRESENT manifest entry forces its invariant;
+-- this rung closes the load-bearing gap that the entry must be present at all. The cell's declared
+-- constraint-set is bound into committed state (compute_authority_digest_felt → record_digest → the
+-- ~124-bit wide commit), so a verifier re-deriving the required tags and DEMANDING coverage cannot be
+-- fooled by omission: omission_caught_under_binding (the soundness core, under the authority-digest CR
+-- floor) + omission_rejected/unsatisfied_rejected + the escrow bridge to SealedEscrow.SettleGate.
+-- #assert_all_clean. docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md.
+import Dregg2.Deos.ConstraintBinding
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →
