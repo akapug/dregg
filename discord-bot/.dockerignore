@@ -1,0 +1,13 @@
+# Keep the build context tiny: the runtime image only needs the pre-built binary
+# and the migrations/ seed. Everything else (full target tree, sources, sqlite
+# scratch DBs) is excluded.
+target/*
+!target/release/dregg-discord-bot
+examples/
+src/
+*.db
+*.db-*
+README.md
+Cargo.lock
+Cargo.toml
+rust-toolchain.toml
