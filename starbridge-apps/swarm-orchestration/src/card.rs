@@ -17,18 +17,29 @@
 //! JSON** (this module): pure `serde_json`, no elephant. The deos world's renderers
 //! consume it; this module owns the card definition and proves it is well-formed.
 //!
-//! ## The card shape
+//! ## The card shape — a rich, live dispatch-board surface
 //!
-//! A titled column ([`deos.ui.vstack`](deos_view)) carrying:
-//!   - a `text` header (`"Swarm Orchestration"`);
-//!   - a `bind` on [`EPOCH_SLOT`](crate::EPOCH_SLOT) — a fine-grained signal that
-//!     re-reads the live dispatch counter off the ledger (the SAME witnessed read a
-//!     native `bind` closure makes), so the displayed epoch advances when a fired
-//!     dispatch commits;
-//!   - one `button` per mutating method (`open_board` / `dispatch` / `grant_worker`),
-//!     each carrying its `onClick = { turn, arg }` — the EXACT cap-gated verified turn
-//!     a click fires through the [`invoke()`](crate::service)/affordance seam (the
-//!     button's payload is the method symbol the service routes).
+//! A titled column ([`deos.ui.vstack`](deos_view)) built from the rich deos-view
+//! vocabulary (`section` / `pill` / `gauge` / `breadcrumb` / `divider` / `icon`):
+//!
+//!   - a **status header** — the app name + a `pill` naming the live swarm state as a
+//!     WORD (`DISPATCHING`), and a `breadcrumb` of the dispatch lifecycle
+//!     (Closed → Open → Dispatching → Spent) with the current step marked;
+//!   - a **"Budget" `section`** surfacing the LIVE budget gate — the KILLER VISUAL: a
+//!     `gauge` per worker meter ([`SPENT_A_SLOT`](crate::SPENT_A_SLOT) /
+//!     [`SPENT_B_SLOT`](crate::SPENT_B_SLOT)) filling toward the shared `BUDGET`
+//!     ceiling, so the two meters together VISUALIZE the atomic budget gate
+//!     `spent_a + spent_b <= budget` (the `AffineLe` tooth the executor enforces — the
+//!     two bars can never collectively overrun the ceiling). Plus `bind`s on the
+//!     [`LEAD_SLOT`](crate::LEAD_SLOT) (the provenance anchor), the
+//!     [`BUDGET_SLOT`](crate::BUDGET_SLOT) (the mandate), both spend meters, and the
+//!     [`EPOCH_SLOT`](crate::EPOCH_SLOT) dispatch counter — each a fine-grained signal
+//!     that re-reads the live value (the SAME witnessed read a native `bind` closure
+//!     makes), so the surface advances when a fired dispatch commits;
+//!   - an **"Actions" `section`** of one `icon`+`button` row per mutating method
+//!     (`open_board` / `dispatch` / `grant_worker`), each `button` carrying its
+//!     `onClick = { turn, arg }` — the EXACT cap-gated verified turn a click fires
+//!     through the [`invoke()`](crate::service)/affordance seam.
 //!
 //! The button `turn` names match the [`service`](crate::service) method vocabulary
 //! ([`METHOD_OPEN_BOARD`](crate::service::METHOD_OPEN_BOARD), …) so the card and the
@@ -36,18 +47,71 @@
 
 use serde_json::{Value, json};
 
-use crate::EPOCH_SLOT;
 use crate::service::{METHOD_DISPATCH, METHOD_GRANT_WORKER, METHOD_OPEN_BOARD};
+use crate::{BUDGET_SLOT, EPOCH_SLOT, LEAD_SLOT, SPENT_A_SLOT, SPENT_B_SLOT};
+
+/// The budget gauge's denominator — a representative swarm mandate so a worker's
+/// spend meter fills its bar as the budget is consumed (the seeded board opens with a
+/// `1_000` budget; see [`seed_board`](crate::seed_board)). Both worker gauges share
+/// this ceiling: their two fills together CANNOT overrun it (the `AffineLe` gate).
+const BUDGET_GAUGE_MAX: u64 = 1_000;
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
+/// A `deos.ui.pill` node — a colored status badge.
+fn pill(label: &str, tag: &str) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
+fn icon(glyph: &str, tag: &str) -> Value {
+    json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
+}
+
+/// A `deos.ui.divider` node — a full-width groove rule.
+fn divider() -> Value {
+    json!({ "kind": "divider", "props": {} })
+}
+
+/// A `deos.ui.row` node — a horizontal flex of children.
+fn row(children: Vec<Value>) -> Value {
+    json!({ "kind": "row", "props": {}, "children": children })
+}
+
+/// A `deos.ui.section` node — a titled, bordered container.
+fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
+    json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
+}
+
 /// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
 /// (the engine drops the closure on serialize, so the slot is tagged).
 fn bind(slot: usize, label: &str) -> Value {
     json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+}
+
+/// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
+fn gauge(slot: usize, max: u64, label: &str) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+}
+
+/// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
+fn breadcrumb(steps: &[&str], active: usize) -> Value {
+    let items: Vec<Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let label = if i == active {
+                format!("› {s}")
+            } else {
+                s.to_string()
+            };
+            json!({ "label": label })
+        })
+        .collect();
+    json!({ "kind": "breadcrumb", "props": { "items": items } })
 }
 
 /// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
@@ -58,22 +122,44 @@ fn button(label: &str, turn: &str, arg: i64) -> Value {
     })
 }
 
+/// An action row — an `icon` + a mutating-method `button` (the verified-turn affordance).
+fn action(glyph: &str, label: &str, turn: &str) -> Value {
+    row(vec![icon(glyph, "accent"), button(label, turn, 0)])
+}
+
 /// **The swarm-orchestration card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
 ///
-/// A `vstack` of a header, a live `bind` on the dispatch [`EPOCH_SLOT`], and the three
-/// mutating buttons. Renderer-independent DATA: hand it to any `deos-view` renderer
-/// (native / web / discord) to paint the SAME card. The button `turn` names are the
+/// A rich, live dispatch-board surface: a status header (name + `DISPATCHING` pill +
+/// dispatch-lifecycle breadcrumb), a "Budget" section surfacing the KILLER VISUAL — the
+/// two per-worker spend gauges filling toward the shared `BUDGET` ceiling (the
+/// `AffineLe(spent_a + spent_b <= budget)` gate visualized) — plus the lead / budget /
+/// meters / epoch binds, and an "Actions" section of the three icon-labelled mutating
+/// buttons. Renderer-independent DATA. The button `turn` names are the
 /// [`service`](crate::service) method symbols.
 pub fn board_card_value() -> Value {
     json!({
         "kind": "vstack",
         "props": {},
         "children": [
-            text("Swarm Orchestration"),
-            bind(EPOCH_SLOT as usize, "epoch: "),
-            button("Open Board",   METHOD_OPEN_BOARD,   0),
-            button("Dispatch",     METHOD_DISPATCH,     0),
-            button("Grant Worker", METHOD_GRANT_WORKER, 0),
+            row(vec![text("Swarm Orchestration"), pill("DISPATCHING", "accent")]),
+            breadcrumb(&["Closed", "Open", "Dispatching", "Spent"], 2),
+            divider(),
+            section("Budget", "genuine", vec![
+                // THE KILLER VISUAL — the two worker meters filling toward the shared
+                // budget ceiling: together they CANNOT overrun it (the AffineLe gate).
+                gauge(SPENT_A_SLOT as usize, BUDGET_GAUGE_MAX, "worker-a spend "),
+                gauge(SPENT_B_SLOT as usize, BUDGET_GAUGE_MAX, "worker-b spend "),
+                bind(LEAD_SLOT as usize, "lead · "),
+                bind(BUDGET_SLOT as usize, "budget · "),
+                bind(SPENT_A_SLOT as usize, "spent A · "),
+                bind(SPENT_B_SLOT as usize, "spent B · "),
+                bind(EPOCH_SLOT as usize, "epoch · "),
+            ]),
+            section("Actions", "", vec![
+                action("+", "Open Board",   METHOD_OPEN_BOARD),
+                action("→", "Dispatch",     METHOD_DISPATCH),
+                action("⑂", "Grant Worker", METHOD_GRANT_WORKER),
+            ]),
         ]
     })
 }
@@ -89,31 +175,93 @@ pub fn board_card_json() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_card_is_a_vstack_with_a_header_an_epoch_bind_and_three_buttons() {
-        let card = board_card_value();
-        assert_eq!(card["kind"], "vstack");
-        let children = card["children"].as_array().expect("children");
-        // header, bind, open_board, dispatch, grant_worker
-        assert_eq!(children.len(), 5);
-        assert_eq!(children[0]["kind"], "text");
-        assert_eq!(children[0]["props"]["text"], "Swarm Orchestration");
+    fn collect<'a>(node: &'a Value, kind: &str, out: &mut Vec<&'a Value>) {
+        if node["kind"] == kind {
+            out.push(node);
+        }
+        if let Some(children) = node["children"].as_array() {
+            for c in children {
+                collect(c, kind, out);
+            }
+        }
+    }
+
+    fn of_kind<'a>(card: &'a Value, kind: &str) -> Vec<&'a Value> {
+        let mut out = Vec::new();
+        collect(card, kind, &mut out);
+        out
     }
 
     #[test]
-    fn the_epoch_bind_reads_the_dispatch_counter_slot() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_state_pill() {
         let card = board_card_value();
-        let bind = &card["children"][1];
-        assert_eq!(bind["kind"], "bind");
-        assert_eq!(bind["props"]["slot"], EPOCH_SLOT as usize);
-        assert_eq!(bind["props"]["label"], "epoch: ");
+        assert_eq!(card["kind"], "vstack");
+        let texts = of_kind(&card, "text");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t["props"]["text"] == "Swarm Orchestration"),
+            "the header names the app"
+        );
+        let pills = of_kind(&card, "pill");
+        assert_eq!(pills.len(), 1);
+        assert_eq!(pills[0]["props"]["text"], "DISPATCHING");
+    }
+
+    #[test]
+    fn the_lifecycle_breadcrumb_marks_the_current_step() {
+        let card = board_card_value();
+        let crumbs = of_kind(&card, "breadcrumb");
+        assert_eq!(crumbs.len(), 1);
+        let items = crumbs[0]["props"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 4, "closed → open → dispatching → spent");
+        assert_eq!(
+            items[2]["label"], "› Dispatching",
+            "the active step is marked"
+        );
+    }
+
+    #[test]
+    fn the_budget_gauges_read_the_two_worker_spend_meters() {
+        let card = board_card_value();
+        let gauges = of_kind(&card, "gauge");
+        // THE KILLER VISUAL: a gauge per worker meter, both maxing at the shared budget
+        // ceiling — together they visualize `spent_a + spent_b <= budget`.
+        assert_eq!(gauges.len(), 2, "one gauge per worker spend meter");
+        assert_eq!(gauges[0]["props"]["slot"], SPENT_A_SLOT as usize);
+        assert_eq!(gauges[0]["props"]["max"], BUDGET_GAUGE_MAX);
+        assert_eq!(gauges[1]["props"]["slot"], SPENT_B_SLOT as usize);
+        assert_eq!(
+            gauges[1]["props"]["max"], BUDGET_GAUGE_MAX,
+            "both worker gauges share the budget ceiling"
+        );
+    }
+
+    #[test]
+    fn the_binds_surface_lead_budget_meters_and_epoch() {
+        let card = board_card_value();
+        let binds = of_kind(&card, "bind");
+        let slots: Vec<u64> = binds
+            .iter()
+            .map(|b| b["props"]["slot"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                LEAD_SLOT as u64,
+                BUDGET_SLOT as u64,
+                SPENT_A_SLOT as u64,
+                SPENT_B_SLOT as u64,
+                EPOCH_SLOT as u64,
+            ],
+            "the binds surface lead / budget / meters / epoch"
+        );
     }
 
     #[test]
     fn every_button_carries_its_service_method_as_the_turn_payload() {
         let card = board_card_value();
-        let children = card["children"].as_array().unwrap();
-        let buttons: Vec<&Value> = children.iter().filter(|c| c["kind"] == "button").collect();
+        let buttons = of_kind(&card, "button");
         assert_eq!(buttons.len(), 3);
         let turns: Vec<&str> = buttons
             .iter()
@@ -129,9 +277,9 @@ mod tests {
     #[test]
     fn the_card_serializes_to_parseable_json() {
         let s = board_card_json();
-        // Round-trips through serde (the shape a deos-view renderer's parser reads).
         let back: Value = serde_json::from_str(&s).expect("the card JSON parses");
         assert_eq!(back["kind"], "vstack");
+        // header row, breadcrumb, divider, budget section, actions section
         assert_eq!(back["children"].as_array().unwrap().len(), 5);
     }
 }
