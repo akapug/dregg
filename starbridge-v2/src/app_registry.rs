@@ -264,6 +264,10 @@ pub fn app_card(id: &str) -> Option<AppCard> {
             json: starbridge_sealed_auction::card::auction_card_json(),
             fire: auction_card_fire,
         }),
+        "execution-lease" => Some(AppCard {
+            json: starbridge_execution_lease::card::lease_card_json(),
+            fire: lease_card_fire,
+        }),
         _ => None,
     }
 }
@@ -340,6 +344,34 @@ fn auction_card_fire(
         Err(WorldFireError::World {
             reason: format!(
                 "sealed-auction card: '{method}' is not live-fireable from the seeded COMMIT phase"
+            ),
+        })
+    }
+}
+
+/// execution-lease card fire — the `advance` button delivers one durable checkpoint:
+/// read the LIVE durable cursor off World's state and move it forward by one, the SAME
+/// verified turn the lease `world_drive` fires (Monotonic(STEP) re-enforced by World's
+/// executor). The `pay` / `status` buttons are surfaced refusals from the card surface
+/// (rent is a conserving Transfer carried by the value layer; status is the OFE read seam).
+#[cfg(feature = "embedded-executor")]
+fn lease_card_fire(
+    spine: &AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<TurnReceipt, WorldFireError> {
+    use starbridge_execution_lease as el;
+    let cell = spine.app_cell();
+    if method == el::service::METHOD_ADVANCE {
+        spine.commit("advance", &el::AGENT_RIGHTS, &el::AGENT_RIGHTS, |live| {
+            let live_step = el::field_to_u64(&live.fields[el::STEP_SLOT as usize]);
+            el::advance_effects(cell, live_step + 1, el::field_from_u64(0xDADA))
+        })
+    } else {
+        Err(WorldFireError::World {
+            reason: format!(
+                "execution-lease card: '{method}' is not the live-fireable advance affordance \
+                 (rent `pay` is a conserving Transfer on the value layer; `status` is the OFE seam)"
             ),
         })
     }
@@ -1716,6 +1748,113 @@ impl AppRegistry {
                     },
                 ),
                 // ───────────────────────────────────────────────────────────
+                // THE SERVICE-ECONOMY VALUE APP — durable execution leased as a
+                // payable resource (a fly.io-lite provider on the dregg value
+                // layer). The lease cell's committed umem heap holds the durable
+                // execution image; the meter is a StandingObligation; the rent is a
+                // conserving Transfer; delivery advances the durable cursor
+                // (Monotonic(STEP)). The representative World affordance is `advance`
+                // — the provider delivers one checkpoint, moving the durable cursor
+                // forward (the executor re-enforces Monotonic(STEP), so a rewind is a
+                // real refusal). No sender clause on the lease program (pure
+                // invariants), so the single-custody `commit` path admits it.
+                // ───────────────────────────────────────────────────────────
+                AppEntry::framework(
+                    "execution-lease",
+                    "Execution Lease",
+                    "Durable execution leased as a payable resource (a fly.io-lite provider) — the \
+                         provider delivers one checkpoint, advancing the lease's durable cursor (the \
+                         executor re-enforces Monotonic(STEP); the metered rent is a conserving Transfer).",
+                    starbridge_execution_lease::lease_app,
+                    |exec, _cclerk| {
+                        use starbridge_execution_lease as el;
+                        let lease = exec.cell_id();
+                        let provider = CellId::from_bytes([0xAB; 32]);
+                        let asset = lease;
+                        let terms = el::LeaseTerms::new(
+                            provider,
+                            lease,
+                            asset,
+                            el::DEFAULT_RENT_PER_PERIOD,
+                            el::DEFAULT_PERIOD,
+                            el::DEFAULT_START,
+                            0,
+                        );
+                        el::seed_lease(exec, &terms, el::field_from_u64(1));
+                    },
+                    |app, sub| {
+                        use starbridge_execution_lease as el;
+                        // The PROVIDER delivers one durable checkpoint (the cursor advances;
+                        // Monotonic(STEP) bites a rewind).
+                        el::fire_advance(
+                            app,
+                            &el::AGENT_RIGHTS,
+                            sub.cipherclerk(),
+                            sub.executor(),
+                            el::field_from_u64(0xDADA),
+                            vec![],
+                        )
+                    },
+                    |app, world| {
+                        use starbridge_execution_lease as el;
+                        let lease = app.cells()[0].cell();
+                        let provider = CellId::from_bytes([0xAB; 32]);
+                        // SEED the lease onto World: `lease_cell_program` (WriteOnce economics +
+                        // Monotonic STEP/LAPSED/PERIODS_PAID) + the genesis baseline (step 0,
+                        // genesis digest, LIVE, paid 0, rent/period/provider sealed).
+                        let spine = AppWorldSpine::seed(
+                            world,
+                            lease,
+                            app.cipherclerk().public_key().0,
+                            default_domain_token(),
+                            el::lease_cell_program(),
+                            &[
+                                SeedField {
+                                    slot: el::STEP_SLOT as usize,
+                                    value: el::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: el::STATE_DIGEST_SLOT as usize,
+                                    value: el::field_from_u64(1),
+                                },
+                                SeedField {
+                                    slot: el::LAPSED_SLOT as usize,
+                                    value: el::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: el::PERIODS_PAID_SLOT as usize,
+                                    value: el::field_from_u64(0),
+                                },
+                                SeedField {
+                                    slot: el::RENT_SLOT as usize,
+                                    value: el::field_from_u64(el::DEFAULT_RENT_PER_PERIOD),
+                                },
+                                SeedField {
+                                    slot: el::PERIOD_SLOT as usize,
+                                    value: el::field_from_u64(el::DEFAULT_PERIOD as u64),
+                                },
+                                SeedField {
+                                    slot: el::PROVIDER_SLOT as usize,
+                                    value: el::cell_tag(provider),
+                                },
+                            ],
+                        );
+                        // COMMIT `advance` through World: read the live durable cursor off
+                        // World's ledger and move it forward by one (Monotonic(STEP) holds) —
+                        // the SAME advance `fire_advance` computes.
+                        let receipt = spine.commit(
+                            "advance",
+                            &el::AGENT_RIGHTS,
+                            &el::AGENT_RIGHTS,
+                            |live| {
+                                let live_step = el::field_to_u64(&live.fields[el::STEP_SLOT as usize]);
+                                el::advance_effects(lease, live_step + 1, el::field_from_u64(0xDADA))
+                            },
+                        )?;
+                        Ok((spine, receipt))
+                    },
+                ),
+                // ───────────────────────────────────────────────────────────
                 // THE SENDER-BOUND WAVE — affordances that read the turn's
                 // SENDER, committed through `AppWorldSpine::commit_as`.
                 // ───────────────────────────────────────────────────────────
@@ -2189,6 +2328,8 @@ mod tests {
             "subscription",
             "swarm-orchestration",
             "tool-access-delegation",
+            // The service-economy value app.
+            "execution-lease",
             // The sender-bound wave.
             "supply-chain-provenance",
             "identity",
@@ -2564,12 +2705,19 @@ mod tests {
             let card = app_card(id).unwrap_or_else(|| panic!("{id} ships a wired card"));
             let tree: serde_json::Value =
                 serde_json::from_str(&card.json).expect("the card JSON parses (deos.ui.* shape)");
-            let method = tree["children"]
-                .as_array()
-                .expect("the card is a vstack of children")
-                .iter()
-                .find(|c| c["kind"] == "button" && c["props"]["label"] == click_label)
-                .and_then(|b| b["props"]["onClick"]["turn"].as_str())
+            // Find the `{click_label}` button ANYWHERE in the card tree (the cards nest
+            // their action buttons inside a `section`→`row`, not as direct vstack
+            // children), and recover its `{turn}` service-method symbol — the 4-axis
+            // invariant: the button turn == the wire method the program dispatches on.
+            fn find_button_turn<'a>(node: &'a serde_json::Value, label: &str) -> Option<&'a str> {
+                if node["kind"] == "button" && node["props"]["label"] == label {
+                    return node["props"]["onClick"]["turn"].as_str();
+                }
+                node["children"]
+                    .as_array()
+                    .and_then(|kids| kids.iter().find_map(|c| find_button_turn(c, label)))
+            }
+            let method = find_button_turn(&tree, click_label)
                 .unwrap_or_else(|| panic!("{id} card has a '{click_label}' button"))
                 .to_string();
 
@@ -2636,6 +2784,63 @@ mod tests {
         assert!(
             app_card("compute-exchange").is_none(),
             "an app without a wired card has no card surface to mount"
+        );
+    }
+
+    /// **THE EXECUTION-LEASE CARD MOUNTS + ADVANCES ON WORLD** — the service-economy
+    /// value app's AX4 card mounts as a cockpit surface and its `advance` button fires a
+    /// REAL verified turn that moves the lease's durable checkpoint cursor forward on the
+    /// live `World` ledger (Monotonic(STEP) re-enforced by World's executor). DONE = RAN.
+    #[cfg(feature = "embedded-executor")]
+    #[test]
+    fn the_execution_lease_card_advances_the_durable_cursor_on_world() {
+        use starbridge_execution_lease as el;
+
+        let world = Rc::new(RefCell::new(World::new()));
+        let reg = AppRegistry::standard();
+        let launched = reg
+            .launch_on_world("execution-lease", [0x5Eu8; 32], Rc::clone(&world))
+            .expect("execution-lease is in the standard registry")
+            .expect("execution-lease seeds a lease cell + commits an advance onto the live World");
+        let lease = launched.primary_cell();
+
+        // The launch's representative `advance` already moved the cursor 0 -> 1.
+        let step_after_launch = world
+            .borrow()
+            .ledger()
+            .get(&lease)
+            .map(|c| el::field_to_u64(&c.state.fields[el::STEP_SLOT as usize]))
+            .expect("the lease cell is on the cockpit World ledger");
+        assert_eq!(
+            step_after_launch, 1,
+            "the launch advanced the durable cursor"
+        );
+
+        // RESOLVE the bespoke card + build the live substance over the launch's spine.
+        let card = app_card("execution-lease").expect("execution-lease ships a wired card");
+        let substance = AppCardSubstance::new(launched.spine, card.fire);
+        assert_eq!(substance.app_cell(), lease);
+        let receipts_before = world.borrow().receipts().len();
+
+        // FIRE the card's `advance` button → a REAL verified turn on World; the cursor moves.
+        let receipt = substance
+            .fire(el::service::METHOD_ADVANCE, 0)
+            .expect("the execution-lease card 'advance' fires a real verified turn");
+        assert_eq!(
+            receipt.agent, lease,
+            "the card turn is authored by the lease cell"
+        );
+        assert!(receipt.action_count >= 1);
+        assert_eq!(
+            world.borrow().receipts().len(),
+            receipts_before + 1,
+            "the card advance landed ONE real receipt on World::receipts()"
+        );
+        // The durable checkpoint cursor advanced again (1 -> 2) on the live ledger.
+        assert_eq!(
+            substance.get_u64(el::STEP_SLOT as usize),
+            2,
+            "the durable cursor advanced to 2 (the card's bind re-reads the live cell)"
         );
     }
 }
