@@ -345,6 +345,24 @@ mod live {
         /// The most recent save's receipt, if any save has run.
         fn last_receipt(&self) -> Option<TurnReceipt>;
 
+        /// The ordered receipts whose save targeted `file` — that file's
+        /// verifiable save timeline (its FS-layer provenance, the
+        /// receipt-grounded twin of the doc-viewer's patch blame). Each is a
+        /// finalized [`TurnReceipt`] also present in the global log.
+        ///
+        /// Default: `Vec::new()` — a spine that does not attribute saves
+        /// per-file reports no per-file timeline (its global
+        /// [`receipt_count`](LedgerSpine::receipt_count) /
+        /// [`last_receipt`](LedgerSpine::last_receipt) still hold). The
+        /// self-contained [`OwnedSpine`] overrides this with real per-file
+        /// tracking, so the headless / per-editor / in-tab path carries a
+        /// genuine per-file provenance. A host (e.g. starbridge-v2's `World`)
+        /// keeps the default until it opts in — so adding this method does not
+        /// disturb an existing host impl.
+        fn file_history(&self, _file: CellId) -> Vec<TurnReceipt> {
+            Vec::new()
+        }
+
         /// The total balance across all cells on the spine's ledger — the
         /// conservation observable (Σ balance). A content `SetField` save leaves
         /// this INVARIANT (Σδ=0).
@@ -374,6 +392,11 @@ mod live {
         /// Every save's receipt, in commit order — the provenance log (the same
         /// shape `World::receipts`): a save is an attestable, navigable event.
         receipts: Vec<TurnReceipt>,
+        /// Per-FILE receipt timeline: the receipts whose save targeted a given
+        /// file cell, in commit order. This is the FS-layer provenance of a
+        /// single file — the receipt-grounded twin of the doc-viewer's patch
+        /// blame. `receipts` (global) ⊇ the union of these.
+        per_file: BTreeMap<CellId, Vec<TurnReceipt>>,
     }
 
     impl OwnedSpine {
@@ -392,6 +415,7 @@ mod live {
                     chain_head: None,
                     next_seed: 1,
                     receipts: Vec::new(),
+                    per_file: BTreeMap::new(),
                 }),
             }
         }
@@ -511,6 +535,14 @@ mod live {
                         .unwrap_or(nonce + 1);
                     inner.chain_head = Some(receipt.receipt_hash());
                     inner.receipts.push(receipt.clone());
+                    // Attribute the receipt to the file it saved — the per-file
+                    // provenance timeline (a refused save reached neither arm,
+                    // so only genuine commits are recorded here).
+                    inner
+                        .per_file
+                        .entry(file)
+                        .or_default()
+                        .push(receipt.clone());
                     Ok(receipt)
                 }
                 TurnResult::Rejected { reason, .. } => {
@@ -527,6 +559,15 @@ mod live {
 
         fn last_receipt(&self) -> Option<TurnReceipt> {
             self.inner.borrow().receipts.last().cloned()
+        }
+
+        fn file_history(&self, file: CellId) -> Vec<TurnReceipt> {
+            self.inner
+                .borrow()
+                .per_file
+                .get(&file)
+                .cloned()
+                .unwrap_or_default()
         }
 
         fn total_balance(&self) -> i128 {
@@ -617,6 +658,33 @@ mod live {
         /// The file cell backing `path`, if it exists in the namespace.
         pub fn cell_for(&self, path: &Path) -> Option<CellId> {
             self.entries.borrow().get(path).map(|e| e.cell)
+        }
+
+        /// **The verifiable save timeline for `path`** — the ordered receipts
+        /// whose save targeted this file's cell. Each is a genuine finalized
+        /// [`TurnReceipt`]: the FS-layer provenance of the file (the
+        /// receipt-grounded twin of the doc-viewer's patch blame), distinct from
+        /// the spine-global [`receipt_count`](Self::receipt_count) /
+        /// [`last_receipt`](Self::last_receipt) which fold over EVERY file.
+        ///
+        /// `Ok([])` if the path is in the namespace but has had no committed
+        /// save (a seed is genesis, not a turn — it produces no receipt). `Err`
+        /// only if the path resolves to no cell at all.
+        pub fn history(&self, path: &Path) -> Result<Vec<TurnReceipt>> {
+            let cell = self
+                .cell_for(path)
+                .ok_or_else(|| anyhow!("no cell mounted at {}", path.display()))?;
+            Ok(self.spine.file_history(cell))
+        }
+
+        /// How many receipted saves have targeted `path`'s file cell
+        /// SPECIFICALLY — its per-file save count, distinct from the
+        /// spine-global [`receipt_count`](Self::receipt_count). `0` for a path
+        /// with no cell or no committed save yet.
+        pub fn save_count_for(&self, path: &Path) -> usize {
+            self.cell_for(path)
+                .map(|c| self.spine.file_history(c).len())
+                .unwrap_or(0)
         }
 
         /// The total balance across all cells on the spine's ledger — the
@@ -922,6 +990,56 @@ mod live {
                 "a refused save leaves the cell untouched"
             );
             assert_eq!(fs.receipt_count(), 0, "no receipt for a refused save");
+        }
+
+        #[test]
+        fn per_file_history_is_attributed_and_ordered() {
+            // Each file carries its OWN verifiable save timeline (the FS-layer
+            // provenance), distinct from the spine-global receipt log: a save to
+            // file A must not appear in file B's history, and the global log is
+            // the union of the per-file timelines in commit order.
+            let fs = FirmamentFs::new();
+            let a = PathBuf::from("/proj/a.rs");
+            let b = PathBuf::from("/proj/b.rs");
+            fs.seed_file(&a, "a0").unwrap();
+            fs.seed_file(&b, "b0").unwrap();
+
+            // A seed is genesis, not a turn — no per-file history yet.
+            assert!(fs.history(&a).unwrap().is_empty());
+            assert_eq!(fs.save_count_for(&a), 0);
+
+            // Interleave saves: a, b, a.
+            fs.save(&a, "a1").unwrap();
+            fs.save(&b, "b1").unwrap();
+            fs.save(&a, "a2").unwrap();
+
+            // Per-file counts are attributed, not global.
+            assert_eq!(fs.save_count_for(&a), 2, "file a saw two saves");
+            assert_eq!(fs.save_count_for(&b), 1, "file b saw one save");
+            assert_eq!(
+                fs.receipt_count(),
+                3,
+                "the global log is the union of the per-file timelines"
+            );
+
+            // a's timeline is its two receipts in commit order, each chained
+            // (the second's previous hash is the first's receipt hash) — a's own
+            // verifiable history independent of the b save committed between them.
+            let hist_a = fs.history(&a).unwrap();
+            assert_eq!(hist_a.len(), 2);
+            assert_eq!(
+                hist_a[1].previous_receipt_hash,
+                Some(fs.history(&b).unwrap()[0].receipt_hash()),
+                "the global receipt chain threads through ALL files; a's 2nd save \
+                 chains onto the b save committed between a's two saves"
+            );
+            for r in &hist_a {
+                assert_eq!(r.agent, fs.editor_id(), "the editor authored each save");
+                assert_ne!(r.pre_state_hash, r.post_state_hash, "each save moved state");
+            }
+
+            // A path with no cell errors; a known-but-unsaved-since-seed path is Ok([]).
+            assert!(fs.history(Path::new("/nope.rs")).is_err());
         }
 
         #[test]
