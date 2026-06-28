@@ -45,7 +45,10 @@
 use serde_json::{Value, json};
 
 use crate::service::{METHOD_CLOSE_SUBMISSIONS, METHOD_CURATE, METHOD_REVEAL, METHOD_SUBMIT};
-use crate::{CURATOR_SLOT, FEATURED_SLOT, PHASE_CURATED, PHASE_SLOT, SUBMIT_BASE};
+use crate::{
+    CURATOR_SLOT, FEATURED_SLOT, PHASE_CURATED, PHASE_REVEAL, PHASE_SLOT, PHASE_SUBMISSION,
+    SUBMIT_BASE,
+};
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
@@ -54,8 +57,16 @@ fn text(s: &str) -> Value {
 
 /// A `deos.ui.pill` node — a colored status badge (`tag` selects the semantic
 /// palette: `good`/`warn`/`bad`/`accent`/`muted`).
+#[allow(dead_code)]
 fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -79,17 +90,21 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged). A live read of
-/// the cell's field tail off the ledger.
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque identity scalar / sealed digest paints short + friendly.
+/// `adept` hides a dev-y row (a sealed digest the friendlier signals already cover) from
+/// the simple projection; revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar. The fill is `slot_value / max`
-/// (clamped). Reads its slot IMMEDIATE-MODE off the live ledger.
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// (clamped). Reads its slot IMMEDIATE-MODE off the live ledger. `adept` hides the raw
+/// numeric in the simple projection (the live pill + breadcrumb already show the stage);
+/// revealed in the adept "see the bones" view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — a `→`-joined lifecycle path. The `active` step is
@@ -136,14 +151,18 @@ pub fn gallery_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Sealed Gallery"), pill("SUBMISSION", "warn")]),
+            row(vec![text("Sealed Gallery"), pill_live(PHASE_SLOT, "SUBMISSION", "warn", json!([
+                { "value": PHASE_SUBMISSION, "label": "SUBMISSION", "tag": "warn" },
+                { "value": PHASE_REVEAL,     "label": "REVEAL",     "tag": "accent" },
+                { "value": PHASE_CURATED,    "label": "CURATED",    "tag": "good" },
+            ]))]),
             breadcrumb(&["Submission", "Reveal", "Curated"], 0),
             divider(),
             section("Lifecycle", "genuine", vec![
-                gauge(PHASE_SLOT, PHASE_CURATED, "phase "),
-                bind(CURATOR_SLOT, "curator key · "),
-                bind(SUBMIT_BASE, "sealed entry · "),
-                bind(FEATURED_SLOT, "featured · "),
+                gauge(PHASE_SLOT, PHASE_CURATED, "phase ", true),
+                bind(CURATOR_SLOT, "curator key · ", "id", false),
+                bind(SUBMIT_BASE, "sealed entry · ", "hash", true),
+                bind(FEATURED_SLOT, "featured · ", "id", false),
             ]),
             section("Actions", "", vec![
                 action("+", "Submit",            METHOD_SUBMIT),
@@ -196,7 +215,53 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1, "one lifecycle-stage pill");
-        assert_eq!(pills[0]["props"]["text"], "SUBMISSION");
+        // The header pill is LIVE: it reads PHASE_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "SUBMISSION",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], PHASE_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 3, "SUBMISSION / REVEAL / CURATED");
+        assert_eq!(cases[2]["value"], PHASE_CURATED);
+        assert_eq!(cases[2]["label"], "CURATED");
+        assert_eq!(cases[2]["tag"], "good");
+    }
+
+    #[test]
+    fn the_identity_and_seal_binds_carry_their_display_fmt() {
+        let card = gallery_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        // Identity scalars paint avatar handles; the sealed entry digest paints hex.
+        assert_eq!(fmt(CURATOR_SLOT), "id");
+        assert_eq!(fmt(FEATURED_SLOT), "id");
+        assert_eq!(fmt(SUBMIT_BASE), "hash");
+    }
+
+    #[test]
+    fn the_dev_y_rows_are_marked_adept() {
+        let card = gallery_card_value();
+        let adept = |kind: &str, slot: usize| -> bool {
+            of_kind(&card, kind)
+                .iter()
+                .find(|n| n["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|n| n["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The raw phase gauge + the sealed-entry digest hide in the simple view.
+        assert!(adept("gauge", PHASE_SLOT), "the raw phase integer gauge");
+        assert!(adept("bind", SUBMIT_BASE), "the sealed-entry digest");
+        // The warm identities stay visible.
+        assert!(!adept("bind", CURATOR_SLOT));
+        assert!(!adept("bind", FEATURED_SLOT));
     }
 
     #[test]

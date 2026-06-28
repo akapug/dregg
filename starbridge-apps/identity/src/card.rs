@@ -96,15 +96,20 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque key-root / commitment / counter paints short + friendly.
+/// `adept` hides a dev-y row (a raw issuance counter the gauge already covers) from the
+/// simple projection; revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection (the friendly validity pill +
+/// binds carry the meaning); revealed in the adept "see the bones" view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
@@ -156,12 +161,12 @@ pub fn identity_card_value() -> Value {
             breadcrumb(&["Issued", "Presented", "Verified", "Revoked"], 2),
             divider(),
             section("Issuer", "genuine", vec![
-                gauge(ISSUANCE_COUNTER_SLOT, ISSUANCE_GAUGE_MAX, "issuance seq "),
-                gauge(REVOCATION_ROOT_SLOT, REVOCATION_GAUGE_MAX, "revocation horizon "),
-                bind(ISSUER_AUTH_ROOT_SLOT, "issuer key · "),
-                bind(ISSUANCE_COUNTER_SLOT, "credential id · "),
-                bind(SCHEMA_COMMITMENT_SLOT, "schema · "),
-                bind(REVOCATION_ROOT_SLOT, "status · "),
+                gauge(ISSUANCE_COUNTER_SLOT, ISSUANCE_GAUGE_MAX, "issuance seq ", true),
+                gauge(REVOCATION_ROOT_SLOT, REVOCATION_GAUGE_MAX, "revocation horizon ", true),
+                bind(ISSUER_AUTH_ROOT_SLOT, "issuer key · ", "id", false),
+                bind(ISSUANCE_COUNTER_SLOT, "credential id · ", "raw", true),
+                bind(SCHEMA_COMMITMENT_SLOT, "schema · ", "hash", false),
+                bind(REVOCATION_ROOT_SLOT, "status · ", "hash", false),
             ]),
             section("Actions", "", vec![
                 action("+", "Issue",   METHOD_ISSUE),
@@ -253,6 +258,58 @@ mod tests {
                 REVOCATION_ROOT_SLOT as u64,
             ],
             "the binds surface issuer key / credential id / schema / status"
+        );
+    }
+
+    #[test]
+    fn the_binds_carry_their_display_fmt() {
+        let card = identity_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        // The issuer-key root paints an avatar handle; the schema / revocation-root
+        // digests paint short hex; the credential id is a small sequence number (raw).
+        assert_eq!(fmt(ISSUER_AUTH_ROOT_SLOT), "id");
+        assert_eq!(fmt(SCHEMA_COMMITMENT_SLOT), "hash");
+        assert_eq!(fmt(REVOCATION_ROOT_SLOT), "hash");
+        assert_eq!(fmt(ISSUANCE_COUNTER_SLOT), "raw");
+    }
+
+    #[test]
+    fn the_dev_y_rows_are_marked_adept() {
+        let card = identity_card_value();
+        let adept = |kind: &str, slot: usize| -> bool {
+            of_kind(&card, kind)
+                .iter()
+                .find(|n| n["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|n| n["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The raw issuance/revocation gauges + the raw credential-id counter hide in
+        // the simple view; the friendly issuer key / schema / live status stay visible.
+        assert!(
+            adept("gauge", ISSUANCE_COUNTER_SLOT),
+            "the raw issuance gauge"
+        );
+        assert!(
+            adept("gauge", REVOCATION_ROOT_SLOT),
+            "the raw revocation gauge"
+        );
+        assert!(
+            adept("bind", ISSUANCE_COUNTER_SLOT),
+            "the raw credential-id counter"
+        );
+        assert!(!adept("bind", ISSUER_AUTH_ROOT_SLOT));
+        assert!(!adept("bind", SCHEMA_COMMITMENT_SLOT));
+        assert!(
+            !adept("bind", REVOCATION_ROOT_SLOT),
+            "the live status stays visible"
         );
     }
 
