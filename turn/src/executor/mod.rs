@@ -1858,6 +1858,14 @@ mod execute_tree;
 mod finalize;
 mod proof_verify;
 
+// Concurrency-safe committed bridge mirror-ledger (`bridge_ledger.rs`):
+// `lock_id`-as-nullifier + a committed supply cell, gated inside one atomic
+// mint, closing the multi-relayer double-mint gap.
+pub mod bridge_ledger;
+pub use bridge_ledger::{
+    BridgeMintError, BridgeMintReceipt, BridgeMintRequest, new_mirror_ledger_cell, read_supply,
+};
+
 // MEASUREMENT-ONLY: env-gated (`DREGG_TURN_PROFILE=1`) per-turn phase profiler.
 mod turn_profile;
 pub use proof_verify::{SovereignCohortChain, SovereignCohortLeg};
