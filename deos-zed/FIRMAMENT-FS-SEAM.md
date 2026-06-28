@@ -102,6 +102,16 @@ What is real vs. sketched in the first slice:
   (the same overflow map dregg-doc's `ExecutorDrivenDoc` uses), so the file cell's
   `fields_root` — which the canonical state commitment absorbs — commits to the
   content a light client can trust.
+- **Real:** per-FILE save provenance — `FirmamentFs::history(path)` returns the
+  ordered `TurnReceipt`s whose save targeted that file's cell (and
+  `save_count_for(path)` its count), distinct from the spine-global
+  `receipt_count`/`last_receipt`. This is the receipt-grounded twin of the
+  doc-viewer's patch blame: a file's verifiable save timeline, each entry chained
+  into the global log. The `LedgerSpine::file_history` method defaults to empty
+  (a host that has not opted into per-file attribution keeps its global counts
+  intact — so the addition does not disturb starbridge-v2's host impl); the
+  self-contained `OwnedSpine` (the headless / per-editor / in-tab path) overrides
+  it with real tracking.
 - **Sketched (first slice):** the path → cell namespace is an in-memory flat
   `BTreeMap<PathBuf, CellId>` (the simpler alternative this doc named), not yet
   `rbg`'s richer `DirectoryCell` name→cap map; and the host-handoff (a deos image
