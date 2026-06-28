@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use boa_engine::{js_string, Context, JsNativeError, JsValue, NativeFunction, Source};
 
 use crate::applet::{CellApplet, FireError};
-use crate::world::CellWorld;
+use crate::world::{BatchGuard, BatchOp, CellWorld};
 
 thread_local! {
     /// The applet the installed host functions drive, for the duration of one
@@ -275,6 +275,76 @@ fn world_view_patch(
     }
 }
 
+/// The JSON shape of one [`world_batch`] compound turn — what the pure JS hands across as a
+/// `JSON.stringify`'d object (the same JSON-string host-arg convention `viewPatch` uses).
+/// `guard` is optional; `ops` is the ordered list of atomic legs.
+#[derive(serde::Deserialize)]
+struct BatchSpec {
+    #[serde(default)]
+    guard: Option<GuardSpec>,
+    ops: Vec<OpSpec>,
+}
+
+/// `{ "slot": n, "value": v }` — the actor-state precondition the compound is gated on.
+#[derive(serde::Deserialize)]
+struct GuardSpec {
+    slot: usize,
+    value: u64,
+}
+
+/// One atomic leg, externally tagged: `{ "transfer": { "to": h, "amount": a } }` or
+/// `{ "setSlot": { "slot": n, "value": v } }`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum OpSpec {
+    Transfer { to: String, amount: u64 },
+    SetSlot { slot: usize, value: u64 },
+}
+
+/// `batch(actor, specJson)` — **fire an ATOMIC, STATE-GUARDED, COMPOUND turn**: the
+/// compound/conditional-turn power-up toward "ALL apps as pure JS". `specJson` is a
+/// `JSON.stringify`'d `{ guard?, ops }` object (see [`BatchSpec`]): an optional `guard`
+/// (`{slot,value}` — the actor's state must currently match, a kernel
+/// `require_field_equals` precondition checked AHEAD of every effect and bound into the
+/// action commitment) and an ordered `ops` list of legs (`transfer`/`setSlot`) that commit
+/// ATOMICALLY (all-or-none). The escrow's "release = only-if-SETTLED ∧ transfer to seller"
+/// becomes ONE witnessed turn the kernel commits whole or refuses whole. Returns the number
+/// of legs committed.
+fn world_batch(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> boa_engine::JsResult<JsValue> {
+    let actor = arg_string(
+        args.first(),
+        ctx,
+        "batch(actor, spec): missing actor handle",
+    )?;
+    let spec_raw = arg_string(args.get(1), ctx, "batch(actor, spec): missing spec JSON")?;
+    let spec: BatchSpec = serde_json::from_str(&spec_raw).map_err(|e| {
+        JsNativeError::typ().with_message(format!("batch({actor:?}) spec parse error: {e}"))
+    })?;
+
+    let guard = spec.guard.map(|g| BatchGuard {
+        slot: g.slot,
+        value: g.value,
+    });
+    let ops: Vec<BatchOp> = spec
+        .ops
+        .into_iter()
+        .map(|o| match o {
+            OpSpec::Transfer { to, amount } => BatchOp::Transfer { to, amount },
+            OpSpec::SetSlot { slot, value } => BatchOp::SetSlot { slot, value },
+        })
+        .collect();
+    let legs = ops.len() as i64;
+
+    match with_world(|w| w.guarded_batch(&actor, guard, &ops)) {
+        Ok(_receipt_hash) => Ok(JsValue::from(legs)),
+        Err(e) => Err(refuse(&format!("batch({actor:?})"), e).into()),
+    }
+}
+
 fn arg_string(
     v: Option<&JsValue>,
     ctx: &mut Context,
@@ -333,6 +403,7 @@ impl NativeRuntime {
             ("t", 2, NativeFunction::from_fn_ptr(world_t)),
             ("tCell", 3, NativeFunction::from_fn_ptr(world_t_cell)),
             ("transfer", 3, NativeFunction::from_fn_ptr(world_transfer)),
+            ("batch", 2, NativeFunction::from_fn_ptr(world_batch)),
             ("get", 2, NativeFunction::from_fn_ptr(world_get)),
             (
                 "viewPatch",

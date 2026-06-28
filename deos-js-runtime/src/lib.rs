@@ -26,4 +26,4 @@ pub mod world;
 
 pub use applet::{Affordance, ApplyOp, CellApplet, FireError, Slot};
 pub use runtime::{NativeRuntime, RunOutcome, WorldOutcome};
-pub use world::{CellWorld, Fired};
+pub use world::{BatchGuard, BatchOp, CellWorld, Fired};

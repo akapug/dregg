@@ -265,17 +265,44 @@ web shell binds the (SpiderMonkey today, boa-on-wasm tomorrow) `Context` to its
   ..)`) is `NoCapability` — the escrow funds untouched, the uncapped cell byte-identical, and
   a legitimate payout still commits afterward. All real verified turns, NO servo.
 
-  **Named host-API gap (the fullest faithful version surfaced).** Each escrow leg is its own
-  verified turn: the host API exposes no compound/atomic multi-effect turn, so `settle` (the
-  state flip) and the payout `transfer` are two separate receipts, not one atomic "release",
-  and the runtime does not yet enforce the state-machine GUARD (it does not refuse a payout
-  unless `state == SETTLED`). The JS drives the ordering and the cap tooth gates WHO may
-  settle, but the conditional "only-if-funded" link between the state cell and the value move
-  is not yet a single witnessed turn. A conditional / compound-turn host fn (an
-  `Effect::ConditionalBatch`-shaped affordance — the partial-turn/promises machinery already
-  exists in `turn/`) is the named next power-up that would make the release atomic and
-  state-guarded. With that, an arbitrary multi-cell app — not just its value movement and
-  dispatch but its *guarded coordination* — is expressible as pure JS-on-cells.
+  **The compound/conditional-turn power-up (LANDED).** The escrow's release is now ONE
+  atomic, state-guarded turn. The `batch(actor, specJson)` host fn fires a COMPOUND turn from
+  pure JS: `specJson` is a `JSON.stringify`'d `{ guard?, ops }` object — an optional `guard`
+  (`{slot, value}`) and an ordered list of legs (`transfer`/`setSlot`). It maps to ONE
+  verified turn (`CellWorld::guarded_batch`) built from two kernel primitives the executor
+  already enforces and a light client already witnesses:
+
+    - **the guard is a real `require_field_equals` precondition** on the actor's state. The
+      executor checks it AHEAD of every effect (`check_preconditions`, before any effect
+      runs), and it folds into `Action::hash` (the anti-downgrade commitment) — so the
+      "only-if-SETTLED" link between the state cell and the value move is part of what the
+      turn PROVES, witnessed by a light client, not an off-chain ordering the JS chose;
+    - **the legs commit atomically** — multiple effects in one action are all-or-none ("if
+      any action fails, ALL effects are rolled back via journal replay"). A guard that does
+      not hold, an over-drawn transfer, or a transfer to an unheld cell refuses the WHOLE
+      turn: no partial release.
+
+  So the escrow's "release = check SETTLED ∧ transfer to seller, atomically" is a single
+  witnessed turn the kernel commits whole or refuses whole. Proven by running (tests
+  (e)..(g2) in `native_js_escrow_pure_js.rs`): (e) a guarded release commits IFF the escrow
+  is SETTLED — one receipt; (f) a guarded release attempted while still OPEN is refused
+  atomically (`PreconditionFailed`) — no transfer, no partial, no receipt; (g) a compound
+  `settle ∧ pay` commits as ONE receipt; (g2) all-or-none — a compound whose transfer leg
+  over-draws rolls back the state flip too. (Honest note: the guard refusal is enforced
+  INSIDE the executor, so a refused guarded turn burns the submitter's fee — unlike the
+  pre-flight cap-tooth / `NoCapability` refusals, which never reach the executor and are
+  free.)
+
+  **The kernel primitive, and the one remaining seam.** This is `Preconditions` +
+  per-action atomicity — STRONGER than a bolt-on `Effect::ConditionalBatch` would be, because
+  both are already kernel-enforced AND already in the action commitment (no new effect
+  variant, no VK change). The one narrow limit: the guard reads the ACTOR's OWN state (the
+  precondition evaluates against `action.target`). A cross-cell guard — commit on cell B's
+  state while acting on cell A — would need a `witnessed`-clause precondition or a
+  multi-party atomic turn. For the escrow the guard cell and the value-source are the same
+  cell (the escrow), so the release is fully covered. With `batch`, an arbitrary multi-cell
+  app — not just its value movement and dispatch but its *guarded coordination* — is
+  expressible as pure JS-on-cells.
 - **Follow-up — `deos-js-core`:** lift the engine-free substance out of `deos-js` so
   both engines share one turn path and the cockpit crate never links mozjs.
 - **Follow-up — boa-on-wasm in the web shell:** retire the servo-only constraint by
