@@ -218,18 +218,43 @@ any committed VK / registry; the deployed descriptors are byte-identical.
   `ChipTableSound` + `FloorDigestBinds` (no off-band hypothesis), `#assert_all_clean`; the Rust gadget
   shadow + producer-witness + gate-eval teeth are green (`authority_digest_weld.rs`). STAGED — deployed
   descriptors / VK byte-identical, drift gate green.
-* **REMAINING to a sound escrow FLIP (precise):**
-  1. EMIT the `gentianGadgetDescriptor` into a staged registry (the chip-lookup table-id + the floor /
-     is-zero / lane columns + the Option-B reinterpretation of the committed `B_AUTHORITY_DIGEST` limb
-     as the felt-domain floor digest in `compute_rotated_pre_limbs`) — the flag-day VK bytes.
-  2. A satisfying STARK PRODUCER for the gentian descriptor: extend
-     `generate_rotated_settle_escrow_trace` to fill the floor / is-zero-witness / lane columns + the
-     genuine chip rows (the IR-v2 interpreter auto-gathers the chip table), then a full
-     `prove_vm_descriptor2` / `verify_vm_descriptor2` (the next rung after the gate-eval teeth, exactly
-     as `settle_escrow_weld_prove.rs` followed the satisfaction shadow) — honest proves, forged
-     (sel=0 dodge / wrong floor / wrong digest) refuses.
+* **REMAINING to a sound escrow FLIP (precise) — the COMMIT-TARGET BLOCKER (verified 2026-06-28).**
+  The proven gadget's discharge of `hcommitLimb` requires the committed limb the gadget reads
+  (`gentianAuthDigestCol = EFFECT_VM_WIDTH + 24`, the `B_AUTHORITY_DIGEST` r23 limb) to carry the
+  *felt-domain* `hash_many(required-tag floor)`. The deployed commitment puts a DIFFERENT value there:
+  `turn/src/rotation_witness.rs:367` sets `pre_limbs[24] = compute_authority_digest_felt(cell)` — the
+  *byte-domain* `hash_bytes` over the WHOLE authority residue (program / permissions / vk / delegate /
+  delegation / mode / fields[8..16] / visibility / commitments / proved / side-table roots). For any
+  real escrow cell `compute_authority_digest_felt(cell) ≠ hash_many(floor)`, so:
+    - the recompute-bind gate forces the gadget's limb-24 trace column to `hash_many(floor)`; the wide
+      commit then absorbs that, producing a published-commit ≠ the light client's real commit (which
+      absorbs the true `authDigest`). An HONEST declared-escrow turn therefore CANNOT produce a
+      light-client-accepted gentian proof — the producer step (2) is not satisfiable against the
+      deployed limb 24. (Confirmed: the staged shadow only checks gate-eval over a hand-built row whose
+      limb 24 IS the floor digest; it does not — and cannot — also satisfy the deployed wide commit.)
+    - the literal "reinterpret limb 24 as the floor digest in `compute_rotated_pre_limbs`" path is
+      UNSOUND: limb 24 (`= B_RECORD_DIGEST`) is load-bearing — it is the v1 OLD_COMMIT's fourth root
+      input (`record_digest`, audit P0-2 cross-leg binding) and the forced limb for the
+      SetPermissions / SetVerificationKey / MakeSovereign / Refusal record-forcing pins
+      (`record_pin_offset`, welded to PI 38, verifier-anchored to `compute_authority_digest_felt`).
+      Overwriting it with `hash_many(floor)` destroys those bindings and the authority-residue commit.
+  The SOUND realization is a NEW dedicated felt-domain floor-digest limb (the `perms_digest` /
+  `vk_digest` pattern at limbs 33/34), which is UNBUILT and requires: (a) extending the pre-limb vector
+  (limbs 24..37 are fully packed today → a width/layout flag-day shifting iroot/state_commit/chain),
+  (b) a new Lean wide-commit absorption proof for that limb, (c) retargeting `gentianAuthDigestCol` off
+  limb 24 onto it in both the Lean gadget and `authority_digest_weld.rs`, (d) computing
+  `hash_many(floor)` into it in `compute_rotated_pre_limbs` + `rotation_witness`. Only THEN can:
+  1. EMIT the `gentianGadgetDescriptor` (now reading the new floor-digest limb) into a staged registry —
+     the chip-lookup table-id + the floor / is-zero / lane columns — the flag-day VK bytes.
+  2. A satisfying STARK PRODUCER fill the floor / is-zero-witness / lane columns + the genuine chip rows
+     AND the new floor-digest limb consistently, then a full `prove_vm_descriptor2` /
+     `verify_vm_descriptor2` — honest proves, forged (sel=0 dodge / wrong floor / wrong digest) refuses.
   3. Commit the welded VK beside the deployed; route a declared-escrow turn through the gentian
      descriptor on the live verify path; the lockstep flip.
+  Until the new-limb design lands, the gadget is a CONDITIONAL truth (sound under `hcommitLimb`); the
+  flip MUST NOT be taken — forcing it would either make honest escrow turns unprovable/rejected or, via
+  the limb-24 overwrite, accept forgeries on the record-pin surfaces. SettleEscrow is NOT a deployed
+  pure-light-client truth.
 * **UNLOCKS 18/19/Custom/temporal:** the selector-forcing core is tag-agnostic — `gentian_selector_forced`
   is parametric in the required-tag predicate, so discharge (18) and vault (19) reuse it verbatim
   for the *coverage→selector* half once their satisfaction gates land (18 needs the range-checked
