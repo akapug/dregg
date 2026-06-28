@@ -284,6 +284,16 @@ impl Cockpit {
             #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::ServiceDirectory => self.service_directory_panel(cx).into_any_element(),
             Tab::Workspace => self.workspace_panel(cx).into_any_element(),
+            // INHABIT · the glowing-cell room AS the surface (the 1999-AOL wonder front door as
+            // a portable card — every cell a tile in a spatial grid, glow as a live `icon`), the
+            // gpui wonder room (which fires the grab/drop conserving turn) as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Wonder => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Wonder,
+                cx,
+                |this, cx| this.wonder_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Wonder => self.wonder_panel(cx).into_any_element(),
             Tab::Lanes => self.lanes_panel(cx).into_any_element(),
             Tab::Time => self.time_panel(cx).into_any_element(),

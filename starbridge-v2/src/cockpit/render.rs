@@ -133,6 +133,7 @@ impl Render for Cockpit {
                 ModeCard::ServiceDirectory,
                 ModeCard::WebCells,
                 ModeCard::Trust,
+                ModeCard::Wonder,
             ] {
                 self.ensure_mode_card(kind, cx);
             }

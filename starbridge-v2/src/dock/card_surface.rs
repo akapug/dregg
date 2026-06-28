@@ -34,7 +34,10 @@ use gpui::{
 use deos_view::ViewNode;
 use dregg_cell::{AuthRequired, CellId};
 
-use deos_js::card_editor::{CardEditor, PillProps, SectionProps, TextProps, ViewPatch};
+use deos_js::card_editor::{
+    ButtonProps, CardEditor, GridProps, IconProps, OnClick, PillProps, SectionProps, TextProps,
+    ViewPatch,
+};
 use deos_js::portable::{AppletManifest, PortableApplet};
 use deos_js::{Author, ViewTree};
 
@@ -42,6 +45,7 @@ use crate::reflect::FieldValue;
 use crate::service_directory::{ServiceDirectory, ServiceFilter, ServiceKind};
 use crate::trust_panel::TrustPanel;
 use crate::web_cells::WebCellsBrowser;
+use crate::wonder::WonderRoom;
 
 use crate::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
 use crate::card_pane::{build_card_over_live, CardPane, SharedAttached};
@@ -354,6 +358,13 @@ pub enum ModeCard {
     /// key-event-log (KEL) timeline — all real projections off the identity decode.
     /// Read-only.
     Trust,
+    /// WONDER · the glowing-cell room (`crate::wonder`) — the 1999-AOL front door, reborn as a
+    /// portable card. Every ledger cell becomes a tile in a spatial `grid`, its glow `icon`
+    /// (✦ alive / ○ quiet) a live projection of the recent dynamics stream, each carrying a
+    /// `look` button. A pure function of the live World (`WonderRoom::build`); read-mostly (the
+    /// drag-value grab/drop conserving turn stays in the gpui room). The card the new
+    /// `grid`/`icon` vocabulary was built for.
+    Wonder,
 }
 
 impl ModeCard {
@@ -373,6 +384,7 @@ impl ModeCard {
             ModeCard::ServiceDirectory => "directory · live services (deos-js card)",
             ModeCard::WebCells => "web-of-cells · live dregg:// docuverse (deos-js card)",
             ModeCard::Trust => "trust · who-i-am + recovery (deos-js card)",
+            ModeCard::Wonder => "wonder · the glowing room (deos-js card)",
         }
     }
 
@@ -578,6 +590,12 @@ impl ModeCard {
             // identity until an on-ledger identity cell is wired — the same posture as the
             // gpui `trust_tab`), so it does not read the cockpit's `world`.
             ModeCard::Trust => trust_view(&TrustPanel::demo()),
+            ModeCard::Wonder => {
+                // The glowing room over the live image — every cell a tile, its glow a live
+                // projection of the recent dynamics stream (a pure function of `world`).
+                let room = WonderRoom::build(world);
+                wonder_view(&room)
+            }
         }
     }
 }
@@ -605,6 +623,22 @@ fn card_section(title: impl Into<String>, children: Vec<ViewTree>) -> ViewTree {
         props: SectionProps {
             title: title.into(),
             tag: String::new(),
+            adept: false,
+        },
+        children,
+    }
+}
+
+/// An **adept-only** `section` (progressive disclosure) — the "see the bones" drawer the
+/// clean newcomer projection ([`deos_view::disclose`] at [`deos_view::Disclosure::Simple`],
+/// which the card mount paints) DROPS and an adept REVEALS. Raw hashes / interface ids / the
+/// "this is a verified turn" mechanics a stranger does not need go here.
+fn card_section_adept(title: impl Into<String>, children: Vec<ViewTree>) -> ViewTree {
+    ViewTree::Section {
+        props: SectionProps {
+            title: title.into(),
+            tag: String::new(),
+            adept: true,
         },
         children,
     }
@@ -613,6 +647,83 @@ fn card_section(title: impl Into<String>, children: Vec<ViewTree>) -> ViewTree {
 /// A horizontal `row` node.
 fn card_row(children: Vec<ViewTree>) -> ViewTree {
     ViewTree::Row { children }
+}
+
+/// A wrapping spatial `grid` node (`cols` cells per row; 0 → free wrap).
+fn card_grid(cols: usize, children: Vec<ViewTree>) -> ViewTree {
+    ViewTree::Grid {
+        props: GridProps { cols },
+        children,
+    }
+}
+
+/// A glyph `icon` node, tinted by a semantic palette `tag`.
+fn card_icon(glyph: impl Into<String>, tag: &str) -> ViewTree {
+    ViewTree::Icon {
+        props: IconProps {
+            glyph: glyph.into(),
+            tag: tag.to_string(),
+        },
+    }
+}
+
+/// A `button` node firing affordance `turn` with `arg` (a cap-gated verified turn).
+fn card_button(label: impl Into<String>, turn: impl Into<String>, arg: i64) -> ViewTree {
+    ViewTree::Button {
+        props: ButtonProps {
+            label: label.into(),
+            on_click: OnClick {
+                turn: turn.into(),
+                arg,
+            },
+        },
+    }
+}
+
+/// The WONDER ROOM as a portable card — the 1999-AOL front door. Every ledger cell is a tile
+/// in a spatial `grid`; its glow `icon` (✦ alive / ○ quiet) is a LIVE projection of the recent
+/// dynamics stream; each tile carries a `look` button. A pure function of the live World
+/// (`WonderRoom::build`). Read-mostly: the drag-value grab/drop conserving turn stays in the
+/// gpui room (the same read-only-card / live-action-in-gpui posture as the directory card).
+fn wonder_view(room: &WonderRoom) -> ViewTree {
+    let glowing = room.cells.iter().filter(|c| c.is_glowing()).count();
+    let mut tiles: Vec<ViewTree> = Vec::new();
+    for gc in &room.cells {
+        let short = crate::reflect::short_hex(gc.cell.as_bytes());
+        let (glyph, tag) = if gc.is_glowing() {
+            ("✦", "good")
+        } else {
+            ("○", "muted")
+        };
+        // A warm description of what the cell holds (an issuer well carries −supply — named
+        // as a wellspring, never a scary negative).
+        let holds = if gc.balance < 0 {
+            format!("a wellspring (−{})", gc.balance.unsigned_abs())
+        } else {
+            format!("holds {}", gc.balance)
+        };
+        tiles.push(card_section(
+            "",
+            vec![
+                card_row(vec![card_icon(glyph, tag), card_text(short.clone())]),
+                card_text(holds),
+                card_button("look", format!("inspect:{short}"), 1),
+            ],
+        ));
+    }
+    if tiles.is_empty() {
+        tiles.push(card_text("The room is empty — nothing has been made yet."));
+    }
+    ViewTree::VStack {
+        children: vec![
+            card_text("✦ The room — poke the glowing things. Nothing here can break."),
+            card_pill(
+                format!("{} thing(s) · {glowing} glowing", room.cells.len()),
+                "accent",
+            ),
+            card_grid(5, tiles),
+        ],
+    }
 }
 
 /// The SERVICE DIRECTORY as a portable card — a summary pill row + one row per discovered
@@ -630,30 +741,31 @@ fn service_directory_view(dir: &ServiceDirectory) -> ViewTree {
             ServiceKind::Service => "service",
             ServiceKind::Capability => "capability",
         };
+        // The friendly line up front; the interface-id hex tucked into the adept drawer.
         let mut r = vec![card_text(format!(
-            "⬡ {} · {} · iface {} · {} method(s)",
-            s.label,
-            kind,
-            crate::reflect::short_hex(&s.interface_id),
-            s.method_count,
+            "⬡ {} · {} · {} thing(s) it can do",
+            s.label, kind, s.method_count,
         ))];
         if s.announced {
-            r.push(card_pill("ANNOUNCED", "good"));
+            r.push(card_pill("listed", "good"));
         }
+        r.push(card_section_adept(
+            "id",
+            vec![card_text(format!(
+                "interface {}",
+                crate::reflect::short_hex(&s.interface_id)
+            ))],
+        ));
         rows.push(card_row(r));
     }
     ViewTree::VStack {
         children: vec![
-            card_text("📇 DIRECTORY · every service-publishing cell in the live image"),
+            card_text("📇 What's on offer in here"),
             card_row(vec![
                 card_pill(format!("{} service(s)", dir.services.len()), "accent"),
-                card_pill(format!("{} announced", dir.announced_count), "good"),
+                card_pill(format!("{} listed", dir.announced_count), "good"),
             ]),
-            card_section("discovered services", rows),
-            card_text(
-                "Announce (a real verified turn that publishes a service's interface) is \
-                 fired from the gpui directory panel.",
-            ),
+            card_section("things you can use", rows),
         ],
     }
 }
@@ -677,12 +789,9 @@ fn web_cells_view(browser: &WebCellsBrowser) -> ViewTree {
     }
     ViewTree::VStack {
         children: vec![
-            card_text("🌐 WEB-OF-CELLS · the dregg:// docuverse (attested fetch)"),
-            card_pill(
-                format!("{} addressable cell(s)", browser.cells.len()),
-                "accent",
-            ),
-            card_section("addressable cells", rows),
+            card_text("🌐 Pages you can open in here"),
+            card_pill(format!("{} page(s)", browser.cells.len()), "accent"),
+            card_section("places to go", rows),
         ],
     }
 }
@@ -691,11 +800,19 @@ fn web_cells_view(browser: &WebCellsBrowser) -> ViewTree {
 /// as labeled rows), the recovery gauge, and the KEL timeline. All real projections.
 fn trust_view(panel: &TrustPanel) -> ViewTree {
     let card = panel.identity_card();
-    let id_rows: Vec<ViewTree> = card
-        .fields
-        .iter()
-        .map(|f| card_text(format!("{}: {}", f.key, field_value_display(&f.value))))
-        .collect();
+    // Friendly identity rows up front; the raw key/hash fields tucked into an adept drawer.
+    let mut id_rows: Vec<ViewTree> = Vec::new();
+    let mut raw_id_rows: Vec<ViewTree> = Vec::new();
+    for f in &card.fields {
+        let row = card_text(format!("{}: {}", f.key, field_value_display(&f.value)));
+        match f.value {
+            FieldValue::Id(_) | FieldValue::Hash(_) => raw_id_rows.push(row),
+            _ => id_rows.push(row),
+        }
+    }
+    if !raw_id_rows.is_empty() {
+        id_rows.push(card_section_adept("keys", raw_id_rows));
+    }
 
     let mut recovery: Vec<ViewTree> = Vec::new();
     match panel.recovery_gauge() {
@@ -717,10 +834,10 @@ fn trust_view(panel: &TrustPanel) -> ViewTree {
 
     ViewTree::VStack {
         children: vec![
-            card_text(format!("⚷ TRUST · {}", panel.summary())),
-            card_section("who I am", id_rows),
-            card_section("recovery", recovery),
-            card_section("key-event log (KEL)", kel_rows),
+            card_text(format!("⚷ Who you are · {}", panel.summary())),
+            card_section("you", id_rows),
+            card_section("getting back in", recovery),
+            card_section("your history", kel_rows),
         ],
     }
 }
@@ -843,6 +960,7 @@ fn mode_card_pk(kind: ModeCard, focus: CellId) -> [u8; 32] {
         ModeCard::ServiceDirectory => 0xD1,
         ModeCard::WebCells => 0x7B,
         ModeCard::Trust => 0x7E,
+        ModeCard::Wonder => 0x77,
     };
     pk
 }
