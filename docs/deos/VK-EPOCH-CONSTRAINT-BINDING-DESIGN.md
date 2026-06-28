@@ -166,6 +166,46 @@ STAGED: nothing on the live wire calls these (no deployed cell declares a capaci
 deployed empty-manifest default and the deployed descriptors/VK are byte-identical (descriptor-drift
 guards green).
 
+### The SATISFACTION staging (Piece 2, built this pass — VK-AFFECTING, NOT emitted/flipped)
+
+The genuinely-VK-affecting half — the SATISFACTION weld — now has its soundness rung PROVEN and its
+in-AIR constraint polynomials BUILT (staged beside the deployed descriptor, NOT yet emitted into a
+committed VK):
+
+* **Lean** — `metatheory/Dregg2/Deos/CapacitySatisfaction.lean`, `#assert_all_clean` (6 keystones).
+  It models the rotated state block as its limb vector, the field-slot read `fieldAt b k = b[4 + k]`
+  (the `r3..r10 ↔ fields[0..8]` weld), and the block `stateCommit` as the sponge over the limbs (the
+  chained `wireCommitR` digest the wide commit absorbs, under the ONE `Poseidon2SpongeCR` floor). It
+  proves:
+  - `fieldAt_bound_in_commit` — equal state commits ⟹ equal field-at-slot (REUSE of
+    `Poseidon2SpongeCR`; the field-level analog of `Heap.root_binds_get`).
+  - `SettleFieldGate` — the EXACT shape of the deployed `verify.rs` `SETTLE_ESCROW` arm (both legs
+    `Deposited` before, both `Consumed` after), now read from the rotated BEFORE/AFTER field columns;
+    `partial_settle_field_rejected` / `phantom_settle_field_rejected` are the negative teeth.
+  - **`satisfaction_witnessed`** — the SATISFACTION keystone: equal before/after state commits ⟹ the
+    same gate verdict. So a forger cannot pass the in-AIR gate over FAKE field columns while the
+    genuine committed state fails it. This is the in-AIR analog of `SealedEscrow.settle_gate_root_bound`,
+    over the FIELD columns the weld touches and the state-commit the wide commit DIRECTLY absorbs
+    (vs the heap root the caller had to hold).
+  - **`capacity_witnessed_pure_lightclient`** — the composed keystone: coverage (Piece 1, the carrier
+    `carrier_manifest_forced`) ∧ satisfaction (Piece 2) — a pure light client binding the caveat
+    commit + the before/after state commits witnesses BOTH that the entry is present AND that the gate
+    held over the committed state, WITHOUT any caller-held opening. The cap-membership posture is fully
+    discharged in proof.
+* **Circuit** — `circuit/src/effect_vm/satisfaction_weld.rs`: `settle_escrow_satisfaction_gates`
+  builds the FOUR `VmConstraint::Gate` constraints `sel · (col − const) == 0` over the rotated
+  BEFORE/AFTER field columns (`before_field_col` / `after_field_col` = `{BEFORE,AFTER}_BASE + 4 + slot`),
+  selector-gated. Tests (`cargo test effect_vm::satisfaction_weld`, faithful `eval_lean_expr`): honest
+  settle satisfies every gate; a partial settle and a phantom settle are UNSAT; selector-0 makes the
+  gates inert (no false reject off a declared capacity turn).
+
+STAGED — these constraint polynomials are NOT yet emitted into a committed welded descriptor / VK and
+NOT routed onto any live path. So SATISFACTION is **not light-client-witnessed yet** — only a verifier
+holding the committed-state opening witnesses it (the cap-membership posture). What remains is §6
+item 1's tail: emit the staged `settleEscrowSatVmDescriptor2R24` (its Lean emit keystone), commit its
+VK beside the deployed, and flip. The deployed descriptors/VK are byte-identical this pass
+(descriptor-drift guards green).
+
 ## 6. The true distance to "genuinely light-client-witnessed"
 
 * **DONE (this pass):** the soundness core. A verifier that holds (or re-derives from authoritative
@@ -179,13 +219,23 @@ guards green).
   light client: it no longer needs to be handed the manifest opening — the wide commit forces it.
   NOT VK-affecting (the carrier binding is already deployed; see the §4 correction).
 
+* **DONE (this pass — Piece 2, the SATISFACTION SOUNDNESS + CONSTRAINTS, §5):** the in-AIR
+  gate-satisfaction weld's soundness rung is PROVEN (`CapacitySatisfaction.lean`,
+  `satisfaction_witnessed` + the composed `capacity_witnessed_pure_lightclient`,
+  `#assert_all_clean`) and its in-AIR `VmConstraint::Gate` polynomials are BUILT + tested
+  (`satisfaction_weld.rs`). This establishes that welding the gate's slot reads to the rotated
+  BEFORE/AFTER field columns carries pure-light-client satisfaction. It is STAGED — NOT yet in a
+  committed VK and NOT flipped, so satisfaction is **not light-client-witnessed in production yet**.
+
 * **REMAINING (the genuinely-VK-affecting tail — narrower than "the carrier"):**
-  1. **In-AIR gate-satisfaction weld** — the SATISFACTION half is still off-AIR: the §6 capacity gates
-     (`SettleGate`/`DischargeGate`/`VaultDepositGate`) re-evaluate against caller-supplied
-     `initial_fields`/`final_fields`. For a pure light client to witness satisfaction (not just
-     coverage) without a state opening, the gate's slot reads must be welded **in-AIR** to the rotated
-     BEFORE/AFTER state-block field columns (the `r3..r10` limbs, cols 187+… / 237+…). This is a new
-     constraint = **new VK bytes**, built STAGED beside the deployed descriptor.
+  1. **Emit + commit the welded descriptor (the actual VK bump)** — the soundness and the constraint
+     polynomials for the sealed-escrow gate are done (above); what remains is to EMIT the staged
+     `settleEscrowSatVmDescriptor2R24` from its Lean emit keystone (the `EffectVmEmit*` shape carrying
+     `settle_escrow_satisfaction_gates`), register it in a staged registry beside the deployed
+     `transferVmDescriptor2R24`, and COMMIT its VK — **new VK bytes**, staged, deployed default
+     untouched. Then repeat the gate-polynomial + emit for `DischargeObligation` (tag 18) and
+     `VaultDeposit` (tag 19) following the SAME `satisfaction_weld.rs` pattern (their Lean
+     `DischargeGate`/`VaultDepositGate` field-column twins). The escrow gate is the proven template.
   2. **In-AIR coverage-forcing from the authority digest** — bind the required-tag floor to the
      committed declaration **in-proof**: open the witnessed `state_constraints` against the
      `B_AUTHORITY_DIGEST` r23 limb the wide commit carries (recompute `compute_authority_digest_felt`,
@@ -200,7 +250,11 @@ guards green).
      Precedent: the umem flip (`da0c47dd6`) — every producer built + loud-probe-validated STAGED, the
      flip a pure registry-default flip, PI-count-preserving, fail-closed, no coverage narrowing.
 
-The honest scope after this pass: COVERAGE (omission caught) is now pure-light-client-witnessed via
-the deployed carrier; SATISFACTION (the gate re-eval) is still witnessed only **for a verifier with
-the committed-state opening** (the cap-membership posture) until (1) lands; and the required-tag floor
-is caller-asserted until (2) binds it in-proof. (1)+(2)+(3) are the remaining gated VK epoch.
+The honest scope after this pass: COVERAGE (omission caught) is pure-light-client-witnessed via the
+deployed carrier. SATISFACTION is now **proven sound + its in-AIR constraints built** (Piece 2,
+`CapacitySatisfaction.lean` + `satisfaction_weld.rs`) — but it is witnessed only **for a verifier with
+the committed-state opening** (the cap-membership posture) until (1) emits the welded descriptor +
+commits its VK + flips; it is **NOT light-client-witnessed in production until that flip**. The
+required-tag floor is caller-asserted until (2) binds it in-proof. (1)+(2)+(3) are the remaining gated
+VK epoch — (1) is now reduced from "design + soundness + constraints" to "emit the descriptor + commit
+the VK + flip" for the proven escrow template, then replicate for tags 18/19.
