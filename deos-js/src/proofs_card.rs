@@ -54,36 +54,59 @@ pub fn proofs_view(
     rows: &[ProofCardRow],
 ) -> ViewTree {
     let mut top: Vec<ViewTree> = Vec::new();
-    top.push(text(&format!("Proofs · {} committed turn(s)", rows.len())));
+    // Warm headline first (the newcomer reassurance), the count second.
+    top.push(text(&format!(
+        "Everything here was checked — {} change(s) recorded.",
+        rows.len()
+    )));
 
-    // The summary badge row — the three honest tiers as pills.
+    // The summary badge row — the three honest tiers as pills, in plain words.
     top.push(ViewTree::Row {
         children: vec![
-            pill(&format!("{by_construction} by-construction"), "muted"),
+            pill(&format!("{by_construction} checked as it ran"), "muted"),
             pill(&format!("{signed} signed"), "accent"),
-            pill(&format!("{stark_attached} STARK"), "good"),
+            pill(&format!("{stark_attached} independently proven"), "good"),
         ],
     });
 
     if rows.is_empty() {
-        top.push(text("(no committed turns yet)"));
+        top.push(text("Nothing has happened yet — go make the first change."));
         return ViewTree::VStack { children: top };
     }
 
-    // One section per turn: a tier-tinted title, the proof summary, the upgrade route.
+    // One section per turn: a friendly tier word + the honest upgrade route up front; the
+    // receipt hash + the dense one-line summary tucked into an `adept` "under the hood" drawer
+    // (DROPPED in the clean newcomer view, REVEALED for an adept — one card, two projections).
     for row in rows {
-        let mut body: Vec<ViewTree> = vec![text(&row.summary), pill(&row.tier_label, &row.tag)];
+        let mut body: Vec<ViewTree> = vec![pill(friendly_tier(&row.tier_label), &row.tag)];
         if let Some(route) = &row.route {
-            body.push(text(&format!("→ next: {route}")));
+            body.push(text(&format!("Want it even stronger? {route}.")));
         }
-        top.push(section(
-            &format!("h{} · {}", row.height, row.receipt_short),
+        body.push(section_adept(
+            "under the hood",
             &row.tag,
-            body,
+            vec![
+                text(&format!("receipt {}", row.receipt_short)),
+                text(&row.summary),
+            ],
         ));
+        top.push(section(&format!("Change #{}", row.height), &row.tag, body));
     }
 
     ViewTree::VStack { children: top }
+}
+
+/// Map a verification-tier label into plain, newcomer-legible words (the default face never
+/// says "by-construction" / "STARK"). The styling-accent `tag` carries the tier's color.
+fn friendly_tier(tier_label: &str) -> &'static str {
+    let t = tier_label.to_ascii_lowercase();
+    if t.contains("stark") {
+        "independently proven"
+    } else if t.contains("sign") {
+        "signed by the machine that ran it"
+    } else {
+        "checked as it ran"
+    }
 }
 
 fn text(s: &str) -> ViewTree {
@@ -108,6 +131,20 @@ fn section(title: &str, tag: &str, children: Vec<ViewTree>) -> ViewTree {
         props: SectionProps {
             title: title.to_string(),
             tag: tag.to_string(),
+            adept: false,
+        },
+        children,
+    }
+}
+
+/// An **adept-only** section — the "see the bones" drawer (`disclose(Simple)` drops it, the
+/// adept projection reveals it).
+fn section_adept(title: &str, tag: &str, children: Vec<ViewTree>) -> ViewTree {
+    ViewTree::Section {
+        props: SectionProps {
+            title: title.to_string(),
+            tag: tag.to_string(),
+            adept: true,
         },
         children,
     }
@@ -134,8 +171,8 @@ mod tests {
         assert!(
             tree.walk()
                 .iter()
-                .any(|n| n.label() == Some("(no committed turns yet)")),
-            "an empty proofs board shows the honest placeholder"
+                .any(|n| n.label() == Some("Nothing has happened yet — go make the first change.")),
+            "an empty proofs board shows the warm, jargon-free placeholder"
         );
         // Even empty it carries the three summary pills.
         assert_eq!(
@@ -149,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn each_turn_becomes_a_tier_tinted_section_with_its_route() {
+    fn each_turn_becomes_a_friendly_section_with_its_route() {
         let rows = [
             row(2, "STARK-attached", "good", None),
             row(
@@ -160,20 +197,47 @@ mod tests {
             ),
         ];
         let tree = proofs_view(1, 0, 1, &rows);
-        // One section per turn, titled by height + receipt.
-        assert!(tree.walk().iter().any(|n| n.label() == Some("h2 · rh2")));
-        assert!(tree.walk().iter().any(|n| n.label() == Some("h1 · rh1")));
-        // The upgrade route surfaces honestly for the lower tier.
+        // One section per turn, titled by a friendly step number (no raw receipt in the title).
+        assert!(tree.walk().iter().any(|n| n.label() == Some("Change #2")));
+        assert!(tree.walk().iter().any(|n| n.label() == Some("Change #1")));
+        // The upgrade route surfaces honestly for the lower tier, in warm words.
         assert!(
             tree.walk()
                 .iter()
-                .any(|n| n.label() == Some("→ next: attach a signature")),
-            "the honest upgrade route is shown"
+                .any(|n| n.label() == Some("Want it even stronger? attach a signature.")),
+            "the honest upgrade route is shown warmly"
         );
-        // The summary header counts the turns.
+        // The headline counts the changes in plain words.
         assert!(tree
             .walk()
             .iter()
-            .any(|n| n.label() == Some("Proofs · 2 committed turn(s)")));
+            .any(|n| n.label() == Some("Everything here was checked — 2 change(s) recorded.")));
+    }
+
+    /// The raw receipt + dense summary live in an `adept` drawer — so the simple projection
+    /// (what `disclose(Simple)` and the card mount paint) hides them, an adept reveals them.
+    #[test]
+    fn the_receipt_and_dense_summary_are_adept_only() {
+        let rows = [row(2, "STARK-attached", "good", None)];
+        let tree = proofs_view(1, 0, 1, &rows);
+        // The "under the hood" drawer is an adept-marked section carrying the receipt + summary.
+        let drawer = tree
+            .walk()
+            .into_iter()
+            .find_map(|n| match n {
+                ViewTree::Section { props, children } if props.title == "under the hood" => {
+                    Some((props.adept, children))
+                }
+                _ => None,
+            })
+            .expect("the under-the-hood drawer is present");
+        assert!(
+            drawer.0,
+            "the drawer is adept-only (hidden in the simple view)"
+        );
+        assert!(
+            drawer.1.iter().any(|c| c.label() == Some("receipt rh2")),
+            "the raw receipt lives inside the adept drawer, not the friendly title"
+        );
     }
 }

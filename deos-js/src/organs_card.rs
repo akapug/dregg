@@ -84,6 +84,7 @@ fn organ_section(title: &str, tag: &str, rows: &[OrganCardRow], empty: &str) -> 
         props: SectionProps {
             title: title.to_string(),
             tag: tag.to_string(),
+            adept: false,
         },
         children,
     }

@@ -101,6 +101,23 @@ pub enum ViewTree {
         #[serde(default)]
         props: PillProps,
     },
+    /// A wrapping spatial **cell field** — the glowing-cell grid, the desktop icon field,
+    /// app tiles. `cols` caps how many children sit per row (0 → free wrap). Bridges to
+    /// [`deos_view::ViewNode::Grid`] (the renderer paints it, native + web), so a spatial
+    /// surface is a LOSSLESS card. Recurses children in declaration order.
+    Grid {
+        #[serde(default)]
+        props: GridProps,
+        #[serde(default)]
+        children: Vec<ViewTree>,
+    },
+    /// A **glyph indicator** (a leaf), tinted by `tag` (the semantic palette
+    /// `good`/`warn`/`bad`/`accent`/`muted`/empty=foreground). The Wonder glow ✦/○, a status
+    /// marker. Bridges to [`deos_view::ViewNode::Icon`].
+    Icon {
+        #[serde(default)]
+        props: IconProps,
+    },
 }
 
 /// `text` props.
@@ -138,6 +155,36 @@ pub struct SectionProps {
     pub title: String,
     #[serde(default)]
     pub tag: String,
+    /// **Progressive disclosure (the consumer-delight knob).** An adept-only section (and its
+    /// whole subtree) is the "see the bones" detail a newcomer should NOT meet — raw hashes,
+    /// slot indices, internal fields. `deos-view`'s [`deos_view::disclose`] DROPS it in the
+    /// clean `simple` projection (the default a card mount paints) and REVEALS it in `adept`:
+    /// the "internals" drawer a newcomer never opens, one toggle away for an adept. Serialized
+    /// only when set (via `props.adept`), so existing cards are byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adept: bool,
+}
+
+/// `grid` props — the column cap (cells per row; 0 → free wrap).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridProps {
+    #[serde(default)]
+    pub cols: usize,
+}
+
+/// `icon` props — the glyph + a semantic palette tag.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IconProps {
+    #[serde(default)]
+    pub glyph: String,
+    #[serde(default)]
+    pub tag: String,
+}
+
+/// Whether a `bool` is `false` — the `skip_serializing_if` predicate for the optional
+/// consumer-delight flags, so a card that does not set them serializes byte-identically.
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// `pill` props — its badge text + a semantic palette tag.
@@ -181,17 +228,19 @@ impl ViewTree {
         match self {
             ViewTree::VStack { children }
             | ViewTree::Row { children }
-            | ViewTree::Section { children, .. } => children,
+            | ViewTree::Section { children, .. }
+            | ViewTree::Grid { children, .. } => children,
             _ => &[],
         }
     }
 
-    /// Push a child onto a container node (vstack/row/section). A no-op on a leaf.
+    /// Push a child onto a container node (vstack/row/section/grid). A no-op on a leaf.
     fn push_child(&mut self, node: ViewTree) {
         match self {
             ViewTree::VStack { children }
             | ViewTree::Row { children }
-            | ViewTree::Section { children, .. } => children.push(node),
+            | ViewTree::Section { children, .. }
+            | ViewTree::Grid { children, .. } => children.push(node),
             _ => {}
         }
     }
@@ -585,6 +634,7 @@ mod viewtree_vocab_tests {
                     props: SectionProps {
                         title: "TRUSTLINES".into(),
                         tag: "accent".into(),
+                        adept: false,
                     },
                     children: vec![ViewTree::Text {
                         props: TextProps {
@@ -614,6 +664,7 @@ mod viewtree_vocab_tests {
                 props: SectionProps {
                     title: "ORGANS".into(),
                     tag: String::new(),
+                    adept: false,
                 },
                 children: vec![ViewTree::Text {
                     props: TextProps { text: "old".into() },

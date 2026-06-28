@@ -93,6 +93,7 @@ fn section(title: &str, tag: &str, children: Vec<ViewTree>) -> ViewTree {
         props: SectionProps {
             title: title.to_string(),
             tag: tag.to_string(),
+            adept: false,
         },
         children,
     }
