@@ -9,16 +9,15 @@ name: Extension
 #   package     — workflow_dispatch ONLY. Builds the Rust crypto core to wasm32,
 #                 runs wasm-bindgen, and produces the Chrome .zip / Firefox .xpi
 #                 store artifacts (uploaded to the run). It is dispatch-gated
-#                 because the wasm build currently needs the plonky3-recursion
-#                 fork's in-flight `update-plonky3-rev` tip checked out as a
-#                 sibling (the same prerequisite pages.yml has): the standalone
-#                 `wasm/` workspace carries a TEMP
-#                 `[patch."https://github.com/emberian/plonky3-recursion"]` ->
-#                 `../../plonky3-recursion`. Until that fork rev is pushed and the
-#                 TEMP patch is replaced with a pinned git rev, a hosted runner
-#                 cannot reproduce the wasm build. Keeping it off the push lane
-#                 avoids red-by-design on the auto gate; trigger it by hand once
-#                 the fork is pushed (`gh workflow run Extension --ref main`).
+#                 because the wasm build needs the plonky3-recursion fork's
+#                 `update-plonky3-rev` tip checked out as a sibling (the same
+#                 prerequisite pages.yml has): the standalone `wasm/` workspace
+#                 carries a `[patch."https://github.com/emberian/plonky3-recursion"]`
+#                 -> `../../plonky3-recursion`. The fork is now PUSHED (rev
+#                 0b4da97), so this job reproduces the build on a hosted runner.
+#                 It stays off the push lane only to avoid spending a heavy wasm
+#                 build on every extension touch; trigger it by hand to refresh
+#                 the store artifacts (`gh workflow run Extension --ref main`).
 
 on:
   push:
@@ -101,13 +100,13 @@ jobs:
           echo "Installing wasm-bindgen-cli $VER"
           cargo install wasm-bindgen-cli --version "$VER" --locked \
             || cargo install wasm-bindgen-cli --version "$VER"
-      - name: Fetch the plonky3-recursion fork as a sibling (wasm/ TEMP patch target)
+      - name: Fetch the plonky3-recursion fork as a sibling (wasm/ patch target)
         # The standalone wasm/ workspace patches p3-* to ../../plonky3-recursion.
-        # Replace REV once update-plonky3-rev is pushed; until then this clone is a
-        # stale tip and the wasm build will fail (documented prerequisite).
+        # REV is the pushed `update-plonky3-rev` tip (keep in lockstep with
+        # wasm/Cargo.toml's [patch] sibling + .github/workflows/pages.yml).
         run: |
           set -euo pipefail
-          REV=d959ff10f86495e81bd883e5d9dde1f0fcf00d81
+          REV=0b4da97a430cf47710a5b03ef998f6a8674761ad
           if [ ! -d ../plonky3-recursion/.git ]; then
             git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
             git -C ../plonky3-recursion fetch --depth 1 origin "$REV"
