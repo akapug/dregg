@@ -240,6 +240,19 @@ pub mod shared_fork;
 #[cfg(feature = "embedded-executor")]
 pub mod umem_membrane;
 
+// BRANCH-AND-STITCH SESSION — the distributed-Houyhnhnm primitive made transport-free. The
+// GUTS of `ForkMembraneHost::stitch_pair` (fork → drive → project → settlement-sound gate)
+// lifted out of the deos-matrix-gated host into a `World`-native API a plain demo can call:
+// `BranchStitchSession::{open, fork, base_mut, stitch}` + `Branch::drive`. Composition only —
+// it imports the existing public surface of `world`/`shared_fork`/`umem_membrane` and edits
+// none of them. Two participants fork one shared verified world, diverge on independent
+// branches, and stitch back through one gated door: disjoint edits merge clean, a same-address
+// clash is refused fail-closed (both readings kept), and a cap revoked on main between branch
+// and settlement is LINEAR-DROPPED — the operable shadow of `Metatheory.SettlementSoundness`.
+// gpui-free + deos-matrix-free + `cargo test`-able under `--features embedded-executor`.
+#[cfg(feature = "embedded-executor")]
+pub mod branch_stitch_session;
+
 // AGENT ATTACH — bind the confined agent's `run_js` (deos-js) to the cockpit's LIVE
 // World, so a Claude in Hermes drives the operator's ACTUAL cells (or a fork). The
 // cockpit-side `deos_js::WorldSink` weld + the cap-bounded attach. Gated on

@@ -1,0 +1,21 @@
+[package]
+name = "starbridge-branch-stitch-multiplayer"
+version = "0.1.0"
+edition = "2021"
+description = "Branch-and-stitch multiplayer — the distributed-Houyhnhnm flagship as a runnable, gpui-free app. Two participants fork ONE shared verified world, diverge on independent verified branches, and stitch back through a single settlement-sound gate: disjoint edits merge clean (conservation + authority preserved), a same-address clash is refused fail-closed (both readings kept, never a silent last-writer-wins), and a capability revoked on main between branch and settlement is linear-dropped while the rest still settles. Distributed · reversible · capability-secure · witnessed multiplayer, over `BranchStitchSession` (the transport-free primitive lifted from `ForkMembraneHost::stitch_pair`)."
+
+# The FIRST app to depend on `starbridge-v2` with `embedded-executor` only — no GPU, no
+# Matrix, no cockpit transport. It composes the `branch_stitch_session` primitive over a
+# real `World`, so it doubles as a runnable narration AND an integration test of the
+# settlement-sound branch-and-stitch (`docs/deos/BRANCH-AND-STITCH-APP-PLAN.md`, slice 0).
+[dependencies]
+starbridge-v2 = { path = "../../starbridge-v2", default-features = false, features = ["embedded-executor"] }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+
+[[bin]]
+name = "branch-stitch-multiplayer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
