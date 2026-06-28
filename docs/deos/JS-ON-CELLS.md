@@ -127,6 +127,9 @@ which is the sandbox.
 | `transfer(from, to, amount)` | **move value** between two cells the JS holds caps to | yes — `Effect::Transfer`, conservation enforced by the executor |
 | `get(slot)` / `get(cell, slot)` | witnessed read of a home / named-cell model slot off the live ledger | read, confers no authority |
 | `viewPatch(node)` | append a `{kind,props,children}` node to the home cell's view-tree, seal the blob into its committed heap, and bump the view version via a turn | yes — a receipted heap write moving `heap_root` + a `SetField` provenance turn |
+| `seal(bidder, value, nonce)` | compute the **sealed commitment** `BLAKE3(bidder‖value‖nonce)` (the same construction the real `Bid::seal` uses), returned as hex — a bidder publishes ONLY this digest at commit time | read / pure — confers no authority, commits no turn |
+| `commitSeal(cell, {slot, seal, guard?})` | **freeze a sealed bid** at `slot` as ONE cap-gated verified turn; WRITE-ONCE (a committed bid cannot be overwritten) + an optional phase guard | yes — `is_attenuation` (the published `commit` method's req) + write-once + executor + `TurnReceipt` |
+| `revealBid(cell, {sealSlot, revealSlot, bidder, value, nonce, guard?})` | **open a sealed bid** — the runtime RE-HASHES the opening and refuses one that does not bind to the frozen seal (the binding tooth), then writes the value as a turn | yes — `is_attenuation` (published `reveal` req) + in-band binding check + optional phase precondition + `TurnReceipt` |
 
 ### The single-cell vs multi-cell substance
 
@@ -303,6 +306,53 @@ web shell binds the (SpiderMonkey today, boa-on-wasm tomorrow) `Context` to its
   cell (the escrow), so the release is fully covered. With `batch`, an arbitrary multi-cell
   app — not just its value movement and dispatch but its *guarded coordination* — is
   expressible as pure JS-on-cells.
+- **Third app — a multi-party COMMIT-REVEAL sealed-bid auction as pure JS — DONE:** the
+  kvstore is one cell behaving and the escrow coordinates two parties through an intermediary;
+  a sealed-bid auction is the harder shape — SEVERAL parties COMPETE for one award by sealing
+  HIDDEN bids, then opening them under a runtime-enforced binding. `tests/native_js_sealed_auction_pure_js.rs`
+  drives a whole auction across FIVE cells (three bidders `alice`/`bob`/`carol`, the `seller`,
+  the `auction` coordinator) entirely in pure JS, mirroring `starbridge-apps/sealed-auction`
+  (the executable surface of `Dregg2/Intent/SealedAuction.lean`).
+
+  **The power-up this app needed — a commit-reveal helper (LANDED).** No existing primitive
+  could enforce that a reveal BINDS to its sealed commitment, and a binding the JS computed
+  AND the JS checked would enforce nothing (a malicious script would just write whatever). So
+  the RUNTIME owns the seal:
+    - `seal(bidder, value, nonce)` — a pure host fn returning the BLAKE3 sealed commitment
+      (the same `Bid::seal` construction). A bidder publishes ONLY the digest at commit time;
+      the secret value/nonce stay in JS variables until reveal.
+    - `commitSeal(auction, {slot, seal, guard?})` — freeze a sealed bid as ONE cap-gated
+      verified turn, with WRITE-ONCE (`CommitmentMismatch` refuses overwriting a committed bid
+      — the anti-front-running tooth) and an optional phase guard.
+    - `revealBid(auction, {sealSlot, revealSlot, bidder, value, nonce, guard?})` — the runtime
+      RE-HASHES `(bidder, value, nonce)` and refuses an opening that does not bind to the
+      frozen seal (the keystone binding tooth), optionally phase-guarded; the revealed value
+      is then written as a verified turn. The full 256-bit BLAKE3 digest lives in ONE
+      cell-state field (no truncation), so the binding is the hash's full second-preimage
+      resistance, not a folded u64.
+
+  The same guarantees the Lean development proves are exercised AS PURE JS, by running: (a) the
+  happy path — three sealed commits hide the bids, three bound reveals open them, the highest
+  (bob) wins, the first-price payment reaches the seller, value CONSERVED (only per-turn fees
+  burned), and the winner's value is provably bound to its commitment (`winner_was_committed`);
+  (b) `reveal_binds_committed` — a reveal with a SWITCHED value is refused in-band
+  (`CommitmentMismatch`), no peeking-then-switching; (c) `uncommitted_cannot_open` — a party
+  that never sealed cannot reveal; (d) anti-front-running — a committed bid cannot be
+  overwritten (write-once); (e) `reveal_requires_reveal_phase` — a reveal before the commit
+  phase closes is refused ATOMICALLY by the kernel phase precondition (light-client-witnessed);
+  (f) settlement confinement — the payout cannot drain to an unheld party (`NoCapability`), the
+  legitimate payout still commits; (g) the reveal cap gate comes from the PUBLISHED interface
+  (`reveal` requiring `Proof` refuses the `Signature`-holding app). All real verified turns, NO
+  servo.
+
+  **How close to "an arbitrary app in pure JS".** The host surface now spans dispatch (typed
+  `route_method`), state writes (the `ApplyOp` write-shapes), value movement (`transfer`,
+  conserved), guarded atomic multi-step coordination (`batch`), and a commitment protocol
+  (`seal`/`commitSeal`/`revealBid`). The three exemplars cover the single-cell service, the
+  intermediary-coordination, and the multi-party-competition shapes. The remaining gap toward
+  a fully arbitrary app is the CROSS-CELL guard (a precondition reading cell B's state while
+  acting on cell A — the named `batch` seam, needing a `witnessed`-clause precondition or a
+  multi-party atomic turn), richer value/heap reads, and lifting `deos-js-core`.
 - **Follow-up — `deos-js-core`:** lift the engine-free substance out of `deos-js` so
   both engines share one turn path and the cockpit crate never links mozjs.
 - **Follow-up — boa-on-wasm in the web shell:** retire the servo-only constraint by

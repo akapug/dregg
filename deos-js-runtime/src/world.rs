@@ -291,6 +291,33 @@ impl CellWorld {
         self.entry(name).map(|e| e.id)
     }
 
+    /// Resolve the cap requirement for a `method` on a capped cell — the SAME routing the
+    /// `tCell` fire path uses, factored out so the commit-reveal primitives gate identically.
+    /// With a published [`InterfaceDescriptor`] the requirement comes from the typed
+    /// `MethodSig` via the verified DFA `route_method` (an undeclared method is fail-closed
+    /// [`FireError::MethodNotRouted`], a [`Semantics::Serviced`] method is
+    /// [`FireError::ServicedSeam`]); without one, from the bare affordance's own `required`.
+    fn required_for(&self, entry: &CellEntry, method: &str) -> Result<AuthRequired, FireError> {
+        match &entry.interface {
+            Some(iface) => {
+                let sym = method_symbol(method);
+                let m = iface
+                    .route_method(&sym)
+                    .ok_or_else(|| FireError::MethodNotRouted(method.to_string()))?;
+                if m.semantics == Semantics::Serviced {
+                    return Err(FireError::ServicedSeam(method.to_string()));
+                }
+                Ok(m.auth_required.clone())
+            }
+            None => entry
+                .affordances
+                .iter()
+                .find(|a| a.name == method)
+                .map(|a| a.required.clone())
+                .ok_or_else(|| FireError::UnknownAffordance(method.to_string())),
+        }
+    }
+
     /// The live nonce of a cell (chains its next turn).
     fn nonce(&self, id: CellId) -> u64 {
         self.engine
@@ -311,6 +338,22 @@ impl CellWorld {
             .and_then(|c| c.state.get_field(slot).copied())
             .map(|fe| unpack_u64(&fe))
             .unwrap_or(0))
+    }
+
+    /// Witnessed read of the **full 32-byte field** at `slot` on the cell named `name` — the
+    /// sealed-commitment reader. A cell-state field is a whole [`FieldElement`] even at a low
+    /// slot index, so a 256-bit sealed commitment lives in ONE slot with NO truncation (the
+    /// full BLAKE3 digest, not a folded u64). An absent field reads back all-zero, which the
+    /// reveal-binding check treats as "no commitment sealed here". `NoCapability` if the JS
+    /// holds no handle to that cell.
+    pub fn get_seal(&self, name: &str, slot: Slot) -> Result<[u8; 32], FireError> {
+        let id = self.id_of(name)?;
+        Ok(self
+            .engine
+            .ledger()
+            .get(&id)
+            .and_then(|c| c.state.get_field(slot).copied())
+            .unwrap_or([0u8; 32]))
     }
 
     /// Witnessed read of `slot` on the **home** cell.
@@ -390,24 +433,7 @@ impl CellWorld {
 
         // (2) typed-method routing: resolve the cap requirement either from the published
         //     interface (the route_method bridge) or the bare affordance (legacy path).
-        let required = match &entry.interface {
-            Some(iface) => {
-                let sym = method_symbol(affordance);
-                let method = iface
-                    .route_method(&sym)
-                    .ok_or_else(|| FireError::MethodNotRouted(affordance.to_string()))?;
-                if method.semantics == Semantics::Serviced {
-                    return Err(FireError::ServicedSeam(affordance.to_string()));
-                }
-                method.auth_required.clone()
-            }
-            None => entry
-                .affordances
-                .iter()
-                .find(|a| a.name == affordance)
-                .map(|a| a.required.clone())
-                .ok_or_else(|| FireError::UnknownAffordance(affordance.to_string()))?,
-        };
+        let required = self.required_for(entry, affordance)?;
 
         // (3) resolve the execution body — the affordance the method name maps to.
         let aff = entry
@@ -529,6 +555,124 @@ impl CellWorld {
         Ok(receipt.receipt_hash())
     }
 
+    /// **Commit a SEALED bid** (the `commitSeal` host fn) — the commit half of the
+    /// commit-reveal power-up. Writes the 256-bit `seal` (a full [`FieldElement`], the BLAKE3
+    /// digest the runtime-owned [`seal_commitment`] produced) into `slot` on the auction
+    /// cell as ONE cap-gated verified turn, AS the auction cell. Three teeth:
+    ///
+    ///   - **cap gate, in-band**: the held cap toward the auction must satisfy the `commit`
+    ///     method's published requirement (the SAME `is_attenuation` tooth / `route_method`
+    ///     bridge `tCell` uses) — an over-reach commits NOTHING;
+    ///   - **anti-front-running (WRITE-ONCE), in-band**: a non-zero field already at `slot`
+    ///     means a bid is already sealed there — the commit is refused
+    ///     ([`FireError::CommitmentMismatch`]) BEFORE any turn, so a committed bid can never
+    ///     be overwritten (the sealed board is append-only, the front-running tooth);
+    ///   - **phase gate (optional, light-client-witnessed)**: a `guard` lowers to a kernel
+    ///     `require_field_equals` precondition (e.g. phase == COMMIT) folded into the action
+    ///     commitment, so "no commit after the commit phase closes" is part of what the turn
+    ///     proves, not an ordering the JS chose.
+    ///
+    /// The sealed digest HIDES the bid (the blinding nonce gives hiding even for a
+    /// low-entropy value) and BINDS the bidder to exactly one bid — opened only at reveal.
+    pub fn commit_seal(
+        &mut self,
+        auction: &str,
+        slot: Slot,
+        seal: [u8; 32],
+        guard: Option<BatchGuard>,
+    ) -> Result<[u8; 32], FireError> {
+        let entry = self.entry(auction)?;
+        let id = entry.id;
+        let required = self.required_for(entry, "commit")?;
+        if !dregg_cell::is_attenuation(&entry.held, &required) {
+            return Err(FireError::Unauthorized("commit".to_string()));
+        }
+
+        // Anti-front-running WRITE-ONCE: a sealed bid is FROZEN the instant it is committed.
+        // A non-zero field already at this slot is a committed bid — refuse in-band (free,
+        // no fee), the sealed board is append-only.
+        if self.get_seal(auction, slot)? != [0u8; 32] {
+            return Err(FireError::CommitmentMismatch(format!(
+                "a bid is already sealed at slot {slot} (write-once: no overwriting a committed bid)"
+            )));
+        }
+
+        let mut builder = ActionBuilder::new_unchecked_for_tests(id, "commit", id);
+        if let Some(g) = guard {
+            builder = builder.require_field_equals(g.slot, pack_u64(g.value));
+        }
+        let action = builder
+            .effect_set_field(id, slot, seal)
+            .effect_increment_nonce(id)
+            .build();
+        let receipt = self.commit(id, action)?;
+        Ok(receipt.receipt_hash())
+    }
+
+    /// **Reveal a sealed bid** (the `revealBid` host fn) — the reveal half, and the keystone
+    /// BINDING tooth. The runtime OWNS the seal function ([`seal_commitment`]), so a reveal
+    /// binds to EXACTLY its commitment:
+    ///
+    ///   1. **cap gate, in-band**: the held cap must satisfy the published `reveal` method's
+    ///      requirement (the same `is_attenuation` tooth);
+    ///   2. **binding, in-band**: the committed seal is read back off `seal_slot`; the
+    ///      runtime RE-HASHES the supplied `(bidder, value, nonce)` and compares all 256
+    ///      bits. A mismatch — a switched value (peeking-then-switching), a wrong bidder, or
+    ///      an absent (all-zero) commitment (a non-committed party) — is
+    ///      [`FireError::CommitmentMismatch`], refused BEFORE any turn (nothing commits,
+    ///      never reaches the executor); only a faithful opening proceeds;
+    ///   3. **phase gate (optional, light-client-witnessed)**: a `guard` lowers to a kernel
+    ///      `require_field_equals` precondition (e.g. phase == REVEAL) folded into the action
+    ///      commitment, so "no reveal before the commit phase closes" is part of what the
+    ///      turn proves;
+    ///   4. the revealed `value` is written into `reveal_slot` as a verified turn — the bid
+    ///      is now public AND provably bound to its earlier commitment (`winner_was_committed`
+    ///      follows: only a faithfully-revealed bid carries a value to win on).
+    #[allow(clippy::too_many_arguments)]
+    pub fn reveal_bid(
+        &mut self,
+        auction: &str,
+        seal_slot: Slot,
+        reveal_slot: Slot,
+        bidder: u64,
+        value: u64,
+        nonce: u64,
+        guard: Option<BatchGuard>,
+    ) -> Result<[u8; 32], FireError> {
+        let entry = self.entry(auction)?;
+        let id = entry.id;
+        let required = self.required_for(entry, "reveal")?;
+        if !dregg_cell::is_attenuation(&entry.held, &required) {
+            return Err(FireError::Unauthorized("reveal".to_string()));
+        }
+
+        // (2) THE BINDING TOOTH: re-hash the opening and compare to the frozen seal. An
+        // absent (all-zero) seal — a non-committed party — never matches; a switched value or
+        // a wrong bidder never matches. Refused in-band before any turn.
+        let committed = self.get_seal(auction, seal_slot)?;
+        if committed == [0u8; 32] {
+            return Err(FireError::CommitmentMismatch(format!(
+                "no bid was sealed at slot {seal_slot} (a non-committed party cannot reveal)"
+            )));
+        }
+        if seal_commitment(bidder, value, nonce) != committed {
+            return Err(FireError::CommitmentMismatch(format!(
+                "the opening (bidder={bidder}, value={value}, nonce={nonce}) does not match the sealed commitment at slot {seal_slot}"
+            )));
+        }
+
+        let mut builder = ActionBuilder::new_unchecked_for_tests(id, "reveal", id);
+        if let Some(g) = guard {
+            builder = builder.require_field_equals(g.slot, pack_u64(g.value));
+        }
+        let action = builder
+            .effect_set_field(id, reveal_slot, pack_u64(value))
+            .effect_increment_nonce(id)
+            .build();
+        let receipt = self.commit(id, action)?;
+        Ok(receipt.receipt_hash())
+    }
+
     /// **A receipted self-edit of the home cell's view-tree** (the `viewPatch` host fn).
     /// Appends `node` to the home view-tree's children, serializes the tree into the home
     /// cell's committed heap (the chunked `VIEWTREE_COLL` blob — so `heap_root` moves), and
@@ -591,6 +735,25 @@ impl CellWorld {
         self.receipts.push(rh);
         Ok(receipt)
     }
+}
+
+/// The **runtime-owned sealed commitment** — `BLAKE3(bidder || value || nonce)`, the SAME
+/// derive-key construction the real `starbridge-apps/sealed-auction` `Bid::seal` uses (and
+/// the Rust image of the Lean `SealedAuction.sealOf`). The runtime owns this function so the
+/// reveal-binding check ([`CellWorld::reveal_bid`]) and the commit a JS app publishes use the
+/// IDENTICAL hash: under collision-resistance a sealed commitment opens to EXACTLY its bid
+/// (binding), and the nonce blinds even a low-entropy value (hiding).
+///
+/// The digest is the full 32-byte BLAKE3 output stored in ONE cell-state field with NO
+/// truncation, so the binding is the hash's full 256-bit second-preimage resistance — not a
+/// folded u64. (The all-zero digest is treated by the reveal check as "no commitment"; a
+/// genuine BLAKE3 output is all-zero with negligible probability.)
+pub fn seal_commitment(bidder: u64, value: u64, nonce: u64) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-sealed-auction bid v1");
+    hasher.update(&bidder.to_le_bytes());
+    hasher.update(&value.to_le_bytes());
+    hasher.update(&nonce.to_le_bytes());
+    *hasher.finalize().as_bytes()
 }
 
 /// Write a view-tree blob into a cell's committed heap (collection [`VIEWTREE_COLL`]) — key

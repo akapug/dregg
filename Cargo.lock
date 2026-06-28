@@ -3505,6 +3505,7 @@ dependencies = [
 name = "deos-js-runtime"
 version = "0.1.0"
 dependencies = [
+ "blake3",
  "boa_engine",
  "dregg-cell",
  "dregg-sdk",
