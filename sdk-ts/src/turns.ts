@@ -36,6 +36,9 @@ import { explainAction } from "./explain";
 import type { Action, Bytes32, CapabilityRef, CellId, Effect, Turn } from "./internal/wire";
 import { fieldFromU64, unsignedActionNamed } from "./internal/wire";
 
+/** The canonical `Payable` `pay` method name (mirrors `dregg_payable::PAY_METHOD`). */
+export const PAY_METHOD = "pay";
+
 /** Default computron budget when `.fee()` is not called (Rust parity). */
 const DEFAULT_FEE = 10_000n;
 
@@ -60,6 +63,7 @@ export class TurnBuilder {
   private actingOn: CellId | undefined;
   private methodName = "execute";
   private effectList: Effect[] = [];
+  private argList: Bytes32[] = [];
   private feeValue: bigint | undefined;
 
   constructor(runtime: AgentRuntime) {
@@ -152,6 +156,36 @@ export class TurnBuilder {
     return this;
   }
 
+  /**
+   * Set the action's argument vector (the typed witness the method carries;
+   * the routing/auth gate on the method symbol, these are the receipt-bound
+   * record). Each entry is a 32-byte field element. Replaces any prior args.
+   */
+  args(args: Bytes32[]): this {
+    this.argList = args.slice();
+    return this;
+  }
+
+  /**
+   * **`pay`** — move `amount` of `asset` from the acting cell to `to` through
+   * the canonical `Payable` `pay` desugar. The byte-identical twin of
+   * `dregg_payable::resolve_pay` / the Rust SDK's `AgentRuntime::pay`: the
+   * action's `method` is `pay`, its `args` are `[asset, field_from_u64(amount),
+   * to]` (the `pay_args` witness), and it carries EXACTLY ONE conserving
+   * `Effect::Transfer` (per-asset Σδ=0). The same value rail the app
+   * framework's `Payable::pay` and the metered tool-gateway charge ride — not a
+   * hand-rolled effect.
+   *
+   * `asset` is the asset to pay in (the payer's `token_id`; a bridged `$DREGG`
+   * mirror asset is an ordinary 32-byte id, routed identically).
+   */
+  pay(to: CellId, amount: number | bigint, asset: Bytes32): this {
+    this.methodName = PAY_METHOD;
+    this.argList = [asset, fieldFromU64(amount), to];
+    this.effectList.push({ kind: "transfer", from: this.actingCell(), to, amount });
+    return this;
+  }
+
   // ─── terminal ───
 
   /**
@@ -170,6 +204,7 @@ export class TurnBuilder {
     const target = this.actingCell();
     const federationId = await this.runtime.node.federationId();
     const unsigned = unsignedActionNamed(target, this.methodName, this.effectList);
+    unsigned.args = this.argList;
     const action = this.runtime.identity.signAction(unsigned, federationId);
     return new AuthorizedTurn(this.runtime, action, this.feeValue ?? DEFAULT_FEE);
   }

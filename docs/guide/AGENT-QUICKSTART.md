@@ -166,15 +166,23 @@ for r in cclerk.receipt_chain() {
 Lease and gateway turns chain on their own worker cells; their proofs are the
 `receipt` field of `LeaseStep` / `ToolReceipt`.
 
-## What's real vs designed
+## What's real, in all three SDKs
 
-- **Real, tested (Rust SDK):** `pay`/`pay_native`, `invoke_service`,
-  `ExecutionLease` (open/fund/run), `ToolGateway` (free + `admit_priced`,
-  inline + routed). Desugar + end-to-end conservation/meter tests in
-  `sdk/src/service_economy.rs`, `sdk/tests/tool_market_paid.rs`,
-  `sdk/tests/tool_gateway_e2e.rs`. The Stripe and Solana bridge on-ramps are
-  real with end-to-end tests (above).
-- **Designed, not yet shipped:** the TypeScript (`@dregg/sdk`) and Python
-  (`dregg` pip) service-economy bindings — thin layers over the Rust core above.
-  See [`SERVICE-ECONOMY-SDK.md`](SERVICE-ECONOMY-SDK.md) for the binding story
-  and the per-call → underlying-turn table.
+- **Rust SDK:** `pay`/`pay_native`, `invoke_service`, `ExecutionLease`
+  (open/fund/run), `ToolGateway` (free + `admit_priced`, inline + routed).
+  Desugar + end-to-end conservation/meter tests in `sdk/src/service_economy.rs`,
+  `sdk/tests/tool_market_paid.rs`, `sdk/tests/tool_gateway_e2e.rs`. The Stripe
+  and Solana bridge on-ramps are real with end-to-end tests (above).
+- **TypeScript SDK (`@dregg/sdk`):** `runtime.pay`, `runtime.services.invoke`,
+  `runtime.execution.lease` — hand-written TS that builds the SAME
+  `Action`/`Effect` JSON the node verifies (the bytes `resolve_pay` /
+  `resolve_invocation` produce; differential-tested vs the repo's `dregg-wasm`).
+  Tested in `sdk-ts/test/service-economy.test.mjs`.
+- **Python SDK (`dregg` pip):** `dregg.ServiceRuntime` — `pay` /
+  `invoke_service` / `lease` `#[pyclass]` bindings forwarding to the in-process
+  Rust `AgentRuntime` + `ExecutionLease` (the REAL verified executor: real
+  committed receipts, the real verified desugar). Tested in
+  `sdk-py/tests/test_service_economy.py`.
+
+See [`SERVICE-ECONOMY-SDK.md`](SERVICE-ECONOMY-SDK.md) for the binding story and
+the per-call → underlying-turn table.

@@ -32,12 +32,24 @@ use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
-use dregg_cell::program::{HashKind, SimpleStateConstraint, StateConstraint};
-use dregg_cell::{AuthRequired, CapabilityRef, field_from_u64};
-use dregg_sdk::cipherclerk::{AgentCipherclerk, SignedTurn};
+use std::sync::{Arc, RwLock};
+
+use dregg_cell::interface::method_symbol;
+use dregg_cell::program::{
+    CellProgram, HashKind, SimpleStateConstraint, StateConstraint, TransitionCase, TransitionGuard,
+};
+use dregg_cell::state::FieldElement;
+use dregg_cell::{AuthRequired, CapabilityRef, Cell, field_from_u64};
+use dregg_sdk::cipherclerk::{AgentCipherclerk, HeldToken, SignedTurn};
 use dregg_sdk::explain::{explain_action, explain_turn};
 use dregg_sdk::profiles;
+use dregg_sdk::{
+    AgentRuntime as SdkRuntime, Attenuation, ExecutionLease, InvokeAuthority, LeaseTerms, PayLeg,
+    SubAgent,
+};
 use dregg_turn::Effect;
+use dregg_turn::TurnReceipt;
+use dregg_turn::action::Action;
 use dregg_types::CellId;
 
 // ─── exceptions ───
@@ -2280,6 +2292,377 @@ fn deploy_lower<'py>(py: Python<'py>, text: &str) -> PyResult<Bound<'py, PyAny>>
     Ok(d.into_any())
 }
 
+// ─── service economy (in-process, executor-backed) ───
+//
+// The Python face of the Rust SDK facade (`sdk/src/service_economy.rs`). Unlike
+// the wire `Identity → turn(node) → submit` flow, these bindings FORWARD to the
+// real in-process `dregg_sdk::AgentRuntime` + `ExecutionLease` — the genuine
+// verified kernel executor — so `pay`/`lease` produce REAL committed
+// `TurnReceipt`s and `invoke_service` returns the REAL verified desugar. No
+// faking: every method is a thin forward to the now-existing Rust core.
+
+/// `Effect` → a small Python dict (`kind` + the load-bearing fields).
+fn effect_to_py<'py>(py: Python<'py>, e: &Effect) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    match e {
+        Effect::Transfer { from, to, amount } => {
+            d.set_item("kind", "transfer")?;
+            d.set_item("from", hex::encode(from.0))?;
+            d.set_item("to", hex::encode(to.0))?;
+            d.set_item("amount", *amount)?;
+        }
+        Effect::SetField { cell, index, value } => {
+            d.set_item("kind", "set_field")?;
+            d.set_item("cell", hex::encode(cell.0))?;
+            d.set_item("index", *index)?;
+            d.set_item("value", hex::encode(value))?;
+        }
+        other => {
+            d.set_item("kind", "other")?;
+            d.set_item("repr", format!("{other:?}"))?;
+        }
+    }
+    Ok(d)
+}
+
+/// `Action` → a Python dict mirroring the TS `action()` shape
+/// (`target`/`method`/`args`/`effects`, all hex).
+fn action_to_py<'py>(py: Python<'py>, a: &Action) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("target", hex::encode(a.target.0))?;
+    d.set_item("method", hex::encode(a.method))?;
+    let args = PyList::empty(py);
+    for arg in &a.args {
+        args.append(hex::encode(arg))?;
+    }
+    d.set_item("args", args)?;
+    let effects = PyList::empty(py);
+    for e in &a.effects {
+        effects.append(effect_to_py(py, e)?)?;
+    }
+    d.set_item("effects", effects)?;
+    Ok(d)
+}
+
+/// The `method`/`topic` symbol a name hashes to (`blake3(name)`), hex — the same
+/// `dregg_cell::method_symbol` the executor routes on. Handy for asserting the
+/// desugar's `method` field.
+#[pyfunction]
+#[pyo3(name = "method_symbol")]
+fn method_symbol_py(name: &str) -> String {
+    hex::encode(method_symbol(name))
+}
+
+/// A small receipt view over an in-process `TurnReceipt`.
+#[pyclass(module = "dregg", name = "TxReceipt")]
+struct TxReceipt {
+    #[pyo3(get)]
+    turn_hash: String,
+    #[pyo3(get)]
+    receipt_hash: String,
+    #[pyo3(get)]
+    post_state: String,
+    #[pyo3(get)]
+    computrons_used: u64,
+    #[pyo3(get)]
+    action_count: usize,
+}
+
+impl TxReceipt {
+    fn from_receipt(r: &TurnReceipt) -> Self {
+        TxReceipt {
+            turn_hash: hex::encode(r.turn_hash),
+            receipt_hash: hex::encode(r.receipt_hash()),
+            post_state: hex::encode(r.post_state_hash),
+            computrons_used: r.computrons_used,
+            action_count: r.action_count,
+        }
+    }
+}
+
+#[pymethods]
+impl TxReceipt {
+    fn __repr__(&self) -> String {
+        format!(
+            "TxReceipt(turn_hash={:?}, computrons_used={})",
+            self.turn_hash, self.computrons_used
+        )
+    }
+}
+
+/// A funded sub-agent worker (a payee or a lease funder) spawned by a
+/// [`ServiceRuntime`]. Wraps a real `dregg_sdk::SubAgent`.
+#[pyclass(unsendable, module = "dregg", name = "Worker")]
+struct Worker {
+    inner: SubAgent,
+}
+
+#[pymethods]
+impl Worker {
+    /// Hex cell id of this worker.
+    #[getter]
+    fn cell_id(&self) -> String {
+        hex::encode(self.inner.cell_id().0)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Worker(cell_id={:?})", self.cell_id())
+    }
+}
+
+/// **A durable, metered execution lease** — the Python face of
+/// `dregg_sdk::ExecutionLease`. `run` advances the durable checkpoint
+/// (`step → step+1`) metered through the cap-gated worker on one turn; `fund`
+/// moves value in with a conserving Transfer. The `FieldLte { step ≤ max_steps }
+/// ∧ Monotonic { step }` meter is enforced by the REAL executor: a run past the
+/// ceiling raises `DreggRefused`.
+#[pyclass(unsendable, module = "dregg", name = "Lease")]
+struct Lease {
+    inner: ExecutionLease,
+}
+
+#[pymethods]
+impl Lease {
+    /// Hex id of the lease cell (carrying the checkpoint slot + meter program).
+    #[getter]
+    fn lease_cell(&self) -> String {
+        hex::encode(self.inner.lease_cell().0)
+    }
+
+    /// Hex asset id the lease holds value in.
+    #[getter]
+    fn asset(&self) -> String {
+        hex::encode(self.inner.asset())
+    }
+
+    /// The durable checkpoint index so far.
+    #[getter]
+    fn step(&self) -> i64 {
+        self.inner.step()
+    }
+
+    /// The runs remaining (`max_steps - step`).
+    #[getter]
+    fn remaining(&self) -> i64 {
+        self.inner.remaining()
+    }
+
+    /// Fund the lease — one conserving Transfer of `amount` from `funder` into
+    /// the lease cell.
+    fn fund(&self, funder: &Worker, amount: u64) -> PyResult<TxReceipt> {
+        let r = self
+            .inner
+            .fund(&funder.inner, amount)
+            .map_err(|e| refused(e.to_string()))?;
+        Ok(TxReceipt::from_receipt(&r))
+    }
+
+    /// Advance the durable checkpoint (`step → step+1`), metered through the
+    /// cap-gated worker. Raises `DreggRefused` when a run would exceed the
+    /// capacity ceiling (the executor's `FieldLte` meter tooth).
+    fn run(&mut self) -> PyResult<TxReceipt> {
+        let step = self
+            .inner
+            .run(Vec::new())
+            .map_err(|e| refused(e.to_string()))?;
+        Ok(TxReceipt::from_receipt(&step.receipt))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Lease(lease_cell={:?}, step={}, remaining={})",
+            self.lease_cell(),
+            self.step(),
+            self.remaining()
+        )
+    }
+}
+
+/// **An in-process service-economy runtime** — a real `dregg_sdk::AgentRuntime`
+/// over the verified kernel executor, exposing the few-lines facade: `pay`,
+/// `invoke_service`, and a durable, metered `lease`. The agent cell is
+/// self-funded (1M computrons) for local use.
+#[pyclass(unsendable, module = "dregg", name = "ServiceRuntime")]
+struct ServiceRuntime {
+    runtime: SdkRuntime,
+    root: HeldToken,
+    domain: String,
+}
+
+#[pymethods]
+impl ServiceRuntime {
+    /// A fresh in-process runtime (real cipherclerk + ledger + executor) in
+    /// `domain` (the asset namespace; the agent's value is denominated in
+    /// `blake3(domain)`).
+    #[new]
+    #[pyo3(signature = (domain="compute"))]
+    fn new(domain: &str) -> PyResult<Self> {
+        let mut clerk = AgentCipherclerk::new();
+        let root = clerk.mint_token(&[7u8; 32], domain);
+        let runtime = SdkRuntime::new(Arc::new(RwLock::new(clerk)), domain);
+        Ok(ServiceRuntime {
+            runtime,
+            root,
+            domain: domain.to_string(),
+        })
+    }
+
+    /// Hex cell id of this runtime's agent cell (the payer / caller).
+    #[getter]
+    fn cell_id(&self) -> String {
+        hex::encode(self.runtime.cell_id().0)
+    }
+
+    /// Hex id of this runtime's native asset (its agent cell's `token_id`).
+    #[getter]
+    fn native_asset(&self) -> String {
+        hex::encode(self.runtime.native_asset())
+    }
+
+    /// The balance of `cell` in the ledger (0 for an unknown cell).
+    fn balance(&self, cell: &Bound<'_, PyAny>) -> PyResult<i64> {
+        let cell = parse_cell(cell, "cell")?;
+        let ledger = self.runtime.ledger().lock().unwrap();
+        Ok(ledger.get(&cell).map(|c| c.state.balance()).unwrap_or(0))
+    }
+
+    /// Spawn a funded sub-agent worker (a payee or a lease funder) in this
+    /// runtime's domain, sharing the domain asset.
+    fn spawn(&self) -> PyResult<Worker> {
+        let w = self
+            .runtime
+            .spawn_sub_agent(&Attenuation::default(), &self.root)
+            .map_err(|e| refused(e.to_string()))?;
+        Ok(Worker { inner: w })
+    }
+
+    /// Install a service cell whose program dispatches `methods` (its derived
+    /// interface exposes them, all Replayable), in this runtime's asset. Returns
+    /// the cell id (hex). A test/provisioning helper for `invoke_service`.
+    fn install_service_cell(&self, methods: Vec<String>) -> PyResult<String> {
+        let cases = methods
+            .iter()
+            .map(|m| TransitionCase {
+                guard: TransitionGuard::MethodIs {
+                    method: method_symbol(m),
+                },
+                constraints: Vec::new(),
+            })
+            .collect();
+        let mut cell = Cell::with_balance(
+            [5u8; 32],
+            *blake3::hash(self.domain.as_bytes()).as_bytes(),
+            0,
+        );
+        cell.program = CellProgram::Cases(cases);
+        let id = cell.id();
+        let _ = self.runtime.ledger().lock().unwrap().insert_cell(cell);
+        Ok(hex::encode(id.0))
+    }
+
+    /// **`pay`** — move `amount` of `asset` from this runtime's cell to `to`
+    /// through the canonical `Payable` `pay` desugar (one conserving Transfer,
+    /// per-asset Σδ=0). Forwards to `AgentRuntime::pay`. `asset` defaults to the
+    /// native asset (an intra-domain payment).
+    #[pyo3(signature = (to, amount, asset=None))]
+    fn pay(
+        &self,
+        to: &Bound<'_, PyAny>,
+        amount: u64,
+        asset: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<TxReceipt> {
+        let to = parse_cell(to, "to")?;
+        let receipt = match asset {
+            Some(a) => {
+                let a = parse_32(a, "asset")?;
+                self.runtime.pay(to, amount, a)
+            }
+            None => self.runtime.pay_native(to, amount),
+        }
+        .map_err(|e| refused(e.to_string()))?;
+        Ok(TxReceipt::from_receipt(&receipt))
+    }
+
+    /// **`invoke_service`** — route `method` against `target`'s interface through
+    /// the verified DFA router, optionally PREPENDING the canonical `Payable`
+    /// pay leg, and return the verified DESUGAR (the `Action` the executor runs)
+    /// as a dict (`target`/`method`/`args`/`effects`). Forwards to
+    /// `AgentRuntime::invoke_service_resolved`. Fail-closed: an unknown method, a
+    /// serviced seam, or an under-authority call raises `DreggRefused`.
+    ///
+    /// `pay` is a `(provider, amount, asset)` tuple; `authority` is one of
+    /// `none`/`signature`/`proof`.
+    #[pyo3(signature = (target, method, args=None, pay=None, authority="none"))]
+    fn invoke_service<'py>(
+        &self,
+        py: Python<'py>,
+        target: &Bound<'_, PyAny>,
+        method: &str,
+        args: Option<&Bound<'_, PyAny>>,
+        pay: Option<&Bound<'_, PyAny>>,
+        authority: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let target = parse_cell(target, "target")?;
+
+        let mut arg_felts: Vec<FieldElement> = Vec::new();
+        if let Some(args) = args {
+            for item in args.try_iter()? {
+                arg_felts.push(parse_32(&item?, "args[]")?);
+            }
+        }
+
+        let pay_leg = match pay {
+            None => None,
+            Some(p) => {
+                let (prov, amt, asset): (Bound<'_, PyAny>, u64, Bound<'_, PyAny>) =
+                    p.extract().map_err(|_| {
+                        PyTypeError::new_err("pay: expected a (provider, amount, asset) tuple")
+                    })?;
+                Some(PayLeg::new(
+                    parse_cell(&prov, "pay.provider")?,
+                    amt,
+                    parse_32(&asset, "pay.asset")?,
+                ))
+            }
+        };
+
+        let authority = match authority.to_ascii_lowercase().as_str() {
+            "none" => InvokeAuthority::None,
+            "signature" => InvokeAuthority::Signature,
+            "proof" => InvokeAuthority::Proof,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "authority: expected one of none/signature/proof, got {other:?}"
+                )));
+            }
+        };
+
+        let (action, _sig) = self
+            .runtime
+            .invoke_service_resolved(target, method, arg_felts, Vec::new(), authority, pay_leg)
+            .map_err(|e| refused(e.to_string()))?;
+        action_to_py(py, &action)
+    }
+
+    /// **`lease`** — open a durable, metered execution lease admitting
+    /// `max_steps` checkpoints. Forwards to `ExecutionLease::open` (spawns a
+    /// cap-gated worker scoped to the run verb + installs the
+    /// `FieldLte ∧ Monotonic` meter program on the lease cell).
+    fn lease(&self, max_steps: i64) -> PyResult<Lease> {
+        let inner = ExecutionLease::open(&self.runtime, &self.root, LeaseTerms::new(max_steps))
+            .map_err(|e| refused(e.to_string()))?;
+        Ok(Lease { inner })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ServiceRuntime(cell_id={:?}, domain={:?})",
+            self.cell_id(),
+            self.domain
+        )
+    }
+}
+
 // ─── module ───
 
 #[pymodule]
@@ -2301,6 +2684,12 @@ fn dregg(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Mailbox>()?;
     m.add_class::<AttestedQuery>()?;
     m.add_class::<SseJsonStream>()?;
+    // The service-economy surface (in-process, executor-backed).
+    m.add_class::<ServiceRuntime>()?;
+    m.add_class::<Worker>()?;
+    m.add_class::<Lease>()?;
+    m.add_class::<TxReceipt>()?;
+    m.add_function(wrap_pyfunction!(method_symbol_py, m)?)?;
     m.add_function(wrap_pyfunction!(subscribe, m)?)?;
     m.add_function(wrap_pyfunction!(faucet, m)?)?;
     m.add_function(wrap_pyfunction!(explain, m)?)?;

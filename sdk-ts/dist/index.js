@@ -34,16 +34,20 @@ __export(index_exports, {
   AttestedQuery: () => AttestedQuery,
   AuthorizedTurn: () => AuthorizedTurn,
   ChannelsClient: () => ChannelsClient,
+  DEFAULT_LEASE_METHOD: () => DEFAULT_LEASE_METHOD,
   DeployChecker: () => DeployChecker,
   DreggPgError: () => DreggPgError,
   EmptyTurnError: () => EmptyTurnError,
   Identity: () => Identity,
   KERNEL_ROLE: () => KERNEL_ROLE,
+  LEASE_STEP_SLOT: () => LEASE_STEP_SLOT,
+  Lease: () => Lease,
   MAIN_IDENTITY_PATH: () => MAIN_IDENTITY_PATH,
   MailboxClient: () => MailboxClient,
   NodeClient: () => NodeClient,
   NodeError: () => NodeError,
   NodeEvents: () => NodeEvents,
+  PAY_METHOD: () => PAY_METHOD,
   PROFILE_ENV: () => PROFILE_ENV,
   Pg: () => Pg,
   ProfileError: () => ProfileError,
@@ -52,6 +56,7 @@ __export(index_exports, {
   ReceiptFilter: () => ReceiptFilter,
   ReceiptStream: () => ReceiptStream,
   RelayError: () => RelayError,
+  ServiceEconomy: () => ServiceEconomy,
   TOKEN_GUC: () => TOKEN_GUC,
   TrustlineClient: () => TrustlineClient,
   TurnBuilder: () => TurnBuilder,
@@ -66,6 +71,7 @@ __export(index_exports, {
   fieldFromU64: () => fieldFromU64,
   hexDecode: () => hexDecode,
   hexEncode: () => hexEncode,
+  leaseProgramConstraints: () => leaseProgramConstraints,
   profiles: () => profiles_exports,
   program: () => program_exports,
   renderTurn: () => renderTurn,
@@ -1280,6 +1286,7 @@ function explainTurn(turn) {
 var renderTurn = explainTurn;
 
 // src/turns.ts
+var PAY_METHOD = "pay";
 var DEFAULT_FEE = 10000n;
 var VALIDITY_HORIZON_SECS = 3600n;
 var EmptyTurnError = class extends Error {
@@ -1292,6 +1299,7 @@ var TurnBuilder = class {
   constructor(runtime) {
     this.methodName = "execute";
     this.effectList = [];
+    this.argList = [];
     this.runtime = runtime;
   }
   /** The cell whose authority this turn exercises. */
@@ -1367,6 +1375,34 @@ var TurnBuilder = class {
     for (const e of effects) this.effectList.push(e);
     return this;
   }
+  /**
+   * Set the action's argument vector (the typed witness the method carries;
+   * the routing/auth gate on the method symbol, these are the receipt-bound
+   * record). Each entry is a 32-byte field element. Replaces any prior args.
+   */
+  args(args) {
+    this.argList = args.slice();
+    return this;
+  }
+  /**
+   * **`pay`** — move `amount` of `asset` from the acting cell to `to` through
+   * the canonical `Payable` `pay` desugar. The byte-identical twin of
+   * `dregg_payable::resolve_pay` / the Rust SDK's `AgentRuntime::pay`: the
+   * action's `method` is `pay`, its `args` are `[asset, field_from_u64(amount),
+   * to]` (the `pay_args` witness), and it carries EXACTLY ONE conserving
+   * `Effect::Transfer` (per-asset Σδ=0). The same value rail the app
+   * framework's `Payable::pay` and the metered tool-gateway charge ride — not a
+   * hand-rolled effect.
+   *
+   * `asset` is the asset to pay in (the payer's `token_id`; a bridged `$DREGG`
+   * mirror asset is an ordinary 32-byte id, routed identically).
+   */
+  pay(to, amount, asset) {
+    this.methodName = PAY_METHOD;
+    this.argList = [asset, fieldFromU64(amount), to];
+    this.effectList.push({ kind: "transfer", from: this.actingCell(), to, amount });
+    return this;
+  }
   // ─── terminal ───
   /**
    * Sign the built action with this identity's key over the canonical
@@ -1384,6 +1420,7 @@ var TurnBuilder = class {
     const target = this.actingCell();
     const federationId = await this.runtime.node.federationId();
     const unsigned = unsignedActionNamed(target, this.methodName, this.effectList);
+    unsigned.args = this.argList;
     const action = this.runtime.identity.signAction(unsigned, federationId);
     return new AuthorizedTurn(this.runtime, action, this.feeValue ?? DEFAULT_FEE);
   }
@@ -1567,6 +1604,116 @@ var ChannelsClient = class {
    */
   async *messages(channel) {
     yield* this.node.sseStream(`/channels/messages/${asHex2(channel)}`);
+  }
+};
+
+// src/service-economy.ts
+var LEASE_STEP_SLOT = 4;
+var DEFAULT_LEASE_METHOD = "run";
+function leaseProgramConstraints(maxSteps) {
+  const ceiling = maxSteps < 0 ? 0 : maxSteps;
+  return [
+    { kind: "fieldLte", index: LEASE_STEP_SLOT, value: fieldFromU64(ceiling) },
+    { kind: "monotonic", index: LEASE_STEP_SLOT }
+  ];
+}
+var Lease = class {
+  constructor(runtime, terms) {
+    this.runtime = runtime;
+    this.stepIndex = 0;
+    this.maxSteps = terms.maxSteps;
+    this.leaseCell = terms.leaseCell;
+    this.asset = terms.asset;
+    this.method = terms.method ?? DEFAULT_LEASE_METHOD;
+  }
+  /** The durable checkpoint index so far. */
+  step() {
+    return this.stepIndex;
+  }
+  /** The runs remaining on the lease (`maxSteps - step`). */
+  remaining() {
+    return this.maxSteps - this.stepIndex;
+  }
+  /**
+   * The unsigned-then-signable builder for the next `run`: a
+   * `Monotonic`/`FieldLte`-gated `SetField` on {@link LEASE_STEP_SLOT}
+   * (`step → step+1`) followed by `work`, on the lease's run verb. Does NOT
+   * advance the local counter (inspect / sign without committing).
+   */
+  runTurn(work = []) {
+    const next = this.stepIndex + 1;
+    return this.runtime.turn().on(this.leaseCell).method(this.method).writeU64(LEASE_STEP_SLOT, next).effects(work);
+  }
+  /**
+   * Advance the durable checkpoint and meter `work` on one turn. Submits the
+   * {@link runTurn} and, on commit, advances the local step counter.
+   */
+  async run(work = []) {
+    const receipt = await (await this.runTurn(work).sign()).submit();
+    this.stepIndex += 1;
+    return { receipt, step: this.stepIndex, remaining: this.remaining() };
+  }
+  /** The signable builder for a funding transfer: one conserving
+   * `Effect::Transfer` of `amount` from `funder` into the lease cell. */
+  fundTurn(funder, amount) {
+    return this.runtime.turn().transferFrom(funder, this.leaseCell, amount);
+  }
+  /** Move `amount` from `funder` into the lease cell with a conserving
+   * `Effect::Transfer`. The runtime signs; the executor checks authority over
+   * `funder`. */
+  async fund(funder, amount) {
+    return (await this.fundTurn(funder, amount).sign()).submit();
+  }
+};
+var ServiceEconomy = class {
+  constructor(runtime) {
+    this.runtime = runtime;
+  }
+  /** The signable builder for {@link pay} (inspect / sign without submitting). */
+  payTurn(to, amount, asset) {
+    return this.runtime.turn().pay(to, amount, asset);
+  }
+  /**
+   * **`pay`** — move `amount` of `asset` from this runtime's cell to `to`
+   * through the canonical `Payable` `pay` desugar (one conserving
+   * `Effect::Transfer`, per-asset Σδ=0). Byte-identical to the Rust
+   * `AgentRuntime::pay`.
+   */
+  async pay(to, amount, asset) {
+    return (await this.payTurn(to, amount, asset).sign()).submit();
+  }
+  /**
+   * The signable builder for {@link invoke}: an action targeting `cell`'s
+   * `method` with `args`, optionally PREPENDING the canonical pay `Transfer`
+   * (caller → provider) ahead of `work`. The DFA route + fail-closed
+   * unknown-method/under-authority refusals are the node executor's job over
+   * the wire.
+   */
+  invokeTurn(cell, method, args = [], opts) {
+    const builder = this.runtime.turn().on(cell).method(method).args(args);
+    if (opts?.pay) {
+      builder.transferFrom(this.runtime.identity.cellId(), opts.pay.provider, opts.pay.amount);
+    }
+    if (opts?.work) builder.effects(opts.work);
+    return builder;
+  }
+  /**
+   * **`invoke`** — call `method` on the `cell` service, optionally paying
+   * through `Payable` in the same turn, and submit. The committed turn carries
+   * the routed method + (optionally pay-prepended) effects, mirroring the Rust
+   * `AgentRuntime::invoke_service`.
+   */
+  async invoke(cell, method, args = [], opts) {
+    return (await this.invokeTurn(cell, method, args, opts).sign()).submit();
+  }
+  /**
+   * **`lease`** — bind to a provisioned lease cell and drive its durable,
+   * metered `run` / `fund` turns. See {@link Lease} and
+   * {@link leaseProgramConstraints} for the meter program installed at
+   * provisioning.
+   */
+  lease(terms) {
+    return new Lease(this.runtime, terms);
   }
 };
 
@@ -1840,6 +1987,32 @@ var AgentRuntime = class {
   /** The **channels** organ on this runtime's node ([`NodeClient.channels`]). */
   channels() {
     return this.node.channels();
+  }
+  /**
+   * The **service-economy** surface (`docs/guide/SERVICE-ECONOMY-SDK.md`) — the
+   * TS twin of the Rust SDK facade. `runtime.services.invoke(...)`,
+   * `runtime.execution.lease(...)`, `runtime.pay(...)`.
+   */
+  econ() {
+    return this.serviceEconomy ?? (this.serviceEconomy = new ServiceEconomy(this));
+  }
+  /** Find + call a service (`econ.invoke`); `runtime.services.invoke(...)`. */
+  get services() {
+    return this.econ();
+  }
+  /** Open a durable, metered execution lease (`econ.lease`);
+   * `runtime.execution.lease(...)`. */
+  get execution() {
+    return this.econ();
+  }
+  /**
+   * **`pay`** — move `amount` of `asset` from this runtime's cell to `to`
+   * through the canonical `Payable` `pay` desugar (one conserving
+   * `Effect::Transfer`). The few-lines front door; mirrors Rust
+   * `AgentRuntime::pay`.
+   */
+  pay(to, amount, asset) {
+    return this.econ().pay(to, amount, asset);
   }
   /** The agent cell's current nonce (0 for a never-seen cell). */
   async currentNonce() {
@@ -2762,16 +2935,20 @@ var DeployChecker = class {
   AttestedQuery,
   AuthorizedTurn,
   ChannelsClient,
+  DEFAULT_LEASE_METHOD,
   DeployChecker,
   DreggPgError,
   EmptyTurnError,
   Identity,
   KERNEL_ROLE,
+  LEASE_STEP_SLOT,
+  Lease,
   MAIN_IDENTITY_PATH,
   MailboxClient,
   NodeClient,
   NodeError,
   NodeEvents,
+  PAY_METHOD,
   PROFILE_ENV,
   Pg,
   ProfileError,
@@ -2780,6 +2957,7 @@ var DeployChecker = class {
   ReceiptFilter,
   ReceiptStream,
   RelayError,
+  ServiceEconomy,
   TOKEN_GUC,
   TrustlineClient,
   TurnBuilder,
@@ -2794,6 +2972,7 @@ var DeployChecker = class {
   fieldFromU64,
   hexDecode,
   hexEncode,
+  leaseProgramConstraints,
   profiles,
   program,
   renderTurn,

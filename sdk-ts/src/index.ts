@@ -73,7 +73,18 @@ export type {
 } from "./client";
 
 // The one public turn shape.
-export { AuthorizedTurn, EmptyTurnError, TurnBuilder } from "./turns";
+export { AuthorizedTurn, EmptyTurnError, PAY_METHOD, TurnBuilder } from "./turns";
+
+// The service-economy surface (the TS twin of `sdk/src/service_economy.rs`):
+// pay, services.invoke, the durable metered execution lease.
+export {
+  DEFAULT_LEASE_METHOD,
+  Lease,
+  LEASE_STEP_SLOT,
+  ServiceEconomy,
+  leaseProgramConstraints,
+} from "./service-economy";
+export type { LeaseMeterConstraint, LeaseStep, LeaseTerms, PayLeg } from "./service-economy";
 
 // The receipt noun (lazy proof).
 export { Receipt, TurnProof, WrongTurnProofError } from "./receipt";
