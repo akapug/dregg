@@ -58,7 +58,7 @@ pub(crate) use starbridge_v2::palette::{Category, CommandId, CommandPalette};
 pub(crate) use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
 pub(crate) use starbridge_v2::shell::{Scene, Shell};
 pub(crate) use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
-pub(crate) use starbridge_v2::time_travel::TimeCockpitModel;
+pub(crate) use starbridge_v2::time_travel::{TimeBranch, TimeCockpitModel};
 pub(crate) use starbridge_v2::ui_snapshot::{Liveness, UiSnapshot};
 pub(crate) use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
 // THE ⤳ SHARE surface — the frustum / snapshot editor (cull + pare + verify + share).
@@ -655,6 +655,13 @@ pub struct Cockpit {
     /// it; "suspend & inspect" pushes a level, "descend" pops. Empty until the
     /// operator first suspends + climbs (the live system runs un-reflected).
     meta_stack: MetaStack,
+    /// THE ⑂ DIVERGENT BRANCH — the result of forking the past at the scrubber
+    /// cursor ([`dregg_turn::reversible::ReversibleHistory::fork_at`]) and driving
+    /// a divergent verified turn from it. `None` until the operator clicks "⑂
+    /// BRANCH HERE"; pinned so the TIME tab can paint the divergent future beside
+    /// the (untouched) live line. The temporal dual of the spatial branch-and-stitch
+    /// fork — a verified future grown from the past, the parent timeline immune.
+    time_branch: Option<TimeBranch>,
 
     // --- CIPHERCLERK panel state -------------------------------------------
     /// The HD-derived identity vault (real `AgentCipherclerk`s).
