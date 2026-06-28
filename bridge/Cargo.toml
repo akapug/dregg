@@ -25,6 +25,13 @@ sha2 = { workspace = true }
 postcard = { version = "1", features = ["use-std"] }
 getrandom = { workspace = true }
 serde = { version = "1", features = ["derive"] }
+# Stripe webhook verification (`stripe_mirror`): HMAC-SHA256 over the raw body is
+# the real Stripe `Stripe-Signature` scheme; constant-time compare via `subtle`;
+# the verified event JSON is parsed with `serde_json`. All workspace-pinned, light
+# (no `async-stripe`/`stripe-rust` monolith pulled in). See stripe_mirror.rs docs.
+hmac = { workspace = true }
+subtle = { workspace = true }
+serde_json = { workspace = true }
 # Lightweight TYPE-ONLY Solana wire crate for real mainnet vote-transaction
 # ingestion (the `VoteInstruction`/`Vote`/`TowerSync`/`VoteStateUpdate` types).
 # Deliberately NOT the `solana-sdk` monolith: these split crates pin
