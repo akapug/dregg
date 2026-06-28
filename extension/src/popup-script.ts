@@ -40,6 +40,21 @@ const createProfileBtn = document.getElementById("createProfileBtn") as HTMLButt
 const profileError = document.getElementById("profileError")!;
 const receiptsContainer = document.getElementById("receiptsContainer")!;
 
+// Onboarding (first-run) elements.
+const onboardingSection = document.getElementById("onboardingSection")!;
+const tabsNav = document.getElementById("tabsNav")!;
+const onbStep1 = document.getElementById("onbStep1")!;
+const onbStep2 = document.getElementById("onbStep2")!;
+const onbPass = document.getElementById("onbPass") as HTMLInputElement;
+const onbPassConfirm = document.getElementById("onbPassConfirm") as HTMLInputElement;
+const onbNextBtn = document.getElementById("onbNextBtn") as HTMLButtonElement;
+const onbErr1 = document.getElementById("onbErr1")!;
+const onbMnemonic = document.getElementById("onbMnemonic")!;
+const onbConfirm = document.getElementById("onbConfirm") as HTMLTextAreaElement;
+const onbCreateBtn = document.getElementById("onbCreateBtn") as HTMLButtonElement;
+const onbBackBtn = document.getElementById("onbBackBtn") as HTMLButtonElement;
+const onbErr2 = document.getElementById("onbErr2")!;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -79,6 +94,21 @@ async function refresh(): Promise<void> {
       wasmError.style.display = "none";
     }
   }
+
+  // First-run onboarding: no wallet exists yet. Force passphrase + recovery
+  // backup before anything else is shown.
+  if (state.uninitialized) {
+    onboardingSection.classList.remove("hidden");
+    tabsNav.style.display = "none";
+    document.querySelectorAll(".tab-content").forEach(c => ((c as HTMLElement).style.display = "none"));
+    statusDot.classList.add("locked");
+    statusText.textContent = "Setup required";
+    return;
+  }
+  onboardingSection.classList.add("hidden");
+  tabsNav.style.display = "";
+  // Clear the inline overrides so the CSS rules (only .active shows) apply.
+  document.querySelectorAll(".tab-content").forEach(c => ((c as HTMLElement).style.display = ""));
 
   if (state.locked) {
     statusDot.classList.add("locked");
@@ -277,6 +307,90 @@ setPassphraseBtn.addEventListener("click", async () => {
   confirmPassphraseInput.style.borderColor = "";
   passphraseSetupSection.classList.add("hidden");
   await refresh();
+});
+
+// ---------------------------------------------------------------------------
+// First-run onboarding
+// ---------------------------------------------------------------------------
+
+let onboardingPass = "";
+
+function showOnbErr(el: HTMLElement, text: string): void {
+  el.textContent = text;
+  el.style.display = text ? "block" : "none";
+}
+
+onbNextBtn.addEventListener("click", async () => {
+  showOnbErr(onbErr1, "");
+  const pass = onbPass.value;
+  const confirm = onbPassConfirm.value;
+  if (!pass || pass.length < 8) {
+    showOnbErr(onbErr1, "Passphrase must be at least 8 characters.");
+    return;
+  }
+  if (pass !== confirm) {
+    showOnbErr(onbErr1, "Passphrases do not match.");
+    return;
+  }
+  onbNextBtn.disabled = true;
+  const result = await sendMessage<{ mnemonic?: string; error?: string }>("dregg:beginOnboarding");
+  onbNextBtn.disabled = false;
+  if (!result || result.error || !result.mnemonic) {
+    showOnbErr(onbErr1, result?.error || "Could not start onboarding.");
+    return;
+  }
+  onboardingPass = pass;
+  const words = result.mnemonic.split(" ");
+  onbMnemonic.textContent = "";
+  words.forEach((w, i) => {
+    const span = document.createElement("span");
+    span.textContent = `${String(i + 1).padStart(2, "0")}. ${w}`;
+    onbMnemonic.appendChild(span);
+    onbMnemonic.appendChild(document.createTextNode("  "));
+  });
+  onbStep1.classList.add("hidden");
+  onbStep2.classList.remove("hidden");
+});
+
+onbBackBtn.addEventListener("click", () => {
+  // Return to step 1. The candidate phrase stays in the background until
+  // completeOnboarding (or it is discarded when a fresh beginOnboarding runs).
+  onbStep2.classList.add("hidden");
+  onbStep1.classList.remove("hidden");
+  onbConfirm.value = "";
+  showOnbErr(onbErr2, "");
+});
+
+onbCreateBtn.addEventListener("click", async () => {
+  showOnbErr(onbErr2, "");
+  if (!onbConfirm.value.trim()) {
+    showOnbErr(onbErr2, "Re-type your recovery phrase to confirm you backed it up.");
+    return;
+  }
+  onbCreateBtn.disabled = true;
+  onbCreateBtn.textContent = "Creating...";
+  const result = await sendMessage<{ success: boolean; error?: string }>("dregg:completeOnboarding", {
+    passphrase: onboardingPass,
+    confirmMnemonic: onbConfirm.value,
+  });
+  onbCreateBtn.disabled = false;
+  onbCreateBtn.textContent = "Create wallet";
+  if (!result || !result.success) {
+    showOnbErr(onbErr2, result?.error || "Could not create wallet.");
+    return;
+  }
+  // Wallet created + unlocked. Wipe the in-memory passphrase + confirmation.
+  onboardingPass = "";
+  onbPass.value = "";
+  onbPassConfirm.value = "";
+  onbConfirm.value = "";
+  onbMnemonic.textContent = "";
+  onbStep2.classList.add("hidden");
+  onbStep1.classList.remove("hidden");
+  await refresh();
+  await loadLog();
+  await loadProfiles();
+  await loadReceipts();
 });
 
 // ---------------------------------------------------------------------------
@@ -570,7 +684,7 @@ acctSendBtn.addEventListener("click", async () => {
     },
   });
   acctSendBtn.disabled = false;
-  acctSendBtn.textContent = "Send";
+  acctSendBtn.textContent = "Operator Send";
   if (result?.accepted && result.turnHash) {
     const short = result.turnHash.slice(0, 16);
     showAcctResult(
