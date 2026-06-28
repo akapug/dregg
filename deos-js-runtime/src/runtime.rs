@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use boa_engine::{js_string, Context, JsNativeError, JsValue, NativeFunction, Source};
 
 use crate::applet::{CellApplet, FireError};
-use crate::world::{BatchGuard, BatchOp, CellWorld};
+use crate::world::{seal_commitment, BatchGuard, BatchOp, CellWorld};
 
 thread_local! {
     /// The applet the installed host functions drive, for the duration of one
@@ -345,6 +345,154 @@ fn world_batch(
     }
 }
 
+/// `seal(bidder, value, nonce)` — compute the **runtime-owned sealed commitment** (the
+/// BLAKE3 digest [`seal_commitment`], the same construction the real sealed-auction
+/// `Bid::seal` uses), returned as a 64-char hex string. This is a PURE function — it confers
+/// no authority and commits no turn. A bidder's JS calls it to publish ONLY the digest at
+/// commit time (the secret `value`/`nonce` stay in JS variables until reveal); because the
+/// runtime owns the same hash the reveal-binding check uses, a later opening binds to exactly
+/// this commitment (no peeking-then-switching). It is the bidder's own value it seals.
+fn world_seal(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> boa_engine::JsResult<JsValue> {
+    let bidder = arg_i64(args.first(), ctx)?.max(0) as u64;
+    let value = arg_i64(args.get(1), ctx)?.max(0) as u64;
+    let nonce = arg_i64(args.get(2), ctx)?.max(0) as u64;
+    Ok(JsValue::from(js_string!(hex_encode(&seal_commitment(
+        bidder, value, nonce
+    )))))
+}
+
+/// `{ "slot": n, "seal": "<64-hex>", "guard"?: {slot,value} }` — the commit half of the
+/// commit-reveal power-up: freeze a sealed bid at `slot`, optionally guarded on the auction
+/// phase. See [`CellWorld::commit_seal`].
+#[derive(serde::Deserialize)]
+struct CommitSpec {
+    slot: usize,
+    seal: String,
+    #[serde(default)]
+    guard: Option<GuardSpec>,
+}
+
+/// `commitSeal(auction, specJson)` — **commit a sealed bid** as one cap-gated verified turn.
+/// `specJson` is a `JSON.stringify`'d [`CommitSpec`]: the `slot` to freeze the seal into, the
+/// `seal` hex from [`world_seal`], and an optional phase `guard`. Write-once (no overwriting
+/// a committed bid) and the phase gate are enforced by [`CellWorld::commit_seal`]. Returns 1.
+fn world_commit_seal(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> boa_engine::JsResult<JsValue> {
+    let auction = arg_string(
+        args.first(),
+        ctx,
+        "commitSeal(auction, spec): missing auction",
+    )?;
+    let spec_raw = arg_string(
+        args.get(1),
+        ctx,
+        "commitSeal(auction, spec): missing spec JSON",
+    )?;
+    let spec: CommitSpec = serde_json::from_str(&spec_raw).map_err(|e| {
+        JsNativeError::typ().with_message(format!("commitSeal({auction:?}) spec parse error: {e}"))
+    })?;
+    let seal = hex_decode_32(&spec.seal).ok_or_else(|| {
+        JsNativeError::typ().with_message(format!(
+            "commitSeal({auction:?}): seal is not 32 bytes of hex"
+        ))
+    })?;
+    let guard = spec.guard.map(|g| BatchGuard {
+        slot: g.slot,
+        value: g.value,
+    });
+    match with_world(|w| w.commit_seal(&auction, spec.slot, seal, guard)) {
+        Ok(_rh) => Ok(JsValue::from(1)),
+        Err(e) => Err(refuse(&format!("commitSeal({auction:?})"), e).into()),
+    }
+}
+
+/// `{ sealSlot, revealSlot, bidder, value, nonce, guard?: {slot,value} }` — the reveal half:
+/// open a sealed bid, the runtime re-hashing the opening and refusing a non-binding one. See
+/// [`CellWorld::reveal_bid`].
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RevealSpec {
+    seal_slot: usize,
+    reveal_slot: usize,
+    bidder: u64,
+    value: u64,
+    nonce: u64,
+    #[serde(default)]
+    guard: Option<GuardSpec>,
+}
+
+/// `revealBid(auction, specJson)` — **reveal a sealed bid** as one cap-gated verified turn.
+/// `specJson` is a `JSON.stringify`'d [`RevealSpec`]. The runtime RE-HASHES `(bidder, value,
+/// nonce)` and refuses an opening that does not bind to the frozen seal (the keystone
+/// binding tooth — no peeking-then-switching, a non-committed party cannot open), optionally
+/// phase-guarded; see [`CellWorld::reveal_bid`]. Returns the revealed `value` on success.
+fn world_reveal_bid(
+    _this: &JsValue,
+    args: &[JsValue],
+    ctx: &mut Context,
+) -> boa_engine::JsResult<JsValue> {
+    let auction = arg_string(
+        args.first(),
+        ctx,
+        "revealBid(auction, spec): missing auction",
+    )?;
+    let spec_raw = arg_string(
+        args.get(1),
+        ctx,
+        "revealBid(auction, spec): missing spec JSON",
+    )?;
+    let spec: RevealSpec = serde_json::from_str(&spec_raw).map_err(|e| {
+        JsNativeError::typ().with_message(format!("revealBid({auction:?}) spec parse error: {e}"))
+    })?;
+    let guard = spec.guard.map(|g| BatchGuard {
+        slot: g.slot,
+        value: g.value,
+    });
+    match with_world(|w| {
+        w.reveal_bid(
+            &auction,
+            spec.seal_slot,
+            spec.reveal_slot,
+            spec.bidder,
+            spec.value,
+            spec.nonce,
+            guard,
+        )
+    }) {
+        Ok(_rh) => Ok(JsValue::from(spec.value as i64)),
+        Err(e) => Err(refuse(&format!("revealBid({auction:?})"), e).into()),
+    }
+}
+
+/// Lower-hex of 32 bytes (the seal digest handed to/from JS as a string).
+fn hex_encode(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+/// Parse exactly 32 bytes of lower/upper hex back into a digest; `None` on a bad length/char.
+fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
 fn arg_string(
     v: Option<&JsValue>,
     ctx: &mut Context,
@@ -404,6 +552,17 @@ impl NativeRuntime {
             ("tCell", 3, NativeFunction::from_fn_ptr(world_t_cell)),
             ("transfer", 3, NativeFunction::from_fn_ptr(world_transfer)),
             ("batch", 2, NativeFunction::from_fn_ptr(world_batch)),
+            ("seal", 3, NativeFunction::from_fn_ptr(world_seal)),
+            (
+                "commitSeal",
+                2,
+                NativeFunction::from_fn_ptr(world_commit_seal),
+            ),
+            (
+                "revealBid",
+                2,
+                NativeFunction::from_fn_ptr(world_reveal_bid),
+            ),
             ("get", 2, NativeFunction::from_fn_ptr(world_get)),
             (
                 "viewPatch",

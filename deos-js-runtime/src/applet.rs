@@ -135,6 +135,14 @@ pub enum FireError {
     /// turn, so the bridge refuses to fire it (mirroring `invoke()`'s `ServicedSeam`
     /// refusal). The seam is named honestly rather than faked into a write.
     ServicedSeam(String),
+    /// A commit-reveal **binding** refusal — the keystone tooth of the sealed-auction
+    /// power-up. A revealed `(bidder, value, nonce)` did NOT re-hash to the sealed
+    /// commitment frozen at commit time (or no commitment was ever sealed at that slot).
+    /// The runtime OWNS the seal function, so a reveal binds to EXACTLY its commitment:
+    /// no peeking-then-switching (a changed value no longer matches its frozen seal), and
+    /// a non-committed party cannot open (an absent/zero seal never matches). Refused
+    /// IN-BAND before any turn — nothing commits, the reveal never reaches the executor.
+    CommitmentMismatch(String),
     /// The executor rejected the (authorized) turn.
     Executor(String),
 }
@@ -153,6 +161,12 @@ impl std::fmt::Display for FireError {
             }
             FireError::ServicedSeam(n) => {
                 write!(f, "serviced method is a read, not a turn (no desugar): {n}")
+            }
+            FireError::CommitmentMismatch(n) => {
+                write!(
+                    f,
+                    "revealed bid does not bind to its sealed commitment: {n}"
+                )
             }
             FireError::Executor(e) => write!(f, "executor rejected the turn: {e}"),
         }
