@@ -95,6 +95,18 @@ import Dregg2.Deos.ConstraintBinding
 -- NOT VK-affecting (the carrier binding is already deployed; capacity tags are DATA on existing cols).
 -- #assert_all_clean. docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md §6.
 import Dregg2.Deos.CapacityCarrier
+-- PIECE 2 of the VK epoch — the SATISFACTION rung (the genuinely-VK-affecting weld, STAGED): the
+-- capacity gate's slot reads are welded IN-AIR to the rotated BEFORE/AFTER state-block FIELD columns
+-- (r3..r10), so the gate verdict is FORCED by the before/after state commits a PURE light client binds
+-- in the wide commit — not re-evaluated against caller-supplied initial_fields/final_fields. Upgrades
+-- the cap-membership posture (SealedEscrow.settle_gate_root_bound, over the HEAP root the caller held)
+-- to a pure light client over the FIELD columns the wide commit DIRECTLY absorbs: satisfaction_witnessed
+-- (equal state commits ⟹ same gate verdict, REUSE of the Poseidon2SpongeCR field-binding) +
+-- partial/phantom teeth + the composed keystone capacity_witnessed_pure_lightclient (coverage PIECE 1 ∧
+-- satisfaction PIECE 2). The in-AIR constraint itself is STAGED in circuit/src/effect_vm/satisfaction_weld.rs
+-- (NOT yet emitted into a committed welded descriptor/VK, NOT flipped). #assert_all_clean.
+-- docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md §6.
+import Dregg2.Deos.CapacitySatisfaction
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →

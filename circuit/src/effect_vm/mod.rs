@@ -172,6 +172,7 @@ mod air;
 mod cell_state;
 mod effect;
 mod helpers;
+pub mod satisfaction_weld;
 mod trace;
 pub mod trace_rotated;
 mod verify;
@@ -217,6 +218,11 @@ pub use trace_rotated::{
     empty_caveat_manifest, generate_rotated_effect_vm_trace, rotated_descriptor_name,
     rotated_descriptor_name_for_effect, rotated_set_field_descriptor_name,
     transfer_caveat_manifest,
+};
+
+// ---- Re-export the STAGED in-AIR capacity-gate satisfaction weld (PIECE 2 of the VK epoch) ----
+pub use satisfaction_weld::{
+    after_field_col, before_field_col, rotated_field_offset, settle_escrow_satisfaction_gates,
 };
 
 // ---- Re-export verify ----
