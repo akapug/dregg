@@ -60,6 +60,10 @@ export const test = base.extend<ExtensionFixtures>({
     const page = await context.newPage();
     await page.goto(popupUrl);
     await page.waitForLoadState('domcontentloaded');
+    // A fresh install now starts UNINITIALIZED (no auto-created wallet — MF-1).
+    // Run the real onboarding flow once so the wallet exists + is unlocked for
+    // the test. Idempotent: skips if a wallet already exists.
+    await ensureOnboarded(page);
     await use(page);
     await page.close();
   },
@@ -76,12 +80,43 @@ export const test = base.extend<ExtensionFixtures>({
 
 export { expect } from '@playwright/test';
 
+/** The passphrase the e2e onboarding sets (and unlockPopup re-types). */
+export const E2E_PASSPHRASE = 'e2e-passphrase';
+
 /**
- * Unlock the cipherclerk through the popup's real unlock flow. Before a user
- * passphrase is set (needsPassphraseSetup), the background falls back to the
- * installation's internal key, so any typed passphrase unlocks.
+ * Run first-run onboarding through the real popup UI if the wallet is
+ * uninitialized: set a passphrase, read the displayed recovery phrase, confirm
+ * it, and create the wallet (which leaves it unlocked). Idempotent — returns
+ * immediately if a wallet already exists (onboarding section hidden).
+ */
+export async function ensureOnboarded(popup: Page): Promise<void> {
+  const onboarding = popup.locator('#onboardingSection');
+  // Let the initial refresh() decide visibility.
+  await popup.waitForTimeout(300);
+  if (!(await onboarding.isVisible())) return;
+
+  await popup.fill('#onbPass', E2E_PASSPHRASE);
+  await popup.fill('#onbPassConfirm', E2E_PASSPHRASE);
+  await popup.click('#onbNextBtn');
+  await popup.locator('#onbStep2:not(.hidden)').waitFor({ state: 'attached', timeout: 5000 });
+
+  // The phrase renders as "01. word  02. word ..."; strip the "NN. " prefixes.
+  const words = await popup.locator('#onbMnemonic').evaluate((el) =>
+    (el.textContent || '')
+      .split(/\s+/)
+      .filter((t) => t && !/^\d+\.?$/.test(t))
+      .join(' '));
+  await popup.fill('#onbConfirm', words);
+  await popup.click('#onbCreateBtn');
+  await onboarding.waitFor({ state: 'hidden', timeout: 5000 });
+}
+
+/**
+ * Unlock the cipherclerk through the popup's real unlock flow. After onboarding
+ * the wallet is already unlocked, so this no-ops unless a test locked it.
  */
 export async function unlockPopup(popup: Page): Promise<void> {
+  await ensureOnboarded(popup);
   const lockBtn = popup.locator('#lockBtn');
   // The button's static HTML text is "Lock Cipherclerk"; the initial
   // refresh() flips it to "Unlock Cipherclerk" for the locked-at-rest clerk.
@@ -90,7 +125,7 @@ export async function unlockPopup(popup: Page): Promise<void> {
   await popup.locator('#passphraseSection:not(.hidden), #backupBtn[style*="block"]')
     .first().waitFor({ state: 'attached', timeout: 5000 });
   if ((await lockBtn.textContent())?.includes('Unlock')) {
-    await popup.fill('#passphraseInput', 'e2e');
+    await popup.fill('#passphraseInput', E2E_PASSPHRASE);
     await lockBtn.click();
     // Exact comparison: hasText would substring-match "Unlock Cipherclerk".
     await popup.waitForFunction(
