@@ -9,6 +9,9 @@
 //! governed-namespace, nameservice) or to bot-local features (presence,
 //! captp, queue, federation, cclerk, transfer, status, social).
 
+// `/channel` — claim a semi-private DreggNet Cloud channel to drive your Hermes
+// (`crate::channels` + `crate::hermes_channel`).
+pub mod channel;
 pub mod cipherclerk;
 pub mod explorer;
 pub mod gallery;

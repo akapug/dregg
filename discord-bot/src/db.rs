@@ -152,6 +152,37 @@ pub struct CredentialPresentation {
     pub created_at: i64,
 }
 
+/// A user's semi-private DreggNet Cloud channel — the surface from which they
+/// drive their own confined Hermes. Visibility is gated to the owner + admin;
+/// the admin (ember) monitors all of them via the admin portal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UserChannel {
+    pub channel_id: String,
+    pub discord_id: String,
+    pub guild_id: String,
+    pub cell_id: String,
+    pub status: String,
+    pub created_at: i64,
+}
+
+/// One cap-gated Hermes verdict in a user's channel (the per-channel agent
+/// ledger). `allowed` is the gateway verdict; `receipt` is the committed turn
+/// hash when admitted; `reason` names the refused leg when not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HermesActivity {
+    pub id: i64,
+    pub discord_id: String,
+    pub channel_id: String,
+    pub prompt: String,
+    pub tool: String,
+    pub kind: String,
+    pub allowed: bool,
+    pub receipt: Option<String>,
+    pub remaining: Option<i64>,
+    pub reason: Option<String>,
+    pub created_at: i64,
+}
+
 /// Database handle wrapping a SQLite connection pool.
 #[derive(Clone)]
 pub struct Database {
@@ -409,6 +440,69 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // ─── DreggNet Cloud: semi-private per-user channels ──────────────────
+        // A user's own (semi-)private Discord channel, gated to them + admin,
+        // bound to THEIR dregg cell. The channel is the surface from which the
+        // user drives their own confined Hermes. `channel_id` is the Discord
+        // snowflake (the unique key); `cell_id` is the user's custodial cell.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS user_channels (
+                channel_id TEXT PRIMARY KEY,
+                discord_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                cell_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_user_channels_discord
+             ON user_channels (discord_id, created_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        // ─── DreggNet Cloud: per-channel Hermes activity ─────────────────────
+        // Every message that drives a user's Hermes leaves a record of the
+        // cap-gated verdict: the tool/kind, whether the gateway admitted it, the
+        // receipt hash (proof the metered turn committed on the verified
+        // executor), the remaining rate budget, and — on refusal — the leg that
+        // bit. This is the per-channel agent ledger the admin portal monitors.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS hermes_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discord_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                allowed INTEGER NOT NULL,
+                receipt TEXT,
+                remaining INTEGER,
+                reason TEXT,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_activity_recent
+             ON hermes_activity (created_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_hermes_activity_user
+             ON hermes_activity (discord_id, created_at DESC)",
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
     }
 
@@ -464,6 +558,25 @@ impl Database {
                 cell_id: row.get("cell_id"),
                 mode: IdentityMode::from_db(row.get::<String, _>("identity_mode").as_str()),
                 link_challenge: row.get("link_challenge"),
+            })
+            .collect())
+    }
+
+    /// Admin monitoring listing: `(discord_id, cell_id, identity_mode)` for every
+    /// known user — the internal user↔cell mapping the admin portal surfaces.
+    pub async fn list_users_admin(&self) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+        let rows =
+            sqlx::query("SELECT discord_id, cell_id, identity_mode FROM users ORDER BY rowid")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("discord_id"),
+                    row.get::<String, _>("cell_id"),
+                    row.get::<String, _>("identity_mode"),
+                )
             })
             .collect())
     }
@@ -1266,6 +1379,135 @@ impl Database {
         Ok(())
     }
 
+    // ─── DreggNet Cloud: semi-private per-user channels ─────────────────────
+
+    /// Record a freshly created (or re-claimed) per-user channel. Upsert by
+    /// `channel_id` so re-running the claim flow is idempotent.
+    pub async fn upsert_user_channel(
+        &self,
+        channel_id: &str,
+        discord_id: &str,
+        guild_id: &str,
+        cell_id: &str,
+        created_at: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO user_channels (channel_id, discord_id, guild_id, cell_id, status, created_at)
+             VALUES (?, ?, ?, ?, 'active', ?)
+             ON CONFLICT(channel_id) DO UPDATE SET
+                discord_id = excluded.discord_id,
+                guild_id = excluded.guild_id,
+                cell_id = excluded.cell_id,
+                status = 'active'",
+        )
+        .bind(channel_id)
+        .bind(discord_id)
+        .bind(guild_id)
+        .bind(cell_id)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Look up the channel record for a Discord channel id (the routing key the
+    /// message handler uses to decide whether a channel drives a user's Hermes).
+    pub async fn get_user_channel(
+        &self,
+        channel_id: &str,
+    ) -> Result<Option<UserChannel>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT channel_id, discord_id, guild_id, cell_id, status, created_at
+             FROM user_channels WHERE channel_id = ?",
+        )
+        .bind(channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(user_channel_from_row))
+    }
+
+    /// The existing channel a user already owns in a guild, if any (so the claim
+    /// flow can return the existing one instead of creating a duplicate).
+    pub async fn get_user_channel_for_user(
+        &self,
+        discord_id: &str,
+        guild_id: &str,
+    ) -> Result<Option<UserChannel>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT channel_id, discord_id, guild_id, cell_id, status, created_at
+             FROM user_channels WHERE discord_id = ? AND guild_id = ? AND status = 'active'
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(discord_id)
+        .bind(guild_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(user_channel_from_row))
+    }
+
+    /// Every recorded channel (admin portal monitoring view).
+    pub async fn list_user_channels(&self) -> Result<Vec<UserChannel>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT channel_id, discord_id, guild_id, cell_id, status, created_at
+             FROM user_channels ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(user_channel_from_row).collect())
+    }
+
+    // ─── DreggNet Cloud: per-channel Hermes activity ────────────────────────
+
+    /// Append a Hermes verdict to the per-channel agent ledger.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_hermes_activity(
+        &self,
+        discord_id: &str,
+        channel_id: &str,
+        prompt: &str,
+        tool: &str,
+        kind: &str,
+        allowed: bool,
+        receipt: Option<&str>,
+        remaining: Option<i64>,
+        reason: Option<&str>,
+        created_at: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO hermes_activity
+                (discord_id, channel_id, prompt, tool, kind, allowed, receipt, remaining, reason, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(discord_id)
+        .bind(channel_id)
+        .bind(prompt)
+        .bind(tool)
+        .bind(kind)
+        .bind(allowed as i64)
+        .bind(receipt)
+        .bind(remaining)
+        .bind(reason)
+        .bind(created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Recent Hermes activity across all channels (admin portal).
+    pub async fn list_recent_hermes_activity(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<HermesActivity>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id, discord_id, channel_id, prompt, tool, kind, allowed, receipt, remaining, reason, created_at
+             FROM hermes_activity ORDER BY created_at DESC, id DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(hermes_activity_from_row).collect())
+    }
+
     /// Ensure extra tables exist (called from connect).
     pub async fn ensure_extra_tables(&self) -> Result<(), sqlx::Error> {
         sqlx::query(
@@ -1281,6 +1523,34 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+fn user_channel_from_row(row: sqlx::sqlite::SqliteRow) -> UserChannel {
+    UserChannel {
+        channel_id: row.get("channel_id"),
+        discord_id: row.get("discord_id"),
+        guild_id: row.get("guild_id"),
+        cell_id: row.get("cell_id"),
+        status: row.get("status"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn hermes_activity_from_row(row: sqlx::sqlite::SqliteRow) -> HermesActivity {
+    let allowed: i64 = row.get("allowed");
+    HermesActivity {
+        id: row.get("id"),
+        discord_id: row.get("discord_id"),
+        channel_id: row.get("channel_id"),
+        prompt: row.get("prompt"),
+        tool: row.get("tool"),
+        kind: row.get("kind"),
+        allowed: allowed != 0,
+        receipt: row.get("receipt"),
+        remaining: row.get("remaining"),
+        reason: row.get("reason"),
+        created_at: row.get("created_at"),
     }
 }
 
@@ -1512,5 +1782,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(presentation.credential_id.as_deref(), Some("cred1"));
+    }
+
+    #[tokio::test]
+    async fn user_channel_roundtrips_and_routes_by_channel() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.upsert_user_channel("chan-1", "user-99", "guild-1", "cell-abc", 100)
+            .await
+            .unwrap();
+
+        // Routing key: look up by the Discord channel id.
+        let by_chan = db.get_user_channel("chan-1").await.unwrap().unwrap();
+        assert_eq!(by_chan.discord_id, "user-99");
+        assert_eq!(by_chan.cell_id, "cell-abc");
+        assert_eq!(by_chan.status, "active");
+
+        // Idempotent re-claim: a user already owns one in the guild.
+        let existing = db
+            .get_user_channel_for_user("user-99", "guild-1")
+            .await
+            .unwrap();
+        assert!(existing.is_some());
+
+        assert!(db.get_user_channel("nope").await.unwrap().is_none());
+        assert_eq!(db.list_user_channels().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn hermes_activity_records_both_verdicts() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        db.record_hermes_activity(
+            "user-1",
+            "chan-1",
+            "read README",
+            "read_file",
+            "Read",
+            true,
+            Some("deadbeef"),
+            Some(199),
+            None,
+            10,
+        )
+        .await
+        .unwrap();
+        db.record_hermes_activity(
+            "user-1",
+            "chan-1",
+            "run rm",
+            "terminal",
+            "Execute",
+            false,
+            None,
+            None,
+            Some("rate exhausted: 1 of 1 calls used this mandate window"),
+            11,
+        )
+        .await
+        .unwrap();
+
+        let recent = db.list_recent_hermes_activity(10).await.unwrap();
+        assert_eq!(recent.len(), 2);
+        // Most recent first.
+        assert!(!recent[0].allowed);
+        assert!(
+            recent[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("rate exhausted")
+        );
+        assert!(recent[1].allowed);
+        assert_eq!(recent[1].receipt.as_deref(), Some("deadbeef"));
     }
 }

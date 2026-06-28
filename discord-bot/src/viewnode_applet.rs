@@ -187,6 +187,10 @@ impl CardApplet {
                 ViewNode::Bind {
                     slot: COUNT,
                     label: "count: ".to_string(),
+                    // The plain-decimal default (a counter stays `count: 1`),
+                    // matching the prior render before `deos-view` added the
+                    // `fmt` paint knob to `ViewNode::Bind`.
+                    fmt: deos_view::BindFmt::default(),
                 },
                 ViewNode::Button {
                     label: "+1".to_string(),
