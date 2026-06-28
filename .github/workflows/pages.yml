@@ -60,8 +60,8 @@ jobs:
           set -euo pipefail
           if [ ! -d ../plonky3-recursion/.git ]; then
             git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
-            git -C ../plonky3-recursion fetch --depth 1 origin 72ffc5646e90af9324ab17248b4beed31c036db3
-            git -C ../plonky3-recursion checkout 72ffc5646e90af9324ab17248b4beed31c036db3
+            git -C ../plonky3-recursion fetch --depth 1 origin 0b4da97a430cf47710a5b03ef998f6a8674761ad
+            git -C ../plonky3-recursion checkout 0b4da97a430cf47710a5b03ef998f6a8674761ad
           fi
 
       - name: Build the layered deos site (sober landing + all wasm client-side, node-less)
