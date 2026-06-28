@@ -195,9 +195,22 @@ impl TurnExecutor {
         // verifier BEFORE the state transition commits — a custom effect is only
         // admitted if its registered verifier accepts. Fail-closed: an
         // unregistered vk_hash rejects the whole turn (no silent pass).
-        self.enforce_custom_effect_proofs(turn)?;
+        //
+        // FINDING 1 (`docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`): the
+        // DoS cap (`proofs.len() <= cell.max_custom_effects`, hard cap 64) is
+        // enforced INSIDE `enforce_custom_effect_proofs`, BEFORE any recursive
+        // sub-proof verify runs — a flooding turn pays nothing.
+        self.enforce_custom_effect_proofs(turn, cell_id, ledger)?;
 
-        self.verify_and_commit_proof_rotated(cell_id, proof_bytes, turn, ledger)
+        self.verify_and_commit_proof_rotated(cell_id, proof_bytes, turn, ledger)?;
+
+        // FINDING 1, binding leg: after the main EffectVM proof verifies, the
+        // off-circuit dispatch count (`turn.custom_program_proofs.len()`) must
+        // equal the in-circuit committed Custom-effect count `PI[CUSTOM_EFFECT_COUNT]`,
+        // so the wire vec can carry neither MORE (padding) nor FEWER (a dropped,
+        // unverified custom effect) than the proven transition commits to.
+        self.enforce_custom_proof_count_committed(cell_id, turn)?;
+        Ok(())
     }
 
     /// Dispatch every `Effect::Custom` sub-proof a turn carries to its registered
@@ -219,11 +232,37 @@ impl TurnExecutor {
     /// When NO registry is configured (`custom_effect_registry == None`) the
     /// executor cannot honor a custom effect, so any turn that carries one is
     /// refused fail-closed; a turn with no custom proofs still passes.
-    pub(super) fn enforce_custom_effect_proofs(&self, turn: &Turn) -> Result<(), TurnError> {
+    ///
+    /// **DoS cap (FINDING 1, `docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`).**
+    /// Each entry of `turn.custom_program_proofs` is a full recursive STARK verify
+    /// (`custom_proof_bind::verify_proof_bind`). The wire vec is attacker-chosen, so
+    /// BEFORE running any verify we reject the turn if its length exceeds the cell's
+    /// declared `max_custom_effects` (via [`Self::read_cell_max_custom_effects`],
+    /// itself hard-capped at [`MAX_CUSTOM_EFFECTS_HARD_CAP`] = 64). This bounds
+    /// per-turn verifier work to <=64 recursive verifies and turns the asymmetric
+    /// "one fee, M verifies" exhaustion into a cheap fail-closed reject — a flooding
+    /// turn pays NOTHING (the cap is checked before the loop).
+    ///
+    /// [`MAX_CUSTOM_EFFECTS_HARD_CAP`]: dregg_circuit::effect_vm::pi::MAX_CUSTOM_EFFECTS_HARD_CAP
+    pub(super) fn enforce_custom_effect_proofs(
+        &self,
+        turn: &Turn,
+        cell_id: &CellId,
+        ledger: &Ledger,
+    ) -> Result<(), TurnError> {
         let proofs = match &turn.custom_program_proofs {
             Some(p) if !p.is_empty() => p,
             _ => return Ok(()),
         };
+
+        // FINDING 1: the decisive DoS cap — BEFORE any recursive sub-proof verify.
+        let cap = self.read_cell_max_custom_effects(cell_id, ledger) as usize;
+        if proofs.len() > cap {
+            return Err(TurnError::TooManyCustomProofs {
+                got: proofs.len(),
+                cap,
+            });
+        }
 
         let registry = self.custom_effect_registry.as_ref().ok_or_else(|| {
             TurnError::ProofVerificationFailed(
@@ -248,6 +287,42 @@ impl TurnExecutor {
                         "custom-effect proof #{i} rejected: {e}"
                     ))
                 })?;
+        }
+        Ok(())
+    }
+
+    /// FINDING 1 binding leg (`docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`):
+    /// bind the off-circuit custom-sub-proof dispatch count to the in-circuit
+    /// committed count `PI[CUSTOM_EFFECT_COUNT]`.
+    ///
+    /// The DoS cap in [`Self::enforce_custom_effect_proofs`] bounds the wire vec
+    /// length; this closes the orthogonal seam the audit names — that the wire vec
+    /// and the in-circuit Custom-row count are otherwise INDEPENDENT. The committed
+    /// count is the number of `Effect::Custom` rows the proven transition carries,
+    /// which the in-circuit sum-check pins to `PI[CUSTOM_EFFECT_COUNT]`
+    /// (`circuit/src/effect_vm/{columns,trace}.rs`). The executor reconstructs the
+    /// SAME effect sequence the proof binds via [`convert_turn_effects_to_vm`], so
+    /// counting `effect_vm::Effect::Custom` there reproduces `PI[CUSTOM_EFFECT_COUNT]`
+    /// exactly. A wire vec longer (padding extra recursive verifies) or shorter (a
+    /// dropped, unverified custom effect) than that committed count is rejected
+    /// fail-closed.
+    ///
+    /// Called only AFTER the main EffectVM proof has verified (so the reconstructed
+    /// effect sequence — hence the count — is genuinely COMMITTED by a verified proof,
+    /// not a free reconstruction).
+    pub(super) fn enforce_custom_proof_count_committed(
+        &self,
+        cell_id: &CellId,
+        turn: &Turn,
+    ) -> Result<(), TurnError> {
+        let wire = turn.custom_program_proofs.as_ref().map_or(0, |p| p.len());
+        let vm_effects = convert_turn_effects_to_vm(cell_id, turn);
+        let committed = vm_effects
+            .iter()
+            .filter(|e| matches!(e, dregg_circuit::effect_vm::Effect::Custom { .. }))
+            .count();
+        if wire != committed {
+            return Err(TurnError::CustomProofCountMismatch { wire, committed });
         }
         Ok(())
     }
@@ -2786,7 +2861,7 @@ mod custom_effect_dispatch_tests {
     fn no_custom_proofs_is_pass() {
         let ex = TurnExecutor::new(ComputronCosts::zero());
         let turn = empty_turn(cell_id(1));
-        ex.enforce_custom_effect_proofs(&turn)
+        ex.enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
             .expect("no-custom pass");
     }
 
@@ -2801,7 +2876,7 @@ mod custom_effect_dispatch_tests {
             proof_bytes: b"a-genuine-proof".to_vec(),
             public_inputs: vec![1, 2, 3],
         }]);
-        ex.enforce_custom_effect_proofs(&turn)
+        ex.enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
             .expect("conforming custom effect must pass");
     }
 
@@ -2858,7 +2933,7 @@ mod custom_effect_dispatch_tests {
             proof_bytes: vec![0x42, 0x00, 0x01],
             public_inputs: vec![],
         }]);
-        ex.enforce_custom_effect_proofs(&good)
+        ex.enforce_custom_effect_proofs(&good, &good.agent, &Ledger::new())
             .expect("conforming proof accepted");
 
         // Non-conforming proof (wrong lead byte) is REJECTED.
@@ -2869,7 +2944,7 @@ mod custom_effect_dispatch_tests {
             public_inputs: vec![],
         }]);
         let err = ex
-            .enforce_custom_effect_proofs(&bad)
+            .enforce_custom_effect_proofs(&bad, &bad.agent, &Ledger::new())
             .expect_err("non-conforming custom effect must be rejected");
         assert!(
             matches!(err, TurnError::ProofVerificationFailed(_)),
@@ -2890,7 +2965,7 @@ mod custom_effect_dispatch_tests {
             public_inputs: vec![],
         }]);
         let err = ex
-            .enforce_custom_effect_proofs(&turn)
+            .enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
             .expect_err("unregistered vk_hash must fail closed");
         assert!(
             matches!(err, TurnError::ProofVerificationFailed(_)),
@@ -2909,7 +2984,7 @@ mod custom_effect_dispatch_tests {
             public_inputs: vec![],
         }]);
         let err = ex
-            .enforce_custom_effect_proofs(&turn)
+            .enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
             .expect_err("custom proof with no registry must fail closed");
         assert!(
             matches!(err, TurnError::ProofVerificationFailed(_)),
@@ -2930,11 +3005,160 @@ mod custom_effect_dispatch_tests {
             public_inputs: vec![],
         }]);
         let err = ex
-            .enforce_custom_effect_proofs(&turn)
+            .enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
             .expect_err("empty proof bytes must be refused");
         assert!(
             matches!(err, TurnError::ProofVerificationFailed(_)),
             "{err:?}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    // FINDING 1 (docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md): the
+    // unbounded/asymmetric custom-proof verification DoS.
+    // ─────────────────────────────────────────────────────────────────
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A verifier that COUNTS how many times it is invoked and always accepts —
+    /// so a test can prove the DoS cap rejects a flooding turn BEFORE any
+    /// recursive verify runs.
+    struct CountingVerifier {
+        vk: [u8; 32],
+        calls: Arc<AtomicUsize>,
+    }
+    impl CustomEffectVerifier for CountingVerifier {
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn vk_hash(&self) -> [u8; 32] {
+            self.vk
+        }
+        fn verify(&self, _pi: &[u8], _proof: &[u8]) -> Result<(), CustomEffectError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn counting_registry(canonical: &[u8]) -> (CustomEffectRegistry, [u8; 32], Arc<AtomicUsize>) {
+        let vk_hash = canonical_vk_v2(&VkComponents {
+            program_bytes: canonical,
+            air_fingerprint: air_fp(),
+            verifier_fingerprint: verifier_fp(),
+            proving_system_id: proving_system(),
+        });
+        let calls = Arc::new(AtomicUsize::new(0));
+        let verifier = Arc::new(CountingVerifier {
+            vk: vk_hash,
+            calls: calls.clone(),
+        });
+        let mut reg = CustomEffectRegistry::empty();
+        reg.register(
+            canonical.to_vec(),
+            air_fp(),
+            verifier_fp(),
+            proving_system(),
+            verifier,
+        )
+        .expect("register counting verifier");
+        (reg, vk_hash, calls)
+    }
+
+    /// FINDING 1, the DoS cap: a turn whose `custom_program_proofs` vec is longer
+    /// than the cell's `max_custom_effects` is REJECTED before ANY recursive verify
+    /// runs (a flooding turn pays nothing). The cell has no sovereign registration,
+    /// so its cap is the default (4); a 5-entry vec exceeds it.
+    #[test]
+    fn flooding_turn_rejected_before_any_verify() {
+        let (reg, vk_hash, calls) = counting_registry(b"flood-program");
+        let ex = executor_with(reg);
+        let mut turn = empty_turn(cell_id(7));
+        let valid = CustomProgramProof {
+            vk_hash,
+            proof_bytes: b"a-valid-sub-proof".to_vec(),
+            public_inputs: vec![],
+        };
+        // 5 > default cap of 4: a single authorized turn replicating one valid
+        // sub-proof — the FINDING-1 attack shape `vec![valid_proof; M]`.
+        turn.custom_program_proofs = Some(vec![valid; 5]);
+
+        let err = ex
+            .enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
+            .expect_err("a turn exceeding max_custom_effects must be rejected");
+        assert!(
+            matches!(err, TurnError::TooManyCustomProofs { got: 5, cap: 4 }),
+            "expected TooManyCustomProofs {{ got: 5, cap: 4 }}, got {err:?}"
+        );
+        // The decisive property: NO sub-proof verify ran — the cap is checked
+        // before the loop, so the asymmetric exhaustion never starts.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "the flooding turn must be rejected BEFORE any recursive verify runs"
+        );
+    }
+
+    /// A turn AT the cap (== max_custom_effects) is admitted and every sub-proof is
+    /// dispatched — the cap is a ceiling, not an off-by-one (no regression).
+    #[test]
+    fn turn_at_cap_passes_and_dispatches_all() {
+        let (reg, vk_hash, calls) = counting_registry(b"at-cap-program");
+        let ex = executor_with(reg);
+        let mut turn = empty_turn(cell_id(8));
+        let valid = CustomProgramProof {
+            vk_hash,
+            proof_bytes: b"a-valid-sub-proof".to_vec(),
+            public_inputs: vec![],
+        };
+        // Exactly the default cap of 4.
+        turn.custom_program_proofs = Some(vec![valid; 4]);
+        ex.enforce_custom_effect_proofs(&turn, &turn.agent, &Ledger::new())
+            .expect("a turn at the cap must pass");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            4,
+            "every sub-proof at-or-under the cap must be dispatched"
+        );
+    }
+
+    /// FINDING 1, the binding leg: the off-circuit dispatch count must equal the
+    /// in-circuit committed count `PI[CUSTOM_EFFECT_COUNT]`. The empty `empty_turn`
+    /// carries no `Effect::Custom` rows (committed count 0), so a wire vec of any
+    /// non-zero length is a MISMATCH and is rejected fail-closed.
+    #[test]
+    fn wire_count_not_matching_committed_is_rejected() {
+        let (reg, vk_hash) = registry_with_stub(b"count-bind-program");
+        let ex = executor_with(reg);
+        let mut turn = empty_turn(cell_id(9));
+        turn.custom_program_proofs = Some(vec![CustomProgramProof {
+            vk_hash,
+            proof_bytes: b"a-valid-sub-proof".to_vec(),
+            public_inputs: vec![],
+        }]);
+        // The turn declares no Custom effect (committed count 0) but the wire
+        // carries one sub-proof — the wire/in-circuit independence the audit names.
+        let err = ex
+            .enforce_custom_proof_count_committed(&turn.agent, &turn)
+            .expect_err("wire count != committed count must be rejected");
+        assert!(
+            matches!(
+                err,
+                TurnError::CustomProofCountMismatch {
+                    wire: 1,
+                    committed: 0
+                }
+            ),
+            "expected CustomProofCountMismatch {{ wire: 1, committed: 0 }}, got {err:?}"
+        );
+    }
+
+    /// The binding leg passes when the wire count equals the committed count: a
+    /// turn with NO custom sub-proofs (wire 0) and NO Custom rows (committed 0).
+    #[test]
+    fn wire_count_matching_committed_passes() {
+        let ex = TurnExecutor::new(ComputronCosts::zero());
+        let turn = empty_turn(cell_id(10));
+        ex.enforce_custom_proof_count_committed(&turn.agent, &turn)
+            .expect("wire 0 == committed 0 must pass");
     }
 }

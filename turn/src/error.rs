@@ -229,6 +229,22 @@ pub enum TurnError {
     /// The STARK proof verification failed.
     ProofVerificationFailed(String),
 
+    /// A proof-carrying turn carried more `Effect::Custom` sub-proofs in
+    /// `turn.custom_program_proofs` than the cell admits (the DoS cap, FINDING 1
+    /// of `docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`). Each sub-proof is
+    /// a full recursive STARK verify; without this cap a single authorized turn
+    /// could force arbitrarily many verifications (asymmetric resource
+    /// exhaustion). Rejected fail-closed BEFORE any sub-proof is verified.
+    /// `cap` is the cell's `max_custom_effects` (hard-capped at 64).
+    TooManyCustomProofs { got: usize, cap: usize },
+
+    /// The number of `Effect::Custom` sub-proofs on the wire
+    /// (`turn.custom_program_proofs`) does not equal the in-circuit committed
+    /// count `PI[CUSTOM_EFFECT_COUNT]` (FINDING 1). The off-circuit dispatch
+    /// count must equal the in-circuit Custom-row count the proof binds, else the
+    /// wire vec could carry more (or fewer) sub-proofs than the turn commits to.
+    CustomProofCountMismatch { wire: usize, committed: usize },
+
     /// The cell targeted by a proof-carrying turn has no stored sovereign commitment.
     SovereignNotRegistered { cell: CellId },
 
@@ -697,6 +713,20 @@ impl core::fmt::Display for TurnError {
             }
             TurnError::ProofVerificationFailed(reason) => {
                 write!(f, "execution proof verification failed: {reason}")
+            }
+            TurnError::TooManyCustomProofs { got, cap } => {
+                write!(
+                    f,
+                    "turn carries {got} custom-effect sub-proofs but the cell admits at most {cap} \
+                     (max_custom_effects); rejected before verification to bound recursive STARK work"
+                )
+            }
+            TurnError::CustomProofCountMismatch { wire, committed } => {
+                write!(
+                    f,
+                    "custom-effect sub-proof count mismatch: {wire} on the wire but the proof \
+                     commits to {committed} (PI[CUSTOM_EFFECT_COUNT]); rejected fail-closed"
+                )
             }
             TurnError::SovereignNotRegistered { cell } => {
                 write!(
