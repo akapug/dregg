@@ -23,8 +23,9 @@
 //! A titled column ([`deos.ui.vstack`](deos_view)) built from the rich deos-view
 //! vocabulary (`section` / `pill` / `gauge` / `breadcrumb` / `divider` / `icon`):
 //!
-//!   - a **status header** — the app name + a `pill` naming the live quota state as
-//!     a WORD (`ACTIVE`, vs `FULL` when the budget is exhausted), and a
+//!   - a **status header** — the app name + a LIVE `pill` reading
+//!     [`LAST_OP_SLOT`](crate::LAST_OP_SLOT) and naming the last gateway op as a WORD
+//!     (`GET` / `PUT` / `LIST`, falling back to `ACTIVE` before any op), and a
 //!     `breadcrumb` of the quota lifecycle (empty → filling → full) with the current
 //!     band marked;
 //!   - a **"Quota" `section`** surfacing the LIVE cell state: the KILLER VISUAL is a
@@ -57,9 +58,11 @@ fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
-/// A `deos.ui.pill` node — a colored status badge.
-fn pill(label: &str, tag: &str) -> Value {
-    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a word +
+/// color via `cases` (the first `{value,label,tag}` matching the slot wins). `text`/`tag` are
+/// the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -82,10 +85,13 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped digits /
+/// `"raw"` plain) so an opaque key/amount paints short + friendly. `adept` tags a dev-y row
+/// (a raw enum/counter integer) hidden in the simple projection, revealed in the adept
+/// "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
@@ -137,17 +143,24 @@ pub fn gateway_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Storage Gateway"), pill("ACTIVE", "good")]),
+            // The header pill reads the LIVE last-op slot and names it as a WORD (GET/PUT/LIST;
+            // StorageOp encoding Get=0/Put=1/List=2), falling back to ACTIVE before any op.
+            row(vec![text("Storage Gateway"), pill_live(LAST_OP_SLOT as usize, "ACTIVE", "good", json!([
+                { "value": 0, "label": "GET",  "tag": "accent" },
+                { "value": 1, "label": "PUT",  "tag": "good" },
+                { "value": 2, "label": "LIST", "tag": "muted" },
+            ]))]),
             breadcrumb(&["Empty", "Filling", "Full"], 1),
             divider(),
             section("Quota", "genuine", vec![
                 // THE KILLER VISUAL: the storage budget filling as objects are put —
                 // VOLUME_SPENT over the ceiling, read immediate-mode off the live cell.
                 gauge(VOLUME_SPENT_SLOT as usize, DEFAULT_VOLUME_CEILING, "volume used "),
-                bind(VOLUME_SPENT_SLOT as usize, "spent · "),
-                bind(VOLUME_CEILING_SLOT as usize, "ceiling · "),
-                bind(OBJECT_KEY_SLOT as usize, "last key · "),
-                bind(LAST_OP_SLOT as usize, "last op · "),
+                bind(VOLUME_SPENT_SLOT as usize, "spent · ", "amount", false),
+                bind(VOLUME_CEILING_SLOT as usize, "ceiling · ", "amount", false),
+                bind(OBJECT_KEY_SLOT as usize, "last key · ", "hash", false),
+                // The raw StorageOp integer duplicates the header's GET/PUT/LIST word — adept-only.
+                bind(LAST_OP_SLOT as usize, "last op · ", "raw", true),
             ]),
             section("Actions", "", vec![
                 action("↑", "Put",  METHOD_PUT),
@@ -187,7 +200,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_named_header_and_a_status_pill() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_live_status_pill() {
         let card = gateway_card_value();
         assert_eq!(card["kind"], "vstack");
         let texts = of_kind(&card, "text");
@@ -199,7 +212,52 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "ACTIVE");
+        // The header pill is LIVE: it reads LAST_OP_SLOT and names the op as a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "ACTIVE",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], LAST_OP_SLOT as usize);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 3, "GET / PUT / LIST");
+        assert_eq!(cases[1]["value"], 1, "StorageOp::Put encodes to 1");
+        assert_eq!(cases[1]["label"], "PUT");
+    }
+
+    #[test]
+    fn the_quota_binds_carry_their_display_fmt() {
+        let card = gateway_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: u8| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            fmt(VOLUME_SPENT_SLOT),
+            "amount",
+            "the spent meter groups digits"
+        );
+        assert_eq!(
+            fmt(VOLUME_CEILING_SLOT),
+            "amount",
+            "the ceiling groups digits"
+        );
+        assert_eq!(
+            fmt(OBJECT_KEY_SLOT),
+            "hash",
+            "the object key paints short hex"
+        );
+        assert_eq!(fmt(LAST_OP_SLOT), "raw", "the raw op integer stays plain");
+        // The raw last-op integer is adept-only (the header pill shows it as a word).
+        let last_op = binds
+            .iter()
+            .find(|b| b["props"]["slot"].as_u64() == Some(LAST_OP_SLOT as u64))
+            .unwrap();
+        assert_eq!(last_op["props"]["adept"], true, "the raw op row is dev-y");
     }
 
     #[test]

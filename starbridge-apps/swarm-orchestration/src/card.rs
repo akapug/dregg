@@ -22,8 +22,10 @@
 //! A titled column ([`deos.ui.vstack`](deos_view)) built from the rich deos-view
 //! vocabulary (`section` / `pill` / `gauge` / `breadcrumb` / `divider` / `icon`):
 //!
-//!   - a **status header** — the app name + a `pill` naming the live swarm state as a
-//!     WORD (`DISPATCHING`), and a `breadcrumb` of the dispatch lifecycle
+//!   - a **status header** — the app name + a LIVE `pill` reading
+//!     [`EPOCH_SLOT`](crate::EPOCH_SLOT) and naming the swarm phase as a WORD (`OPEN` at
+//!     epoch 0, `DISPATCHING` once a committed dispatch advances the counter), and a
+//!     `breadcrumb` of the dispatch lifecycle
 //!     (Closed → Open → Dispatching → Spent) with the current step marked;
 //!   - a **"Budget" `section`** surfacing the LIVE budget gate — the KILLER VISUAL: a
 //!     `gauge` per worker meter ([`SPENT_A_SLOT`](crate::SPENT_A_SLOT) /
@@ -61,9 +63,11 @@ fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
-/// A `deos.ui.pill` node — a colored status badge.
-fn pill(label: &str, tag: &str) -> Value {
-    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a word +
+/// color via `cases` (the first `{value,label,tag}` matching the slot wins). `text`/`tag` are
+/// the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -86,10 +90,13 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped digits /
+/// `"raw"` plain) so an opaque key/amount paints short + friendly. `adept` tags a dev-y row
+/// (a raw counter integer) hidden in the simple projection, revealed in the adept
+/// "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
@@ -141,7 +148,11 @@ pub fn board_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Swarm Orchestration"), pill("DISPATCHING", "accent")]),
+            // The header pill reads the LIVE epoch counter: a freshly-opened board (epoch 0)
+            // reads OPEN, and every committed dispatch advances it into DISPATCHING (fallback).
+            row(vec![text("Swarm Orchestration"), pill_live(EPOCH_SLOT as usize, "DISPATCHING", "accent", json!([
+                { "value": 0, "label": "OPEN", "tag": "good" },
+            ]))]),
             breadcrumb(&["Closed", "Open", "Dispatching", "Spent"], 2),
             divider(),
             section("Budget", "genuine", vec![
@@ -149,11 +160,12 @@ pub fn board_card_value() -> Value {
                 // budget ceiling: together they CANNOT overrun it (the AffineLe gate).
                 gauge(SPENT_A_SLOT as usize, BUDGET_GAUGE_MAX, "worker-a spend "),
                 gauge(SPENT_B_SLOT as usize, BUDGET_GAUGE_MAX, "worker-b spend "),
-                bind(LEAD_SLOT as usize, "lead · "),
-                bind(BUDGET_SLOT as usize, "budget · "),
-                bind(SPENT_A_SLOT as usize, "spent A · "),
-                bind(SPENT_B_SLOT as usize, "spent B · "),
-                bind(EPOCH_SLOT as usize, "epoch · "),
+                bind(LEAD_SLOT as usize, "lead · ", "id", false),
+                bind(BUDGET_SLOT as usize, "budget · ", "amount", false),
+                bind(SPENT_A_SLOT as usize, "spent A · ", "amount", false),
+                bind(SPENT_B_SLOT as usize, "spent B · ", "amount", false),
+                // The raw dispatch counter is dev-y — the header pill + breadcrumb show the phase.
+                bind(EPOCH_SLOT as usize, "epoch · ", "raw", true),
             ]),
             section("Actions", "", vec![
                 action("+", "Open Board",   METHOD_OPEN_BOARD),
@@ -193,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_named_header_and_a_state_pill() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_live_state_pill() {
         let card = board_card_value();
         assert_eq!(card["kind"], "vstack");
         let texts = of_kind(&card, "text");
@@ -205,7 +217,52 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "DISPATCHING");
+        // The header pill is LIVE: it reads the dispatch counter and names the phase.
+        assert_eq!(
+            pills[0]["props"]["text"], "DISPATCHING",
+            "the static fallback word (epoch advanced)"
+        );
+        assert_eq!(pills[0]["props"]["slot"], EPOCH_SLOT as usize);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 1, "epoch 0 reads OPEN");
+        assert_eq!(cases[0]["value"], 0);
+        assert_eq!(cases[0]["label"], "OPEN");
+    }
+
+    #[test]
+    fn the_budget_binds_carry_their_display_fmt() {
+        let card = board_card_value();
+        let binds = of_kind(&card, "bind");
+        let prop = |slot: u8, key: &str| -> Value {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .map(|b| b["props"][key].clone())
+                .unwrap()
+        };
+        assert_eq!(
+            prop(LEAD_SLOT, "fmt"),
+            "id",
+            "the lead paints an avatar handle"
+        );
+        assert_eq!(
+            prop(BUDGET_SLOT, "fmt"),
+            "amount",
+            "the budget groups digits"
+        );
+        assert_eq!(prop(SPENT_A_SLOT, "fmt"), "amount", "spent A groups digits");
+        assert_eq!(prop(SPENT_B_SLOT, "fmt"), "amount", "spent B groups digits");
+        assert_eq!(
+            prop(EPOCH_SLOT, "fmt"),
+            "raw",
+            "the raw counter stays plain"
+        );
+        // The raw dispatch counter is adept-only (the header pill + breadcrumb show the phase).
+        assert_eq!(
+            prop(EPOCH_SLOT, "adept"),
+            true,
+            "the epoch counter is dev-y"
+        );
     }
 
     #[test]
