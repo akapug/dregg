@@ -6278,9 +6278,17 @@ SELF-HOSTABLE (anyone runs a provider against their own cells), not a monolith; 
   language-as-wasm** (real CPython/Node, not wasm costumes). polyana = co-dev w/ akapug, Apache-2.0.
 
 ### OPEN BURN-DOWN (named follow-ups)
-1. **Gentian FLIP keystone — the in-AIR authority-digest→selector gadget** (recompute
-   `compute_authority_digest_felt`, a Poseidon2-preimage over the declaration, IN-AIR, to force sel=1 for
-   a pure light client). Unlocks the WHOLE weld class → "deployed truths, not staged-conditional." THE deep one.
+1. **Gentian FLIP — in-AIR authority-digest→selector gadget DISCHARGED, flip BLOCKED on commit-target**
+   (verified 2026-06-28). The gadget keystones (`InAirAuthorityDigestGadget.gentian_*_discharged`) hold
+   under ONLY `ChipTableSound` + `FloorDigestBinds`, `#assert_all_clean`; Rust shadow green (14/14).
+   BLOCKER to the flip: the gadget reads limb 24 (`B_AUTHORITY_DIGEST`) as `hash_many(floor)`, but the
+   deployed commit puts the byte-domain `compute_authority_digest_felt(cell)` there
+   (`rotation_witness.rs:367`) — so an honest escrow turn CANNOT produce a light-client-accepted gentian
+   proof, and overwriting limb 24 is UNSOUND (it is `record_digest` + the SetPerms/SetVK/MakeSovereign/
+   Refusal record-pin target). SOUND fix = a NEW dedicated felt-domain floor-digest limb (perms/vk
+   pattern) + new Lean absorption proof + retarget `gentianAuthDigestCol` off limb 24 — UNBUILT
+   (limbs 24..37 fully packed → width/layout flag-day). FLIP NOT TAKEN; SettleEscrow stays a CONDITIONAL
+   truth (sound under `hcommitLimb`), NOT a deployed pure-light-client truth. `IN-AIR-AUTHORITY-DIGEST-GADGET.md` §7. THE deep one.
 2. **18/19 welds:** range-check (discharge due-ness) + multi-limb-product (vault no-dilution, overflows BabyBear) gadgets — after (1).
 3. **node-image:** Lean-on-Linux build (builder baking it) → unblocks full staging end-to-end.
 4. **Solana mainnet-real:** geyser/custom-RPC validator plugin for real accounts-hash inclusion proofs
