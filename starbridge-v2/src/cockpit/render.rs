@@ -126,6 +126,7 @@ impl Render for Cockpit {
                 ModeCard::Dynamics,
                 ModeCard::Agent,
                 ModeCard::Links,
+                ModeCard::Inspector,
             ] {
                 self.ensure_mode_card(kind, cx);
             }
