@@ -10,6 +10,12 @@ is no new kernel effect, no new commitment field, and no faking. A call you make
 in TypeScript, Python, or Rust resolves to the same `Action`/`Effect` and rides
 the same proof-carrying turn.
 
+> **LLM agents:** start with [`AGENT-QUICKSTART.md`](AGENT-QUICKSTART.md) — the
+> few-lines "earn / spend / run" flow. The runnable end-to-end loop is
+> [`sdk/examples/agent_business_loop.rs`](../../sdk/examples/agent_business_loop.rs)
+> (`cargo run -p dregg-sdk --example agent_business_loop`). This page is the full
+> API surface and the per-call → underlying-turn mapping.
+
 ## The few-lines API (consistent across ts / py / rust)
 
 ```ts
@@ -122,6 +128,85 @@ metered turn. `dregg.services.invoke` above is the simple, single-call front doo
 the `ToolGateway` is the metered, budgeted, routed data plane over the same value
 rail.
 
+```rust
+use dregg_sdk::{ToolGateway, ToolGrant, Charge, ToolCallError};
+
+// The grantor pins the mandate (scope + rate + deadline) and a per-call price.
+let grant = ToolGrant {
+    tool_id: 77,                  // SCOPE: the single allowlisted tool/MCP id
+    rate_limit: 3,                // RATE:  at most N calls under this mandate
+    deadline: 100,                // DEADLINE: refused when presented at now > deadline
+    tool_method: "search".into(), // the executor verb the worker credential is scoped to
+};
+let mut gw = ToolGateway::admit_priced(          // `admit` for a free, rate-only mandate
+    &runtime, &root, grant,
+    Some(Charge::new(/*price*/ 500, provider, /*budget*/ 10_000)),
+)?;
+gw.fund(&funder, 50_000)?;                        // fund the consumer spend account (real funds)
+
+// INLINE: gate + meter + charge + execute on one turn.
+let r = gw.invoke(77, /*now*/ 50, work_effects)?; // -> ToolReceipt { receipt, calls_made, remaining, paid }
+
+// An out-of-mandate call is an IN-BAND refusal (no turn, no spend, no counter advance):
+match gw.invoke(99, 50, vec![]) {                 // wrong tool id
+    Err(ToolCallError::Refused(why)) => eprintln!("refused: {why}"),
+    _ => unreachable!(),
+}
+
+// ROUTED (non-blocking data plane): admit + enqueue -> drive elsewhere -> results-back.
+let handle = gw.enqueue(77, 50, work_effects)?;   // -> RoutedHandle (an EventualRef-shaped promise)
+gw.drive_executor(/*now*/ 51);                    // the execution environment drains + runs
+let routed = gw.resolve(&handle)?;                // -> RoutedResult { tool_receipt, delivery }
+```
+
+| `ToolGateway` call | Desugars to | File |
+| --- | --- | --- |
+| `admit` / `admit_priced` | cap-gated worker scoped to `tool_method` + `mandate_program` (`FieldLte { calls_made ≤ rate_limit } ∧ Monotonic`) installed on the worker cell | `sdk/src/tool_gateway.rs:543` / `:564` |
+| `fund(funder, amount)` | one conserving `Effect::Transfer` into the worker spend account | `sdk/src/tool_gateway.rs:628` |
+| `invoke(tool, now, work)` | `deleg_admit` (= Lean `delegAdmit`) gate → metered `calls_made:c→c+1` `SetField` + the `Payable::pay` charge `Transfer` + `work` on one turn | `sdk/src/tool_gateway.rs:774`, `deleg_admit` `:220` |
+| `enqueue` / `drive_executor` / `resolve` | same gate + charge, routed through the verified `PendingTurnRegistry` promise channel | `sdk/src/tool_gateway.rs:850` / `:941` / `:1059` |
+
+`deleg_admit` is the byte-faithful Rust mirror of the proven Lean `delegAdmit`
+(`metatheory/Dregg2/Apps/ToolAccessDelegation.lean`); the
+`tool_gateway_admit_mirrors_lean_delegadmit` test pins the same decision vector the
+Lean `#guard`s witness. End-to-end paid / insolvent / over-budget / routed tests:
+`sdk/tests/tool_market_paid.rs`, `sdk/tests/tool_gateway_e2e.rs`.
+
+### The intent ring / service-promise (node-side, real but above the SDK)
+
+The other shape of the market is a posted intent ring: a provider posts a
+`ServicePromise` (a service + the exact verified turn hash it will execute to
+fulfill, a price, a window) and a consumer posts a `ServiceRequest` (the service
+wanted + an offer). `ServicePromiseExchange::match_one` encodes both as ring
+intents — the service as a synthetic promise-token asset, the payment as the real
+asset — and asks the same verified `RingSolver` the asset ring uses for a 2-cycle.
+The matched payment is escrowed; a `TurnReceipt` for the promised
+`service_turn_hash`, signed by a trusted executor, fills the fulfillment hole and
+releases the escrow (or it refunds after `timeout_height`).
+
+```rust
+// app-framework/src/service_promise.rs — node-side (depends on AppCipherclerk).
+use dregg_app_framework::service_promise::{
+    ServicePromise, ServiceRequest, ServicePromiseExchange, ServiceId,
+};
+
+let exchange = ServicePromiseExchange::new(/*max_ring_size*/ 2, /*now*/ 100, escrow, executor_keys);
+let promise = ServicePromise {
+    provider, service, service_turn_hash, payment_asset, price: 250, timeout_height: 1000,
+};
+let request = ServiceRequest { consumer, service, payment_asset, offer: 250 };
+let matched = exchange.match_one(&promise, &request)?; // -> ServiceMatch (the verified 2-cycle leg)
+```
+
+`ServicePromise` / `ServiceRequest` / `ServiceMatch`:
+`app-framework/src/service_promise.rs:125` / `:146` / `:159`;
+`ServicePromiseExchange::match_one`: `:468`; the ring coordinator it rides:
+`app-framework/src/ring_trade.rs` (`RingCoordinator`, `:183`). This surface is
+**real and tested above the SDK** (it depends on `dregg-app-framework`'s
+`AppCipherclerk`, which depends on `dregg-sdk`, so the SDK cannot re-export it
+without a cycle). The `dregg.intents.requestService` facade in the few-lines table
+is its designed ergonomic face at the node/app-framework layer.
+
 ## Paying with $DREGG (including bridged $DREGG)
 
 In the dregg value model an asset **is** its issuer cell: `AssetId := issuer-cell`
@@ -136,7 +221,24 @@ token is mirror-minted inside dregg by `dregg-bridge::solana_mirror`
 just `dregg.pay(to, amount, mirror_asset)` — the same single conserving
 `Effect::Transfer`, routed identically (the bridge's own end-to-end test mints
 bridged `$DREGG` and pays it through the `Payable` interface,
-`bridge/src/solana_mirror.rs:606`).
+`bridged_dregg_pays_an_execution_lease`, `bridge/src/solana_mirror.rs:639`).
+
+## Funding from the outside: Stripe USD-credit and $DREGG
+
+Value enters an agent's economy from the real world as an ordinary in-dregg
+`AssetId`, through one of two bridges:
+
+- **Stripe → USD-credit.** A verified Stripe webhook mirror-mints USD-credit to
+  the named cell with a real `Effect::Mint`: `StripeMirrorState::mint_against_webhook`
+  (`bridge/src/stripe_mirror.rs:437`); the credit's `AssetId` is
+  `StripeMirrorConfig.asset` (`:362`). End-to-end:
+  `stripe_payment_funds_an_execution_lease` (`bridge/src/stripe_mirror.rs:814`)
+  pays for a lease through the same `resolve_pay` rail.
+- **Solana / pump.fun $DREGG → bridged $DREGG.** As above, via
+  `MirrorState::mint_against_lock` (`bridge/src/solana_mirror.rs`).
+
+In both cases the agent then just calls `dregg.pay(to, amount, that_asset)` — the
+mirror's asset is not special-cased anywhere in the agent code.
 
 ## TypeScript SDK (`@dregg/sdk`) — binding story: HAND-WRITTEN
 
@@ -210,6 +312,9 @@ struct Lease { /* wraps dregg_sdk::ExecutionLease */ }
   (`open`/`fund`/`run`) — all desugaring to verified primitives, with desugar +
   end-to-end conservation/meter tests (`sdk/src/service_economy.rs`, green under
   `cargo test -p dregg-sdk`). The metered/paid `ToolGateway` was already real.
+  The whole loop runs end-to-end in
+  [`sdk/examples/agent_business_loop.rs`](../../sdk/examples/agent_business_loop.rs)
+  (`cargo run -p dregg-sdk --example agent_business_loop`).
 - **Real, above the SDK:** the intent-ring `ServicePromiseExchange` /
   `RingCoordinator` and the standalone `starbridge-execution-lease` app
   (`app-framework/`, `starbridge-apps/execution-lease/`). The
