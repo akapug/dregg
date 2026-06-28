@@ -23,7 +23,8 @@ pub use dregg_intent::solver::{
     ExchangeSpec, IntentNode, RingSolver, RingTrade, Settlement, SolverError,
 };
 pub use dregg_intent::verified_settle::{
-    VerifiedLedger, VerifiedLeg, VerifiedSettleError, funded_ledger, settle_ring_verified,
+    VerifiedLedger, VerifiedLeg, VerifiedSettleError, WideLedger, WideLeg, funded_ledger,
+    funded_wide_ledger, settle_ring_verified, settle_ring_wide_verified,
 };
 pub use dregg_intent::{CommitmentId, IntentId};
 
@@ -128,8 +129,9 @@ pub struct CoordinationReceipt {
     /// The ring the solver matched out of the posted intents.
     pub ring: RingTrade,
     /// The verified post-state ledger — the result of folding every leg through
-    /// the verified executor with Σδ=0 asserted per touched asset.
-    pub verified_post: VerifiedLedger,
+    /// the verified executor with Σδ=0 asserted per touched asset. Keyed by the
+    /// FULL 32-byte commitment, so distinct participants never collide.
+    pub verified_post: WideLedger,
 }
 
 /// Why a coordination round refused. Every variant is ATOMIC: on `NoMatch` and
@@ -233,14 +235,14 @@ impl RingCoordinator {
             .solve_best(&nodes, self.now)
             .ok_or(CoordinationError::NoMatch)?;
 
-        // (3) Verified Σδ=0 gate — BEFORE any app mutation. The same per-asset
-        //     projection the verified settlement path uses (settlement.from/to low
-        //     byte = ledger cell), folded all-or-nothing with conservation
-        //     asserted per touched asset.
-        let legs: Vec<VerifiedLeg> = ring.settlements.iter().map(settlement_to_leg).collect();
-        let k0 = funded_ledger(&legs);
+        // (3) Verified Σδ=0 gate — BEFORE any app mutation. Each settlement is
+        //     projected onto a leg keyed by the FULL 32-byte commitment (so two
+        //     participants sharing a low byte never alias), then folded
+        //     all-or-nothing with conservation asserted per touched asset.
+        let legs: Vec<WideLeg> = ring.settlements.iter().map(settlement_to_leg).collect();
+        let k0 = funded_wide_ledger(&legs);
         let verified_post =
-            settle_ring_verified(&k0, &legs).map_err(CoordinationError::NotConserving)?;
+            settle_ring_wide_verified(&k0, &legs).map_err(CoordinationError::NotConserving)?;
 
         // (4) Atomically drive the apps. A leg touches its sender AND receiver;
         //     both apps settle it. Track applied (leg, participant) pairs so a
@@ -277,13 +279,14 @@ impl RingCoordinator {
     }
 }
 
-/// Project a [`Settlement`] onto the verified-ledger leg the verified executor
-/// settles — the SAME projection `verified_settle::extract_legs` performs (sender
-/// = `from.0[0]`, receiver = `to.0[0]`, the settlement's asset + amount).
-fn settlement_to_leg(s: &Settlement) -> VerifiedLeg {
-    VerifiedLeg {
-        from: s.from.0[0],
-        to: s.to.0[0],
+/// Project a [`Settlement`] onto the full-width verified-ledger leg the verified
+/// executor settles: sender = `from.0` (the whole 32-byte commitment), receiver =
+/// `to.0`, the settlement's asset + amount. Keying on the full id — not the low
+/// byte — is what guarantees two distinct participants never collide.
+fn settlement_to_leg(s: &Settlement) -> WideLeg {
+    WideLeg {
+        from: s.from.0,
+        to: s.to.0,
         asset: s.asset,
         amount: s.amount as i128,
     }

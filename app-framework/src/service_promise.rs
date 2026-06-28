@@ -67,11 +67,13 @@
 
 use std::collections::HashSet;
 
+use dregg_cell::Cell;
+use dregg_cell::escrow_sealed::{decode_i64, encode_i64};
 use dregg_intent::CommitmentId;
 use dregg_intent::exchange::AssetId;
 use dregg_intent::solver::{ExchangeSpec, IntentNode, RingSolver, RingTrade};
 use dregg_intent::verified_settle::{
-    VerifiedLedger, VerifiedLeg, VerifiedSettleError, settle_ring_verified,
+    VerifiedSettleError, WideLedger, WideLeg, settle_ring_wide_verified,
 };
 use dregg_turn::TurnReceipt;
 use dregg_turn::conditional::{
@@ -173,6 +175,145 @@ pub struct ServiceMatch {
     pub ring: RingTrade,
 }
 
+impl ServiceMatch {
+    /// A 32-byte canonical digest binding WHICH service-for-payment this escrow
+    /// holds: the two parties, the service + its fulfillment hole, the payment
+    /// asset, the held price, and the promise window. Domain-separated so it can
+    /// never collide with any other heap value's preimage. Bound into the escrow
+    /// cell's commitment (at [`KEY_SP_TERMS_DIGEST`]) so the held leg can never be
+    /// reinterpreted under different terms — the same discipline
+    /// [`dregg_cell::escrow_sealed::EscrowTerms::digest`] uses for the 2-of-2 swap.
+    pub fn terms_digest(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key("dregg.service-promise.escrow-terms.v1");
+        h.update(&self.provider.0);
+        h.update(&self.consumer.0);
+        h.update(self.service.as_bytes());
+        h.update(&self.service_turn_hash);
+        h.update(&self.payment_asset);
+        h.update(&self.price.to_le_bytes());
+        h.update(&self.timeout_height.to_le_bytes());
+        *h.finalize().as_bytes()
+    }
+}
+
+// ===========================================================================
+// The COMMITTED escrow one-shot — release/refund mutual-exclusion bound into a
+// CELL COMMITMENT, not the orchestrator's memory.
+// ===========================================================================
+//
+// The held payment's terminal exit (release → provider XOR refund → consumer) is
+// a one-shot: taken exactly once, by exactly one exit. Binding that into the
+// escrow cell's committed heap — mirroring `dregg_cell::escrow_sealed`'s
+// consumed-once discipline — means a RE-EXECUTING validator (not just the
+// coordinator that ran the turn) witnesses the exclusion: once the cell records a
+// terminal status, the committed state itself refuses the other exit. The
+// in-memory [`EscrowStatus`] on [`ServiceEscrow`] is a convenience mirror; the
+// committed cell is the AUTHORITY.
+
+/// Reserved heap collection id for the service-promise escrow's committed
+/// one-shot ledger. Lives inside the escrow cell's committed heap, so the held
+/// amount and its consumed-once status are folded into the canonical state
+/// commitment. Chosen high to avoid colliding with application heap collections,
+/// distinct from [`dregg_cell::escrow_sealed::ESCROW_COLL`].
+pub const SERVICE_ESCROW_COLL: u32 = 0x0053_5645; // "SVE" — service escrow
+
+/// Heap key: the 32-byte [`ServiceMatch::terms_digest`] this escrow binds.
+pub const KEY_SP_TERMS_DIGEST: u32 = 0;
+/// Heap key: the held payment amount (canonical little-endian `i64`).
+pub const KEY_SP_HELD_AMOUNT: u32 = 1;
+/// Heap key: the lifecycle status felt — `1` Funded, `2` Released, `3` Refunded.
+pub const KEY_SP_STATUS: u32 = 2;
+
+const SP_STATUS_FUNDED: i64 = 1;
+const SP_STATUS_RELEASED: i64 = 2;
+const SP_STATUS_REFUNDED: i64 = 3;
+
+/// The escrow's COMMITTED one-shot state, recovered from the escrow cell's heap —
+/// the authority a re-executing validator consults (the held amount and the
+/// consumed-once status are bound into the cell commitment, not held in
+/// orchestrator memory).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommittedEscrow {
+    /// The bound [`ServiceMatch::terms_digest`].
+    pub terms_digest: [u8; 32],
+    /// The held payment amount committed at fund time.
+    pub held_amount: i64,
+    /// The committed lifecycle status (the one-shot authority).
+    pub status: EscrowStatus,
+}
+
+impl CommittedEscrow {
+    /// Recover the committed escrow state from a cell, or `None` if the cell
+    /// carries no service-escrow binding.
+    pub fn read(cell: &Cell) -> Option<CommittedEscrow> {
+        let terms_digest = cell
+            .state
+            .get_heap(SERVICE_ESCROW_COLL, KEY_SP_TERMS_DIGEST)?;
+        let held_amount = cell
+            .state
+            .get_heap(SERVICE_ESCROW_COLL, KEY_SP_HELD_AMOUNT)
+            .map(|f| decode_i64(&f))
+            .unwrap_or(0);
+        let status = match cell
+            .state
+            .get_heap(SERVICE_ESCROW_COLL, KEY_SP_STATUS)
+            .map(|f| decode_i64(&f))
+            .unwrap_or(SP_STATUS_FUNDED)
+        {
+            SP_STATUS_RELEASED => EscrowStatus::Released,
+            SP_STATUS_REFUNDED => EscrowStatus::Refunded,
+            _ => EscrowStatus::Funded,
+        };
+        Some(CommittedEscrow {
+            terms_digest,
+            held_amount,
+            status,
+        })
+    }
+}
+
+/// Open the committed escrow binding on `cell`: bind the terms digest, the held
+/// amount, and a `Funded` status into the cell's commitment. After this the cell
+/// commitment binds the held leg; a light client sees value is escrowed.
+fn open_committed_escrow(cell: &mut Cell, matched: &ServiceMatch) {
+    let st = &mut cell.state;
+    st.set_heap(
+        SERVICE_ESCROW_COLL,
+        KEY_SP_TERMS_DIGEST,
+        matched.terms_digest(),
+    );
+    st.set_heap(
+        SERVICE_ESCROW_COLL,
+        KEY_SP_HELD_AMOUNT,
+        encode_i64(matched.price as i64),
+    );
+    st.set_heap(
+        SERVICE_ESCROW_COLL,
+        KEY_SP_STATUS,
+        encode_i64(SP_STATUS_FUNDED),
+    );
+}
+
+/// Flip the committed escrow status from `Funded` to a terminal exit, enforcing
+/// the one-shot IN COMMITTED STATE: if the cell already records a terminal status
+/// (or carries no/mismatched binding) the flip is REFUSED with
+/// [`ServicePromiseError::AlreadySettled`] — a second release/refund is rejected
+/// by the commitment, not an in-memory flag. This is the gate a re-executing
+/// validator runs, so the exclusion is witnessed by anyone holding the cell.
+fn commit_terminal(
+    cell: &mut Cell,
+    matched: &ServiceMatch,
+    terminal: i64,
+) -> Result<(), ServicePromiseError> {
+    let view = CommittedEscrow::read(cell).ok_or(ServicePromiseError::AlreadySettled)?;
+    if view.terms_digest != matched.terms_digest() || view.status != EscrowStatus::Funded {
+        return Err(ServicePromiseError::AlreadySettled);
+    }
+    cell.state
+        .set_heap(SERVICE_ESCROW_COLL, KEY_SP_STATUS, encode_i64(terminal));
+    Ok(())
+}
+
 /// The lifecycle state of an escrowed promise. `Funded` is the only OPEN state;
 /// `Released` and `Refunded` are one-shot terminals — a released escrow can never
 /// refund and vice-versa (the held payment is taken exactly once).
@@ -194,11 +335,17 @@ pub struct ServiceEscrow {
     pub matched: ServiceMatch,
     /// The account holding the payment until release/refund.
     pub escrow: CommitmentId,
+    /// The escrow CELL whose committed heap binds the held leg + its consumed-once
+    /// status — the one-shot AUTHORITY a re-executing validator consults (see
+    /// [`CommittedEscrow`]). The [`status`](Self::status) field is its in-memory
+    /// mirror.
+    pub escrow_cell: Cell,
     /// The fulfillment condition (the promise hole): a [`ProofCondition::TurnExecuted`]
     /// naming the promised service turn. Swap this for a `LocalProof`/`RemoteProof`
     /// to gate release on an outcome predicate instead of mere execution.
     pub condition: ProofCondition,
-    /// Lifecycle state.
+    /// In-memory mirror of the committed lifecycle status. The committed cell
+    /// ([`escrow_cell`](Self::escrow_cell)) is authoritative.
     pub status: EscrowStatus,
 }
 
@@ -413,19 +560,24 @@ impl ServicePromiseExchange {
     pub fn fund(
         &self,
         matched: &ServiceMatch,
-        ledger: &VerifiedLedger,
-    ) -> Result<(ServiceEscrow, VerifiedLedger), ServicePromiseError> {
-        let leg = VerifiedLeg {
-            from: matched.consumer.0[0],
-            to: self.escrow.0[0],
+        ledger: &WideLedger,
+    ) -> Result<(ServiceEscrow, WideLedger), ServicePromiseError> {
+        let leg = WideLeg {
+            from: matched.consumer.0,
+            to: self.escrow.0,
             asset: matched.payment_asset,
             amount: matched.price as i128,
         };
-        let post =
-            settle_ring_verified(ledger, &[leg]).map_err(ServicePromiseError::NotConserving)?;
+        let post = settle_ring_wide_verified(ledger, &[leg])
+            .map_err(ServicePromiseError::NotConserving)?;
+        // Bind the held leg + its one-shot status into the escrow cell's
+        // commitment (the AUTHORITY); a light client sees value is escrowed.
+        let mut escrow_cell = Cell::with_balance(self.escrow.0, matched.payment_asset, 0);
+        open_committed_escrow(&mut escrow_cell, matched);
         let escrow = ServiceEscrow {
             matched: matched.clone(),
             escrow: self.escrow,
+            escrow_cell,
             condition: ProofCondition::TurnExecuted {
                 turn_hash: matched.service_turn_hash,
             },
@@ -446,10 +598,10 @@ impl ServicePromiseExchange {
     pub fn fulfill(
         &self,
         escrow: &mut ServiceEscrow,
-        ledger: &VerifiedLedger,
+        ledger: &WideLedger,
         proof: &ConditionProof,
         current_height: u64,
-    ) -> Result<VerifiedLedger, ServicePromiseError> {
+    ) -> Result<WideLedger, ServicePromiseError> {
         if !escrow.is_open() {
             return Err(ServicePromiseError::AlreadySettled);
         }
@@ -470,15 +622,20 @@ impl ServicePromiseExchange {
             return Err(ServicePromiseError::Unfulfilled(format!("{result:?}")));
         }
 
+        // Take the one-shot terminal in COMMITTED state BEFORE any value moves:
+        // this is the authority a re-executing validator runs, so a second
+        // release/refund is refused by the commitment, not an in-memory flag.
+        commit_terminal(&mut escrow.escrow_cell, &escrow.matched, SP_STATUS_RELEASED)?;
+
         // Promise fulfilled — release the held payment to the provider. Atomic.
-        let leg = VerifiedLeg {
-            from: escrow.escrow.0[0],
-            to: escrow.matched.provider.0[0],
+        let leg = WideLeg {
+            from: escrow.escrow.0,
+            to: escrow.matched.provider.0,
             asset: escrow.matched.payment_asset,
             amount: escrow.matched.price as i128,
         };
-        let post =
-            settle_ring_verified(ledger, &[leg]).map_err(ServicePromiseError::NotConserving)?;
+        let post = settle_ring_wide_verified(ledger, &[leg])
+            .map_err(ServicePromiseError::NotConserving)?;
         escrow.status = EscrowStatus::Released;
         Ok(post)
     }
@@ -491,9 +648,9 @@ impl ServicePromiseExchange {
     pub fn refund(
         &self,
         escrow: &mut ServiceEscrow,
-        ledger: &VerifiedLedger,
+        ledger: &WideLedger,
         current_height: u64,
-    ) -> Result<VerifiedLedger, ServicePromiseError> {
+    ) -> Result<WideLedger, ServicePromiseError> {
         if !escrow.is_open() {
             return Err(ServicePromiseError::AlreadySettled);
         }
@@ -503,14 +660,17 @@ impl ServicePromiseExchange {
                 timeout_height: escrow.matched.timeout_height,
             });
         }
-        let leg = VerifiedLeg {
-            from: escrow.escrow.0[0],
-            to: escrow.matched.consumer.0[0],
+        // Take the one-shot terminal in COMMITTED state BEFORE any value moves —
+        // the same committed authority release runs, so the two exits exclude.
+        commit_terminal(&mut escrow.escrow_cell, &escrow.matched, SP_STATUS_REFUNDED)?;
+        let leg = WideLeg {
+            from: escrow.escrow.0,
+            to: escrow.matched.consumer.0,
             asset: escrow.matched.payment_asset,
             amount: escrow.matched.price as i128,
         };
-        let post =
-            settle_ring_verified(ledger, &[leg]).map_err(ServicePromiseError::NotConserving)?;
+        let post = settle_ring_wide_verified(ledger, &[leg])
+            .map_err(ServicePromiseError::NotConserving)?;
         escrow.status = EscrowStatus::Refunded;
         Ok(post)
     }
@@ -519,17 +679,13 @@ impl ServicePromiseExchange {
     /// touches (consumer, provider, escrow), funding the consumer with
     /// `consumer_balance` of the payment asset. The conserved reference the
     /// lifecycle settles against.
-    pub fn seed_ledger(&self, matched: &ServiceMatch, consumer_balance: u64) -> VerifiedLedger {
-        let mut k = VerifiedLedger::new();
-        for cell in [
-            matched.consumer.0[0],
-            matched.provider.0[0],
-            self.escrow.0[0],
-        ] {
+    pub fn seed_ledger(&self, matched: &ServiceMatch, consumer_balance: u64) -> WideLedger {
+        let mut k = WideLedger::new();
+        for cell in [matched.consumer.0, matched.provider.0, self.escrow.0] {
             k.add_account(cell);
         }
         k.set(
-            matched.consumer.0[0],
+            matched.consumer.0,
             &matched.payment_asset,
             consumer_balance as i128,
         );
@@ -647,15 +803,186 @@ mod tests {
         let (exchange, promise, request, _) = sample();
         let m = exchange.match_one(&promise, &request).unwrap();
         let k0 = exchange.seed_ledger(&m, 100);
-        assert_eq!(k0.get(m.consumer.0[0], &m.payment_asset), 100);
+        assert_eq!(k0.get(m.consumer.0, &m.payment_asset), 100);
 
         let (escrow, k1) = exchange.fund(&m, &k0).expect("fund must settle");
         // Payment left the consumer and is held in escrow; provider untouched.
-        assert_eq!(k1.get(m.consumer.0[0], &m.payment_asset), 0);
-        assert_eq!(k1.get(exchange.escrow.0[0], &m.payment_asset), 100);
-        assert_eq!(k1.get(m.provider.0[0], &m.payment_asset), 0);
+        assert_eq!(k1.get(m.consumer.0, &m.payment_asset), 0);
+        assert_eq!(k1.get(exchange.escrow.0, &m.payment_asset), 100);
+        assert_eq!(k1.get(m.provider.0, &m.payment_asset), 0);
         assert_eq!(escrow.status, EscrowStatus::Funded);
         // Conserved.
         assert_eq!(k1.total_asset(&m.payment_asset), 100);
+        // The held leg + Funded status are bound into the escrow CELL's
+        // commitment (the authority), not just the in-memory mirror.
+        let committed = CommittedEscrow::read(&escrow.escrow_cell).expect("escrow binding");
+        assert_eq!(committed.status, EscrowStatus::Funded);
+        assert_eq!(committed.held_amount, 100);
+        assert_eq!(committed.terms_digest, m.terms_digest());
+    }
+
+    // ── GAP 1: full 32-byte indexing — no low-byte collision ─────────────────
+
+    /// A three party set whose commitments SHARE a low byte (0x07) but differ
+    /// above it. Under the OLD low-byte projection consumer, provider, and escrow
+    /// all aliased to verified-ledger cell 7 — the consumer→escrow payment would
+    /// collapse into a `from == to` self-leg the gate rejects, and the parties'
+    /// balances would merge. Full 32-byte indexing keeps them distinct, so the
+    /// escrow funds and conserves correctly.
+    #[test]
+    fn full_indexing_avoids_low_byte_collision() {
+        let mut c = [0u8; 32];
+        c[0] = 0x07;
+        c[1] = 0x01;
+        let mut p = [0u8; 32];
+        p[0] = 0x07;
+        p[1] = 0x02;
+        let mut e = [0u8; 32];
+        e[0] = 0x07;
+        e[1] = 0x03;
+        let consumer = CommitmentId(c);
+        let provider = CommitmentId(p);
+        let escrow_id = CommitmentId(e);
+        // They genuinely collide on the low byte the OLD path keyed by.
+        assert_eq!(consumer.0[0], provider.0[0]);
+        assert_eq!(consumer.0[0], escrow_id.0[0]);
+
+        let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
+        let promise = ServicePromise {
+            provider,
+            service,
+            service_turn_hash: [0xAB; 32],
+            payment_asset: asset(7),
+            price: 100,
+            timeout_height: 50,
+        };
+        let request = ServiceRequest {
+            consumer,
+            service,
+            payment_asset: asset(7),
+            offer: 100,
+        };
+        let exchange = ServicePromiseExchange::new(4, 0, escrow_id, vec![]);
+
+        let m = exchange
+            .match_one(&promise, &request)
+            .expect("pair matches");
+        let k0 = exchange.seed_ledger(&m, 100);
+        let (escrow, k1) = exchange
+            .fund(&m, &k0)
+            .expect("distinct full ids fund despite the shared low byte");
+
+        // Three DISTINCT accounts — payment moved consumer → escrow, provider untouched.
+        assert_eq!(k1.get(consumer.0, &asset(7)), 0);
+        assert_eq!(k1.get(escrow_id.0, &asset(7)), 100);
+        assert_eq!(k1.get(provider.0, &asset(7)), 0);
+        assert_eq!(k1.total_asset(&asset(7)), 100, "conserved, no merge");
+        assert_eq!(escrow.status, EscrowStatus::Funded);
+    }
+
+    // ── GAP 2: committed-state one-shot, witnessed by RE-EXECUTION ────────────
+
+    /// Drive a full match → fund → fulfill, then take ONLY the escrow cell's
+    /// committed state (what a re-executing validator has — no orchestrator
+    /// in-memory flag) and show the committed status is `Released` AND that the
+    /// committed state itself REFUSES a refund. The exclusion is bound into the
+    /// commitment, not the coordinator's memory.
+    fn fund_one() -> (ServicePromiseExchange, ServiceEscrow, WideLedger, [u8; 32]) {
+        use ed25519_dalek::SigningKey;
+        let executor = SigningKey::from_bytes(&[7u8; 32]);
+        let trusted = vec![executor.verifying_key().to_bytes()];
+        let service = ServiceId::of(CellId::from_bytes([0x5e; 32]), "render-report");
+        let service_turn_hash = [0xAB; 32];
+        let promise = ServicePromise {
+            provider: cid(2),
+            service,
+            service_turn_hash,
+            payment_asset: asset(7),
+            price: 100,
+            timeout_height: 50,
+        };
+        let request = ServiceRequest {
+            consumer: cid(1),
+            service,
+            payment_asset: asset(7),
+            offer: 100,
+        };
+        let exchange = ServicePromiseExchange::new(4, 0, cid(9), trusted);
+        let m = exchange.match_one(&promise, &request).unwrap();
+        let k0 = exchange.seed_ledger(&m, 100);
+        let (escrow, k1) = exchange.fund(&m, &k0).unwrap();
+        (exchange, escrow, k1, service_turn_hash)
+    }
+
+    fn signed_proof(turn_hash: [u8; 32]) -> ConditionProof {
+        use ed25519_dalek::{Signer, SigningKey};
+        let executor = SigningKey::from_bytes(&[7u8; 32]);
+        let mut receipt = TurnReceipt {
+            turn_hash,
+            agent: CellId::from_bytes([2u8; 32]),
+            ..Default::default()
+        };
+        let sig = executor.sign(&receipt.receipt_hash());
+        receipt.executor_signature = Some(sig.to_bytes().to_vec());
+        fulfillment_proof(receipt)
+    }
+
+    #[test]
+    fn committed_state_forbids_refund_after_release() {
+        let (exchange, mut escrow, k1, turn_hash) = fund_one();
+        let proof = signed_proof(turn_hash);
+        exchange
+            .fulfill(&mut escrow, &k1, &proof, 10)
+            .expect("a conforming receipt releases");
+
+        // The commitment moved (a light client sees the terminal state).
+        let committed = CommittedEscrow::read(&escrow.escrow_cell).expect("binding");
+        assert_eq!(committed.status, EscrowStatus::Released);
+
+        // RE-EXECUTION view: a validator holding ONLY the committed cell (no
+        // orchestrator memory) finds the committed state refuses the refund exit.
+        let mut replay = escrow.escrow_cell.clone();
+        assert_eq!(
+            commit_terminal(&mut replay, &escrow.matched, SP_STATUS_REFUNDED),
+            Err(ServicePromiseError::AlreadySettled),
+            "committed Released forbids a refund flip, by re-execution"
+        );
+        // And it cannot release twice either.
+        assert_eq!(
+            commit_terminal(&mut replay, &escrow.matched, SP_STATUS_RELEASED),
+            Err(ServicePromiseError::AlreadySettled)
+        );
+    }
+
+    #[test]
+    fn committed_state_forbids_release_after_refund() {
+        let (exchange, mut escrow, k1, _) = fund_one();
+        exchange
+            .refund(&mut escrow, &k1, 51)
+            .expect("lapsed promise refunds");
+
+        let committed = CommittedEscrow::read(&escrow.escrow_cell).expect("binding");
+        assert_eq!(committed.status, EscrowStatus::Refunded);
+
+        // RE-EXECUTION view: committed Refunded refuses the release exit.
+        let mut replay = escrow.escrow_cell.clone();
+        assert_eq!(
+            commit_terminal(&mut replay, &escrow.matched, SP_STATUS_RELEASED),
+            Err(ServicePromiseError::AlreadySettled),
+            "committed Refunded forbids a release flip, by re-execution"
+        );
+    }
+
+    #[test]
+    fn committed_terminal_moves_the_cell_commitment() {
+        let (exchange, mut escrow, k1, turn_hash) = fund_one();
+        let before = escrow.escrow_cell.state_commitment();
+        let proof = signed_proof(turn_hash);
+        exchange.fulfill(&mut escrow, &k1, &proof, 10).unwrap();
+        let after = escrow.escrow_cell.state_commitment();
+        assert_ne!(
+            before, after,
+            "taking the one-shot terminal re-seals the escrow cell's commitment"
+        );
     }
 }
