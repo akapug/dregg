@@ -6213,3 +6213,66 @@ prove/verify of the welded descriptor. PRECISE REMAINING to a flippable escrow w
   3. THEN the range-check + overflow-safe-product in-AIR gates for tags 18/19 (§6 BLOCKER 2), then
      the flip. The deployed default is UNCHANGED; SATISFACTION is still NOT light-client-witnessed in
      production. `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6.
+
+## ═══ THE SERVICE-ECONOMY + DREGGNET-CLOUD EPOCH (2026-06-28) ═══
+
+The through-line: dregg grew an **agent service economy**, and **DreggNet** (a NEW private repo,
+`~/dev/DreggNet`) became the operator/cloud that runs real workloads on it. Open-core split:
+dregg = AGPL public verified substrate ⟂ DreggNet = proprietary moat (the `net/` crates are ember's
+own Elide work, freely-usable-not-relicensable → why DreggNet is proprietary). DreggNet is meant to be
+SELF-HOSTABLE (anyone runs a provider against their own cells), not a monolith; the moat is the network.
+
+### LANDED (committed)
+- **Service economy (breadstuffs):** Payable DSI (`dregg-payable`), intent-ring + service-promise
+  (pay-on-delivery escrow), metered+paid ToolGateway (pay-per-tool, `sdk/src/tool_gateway.rs`),
+  execution-lease (`starbridge-apps/execution-lease` + `sdk/src/service_economy.rs`). SDKs ts/py/rust
+  service-economy bindings SHIPPED (byte-faithful, tested) — "designed-not-shipped" closed.
+- **Bridges (breadstuffs `bridge/`):** **Solana light-client bridge = TRUSTLESS-COMPLETE modulo the
+  weak-subjectivity anchor** (real Ed25519 votes + 16-ary accounts-hash + stake-table/authorized-voters/
+  StakeHistory/warmup-cooldown-effective-stake all bank-state-derived + epoch rotation; passes 1-4).
+  **Stripe rail** (webhook-HMAC → mint USD-credit → pays a lease, idempotent). **Double-mint CLOSED**
+  (committed mirror-ledger + lock_id-as-note_nullifier, `turn/src/executor/bridge_ledger.rs`, no new verb).
+- **DreggNet stack (~/dev/DreggNet, branch `dev`, NO remote yet — all local commits):** exec (polyana:
+  native-CPython + wasmtime + wasmi tiers, real input-passing) · durable (DBOS duroxide, SQLite + pg
+  meter-outbox, crash-resume exactly-once) · bridge (lease→fulfill + watch→fulfill→reap) · control
+  (VmProvider + LocalProvider + Ec2Provider[real aws-cli] + scheduler + wireguard mesh) · gateway
+  (httpe fly.io-compat machines API, SERVES, Linux) · cli (operator + full-stack e2e) · webapp
+  (agent-served web APIs, durable+metered). Docker-runnable; CI gate; deploy/staging/ infra.
+- **VK Gentian (breadstuffs circuit/metatheory):** escrow weld teeth bite in a REAL STARK proof;
+  WIDE-member fulcrum PROVEN (gate columns absorbed into the ~124-bit commit). FLIP NOT taken.
+- **deos pillars:** cockpit 17/31 surfaces carded + consumer-delight pass; hermes does PAID work in the
+  live World; deos-zed FirmamentFs + capability-secure DirectoryCell namespace (dregg:// paths); the
+  TRUSTLESS WEB PORTAL (a page that runs the recursive-STARK verify in-tab + per-field heap openings).
+- **Docs/share:** `docs/atlas/` (comprehension site, single-file `atlas.html` via build.sh) ·
+  `docs/posters/` (launch + coordination-security + dregg-revealed). `CONSTRUCTIVE-KNOWLEDGE.md` +
+  `DREGG-CALCULUS.md` are the conceptual spine (authority = production-under-non-forgeability; a turn =
+  an attenuable proof-carrying token over conserved state leaving a receipt).
+
+### INFRA STATE (LIVE — costs money)
+- **Staging box `i-03365e2bcf4ea08b2`** (t3.medium, `3.95.22.43`, us-east-1, key `~/.ssh/dreggnet-staging.pem`):
+  ~$30/mo running, ~$1.60/mo stopped. **STOP IT WHEN IDLE:** `aws ec2 stop-instances --region us-east-1 --instance-ids i-03365e2bcf4ea08b2`
+- A pulsed **node-image builder** was being provisioned (Lean-on-Linux dregg-node image — the staging seam).
+
+### PERF (measured)
+- Solana verify: ~33µs/vote linear, ~50ms @1500 votes → **fast enough for staging**; Option-B O(1)
+  wrapper only when throughput/in-circuit needed. Perf-characterization campaign RUNNING (3 lanes:
+  inventory/plan `docs/PERF-CHARACTERIZATION.md`, DreggNet-cloud-bench, kernel-scaling-bench).
+
+### KEY DECISIONS
+- **KEEP + IMPROVE polyana** (not drop): real native CPython works robustly now; v8/Node is broken
+  (SIGSEGV) = the gap; polyana branch `harden/native-tier-kill-on-drop` flagged for pug. **NEVER
+  language-as-wasm** (real CPython/Node, not wasm costumes). polyana = co-dev w/ akapug, Apache-2.0.
+
+### OPEN BURN-DOWN (named follow-ups)
+1. **Gentian FLIP keystone — the in-AIR authority-digest→selector gadget** (recompute
+   `compute_authority_digest_felt`, a Poseidon2-preimage over the declaration, IN-AIR, to force sel=1 for
+   a pure light client). Unlocks the WHOLE weld class → "deployed truths, not staged-conditional." THE deep one.
+2. **18/19 welds:** range-check (discharge due-ness) + multi-limb-product (vault no-dilution, overflows BabyBear) gadgets — after (1).
+3. **node-image:** Lean-on-Linux build (builder baking it) → unblocks full staging end-to-end.
+4. **Solana mainnet-real:** geyser/custom-RPC validator plugin for real accounts-hash inclusion proofs
+   (RPC exposes neither real bank hash nor Merkle inclusion → can't have real-vote-sig + real-inclusion both today).
+5. **polyana Node tier** (real Node via native-process + cap-threading, pug-coord).
+6. **DreggNet:** real-dregg-lease wire (`dregg-verify` feature needs the root arkworks `[patch]`); durable
+   per-request pg store + meter-ledger unification; **federation multi-node** (needs the fleet); a private GitHub remote.
+7. **Hackathon:** Hermes Accelerated Business demo (Nous/NVIDIA/Stripe) DUE TUE JUN 30 — demo ready
+   (live-Stripe-trigger + on-camera crash-resume strengtheners landed).
