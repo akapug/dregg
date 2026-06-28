@@ -251,32 +251,43 @@ language, and `Pg`/`DeployChecker`. (A separate `@dregg/sdk/wasm` playground is 
 only wasm-bindgen-generated piece, in `wasm/`.)
 
 So the service-economy surface in TS is **added by hand** as TypeScript that builds
-the same turns the Rust facade does and posts them through `NodeClient`:
+the same turns the Rust facade does and posts them through `NodeClient`. It is
+**SHIPPED** (`sdk-ts/src/service-economy.ts` + the `pay()` verb on `TurnBuilder`):
 
 ```ts
-// sdk-ts/src/service-economy.ts  (proposed — mirrors the Rust desugars)
-export class ServiceEconomy {
-  constructor(private runtime: AgentRuntime) {}
+import { AgentRuntime, Identity } from "@dregg/sdk";
 
-  // pay → a Payable `pay` turn: one Transfer(from=me, to, amount) in `asset`.
-  async pay(to: Bytes32, amount: bigint, asset: Bytes32): Promise<Receipt> {
-    return this.runtime.turn().payable(asset, amount, to).sign().then(t => t.submit());
-  }
+const runtime = new AgentRuntime(Identity.generate(), nodeUrl);
 
-  // services.invoke → route `method` on `cell`, prepend the pay Transfer if given.
-  async invoke(cell: Bytes32, method: string, args: Bytes32[], opts?: { pay?: PayLeg }): Promise<Receipt> { /* … */ }
+// pay → a Payable `pay` turn: method "pay", args [asset, field_from_u64(amount), to],
+// carrying EXACTLY ONE conserving Transfer(from=me, to, amount).
+await runtime.pay(provider, 1_000n, asset);
 
-  // execution.lease → open a worker + install FieldLte ∧ Monotonic meter; run advances the checkpoint.
-  async lease(terms: { maxSteps: number; asset: Bytes32 }): Promise<Lease> { /* … */ }
-}
+// services.invoke → route `method` on `cell`, prepend the pay Transfer if given.
+await runtime.services.invoke(cell, "render", args, {
+  pay: { provider, amount: 250n, asset },
+  work: workEffects,
+});
+
+// execution.lease → drive the durable, metered run/fund turns against a lease cell.
+const lease = runtime.execution.lease({ maxSteps: 8, leaseCell, asset });
+await lease.fund(funder, 5_000n);     // one conserving Transfer into the lease cell
+const step = await lease.run(work);   // SetField(slot 4, step+1) + work, on the run verb
 ```
 
 Because the TS SDK already builds and signs turns client-side (the `TurnBuilder` →
-`AuthorizedTurn` → `submit` shape), the honest way to add these is a `pay()` verb on
-`TurnBuilder` (desugaring to the `Payable` `Transfer`) plus a `ServiceEconomy`
-namespace, each producing the exact `Action`/`Effect` JSON the node executor
-verifies — the same bytes the Rust `resolve_pay` produces. Building it is tractable
-and is the next slice; it is **designed, not yet shipped** (see Status).
+`AuthorizedTurn` → `submit` shape), these are a `pay()` verb on `TurnBuilder`
+(desugaring to the `Payable` `Transfer`) plus a `ServiceEconomy` namespace
+(`runtime.pay` / `runtime.services.invoke` / `runtime.execution.lease`), each
+producing the exact `Action`/`Effect` JSON the node executor verifies — the same
+bytes the Rust `resolve_pay` / `resolve_invocation` produce. The differential
+test (`sdk-ts/test/wire.test.mjs`, byte-equality vs the repo's `dregg-wasm` build)
+keeps the encoding honest; `sdk-ts/test/service-economy.test.mjs` asserts each
+method emits the right `Action`/`Effect` shape. Spawning the cap-gated worker and
+installing the `FieldLte ∧ Monotonic` meter program is the cell-provisioning step
+(the in-process Rust `ExecutionLease::open` does it locally; over the wire it is
+done when the lease cell is provisioned — `leaseProgramConstraints` describes the
+two teeth the cell's program enforces).
 
 ## Python SDK (`dregg` pip) — binding story: GENERATED (PyO3/maturin)
 
@@ -286,24 +297,43 @@ Rust** via maturin (`bindings = "pyo3"`, module `dregg.dregg`). Its surface
 `Trustline`/`Channels`/`Mailbox` organ clients, the `program` constraint functions
 — is each a `#[pyclass]`/`#[pymethods]`/`#[pyfunction]` over the Rust SDK.
 
-So the service-economy surface in Python is **added by writing Rust bindings** in
-`sdk-py/src/lib.rs` that call the Rust facade methods this work shipped
-(`AgentRuntime::pay`, `invoke_service`, `ExecutionLease`), then `maturin build
---release`. No hand-written Python: the Python surface is generated, so the design
-is "add `#[pymethods] fn pay(...)`, `fn invoke_service(...)`, and a `Lease`
-`#[pyclass]` forwarding to `ExecutionLease`." This is the cleaner of the two
-bindings precisely because the Rust core now exists — the Python methods are
-thin forwards.
+The service-economy surface in Python is **SHIPPED** as `#[pyclass]` bindings in
+`sdk-py/src/lib.rs` that **forward to the now-existing in-process Rust core**
+(`dregg_sdk::AgentRuntime` + `ExecutionLease`). Unlike the wire `Identity →
+turn(node) → submit` flow, the `ServiceRuntime` binding drives the REAL verified
+kernel executor in-process, so `pay` / `lease` produce REAL committed
+`TurnReceipt`s and `invoke_service` returns the REAL verified desugar — thin
+forwards, no faking:
 
-```rust
-// sdk-py/src/lib.rs  (proposed — forwards to the Rust facade)
-#[pymethods]
-impl TurnBuilder {
-    fn pay(&self, to: &Bound<PyAny>, amount: u64, asset: &Bound<PyAny>) -> PyResult<AuthorizedTurn> { /* resolve_pay → sign */ }
-}
-#[pyclass(module = "dregg")]
-struct Lease { /* wraps dregg_sdk::ExecutionLease */ }
+```python
+import dregg
+
+rt = dregg.ServiceRuntime()                 # a real in-process runtime (self-funded agent cell)
+
+# pay → AgentRuntime::pay: one conserving Payable Transfer (per-asset Σδ=0).
+recipient = rt.spawn()
+rt.pay(recipient.cell_id, 1_000)            # -> TxReceipt
+
+# invoke_service → AgentRuntime::invoke_service_resolved: the verified desugar
+# (method routed through the DFA router; unknown method raises DreggRefused).
+svc = rt.install_service_cell(["render"])
+action = rt.invoke_service(svc, "render", pay=(svc, 250, rt.native_asset))
+assert action["effects"][0]["kind"] == "transfer"   # the canonical pay leg
+
+# lease → ExecutionLease::open/fund/run: the durable, metered checkpoint.
+funder = rt.spawn()
+lease = rt.lease(8)
+lease.fund(funder, 5_000)
+lease.run()                                 # advances the checkpoint; FieldLte∧Monotonic enforced
 ```
+
+`ServiceRuntime` / `Worker` / `Lease` / `TxReceipt` are each a `#[pyclass]`
+wrapping the real Rust type; `dregg.method_symbol(name)` exposes the routing
+symbol. `sdk-py/tests/test_service_economy.py` is the Python twin of the Rust
+facade's tests (conservation, routing + unknown-method refusal, the canonical pay
+leg, checkpoint advance, and the executor refusing a run past the capacity
+ceiling). Built green with `maturin develop` / `maturin build --release` (the
+default `light`, kernel-free wheel — no Lean toolchain required).
 
 ## Status — real vs designed
 
@@ -320,7 +350,17 @@ struct Lease { /* wraps dregg_sdk::ExecutionLease */ }
   (`app-framework/`, `starbridge-apps/execution-lease/`). The
   `dregg.intents.requestService` facade is the designed ergonomic face of these;
   it belongs in the app-framework/node layer.
-- **Designed, not yet shipped:** the TypeScript `ServiceEconomy` namespace
-  (hand-written TS over `NodeClient`) and the Python `pay`/`invoke_service`/`Lease`
-  bindings (generated PyO3 forwards to the Rust facade above). Both are tractable
-  thin layers over the now-existing verified Rust core; neither is faked here.
+- **Shipped (TypeScript):** the `ServiceEconomy` namespace + the `pay()` verb on
+  `TurnBuilder` (`sdk-ts/src/service-economy.ts`, `sdk-ts/src/turns.ts`) —
+  `runtime.pay` / `runtime.services.invoke` / `runtime.execution.lease`, each
+  producing the exact `Action`/`Effect` JSON the node verifies (the same bytes
+  `resolve_pay` / `resolve_invocation` produce; the differential wire test keeps
+  the encoding honest). Tested in `sdk-ts/test/service-economy.test.mjs` (green
+  under `npm test`). The cap-gated-worker spawn + meter-program install is the
+  cell-provisioning step; the wire SDK drives the verified `run`/`fund` turns.
+- **Shipped (Python):** the `ServiceRuntime` / `Worker` / `Lease` / `TxReceipt`
+  `#[pyclass]` bindings (`sdk-py/src/lib.rs`) forwarding to the in-process Rust
+  `AgentRuntime` + `ExecutionLease` — `pay` / `invoke_service` / `lease` over the
+  REAL verified executor (real committed receipts, the real verified desugar).
+  Tested in `sdk-py/tests/test_service_economy.py` (green under `pytest`; built
+  with `maturin develop` / `maturin build --release`).
