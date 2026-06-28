@@ -53,7 +53,7 @@ use serde_json::{Value, json};
 use crate::service::{METHOD_BID, METHOD_POST, METHOD_SETTLE};
 use crate::{
     BID_SLOT, BUDGET_SLOT, PAID_SLOT, PROVIDER_HASH_SLOT, REFUNDED_SLOT, REQUESTER_HASH_SLOT,
-    SPEC_HASH_SLOT, STATE_SETTLED, STATE_SLOT,
+    SPEC_HASH_SLOT, STATE_BID, STATE_POSTED, STATE_SETTLED, STATE_SLOT,
 };
 
 /// The bid gauge's denominator — a representative budget ceiling so a bid that
@@ -68,8 +68,16 @@ fn text(s: &str) -> Value {
 }
 
 /// A `deos.ui.pill` node — a colored status badge.
+#[allow(dead_code)]
 fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -92,14 +100,20 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque 20-digit key/amount paints short + friendly. `adept`
+/// hides a dev-y row (a sealed digest the friendlier signals already cover) from the
+/// simple projection; revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection (the live pill + breadcrumb
+/// already show the stage); revealed in the adept "see the bones" view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
@@ -146,21 +160,25 @@ pub fn job_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Compute Exchange"), pill("BIDDING", "accent")]),
+            row(vec![text("Compute Exchange"), pill_live(STATE_SLOT, "BIDDING", "accent", json!([
+                { "value": STATE_POSTED,  "label": "POSTED",  "tag": "warn" },
+                { "value": STATE_BID,     "label": "BIDDING", "tag": "accent" },
+                { "value": STATE_SETTLED, "label": "SETTLED", "tag": "good" },
+            ]))]),
             breadcrumb(&["Posted", "Bidding", "Settled"], 1),
             divider(),
             section("Job", "genuine", vec![
-                gauge(STATE_SLOT, STATE_SETTLED, "lifecycle "),
-                gauge(BID_SLOT, BUDGET_GAUGE_MAX, "bid vs budget "),
-                bind(BUDGET_SLOT, "budget · "),
-                bind(BID_SLOT, "accepted bid · "),
-                bind(SPEC_HASH_SLOT, "spec · "),
-                bind(REQUESTER_HASH_SLOT, "requester · "),
-                bind(PROVIDER_HASH_SLOT, "provider · "),
+                gauge(STATE_SLOT, STATE_SETTLED, "lifecycle ", true),
+                gauge(BID_SLOT, BUDGET_GAUGE_MAX, "bid vs budget ", false),
+                bind(BUDGET_SLOT, "budget · ", "amount", false),
+                bind(BID_SLOT, "accepted bid · ", "amount", false),
+                bind(SPEC_HASH_SLOT, "spec · ", "hash", true),
+                bind(REQUESTER_HASH_SLOT, "requester · ", "id", false),
+                bind(PROVIDER_HASH_SLOT, "provider · ", "id", false),
             ]),
             section("Settlement", "", vec![
-                bind(PAID_SLOT, "paid · "),
-                bind(REFUNDED_SLOT, "refunded · "),
+                bind(PAID_SLOT, "paid · ", "amount", false),
+                bind(REFUNDED_SLOT, "refunded · ", "amount", false),
             ]),
             section("Actions", "", vec![
                 action("+", "Post",   METHOD_POST),
@@ -212,7 +230,61 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "BIDDING");
+        // The header pill is LIVE: it reads STATE_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "BIDDING",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], STATE_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 3, "POSTED / BIDDING / SETTLED");
+        assert_eq!(cases[2]["value"], STATE_SETTLED);
+        assert_eq!(cases[2]["label"], "SETTLED");
+        assert_eq!(cases[2]["tag"], "good");
+    }
+
+    #[test]
+    fn the_binds_carry_their_display_fmt() {
+        let card = job_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        // Amounts group digits; identity keys paint avatar handles; the spec digest paints hex.
+        assert_eq!(fmt(BUDGET_SLOT), "amount");
+        assert_eq!(fmt(BID_SLOT), "amount");
+        assert_eq!(fmt(PAID_SLOT), "amount");
+        assert_eq!(fmt(REFUNDED_SLOT), "amount");
+        assert_eq!(fmt(REQUESTER_HASH_SLOT), "id");
+        assert_eq!(fmt(PROVIDER_HASH_SLOT), "id");
+        assert_eq!(fmt(SPEC_HASH_SLOT), "hash");
+    }
+
+    #[test]
+    fn the_dev_y_rows_are_marked_adept() {
+        let card = job_card_value();
+        let adept = |kind: &str, slot: usize| -> bool {
+            of_kind(&card, kind)
+                .iter()
+                .find(|n| n["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|n| n["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The raw state-machine gauge + the sealed spec digest hide in the simple view.
+        assert!(
+            adept("gauge", STATE_SLOT),
+            "the raw lifecycle integer gauge"
+        );
+        assert!(adept("bind", SPEC_HASH_SLOT), "the sealed spec digest");
+        // The human-meaningful job terms stay visible.
+        assert!(!adept("gauge", BID_SLOT));
+        assert!(!adept("bind", BUDGET_SLOT));
+        assert!(!adept("bind", REQUESTER_HASH_SLOT));
     }
 
     #[test]
