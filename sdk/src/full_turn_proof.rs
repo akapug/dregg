@@ -658,7 +658,7 @@ pub struct CapMembershipExpectation {
 ///
 /// STAGED (`docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`): the AIR constraint
 /// polynomials — hence the VK bytes — are UNCHANGED (the manifest rides public inputs
-/// + off-AIR re-evaluation, exactly the temporal-caveat / capacity-weld vehicle).
+/// and off-AIR re-evaluation, exactly the temporal-caveat / capacity-weld vehicle).
 /// `None` (the deployed default) skips the check entirely, so nothing flips by
 /// default; the gated verifier-code epoch is the flip step.
 pub struct CaveatCoverageExpectation {
