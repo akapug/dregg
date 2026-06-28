@@ -330,6 +330,18 @@ pub enum Tab {
     /// unauthorized method is refused in-band. See
     /// [`starbridge_v2::service_explorer`].
     ServiceExplorer,
+    /// THE SERVICE DIRECTORY (📇 DIRECTORY) — the WHOLE-IMAGE sibling of the
+    /// per-cell [`Tab::ServiceExplorer`]: it BROWSES the live image for every cell
+    /// that publishes a service interface (each cell's interface derived live via
+    /// [`dregg_cell::interface::InterfaceDescriptor::derive_replayable`]), listing
+    /// each discovered service with its interface-id, method count, kind, and
+    /// whether it has been ANNOUNCED. Selecting a service and pressing "announce"
+    /// publishes its interface as a REAL verified turn (an `Effect::EmitEvent`
+    /// carrying the canonical announce topic, committed through the embedded
+    /// executor), leaving a witnessed receipt the next discover reads back — the
+    /// publish loop closes over the real ledger, not a transient flag. See
+    /// [`starbridge_v2::service_directory`].
+    ServiceDirectory,
     /// THE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an intent,
     /// evaluate it in a FORKED throwaway world (predict, never mutate), print the
     /// predicted receipt, inspect the predicted post-state as live objects, then
@@ -394,7 +406,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 31] = [
+    const ALL: [Tab; 32] = [
         Tab::Docs,
         Tab::Trust,
         Tab::Devtools,
@@ -404,6 +416,7 @@ impl Tab {
         Tab::Moldable,
         Tab::InspectAct,
         Tab::ServiceExplorer,
+        Tab::ServiceDirectory,
         Tab::Workspace,
         Tab::Lanes,
         Tab::Shell,
@@ -456,6 +469,7 @@ impl Tab {
             Tab::Moldable => "INSPECTOR",
             Tab::InspectAct => "INSPECT-ACT",
             Tab::ServiceExplorer => "🛰 SERVICES",
+            Tab::ServiceDirectory => "📇 DIRECTORY",
             Tab::Workspace => "WORKSPACE",
             Tab::Wonder => "WONDER",
             Tab::Lanes => "LANES",
@@ -956,6 +970,19 @@ pub struct Cockpit {
     /// The last invoke outcome banner (a REAL committed receipt / an in-band refusal).
     service_explorer_outcome: Option<String>,
 
+    // --- THE SERVICE DIRECTORY (the whole-image discover/announce surface) ---
+    /// The discovered service the directory has SELECTED to announce (its backing
+    /// cell). `None` = none picked yet; a row's "select" sets it, and "announce"
+    /// publishes its interface as a real verified turn. See
+    /// [`super::panels_service_directory`].
+    service_directory_selected: Option<CellId>,
+    /// Whether the directory listing includes the opaque (no-interface) capability
+    /// cells too (the `include_non_services` filter — toggled in the panel).
+    service_directory_include_caps: bool,
+    /// The last announce outcome banner (a REAL committed receipt / an in-band
+    /// refusal — nothing to announce / the executor gated the announcer).
+    service_directory_outcome: Option<String>,
+
     // --- THE WORKSPACE (doIt / printIt / inspectIt) -------------------------
     /// The live workspace evaluator — composes an intent, evaluates it in a forked
     /// throwaway world (predict, never mutate), and commits-or-discards.
@@ -1282,6 +1309,7 @@ mod panels_app_launcher;
 mod panels_devtools;
 mod panels_main;
 mod panels_moldable;
+mod panels_service_directory;
 mod panels_web;
 mod panels_webshell;
 mod panels_workspace;

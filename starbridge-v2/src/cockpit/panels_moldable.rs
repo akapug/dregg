@@ -168,10 +168,14 @@ impl Cockpit {
             .id("mode-card-surface")
             .flex()
             .flex_col()
+            .gap_1()
             .size_full()
             .child(
+                // The card region HUGS the card's content (no `flex_1` stretch that
+                // left a dead black canvas below a short card), capped at the pane
+                // height (a card taller than the pane clips, as before).
                 div()
-                    .flex_1()
+                    .max_h(gpui::relative(1.))
                     .overflow_hidden()
                     .border_1()
                     .border_color(theme::accent())
@@ -282,6 +286,10 @@ impl Cockpit {
             col = col.child(
                 div()
                     .min_h(px(220.))
+                    // Hug the card's content (the card is content-sized) instead of
+                    // stretching; cap at the pane height (a tall card clips).
+                    .max_h(gpui::relative(1.))
+                    .overflow_hidden()
                     .border_1()
                     .border_color(theme::accent())
                     .rounded_md()

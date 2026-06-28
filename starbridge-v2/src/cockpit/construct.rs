@@ -438,6 +438,12 @@ impl Cockpit {
             service_explorer_args: String::new(),
             service_explorer_outcome: None,
 
+            // THE SERVICE DIRECTORY boots showing the service-publishing cells only
+            // (the "services" view), nothing selected, no announce fired yet.
+            service_directory_selected: None,
+            service_directory_include_caps: false,
+            service_directory_outcome: None,
+
             // THE WORKSPACE boots with a seeded conserving transfer draft so the
             // panel opens on a runnable doIt rather than an empty expression.
             workspace: {
