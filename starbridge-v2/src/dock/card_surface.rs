@@ -283,11 +283,11 @@ impl CockpitSurface for CardSurface {
 }
 
 // ===========================================================================
-// THE SIX LANDED CARDS AS THEIR MODE'S MAIN-PANE SURFACE — the same
+// THE LANDED CARDS AS THEIR MODE'S MAIN-PANE SURFACE — the same
 // CardPane-over-live-World pattern as the inspector card, now generalized to
-// the other reflective cards (composer / objects / graph / dynamics / agent /
-// links). Each generates its view-tree IN RUST from the live ledger (the
-// card's own public view-builder), bridges it to a `ViewNode`, and hosts it as
+// the reflective cards (composer / objects / graph / dynamics / agent /
+// links / inspector). Each generates its view-tree IN RUST from the live ledger
+// (the card's own public view-builder), bridges it to a `ViewNode`, and hosts it as
 // a `CardPane` over an applet ATTACHED to the cockpit's live World — so a bound
 // row re-reads the operator's real cell and an affordance button fires ONE
 // cap-gated verified turn on that World.
@@ -315,6 +315,14 @@ pub enum ModeCard {
     Agent,
     /// AUTHOR · what-links-here (`deos_js::links_card`).
     Links,
+    /// INSPECT · the focused cell's reflected state + its cap-gated affordances
+    /// (`deos_js::inspector_card`). The INSPECT-ACT surface reborn as card data: the
+    /// RawFields face → live `Bind` rows + labeled `Text`, the Affordances face →
+    /// cap-gated `Button`s that fire a real verified turn. This routes the Inspect-Act
+    /// surface through the SAME generalized mode-card mount as the other reflective cards
+    /// (so it gets the live-World bind + the edit-from-within seam for free), rather than
+    /// the hardcoded gpui `inspect_act_panel` tree.
+    Inspector,
 }
 
 impl ModeCard {
@@ -327,6 +335,7 @@ impl ModeCard {
             ModeCard::Dynamics => "dynamics · live transition feed (deos-js card)",
             ModeCard::Agent => "agent · live mandate + activity (deos-js card)",
             ModeCard::Links => "what-links-here · live backlinks (deos-js card)",
+            ModeCard::Inspector => "inspect · live cell state + affordances (deos-js card)",
         }
     }
 
@@ -397,6 +406,22 @@ impl ModeCard {
                 let (backlinks, total) =
                     deos_js::links_card::build_backlinks(focus, &cells, viewer);
                 deos_js::links_card::links_view(focus, viewer, &backlinks, total)
+            }
+            ModeCard::Inspector => {
+                // The inspector view-tree over the focused cell: its RawFields face (scalar
+                // state slots → live `Bind` rows, structural substances → labeled `Text`)
+                // and its cap-gated affordances (a `Button` per affordance the holder of
+                // `viewer` may fire). The affordance spec MATCHES the one
+                // `build_mode_card_surface` registers on the attached applet (`bump`,
+                // Signature), so the surfaced button fires a REAL cap-gated verified turn on
+                // the live ledger. `escalate` (Proof) is offered to the surface too so the
+                // cap tooth is genuinely exercised: `project_for(viewer)` never surfaces it
+                // as a button for a Signature holder (the over-reach is refused in-band).
+                let specs = vec![
+                    ("bump".to_string(), AuthRequired::Signature),
+                    ("escalate".to_string(), AuthRequired::Proof),
+                ];
+                deos_js::inspector_card::inspector_view_for(focus, ledger, &specs, viewer)
             }
         }
     }
@@ -498,6 +523,7 @@ fn mode_card_pk(kind: ModeCard, focus: CellId) -> [u8; 32] {
         ModeCard::Dynamics => 0xD7,
         ModeCard::Agent => 0xA9,
         ModeCard::Links => 0x11,
+        ModeCard::Inspector => 0x15,
     };
     pk
 }

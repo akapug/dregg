@@ -59,7 +59,7 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
             .unwrap_or(0)
     };
 
-    // Each of the six landed cards, as its mode's surface over the LIVE World.
+    // Each landed card, as its mode's surface over the LIVE World.
     for (n, kind) in [
         ModeCard::Composer,
         ModeCard::Objects,
@@ -67,6 +67,7 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
         ModeCard::Dynamics,
         ModeCard::Agent,
         ModeCard::Links,
+        ModeCard::Inspector,
     ]
     .into_iter()
     .enumerate()

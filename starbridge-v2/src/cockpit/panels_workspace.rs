@@ -224,6 +224,17 @@ impl Cockpit {
             Tab::LinksHere => self.links_here_panel(cx).into_any_element(),
             Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
             Tab::Moldable => self.moldable_panel(cx).into_any_element(),
+            // INSPECT · the focused cell's reflected state + cap-gated affordances AS a
+            // deos-js card over the live World (the inspector view-tree: RawFields → live
+            // `Bind`s, Affordances → cap-gated `Button`s that fire real verified turns).
+            // The hardcoded gpui `inspect_act_panel` is kept as the fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::InspectAct => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Inspector,
+                cx,
+                |this, cx| this.inspect_act_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::InspectAct => self.inspect_act_panel(cx).into_any_element(),
             Tab::ServiceExplorer => self.service_explorer_panel(cx).into_any_element(),
             Tab::ServiceDirectory => self.service_directory_panel(cx).into_any_element(),
