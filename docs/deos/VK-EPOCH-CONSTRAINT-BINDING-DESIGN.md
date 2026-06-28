@@ -240,18 +240,31 @@ VK beside the deployed, and flip. The deployed descriptors/VK are byte-identical
 * **REMAINING (the genuinely-VK-affecting tail — the FLIP is NOT yet soundly takeable; two
   independent, verified blockers):**
 
-  * **BLOCKER 1 — the emit/producer/selector/VK/routing MACHINERY is absent even for the proven
-    escrow template.** The escrow satisfaction gate's soundness + in-AIR `VmConstraint::Gate`
-    polynomials are done (`satisfaction_weld.rs`, `satisfaction_witnessed`), but emitting + flipping
-    needs ALL of: a Lean welded `EffectVmDescriptor2` emit keystone (no `settleEscrowSatVmDescriptor2R24`
-    exists — it is named-only); a **capacity-selector column** filled by a producer (`satisfaction_weld.rs`
-    uses a placeholder `SEL = 320`; the rotated trace producer fills no such column); a staged registry +
-    FP-pin + **committed VK**; a prover dispatch that routes a capacity turn through the welded
-    descriptor; and the verify-path routing. There is moreover **no live capacity-caveat-bearing
-    proving path** (no deployed cell declares a capacity caveat), so even a flipped default has no
-    exerciser and "prove the teeth bite for a pure light client against the flipped VK" cannot be
-    demonstrated without first building that proving path. This is umem-flip-scale work
-    (`da0c47dd6` was "the 13th attempt", with extensive producer + gauntlet validation).
+  * **BLOCKER 1 — the emit/selector/exerciser MACHINERY (now BUILT this pass — the GENTIAN
+    INITIATIVE); the producer/VK/routing tail REMAINS.** What was named-only is now real:
+    - **The welded emit keystone EXISTS** — `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean`
+      defines `settleEscrowSatVmDescriptor2R24` = `graduateV1 (rotateV3 settle-base)` + the four
+      selector-gated satisfaction gates over the rotated FIELD columns + the selector PI pin, with the
+      REFINEMENT rung `settleEscrowSatV3_forces_settle_gate` (a satisfying trace on a selector-on
+      non-last row FORCES both legs Deposited-before/Consumed-after) + partial/phantom UNSAT teeth,
+      `#assert_all_clean`. It is EMITTED into `rotation-v3-staged-registry.tsv` (the 58th member;
+      deployed rows byte-identical, FP re-pinned, drift + Rust descriptor-validation + wide-parity +
+      resolver-cohort gates all green).
+    - **The capacity-selector column is REAL** — `satisfaction_weld.rs` `ESCROW_SEL_COL = PARAM_BASE+2
+      = 70` (pinned to PI 46) replaces the `SEL = 320` placeholder; the emitted descriptor's four
+      welded gate bodies match the Rust builder byte-for-byte and bite (honest accept / forged reject).
+    - **A capacity-caveat-bearing EXERCISER exists** — `circuit/tests/settle_escrow_capacity_weld.rs`:
+      a declared escrow caveat (tag 17, legs 0/1) is COVERAGE-bound on the rotated carrier (can't be
+      omitted) AND the EMITTED welded descriptor's gates accept the honest settle / reject the
+      forged (SATISFACTION) = the full capacity witness for a declared turn, at the descriptor's
+      CONSTRAINT-eval level.
+    What REMAINS (the genuine umem-flip-scale tail; `da0c47dd6` was "the 13th attempt"): a PRODUCER
+    emitting a SATISFYING rotated trace for the welded descriptor (the field-override + commit-
+    recompute surgery the fee/nullifier producers do, now for the two leg field limbs of a
+    zero-amount settle-carrier) → a full STARK **prove/verify** against a **committed VK**; binding
+    the selector to the committed declaration in-AIR (§6 item 2, so a forger cannot dodge by setting
+    the selector 0); and the prover/verify-path routing. The teeth bite in-PROOF today at the LEAN
+    refinement level + the EMITTED-descriptor constraint-eval level, NOT yet a full STARK prove.
 
   * **BLOCKER 2 — tags 18/19 in-AIR gates are NOT a mirror of the escrow EQUALITY template.** The
     escrow gate is pure status-code equality (`sel·(col − const) == 0`), the whole gate. The discharge

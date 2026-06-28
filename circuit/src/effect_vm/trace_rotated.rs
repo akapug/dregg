@@ -3672,6 +3672,14 @@ mod tests {
                     // Like the cap-open members it is a separately-routed registry member, excluded
                     // from the resolver-cohort completeness audit (registry-present, resolver-unreached).
                     && s != &"heapWriteVmDescriptor2R24"
+                    // the WELDED SEALED-ESCROW SATISFACTION descriptor
+                    // (`settleEscrowSatVmDescriptor2R24`, VK-EPOCH §6 BLOCKER 1) is REGISTRY-PRESENT
+                    // but RESOLVER-UNREACHED: no live effect routes to it (the satisfaction weld is
+                    // STAGED, NOT flipped — `rotated_descriptor_name_for_effect` carries no escrow
+                    // arm). It is the descriptor a flippable escrow weld commits a VK for; until that
+                    // flip it is a separately-staged registry member, excluded from the resolver
+                    // cohort completeness audit (registry-present, resolver-unreached).
+                    && s != &"settleEscrowSatVmDescriptor2R24"
             })
             .collect();
         assert_eq!(

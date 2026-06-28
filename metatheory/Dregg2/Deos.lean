@@ -107,6 +107,13 @@ import Dregg2.Deos.CapacityCarrier
 -- (NOT yet emitted into a committed welded descriptor/VK, NOT flipped). #assert_all_clean.
 -- docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md §6.
 import Dregg2.Deos.CapacitySatisfaction
+-- The WELDED sealed-escrow satisfaction DESCRIPTOR, made REAL (the prior pass's named-only gap):
+-- settleEscrowSatVmDescriptor2R24 = graduateV1 (rotateV3 settle-base) + the four selector-gated
+-- satisfaction gates over the rotated FIELD columns + the selector PI pin (the deployed fifth-pin
+-- shape). The REFINEMENT rung settleEscrowSatV3_forces_settle_gate proves a satisfying trace FORCES
+-- the sealed-escrow gate (both legs Deposited before / Consumed after) IN-PROOF, with partial/phantom
+-- UNSAT teeth. STAGED beside the deployed cohort (no live routing, no VK committed). #assert_all_clean.
+import Dregg2.Deos.SettleEscrowSatDescriptor
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →

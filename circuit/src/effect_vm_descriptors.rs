@@ -820,7 +820,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "61af721aa9401249d15611fbf9d1f89dc4a44002b70b65a2b69af664dc6e50d7";
+    "3f28db64d9bb76d89770aeb941c71ed5d0e929705fa0f88381b8bb1c39745a0f";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -2328,6 +2328,25 @@ mod tests {
                     vec![(263, pi_base + 4)],
                     "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (263) to PI[46]"
                 );
+            } else if key == "settleEscrowSatVmDescriptor2R24" {
+                // THE WELDED SEALED-ESCROW SATISFACTION descriptor (VK-EPOCH §6 BLOCKER 1, STAGED):
+                // the fifth pin welds the escrow capacity SELECTOR column (param2, col 70) to PI[46]
+                // on the first row, so a verifier that knows the cell declares the escrow capacity
+                // (the deployed COVERAGE carrier `CapacityCarrier`) can FORCE the selector on; the
+                // four selector-gated satisfaction gates over the rotated FIELD columns then force
+                // both legs Deposited→Consumed (the in-AIR `SETTLE_ESCROW` arm). NO live routing —
+                // staged beside the cohort; the descriptor a flippable escrow weld commits a VK for.
+                // Refinement proven in `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean`.
+                use crate::effect_vm::columns::PARAM_BASE;
+                assert_eq!(
+                    d.public_input_count, 47,
+                    "settleEscrowSat: rotated 46-PI + the appended selector slot"
+                );
+                assert_eq!(
+                    nullifier_pins,
+                    vec![(PARAM_BASE + 2, pi_base + 4)],
+                    "settleEscrowSat: the fifth pin welds the escrow selector (param2, col 70) to PI[46]"
+                );
             } else if is_heap_write {
                 // heapWrite: the base carries no v1 PIs, so the rotated descriptor publishes
                 // EXACTLY the four commit pins (indices 0..=3) — no fifth pin. The new heap_root is
@@ -2353,7 +2372,7 @@ mod tests {
             }
         }
         assert_eq!(
-            n, 57,
+            n, 58,
             "expected the 36-member rotated cohort (28 v2-graduated + 8 widened) + the 6 fan-out \
              cap-open members (delegate/introduce/grantCap/revoke/refreshDelegation/revokeCapability \
              — each *CapOpenVmDescriptor2R24) + the 2 LIVE effect-general legs \
@@ -2379,7 +2398,12 @@ mod tests {
              proven credit/tick/freeze body as mintVmDescriptor2R24 save the appended selectorGate \
              operand, so it proves + self-verifies under a dedicated selector, not by riding \
              BridgeMint's). \
-             The Signature-pinned capOpenAttenuateV3/transferCapOpenV3 were DELETED (Stage D)."
+             The Signature-pinned capOpenAttenuateV3/transferCapOpenV3 were DELETED (Stage D). \
+             + the WELDED SEALED-ESCROW SATISFACTION descriptor \
+             (settleEscrowSatVmDescriptor2R24, VK-EPOCH §6 BLOCKER 1 — the staged welded \
+             EffectVmDescriptor2 carrying the four selector-gated satisfaction gates over the \
+             rotated FIELD columns + the selector PI pin (col 70 → PI 46), 47 PIs; NO live routing, \
+             NO VK committed — the descriptor a flippable escrow weld commits a VK for)."
         );
     }
 
@@ -2401,6 +2425,11 @@ mod tests {
             .lines()
             .filter(|l| !l.is_empty())
             .map(|l| l.split('\t').next().expect("live key"))
+            // The WELDED SEALED-ESCROW SATISFACTION descriptor is a STAGED satisfaction-weld member
+            // (VK-EPOCH §6 BLOCKER 1), appended LAST to the rotated registry; its WIDE+umem mirror is
+            // a separate named step (the wide cohort is the deployable host set). Excluded from the
+            // member-for-member wide-cover parity until that weld lands — it carries no live routing.
+            .filter(|k| *k != "settleEscrowSatVmDescriptor2R24")
             .collect();
         let mut n = 0usize;
         for (i, line) in WIDE_REGISTRY_STAGED_TSV.lines().enumerate() {

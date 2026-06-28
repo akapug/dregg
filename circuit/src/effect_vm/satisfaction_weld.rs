@@ -41,6 +41,19 @@ use super::trace_rotated::{AFTER_BASE, BEFORE_BASE};
 use crate::descriptor_ir2::VmConstraint2;
 use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
 
+/// **THE REAL CAPACITY-SELECTOR COLUMN** — the free PARAM slot `param2` (`PARAM_BASE + 2 = 70`) the
+/// emitted `settleEscrowSatVmDescriptor2R24` gates the four satisfaction constraints on, and that the
+/// producer fills (`1` on the settle row, `0` on padding). This REPLACES the prior placeholder
+/// `SEL = 320` (a column no producer filled): the emitted descriptor pins this column to PI 46 on the
+/// first row (`pi_binding first col 70 pi 46`), so a verifier that knows the cell declares the escrow
+/// capacity (the deployed COVERAGE carrier) can FORCE the selector on. The Lean twin is
+/// `Dregg2.Deos.SettleEscrowSatDescriptor.ESCROW_SEL_COL`.
+pub const ESCROW_SEL_COL: usize = super::columns::PARAM_BASE + 2;
+
+/// The PI slot the emitted descriptor pins the selector to (the fifth appended PI, `pi_base + 4`).
+/// Lean `Dregg2.Deos.SettleEscrowSatDescriptor.ESCROW_SEL_PI`.
+pub const ESCROW_SEL_PI: usize = 46;
+
 /// The rotated state-block in-block offset of field-slot `k`: the `r3..r10 ↔ fields[0..8]` weld
 /// (`r3` is pre-limb index 4, so `fields[k]` rides limb `4 + k` — `trace_rotated::fill_block`). The
 /// Rust twin of the Lean `Dregg2.Deos.CapacitySatisfaction.fieldOffset`.
@@ -138,10 +151,10 @@ mod tests {
             .all(|g| eval_lean_expr(gate_body(g), row) == BabyBear::ZERO)
     }
 
-    // The legs ride field slots 0 and 1; the capacity selector is some spare column past the AFTER
-    // block (a settle row sets it to 1). The actual deployed selector wiring is fixed by the staged
-    // descriptor; this test exercises the constraint POLYNOMIALS.
-    const SEL: usize = 320; // an appended capacity-selector column (past the rotated blocks)
+    // The legs ride field slots 0 and 1; the capacity selector is the REAL `ESCROW_SEL_COL` (param2,
+    // col 70) the emitted `settleEscrowSatVmDescriptor2R24` gates on and the producer fills — NOT the
+    // prior `SEL = 320` placeholder. A settle row sets it to 1.
+    const SEL: usize = ESCROW_SEL_COL;
     const LEG_A: usize = 0;
     const LEG_B: usize = 1;
     const DEP: u32 = pi::SETTLE_ESCROW_STATUS_DEPOSITED;
@@ -177,6 +190,89 @@ mod tests {
         assert!(
             !all_gates_zero(&gates, &row),
             "a phantom settle (leg A not Deposited before) must violate an in-AIR gate"
+        );
+    }
+
+    /// **THE EMITTED DESCRIPTOR CARRIES THESE GATES AND THEY BITE.** Parse the staged
+    /// `settleEscrowSatVmDescriptor2R24` straight from the committed registry TSV, pull out its
+    /// FOUR welded satisfaction gates (the `.gate` constraints whose body is
+    /// `mul(var ESCROW_SEL_COL, …)`), and confirm: (a) the Rust builder
+    /// [`settle_escrow_satisfaction_gates`] reproduces EXACTLY those four gate bodies; (b) an honest
+    /// settle row makes every emitted gate body vanish; (c) a forged partial / phantom settle makes
+    /// an emitted gate body NON-zero — the teeth bite against the DEPLOYED-staged descriptor's own
+    /// constraints, not a hand-built shadow. The selector is the real col 70 (param2), pinned to PI
+    /// 46 by the descriptor.
+    #[test]
+    fn emitted_descriptor_carries_the_welded_gates_and_they_bite() {
+        use crate::descriptor_ir2::parse_vm_descriptor2;
+        use crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+
+        let json = V3_STAGED_REGISTRY_TSV
+            .lines()
+            .find_map(|l| {
+                let mut it = l.splitn(3, '\t');
+                if it.next() == Some("settleEscrowSatVmDescriptor2R24") {
+                    let _name = it.next();
+                    it.next()
+                } else {
+                    None
+                }
+            })
+            .expect("settleEscrowSatVmDescriptor2R24 in the staged registry");
+        let desc = parse_vm_descriptor2(json).expect("welded escrow descriptor parses");
+        assert_eq!(
+            desc.public_input_count, 47,
+            "rotated 46-PI + the selector slot"
+        );
+
+        // The emitted welded gates: `.gate` constraints whose body is `mul(var ESCROW_SEL_COL, _)`.
+        let emitted: Vec<&LeanExpr> = desc
+            .constraints
+            .iter()
+            .filter_map(|c| match c {
+                VmConstraint2::Base(VmConstraint::Gate(body)) => match body {
+                    LeanExpr::Mul(l, _) if **l == LeanExpr::Var(ESCROW_SEL_COL) => Some(body),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            emitted.len(),
+            4,
+            "the emitted descriptor carries EXACTLY the four selector-gated satisfaction gates"
+        );
+
+        // (a) the Rust builder reproduces the emitted gate bodies byte-for-byte.
+        let built = settle_escrow_satisfaction_gates(ESCROW_SEL_COL, LEG_A, LEG_B);
+        let built_bodies: Vec<&LeanExpr> = built.iter().map(gate_body).collect();
+        assert_eq!(
+            built_bodies, emitted,
+            "the Rust builder reproduces the emitted descriptor's welded gate bodies"
+        );
+
+        // (b) honest settle: every emitted gate body vanishes.
+        let honest = make_row(ESCROW_SEL_COL, 1, LEG_A, LEG_B, DEP, DEP, CON, CON);
+        assert!(
+            emitted
+                .iter()
+                .all(|b| eval_lean_expr(b, &honest) == BabyBear::ZERO),
+            "the honest settle satisfies every EMITTED welded gate"
+        );
+        // (c) forged partial (leg B left Deposited) + phantom (leg A never Deposited): a gate bites.
+        let partial = make_row(ESCROW_SEL_COL, 1, LEG_A, LEG_B, DEP, DEP, CON, DEP);
+        assert!(
+            emitted
+                .iter()
+                .any(|b| eval_lean_expr(b, &partial) != BabyBear::ZERO),
+            "a partial settle violates an EMITTED welded gate"
+        );
+        let phantom = make_row(ESCROW_SEL_COL, 1, LEG_A, LEG_B, 0, DEP, CON, CON);
+        assert!(
+            emitted
+                .iter()
+                .any(|b| eval_lean_expr(b, &phantom) != BabyBear::ZERO),
+            "a phantom settle violates an EMITTED welded gate"
         );
     }
 

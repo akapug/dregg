@@ -29,6 +29,12 @@ import Dregg2.Circuit.Emit.CapOpenTurnPins
 -- members so the checked-in wire carries exactly what the circuit-soundness apex proves about
 -- (guarantee A: the cap-tree / heap-root WRITE forced, not the authority-read-only wrapper).
 import Dregg2.Circuit.RotatedKernelRefinementExercise
+-- The WELDED sealed-escrow SATISFACTION descriptor (VK-EPOCH §6 BLOCKER 1, made real this pass):
+-- settleEscrowSatVmDescriptor2R24, the staged welded EffectVmDescriptor2 carrying the four
+-- selector-gated satisfaction gates over the rotated FIELD columns + the selector PI pin. Emitted
+-- BESIDE the deployed cohort (no live routing); the descriptor a flippable escrow weld commits a VK
+-- for. Refinement proven kernel-clean in Dregg2.Deos.SettleEscrowSatDescriptor.
+import Dregg2.Deos.SettleEscrowSatDescriptor
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotation
@@ -102,3 +108,10 @@ def main : IO Unit := do
   -- `selectorGate` operand. Emitted so the deployed Rust IR-2 interpreter parses exactly what the
   -- apex's `Rfix 3 = supplyMintV3` proves.
   IO.println s!"v3rot\tsupplyMintVmDescriptor2R24\t{Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3.name}\t{emitVmJson2 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3}"
+  -- THE WELDED SEALED-ESCROW SATISFACTION descriptor (VK-EPOCH §6 BLOCKER 1, the prior pass's
+  -- named-only gap, made real): the staged `settleEscrowSatVmDescriptor2R24` (legs in field slots
+  -- 0/1) — `graduateV1 (rotateV3 settle-base)` PLUS the four selector-gated satisfaction gates over
+  -- the rotated FIELD columns PLUS the selector PI pin (PI 46). Emitted BESIDE the deployed cohort
+  -- (no live routing, no VK committed); the descriptor a flippable escrow weld commits a VK for. Its
+  -- in-proof refinement is `Dregg2.Deos.SettleEscrowSatDescriptor.settleEscrowSatV3_forces_settle_gate`.
+  IO.println s!"v3rot\tsettleEscrowSatVmDescriptor2R24\t{(Dregg2.Deos.SettleEscrowSatDescriptor.settleEscrowSatVmDescriptor2R24 0 1).name}\t{emitVmJson2 (Dregg2.Deos.SettleEscrowSatDescriptor.settleEscrowSatVmDescriptor2R24 0 1)}"

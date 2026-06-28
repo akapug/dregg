@@ -6151,3 +6151,44 @@ Not done here to avoid touching untested Migrated-agent flows; out of the CellUn
 SEPARATE LANE (not this fix, provably unaffected — Live agents/no caps): speculative_audit.rs (full-ledger-root / slot-6
 "target" field fidelity in the streaming audit) + dregg-lean-ffi direct_vs_json_differential (auth_0 direct-vs-JSON
 marshalling-conformance) still fail; they are state-fidelity/marshalling lanes, NOT the authority lane.
+
+— 2026-06-28 (THE GENTIAN INITIATIVE — the escrow SATISFACTION-weld proving-path machinery, STAGED,
+FLIP NOT taken): closed VK-EPOCH §6 BLOCKER 1's core ("the welded EffectVmDescriptor emit keystone
+is named-only; the SEL=320 selector is a placeholder filled by no producer; no live capacity-caveat
+exerciser"). NOW BUILT + GREEN:
+  * EMIT KEYSTONE (real): `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean` defines
+    `settleEscrowSatVmDescriptor2R24` = graduateV1(rotateV3 settle-base) + the four selector-gated
+    satisfaction gates over the rotated FIELD columns (cols 192/193/243/244 = before/after legs 0/1)
+    + the selector PI pin (col 70 → PI 46). Base = transfer-rotated with the two LEG field-freezes
+    DROPPED (a settle CHANGES the status fields), so the welded gates and the base are mutually
+    satisfiable (a zero-amount settle-carrier). REFINEMENT rung
+    `settleEscrowSatV3_forces_settle_gate`: a satisfying trace on a selector-on non-last row FORCES
+    both legs Deposited-before / Consumed-after (the in-AIR SettleGate); partial_settle_unsat /
+    phantom_settle_unsat are the UNSAT teeth. #assert_all_clean (5 keystones). lake green.
+  * EMITTED into the registry: `EmitRotationV3.lean` emits it; `rotation-v3-staged-registry.tsv`
+    carries it as the 58th member (deployed rows BYTE-IDENTICAL; FP re-pinned). Rust descriptor
+    validation gets its per-key branch (pi_count 47, the selector fifth-pin col 70 → PI 46); the
+    `n==58` cohort assert + the wide-registry parity (the staged escrow member excluded from the
+    wide-cover until its wide+umem mirror lands) + the resolver-cohort completeness (registry-present,
+    resolver-unreached — no live routing) all GREEN.
+  * REAL SELECTOR (no more placeholder): `satisfaction_weld.rs` `ESCROW_SEL_COL = PARAM_BASE+2 = 70`
+    + `ESCROW_SEL_PI = 46` replace `SEL = 320`; a test cross-checks the EMITTED descriptor's four
+    welded gate bodies match the Rust builder byte-for-byte AND bite (honest accept / partial+phantom
+    reject).
+  * EXERCISER: `circuit/tests/settle_escrow_capacity_weld.rs` — a declared escrow caveat (tag 17,
+    legs 0/1) projects onto the bound rotated carrier (COVERAGE, can't be omitted — the deployed
+    carrier tooth) AND the EMITTED welded descriptor's gates accept the honest settle / reject the
+    forged (SATISFACTION) = the full capacity witness, coverage ∧ satisfaction, for a declared turn.
+THE FLIP WAS NOT TAKEN. The teeth bite IN-PROOF at the LEAN refinement level + at the EMITTED
+descriptor's CONSTRAINT-eval level over honest/forged settle rows — NOT yet a full STARK
+prove/verify of the welded descriptor. PRECISE REMAINING to a flippable escrow weld:
+  1. a PRODUCER emitting a SATISFYING rotated trace for the welded descriptor (the field-override +
+     GROUP-4/rotated commit-recompute surgery the fee/nullifier producers do for balance/nullifier
+     limbs, now for the two leg field limbs of a zero-amount settle-carrier) → a full STARK
+     prove/verify (accept honest, reject forged against the committed VK);
+  2. commit the welded VK + bind the selector to the committed declaration's required-tag floor
+     IN-AIR (the `DeclCommitBinds` realization, §6 item 2 — so a forger cannot dodge by setting the
+     selector 0) + route a declared-escrow turn through the welded descriptor;
+  3. THEN the range-check + overflow-safe-product in-AIR gates for tags 18/19 (§6 BLOCKER 2), then
+     the flip. The deployed default is UNCHANGED; SATISFACTION is still NOT light-client-witnessed in
+     production. `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6.
