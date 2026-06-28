@@ -226,6 +226,7 @@ impl Cockpit {
             Tab::Moldable => self.moldable_panel(cx).into_any_element(),
             Tab::InspectAct => self.inspect_act_panel(cx).into_any_element(),
             Tab::ServiceExplorer => self.service_explorer_panel(cx).into_any_element(),
+            Tab::ServiceDirectory => self.service_directory_panel(cx).into_any_element(),
             Tab::Workspace => self.workspace_panel(cx).into_any_element(),
             Tab::Wonder => self.wonder_panel(cx).into_any_element(),
             Tab::Lanes => self.lanes_panel(cx).into_any_element(),

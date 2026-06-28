@@ -191,6 +191,9 @@ impl CardPane {
             }
             ViewNode::Text(s) => Label::new(s.clone())
                 .text_color(theme_fg)
+                // Never let a constrained column squeeze a text row to zero height
+                // (which overlaps the next line) — a label keeps its own line height.
+                .flex_shrink_0()
                 .into_any_element(),
             ViewNode::Bind { slot, label } => {
                 // THE SIGNAL BINDING over the LIVE ledger — re-read the bound model slot
@@ -206,6 +209,7 @@ impl CardPane {
                 Label::new(text)
                     .font_weight(FontWeight::BOLD)
                     .text_color(theme_fg)
+                    .flex_shrink_0()
                     .into_any_element()
             }
             ViewNode::Button { label, turn, arg } => {
@@ -769,23 +773,25 @@ impl Render for CardPane {
         // borrowed immutably here, `app` is `cx` (a distinct object), so the two
         // borrows don't conflict.
         let body = self.node(&self.tree, window, app);
-        div()
-            .size_full()
-            .bg(background)
-            .text_color(foreground)
-            .child(
-                // The surface chrome — a titled card frame so it reads as a cockpit pane.
-                v_flex()
-                    .size_full()
-                    .child(
-                        div().px_3().py_2().border_b_1().border_color(border).child(
-                            Label::new(title)
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(header_fg),
-                        ),
-                    )
-                    .child(body),
-            )
+        // SIZE TO CONTENT, NOT THE COLUMN. The card is a content-sized object: it
+        // hugs its view-tree vertically (`w_full`, no `h_full`) so a host never sees
+        // it stretch to fill the whole pane and leave a dead canvas below the content,
+        // and so its flex children are never squeezed against an over-tall parent
+        // (which collapsed line heights into overlapping text). The HOST decides the
+        // frame; the card draws exactly as tall as it is.
+        div().w_full().bg(background).text_color(foreground).child(
+            // The surface chrome — a titled card frame so it reads as a cockpit pane.
+            v_flex()
+                .w_full()
+                .child(
+                    div().px_3().py_2().border_b_1().border_color(border).child(
+                        Label::new(title)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(header_fg),
+                    ),
+                )
+                .child(body),
+        )
     }
 }
 
