@@ -38,6 +38,7 @@
 
 use std::collections::BTreeSet;
 
+use dregg_cell::Nullifier;
 use dregg_turn::action::Effect;
 use dregg_types::CellId;
 use serde::{Deserialize, Serialize};
@@ -48,6 +49,40 @@ use crate::midnight::{EpochKey, FederationAttestation};
 /// `midnight` bridge domain so an attestation for one bridge can never be
 /// replayed against the other.
 pub const SOLANA_MIRROR_DOMAIN: &str = "dregg-solana-mirror-v1";
+
+/// Domain separation for the COMMITTED consume-once lock nullifier (the
+/// concurrency-safe double-mint gate, `docs/deos/BRIDGE-ARCHITECTURE-SOUNDNESS.md`
+/// §3). Distinct from [`SOLANA_MIRROR_DOMAIN`] (the attestation-signature domain)
+/// and from the Stripe nullifier domain.
+pub const SOLANA_LOCK_NULLIFIER_DOMAIN: &str = "dregg-solana-lock-v1";
+
+/// Derive the domain-separated, consume-once nullifier for a Solana lock.
+///
+/// `nf = H("dregg-solana-lock-v1" ‖ spl_mint ‖ lock_id)`. Binding `spl_mint`
+/// scopes the nullifier to this mirror so a `lock_id` from another mirror can
+/// never collide. This is the value gated against the executor's committed
+/// `note_nullifiers` set in [`dregg_turn::executor::bridge_ledger`] — so a
+/// `lock_id` is consumed exactly once GLOBALLY, regardless of how many relayer
+/// processes observe the same lock.
+pub fn lock_nullifier(spl_mint: &[u8; 32], lock_id: &[u8; 32]) -> Nullifier {
+    let mut h = blake3::Hasher::new_derive_key(SOLANA_LOCK_NULLIFIER_DOMAIN);
+    h.update(spl_mint);
+    h.update(lock_id);
+    Nullifier(*h.finalize().as_bytes())
+}
+
+/// The verified, committed-bridge-ready facts of a Solana lock: the consume-once
+/// nullifier plus the mint target/amount. Produced by [`MirrorState::verify_lock`]
+/// WITHOUT mutating any per-relayer RAM — the authority is committed state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedLock {
+    /// The domain-separated consume-once lock nullifier (see [`lock_nullifier`]).
+    pub lock_nullifier: Nullifier,
+    /// The dregg cell to credit the mirrored asset.
+    pub recipient: CellId,
+    /// The amount to mint.
+    pub amount: u64,
+}
 
 /// An attested claim that `amount` of the SPL token `spl_mint` was locked on
 /// Solana, bound for `dregg_recipient` inside dregg.
@@ -260,7 +295,12 @@ pub struct MirrorState {
     pub currently_locked: u64,
     /// Mirror-$DREGG currently circulating inside dregg.
     pub live_supply: u64,
-    /// Lock ids already mirrored (replay / double-mint protection).
+    /// Lock ids already mirrored — a per-relayer LOCAL fast-reject CACHE, NOT the
+    /// global double-mint authority. The authoritative consume-once gate is the
+    /// committed `note_nullifiers` set (see [`lock_nullifier`] +
+    /// [`dregg_turn::executor::bridge_ledger`]): a second relayer with a fresh
+    /// `seen_locks` is still refused by COMMITTED state. This cache only saves a
+    /// round-trip for the single-relayer happy path.
     seen_locks: BTreeSet<[u8; 32]>,
     /// Redeem ids already issued.
     seen_redeems: BTreeSet<[u8; 32]>,
@@ -351,6 +391,46 @@ impl MirrorState {
         }
 
         self.credit_lock(att.lock_id, att.amount, att.dregg_recipient)
+    }
+
+    /// **Verify a lock attestation for the COMMITTED bridge mint, mutating no
+    /// per-relayer RAM.**
+    ///
+    /// Runs exactly the same checks as [`Self::mint_against_lock`]
+    /// (mint match, amount bounds, threshold attestation) but does NOT touch
+    /// `seen_locks` / `currently_locked` / `live_supply`. It returns the
+    /// consume-once [`VerifiedLock`] the caller feeds to
+    /// [`dregg_turn::executor::bridge_ledger`]'s
+    /// `TurnExecutor::bridge_mint_against_lock`, where the committed
+    /// `note_nullifiers` set is the global double-mint authority and a committed
+    /// cell is the supply source of truth.
+    ///
+    /// This is the SOUND multi-relayer path: any number of relayers may call
+    /// `verify_lock` for the same lock and race the committed mint — exactly one
+    /// wins (the first to consume the nullifier); the rest are refused by
+    /// committed state, not by per-relayer `seen_locks`.
+    pub fn verify_lock(&self, att: &SolanaLockAttestation) -> Result<VerifiedLock, MirrorError> {
+        if att.spl_mint != self.config.spl_mint {
+            return Err(MirrorError::WrongMint);
+        }
+        if att.amount < self.config.min_amount {
+            return Err(MirrorError::BelowMin);
+        }
+        if att.amount > self.config.max_amount {
+            return Err(MirrorError::AboveMax);
+        }
+        let key = self
+            .config
+            .key_for_epoch(att.epoch)
+            .ok_or(MirrorError::NoKeyForEpoch(att.epoch))?;
+        if !att.verify_under(key) {
+            return Err(MirrorError::AttestationInvalid);
+        }
+        Ok(VerifiedLock {
+            lock_nullifier: lock_nullifier(&att.spl_mint, &att.lock_id),
+            recipient: att.dregg_recipient,
+            amount: att.amount,
+        })
     }
 
     /// The shared lock-accounting routine, independent of how the lock is

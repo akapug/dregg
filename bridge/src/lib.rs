@@ -118,8 +118,8 @@ pub use solana_consensus::{
     verify_poh_segment, verify_supermajority, vote_message,
 };
 pub use solana_mirror::{
-    MirrorConfig, MirrorError, MirrorMint, MirrorRedeem, MirrorState, SolanaLockAttestation,
-    SolanaUnlockRequest,
+    MirrorConfig, MirrorError, MirrorMint, MirrorRedeem, MirrorState, SOLANA_LOCK_NULLIFIER_DOMAIN,
+    SolanaLockAttestation, SolanaUnlockRequest, VerifiedLock, lock_nullifier,
 };
 pub use solana_provenance::{
     Delegation, DerivedStakeTable, ProvenAccount, ProvenanceError, RotationStep, STAKE_PROGRAM_ID,
@@ -137,7 +137,8 @@ pub use solana_wire::{
     solana_account_hash, verify_account_inclusion_16ary, witness_binds,
 };
 pub use stripe_mirror::{
-    DEFAULT_TOLERANCE_SECS, RECIPIENT_METADATA_KEY, StripeMint, StripeMirrorConfig,
-    StripeMirrorError, StripeMirrorState, StripePaymentAttestation, StripeWebhookEvent,
+    DEFAULT_TOLERANCE_SECS, RECIPIENT_METADATA_KEY, STRIPE_PAYMENT_NULLIFIER_DOMAIN, StripeMint,
+    StripeMirrorConfig, StripeMirrorError, StripeMirrorState, StripePaymentAttestation,
+    StripeWebhookEvent, VerifiedPayment, payment_nullifier,
 };
 pub use verifier::{DslAwareProofVerifier, StarkProofVerifier};

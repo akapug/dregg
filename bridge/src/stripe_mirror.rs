@@ -48,6 +48,7 @@
 
 use std::collections::BTreeSet;
 
+use dregg_cell::Nullifier;
 use dregg_turn::action::Effect;
 use dregg_types::CellId;
 use hmac::{Hmac, Mac};
@@ -55,6 +56,40 @@ use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// Domain separation for the COMMITTED consume-once payment nullifier (the
+/// concurrency-safe double-mint gate, `docs/deos/BRIDGE-ARCHITECTURE-SOUNDNESS.md`
+/// §3). Distinct from the Solana lock nullifier domain.
+pub const STRIPE_PAYMENT_NULLIFIER_DOMAIN: &str = "dregg-stripe-payment-v1";
+
+/// Derive the domain-separated, consume-once nullifier for a Stripe payment.
+///
+/// `nf = H("dregg-stripe-payment-v1" ‖ asset ‖ payment_intent_id)`. Binding the
+/// mirror `asset` scopes the nullifier so a `payment_intent_id` can never
+/// collide across mirrors. This is the value gated against the executor's
+/// committed `note_nullifiers` set in [`dregg_turn::executor::bridge_ledger`] —
+/// so a payment is minted exactly once GLOBALLY, regardless of how many relayer
+/// processes (or webhook retries / sibling `charge.succeeded` events) observe it.
+pub fn payment_nullifier(asset: &[u8; 32], payment_intent_id: &str) -> Nullifier {
+    let mut h = blake3::Hasher::new_derive_key(STRIPE_PAYMENT_NULLIFIER_DOMAIN);
+    h.update(asset);
+    h.update(payment_intent_id.as_bytes());
+    Nullifier(*h.finalize().as_bytes())
+}
+
+/// The verified, committed-bridge-ready facts of a Stripe payment: the
+/// consume-once nullifier plus the mint target/amount. Produced by
+/// [`StripeMirrorState::verify_payment`] WITHOUT mutating any per-relayer RAM —
+/// the authority is committed state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedPayment {
+    /// The domain-separated consume-once payment nullifier (see [`payment_nullifier`]).
+    pub payment_nullifier: Nullifier,
+    /// The dregg cell to credit the mirrored USD-credit.
+    pub recipient: CellId,
+    /// The amount (cents) to mint.
+    pub amount: u64,
+}
 
 /// The metadata key, on the Stripe payment object, that carries the dregg cell
 /// (hex-encoded 32-byte [`CellId`]) the minted USD-credit should be credited to.
@@ -388,7 +423,11 @@ pub struct StripeMirrorState {
     pub total_verified_payments: u64,
     /// USD-credit currently circulating inside dregg.
     pub live_supply: u64,
-    /// Payment-intent ids already mirrored (replay / double-mint protection).
+    /// Payment-intent ids already mirrored — a per-relayer LOCAL fast-reject
+    /// CACHE, NOT the global double-mint authority. The authoritative
+    /// consume-once gate is the committed `note_nullifiers` set (see
+    /// [`payment_nullifier`] + [`dregg_turn::executor::bridge_ledger`]): a second
+    /// relayer with a fresh `seen_payments` is still refused by COMMITTED state.
     seen_payments: BTreeSet<String>,
 }
 
@@ -442,6 +481,43 @@ impl StripeMirrorState {
     ) -> Result<StripeMint, StripeMirrorError> {
         let att = webhook.verify(&self.config.webhook_secret, now, tolerance_secs)?;
         self.mint_against_payment(&att)
+    }
+
+    /// **Verify a payment for the COMMITTED bridge mint, mutating no per-relayer
+    /// RAM.**
+    ///
+    /// Runs the same currency/amount checks as [`Self::mint_against_payment`] but
+    /// does NOT touch `seen_payments` / `total_verified_payments` / `live_supply`.
+    /// It returns the consume-once [`VerifiedPayment`] the caller feeds to
+    /// [`dregg_turn::executor::bridge_ledger`]'s
+    /// `TurnExecutor::bridge_mint_against_lock`, where the committed
+    /// `note_nullifiers` set is the global double-mint authority. This is the
+    /// SOUND multi-relayer path: any number of relayers (or webhook retries) may
+    /// race the same payment and exactly one wins.
+    ///
+    /// The caller must already have verified the webhook signature (e.g. via
+    /// [`StripeWebhookEvent::verify`]) to obtain `att`.
+    pub fn verify_payment(
+        &self,
+        att: &StripePaymentAttestation,
+    ) -> Result<VerifiedPayment, StripeMirrorError> {
+        if att.currency != self.config.currency {
+            return Err(StripeMirrorError::WrongCurrency {
+                got: att.currency.clone(),
+                want: self.config.currency.clone(),
+            });
+        }
+        if att.amount_cents < self.config.min_cents {
+            return Err(StripeMirrorError::BelowMin);
+        }
+        if att.amount_cents > self.config.max_cents {
+            return Err(StripeMirrorError::AboveMax);
+        }
+        Ok(VerifiedPayment {
+            payment_nullifier: payment_nullifier(&self.config.asset, &att.payment_intent_id),
+            recipient: att.recipient,
+            amount: att.amount_cents,
+        })
     }
 
     /// **Mirror-mint against a verified Stripe payment.**

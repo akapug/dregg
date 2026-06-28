@@ -2762,7 +2762,7 @@ impl TurnExecutor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_mint(
+    pub(super) fn apply_mint(
         &self,
         ledger: &mut Ledger,
         path: &[usize],
