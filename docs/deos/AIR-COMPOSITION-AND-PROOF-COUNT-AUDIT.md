@@ -100,10 +100,11 @@ faithfulness, recursion-engine soundness). Nothing dregg-specific is assumed wit
 ## Q2 — Proof-verification count per turn (the cost/DoS surface)
 
 **Verdict: the EffectVM leaf count is bounded by the (wire-controlled) cohort-run count,
-with roughly symmetric prover/verifier cost. BUT the custom-effect sub-proof
-verification loop is UNBOUNDED and ASYMMETRIC — a single authorized turn can force the
-verifier to run an arbitrary number of recursive STARK verifications. This is a real
-DoS finding (FINDING 1).**
+with roughly symmetric prover/verifier cost. The custom-effect sub-proof verification
+loop WAS UNBOUNDED and ASYMMETRIC — a single authorized turn could force the verifier to
+run an arbitrary number of recursive STARK verifications (FINDING 1). This is now FIXED:
+a fail-closed pre-loop cap (`proofs.len() <= max_custom_effects`, hard cap 64) plus a
+post-verify committed-count binding (`proofs.len() == PI[CUSTOM_EFFECT_COUNT]`).**
 
 ### (a) The EffectVM STARK — one verify per *cohort run*, not per effect
 
@@ -119,7 +120,27 @@ check, `proof_verify.rs:399-407`, before the expensive per-leg verify). Lower-se
 than (b), but note there is no explicit cap on `effects.len()` / cohort-run count — see
 FINDING 2.
 
-### (b) FINDING 1 (Medium-High) — unbounded, asymmetric custom-proof verification
+### (b) FINDING 1 (Medium-High) — unbounded, asymmetric custom-proof verification — **FIXED**
+
+**STATUS: FIXED** (`turn/src/executor/proof_verify.rs`). The fail-closed bound below is
+now enforced in the kernel gate, before any recursive sub-proof verify runs:
+1. **Pre-loop DoS cap** — `enforce_custom_effect_proofs` rejects the turn with
+   `TurnError::TooManyCustomProofs { got, cap }` when
+   `turn.custom_program_proofs.len() > read_cell_max_custom_effects(cell, ledger)`
+   (hard cap 64). The check precedes the verify loop, so a flooding turn pays no verify
+   cost (test `flooding_turn_rejected_before_any_verify` asserts zero verifier
+   invocations on a 5-entry vec against a default cap of 4; `turn_at_cap_passes_and_dispatches_all`
+   confirms the ceiling is not off-by-one).
+2. **Committed-count binding** — after the main EffectVM proof verifies,
+   `enforce_custom_proof_count_committed` rejects with
+   `TurnError::CustomProofCountMismatch { wire, committed }` unless the wire vec length
+   equals the in-circuit committed count (the number of `Effect::Custom` rows the proven
+   transition carries, = `PI[CUSTOM_EFFECT_COUNT]`; the executor reconstructs the same
+   effect sequence the proof binds). Closes the wire-vec-vs-in-circuit independence seam
+   fail-closed (tests `wire_count_not_matching_committed_is_rejected` /
+   `wire_count_matching_committed_passes`).
+
+The original finding, for the record:
 
 `enforce_custom_effect_proofs` (`turn/src/executor/proof_verify.rs:222-253`) runs at the
 TOP of `verify_and_commit_proof` (line 198), **before** the main proof is verified, and
@@ -306,13 +327,14 @@ more effect families are welded.
 
 | # | Severity | Finding | Fix (proposed, not applied) |
 |---|---|---|---|
-| 1 | **Medium-High** | `enforce_custom_effect_proofs` loops over the wire-supplied `turn.custom_program_proofs` with no length cap and no binding to `PI[CUSTOM_EFFECT_COUNT]` / `max_custom_effects`; each entry is a full recursive STARK verify, run before the main proof. A single authorized turn (one fee) replicating one valid sub-proof forces arbitrarily many verifications — asymmetric DoS. (`turn/src/executor/proof_verify.rs:222-253`, `cell/src/custom_effect.rs:350`) | Cap `proofs.len()` against the cell's `max_custom_effects` (hard cap 64) before the loop, in the kernel gate; separately, after the main verify, assert `proofs.len() == PI[CUSTOM_EFFECT_COUNT]`. |
+| 1 | **Medium-High** — **FIXED** | `enforce_custom_effect_proofs` loops over the wire-supplied `turn.custom_program_proofs` with no length cap and no binding to `PI[CUSTOM_EFFECT_COUNT]` / `max_custom_effects`; each entry is a full recursive STARK verify, run before the main proof. A single authorized turn (one fee) replicating one valid sub-proof forces arbitrarily many verifications — asymmetric DoS. (`turn/src/executor/proof_verify.rs:222-253`, `cell/src/custom_effect.rs:350`) | **FIXED:** pre-loop cap `proofs.len() <= read_cell_max_custom_effects` (`TurnError::TooManyCustomProofs`, before any verify) + post-verify `proofs.len() == PI[CUSTOM_EFFECT_COUNT]` committed-count binding (`TurnError::CustomProofCountMismatch`). Both fail-closed in the kernel gate. Tests in `proof_verify.rs::custom_effect_dispatch_tests`. |
 | 2 | Low | No explicit cap on `effects.len()` / cohort-run count ⇒ EffectVM leaf-verify count grows with a wire-controlled effect count (cost roughly symmetric, so lower severity). (`proof_verify.rs:357-447`) | Bound effects-per-turn at admission; or rely on wire-decode size limits + the symmetric proving cost. Verify the postcard decode bound is set. |
 | — | Info | Layout comments in `columns.rs:11,31` disagree on EffectVM width (186 vs 188) vs `trace_rotated.rs:80` (V1_WIDTH 187); param scratch is multiplexed per-descriptor (no aliasing, but the 8-col block is the weld budget). | Reconcile comments in the descriptor-regeneration lane. |
 
 **Verdicts:** Q1 composes-correctly (modulo the named standard-crypto carriers, all Lean
 hypotheses/structures, zero axioms). Q2 EffectVM = 1 verify per cohort run (bounded by
-effects, symmetric); **custom-proof verification is UNBOUNDED and asymmetric — FINDING 1**.
+effects, symmetric); **custom-proof verification WAS UNBOUNDED and asymmetric (FINDING 1)
+— now FIXED with a pre-loop cap + committed-count binding**.
 Q3 weld specs are good (degree-correct, real columns, structurally inert at sel=0,
 spec-faithful, honestly STAGED). Q4 in-AIR is the right call for the degree-≤2 skeleton
 and sustainable; realize the recompute/decode chains via a composed chip-lookup, not a raw
