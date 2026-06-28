@@ -4006,6 +4006,7 @@ dependencies = [
  "dregg-circuit",
  "dregg-circuit-prove",
  "dregg-intent",
+ "dregg-payable",
  "dregg-sdk",
  "dregg-storage",
  "dregg-turn",
@@ -4728,6 +4729,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-payable"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+]
+
+[[package]]
 name = "dregg-perf"
 version = "0.1.0"
 dependencies = [
@@ -4889,6 +4899,7 @@ dependencies = [
  "dregg-lean-ffi",
  "dregg-lightclient",
  "dregg-macaroon",
+ "dregg-payable",
  "dregg-token",
  "dregg-trace",
  "dregg-turn",
@@ -16964,6 +16975,7 @@ dependencies = [
  "starbridge-compartment-workflow-mandate",
  "starbridge-compute-exchange",
  "starbridge-escrow-market",
+ "starbridge-execution-lease",
  "starbridge-gallery",
  "starbridge-governed-namespace",
  "starbridge-identity",

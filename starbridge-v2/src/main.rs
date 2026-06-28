@@ -243,6 +243,35 @@ fn main() {
         }
     }
 
+    // `--render-service-economy <out>`: THE SERVICE-ECONOMY SCENE — the value/service
+    // apps as live windows over ONE shared live `World`: the durable EXECUTION-LEASE
+    // (a metered, payable lease whose periods-paid gauge climbs as its durable cursor
+    // advances), the ESCROW-MARKET (a two-party sealed-escrow swap driven to SETTLED),
+    // and the COMPUTE-EXCHANGE (a compute job driven to SETTLED, the budget split into
+    // paid/refunded). Each app is launched onto the World and DRIVEN with real cap-gated
+    // verified turns so its card's gauges/state are alive, then its bespoke deos-view
+    // card is mounted side by side. ONE high-res PNG written to `<out>`. Asserts the
+    // ledger grew + names every fired turn. Default 2560x1600 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_service_economy_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((2560.0, 1600.0));
+            match render_service_economy_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-service-economy FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     // `--render-app-fire <out>`: THE CLICK → VERIFIED TURN close-up. Launches a real app
     // (gallery) onto a live `World`, mounts its bespoke deos-view card, bakes
     // `<out>.before.png`, FIRES the card's `submit` button = ONE cap-gated VERIFIED turn
@@ -2621,6 +2650,28 @@ fn render_apps_showcase_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-service-economy <out>` (or `=<out>`) argument — the output path for
+/// the SERVICE-ECONOMY scene bake (ONE PNG written to `<out>`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_service_economy_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-service-economy" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-service-economy=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// Parse the `--render-app-fire <out>` (or `=<out>`) argument — the output base path for
 /// the CLICK→VERIFIED-TURN app-card-button bake (`<out>.before.png` / `<out>.after.png` /
 /// `<out>.png`). `None` when absent.
@@ -4760,6 +4811,328 @@ fn render_apps_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()
         "OK apps-showcase render -> {out} ({aw}x{ah}), logical {w}x{h}; {card_count} VISUAL-KILLER \
          app cards mounted on a shared live World, each DRIVEN with real verified turns until its \
          gauges are FILLED ({total_fired} turns total, ledger {pre_height}->{post_height}, receipts \
+         {pre_receipts}->{post_receipts}): {}.",
+        summ.join("; ")
+    );
+    Ok(())
+}
+
+/// escrow-market card fire — the sealed-escrow lifecycle is COMPLETE in the
+/// service-economy bake (driven to SETTLED), so a card button is a surfaced honest
+/// refusal: there is no further live-fireable affordance on a settled escrow. The card's
+/// LIVE binds (escrowed / state) still re-read the running World state.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn escrow_card_fire(
+    _spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    Err(starbridge_v2::app_worldspine::WorldFireError::World {
+        reason: format!(
+            "escrow-market card: '{method}' is not live-fireable — the sealed escrow has \
+             already SETTLED in this scene (the lifecycle is complete)"
+        ),
+    })
+}
+
+/// compute-exchange card fire — the job is SETTLED in the service-economy bake (the budget
+/// split into paid/refunded), so a card button is a surfaced honest refusal. The card's
+/// LIVE gauges/binds (lifecycle / bid / paid / refunded) still re-read the running World.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn compute_card_fire(
+    _spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    Err(starbridge_v2::app_worldspine::WorldFireError::World {
+        reason: format!(
+            "compute-exchange card: '{method}' is not live-fireable — the job has already \
+             SETTLED in this scene (the budget was split paid/refunded)"
+        ),
+    })
+}
+
+/// **THE SERVICE-ECONOMY SCENE BAKE.** Launches the value/service apps onto ONE shared
+/// live [`World`](starbridge_v2::world::World) and DRIVES each with real cap-gated verified
+/// turns so its card's state is alive, then mounts each app's bespoke deos-view
+/// [`CardPane`](starbridge_v2::card_pane::CardPane) side by side:
+///
+///   - **execution-lease** — the launch advances the durable cursor (step 0→1); then a run
+///     of metered deliveries climbs the periods-paid gauge AND the durable checkpoint
+///     cursor (each `advance` re-enforced by `Monotonic(STEP)`/`Monotonic(PERIODS_PAID)`);
+///   - **escrow-market** — the launch funds the listed item (LISTED→FUNDED, escrowed); then
+///     `ship` (FUNDED→SHIPPED) + `settle` (SHIPPED→SETTLED) release the escrow IN FULL
+///     (`released + refunded == escrowed`, the FLASHWELL `AffineEq` conservation);
+///   - **compute-exchange** — the launch bids on the job (POSTED→BID); then `settle`
+///     (BID→SETTLED) splits the budget into `paid` (the accepted bid) + `refunded` (the
+///     remainder), the conserving `AffineEq(PAID + REFUNDED == BUDGET)`.
+///
+/// ONE high-res PNG written to `<out>`. Asserts the live ledger height GREW and names every
+/// fired turn + the final gauge readings, so the scene is the running World's real state.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_service_economy_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance, CardFireFn};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::borrow::Cow;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let rows = launcher.rows();
+    let name_of = |id: &str| -> String {
+        rows.iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+
+    struct Pending {
+        name: String,
+        substance: AppCardSubstance,
+        tree: deos_view::ViewNode,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut summ: Vec<String> = Vec::new();
+    let mut total_fired = 0usize;
+
+    // ── (1) EXECUTION-LEASE — durable cursor advances + periods-paid gauge climbs ──
+    {
+        let id = "execution-lease";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's representative advance (step 0 -> 1)
+        use starbridge_execution_lease as el;
+        let cell = spine.app_cell();
+        // A run of metered durable deliveries: each `advance` moves the durable checkpoint
+        // cursor forward AND meters one rent period, filling the periods-paid gauge (max
+        // DEMO_LEASE_PERIODS) — `Monotonic(STEP)` + `Monotonic(PERIODS_PAID)` re-enforced.
+        let deliveries = 8u64;
+        for _ in 0..deliveries {
+            spine
+                .commit("advance", &el::AGENT_RIGHTS, &el::AGENT_RIGHTS, |st| {
+                    let step =
+                        field_tail_u64_le(&st.fields[el::STEP_SLOT as usize]).saturating_add(1);
+                    let paid = field_tail_u64_le(&st.fields[el::PERIODS_PAID_SLOT as usize])
+                        .saturating_add(1);
+                    vec![
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::STEP_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(step),
+                        },
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::STATE_DIGEST_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(0xD00D + step),
+                        },
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::PERIODS_PAID_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(paid),
+                        },
+                        dregg_app_framework::Effect::EmitEvent {
+                            cell,
+                            event: dregg_app_framework::Event::new(
+                                dregg_app_framework::symbol("lease-advanced"),
+                                vec![dregg_app_framework::field_from_u64(step)],
+                            ),
+                        },
+                    ]
+                })
+                .map_err(|e| anyhow::anyhow!("execution-lease advance refused: {e}"))?;
+            total_fired += 1;
+        }
+        let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+        let tree = deos_view::parse_view_tree(&card.json)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(spine, card.fire);
+        let step = substance.get_u64(el::STEP_SLOT as usize);
+        let paid = substance.get_u64(el::PERIODS_PAID_SLOT as usize);
+        summ.push(format!(
+            "{} (durable checkpoint step {step} · {paid}/{} rent periods paid)",
+            name_of(id),
+            el::card::DEMO_LEASE_PERIODS
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (2) ESCROW-MARKET — the sealed-escrow swap driven to SETTLED ──
+    {
+        let id = "escrow-market";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's fund (LISTED -> FUNDED, escrowed 500)
+        use starbridge_escrow_market as e;
+        let cell = spine.app_cell();
+        // ship (FUNDED -> SHIPPED): the seller commits the sealed delivery (WriteOnce
+        // DELIVERY_HASH + StrictMonotonic STATE).
+        spine
+            .commit("ship", &e::SELLER_RIGHTS, &e::SELLER_RIGHTS, |_st| {
+                e::ship_effects(cell, &dregg_app_framework::field_from_u64(0x5417))
+            })
+            .map_err(|err| anyhow::anyhow!("escrow-market ship refused: {err}"))?;
+        total_fired += 1;
+        // settle (SHIPPED -> SETTLED): release the escrow IN FULL — the FLASHWELL
+        // AffineEq(RELEASED + REFUNDED == ESCROWED) conservation (released = escrowed).
+        spine
+            .commit("settle", &e::SELLER_RIGHTS, &e::SELLER_RIGHTS, |st| {
+                let escrowed = field_tail_u64_le(&st.fields[e::ESCROWED_SLOT]);
+                e::settle_effects(cell, escrowed, 0)
+            })
+            .map_err(|err| anyhow::anyhow!("escrow-market settle refused: {err}"))?;
+        total_fired += 1;
+        let json = starbridge_escrow_market::card::escrow_card_json();
+        let tree = deos_view::parse_view_tree(&json)
+            .map_err(|err| anyhow::anyhow!("'{id}' card view-tree parse: {err}"))?;
+        let substance = AppCardSubstance::new(spine, escrow_card_fire as CardFireFn);
+        let escrowed = substance.get_u64(e::ESCROWED_SLOT);
+        let state = substance.get_u64(e::STATE_SLOT);
+        summ.push(format!(
+            "{} (escrowed {escrowed} released · state {state}/{} SETTLED)",
+            name_of(id),
+            e::STATE_SETTLED
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (3) COMPUTE-EXCHANGE — the compute job driven to SETTLED (budget split) ──
+    {
+        let id = "compute-exchange";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's bid (POSTED -> BID, bid 750)
+        use starbridge_compute_exchange as j;
+        let cell = spine.app_cell();
+        // settle (BID -> SETTLED): pay the provider IN FULL + refund the remainder — the
+        // conserving AffineEq(PAID + REFUNDED == BUDGET).
+        spine
+            .commit("settle", &j::REQUESTER_RIGHTS, &j::REQUESTER_RIGHTS, |st| {
+                let budget = field_tail_u64_le(&st.fields[j::BUDGET_SLOT]);
+                let bid = field_tail_u64_le(&st.fields[j::BID_SLOT]);
+                j::settle_effects(cell, bid, budget.saturating_sub(bid))
+            })
+            .map_err(|err| anyhow::anyhow!("compute-exchange settle refused: {err}"))?;
+        total_fired += 1;
+        let json = starbridge_compute_exchange::card::job_card_json();
+        let tree = deos_view::parse_view_tree(&json)
+            .map_err(|err| anyhow::anyhow!("'{id}' card view-tree parse: {err}"))?;
+        let substance = AppCardSubstance::new(spine, compute_card_fire as CardFireFn);
+        let paid = substance.get_u64(j::PAID_SLOT);
+        let refunded = substance.get_u64(j::REFUNDED_SLOT);
+        let state = substance.get_u64(j::STATE_SLOT);
+        summ.push(format!(
+            "{} (paid {paid} · refunded {refunded} · state {state}/{} SETTLED)",
+            name_of(id),
+            j::STATE_SETTLED
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "no verified turns committed ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts >= pre_receipts + total_fired,
+        "expected at least {total_fired} new receipts, got {}",
+        post_receipts.saturating_sub(pre_receipts)
+    );
+
+    let subtitle = format!(
+        "the service-economy value apps launched onto ONE shared live World, then DRIVEN with \
+         {total_fired} real cap-gated VERIFIED turns (ledger {pre_height}→{post_height}, receipts \
+         {pre_receipts}→{post_receipts}): a durable-execution lease's periods-paid gauge climbing \
+         as its checkpoint cursor advances, a sealed escrow released to SETTLED, and a compute job \
+         settled with its budget split paid/refunded — every value below is the running World's \
+         real state."
+    );
+    let card_count = pending.len();
+    let apps = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        let cards = pending
+            .into_iter()
+            .map(|p| {
+                let sub: CardSubstanceRef = Rc::new(RefCell::new(p.substance));
+                let title = format!("{} · live app card (deos-view)", p.name);
+                cx.new(|_cx| CardPane::new_substance(sub, p.tree, title))
+            })
+            .collect();
+        cx.new(|_cx| AppsRowView { subtitle, cards })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(apps.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let apps_png = cx.capture_screenshot(apps.into())?;
+    let (aw, ah) = (apps_png.width(), apps_png.height());
+    apps_png.save(out)?;
+
+    println!(
+        "OK service-economy render -> {out} ({aw}x{ah}), logical {w}x{h}; {card_count} value/service \
+         app cards mounted on a shared live World, each DRIVEN with real verified turns until its \
+         state is alive ({total_fired} turns total, ledger {pre_height}->{post_height}, receipts \
          {pre_receipts}->{post_receipts}): {}.",
         summ.join("; ")
     );

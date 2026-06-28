@@ -356,6 +356,8 @@ app-registry = [
     "dep:starbridge-subscription",
     "dep:starbridge-swarm-orchestration",
     "dep:starbridge-tool-access-delegation",
+    # The SERVICE-ECONOMY value app (durable execution leased + metered + paid).
+    "dep:starbridge-execution-lease",
     # The sender-bound wave (affordances that read the turn's sender, via `commit_as`).
     "dep:starbridge-supply-chain-provenance",
     "dep:starbridge-identity",
@@ -801,6 +803,8 @@ starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gatewa
 starbridge-subscription = { path = "../starbridge-apps/subscription", optional = true }
 starbridge-swarm-orchestration = { path = "../starbridge-apps/swarm-orchestration", optional = true }
 starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation", optional = true }
+# The SERVICE-ECONOMY value app — durable execution leased as a payable resource.
+starbridge-execution-lease = { path = "../starbridge-apps/execution-lease", optional = true }
 starbridge-supply-chain-provenance = { path = "../starbridge-apps/supply-chain-provenance", optional = true }
 starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
 starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace", optional = true }
