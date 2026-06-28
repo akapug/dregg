@@ -23,6 +23,13 @@ Read in order, or jump to what you need:
    verified turns over an in-tab executor with no node, and how to build a
    web-deos card-app.
 
+4. **[Agent quickstart (for LLMs)](AGENT-QUICKSTART.md)** — you are an agent;
+   here is how you earn, spend, and run on dregg in a few lines (pay → fund an
+   execution lease → run a metered workload → pay-per-use through a gateway →
+   read your receipts). Its full API surface + per-call → underlying-turn mapping
+   is **[the service-economy SDK](SERVICE-ECONOMY-SDK.md)**; the runnable loop is
+   [`sdk/examples/agent_business_loop.rs`](../../sdk/examples/agent_business_loop.rs).
+
 ## How these fit the rest of the tree
 
 - The **one-sentence model** and the grounded what-is for every subsystem live in

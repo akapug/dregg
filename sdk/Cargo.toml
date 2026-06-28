@@ -154,6 +154,10 @@ name = "hello_receipt_chain"
 path = "examples/hello_receipt_chain.rs"
 
 [[example]]
+name = "agent_business_loop"
+path = "examples/agent_business_loop.rs"
+
+[[example]]
 name = "polis_sealed_vote"
 path = "examples/polis_sealed_vote.rs"
 
