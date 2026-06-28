@@ -14,10 +14,13 @@
 //!                 [`ReversibleHistory::undo_to`] (backward-from-head via the
 //!                 `Turn::invert` un-turn). The demo shows the two roads land on
 //!                 the SAME verified past state (modulo the monotone nonce).
-//!   * BRANCH    — fork the past by replaying the recorded prefix (`steps()` +
-//!                 `record_commit`) into a fresh `ReversibleHistory`. The fork's
-//!                 root at step k equals the original's root at k EXACTLY (same
-//!                 verified past), then a divergent turn writes a different future.
+//!   * BRANCH    — fork the past with the first-class
+//!                 [`ReversibleHistory::fork_at`]: a new history whose committed
+//!                 prefix `[0,k]` SHARES the parent's config-lattice down-set
+//!                 (each prefix step is an `Arc`-handle clone — NOT re-executed),
+//!                 landing on the original's `roots[k]` byte-identically. Then a
+//!                 divergent turn writes a different future. This is the temporal
+//!                 dual of branch-and-stitch's spatial `World::fork`.
 //!   * GENUINE   — receipts are real (`record_commit` returns `Some(receipt)`),
 //!                 conservation/authority hold (the real executor rejects
 //!                 otherwise), the un-turn is an exact inverse on value/state
@@ -30,18 +33,20 @@
 //!     deliberate island of irreversibility every committed turn carries
 //!     (`FIRST-CLASS-REVERSIBILITY.md` §4.2). It is not replay-to-N approximation;
 //!     it walks history backward applying real inverse turns through the executor.
-//!   * BRANCHING currently has NO first-class `ReversibleHistory::fork_at(k)`
-//!     API. This demo synthesizes the fork by REPLAYING the recorded prefix into
-//!     a fresh history — faithful (root-at-k matches bit-for-bit) but re-executing
-//!     rather than structurally sharing the prefix. The named next rung is a
-//!     `fork_at` that shares the prefix as the config-lattice down-set. See the
-//!     `the_named_gap_fork_at_is_replay_of_the_prefix` note at the bottom.
+//!   * BRANCHING is now first-class: [`ReversibleHistory::fork_at`] SHARES the
+//!     recorded prefix as the event-structure config-lattice down-set (each
+//!     prefix step is an `Arc`-handle clone of the parent's — no re-execution, no
+//!     deep copy), landing on `roots[k]` byte-identically. The earlier demo
+//!     SYNTHESIZED this by replaying the `steps()` prefix through the executor
+//!     (faithful but re-executing); `fork_at` is the sound optimization that
+//!     synthesis pointed at. See `fork_at_shares_the_downset_not_replay` at the
+//!     bottom (the structural-sharing witness, `Arc::ptr_eq`).
 
 use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::TurnExecutor;
 use dregg_turn::action::Effect;
 use dregg_turn::builder::{ActionBuilder, TurnBuilder};
-use dregg_turn::reversible::{ReversibleHistory, ReversibleStep, ledgers_agree_modulo_nonce};
+use dregg_turn::reversible::{ReversibleHistory, ledgers_agree_modulo_nonce};
 use dregg_turn::turn::Turn;
 
 // ── fixtures (mirror turn/src/reversible.rs tests; the demo/test substrate) ──
@@ -81,37 +86,6 @@ fn nonce_of(l: &Ledger, id: &CellId) -> u64 {
 
 fn balance_of(l: &Ledger, id: &CellId) -> i64 {
     l.get(id).map(|c| c.state.balance()).unwrap_or(0)
-}
-
-/// Fork the recorded history at step `k`: replay steps `0..k` of `h` into a
-/// FRESH `ReversibleHistory`, returning it primed at the past cursor together
-/// with the reconstructed ledger. The fork shares the verified past EXACTLY
-/// (`branch.root_at(k) == h.root_at(k)`); the caller then records a DIVERGENT
-/// turn to write a different future from that point.
-///
-/// This is the demo-synthesized branch primitive — the named gap is that
-/// `ReversibleHistory` has no first-class `fork_at`; we replay the public
-/// `steps()` prefix through `record_commit` (re-executing, not structurally
-/// sharing). It is faithful because re-executing the same prefix is
-/// deterministic and lands on the same canonical root tooth.
-fn fork_at(h: &ReversibleHistory, k: usize, timestamp: i64) -> (ReversibleHistory, Ledger) {
-    let mut branch = ReversibleHistory::new(timestamp);
-    let mut bl = Ledger::new();
-    let bex = branch.fresh_executor();
-    for step in &h.steps()[..k] {
-        match step {
-            ReversibleStep::Genesis { cell } => {
-                branch.record_genesis(&mut bl, cell.clone());
-            }
-            ReversibleStep::Committed { turn, .. } => {
-                assert!(
-                    branch.record_commit(&bex, &mut bl, turn.clone()).is_some(),
-                    "replaying a recorded prefix turn must re-commit deterministically"
-                );
-            }
-        }
-    }
-    (branch, bl)
 }
 
 /// Build the flagship history: a tiny two-party ledger world that accrues a
@@ -275,10 +249,15 @@ fn time_travel_rewind_branch_and_replay_a_divergent_verified_future() {
 
     // ── (b) BRANCH at the past point and replay a DIFFERENT future. ──────────
     //
-    // Fork at K=4. The branch shares the verified past EXACTLY, then we author a
-    // divergent turn: instead of t3's memo + t4's bob→alice 30, alice sends bob
-    // a big 500 transfer. A genuinely different future from the same past.
-    let (mut branch, mut bl) = fork_at(&h, K, 1_700_000_000);
+    // Fork at K=4 with the first-class `fork_at`. The branch SHARES the verified
+    // past as the config-lattice down-set (the prefix is NOT re-executed — see
+    // `fork_at_shares_the_downset_not_replay`), then we author a divergent turn:
+    // instead of t3's memo + t4's bob→alice 30, alice sends bob a big 500
+    // transfer. A genuinely different future from the same shared past. The
+    // working ledger is the rewind result (`rewound_fwd`) — `fork_at` itself
+    // neither produces nor re-executes a ledger.
+    let mut branch = h.fork_at(K);
+    let mut bl = rewound_fwd;
     let bex = branch.fresh_executor();
 
     // PROOF the past is shared: the fork's root at K equals the original's.
@@ -457,20 +436,20 @@ fn rewind_fails_closed_past_a_settled_commit() {
     );
 }
 
-// ── the named gap: fork_at is replay-of-the-prefix, not structural sharing. ──
+// ── fork_at SHARES the down-set — no re-execution, structurally the parent's. ─
 
 #[test]
-fn the_named_gap_fork_at_is_replay_of_the_prefix() {
-    // The demo's `fork_at` synthesizes branching with no first-class
-    // `ReversibleHistory::fork_at`: it REPLAYS the recorded `steps()` prefix into
-    // a fresh history. This proves the synthesis is FAITHFUL — the replayed
-    // prefix lands on the original's root tooth at every shared step — which is
-    // exactly why a real `fork_at` (sharing the prefix as the event-structure
-    // config-lattice down-set, no re-execution) would be a sound optimization,
-    // the named next reversibility rung.
+fn fork_at_shares_the_downset_not_replay() {
+    // The first-class `ReversibleHistory::fork_at` SHARES the recorded prefix as
+    // the event-structure config-lattice down-set: it lands on the original's
+    // root tooth at every shared step BYTE-IDENTICALLY, and — the proof that the
+    // prefix is NOT re-executed — each fork prefix step IS the parent's step
+    // (same `Arc` allocation, `Arc::ptr_eq`), not a freshly recomputed object.
+    // This is the named reversibility rung the earlier replay-synthesis pointed
+    // at, now built.
     let (h, _live, _ex, _alice, _bob) = build_history();
     for k in 2..=h.len() {
-        let (branch, _bl) = fork_at(&h, k, 1_700_000_000);
+        let branch = h.fork_at(k);
         assert_eq!(
             branch.len(),
             k,
@@ -480,7 +459,15 @@ fn the_named_gap_fork_at_is_replay_of_the_prefix() {
             assert_eq!(
                 branch.root_at(step),
                 h.root_at(step),
-                "the replayed prefix matches the original root tooth at every shared step {step}"
+                "fork_at({k}) shares the original root tooth at step {step} byte-identically"
+            );
+        }
+        // STRUCTURAL SHARING (not re-execution): the fork's prefix steps ARE the
+        // parent's, witnessed by pointer-equality of the shared `Arc` handles.
+        for i in 0..k {
+            assert!(
+                std::sync::Arc::ptr_eq(&branch.steps()[i], &h.steps()[i]),
+                "fork_at({k}) step {i} is the parent's step (Arc::ptr_eq) — shared, not re-executed"
             );
         }
     }
