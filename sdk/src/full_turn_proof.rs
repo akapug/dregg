@@ -640,6 +640,43 @@ pub struct CapMembershipExpectation {
     pub cap_root: BabyBear,
 }
 
+/// What the VERIFIER expects of the slot-caveat manifest for a CAPACITY cell — the
+/// constraint-binding weld's omission-proof expectation (the soundness core, STAGED).
+/// Mirrors [`CapMembershipExpectation`]: every field is re-derived by the verifier
+/// from data it trusts (the cell's COMMITTED declared constraint-set + the
+/// authoritative pre/post cell state), never taken from the proof.
+///
+/// The §6 weld rungs (`SealedEscrow`/`StandingObligation`/`Vault` Lean) prove a
+/// PRESENT manifest entry forces its invariant; the load-bearing gap they leave is
+/// that the entry must be present at all (the manifest is prover-chosen — a forger
+/// OMITS it). This expectation closes it: the verifier RE-DERIVES the required
+/// capacity tags from the committed declaration (via
+/// `dregg_turn::executor::required_capacity_caveat_tags`, whose `state_constraints`
+/// are bound into the `B_AUTHORITY_DIGEST` limb of the ~124-bit wide commit) and
+/// DEMANDS each is covered (present AND its gate re-evaluates true). This is the Rust
+/// shadow of the Lean `Dregg2.Deos.ConstraintBinding.omission_caught_under_binding`.
+///
+/// STAGED (`docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`): the AIR constraint
+/// polynomials — hence the VK bytes — are UNCHANGED (the manifest rides public inputs
+/// + off-AIR re-evaluation, exactly the temporal-caveat / capacity-weld vehicle).
+/// `None` (the deployed default) skips the check entirely, so nothing flips by
+/// default; the gated verifier-code epoch is the flip step.
+pub struct CaveatCoverageExpectation {
+    /// The capacity caveat tags the cell's COMMITTED declaration REQUIRES (the
+    /// `dregg_turn::executor::required_capacity_caveat_tags` re-derivation over the
+    /// committed `state_constraints`). The verifier demands every one is present in
+    /// the manifest — omission is rejected.
+    pub required_tags: Vec<u32>,
+    /// The cell's slot-0..7 4-byte pre-state field views (the same `STATE_BEFORE_BASE`
+    /// columns the AIR binds), re-derived from the authoritative pre-state cell.
+    pub initial_fields: [BabyBear; 8],
+    /// The cell's slot-0..7 4-byte post-state field views, re-derived from the
+    /// authoritative post-state cell.
+    pub final_fields: [BabyBear; 8],
+    /// The schedule clock (block height) the temporal / discharge gates read.
+    pub block_height: u64,
+}
+
 // ============================================================================
 // Circuit Descriptor Construction
 // ============================================================================
@@ -4984,9 +5021,119 @@ pub fn verify_full_turn_bound(
     Ok(())
 }
 
+/// **The STAGED constraint-binding verifier (the house-capacity weld's omission-proof
+/// path).** Runs every deployed [`verify_full_turn_bound`] check, then — when the
+/// caller supplies a [`CaveatCoverageExpectation`] — additionally enforces that the
+/// slot-caveat manifest COVERS every capacity caveat the cell's COMMITTED declaration
+/// requires (present AND its gate re-evaluates true). This closes the load-bearing
+/// soundness gap that the deployed path leaves: the manifest is prover-chosen, so a
+/// forger could OMIT a declared capacity entry and the verifier would have nothing to
+/// check (the §6 weld rungs only force a PRESENT entry's invariant). With the
+/// coverage demand, omission is rejected.
+///
+/// This is the Rust shadow of the Lean
+/// `Dregg2.Deos.ConstraintBinding.omission_caught_under_binding`: the caller's
+/// `required_tags` is `requiredTags(committed declaration)`, and a forger cannot
+/// escape via a hollow declaration because the declaration is bound in committed
+/// state (the `B_AUTHORITY_DIGEST` limb of the wide commit — the Lean `DeclCommitBinds`
+/// floor = the authority digest's collision-resistance).
+///
+/// STAGED — built BESIDE the deployed [`verify_full_turn_bound`], NOT flipping it:
+///   * `expected_caveat_coverage = None` ⇒ byte-identical to [`verify_full_turn_bound`]
+///     (the deployed default; no caveat check, nothing flips).
+///   * `Some(cov)` ⇒ the omission-proof path. The AIR constraint polynomials — hence
+///     the VK bytes — are UNCHANGED (the manifest rides public inputs + off-AIR
+///     re-evaluation).
+///
+/// CARRIER NOTE (the true remaining distance): the off-AIR slot-caveat manifest rides
+/// the FULL v1 effect-vm PI layout (`>= pi::BASE_COUNT`); the live ROTATED leg
+/// (38/39/wide PIs) does NOT carry it. So for a pure light client (commitments only),
+/// getting the manifest onto the rotated/wide leg bound in-AIR is the named VK epoch.
+/// Until then this path is fail-closed: a turn with NO manifest-bearing leg has every
+/// required tag absent and is rejected. See
+/// `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`.
+pub fn verify_full_turn_bound_with_caveat_coverage(
+    proof: &FullTurnProof,
+    expected_old_commit: [BabyBear; 8],
+    expected_new_commit: [BabyBear; 8],
+    expected_revocation_root: Option<BabyBear>,
+    expected_cap_membership: Option<&CapMembershipExpectation>,
+    expected_caveat_coverage: Option<&CaveatCoverageExpectation>,
+) -> Result<(), FullTurnVerifyError> {
+    // 1. Every deployed check (cryptographic verify + commit/adjacency/auth/freshness/cap).
+    verify_full_turn_bound(
+        proof,
+        expected_old_commit,
+        expected_new_commit,
+        expected_revocation_root,
+        expected_cap_membership,
+    )?;
+
+    // 2. The staged coverage check (None ⇒ deployed-identical).
+    let Some(cov) = expected_caveat_coverage else {
+        return Ok(());
+    };
+    if cov.required_tags.is_empty() {
+        return Ok(());
+    }
+
+    // Locate the effect-vm leg carrying the off-AIR slot-caveat manifest (the FULL v1 PI layout,
+    // >= pi::BASE_COUNT). The rotated leg does not carry it (the carrier gap, documented above);
+    // a turn with no manifest-bearing leg fails closed (every required tag absent).
+    let manifest_leg = proof.composed.sub_proofs.iter().find(|sp| {
+        (sp.label == "effect-vm" || sp.label == "effect-vm-rotated")
+            && sp.sub_public_inputs.len() >= effect_vm::pi::BASE_COUNT
+    });
+    let pi: &[BabyBear] = match manifest_leg {
+        Some(leg) => &leg.sub_public_inputs,
+        None => {
+            return Err(FullTurnVerifyError::CaveatCoverageFailed {
+                reason: format!(
+                    "no manifest-bearing effect-vm leg (>= {} PIs); declared capacity tag {} is \
+                     unwitnessed — omission rejected (fail-closed)",
+                    effect_vm::pi::BASE_COUNT,
+                    cov.required_tags[0]
+                ),
+            });
+        }
+    };
+
+    // SATISFACTION: every PRESENT entry's gate re-evaluates true (the §6 capacity gates).
+    dregg_circuit::effect_vm::verify_slot_caveat_manifest(
+        pi,
+        &cov.initial_fields,
+        &cov.final_fields,
+        cov.block_height,
+    )
+    .map_err(|reason| FullTurnVerifyError::CaveatManifestUnsatisfied { reason })?;
+
+    // COVERAGE / OMISSION: every REQUIRED tag is present (the soundness core).
+    dregg_circuit::effect_vm::verify_slot_caveat_coverage(pi, &cov.required_tags)
+        .map_err(|reason| FullTurnVerifyError::CaveatCoverageFailed { reason })?;
+
+    Ok(())
+}
+
 /// Errors that can occur during full turn proof verification.
 #[derive(Debug, Clone)]
 pub enum FullTurnVerifyError {
+    /// STAGED constraint-binding weld: a PRESENT slot-caveat manifest entry's gate
+    /// re-evaluation FAILED against the bound state views (the §6
+    /// `SettleGate`/`DischargeGate`/`VaultDepositGate` satisfaction half — e.g. a
+    /// partial settle, an early discharge, a diluting deposit). Only raised on the
+    /// staged [`verify_full_turn_bound_with_caveat_coverage`] path.
+    CaveatManifestUnsatisfied {
+        /// The first failing entry's diagnostic.
+        reason: String,
+    },
+    /// STAGED constraint-binding weld: a capacity caveat the cell's COMMITTED
+    /// declaration REQUIRES is ABSENT from the manifest (omission). This is the
+    /// soundness-core rejection — a forger cannot drop a declared capacity gate. Only
+    /// raised on the staged [`verify_full_turn_bound_with_caveat_coverage`] path.
+    CaveatCoverageFailed {
+        /// The missing-tag diagnostic.
+        reason: String,
+    },
     /// The composed main STARK proof failed verification.
     MainProofInvalid(String),
     /// A sub-proof could not be deserialized.
@@ -5148,6 +5295,15 @@ impl std::fmt::Display for FullTurnVerifyError {
                  spent nullifier ({:?}) — the freshness attests a DIFFERENT item than the \
                  turn spends (no-double-spend binding b)",
                 proven_item, effect_nullifier
+            ),
+            Self::CaveatManifestUnsatisfied { reason } => write!(
+                f,
+                "slot-caveat manifest entry's gate failed re-evaluation (capacity-weld \
+                 satisfaction): {reason}"
+            ),
+            Self::CaveatCoverageFailed { reason } => write!(
+                f,
+                "slot-caveat coverage failed (capacity-weld omission): {reason}"
             ),
         }
     }

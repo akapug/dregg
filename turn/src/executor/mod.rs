@@ -564,6 +564,52 @@ pub fn project_slot_caveat_manifest(
     (count as u32, entries)
 }
 
+/// **The REQUIRED-TAG re-derivation (constraint-binding weld, the soundness core).**
+/// The capacity caveat tags a cell's declared constraint-set REQUIRES — the Rust
+/// twin of the Lean `Dregg2.Deos.ConstraintBinding.requiredTags`. A capacity
+/// `StateConstraint` (`SettleEscrow` / `DischargeObligation` / `VaultDeposit`) is a
+/// JOINT invariant whose manifest entry MUST be present for a turn on the cell to be
+/// sound (omitting it would leave the atomicity / on-schedule / no-dilution gate
+/// unchecked). This returns those required tags so a verifier can DEMAND coverage
+/// (`dregg_circuit::effect_vm::verify_slot_caveat_coverage`).
+///
+/// Because a cell's declared `state_constraints` are bound into committed state
+/// (`dregg_cell::commitment::compute_authority_digest_felt` folds `cell.program` —
+/// hence these constraints — into the `B_AUTHORITY_DIGEST` limb of the ~124-bit wide
+/// commit a light client binds), re-deriving the required tags from the COMMITTED
+/// declaration and demanding coverage makes the gate omission-proof: a forger cannot
+/// drop the entry (coverage fails) nor swap in a hollow declaration (it would have to
+/// match the committed authority digest — the Lean `DeclCommitBinds` floor). Only the
+/// JOINT capacity gates are required here; the per-slot caveats are independently
+/// re-evaluated by `verify_slot_caveat_manifest` when present and need no coverage
+/// floor. STAGED: this is the re-derivation a future `verify_full_turn_bound` arm
+/// consumes; no deployed cell declares a capacity caveat yet. See
+/// `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`.
+pub fn required_capacity_caveat_tags(constraints: &[dregg_cell::StateConstraint]) -> Vec<u32> {
+    use dregg_circuit::effect_vm::pi;
+    let mut tags = Vec::new();
+    for c in constraints {
+        let tag = match c {
+            dregg_cell::StateConstraint::SettleEscrow { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_SETTLE_ESCROW)
+            }
+            dregg_cell::StateConstraint::DischargeObligation { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION)
+            }
+            dregg_cell::StateConstraint::VaultDeposit { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_VAULT_DEPOSIT)
+            }
+            _ => None,
+        };
+        if let Some(t) = tag
+            && !tags.contains(&t)
+        {
+            tags.push(t);
+        }
+    }
+    tags
+}
+
 /// Whether note effects in a turn use Pedersen value commitments or cleartext values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoteCommitmentMode {
