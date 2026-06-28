@@ -95,6 +95,47 @@ pub struct Fired {
     pub value: i64,
 }
 
+/// The **guard** of a compound turn — the state precondition the WHOLE action is gated
+/// on. The compound commits only if the actor cell's `slot` currently equals `value`,
+/// enforced as a real kernel `require_field_equals` precondition: it is checked BEFORE any
+/// effect runs (so a failed guard refuses the whole action — no partial), and it binds into
+/// the action commitment (`Action::hash` folds preconditions in, the anti-downgrade hash),
+/// so a LIGHT CLIENT — not just a re-executing validator — witnesses the guard that gated
+/// the move. This is the escrow's missing "only-if-SETTLED" link, made a single witnessed
+/// turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BatchGuard {
+    /// The actor cell's state slot the guard reads.
+    pub slot: Slot,
+    /// The value that slot must currently hold for the compound to commit.
+    pub value: u64,
+}
+
+/// One leg of a compound atomic turn — a single effect that commits with the others or not
+/// at all. Both lower to ordinary effects the executor already enforces and a light client
+/// already witnesses; the *atomicity* (all-or-none) is the executor's per-action journal —
+/// "if any action fails, ALL effects are rolled back via journal replay".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BatchOp {
+    /// Move value from the actor to a capped recipient (e.g. escrow -> seller). The
+    /// recipient must be a capped handle; a leg naming an unheld cell refuses the WHOLE
+    /// batch ([`FireError::NoCapability`]) before any effect — the ocap gate, all-or-none.
+    Transfer {
+        /// The recipient handle (must be in the cap table).
+        to: String,
+        /// The value moved.
+        amount: u64,
+    },
+    /// Write a fixed value to one of the actor's own slots (e.g. flip a state machine to
+    /// SETTLED). Lowers to `Effect::SetField` on the actor cell.
+    SetSlot {
+        /// The actor slot written.
+        slot: Slot,
+        /// The value written.
+        value: u64,
+    },
+}
+
 /// A **multi-cell world** on one embedded verified executor — the substance a native-JS
 /// *app* orchestrates. Cells are addressed by string handle; the handle IS the capability
 /// (an absent handle is an unreachable cell). One designated **home** cell carries the
@@ -414,6 +455,78 @@ impl CellWorld {
             .build();
         self.commit(from_id, action)?;
         self.balance(from)
+    }
+
+    /// **Fire an ATOMIC, STATE-GUARDED, COMPOUND turn** (the `batch` host fn) — the
+    /// compound/conditional-turn power-up. ONE verified turn, submitted AS `actor`, that
+    /// carries an OPTIONAL [`BatchGuard`] (a kernel `require_field_equals` precondition on
+    /// the actor's own state) and a list of [`BatchOp`] legs (transfers + slot writes). The
+    /// kernel commits it WHOLE or refuses it whole:
+    ///
+    ///   - **the guard is checked BEFORE any effect** ([`crate::world`] →
+    ///     `executor::check_preconditions`, run ahead of effect application). If the actor's
+    ///     guarded slot does not equal the guard value, the turn is refused
+    ///     ([`FireError::Executor`] carrying `PreconditionFailed`) — NO transfer, NO slot
+    ///     write, NO partial release;
+    ///   - **the legs commit atomically** — multiple effects in one action are all-or-none
+    ///     ("if any action fails, ALL effects are rolled back via journal replay"); if any
+    ///     leg would fail (insufficient balance, an unheld recipient), NOTHING commits;
+    ///   - **confinement holds** — every transfer recipient must be a capped handle; a leg
+    ///     naming an unheld cell is [`FireError::NoCapability`] and refuses the whole batch
+    ///     before it is built (the ocap gate, you cannot even name what you do not hold);
+    ///   - **a light client witnesses the guard** — preconditions fold into `Action::hash`
+    ///     (the anti-downgrade commitment), so the "only-if-SETTLED" link between the state
+    ///     cell and the value move is part of what the turn proves, not an off-chain
+    ///     ordering the JS happened to choose.
+    ///
+    /// This is the escrow's "release = check SETTLED ∧ transfer to seller, atomically" as a
+    /// SINGLE witnessed turn. Returns the committed receipt hash.
+    ///
+    /// NAMED SEAM (honest): the kernel primitive used here is `Preconditions` +
+    /// per-action atomicity — STRONGER than a bolt-on `Effect::ConditionalBatch` would be,
+    /// because both are already kernel-enforced AND already in the action commitment. The
+    /// one limit is that the guard reads the ACTOR's own state (the precondition evaluates
+    /// against `action.target`, which is the actor): a cross-cell guard (commit on cell B's
+    /// state, act on cell A) is not expressible through this single-actor action and would
+    /// need a `witnessed`-clause precondition or a multi-party atomic turn. For the escrow
+    /// the guard cell and the value-source are the same cell (the escrow), so the release is
+    /// fully covered.
+    pub fn guarded_batch(
+        &mut self,
+        actor: &str,
+        guard: Option<BatchGuard>,
+        ops: &[BatchOp],
+    ) -> Result<[u8; 32], FireError> {
+        let actor_id = self.id_of(actor)?;
+
+        // Build the single compound action AS the actor (target = actor, so the guard
+        // precondition evaluates against the actor's own committed state).
+        let mut builder = ActionBuilder::new_unchecked_for_tests(actor_id, "batch", actor_id);
+
+        // The guard becomes a real kernel precondition (checked ahead of every effect, and
+        // bound into the action commitment — the light-client-witnessed "only-if").
+        if let Some(g) = guard {
+            builder = builder.require_field_equals(g.slot, pack_u64(g.value));
+        }
+
+        // Lower each leg to an ordinary effect. A transfer to an unheld cell refuses the
+        // WHOLE batch here (the ocap gate — confinement, all-or-none) before it is built.
+        for op in ops {
+            builder = match op {
+                BatchOp::Transfer { to, amount } => {
+                    let to_id = self.id_of(to)?;
+                    builder.effect_transfer(actor_id, to_id, *amount)
+                }
+                BatchOp::SetSlot { slot, value } => {
+                    builder.effect_set_field(actor_id, *slot, pack_u64(*value))
+                }
+            };
+        }
+
+        // One nonce bump per turn, then commit ONE atomic verified turn.
+        let action = builder.effect_increment_nonce(actor_id).build();
+        let receipt = self.commit(actor_id, action)?;
+        Ok(receipt.receipt_hash())
     }
 
     /// **A receipted self-edit of the home cell's view-tree** (the `viewPatch` host fn).

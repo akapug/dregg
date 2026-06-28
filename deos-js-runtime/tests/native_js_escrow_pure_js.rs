@@ -34,15 +34,28 @@
 //!       to a cell the app holds no cap to is `NoCapability`, the escrow funds are untouched,
 //!       and a legitimate payout still commits afterward.
 //!
-//! NAMED HOST-API GAP (the fullest faithful version): each leg of the escrow is its OWN
-//! verified turn — the host API exposes no compound/atomic multi-effect turn, so `settle`
-//! (the state flip) and the payout `transfer` are two separate receipts, not one atomic
-//! "release". Likewise the runtime does not yet enforce the state-machine GUARD (it does not
-//! refuse a payout `transfer` unless `state == SETTLED`); the JS program drives the ordering
-//! and the cap tooth gates WHO may settle, but the conditional "only-if-funded" link between
-//! the state cell and the value move is not yet a single witnessed turn. A conditional /
-//! compound-turn host fn (an `Effect::ConditionalBatch`-shaped affordance) is the named
-//! next power-up that would make the release atomic and state-guarded.
+//! THE COMPOUND/CONDITIONAL-TURN POWER-UP (the gap, now CLOSED — tests (e)..(g2)): the
+//! `batch(actor, specJson)` host fn fires an ATOMIC, STATE-GUARDED, COMPOUND turn — ONE
+//! verified turn carrying an optional GUARD (a kernel `require_field_equals` precondition on
+//! the actor's state, checked AHEAD of every effect and bound into the action commitment, so
+//! a LIGHT CLIENT witnesses the "only-if") and an ordered list of legs (transfers + slot
+//! writes) that commit ATOMICALLY (all-or-none, via the executor's per-action journal). The
+//! escrow's "release = only-if-SETTLED ∧ transfer to seller" is now ONE turn the kernel
+//! commits whole or refuses whole:
+//!   (e) a guarded release commits IFF the escrow is SETTLED — one atomic witnessed turn;
+//!   (f) a guarded release attempted when NOT settled is refused ATOMICALLY (Precondition
+//!       failed) — no transfer, no partial release, no receipt;
+//!   (g) a compound `settle ∧ pay` commits as ONE receipt (multi-leg atomicity), and
+//!   (g2) all-or-none holds — a compound whose transfer leg over-draws rolls back the state
+//!       flip too: nothing commits.
+//!
+//! NAMED SEAM (honest, narrow): the kernel primitive is `Preconditions` + per-action
+//! atomicity — STRONGER than a bolt-on `Effect::ConditionalBatch` would be (both are already
+//! kernel-enforced AND in the action commitment). The one limit is that the guard reads the
+//! ACTOR's own state (the precondition evaluates against `action.target`); a cross-cell
+//! guard (commit on cell B, act on cell A) would need a `witnessed`-clause precondition or a
+//! multi-party atomic turn. For the escrow the guard cell and the value-source are the same
+//! cell, so the release is fully covered.
 
 use deos_js_runtime::applet::{Affordance, ApplyOp};
 use deos_js_runtime::{CellWorld, FireError, NativeRuntime};
@@ -484,5 +497,305 @@ fn pure_js_escrow_cannot_drain_to_an_uncapped_party() {
         balance_sum(w),
         initial_sum - FEE * w.receipts().len() as i64,
         "balance conserved across the three deal parties (mallory excluded)"
+    );
+}
+
+/// (e) THE ATOMIC GUARDED RELEASE: the payout is now a SINGLE compound turn that the kernel
+/// commits only if the escrow is SETTLED. After `arm`, `fund`, and `settle`, the app fires
+/// ONE `batch("escrow", {{ guard: state==SETTLED, ops: [transfer escrow->bob] }})`. The
+/// guard is a real `require_field_equals` precondition (checked ahead of the transfer and
+/// folded into the action commitment), so the "only-if-SETTLED" link between the state cell
+/// and the value move is part of what the turn proves — not an off-chain ordering the JS
+/// happened to choose. Value reaches the seller, and the release is ONE receipt.
+#[test]
+fn pure_js_escrow_guarded_release_is_one_atomic_turn() {
+    let (world, _a, _b, _e) = escrow_world(AuthRequired::Signature, AuthRequired::Signature);
+    let initial_sum = balance_sum(&world);
+
+    // arm, fund, settle, then the GUARDED ATOMIC RELEASE as one `batch` turn: transfer to
+    // bob ONLY IF the escrow state slot equals SETTLED. The app builds its own spec object
+    // and `JSON.stringify`s it — pure JS, no ambient authority.
+    let app = format!(
+        r#"
+        var price = 250000;
+        tCell("escrow", "arm", price);
+        transfer("alice", "escrow", price);
+        tCell("escrow", "settle");
+        var owed = get("escrow", {amount_slot});
+        batch("escrow", JSON.stringify({{
+            guard: {{ slot: {state_slot}, value: {settled} }},
+            ops: [ {{ transfer: {{ to: "bob", amount: owed }} }} ]
+        }}));
+        owed;
+    "#,
+        amount_slot = AMOUNT_SLOT,
+        state_slot = STATE_SLOT,
+        settled = SETTLED,
+    );
+
+    let mut rt = NativeRuntime::new();
+    let outcome = rt
+        .run_world(world, &app)
+        .expect("the pure-JS guarded-release app runs natively");
+    let w = &outcome.world;
+
+    assert!(
+        outcome.last_fire_error.is_none(),
+        "the guarded release committed cleanly (state matched the guard): {:?}",
+        outcome.last_fire_error
+    );
+    assert_eq!(
+        w.get_slot("escrow", STATE_SLOT).unwrap(),
+        SETTLED,
+        "the escrow reached SETTLED before the guarded release"
+    );
+
+    // FOUR receipts: arm, fund, settle, and the ONE guarded-release batch turn.
+    assert_eq!(
+        w.receipts().len(),
+        4,
+        "the release is a SINGLE guarded compound turn (arm, fund, settle, batch)"
+    );
+
+    // Value reached the seller through the atomic guarded turn.
+    assert_eq!(
+        w.balance("bob").unwrap(),
+        START + 250_000,
+        "the seller received the price through the guarded atomic release"
+    );
+    assert_eq!(
+        w.balance("alice").unwrap(),
+        START - FEE - 250_000,
+        "the buyer parted with the price and paid her fund-transfer fee"
+    );
+    assert_eq!(
+        w.balance("escrow").unwrap(),
+        START - 3 * FEE,
+        "the escrow netted to zero on value (paid arm, settle, batch fees)"
+    );
+    assert_eq!(
+        balance_sum(w),
+        initial_sum - FEE * w.receipts().len() as i64,
+        "balance conserved across the guarded-release flow"
+    );
+}
+
+/// (f) THE GUARD REFUSES A PREMATURE RELEASE — ATOMICALLY, NO PARTIAL. The escrow is armed
+/// and funded but NOT settled (state stays OPEN). The app attempts the same guarded `batch`
+/// release; the kernel `require_field_equals` guard fails BEFORE any effect, so the WHOLE
+/// turn is refused (`PreconditionFailed`): no transfer, no partial release, no receipt. The
+/// funds stay LOCKED in the escrow and the seller receives nothing — the "only-if-SETTLED"
+/// link is now kernel-enforced, not just an ordering the JS chose to honor.
+#[test]
+fn pure_js_escrow_guarded_release_refused_when_not_settled() {
+    let (world, _a, _b, _e) = escrow_world(AuthRequired::Signature, AuthRequired::Signature);
+    let initial_sum = balance_sum(&world);
+
+    let app = format!(
+        r#"
+        var price = 250000;
+        tCell("escrow", "arm", price);
+        transfer("alice", "escrow", price);
+        // NB: no settle — the escrow state machine is still OPEN.
+        var owed = get("escrow", {amount_slot});
+        try {{
+            // the guard (state == SETTLED) does NOT hold: the whole batch is refused.
+            batch("escrow", JSON.stringify({{
+                guard: {{ slot: {state_slot}, value: {settled} }},
+                ops: [ {{ transfer: {{ to: "bob", amount: owed }} }} ]
+            }}));
+        }} catch (e) {{ /* PreconditionFailed: nothing was released */ }}
+        owed;
+    "#,
+        amount_slot = AMOUNT_SLOT,
+        state_slot = STATE_SLOT,
+        settled = SETTLED,
+    );
+
+    let mut rt = NativeRuntime::new();
+    let outcome = rt
+        .run_world(world, &app)
+        .expect("the try/catch swallows the refused-guard throw");
+    let w = &outcome.world;
+
+    // The guard refusal surfaced as an executor rejection naming the failed precondition.
+    match &outcome.last_fire_error {
+        Some(FireError::Executor(msg)) => assert!(
+            msg.contains("Precondition") || msg.contains("precondition"),
+            "the guard refusal names the failed precondition, got: {msg}"
+        ),
+        other => panic!("expected an Executor(PreconditionFailed) refusal, got {other:?}"),
+    }
+
+    // The escrow never left OPEN and STILL HOLDS the funds — nothing was released.
+    assert_eq!(
+        w.get_slot("escrow", STATE_SLOT).unwrap(),
+        0,
+        "the escrow state machine is still OPEN (never settled)"
+    );
+    assert_eq!(
+        w.balance("bob").unwrap(),
+        START,
+        "the seller got NOTHING — the premature release was refused atomically"
+    );
+    // The guard refusal happens INSIDE the executor (a kernel `require_field_equals` check),
+    // so — unlike the pre-flight cap-tooth/NoCapability refusals in tests (c)/(d) which never
+    // reach the executor — the refused turn still burns the submitter's fee while committing
+    // NO receipt and rolling back every effect. The escrow paid its arm fee AND the refused
+    // batch's fee, and STILL HOLDS the funded price.
+    assert_eq!(
+        w.balance("escrow").unwrap(),
+        START - 2 * FEE + 250_000,
+        "the escrow STILL HOLDS the price; it paid the arm fee + the refused batch's fee"
+    );
+    // Only arm + fund left receipts; the refused guarded batch left none (but burned a fee).
+    assert_eq!(
+        w.receipts().len(),
+        2,
+        "exactly arm + fund left receipts; the refused guarded release did not"
+    );
+    // Conservation across the three deal parties: every fee-burning turn drops the sum by a
+    // FEE — the two committed turns PLUS the refused (executor-reached) batch = three fees.
+    assert_eq!(
+        balance_sum(w),
+        initial_sum - FEE * (w.receipts().len() as i64 + 1),
+        "balance conserved — no value moved, three fees burned (arm, fund, refused batch)"
+    );
+}
+
+/// (g) THE COMPOUND SETTLE-AND-PAY IN ONE TURN: a single `batch` flips the escrow to SETTLED
+/// AND releases to the seller in ONE atomic turn (two legs, one receipt). This is the
+/// multi-effect atomicity — the state flip and the value move commit together or not at all.
+#[test]
+fn pure_js_escrow_compound_settle_and_pay_is_one_turn() {
+    let (world, _a, _b, _e) = escrow_world(AuthRequired::Signature, AuthRequired::Signature);
+    let initial_sum = balance_sum(&world);
+
+    let app = format!(
+        r#"
+        var price = 250000;
+        tCell("escrow", "arm", price);
+        transfer("alice", "escrow", price);
+        var owed = get("escrow", {amount_slot});
+        // ONE atomic turn does BOTH: flip the state machine to SETTLED, AND pay the seller.
+        batch("escrow", JSON.stringify({{
+            ops: [
+                {{ setSlot: {{ slot: {state_slot}, value: {settled} }} }},
+                {{ transfer: {{ to: "bob", amount: owed }} }}
+            ]
+        }}));
+        owed;
+    "#,
+        amount_slot = AMOUNT_SLOT,
+        state_slot = STATE_SLOT,
+        settled = SETTLED,
+    );
+
+    let mut rt = NativeRuntime::new();
+    let outcome = rt
+        .run_world(world, &app)
+        .expect("the pure-JS compound settle-and-pay app runs natively");
+    let w = &outcome.world;
+
+    assert!(
+        outcome.last_fire_error.is_none(),
+        "the compound settle-and-pay committed cleanly: {:?}",
+        outcome.last_fire_error
+    );
+    // BOTH legs landed in the SAME turn: state flipped AND value moved.
+    assert_eq!(
+        w.get_slot("escrow", STATE_SLOT).unwrap(),
+        SETTLED,
+        "the state-flip leg committed in the compound turn"
+    );
+    assert_eq!(
+        w.balance("bob").unwrap(),
+        START + 250_000,
+        "the transfer leg committed in the SAME compound turn"
+    );
+    // THREE receipts: arm, fund, and the ONE compound settle-and-pay turn.
+    assert_eq!(
+        w.receipts().len(),
+        3,
+        "the settle and the payout are ONE compound receipt (arm, fund, batch)"
+    );
+    assert_eq!(
+        balance_sum(w),
+        initial_sum - FEE * w.receipts().len() as i64,
+        "balance conserved across the compound settle-and-pay flow"
+    );
+}
+
+/// (g2) ALL-OR-NONE: a compound whose transfer leg OVER-DRAWS the escrow is refused WHOLE —
+/// the state-flip leg, which would have succeeded on its own, is ROLLED BACK because a later
+/// leg failed. After the refused batch the escrow is STILL OPEN and STILL holds its funds:
+/// no half-committed turn, the strongest proof of per-action atomicity.
+#[test]
+fn pure_js_escrow_compound_is_all_or_none() {
+    let (world, _a, _b, _e) = escrow_world(AuthRequired::Signature, AuthRequired::Signature);
+    let initial_sum = balance_sum(&world);
+
+    let app = format!(
+        r#"
+        var price = 250000;
+        tCell("escrow", "arm", price);
+        transfer("alice", "escrow", price);
+        try {{
+            // ONE turn: flip to SETTLED, then transfer FAR MORE than the escrow holds. The
+            // transfer leg fails (insufficient balance) -> the state flip rolls back too.
+            batch("escrow", JSON.stringify({{
+                ops: [
+                    {{ setSlot: {{ slot: {state_slot}, value: {settled} }} }},
+                    {{ transfer: {{ to: "bob", amount: 99999999 }} }}
+                ]
+            }}));
+        }} catch (e) {{ /* the over-draw failed the whole atomic turn */ }}
+        0;
+    "#,
+        state_slot = STATE_SLOT,
+        settled = SETTLED,
+    );
+
+    let mut rt = NativeRuntime::new();
+    let outcome = rt
+        .run_world(world, &app)
+        .expect("the try/catch swallows the over-draw throw");
+    let w = &outcome.world;
+
+    // The over-draw surfaced as an executor rejection.
+    assert!(
+        matches!(outcome.last_fire_error, Some(FireError::Executor(_))),
+        "the over-draw recorded an executor refusal, got {:?}",
+        outcome.last_fire_error
+    );
+    // ALL-OR-NONE: the state-flip leg was ROLLED BACK with the failed transfer leg.
+    assert_eq!(
+        w.get_slot("escrow", STATE_SLOT).unwrap(),
+        0,
+        "the state flip rolled back — the failed transfer leg took the whole turn down"
+    );
+    assert_eq!(
+        w.balance("bob").unwrap(),
+        START,
+        "the seller received nothing — no leg of the refused compound committed"
+    );
+    // The over-draw fails INSIDE the executor, so the refused turn burns its fee while
+    // committing no receipt and rolling back both legs (see test (f)). The escrow paid its
+    // arm fee + the refused batch's fee and still holds the price.
+    assert_eq!(
+        w.balance("escrow").unwrap(),
+        START - 2 * FEE + 250_000,
+        "the escrow still holds the price; it paid the arm fee + the refused batch's fee"
+    );
+    // Only arm + fund left receipts; the refused compound left none (but burned a fee).
+    assert_eq!(
+        w.receipts().len(),
+        2,
+        "exactly arm + fund left receipts; the all-or-none refusal left none"
+    );
+    assert_eq!(
+        balance_sum(w),
+        initial_sum - FEE * (w.receipts().len() as i64 + 1),
+        "balance conserved — the refused compound moved nothing, three fees burned"
     );
 }
