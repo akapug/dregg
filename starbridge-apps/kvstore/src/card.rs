@@ -57,6 +57,13 @@ fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
@@ -78,14 +85,18 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
 }
 
 /// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// and a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"`
+/// grouped / `"raw"` plain) so an opaque key/digest/amount paints short + friendly.
+/// `adept` hides the row in the simple projection (it duplicates a friendlier signal
+/// or is a raw internal numeric); revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection; revealed in the adept view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
@@ -115,14 +126,16 @@ pub fn kvstore_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Key-Value Store"), pill("LIVE", "good")]),
+            row(vec![text("Key-Value Store"), pill_live(COUNT_SLOT, "ACTIVE", "good", json!([
+                { "value": 0, "label": "EMPTY", "tag": "muted" },
+            ]))]),
             divider(),
             section("Store", "genuine", vec![
-                gauge(COUNT_SLOT, CAPACITY as u64, "entries "),
-                bind(VERSION_SLOT, "version · "),
-                bind(COUNT_SLOT, "entries · "),
-                bind(LAST_KEY_SLOT, "last key · "),
-                bind(LAST_VALUE_SLOT, "last value · "),
+                gauge(COUNT_SLOT, CAPACITY as u64, "entries ", false),
+                bind(VERSION_SLOT, "version · ", "raw", true),
+                bind(COUNT_SLOT, "entries · ", "amount", true),
+                bind(LAST_KEY_SLOT, "last key · ", "id", false),
+                bind(LAST_VALUE_SLOT, "last value · ", "hash", false),
             ]),
             section("Actions", "", vec![
                 action("+", "Put",    METHOD_PUT),
@@ -162,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_named_header_and_a_status_pill() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_live_status_pill() {
         let card = kvstore_card_value();
         assert_eq!(card["kind"], "vstack");
         let texts = of_kind(&card, "text");
@@ -174,7 +187,61 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "LIVE");
+        // The header pill is LIVE: it reads COUNT_SLOT and maps an empty store to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "ACTIVE",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], COUNT_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 1, "an EMPTY case for a zero-entry store");
+        assert_eq!(cases[0]["value"], 0);
+        assert_eq!(cases[0]["label"], "EMPTY");
+    }
+
+    #[test]
+    fn the_key_and_value_binds_carry_their_display_fmt() {
+        let card = kvstore_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            fmt(LAST_KEY_SLOT),
+            "id",
+            "the last key paints an avatar handle"
+        );
+        assert_eq!(
+            fmt(LAST_VALUE_SLOT),
+            "hash",
+            "the last value paints short hex"
+        );
+        assert_eq!(fmt(COUNT_SLOT), "amount", "the entry count groups digits");
+        assert_eq!(fmt(VERSION_SLOT), "raw", "the internal version stays raw");
+    }
+
+    #[test]
+    fn the_devy_internal_binds_are_marked_adept() {
+        let card = kvstore_card_value();
+        let binds = of_kind(&card, "bind");
+        let adept = |slot: usize| -> bool {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The monotone version + the count row (it duplicates the gauge) hide by default.
+        assert!(adept(VERSION_SLOT), "the internal version is adept-only");
+        assert!(adept(COUNT_SLOT), "the count duplicates the gauge");
+        // The human-meaningful last-key / last-value stay in the simple projection.
+        assert!(!adept(LAST_KEY_SLOT));
+        assert!(!adept(LAST_VALUE_SLOT));
     }
 
     #[test]

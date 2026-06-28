@@ -77,7 +77,7 @@ use crate::STATE_SLOT;
 use crate::council::{
     APPROVED_FLAG_SLOT, FIRST_APPROVAL_SLOT, MAX_MEMBERS, MEMBERS_COMMIT_SLOT, METHOD_APPROVE,
     METHOD_CERTIFY, METHOD_EXECUTE, METHOD_PROPOSE, METHOD_REJECT, PROPOSAL_HASH_SLOT,
-    STATE_EXECUTED,
+    STATE_APPROVED, STATE_DRAFT, STATE_EXECUTED, STATE_PROPOSED, STATE_REJECTED,
 };
 
 /// The quorum bar's denominator — the representative M-of-N threshold (the
@@ -104,6 +104,13 @@ fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
@@ -124,15 +131,19 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label
-/// prefix (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: u8, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot as usize, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
+/// and a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"`
+/// grouped / `"raw"` plain) so an opaque key/digest paints short + friendly.
+/// `adept` hides the row in the simple projection (it duplicates a friendlier signal
+/// or is a raw state-machine numeric); revealed in the adept "see the bones" view.
+fn bind(slot: u8, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot as usize, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: u8, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot as usize, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection; revealed in the adept view.
+fn gauge(slot: u8, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot as usize, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
@@ -179,22 +190,29 @@ pub fn council_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Polis Council"), pill("PROPOSED", "accent")]),
+            row(vec![text("Polis Council"), pill_live(STATE_SLOT as usize, "PROPOSED", "accent", json!([
+                { "value": STATE_DRAFT,    "label": "DRAFT",    "tag": "muted" },
+                { "value": STATE_PROPOSED, "label": "PROPOSED", "tag": "accent" },
+                { "value": STATE_REJECTED, "label": "REJECTED", "tag": "bad" },
+                { "value": STATE_APPROVED, "label": "APPROVED", "tag": "good" },
+                { "value": STATE_EXECUTED, "label": "EXECUTED", "tag": "good" },
+            ]))]),
             breadcrumb(&["Propose", "Approve", "Certify", "Execute"], 1),
             divider(),
             section("Council", "genuine", vec![
                 // THE killer governance visual: the running approval tally toward quorum.
-                gauge(FIRST_APPROVAL_SLOT, QUORUM, "quorum "),
-                // The lifecycle stage climbing DRAFT(0) → … → EXECUTED.
-                gauge(STATE_SLOT, STATE_EXECUTED, "lifecycle "),
+                gauge(FIRST_APPROVAL_SLOT, QUORUM, "quorum ", false),
+                // The lifecycle stage climbing DRAFT(0) → … → EXECUTED — a raw
+                // state-machine gauge; the live pill + breadcrumb already say the word.
+                gauge(STATE_SLOT, STATE_EXECUTED, "lifecycle ", true),
                 text(&m_of_n),
-                bind(PROPOSAL_HASH_SLOT, "proposal · "),
-                bind(FIRST_APPROVAL_SLOT, "approval ① · "),
-                bind(FIRST_APPROVAL_SLOT + 1, "approval ② · "),
-                bind(FIRST_APPROVAL_SLOT + 2, "approval ③ · "),
-                bind(APPROVED_FLAG_SLOT, "certified · "),
-                bind(MEMBERS_COMMIT_SLOT, "council · "),
-                bind(STATE_SLOT, "state · "),
+                bind(PROPOSAL_HASH_SLOT, "proposal · ", "hash", false),
+                bind(FIRST_APPROVAL_SLOT, "approval ① · ", "raw", true),
+                bind(FIRST_APPROVAL_SLOT + 1, "approval ② · ", "raw", true),
+                bind(FIRST_APPROVAL_SLOT + 2, "approval ③ · ", "raw", true),
+                bind(APPROVED_FLAG_SLOT, "certified · ", "raw", true),
+                bind(MEMBERS_COMMIT_SLOT, "council · ", "hash", false),
+                bind(STATE_SLOT, "state · ", "raw", true),
             ]),
             section("Actions", "", vec![
                 action("+", "Propose", METHOD_PROPOSE),
@@ -236,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_named_header_and_a_stage_pill() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_live_stage_pill() {
         let card = council_card_value();
         assert_eq!(card["kind"], "vstack");
         let texts = of_kind(&card, "text");
@@ -246,7 +264,83 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "PROPOSED");
+        // The header pill is LIVE: it reads STATE_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "PROPOSED",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], STATE_SLOT as usize);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(
+            cases.len(),
+            5,
+            "DRAFT / PROPOSED / REJECTED / APPROVED / EXECUTED"
+        );
+        assert_eq!(cases[4]["value"], STATE_EXECUTED);
+        assert_eq!(cases[4]["label"], "EXECUTED");
+    }
+
+    #[test]
+    fn the_proposal_and_council_binds_carry_their_display_fmt() {
+        let card = council_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: u8| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            fmt(PROPOSAL_HASH_SLOT),
+            "hash",
+            "the staged proposal paints short hex"
+        );
+        assert_eq!(
+            fmt(MEMBERS_COMMIT_SLOT),
+            "hash",
+            "the membership commitment paints short hex"
+        );
+        assert_eq!(fmt(STATE_SLOT), "raw", "the raw state integer stays raw");
+    }
+
+    #[test]
+    fn the_raw_state_machine_rows_are_marked_adept() {
+        let card = council_card_value();
+        // The lifecycle gauge is a raw state-machine numeric (the live pill +
+        // breadcrumb already say the word) → adept-only.
+        let gauges = of_kind(&card, "gauge");
+        let lifecycle = gauges
+            .iter()
+            .find(|g| g["props"]["slot"].as_u64() == Some(STATE_SLOT as u64))
+            .unwrap();
+        assert_eq!(lifecycle["props"]["adept"], true);
+        // The quorum gauge — THE killer visual — stays in the simple projection.
+        let quorum = gauges
+            .iter()
+            .find(|g| g["props"]["slot"].as_u64() == Some(FIRST_APPROVAL_SLOT as u64))
+            .unwrap();
+        assert_eq!(quorum["props"]["adept"], false);
+
+        let binds = of_kind(&card, "bind");
+        let adept = |slot: u8| -> bool {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The raw per-member approval bits, the certified flag, and the raw state
+        // integer all duplicate the quorum gauge / live pill → adept-only.
+        assert!(adept(FIRST_APPROVAL_SLOT));
+        assert!(adept(FIRST_APPROVAL_SLOT + 1));
+        assert!(adept(FIRST_APPROVAL_SLOT + 2));
+        assert!(adept(APPROVED_FLAG_SLOT));
+        assert!(adept(STATE_SLOT));
+        // The human-meaningful proposal + council commitment stay visible.
+        assert!(!adept(PROPOSAL_HASH_SLOT));
+        assert!(!adept(MEMBERS_COMMIT_SLOT));
     }
 
     #[test]
