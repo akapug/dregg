@@ -89,13 +89,28 @@ where
         sink_factory: F,
     ) -> Result<Self, String> {
         let rt = JsRuntime::new()?;
-        Ok(LiveJsHands {
+        Ok(Self::with_runtime(tool, agent, gateway, sink_factory, rt))
+    }
+
+    /// As [`LiveJsHands::new`], but on a CALLER-OWNED [`JsRuntime`]. SpiderMonkey's
+    /// engine init is process-global + one-shot, so a host (or test) that has already
+    /// booted a runtime threads it here instead of booting another (a second
+    /// `JsRuntime::new()` errors `AlreadyInitialized`). Mirrors
+    /// [`LiveAuthoringHands::with_runtime`] / [`LiveComposeHands::with_runtime`].
+    pub fn with_runtime(
+        tool: RunJsTool,
+        agent: CellId,
+        gateway: HermesGateway<'gw>,
+        sink_factory: F,
+        rt: JsRuntime,
+    ) -> Self {
+        LiveJsHands {
             tool,
             agent,
             gateway,
             sink_factory,
             rt,
-        })
+        }
     }
 
     /// Run ONE `run_js` tool-call: the gateway accountability turn AND the model's
