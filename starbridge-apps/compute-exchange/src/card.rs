@@ -18,18 +18,31 @@
 //! elephant. The deos world's renderers consume it; this module owns the card
 //! definition and proves it is well-formed.
 //!
-//! ## The card shape
+//! ## The card shape — a rich, live compute-market surface
 //!
-//! A titled column ([`deos.ui.vstack`](deos_view)) carrying:
-//!   - a `text` header (`"Compute Exchange"`);
-//!   - a `bind` on [`STATE_SLOT`](crate::STATE_SLOT) — a fine-grained signal that
-//!     re-reads the live lifecycle state off the ledger (the SAME witnessed read a
-//!     native `bind` closure makes), so the displayed state advances when a fired
-//!     turn commits;
-//!   - one `button` per lifecycle method (`post` / `bid` / `settle`), each
-//!     carrying its `onClick = { turn, arg }` — the EXACT cap-gated verified turn
-//!     a click fires through the [`invoke()`](crate::service)/affordance seam (the
-//!     button's payload is the method symbol the service routes).
+//! A titled column ([`deos.ui.vstack`](deos_view)) built from the rich deos-view
+//! vocabulary (`section` / `pill` / `gauge` / `breadcrumb` / `divider` / `icon`):
+//!
+//!   - a **status header** — the app name + a `pill` naming the live state-machine
+//!     stage as a WORD (`BIDDING`), and a `breadcrumb` of the whole lifecycle
+//!     (Posted → Bidding → Settled) with the current step marked;
+//!   - a **"Job" `section`** surfacing the LIVE job terms: a `gauge` bound to
+//!     [`STATE_SLOT`](crate::STATE_SLOT) (lifecycle-phase progress, maxing at
+//!     [`STATE_SETTLED`](crate::STATE_SETTLED)) and a `gauge` on the accepted
+//!     [`BID_SLOT`](crate::BID_SLOT) read against the budget ceiling (the BUDGET
+//!     gate, visualized), plus `bind`s on the budget, the accepted bid, the sealed
+//!     [`SPEC_HASH_SLOT`](crate::SPEC_HASH_SLOT), and the requester / provider
+//!     identities — each a fine-grained signal that re-reads the live value (the
+//!     SAME witnessed read a native `bind` closure makes), so the surface advances
+//!     when a fired turn commits;
+//!   - a **"Settlement" `section`** surfacing the FLASHWELL split: `bind`s on the
+//!     funds paid to the provider ([`PAID_SLOT`](crate::PAID_SLOT)) and refunded to
+//!     the requester ([`REFUNDED_SLOT`](crate::REFUNDED_SLOT)) — the conserving
+//!     `PAID + REFUNDED == BUDGET` payout, shown live;
+//!   - an **"Actions" `section`** of one `icon`+`button` row per lifecycle method
+//!     (`post` / `bid` / `settle`), each `button` carrying its `onClick = { turn,
+//!     arg }` — the EXACT cap-gated verified turn a click fires through the
+//!     [`invoke()`](crate::service)/affordance seam.
 //!
 //! The button `turn` names match the [`service`](crate::service) method vocabulary
 //! ([`METHOD_POST`](crate::service::METHOD_POST), …) so the card and the service
@@ -37,18 +50,73 @@
 
 use serde_json::{Value, json};
 
-use crate::STATE_SLOT;
 use crate::service::{METHOD_BID, METHOD_POST, METHOD_SETTLE};
+use crate::{
+    BID_SLOT, BUDGET_SLOT, PAID_SLOT, PROVIDER_HASH_SLOT, REFUNDED_SLOT, REQUESTER_HASH_SLOT,
+    SPEC_HASH_SLOT, STATE_SETTLED, STATE_SLOT,
+};
+
+/// The bid gauge's denominator — a representative budget ceiling so a bid that
+/// draws the full budget fills the gauge (the seeded budget is `1_000`). The BUDGET
+/// gate (`FieldLteField { BID <= BUDGET }`) means a live bid never exceeds it, so
+/// the bar is the budget-draw ratio made visible.
+const BUDGET_GAUGE_MAX: u64 = 1_000;
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label
-/// prefix (the engine drops the closure on serialize, so the slot is tagged).
+/// A `deos.ui.pill` node — a colored status badge.
+fn pill(label: &str, tag: &str) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
+fn icon(glyph: &str, tag: &str) -> Value {
+    json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
+}
+
+/// A `deos.ui.divider` node — a full-width groove rule.
+fn divider() -> Value {
+    json!({ "kind": "divider", "props": {} })
+}
+
+/// A `deos.ui.row` node — a horizontal flex of children.
+fn row(children: Vec<Value>) -> Value {
+    json!({ "kind": "row", "props": {}, "children": children })
+}
+
+/// A `deos.ui.section` node — a titled, bordered container.
+fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
+    json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
+}
+
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
 fn bind(slot: usize, label: &str) -> Value {
     json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+}
+
+/// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
+fn gauge(slot: usize, max: u64, label: &str) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+}
+
+/// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
+fn breadcrumb(steps: &[&str], active: usize) -> Value {
+    let items: Vec<Value> = steps
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let label = if i == active {
+                format!("› {s}")
+            } else {
+                s.to_string()
+            };
+            json!({ "label": label })
+        })
+        .collect();
+    json!({ "kind": "breadcrumb", "props": { "items": items } })
 }
 
 /// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
@@ -59,22 +127,46 @@ fn button(label: &str, turn: &str, arg: i64) -> Value {
     })
 }
 
+/// An action row — an `icon` + a lifecycle `button` (the verified-turn affordance).
+fn action(glyph: &str, label: &str, turn: &str) -> Value {
+    row(vec![icon(glyph, "accent"), button(label, turn, 0)])
+}
+
 /// **The compute-exchange card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
 ///
-/// A `vstack` of a header, a live `bind` on the lifecycle [`STATE_SLOT`], and the
-/// three lifecycle-advancing buttons. Renderer-independent DATA: hand it to any
-/// `deos-view` renderer (native / web / discord) to paint the SAME card. The
-/// button `turn` names are the [`service`](crate::service) method symbols.
+/// A rich, live compute-market surface: a status header (name + `BIDDING` pill +
+/// lifecycle breadcrumb), a "Job" section surfacing the live lifecycle-phase gauge,
+/// the bid-vs-budget gauge, and the budget / bid / spec / requester / provider
+/// binds, a "Settlement" section with the live paid / refunded binds (the FLASHWELL
+/// split), and an "Actions" section of the three icon-labelled lifecycle buttons.
+/// Renderer-independent DATA. The button `turn` names are the
+/// [`service`](crate::service) method symbols.
 pub fn job_card_value() -> Value {
     json!({
         "kind": "vstack",
         "props": {},
         "children": [
-            text("Compute Exchange"),
-            bind(STATE_SLOT, "state: "),
-            button("Post",   METHOD_POST,   0),
-            button("Bid",    METHOD_BID,    0),
-            button("Settle", METHOD_SETTLE, 0),
+            row(vec![text("Compute Exchange"), pill("BIDDING", "accent")]),
+            breadcrumb(&["Posted", "Bidding", "Settled"], 1),
+            divider(),
+            section("Job", "genuine", vec![
+                gauge(STATE_SLOT, STATE_SETTLED, "lifecycle "),
+                gauge(BID_SLOT, BUDGET_GAUGE_MAX, "bid vs budget "),
+                bind(BUDGET_SLOT, "budget · "),
+                bind(BID_SLOT, "accepted bid · "),
+                bind(SPEC_HASH_SLOT, "spec · "),
+                bind(REQUESTER_HASH_SLOT, "requester · "),
+                bind(PROVIDER_HASH_SLOT, "provider · "),
+            ]),
+            section("Settlement", "", vec![
+                bind(PAID_SLOT, "paid · "),
+                bind(REFUNDED_SLOT, "refunded · "),
+            ]),
+            section("Actions", "", vec![
+                action("+", "Post",   METHOD_POST),
+                action("›", "Bid",    METHOD_BID),
+                action("✓", "Settle", METHOD_SETTLE),
+            ]),
         ]
     })
 }
@@ -90,31 +182,102 @@ pub fn job_card_json() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_card_is_a_vstack_with_a_header_a_state_bind_and_three_buttons() {
-        let card = job_card_value();
-        assert_eq!(card["kind"], "vstack");
-        let children = card["children"].as_array().expect("children");
-        // header, bind, post, bid, settle
-        assert_eq!(children.len(), 5);
-        assert_eq!(children[0]["kind"], "text");
-        assert_eq!(children[0]["props"]["text"], "Compute Exchange");
+    fn collect<'a>(node: &'a Value, kind: &str, out: &mut Vec<&'a Value>) {
+        if node["kind"] == kind {
+            out.push(node);
+        }
+        if let Some(children) = node["children"].as_array() {
+            for c in children {
+                collect(c, kind, out);
+            }
+        }
+    }
+
+    fn of_kind<'a>(card: &'a Value, kind: &str) -> Vec<&'a Value> {
+        let mut out = Vec::new();
+        collect(card, kind, &mut out);
+        out
     }
 
     #[test]
-    fn the_state_bind_reads_the_lifecycle_slot() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_state_pill() {
         let card = job_card_value();
-        let bind = &card["children"][1];
-        assert_eq!(bind["kind"], "bind");
-        assert_eq!(bind["props"]["slot"], STATE_SLOT);
-        assert_eq!(bind["props"]["label"], "state: ");
+        assert_eq!(card["kind"], "vstack");
+        let texts = of_kind(&card, "text");
+        assert!(
+            texts
+                .iter()
+                .any(|t| t["props"]["text"] == "Compute Exchange"),
+            "the header names the app"
+        );
+        let pills = of_kind(&card, "pill");
+        assert_eq!(pills.len(), 1);
+        assert_eq!(pills[0]["props"]["text"], "BIDDING");
+    }
+
+    #[test]
+    fn the_lifecycle_breadcrumb_marks_the_current_step() {
+        let card = job_card_value();
+        let crumbs = of_kind(&card, "breadcrumb");
+        assert_eq!(crumbs.len(), 1);
+        let items = crumbs[0]["props"]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3, "Posted → Bidding → Settled");
+        assert_eq!(items[1]["label"], "› Bidding", "the active step is marked");
+    }
+
+    #[test]
+    fn the_state_and_bid_gauges_read_the_live_slots() {
+        let card = job_card_value();
+        let gauges = of_kind(&card, "gauge");
+        assert_eq!(
+            gauges.len(),
+            2,
+            "a lifecycle-phase gauge + a bid-vs-budget gauge"
+        );
+        assert_eq!(gauges[0]["props"]["slot"], STATE_SLOT);
+        assert_eq!(gauges[0]["props"]["max"], STATE_SETTLED);
+        assert_eq!(gauges[1]["props"]["slot"], BID_SLOT);
+        assert_eq!(gauges[1]["props"]["max"], BUDGET_GAUGE_MAX);
+    }
+
+    #[test]
+    fn the_binds_surface_the_full_job_and_settlement_terms() {
+        let card = job_card_value();
+        let binds = of_kind(&card, "bind");
+        let slots: Vec<u64> = binds
+            .iter()
+            .map(|b| b["props"]["slot"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            slots,
+            vec![
+                BUDGET_SLOT as u64,
+                BID_SLOT as u64,
+                SPEC_HASH_SLOT as u64,
+                REQUESTER_HASH_SLOT as u64,
+                PROVIDER_HASH_SLOT as u64,
+                PAID_SLOT as u64,
+                REFUNDED_SLOT as u64,
+            ],
+            "budget / bid / spec / requester / provider, then paid / refunded"
+        );
+    }
+
+    #[test]
+    fn the_card_has_a_job_and_a_settlement_section() {
+        let card = job_card_value();
+        let sections = of_kind(&card, "section");
+        let titles: Vec<&str> = sections
+            .iter()
+            .map(|s| s["props"]["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["Job", "Settlement", "Actions"]);
     }
 
     #[test]
     fn every_button_carries_its_service_method_as_the_turn_payload() {
         let card = job_card_value();
-        let children = card["children"].as_array().unwrap();
-        let buttons: Vec<&Value> = children.iter().filter(|c| c["kind"] == "button").collect();
+        let buttons = of_kind(&card, "button");
         assert_eq!(buttons.len(), 3);
         let turns: Vec<&str> = buttons
             .iter()
@@ -130,6 +293,7 @@ mod tests {
         // Round-trips through serde (the shape a deos-view renderer's parser reads).
         let back: Value = serde_json::from_str(&s).expect("the card JSON parses");
         assert_eq!(back["kind"], "vstack");
-        assert_eq!(back["children"].as_array().unwrap().len(), 5);
+        // header row, breadcrumb, divider, job section, settlement section, actions section
+        assert_eq!(back["children"].as_array().unwrap().len(), 6);
     }
 }
