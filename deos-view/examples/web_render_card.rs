@@ -496,6 +496,7 @@ fn main() {
         "deos counter cell — trustlessly served",
         &counter,
         /*bind_values*/ &[0],
+        /*openings*/ &[],
         &TrustlessAttestation::InTabDemo { k: 3, step: 7 },
         "./pkg/dregg_wasm.js",
     );
@@ -531,6 +532,7 @@ fn main() {
         "deos counter cell — gateway-served",
         &counter,
         &[0],
+        &[],
         &TrustlessAttestation::ServerSupplied {
             envelope_json: r#"{"version":1,"vk_fingerprint_hex":"ab","genesis_root":[0],"final_root":[0],"chain_digest":[0],"num_turns":2,"proof_bytes_b64":""}"#,
             config_anchor_hex: &"ab".repeat(32),
