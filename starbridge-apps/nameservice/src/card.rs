@@ -66,6 +66,13 @@ fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
@@ -87,14 +94,18 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
 }
 
 /// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// and a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"`
+/// grouped / `"raw"` plain) so an opaque key/digest paints short + friendly.
+/// `adept` hides the row in the simple projection (it duplicates a friendlier signal
+/// or is a raw internal numeric); revealed in the adept "see the bones" view.
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection; revealed in the adept view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `›`.
@@ -141,16 +152,19 @@ pub fn nameservice_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Name Service"), pill("REGISTERED", "good")]),
+            row(vec![text("Name Service"), pill_live(REVOKED_SLOT, "REGISTERED", "good", json!([
+                { "value": 0, "label": "REGISTERED", "tag": "good" },
+                { "value": 1, "label": "REVOKED",    "tag": "bad" },
+            ]))]),
             breadcrumb(&["Available", "Registered", "Expiring", "Revoked"], 1),
             divider(),
             section("Record", "genuine", vec![
-                gauge(EXPIRY_SLOT, DEFAULT_RENT_EPOCH_BLOCKS, "rent horizon "),
-                bind(NAME_HASH_SLOT, "name · "),
-                bind(OWNER_HASH_SLOT, "owner key · "),
-                bind(EXPIRY_SLOT, "expiry block · "),
-                bind(REVOKED_SLOT, "revoked · "),
-                bind(RESOLVE_TARGET_SLOT, "target · "),
+                gauge(EXPIRY_SLOT, DEFAULT_RENT_EPOCH_BLOCKS, "rent horizon ", false),
+                bind(NAME_HASH_SLOT, "name · ", "hash", false),
+                bind(OWNER_HASH_SLOT, "owner key · ", "id", false),
+                bind(EXPIRY_SLOT, "expiry block · ", "raw", true),
+                bind(REVOKED_SLOT, "revoked · ", "raw", true),
+                bind(RESOLVE_TARGET_SLOT, "target · ", "id", false),
             ]),
             section("Actions", "", vec![
                 action("+", "Register", METHOD_REGISTER),
@@ -191,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_is_a_vstack_with_a_named_header_and_a_status_pill() {
+    fn the_card_is_a_vstack_with_a_named_header_and_a_live_status_pill() {
         let card = nameservice_card_value();
         assert_eq!(card["kind"], "vstack");
         let texts = of_kind(&card, "text");
@@ -201,7 +215,76 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "REGISTERED");
+        // The header pill is LIVE: it reads REVOKED_SLOT and maps the marker to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "REGISTERED",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], REVOKED_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(
+            cases.len(),
+            2,
+            "active (0) → REGISTERED, tombstoned (1) → REVOKED"
+        );
+        assert_eq!(cases[0]["value"], 0);
+        assert_eq!(cases[0]["label"], "REGISTERED");
+        assert_eq!(cases[1]["value"], 1);
+        assert_eq!(cases[1]["label"], "REVOKED");
+    }
+
+    #[test]
+    fn the_name_and_identity_binds_carry_their_display_fmt() {
+        let card = nameservice_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            fmt(NAME_HASH_SLOT),
+            "hash",
+            "the name hash paints short hex"
+        );
+        assert_eq!(
+            fmt(OWNER_HASH_SLOT),
+            "id",
+            "the owner key paints an avatar handle"
+        );
+        assert_eq!(
+            fmt(RESOLVE_TARGET_SLOT),
+            "id",
+            "the resolve target paints an avatar handle"
+        );
+        assert_eq!(fmt(EXPIRY_SLOT), "raw", "the expiry block stays raw");
+    }
+
+    #[test]
+    fn the_devy_internal_binds_are_marked_adept() {
+        let card = nameservice_card_value();
+        let binds = of_kind(&card, "bind");
+        let adept = |slot: usize| -> bool {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        // The expiry block (the gauge already shows the rent horizon) + the raw
+        // revoked marker (the live pill already says the word) hide by default.
+        assert!(adept(EXPIRY_SLOT), "the expiry block duplicates the gauge");
+        assert!(
+            adept(REVOKED_SLOT),
+            "the revoked marker duplicates the live pill"
+        );
+        // The human-meaningful name / owner / target stay in the simple projection.
+        assert!(!adept(NAME_HASH_SLOT));
+        assert!(!adept(OWNER_HASH_SLOT));
+        assert!(!adept(RESOLVE_TARGET_SLOT));
     }
 
     #[test]
