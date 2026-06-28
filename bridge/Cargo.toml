@@ -66,11 +66,23 @@ solana-hash = "4"
 # (pass 3) vote-account-data fixtures. `solana-vote-interface` + `bincode` are
 # already normal deps and are reused by the provenance tests.
 solana-pubkey = "4"
+# Base58 pubkey decode for the local-validator e2e harness (`solana_local_e2e`):
+# the harness script emits the harvested account pubkeys base58 (Solana's native
+# encoding); the gated test decodes them to the raw 32-byte form the verifier
+# hashes. Only used by the `SOLANA_LOCAL=1` e2e path.
+bs58 = "0.5"
 
 [[bench]]
 name = "presentation_bench"
 harness = false
 required-features = ["test-utils"]
+
+# Wall-time of the trustless Solana lock-proof verify vs validator-vote count
+# (100/500/1500). Self-contained (no validator); the local-cluster e2e is the
+# `solana_local_e2e` test gated on `SOLANA_LOCAL=1`.
+[[bench]]
+name = "solana_verify_bench"
+harness = false
 
 [lints]
 workspace = true
