@@ -92,7 +92,11 @@ pub use dregg_app_framework::field_from_bytes;
 //     [`fire_dispatch`] / [`fire_open_board`] — the composed `DeosApp` surface.
 //   - AX3 (service): [`service`] — the board as a typed `InterfaceDescriptor` on the
 //     `invoke()` front door (the command face).
-//   - AX4 (card): [`card`] — the UI as a renderer-independent `deos.ui.*` view-tree.
+//   - AX4 (card): [`card`] — the UI as a renderer-independent `deos.ui.*` view-tree
+//     (the rich vocabulary: a `DISPATCHING` status pill, the dispatch-lifecycle
+//     breadcrumb, the per-worker spend GAUGES filling toward the shared budget ceiling
+//     — the `AffineLe(spent_a + spent_b <= budget)` gate VISUALIZED — live lead/budget/
+//     meter/epoch binds, and the icon+button Actions section).
 //   - AX5 (reactor): [`reactor`] — the autonomous COORDINATOR agent-loop as a
 //     `Reactor` (the reactive twin of `invoke()`): watch a posted mandate, react by
 //     auto-dispatching the first sub-task within the conserved budget.
