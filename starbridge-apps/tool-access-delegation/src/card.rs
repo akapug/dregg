@@ -23,8 +23,10 @@
 //! object-capability story — *a delegate holds a NARROWLY-BOUNDED, RATE-LIMITED, TIME-BOUNDED
 //! invoke capability* — is VISIBLE at a glance:
 //!
-//!   - a **status header** — the app name + a `pill` naming the live mandate state as a WORD
-//!     ([`ACTIVE`](status_pill) / `RATE-LIMITED` / `EXPIRED`), and a `breadcrumb` of the whole
+//!   - a **status header** — the app name + a LIVE `pill` ([`status_pill`]) reading
+//!     [`CALLS_MADE_SLOT`](crate::CALLS_MADE_SLOT) and naming the mandate state as a WORD
+//!     (`ACTIVE` / `RATE-LIMITED` at the ceiling; `EXPIRED` is the deadline bar's story), and
+//!     a `breadcrumb` of the whole
 //!     delegation lifecycle (granted → delegated → exercising → revoked) with the current step
 //!     marked;
 //!   - a **"Mandate" `section`** surfacing the LIVE rate budget: a `gauge` bound to
@@ -71,9 +73,11 @@ fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
-/// A `deos.ui.pill` node — a colored status badge.
-fn pill(label: &str, tag: &str) -> Value {
-    json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a word +
+/// color via `cases` (the first `{value,label,tag}` matching the slot wins). `text`/`tag` are
+/// the static fallback (discord, or no match).
+fn pill_live(slot: u8, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -96,10 +100,13 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix (the engine
-/// drops the closure on serialize, so the slot is tagged).
-fn bind(slot: u8, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a display
+/// `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped digits / `"raw"` plain)
+/// so an opaque id/amount paints short + friendly. `adept` tags a dev-y row (e.g. a raw block
+/// height duplicating a friendlier bar) hidden in the simple projection, revealed in the adept
+/// "see the bones" view.
+fn bind(slot: u8, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode read of
@@ -154,8 +161,20 @@ fn action(glyph: &str, label: &str, turn: &str) -> Value {
 /// The seeded mandate is granted with budget remaining and an in-window deadline, so the card
 /// surfaces the representative `ACTIVE` state; the live `gauge` + the deadline `progress` show
 /// HOW CLOSE to the `RATE-LIMITED` / `EXPIRED` edges the mandate is.
+///
+/// The pill is LIVE: it reads [`CALLS_MADE_SLOT`](crate::CALLS_MADE_SLOT) and flips to
+/// `RATE-LIMITED` (`warn`) the instant the meter reaches the granted ceiling
+/// ([`RATE_GAUGE_MAX`]); otherwise the `ACTIVE` (`good`) fallback shows. (`EXPIRED` is
+/// height-relative — not a single-slot value — so it stays the deadline `progress` bar's story.)
 fn status_pill() -> Value {
-    pill("ACTIVE", "good")
+    pill_live(
+        CALLS_MADE_SLOT,
+        "ACTIVE",
+        "good",
+        json!([
+            { "value": RATE_GAUGE_MAX, "label": "RATE-LIMITED", "tag": "warn" },
+        ]),
+    )
 }
 
 /// **The tool-access-delegation card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
@@ -178,10 +197,11 @@ pub fn mandate_card_value() -> Value {
             section("Mandate", "genuine", vec![
                 gauge(CALLS_MADE_SLOT, RATE_GAUGE_MAX, "rate budget "),
                 progress(DEADLINE_REMAINING, DEADLINE_WINDOW, "time remaining "),
-                bind(TOOL_ID_SLOT,    "tool · "),
-                bind(CALLS_MADE_SLOT, "calls used · "),
-                bind(RATE_LIMIT_SLOT, "rate ceiling · "),
-                bind(DEADLINE_SLOT,   "deadline · "),
+                bind(TOOL_ID_SLOT,    "tool · ", "id", false),
+                bind(CALLS_MADE_SLOT, "calls used · ", "raw", false),
+                bind(RATE_LIMIT_SLOT, "rate ceiling · ", "raw", false),
+                // The raw expiry block-height duplicates the friendlier time-remaining bar — adept-only.
+                bind(DEADLINE_SLOT,   "deadline · ", "amount", true),
             ]),
             section("Actions", "", vec![
                 action("+", "Grant",    METHOD_GRANT),
@@ -234,8 +254,18 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "ACTIVE");
+        // The header pill is LIVE: it reads CALLS_MADE_SLOT and flips to RATE-LIMITED at the ceiling.
+        assert_eq!(
+            pills[0]["props"]["text"], "ACTIVE",
+            "the static fallback word"
+        );
         assert_eq!(pills[0]["props"]["tag"], "good");
+        assert_eq!(pills[0]["props"]["slot"], CALLS_MADE_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 1, "the rate-limited edge");
+        assert_eq!(cases[0]["value"], RATE_GAUGE_MAX);
+        assert_eq!(cases[0]["label"], "RATE-LIMITED");
+        assert_eq!(cases[0]["tag"], "warn");
     }
 
     #[test]
@@ -291,6 +321,45 @@ mod tests {
                 DEADLINE_SLOT as u64,
             ],
             "the binds surface tool / calls-used / rate-ceiling / deadline"
+        );
+    }
+
+    #[test]
+    fn the_mandate_binds_carry_their_display_fmt() {
+        let card = mandate_card_value();
+        let binds = of_kind(&card, "bind");
+        let prop = |slot: u8, key: &str| -> Value {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .map(|b| b["props"][key].clone())
+                .unwrap()
+        };
+        assert_eq!(
+            prop(TOOL_ID_SLOT, "fmt"),
+            "id",
+            "the tool scope paints an avatar handle"
+        );
+        assert_eq!(
+            prop(CALLS_MADE_SLOT, "fmt"),
+            "raw",
+            "the small call counter stays plain"
+        );
+        assert_eq!(
+            prop(RATE_LIMIT_SLOT, "fmt"),
+            "raw",
+            "the small ceiling stays plain"
+        );
+        assert_eq!(
+            prop(DEADLINE_SLOT, "fmt"),
+            "amount",
+            "the block height groups digits"
+        );
+        // The raw expiry height is adept-only (the time-remaining progress shows it friendlier).
+        assert_eq!(
+            prop(DEADLINE_SLOT, "adept"),
+            true,
+            "the raw deadline height is dev-y"
         );
     }
 
