@@ -44,6 +44,14 @@ solana-vote-interface = { version = "6.0.2", default-features = false, features 
 # bincode 1.x (Solana's instruction-data codec) for decoding the `VoteInstruction`
 # carried in a real vote transaction's instruction data.
 bincode = "1"
+# Type-only Solana stake interface for the REAL warmup/cooldown effective-stake
+# curve (`Delegation::stake_v2` / `StakeHistory` / `StakeHistoryEntry` + the
+# `warmup_cooldown_allowance` rate constants — 25% original / 9% tower). Pulled
+# `default-features = false` (no `serde`/`sysvar`/`bincode` features): only the
+# core `stake_history` + `state` + `warmup_cooldown_allowance` modules, which add
+# NO new crates to the lockfile beyond what `solana-vote-interface` already pins
+# (no curve25519 conflict). See docs/deos/TRUSTLESS-SOLANA-BRIDGE.md.
+solana-stake-interface = { version = "4.3.0", default-features = false }
 
 [dev-dependencies]
 criterion = { workspace = true }

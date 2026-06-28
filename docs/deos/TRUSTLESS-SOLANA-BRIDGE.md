@@ -290,18 +290,41 @@ table** — only the anchor + the proof's `StakeProvenance`. The older
 consensus primitive (the supermajority arithmetic over an already-obtained
 table).
 
-### What still remains (honest — pass 4 and the named refinements)
+### Warmup/cooldown effective stake — pass 4 (`bridge/src/solana_provenance.rs`)
+
+Pass 4 closes the dominant remaining *exactness* gap (not a soundness hole): the
+≥ 2/3 super-majority is now computed over Solana's **effective stake** — the real
+warmup/cooldown curve — not the coarse `[activation, deactivation)` integer
+window.
+
+- **The real curve — REAL (done).** `solana_provenance::effective_stake` runs
+  Solana's own `Delegation::stake_v2(target_epoch, &StakeHistory,
+  new_rate_activation_epoch)` (the upstream **integer** implementation, type-only
+  `solana-stake-interface`, no monolith). A delegation still warming up (or
+  cooling down) contributes its rate-limited effective stake, bounded per epoch by
+  the cluster rate — `ORIGINAL_WARMUP_COOLDOWN_RATE_BPS = 2_500` (25%) then
+  `TOWER_WARMUP_COOLDOWN_RATE_BPS = 900` (9%) from the `reduce_stake_warmup_cooldown`
+  feature epoch (`new_rate_activation_epoch`). Fixture: a 1,000,000-lamport
+  delegation activating at epoch 10 contributes 90,000 (9%) at epoch 11, not its
+  full delegated amount.
+- **StakeHistory proven from bank state — REAL (done).** The curve reads the
+  cluster `StakeHistory`, itself **derived, not trusted**: the
+  `SysvarStakeHistory1111111111111111111111111` sysvar account
+  (`STAKE_HISTORY_SYSVAR_ID`) is proven into the voted accounts hash and decoded
+  (`decode_stake_history`). So the effective-stake denominator the ≥ 2/3 is checked
+  against comes from the same bank hash the votes attest.
+
+### What still remains (honest — the named refinements)
 
 1. **The weak-subjectivity anchor itself** is trusted. This is irreducible: a
    from-genesis-trustless Solana light client would replay all history. Every
    deployed light client (ETH included) trusts a recent finalized checkpoint;
    `WeakSubjectivityAnchor` is dregg's, named as such.
-2. **Stake-activation timing nuance.** `active_stake` counts a delegation at full
-   weight inside its `[activation, deactivation)` window; Solana's warmup/cooldown
-   effective-stake curve and the two-epoch leader-schedule snapshot offset are
-   refinements. The *security* property — stake weights proven against a bank hash
-   rather than trusted — holds regardless; the derived total can differ from the
-   cluster's only by the warmup/cooldown delta on freshly (de)activated stake.
+2. **The two-epoch leader-schedule snapshot offset.** The warmup/cooldown curve
+   (the *magnitude* of each validator's stake) is now exact; *which* epoch index
+   the consensus stake-weight snapshot is taken at (Solana's leader schedule is the
+   stakes two epochs prior) is a ±1–2-epoch shift in the evaluation point, not the
+   curve shape — evaluated here at the table's epoch.
 3. **Account-data lock-record layout.** The vault account's `data` carries the
    lock record in an *adapter-defined* layout (`encode_lock_record`); the
    per-account hash + the 16-ary tree are mainnet-faithful, but the lock
@@ -309,9 +332,17 @@ table).
 4. **Bank-hash version extras.** The classic 4-field recipe is byte-faithful; the
    epoch-accounts-hash (at EAH slots) and the accounts lt-hash (SIMD-0215) the
    modern bank folds in at specific slots are not modeled.
-5. **Option-B succinct wrapper (optional).** Wrapping the above in an off-dregg
-   relayer circuit + a dregg-side succinct verify keeps the on-dregg cost
-   constant; the in-process verification is the Option-A logic it would encode.
+5. **Option-B succinct wrapper — the on-dregg-cost optimization.** The in-process
+   anchored verifier is `O(votes + accounts + rotation)` on the dregg side.
+   Option B relocates that to an off-dregg relayer circuit and leaves dregg a
+   constant-cost succinct verify (reusing the recursive-STARK surface
+   `verify_turn_chain_recursive` + a pinned VK). **Designed + first slice shipped**
+   (`docs/deos/SOLANA-SUCCINCT-WRAPPER.md`): the public-input statement shape
+   (`SolanaConsensusStatement` + its canonical `digest`, derived from a verified
+   proof via `of_verified`) and the on-dregg verify mapped to the existing
+   surface. The remaining build is the relayer consensus AIR (the in-circuit
+   Ed25519 batch + accounts-hash folds + the curve) — a soundness-neutral
+   optimization, not a trust change.
 
 **Honest status:** the bridge is now **trustless modulo the weak-subjectivity
 anchor** (plus the named stake-timing / lock-layout / bank-hash-version
@@ -320,8 +351,15 @@ votes are real signed vote transactions, whose accounts inclusion uses the real
 16-ary format, and whose `StakeProvenance` derives the stake table + authorized
 voters from bank state anchored at a `WeakSubjectivityAnchor`,
 `verify_lock_proof_consensus_anchored` verifies — with **no trusted stake-table
-input** — a ≥ 2/3 stake-weighted Ed25519 attestation by the on-chain authorized
-voters over a stake distribution proven from the voted bank hash, binds the lock
-record to that bank hash, and (when required) checks PoH against a bounded-anchor
-policy. The watchtower interim remains a cheap complementary hardening for the
-trusted path.
+input** — a ≥ 2/3 **effective-stake** (warmup/cooldown curve) Ed25519 attestation
+by the on-chain authorized voters over a stake distribution proven from the voted
+bank hash (the `StakeHistory` sysvar included too), binds the lock record to that
+bank hash, and (when required) checks PoH against a bounded-anchor policy. The
+watchtower interim remains a cheap complementary hardening for the trusted path.
+
+The honest distance to a fully-**COMPLETE** trustless Solana bridge is now a
+single optimization, not a soundness item: the **Option-B succinct wrapper** (the
+relayer consensus AIR that turns the `O(votes)` on-dregg verify into an `O(1)`
+succinct check) — designed with its first slice shipped
+(`docs/deos/SOLANA-SUCCINCT-WRAPPER.md`); everything that makes the bridge
+*trustless* (modulo the irreducible weak-subjectivity anchor) is in place.

@@ -183,6 +183,12 @@ pub struct StakeProvenance {
     pub anchor_stake_accounts: Vec<ProvenAccount>,
     /// Vote accounts deriving the anchor epoch's authorized voters.
     pub anchor_vote_accounts: Vec<ProvenAccount>,
+    /// The anchor epoch's `StakeHistory` sysvar account, proving the cluster stake
+    /// history the warmup/cooldown effective-stake curve reads.
+    pub anchor_stake_history_account: ProvenAccount,
+    /// The `reduce_stake_warmup_cooldown` feature epoch the effective-stake curve
+    /// uses (`None` ⟹ the original 25% rate forever). A Solana network constant.
+    pub new_rate_activation_epoch: Option<u64>,
     /// Rotation steps from the anchor epoch to the lock's epoch (each attested by
     /// the prior trusted epoch's ≥ 2/3 stake). Empty at the anchor epoch.
     pub rotation: Vec<RotationStep>,
@@ -514,6 +520,8 @@ fn derive_verified_table(
         &provenance.anchor_accounts_hash,
         &provenance.anchor_stake_accounts,
         &provenance.anchor_vote_accounts,
+        &provenance.anchor_stake_history_account,
+        provenance.new_rate_activation_epoch,
     )
     .map_err(LockProofError::Provenance)?;
     for step in &provenance.rotation {
@@ -576,6 +584,128 @@ pub fn verify_lock_proof_consensus_anchored(
         poh_policy,
     )?;
     Ok(LockProofTrust::ConsensusVerified)
+}
+
+// ============================================================================
+// Option-B succinct wrapper — the public-input statement (first slice)
+// ============================================================================
+
+/// The **public instance** of the Option-B succinct-wrapper relation `R` (the
+/// design: `docs/deos/SOLANA-SUCCINCT-WRAPPER.md`): exactly the values dregg's
+/// value layer needs to credit a lock, plus the weak-subjectivity trust root the
+/// proof chains to. The relayer circuit will expose [`Self::digest`] as its single
+/// public input; the on-dregg `verify_lock_proof_succinct` binds it. NOTHING about
+/// *how* consensus was checked (votes, accounts, rotation, PoH) is public — that
+/// is the circuit's private witness.
+///
+/// This is the typed seam between today's in-process
+/// [`verify_lock_proof_consensus_anchored`] and the future constant-cost succinct
+/// verify; it carries no proof system yet. Construct it from a proof the
+/// in-process verifier has accepted via [`Self::of_verified`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolanaConsensusStatement {
+    /// The mirrored SPL mint the proof is bound to.
+    pub spl_mint: [u8; 32],
+    /// The locked lamports → minted $DREGG (the conserved quantity).
+    pub amount: u64,
+    /// The dregg cell credited.
+    pub dregg_recipient: CellId,
+    /// The consume-once lock id (the replay-nullifier key).
+    pub lock_id: [u8; 32],
+    /// The finalized Solana slot the lock lives in.
+    pub slot: u64,
+    /// The bank hash the super-majority voted for `slot`.
+    pub bank_hash: [u8; 32],
+    /// The epoch `slot` belongs to (the stake table's epoch).
+    pub epoch: u64,
+    /// The Solana account holding the lock record.
+    pub vault_account: [u8; 32],
+    /// The weak-subjectivity anchor epoch the stake-table provenance chains to.
+    pub anchor_epoch: u64,
+    /// The anchor's pinned stake-table root.
+    pub anchor_stake_table_root: [u8; 32],
+    /// The `reduce_stake_warmup_cooldown` feature epoch the effective-stake curve
+    /// used (`None` ⟹ the original 25% rate). A pinned Solana network constant.
+    pub new_rate_activation_epoch: Option<u64>,
+    /// Whether PoH linkage was demanded.
+    pub require_poh: bool,
+}
+
+impl SolanaConsensusStatement {
+    /// A binding, domain-separated SHA-256 commitment to the full instance, in a
+    /// canonical field order. This is the public input the wrapper proof commits
+    /// to; two statements collide iff every field agrees.
+    pub fn digest(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"dregg-solana-succinct-statement:v1");
+        h.update(self.spl_mint);
+        h.update(self.amount.to_le_bytes());
+        h.update(self.dregg_recipient.as_bytes());
+        h.update(self.lock_id);
+        h.update(self.slot.to_le_bytes());
+        h.update(self.bank_hash);
+        h.update(self.epoch.to_le_bytes());
+        h.update(self.vault_account);
+        h.update(self.anchor_epoch.to_le_bytes());
+        h.update(self.anchor_stake_table_root);
+        // Encode the Option as a tag byte + value so `None` ≠ `Some(0)`.
+        match self.new_rate_activation_epoch {
+            Some(e) => {
+                h.update([1u8]);
+                h.update(e.to_le_bytes());
+            }
+            None => h.update([0u8]),
+        }
+        h.update([self.require_poh as u8]);
+        h.finalize().into()
+    }
+
+    /// Derive the statement from a lock proof the **in-process anchored verifier
+    /// accepts** — pinning the relation `R`'s public projection to today's
+    /// ground-truth checker ([`verify_lock_proof_consensus_anchored`]). Returns the
+    /// verifier's error unchanged if the proof would not verify (so a statement can
+    /// only be minted for a genuinely-finalized lock). This is the contract the
+    /// future relayer circuit must satisfy: it proves exactly this acceptance and
+    /// exposes [`Self::digest`].
+    pub fn of_verified(
+        proof: &SolanaLockProof,
+        spl_mint: &[u8; 32],
+        min_amount: u64,
+        max_amount: u64,
+        anchor: &WeakSubjectivityAnchor,
+        require_poh: bool,
+        poh_policy: Option<&PohAnchorPolicy>,
+    ) -> Result<Self, LockProofError> {
+        // Ground-truth: the statement exists only for a proof that verifies.
+        verify_lock_proof_consensus_anchored(
+            proof,
+            spl_mint,
+            min_amount,
+            max_amount,
+            anchor,
+            require_poh,
+            poh_policy,
+        )?;
+        let new_rate_activation_epoch = proof
+            .stake_provenance
+            .as_ref()
+            .and_then(|p| p.new_rate_activation_epoch);
+        Ok(Self {
+            spl_mint: proof.spl_mint,
+            amount: proof.amount,
+            dregg_recipient: proof.dregg_recipient,
+            lock_id: proof.lock_id,
+            slot: proof.consensus.slot,
+            bank_hash: proof.consensus.bank_hash,
+            epoch: proof.consensus.epoch,
+            vault_account: proof.inclusion.vault_account,
+            anchor_epoch: anchor.epoch,
+            anchor_stake_table_root: anchor.stake_table_root,
+            new_rate_activation_epoch,
+            require_poh,
+        })
+    }
 }
 
 /// The real anchored-consensus verification (see
@@ -1412,7 +1542,10 @@ mod tests {
 
     use crate::solana_consensus::PohAnchorPolicy;
     use crate::solana_provenance::tests as prov;
-    use crate::solana_provenance::{STAKE_PROGRAM_ID, derive_stake_table, vote_program_id};
+    use crate::solana_provenance::{
+        STAKE_HISTORY_SYSVAR_ID, STAKE_PROGRAM_ID, SYSVAR_OWNER_ID, derive_stake_table,
+        vote_program_id,
+    };
     use crate::solana_wire::{encode_lock_record, solana_account_hash};
 
     /// A fully **bank-state-provenance** proof: the stake table + authorized
@@ -1447,12 +1580,14 @@ mod tests {
         let vd2 = prov::build_vote_account_data(&[0x02u8; 32], &a2pk, epoch);
         let sd1 = prov::build_stake_account_data(&va1, 700, 0, u64::MAX);
         let sd2 = prov::build_stake_account_data(&va2, 300, 0, u64::MAX);
+        let shd = prov::encode_stake_history_data(&[]); // empty → epoch-0 stake fully warmed
+        let sysvar_owner = SYSVAR_OWNER_ID;
         let vault_data = encode_lock_record(&lid, &recipient, amount);
 
         let sa1 = [0x51u8; 32];
         let sa2 = [0x52u8; 32];
 
-        // One 16-ary chunk: [vault, vote1, vote2, stake1, stake2].
+        // One 16-ary chunk: [vault, vote1, vote2, stake1, stake2, stake_history].
         let vault_leaf =
             solana_account_hash(2_000_000, &[0x07u8; 32], false, 5, &vault_data, &vault);
         let leaves = [
@@ -1461,6 +1596,14 @@ mod tests {
             solana_account_hash(1_000_000, &vote_program, false, 0, &vd2, &va2),
             solana_account_hash(1_000_000, &stake_program, false, 0, &sd1, &sa1),
             solana_account_hash(1_000_000, &stake_program, false, 0, &sd2, &sa2),
+            solana_account_hash(
+                1_000_000,
+                &sysvar_owner,
+                false,
+                0,
+                &shd,
+                &STAKE_HISTORY_SYSVAR_ID,
+            ),
         ];
         let (accounts_hash, proofs) = prov::single_chunk(&leaves);
 
@@ -1497,10 +1640,23 @@ mod tests {
             prov::proven_account(sa1, stake_program, sd1, proofs[3].clone()),
             prov::proven_account(sa2, stake_program, sd2, proofs[4].clone()),
         ];
+        let stake_history_account = prov::proven_account(
+            STAKE_HISTORY_SYSVAR_ID,
+            sysvar_owner,
+            shd,
+            proofs[5].clone(),
+        );
 
         // The anchor pins the GENUINE derived distribution at this epoch.
-        let derived = derive_stake_table(epoch, &accounts_hash, &stake_accounts, &vote_accounts)
-            .expect("derive anchor table");
+        let derived = derive_stake_table(
+            epoch,
+            &accounts_hash,
+            &stake_accounts,
+            &vote_accounts,
+            &stake_history_account,
+            None,
+        )
+        .expect("derive anchor table");
         let anchor = WeakSubjectivityAnchor::from_table(&derived.table);
 
         let proof = SolanaLockProof {
@@ -1542,6 +1698,8 @@ mod tests {
                 anchor_accounts_hash: accounts_hash,
                 anchor_stake_accounts: stake_accounts,
                 anchor_vote_accounts: vote_accounts,
+                anchor_stake_history_account: stake_history_account,
+                new_rate_activation_epoch: None,
                 rotation: vec![],
             }),
         };
@@ -1569,6 +1727,57 @@ mod tests {
         )
         .expect("anchored consensus verifies with derived stake table");
         assert_eq!(trust, LockProofTrust::ConsensusVerified);
+    }
+
+    #[test]
+    fn succinct_statement_pins_public_inputs_of_a_verified_proof() {
+        let cfg = config();
+        let recipient = cid(7);
+        let (proof, anchor, policy) = anchored_grade(500, recipient, 1);
+
+        // The statement can only be minted for a proof the in-process verifier
+        // accepts; it then exposes exactly the value-layer public inputs.
+        let st = SolanaConsensusStatement::of_verified(
+            &proof,
+            &cfg.spl_mint,
+            cfg.min_amount,
+            cfg.max_amount,
+            &anchor,
+            true,
+            Some(&policy),
+        )
+        .expect("statement for a verified proof");
+        assert_eq!(st.amount, 500);
+        assert_eq!(st.dregg_recipient, recipient);
+        assert_eq!(st.slot, proof.consensus.slot);
+        assert_eq!(st.bank_hash, proof.consensus.bank_hash);
+        assert_eq!(st.vault_account, proof.inclusion.vault_account);
+        assert_eq!(st.anchor_stake_table_root, anchor.stake_table_root);
+
+        // The digest binds every field: a mutated public input ⇒ a different digest.
+        let d0 = st.digest();
+        let mut st2 = st.clone();
+        st2.amount = 501;
+        assert_ne!(st2.digest(), d0);
+        // Deterministic for the same statement.
+        assert_eq!(st.digest(), st.clone().digest());
+
+        // A proof that would NOT verify cannot mint a statement.
+        let mut bad = proof.clone();
+        bad.stake_provenance = None;
+        assert_eq!(
+            SolanaConsensusStatement::of_verified(
+                &bad,
+                &cfg.spl_mint,
+                cfg.min_amount,
+                cfg.max_amount,
+                &anchor,
+                false,
+                Some(&policy),
+            )
+            .unwrap_err(),
+            LockProofError::StakeProvenanceMissing
+        );
     }
 
     #[test]
