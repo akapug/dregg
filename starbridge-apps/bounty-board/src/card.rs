@@ -45,7 +45,10 @@
 use serde_json::{Value, json};
 
 use crate::service::{METHOD_CLAIM, METHOD_PAYOUT, METHOD_POST, METHOD_SUBMIT};
-use crate::{CLAIMANT_HASH_SLOT, REWARD_SLOT, STATE_PAID, STATE_SLOT, TITLE_HASH_SLOT};
+use crate::{
+    CLAIMANT_HASH_SLOT, REWARD_SLOT, STATE_CLAIMED, STATE_OPEN, STATE_PAID, STATE_SLOT,
+    STATE_SUBMITTED, TITLE_HASH_SLOT,
+};
 
 /// The reward bar's denominator — a representative escrow ceiling so a fully-funded
 /// bounty fills the gauge (the seeded reward is `1_000`).
@@ -59,6 +62,13 @@ fn text(s: &str) -> Value {
 /// A `deos.ui.pill` node — a colored status badge.
 fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -81,14 +91,18 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque 20-digit key/amount paints short + friendly.
+fn bind(slot: usize, label: &str, fmt: &str) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection (the live pill + breadcrumb
+/// already show the stage); revealed in the adept "see the bones" view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `▸`.
@@ -133,15 +147,20 @@ pub fn bounty_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Bounty Board"), pill("CLAIMED", "accent")]),
+            row(vec![text("Bounty Board"), pill_live(STATE_SLOT, "CLAIMED", "accent", json!([
+                { "value": STATE_OPEN,      "label": "OPEN",      "tag": "warn" },
+                { "value": STATE_CLAIMED,   "label": "CLAIMED",   "tag": "accent" },
+                { "value": STATE_SUBMITTED, "label": "SUBMITTED", "tag": "accent" },
+                { "value": STATE_PAID,      "label": "PAID",      "tag": "good" },
+            ]))]),
             breadcrumb(&["Open", "Claimed", "Submitted", "Paid"], 1),
             divider(),
             section("Bounty", "genuine", vec![
-                gauge(STATE_SLOT, STATE_PAID, "stage "),
-                gauge(REWARD_SLOT, REWARD_GAUGE_MAX, "escrowed reward "),
-                bind(REWARD_SLOT, "reward · "),
-                bind(CLAIMANT_HASH_SLOT, "claimant · "),
-                bind(TITLE_HASH_SLOT, "title hash · "),
+                gauge(STATE_SLOT, STATE_PAID, "stage ", true),
+                gauge(REWARD_SLOT, REWARD_GAUGE_MAX, "escrowed reward ", false),
+                bind(REWARD_SLOT, "reward · ", "amount"),
+                bind(CLAIMANT_HASH_SLOT, "claimant · ", "id"),
+                bind(TITLE_HASH_SLOT, "title hash · ", "hash"),
             ]),
             section("Actions", "", vec![
                 action("+", "Post",    METHOD_POST),
@@ -192,7 +211,41 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "CLAIMED");
+        // The header pill is LIVE: it reads STATE_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "CLAIMED",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], STATE_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 4, "OPEN / CLAIMED / SUBMITTED / PAID");
+        assert_eq!(cases[3]["value"], STATE_PAID);
+        assert_eq!(cases[3]["label"], "PAID");
+    }
+
+    #[test]
+    fn the_reward_and_identity_binds_carry_their_display_fmt() {
+        let card = bounty_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(REWARD_SLOT), "amount", "the reward groups digits");
+        assert_eq!(
+            fmt(CLAIMANT_HASH_SLOT),
+            "id",
+            "the claimant paints an avatar handle"
+        );
+        assert_eq!(
+            fmt(TITLE_HASH_SLOT),
+            "hash",
+            "the title hash paints short hex"
+        );
     }
 
     #[test]

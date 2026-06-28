@@ -72,6 +72,13 @@ fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: u8, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot as usize, "cases": cases } })
+}
+
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
@@ -92,9 +99,12 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
-fn bind(slot: u8, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot as usize, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix, a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) and an `adept` flag (true → hidden in the simple projection, shown
+/// in the adept "see the bones" view — for internal slot detail).
+fn bind(slot: u8, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot as usize, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
@@ -144,17 +154,27 @@ pub fn governance_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Governed Namespace"), pill("VOTING", "accent")]),
+            // The status pill is LIVE: it reads the pending-proposal signal and maps it
+            // to the constitutional stage word (value 0 = no proposal = DRAFT; a staged
+            // value maps to PROPOSED/VOTING/COMMITTED, else the static fallback word).
+            row(vec![text("Governed Namespace"), pill_live(PENDING_PROPOSAL_ROOT_SLOT, "VOTING", "accent", json!([
+                { "value": 0, "label": "DRAFT",     "tag": "muted" },
+                { "value": 1, "label": "PROPOSED",  "tag": "warn" },
+                { "value": 2, "label": "VOTING",    "tag": "accent" },
+                { "value": 3, "label": "COMMITTED", "tag": "good" },
+            ]))]),
             breadcrumb(&["Draft", "Proposed", "Voting", "Committed"], 2),
             divider(),
             section("Proposal", "genuine", vec![
                 // THE killer governance visual: the running vote tally toward quorum.
                 gauge(PENDING_PROPOSAL_ROOT_SLOT, QUORUM, "quorum "),
-                bind(ROUTE_TABLE_ROOT_SLOT, "proposed route · "),
-                bind(PENDING_PROPOSAL_ROOT_SLOT, "votes · "),
-                bind(THRESHOLD_SLOT, "quorum (M) · "),
-                bind(GOVERNANCE_COMMITTEE_ROOT_SLOT, "committee · "),
-                bind(VERSION_SLOT, "version · "),
+                bind(ROUTE_TABLE_ROOT_SLOT, "proposed route · ", "hash", false),
+                bind(PENDING_PROPOSAL_ROOT_SLOT, "votes · ", "raw", false),
+                bind(GOVERNANCE_COMMITTEE_ROOT_SLOT, "committee · ", "hash", false),
+                // Internal slot detail — the raw quorum M + version: hidden in the
+                // simple projection (the gauge already shows progress toward M).
+                bind(THRESHOLD_SLOT, "quorum (M) · ", "raw", true),
+                bind(VERSION_SLOT, "version · ", "raw", true),
             ]),
             section("Actions", "", vec![
                 action("+", "Propose",  METHOD_PROPOSE),
@@ -207,7 +227,18 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "VOTING");
+        // The header pill is LIVE: a static fallback word + a slot it reads + stage cases.
+        assert_eq!(
+            pills[0]["props"]["text"], "VOTING",
+            "the static fallback word"
+        );
+        assert_eq!(
+            pills[0]["props"]["slot"],
+            PENDING_PROPOSAL_ROOT_SLOT as usize
+        );
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 4, "DRAFT / PROPOSED / VOTING / COMMITTED");
+        assert_eq!(cases[3]["label"], "COMMITTED");
     }
 
     #[test]
@@ -247,12 +278,38 @@ mod tests {
             vec![
                 ROUTE_TABLE_ROOT_SLOT as u64,
                 PENDING_PROPOSAL_ROOT_SLOT as u64,
-                THRESHOLD_SLOT as u64,
                 GOVERNANCE_COMMITTEE_ROOT_SLOT as u64,
+                THRESHOLD_SLOT as u64,
                 VERSION_SLOT as u64,
             ],
-            "the binds surface route / votes / quorum / committee / version"
+            "the binds surface route / votes / committee / quorum / version"
         );
+        // The opaque roots paint short — route + committee as truncated hex digests.
+        let fmt = |slot: u8| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(ROUTE_TABLE_ROOT_SLOT), "hash");
+        assert_eq!(fmt(GOVERNANCE_COMMITTEE_ROOT_SLOT), "hash");
+        assert_eq!(
+            fmt(PENDING_PROPOSAL_ROOT_SLOT),
+            "raw",
+            "the vote count stays raw"
+        );
+        // The internal quorum-M + version rows are adept-only (clean simple projection).
+        let adept = |slot: u8| -> bool {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["adept"].as_bool())
+                .unwrap()
+        };
+        assert!(adept(THRESHOLD_SLOT) && adept(VERSION_SLOT));
+        assert!(!adept(ROUTE_TABLE_ROOT_SLOT));
     }
 
     #[test]

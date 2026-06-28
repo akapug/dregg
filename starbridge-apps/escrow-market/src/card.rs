@@ -18,8 +18,12 @@
 //! ## The card shape
 //!
 //! A titled column ([`deos.ui.vstack`](deos_view)) carrying:
-//!   - a `text` header (`"Sealed Escrow"`);
-//!   - a `bind` re-reading the live escrow leg status off the committed heap;
+//!   - a `text` header (`"Sealed Escrow"`) and a LIVE leg-status `pill` reading
+//!     [`STATE_SLOT`](crate::STATE_SLOT) — the value maps to a word + color
+//!     (`LISTED`/`FUNDED`/`SHIPPED`/`SETTLED`);
+//!   - an "Escrow" `section` surfacing the live parties + amounts: the seller /
+//!     buyer key `bind`s paint emoji-avatar handles (`fmt:"id"`), the ceiling /
+//!     escrowed `bind`s group their digits (`fmt:"amount"`);
 //!   - one `button` per swap-lifecycle method (`open` / `deposit` / `settle` /
 //!     `reclaim`), each carrying its `onClick = { turn, arg }` — the method symbol
 //!     the [`service`](crate::service) face routes.
@@ -31,20 +35,38 @@
 use serde_json::{Value, json};
 
 use crate::service::{METHOD_DEPOSIT, METHOD_OPEN, METHOD_RECLAIM, METHOD_SETTLE};
-
-/// The renderer tag for the escrow's live leg-status binding (a `deos.ui.bind`
-/// re-reads the committed leg state off the host cell's heap).
-pub const STATUS_BIND: &str = "escrow-status";
+use crate::{
+    BUYER_HASH_SLOT, CEILING_SLOT, ESCROWED_SLOT, SELLER_HASH_SLOT, STATE_FUNDED, STATE_LISTED,
+    STATE_SETTLED, STATE_SHIPPED, STATE_SLOT,
+};
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
     json!({ "kind": "text", "props": { "text": s } })
 }
 
-/// A `deos.ui.bind` node tagged with the model `key` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the key is tagged).
-fn bind(key: &str, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "key": key, "label": label } })
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
+/// A `deos.ui.section` node — a titled, bordered container.
+fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
+    json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
+}
+
+/// A `deos.ui.row` node — a horizontal flex of children.
+fn row(children: Vec<Value>) -> Value {
+    json!({ "kind": "row", "props": {}, "children": children })
+}
+
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and
+/// a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque 20-digit key/amount paints short + friendly.
+fn bind(slot: usize, label: &str, fmt: &str) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt } })
 }
 
 /// A `deos.ui.button` node carrying its affordance payload `onClick = {turn, arg}`.
@@ -57,17 +79,28 @@ fn button(label: &str, turn: &str, arg: i64) -> Value {
 
 /// **The escrow-market card as a `deos.ui.*` view-tree** (a `serde_json::Value`).
 ///
-/// A `vstack` of a header, a live `bind` on the escrow's leg status, and the four
-/// sealed-escrow lifecycle buttons. Renderer-independent DATA: hand it to any
-/// `deos-view` renderer (native / web / discord) to paint the SAME card. The
-/// button `turn` names are the [`service`](crate::service) method symbols.
+/// A `vstack` of a header + LIVE status pill, an "Escrow" section surfacing the live
+/// parties (avatar handles) + amounts (grouped digits), and the four sealed-escrow
+/// lifecycle buttons. Renderer-independent DATA: hand it to any `deos-view` renderer
+/// (native / web / discord) to paint the SAME card. The button `turn` names are the
+/// [`service`](crate::service) method symbols.
 pub fn escrow_card_value() -> Value {
     json!({
         "kind": "vstack",
         "props": {},
         "children": [
-            text("Sealed Escrow"),
-            bind(STATUS_BIND, "status: "),
+            row(vec![text("Sealed Escrow"), pill_live(STATE_SLOT, "LISTED", "muted", json!([
+                { "value": STATE_LISTED,  "label": "LISTED",  "tag": "warn" },
+                { "value": STATE_FUNDED,  "label": "FUNDED",  "tag": "accent" },
+                { "value": STATE_SHIPPED, "label": "SHIPPED", "tag": "accent" },
+                { "value": STATE_SETTLED, "label": "SETTLED", "tag": "good" },
+            ]))]),
+            section("Escrow", "genuine", vec![
+                bind(SELLER_HASH_SLOT, "seller · ", "id"),
+                bind(BUYER_HASH_SLOT,  "buyer · ",  "id"),
+                bind(CEILING_SLOT,     "ceiling · ", "amount"),
+                bind(ESCROWED_SLOT,    "escrowed · ", "amount"),
+            ]),
             button("Open",    METHOD_OPEN,    0),
             button("Deposit", METHOD_DEPOSIT, 0),
             button("Settle",  METHOD_SETTLE,  0),
@@ -87,31 +120,76 @@ pub fn escrow_card_json() -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_card_is_a_vstack_with_a_header_a_status_bind_and_four_buttons() {
-        let card = escrow_card_value();
-        assert_eq!(card["kind"], "vstack");
-        let children = card["children"].as_array().expect("children");
-        // header, bind, open, deposit, settle, reclaim
-        assert_eq!(children.len(), 6);
-        assert_eq!(children[0]["kind"], "text");
-        assert_eq!(children[0]["props"]["text"], "Sealed Escrow");
+    fn collect<'a>(node: &'a Value, kind: &str, out: &mut Vec<&'a Value>) {
+        if node["kind"] == kind {
+            out.push(node);
+        }
+        if let Some(children) = node["children"].as_array() {
+            for c in children {
+                collect(c, kind, out);
+            }
+        }
+    }
+
+    fn of_kind<'a>(card: &'a Value, kind: &str) -> Vec<&'a Value> {
+        let mut out = Vec::new();
+        collect(card, kind, &mut out);
+        out
     }
 
     #[test]
-    fn the_status_bind_reads_the_leg_state() {
+    fn the_card_is_a_vstack_with_a_header_a_live_status_pill_and_four_buttons() {
         let card = escrow_card_value();
-        let b = &card["children"][1];
-        assert_eq!(b["kind"], "bind");
-        assert_eq!(b["props"]["key"], STATUS_BIND);
-        assert_eq!(b["props"]["label"], "status: ");
+        assert_eq!(card["kind"], "vstack");
+        let children = card["children"].as_array().expect("children");
+        // header row, escrow section, open, deposit, settle, reclaim
+        assert_eq!(children.len(), 6);
+        let texts = of_kind(&card, "text");
+        assert!(texts.iter().any(|t| t["props"]["text"] == "Sealed Escrow"));
+    }
+
+    #[test]
+    fn the_status_pill_reads_the_leg_state_live() {
+        let card = escrow_card_value();
+        let pills = of_kind(&card, "pill");
+        assert_eq!(pills.len(), 1);
+        assert_eq!(pills[0]["props"]["slot"], STATE_SLOT as u64);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 4, "LISTED / FUNDED / SHIPPED / SETTLED");
+        assert_eq!(cases[3]["value"], STATE_SETTLED);
+        assert_eq!(cases[3]["label"], "SETTLED");
+    }
+
+    #[test]
+    fn the_party_and_amount_binds_carry_their_display_fmt() {
+        let card = escrow_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            fmt(SELLER_HASH_SLOT),
+            "id",
+            "seller paints an avatar handle"
+        );
+        assert_eq!(fmt(BUYER_HASH_SLOT), "id", "buyer paints an avatar handle");
+        assert_eq!(fmt(CEILING_SLOT), "amount", "the ceiling groups digits");
+        assert_eq!(
+            fmt(ESCROWED_SLOT),
+            "amount",
+            "the escrowed amount groups digits"
+        );
     }
 
     #[test]
     fn every_button_carries_its_service_method_as_the_turn_payload() {
         let card = escrow_card_value();
-        let children = card["children"].as_array().unwrap();
-        let buttons: Vec<&Value> = children.iter().filter(|c| c["kind"] == "button").collect();
+        let buttons = of_kind(&card, "button");
         assert_eq!(buttons.len(), 4);
         let turns: Vec<&str> = buttons
             .iter()
