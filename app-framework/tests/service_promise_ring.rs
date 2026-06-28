@@ -31,8 +31,8 @@ fn asset(b: u8) -> AssetId {
     a
 }
 
-/// The provider cell, the consumer cell, the escrow cell — distinct verified-ledger
-/// indices (the ledger projects each commitment to its low byte).
+/// The provider cell, the consumer cell, the escrow cell — distinct commitments
+/// (the verified ledger keys them by their FULL 32-byte id, so they never alias).
 const CONSUMER: u8 = 1;
 const PROVIDER: u8 = 2;
 const ESCROW: u8 = 9;
@@ -99,8 +99,8 @@ fn happy_path_service_performed_then_paid() {
 
     // Escrow the payment.
     let (mut escrow, k1) = exchange.fund(&m, &k0).expect("payment escrows");
-    assert_eq!(k1.get(CONSUMER, &pay), 0);
-    assert_eq!(k1.get(ESCROW, &pay), PRICE as i128);
+    assert_eq!(k1.get(cid(CONSUMER).0, &pay), 0);
+    assert_eq!(k1.get(cid(ESCROW).0, &pay), PRICE as i128);
     assert_eq!(
         k1.total_asset(&pay),
         PRICE as i128,
@@ -114,9 +114,13 @@ fn happy_path_service_performed_then_paid() {
         .expect("a conforming receipt releases the payment");
 
     assert_eq!(escrow.status, EscrowStatus::Released);
-    assert_eq!(k2.get(PROVIDER, &pay), PRICE as i128, "provider is paid");
-    assert_eq!(k2.get(ESCROW, &pay), 0, "escrow drained");
-    assert_eq!(k2.get(CONSUMER, &pay), 0);
+    assert_eq!(
+        k2.get(cid(PROVIDER).0, &pay),
+        PRICE as i128,
+        "provider is paid"
+    );
+    assert_eq!(k2.get(cid(ESCROW).0, &pay), 0, "escrow drained");
+    assert_eq!(k2.get(cid(CONSUMER).0, &pay), 0);
     assert_eq!(k2.total_asset(&pay), PRICE as i128, "conserved end-to-end");
 }
 
@@ -147,9 +151,13 @@ fn refund_path_unfulfilled_then_refunded() {
         .refund(&mut escrow, &k1, 51)
         .expect("lapsed promise refunds");
     assert_eq!(escrow.status, EscrowStatus::Refunded);
-    assert_eq!(k2.get(CONSUMER, &pay), PRICE as i128, "consumer made whole");
-    assert_eq!(k2.get(ESCROW, &pay), 0, "escrow drained");
-    assert_eq!(k2.get(PROVIDER, &pay), 0, "provider got nothing");
+    assert_eq!(
+        k2.get(cid(CONSUMER).0, &pay),
+        PRICE as i128,
+        "consumer made whole"
+    );
+    assert_eq!(k2.get(cid(ESCROW).0, &pay), 0, "escrow drained");
+    assert_eq!(k2.get(cid(PROVIDER).0, &pay), 0, "provider got nothing");
     assert_eq!(k2.total_asset(&pay), PRICE as i128, "conserved end-to-end");
 }
 
@@ -176,8 +184,8 @@ fn forged_fulfillment_never_half_pays() {
 
     // No half-settle: every felt is still held in escrow, status unchanged.
     assert_eq!(escrow.status, EscrowStatus::Funded);
-    assert_eq!(k1.get(ESCROW, &pay), PRICE as i128);
-    assert_eq!(k1.get(PROVIDER, &pay), 0);
+    assert_eq!(k1.get(cid(ESCROW).0, &pay), PRICE as i128);
+    assert_eq!(k1.get(cid(PROVIDER).0, &pay), 0);
     assert_eq!(k1.total_asset(&pay), PRICE as i128);
 
     // A receipt for the WRONG turn also fails to fill the hole.
@@ -192,7 +200,7 @@ fn forged_fulfillment_never_half_pays() {
     let k2 = exchange
         .refund(&mut escrow, &k1, 51)
         .expect("still refundable");
-    assert_eq!(k2.get(CONSUMER, &pay), PRICE as i128);
+    assert_eq!(k2.get(cid(CONSUMER).0, &pay), PRICE as i128);
     assert_eq!(k2.total_asset(&pay), PRICE as i128);
 }
 
