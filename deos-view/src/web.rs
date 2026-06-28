@@ -98,6 +98,7 @@ fn node(n: &ViewNode, binds: &BindValues, cursor: &mut usize, out: &mut String) 
             // CONSUMER-DELIGHT: `fmt` paints an opaque key/hash SHORT + friendly; `data-fmt` +
             // `data-label` let the in-tab re-read re-format identically (the JS mirror) instead
             // of clobbering the friendly text with a raw number.
+            let idx = *cursor;
             let value = binds.get(*cursor).copied().unwrap_or(0);
             *cursor += 1;
             let shown = crate::fmt::format_value(value, *fmt);
@@ -106,8 +107,12 @@ fn node(n: &ViewNode, binds: &BindValues, cursor: &mut usize, out: &mut String) 
             } else {
                 format!("{label}{shown}")
             };
+            // `data-bind-index` is the stable tree-walk position of this bind. The
+            // trustless portal carries per-bind heap openings as a JSON island keyed by
+            // this index, so the in-tab verify can flip THIS field's span once its opening
+            // checks against the committed heap root (the served-plain closure).
             out.push_str(&format!(
-                "<span class=\"deos-bind\" data-slot=\"{slot}\" data-fmt=\"{}\" data-label=\"{}\">{}</span>",
+                "<span class=\"deos-bind\" data-slot=\"{slot}\" data-bind-index=\"{idx}\" data-fmt=\"{}\" data-label=\"{}\">{}</span>",
                 fmt.as_str(),
                 escape(label),
                 escape(&text)
@@ -1061,6 +1066,75 @@ pub enum TrustlessAttestation<'a> {
     },
 }
 
+/// A per-field **heap opening** the trustless portal carries so the tab can bind a
+/// rendered `bind` VALUE to the cell's committed umem heap — the served-plain closure.
+///
+/// One per `bind` the portal wants field-verified (keyed by the bind's tree-walk index,
+/// matching the `data-bind-index` the renderer emits). It is the sparse-Merkle opening of
+/// the slot `(coll, key)` → `value` against the cell's committed heap `root`, the exact
+/// fold `dregg_circuit::heap_root` commits with. The tab runs the wasm
+/// `verify_slot_opening(root, coll, key, value, siblings, directions)` over it; a genuine
+/// opening flips the field span to verified, a tampered one is refused.
+///
+/// All values are decimal `BabyBear` felts (`< 2^31`). `siblings`/`directions` are the
+/// depth-`HEAP_TREE_DEPTH` (16) path (bottom-up): `directions[i]` is `0` if the running
+/// node is the left child at level `i`, `1` if right. The baker mints these from a real
+/// `CanonicalHeapTree` (the portal renderer is circuit-free, so the opening is produced by
+/// a circuit-aware caller and handed in); it MUST carry the same `value` the card paints
+/// for that bind, so "the shown value" and "the opened value" are one and the same.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct HeapSlotOpening {
+    /// The cell's committed umem heap root (decimal `BabyBear` felt).
+    pub root: u32,
+    /// The slot's collection id.
+    pub coll: u32,
+    /// The slot's key within the collection.
+    pub key: u32,
+    /// The committed value at the slot (decimal felt) — equals the painted bind value.
+    pub value: u32,
+    /// The sparse-Merkle siblings along the path, bottom-up (decimal felts), length 16.
+    pub siblings: Vec<u32>,
+    /// The path direction bits, bottom-up (`0` = left child, `1` = right), length 16.
+    pub directions: Vec<u8>,
+}
+
+/// Serialize the per-bind openings to a compact JSON array for the `#deos-openings`
+/// island: `null` for a bind with no opening, else `{i, root, coll, key, value, sibs, dirs}`
+/// (the `data-bind-index` `i` ties it to its span). Numbers only — no string escaping
+/// needed — so this is a plain hand-built emit (kept gpui/serde_json-free in spirit, and
+/// the `<` neutralisation is handled by [`embed_json`] at the island).
+fn openings_json(openings: &[Option<HeapSlotOpening>]) -> String {
+    let mut out = String::from("[");
+    for (i, op) in openings.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        match op {
+            None => out.push_str("null"),
+            Some(o) => {
+                let sibs = o
+                    .siblings
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let dirs = o
+                    .directions
+                    .iter()
+                    .map(|d| d.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                out.push_str(&format!(
+                    "{{\"i\":{i},\"root\":{},\"coll\":{},\"key\":{},\"value\":{},\"sibs\":\"{sibs}\",\"dirs\":\"{dirs}\"}}",
+                    o.root, o.coll, o.key, o.value
+                ));
+            }
+        }
+    }
+    out.push(']');
+    out
+}
+
 /// **THE TRUSTLESS PORTAL PAGE** — serve a dregg cell's card to a browser such that
 /// the page PROVES (in the tab, re-witnessing nothing) it reflects a genuine verified
 /// cell, not a server's bare claim.
@@ -1082,22 +1156,31 @@ pub enum TrustlessAttestation<'a> {
 ///   floor `recursive_sound` (FRI/STARK engine soundness, surfaced not hidden). A
 ///   tampered proof, a relabeled public, or a foreign circuit is REFUSED. This is
 ///   exactly `light_client_verifies_whole_history`, run in wasm32.
-/// - **SERVED-PLAIN, the named next rung:** the binding from the card's painted slot
-///   VALUES to that verified `final_root` — i.e. a per-slot opening proving each
-///   rendered field is the committed state at `final_root` — is NOT yet checked here;
-///   the card is the server's rendering of the cell whose committed history is verified.
-///   Closing it is the umem per-cell heap-root opening work (`Heap.root_binds_get`):
-///   carry each `bind` value with its Merkle opening against `final_root` and verify it
-///   tab-side. Until then the page is precise: the COMMITMENT is light-client-verified;
-///   the per-field rendering is the server's, pending the opening rung.
+/// - **SERVED-PLAIN, now closed per-field (when `openings` are carried):** each painted
+///   `bind` VALUE is bound to the committed cell state by a per-slot sparse-Merkle
+///   OPENING against the cell's umem heap `root` ([`HeapSlotOpening`]), verified tab-side
+///   by the wasm `verify_slot_opening` — the executable counterpart of Lean's
+///   `Heap.root_binds_get` (equal roots ⇒ equal value at every slot). A field whose
+///   opening checks flips from `deos-field-unverified` to verified; a tampered value
+///   moves the recomputed root and is REFUSED, never laundered. So the trustless claim
+///   now covers the field VALUES, not only the commitment.
+/// - **THE RESIDUAL (named, not hidden):** an opening binds a value to the cell's HEAP
+///   ROOT. The heap root is one limb of the cell-state commitment that the faithful
+///   8-felt `final_root` folds, so it BINDS to the verified anchor — but re-deriving
+///   `final_root` from the heap root in-tab (recomputing the whole cell-state commitment
+///   from its limbs) is a further rung, not done here. What is proven: each shown field
+///   value equals the value committed at its slot in the cell heap whose `root` the
+///   opening pins. A bind carrying NO opening stays the server's plain rendering.
 ///
-/// `pkg_url` is the ES-module URL of the wasm bundle's JS shim (e.g.
-/// `./pkg/dregg_wasm.js`). Must be served over HTTP (module import + `.wasm` fetch are
-/// CORS-blocked on `file://`).
+/// `openings[i]` is the heap opening for the `i`-th `bind` in tree-walk order (`None` =
+/// no opening carried, that field stays plain). `pkg_url` is the ES-module URL of the
+/// wasm bundle's JS shim (e.g. `./pkg/dregg_wasm.js`). Must be served over HTTP (module
+/// import + `.wasm` fetch are CORS-blocked on `file://`).
 pub fn render_trustless_cell_document(
     title: &str,
     tree: &ViewNode,
     bind_values: &BindValues,
+    openings: &[Option<HeapSlotOpening>],
     attestation: &TrustlessAttestation,
     pkg_url: &str,
 ) -> String {
@@ -1148,11 +1231,48 @@ pub fn render_trustless_cell_document(
     };
 
     let bootstrap = format!(
-        "import init, {{ verify_devnet_history, produce_external_history_envelope, genesis_vk_anchor }} from '{pkg}';\n\
+        "import init, {{ verify_devnet_history, produce_external_history_envelope, genesis_vk_anchor, verify_slot_opening }} from '{pkg}';\n\
+// THE PER-FIELD CLOSURE: once the history attests, bind each painted field VALUE to the\n\
+// committed cell heap by verifying its per-slot opening (verify_slot_opening) tab-side.\n\
+// Each genuine opening flips its field span to verified; a tampered value is REFUSED.\n\
+function deosMarkPendingFields() {{\n\
+  // Before the verify runs, mark every field that CARRIES an opening as unverified so it\n\
+  // reads as the server's claim until its opening checks (the per-field flip target).\n\
+  const island = document.getElementById('deos-openings');\n\
+  if (!island) return;\n\
+  let openings;\n\
+  try {{ openings = JSON.parse(island.textContent); }} catch (e) {{ return; }}\n\
+  (openings || []).forEach(function(o) {{\n\
+    if (!o) return;\n\
+    const span = document.querySelector('.deos-bind[data-bind-index=\\\"' + o.i + '\\\"]');\n\
+    if (span) span.classList.add('deos-field-unverified');\n\
+  }});\n\
+}}\n\
+function deosVerifyFields() {{\n\
+  const island = document.getElementById('deos-openings');\n\
+  if (!island) return;\n\
+  let openings;\n\
+  try {{ openings = JSON.parse(island.textContent); }} catch (e) {{ return; }}\n\
+  let ok = 0, total = 0;\n\
+  (openings || []).forEach(function(o) {{\n\
+    if (!o) return;\n\
+    const span = document.querySelector('.deos-bind[data-bind-index=\\\"' + o.i + '\\\"]');\n\
+    if (!span) return;\n\
+    total++;\n\
+    let good = false;\n\
+    try {{ good = verify_slot_opening(o.root, o.coll, o.key, o.value, o.sibs, o.dirs); }} catch (e) {{ good = false; }}\n\
+    span.classList.remove('deos-field-unverified');\n\
+    span.classList.add(good ? 'deos-field-verified' : 'deos-field-refused');\n\
+    span.title = good ? 'field value verified: a per-slot opening checks against the committed heap root' : 'field value REFUSED: opening did not check';\n\
+    if (good) ok++;\n\
+  }});\n\
+  return {{ ok: ok, total: total }};\n\
+}}\n\
 async function boot() {{\n\
   const banner = document.getElementById('deos-trust');\n\
   const detail = document.getElementById('deos-trust-detail');\n\
   const content = document.getElementById('deos-content');\n\
+  deosMarkPendingFields();                         // fields with openings read as unverified until checked\n\
   try {{\n\
     await init();                                  // instantiate the wasm light client\n\
     {obtain}\n\
@@ -1161,8 +1281,13 @@ async function boot() {{\n\
       banner.className = 'deos-trust verified';\n\
       banner.textContent = '\\u2713 light-client verified \\u2014 ' + verdict.num_turns + ' finalized turns, checked in YOUR browser';\n\
       content.className = content.className.replace('deos-unverified', 'deos-verified');\n\
+      const fields = deosVerifyFields();   // bind each painted field value to the committed heap\n\
+      let fieldNote = '';\n\
+      if (fields && fields.total > 0) {{\n\
+        fieldNote = '<br>field values: ' + fields.ok + '/' + fields.total + ' verified by per-slot heap openings (the shown values provably equal the committed cell state under <code>heap_root</code>; binding <code>heap_root</code> into <code>final_root</code> is the named residual)';\n\
+      }}\n\
       detail.innerHTML = 'This page reflects a genuine verified cell. The recursive STARK aggregate over its whole finalized history verified in this tab, re-witnessing nothing \\u2014 ' +\n\
-        '{mode_note}.<br>commitment <code>final_root</code> = [' + fr + ']<br>engine: ' + verdict.engine + '<br><span class=\\\"deos-floor\\\">' + verdict.named_floor + '</span>';\n\
+        '{mode_note}.<br>commitment <code>final_root</code> = [' + fr + ']<br>engine: ' + verdict.engine + fieldNote + '<br><span class=\\\"deos-floor\\\">' + verdict.named_floor + '</span>';\n\
     }} else {{\n\
       banner.className = 'deos-trust refused';\n\
       banner.textContent = '\\u2717 UNVERIFIED \\u2014 the light client REFUSED this attestation';\n\
@@ -1181,6 +1306,18 @@ boot();\n",
         mode_note = mode_note,
     );
 
+    // The per-field heap openings as an inert JSON island (read via textContent; `<`
+    // neutralised so a value can never break out of the island). The bootstrap's
+    // `deosVerifyFields` reads it after the history attests and verifies each opening.
+    let openings_block = if openings.iter().any(|o| o.is_some()) {
+        format!(
+            "<script type=\"application/json\" id=\"deos-openings\">{}</script>",
+            embed_json(&openings_json(openings))
+        )
+    } else {
+        String::new()
+    };
+
     format!(
         "<!doctype html>\n\
 <html lang=\"en\">\n\
@@ -1197,6 +1334,7 @@ boot();\n",
 <main class=\"deos-card deos-unverified\" id=\"deos-content\">{body}</main>\n\
 </div>\n\
 {attest_block}\n\
+{openings_block}\n\
 <script>{JS}</script>\n\
 <script type=\"module\">{bootstrap}</script>\n\
 </body>\n\
@@ -1206,6 +1344,7 @@ boot();\n",
         TRUSTLESS_CSS = TRUSTLESS_CSS,
         body = body,
         attest_block = attest_block,
+        openings_block = openings_block,
         JS = js(),
         bootstrap = bootstrap,
     )
@@ -1233,6 +1372,11 @@ const TRUSTLESS_CSS: &str = "
 .deos-trust-detail .deos-floor{display:block;margin-top:.35rem;font-style:italic;opacity:.85;}
 .deos-card.deos-unverified{opacity:.62;filter:grayscale(.4);border-style:dashed;transition:opacity .25s,filter .25s,border-color .25s;}
 .deos-card.deos-verified{opacity:1;filter:none;border-color:#3fb950;border-style:solid;transition:opacity .25s,filter .25s,border-color .25s;}
+.deos-bind.deos-field-unverified{border-bottom:1px dashed var(--muted);opacity:.8;}
+.deos-bind.deos-field-verified{border-bottom:1px solid #3fb950;color:#3fb950;}
+.deos-bind.deos-field-verified::after{content:'\\2713';font-size:.7em;margin-left:.2em;vertical-align:super;opacity:.8;}
+.deos-bind.deos-field-refused{border-bottom:1px solid #f85149;color:#f85149;}
+.deos-bind.deos-field-refused::after{content:'\\2717';font-size:.7em;margin-left:.2em;vertical-align:super;}
 ";
 
 /// Extra styling for the live page's status strip (the receipt-count audit readout) + the
@@ -1517,6 +1661,7 @@ mod trustless_tests {
             "trustless counter",
             &counter(),
             &[0],
+            &[],
             &TrustlessAttestation::InTabDemo { k: 3, step: 7 },
             "./pkg/dregg_wasm.js",
         );
@@ -1529,6 +1674,43 @@ mod trustless_tests {
         // The card starts unverified; the flip is gated on a real attestation.
         assert!(doc.contains("deos-unverified") && doc.contains("verdict.attested"));
         assert!(doc.contains("id=\"deos-trust\""));
+        // With no openings carried, no field-opening island is emitted.
+        assert!(!doc.contains("id=\"deos-openings\""));
+    }
+
+    /// THE SERVED-PLAIN CLOSURE WIRING. When per-field heap openings are carried, the page
+    /// imports `verify_slot_opening`, embeds the openings as an inert JSON island, tags the
+    /// bind span with its `data-bind-index`, and the bootstrap binds each field VALUE to the
+    /// committed heap (the field flips to verified on a checking opening). The cryptographic
+    /// correctness of the opening verify is covered in `wasm::bindings_lightclient`.
+    #[test]
+    fn trustless_portal_carries_and_wires_per_field_heap_openings() {
+        let opening = HeapSlotOpening {
+            root: 12345,
+            coll: 0,
+            key: 0,
+            value: 0,
+            siblings: vec![0; 16],
+            directions: vec![0; 16],
+        };
+        let doc = render_trustless_cell_document(
+            "trustless counter",
+            &counter(),
+            &[0],
+            &[Some(opening)],
+            &TrustlessAttestation::InTabDemo { k: 2, step: 1 },
+            "./pkg/dregg_wasm.js",
+        );
+        // The bind span carries its stable tree-walk index (the opening key).
+        assert!(doc.contains("data-bind-index=\"0\""));
+        // The per-slot opening verify is imported and called.
+        assert!(doc.contains("verify_slot_opening"));
+        // The openings ride as an inert JSON island, keyed by bind index.
+        assert!(doc.contains("id=\"deos-openings\""));
+        assert!(doc.contains("\"i\":0") && doc.contains("\"root\":12345"));
+        // The field flips from unverified to verified/refused on its opening.
+        assert!(doc.contains("deos-field-unverified") && doc.contains("deos-field-verified"));
+        assert!(doc.contains("deosVerifyFields"));
     }
 
     /// THE CONFIG-NOT-ARTIFACT SHAPE (server-supplied). The envelope is embedded as an
@@ -1541,6 +1723,7 @@ mod trustless_tests {
             "gateway counter",
             &counter(),
             &[0],
+            &[],
             &TrustlessAttestation::ServerSupplied {
                 envelope_json: r#"{"version":1,"note":"</script><b>x</b>","num_turns":2}"#,
                 config_anchor_hex: &anchor,

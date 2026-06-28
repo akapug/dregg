@@ -417,6 +417,110 @@ pub fn produce_external_history_envelope(k: usize, step: u64) -> Result<String, 
 }
 
 // ---------------------------------------------------------------------------
+// THE PER-SLOT HEAP OPENING — close the served-plain seam.
+//
+// `verify_devnet_history` attests that a cell's whole finalized history folds to
+// its committed state anchor (`final_root`), re-witnessing nothing. But the card a
+// trustless portal serves paints per-FIELD values, and those values are the
+// SERVER'S rendering until each is bound, in the tab, to the committed cell state.
+//
+// This is that binding: a per-slot sparse-Merkle OPENING of (slot → value) against
+// the cell's committed umem heap root, verified tab-side. It reproduces EXACTLY the
+// path fold `dregg_circuit::heap_root` commits with (the arity-2 Poseidon2 leaf
+// `hash[heap_addr(coll,key), value]` folded up a depth-`HEAP_TREE_DEPTH` tree by
+// `hash_fact`) — the executable counterpart of Lean's `Heap.root_binds_get` (equal
+// roots ⇒ equal value at every (coll, key)). A correct opening attests the field
+// value; a tampered value, a wrong slot, or a forged path moves the recomputed root
+// off `root` and is REFUSED.
+//
+// HONEST SCOPE: this verifies a field value against the cell's HEAP ROOT. The heap
+// root is one limb of the cell-state commitment that the faithful 8-felt
+// `final_root` folds — so it BINDS to the light-client-verified anchor, but
+// re-deriving `final_root` from the heap root in-tab (recomputing the whole
+// cell-state commitment from its limbs) is a further rung, not done here. What IS
+// closed: each shown field value provably equals the value committed at its slot in
+// the cell heap whose root is the verified opening's `root`.
+// ---------------------------------------------------------------------------
+
+/// **VERIFY A PER-SLOT HEAP OPENING** — prove a rendered field VALUE equals the
+/// value committed at its slot `(coll, key)` in the cell's umem heap, against the
+/// cell's committed `root`, re-witnessing nothing.
+///
+/// Reproduces the canonical heap path fold (`dregg_circuit::heap_root`): the leaf is
+/// the arity-2 Poseidon2 digest `hash[heap_addr(coll, key), value]`; it folds up a
+/// depth-`HEAP_TREE_DEPTH` tree against `siblings_csv` per `directions_csv` (bit `0`
+/// = the running node is the left child → `hash_fact(cur, sib)`; `1` = right →
+/// `hash_fact(sib, cur)`), and the recomputed root must equal `root`.
+///
+/// All field elements are decimal `BabyBear` felts (`< 2^31`): `root`/`value`/each
+/// sibling. `siblings_csv` and `directions_csv` are comma-separated, each of length
+/// exactly `HEAP_TREE_DEPTH` (16) — a wrong length is REFUSED (fail-closed). A
+/// tampered value, a wrong `(coll, key)`, or a forged path recomputes a different
+/// root and returns `false`.
+#[wasm_bindgen]
+pub fn verify_slot_opening(
+    root: u32,
+    coll: u32,
+    key: u32,
+    value: u32,
+    siblings_csv: &str,
+    directions_csv: &str,
+) -> bool {
+    let siblings = parse_felt_csv(siblings_csv);
+    let directions: Vec<u8> = parse_felt_csv(directions_csv)
+        .into_iter()
+        .map(|d| (d & 1) as u8)
+        .collect();
+    verify_slot_opening_core(root, coll, key, value, &siblings, &directions)
+}
+
+/// The pure path-fold verify the `#[wasm_bindgen]` wrapper drives (host-testable: no
+/// `JsValue`). Folds the (coll, key, value) leaf up the depth-`HEAP_TREE_DEPTH` tree
+/// against the opening and compares the recomputed root to `root`. Fails closed on a
+/// wrong-length path.
+fn verify_slot_opening_core(
+    root: u32,
+    coll: u32,
+    key: u32,
+    value: u32,
+    siblings: &[u32],
+    directions: &[u8],
+) -> bool {
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::heap_root::{HEAP_TREE_DEPTH, HeapLeaf, heap_addr};
+    use dregg_circuit::poseidon2::hash_fact;
+
+    if siblings.len() != HEAP_TREE_DEPTH || directions.len() != HEAP_TREE_DEPTH {
+        return false;
+    }
+    let leaf = HeapLeaf {
+        addr: heap_addr(BabyBear::new(coll), BabyBear::new(key)),
+        value: BabyBear::new(value),
+    };
+    let mut cur = leaf.digest();
+    for level in 0..HEAP_TREE_DEPTH {
+        let sib = BabyBear::new(siblings[level]);
+        cur = if directions[level] == 0 {
+            hash_fact(cur, &[sib])
+        } else {
+            hash_fact(sib, &[cur])
+        };
+    }
+    cur.as_u32() == BabyBear::new(root).as_u32()
+}
+
+/// Parse a comma-separated list of decimal `u32` felts. Blank tokens are skipped; a
+/// non-numeric token is dropped (which shortens the list, so the caller's
+/// length-check fails closed — a malformed path is REFUSED, never silently padded).
+fn parse_felt_csv(s: &str) -> Vec<u32> {
+    s.split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<u32>().ok())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers.
 // ---------------------------------------------------------------------------
 
@@ -641,6 +745,76 @@ mod tests {
         assert_eq!(
             decoded, raw,
             "the proof bytes round-trip through the envelope"
+        );
+    }
+
+    #[test]
+    fn slot_opening_verifies_and_a_tampered_value_is_refused() {
+        // THE SERVED-PLAIN CLOSURE, at the crypto level: a REAL opening of a slot's
+        // value against the cell's committed heap root verifies; a tampered value (or
+        // wrong slot) recomputes a different root and is REFUSED. The opening is minted
+        // by the SAME `dregg_circuit::heap_root` the executor commits with, so the
+        // tab-side fold here reproduces the committed root bit-for-bit.
+        use dregg_circuit::field::BabyBear;
+        use dregg_circuit::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf, heap_addr};
+
+        // A small umem heap: three (coll, key) → value entries.
+        let entries: [((u32, u32), u32); 3] = [((1, 1), 10), ((1, 2), 77), ((2, 1), 30)];
+        let leaves: Vec<HeapLeaf> = entries
+            .iter()
+            .map(|((c, k), v)| HeapLeaf {
+                addr: heap_addr(BabyBear::new(*c), BabyBear::new(*k)),
+                value: BabyBear::new(*v),
+            })
+            .collect();
+        let tree = CanonicalHeapTree::new(leaves, HEAP_TREE_DEPTH);
+        let root = tree.root().as_u32();
+
+        // Open slot (1, 2) → 77: a real membership proof off the committed tree.
+        let addr = heap_addr(BabyBear::new(1), BabyBear::new(2));
+        let pos = tree
+            .position_of(addr)
+            .expect("the slot is present in the heap");
+        let (sibs, dirs) = tree.prove_membership(pos).expect("membership proof");
+        let sibs_u32: Vec<u32> = sibs.iter().map(|s| s.as_u32()).collect();
+
+        // A real opening checks; a tampered value fails; a wrong slot fails.
+        assert!(
+            verify_slot_opening_core(root, 1, 2, 77, &sibs_u32, &dirs),
+            "a genuine opening of the committed value verifies"
+        );
+        assert!(
+            !verify_slot_opening_core(root, 1, 2, 78, &sibs_u32, &dirs),
+            "a tampered value recomputes a different root and is refused"
+        );
+        assert!(
+            !verify_slot_opening_core(root, 9, 9, 77, &sibs_u32, &dirs),
+            "the opening is bound to its (coll, key) — a wrong slot is refused"
+        );
+        // A wrong-length path fails closed (no silent pad).
+        assert!(
+            !verify_slot_opening_core(root, 1, 2, 77, &sibs_u32[..3], &dirs),
+            "a short path is refused, never padded"
+        );
+
+        // The CSV `#[wasm_bindgen]` wrapper agrees with the core.
+        let sibs_csv = sibs_u32
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let dirs_csv = dirs
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            verify_slot_opening(root, 1, 2, 77, &sibs_csv, &dirs_csv),
+            "the CSV wrapper verifies a real opening"
+        );
+        assert!(
+            !verify_slot_opening(root, 1, 2, 78, &sibs_csv, &dirs_csv),
+            "the CSV wrapper refuses a tampered value"
         );
     }
 
