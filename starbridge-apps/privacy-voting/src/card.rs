@@ -65,6 +65,13 @@ fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
 }
 
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
+}
+
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
 fn icon(glyph: &str, tag: &str) -> Value {
     json!({ "kind": "icon", "props": { "glyph": glyph, "tag": tag } })
@@ -85,10 +92,12 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix
-/// (the engine drops the closure on serialize, so the slot is tagged).
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix, a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) and an `adept` flag (true → hidden in the simple projection, shown in
+/// the adept "see the bones" view — for internal slot detail).
+fn bind(slot: usize, label: &str, fmt: &str, adept: bool) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt, "adept": adept } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
@@ -140,20 +149,26 @@ pub fn voting_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Privacy Voting"), pill("OPEN", "good")]),
+            // The status pill is LIVE: it reads CLOSED_SLOT (0 = open, non-zero = closed)
+            // and maps it to the poll-stage word + color.
+            row(vec![text("Privacy Voting"), pill_live(CLOSED_SLOT, "OPEN", "good", json!([
+                { "value": 0, "label": "OPEN",   "tag": "good" },
+                { "value": 1, "label": "CLOSED", "tag": "muted" },
+            ]))]),
             breadcrumb(&["Open", "Voting", "Tally", "Closed"], 1),
             divider(),
             section("Tally", "genuine", vec![
                 gauge(TALLY_YES_SLOT,     QUORUM_TARGET, "yes "),
                 gauge(TALLY_NO_SLOT,      QUORUM_TARGET, "no "),
                 gauge(TALLY_ABSTAIN_SLOT, QUORUM_TARGET, "abstain "),
-                bind(TALLY_YES_SLOT,     "yes · "),
-                bind(TALLY_NO_SLOT,      "no · "),
-                bind(TALLY_ABSTAIN_SLOT, "abstain · "),
+                bind(TALLY_YES_SLOT,     "yes · ",     "amount", false),
+                bind(TALLY_NO_SLOT,      "no · ",      "amount", false),
+                bind(TALLY_ABSTAIN_SLOT, "abstain · ", "amount", false),
             ]),
             section("Poll", "", vec![
-                bind(QUESTION_HASH_SLOT, "question · "),
-                bind(CLOSED_SLOT,        "closed · "),
+                bind(QUESTION_HASH_SLOT, "question · ", "hash", false),
+                // The raw closed flag is internal detail — the live pill already shows it.
+                bind(CLOSED_SLOT,        "closed · ",   "raw", true),
             ]),
             section("Actions", "", vec![
                 action("+", "Open Poll",    METHOD_OPEN_POLL),
@@ -204,7 +219,39 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "OPEN");
+        // The header pill is LIVE: it reads CLOSED_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "OPEN",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], CLOSED_SLOT);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 2, "OPEN / CLOSED");
+        assert_eq!(cases[1]["label"], "CLOSED");
+    }
+
+    #[test]
+    fn the_question_paints_short_and_the_closed_flag_is_adept_only() {
+        let card = voting_card_value();
+        let binds = of_kind(&card, "bind");
+        let by_slot = |slot: usize| -> &Value {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .unwrap()
+        };
+        assert_eq!(by_slot(QUESTION_HASH_SLOT)["props"]["fmt"], "hash");
+        assert_eq!(
+            by_slot(TALLY_YES_SLOT)["props"]["fmt"],
+            "amount",
+            "tallies stay as amounts"
+        );
+        assert_eq!(
+            by_slot(CLOSED_SLOT)["props"]["adept"],
+            true,
+            "the raw closed flag is adept-only"
+        );
+        assert_eq!(by_slot(QUESTION_HASH_SLOT)["props"]["adept"], false);
     }
 
     #[test]

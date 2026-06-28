@@ -44,7 +44,10 @@
 use serde_json::{Value, json};
 
 use crate::service::{METHOD_CLOSE_COMMIT, METHOD_COMMIT_BID, METHOD_RESOLVE, METHOD_REVEAL_BID};
-use crate::{COMMIT_BASE, HIGH_BID_SLOT, PHASE_RESOLVED, PHASE_SLOT, SELLER_SLOT, WINNER_SLOT};
+use crate::{
+    COMMIT_BASE, HIGH_BID_SLOT, PHASE_COMMIT, PHASE_RESOLVED, PHASE_REVEAL, PHASE_SLOT,
+    SELLER_SLOT, WINNER_SLOT,
+};
 
 /// A `deos.ui.text` node.
 fn text(s: &str) -> Value {
@@ -54,6 +57,13 @@ fn text(s: &str) -> Value {
 /// A `deos.ui.pill` node — a colored status badge.
 fn pill(label: &str, tag: &str) -> Value {
     json!({ "kind": "pill", "props": { "text": label, "tag": tag } })
+}
+
+/// A LIVE `deos.ui.pill` node — reads `slot` immediate-mode and maps the value to a
+/// word + color via `cases` (the first `{value,label,tag}` matching the slot wins).
+/// `text`/`tag` are the static fallback (discord, or no match).
+fn pill_live(slot: usize, label: &str, tag: &str, cases: Value) -> Value {
+    json!({ "kind": "pill", "props": { "text": label, "tag": tag, "slot": slot, "cases": cases } })
 }
 
 /// A `deos.ui.icon` node — a glyph indicator tinted by `tag`.
@@ -76,14 +86,18 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and
+/// a display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque 20-digit key/amount paints short + friendly.
+fn bind(slot: usize, label: &str, fmt: &str) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
-fn gauge(slot: usize, max: u64, label: &str) -> Value {
-    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label } })
+/// `adept` hides the raw numeric in the simple projection (the live pill + breadcrumb
+/// already show the phase legibly); it is revealed in the adept "see the bones" view.
+fn gauge(slot: usize, max: u64, label: &str, adept: bool) -> Value {
+    json!({ "kind": "gauge", "props": { "slot": slot, "max": max, "label": label, "adept": adept } })
 }
 
 /// A `deos.ui.breadcrumb` node — the lifecycle path; the `active` step is marked `▸`.
@@ -128,15 +142,19 @@ pub fn auction_card_value() -> Value {
         "kind": "vstack",
         "props": {},
         "children": [
-            row(vec![text("Sealed Auction"), pill("COMMIT", "warn")]),
+            row(vec![text("Sealed Auction"), pill_live(PHASE_SLOT, "COMMIT", "warn", json!([
+                { "value": PHASE_COMMIT,   "label": "COMMIT",   "tag": "warn" },
+                { "value": PHASE_REVEAL,   "label": "REVEAL",   "tag": "accent" },
+                { "value": PHASE_RESOLVED, "label": "RESOLVED", "tag": "good" },
+            ]))]),
             breadcrumb(&["Commit", "Reveal", "Resolved"], 0),
             divider(),
             section("Auction", "genuine", vec![
-                gauge(PHASE_SLOT, PHASE_RESOLVED, "phase "),
-                bind(SELLER_SLOT, "seller key · "),
-                bind(COMMIT_BASE, "sealed bid · "),
-                bind(HIGH_BID_SLOT, "high bid · "),
-                bind(WINNER_SLOT, "winner · "),
+                gauge(PHASE_SLOT, PHASE_RESOLVED, "phase ", true),
+                bind(SELLER_SLOT, "seller key · ", "id"),
+                bind(COMMIT_BASE, "sealed bid · ", "amount"),
+                bind(HIGH_BID_SLOT, "high bid · ", "amount"),
+                bind(WINNER_SLOT, "winner · ", "id"),
             ]),
             section("Actions", "", vec![
                 action("+", "Commit Bid",   METHOD_COMMIT_BID),
@@ -187,7 +205,34 @@ mod tests {
         );
         let pills = of_kind(&card, "pill");
         assert_eq!(pills.len(), 1);
-        assert_eq!(pills[0]["props"]["text"], "COMMIT");
+        // The header pill is now LIVE: it reads PHASE_SLOT and maps the value to a word.
+        assert_eq!(
+            pills[0]["props"]["text"], "COMMIT",
+            "the static fallback word"
+        );
+        assert_eq!(pills[0]["props"]["slot"], PHASE_SLOT as u64);
+        let cases = pills[0]["props"]["cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 3, "COMMIT / REVEAL / RESOLVED");
+        assert_eq!(cases[2]["value"], PHASE_RESOLVED);
+        assert_eq!(cases[2]["label"], "RESOLVED");
+    }
+
+    #[test]
+    fn the_identity_and_amount_binds_carry_their_display_fmt() {
+        let card = auction_card_value();
+        let binds = of_kind(&card, "bind");
+        let fmt = |slot: usize| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot as u64))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(SELLER_SLOT), "id", "seller key paints an avatar handle");
+        assert_eq!(fmt(WINNER_SLOT), "id", "winner paints an avatar handle");
+        assert_eq!(fmt(COMMIT_BASE), "amount", "the sealed bid groups digits");
+        assert_eq!(fmt(HIGH_BID_SLOT), "amount", "the high bid groups digits");
     }
 
     #[test]

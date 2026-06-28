@@ -89,9 +89,11 @@ fn section(title: &str, tag: &str, children: Vec<Value>) -> Value {
     json!({ "kind": "section", "props": { "title": title, "tag": tag }, "children": children })
 }
 
-/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix.
-fn bind(slot: usize, label: &str) -> Value {
-    json!({ "kind": "bind", "props": { "slot": slot, "label": label } })
+/// A `deos.ui.bind` node tagged with the model `slot` it re-reads + a label prefix and a
+/// display `fmt` (`"id"` avatar-handle / `"hash"` short-hex / `"amount"` grouped /
+/// `"raw"` plain) so an opaque 20-digit custodian key / chain tip paints short + friendly.
+fn bind(slot: usize, label: &str, fmt: &str) -> Value {
+    json!({ "kind": "bind", "props": { "slot": slot, "label": label, "fmt": fmt } })
 }
 
 /// A `deos.ui.gauge` node — a bound progress bar (`slot_value / max`, immediate-mode).
@@ -153,9 +155,9 @@ pub fn provenance_card_value() -> Value {
             section("Custody", "genuine", vec![
                 gauge(EPOCH_SLOT as usize, CHAIN_GAUGE_MAX, "epoch "),
                 gauge(HEAD_SLOT as usize, CHAIN_GAUGE_MAX, "chain length "),
-                bind(CUSTODIAN_SLOT as usize, "custodian · "),
-                bind(EPOCH_SLOT as usize, "epoch · "),
-                bind(TIP_SLOT as usize, "chain tip · "),
+                bind(CUSTODIAN_SLOT as usize, "custodian · ", "id"),
+                bind(EPOCH_SLOT as usize, "epoch · ", "raw"),
+                bind(TIP_SLOT as usize, "chain tip · ", "hash"),
             ]),
             // The attested-query trust visual — the non-omission completeness
             // certificate over the custody log (see `derived::attested_custody_log`).
@@ -250,6 +252,17 @@ mod tests {
             vec![CUSTODIAN_SLOT as u64, EPOCH_SLOT as u64, TIP_SLOT as u64],
             "the binds surface custodian / epoch / chain tip"
         );
+        // The opaque custodian key paints an avatar handle; the chain tip paints short hex.
+        let fmt = |slot: u64| -> String {
+            binds
+                .iter()
+                .find(|b| b["props"]["slot"].as_u64() == Some(slot))
+                .and_then(|b| b["props"]["fmt"].as_str())
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fmt(CUSTODIAN_SLOT as u64), "id");
+        assert_eq!(fmt(TIP_SLOT as u64), "hash");
     }
 
     #[test]
