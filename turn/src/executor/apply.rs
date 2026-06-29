@@ -341,6 +341,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetState,
                 "SetState",
+                dregg_cell::EFFECT_SET_FIELD,
                 path,
             )?;
         }
@@ -409,6 +410,7 @@ impl TurnExecutor {
                 from,
                 dregg_cell::permissions::Action::Send,
                 "Send",
+                dregg_cell::EFFECT_TRANSFER,
                 path,
             )?;
         }
@@ -500,6 +502,7 @@ impl TurnExecutor {
                 from,
                 dregg_cell::permissions::Action::Delegate,
                 "Delegate",
+                dregg_cell::EFFECT_GRANT_CAPABILITY,
                 path,
             )?;
         }
@@ -632,6 +635,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::Delegate,
                 "Delegate",
+                dregg_cell::EFFECT_REVOKE_CAPABILITY,
                 path,
             )?;
         }
@@ -695,6 +699,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::IncrementNonce,
                 "IncrementNonce",
+                dregg_cell::EFFECT_INCREMENT_NONCE,
                 path,
             )?;
         }
@@ -766,6 +771,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetPermissions,
                 "SetPermissions",
+                dregg_cell::EFFECT_SET_PERMISSIONS,
                 path,
             )?;
         }
@@ -808,6 +814,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetVerificationKey,
                 "SetVerificationKey",
+                dregg_cell::EFFECT_SET_VERIFICATION_KEY,
                 path,
             )?;
         }
@@ -891,6 +898,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetVerificationKey,
                 "SetProgram",
+                dregg_cell::EFFECT_SET_PROGRAM,
                 path,
             )?;
         }
@@ -1709,6 +1717,7 @@ impl TurnExecutor {
                         from,
                         dregg_cell::permissions::Action::Send,
                         "Send (Transfer.from via ExerciseViaCapability)",
+                        dregg_cell::EFFECT_TRANSFER,
                         path,
                     )?;
                     // Handled; skip the generic required_perm_action path below.
@@ -2371,6 +2380,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetState,
                 "Refusal",
+                dregg_cell::EFFECT_REFUSAL,
                 path,
             )?;
         }
@@ -2585,6 +2595,7 @@ impl TurnExecutor {
                 target,
                 dregg_cell::permissions::Action::Send,
                 "Burn",
+                dregg_cell::EFFECT_BURN,
                 path,
             )?;
         }
@@ -3158,6 +3169,48 @@ impl TurnExecutor {
         false
     }
 
+    /// FACET-aware sibling of [`has_access_including_delegation_at`]: the actor
+    /// must hold a path to `target` whose `allowed_effects` mask ADMITS the
+    /// effect-kind being attempted (`effect_bit`), not merely a path that
+    /// exists. This is the direct cross-cell facet leg the verified kernel's
+    /// `authorizedB` enforces (`metatheory/Dregg2/Exec/Kernel.lean:54` — an
+    /// `.endpoint` cap is authorized only when its `rights` carry the required
+    /// facet). Presence is gated separately by `has_access_including_delegation_at`
+    /// so that "no cap at all" stays a `CapabilityNotHeld` while "cap present but
+    /// faceted away" becomes a `FacetViolation`, matching the
+    /// `ExerciseViaCapability` sibling (`apply.rs:1803`). `CAP-FACET-1`.
+    pub(super) fn permits_effect_including_delegation_at(
+        cell: &Cell,
+        target: &CellId,
+        current_height: u64,
+        effect_bit: dregg_cell::EffectMask,
+    ) -> bool {
+        // A cell implicitly holds the full-facet capability over itself
+        // (`actor == src` in `authorizedB`): no facet restricts an owner.
+        if cell.id() == *target {
+            return true;
+        }
+        // Direct capability, facet-checked.
+        if cell
+            .capabilities
+            .permits_effect_at(target, current_height, effect_bit)
+        {
+            return true;
+        }
+        // Delegated capability (from snapshot), facet-checked. Mirrors the
+        // presence semantics of the delegation branch above (target match,
+        // non-revoked) plus the facet admission.
+        if let Some(ref delegation) = cell.delegation {
+            if delegation.capabilities_for(target).iter().any(|cap| {
+                cap.permissions != dregg_cell::AuthRequired::Impossible
+                    && dregg_cell::is_effect_permitted(cap.allowed_effects, effect_bit)
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Walk the delegation chain from `start_cell` upward (via `cell.delegate`)
     /// looking for an ancestor that holds a capability to `target`.
     ///
@@ -3195,6 +3248,7 @@ impl TurnExecutor {
         target_cell_id: &CellId,
         permission_action: dregg_cell::permissions::Action,
         action_name: &str,
+        effect_bit: dregg_cell::EffectMask,
         path: &[usize],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         if actor != target_cell_id {
@@ -3210,6 +3264,37 @@ impl TurnExecutor {
                     TurnError::CapabilityNotHeld {
                         actor: *actor,
                         target: *target_cell_id,
+                    },
+                    path.to_vec(),
+                ));
+            }
+            // CAP-FACET-1: presence is not authority. The held cap's
+            // `allowed_effects` FACET must ADMIT the effect being attempted on
+            // this direct cross-cell path — matching the `ExerciseViaCapability`
+            // sibling (`apply.rs:1803`, routing through `is_effect_permitted`)
+            // and the verified kernel's `authorizedB` (`Kernel.lean:54`), which
+            // authorizes an `.endpoint` cap only when its rights carry the
+            // required facet. Without this, a SetField-only faceted cap could
+            // drive a `Transfer` against a `None`-permission target (Rust
+            // commits, Lean rejects — a rejection-parity break + cap
+            // amplification).
+            if !Self::permits_effect_including_delegation_at(
+                actor_cell,
+                target_cell_id,
+                self.block_height,
+                effect_bit,
+            ) {
+                return Err((
+                    TurnError::FacetViolation {
+                        actor: *actor,
+                        target: *target_cell_id,
+                        // The direct path resolves authority across the whole
+                        // c-list, not a single exercised slot; report 0.
+                        cap_slot: 0,
+                        attempted_effect: action_name.to_string(),
+                        allowed_mask: actor_cell
+                            .capabilities
+                            .effect_mask_union_for(target_cell_id),
                     },
                     path.to_vec(),
                 ));
