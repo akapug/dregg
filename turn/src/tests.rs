@@ -8187,6 +8187,170 @@ fn test_faceted_capability_blocks_disallowed_effects() {
 }
 
 #[test]
+fn test_direct_cross_cell_facet_refuses_disallowed_effect() {
+    // CAP-FACET-1 (executor↔Lean rejection-parity).
+    //
+    // PoC for the direct (non-`ExerciseViaCapability`) cross-cell path. Alice
+    // holds a SetField-ONLY faceted cap to Bob (FACET_STATE_WRITER excludes
+    // Transfer). Bob's Send permission is `None` — the pure object-capability
+    // case where the facet IS the entire attenuation boundary. Alice then
+    // submits an ORDINARY `Transfer { from: Bob, .. }` directly (not via
+    // exercise). The verified kernel's `authorizedB` rejects this (the endpoint
+    // cap lacks the `Transfer`/write facet); the Rust executor previously
+    // accepted it (presence-only `has_access_at`). After the fix the direct
+    // path enforces the facet and REFUSES — restoring rejection-parity.
+    let mut ledger = Ledger::new();
+    let alice_cell = Cell::with_balance([10u8; 32], [0u8; 32], 100_000);
+    let bob_cell = Cell::with_balance([20u8; 32], [0u8; 32], 100_000);
+    let alice_id = alice_cell.id();
+    let bob_id = bob_cell.id();
+    ledger.insert_cell(alice_cell).unwrap();
+    ledger.insert_cell(bob_cell).unwrap();
+
+    // Alice holds a SetField-only (no Transfer) faceted cap to Bob.
+    {
+        let alice = ledger.get_mut(&alice_id).unwrap();
+        alice.capabilities.grant_faceted(
+            bob_id,
+            AuthRequired::None,
+            dregg_cell::FACET_STATE_WRITER,
+        );
+    }
+    // Bob's Send is permissionless (the facet is the only boundary).
+    {
+        let bob = ledger.get_mut(&bob_id).unwrap();
+        bob.permissions.send = AuthRequired::None;
+    }
+
+    // Action targets Alice (self) but the effect moves value FROM Bob — so the
+    // cross-cell `from != action_target` leg gates it via the direct path.
+    let action = Action {
+        target: alice_id,
+        method: [0u8; 32],
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: CellPreconditions::default(),
+        effects: vec![Effect::Transfer {
+            from: bob_id,
+            to: alice_id,
+            amount: 100,
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![],
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+    let turn = Turn {
+        agent: alice_id,
+        nonce: 0,
+        call_forest: forest,
+        fee: 10000,
+        memo: None,
+        valid_until: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+        previous_receipt_hash: None,
+    };
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+    match result {
+        crate::turn::TurnResult::Rejected { reason, .. } => assert!(
+            matches!(reason, TurnError::FacetViolation { .. }),
+            "expected FacetViolation on the direct cross-cell path, got: {:?}",
+            reason
+        ),
+        _ => panic!(
+            "CAP-FACET-1: SetField-faceted cap drove a direct Transfer — expected refusal, got: {result:?}"
+        ),
+    }
+    // The exploit must NOT have moved value.
+    assert_eq!(ledger.get(&bob_id).unwrap().state.balance(), 100_000);
+}
+
+#[test]
+fn test_direct_cross_cell_facet_allows_matching_effect() {
+    // No-false-reject companion to the CAP-FACET-1 PoC: a Transfer-bearing
+    // facet (FACET_TRANSFER_ONLY) on the SAME direct path must still SUCCEED.
+    let mut ledger = Ledger::new();
+    let alice_cell = Cell::with_balance([11u8; 32], [0u8; 32], 100_000);
+    let bob_cell = Cell::with_balance([21u8; 32], [0u8; 32], 100_000);
+    let alice_id = alice_cell.id();
+    let bob_id = bob_cell.id();
+    ledger.insert_cell(alice_cell).unwrap();
+    ledger.insert_cell(bob_cell).unwrap();
+
+    {
+        let alice = ledger.get_mut(&alice_id).unwrap();
+        alice.capabilities.grant_faceted(
+            bob_id,
+            AuthRequired::None,
+            dregg_cell::FACET_TRANSFER_ONLY,
+        );
+    }
+    {
+        let bob = ledger.get_mut(&bob_id).unwrap();
+        bob.permissions.send = AuthRequired::None;
+    }
+
+    let action = Action {
+        target: alice_id,
+        method: [0u8; 32],
+        args: vec![],
+        authorization: Authorization::Unchecked,
+        preconditions: CellPreconditions::default(),
+        effects: vec![Effect::Transfer {
+            from: bob_id,
+            to: alice_id,
+            amount: 100,
+        }],
+        may_delegate: DelegationMode::None,
+        commitment_mode: CommitmentMode::Full,
+        balance_change: None,
+        witness_blobs: vec![],
+    };
+    let mut forest = CallForest::new();
+    forest.add_root(action);
+    let turn = Turn {
+        agent: alice_id,
+        nonce: 0,
+        call_forest: forest,
+        fee: 10000,
+        memo: None,
+        valid_until: None,
+        depends_on: vec![],
+        conservation_proof: None,
+        sovereign_witnesses: std::collections::HashMap::new(),
+        execution_proof: None,
+        execution_proof_cell: None,
+        execution_proof_new_commitment: None,
+        custom_program_proofs: None,
+        effect_binding_proofs: Vec::new(),
+        cross_effect_dependencies: Vec::new(),
+        effect_witness_index_map: Vec::new(),
+        previous_receipt_hash: None,
+    };
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+    assert!(
+        matches!(result, crate::turn::TurnResult::Committed { .. }),
+        "Transfer-faceted cap on the direct path must pass, got: {result:?}"
+    );
+    assert_eq!(ledger.get(&bob_id).unwrap().state.balance(), 100_000 - 100);
+}
+
+#[test]
 fn test_unfaceted_capability_allows_all_effects() {
     // Alice has an UNFACETED capability to Bob (allowed_effects = None).
     // ExerciseViaCapability with any effect should succeed.
