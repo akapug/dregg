@@ -147,6 +147,13 @@ import Dregg2.Deos.InAirAuthorityDigestSelector
 -- chip-lookup recompute + the in-AIR is-zero/OR-fold decode), so the selector-forcing holds under
 -- ONLY the two CR floors (`ChipTableSound`/`FloorDigestBinds`) — no off-band verifier discipline.
 import Dregg2.Deos.InAirAuthorityDigestGadget
+-- The GENTIAN floor BINDING DISCHARGED (PATH b): the required-tag floor the selector reads is decoded
+-- from the already-coverage-bound caveat-manifest type-tag columns, so the last `hcommitLimb` is
+-- DISCHARGED — the floor is PROVABLY the cell's real declared floor (via the EXISTING `caveatCommit`
+-- carrier, NO new binding VK, NO recompute lookup, NO `FloorDigestBinds`), not a forgeable free limb.
+-- The forged-floor dodge is closed at the binding (`gentian_forged_floor_unsat_carrier`); only the
+-- in-AIR decode + selector-force arithmetic gates remain a (small, staged) VK delta.
+import Dregg2.Deos.CarrierBoundFloorGadget
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →
