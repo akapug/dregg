@@ -2171,9 +2171,16 @@ async fn record_finalization_vote(
         let mut col = handle.votes.write().await;
         col.record(vote)
     };
+    // Per-validator liveness: every recorded (well-formed, member-signed) vote is
+    // a freshness heartbeat from its signer. Bounded label cardinality (one per
+    // committee member).
+    let voter_tag = hex_encode(&vote.voter[..4]);
     match outcome {
         RecordOutcome::ReachedQuorum { distinct_votes } => {
             crate::metrics::inc_consensus_attested();
+            crate::metrics::set_validator_last_seen(&voter_tag);
+            // Finality latency: first local vote for this block → quorum reached.
+            crate::metrics::record_finality_latency(&block_id.0);
             info!(
                 block_id = %block_id,
                 votes = distinct_votes,
@@ -2182,13 +2189,20 @@ async fn record_finalization_vote(
             );
         }
         RecordOutcome::Counted { distinct_votes } => {
+            crate::metrics::set_validator_last_seen(&voter_tag);
+            // The first recorded vote opens this node's quorum-gathering window.
+            if distinct_votes == 1 {
+                crate::metrics::mark_block_voting_started(block_id.0);
+            }
             debug!(
                 block_id = %block_id,
                 votes = distinct_votes,
                 "recorded finalization vote (below quorum)"
             );
         }
-        RecordOutcome::AlreadyQuorum { .. } => {}
+        RecordOutcome::AlreadyQuorum { .. } => {
+            crate::metrics::set_validator_last_seen(&voter_tag);
+        }
         RecordOutcome::Rejected => {
             debug!(
                 block_id = %block_id,
