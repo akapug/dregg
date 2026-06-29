@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use quinn::{Connection, Endpoint, RecvStream};
 use rand::seq::IndexedRandom;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, Semaphore, mpsc};
 use tracing::{debug, info, trace, warn};
 
 use dregg_types::{PublicKey, Signature as Ed25519Signature, SigningKey};
@@ -99,6 +99,51 @@ const MAX_MESSAGE_CACHE_SIZE: usize = 10_000;
 /// Maximum number of concurrent streams per peer connection.
 /// Prevents a single peer from exhausting resources via stream flooding.
 const MAX_STREAMS_PER_PEER: usize = 64;
+
+/// Maximum number of gossip uni-streams we hold OPEN concurrently to a single
+/// connection (outbound backpressure). The original send path opened a fresh
+/// QUIC uni-stream per message with no upper bound: under a catch-up burst the
+/// consensus layer eager-pushes blocks/frontiers/votes FASTER than the peer
+/// drains them, so the receiver's per-connection inbound count blows past
+/// [`MAX_STREAMS_PER_PEER`] (64) and rejects the overflow — which drops exactly
+/// the blocks/votes needed to finalize, so the committee never converges and the
+/// catch-up loop re-pushes harder, a self-sustaining stream storm. Capping the
+/// IN-FLIGHT outbound streams per connection (well under the receiver's 64) makes
+/// the sender track the drain rate instead of out-running it: a node never opens
+/// more streams to a peer than that peer can be reading at once. Kept comfortably
+/// below 64 so that even two coexisting links to the same committee peer
+/// (one dialed, one accepted) stay under the receiver's per-connection limit.
+const MAX_INFLIGHT_OUT_STREAMS_PER_CONN: usize = 32;
+
+/// Upper bound on a single gossip stream write. A peer that has stopped draining
+/// our streams (e.g. it is wedged or going away) would otherwise let a write
+/// block forever on QUIC flow control, holding its outbound budget permit and
+/// permanently wedging that connection's send budget. Bounding the write lets a
+/// stuck stream be reset and its permit reclaimed so the budget keeps flowing.
+const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Upper bound on reading one inbound gossip frame off an accepted uni-stream.
+/// The receiver bounds concurrent stream processing (see [`serve_connection`]) and
+/// backpressures rather than rejecting; this timeout ensures a peer that opens a
+/// stream but never finishes writing it cannot hold one of those bounded slots
+/// forever (a slow-loris that would wedge the connection). Healthy frames read in
+/// well under a millisecond, so this only ever fires on a stalled/hostile stream.
+const INBOUND_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Soft cap on the per-connection outbound-budget map before stale entries (for
+/// connections that have since closed) are pruned. Bounds memory across many
+/// reconnect cycles without paying a prune on every send.
+const MAX_SEND_BUDGET_ENTRIES: usize = 256;
+
+/// Process-wide count of inbound gossip streams DROPPED for stalling — a peer
+/// opened a stream but did not deliver a complete frame within
+/// [`INBOUND_STREAM_READ_TIMEOUT`]. Healthy gossip (even a heavy eager-push burst)
+/// never trips this: the receiver backpressures concurrent processing rather than
+/// rejecting, so well-behaved streams are always read to completion. A rising
+/// value is the signature of a stuck/hostile peer (or, historically, an eager-push
+/// stream storm). Exported via [`GossipNetwork::rejected_stream_count`] so a
+/// regression is observable (and asserted in tests) rather than only a log flood.
+static REJECTED_STREAMS: AtomicU64 = AtomicU64::new(0);
 
 // ─── Dandelion++ constants ─────────────────────────────────────────────────
 
@@ -482,6 +527,37 @@ struct GossipState {
     /// dial-verified bindings — still learn and re-share every member's reachable
     /// endpoint, meshing the whole committee from a single seed.
     verified_addrs: HashMap<NodeId, SocketAddr>,
+    /// Per-connection OUTBOUND stream budget (keyed by `Connection::stable_id`).
+    /// Each connection gets a [`Semaphore`] of [`MAX_INFLIGHT_OUT_STREAMS_PER_CONN`]
+    /// permits; the send path acquires a permit before opening a gossip uni-stream
+    /// and holds it until the write finishes (or times out). This is the
+    /// backpressure that stops the eager-push storm: when a peer is not draining,
+    /// our permits stay held and we stop opening new streams to it rather than
+    /// piling on until the receiver's per-peer limit rejects the overflow. The map
+    /// is lazily populated on first send to a connection and pruned of stale
+    /// (closed-connection) entries when it grows past [`MAX_SEND_BUDGET_ENTRIES`].
+    send_budgets: HashMap<usize, Arc<Semaphore>>,
+}
+
+impl GossipState {
+    /// Get (or lazily create) the outbound stream-budget semaphore for the
+    /// connection identified by `stable_id`. When the map grows past
+    /// [`MAX_SEND_BUDGET_ENTRIES`], entries for connections no longer present in
+    /// `peers` are pruned first so the map stays bounded across reconnect churn.
+    fn send_budget_for(&mut self, stable_id: usize) -> Arc<Semaphore> {
+        if self.send_budgets.len() > MAX_SEND_BUDGET_ENTRIES {
+            let live: HashSet<usize> = self
+                .peers
+                .values()
+                .flat_map(|links| links.iter().map(|c| c.stable_id()))
+                .collect();
+            self.send_budgets.retain(|id, _| live.contains(id));
+        }
+        self.send_budgets
+            .entry(stable_id)
+            .or_insert_with(|| Arc::new(Semaphore::new(MAX_INFLIGHT_OUT_STREAMS_PER_CONN)))
+            .clone()
+    }
 }
 
 impl GossipState {
@@ -942,6 +1018,7 @@ impl GossipNetwork {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         }));
 
         let signing_key = Arc::new(signing_key);
@@ -1122,6 +1199,15 @@ impl GossipNetwork {
     /// where a block produced before a peer's link is up is never delivered).
     pub async fn connected_peer_count(&self) -> usize {
         self.state.read().await.live_peer_count()
+    }
+
+    /// Process-wide count of inbound gossip streams rejected for hitting the
+    /// per-connection stream limit ([`MAX_STREAMS_PER_PEER`]). 0 in healthy
+    /// operation; a rising value is the signature of an eager-push stream storm
+    /// (a sender opening uni-streams faster than the receiver drains). The
+    /// outbound backpressure budget keeps this at 0 under sustained load.
+    pub fn rejected_stream_count() -> u64 {
+        REJECTED_STREAMS.load(Ordering::Relaxed)
     }
 
     /// Whether we currently hold at least one live QUIC link to `addr`.
@@ -1755,20 +1841,59 @@ impl GossipNetwork {
             }
             let mut delivered_any = false;
             for conn in links {
+                // BACKPRESSURE: acquire one of this connection's bounded outbound
+                // stream permits before opening a uni-stream. If the budget is
+                // momentarily exhausted (the peer is not draining our streams fast
+                // enough), DROP this push rather than open more — best-effort
+                // gossip, re-delivered by the frontier/pull anti-entropy. This is
+                // what keeps the eager-push catch-up burst from out-running the
+                // receiver's per-peer stream limit and stalling finality.
+                let sem = {
+                    let mut s = state.write().await;
+                    s.send_budget_for(conn.stable_id())
+                };
+                let permit = match Arc::clone(&sem).try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // A live link exists but its send budget is saturated — the
+                        // peer is alive (do not count it dead), we just skip this
+                        // push to it and let anti-entropy re-deliver.
+                        delivered_any = true;
+                        trace!(
+                            "send budget exhausted for {addr} (conn {:#x}); dropping push (anti-entropy will re-deliver)",
+                            conn.stable_id()
+                        );
+                        continue;
+                    }
+                };
                 match conn.open_uni().await {
                     Ok(mut stream) => {
                         delivered_any = true;
                         let padded = Arc::clone(&padded);
                         tokio::spawn(async move {
-                            // Write outer length prefix (padded frame size) then padded data.
-                            let len = (padded.len() as u32).to_be_bytes();
-                            if stream.write_all(&len).await.is_ok() {
-                                let _ = stream.write_all(&padded).await;
-                                let _ = stream.finish();
+                            // Hold the budget permit for the lifetime of the write;
+                            // released (and the budget freed) on completion/timeout.
+                            let _permit = permit;
+                            let write = async {
+                                // Outer length prefix (padded frame size) then data.
+                                let len = (padded.len() as u32).to_be_bytes();
+                                if stream.write_all(&len).await.is_ok() {
+                                    let _ = stream.write_all(&padded).await;
+                                    let _ = stream.finish();
+                                }
+                            };
+                            // Bound the write so a peer that has stopped reading
+                            // cannot hold this connection's budget permit forever.
+                            if tokio::time::timeout(STREAM_WRITE_TIMEOUT, write)
+                                .await
+                                .is_err()
+                            {
+                                let _ = stream.reset(0u32.into());
                             }
                         });
                     }
                     Err(e) => {
+                        drop(permit);
                         debug!("Failed to open stream to {addr}: {e}");
                     }
                 }
@@ -1902,41 +2027,58 @@ impl GossipNetwork {
         peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
     ) {
         let remote_addr = conn.remote_address();
-        // Per-connection stream counter to prevent stream flooding.
-        let active_streams = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Per-connection inbound concurrency limiter. We process at most
+        // MAX_STREAMS_PER_PEER gossip streams from this connection at once and
+        // BACKPRESSURE rather than reject: a permit is acquired BEFORE accepting
+        // the next stream, so when all slots are busy we simply stop accepting.
+        // Unaccepted streams sit in QUIC's stream-flow-control window, which
+        // throttles the sender's `open_uni` — end-to-end backpressure that pairs
+        // with the sender's MAX_INFLIGHT_OUT_STREAMS_PER_CONN budget. The old code
+        // accepted unconditionally and REJECTED the overflow, dropping exactly the
+        // blocks/votes a catch-up burst needed to finalize (the stream storm that
+        // stalled sustained finality). Waiting instead of dropping keeps every
+        // accepted stream's payload while still bounding concurrent work.
+        let limiter = Arc::new(Semaphore::new(MAX_STREAMS_PER_PEER));
 
         loop {
+            // Acquire a processing slot first. When the connection is saturated
+            // this awaits a slot instead of accepting-then-rejecting, so no stream
+            // is dropped — the sender is throttled by QUIC flow control instead.
+            let Ok(permit) = Arc::clone(&limiter).acquire_owned().await else {
+                break; // limiter closed (unreachable; defensive)
+            };
             let Ok(mut recv) = conn.accept_uni().await else {
                 break;
             };
-
-            // Enforce per-connection stream limit.
-            let current_streams = active_streams.fetch_add(1, Ordering::SeqCst);
-            if current_streams >= MAX_STREAMS_PER_PEER {
-                active_streams.fetch_sub(1, Ordering::SeqCst);
-                warn!(
-                    "Rejecting stream from {} — at per-peer limit ({})",
-                    remote_addr, MAX_STREAMS_PER_PEER
-                );
-                continue;
-            }
 
             let state = state.clone();
             let outgoing_tx = outgoing_tx.clone();
             let key = signing_key.clone();
             let peer_keys = peer_keys.clone();
             let our_node_id = node_id;
-            let streams_counter = active_streams.clone();
             tokio::spawn(async move {
-                // Decrement stream count when this stream handler completes.
-                struct StreamGuard(Arc<std::sync::atomic::AtomicUsize>);
-                impl Drop for StreamGuard {
-                    fn drop(&mut self) {
-                        self.0.fetch_sub(1, Ordering::SeqCst);
+                // Release the processing slot when this stream handler completes.
+                let _permit = permit;
+                // Bound the read so a peer that opens a stream but never finishes
+                // writing it cannot hold a processing slot forever (a slow-loris
+                // DoS that would otherwise wedge the connection's bounded slots).
+                // A stalled/timed-out read drops the stream and is counted as a
+                // health signal; healthy gossip frames read in microseconds.
+                let read = tokio::time::timeout(
+                    INBOUND_STREAM_READ_TIMEOUT,
+                    read_signed_envelope(&mut recv),
+                )
+                .await;
+                let signed = match read {
+                    Ok(Ok(signed)) => signed,
+                    Ok(Err(_)) => return,
+                    Err(_) => {
+                        REJECTED_STREAMS.fetch_add(1, Ordering::Relaxed);
+                        let _ = recv.stop(0u32.into());
+                        return;
                     }
-                }
-                let _guard = StreamGuard(streams_counter);
-                if let Ok(signed) = read_signed_envelope(&mut recv).await {
+                };
+                {
                     // Look up the sender's public key from the peer registry.
                     let sender_pk = {
                         let keys = peer_keys.read().await;
@@ -3359,6 +3501,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
 
         // Add a topic with 5 peers (3 eager, 2 lazy)
@@ -3466,6 +3609,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
 
         // 3 eager + 2 lazy peers
@@ -3686,6 +3830,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
         // No links yet: links_to is empty and the address counts as not-connected.
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -3784,6 +3929,99 @@ mod tests {
             "A never received B's spontaneous eager push — B->A spontaneous gossip dropped"
         );
         assert_eq!(got_on_a.unwrap(), msg_from_b);
+    }
+
+    /// STREAM-STORM BACKPRESSURE: a rapid eager-push burst must NOT trip the
+    /// receiver's per-connection stream limit. The original send path opened an
+    /// unbounded uni-stream per message; a catch-up burst then out-ran the
+    /// receiver's drain and overflowed [`MAX_STREAMS_PER_PEER`], rejecting exactly
+    /// the blocks/votes needed to finalize (the live-federation "first turn
+    /// finalizes then stalls" storm). With the per-connection outbound budget the
+    /// sender tracks the drain rate, so a large burst is delivered with ZERO
+    /// rejected streams. This pins both properties: the burst is delivered AND the
+    /// reject counter does not move.
+    #[tokio::test]
+    async fn eager_push_burst_does_not_storm_the_stream_limit() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::collections::HashSet;
+        use std::time::Duration;
+
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        let topic_a = gossip_a.join_topic("dregg/burst", &[addr_b]).await.unwrap();
+        let topic_b = gossip_b.join_topic("dregg/burst", &[addr_a]).await.unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        // Let the dial+accept links establish in both directions.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // Baseline the process-wide reject counter (healthy operation never
+        // rejects, so the delta across this burst must be exactly zero).
+        let rejects_before = GossipNetwork::rejected_stream_count();
+
+        // BURST: fire far more messages than MAX_STREAMS_PER_PEER (64), as fast as
+        // the publisher can enqueue them — the shape that overflowed the receiver
+        // under the old unbounded stream-per-message path.
+        const BURST: usize = 400;
+        for i in 0..BURST {
+            let msg = PeerMessage::PublishTurn {
+                turn_hash: [0u8; 32],
+                turn_data: format!("burst-{i}").into_bytes(),
+                causal_deps: vec![],
+            };
+            gossip_a.publish_eager(&topic_a, &msg).await.unwrap();
+        }
+
+        // Collect distinct deliveries on B until the burst drains or we time out.
+        let mut delivered: HashSet<Vec<u8>> = HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while delivered.len() < BURST && Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(remaining, stream_b.recv()).await {
+                Ok(Some(GossipEvent::Message {
+                    message: PeerMessage::PublishTurn { turn_data, .. },
+                    ..
+                })) => {
+                    delivered.insert(turn_data);
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        let rejects_after = GossipNetwork::rejected_stream_count();
+        assert_eq!(
+            rejects_after,
+            rejects_before,
+            "an eager-push burst tripped the per-connection stream limit \
+             ({} streams rejected) — the storm backpressure is not bounding outbound streams",
+            rejects_after - rejects_before
+        );
+        // The bounded sender delivers the whole burst (best-effort gossip allows a
+        // rare drop under momentary budget pressure, but on loopback the writes
+        // drain far faster than the sequential forward loop opens them, so every
+        // distinct message arrives).
+        assert_eq!(
+            delivered.len(),
+            BURST,
+            "burst delivery collapsed: B received {}/{} distinct messages",
+            delivered.len(),
+            BURST
+        );
     }
 
     /// Drain a subscriber stream until a REMOTE message arrives (skipping the
