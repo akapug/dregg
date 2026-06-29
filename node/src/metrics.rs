@@ -3,7 +3,9 @@
 //! Installs a Prometheus recorder and exposes a `/metrics` HTTP handler
 //! that renders the exposition format.
 
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use metrics::{counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -20,9 +22,18 @@ static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 pub fn install_recorder() -> PrometheusHandle {
     RECORDER
         .get_or_init(|| {
-            PrometheusBuilder::new()
+            let handle = PrometheusBuilder::new()
                 .install_recorder()
-                .expect("failed to install Prometheus metrics recorder")
+                .expect("failed to install Prometheus metrics recorder");
+            // Pre-register the flat security series at 0 so the Security dashboard
+            // renders "0" (a live, healthy detector) from boot rather than "No
+            // data" until the first refusal. The Prometheus recorder only creates
+            // a series on first touch, so an `increment(0)` here materializes it.
+            counter!("dregg_auth_failures_total").increment(0);
+            counter!("dregg_cap_refusals_total").increment(0);
+            counter!("dregg_turns_rejected_total").increment(0);
+            counter!("dregg_sandbox_denials_total").increment(0);
+            handle
         })
         .clone()
 }
@@ -149,4 +160,98 @@ pub fn set_block_height(height: f64) {
 /// Set time since the last root update (seconds).
 pub fn set_federation_root_age(seconds: f64) {
     gauge!("dregg_federation_root_age_seconds").set(seconds);
+}
+
+// ─── Security counters (the Security dashboard's exploitation-attempt detector) ─
+//
+// `dregg_turns_rejected_total` counts turns the executor REFUSED
+// (`TurnResult::Rejected`). `dregg_auth_failures_total` and
+// `dregg_cap_refusals_total` are the subset of those refusals that were a
+// credential/authorization-gate refusal or a capability-gate (CAP path) refusal
+// respectively — classified from the `TurnError` via
+// `dregg_turn::TurnError::refusal_class`. A rising rate (especially post
+// red-team) is a live signal that something is probing the gates.
+
+/// A credential / authorization-gate refusal was raised.
+pub fn inc_auth_failure() {
+    counter!("dregg_auth_failures_total").increment(1);
+}
+
+/// A capability-gate refusal (the CAP path) was raised.
+pub fn inc_cap_refusal() {
+    counter!("dregg_cap_refusals_total").increment(1);
+}
+
+/// A sandbox/exec deny-by-default refusal was raised.
+///
+/// NOTE: the default-deny sandbox lives in the DreggNet `exec` crate (a separate
+/// process with no Prometheus surface), so on the node this series stays at 0
+/// today — it is registered here so the Security dashboard panel renders, and so
+/// the helper exists for the day the exec plane exports its own metrics.
+pub fn inc_sandbox_denial() {
+    counter!("dregg_sandbox_denials_total").increment(1);
+}
+
+/// Record a refused turn for the Security dashboard: always bumps
+/// `dregg_turns_rejected_total`, then bumps the auth / cap sub-counter the
+/// `TurnError` classifies into. Call this at every `TurnResult::Rejected` site.
+pub fn note_turn_rejected(reason: &dregg_turn::TurnError) {
+    counter!("dregg_turns_rejected_total").increment(1);
+    match reason.refusal_class() {
+        dregg_turn::RefusalClass::Auth => inc_auth_failure(),
+        dregg_turn::RefusalClass::Capability => inc_cap_refusal(),
+        dregg_turn::RefusalClass::Other => {}
+    }
+}
+
+// ─── Consensus signals (per-validator health + finality latency) ──────────────
+//
+// Finality latency is the wall-clock from the moment this node FIRST records a
+// finalization vote for a block (it begins gathering the quorum) to the moment a
+// quorum of distinct signed votes is reached (consensus-wide Attested). The
+// per-block start instant is held in a small bounded map; an entry that never
+// reaches quorum is dropped when the map is trimmed.
+
+/// Per-block first-vote instant, keyed by block id. Bounded; trimmed wholesale
+/// if it grows past the cap (stale, never-finalized entries).
+static FINALITY_T0: OnceLock<Mutex<HashMap<[u8; 32], Instant>>> = OnceLock::new();
+
+fn finality_t0() -> &'static Mutex<HashMap<[u8; 32], Instant>> {
+    FINALITY_T0.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Mark the start of the local quorum-gathering window for `block_id` (the first
+/// finalization vote this node recorded for it). Idempotent per block.
+pub fn mark_block_voting_started(block_id: [u8; 32]) {
+    let mut m = finality_t0().lock().unwrap_or_else(|p| p.into_inner());
+    // Trim if a flood of never-finalized blocks accumulates (bounded memory).
+    if m.len() > 8192 {
+        m.clear();
+    }
+    m.entry(block_id).or_insert_with(Instant::now);
+}
+
+/// Record the finality latency for `block_id` (first vote → quorum) into the
+/// `dregg_consensus_finality_latency_seconds` histogram. No-op if no start was
+/// marked (e.g. a single-vote quorum where this node never opened a window).
+pub fn record_finality_latency(block_id: &[u8; 32]) {
+    let t0 = finality_t0()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .remove(block_id);
+    if let Some(t0) = t0 {
+        histogram!("dregg_consensus_finality_latency_seconds").record(t0.elapsed().as_secs_f64());
+    }
+}
+
+/// Set the last-seen unix timestamp (seconds) for a finalization-vote signer.
+/// `voter` is a short hex tag of the validator key; the label cardinality is
+/// bounded by the committee size. Feeds the Consensus dashboard's per-validator
+/// liveness.
+pub fn set_validator_last_seen(voter: &str) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    gauge!("dregg_validator_last_seen_timestamp_seconds", "voter" => voter.to_owned()).set(now);
 }

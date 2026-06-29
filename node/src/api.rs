@@ -3147,6 +3147,7 @@ async fn post_submit_turn(
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
             Ok(Json(SubmitTurnResponse {
@@ -3407,6 +3408,7 @@ async fn post_submit_signed_turn(
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
             Ok(Json(SubmitSignedTurnResponse {
@@ -5132,11 +5134,15 @@ async fn post_fast_path_certificate(
                 error: None,
             }))
         }
-        dregg_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FastPathCertificateResponse {
-            executed: false,
-            turn_hash: Some(hex_encode(&turn_hash_bytes)),
-            error: Some(format!("turn rejected: {reason}")),
-        })),
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
+            Ok(Json(FastPathCertificateResponse {
+                executed: false,
+                turn_hash: Some(hex_encode(&turn_hash_bytes)),
+                error: Some(format!("turn rejected: {reason}")),
+            }))
+        }
         _ => Ok(Json(FastPathCertificateResponse {
             executed: false,
             turn_hash: Some(hex_encode(&turn_hash_bytes)),
@@ -5339,6 +5345,8 @@ async fn post_resolve_conditional(
                     }))
                 }
                 dregg_turn::TurnResult::Rejected { reason, .. } => {
+                    crate::metrics::inc_turns_executed("rejected");
+                    crate::metrics::note_turn_rejected(&reason);
                     Ok(Json(ResolveConditionalResponse {
                         resolved: false,
                         turn_hash: None,
@@ -6737,13 +6745,17 @@ async fn post_faucet(
                 error: None,
             }))
         }
-        dregg_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FaucetResponse {
-            success: false,
-            tx_hash: None,
-            turn_hash: None,
-            amount: 0,
-            error: Some(format!("transfer rejected: {reason}")),
-        })),
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
+            Ok(Json(FaucetResponse {
+                success: false,
+                tx_hash: None,
+                turn_hash: None,
+                amount: 0,
+                error: Some(format!("transfer rejected: {reason}")),
+            }))
+        }
         _ => Ok(Json(FaucetResponse {
             success: false,
             tx_hash: None,

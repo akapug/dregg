@@ -456,6 +456,67 @@ pub enum TurnError {
     AdmissionRefused { reason: crate::AdmissionReason },
 }
 
+/// Operational classification of a refusal, for the security observability
+/// counters (`dregg_auth_failures_total` / `dregg_cap_refusals_total`). This is
+/// a pure projection of [`TurnError`] — it carries no dependency on any metrics
+/// facade so the type stays where the variants live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalClass {
+    /// A credential / authorization-gate refusal: the presented authorization
+    /// (signature, biscuit/macaroon token, stealth proof, admission) did not
+    /// authorize the action.
+    Auth,
+    /// A capability-gate refusal: a held capability was missing, revoked, stale,
+    /// over-attenuated, or a delegation/facet bound was violated (the CAP path).
+    Capability,
+    /// Any other refusal (balance, nonce/replay, precondition, conservation,
+    /// structural). Not an exploitation signal on its own.
+    Other,
+}
+
+impl TurnError {
+    /// Classify this refusal for the security counters. `Auth` = credential /
+    /// authorization-gate refusals; `Capability` = cap-gate refusals (the CAP
+    /// path). Everything else is `Other`. A spike in the first two — especially
+    /// post red-team — is a live exploitation-attempt signal.
+    pub fn refusal_class(&self) -> RefusalClass {
+        use TurnError::*;
+        match self {
+            // Authorization / credential gate.
+            InvalidAuthorization { .. }
+            | PermissionDenied { .. }
+            | StealthAuthInvalid { .. }
+            | TokenAuthInvalid { .. }
+            | TokenInsufficientCapability { .. }
+            | TokenVerifierNotConfigured
+            | AuthModeNotRegistered { .. }
+            | AdmissionRefused { .. } => RefusalClass::Auth,
+            // Capability gate (CAP path): held-cap missing / revoked / stale /
+            // over-attenuated / delegation / facet / bearer-cap bounds.
+            CapabilityNotHeld { .. }
+            | DelegationDenied { .. }
+            | DelegationModeUnimplemented { .. }
+            | StaleDelegation { .. }
+            | CapabilityRevoked { .. }
+            | CapabilityStale { .. }
+            | CapabilitySlotOverflow { .. }
+            | IntroductionDenied { .. }
+            | FacetViolation { .. }
+            | BreadstuffExpired { .. }
+            | BreadstuffRevoked { .. }
+            | BreadstuffFacetViolation { .. }
+            | BearerCapFacetViolation { .. }
+            | BearerCapFacetAmplification { .. }
+            | BearerCapExpired { .. }
+            | BearerCapRevoked { .. }
+            | BearerCapInvalidProof { .. }
+            | BearerCapAmplification { .. }
+            | BearerCapDelegatorLacksCapability { .. } => RefusalClass::Capability,
+            _ => RefusalClass::Other,
+        }
+    }
+}
+
 impl core::fmt::Display for TurnError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -949,3 +1010,63 @@ impl core::fmt::Display for TurnError {
 }
 
 impl std::error::Error for TurnError {}
+
+#[cfg(test)]
+mod refusal_class_tests {
+    use super::*;
+    use dregg_cell::CellId;
+
+    #[test]
+    fn auth_gate_refusals_classify_as_auth() {
+        assert_eq!(
+            TurnError::InvalidAuthorization {
+                reason: "bad sig".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenAuthInvalid {
+                reason: "expired biscuit".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenVerifierNotConfigured.refusal_class(),
+            RefusalClass::Auth
+        );
+    }
+
+    #[test]
+    fn cap_gate_refusals_classify_as_capability() {
+        assert_eq!(
+            TurnError::CapabilityNotHeld {
+                actor: CellId([1u8; 32]),
+                target: CellId([2u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+        assert_eq!(
+            TurnError::CapabilitySlotOverflow {
+                cell: CellId([3u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+    }
+
+    #[test]
+    fn ordinary_refusals_classify_as_other() {
+        assert_eq!(
+            TurnError::NonceReplay {
+                expected: 1,
+                got: 0
+            }
+            .refusal_class(),
+            RefusalClass::Other
+        );
+        assert_eq!(TurnError::EmptyForest.refusal_class(), RefusalClass::Other);
+    }
+}

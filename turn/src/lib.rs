@@ -148,7 +148,7 @@ pub use encrypted::{
     ConflictBucket, EncryptedTurn, EncryptedTurnError, SubmitterAuth, TurnOrdering,
     TurnValidityProof, TurnValidityPublicInputs, order_encrypted_turns,
 };
-pub use error::TurnError;
+pub use error::{RefusalClass, TurnError};
 pub use eventual::{
     CycleError, EventualRef, OutputRef, Pipeline, PipelineBuilder, PipelineError, PipelineResult,
     Target, TurnBatch, TurnOutput,
