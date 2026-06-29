@@ -33,21 +33,39 @@
 //! gadget descriptor into a staged registry + a satisfying STARK PRODUCER (fill the bit/inv/OR aux
 //! columns over the bound type-tag columns) + commit the (decode-only) VK delta + live admission.
 //!
-//! ## The constraint shape
+//! ## The constraint shape (with the ROW-LOCALITY FIX)
 //!
 //! Per declared-caveat slot `k` (`MAX_CAVEATS = 4`): an is-zero gadget against the escrow tag (a
 //! defining gate `b_k + (tag_k − 17)·inv_k − 1 == 0` and a forcing gate `(tag_k − 17)·b_k == 0`, sound
 //! over the integral domain), then a running-OR fold (`O0 = b0`, `O_{j} = O_{j-1} + b_j − O_{j-1}·b_j`)
-//! into `FLOOR_ESCROW_COL`, then the selector-force gate `FLOOR_ESCROW_COL · (ESCROW_SEL_COL − 1) == 0`.
-//! A cell DECLARING escrow (some bound type-tag column == 17) forces `FLOOR_ESCROW_COL = 1` and hence
-//! `ESCROW_SEL_COL = 1`; a cell declaring no escrow leaves both inert.
+//! into `FLOOR_ESCROW_COL`, then the FIRST-ROW-SCOPED selector-force gate
+//! `FLOOR_ESCROW_COL · (ESCROW_SEL_COL − 1) == 0` (a `Boundary{First}`, fired only on the settle row),
+//! then four caveat-uniformity `windowGate`s `nxt(tag_k) − loc(tag_k) == 0` (on-transition).
+//!
+//! A cell DECLARING escrow (some bound type-tag column == 17) forces `FLOOR_ESCROW_COL = 1` and hence,
+//! on the settle row, `ESCROW_SEL_COL = 1`; a cell declaring no escrow leaves both inert.
+//!
+//! ### Why first-row scoping (the empirical `10ac36c54` row-locality defect, FIXED)
+//!
+//! The deployed satisfaction selector is producer-controlled: `1` on the settle row (row 0), `0` on the
+//! carry-forward padding rows (which carry the post-settle `Consumed` status in their BEFORE block). An
+//! EVERY-ROW force, over the uniformly-`fill_caveat`'d escrow manifest (`FLOOR = 1` every row), forced
+//! `sel = 1` on every row — but `sel = 1` on a padding row makes the base satisfaction gate
+//! `sel · (before_leg − Deposited)` bite (`before_leg = Consumed ≠ Deposited`), so the honest
+//! escrow-declared settle had NO satisfying multi-row assignment (`OodEvaluationMismatch`). Scoping the
+//! force to the FIRST row (where the settle, and the satisfaction discipline, live) makes it inert on
+//! padding ⟹ the honest settle is SATISFIABLE again, while the `sel = 0` dodge on the settle row stays
+//! closed. The uniformity `windowGate`s close the secondary decode/commit decoupling: PI 45 (the caveat
+//! commit) is pinned to the LAST row, the decode reads the type-tag columns on the settle row, and
+//! without a cross-row gate a forger could light a no-escrow manifest on the settle row while committing
+//! the real escrow manifest to PI 45 — uniformity forces the two equal.
 
 use super::authority_digest_weld::FLOOR_ESCROW_COL;
 use super::pi::SLOT_CAVEAT_TAG_SETTLE_ESCROW;
 use super::satisfaction_weld::ESCROW_SEL_COL;
 use super::trace_rotated::{CAVEAT_BASE, GRAD_ROT_WIDTH};
-use crate::descriptor_ir2::VmConstraint2;
-use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
+use crate::descriptor_ir2::{VmConstraint2, WindowExpr, WindowGateSpec};
+use crate::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 
 use super::columns::rotation::caveat as cav;
 
@@ -134,23 +152,59 @@ fn or_fold_gate(out_col: usize, in_or_col: usize, bit_c: usize) -> VmConstraint2
     VmConstraint2::Base(VmConstraint::Gate(body))
 }
 
-/// (selector-force) `FLOOR_ESCROW_COL · (ESCROW_SEL_COL − 1) == 0`. Lean
-/// `Dregg2.Deos.InAirAuthorityDigestSelector.gentianSelectorForceGate`.
-fn selector_force_gate(floor_col: usize, sel_col: usize) -> VmConstraint2 {
+/// (selector-force, FIRST-ROW SCOPED) `FLOOR_ESCROW_COL · (ESCROW_SEL_COL − 1) == 0`, fired ONLY on
+/// the FIRST (settle) row (`Boundary{First}`, the `when_first_row` AIR domain) — the ROW-LOCALITY FIX.
+/// The deployed producer pins the selector to PI 46 on the first row and sets `sel = 1` there (the
+/// settle row) and `0` on the carry-forward padding rows. The previous EVERY-ROW force over a uniform
+/// escrow manifest forced `sel = 1` on padding rows too, which the base satisfaction gates
+/// (`sel · (before_leg − Deposited)`, with `before_leg = Consumed` on carry-forward rows) then BIT —
+/// rendering the honest escrow-declared settle UNSATISFIABLE. Scoping the force to the first row makes
+/// it INERT on padding (so the honest settle is satisfiable) while still closing the `sel = 0` dodge on
+/// the settle row, where the satisfaction discipline must hold. Lean
+/// `Dregg2.Deos.CarrierBoundFloorGadget.selectorForceFirstGate`.
+fn selector_force_first_gate(floor_col: usize, sel_col: usize) -> VmConstraint2 {
     let body = LeanExpr::mul(
         LeanExpr::var(floor_col),
         LeanExpr::add(LeanExpr::var(sel_col), LeanExpr::constant(-1)),
     );
-    VmConstraint2::Base(VmConstraint::Gate(body))
+    VmConstraint2::Base(VmConstraint::Boundary {
+        row: VmRow::First,
+        body,
+    })
 }
 
-/// **THE CARRIER-BOUND FLOOR-DECODE + SELECTOR-FORCE GATES (STAGED).** Decode the escrow bit from the
-/// four caveat-commit-bound type-tag columns and force the capacity selector when escrow is declared —
-/// the `hcommitLimb`-discharged GENTIAN forcing (no recompute lookup, no separate digest limb). The
-/// floor read is the cell's REAL declared floor, bound by the EXISTING caveat-commit chain. STAGED: not
-/// in a committed VK, no live routing. Lean `Dregg2.Deos.CarrierBoundFloorGadget.carrierGates`.
+/// (caveat-uniformity) `nxt(tag_k) − loc(tag_k) == 0`, asserted on the transition (`when_transition`,
+/// rows `0..n-2`) — a two-row `windowGate` forcing the caveat type-tag column UNIFORM across adjacent
+/// rows. Couples the row-0 floor DECODE to the LAST-row-pinned committed caveat (PI 45,
+/// `last[CAVEAT_BASE + C_SPAN − 1]`): a forger cannot light a no-escrow manifest on the settle row
+/// (decoding `floor = 0` to free the selector) while committing the cell's real escrow manifest to PI
+/// 45 — uniformity forces the settle-row tags to equal the committed (last-row) tags. Lean
+/// `Dregg2.Deos.CarrierBoundFloorGadget.caveatUniformGate`.
+fn caveat_uniform_gate(tag_col: usize) -> VmConstraint2 {
+    let body = WindowExpr::Add(
+        Box::new(WindowExpr::Nxt(tag_col)),
+        Box::new(WindowExpr::Mul(
+            Box::new(WindowExpr::Const(-1)),
+            Box::new(WindowExpr::Loc(tag_col)),
+        )),
+    );
+    VmConstraint2::WindowGate(WindowGateSpec {
+        body,
+        on_transition: true,
+    })
+}
+
+/// **THE CARRIER-BOUND FLOOR-DECODE + SELECTOR-FORCE + CAVEAT-UNIFORMITY GATES (STAGED).** Decode the
+/// escrow bit from the four caveat-commit-bound type-tag columns, force the capacity selector ON the
+/// SETTLE (first) row when escrow is declared, and force the caveat manifest UNIFORM across rows — the
+/// `hcommitLimb`-discharged GENTIAN forcing (no recompute lookup, no separate digest limb) with the
+/// ROW-LOCALITY FIX. The floor read is the cell's REAL declared floor, bound by the EXISTING
+/// caveat-commit chain; the first-row scoping of the force makes the honest escrow-declared settle
+/// SATISFIABLE (the every-row force false-rejected it on carry-forward rows); the uniformity gates
+/// couple the row-0 decode to the last-row PI-45 commit. STAGED: not in a committed VK, no live routing.
+/// Lean `Dregg2.Deos.CarrierBoundFloorGadget.carrierGates`.
 pub fn carrier_floor_gates() -> Vec<VmConstraint2> {
-    let mut gates = Vec::with_capacity(13);
+    let mut gates = Vec::with_capacity(17);
     for k in 0..cav::MAX_CAVEATS {
         gates.push(is_zero_def_gate(caveat_tag_col(k), bit_col(k), inv_col(k)));
         gates.push(is_zero_force_gate(caveat_tag_col(k), bit_col(k)));
@@ -159,7 +213,12 @@ pub fn carrier_floor_gates() -> Vec<VmConstraint2> {
     gates.push(or_fold_gate(or_col(1), or_col(0), bit_col(1)));
     gates.push(or_fold_gate(or_col(2), or_col(1), bit_col(2)));
     gates.push(or_fold_gate(FLOOR_ESCROW_COL, or_col(2), bit_col(3)));
-    gates.push(selector_force_gate(FLOOR_ESCROW_COL, ESCROW_SEL_COL));
+    // The selector-force, scoped to the settle (first) row — the row-locality fix.
+    gates.push(selector_force_first_gate(FLOOR_ESCROW_COL, ESCROW_SEL_COL));
+    // The cross-row caveat-uniformity gates coupling the row-0 decode to the last-row PI-45 commit.
+    for k in 0..cav::MAX_CAVEATS {
+        gates.push(caveat_uniform_gate(caveat_tag_col(k)));
+    }
     gates
 }
 
@@ -169,10 +228,52 @@ mod tests {
     use crate::descriptor_ir2::eval_lean_expr;
     use crate::field::BabyBear;
 
-    fn gate_body(c: &VmConstraint2) -> &LeanExpr {
+    /// Row-aware violation of one carrier constraint against a `(local, next)` window with an
+    /// `is_first` tag — replaying the deployed `Ir2Air::Main` firing domains: an every-row `Gate` and
+    /// an `on_transition` `WindowGate` fire on the transition (here: always, the window over
+    /// `local`/`next`); a `Boundary{First}` body fires only when `is_first`. Returns `0` iff satisfied.
+    fn violation(
+        c: &VmConstraint2,
+        local: &[BabyBear],
+        next: &[BabyBear],
+        is_first: bool,
+    ) -> BabyBear {
         match c {
-            VmConstraint2::Base(VmConstraint::Gate(body)) => body,
-            _ => panic!("expected a Gate constraint"),
+            VmConstraint2::Base(VmConstraint::Gate(body)) => eval_lean_expr(body, local),
+            VmConstraint2::Base(VmConstraint::Boundary {
+                row: VmRow::First,
+                body,
+            }) => {
+                if is_first {
+                    eval_lean_expr(body, local)
+                } else {
+                    BabyBear::ZERO
+                }
+            }
+            VmConstraint2::WindowGate(g) => eval_window_expr(&g.body, local, next),
+            other => panic!("unexpected carrier constraint kind: {other:?}"),
+        }
+    }
+
+    /// A felt evaluator for `WindowExpr` over a `(local, next)` row window (the test twin of the AIR's
+    /// `eval_expr`).
+    fn eval_window_expr(e: &WindowExpr, local: &[BabyBear], next: &[BabyBear]) -> BabyBear {
+        match e {
+            WindowExpr::Loc(i) => local[*i],
+            WindowExpr::Nxt(i) => next[*i],
+            WindowExpr::Const(c) => {
+                if *c < 0 {
+                    -BabyBear::new((-*c) as u32)
+                } else {
+                    BabyBear::new(*c as u32)
+                }
+            }
+            WindowExpr::Add(a, b) => {
+                eval_window_expr(a, local, next) + eval_window_expr(b, local, next)
+            }
+            WindowExpr::Mul(a, b) => {
+                eval_window_expr(a, local, next) * eval_window_expr(b, local, next)
+            }
         }
     }
 
@@ -211,10 +312,12 @@ mod tests {
         row
     }
 
-    fn all_gates_zero(gates: &[VmConstraint2], row: &[BabyBear]) -> bool {
+    /// Every carrier gate satisfied on the SETTLE row (`is_first = true`) with a self-`next` (a uniform
+    /// manifest, so the uniformity window gates vanish) — the row-0 acceptance check.
+    fn all_gates_zero_settle(gates: &[VmConstraint2], row: &[BabyBear]) -> bool {
         gates
             .iter()
-            .all(|g| eval_lean_expr(gate_body(g), row) == BabyBear::ZERO)
+            .all(|g| violation(g, row, row, /*is_first*/ true) == BabyBear::ZERO)
     }
 
     #[test]
@@ -254,22 +357,40 @@ mod tests {
         // a cell declaring escrow (tag 17 in slot 0, a vault tag elsewhere) with the selector ON.
         let row = make_row([SLOT_CAVEAT_TAG_SETTLE_ESCROW, 19, 0, 0], /*sel*/ 1);
         assert!(
-            all_gates_zero(&gates, &row),
-            "a declared-escrow manifest must decode floor=1 and the selector-forced row must satisfy"
+            all_gates_zero_settle(&gates, &row),
+            "a declared-escrow manifest must decode floor=1 and the selector-forced settle row satisfies"
         );
         // FLOOR_ESCROW_COL is forced 1 by the decode.
         assert_eq!(row[FLOOR_ESCROW_COL], BabyBear::new(1));
     }
 
     #[test]
-    fn declared_escrow_with_selector_off_is_unsat() {
+    fn declared_escrow_with_selector_off_on_settle_row_is_unsat() {
         let gates = carrier_floor_gates();
-        // escrow declared (floor decodes 1) but the forger sets the selector 0 — the selector-force
-        // gate bites: the half-open dodge by `sel = 0` is closed.
+        // escrow declared (floor decodes 1) but the forger sets the selector 0 on the SETTLE row — the
+        // first-row selector-force gate bites: the half-open dodge by `sel = 0` is closed.
         let row = make_row([SLOT_CAVEAT_TAG_SETTLE_ESCROW, 19, 0, 0], /*sel*/ 0);
         assert!(
-            !all_gates_zero(&gates, &row),
-            "a declared-escrow cell cannot set the selector 0 — the selector-force gate must bite"
+            !all_gates_zero_settle(&gates, &row),
+            "a declared-escrow cell cannot set the selector 0 on the settle row — the force must bite"
+        );
+    }
+
+    #[test]
+    fn first_row_force_is_inert_on_padding_rows() {
+        // THE ROW-LOCALITY FIX: a carry-forward padding row (is_first = false) with escrow declared
+        // (FLOOR = 1) and the selector 0 MUST satisfy the first-row-scoped force — this is exactly the
+        // case the previous EVERY-ROW force false-rejected, rendering the honest settle unsatisfiable.
+        let gates = carrier_floor_gates();
+        let row = make_row([SLOT_CAVEAT_TAG_SETTLE_ESCROW, 19, 0, 0], /*sel*/ 0);
+        assert_eq!(row[FLOOR_ESCROW_COL], BabyBear::new(1), "escrow ⟹ FLOOR 1");
+        let all_inert = gates
+            .iter()
+            .all(|g| violation(g, &row, &row, /*is_first*/ false) == BabyBear::ZERO);
+        assert!(
+            all_inert,
+            "with escrow declared + selector 0, every carrier gate must be inert on a PADDING row \
+             (is_first=false) — the first-row scoping is what restores honest-settle satisfiability"
         );
     }
 
@@ -280,7 +401,7 @@ mod tests {
         // (whatever the selector value). The decode is fail-open ONLY where the cell declares no escrow.
         let row0 = make_row([6, 19, 0, 0], /*sel*/ 0);
         assert!(
-            all_gates_zero(&gates, &row0),
+            all_gates_zero_settle(&gates, &row0),
             "no declared escrow ⟹ floor 0 ⟹ selector inert (no false reject)"
         );
         assert_eq!(row0[FLOOR_ESCROW_COL], BabyBear::ZERO);
@@ -292,19 +413,46 @@ mod tests {
         // escrow declared in slot 2 (not slot 0) — the OR fold still lights the floor.
         let row = make_row([6, 19, SLOT_CAVEAT_TAG_SETTLE_ESCROW, 0], /*sel*/ 1);
         assert!(
-            all_gates_zero(&gates, &row),
+            all_gates_zero_settle(&gates, &row),
             "escrow declared in any slot must light the floor through the OR fold"
         );
         assert_eq!(row[FLOOR_ESCROW_COL], BabyBear::new(1));
-        // ...and the selector-off variant bites.
+        // ...and the selector-off variant bites on the settle row.
         let row_off = make_row([6, 19, SLOT_CAVEAT_TAG_SETTLE_ESCROW, 0], /*sel*/ 0);
-        assert!(!all_gates_zero(&gates, &row_off));
+        assert!(!all_gates_zero_settle(&gates, &row_off));
+    }
+
+    #[test]
+    fn caveat_uniformity_gate_bites_on_a_non_uniform_manifest() {
+        // THE (ii) COUPLING: the four uniformity window gates force the caveat type-tag columns equal
+        // across adjacent rows. A forger lighting a no-escrow manifest on the settle row (local) while
+        // committing the escrow manifest on the next/last row (next) trips a uniformity gate.
+        let gates = carrier_floor_gates();
+        let local = make_row([6, 19, 0, 0], /*sel*/ 0); // settle row: no escrow tag
+        let next = make_row([SLOT_CAVEAT_TAG_SETTLE_ESCROW, 19, 0, 0], /*sel*/ 0); // committed: escrow
+        let some_bites = gates
+            .iter()
+            .any(|g| violation(g, &local, &next, /*is_first*/ true) != BabyBear::ZERO);
+        assert!(
+            some_bites,
+            "a non-uniform caveat manifest (settle-row tags ≠ next-row tags) must trip a uniformity gate"
+        );
+        // ...and a uniform escrow manifest with the selector ON (the honest settle row) passes every
+        // carrier gate.
+        let honest = make_row([SLOT_CAVEAT_TAG_SETTLE_ESCROW, 19, 0, 0], /*sel*/ 1);
+        let all_uniform_ok = gates
+            .iter()
+            .all(|g| violation(g, &honest, &honest, /*is_first*/ true) == BabyBear::ZERO);
+        assert!(
+            all_uniform_ok,
+            "a uniform escrow manifest with the selector on satisfies every carrier gate on the settle row"
+        );
     }
 
     #[test]
     fn gate_count_matches_lean() {
-        // 4 × (def + force) + seed + 2 folds + final fold + selector-force = 13, matching the Lean
-        // `carrierGates.length == 13`.
-        assert_eq!(carrier_floor_gates().len(), 13);
+        // 4 × (def + force) + seed + 2 folds + final fold + first-row selector-force + 4 caveat
+        // uniformity gates = 17, matching the Lean `carrierGates.length == 17`.
+        assert_eq!(carrier_floor_gates().len(), 17);
     }
 }
