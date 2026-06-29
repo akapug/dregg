@@ -66,6 +66,18 @@ reason the vk changes — it is not used at all"), so no separate `shielded` VK 
 just change the circuit; the VK changes.
 
 ## Status
-Design banked; the seam is approved; M2 is **mine**. It waits on ember's circuit refactor *compiling*
-(not its design) and is a real ZK-circuit build (the shielded-action AIR is substantial — not a weld),
-but every primitive it needs is in-tree on the proper (p3) crypto floor.
+M2-a (single-asset shielded transfer) is **executor-live, opt-in**: `Effect::ShieldedTransfer`
+(`turn/src/action.rs`) carries the hidden per-input STARK proofs + the value-commitment legs + range
+proofs + the Pedersen conservation proof, and the live executor (`turn/src/executor/apply.rs`
+`apply_shielded_transfer`) admits it only when all three gates pass — the hidden membership+nullifier
+STARK (`verify_stark_side`), Pedersen `Σ≡0` + per-output range (`verify_full_conservation_bytes`), and
+the production nullifier set (spend-once, journaled). Proven end-to-end (accept-valid / forged-root /
+double-spend / inflation / unlinkable) in `shielded_executor_tests`.
+
+**The one remaining seam (named, honest):** the shielded-proof verification is bound into the
+*executor*, not yet into `effect_vm`/`descriptor_ir2` — so a **re-executing validator** witnesses the
+transfer's validity + conservation, but a **pure light client** does not yet (binding it in-circuit is
+the VK-affecting follow-up). VK perturbation is free, so this is a circuit weld, not a redesign. A
+second residual: the leaf↔leg **value link** is only checkable with the secret opening, so M2-a leans on
+the honest prover for it. The multi-asset **pool** (M2-b) and **ZK attestations** (M2-d) remain
+tested library primitives (`circuit-prove/src/shielded/{pool,attest}.rs`), not yet Effects.
