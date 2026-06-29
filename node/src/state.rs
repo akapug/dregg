@@ -744,8 +744,12 @@ impl NodeState {
                     upsert_cell(&mut ledger, cell);
                 }
                 // The recovery-convergence verdict is DEFERRED to
-                // `verify_recovery_convergence`, which `run_node` calls AFTER the
-                // genesis/baseline cells are (re)seeded onto this overlay.
+                // `verify_recovery_convergence`, which `run_node` calls AFTER it
+                // reconstructs the FULL finalized ledger in the SOUND order
+                // (`reseed_genesis_then_overlay`): the genesis BASELINE is built
+                // first on a fresh ledger — `genesis_moves` replayed EXACTLY ONCE
+                // — and THEN this recovered overlay is re-applied last-writer-wins
+                // ON TOP, so every bot-touched cell's finalized post-state wins.
                 //
                 // A node that finalized turns BELOW the first ledger checkpoint
                 // has NO checkpoint to restore its UNTOUCHED genesis cells from,
@@ -753,7 +757,7 @@ impl NodeState {
                 // So the ledger reconstructed HERE is the touched-cell delta on
                 // an empty base — NOT yet the full finalized ledger. The recorded
                 // finalized root commits the FULL ledger (genesis ⊕ touched);
-                // comparing against it before the genesis baseline is reseeded
+                // comparing against it before the genesis baseline is rebuilt
                 // would fail-close every legitimate sub-checkpoint restart (the
                 // node would need a redb wipe to rejoin). The verdict still runs,
                 // still fail-CLOSED on genuine divergence — just once the
@@ -1074,16 +1078,18 @@ impl NodeState {
     /// SILENTLY-WRONG ledger as truth (a soundness event). FAIL CLOSED: return
     /// `Err` so the caller refuses to start rather than serve divergent state.
     ///
-    /// MUST be called AFTER the genesis/baseline cells have been (re)seeded onto
-    /// the recovered commit-log overlay. The verdict is deliberately deferred out
-    /// of `NodeState::new_with_key_file`: a node that finalized turns BELOW the
-    /// first ledger checkpoint has no checkpoint to restore its UNTOUCHED genesis
-    /// cells from, and the commit-log overlay carries only the cells a turn
-    /// touched — so the ledger at construction time is the touched-cell delta on
-    /// an empty base, not yet the full finalized ledger. Reseeding the genesis
-    /// baseline (insert-if-absent; the overlaid touched cells are preserved)
-    /// completes the ledger to `genesis ⊕ touched`, the exact state the recorded
-    /// root commits. Only then is the comparison meaningful.
+    /// MUST be called AFTER the full finalized ledger has been reconstructed in
+    /// the SOUND order (`reseed_genesis_then_overlay`): the genesis BASELINE
+    /// built first on a fresh ledger (`genesis_moves` applied EXACTLY ONCE), the
+    /// recovered commit-log overlay re-applied last-writer-wins ON TOP. The
+    /// verdict is deliberately deferred out of `NodeState::new_with_key_file`: a
+    /// node that finalized turns BELOW the first ledger checkpoint has no
+    /// checkpoint to restore its UNTOUCHED genesis cells from, and the commit-log
+    /// overlay carries only the cells a turn touched — so the ledger at
+    /// construction time is the touched-cell delta on an empty base, not yet the
+    /// full finalized ledger. Rebuilding `genesis_baseline ⊕ overlay` completes
+    /// the ledger to the exact state the recorded root commits. Only then is the
+    /// comparison meaningful.
     ///
     /// Returns `Ok(())` when there is no recorded finalized root (a fresh genesis
     /// boot has nothing to converge to) or when the roots match.
@@ -2387,8 +2393,13 @@ mod crash_recovery_overlay_tests {
             "without the genesis baseline the reconstructed root is incomplete"
         );
 
-        // Reseed the genesis baseline exactly as `run_node` does: insert-if-absent
-        // (first-writer-wins; the already-overlaid touched cell is preserved).
+        // Reseed the genesis baseline (move-FREE genesis: the untouched cells
+        // G1/G2 just need restoring). `run_node` reconstructs genesis-then-
+        // overlay via `reseed_genesis_then_overlay`; for a move-free genesis with
+        // no id collision that is equivalent to inserting the untouched cells, so
+        // we simulate it directly here (no genesis.json plumbing needed). The
+        // issuer-well + genesis_moves case — where the ordering MATTERS — is
+        // covered by `issuer_well_genesis_recovery_*` below.
         {
             let mut s = state.write().await;
             let _ = s.ledger.insert_cell(g1.clone());
@@ -2464,6 +2475,206 @@ mod crash_recovery_overlay_tests {
             .await
             .err()
             .expect("a corrupt overlay must STILL fail closed even after genesis reseed");
+        assert!(
+            err.contains("convergence"),
+            "the refusal must name the convergence failure; got: {err}"
+        );
+    }
+
+    // ---- Issuer-well genesis recovery (the genesis_moves ordering fix) ----
+    //
+    // THE EPOCH §5 genesis is an ISSUER-WELL economy: a negative-balance issuer
+    // well funds its recipients via `genesis_moves` (Σδ = 0). On a
+    // sub-checkpoint restart the recovered commit-log overlay already carries
+    // the FINALIZED post-state of every cell a turn TOUCHED — INCLUDING any
+    // move RECIPIENT (e.g. the faucet) the bot drew from. Recovery must
+    // reconstruct `genesis_baseline ⊕ overlay` in the SOUND order
+    // (`reseed_genesis_then_overlay`): build the genesis baseline FIRST on a
+    // fresh ledger so the `genesis_moves` run EXACTLY ONCE, THEN re-apply the
+    // overlay so the touched recipient's finalized post-state WINS. The old
+    // order (genesis reseed OVER the overlay) replayed the moves across the
+    // whole ledger and re-credited the already-overlaid recipient — a
+    // double-credit that produced the WRONG root and fail-closed a healthy node
+    // (the move-free recovery tests above never exercised a `genesis_move`, so
+    // this hid).
+
+    /// hex of a `[seed; 32]` byte array (the `cell(seed, _)` public key).
+    fn hx(seed: u8) -> String {
+        dregg_types::hex_encode(&[seed; 32])
+    }
+
+    /// hex of the content-addressed id of `cell(seed, _)` (balance-independent).
+    fn id_hex(seed: u8) -> String {
+        dregg_types::hex_encode(&cell(seed, 0).id().0)
+    }
+
+    /// An issuer-well genesis: the well (`WELL`) funds the faucet (`FAUCET`,
+    /// `faucet_amount`) and alice (`ALICE`, `alice_amount`) via two
+    /// `genesis_moves`. Cell ids/keys are the `cell(seed, _)` derivation so the
+    /// overlay (built from the SAME helper) shares ids with the genesis cells.
+    fn issuer_well_genesis(
+        well: u8,
+        faucet: u8,
+        alice: u8,
+        faucet_amount: u64,
+        alice_amount: u64,
+    ) -> serde_json::Value {
+        let supply = (faucet_amount + alice_amount) as i64;
+        serde_json::json!({
+            "issuer_well": id_hex(well),
+            "genesis_moves": [
+                { "from": id_hex(well), "to": id_hex(faucet), "amount": faucet_amount },
+                { "from": id_hex(well), "to": id_hex(alice),  "amount": alice_amount  },
+            ],
+            "initial_cells": [
+                // The well carries −supply; the column sums to zero.
+                { "id": id_hex(well),   "public_key": hx(well),   "token_id": hx(well.wrapping_add(7)),   "balance": -supply },
+                { "id": id_hex(faucet), "public_key": hx(faucet), "token_id": hx(faucet.wrapping_add(7)), "balance": faucet_amount as i64 },
+                { "id": id_hex(alice),  "public_key": hx(alice),  "token_id": hx(alice.wrapping_add(7)),  "balance": alice_amount as i64 },
+            ],
+        })
+    }
+
+    /// The issuer-well recovery: a move RECIPIENT (faucet) is ALSO in the
+    /// commit-log overlay (bot-touched, post-bot value). Recovery must apply the
+    /// `genesis_moves` ONCE and let the overlay's post-state WIN — NOT
+    /// double-credit the faucet — reconstructing the correct finalized root.
+    #[tokio::test]
+    async fn issuer_well_genesis_recovery_applies_moves_once() {
+        let (well, faucet, alice) = (0xe1u8, 0xf1u8, 0xa2u8);
+        let (faucet_amount, alice_amount) = (1_000u64, 250u64);
+        let supply = (faucet_amount + alice_amount) as i64; // 1250
+
+        // The bot drew on the faucet AFTER genesis: its FINALIZED balance is the
+        // post-bot value carried by the commit-log overlay (NOT the genesis
+        // 1000, and emphatically NOT the double-credited 2000).
+        let faucet_post_bot = 1_750i64;
+
+        // The committing node recorded the root of the FULL finalized ledger:
+        // genesis baseline {WELL −1250, faucet 1000, alice 250} with the faucet
+        // OVERWRITTEN by its post-bot value.
+        let mut full = Ledger::new();
+        full.insert_cell(cell(well, -supply)).expect("well");
+        full.insert_cell(cell(faucet, faucet_post_bot))
+            .expect("faucet");
+        full.insert_cell(cell(alice, alice_amount as i64))
+            .expect("alice");
+        let recorded_root = crate::blocklace_sync::canonical_ledger_root(&full);
+
+        // Store: NO checkpoint (sub-first-checkpoint), one finalized turn at
+        // height 5 touching ONLY the faucet (its post-bot value). The recorded
+        // finalized root is the FULL ledger root.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_sub_checkpoint_store(tmp.path(), 5, &cell(faucet, faucet_post_bot), recorded_root);
+
+        // Construction reconstructs the overlay = {faucet @ post-bot}.
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("construction reconstructs the touched-faucet overlay");
+
+        // Reconstruct in the SOUND order exactly as `run_node` does.
+        let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
+        {
+            let mut s = state.write().await;
+            let stats = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+            assert_eq!(
+                stats.invalid, 0,
+                "genesis baseline must materialize cleanly — the moves run ONCE on the \
+                 fresh ledger, so every declared balance matches"
+            );
+        }
+
+        let guard = state.read().await;
+        let faucet_bal = guard
+            .ledger
+            .get(&cell(faucet, 0).id())
+            .expect("faucet present")
+            .state
+            .balance();
+        assert_eq!(
+            faucet_bal,
+            faucet_post_bot,
+            "the overlay's FINALIZED faucet post-state must WIN; the genesis move must \
+             NOT be re-applied on top of it (double-credit would yield {})",
+            faucet_post_bot + faucet_amount as i64
+        );
+        assert_ne!(
+            faucet_bal,
+            faucet_post_bot + faucet_amount as i64,
+            "guard against the double-credit bug specifically"
+        );
+        assert_eq!(
+            guard
+                .ledger
+                .get(&cell(well, 0).id())
+                .expect("well present")
+                .state
+                .balance(),
+            -supply,
+            "the issuer well must be debited EXACTLY −supply (each move applied once)"
+        );
+        assert_eq!(
+            guard
+                .ledger
+                .get(&cell(alice, 0).id())
+                .expect("alice present")
+                .state
+                .balance(),
+            alice_amount as i64,
+            "an UNtouched recipient keeps its single genesis credit"
+        );
+        assert_eq!(
+            crate::blocklace_sync::canonical_ledger_root(&guard.ledger),
+            recorded_root,
+            "recovery must reconstruct the recorded finalized root (genesis ⊕ overlay)"
+        );
+        drop(guard);
+
+        // The deferred verdict converges — a clean issuer-well restart recovers.
+        state
+            .verify_recovery_convergence()
+            .await
+            .expect("an issuer-well recovery in the sound order must pass the verdict");
+    }
+
+    /// Fail-closed is PRESERVED with an issuer-well genesis: a genuinely
+    /// divergent overlay (a TAMPERED faucet post-state) still reconstructs a
+    /// wrong root, so the verdict STILL refuses to start. The reorder fixes the
+    /// double-credit; it does NOT loosen the integrity check.
+    #[tokio::test]
+    async fn issuer_well_genesis_recovery_corrupt_overlay_fails_closed() {
+        let (well, faucet, alice) = (0xe1u8, 0xf1u8, 0xa2u8);
+        let (faucet_amount, alice_amount) = (1_000u64, 250u64);
+        let supply = (faucet_amount + alice_amount) as i64;
+
+        // The recorded root commits the GENUINE finalized faucet value (1750).
+        let genuine_faucet = 1_750i64;
+        let mut full = Ledger::new();
+        full.insert_cell(cell(well, -supply)).expect("well");
+        full.insert_cell(cell(faucet, genuine_faucet))
+            .expect("faucet");
+        full.insert_cell(cell(alice, alice_amount as i64))
+            .expect("alice");
+        let recorded_root = crate::blocklace_sync::canonical_ledger_root(&full);
+
+        // But the overlay carries a TAMPERED faucet post-state.
+        let tampered_faucet = 9_999i64;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        seed_sub_checkpoint_store(tmp.path(), 5, &cell(faucet, tampered_faucet), recorded_root);
+
+        let state = NodeState::new_with_key_file(tmp.path(), vec![], "node.key")
+            .expect("construction reconstructs the (tampered) overlay");
+
+        let genesis = issuer_well_genesis(well, faucet, alice, faucet_amount, alice_amount);
+        {
+            let mut s = state.write().await;
+            let _ = crate::reseed_genesis_then_overlay(&genesis, &mut s.ledger);
+        }
+
+        let err = state
+            .verify_recovery_convergence()
+            .await
+            .err()
+            .expect("a tampered issuer-well overlay must STILL fail closed");
         assert!(
             err.contains("convergence"),
             "the refusal must name the convergence failure; got: {err}"

@@ -654,7 +654,15 @@ async fn run_node(
                         if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
                             s.checkpoint_interval = ci;
                         }
-                        let cell_load = materialize_genesis_cells(&genesis, &mut s.ledger);
+                        // Recovery ordering (the issuer-well fix): reconstruct
+                        // the genesis BASELINE first on a fresh ledger (the
+                        // `genesis_moves` replay EXACTLY ONCE over value-empty
+                        // cells), THEN re-apply the recovered commit-log overlay
+                        // so every bot-touched cell's FINALIZED post-state wins.
+                        // The old order (genesis reseed applied OVER the overlay)
+                        // re-credited every move RECIPIENT already in the overlay
+                        // — a double-credit that diverged the reconstructed root.
+                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
                         if cell_load.total() > 0 {
                             info!(
                                 inserted = cell_load.inserted,
@@ -1426,6 +1434,60 @@ fn materialize_genesis_cells(
                 stats.invalid += 1;
             }
         }
+    }
+
+    stats
+}
+
+/// Reconstruct the recovered ledger in the SOUND order — genesis BASELINE
+/// first, commit-log overlay SECOND — returning the genesis materialization
+/// stats.
+///
+/// On entry `ledger` holds the recovered commit-log overlay that
+/// `NodeState::new_with_key_file` left in place: `checkpoint ⊕ touched
+/// post-states`. The genesis baseline is the height-0 truth that belongs
+/// UNDER that overlay; the overlay is the later finalized truth that belongs
+/// ON it. So this:
+///
+///   1. lifts the recovered overlay out of the live ledger,
+///   2. materializes the genesis baseline on a FRESH ledger, so the
+///      `genesis_moves` replay EXACTLY ONCE over value-empty cells (the issuer
+///      well goes −supply; each recipient is credited once),
+///   3. re-applies the overlay LAST-WRITER-WINS (remove-then-insert, the
+///      verified `CrashRecovery.upd` point update) so every bot-touched cell's
+///      FINALIZED post-state OVERWRITES its genesis-baseline value.
+///
+/// The result is `genesis_baseline ⊕ overlay` exactly — the state the recorded
+/// finalized root commits.
+///
+/// This replaces the old order (genesis reseed applied OVER the overlay), which
+/// replayed the `genesis_moves` across the WHOLE ledger and so re-credited
+/// every move RECIPIENT already present in the overlay — a double-credit (e.g.
+/// the faucet cell, already carrying its post-bot value) that made the
+/// reconstructed root diverge from the recorded finalized root and fail-closed
+/// a healthy node. An issuer-well genesis (issuer cell funding recipients via
+/// `genesis_moves`) surfaces this; a move-free genesis never did. Reordering
+/// does NOT loosen the integrity verdict: a genuinely divergent overlay STILL
+/// reconstructs a wrong root, and `verify_recovery_convergence` STILL refuses
+/// to start (STORE INTEGRITY EVENT).
+fn reseed_genesis_then_overlay(
+    genesis: &serde_json::Value,
+    ledger: &mut dregg_cell::Ledger,
+) -> GenesisCellLoadStats {
+    // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
+    //    post-states) out of the live ledger.
+    let recovered_overlay: Vec<dregg_cell::Cell> = ledger.iter().map(|(_, c)| c.clone()).collect();
+    *ledger = dregg_cell::Ledger::new();
+
+    // 2. Genesis baseline on a FRESH ledger: genesis_moves apply EXACTLY ONCE
+    //    over value-empty cells.
+    let stats = materialize_genesis_cells(genesis, ledger);
+
+    // 3. Re-apply the overlay LAST-WRITER-WINS so every bot-touched cell's
+    //    finalized post-state OVERWRITES its genesis-baseline value.
+    for cell in recovered_overlay {
+        let _ = ledger.remove(&cell.id());
+        let _ = ledger.insert_cell(cell);
     }
 
     stats
