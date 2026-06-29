@@ -82,7 +82,7 @@ open Dregg2.Deos.SettleEscrowSatDescriptor
 open Dregg2.Deos.SettleEscrowSatWideDescriptor
   (settleEscrowSatVmDescriptor2R24Wide settleGateWide_mem)
 open Dregg2.Deos.InAirAuthorityDigestSelector
-  (GENTIAN_FLOOR_ESCROW_COL gentianSelectorForceGate)
+  (GENTIAN_FLOOR_ESCROW_COL)
 open Dregg2.Deos.InAirAuthorityDigestGadget
   (tagEscrowZ escrowBitZ isZeroDefGate isZeroForceGate isZero_from_gates)
 
@@ -152,8 +152,30 @@ def orFoldGate (outCol inOrCol bitC : Nat) : VmConstraint2 :=
     (.mul (.const (-1)) (.add (.add (.var inOrCol) (.var bitC))
       (.mul (.const (-1)) (.mul (.var inOrCol) (.var bitC)))))))
 
+/-! ## §2b — THE ROW-LOCALITY FIX gates (the §2 precondition of `VK-EPOCH-DESIGN.md`).
+
+The selector-force is scoped to the FIRST (settle) row (`Boundary .first`) so it is INERT on the
+carry-forward padding rows — the empirical `10ac36c54` defect was an EVERY-ROW force that, over a
+uniform escrow manifest, forced `sel = 1` on padding rows where the base satisfaction gate
+`sel·(before_leg − Deposited)` then bit (`before_leg = Consumed` there), making the honest settle
+UNSATISFIABLE. The caveat-uniformity `windowGate`s force the type-tag columns constant across adjacent
+rows, coupling the row-0 decode to the LAST-row-pinned committed caveat (PI 45). -/
+
+/-- (selector-force, FIRST-ROW SCOPED) `GENTIAN_FLOOR_ESCROW_COL · (ESCROW_SEL_COL − 1) == 0`, fired
+ONLY on the first (settle) row (`Boundary .first`, the `when_first_row` AIR domain). Rust twin
+`carrier_floor_weld::selector_force_first_gate`. -/
+def selectorForceFirstGate (floorCol selCol : Nat) : VmConstraint2 :=
+  .base (.boundary .first (.mul (.var floorCol) (.add (.var selCol) (.const (-1)))))
+
+/-- (caveat-uniformity) `nxt(tagCol) − loc(tagCol) == 0`, on the transition — a two-row `windowGate`
+forcing the caveat type-tag column UNIFORM across adjacent rows. Rust twin
+`carrier_floor_weld::caveat_uniform_gate`. -/
+def caveatUniformGate (tagCol : Nat) : VmConstraint2 :=
+  .windowGate { body := .add (.nxt tagCol) (.mul (.const (-1)) (.loc tagCol)), onTransition := true }
+
 /-- The full carrier decode-gadget gate block: four per-slot is-zero gadgets (`def` + `force`), the
-OR seed, two OR folds, the final OR fold into `GENTIAN_FLOOR_ESCROW_COL`, and the selector-force gate. -/
+OR seed, two OR folds, the final OR fold into `GENTIAN_FLOOR_ESCROW_COL`, the FIRST-ROW-scoped
+selector-force gate (the row-locality fix), and four caveat-uniformity `windowGate`s. -/
 def carrierGates : List VmConstraint2 :=
   [ isZeroDefGate (cavTagCol 0) (bitCol 0) (invCol 0), isZeroForceGate (cavTagCol 0) (bitCol 0)
   , isZeroDefGate (cavTagCol 1) (bitCol 1) (invCol 1), isZeroForceGate (cavTagCol 1) (bitCol 1)
@@ -163,7 +185,9 @@ def carrierGates : List VmConstraint2 :=
   , orFoldGate (orCol 1) (orCol 0) (bitCol 1)
   , orFoldGate (orCol 2) (orCol 1) (bitCol 2)
   , orFoldGate GENTIAN_FLOOR_ESCROW_COL (orCol 2) (bitCol 3)
-  , gentianSelectorForceGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL ]
+  , selectorForceFirstGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL
+  , caveatUniformGate (cavTagCol 0), caveatUniformGate (cavTagCol 1)
+  , caveatUniformGate (cavTagCol 2), caveatUniformGate (cavTagCol 3) ]
 
 /-! ## §3 — THE CARRIER GADGET DESCRIPTOR (the wide welded descriptor + the carrier decode gates). -/
 
@@ -207,6 +231,74 @@ theorem carrier_gate_holds (hash : List ℤ → ℤ) (legA legB : Nat)
   have hrow := hsat.rowConstraints i hi g hg
   rw [hbody] at hrow
   simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, hnl] using hrow
+
+/-- **THE FIRST-ROW (settle-row) FORCING.** A `Boundary .first` gate's body vanishes on the FIRST row
+(`isFirst`, the `when_first_row` AIR domain) — the row-locality discipline of the selector-force gate.
+The body need NOT vanish on the carry-forward padding rows (where the force is inert), which is exactly
+what restores the honest settle's satisfiability. -/
+theorem carrier_boundary_first_holds (hash : List ℤ → ℤ) (legA legB : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
+    (hi : 0 < t.rows.length)
+    (g : VmConstraint2) (hg : g ∈ (gentianCarrierDescriptor legA legB).constraints)
+    (body : EmittedExpr) (hbody : g = .base (.boundary .first body)) :
+    body.eval (envAt t 0).loc = 0 := by
+  have hrow := hsat.rowConstraints 0 hi g hg
+  rw [hbody] at hrow
+  simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm] at hrow
+  exact hrow rfl
+
+/-- **THE CAVEAT-UNIFORMITY STEP.** The uniformity `windowGate` forces the caveat type-tag column equal
+across adjacent rows: on a non-last row `i`, `(envAt t (i+1)).loc (cavTagCol k) = (envAt t i).loc
+(cavTagCol k)`. (`(envAt t i).nxt c` is definitionally `(envAt t (i+1)).loc c`.) -/
+theorem caveat_uniform_step (hash : List ℤ → ℤ) (legA legB : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false) (k : Nat)
+    (hkmem : caveatUniformGate (cavTagCol k) ∈ (gentianCarrierDescriptor legA legB).constraints) :
+    (envAt t (i + 1)).loc (cavTagCol k) = (envAt t i).loc (cavTagCol k) := by
+  have hrow := hsat.rowConstraints i hi _ hkmem
+  -- `.windowGate w` ⇒ `WindowConstraint.holdsAt env isLast`; `onTransition = true` ⇒ the body need
+  -- only vanish off the last row (`isLast = false`, here `hnl`).
+  simp only [VmConstraint2.holdsAt, caveatUniformGate, WindowConstraint.holdsAt] at hrow
+  have hbody := hrow hnl
+  simp only [WindowExpr.eval] at hbody
+  -- `(envAt t i).nxt c` is definitionally `(envAt t (i+1)).loc c`.
+  have hnxt : (envAt t i).nxt (cavTagCol k) = (envAt t (i + 1)).loc (cavTagCol k) := rfl
+  rw [hnxt] at hbody
+  omega
+
+/-- **THE CAVEAT-UNIFORMITY (whole trace).** Every row's caveat type-tag column equals the settle
+(row-0) row's — the uniformity gates fold the per-step equality across the trace. -/
+theorem caveat_uniform_const (hash : List ℤ → ℤ) (legA legB : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
+    (k : Nat)
+    (hkmem : caveatUniformGate (cavTagCol k) ∈ (gentianCarrierDescriptor legA legB).constraints)
+    (j : Nat) (hj : j < t.rows.length) :
+    (envAt t j).loc (cavTagCol k) = (envAt t 0).loc (cavTagCol k) := by
+  induction j with
+  | zero => rfl
+  | succ n ih =>
+    have hn : n < t.rows.length := by omega
+    have hnl : (n + 1 == t.rows.length) = false := by
+      have : n + 1 ≠ t.rows.length := by omega
+      simpa using this
+    have hstep := caveat_uniform_step hash legA legB hsat n hn hnl k hkmem
+    rw [hstep]; exact ih hn
+
+/-- **THE DECODE READS THE COMMITTED (LAST-ROW) TAGS.** With the uniformity gates, the settle-row
+(row-0) decode reads the SAME caveat type tags as the LAST row — the row PI 45 (the caveat commit) is
+pinned to. So a forger cannot light a no-escrow decode on the settle row while committing an escrow
+manifest to PI 45: the decoded floor IS the committed declaration's floor. -/
+theorem decode_reads_committed_tags (hash : List ℤ → ℤ) (legA legB : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
+    (k : Nat) (hlen : 0 < t.rows.length)
+    (hkmem : caveatUniformGate (cavTagCol k) ∈ (gentianCarrierDescriptor legA legB).constraints) :
+    (envAt t 0).loc (cavTagCol k) = (envAt t (t.rows.length - 1)).loc (cavTagCol k) := by
+  have h := caveat_uniform_const hash legA legB hsat k hkmem (t.rows.length - 1) (by omega)
+  exact h.symm
 
 /-! ## §6 — the per-slot bit is the escrow decode of its tag column. -/
 
@@ -311,23 +403,24 @@ theorem gentian_selector_forced_carrier (hash : List ℤ → ℤ) (hCR : Poseido
     (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
     (committedManifest : RotCaveatManifest)
-    (hbind : caveatCommit hash (gadgetManifest (envAt t i).loc) = caveatCommit hash committedManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
     (hreq : tagEscrowZ ∈ manifestTags committedManifest) :
-    (envAt t i).loc ESCROW_SEL_COL = 1 := by
+    (envAt t 0).loc ESCROW_SEL_COL = 1 := by
   -- DISCHARGE: the existing caveat-commit binding forces the row manifest = the committed manifest.
-  have hmeq : gadgetManifest (envAt t i).loc = committedManifest := caveatCommit_binds hash hCR hbind
-  have hrowreq : tagEscrowZ ∈ manifestTags (gadgetManifest (envAt t i).loc) := by
+  have hmeq : gadgetManifest (envAt t 0).loc = committedManifest := caveatCommit_binds hash hCR hbind
+  have hrowreq : tagEscrowZ ∈ manifestTags (gadgetManifest (envAt t 0).loc) := by
     rw [hmeq]; exact hreq
-  -- the decode lights the floor column from the bound type tags.
-  have hdec := floor_decodes hash legA legB hsat i hi hnl
-  have hfloor : (envAt t i).loc GENTIAN_FLOOR_ESCROW_COL = 1 := by
+  -- the decode lights the floor column from the bound type tags, on the SETTLE (row-0) row.
+  have hdec := floor_decodes hash legA legB hsat 0 hi hnl
+  have hfloor : (envAt t 0).loc GENTIAN_FLOOR_ESCROW_COL = 1 := by
     rw [hdec]; unfold escrowBitZ; rw [if_pos hrowreq]
-  -- the selector-force gate forces sel = 1.
-  have hsel := carrier_gate_holds hash legA legB hsat i hi hnl
-    (gentianSelectorForceGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
-    (carrierGate_mem legA legB _ (by simp [carrierGates])) _ rfl
+  -- the FIRST-ROW selector-force gate forces sel = 1 on the settle row.
+  have hsel := carrier_boundary_first_holds hash legA legB hsat hi
+    (selectorForceFirstGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
+    (carrierGate_mem legA legB _ (by simp [carrierGates]))
+    (.mul (.var GENTIAN_FLOOR_ESCROW_COL) (.add (.var ESCROW_SEL_COL) (.const (-1)))) rfl
   simp only [EmittedExpr.eval, hfloor, one_mul] at hsel
   omega
 
@@ -340,21 +433,21 @@ theorem gentian_settle_forced_carrier (hash : List ℤ → ℤ) (hCR : Poseidon2
     (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
     (committedManifest : RotCaveatManifest)
-    (hbind : caveatCommit hash (gadgetManifest (envAt t i).loc) = caveatCommit hash committedManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
     (hreq : tagEscrowZ ∈ manifestTags committedManifest) :
-    (envAt t i).loc (beforeFieldCol legA) = stDeposited ∧
-    (envAt t i).loc (beforeFieldCol legB) = stDeposited ∧
-    (envAt t i).loc (afterFieldCol legA)  = stConsumed ∧
-    (envAt t i).loc (afterFieldCol legB)  = stConsumed := by
-  have hsel := gentian_selector_forced_carrier hash hCR legA legB hsat i hi hnl committedManifest
+    (envAt t 0).loc (beforeFieldCol legA) = stDeposited ∧
+    (envAt t 0).loc (beforeFieldCol legB) = stDeposited ∧
+    (envAt t 0).loc (afterFieldCol legA)  = stConsumed ∧
+    (envAt t 0).loc (afterFieldCol legB)  = stConsumed := by
+  have hsel := gentian_selector_forced_carrier hash hCR legA legB hsat hi hnl committedManifest
     hbind hreq
   have force : ∀ (col : Nat) (val : ℤ),
       settleEscrowSatGate ESCROW_SEL_COL col val ∈ settleEscrowSatGates ESCROW_SEL_COL legA legB →
-      (envAt t i).loc col = val := by
+      (envAt t 0).loc col = val := by
     intro col val hmem
-    have h0 := carrier_gate_holds hash legA legB hsat i hi hnl
+    have h0 := carrier_gate_holds hash legA legB hsat 0 hi hnl
       (settleEscrowSatGate ESCROW_SEL_COL col val) (weldedGate_mem_carrier legA legB _ hmem)
       (.mul (.var ESCROW_SEL_COL) (.add (.var col) (.const (-val)))) rfl
     simp only [EmittedExpr.eval, hsel, one_mul] at h0
@@ -387,13 +480,13 @@ theorem gentian_partial_unsat_carrier (hash : List ℤ → ℤ) (hCR : Poseidon2
     (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
     (committedManifest : RotCaveatManifest)
-    (hbind : caveatCommit hash (gadgetManifest (envAt t i).loc) = caveatCommit hash committedManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
     (hreq : tagEscrowZ ∈ manifestTags committedManifest)
-    (hpartial : (envAt t i).loc (afterFieldCol legB) = stDeposited) :
+    (hpartial : (envAt t 0).loc (afterFieldCol legB) = stDeposited) :
     False := by
-  have h := (gentian_settle_forced_carrier hash hCR legA legB hsat i hi hnl committedManifest
+  have h := (gentian_settle_forced_carrier hash hCR legA legB hsat hi hnl committedManifest
     hbind hreq).2.2.2
   rw [hpartial] at h
   exact absurd h (by decide)
@@ -404,13 +497,13 @@ theorem gentian_phantom_unsat_carrier (hash : List ℤ → ℤ) (hCR : Poseidon2
     (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianCarrierDescriptor legA legB) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
     (committedManifest : RotCaveatManifest)
-    (hbind : caveatCommit hash (gadgetManifest (envAt t i).loc) = caveatCommit hash committedManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
     (hreq : tagEscrowZ ∈ manifestTags committedManifest)
-    (hphantom : (envAt t i).loc (beforeFieldCol legA) = stEmpty) :
+    (hphantom : (envAt t 0).loc (beforeFieldCol legA) = stEmpty) :
     False := by
-  have h := (gentian_settle_forced_carrier hash hCR legA legB hsat i hi hnl committedManifest
+  have h := (gentian_settle_forced_carrier hash hCR legA legB hsat hi hnl committedManifest
     hbind hreq).1
   rw [hphantom] at h
   exact absurd h (by decide)
@@ -433,9 +526,9 @@ private def hollowManifest : RotCaveatManifest :=
 #guard tagEscrowZ ∉ manifestTags hollowManifest
 
 -- The carrier descriptor extends the wide welded descriptor (63 PIs, no new PI — the forcing is
--- in-AIR) and appends exactly the carrier decode + selector gate block.
+-- in-AIR) and appends exactly the carrier decode + first-row selector-force + caveat-uniformity block.
 #guard (gentianCarrierDescriptor 0 1).piCount == 63
-#guard carrierGates.length == 13
+#guard carrierGates.length == 17
 
 -- The decode/aux columns are distinct (no aliasing).
 #guard [cavTagCol 0, cavTagCol 1, cavTagCol 2, cavTagCol 3,
@@ -474,11 +567,35 @@ private def gateVal (g : VmConstraint2) (loc : Nat → ℤ) : ℤ :=
   (mkLoc tagEscrowZ 6 0 0  1 0 0 0  1 1 1 1) == 0
 #guard gateVal (orFoldGate GENTIAN_FLOOR_ESCROW_COL (orCol 2) (bitCol 3))
   (mkLoc tagEscrowZ 6 0 0  1 0 0 0  1 1 1 0) != 0
--- selector-force: floor = 1 demands sel = 1 — but mkLoc has no sel slot, so use a direct check:
-#guard gateVal (gentianSelectorForceGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
+-- THE ROW-LOCALITY FIX gates have the right SHAPE: the selector-force is FIRST-row-scoped (a
+-- `Boundary .first`), and the caveat-uniformity gates are on-transition two-row windows.
+#guard (match selectorForceFirstGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL with
+        | .base (.boundary .first _) => true | _ => false)
+#guard (match caveatUniformGate (cavTagCol 0) with
+        | .windowGate w => w.onTransition | _ => false)
+
+-- The FIRST-ROW selector-force body: floor = 1 demands sel = 1 (sel = 0 bites).
+private def forceBodyVal (g : VmConstraint2) (loc : Nat → ℤ) : ℤ :=
+  match g with
+  | .base (.boundary _ body) => body.eval loc
+  | _ => 999
+#guard forceBodyVal (selectorForceFirstGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
   (fun c => if c == GENTIAN_FLOOR_ESCROW_COL then 1 else if c == ESCROW_SEL_COL then 1 else 0) == 0
-#guard gateVal (gentianSelectorForceGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
+#guard forceBodyVal (selectorForceFirstGate GENTIAN_FLOOR_ESCROW_COL ESCROW_SEL_COL)
   (fun c => if c == GENTIAN_FLOOR_ESCROW_COL then 1 else if c == ESCROW_SEL_COL then 0 else 0) != 0
+
+-- THE CAVEAT-UNIFORMITY body `nxt(tag) − loc(tag)` BITES on a non-uniform manifest and vanishes when
+-- uniform.
+private def uniformBodyVal (g : VmConstraint2) (locf nxtf : Nat → ℤ) : ℤ :=
+  match g with
+  | .windowGate w => w.body.eval ⟨locf, nxtf, fun _ => 0⟩
+  | _ => 999
+#guard uniformBodyVal (caveatUniformGate (cavTagCol 0))
+  (fun c => if c == cavTagCol 0 then 6 else 0)
+  (fun c => if c == cavTagCol 0 then tagEscrowZ else 0) != 0
+#guard uniformBodyVal (caveatUniformGate (cavTagCol 0))
+  (fun c => if c == cavTagCol 0 then tagEscrowZ else 0)
+  (fun c => if c == cavTagCol 0 then tagEscrowZ else 0) == 0
 
 -- THE BINDING BITES: the hollow (omitting) manifest cannot share the escrow manifest's caveat commit
 -- (computed on the reference sponge — the forged-floor dodge moves the bound commit).
@@ -495,6 +612,10 @@ end Witnesses
   carrierGate_mem,
   weldedGate_mem_carrier,
   carrier_gate_holds,
+  carrier_boundary_first_holds,
+  caveat_uniform_step,
+  caveat_uniform_const,
+  decode_reads_committed_tags,
   bit_decodes,
   orStep,
   floor_decodes,
