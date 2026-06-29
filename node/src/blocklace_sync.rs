@@ -979,6 +979,12 @@ impl BlocklaceHandle {
         // For solo mode (n=1): every block is immediately finalized in topological
         // order. tau() handles this correctly because with a single participant,
         // every block trivially has supermajority.
+        // `ordered_from_lean` records whether the multi-party order below came from the
+        // verified Lean export (the authoritative path) rather than the Rust fallback. It
+        // lets us SKIP the redundant secondary finality-gate FFI in the common case (the
+        // gate only ever admits the whole Lean order back) — halving the executor's
+        // O(history) Lean work per poll, which is the dominant cost as the chain grows.
+        let mut ordered_from_lean = false;
         let ordered = if participants.len() <= 1 {
             // Solo: all actionable blocks are ordered by sequence.
             let mut all_blocks: Vec<(u64, BlockId)> = lace
@@ -1067,6 +1073,7 @@ impl BlocklaceHandle {
                         );
                     }
                     // The VERIFIED Lean order is the one we finalize over.
+                    ordered_from_lean = true;
                     lean_order
                 }
                 None => {
@@ -1104,7 +1111,16 @@ impl BlocklaceHandle {
         // committed batch BEFORE that block (it is NOT marked executed), so it is re-evaluated on a
         // later poll once the lace has grown enough — preserving liveness (a finalized block stays
         // pending until served; identity tracking makes the retry order-shift-proof).
-        let gate_armed = participants.len() > 1 && crate::finality_gate::finality_gate_enabled();
+        //
+        // PERF: when `ordered` ALREADY came from the verified Lean export (`ordered_from_lean`,
+        // the common path), the gate is provably a no-op — it re-runs the SAME verified projection
+        // and admits the whole Lean order back (`gate_admits_iff_verified_finalizes`). So skip the
+        // second O(history) FFI there and keep the belt ONLY for the Rust fallback (the case it
+        // actually defends, where `ordered` is NOT Lean-verified). Equivalent to the prior behaviour
+        // (verified=None ⇒ fail-open ⇒ admit all) on the Lean path, at half the per-poll Lean cost.
+        let gate_armed = participants.len() > 1
+            && !ordered_from_lean
+            && crate::finality_gate::finality_gate_enabled();
         let verified = if gate_armed {
             crate::finality_gate::VerifiedFinality::compute(&lace, &participants)
         } else {
