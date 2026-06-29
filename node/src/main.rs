@@ -50,6 +50,9 @@ mod mcp;
 pub mod metrics;
 #[cfg(test)]
 mod node_integrator_e2e;
+// The operator onboarding dance (gen-validator-key / join / add-validator) — the
+// slick, reusable path for folding a node + validator into a federation.
+mod operator_join;
 mod pg_mirror;
 mod prove_pool;
 mod relay_service;
@@ -392,6 +395,83 @@ enum Command {
         #[arg(long, default_value = "1000")]
         subscription_fee: u64,
     },
+
+    /// Generate (or read) this box's validator keypair and print its PUBLIC key.
+    ///
+    /// Idempotent — if `node.key` already exists in the data dir, its public key
+    /// is read and printed; otherwise a fresh 32-byte seed is generated (0600).
+    /// Hand the printed PUBLIC key to the federation operator; they admit you
+    /// with `dregg-node add-validator --pubkey <it>` and send back the resulting
+    /// genesis.json for `dregg-node join`.
+    GenValidatorKey {
+        /// Data directory holding (or to hold) `node.key`.
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Emit JSON (`{public_key, key_file, generated}`).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Join a federation: peer to a bootstrap node, sync the blocklace, run as a
+    /// follower (or, if this node's key is in the committee, a voting validator).
+    ///
+    /// Pre-flights the data dir (auto-generates `node.key` if absent, printing the
+    /// pubkey) and requires a committee `genesis.json` to be present — a node
+    /// cannot verify a federation's blocks without its committee descriptor, so
+    /// `join` refuses rather than trusting nobody. The node then catches up the
+    /// DAG from the bootstrap and, if it is NOT yet a committee member,
+    /// auto-proposes membership (`propose_join_if_needed`) and follows until an
+    /// operator admits it via `add-validator`.
+    Join {
+        /// Bootstrap peer to dial: `host:gossip_port` (e.g. 100.64.0.1:9420).
+        /// One live peer is enough; gossip-of-peers fills in the rest.
+        #[arg(long)]
+        bootstrap: String,
+        /// Data directory (must hold, or will receive, `node.key` + `genesis.json`).
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Localhost/overlay HTTP read-API port.
+        #[arg(long, default_value = "8420")]
+        port: u16,
+        /// Bind address for the read API. Default 127.0.0.1 (loopback-only).
+        /// Bind the OVERLAY ip (e.g. 100.64.0.2) so authorized peers can sync —
+        /// NOT 0.0.0.0 (that exposes every interface, red-team MESH-2).
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Gossip/federation sync port (QUIC, UDP).
+        #[arg(long, default_value = "9420")]
+        gossip_port: u16,
+        /// Prove every finalized turn on the commit path (audit-grade).
+        #[arg(long)]
+        prove_turns: bool,
+        /// Enable the devnet faucet endpoint.
+        #[arg(long)]
+        enable_faucet: bool,
+        /// (Devnet) auto-approve incoming join proposals.
+        #[arg(long)]
+        auto_approve_joins: bool,
+    },
+
+    /// Add one or more validators to this node's committee (the authority op).
+    ///
+    /// Reads `genesis.json` from the data dir, folds the given pubkey(s) into the
+    /// committee, recomputes the `federation_id` + BFT `threshold`
+    /// (`quorum_threshold`), and writes the new committee descriptor back (plus a
+    /// content-named `genesis-<id8>.json` to distribute). Filesystem access to
+    /// the node's data dir IS the authority — there is no remote self-admit (that
+    /// would defeat BFT). The re-roll changes the `federation_id`, so distribute
+    /// the new genesis.json to every committee node and restart into full mode.
+    AddValidator {
+        /// Validator public key(s) to add (64-hex Ed25519). Repeat for several.
+        #[arg(long = "pubkey", required = true)]
+        pubkeys: Vec<String>,
+        /// Data directory holding the committee `genesis.json`.
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -531,6 +611,71 @@ async fn main() {
                 default_min_deposit,
                 min_message_deposit,
                 subscription_fee,
+            )
+            .await
+        }
+        Command::GenValidatorKey { data_dir, json } => {
+            if let Err(e) = operator_join::gen_validator_key(&data_dir, json) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::AddValidator {
+            pubkeys,
+            data_dir,
+            json,
+        } => {
+            if let Err(e) = operator_join::add_validator(&data_dir, &pubkeys, json) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Join {
+            bootstrap,
+            data_dir,
+            port,
+            bind,
+            gossip_port,
+            prove_turns,
+            enable_faucet,
+            auto_approve_joins,
+        } => {
+            // Pre-flight: ensure key + committee descriptor, report membership.
+            let plan = match operator_join::prepare_join(&data_dir, &bootstrap, false) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            operator_join::announce_join(&plan, &data_dir, &bind);
+            // Start the daemon in full (BFT-quorum) mode, peered to the bootstrap.
+            // The blocklace catches up from the peer; a non-member auto-proposes
+            // membership (see `blocklace_sync::propose_join_if_needed`).
+            run_node(
+                port,
+                &bind,
+                vec![plan.bootstrap.clone()],
+                &data_dir,
+                "node.key",
+                gossip_port,
+                0,
+                0,
+                false,
+                prove_turns,
+                1000,
+                100,
+                10000,
+                2000,
+                120000,
+                5000,
+                enable_faucet,
+                "full",
+                "blocklace",
+                Vec::new(),
+                auto_approve_joins,
+                Vec::new(),
+                None,
             )
             .await
         }
