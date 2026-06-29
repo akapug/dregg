@@ -33,6 +33,14 @@ pub fn install_recorder() -> PrometheusHandle {
             counter!("dregg_cap_refusals_total").increment(0);
             counter!("dregg_turns_rejected_total").increment(0);
             counter!("dregg_sandbox_denials_total").increment(0);
+            // Pre-seed the protocol-activity series the same way so the protocol
+            // dashboard renders "0" from boot rather than "No data" on an idle
+            // node. The label shapes MATCH the real emit sites: `inc_turns_submitted`
+            // is unlabelled, `inc_proofs_verified` carries `result` (seeded with the
+            // representative "valid" value it emits on a passing verification).
+            counter!("dregg_turns_submitted_total").increment(0);
+            counter!("dregg_proofs_verified_total", "result" => "valid").increment(0);
+            gauge!("dregg_block_height").set(0.0);
             handle
         })
         .clone()
@@ -160,6 +168,40 @@ pub fn set_block_height(height: f64) {
 /// Set time since the last root update (seconds).
 pub fn set_federation_root_age(seconds: f64) {
     gauge!("dregg_federation_root_age_seconds").set(seconds);
+}
+
+// ─── Protocol structure gauges (receipt chain · blocklace DAG · mempool) ──────
+
+/// Set the current length of this node's receipt chain (the append-only
+/// per-turn receipt log). Emitted after each successful `append_receipt`.
+pub fn set_receipt_chain_length(n: f64) {
+    gauge!("dregg_receipt_chain_length").set(n);
+}
+
+/// Set the blocklace DAG depth: the maximum round across the current per-creator
+/// tips (how far the lace has advanced).
+pub fn set_blocklace_depth(d: f64) {
+    gauge!("dregg_blocklace_depth").set(d);
+}
+
+/// Set the blocklace frontier width: the number of current per-creator tip
+/// blocks (the DAG heads), bounded by committee size.
+pub fn set_blocklace_frontier(w: f64) {
+    gauge!("dregg_blocklace_frontier").set(w);
+}
+
+/// Set the mempool depth: turns/payloads queued but not yet drained into a
+/// produced block (the `pending_payloads` backlog awaiting inclusion).
+pub fn set_mempool_pending(n: f64) {
+    gauge!("dregg_mempool_pending").set(n);
+}
+
+/// Increment a per-validator finalization-vote counter. Bumped at the same site
+/// as `set_validator_last_seen`, so a dashboard derives each validator's
+/// vote-share as `votes / sum(votes)`. `voter` is the short hex key tag; label
+/// cardinality is bounded by committee size.
+pub fn inc_validator_votes(voter: &str) {
+    counter!("dregg_validator_votes_total", "voter" => voter.to_owned()).increment(1);
 }
 
 // ─── Security counters (the Security dashboard's exploitation-attempt detector) ─
