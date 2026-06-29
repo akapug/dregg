@@ -71,6 +71,9 @@ impl TurnExecutor {
             // NoteSpend.
             Effect::Promise { .. } | Effect::Notify { .. } => self.costs.effect_base,
             Effect::React { .. } => self.costs.proof_verify,
+            // Shielded transfer: per-input hidden-STARK verify + Pedersen
+            // conservation/range verify — proof-heavy, charged as a proof_verify.
+            Effect::ShieldedTransfer { .. } => self.costs.proof_verify,
         };
         base.saturating_add(extra)
             .saturating_add((effect.data_bytes() as u64).saturating_mul(self.costs.per_byte))

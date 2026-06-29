@@ -2204,8 +2204,10 @@ impl TurnExecutor {
                 // * CreateCell / CreateCellFromFactory / SpawnWithDelegation —
                 //   create a FRESH cell (no victim to gate); spawn/factory
                 //   constraints are validated in their handlers.
-                // * NoteSpend / NoteCreate / BridgeMint — self-authorizing via
-                //   ZK proof / nullifier membership.
+                // * NoteSpend / NoteCreate / BridgeMint / ShieldedTransfer —
+                //   self-authorizing via ZK proof / nullifier membership (the
+                //   shielded proof of note ownership IS the authority; no cross-cell
+                //   victim to gate, like NoteSpend).
                 // * Burn / Mint — gated in `apply`: self-burn is permissionless,
                 //   cross-cell burn is Send-gated on the holder; mint requires a
                 //   mint-grade cap over the issuer well.
@@ -2235,7 +2237,8 @@ impl TurnExecutor {
                 | Effect::PipelinedSend { .. }
                 | Effect::Promise { .. }
                 | Effect::Notify { .. }
-                | Effect::React { .. } => {}
+                | Effect::React { .. }
+                | Effect::ShieldedTransfer { .. } => {}
             }
         }
 

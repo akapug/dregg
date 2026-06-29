@@ -273,6 +273,9 @@ fn rewrite_effect_targets(effects: &mut [Effect], placeholder: &CellId, resolved
             | Effect::RefreshDelegation { .. }
             | Effect::RevokeDelegation { .. }
             | Effect::MakeSovereign { .. }
+            // ShieldedTransfer carries only nullifiers / commitments / proofs —
+            // no CellId fields to rewrite.
+            | Effect::ShieldedTransfer { .. }
             | Effect::CreateCellFromFactory { .. } => {} // These effects don't have mutable CellId fields needing rewrite:
         }
     }

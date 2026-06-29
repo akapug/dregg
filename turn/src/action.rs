@@ -954,6 +954,65 @@ impl LinearityClass {
     }
 }
 
+/// One value-commitment leg of a shielded transfer on the wire: the (single-asset
+/// M2-a) public asset type and the opaque compressed Pedersen value commitment
+/// `commit(v, r)`. The amount `v` stays hidden behind the commitment; the
+/// downstream conservation proof certifies `Σ in = Σ out` without revealing any
+/// `v`. Mirrors `dregg_circuit_prove::shielded::ShieldedValueLeg` as plain,
+/// always-serializable data so the `Effect` vocabulary needs no circuit type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShieldedLeg {
+    /// Asset type (public in M2-a; the multi-asset pool hides it into a scalar).
+    pub asset_type: u64,
+    /// Compressed Ristretto encoding of the Pedersen value commitment.
+    pub commitment_bytes: [u8; 32],
+}
+
+/// One spent input of a shielded transfer on the wire: the revealed nullifier and
+/// value-binding (canonical `u32` field elements) plus the postcard-serialized
+/// **hidden** note-spend proof (the hiding uni-STARK that proves membership +
+/// nullifier derivation with owner/key/path blind). Reconstructed by the executor
+/// via `dregg_circuit_prove::shielded::ShieldedTransfer::from_serialized_parts`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShieldedInputPayload {
+    /// The revealed nullifier (the double-spend tag), as a canonical BabyBear u32.
+    pub nullifier: u32,
+    /// The published value-binding `hash_fact(value,[randomness,0,0])`, BabyBear u32.
+    pub value_binding: u32,
+    /// Canonical postcard bytes of the hiding note-spend proof (`DslZkProof`).
+    pub proof: Vec<u8>,
+}
+
+/// The wire payload of a shielded transfer effect (privacy M2-a).
+///
+/// A **shielded transfer** spends hidden input notes and mints hidden output
+/// notes with the **value** and the **owner** blind, leaving only: the nullifiers
+/// (so the chain rejects double-spends), the output value commitments, and a
+/// proof that the flow is genuine, conserved (`Σ in = Σ out`), and in-range. This
+/// is the always-serializable, circuit-type-free mirror of
+/// `dregg_circuit_prove::shielded::ShieldedTransfer` plus the Pedersen
+/// conservation proof, so the `Effect` enum is wire-stable in every build (the
+/// heavy STARK *verify* is reconstructed only in a `prover`-enabled executor).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShieldedTransferPayload {
+    /// Commitment-tree root every input note is proven a member of (BabyBear u32).
+    pub merkle_root: u32,
+    /// One hidden note-spend proof per spent input.
+    pub inputs: Vec<ShieldedInputPayload>,
+    /// Input value-commitment legs (the spent notes' Pedersen commitments).
+    pub input_legs: Vec<ShieldedLeg>,
+    /// Output value-commitment legs (the minted notes' Pedersen commitments).
+    pub output_legs: Vec<ShieldedLeg>,
+    /// One serialized Bulletproof range proof per output leg (same order), each
+    /// attesting the committed value is in `[0, 2^64)` — the inflation gate.
+    pub output_range_proofs: Vec<Vec<u8>>,
+    /// The Pedersen conservation (Schnorr-excess) proof over the legs, certifying
+    /// `Σ C_in − Σ C_out = r_excess·R` (i.e. `Σ v_in = Σ v_out`) without revealing
+    /// any amount. Bound — with the range proofs and STARK nullifiers/value-bindings
+    /// — to the transfer's Fiat-Shamir transcript so the two halves cannot be spliced.
+    pub conservation: dregg_cell_crypto::ConservationProof,
+}
+
 /// An effect produced by an action — what changes in the ledger.
 ///
 /// Analogous to Mina's balance_change + state updates, but generalized for
@@ -1414,6 +1473,37 @@ pub enum Effect {
         /// Amount to mint (credited to `target`, debited from the well).
         amount: u64,
     },
+    /// Shielded transfer (privacy M2-a): spend hidden input notes and mint hidden
+    /// output notes with **value and owner blind**. The opt-in privacy upgrade of
+    /// the cleartext note path — the cleartext `NoteSpend`/`NoteCreate` stay the
+    /// default; this hides amounts and owners entirely.
+    ///
+    /// What the executor admits it on: (1) the **hidden STARK side** — every
+    /// input's membership in the commitment tree + correct nullifier derivation,
+    /// proved through `HidingFriPcs` so owner/key/path are blind; (2) the **hidden
+    /// Pedersen side** — homomorphic value-commitment conservation (`Σ in = Σ out`)
+    /// plus a per-output range proof closing the negative-value inflation hole;
+    /// (3) the **nullifier gate** — each revealed nullifier is consumed once in the
+    /// production `note_nullifiers` set (double-spend rejected, journaled for
+    /// rollback). The two halves are Fiat-Shamir-bound to one transcript so they
+    /// cannot be spliced across transfers.
+    ///
+    /// Self-authorizing: the ZK proof of note ownership IS the authority (like
+    /// `NoteSpend` / `BridgeMint`), so it carries no cross-cell capability gate.
+    ///
+    /// APPENDED LAST (after `Mint`) so its serde discriminant shifts no existing
+    /// variant — the durable postcard codec is index-sensitive.
+    ///
+    /// CIRCUIT WITNESS (named residual): the executor VERIFIES the shielded proof
+    /// and conserves live, but binding the shielded-proof verification into the
+    /// `effect_vm` descriptor (so a pure LIGHT CLIENT — not just a re-executing
+    /// validator — witnesses it) is the VK-affecting follow-up. See
+    /// `docs/posters/privacy.txt` and the M2 weld plan.
+    ShieldedTransfer {
+        /// The shielded transfer's wire payload (hidden STARK proofs + Pedersen
+        /// value-commitment legs + range proofs + the conservation proof).
+        payload: ShieldedTransferPayload,
+    },
 }
 
 /// Why a [`Effect::Refusal`] was issued. Refusals are *evidence of
@@ -1666,6 +1756,10 @@ impl Effect {
             // sibling spend/create pairs in the same turn.
             Effect::NoteSpend { .. } => LinearityClass::Conservative,
             Effect::NoteCreate { .. } => LinearityClass::Conservative,
+
+            // A shielded transfer is value-conserving by construction: the
+            // Pedersen conservation proof certifies `Σ in = Σ out` (blind).
+            Effect::ShieldedTransfer { .. } => LinearityClass::Conservative,
             // Obligation creation locks stake; fulfillment returns it;
             // slash transfers it. Each is a conservative move.
 
@@ -2254,6 +2348,33 @@ impl Effect {
                 hasher.update(&p);
                 hasher.update(&wake.hash());
             }
+            Effect::ShieldedTransfer { payload } => {
+                hasher.update(&[63u8]);
+                hasher.update(&payload.merkle_root.to_le_bytes());
+                hasher.update(&(payload.inputs.len() as u64).to_le_bytes());
+                for input in &payload.inputs {
+                    hasher.update(&input.nullifier.to_le_bytes());
+                    hasher.update(&input.value_binding.to_le_bytes());
+                    hasher.update(&(input.proof.len() as u64).to_le_bytes());
+                    hasher.update(&input.proof);
+                }
+                for (tag, legs) in [(0u8, &payload.input_legs), (1u8, &payload.output_legs)] {
+                    hasher.update(&[tag]);
+                    hasher.update(&(legs.len() as u64).to_le_bytes());
+                    for leg in legs {
+                        hasher.update(&leg.asset_type.to_le_bytes());
+                        hasher.update(&leg.commitment_bytes);
+                    }
+                }
+                hasher.update(&(payload.output_range_proofs.len() as u64).to_le_bytes());
+                for rp in &payload.output_range_proofs {
+                    hasher.update(&(rp.len() as u64).to_le_bytes());
+                    hasher.update(rp);
+                }
+                let c = postcard::to_allocvec(&payload.conservation).unwrap_or_default();
+                hasher.update(&(c.len() as u64).to_le_bytes());
+                hasher.update(&c);
+            }
         }
         *hasher.finalize().as_bytes()
     }
@@ -2373,6 +2494,22 @@ impl Effect {
                     + postcard::to_allocvec(condition).map_or(0, |b| b.len())
                     + postcard::to_allocvec(resolution_proof).map_or(0, |b| b.len())
             }
+            // Shielded transfer: dominated by the hidden per-input STARK proofs +
+            // the value-commitment legs + range proofs + conservation proof.
+            Effect::ShieldedTransfer { payload } => {
+                4 + payload
+                    .inputs
+                    .iter()
+                    .map(|i| 4 + 4 + 8 + i.proof.len())
+                    .sum::<usize>()
+                    + (payload.input_legs.len() + payload.output_legs.len()) * (8 + 32)
+                    + payload
+                        .output_range_proofs
+                        .iter()
+                        .map(|rp| 8 + rp.len())
+                        .sum::<usize>()
+                    + 96 // the three 32-byte ConservationProof fields
+            }
         }
     }
 
@@ -2436,6 +2573,9 @@ impl Effect {
             Effect::Promise { .. } | Effect::Notify { .. } | Effect::React { .. } => {
                 dregg_cell::EFFECT_REACTIVE_OPS
             }
+            // A shielded transfer consumes (hidden) note nullifiers — the same
+            // note-spend facet a faceted capability gates `NoteSpend` with.
+            Effect::ShieldedTransfer { .. } => dregg_cell::EFFECT_NOTE_SPEND,
         }
     }
 }

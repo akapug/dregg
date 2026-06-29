@@ -76,35 +76,54 @@
         ‹ honest: the VOTE slot stores the CLEARTEXT choice. "tally without revealing votes" is
           DESIGNED-only — the crate's docstring says a ZK secret-tally tier composes ON TOP. ›
 
-   ⑧ FULL SHIELDED TRANSFER/POOL — value AND owner hiding.                          ‹ DEMO · library ›
-        ‹ circuit-prove/src/shielded/ ›   tested prover: hiding uni-STARK membership/nullifier + Pedersen.
-        ‹ honest: NOT wired into effect_vm / the live executor; callers are tests only. there is NO live
-          shielded pool — a real proof construction sitting BESIDE the deployed path, not inside it. ›
+   ⑧ FULL SHIELDED TRANSFER — value AND owner hiding, now an Effect.        ‹ REAL · opt-in (executor) ›
+        ‹ circuit-prove/src/shielded/ · turn/src/action.rs Effect::ShieldedTransfer · executor/apply.rs
+          apply_shielded_transfer ›   hiding uni-STARK membership/nullifier + Pedersen conservation/range.
+        the opt-in privacy upgrade of the note path: a `ShieldedTransfer` effect carries the hidden
+        per-input STARK proofs + the value-commitment legs + range proofs + the conservation proof, and
+        the LIVE executor ADMITS it only when all three gates pass — (1) the hidden membership+nullifier
+        STARK (owner/key/path blind), (2) Pedersen Σ≡0 + per-output range (no hidden inflation), (3) the
+        production nullifier set (spend-once). proven through the real verifier end-to-end:
+        ‹ turn/src/executor/apply.rs::shielded_executor_tests — accept-valid / forged-root-reject /
+          double-spend-reject / inflation-reject / unlinkable-on-the-wire. ›
+        ‹ honest residual (named, not hidden): the executor VERIFIES + conserves live, but the shielded
+          proof is NOT yet bound into the effect_vm descriptor — a re-executing validator witnesses it,
+          a pure LIGHT CLIENT does not yet (the VK-affecting weld is the follow-up). and the leaf↔leg
+          VALUE LINK is only checkable with the secret opening, so M2-a leans on the honest prover for
+          it. the multi-asset POOL (circuit-prove/src/shielded/pool.rs) + ZK ATTESTATIONS (attest.rs)
+          remain tested library prims, not yet an Effect. ›
 
   ░▒▓ ⚖ THE HONESTY DIAL · what privacy IS vs the FRONTIER ▓▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒
         REAL, deployed, usable now ──────────────────┐   ┌────────────────── FRONTIER, not yet deployed
           selective-disclosure ZK presentation       │   │  default sender↔receiver unlinkability
-          opt-in Pedersen amount-hiding (conserved)  │   │  a LIVE shielded pool (value + owner hidden)
-          nullifier double-spend gate                │   │  secret-tally voting (ZK choice + proof)
-          membrane authority confinement             │   │  metadata privacy: IP / timing / msg size
-          Dandelion++ tx-origin anonymity            │   │  a mixnet (Sphinx / Loopix / Tor) — designed
+          opt-in Pedersen amount-hiding (conserved)  │   │  light-client-witnessed shielded transfer
+          opt-in shielded transfer (value+owner) ✶   │   │     (the in-circuit / effect_vm VK weld)
+          nullifier double-spend gate                │   │  multi-asset shielded POOL as an Effect
+          membrane authority confinement             │   │  secret-tally voting (ZK choice + proof)
+          Dandelion++ tx-origin anonymity            │   │  metadata privacy · a mixnet — designed
+        ‹ ✶ shielded transfer is executor-live (verify + conserve + spend-once) but NOT yet light-client-
+          witnessed — bound into the executor, not yet into the effect_vm descriptor / VK. ›
         ‹ the metadata leak is not hidden — it is PROVEN: metatheory/Dregg2/Privacy/Metadata.lean: an
           observer recovers partners, slot/timing, volume, while the shielded payload stays hidden. ›
 
   ░▒▓ ‼ THE UNLINKABILITY VERDICT · stated plainly, no hedging ▓▒░
   ────────────────────────────────────────────────────────────────────────────────────────────────────────
-        full sender↔receiver unlinkability is NOT the default, and is NOT deployed in the live executor.
+        full sender↔receiver unlinkability is NOT the default — but value+owner shielding is now an opt-in
+        Effect the live executor admits, no longer a library beside the node.
           · the default value path is CLEARTEXT (Transfer): amounts and parties are public.
           · the opt-in COMMITTED path hides AMOUNTS ONLY (Pedersen); spend→output is still seen in-turn.
-          · value+owner shielding EXISTS as a REAL, TESTED prover library (circuit-prove/src/shielded/) —
-            but it is a DEMO, not woven into the node. there is no live shielded pool.
-        the honest sentence:  "privacy PRIMITIVES + opt-in amount-hiding + mature selective disclosure" —
-        NOT  "private or unlinkable transactions by default."   the parts are real; the default is open.
+          · the opt-in SHIELDED TRANSFER (value + owner hidden) is WIRED into the executor: it verifies the
+            hidden STARK side, conserves (Σ≡0 + range), and spends-once at the live apply path. its residual
+            is the LIGHT-CLIENT witness — verified by a re-executing validator, not yet bound into the VK.
+        the honest sentence:  "opt-in shielded transfers + opt-in amount-hiding + mature selective
+        disclosure, all executor-live" — NOT "private or unlinkable by default", and NOT yet
+        "light-client-witnessed shielded". the parts are real and wired; the default is open; one weld remains.
 
   ────────────────────────────────────────────────────────────────────────────────────────────────────────
      a semisovereign dregg: you hold the caps no admin can mint, the cell only you can write, the keys you
      brought. you disclose what you choose, transact with the privacy you opt into, and live in a membrane
-     you can fork and leave. not a surveillance ledger — and not yet a shielded pool. both are true.
+     you can fork and leave. not a surveillance ledger — shielded transfers are opt-in and executor-live;
+     the multi-asset pool and the light-client witness are the named frontier. all of it is true.
 
           ░▒▓█  the magic is that it is all real — and the privacy NOT yet built is named, not hidden.  █▓▒░
                 sovereign over your slice · interoperable in a verifiable commons  ·  built with Claude
