@@ -343,16 +343,20 @@ fn three_nodes_finalize_multiple_turns_in_a_row_without_stream_storm() {
     );
 
     // ── SUSTAINED FINALITY: multiple turns in a row ───────────────────────────
-    // This is the remaining frontier. EMPIRICALLY (see the task investigation) the
-    // storm fix is NECESSARY but NOT SUFFICIENT for sustained finality on this
-    // harness: with zero stream rejections the committee STILL stalls after the
-    // first wave because (a) round/block production halts (`dag_height` freezes, no
-    // new wave for `tau` to finalize) and (b) the faucet reads its AUTHORITATIVE
-    // nonce, which only advances at finalization, so a turn submitted before the
-    // prior one finalizes replays ("nonce replay: expected 1, got 0"). Neither is
-    // the gossip transport and neither is an empty `tau` (it finalized the first
-    // wave AND ordered later turns). Those are separate consensus-liveness / faucet
-    // lanes; gated here so a CI lane can require sustained finality once they land.
+    // The storm fix was NECESSARY but not SUFFICIENT; the consensus-liveness and
+    // faucet lanes that also blocked sustained finality have now LANDED (see
+    // `node/src/blocklace_sync.rs` / `node/src/api.rs`):
+    //   * round/block production no longer halts — `poll_finalized_blocks` no longer
+    //     holds the lace lock across the O(history) verified-Lean tau FFI, so it
+    //     stopped starving the producer's `lace.write()` (the `dag_height` freeze);
+    //   * the frontier vote-reply amplification storm was removed and a self-healing
+    //     tip pull closes the n=3 round cohort;
+    //   * the faucet receipt-chain (full-mode `previous_receipt_hash = None`) and a
+    //     reserved in-flight nonce stop the 2nd+ turn rejecting / replaying.
+    // The committee finalizes turn-after-turn with the chain climbing. The hard gate
+    // stays env-guarded: a CI lane runs it with adequate resources, while a developer
+    // box that is CPU-saturated by 3 in-process nodes + the test harness still gets a
+    // precise report instead of a contention flake.
     eprintln!("committed {committed_turns}/{NUM_TURNS} turns in a row");
     if require_finality {
         assert_eq!(
