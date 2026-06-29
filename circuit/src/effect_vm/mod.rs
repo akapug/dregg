@@ -170,6 +170,7 @@ pub mod pi;
 
 mod air;
 pub mod authority_digest_weld;
+pub mod carrier_floor_weld;
 mod cell_state;
 mod effect;
 mod helpers;
