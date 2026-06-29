@@ -3029,6 +3029,7 @@ async fn post_submit_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             // Gather the rotated attestation material from the REAL before/after
             // actor cells (pre_ledger / the just-committed s.ledger). A build hiccup
@@ -3316,6 +3317,7 @@ async fn post_submit_signed_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
                 &signed.turn,
@@ -3774,6 +3776,7 @@ async fn post_submit_encrypted_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
                 &cleartext_turn,

@@ -601,7 +601,18 @@ impl BlocklaceHandle {
     pub async fn send_frontier(&self) {
         let frontier_tips: HashMap<[u8; 32], BlockId> = {
             let lace = self.lace.read().await;
-            lace.tips().iter().map(|(k, v)| (*k, *v)).collect()
+            let tips = lace.tips();
+            // DAG structure gauges (emitted under the lace lock, so they reflect a
+            // single consistent view): frontier width = number of per-creator tips;
+            // depth = the maximum round across those tips.
+            crate::metrics::set_blocklace_frontier(tips.len() as f64);
+            let depth = tips
+                .values()
+                .filter_map(|t| lace.round_of(t))
+                .max()
+                .unwrap_or(0);
+            crate::metrics::set_blocklace_depth(depth as f64);
+            tips.iter().map(|(k, v)| (*k, *v)).collect()
         };
         let msg = BlocklaceGossipMessage::Frontier {
             tips: frontier_tips,
@@ -2288,6 +2299,7 @@ async fn record_finalization_vote(
         RecordOutcome::ReachedQuorum { distinct_votes } => {
             crate::metrics::inc_consensus_attested();
             crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
             // Finality latency: first local vote for this block → quorum reached.
             crate::metrics::record_finality_latency(&block_id.0);
             info!(
@@ -2299,6 +2311,7 @@ async fn record_finalization_vote(
         }
         RecordOutcome::Counted { distinct_votes } => {
             crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
             // The first recorded vote opens this node's quorum-gathering window.
             if distinct_votes == 1 {
                 crate::metrics::mark_block_voting_started(block_id.0);
@@ -2311,6 +2324,7 @@ async fn record_finalization_vote(
         }
         RecordOutcome::AlreadyQuorum { .. } => {
             crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
         }
         RecordOutcome::Rejected => {
             debug!(
@@ -3118,6 +3132,8 @@ async fn cadence_tick_round_driven(
     // Quiescence inputs (all DAG/queue STATE, so they persist across a held tick —
     // the rate cap can pace an advance but never lose it).
     let queued_turns = handle.pending_payloads.read().await.len();
+    // Mempool depth: turns/payloads queued but not yet drained into a block.
+    crate::metrics::set_mempool_pending(queued_turns as f64);
     let ack_pending = handle
         .ack_pending
         .load(std::sync::atomic::Ordering::Relaxed);
