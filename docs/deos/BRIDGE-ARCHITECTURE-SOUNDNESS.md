@@ -6,7 +6,14 @@ Three questions about the Solana → dregg bridge, answered against the code at 
 2. Is the existing **Custom-VK** machinery enough for "different kinds of recursive custom circuits," or do we need an architecture extension?
 3. What happens if **multiple parties bridge Solana into dregg at once** — can it double-mint / break conservation / race?
 
-This is an analysis + a design. It changes no kernel/circuit/bridge code. Building the concurrency-safe ledger (§3) is a separate follow-up.
+This started as an analysis + a design. **The concurrency-safe ledger designed in §3 is now BUILT** —
+`TurnExecutor::bridge_mint_against_lock` (`turn/src/executor/bridge_ledger.rs`) performs the whole bridge
+mint over committed state (consume-once `lock_nullifier` in the committed `note_nullifiers` set + committed
+mirror-ledger cell), with the per-relayer RAM path superseded. The concurrent-relayer double-mint hole §3
+described is **closed and regression-tested** (`bridge/tests/committed_double_mint.rs`, 4 green tests). The
+one remaining honest gap is the **in-circuit foreign-proof binding** (§4, the `EffectVmEmitBridgeMint`
+HONEST BOUNDARY): a pure light client witnesses the balance credit but not yet the backing — that closure is
+a recursive-verify VK epoch, not built here.
 
 ---
 
@@ -37,7 +44,27 @@ Everything else — attestation verification, Solana consensus arithmetic, repla
 
 Consequence (sets up §3): **the kernel cannot distinguish a bridge mint from any other mint by a holder of that issuer well's mint-cap.** The backing relationship to Solana exists *only* in the bridge's off-chain `MirrorState`.
 
-There is also a *separate* core verb `Effect::BridgeMint { portable_proof }` (`action.rs:1115`) for cross-*federation* note bridging — that one IS in-circuit and nullifier-gated (see §3, it is the model to copy). The Solana mirror does **not** use it; the Solana path uses plain `Effect::Mint`.
+There is also a *separate* core verb `Effect::BridgeMint { portable_proof }` (`action.rs:1115`) for
+cross-*federation* note bridging. **Precise posture (corrected — do not over-read "in-circuit"):** only
+the *balance credit* of a bridge mint is in the deployed per-turn VK — its trace body credits
+`value_lo`, byte-identical to a plain `Effect::Mint` (`circuit/src/effect_vm/trace.rs`,
+`Effect::BridgeMint`). The two backing guarantees are **executor-side**, NOT in the per-turn AIR a pure
+light client checks:
+
+- the **foreign note-spend STARK** is verified by the executor (`apply_bridge_mint` →
+  `verify_note_spend_dsl_full`, `turn/src/executor/apply.rs`); the Lean descriptor
+  `EffectVmEmitBridgeMint` names this exactly as the **HONEST BOUNDARY** — "the inbound-value
+  attestation is NOT internalized in-circuit … enforced at `execFullA`'s ADMISSION";
+- the **nullifier consume-once** rides the committed `note_nullifiers` / `bridged_nullifiers` set
+  (`bridge_mint_against_lock`, `apply_bridge_mint`), i.e. committed-state-side, outside the per-turn VK
+  view.
+
+So a pure light client witnesses *that a credit happened*, not *that a valid foreign spend backs it* nor
+*that the nullifier was consumed exactly once in-proof*. The full-fidelity binding AIR
+(`circuit/src/bridge_action_air.rs`, 18 green teeth) and the recursive foreign-spend verify exist but are
+**not folded into the deployed effect-vm VK** — that fold is the named residual in §4 (the in-circuit
+foreign-proof VK epoch). The Solana mirror does **not** use `Effect::BridgeMint`; the Solana path uses
+plain `Effect::Mint` over the committed mirror ledger (§3).
 
 ---
 
@@ -75,7 +102,7 @@ Recommendation: a trustless in-circuit Solana bridge is a `CellProgram` + the ga
 
 ---
 
-## 3. Concurrency — the real risk: concurrent bridges CAN double-mint
+## 3. Concurrency — the (now-closed) double-mint risk: per-relayer RAM → committed consume-once
 
 ### The trace
 
@@ -97,11 +124,27 @@ Now run N relayers (or one relayer restarted from a stale snapshot), each holdin
 
 **The hole is precisely that the locked-supply ledger and the `lock_id` dedup are bridge-local and per-instance, not a single committed source of truth.** Per-turn serialization does not save it, because the kernel never sees the cross-instance accounting. The `lock_id` is a replay nonce *within one `MirrorState`* (`solana_mirror.rs:342,372`), not a globally-consumed-once token.
 
-### Verdict
+### Verdict — the hole was real; it is now CLOSED in committed state
 
-**Yes — concurrent (or duplicated/restarted) bridge instances can double-mint, and the kernel will not stop them.** This is a genuine soundness gap for any deployment with more than one relayer process, or one relayer without durable committed dedup. The single-relayer-with-perfect-memory case happens to be safe, but safety-by-singleton is not a property we should ship.
+The per-relayer-RAM analysis below was correct: with `MirrorState`'s in-memory `seen_locks`,
+concurrent/duplicated bridge instances **could** double-mint. **This is now fixed.** The fix is the
+design in "The concurrency-safe design" immediately below, BUILT as
+`TurnExecutor::bridge_mint_against_lock` (`turn/src/executor/bridge_ledger.rs`): the `lock_id` becomes a
+domain-separated consume-once **`lock_nullifier`** (`bridge/src/solana_mirror.rs::lock_nullifier`) gated
+against the committed `note_nullifiers` set with the same atomic contains-then-insert NoteSpend/BridgeMint
+ride, and `currently_locked`/`live_supply` live in a committed mirror-ledger cell. `MirrorState::verify_lock`
+now returns a `VerifiedLock` **without mutating per-relayer RAM** — the committed state is the authority,
+the in-memory `seen_locks` is a non-authoritative cache. Regression-tested green in
+`bridge/tests/committed_double_mint.rs`: `two_solana_relayers_one_lock_only_one_mint`,
+`two_stripe_relayers_one_payment_only_one_mint` (second relayer → `DuplicateLock`),
+`solana_distinct_locks_both_mint_and_conserve`, `unauthorized_bridge_mint_is_refused_and_rolls_back`.
 
-### The concurrency-safe design
+**Honest residual (the same boundary as §4):** this consume-once is enforced over *committed state* by a
+re-executing validator / the committed nullifier set, NOT yet bound *inside the per-turn AIR*. A pure
+light client that runs only the per-turn STARK does not witness the nullifier-consume; that in-circuit
+binding is the §4 VK epoch.
+
+### The concurrency-safe design (BUILT — see verdict above)
 
 The fix is to move the two things that must be globally unique — **the locked-supply ledger** and **the `lock_id` consume-once** — out of the relayer's RAM and into **committed dregg state**, gated *inside the mint turn itself*, so the executor's existing per-turn serialization becomes the serialization point for the whole bridge.
 
@@ -132,8 +175,70 @@ This is a bridge-layer + new-cell-shape change, not a kernel-verb change — it 
 
 ---
 
+## 4. The in-circuit foreign-proof binding (G1) — the named VK-epoch residual
+
+This is the one genuine remaining gap (catalog `docs/UNDER-WIRED-circuit.md` G1, the highest
+soundness-value money primitive). It is **scrupulously named in-code, not a hidden hole**: the Lean
+descriptor `EffectVmEmitBridgeMint` flags the foreign attestation as its **HONEST BOUNDARY**, and the
+binding AIR (`circuit/src/bridge_action_air.rs`) exists, is sound+complete in Lean
+(`metatheory/Dregg2/Crypto/Bridge.lean`, `#assert_axioms`-clean under the named `extractable` carrier),
+and carries 18 green adversarial teeth — but it is a **standalone sidecar, not folded into the deployed
+effect-vm VK**.
+
+**What a pure light client does NOT yet witness** (and a re-executing validator DOES enforce):
+1. that a valid **foreign note-spend** with the bound `(nullifier, recipient, dest_federation, amount)`
+   ever existed (the backing);
+2. that the **nullifier was consumed exactly once** (the in-proof double-mint gate).
+
+**Why this is not a localizable green weld** (and was correctly NOT force-landed):
+- Binding the *parameters* at full fidelity (folding `bridge_action_air`'s boundary into the
+  `mintVmDescriptor2R24` member) is a **VK-affecting flip of the bridge-mint descriptor**: new PI slots +
+  boundary constraints, the Lean `EffectVmEmitBridgeMint`/`mintV3` emission must change, the wide twin
+  must change, every producer fills the new aux, the VK fingerprint changes, and the closure apex
+  (`CircuitSoundness.lean:453` `lightclient_unfoolable` + the assembled forest) must re-verify clean.
+  That is a gated VK epoch, not a one-line weld — even though it touches only the bridge member.
+- Witnessing the **backing-existence** (point 1) needs the foreign note-spend STARK **recursively
+  verified in-AIR** — the same machinery as G2's `proofBind` flip (`True` → `boundAt`) + the 4→8-felt
+  commitment lift. `BRIDGE-ARCHITECTURE-SOUNDNESS` §2 and the Custom-VK apex (`CustomApex.lean`) establish
+  the architecture is *sufficient* for this (arbitrary `CellProgram` + generic `verify_proof_bind`), but
+  it is gated behind that undeployed recursive-verify epoch. Folding a foreign proof into the recursive
+  whole-chain IVC is a further real extension (§2, item 3) and is NOT required here.
+- Witnessing the **in-proof consume-once** (point 2) additionally needs the committed `note_nullifiers`
+  membership/insertion surfaced into the per-turn commitment the proof binds — today it is a global
+  executor structure outside the single-cell effect-vm view.
+
+**The weld plan (the burn-down, in order):**
+1. Emit a `bridge_action_air`-style full-fidelity boundary (`nullifier[8] + recipient[8] +
+   dest_federation[8] + amount[lo,hi]`) into the bridge-mint descriptor, **additively + staged** beside
+   the bare `mintVmDescriptor2R24` (the umem/capacity-satisfaction staging pattern), gated on a witness —
+   sound for a witness-holding verifier, no deployed-default VK change. Prove the teeth in Lean + Rust.
+2. The gated VK epoch: make the bridge-mint producer thread the witness, commit the welded descriptor as
+   the sole accepted bridge-mint form, re-prove the gauntlet, re-verify the closure apex. (Parameter
+   binding becomes a pure-LC truth.)
+3. Recursive foreign-spend verify (the G2-shaped `proofBind` flip + 4→8-felt lift) for backing-existence,
+   and surface the nullifier consume into the per-turn commitment for the in-proof double-mint gate.
+
+Until step 2, a pure light client is protected only for the **balance credit**; the **backing** and
+**consume-once** are the re-executing-validator / committed-state posture (sound today, just not
+light-client-witnessed). The apex `lightclient_unfoolable` is unchanged and stays `#assert_axioms`-clean
+(no circuit/Lean code was touched by this pass — only this doc).
+
+---
+
 ## Summary
 
 1. **Invasiveness:** Not core-invasive. The bridge is a leaf library; the only core coupling is that it calls the pre-existing `Effect::Mint` and must hold the issuer well's mint-cap (`holds_mint_authority`). No new verb, no circuit change.
 2. **Custom-VK:** Irrelevant to the bridge as built (the consensus check is off-circuit Rust). For a future in-circuit trustless bridge, the Custom-VK machinery is architecturally sufficient (arbitrary programs via `ProgramRegistry` + generic `verify_proof_bind`) but gated behind one undeployed step — flip the staged `proofBind` constraint from vacuous to `boundAt` and lift the commitment 4→8 felts, in a single gated VK epoch. Folding a foreign proof into the recursive whole-chain IVC *would* need a real extension, but a Solana bridge does not require that.
-3. **Concurrency (the risk):** Concurrent/duplicated bridge instances **can double-mint** — the locked-supply ledger and `lock_id` dedup are bridge-local, per-process, in-memory; the kernel sees only well-authorized mints and per-turn conservation, never the backing. Per-turn serialization does not help because the accounting is off-ledger. Fix: a **single committed mirror-ledger cell** plus a **consume-once `lock_id` nullifier**, both gated inside the mint turn, reusing the existing `note_nullifiers` double-spend machinery — making the executor's per-turn serialization the global serialization point and `live_supply ≤ currently_locked` a committed-state invariant.
+3. **Concurrency (the risk — now CLOSED):** Concurrent/duplicated bridge instances *could* double-mint
+   while the locked-supply ledger and `lock_id` dedup were bridge-local, per-process, in-memory. **Fixed**:
+   a **single committed mirror-ledger cell** plus a **consume-once `lock_id` nullifier**, both gated inside
+   the mint turn (`TurnExecutor::bridge_mint_against_lock`), reusing the committed `note_nullifiers`
+   double-spend machinery — the executor's per-turn serialization is now the global serialization point and
+   `live_supply ≤ currently_locked` is a committed-state invariant. Green in
+   `bridge/tests/committed_double_mint.rs`. Residual: this is committed-state / re-executing-validator
+   enforcement, not yet a per-turn-AIR witness (§4).
+4. **In-circuit foreign-proof binding (G1, the named residual):** only the *balance credit* of a bridge
+   mint is in the deployed per-turn VK; the foreign note-spend STARK verify and the nullifier consume-once
+   are executor-side (the `EffectVmEmitBridgeMint` HONEST BOUNDARY). Closing it so a *pure light client*
+   witnesses the backing is a gated VK epoch (descriptor flip + recursive foreign-spend verify), not a
+   localizable weld — the weld plan is §4. The binding AIR + its 18 teeth already exist; the fold does not.

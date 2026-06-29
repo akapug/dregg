@@ -9,6 +9,22 @@ should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- G1 BRIDGE FOREIGN-PROOF BINDING — residual NAMED + scoped (2026-06-29). Catalog `docs/UNDER-WIRED-circuit.md`
+  G1: a pure light client sees a `BridgeMint` balance credit (in the deployed per-turn VK) but NOT the
+  backing — the foreign note-spend STARK verify + nullifier consume-once are EXECUTOR/committed-state-side
+  (the `EffectVmEmitBridgeMint` HONEST BOUNDARY). This pass: (a) the concurrent-relayer DOUBLE-MINT hole is
+  CONFIRMED CLOSED in committed state (`turn/src/executor/bridge_ledger.rs::bridge_mint_against_lock` +
+  committed `lock_nullifier` consume-once; green `bridge/tests/committed_double_mint.rs`, 4 tests); (b) the
+  `BRIDGE-ARCHITECTURE-SOUNDNESS.md:40` overclaim ("IS in-circuit and nullifier-gated") + the stale §3
+  ("can double-mint … separate follow-up") are CORRECTED + a §4 weld plan added. NOT closed (the genuine
+  residual, deliberately NOT force-landed from thin context — it is a VK epoch, cf. memory be-thoughtful):
+  CLOSURE = (1) stage a `bridge_action_air`-style full-fidelity boundary additively beside
+  `mintVmDescriptor2R24` (umem/capacity staging pattern), prove teeth; (2) the gated VK epoch flip
+  (descriptor + Lean `EffectVmEmitBridgeMint`/`mintV3` + wide twin + producer + re-verify
+  `lightclient_unfoolable`) → parameter-binding becomes a pure-LC truth; (3) recursive foreign-spend verify
+  (G2-shaped `proofBind` flip + 4→8-felt lift) for backing-existence + surface the nullifier consume into
+  the per-turn commitment. The binding AIR + 18 green teeth (`circuit/src/bridge_action_air.rs`) + Lean
+  `Crypto/Bridge.lean` (`#assert_axioms`-clean) already exist; only the fold is missing.
 - LIVE EPOCH TRANSITION WIRED (2026-06-29) — validator add/remove/rotate is now a LIVE on-chain op on the running
   blocklace consensus, not a genesis re-roll. `node/src/finalization_votes.rs::VoteCollector::reconfigure` +
   `node/src/blocklace_sync.rs::{apply_passed_proposal→apply_committee_change, propose_membership}` advance the live
