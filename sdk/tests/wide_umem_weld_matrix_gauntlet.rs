@@ -580,11 +580,18 @@ fn coverage_table() -> Vec<(&'static str, Lane)> {
         ("refreshDelegationCapOpenVmDescriptor2R24", Forbidden),
         ("revokeCapabilityCapOpenVmDescriptor2R24", Forbidden),
         ("spawnCapOpenVmDescriptor2R24", Forbidden),
+        // the 3 LIVE-ONLY wide members (the bare wide registry carries them beyond
+        // v3RegistryCapOpenWide + the write tail) — domain-1 value / heap-splice / grow-gate, welded
+        // with the heap domain via `weldUMemIntoWide`; their wide-twin set is pinned structurally by
+        // `wide_umem_weld_registry_parity_and_no_narrowing`.
+        ("transferCapOpenTBVmDescriptor2R24", ValueOrGrowGate),
+        ("heapWriteVmDescriptor2R24", ValueOrGrowGate),
+        ("supplyMintVmDescriptor2R24", ValueOrGrowGate),
     ]
 }
 
 #[test]
-fn matrix_enumerates_all_54() {
+fn matrix_enumerates_all_57() {
     let registry_keys: std::collections::BTreeSet<&str> = WIDE_UMEM_WELD_REGISTRY_TSV
         .lines()
         .filter(|l| !l.is_empty())
@@ -592,8 +599,8 @@ fn matrix_enumerates_all_54() {
         .collect();
     assert_eq!(
         registry_keys.len(),
-        54,
-        "the welded registry has exactly 54 members"
+        57,
+        "the welded registry has exactly 57 members (the member-for-member cover of the bare wide registry)"
     );
     let table = coverage_table();
     let table_keys: std::collections::BTreeSet<&str> = table.iter().map(|(k, _)| *k).collect();

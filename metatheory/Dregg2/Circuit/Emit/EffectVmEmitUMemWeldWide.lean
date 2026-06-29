@@ -32,6 +32,8 @@ A NEW registry constant BESIDE the deployed wide registry: no VK bump, nothing o
 epoch (the owner's separate go).
 -/
 import Dregg2.Circuit.Emit.CapOpenEmit
+import Dregg2.Circuit.Emit.CapOpenTurnPins
+import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
 
@@ -116,37 +118,79 @@ def weldedWriteTail : List (String × EffectVmDescriptor2) :=
   (v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).map
     (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
 
+/-- **The 3 LIVE-ONLY wide members the bare wide registry carries beyond `v3RegistryCapOpenWide` + the
+write tail.** `WIDE_REGISTRY_STAGED_TSV` is a 57-member cover of the live V3 registry: the 45
+`v3RegistryCapOpenWide` crown + the 9 §10 write-tail wrappers + THESE three —
+`transferCapOpenTBVmDescriptor2R24` (the turn-identity-pinned transfer cap-open),
+`heapWriteVmDescriptor2R24` (the Class-A sorted-Merkle splice), `supplyMintVmDescriptor2R24` (the
+dedicated `sel.MINT` mint). They have NO `v3RegistryCapOpenWide` / `…WriteWide` emit source, so the
+welded twin set omitted them — yet each is a deployed wide member a turn routes to, so a welded proof
+routed to one bound NO cohort descriptor on the wire. Built at the SAME wide geometry
+`EmitWideRegistryProbe` emits them (the byte-identical wide host = the bare wide member), so the Rust
+`weld_umem_into_wide_descriptor` of the bare member byte-matches the welded twin. -/
+def liveOnlyWideHosts : List (String × EffectVmDescriptor2) :=
+  let tbBB := Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth
+  let tbHost := Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
+    Dregg2.Circuit.Emit.CapOpenEmit.transferV3
+    "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
+  let tbWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend tbHost tbBB (tbBB + 51)
+  let hwBB := Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth
+  let hwWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
+    Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3 hwBB (hwBB + 51)
+  let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
+  let smWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 51)
+  [ ("transferCapOpenTBVmDescriptor2R24", tbWide)
+  , ("heapWriteVmDescriptor2R24", hwWide)
+  , ("supplyMintVmDescriptor2R24", smWide) ]
+
+/-- **The welded LIVE-ONLY tail (STAGED).** The 3 `liveOnlyWideHosts` welded with the heap domain each
+touches (`wideKeyUMemDomain` returns `heap` for all three — transfer / heap-splice / mint move
+`Balance` / `Lifecycle`, NOT the caps plane). These complete the welded twin set to a member-for-member
+57/57 cover of the bare wide registry: with them, a welded proof routed to ANY deployed wide member
+resolves a Lean-grounded welded descriptor. -/
+def weldedLiveOnlyTail : List (String × EffectVmDescriptor2) :=
+  liveOnlyWideHosts.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
+
 /-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of the wire's WIDE
 cap-open registry: every `v3RegistryCapOpenWide` AUTHORITY-crown member welded with the domain its
 effect touches, PLUS the §10 WRITE-bearing cap-open tail welded the same way (`weldedWriteTail`) — the
-write wrappers the deployed wire routes the write-bearing cap siblings to. Keyed by the SAME live
-registry key (name-stable, so the by-name executor verifier resolves the welded member as `<live
-key>`). The driver writes these exact bytes to the staged TSV. -/
+write wrappers the deployed wire routes the write-bearing cap siblings to — PLUS the 3 live-only wide
+members (`weldedLiveOnlyTail`) the bare wide registry carries beyond those two sets, completing the
+57/57 cover. Keyed by the SAME live registry key (name-stable, so the by-name executor verifier
+resolves the welded member as `<live key>`). The driver writes these exact bytes to the staged TSV. -/
 def weldedWideRegistry : List (String × EffectVmDescriptor2) :=
   v3RegistryCapOpenWide.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
     ++ weldedWriteTail
+    ++ weldedLiveOnlyTail
 
 /-! ## STRUCTURAL pins (the committed-descriptor discipline — the byte-level pin is the Rust
 `WIDE_UMEM_WELD_REGISTRY_FP` sha256 over the whole emitted TSV, matching how `WIDE_REGISTRY_STAGED`
 is pinned; these `#guard`s pin the SHAPE the bytes realize). -/
 
 -- Cover: the 45 AUTHORITY-crown wide members + the 9 WRITE-tail wrappers (the §10 write tail MINUS
--- `grantCapWriteCapOpen`), name-stable on the keys with their bare wide twins.
-#guard weldedWideRegistry.length == 54
+-- `grantCapWriteCapOpen`) + the 3 LIVE-ONLY wide members — a member-for-member 57/57 cover of the bare
+-- wide registry, name-stable on the keys with their bare wide twins.
+#guard weldedWideRegistry.length == 57
 #guard weldedWriteTail.length == 9
+#guard weldedLiveOnlyTail.length == 3
 #guard (weldedWideRegistry.take 45).map (·.1) == v3RegistryCapOpenWide.map (·.1)
-#guard (weldedWideRegistry.drop 45).map (·.1) ==
+#guard ((weldedWideRegistry.drop 45).take 9).map (·.1) ==
   (v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).map (·.1)
+#guard (weldedWideRegistry.drop 54).map (·.1) ==
+  ["transferCapOpenTBVmDescriptor2R24", "heapWriteVmDescriptor2R24", "supplyMintVmDescriptor2R24"]
 -- Every welded member carries the staged weld marker + EXACTLY ONE welded umem op.
 #guard weldedWideRegistry.all (fun e => e.2.name.endsWith wideUMemWeldSuffix)
 #guard weldedWideRegistry.all (fun e => (umemOpsOf e.2).length == 1)
 -- THE NO-NARROWING INVARIANT: the weld is additive — `traceWidth = host + 7` and `piCount` is
 -- UNCHANGED (the 16 wide-commit PIs / the 8-felt anchors ride through at the same offsets). Checked on
--- BOTH the crown members and the welded write tail.
+-- the crown members, the welded write tail, AND the 3 live-only welded twins.
 #guard (v3RegistryCapOpenWide.zip (weldedWideRegistry.take 45)).all
   (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
 #guard ((v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).zip
-    (weldedWideRegistry.drop 45)).all
+    ((weldedWideRegistry.drop 45).take 9)).all
+  (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
+#guard (liveOnlyWideHosts.zip (weldedWideRegistry.drop 54)).all
   (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
 -- The welded member declares the two universal-memory tables (umemory id 6, umem_boundary id 7).
 #guard weldedWideRegistry.all (fun e =>
