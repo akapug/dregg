@@ -85,6 +85,13 @@ const MAX_ANTI_ENTROPY_RESPONSE_BYTES: usize = 256 * 1024;
 /// Maximum number of concurrent gossip connections.
 const DEFAULT_MAX_GOSSIP_CONNECTIONS: usize = 256;
 
+/// How often a node re-advertises its OWN configured listen address to every
+/// connected peer (the self-forming-mesh substrate). The first `tokio::interval`
+/// tick fires immediately, so a freshly-connected peer learns our reachable
+/// endpoint within one interval — fast enough for a single-bootstrap committee
+/// to mesh transitively in seconds, cheap enough to run forever.
+const SELF_ADVERTISE_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Maximum entries in the message cache. When exceeded, oldest entries are
 /// evicted to prevent unbounded memory growth from message floods.
 const MAX_MESSAGE_CACHE_SIZE: usize = 10_000;
@@ -248,6 +255,13 @@ pub struct GossipNetwork {
     /// Registry of known peer public keys for signature verification.
     /// Maps NodeId -> PublicKey. Populated from federation configuration.
     peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
+    /// Our OWN externally-reachable gossip listen address (`--bind <ip>:<gossip
+    /// -port>`), if configured. The self-advertise loop signs and broadcasts this
+    /// to every connected peer so the committee learns our reachable endpoint from
+    /// a single bootstrap — the self-forming-mesh fix. `None` when the operator did
+    /// not supply a routable bind address (e.g. `0.0.0.0`), in which case we cannot
+    /// advertise a dialable endpoint and the mesh falls back to manual peers.
+    advertise_addr: Arc<RwLock<Option<SocketAddr>>>,
 }
 
 /// A bounded deduplication set with time-based expiry.
@@ -458,6 +472,15 @@ struct GossipState {
     /// "the addresses I have personally verified belong to committee member X";
     /// the receiver re-checks X against its OWN committee key set before dialing,
     /// so a wire peer can never inject an address for a non-committee identity.
+    ///
+    /// An entry also lands here when a peer sends an authenticated
+    /// [`GossipEnvelope::SelfAddr`] advertising its OWN listen endpoint: the
+    /// envelope signature proves the sender authored the claim, so binding
+    /// `sender -> claimed addr` is sound (a node may only advertise an endpoint for
+    /// its OWN signed identity, never another's). This is what lets a pure-ACCEPT
+    /// bootstrap node — one everybody dials but which dials no one, so it holds no
+    /// dial-verified bindings — still learn and re-share every member's reachable
+    /// endpoint, meshing the whole committee from a single seed.
     verified_addrs: HashMap<NodeId, SocketAddr>,
 }
 
@@ -784,6 +807,18 @@ enum GossipEnvelope {
         msg_hash: MessageHash,
         payload: Vec<u8>,
     },
+    /// AUTHENTICATED SELF-ADVERTISEMENT (the self-forming-mesh substrate): the
+    /// envelope signer asserts its OWN reachable listen address. Because the
+    /// carrying [`SignedEnvelope`] is Ed25519-signed with the sender's key, the
+    /// receiver can bind `sender NodeId -> addr` knowing the sender authored the
+    /// claim — a node can advertise an endpoint only for ITS OWN identity, never
+    /// another's. This lets a node that received only an inbound connection (whose
+    /// `remote_address()` is an un-dialable ephemeral source port) still learn the
+    /// peer's real dialable endpoint, and re-share it via the gossip-of-peers
+    /// exchange — so the committee meshes transitively from one bootstrap peer.
+    SelfAddr {
+        addr: SocketAddr,
+    },
 }
 
 /// Serde helper for 64-byte arrays (Ed25519 signatures).
@@ -911,6 +946,7 @@ impl GossipNetwork {
 
         let signing_key = Arc::new(signing_key);
         let peer_keys = Arc::new(RwLock::new(peer_keys));
+        let advertise_addr: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
 
         let network = Self {
             node_id,
@@ -920,6 +956,7 @@ impl GossipNetwork {
             signing_key: signing_key.clone(),
             max_connections,
             peer_keys: peer_keys.clone(),
+            advertise_addr: advertise_addr.clone(),
         };
 
         // Spawn the forwarding task
@@ -988,6 +1025,18 @@ impl GossipNetwork {
             Self::cache_cleanup_loop(cache_state).await;
         });
 
+        // Spawn the self-advertise loop: periodically sign + broadcast our OWN
+        // configured listen address to every connected peer so the committee meshes
+        // transitively from a single bootstrap (the self-forming-mesh fix). A no-op
+        // until `set_advertise_addr` supplies a routable endpoint.
+        let adv_state = state.clone();
+        let adv_addr = advertise_addr.clone();
+        let adv_node_id = node_id;
+        let adv_key = signing_key.clone();
+        tokio::spawn(async move {
+            Self::self_advertise_loop(adv_state, adv_addr, adv_node_id, adv_key).await;
+        });
+
         info!(
             "GossipNetwork started (plumtree): {} (max_connections={})",
             fmt_node_id(&node_id),
@@ -1004,6 +1053,36 @@ impl GossipNetwork {
     pub async fn register_peer_key(&self, node_id: NodeId, public_key: PublicKey) {
         let mut keys = self.peer_keys.write().await;
         keys.insert(node_id, public_key);
+    }
+
+    /// Set our OWN externally-reachable gossip listen address. The self-advertise
+    /// loop signs and broadcasts it to every connected peer (the self-forming-mesh
+    /// substrate): a peer that only ACCEPTED our connection — and therefore knows
+    /// us solely by an un-dialable ephemeral source port — learns our real dialable
+    /// endpoint and re-shares it via gossip-of-peers, so the committee meshes
+    /// transitively from a single bootstrap. An unspecified host or zero port is
+    /// rejected (nothing could dial it); pass the concrete `--bind <ip>:<gossip
+    /// -port>`.
+    pub async fn set_advertise_addr(&self, addr: SocketAddr) {
+        if addr.ip().is_unspecified() || addr.port() == 0 {
+            warn!(
+                "ignoring un-dialable self-advertise address {addr} \
+                 (need a concrete bind IP + non-zero gossip port)"
+            );
+            return;
+        }
+        *self.advertise_addr.write().await = Some(addr);
+        // Advertise immediately so a peer already connected at config time learns
+        // our endpoint without waiting a full interval.
+        self.advertise_self().await;
+    }
+
+    /// Sign and push our configured self-advertisement to every currently-connected
+    /// peer right now. A no-op when no advertise address is set or no peer is live.
+    pub async fn advertise_self(&self) {
+        let addr = { *self.advertise_addr.read().await };
+        let Some(addr) = addr else { return };
+        Self::broadcast_self_addr(&self.state, addr, self.node_id, &self.signing_key).await;
     }
 
     /// Penalize the transport peer at `addr` for relaying a **proven
@@ -1933,6 +2012,7 @@ impl GossipNetwork {
                     Self::handle_envelope(
                         envelope,
                         remote_addr,
+                        signed.sender,
                         &state,
                         &outgoing_tx,
                         &*key,
@@ -1947,6 +2027,7 @@ impl GossipNetwork {
     async fn handle_envelope(
         envelope: GossipEnvelope,
         remote_addr: SocketAddr,
+        sender_id: NodeId,
         state: &Arc<RwLock<GossipState>>,
         outgoing_tx: &mpsc::UnboundedSender<OutgoingGossip>,
         signing_key: &SigningKey,
@@ -2339,6 +2420,26 @@ impl GossipNetwork {
                     .await;
                 }
             }
+
+            // ─── Authenticated self-advertisement (self-forming mesh) ──────────
+            GossipEnvelope::SelfAddr { addr } => {
+                // The carrying envelope's Ed25519 signature already proved
+                // `sender_id` authored this claim, so binding `sender_id -> addr`
+                // is sound: a node may advertise an endpoint ONLY for its OWN
+                // signed identity, never another's (`sender_id` is fixed by the
+                // verified signature, not taken from the payload). Reject an
+                // un-dialable claim (unspecified host / zero port) so we never
+                // propagate a dead hint. Recorded into `verified_addrs` so the
+                // gossip-of-peers exchange re-shares it; the receiver there
+                // re-checks committee membership before dialing.
+                if addr.ip().is_unspecified() || addr.port() == 0 {
+                    debug!("ignoring un-dialable SelfAddr {addr} from {remote_addr}");
+                    return;
+                }
+                let mut s = state.write().await;
+                s.verified_addrs.insert(sender_id, addr);
+                trace!("recorded authenticated self-advertisement: peer -> {addr}");
+            }
         }
     }
 
@@ -2576,6 +2677,56 @@ impl GossipNetwork {
                 s.message_cache.keys().copied().collect();
             s.message_cache_order
                 .retain(|hash| retained_keys.contains(hash));
+        }
+    }
+
+    /// Self-advertise loop: every [`SELF_ADVERTISE_INTERVAL`] (first tick
+    /// immediate), sign our configured listen address and push it to every
+    /// connected peer. A no-op until `set_advertise_addr` supplies a routable
+    /// endpoint or while we hold no live links. This is the SEND half of the
+    /// self-forming-mesh fix; the receive half records the authenticated binding in
+    /// `handle_envelope`'s `SelfAddr` arm.
+    async fn self_advertise_loop(
+        state: Arc<RwLock<GossipState>>,
+        advertise_addr: Arc<RwLock<Option<SocketAddr>>>,
+        node_id: NodeId,
+        signing_key: Arc<SigningKey>,
+    ) {
+        let mut interval = tokio::time::interval(SELF_ADVERTISE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let addr = { *advertise_addr.read().await };
+            let Some(addr) = addr else { continue };
+            Self::broadcast_self_addr(&state, addr, node_id, &signing_key).await;
+        }
+    }
+
+    /// Sign a [`GossipEnvelope::SelfAddr`] for `addr` and send it over every live
+    /// link (including inbound-accepted links keyed by an ephemeral source port, so
+    /// a pure-accept bootstrap peer reaches us back to learn our endpoint).
+    async fn broadcast_self_addr(
+        state: &Arc<RwLock<GossipState>>,
+        addr: SocketAddr,
+        node_id: NodeId,
+        signing_key: &SigningKey,
+    ) {
+        if addr.ip().is_unspecified() || addr.port() == 0 {
+            return;
+        }
+        let targets: Vec<SocketAddr> = {
+            let s = state.read().await;
+            s.peers
+                .iter()
+                .filter(|(_, links)| links.iter().any(|c| c.close_reason().is_none()))
+                .map(|(a, _)| *a)
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let envelope = GossipEnvelope::SelfAddr { addr };
+        if let Some(bytes) = Self::sign_envelope(&envelope, node_id, signing_key) {
+            Self::send_to_peers(&bytes, &targets, state).await;
         }
     }
 
@@ -3967,5 +4118,326 @@ mod tests {
             saw_bc,
             "B<->C must converge over the discovered link — mesh formed from B's single seed"
         );
+    }
+
+    /// INBOUND-LINK REGISTRATION. The headline self-mesh prerequisite: a node that
+    /// only ACCEPTS a connection (never dials the peer) must still register a usable
+    /// peer link, so connectivity is bidirectional. Here B dials A; A is configured
+    /// with NO bootstrap peers and never dials B. After the accept, A must report a
+    /// live peer and be able to push to B over the accepted (inbound) link.
+    #[tokio::test]
+    async fn inbound_accept_registers_a_usable_peer_link() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        // A joins with NO bootstrap peers — it will only ever ACCEPT.
+        let topic_a = gossip_a.join_topic("dregg/inbound", &[]).await.unwrap();
+        let mut stream_a = gossip_a.subscribe(&topic_a).await.unwrap();
+        // B dials A.
+        let topic_b = gossip_b
+            .join_topic("dregg/inbound", &[addr_a])
+            .await
+            .unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // The accept registered an inbound link: A sees one live peer although it
+        // dialed no one.
+        assert!(
+            gossip_a.connected_peer_count().await > 0,
+            "accepting an inbound connection must register a peer link on A"
+        );
+
+        // And that inbound link is usable in the A->B direction (full-duplex serve).
+        let from_a = PeerMessage::PublishTurn {
+            turn_hash: [0x77; 32],
+            turn_data: b"over-inbound".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_a.publish_eager(&topic_a, &from_a).await.unwrap();
+        let got_on_b = recv_remote_within(&mut stream_b, Duration::from_secs(5)).await;
+        assert_eq!(
+            got_on_b,
+            Some(from_a),
+            "A must be able to push to B over the accepted inbound link"
+        );
+
+        // And B->A still works (sanity: the dialed direction serves too).
+        let from_b = PeerMessage::PublishTurn {
+            turn_hash: [0x88; 32],
+            turn_data: b"reply".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &from_b).await.unwrap();
+        let got_on_a = recv_remote_within(&mut stream_a, Duration::from_secs(5)).await;
+        assert_eq!(got_on_a, Some(from_b));
+    }
+
+    /// AUTHENTICATED SELF-ADVERTISEMENT from a PURE-ACCEPT bootstrap node — the
+    /// headline self-forming-mesh mechanism. The edge E dials NO ONE; A and B each
+    /// dial only E. With the old code E would hold zero verified bindings (it only
+    /// records addresses it dialed) and could introduce no one. Now A and B sign +
+    /// advertise their OWN listen addresses; E records the authenticated
+    /// `identity -> listen addr` bindings and can re-share them. We assert E ends up
+    /// holding the real DIALABLE listen address for BOTH A and B even though E never
+    /// dialed either — the substrate that lets the whole committee mesh from one
+    /// seed.
+    #[tokio::test]
+    async fn self_advertisement_gives_pure_accept_edge_dialable_bindings() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_e, pk_e) = dregg_types::generate_keypair();
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_e: NodeId = *blake3::hash(pk_e.as_bytes()).as_bytes();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_e, pk_e);
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_e = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_e = node_e.local_addr();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+
+        let gossip_e = GossipNetwork::new(node_e.endpoint().clone(), id_e, sk_e, keys.clone());
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        const TOPIC: &str = "dregg/self-adv";
+        // E is a PURE-ACCEPT bootstrap: no bootstrap peers, it dials no one.
+        let _topic_e = gossip_e.join_topic(TOPIC, &[]).await.unwrap();
+        // A and B each dial ONLY E.
+        let _topic_a = gossip_a.join_topic(TOPIC, &[addr_e]).await.unwrap();
+        let _topic_b = gossip_b.join_topic(TOPIC, &[addr_e]).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // Each node advertises its OWN reachable listen address (authenticated by
+        // its own signature). E is connected to both A and B (it accepted them), so
+        // their advertisements reach E.
+        gossip_a.set_advertise_addr(addr_a).await;
+        gossip_b.set_advertise_addr(addr_b).await;
+
+        // Give the signed SelfAddr envelopes time to arrive + be recorded.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let b = gossip_e.verified_peer_bindings().await;
+            let has_a = b.iter().any(|(id, addr)| *id == id_a && *addr == addr_a);
+            let has_b = b.iter().any(|(id, addr)| *id == id_b && *addr == addr_b);
+            if has_a && has_b {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "pure-accept edge E must record authenticated self-advertised \
+                     DIALABLE bindings for both A and B; got {b:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// SELF-ADVERTISEMENT IS BOUND TO THE SIGNED IDENTITY (no spoofing hole). A
+    /// committee member can advertise an endpoint only for ITS OWN signed identity,
+    /// never another's: the binding is keyed by the verified envelope signer, not by
+    /// any field a sender controls. Here M (a committee member) advertises a bogus
+    /// address; E records it under M's OWN identity — and crucially holds NO binding
+    /// for the victim V's identity (M cannot fabricate one). Only V, by signing its
+    /// own advertisement, can create V's binding.
+    #[tokio::test]
+    async fn self_advertisement_cannot_spoof_another_identity() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_e, pk_e) = dregg_types::generate_keypair();
+        let (sk_m, pk_m) = dregg_types::generate_keypair();
+        let (_sk_v, pk_v) = dregg_types::generate_keypair();
+        let id_e: NodeId = *blake3::hash(pk_e.as_bytes()).as_bytes();
+        let id_m: NodeId = *blake3::hash(pk_m.as_bytes()).as_bytes();
+        let id_v: NodeId = *blake3::hash(pk_v.as_bytes()).as_bytes();
+        // E's committee key set knows all three identities (M and V are members).
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_e, pk_e);
+        keys.insert(id_m, pk_m);
+        keys.insert(id_v, pk_v);
+
+        let node_e = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_m = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_e = node_e.local_addr();
+        // A plausible-looking "victim" listen address M will try to smuggle.
+        let bogus_addr = free_loopback_addr();
+
+        let gossip_e = GossipNetwork::new(node_e.endpoint().clone(), id_e, sk_e, keys.clone());
+        let gossip_m = GossipNetwork::new(node_m.endpoint().clone(), id_m, sk_m, keys.clone());
+
+        const TOPIC: &str = "dregg/spoof";
+        let _topic_e = gossip_e.join_topic(TOPIC, &[]).await.unwrap();
+        let _topic_m = gossip_m.join_topic(TOPIC, &[addr_e]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // M advertises a bogus address. Because the SelfAddr binds to M's signed
+        // identity, E records id_M -> bogus — M's OWN entry. It can NOT inject an
+        // entry for the victim V.
+        gossip_m.set_advertise_addr(bogus_addr).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let bindings = gossip_e.verified_peer_bindings().await;
+        // M's claim only ever lands under M's own identity...
+        assert!(
+            bindings
+                .iter()
+                .any(|(id, addr)| *id == id_m && *addr == bogus_addr),
+            "M's self-advertisement must bind under M's OWN identity"
+        );
+        // ...and crucially E holds NO binding for the victim V (M cannot forge one).
+        assert!(
+            !bindings.iter().any(|(id, _)| *id == id_v),
+            "a member must NOT be able to advertise an address for ANOTHER identity \
+             (no V binding may exist — only V can create it)"
+        );
+    }
+
+    /// FULL SELF-FORMING MESH FROM A SINGLE BOOTSTRAP (the headline result). Four
+    /// real gossip networks over loopback QUIC: a PURE-ACCEPT edge E and three
+    /// members A, B, C that each boot knowing ONLY E (`--bootstrap edge`, no
+    /// `--federation-peers`). Driving exactly the loop `blocklace_sync` runs —
+    /// self-advertise, then the introducer re-shares its authenticated bindings and
+    /// each node's reconnect prober dials the learned peers — every node converges
+    /// to peer-count N-1 (a full mesh) without anyone enumerating the others. This
+    /// is the robust homelab onboarding path: just `--bootstrap edge`.
+    #[tokio::test]
+    async fn four_node_self_forming_mesh_from_single_bootstrap() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        // Four committee identities; gossip node_id = blake3(public_key).
+        let mut sks = Vec::new();
+        let mut ids = Vec::new();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        for _ in 0..4 {
+            let (sk, pk) = dregg_types::generate_keypair();
+            let id: NodeId = *blake3::hash(pk.as_bytes()).as_bytes();
+            keys.insert(id, pk);
+            sks.push(sk);
+            ids.push(id);
+        }
+
+        // Stand up four nodes. Index 0 = the edge E (pure accept).
+        let mut nodes = Vec::new();
+        let mut addrs = Vec::new();
+        for _ in 0..4 {
+            let n = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+            addrs.push(n.local_addr());
+            nodes.push(n);
+        }
+        let mut gossips = Vec::new();
+        for i in 0..4 {
+            gossips.push(GossipNetwork::new(
+                nodes[i].endpoint().clone(),
+                ids[i],
+                sks[i].clone(),
+                keys.clone(),
+            ));
+        }
+
+        const TOPIC: &str = "dregg/full-mesh";
+        // E (index 0) is a pure-accept bootstrap: no peers configured.
+        let mut topics = Vec::new();
+        topics.push(gossips[0].join_topic(TOPIC, &[]).await.unwrap());
+        // A, B, C each know ONLY the edge E.
+        for i in 1..4 {
+            topics.push(gossips[i].join_topic(TOPIC, &[addrs[0]]).await.unwrap());
+        }
+
+        // Every node advertises its OWN reachable listen address.
+        for i in 0..4 {
+            gossips[i].set_advertise_addr(addrs[i]).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Drive the discovery+prober loop. Each round: (1) re-advertise so the edge
+        // holds every member's authenticated binding; (2) the edge re-shares those
+        // bindings — replicated here by feeding each node the addresses the edge
+        // knows for the OTHER identities (the node-layer `share_peer_addrs` does this
+        // with the committee-key gate); (3) each node's prober dials its unconnected
+        // learned peers.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            for i in 0..4 {
+                gossips[i].advertise_self().await;
+            }
+            // The edge introduces members to each other from its authenticated
+            // bindings (id -> dialable listen addr).
+            let edge_bindings = gossips[0].verified_peer_bindings().await;
+            for i in 1..4 {
+                for (id, addr) in &edge_bindings {
+                    if *id != ids[i] {
+                        gossips[i].learn_peer(&topics[i], *addr).await;
+                    }
+                }
+            }
+            // Each node's reconnect prober dials its discovered-but-unconnected peers.
+            for i in 0..4 {
+                for addr in gossips[i].unconnected_topic_peers(&topics[i]).await {
+                    gossips[i].reconnect_peer(addr).await;
+                }
+            }
+
+            let mut all_meshed = true;
+            for i in 0..4 {
+                if gossips[i].connected_peer_count().await < 3 {
+                    all_meshed = false;
+                    break;
+                }
+            }
+            if all_meshed {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let counts: Vec<usize> = {
+                    let mut v = Vec::new();
+                    for g in &gossips {
+                        v.push(g.connected_peer_count().await);
+                    }
+                    v
+                };
+                panic!(
+                    "committee failed to self-form a full mesh from a single bootstrap; \
+                     per-node live peer counts (want 3 each): {counts:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Every node reached peer-count N-1 = 3: a full mesh from one bootstrap.
+        for i in 0..4 {
+            assert!(
+                gossips[i].connected_peer_count().await >= 3,
+                "node {i} must reach a full mesh (>= 3 live peers)"
+            );
+        }
     }
 }

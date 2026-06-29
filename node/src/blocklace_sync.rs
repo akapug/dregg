@@ -1366,6 +1366,7 @@ async fn resolve_peer_addrs(peers: &[String]) -> Vec<SocketAddr> {
 }
 
 /// Activity only when a turn is submitted or blocks arrive from peers.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_blocklace_sync(
     state: NodeState,
     gossip_port: u16,
@@ -1375,6 +1376,12 @@ pub async fn run_blocklace_sync(
     block_cadence_ms: u64,
     idle_heartbeat_ms: u64,
     min_block_interval_ms: u64,
+    // Our OWN externally-reachable gossip endpoint (`--bind <ip>:<gossip-port>`),
+    // if the operator supplied a routable bind IP. Fed to the gossip layer so the
+    // node advertises itself in the authenticated peer exchange and the committee
+    // meshes transitively from a single bootstrap. `None` (e.g. `--bind 0.0.0.0`)
+    // disables self-advertisement and falls back to manual `--federation-peers`.
+    advertise_addr: Option<SocketAddr>,
 ) -> Option<BlocklaceHandle> {
     // Blocklace tuning params (from CLI --blocklace-* or safe defaults in main).
     // This is the core of making blocklace easy to configure/enable/disable/tune
@@ -1577,6 +1584,19 @@ pub async fn run_blocklace_sync(
         gossip_signing_key,
         peer_keys_map,
     ));
+
+    // SELF-FORMING MESH: advertise our own reachable listen endpoint in the
+    // authenticated peer exchange. A node booted with only `--bootstrap <one-peer>`
+    // signs and broadcasts this address to every peer it connects to; the peer
+    // records the authenticated `identity -> addr` binding and re-shares it via
+    // gossip-of-peers, so the whole committee learns every member's endpoint from a
+    // single seed (manual `--federation-peers` becomes an optional override). A
+    // non-routable bind (e.g. `0.0.0.0`) yields `None` and self-advertisement stays
+    // off — the address would not be dialable anyway.
+    if let Some(adv) = advertise_addr {
+        gossip.set_advertise_addr(adv).await;
+        info!(advertise = %adv, "gossip self-advertisement enabled (self-forming mesh)");
+    }
 
     // Resolve peer addresses. A spec is `host:port` where `host` may be a
     // HOSTNAME (e.g. a genesis-emitted overlay hostname like `edge:9420`), not

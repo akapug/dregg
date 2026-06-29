@@ -192,6 +192,7 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
         50,     // block_cadence_ms (fast check tick for the test)
         2_000,  // idle_heartbeat_ms
         0,      // min_block_interval_ms (no rate cap in-test)
+        None,   // advertise_addr (solo — nothing to advertise)
     )
     .await
     .expect("run_blocklace_sync must return a handle in solo mode");

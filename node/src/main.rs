@@ -1082,6 +1082,16 @@ async fn run_node(
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .unwrap_or(min_block_interval_ms);
+            // SELF-FORMING MESH: derive our advertised gossip endpoint from the
+            // operator-configured `--bind <ip>` and the gossip port. Only a
+            // concrete, routable IP is advertised — an unspecified bind (0.0.0.0/
+            // ::) is not dialable, so self-advertisement stays off there and the
+            // node falls back to manual `--federation-peers`.
+            let advertise_addr: Option<SocketAddr> = bind
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .filter(|ip| !ip.is_unspecified())
+                .map(|ip| SocketAddr::new(ip, gossip_port_copy));
             let blocklace_handle = blocklace_sync::run_blocklace_sync(
                 sync_state,
                 gossip_port_copy,
@@ -1091,6 +1101,7 @@ async fn run_node(
                 block_cadence_ms,
                 idle_heartbeat_ms,
                 min_block_interval_ms,
+                advertise_addr,
             )
             .await;
             if let Some(handle) = blocklace_handle {
