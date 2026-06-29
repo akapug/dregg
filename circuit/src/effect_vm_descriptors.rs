@@ -1228,7 +1228,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "a5f74b91e89e691a75ef88878bbeac4f448776db1b4775338d7002d0bbc6f568";
+    "70d7d9e32ba134b05a85e980004b9480f5a3a3ad18014465077bec719dd9d705";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2501,9 +2501,10 @@ mod tests {
     fn wide_umem_weld_registry_parity_and_no_narrowing() {
         use crate::descriptor_ir2::{VmConstraint2, parse_vm_descriptor2};
 
-        // The bare wide members, keyed (the welded registry covers v3RegistryCapOpenWide = the first
-        // 45 of the 57 bare members, PLUS the 9 §10 WRITE-bearing cap-open tail wrappers — every
-        // welded key is a bare WIDE_REGISTRY_STAGED_TSV key).
+        // The bare wide members, keyed. The welded registry is now a member-for-member 57/57 cover of
+        // the bare wide registry: v3RegistryCapOpenWide (the first 45 bare members) + the 9 §10
+        // WRITE-bearing cap-open tail wrappers + the 3 live-only wide members (transferCapOpenTB /
+        // heapWrite / supplyMint) — every welded key is a bare WIDE_REGISTRY_STAGED_TSV key.
         let bare: std::collections::HashMap<&str, &str> = WIDE_REGISTRY_STAGED_TSV
             .lines()
             .filter(|l| !l.is_empty())
@@ -2569,10 +2570,12 @@ mod tests {
             );
         }
         assert_eq!(
-            n, 54,
-            "the welded registry covers all 45 v3RegistryCapOpenWide emit-source members + the 9 §10 \
-             WRITE-bearing cap-open tail wrappers (the write twins the wire routes cap WRITE turns to, \
-             minus grantCapWriteCapOpen which has no bare wide twin)"
+            n, 57,
+            "the welded registry is a member-for-member 57/57 cover of the bare wide registry: all 45 \
+             v3RegistryCapOpenWide emit-source members + the 9 §10 WRITE-bearing cap-open tail wrappers \
+             (the write twins the wire routes cap WRITE turns to, minus grantCapWriteCapOpen which has \
+             no bare wide twin) + the 3 live-only wide members (transferCapOpenTB / heapWrite / \
+             supplyMint)"
         );
 
         // The byte fingerprint pin (the committed-descriptor discipline; Lean is the byte source).
