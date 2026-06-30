@@ -77,29 +77,45 @@
 //! recompute), and is the shared primitive every hash-heavy carrier's path verification
 //! rides.
 //!
+//! ## The running-hash chain — the COPY-FORWARD extension (now mapped)
+//!
+//! `ChainedHash2to1 { out, seed, input }` is a CROSS-ROW running hash `next[out] ==
+//! hash_2_to_1(local[seed], next[input])`; a single-row `TID_P2` lookup reads only the
+//! `local` window, so it cannot reach the `next` input. The faithful carrier is a fresh
+//! COPY-FORWARD accumulator column `acc`: a per-row chip `out == hash_2_to_1(acc, input)`,
+//! a `WindowGate` copy-forward `next[acc] − local[seed] == 0` (so `acc[i+1]` = the prior
+//! accumulator), and the chain's first-row seed `acc[0] == pi[seed_pi]` from its paired
+//! `SeedHash2to1`. This reproduces BOTH the `ChainedHash2to1` rolling step AND the
+//! `SeedHash2to1` table-commitment seed of `dregg-dfa-routing-v1` byte-for-byte; the `acc`
+//! column is witnessed descriptor-side ([`fill_chain_columns`]) and the chip equality-binds
+//! `out` to the genuine permutation, so a forged accumulator / broken chain is UNSAT.
+//!
+//! ## The transition table — `TableFunction` → its bivariate-Lagrange gate (now mapped)
+//!
+//! `TableFunction { a, b, out, .. }` (the GAP-A `next == step(state, symbol)`) lowers to the
+//! pure-local gate `out − Σ_i Σ_j outputs[i·|b|+j]·Lᵢ(a)·Lⱼ(b)` (`Lᵢ` a Lagrange indicator
+//! over the grid, exactly as `MerkleHash`'s position reconstruction). The paired grid-range
+//! vanishing gates pin `(a, b)` onto the grid, so the interpolant is evaluated only at real
+//! grid points. With these three, `dregg-dfa-routing-v1` FULLY lowers to a foldable leaf.
+//!
 //! ## Constraint kinds this extension does NOT map (precise blockers, not fakes)
 //!
 //! * `Hash` — the capacity-tagged fact-sponge `hash_fact(predicate, terms)` uses the
 //!   arity-7 cap-leaf / `FACT_MARK` fact-bus seeding (state[5]=FACT_MARK, state[6]=1),
 //!   NOT a narrow arity-2/3/4 absorb. Mapping it needs the chip's fact-bus path
 //!   (`BUS_FACT`) — the named follow-up.
-//! * `ChainedHash2to1` — a CROSS-ROW running hash `hash_2_to_1(local[seed],
-//!   next[input])`. A single-row `TID_P2` lookup tuple reads only the `local` window, so
-//!   it cannot seed from `next`; this needs a copy-forward witness column carrying the
-//!   prior accumulator onto the current row (the named follow-up). The `dregg-dfa-routing-v1`
-//!   route commitment uses this.
-//! * `SeedHash2to1` — `hash_2_to_1(pi[seed], local[input])` seeds the absorb from a
-//!   PUBLIC INPUT. A lookup tuple reads only columns, so it needs a first-row PI-bound
-//!   seed column (the named follow-up).
 //! * `Lookup { table_id, .. }` — a `CellProgram` lookup names an arbitrary
 //!   entry-set `LookupTable`. The IR-v2 `Lookup` targets DECLARED tables with FIXED
 //!   semantics (range / chip / submask), not arbitrary entry sets, so there is no
 //!   faithful target. Mapping it needs an IR-v2 "custom-contents" table family
-//!   (the named small IR follow-up).
-//! * `TableFunction` — a fixed bivariate Lagrange polynomial. It IS pure-local and
-//!   gate-expressible IN PRINCIPLE (a large `Σ Lᵢ(a)Lⱼ(b)·outᵢⱼ` `LeanExpr`), but
-//!   the symbolic lowering is non-trivial and unexercised, so it is out of scope here.
-//!   The `dregg-dfa-routing-v1` transition table uses this.
+//!   (the named small IR follow-up). `dregg-dfa-routing-v1` does NOT use it (it routes
+//!   through `TableFunction`, which is now mapped).
+//! * An UNSEEDED `ChainedHash2to1` (no paired first-row `SeedHash2to1`) and a standalone
+//!   `SeedHash2to1` (no chain accumulating its output) — the per-row chip would
+//!   over-constrain row 0 (resp. needs a first-row-ONLY chip gate). No deployed carrier
+//!   hits these; the named residual.
+//! * `BoundaryRow::Index` — an absolute-row boundary has no IR-v2 row-tag carrier
+//!   (`when_first_row`/`when_last_row` only); the named residual.
 //!
 //! ## The remaining seam to the per-turn fold
 //!
@@ -461,18 +477,202 @@ fn merkle_children_exprs(
     [child0, child1, child2, child3]
 }
 
+// ============================================================================
+// Bivariate Lagrange (the `TableFunction` GAP-A transition table → a local gate).
+//
+// `TableFunction { a, b, out, a_values, b_values, outputs }` asserts `out == P(a, b)`
+// where `P` is the unique bivariate interpolant agreeing with `outputs` on the grid
+// `a_values × b_values`. It is PURE-LOCAL and gate-expressible: lower it to the
+// degree-`(|a|-1)+(|b|-1)` polynomial body `out − Σ_i Σ_j outputs[i·|b|+j]·Lᵢ(a)·Lⱼ(b)`,
+// each `Lᵢ` a Lagrange indicator over the grid (`Lᵢ(grid_k) = δ_{ik}`), exactly as
+// `MerkleHash`'s position reconstruction lowers its 4-point indicator. The paired
+// grid-range vanishing gates (`∏ (col − v) == 0`) pin `(a, b)` onto the grid, so the
+// interpolant is evaluated only at real grid points (off-grid escapes are impossible).
+// ============================================================================
+
+/// The Lagrange leading coefficient `1 / ∏_{k≠i}(values[i] − values[k])` over an
+/// arbitrary distinct grid `values`, as a canonical BabyBear. `Err` if the grid has a
+/// repeated value (a zero denominator — the descriptor's grid is distinct by construction).
+fn grid_lagrange_coeff(values: &[u32], i: usize) -> Result<BabyBear, String> {
+    let xi = i64_to_field(values[i] as i64);
+    let mut denom = BabyBear::ONE;
+    for (k, &vk) in values.iter().enumerate() {
+        if k != i {
+            denom *= xi - i64_to_field(vk as i64);
+        }
+    }
+    denom.inverse().ok_or_else(|| {
+        "TableFunction grid has a repeated value (Lagrange denominator 0)".to_string()
+    })
+}
+
+/// The Lagrange indicator `Lᵢ(col)` over `values`: `coeff_i · ∏_{k≠i}(col − values[k])`,
+/// which is `1` when `col == values[i]` and `0` at the other grid points (pinned by the
+/// paired grid-range vanishing gate). A degree-`(|values|−1)` `LeanExpr`.
+fn grid_indicator(col: usize, values: &[u32], i: usize) -> Result<LeanExpr, String> {
+    let coeff = grid_lagrange_coeff(values, i)?;
+    let mut acc = LeanExpr::Const(coeff.as_u32() as i64);
+    for (k, &vk) in values.iter().enumerate() {
+        if k != i {
+            acc = LeanExpr::mul(
+                acc,
+                LeanExpr::add(LeanExpr::Var(col), LeanExpr::Const(-(vk as i64))),
+            );
+        }
+    }
+    Ok(acc)
+}
+
+/// Lower a `TableFunction` to its bivariate-interpolation gate body
+/// `out − Σ_i Σ_j outputs[i·|b|+j]·Lᵢ(a)·Lⱼ(b)` (which must vanish).
+fn table_function_body(
+    a_col: usize,
+    b_col: usize,
+    out_col: usize,
+    a_values: &[u32],
+    b_values: &[u32],
+    outputs: &[u32],
+) -> Result<LeanExpr, String> {
+    let nb = b_values.len();
+    if outputs.len() != a_values.len() * nb {
+        return Err(format!(
+            "TableFunction outputs len {} != |a|·|b| {}",
+            outputs.len(),
+            a_values.len() * nb
+        ));
+    }
+    let mut terms: Vec<LeanExpr> = Vec::with_capacity(outputs.len());
+    for (i, _) in a_values.iter().enumerate() {
+        let la = grid_indicator(a_col, a_values, i)?;
+        for (j, _) in b_values.iter().enumerate() {
+            let out_ij = outputs[i * nb + j];
+            let lb = grid_indicator(b_col, b_values, j)?;
+            terms.push(LeanExpr::mul(
+                LeanExpr::mul(LeanExpr::Const(out_ij as i64), la.clone()),
+                lb,
+            ));
+        }
+    }
+    // `out − P(a, b)`.
+    Ok(sub(LeanExpr::Var(out_col), add_all(terms)))
+}
+
+// ============================================================================
+// Running-hash chains (the cross-row `ChainedHash2to1` + its `SeedHash2to1` seed)
+// lowered via a COPY-FORWARD accumulator column.
+//
+// A `CellProgram` `ChainedHash2to1 { out, seed, input }` is a CROSS-ROW relation
+// `next[out] == hash_2_to_1(local[seed], next[input])`: the absorb seeds from the
+// PREVIOUS row's accumulator. A single-row `TID_P2` chip lookup reads only the `local`
+// window, so it cannot reach the `next` input. The faithful carrier is a fresh
+// COPY-FORWARD witness column `acc` that carries the prior accumulator onto the current
+// row, so the per-row chip is single-row again:
+//
+//   * per-row chip (every row j):  `out[j] == hash_2_to_1(acc[j], input[j])`   (TID_P2)
+//   * copy-forward (transition):   `next[acc] − local[seed] == 0`              (WindowGate)
+//   * seed pin (first row):        `acc[0] == pi[seed_pi_index]`               (PiBinding)
+//
+// The copy-forward sets `acc[i+1] = seed[i]` (= the previous accumulator), so the chip
+// reproduces `out[i+1] = hash(seed[i], input[i+1])` byte-for-byte; row 0 is pinned by the
+// `SeedHash2to1` seed (`acc[0] = pi[tableCommitment]`), reproducing `out[0] =
+// hash(tableCommitment, input[0])`. Together they reproduce BOTH the `ChainedHash2to1`
+// rolling step (C3) AND the `SeedHash2to1` seed of `dregg-dfa-routing-v1` exactly. The
+// `acc` column is witnessed descriptor-side ([`fill_chain_columns`]); the chip equality-
+// binds `out` to the genuine permutation, so a forged accumulator / broken chain is UNSAT.
+// ============================================================================
+
+/// The trace-fill plan for one running-hash chain: which fresh column carries the
+/// copy-forward accumulator, which column it copies (`acc[i] = source[i−1]`), and the
+/// first-row seed (`acc[0] = pi[seed_pi]`).
+#[derive(Clone, Debug)]
+struct ChainFill {
+    /// The freshly-allocated copy-forward accumulator column.
+    acc_col: usize,
+    /// The source accumulator column copied forward (`acc[i] = source[i−1]`); the
+    /// `ChainedHash2to1`'s `seed_local_col`.
+    source_col: usize,
+    /// The first-row seed public input (`acc[0] = pi[seed_pi]`).
+    seed_pi: usize,
+}
+
+/// The result of lowering a `CellProgram`: the IR-v2 descriptor plus the copy-forward
+/// fill plans the trace producer must apply ([`fill_chain_columns`]).
+struct Lowered {
+    desc: EffectVmDescriptor2,
+    chains: Vec<ChainFill>,
+}
+
+/// Unwrap a (possibly `Gated`-wrapped) `SeedHash2to1`, returning `(output_col,
+/// seed_pi_index, input_col)`. The `dregg-dfa-routing-v1` seed is `Gated { is_first,
+/// SeedHash2to1 { .. } }`; the first-row PI-binding tag replaces the `is_first` gate, so
+/// the gate selector is irrelevant here.
+fn as_seed_hash(expr: &ConstraintExpr) -> Option<(usize, usize, usize)> {
+    match expr {
+        ConstraintExpr::SeedHash2to1 {
+            output_col,
+            seed_pi_index,
+            input_col,
+        } => Some((*output_col, *seed_pi_index, *input_col)),
+        ConstraintExpr::Gated { inner, .. } => match &**inner {
+            ConstraintExpr::SeedHash2to1 {
+                output_col,
+                seed_pi_index,
+                input_col,
+            } => Some((*output_col, *seed_pi_index, *input_col)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Fill the copy-forward accumulator columns of `trace` (in place) per the lowered
+/// chain plan, BEFORE the chip-lane weld runs: row 0 = the seed public input, row `i` =
+/// the previous row's accumulator source. The chip-lane fill then derives each row's
+/// genuine permutation lanes from this `acc` value, so `out == hash_2_to_1(acc, input)`
+/// holds at every row.
+fn fill_chain_columns(
+    chains: &[ChainFill],
+    trace: &mut [Vec<BabyBear>],
+    public_inputs: &[BabyBear],
+) {
+    let n = trace.len();
+    for chain in chains {
+        if n == 0 {
+            continue;
+        }
+        trace[0][chain.acc_col] = public_inputs
+            .get(chain.seed_pi)
+            .copied()
+            .unwrap_or(BabyBear::ZERO);
+        for i in 1..n {
+            trace[i][chain.acc_col] = trace[i - 1][chain.source_col];
+        }
+    }
+}
+
 /// Adapt a `CellProgram`'s [`CircuitDescriptor`] into the IR-v2
 /// [`EffectVmDescriptor2`] so it can prove through the general prover.
 ///
 /// Each `ConstraintExpr` maps per the module-level table. The Poseidon2 hash kinds
 /// `Hash2to1` / `Hash4to1` / `Hash3Cap` / `MerkleHash` lower to `TID_P2` chip lookups
 /// with per-site lane columns allocated past the base trace width (the lane-witnessing
-/// extension — see the section above). The remaining hash kinds (`Hash` fact-sponge,
-/// `ChainedHash2to1`, `SeedHash2to1`), arbitrary-entry `Lookup`, and `TableFunction`
-/// have no faithful single-permutation chip carrier and are REFUSED with a precise
-/// blocker. `BoundaryDef::PiBinding`/`Fixed` (first/last row) graduate to the row-tagged
-/// IR-v2 boundary carriers, so a chained Merkle path's leaf/root pins survive the lower.
+/// extension). The cross-row running hash `ChainedHash2to1` + its `SeedHash2to1` first-row
+/// seed lower TOGETHER via a copy-forward accumulator column (a per-row chip + a
+/// `WindowGate` copy-forward + a first-row PI pin — see the running-hash section). The
+/// `TableFunction` lowers to its bivariate-Lagrange gate body. The remaining kinds
+/// (`Hash` fact-sponge, arbitrary-entry `Lookup`, an UNSEEDED `ChainedHash2to1`, a
+/// `SeedHash2to1` with no paired chain) have no faithful carrier here and are REFUSED with
+/// a precise blocker. `BoundaryDef::PiBinding`/`Fixed` (first/last row) graduate to the
+/// row-tagged IR-v2 boundary carriers, so a chained Merkle path's leaf/root pins survive.
 pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescriptor2, String> {
+    lower_cellprogram(program).map(|l| l.desc)
+}
+
+/// [`cellprogram_to_descriptor2`] plus the copy-forward fill plan ([`fill_chain_columns`])
+/// the trace producer must apply. The public adapter discards the plan; the leaf provers
+/// ([`prove_custom_leaf`] / [`prove_custom_leaf_with_commitment`]) use it to witness the
+/// running-hash accumulator columns.
+fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
     let desc = &program.descriptor;
     let mut constraints: Vec<VmConstraint2> = Vec::with_capacity(desc.constraints.len());
 
@@ -487,7 +687,41 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
         base
     };
 
-    for expr in &desc.constraints {
+    // Pre-pass: index the running-hash chain SEEDS. Each `(possibly-Gated) SeedHash2to1`
+    // seeding a chain output column is consumed BY that chain (lowered as the chain's
+    // first-row `acc[0] == pi[seed]` pin), so the main loop must SKIP it rather than try to
+    // lower it as a standalone gate. A `SeedHash2to1` whose output column NO chain
+    // accumulates is left unconsumed and hits the standalone-seed blocker below.
+    let chain_outputs: std::collections::HashSet<usize> = desc
+        .constraints
+        .iter()
+        .filter_map(|c| match c {
+            ConstraintExpr::ChainedHash2to1 {
+                output_next_col, ..
+            } => Some(*output_next_col),
+            _ => None,
+        })
+        .collect();
+    // output_col -> (seed_pi_index, input_col), only for seeds a chain accumulates.
+    let mut seed_of: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut consumed_seed: Vec<bool> = vec![false; desc.constraints.len()];
+    for (idx, c) in desc.constraints.iter().enumerate() {
+        if let Some((out, pi, input)) = as_seed_hash(c)
+            && chain_outputs.contains(&out)
+        {
+            seed_of.insert(out, (pi, input));
+            consumed_seed[idx] = true;
+        }
+    }
+
+    // The copy-forward fill plans accumulated as chains are lowered.
+    let mut chains: Vec<ChainFill> = Vec::new();
+
+    for (idx, expr) in desc.constraints.iter().enumerate() {
+        // A `SeedHash2to1` consumed by its chain is lowered as that chain's first-row pin.
+        if consumed_seed[idx] {
+            continue;
+        }
         let c2 = match expr {
             ConstraintExpr::PiBinding { col, pi_index } => {
                 // A per-row PI gate is inexpressible in `LeanExpr`; the faithful
@@ -586,22 +820,74 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
                         .to_string(),
                 );
             }
-            ConstraintExpr::ChainedHash2to1 { .. } => {
-                return Err(
-                    "constraint kind ChainedHash2to1 is a CROSS-ROW running hash \
-                     (hash_2_to_1(local[seed], next[input])); a single-row TID_P2 lookup \
-                     tuple cannot read the `next` window — needs a copy-forward witness \
-                     column (the named follow-up)"
-                        .to_string(),
-                );
+            // ---- the cross-row running hash + its first-row seed → a copy-forward
+            //      accumulator column (the per-row chip + WindowGate copy-forward + PI pin). ----
+            ConstraintExpr::ChainedHash2to1 {
+                output_next_col,
+                seed_local_col,
+                input_next_col,
+            } => {
+                // The chain is faithful ONLY with a paired first-row `SeedHash2to1` pinning
+                // `acc[0]`: without it the per-row chip would over-constrain row 0 (`out[0] ==
+                // hash(acc[0], input[0])`) where the bare chain leaves it free. An unseeded
+                // ChainedHash2to1 is the precise named residual.
+                let &(seed_pi, seed_input) = seed_of.get(output_next_col).ok_or_else(|| {
+                    "constraint kind ChainedHash2to1 has no paired first-row SeedHash2to1 seed \
+                     for its output column; the copy-forward carrier needs the seed to pin \
+                     acc[0] (an UNSEEDED running hash is the named residual)"
+                        .to_string()
+                })?;
+                if seed_input != *input_next_col {
+                    return Err(format!(
+                        "ChainedHash2to1 absorbs column {input_next_col} but its paired \
+                         SeedHash2to1 absorbs column {seed_input}; the seed must absorb the \
+                         same first-entry column the chain rolls"
+                    ));
+                }
+                // A fresh copy-forward accumulator column `acc`, then its 7 chip lanes.
+                let acc_col = width;
+                width += 1;
+                let lane_base = alloc_lanes(&mut width);
+                // Copy-forward: `next[acc] − local[seed_local_col] == 0` (acc[i+1] = the prior
+                // accumulator), the cross-row carrier the single-row chip cannot reach.
+                constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
+                    body: WindowExpr::Add(
+                        Box::new(WindowExpr::Nxt(acc_col)),
+                        Box::new(WindowExpr::Mul(
+                            Box::new(WindowExpr::Const(-1)),
+                            Box::new(WindowExpr::Loc(*seed_local_col)),
+                        )),
+                    ),
+                    on_transition: true,
+                }));
+                // First-row seed pin: `acc[0] == pi[seed_pi]` (the table-commitment seed).
+                constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+                    row: VmRow::First,
+                    col: acc_col,
+                    pi_index: seed_pi,
+                }));
+                chains.push(ChainFill {
+                    acc_col,
+                    source_col: *seed_local_col,
+                    seed_pi,
+                });
+                // The per-row chip: `out == hash_2_to_1(acc, input)` (single-row, arity 2).
+                chip_lookup_site(
+                    2,
+                    &[LeanExpr::Var(acc_col), LeanExpr::Var(*input_next_col)],
+                    *output_next_col,
+                    lane_base,
+                )
             }
-            ConstraintExpr::SeedHash2to1 { .. } => {
-                return Err(
-                    "constraint kind SeedHash2to1 seeds the absorb from a PUBLIC INPUT \
-                     (hash_2_to_1(pi[seed], local[input])); a TID_P2 lookup tuple reads only \
-                     columns, so it needs a first-row PI-bound seed column (the named follow-up)"
-                        .to_string(),
-                );
+            // A `SeedHash2to1` that reaches here is NOT consumed by a chain (no chain
+            // accumulates its output column) — a standalone first-row PI-seeded hash, which
+            // would need a first-row-ONLY chip gate (the named residual).
+            ConstraintExpr::SeedHash2to1 { output_col, .. } => {
+                return Err(format!(
+                    "constraint kind SeedHash2to1 (output col {output_col}) is a standalone \
+                     PUBLIC-INPUT-seeded first-row hash with no paired ChainedHash2to1 chain; a \
+                     first-row-only chip gate is the named residual"
+                ));
             }
             ConstraintExpr::Lookup { table_id, .. } => {
                 return Err(format!(
@@ -610,14 +896,17 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
                      declared tables only — no faithful target in this extension"
                 ));
             }
-            ConstraintExpr::TableFunction { .. } => {
-                return Err(
-                    "constraint kind TableFunction (bivariate Lagrange) is local-gate \
-                     expressible in principle but its symbolic lowering is out of this \
-                     extension's scope"
-                        .to_string(),
-                );
-            }
+            // ---- the deterministic transition table → its bivariate-Lagrange gate body. ----
+            ConstraintExpr::TableFunction {
+                a_col,
+                b_col,
+                out_col,
+                a_values,
+                b_values,
+                outputs,
+            } => VmConstraint2::Base(VmConstraint::Gate(table_function_body(
+                *a_col, *b_col, *out_col, a_values, b_values, outputs,
+            )?)),
             // Everything else is a pure-local algebraic gate.
             local => VmConstraint2::Base(VmConstraint::Gate(gate_body(local)?)),
         };
@@ -657,14 +946,17 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
         constraints.push(c2);
     }
 
-    Ok(EffectVmDescriptor2 {
-        name: format!("custom-leaf::{}", desc.name),
-        trace_width: width,
-        public_input_count: desc.public_input_count,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
+    Ok(Lowered {
+        desc: EffectVmDescriptor2 {
+            name: format!("custom-leaf::{}", desc.name),
+            trace_width: width,
+            public_input_count: desc.public_input_count,
+            tables: vec![],
+            constraints,
+            hash_sites: vec![],
+            ranges: vec![],
+        },
+        chains,
     })
 }
 
@@ -691,18 +983,19 @@ pub fn prove_custom_leaf(
     public_inputs: &[BabyBear],
     config: &DreggRecursionConfig,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-    let desc2 = cellprogram_to_descriptor2(program)?;
+    let lowered = lower_cellprogram(program)?;
+    let desc2 = &lowered.desc;
 
-    // The CellProgram main rows (width == trace_width). The IR-v2 prover grows/fills
-    // chip lanes itself; for a table-free descriptor that is a no-op.
-    let base_trace = program
-        .generate_trace(witness_values, num_rows)
-        .map_err(|e| format!("custom-leaf trace generation failed: {e}"))?;
+    // The CellProgram main rows, augmented with the copy-forward accumulator columns the
+    // running-hash chains witness (filled below); the chip-lane weld inside the prover then
+    // derives each chip's lanes from them.
+    let base_trace =
+        augmented_base_trace(&lowered, program, witness_values, num_rows, public_inputs)?;
 
     // Mint the inner IR-v2 batch under the recursion config TYPE (the SIDESTEP), so
     // the leaf-wrap's in-circuit verifier consumes it directly.
     let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
-        &desc2,
+        desc2,
         &base_trace,
         public_inputs,
         &MemBoundaryWitness::default(),
@@ -713,8 +1006,34 @@ pub fn prove_custom_leaf(
     .map_err(|e| format!("custom-leaf inner IR-v2 prove failed: {e}"))?;
 
     // Wrap the inner batch as a recursion leaf, binding the descriptor PIs in-circuit.
-    prove_descriptor_leaf_rotated_with_config(&desc2, &inner, public_inputs, config)
+    prove_descriptor_leaf_rotated_with_config(desc2, &inner, public_inputs, config)
         .map_err(|e| format!("custom-leaf recursion wrap failed: {e}"))
+}
+
+/// Generate the `CellProgram`'s base trace and augment it with the lowered descriptor's
+/// copy-forward accumulator columns (witnessed per the running-hash chain plans). Each row
+/// is widened to the lowered `trace_width` so the appended `acc`/lane columns exist; the
+/// `acc` columns are filled BEFORE the chip-lane weld so each chip's lanes derive from the
+/// genuine accumulator value. For a chain-free program this is exactly the raw base trace.
+fn augmented_base_trace(
+    lowered: &Lowered,
+    program: &CellProgram,
+    witness_values: &HashMap<String, Vec<BabyBear>>,
+    num_rows: usize,
+    public_inputs: &[BabyBear],
+) -> Result<Vec<Vec<BabyBear>>, String> {
+    let mut base_trace = program
+        .generate_trace(witness_values, num_rows)
+        .map_err(|e| format!("custom-leaf trace generation failed: {e}"))?;
+    if !lowered.chains.is_empty() {
+        for row in &mut base_trace {
+            if row.len() < lowered.desc.trace_width {
+                row.resize(lowered.desc.trace_width, BabyBear::ZERO);
+            }
+        }
+        fill_chain_columns(&lowered.chains, &mut base_trace, public_inputs);
+    }
+    Ok(base_trace)
 }
 
 // ============================================================================
@@ -849,14 +1168,14 @@ pub fn prove_custom_leaf_with_commitment(
     public_inputs: &[BabyBear],
     config: &DreggRecursionConfig,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-    let desc2 = cellprogram_to_descriptor2(program)?;
+    let lowered = lower_cellprogram(program)?;
+    let desc2 = &lowered.desc;
 
-    let base_trace = program
-        .generate_trace(witness_values, num_rows)
-        .map_err(|e| format!("custom-leaf trace generation failed: {e}"))?;
+    let base_trace =
+        augmented_base_trace(&lowered, program, witness_values, num_rows, public_inputs)?;
 
     let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
-        &desc2,
+        desc2,
         &base_trace,
         public_inputs,
         &MemBoundaryWitness::default(),
@@ -867,7 +1186,7 @@ pub fn prove_custom_leaf_with_commitment(
     .map_err(|e| format!("custom-leaf inner IR-v2 prove failed: {e}"))?;
 
     let (airs, table_public_inputs, common) =
-        ir2_airs_and_common_for_config(&desc2, &inner, public_inputs, config)
+        ir2_airs_and_common_for_config(desc2, &inner, public_inputs, config)
             .map_err(|e| format!("custom-leaf verify-triple build failed: {e}"))?;
 
     let input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
@@ -1360,27 +1679,137 @@ mod tests {
         }
     }
 
-    /// `dregg-dfa-routing-v1` now maps FURTHER: its `Hash4to1` entry-hash (C1) lowers
-    /// through the lane-witnessing weld (no longer the blocker). The first remaining
-    /// unmapped kind is `TableFunction` (the bivariate-Lagrange transition table) — the
-    /// precise named residual, ahead of the cross-row `ChainedHash2to1` and PI-seeded
-    /// `SeedHash2to1` route-commitment kinds.
+    // ========================================================================
+    // The `dregg-dfa-routing-v1` FULL-lowering tooth.
+    //
+    // The production routing descriptor uses EVERY hash-heavy kind: `Hash4to1`
+    // (entry-hash C1, lane-witnessed), `ChainedHash2to1` (running-hash C3) +
+    // `SeedHash2to1` (the table-commitment seed) lowered together via a copy-forward
+    // accumulator column, and `TableFunction` (the GAP-A transition table) lowered to
+    // its bivariate-Lagrange gate. It now FULLY lowers to a foldable IR-2 leaf; an
+    // honest route proves, and a forged transition (broken chain / wrong table entry /
+    // wrong route-commitment) is UNSAT.
+    // ========================================================================
+
+    use dregg_circuit::dsl::dfa_routing::{build_routing_witness, dfa_routing_descriptor};
+
+    /// The exact 4-state production router (`dfa_circuit.rs` / `dfa_routing.rs`):
+    /// IDLE=0/LOCAL=1/REMOTE=2/REJECT=3; symbols internal/external/privileged/unknown.
+    fn router_transitions() -> Vec<(u32, u32, u32)> {
+        let table = [[1u32, 2, 1, 3], [1, 2, 1, 3], [1, 2, 3, 3], [3, 3, 3, 3]];
+        let mut out = Vec::new();
+        for (state, row) in table.iter().enumerate() {
+            for (symbol, &next) in row.iter().enumerate() {
+                out.push((state as u32, symbol as u32, next));
+            }
+        }
+        out
+    }
+
+    /// `dregg-dfa-routing-v1` FULLY lowers — every kind (`Hash4to1` / `ChainedHash2to1` /
+    /// `SeedHash2to1` / `TableFunction`) now maps. The chain adds one copy-forward `acc`
+    /// column (+ its 7 chip lanes) for the running hash, on top of the entry-hash site's
+    /// lanes; no kind is refused.
     #[test]
-    fn dfa_routing_maps_past_hash4to1_to_tablefunction() {
-        use dregg_circuit::dsl::dfa_routing::dfa_routing_descriptor;
-        // A minimal but TOTAL 2-state / 2-symbol transition relation (all 4 grid cells).
-        let transitions = [
-            (0u32, 0u32, 1u32),
-            (0u32, 1u32, 0u32),
-            (1u32, 0u32, 0u32),
-            (1u32, 1u32, 1u32),
-        ];
-        let program = CellProgram::new(dfa_routing_descriptor("dfa-test", &transitions), 1);
-        let err = cellprogram_to_descriptor2(&program)
-            .expect_err("dfa-routing still has unmapped kinds (TableFunction et al.)");
-        assert!(
-            err.contains("TableFunction"),
-            "Hash4to1 must now lower; the precise remaining blocker is TableFunction, got: {err}"
+    fn dfa_routing_v1_fully_lowers() {
+        let transitions = router_transitions();
+        let program = CellProgram::new(
+            dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions),
+            1,
         );
+        let lowered =
+            lower_cellprogram(&program).expect("dregg-dfa-routing-v1 fully lowers to IR-2");
+        // Two chip sites (entry-hash C1 + the running-hash per-row chip) ⇒ 2·7 lane cols,
+        // plus ONE copy-forward accumulator column for the chain.
+        assert_eq!(
+            lowered.desc.trace_width,
+            program.descriptor.trace_width + 1 + 2 * (CHIP_OUT_LANES - 1)
+        );
+        assert_eq!(lowered.chains.len(), 1, "one running-hash chain");
+        let chip_lookups = lowered
+            .desc
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, VmConstraint2::Lookup(l) if l.table == TID_P2))
+            .count();
+        assert_eq!(chip_lookups, 2, "entry-hash + running-hash chip sites");
+    }
+
+    /// THE POSITIVE POLE: an honest routing classification proves as a foldable IR-2 leaf —
+    /// the entry-hash chip binds C1, the copy-forward chip binds the running hash to the
+    /// genuine Poseidon2 chain seeded by the table commitment, and the TableFunction gate
+    /// holds every (state, symbol, next) edge.
+    #[test]
+    fn honest_dfa_routing_folds() {
+        let transitions = router_transitions();
+        let program = CellProgram::new(
+            dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions),
+            1,
+        );
+        // internal, external, internal: IDLE -> LOCAL -> REMOTE -> LOCAL.
+        let (w, pis) = build_routing_witness(&transitions, 0, &[0, 1, 0]).expect("honest route");
+        let rows = w.get("current_state").unwrap().len();
+        let config = ir2_leaf_wrap_config();
+        prove_custom_leaf(&program, &w, rows, &pis, &config)
+            .expect("an honest dfa-routing transition proves as a foldable IR-2 leaf");
+    }
+
+    /// THE NEGATIVE POLE (broken chain): tampering one row's `running_hash` breaks the
+    /// running-hash chip equality (`running == hash_2_to_1(acc, entry)`) — the forged
+    /// accumulator no longer equals the genuine permutation, so the leaf is UNSAT.
+    #[test]
+    fn forged_route_commitment_chain_does_not_fold() {
+        let transitions = router_transitions();
+        let program = CellProgram::new(
+            dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions),
+            1,
+        );
+        let (mut w, pis) =
+            build_routing_witness(&transitions, 0, &[0, 1, 0]).expect("honest route");
+        let rows = w.get("current_state").unwrap().len();
+        // FORGE: corrupt the running hash at row 1. The per-row chip's `out0 ==
+        // perm(acc, entry)[0]` no longer holds (and the copy-forward propagates the lie),
+        // so no witness satisfies the lowered leaf.
+        w.get_mut("running_hash").unwrap()[1] += BabyBear::ONE;
+        let config = ir2_leaf_wrap_config();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_custom_leaf(&program, &w, rows, &pis, &config)
+        }));
+        match result {
+            Err(_) => {}
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => {
+                panic!("a forged running-hash chain minted a foldable leaf — soundness OPEN")
+            }
+        }
+    }
+
+    /// THE NEGATIVE POLE (wrong table entry): tampering a `next_state` to an edge the
+    /// transition TABLE forbids breaks the `TableFunction` gate (`next == step(state,
+    /// symbol)`), the entry-hash C1, and the continuity C2 — the leaf is UNSAT.
+    #[test]
+    fn forged_table_entry_does_not_fold() {
+        let transitions = router_transitions();
+        let program = CellProgram::new(
+            dfa_routing_descriptor("dregg-dfa-routing-v1", &transitions),
+            1,
+        );
+        let (mut w, pis) =
+            build_routing_witness(&transitions, 0, &[0, 1, 0]).expect("honest route");
+        let rows = w.get("current_state").unwrap().len();
+        // FORGE: claim row 1 routes to an edge the table forbids (LOCAL=1 where the real
+        // step from LOCAL-external is REMOTE=2). TableFunction + entry hash both reject it.
+        w.get_mut("next_state").unwrap()[1] = BabyBear::new(1);
+        let config = ir2_leaf_wrap_config();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_custom_leaf(&program, &w, rows, &pis, &config)
+        }));
+        match result {
+            Err(_) => {}
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => panic!("a forbidden table edge minted a foldable leaf — soundness OPEN"),
+        }
     }
 }
