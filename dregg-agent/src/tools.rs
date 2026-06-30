@@ -57,6 +57,66 @@ pub struct ShellOut {
 /// inject a deterministic stand-in. `Err` is an execution error (couldn't spawn).
 pub type ShellFn = Box<dyn Fn(&str, &Path) -> Result<ShellOut, String> + Send + Sync>;
 
+/// The **real shell runner** (std-only): `bash -c` in `cwd`, captured
+/// stdout/stderr/exit, with a `timeout` (a SIGKILL on overrun → exit `124`) and
+/// **cd persistence** (a `cd` inside the command sticks to the next call via a
+/// trailing pwd marker, reported as [`ShellOut::new_cwd`]). The shared
+/// host-side runner both the one-shot `run` and the interactive `session` REPL
+/// wire behind [`OperatorTools::with_shell`] — so the cap-gate / meter / receipt
+/// braid above it is identical on both entry paths. No network, no async runtime.
+pub fn real_shell(cmd: &str, cwd: &Path, timeout: std::time::Duration) -> Result<ShellOut, String> {
+    use std::process::{Command, Stdio};
+    use std::sync::mpsc;
+    const MARKER: &str = "__DREGG_CWD__";
+    let wrapped =
+        format!("{cmd}\n__dregg_ec=$?\nprintf '\\n{MARKER}%s' \"$(pwd)\"\nexit $__dregg_ec");
+    let child = Command::new("bash")
+        .arg("-c")
+        .arg(&wrapped)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn bash: {e}"))?;
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(out)) => {
+            let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+            let mut new_cwd = None;
+            if let Some(pos) = stdout.rfind(MARKER) {
+                let cwd_str = stdout[pos + MARKER.len()..].trim().to_string();
+                stdout.truncate(pos);
+                stdout = stdout.trim_end().to_string();
+                if !cwd_str.is_empty() {
+                    new_cwd = Some(PathBuf::from(cwd_str));
+                }
+            }
+            Ok(ShellOut {
+                exit: out.status.code().unwrap_or(-1) as i64,
+                stdout,
+                stderr,
+                new_cwd,
+            })
+        }
+        Ok(Err(e)) => Err(format!("wait: {e}")),
+        Err(_) => {
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
+            Ok(ShellOut {
+                exit: 124,
+                stdout: String::new(),
+                stderr: format!("timed out after {}s (killed)", timeout.as_secs()),
+                new_cwd: None,
+            })
+        }
+    }
+}
+
 /// What an HTTP GET returned: the status code and the (UTF-8-lossy) body.
 #[derive(Clone, Debug, Default)]
 pub struct HttpResp {

@@ -1317,16 +1317,77 @@ impl AgentCloud {
         brain: &mut dyn AgentBrain,
         toolkit: Option<&dyn ToolKit>,
     ) -> AgentRunReport {
+        // A one-shot run is a session of exactly one goal: a fresh persistent
+        // state, driven once, snapshotted into a report.
+        let mut state = SessionState::new(&handle.id);
+        self.drive_state(handle, brain, toolkit, &mut state);
+        self.report_snapshot(handle, &state)
+    }
+
+    /// **Run one goal of a persistent [`Session`]** against `state`: drive the
+    /// brain's decided actions through the SAME cap-gate · budget · receipt braid
+    /// as [`run`](AgentCloud::run), but thread the result into the *persistent*
+    /// `state` — the receipt chain keeps linking, the budget keeps drawing down
+    /// (the meter cell is the cloud's, so it persists across goals), and the
+    /// monotonic seq continues. Returns the **cumulative** report so far (the
+    /// whole session as one re-witnessable artifact). The interactive twin of
+    /// [`run_with_toolkit`](AgentCloud::run_with_toolkit): call it once per goal a
+    /// user types, and the budget/chain accumulate across the conversation.
+    pub fn run_goal(
+        &self,
+        handle: &AgentHandle,
+        state: &mut SessionState,
+        brain: &mut dyn AgentBrain,
+        toolkit: &dyn ToolKit,
+    ) -> AgentRunReport {
+        self.drive_state(handle, brain, Some(toolkit), state);
+        self.report_snapshot(handle, state)
+    }
+
+    /// The **cumulative report of a session so far** — the whole receipt chain +
+    /// the current bound (drawn vs ceiling), without driving another goal. What
+    /// [`crate::session::Session::verify`] re-witnesses, and what a `verify`
+    /// command writes out. Host-untrusted: needs only the cloud's meter (for the
+    /// live consumed total) and the persistent `state`.
+    pub fn session_report(&self, handle: &AgentHandle, state: &SessionState) -> AgentRunReport {
+        self.report_snapshot(handle, state)
+    }
+
+    /// A fresh, host-untrusted report snapshot from the persistent `state` — the
+    /// cumulative receipt chain + the current bound (drawn so far vs the ceiling).
+    fn report_snapshot(&self, handle: &AgentHandle, state: &SessionState) -> AgentRunReport {
+        let consumed = self.meter.drawn_total(&handle.id);
+        AgentRunReport {
+            agent: handle.id.clone(),
+            asset: handle.asset.clone(),
+            budget: handle.budget,
+            consumed,
+            headroom: (handle.budget - consumed).max(0),
+            admitted: state.admitted,
+            cap_refused: state.cap_refused,
+            budget_refused: state.budget_refused,
+            receipts: state.receipts.clone(),
+            log: state.log.clone(),
+            signer: state.chain.signer_public(),
+            cells: state.cells.clone(),
+        }
+    }
+
+    /// The core run loop, parameterized over the *persistent* [`SessionState`]: a
+    /// one-shot run drives a fresh state once; a session drives the same state
+    /// across many goals. Identical authority · bound · receipt teeth either way.
+    fn drive_state(
+        &self,
+        handle: &AgentHandle,
+        brain: &mut dyn AgentBrain,
+        toolkit: Option<&dyn ToolKit>,
+        state: &mut SessionState,
+    ) {
         let cred = Credential::decode(&handle.credential)
             .expect("a deployed handle always carries a valid credential");
         let root_pub = self.root.public();
-        let chain = ReceiptChain::from_seed(receipt_seed(&handle.id));
-
-        let mut cells: BTreeMap<String, String> = BTreeMap::new();
-        let mut receipts: Vec<AgentReceipt> = Vec::new();
-        let mut log: Vec<ActionRecord> = Vec::new();
-        let (mut admitted, mut cap_refused, mut budget_refused) = (0u64, 0u64, 0u64);
-        let mut seq = 0u64;
+        // The brain is per-goal; its step ordinal restarts at 0 each goal. The
+        // chain, cells, receipts, counts, and seq all live in `state` and persist.
         let mut step = 0u64;
 
         while let Some(action) = brain.next_action(step) {
@@ -1345,7 +1406,7 @@ impl AgentCloud {
                 .verify(&root_pub, &cap_context(&cap, handle.block.max(0) as u64))
                 .is_err()
             {
-                cap_refused += 1;
+                state.cap_refused += 1;
                 brain.observe(&ActionObservation {
                     action: label.clone(),
                     admitted: false,
@@ -1353,7 +1414,7 @@ impl AgentCloud {
                     tool_ok: None,
                     tool_summary: None,
                 });
-                log.push(ActionRecord {
+                state.log.push(ActionRecord {
                     action: label,
                     outcome: ActionOutcome::CapRefused { cap },
                 });
@@ -1367,11 +1428,11 @@ impl AgentCloud {
             // priced tool runs, so no money moves; the draw is exactly-once per
             // (agent, seq).
             let draw_amount = action.draw_cost(handle.cost_per_action);
-            let key = MeterKey::new(&handle.id, seq as i64);
+            let key = MeterKey::new(&handle.id, state.seq as i64);
             match self.meter.draw(&key, draw_amount, handle.block) {
                 Ok(_) => {}
                 Err(MeterError::OverBudget { headroom, .. }) => {
-                    budget_refused += 1;
+                    state.budget_refused += 1;
                     brain.observe(&ActionObservation {
                         action: label.clone(),
                         admitted: false,
@@ -1379,7 +1440,7 @@ impl AgentCloud {
                         tool_ok: None,
                         tool_summary: None,
                     });
-                    log.push(ActionRecord {
+                    state.log.push(ActionRecord {
                         action: label,
                         outcome: ActionOutcome::BudgetRefused { headroom },
                     });
@@ -1388,7 +1449,7 @@ impl AgentCloud {
                 Err(_other) => {
                     // Any other budget refusal (structural) is also contained,
                     // reported with zero headroom (fail-closed).
-                    budget_refused += 1;
+                    state.budget_refused += 1;
                     brain.observe(&ActionObservation {
                         action: label.clone(),
                         admitted: false,
@@ -1396,7 +1457,7 @@ impl AgentCloud {
                         tool_ok: None,
                         tool_summary: None,
                     });
-                    log.push(ActionRecord {
+                    state.log.push(ActionRecord {
                         action: label,
                         outcome: ActionOutcome::BudgetRefused { headroom: 0 },
                     });
@@ -1413,11 +1474,11 @@ impl AgentCloud {
             let mut tool_witnessed: Option<WitnessedRun> = None;
             match &action {
                 AgentAction::CellWrite { path, value } => {
-                    cells.insert(path.clone(), value.clone());
+                    state.cells.insert(path.clone(), value.clone());
                 }
                 AgentAction::Invoke { service } => {
                     if let Some(tk) = toolkit {
-                        let oc = tk.invoke(service, None, &cells);
+                        let oc = tk.invoke(service, None, &state.cells);
                         tool_ok = Some(oc.ok);
                         tool_summary = Some(oc.summary);
                         tool_witnessed = oc.witnessed;
@@ -1431,7 +1492,7 @@ impl AgentCloud {
                     // above), so reaching here means the spend is funded — dispatch
                     // the priced tool (the Stripe payout) with the amount in hand.
                     if let Some(tk) = toolkit {
-                        let oc = tk.invoke(service, Some(*amount_cents), &cells);
+                        let oc = tk.invoke(service, Some(*amount_cents), &state.cells);
                         tool_ok = Some(oc.ok);
                         tool_summary = Some(oc.summary);
                         tool_witnessed = oc.witnessed;
@@ -1443,7 +1504,7 @@ impl AgentCloud {
                     // The cap-gate already admitted this tool+resource; run the real
                     // op (shell / fs / http / git) and bind its witnessed result.
                     if let Some(tk) = toolkit {
-                        let oc = tk.run_op(call, &cells);
+                        let oc = tk.run_op(call, &state.cells);
                         tool_ok = Some(oc.ok);
                         tool_summary = Some(oc.summary);
                         tool_witnessed = oc.witnessed;
@@ -1452,26 +1513,26 @@ impl AgentCloud {
             }
 
             // (4) RECEIPT — seal the admitted action (and any tool verdict) into
-            // the chain.
+            // the PERSISTENT chain (it keeps linking across goals in a session).
             let consumed = self.meter.drawn_total(&handle.id);
             let headroom = self.meter.headroom(&handle.id, handle.block);
             // Capture the verdict for the brain before it is moved into the receipt.
             let obs_tool_summary = tool_summary.clone();
             let mut receipt = AgentReceipt {
-                seq,
+                seq: state.seq,
                 agent: handle.id.clone(),
                 action: label.clone(),
                 cost: draw_amount,
                 consumed_after: consumed,
                 headroom_after: headroom,
-                cell_root: cell_root(&cells),
+                cell_root: cell_root(&state.cells),
                 tool_ok,
                 tool_summary: tool_summary.take(),
                 witnessed: tool_witnessed,
                 attestation: None,
             };
-            receipt.attestation = Some(chain.seal(receipt.body_hash(), seq, None));
-            receipts.push(receipt);
+            receipt.attestation = Some(state.chain.seal(receipt.body_hash(), state.seq, None));
+            state.receipts.push(receipt);
             brain.observe(&ActionObservation {
                 action: label.clone(),
                 admitted: true,
@@ -1479,29 +1540,80 @@ impl AgentCloud {
                 tool_ok,
                 tool_summary: obs_tool_summary,
             });
-            log.push(ActionRecord {
+            state.log.push(ActionRecord {
                 action: label,
                 outcome: ActionOutcome::Admitted,
             });
-            admitted += 1;
-            seq += 1;
+            state.admitted += 1;
+            state.seq += 1;
         }
+    }
+}
 
-        let consumed = self.meter.drawn_total(&handle.id);
-        AgentRunReport {
-            agent: handle.id.clone(),
-            asset: handle.asset.clone(),
-            budget: handle.budget,
-            consumed,
-            headroom: (handle.budget - consumed).max(0),
-            admitted,
-            cap_refused,
-            budget_refused,
-            receipts,
-            log,
-            signer: chain.signer_public(),
-            cells,
+/// The **persistent run state of a [`Session`]** — everything that must survive
+/// across goals so a hosted agent session accumulates into ONE re-witnessable
+/// artifact. Held by the cloud's caller (a [`crate::session::Session`]) and
+/// threaded through [`AgentCloud::run_goal`] once per goal:
+///
+/// - the **receipt chain** keeps linking (goal 2's first receipt's prev-hash is
+///   goal 1's last receipt — a spliced-out goal breaks the chain);
+/// - the committed **cell heap** carries forward (a value written in goal 1 is
+///   still readable in goal 3);
+/// - the running **counts** and the monotonic **seq** continue, so the meter
+///   draws stay exactly-once per `(agent, seq)` across the whole session.
+///
+/// The budget itself lives in the cloud's meter cell keyed by the agent id, so it
+/// draws down across goals automatically — this state only needs the seq cursor
+/// to keep the per-action draw keys unique.
+pub struct SessionState {
+    chain: ReceiptChain,
+    cells: BTreeMap<String, String>,
+    receipts: Vec<AgentReceipt>,
+    log: Vec<ActionRecord>,
+    admitted: u64,
+    cap_refused: u64,
+    budget_refused: u64,
+    seq: u64,
+}
+
+impl SessionState {
+    /// Fresh persistent state for `agent_id` (the receipt chain seeded from the id,
+    /// so the chain identity is bound to the agent and a run is reproducible).
+    pub fn new(agent_id: &str) -> SessionState {
+        SessionState {
+            chain: ReceiptChain::from_seed(receipt_seed(agent_id)),
+            cells: BTreeMap::new(),
+            receipts: Vec::new(),
+            log: Vec::new(),
+            admitted: 0,
+            cap_refused: 0,
+            budget_refused: 0,
+            seq: 0,
         }
+    }
+
+    /// The cumulative receipt chain so far (every admitted action across every
+    /// goal) — the re-witnessable record of the whole session.
+    pub fn receipts(&self) -> &[AgentReceipt] {
+        &self.receipts
+    }
+
+    /// The full ordered run log so far (admitted + refused, across every goal).
+    pub fn log(&self) -> &[ActionRecord] {
+        &self.log
+    }
+
+    /// Admitted-action count across the session.
+    pub fn admitted(&self) -> u64 {
+        self.admitted
+    }
+    /// Cap-refused count across the session.
+    pub fn cap_refused(&self) -> u64 {
+        self.cap_refused
+    }
+    /// Budget-refused count across the session.
+    pub fn budget_refused(&self) -> u64 {
+        self.budget_refused
     }
 }
 

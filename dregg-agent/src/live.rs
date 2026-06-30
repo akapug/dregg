@@ -70,12 +70,24 @@ impl LiveRun {
 /// Build the narrated transcript from a run report's signed log + receipts. Every
 /// admitted step is paired with its receipt (verdict + cost) in order.
 pub fn transcript_of(report: &AgentRunReport) -> Vec<LiveStep> {
+    transcript_of_slices(&report.log, &report.receipts)
+}
+
+/// Build the narrated transcript from a `(log, receipts)` slice pair — the
+/// per-goal **delta** form a [`crate::session::Session`] uses to narrate only the
+/// steps a single typed goal added (slice both vectors from the marks recorded
+/// before the goal ran; the admitted entries in the log slice pair 1:1 with the
+/// receipt slice, in order).
+pub fn transcript_of_slices(
+    log: &[crate::agent::ActionRecord],
+    receipts: &[crate::agent::AgentReceipt],
+) -> Vec<LiveStep> {
     let mut steps = Vec::new();
     let mut ri = 0usize;
-    for (i, rec) in report.log.iter().enumerate() {
+    for (i, rec) in log.iter().enumerate() {
         let (outcome, tool_summary, cost) = match &rec.outcome {
             ActionOutcome::Admitted => {
-                let r = report.receipts.get(ri);
+                let r = receipts.get(ri);
                 ri += 1;
                 (
                     "admitted".to_string(),
