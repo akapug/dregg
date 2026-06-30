@@ -112,6 +112,36 @@ pub struct RotatedParticipantLeg {
     pub descriptor: dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
     /// The 38-PI vector (`ROT_PI_COUNT`) the proof attests.
     pub public_inputs: Vec<BabyBear>,
+    /// **PROVER-SIDE-ONLY custom sub-proof re-provable witness** (the deployed custom-binding
+    /// thread). For a `Custom`-effect turn whose `customVmDescriptor2R24` leg publishes a claimed
+    /// `custom_proof_commitment` (IR2 PI 46..49), this carries the `CellProgram` + trace witness +
+    /// PIs needed to RE-PROVE the sub-proof as a recursion-foldable leaf
+    /// ([`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`]) so the chain prover can
+    /// fold it under [`crate::joint_turn_recursive::prove_custom_binding_node_segmented`], binding
+    /// the claimed commitment for a PURE LIGHT CLIENT. `None` for every non-custom turn. This is
+    /// prover-side witness data ONLY — it is NEVER serialized onto the on-wire artifact a light
+    /// client verifies (the wire `dregg_turn::CustomProgramProof` keeps only finished bytes + PIs);
+    /// the `Clone`/postcard round-trip below clones it directly (the proof is the heavy part).
+    pub custom_witness: Option<CustomWitnessBundle>,
+}
+
+/// The prover-side re-provable witness for a `Custom` turn's external sub-proof — exactly the four
+/// arguments [`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`] consumes to re-prove
+/// the `CellProgram` as a recursion-foldable IR-v2 leaf with an in-circuit-computed PI commitment.
+/// Retained on [`RotatedParticipantLeg::custom_witness`] so the deployed chain prover can mint the
+/// custom sub-proof leaf and fold it in with the dual-claim binding node. NEVER sent to the light
+/// client.
+#[derive(Clone)]
+pub struct CustomWitnessBundle {
+    /// The custom-effect `CellProgram` the sub-proof attests (re-proven, not the bespoke STARK).
+    pub program: dregg_circuit::dsl::circuit::CellProgram,
+    /// The named trace-column witness the program proves over.
+    pub witness_values: std::collections::HashMap<String, Vec<BabyBear>>,
+    /// The number of trace rows.
+    pub num_rows: usize,
+    /// The custom program's public inputs (the values the in-circuit PI commitment is taken over —
+    /// equal, by construction, to the leg's claimed `custom_proof_commitment` preimage).
+    pub public_inputs: Vec<BabyBear>,
 }
 
 impl Clone for RotatedParticipantLeg {
@@ -129,7 +159,18 @@ impl Clone for RotatedParticipantLeg {
             proof,
             descriptor: self.descriptor.clone(),
             public_inputs: self.public_inputs.clone(),
+            custom_witness: self.custom_witness.clone(),
         }
+    }
+}
+
+impl RotatedParticipantLeg {
+    /// Attach the prover-side custom sub-proof witness (the deployed custom-binding thread).
+    /// Builder-style; returns `self` with [`RotatedParticipantLeg::custom_witness`] set. The chain
+    /// prover reads it to mint the custom sub-proof leaf + segmented binding node for this turn.
+    pub fn with_custom_witness(mut self, bundle: CustomWitnessBundle) -> Self {
+        self.custom_witness = Some(bundle);
+        self
     }
 }
 
@@ -253,6 +294,7 @@ impl RotatedParticipantLeg {
             proof,
             descriptor: desc,
             public_inputs: dpis,
+            custom_witness: None,
         })
     }
 
@@ -393,6 +435,7 @@ impl RotatedParticipantLeg {
             proof,
             descriptor: welded,
             public_inputs: dpis,
+            custom_witness: None,
         })
     }
     /// **THE WIDE WELDED ROTATED+UMEM LEG (STAGED, VK-RISK-FREE) — the IVC half of the genuine flip
@@ -519,6 +562,7 @@ impl RotatedParticipantLeg {
             proof,
             descriptor: welded,
             public_inputs: dpis,
+            custom_witness: None,
         })
     }
 
@@ -659,6 +703,7 @@ impl RotatedParticipantLeg {
             proof,
             descriptor: welded,
             public_inputs: dpis,
+            custom_witness: None,
         })
     }
 

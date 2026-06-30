@@ -439,28 +439,40 @@ pub fn verify_joint_turn_recursive(
 }
 
 // ============================================================================
-// THE CUSTOM-EFFECT FOLD-WIRE (the deployed realization of the binding
-// `StarkSoundCustom` falsely assumed).
+// THE CUSTOM-EFFECT FOLD-WIRE (DEPLOYED — wired into the chain prover). The binding the Lean
+// `CustomBindingFromFold.custom_binding_from_fold` premise needs is now REAL for a pure light
+// client: `prove_custom_binding_node_segmented` (below) has a deployed caller in
+// `crate::ivc_turn_chain::prove_chain_core_rotated`.
 // ============================================================================
 //
 // A `Custom` effect's effect-vm leg publishes a CLAIMED `custom_proof_commitment` at IR2 PI
 // slots 46..49 (`customVmDescriptor2R24` / Lean `customPiExposure`). On its own that is an
 // UNBACKED claim: the in-AIR `proof_bind` op is a declaration, so a re-executing validator runs
 // `CellProgram::verify_transition` OFF-AIR but a PURE LIGHT CLIENT (folding only the recursion
-// tree) never witnesses the sub-proof. `StarkSoundCustom` ASSUMED `proofBind ⟹ ∃ verifying
-// sub-proof`; over the deployed AIR that gate is `True` and the assumption is vacuous.
+// tree) never witnesses the sub-proof. The fold-wire binds it IN the deployed tree.
 //
-// This fold-wire makes it REAL. For a custom turn the fold aggregates TWO leaves:
-//   * the effect-vm leg leaf, RE-EXPOSING its claimed 4-felt commitment (PI 46..49) through the
-//     `expose_claim` channel ([`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`]
-//     — the inner PIs themselves are consumed into the primitive `Public` table and never reach a
-//     combine hook, so the re-expose is mandatory);
+// For a custom turn the deployed chain prover (`prove_chain_core_rotated`) aggregates TWO leaves:
+//   * the effect-vm leg leaf as a DUAL-EXPOSE leaf
+//     ([`crate::ivc_turn_chain::prove_descriptor_leaf_dual_expose`]) — ONE `expose_claim` carrying
+//     the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` AND the claimed 4-felt commitment (PI 46..49)
+//     in lanes `[SEG_WIDTH ..)`; the inner PIs are otherwise consumed into the primitive `Public`
+//     table and never reach a combine hook, so the re-expose is mandatory;
 //   * the custom SUB-PROOF leaf, exposing its GENUINE in-circuit-computed PI-commitment
-//     ([`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`]).
-// The combine hook `connect`s the two 4-felt claims lane-by-lane. A turn whose effect-vm row
-// claims a commitment NO verifying sub-proof backs is now UNSAT: there is no satisfying custom
-// leaf whose exposed commitment equals the claimed slots 46..49, so the aggregate does not prove
-// — the binding a light client witnesses by folding the tree.
+//     ([`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`]), RE-PROVEN from the
+//     prover-side `CustomWitnessBundle` retained on the leg
+//     ([`crate::joint_turn_aggregation::RotatedParticipantLeg::custom_witness`]).
+// [`prove_custom_binding_node_segmented`] `connect`s the leg's claimed commitment lanes to the
+// sub-proof's genuine commitment AND re-exposes the SEGMENT, so the node folds into `aggregate_tree`
+// like any segment leaf. A turn whose effect-vm row claims a commitment NO verifying sub-proof
+// backs is UNSAT: there is no satisfying custom leaf whose exposed commitment equals the claimed
+// slots, so the aggregate does not prove (no root) and the light client never receives a verifying
+// artifact. The deployed bite is exercised end-to-end by
+// `circuit-prove/tests/custom_binding_deployed_tooth.rs` (honest-accept + forged-reject through
+// `prove_turn_chain_recursive` → `verify_turn_chain_recursive`).
+//
+// The original single-claim [`prove_custom_binding_node`] (a leg leaf re-exposing ONLY the
+// commitment) and the in-lib `custom_fold_wire_tests` below remain as the minimal MECHANISM teeth
+// over a stand-in leg; the deployed path uses the segment-preserving variant.
 
 /// Aggregate a custom turn's effect-vm leg leaf (which must RE-EXPOSE its claimed 4-felt
 /// `custom_proof_commitment` at PI 46..49 via
@@ -554,6 +566,99 @@ pub fn prove_custom_binding_node(
     })
 }
 
+/// **THE SEGMENT-PRESERVING CUSTOM BINDING NODE (deployed custom-binding half #2).** Aggregate a
+/// custom turn's DUAL-EXPOSE effect-vm leg leaf (minted by
+/// [`crate::ivc_turn_chain::prove_descriptor_leaf_dual_expose`] — its single `expose_claim` carries
+/// the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` and the CLAIMED `custom_proof_commitment` in lanes
+/// `[SEG_WIDTH .. SEG_WIDTH+CUSTOM_COMMIT_LEN)`) WITH the custom sub-proof leaf
+/// ([`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`], whose `expose_claim` is the
+/// genuine in-circuit commitment in lanes `[0 .. CUSTOM_COMMIT_LEN)`), and:
+///
+///   1. `connect`s the leg's claimed commitment lanes to the sub-proof's genuine commitment lanes
+///      (the binding tooth — a forged claim no sub-proof backs is a conflict ⇒ UNSAT ⇒ no root), and
+///   2. RE-EXPOSES the leg's SEGMENT lanes `[0 .. SEG_WIDTH)` as the parent claim.
+///
+/// The output therefore exposes an ordinary `SEG_WIDTH`-lane chain segment — byte-identical to what
+/// a plain [`crate::ivc_turn_chain::prove_descriptor_leaf_rotated_with_segment`] leaf for the same
+/// turn would expose — so it folds into [`crate::ivc_turn_chain::aggregate_tree`] like any other
+/// per-turn segment leaf. This is what makes the custom binding REAL for a pure light client: the
+/// commitment is bound IN the deployed recursion tree the light client folds, while the segment is
+/// preserved so the chain `[genesis_root, final_root, num_turns, chain_digest]` still reaches the
+/// root.
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`]. The connecting node uses the
+/// coeff-forced backend (the custom sub-proof child carries the `recompose/coeff` table).
+pub fn prove_custom_binding_node_segmented(
+    dual_expose_leg_leaf: &RecursionOutput<DreggRecursionConfig>,
+    custom_subproof_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::{SEG_WIDTH, expose_claim_instance_index};
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend_with_coeff_lookups;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let ev_idx = expose_claim_instance_index(&dual_expose_leg_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "dual-expose custom leg leaf carries no expose_claim table — it must be \
+                     wrapped via prove_descriptor_leaf_dual_expose (segment ++ commitment)"
+                .to_string(),
+        }
+    })?;
+    let cs_idx = expose_claim_instance_index(&custom_subproof_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "custom sub-proof leaf carries no exposed commitment (expose_claim) table — \
+                     it must be minted via prove_custom_leaf_with_commitment"
+                .to_string(),
+        }
+    })?;
+
+    let left = dual_expose_leg_leaf.into_recursion_input::<BatchOnly>();
+    let right = custom_subproof_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend_with_coeff_lookups();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let ev = left_apt
+            .get(ev_idx)
+            .expect("dual-expose leg's claim instance present");
+        let cs = right_apt
+            .get(cs_idx)
+            .expect("custom sub-proof's exposed commitment instance present");
+        debug_assert!(
+            ev.len() >= SEG_WIDTH + CUSTOM_COMMIT_LEN && cs.len() >= CUSTOM_COMMIT_LEN,
+            "dual-expose claim must carry segment ++ commitment; custom leaf carries commitment"
+        );
+        // THE BINDING TOOTH, IN-CIRCUIT: the leg's CLAIMED commitment (dual-expose lanes
+        // [SEG_WIDTH .. SEG_WIDTH+CUSTOM_COMMIT_LEN)) must equal the custom sub-proof's GENUINE
+        // in-circuit commitment, lane by lane. A forged claim with no backing sub-proof is a
+        // conflict here ⇒ UNSAT ⇒ no root.
+        for k in 0..CUSTOM_COMMIT_LEN {
+            cb.connect(ev[SEG_WIDTH + k], cs[k]);
+        }
+        // RE-EXPOSE ONLY THE SEGMENT (lanes [0 .. SEG_WIDTH)) as the parent claim, so this node
+        // folds into `aggregate_tree` exactly like a plain per-turn segment leaf.
+        let seg: Vec<Target> = (0..SEG_WIDTH).map(|k| ev[k]).collect();
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        BatchOnly,
+        _,
+        D,
+    >(&left, &right, config, &backend, &params, None, Some(&expose))
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("segmented custom-binding aggregation node failed: {e:?}"),
+    })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -568,15 +673,17 @@ pub fn prove_custom_binding_node(
 // ============================================================================
 // THE CUSTOM-EFFECT FOLD-WIRE TEETH (in-lib — no rotated mint needed).
 //
-// These exercise the deployed binding MECHANISM directly: the REAL custom sub-proof leaf
-// (`prove_custom_leaf_with_commitment`, the deployed custom-leaf adapter) folded against an
+// These exercise the binding MECHANISM directly: the REAL custom sub-proof leaf
+// (`prove_custom_leaf_with_commitment`, the custom-leaf adapter) folded against an
 // effect-vm leg leaf that PUBLISHES a claimed `custom_proof_commitment` at IR2 PI 46..49 — the
 // exact slot semantics the deployed `customVmDescriptor2R24` `customPiExposure` uses (four
-// `PiBinding .first` pins). The leg leaf here is a minimal PiBinding-only IR2 descriptor standing
-// in for the 789-wide deployed trace at the SAME exposure surface (binding the literal 789-wide
-// `customVmDescriptor2R24` leg end-to-end is the heavier `dregg-turn` custom-mint integration
-// follow-up; this proves the fold-wire + the tooth bite over the deployed slot + the deployed
-// custom leaf).
+// `PiBinding .first` pins). The leg leaf here is a minimal PiBinding-only IR2 descriptor STANDING
+// IN for the 789-wide deployed trace at the SAME exposure surface. This proves the fold-wire + the
+// tooth bite over the deployed slot + the real custom leaf via the single-claim
+// `prove_custom_binding_node`. The DEPLOYED path (the 789-wide leg + the retained custom witness +
+// the dual-claim leaf + `prove_custom_binding_node_segmented`, wired in `prove_chain_core_rotated`)
+// is exercised end-to-end by `circuit-prove/tests/custom_binding_deployed_tooth.rs`; these in-lib
+// teeth remain the minimal MECHANISM check.
 // ============================================================================
 #[cfg(test)]
 mod custom_fold_wire_tests {
@@ -751,8 +858,10 @@ mod custom_fold_wire_tests {
     /// THE TOOTH (the repair BITES): a FORGED effect-vm leg — claiming a `custom_proof_commitment`
     /// no verifying sub-proof backs (it is internally consistent, so the leg leaf itself proves) —
     /// has NO satisfying partner in the fold: the per-lane `connect` to the custom sub-proof leaf's
-    /// genuine commitment is a conflict, so the aggregate is UNSAT and no root exists. This is the
-    /// deployed realization of the binding `StarkSoundCustom` falsely assumed.
+    /// genuine commitment is a conflict, so the aggregate is UNSAT and no root exists. This proves
+    /// the binding MECHANISM bites over the single-claim node. The DEPLOYED bite (the segment-
+    /// preserving `prove_custom_binding_node_segmented` wired into `prove_chain_core_rotated`) is
+    /// pinned end-to-end by `circuit-prove/tests/custom_binding_deployed_tooth.rs`.
     #[test]
     fn forged_custom_commitment_is_rejected_by_the_fold() {
         let config = ir2_leaf_wrap_config();
