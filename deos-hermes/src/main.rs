@@ -45,6 +45,12 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "mock".to_string());
     match mode.as_str() {
+        // THE REAL CONFINED AGENT (no live provider needed): a brain-driven ACP
+        // loop. The on-box `LocalBrain` reads the prompt, decides tool-calls one
+        // at a time, OBSERVES each gate verdict, and ADAPTS — every call a
+        // cap-gated, receipted dregg turn (or an in-band refusal it works around).
+        // This is the replacement for the scripted stand-in.
+        "agent" => run_agent(),
         // The live brain → gateway seam over the standard confinement: the
         // `terminal` tool-call the model emits is ADMITTED (a cap-gated,
         // receipted dregg turn on the verified executor).
@@ -132,6 +138,39 @@ fn run_mock() {
 
     let model = AgentDockModel::from_run("sess-demo", &run, client.gateway());
     print!("{}", model.render_text());
+}
+
+/// THE REAL CONFINED AGENT — a brain-driven ACP loop over the standard
+/// confinement. The on-box [`LocalBrain`] forms a plan from the prompt, issues
+/// tool-calls one at a time, and reacts to each gate verdict; `write_file` is
+/// pinned to rate 0 here so the agent meets a refusal and ADAPTS (it falls back
+/// to a read-only probe rather than banging on the denied tool). Prints the dock.
+fn run_agent() {
+    use deos_hermes::{HermesAgentPeer, LocalBrain};
+
+    println!("deos-hermes — the REAL confined agent (brain-driven ACP loop)\n");
+    let (runtime, root_token, registry) = confinement();
+    // Deny write_file so the agent visibly works within its caps (adapts to the
+    // refusal) — the on-box brain's reactive loop, not a fixed script.
+    let registry = registry.with_grant_for_tool_deny("write_file");
+    let gateway = HermesGateway::new(&runtime, root_token, registry);
+
+    let peer = HermesAgentPeer::new("sess-agent", LocalBrain::new());
+    let mut client = AcpClient::new(peer, gateway, 10);
+    let run = client
+        .run_prompt(
+            "/Users/ember/dev/breadstuffs",
+            "search the docs, write a notes file, then run the build",
+        )
+        .expect("the brain-driven ACP loop runs end-to-end");
+
+    let model = AgentDockModel::from_run("sess-agent", &run, client.gateway());
+    print!("{}", model.render_text());
+    println!(
+        "\n(the brain decided {} tool-call(s); a denied write_file was met with a \
+         read-only fallback — the agent adapted within its caps.)",
+        run.verdicts.len()
+    );
 }
 
 /// The `hermes-acp` program deos spawns for the live loop. Overridable via
