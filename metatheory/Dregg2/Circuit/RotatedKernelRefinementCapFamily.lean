@@ -92,7 +92,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
   (revokeCapabilityV3 delegateV3 delegateAttenV3 grantCapWriteV3 attenuateV3
    introduceWriteV3 revokeDelegationWriteV3 refreshDelegationWriteV3
    beforeCapRootCol afterCapRootCol beforeDelegRootCol afterDelegRootCol
-   beforeCapRootCols afterCapRootCols writesTo8 withSelectorGate_satisfied2
+   beforeCapRootCols afterCapRootCols writesTo8 withSelectorGate withSelectorGate_satisfied2
    heldReadOpRot keepWriteOpRot removeWriteOpRot
    delegateV3_forces_write grantCapWriteV3_forces_write delegateAttenV3_non_amp attenuateV3_non_amp
    introduceWriteV3_forces_write revokeDelegationWriteV3_forces_write
@@ -696,10 +696,12 @@ structure DelegateWriteAnchor (S8 : Cap8Scheme)
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP = 1
   -- the WitnessDecodes seam: the decode's sorted-tree roots ARE the committed cap-root limbs.
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
   -- the cap-root advance now lives on the ROTATED before/after limbs (note-spend-shaped — the
   -- v1-state continuity collision dodged); the decode's sorted-tree roots ARE those committed limbs.
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeCapRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterCapRootCol EFFECT_VM_WIDTH)
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`delegate_forces_committed_write` — the post cap-root is FORCED to the genuine sorted insert.** From
 `Satisfied2 hash delegateV3` (via the DEPLOYED `insertWriteOp`, `delegateV3_forces_write`) the committed
@@ -708,15 +710,18 @@ committed BEFORE limb — under CR a forged post-root is excluded (`writesTo` is
 fact rides the DEPLOYED constraints: editing `delegateV3`'s write op turns this RED. -/
 theorem delegate_forces_committed_write (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash delegateV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 delegateV3 name n) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : DelegateWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
-    writesTo hash henc.oldRoot
+    writesTo8 S8 henc.oldRoot
       ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
       henc.newRoot := by
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (delegateV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+  exact effCapOpenWriteV3_forces_write8 S8 delegateV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **`delegate_descriptorRefines_sat` — THE DELEGATE CLASS-A REFINEMENT (write FORCED).** From
 `Satisfied2 hash delegateV3` + the decode + the realizable write-anchor, the kernel `DelegateSpec pre del
@@ -726,16 +731,18 @@ decode field), the post-root here is pinned by the LIVE `insertWriteOp` — guar
 The `grant` `Caps`-move + frame + log are the named §1 decode residual. -/
 theorem delegate_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash delegateV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 delegateV3 name n) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : DelegateWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
   ⟨delegate_descriptorRefines S8 pre post del rec t henc,
-   delegate_forces_committed_write S8 pre post del rec t hash mi mf ma tr hsat henc anc⟩
+   delegate_forces_committed_write S8 pre post del rec t name n hash mi mf ma tr hChip hsat henc anc⟩
 
 /-- **`grantCap_descriptorRefines_sat` — THE GRANTCAP CLASS-A REFINEMENT (write FORCED).** As
 `delegate_descriptorRefines_sat`, consuming `Satisfied2 hash grantCapWriteV3` via
@@ -743,17 +750,20 @@ theorem delegate_descriptorRefines_sat (S8 : Cap8Scheme)
 The bare grant routes to `DelegateSpec` (the same insert), so the SAME decode delivers the kernel spec. -/
 theorem grantCap_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash grantCapWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 grantCapWriteV3 name n) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : DelegateWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
   refine ⟨delegate_descriptorRefines S8 pre post del rec t henc, ?_⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (grantCapWriteV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+  exact effCapOpenWriteV3_forces_write8 S8 grantCapWriteV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **`DelegateAttenWriteAnchor` — the realizable trace seam for delegateAtten** (the attenuated grant's
 INSERT). As `DelegateWriteAnchor` over the `DelegateAttenCapsTreeEncodes` decode. -/
@@ -764,10 +774,12 @@ structure DelegateAttenWriteAnchor (S8 : Cap8Scheme)
   row : Nat
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP = 1
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
   -- the cap-root advance now lives on the ROTATED before/after limbs (note-spend-shaped — the
   -- v1-state continuity collision dodged); the decode's sorted-tree roots ARE those committed limbs.
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeCapRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterCapRootCol EFFECT_VM_WIDTH)
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`delegateAtten_descriptorRefines_sat` — THE DELEGATEATTEN CLASS-A REFINEMENT (write FORCED + non-amp).**
 From `Satisfied2 hash delegateAttenV3` (via `delegateAttenV3_non_amp` — the DEPLOYED held-read + insert-write
@@ -776,22 +788,31 @@ sorted insert of the attenuated grant, AND the conferred mask `⊑` the held mas
 in-circuit). The attenuated-`grant` `Caps`-move + frame + log are the named §2.b decode residual. -/
 theorem delegateAtten_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
     (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
       = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
-    (hsat : Satisfied2 hash delegateAttenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 delegateAttenV3 name n) mi mf ma tr)
     (henc : DelegateAttenCapsTreeEncodes S8 pre post del rec t keep)
     (anc : DelegateAttenWriteAnchor S8 pre post del rec t keep hash mi mf ma tr henc) :
     DelegateAttenSpec pre del rec t keep post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot
     ∧ ∃ a b : Nat, (envAt tr anc.row).loc (prmCol KEEP_MASK) = (a : ℤ)
         ∧ (envAt tr anc.row).loc (prmCol HELD_MASK) = (b : ℤ) ∧ a &&& b = a := by
-  have hforced := delegateAttenV3_non_amp hash mi mf ma tr hsub hsat anc.row anc.hrow anc.hactive
-  refine ⟨delegateAtten_descriptorRefines S8 pre post del rec t keep henc, ?_, hforced.2.2⟩
+  -- the submask non-amplification rides the STRIPPED base `delegateAttenV3` satisfaction.
+  have hbase : Satisfied2 hash delegateAttenV3 mi mf ma tr :=
+    Dregg2.Circuit.Emit.CapOpenEmit.effCapOpenV3_satisfied2_strips_to_base hash delegateAttenV3 name n
+      mi mf ma tr
+      (Dregg2.Circuit.Emit.CapOpenEmit.effCapOpenWriteV3_strips_to_capOpen hash delegateAttenV3 name n
+        mi mf ma tr hsat)
+  have hnonamp := delegateAttenV3_non_amp hash mi mf ma tr hsub hbase anc.row anc.hrow anc.hactive
+  refine ⟨delegateAtten_descriptorRefines S8 pre post del rec t keep henc, ?_, hnonamp.2.2⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact hforced.2.1
+  exact effCapOpenWriteV3_forces_write8 S8 delegateAttenV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-! ## §3.5F — CLASS A for the FROZEN-FACE slots, REBASED onto the MOVING `…Genuine` face
 (introduce / revokeDelegation — guarantee A circuit-FORCED).
@@ -815,10 +836,12 @@ structure IntroduceWriteAnchor (S8 : Cap8Scheme)
   row : Nat
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmit.sel.INTRODUCE = 1
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
   -- the cap-root advance now lives on the ROTATED before/after limbs (note-spend-shaped — the
   -- v1-state continuity collision dodged); the decode's sorted-tree roots ARE those committed limbs.
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeCapRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterCapRootCol EFFECT_VM_WIDTH)
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`introduce_descriptorRefines_sat` — THE INTRODUCE CLASS-A REFINEMENT (write FORCED, frozen-face
 close).** From `Satisfied2 hash introduceWriteV3` (via `introduceWriteV3_forces_write` on the MOVING genuine
@@ -826,17 +849,20 @@ face), the kernel `DelegateSpec` HOLDS AND the post cap-root is the DEPLOYED-FOR
 The v1-face `gCapPass` freeze that left the write off-row is GONE — guarantee A circuit-forced. -/
 theorem introduce_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash introduceWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 introduceWriteV3 name n) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : IntroduceWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
   refine ⟨delegate_descriptorRefines S8 pre post del rec t henc, ?_⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (introduceWriteV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+  exact effCapOpenWriteV3_forces_write8 S8 introduceWriteV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **`RevokeDelegationWriteAnchor` — the realizable trace seam for revokeDelegation** (the edge REMOVE on the
 MOVING genuine face). As `DelegateWriteAnchor` over the `RevokeCapsTreeEncodes` decode; revokeDelegation
@@ -848,10 +874,12 @@ structure RevokeDelegationWriteAnchor (S8 : Cap8Scheme)
   row : Nat
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION = 1
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
   -- the cap-root advance now lives on the ROTATED before/after limbs (note-spend-shaped — the
   -- v1-state continuity collision dodged); the decode's sorted-tree roots ARE those committed limbs.
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeCapRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterCapRootCol EFFECT_VM_WIDTH)
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`revokeDelegation_descriptorRefines_sat` — THE REVOKEDELEGATION CLASS-A REFINEMENT (write FORCED,
 frozen-face close).** From `Satisfied2 hash revokeDelegationWriteV3` (via
@@ -860,30 +888,35 @@ post cap-root is the DEPLOYED-FORCED genuine sorted REMOVE (the ZERO-sentinel wr
 The v1-face `gCapPass` freeze is GONE — guarantee A circuit-forced. Non-amp structural (ZERO write). -/
 theorem revokeDelegation_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (holder t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 revokeDelegationWriteV3 name n) mi mf ma tr)
     (henc : RevokeCapsTreeEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr henc) :
     RevokeSpec pre holder t post
-    ∧ writesTo hash henc.oldRoot
-        ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+    ∧ writesTo8 S8 henc.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
   refine ⟨revoke_descriptorRefines S8 pre post holder t henc, ?_⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (revokeDelegationWriteV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+  exact effCapOpenWriteV3_forces_write8 S8 revokeDelegationWriteV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **CLASS-A TOOTH (introduce) — a forged wrong post-root is UNSAT.** Mutation: dropping `insertWriteOp`
 from `introduceWriteV3` removes the forced `writesTo`, so this conclusion can no longer be drawn. -/
 theorem introduce_sat_forces_postroot (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash introduceWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 introduceWriteV3 name n) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : IntroduceWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
-    writesTo hash henc.oldRoot
+    writesTo8 S8 henc.oldRoot
       ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
       henc.newRoot :=
-  (introduce_descriptorRefines_sat S8 pre post del rec t hash mi mf ma tr hsat henc anc).2
+  (introduce_descriptorRefines_sat S8 pre post del rec t name n hash mi mf ma tr hChip hsat henc anc).2
 
 /-- **CLASS-A TOOTH (revoke / revokeDelegation, tag 2 + tag 14) — the cap-tree REMOVE post-root is
 FORCED.** From `Satisfied2 hash revokeDelegationWriteV3` the genuine REMOVE write (the ZERO sentinel at the
@@ -892,14 +925,16 @@ perturbing/dropping `removeWriteOpRot sel.REVOKE_DELEGATION` from `revokeDelegat
 forced `writesTo`, so this conclusion can no longer be drawn — the tag-2 (and tag-14) apex rung reds. -/
 theorem revokeDelegation_sat_forces_postroot (S8 : Cap8Scheme)
     (pre post : RecChainedState) (holder t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 revokeDelegationWriteV3 name n) mi mf ma tr)
     (henc : RevokeCapsTreeEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr henc) :
-    writesTo hash henc.oldRoot
-      ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+    writesTo8 S8 henc.oldRoot
+      ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
       henc.newRoot :=
-  (revokeDelegation_descriptorRefines_sat S8 pre post holder t hash mi mf ma tr hsat henc anc).2
+  (revokeDelegation_descriptorRefines_sat S8 pre post holder t name n hash mi mf ma tr hChip hsat henc anc).2
 
 /-- **FORGE-DETECTOR (revoke, tag 2) — a fabricated post-cap-root is UNSAT.** The genuine REMOVE write
 FORCES the post-cap-root (`revokeDelegation_sat_forces_postroot`); `writesTo` is FUNCTIONAL under CR
@@ -909,19 +944,28 @@ forced `writesTo henc.oldRoot key 0 henc.newRoot` is the live witness (drop `rem
 hypothesis it consumes vanishes), and `forgedRoot ≠ henc.newRoot` is satisfiable, so the elimination bites
 genuinely. The tag-2 and tag-14 revoke share `revokeDelegationWriteV3`, so this one detector guards both. -/
 theorem revoke_sat_rejects_forged_postroot (S8 : Cap8Scheme)
-    (hash : List ℤ → ℤ) (hCR : Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR hash)
     (pre post : RecChainedState) (holder t : CellId)
-    (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteV3 mi mf ma tr)
+    (name : String) (n : Nat)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 revokeDelegationWriteV3 name n) mi mf ma tr)
     (henc : RevokeCapsTreeEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr henc)
+    -- NAMED CRYPTO CARRIER: the deployed cap-tree's 8-felt `writesTo8`-functionality (membership-path
+    -- uniqueness at full ~124-bit width, derivable from `S8.chip8CR` — the internalization TODO mirroring
+    -- the scalar `MapMerkleRoot.writesToMerkle_functional` that the `hCR` tooth consumed).
+    (hWrites8Func : ∀ {r₁ r₂ : Digest8},
+      writesTo8 S8 henc.oldRoot ((envAt tr anc.row).loc (prmCol CAP_KEY))
+        ((envAt tr anc.row).loc (prmCol KEEP_MASK)) r₁ →
+      writesTo8 S8 henc.oldRoot ((envAt tr anc.row).loc (prmCol CAP_KEY))
+        ((envAt tr anc.row).loc (prmCol KEEP_MASK)) r₂ → r₁ = r₂)
     (forgedRoot : Digest8)
-    (hforged : writesTo hash henc.oldRoot
-      ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0 forgedRoot)
+    (hforged : writesTo8 S8 henc.oldRoot
+      ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK)) forgedRoot)
     (hne : forgedRoot ≠ henc.newRoot) :
     False :=
-  hne (Dregg2.Circuit.DescriptorIR2.writesTo_functional hash hCR hforged
-    (revokeDelegation_sat_forces_postroot S8 pre post holder t hash mi mf ma tr hsat henc anc))
+  hne (hWrites8Func hforged
+    (revokeDelegation_sat_forces_postroot S8 pre post holder t name n hash mi mf ma tr hChip hsat henc anc))
 
 #assert_axioms introduce_descriptorRefines_sat
 #assert_axioms revokeDelegation_descriptorRefines_sat
@@ -945,31 +989,39 @@ grantCapWriteV3` and applying `grantCap_descriptorRefines_sat`. The apex (`Rfix 
 `delegateWriteCapOpenV3`) wires this. -/
 theorem delegate_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash delegateWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
+        (effCapOpenWriteV3 grantCapWriteV3 name n)) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : DelegateWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  grantCap_descriptorRefines_sat S8 pre post del rec t hash mi mf ma tr
-    (capOpen_satisfied2_strips_to_base hash _ grantCapWriteV3 _ _ mi mf ma tr hsat) henc anc
+  grantCap_descriptorRefines_sat S8 pre post del rec t name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 grantCapWriteV3 name n) mi mf ma tr hsat) henc anc
 
 /-- **`grantCap_descriptorRefines_capOpenSat` — the apex-wirable grantCap rung.** As above over
 `grantCapWriteCapOpenV3` (base `grantCapWriteV3`). The apex wires this. -/
 theorem grantCap_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash grantCapWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
+        (effCapOpenWriteV3 grantCapWriteV3 name n)) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : DelegateWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  grantCap_descriptorRefines_sat S8 pre post del rec t hash mi mf ma tr
-    (capOpen_satisfied2_strips_to_base hash _ grantCapWriteV3 _ _ mi mf ma tr hsat) henc anc
+  grantCap_descriptorRefines_sat S8 pre post del rec t name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 grantCapWriteV3 name n) mi mf ma tr hsat) henc anc
 
 /-- **`delegateAtten_descriptorRefines_capOpenSat` — the apex-wirable delegateAtten rung (tag 11).** Consumes
 `Satisfied2 hash delegateAttenWriteCapOpenV3` (base `delegateAttenV3`) by stripping to `Satisfied2
@@ -977,20 +1029,24 @@ delegateAttenV3` and applying `delegateAtten_descriptorRefines_sat` (write FORCE
 non-amplification). The apex (`Rfix 11` re-pointed) wires this. -/
 theorem delegateAtten_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId) (keep : List Auth)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
     (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
       = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
-    (hsat : Satisfied2 hash delegateAttenWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
+        (effCapOpenWriteV3 delegateAttenV3 name n)) mi mf ma tr)
     (henc : DelegateAttenCapsTreeEncodes S8 pre post del rec t keep)
     (anc : DelegateAttenWriteAnchor S8 pre post del rec t keep hash mi mf ma tr henc) :
     DelegateAttenSpec pre del rec t keep post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot
     ∧ ∃ a b : Nat, (envAt tr anc.row).loc (prmCol KEEP_MASK) = (a : ℤ)
         ∧ (envAt tr anc.row).loc (prmCol HELD_MASK) = (b : ℤ) ∧ a &&& b = a :=
-  delegateAtten_descriptorRefines_sat S8 pre post del rec t keep hash mi mf ma tr hsub
-    (capOpen_satisfied2_strips_to_base hash _ delegateAttenV3 _ _ mi mf ma tr hsat) henc anc
+  delegateAtten_descriptorRefines_sat S8 pre post del rec t keep name n hash mi mf ma tr hsub hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 delegateAttenV3 name n) mi mf ma tr hsat) henc anc
 
 /-- **`introduce_descriptorRefines_capOpenSat` — the apex-wirable introduce rung.** Consumes `Satisfied2
 hash introduceWriteCapOpenV3` (the WRITE-FORCING wrapper, base `introduceWriteV3`) by stripping to the base
@@ -998,32 +1054,40 @@ and applying `introduce_descriptorRefines_sat`. The apex (`Rfix 10` re-pointed t
 wires this. -/
 theorem introduce_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (del rec t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash introduceWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.INTRODUCE
+        (effCapOpenWriteV3 introduceWriteV3 name n)) mi mf ma tr)
     (henc : DelegateCapsTreeEncodes S8 pre post del rec t)
     (anc : IntroduceWriteAnchor S8 pre post del rec t hash mi mf ma tr henc) :
     DelegateSpec pre del rec t post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  introduce_descriptorRefines_sat S8 pre post del rec t hash mi mf ma tr
-    (capOpen_satisfied2_strips_to_base hash _ introduceWriteV3 _ _ mi mf ma tr hsat) henc anc
+  introduce_descriptorRefines_sat S8 pre post del rec t name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 introduceWriteV3 name n) mi mf ma tr hsat) henc anc
 
 /-- **`revokeDelegation_descriptorRefines_capOpenSat` — the apex-wirable revokeDelegation rung.** Consumes
 `Satisfied2 hash revokeDelegationWriteCapOpenV3` (base `revokeDelegationWriteV3`) by stripping to the base
 and applying `revokeDelegation_descriptorRefines_sat`. The apex (`Rfix 14` re-pointed) wires this. -/
 theorem revokeDelegation_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (holder t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION
+        (effCapOpenWriteV3 revokeDelegationWriteV3 name n)) mi mf ma tr)
     (henc : RevokeCapsTreeEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr henc) :
     RevokeSpec pre holder t post
-    ∧ writesTo hash henc.oldRoot
-        ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+    ∧ writesTo8 S8 henc.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  revokeDelegation_descriptorRefines_sat S8 pre post holder t hash mi mf ma tr
-    (capOpen_satisfied2_strips_to_base hash _ revokeDelegationWriteV3 _ _ mi mf ma tr hsat) henc anc
+  revokeDelegation_descriptorRefines_sat S8 pre post holder t name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 revokeDelegationWriteV3 name n) mi mf ma tr hsat) henc anc
 
 /-- **`revokeDelegation_descriptorRefines_capOpenSat_full` — the EPOCH-strengthened CLASS-A revokeDelegation
 rung.** The deployed descriptor FORCES the cap-tree REMOVE (`revokeDelegation_descriptorRefines_capOpenSat`,
@@ -1033,16 +1097,20 @@ epoch bumped + child snapshot staled) rides the NAMED `RevokeDelegationFullEncod
 `RevokeDelegationFullSpec` AND the forced cap-tree remove `writesTo`. -/
 theorem revokeDelegation_descriptorRefines_capOpenSat_full (S8 : Cap8Scheme)
     (pre post : RecChainedState) (holder t : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION
+        (effCapOpenWriteV3 revokeDelegationWriteV3 name n)) mi mf ma tr)
     (hfull : RevokeDelegationFullEncodes S8 pre post holder t)
     (anc : RevokeDelegationWriteAnchor S8 pre post holder t hash mi mf ma tr hfull.capRemove) :
     Dregg2.Circuit.Spec.AuthorityRevocation.RevokeDelegationFullSpec pre holder t post
-    ∧ writesTo hash hfull.capRemove.oldRoot
-        ((envAt tr anc.row).loc (prmCol CAP_KEY)) 0
+    ∧ writesTo8 S8 hfull.capRemove.oldRoot
+        ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         hfull.capRemove.newRoot :=
   ⟨revokeDelegation_descriptorRefines S8 pre post holder t hfull,
-   (revokeDelegation_descriptorRefines_capOpenSat S8 pre post holder t hash mi mf ma tr hsat
+   (revokeDelegation_descriptorRefines_capOpenSat S8 pre post holder t name n hash mi mf ma tr hChip hsat
       hfull.capRemove anc).2⟩
 
 /-! ## §3.5R — CLASS A for refreshDelegation: the DELEGATIONS-tree WRITE is FORCED (the LAST cap-family
@@ -1073,10 +1141,13 @@ structure RefreshDelegationWriteAnchor (S8 : Cap8Scheme)
   row : Nat
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc Dregg2.Circuit.Emit.EffectVmEmit.sel.REFRESH_DELEGATION = 1
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
   -- the WitnessDecodes seam: the decode's DELEG sorted-tree roots ARE the committed rotated deleg-root
-  -- limbs (the rotated cap-root limb 25 carries the DELEG accumulator on a refresh row; refresh freezes caps).
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeDelegRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterDelegRootCol EFFECT_VM_WIDTH)
+  -- 8-felt block (the rotated cap-root limb 25 carries the DELEG accumulator on a refresh row; refresh
+  -- freezes caps, so the cap-root 8-felt block faithfully carries the DELEG accumulator).
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`refreshDelegation_descriptorRefines_sat` — THE REFRESHDELEGATION CLASS-A REFINEMENT (DELEG write
 FORCED).** From `Satisfied2 hash refreshDelegationWriteV3` (via `refreshDelegationWriteV3_forces_write` on
@@ -1087,31 +1158,36 @@ guarantee A circuit-forced over the delegations tree. The `refreshDelegationsMap
 ride the §2.c decode residual. -/
 theorem refreshDelegation_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor child : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash refreshDelegationWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 refreshDelegationWriteV3 name n) mi mf ma tr)
     (henc : RefreshDelegationCapsTreeEncodes S8 pre post actor child)
     (anc : RefreshDelegationWriteAnchor S8 pre post actor child hash mi mf ma tr henc) :
     RefreshDelegationFullSpec pre actor child post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
   refine ⟨refreshDelegation_descriptorRefines S8 pre post actor child henc, ?_⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (refreshDelegationWriteV3_forces_write hash mi mf ma tr hsat anc.row anc.hrow anc.hactive).2
+  exact effCapOpenWriteV3_forces_write8 S8 refreshDelegationWriteV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **CLASS-A TOOTH (refreshDelegation) — a forged wrong post-deleg-root is UNSAT.** Mutation: dropping
 `delegUpdateWriteOpRot` from `refreshDelegationWriteV3` removes the forced `writesTo`, so this conclusion
 can no longer be drawn — editing the deleg-write descriptor reds the apex. -/
 theorem refreshDelegation_sat_forces_delegroot (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor child : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash refreshDelegationWriteV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 refreshDelegationWriteV3 name n) mi mf ma tr)
     (henc : RefreshDelegationCapsTreeEncodes S8 pre post actor child)
     (anc : RefreshDelegationWriteAnchor S8 pre post actor child hash mi mf ma tr henc) :
-    writesTo hash henc.oldRoot
+    writesTo8 S8 henc.oldRoot
       ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
       henc.newRoot :=
-  (refreshDelegation_descriptorRefines_sat S8 pre post actor child hash mi mf ma tr hsat henc anc).2
+  (refreshDelegation_descriptorRefines_sat S8 pre post actor child name n hash mi mf ma tr hChip hsat henc anc).2
 
 /-- **`refreshDelegation_descriptorRefines_capOpenSat` — the apex-wirable refreshDelegation rung.** Consumes
 `Satisfied2 hash refreshDelegationWriteCapOpenV3` (base `refreshDelegationWriteV3`) by stripping the cap-open
@@ -1119,16 +1195,20 @@ authority appendix + selector tooth to the base and applying `refreshDelegation_
 apex (`Rfix 55` re-pointed) wires this. -/
 theorem refreshDelegation_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor child : CellId)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsat : Satisfied2 hash refreshDelegationWriteCapOpenV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REFRESH_DELEGATION
+        (effCapOpenWriteV3 refreshDelegationWriteV3 name n)) mi mf ma tr)
     (henc : RefreshDelegationCapsTreeEncodes S8 pre post actor child)
     (anc : RefreshDelegationWriteAnchor S8 pre post actor child hash mi mf ma tr henc) :
     RefreshDelegationFullSpec pre actor child post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  refreshDelegation_descriptorRefines_sat S8 pre post actor child hash mi mf ma tr
-    (capOpen_satisfied2_strips_to_base hash _ refreshDelegationWriteV3 _ _ mi mf ma tr hsat) henc anc
+  refreshDelegation_descriptorRefines_sat S8 pre post actor child name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 refreshDelegationWriteV3 name n) mi mf ma tr hsat) henc anc
 
 #assert_axioms refreshDelegation_descriptorRefines_sat
 #assert_axioms refreshDelegation_sat_forces_delegroot
