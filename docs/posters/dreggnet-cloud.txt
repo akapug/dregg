@@ -1,0 +1,40 @@
+  ░▒▓ ☁ ▓▒░ ────────────────────────────────────────────────────────────────────────────────── ░▒▓ ☁ ▓▒░
+                  .-~~~~-.
+               .-~    ☁    ~-.          D R E G G N E T   ·   C L O U D
+              (    ~    ·    ~   )       the permissionless cloud you can't be lied to.
+               `~-- .  .  .  --~'       ▸  no ID  ·  no card  ·  the chain is your account
+  ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ░▒▓ THE ONE MOVE ▓▒░   every cloud asks for your trust. this one hands you a proof instead.
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+     the usual deal:   you ship, the host serves it and bills you — and you TRUST it served what you wrote
+                       and charged what it should.   you have no way to check.
+     dregg:   you ship, we host —  and the bytes you're served and the price you're charged are each a CELL
+              you re-witness against a committed root.   a five-year-old clicks deploy; an adept checks the proof.
+
+  ░▒▓ WHAT YOU CAN CHECK YOURSELF ▓▒░   not a promise — a proof you re-run
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+     ⟦ the bytes   ⟧   served from a committed cell — a visitor re-hashes them against the root.   no swap, no tamper
+     ⟦ the bill    ⟧   $DREGG moves Σδ=0, in-band, per request — the meter IS the ledger.          no mystery invoice
+     ⟦ the account ⟧   a capability you attenuate, not a password you surrender.   grant ⊆ held — and you can revoke
+     and the runtime underneath:  durable · crash-resumable · exactly-once-metered · receipted — you pay for what ran.
+
+  ░▒▓ THE WORKLOAD THAT TRANSACTS ▓▒░   a function, grown a voice
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+     your code, mid-request, reaches back through the cap-gated bridge:   invoke a service · move value · read+write
+     its own cell — each call weighed against its lease, charged, and signed into the ledger.
+            ‹ not a function that just returns — an agent that can pay, call, and answer for what it spent. ›
+
+  ░▒▓ AND HUNDREDS OF APPS, CAP-SECURED ▓▒░   (Sandstorm, on the verified rail)
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+     a grain is a cell · the powerbox is an attenuable cap · the sandbox is a tier · the app can't escape, can't
+     phone home, can't touch its neighbor — and even a hostile package can't make the host lie about it.
+            ‹ Sandstorm gave the powerbox.  dregg makes the powerbox PROVABLE. ›
+
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+     git push → built in a sandbox → published as a cell → live at your domain, with a real cert,
+     paid in $DREGG.   the bytes you serve and the price you pay check against the chain — no trust required.
+
+              ░▒▓█  the permissionless cloud, where the host cannot lie.  █▓▒░
+                    websites · servers · certs · domains · deploys · apps · agents — verifiable
+                                  🐉   https://dregg.works   ·   $DREGG   ·   built with Claude
