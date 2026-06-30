@@ -2,10 +2,20 @@
 //!
 //! ```text
 //!   dregg-agent run --goal "<natural-language goal>" [--budget N] [--caps …]
-//!                   [--workdir DIR] [--model M] [--base URL] [--step-cap N]
+//!                   [--brain nemotron|hermes|hermes-cli]
+//!                   [--workdir DIR] [--model M] [--base URL]
+//!                   [--llm-base URL] [--llm-model M] [--step-cap N]
 //!                   [--out run.json] [--record resp.json | --replay resp.json] [--no-scale]
 //!   dregg-agent verify <run.json> [--tamper]
 //! ```
+//!
+//! `--brain hermes` drives the **actual Nous Hermes model** over the Nous Portal
+//! (`http://127.0.0.1:8645/v1`, model `hermes-agent`, bearer `~/.nousportalkey` /
+//! `NOUS_PORTAL_KEY`). `--brain hermes-cli` drives the **real `hermes` CLI** as the
+//! confined harness — it reasons with its own installed skills (incl. the real
+//! Stripe Skills) while dregg intercepts each skill-call through the
+//! cap-gate + budget + receipt. Both go live the moment the Nous Portal key / the
+//! `hermes` CLI are present; offline they run a faithful recorded transport.
 //!
 //! `run` gives a live model an arbitrary goal + a budget + a cap bundle, and runs
 //! a real reason → act → observe loop: the model decides the next tool call, the
@@ -52,9 +62,16 @@ fn usage() {
         "dregg-agent — a flexible, live, bounded operator agent\n\n\
          USAGE:\n\
          \x20 dregg-agent run --goal \"<goal>\" [--budget N] [--caps a,b,…] [--workdir DIR]\n\
-         \x20                 [--model M] [--base URL] [--step-cap N] [--out run.json]\n\
+         \x20                 [--brain nemotron|hermes|hermes-cli]\n\
+         \x20                 [--model M] [--base URL] [--llm-model M] [--llm-base URL]\n\
+         \x20                 [--step-cap N] [--out run.json]\n\
          \x20                 [--record resp.json | --replay resp.json] [--no-scale]\n\
          \x20 dregg-agent verify <run.json> [--tamper]\n\n\
+         BRAIN:\n\
+         \x20 nemotron   (default) NVIDIA Nemotron over its OpenAI-compatible endpoint\n\
+         \x20 hermes     the actual Nous Hermes model over the Nous Portal proxy\n\
+         \x20            (http://127.0.0.1:8645/v1, model hermes-agent; key ~/.nousportalkey)\n\
+         \x20 hermes-cli the real `hermes` CLI as the confined harness (its own skills)\n\n\
          CAPS (comma-separated): shell, fs, git:HOST, http:HOST, run_tests,\n\
          \x20                     provision:PROVIDER (Stripe Projects skill),\n\
          \x20                     pay:VENDOR (Stripe Link skill), spend (pay any vendor),\n\
@@ -204,15 +221,41 @@ mod live {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use dregg_agent::agent::{AgentAction, AgentCloud, AgentSpec, PlannedBrain, ToolCall, op};
+    use dregg_agent::agent::{
+        AgentAction, AgentCloud, AgentHandle, AgentRunReport, AgentSpec, PlannedBrain, ToolCall, op,
+    };
     use dregg_agent::brain::{
         LiveOpenAICompatCaller, OpenAICompatBrain, OpenAICompatCaller, ProviderKey,
     };
+    use dregg_agent::harness::{HarnessBrain, MockHarness};
+    use dregg_agent::hermes;
     use dregg_agent::live::{LiveRun, transcript_of};
     use dregg_agent::stripe_skills;
     use dregg_agent::toolkit::Toolkit;
     use dregg_agent::tools::{HttpResp, OperatorTools, ShellOut};
     use serde_json::Value;
+
+    /// The selected brain profile (`--brain`).
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum BrainKind {
+        /// NVIDIA Nemotron over its OpenAI-compatible endpoint (the default).
+        Nemotron,
+        /// The actual Nous Hermes model over the Nous Portal proxy.
+        Hermes,
+        /// The real `hermes` CLI as the confined harness (its own skills).
+        HermesCli,
+    }
+
+    impl BrainKind {
+        fn parse(s: &str) -> Option<BrainKind> {
+            match s {
+                "nemotron" | "nvidia" => Some(BrainKind::Nemotron),
+                "hermes" | "hermes-portal" | "nous" => Some(BrainKind::Hermes),
+                "hermes-cli" | "hermes-harness" => Some(BrainKind::HermesCli),
+                _ => None,
+            }
+        }
+    }
 
     /// A real, default-demoable goal that exercises git + shell + fs + http + the
     /// two real **Stripe Skills** (provision a SaaS, pay a vendor) — all real,
@@ -235,8 +278,35 @@ mod live {
             .and_then(|s| s.parse().ok())
             .unwrap_or(500);
         let caps_str = flag(args, "--caps").unwrap_or(DEFAULT_CAPS).to_string();
-        let model = flag(args, "--model").unwrap_or(DEFAULT_MODEL).to_string();
-        let base = flag(args, "--base").unwrap_or(DEFAULT_BASE).to_string();
+
+        // The brain profile selects the default endpoint/model + the key source.
+        let brain_kind = match flag(args, "--brain") {
+            Some(s) => match BrainKind::parse(s) {
+                Some(k) => k,
+                None => {
+                    eprintln!("unknown --brain `{s}` (use: nemotron | hermes | hermes-cli)");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => BrainKind::Nemotron,
+        };
+        // Per-brain endpoint/model defaults; --model/--base (or --llm-model/--llm-base
+        // aliases) override. `hermes` defaults to the Nous Portal + the Hermes model.
+        let (default_base, default_model) = match brain_kind {
+            BrainKind::Hermes => (
+                dregg_agent::brain::NOUS_PORTAL_BASE,
+                dregg_agent::brain::HERMES_PORTAL_MODEL,
+            ),
+            _ => (DEFAULT_BASE, DEFAULT_MODEL),
+        };
+        let model = flag(args, "--model")
+            .or_else(|| flag(args, "--llm-model"))
+            .unwrap_or(default_model)
+            .to_string();
+        let base = flag(args, "--base")
+            .or_else(|| flag(args, "--llm-base"))
+            .unwrap_or(default_base)
+            .to_string();
         let step_cap: u64 = flag(args, "--step-cap")
             .and_then(|s| s.parse().ok())
             .unwrap_or(16);
@@ -298,7 +368,19 @@ mod live {
         rule();
         println!();
         println!("  GOAL    {goal}");
-        println!("  MODEL   {model} @ {base}");
+        match brain_kind {
+            BrainKind::Nemotron => {
+                println!("  BRAIN   nemotron (model)\n  MODEL   {model} @ {base}")
+            }
+            BrainKind::Hermes => println!(
+                "  BRAIN   hermes (Nous Hermes model, direct)\n  MODEL   {model} @ {base}\n  HERMES  {}",
+                hermes::portal_status_line()
+            ),
+            BrainKind::HermesCli => println!(
+                "  BRAIN   hermes-cli (the REAL hermes CLI as the confined harness, its own skills)\n  HERMES  {}",
+                hermes::hermes_cli_status_line()
+            ),
+        }
         println!("  BUDGET  {budget}¢   STEP-CAP {step_cap}   WORKDIR {workdir_s}");
         println!("  CAPS    {}", handle.caps.join("  ·  "));
 
@@ -331,7 +413,10 @@ mod live {
             "──[ reason → act → observe ]── (live; each step is cap-gated · metered · receipted)\n"
         );
 
-        let report = if let Some(rp) = &replay {
+        let report = if brain_kind == BrainKind::HermesCli {
+            // (b) THE AUTHENTIC PATH: the real `hermes` CLI as the confined harness.
+            run_hermes_cli(&cloud, &handle, &goal, &toolkit, step_cap)
+        } else if let Some(rp) = &replay {
             let responses = match load_record(rp) {
                 Ok(r) => r.responses,
                 Err(e) => {
@@ -357,13 +442,11 @@ mod live {
             );
             cloud.run_with_toolkit(&handle, &mut brain, &toolkit)
         } else {
-            let key = match nvidia_key() {
+            // (a) the model brain: nemotron, or the actual Hermes model over the Portal.
+            let key = match model_key(brain_kind) {
                 Some(k) => k,
                 None => {
-                    eprintln!(
-                        "no model key: put it in ~/.nvidiakey or set NVIDIA_API_KEY \
-                         (or use --replay <resp.json>)"
-                    );
+                    eprintln!("{}", key_help(brain_kind));
                     return ExitCode::FAILURE;
                 }
             };
@@ -422,10 +505,19 @@ mod live {
             None
         };
 
+        // Record the brain faithfully: for hermes-cli the model/endpoint are the
+        // confined harness (no remote endpoint, auth lives inside the subprocess).
+        let (rec_model, rec_endpoint) = match brain_kind {
+            BrainKind::HermesCli => (
+                "hermes (Nous Hermes CLI harness)".to_string(),
+                "hermes-cli://local (subprocess; auth inside the harness)".to_string(),
+            ),
+            _ => (model, base),
+        };
         let live_run = LiveRun {
             goal,
-            model,
-            endpoint: base,
+            model: rec_model,
+            endpoint: rec_endpoint,
             funding,
             budget_cents: budget,
             caps: handle.caps.clone(),
@@ -680,6 +772,87 @@ mod live {
                 .map(|h| Path::new(&h).join(".nvidiakey"))
                 .and_then(|p| ProviderKey::from_file("nvidia", p))
         })
+    }
+
+    /// The model key for a brain profile: the Nous Portal key for `--brain hermes`,
+    /// the NVIDIA key otherwise. `--brain hermes-cli` needs none (the harness holds
+    /// its own auth inside the subprocess) and never reaches this path.
+    fn model_key(kind: BrainKind) -> Option<ProviderKey> {
+        match kind {
+            BrainKind::Hermes => hermes::nous_portal_key(),
+            BrainKind::Nemotron | BrainKind::HermesCli => nvidia_key(),
+        }
+    }
+
+    /// The "no key" help line for a brain profile.
+    fn key_help(kind: BrainKind) -> &'static str {
+        match kind {
+            BrainKind::Hermes => {
+                "no Nous Portal key: put it in ~/.nousportalkey or set NOUS_PORTAL_KEY \
+                 (or use --replay <resp.json>)"
+            }
+            _ => {
+                "no model key: put it in ~/.nvidiakey or set NVIDIA_API_KEY \
+                 (or use --replay <resp.json>)"
+            }
+        }
+    }
+
+    // ── (b) the real `hermes` CLI as the confined harness ───────────────────────
+
+    /// Drive the **real `hermes` CLI** (or a configured ndjson wrapper) as the
+    /// confined harness: it reasons with its own installed skills while dregg
+    /// intercepts every skill-call through the cap-gate + budget + receipt. Live
+    /// when the CLI / a tool-bridge is present; otherwise a faithful recorded demo.
+    fn run_hermes_cli(
+        cloud: &AgentCloud,
+        handle: &AgentHandle,
+        goal: &str,
+        toolkit: &OperatorTools,
+        step_cap: u64,
+    ) -> AgentRunReport {
+        match hermes::spawn_hermes_harness(goal) {
+            Some(Ok(h)) => {
+                println!(
+                    "  [mode] LIVE — the `hermes` CLI is the brain; dregg intercepts every \
+                     skill-call (cap-gate · budget · receipt)\n"
+                );
+                let mut brain = HarnessBrain::new(h).with_step_cap(step_cap);
+                let report = cloud.run_with_toolkit(handle, &mut brain, toolkit);
+                let _ = brain; // the brain owns the child; dropped here.
+                report
+            }
+            Some(Err(e)) => {
+                println!(
+                    "  [mode] could not spawn the hermes harness ({e}); falling back to the \
+                     recorded demo\n"
+                );
+                run_recorded_hermes(cloud, handle, toolkit, step_cap)
+            }
+            None => {
+                println!(
+                    "  [mode] RECORDED — the `hermes` CLI / a tool-bridge is not present; \
+                     replaying hermes-shaped skill calls so the confinement teeth are visible. \
+                     Set {} to a hermes wrapper that speaks the ndjson tool protocol for a live \
+                     run.\n",
+                    hermes::HERMES_CMD_ENV
+                );
+                run_recorded_hermes(cloud, handle, toolkit, step_cap)
+            }
+        }
+    }
+
+    /// The offline recorded confined-harness run: hermes-shaped skill calls through
+    /// the same cap · budget · receipt rail (honestly labelled, never a faked live).
+    fn run_recorded_hermes(
+        cloud: &AgentCloud,
+        handle: &AgentHandle,
+        toolkit: &OperatorTools,
+        step_cap: u64,
+    ) -> AgentRunReport {
+        let calls = hermes::recorded_hermes_demo_calls();
+        let mut brain = HarnessBrain::new(MockHarness::new(calls)).with_step_cap(step_cap);
+        cloud.run_with_toolkit(handle, &mut brain, toolkit)
     }
 
     /// The capture format: the recorded model responses plus the workdir they ran

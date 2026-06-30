@@ -19,7 +19,9 @@
 //! autonomous agent against **any OpenAI-compatible / Hermes model** (BYO key,
 //! recorded transport for tests, the live HTTP transport behind the off-by-default
 //! `live-brain` feature). The [`harness`] confines a BYO child-process brain
-//! behind the same seam.
+//! behind the same seam. [`hermes`] runs dregg DIRECTLY with **Nous Hermes** both
+//! ways: the Hermes *model* over the Nous Portal (`--brain hermes`) and the real
+//! `hermes` *CLI* as the confined harness with its own skills (`--brain hermes-cli`).
 //!
 //! The agent reaches live capabilities (`run_tests` / `verify_deploy` /
 //! `check_health`) through the [`toolkit`] — a registry of cap-gated, metered,
@@ -50,6 +52,7 @@ pub mod agent;
 pub mod brain;
 pub mod federation_qa;
 pub mod harness;
+pub mod hermes;
 pub mod toolkit;
 pub mod tools;
 

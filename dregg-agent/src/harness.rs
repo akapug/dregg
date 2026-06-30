@@ -1,6 +1,13 @@
 //! `harness` — **BRING-YOUR-OWN-HARNESS**: run the user's already-installed,
-//! already-authed agent CLI (`kimi` / `claude` / `codex` / `aider`, …) AS the
-//! confined brain behind the [`AgentBrain`](crate::agent::AgentBrain) seam.
+//! already-authed agent CLI (the real **`hermes`** CLI / `kimi` / `claude` /
+//! `codex` / `aider`, …) AS the confined brain behind the
+//! [`AgentBrain`](crate::agent::AgentBrain) seam.
+//!
+//! The headline case for the Hermes hackathon is the **real `hermes` CLI**: it
+//! reasons with its installed **skills** (including the real Stripe Skills) while
+//! dregg intercepts each skill/tool-call through the cap-gate + budget-meter +
+//! receipt. The hermes-specific launch + the offline recorded demo live in
+//! [`crate::hermes`]; the generic transport + brain are here.
 //!
 //! Most people's *best* LLM access is **harness-tied** — a subscription inside a
 //! coding-agent CLI — not a portable raw API key. If our brain only eats API
@@ -78,20 +85,17 @@ use crate::agent::{ActionObservation, AgentAction, AgentBrain};
 
 /// Map a harness's emitted tool-call (name + a JSON args object) to an
 /// [`AgentAction`]. `None` for `finish` and any unrecognized tool (the turn ends
-/// rather than fabricating an action) — the same convention as
-/// [`crate::brain`]'s `map_tool_call`, so a harness and a raw-key LLM speak one
-/// vocabulary into the seam.
+/// rather than fabricating an action).
+///
+/// Delegates to [`crate::brain`]'s shared vocabulary (after canonicalizing the
+/// emitted name), so a BYO harness — the real `hermes` CLI with its installed
+/// **skills** — and a raw-key LLM speak ONE vocabulary into the seam. This is what
+/// lets a confined harness drive the FULL skill surface: `invoke` / `cell_read` /
+/// `cell_write` AND the operator skills `shell` / `fs_*` / `http_get` / `git_clone`
+/// and the **real Stripe Skills** `stripe_provision` / `stripe_pay` — each
+/// intercepted through the cap-gate + budget-meter + receipt before it runs.
 fn map_tool_call(name: &str, args: &Value) -> Option<AgentAction> {
-    let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
-    match name {
-        "invoke" => s("service").map(|service| AgentAction::Invoke { service }),
-        "cell_write" => match (s("path"), s("value")) {
-            (Some(path), Some(value)) => Some(AgentAction::CellWrite { path, value }),
-            _ => None,
-        },
-        "cell_read" => s("path").map(|path| AgentAction::CellRead { path }),
-        _ => None,
-    }
+    crate::brain::map_tool_call(crate::brain::canonical_tool(name), args)
 }
 
 /// Parse one ndjson line the harness emitted into `(tool_name, args)`. The line

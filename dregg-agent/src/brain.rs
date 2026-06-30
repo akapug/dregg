@@ -78,6 +78,17 @@ pub const DEFAULT_OPENAI_BASE: &str = "https://api.openai.com/v1";
 /// The OpenAI chat/completions endpoint (`DEFAULT_OPENAI_BASE` + the chat route).
 pub const DEFAULT_OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 
+/// The **Nous Portal** proxy base (OpenAI-compatible) — where **Nous Hermes** is
+/// served for the hackathon (`docs/HACKATHON-STACK.md`). `--brain hermes` points
+/// the [`OpenAICompatBrain`] here; the model id is [`HERMES_PORTAL_MODEL`] and the
+/// bearer is the Nous Portal key (`~/.nousportalkey` / `NOUS_PORTAL_KEY`). This is
+/// the **direct-Hermes-model** route: dregg drives the actual Hermes model over
+/// native OpenAI `tool_calls`, cap-bounded + budget-metered + receipted.
+pub const NOUS_PORTAL_BASE: &str = "http://127.0.0.1:8645/v1";
+
+/// The Hermes model id served by the Nous Portal proxy (`--brain hermes`).
+pub const HERMES_PORTAL_MODEL: &str = "hermes-agent";
+
 /// Build a chat/completions endpoint URL from a provider **base URL** (the
 /// `--llm-base` flag): `http://localhost:11434/v1` → `http://localhost:11434/v1/chat/completions`.
 /// A base that already ends in `/chat/completions` is returned unchanged, and a
@@ -925,7 +936,11 @@ fn is_known_tool(name: &str) -> bool {
 /// Map a model's tool name (possibly an alias) to the canonical advertised name —
 /// models often emit `file_list`/`read_file`/`bash`/`fetch` instead of the exact
 /// schema name; canonicalizing keeps the loop robust without a fragile prompt.
-fn canonical_tool(name: &str) -> &str {
+///
+/// Shared with [`crate::harness`] so a BYO harness (the real `hermes` CLI) and a
+/// raw-key LLM speak ONE tool vocabulary into the gate — the confined harness can
+/// drive the full skill surface, including the real Stripe Skills.
+pub(crate) fn canonical_tool(name: &str) -> &str {
     match name {
         // operator ops + common aliases
         "shell" | "bash" | "sh" | "run" | "run_shell" | "exec" | "command" | "terminal" => {
@@ -966,7 +981,12 @@ fn parse_arguments(arguments: Option<&Value>) -> Value {
 
 /// Map an OpenAI tool-call name + arguments to an [`AgentAction`]. `None` for
 /// `finish` and any unrecognized tool (the turn ends rather than fabricating).
-fn map_tool_call(name: &str, args: &Value) -> Option<AgentAction> {
+///
+/// `name` must already be canonicalized ([`canonical_tool`]). Shared with
+/// [`crate::harness`] so the BYO-harness route maps the SAME vocabulary (invoke /
+/// cell_read / cell_write AND the operator skills: shell / fs / http / git and the
+/// real Stripe Skills `stripe_provision` / `stripe_pay`).
+pub(crate) fn map_tool_call(name: &str, args: &Value) -> Option<AgentAction> {
     let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
     match name {
         "invoke" => s("service").map(|service| AgentAction::Invoke { service }),
