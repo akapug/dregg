@@ -9,6 +9,7 @@ import { compatSession, extensionPrefix, isExtensionPageUrl } from "./browser-co
 import { explainTurn } from "./explain";
 import { createSseParser } from "./sse";
 import { mnemonicConfirmed, walletPassphraseOk } from "./onboarding";
+import { defaultNodeUrl, defaultNodeWssUrl } from "./endpoints";
 import type {
   AuthorizeRequest,
   AuthorizeResult,
@@ -65,9 +66,9 @@ const NODE_CONFIG_KEY = "dregg_node_config";
 // Production-sane defaults: a public install talks to the dregg network over
 // TLS only. Plaintext localhost is NOT a silent default; it is reachable as an
 // explicit developer toggle (optional host permission + a settings override).
-const DEFAULT_NODE_URL = "https://devnet.dregg.fg-goose.online";
-const DEFAULT_NODE_WSS_URL = "wss://devnet.dregg.fg-goose.online/ws";
-const DEFAULT_NODE_WS_URL = "wss://devnet.dregg.fg-goose.online/ws";
+const DEFAULT_NODE_URL = defaultNodeUrl();
+const DEFAULT_NODE_WSS_URL = defaultNodeWssUrl();
+const DEFAULT_NODE_WS_URL = defaultNodeWssUrl();
 const DISCOVERY_URL = "https://emberian.github.io/dregg/discovery.json";
 const DISCOVERY_POLL_INTERVAL = 5 * 60 * 1000;
 const PBKDF2_ITERATIONS = 600000;
