@@ -45,6 +45,8 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("run") => cmd_run(&args[1..]),
         Some("verify") => cmd_verify(&args[1..]),
+        Some("session") => repl::cmd_session(&args[1..], repl::Mode::Session),
+        Some("attach") => repl::cmd_session(&args[1..], repl::Mode::Attach),
         Some("-h") | Some("--help") | None => {
             usage();
             ExitCode::SUCCESS
@@ -66,7 +68,19 @@ fn usage() {
          \x20                 [--model M] [--base URL] [--llm-model M] [--llm-base URL]\n\
          \x20                 [--step-cap N] [--out run.json]\n\
          \x20                 [--record resp.json | --replay resp.json] [--no-scale]\n\
+         \x20 dregg-agent session [--account ID] [--budget N] [--caps a,b,…] [--workdir DIR]\n\
+         \x20                     [--brain nemotron|hermes] [--model M] [--base URL]\n\
+         \x20                     [--replay resp.json] [--out session.json]\n\
+         \x20 dregg-agent attach  --account ID [--budget N] [--caps a,b,…] [--workdir DIR]\n\
+         \x20                     [--brain …] [--replay resp.json]   (the SSH forced-command target)\n\
          \x20 dregg-agent verify <run.json> [--tamper]\n\n\
+         SESSION / ATTACH:\n\
+         \x20 A persistent, budget-bounded, cap-gated agent session you DRIVE goal by\n\
+         \x20 goal. Type a goal → it runs a real reason→act→observe loop (cap-gated ·\n\
+         \x20 metered · receipted) → the budget draws down + the receipt chain\n\
+         \x20 accumulates across goals. REPL commands: :status :caps :verify :history\n\
+         \x20 :help :quit. `attach` is the same REPL scoped to one account — the target\n\
+         \x20 an SSH authorized_keys `command=` drops a connecting user into.\n\n\
          BRAIN:\n\
          \x20 nemotron   (default) NVIDIA Nemotron over its OpenAI-compatible endpoint\n\
          \x20 hermes     the actual Nous Hermes model over the Nous Portal proxy\n\
@@ -82,7 +96,6 @@ fn usage() {
     );
 }
 
-#[cfg(feature = "live-brain")]
 fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
         .position(|a| a == name)
@@ -217,8 +230,6 @@ fn cmd_run(args: &[String]) -> ExitCode {
 mod live {
     use super::*;
     use std::path::{Path, PathBuf};
-    use std::process::{Command, Stdio};
-    use std::sync::mpsc;
     use std::time::Duration;
 
     use dregg_agent::agent::{
@@ -232,7 +243,7 @@ mod live {
     use dregg_agent::live::{LiveRun, transcript_of};
     use dregg_agent::stripe_skills;
     use dregg_agent::toolkit::Toolkit;
-    use dregg_agent::tools::{HttpResp, OperatorTools, ShellOut};
+    use dregg_agent::tools::{HttpResp, OperatorTools};
     use serde_json::Value;
 
     /// The selected brain profile (`--brain`).
@@ -400,7 +411,7 @@ mod live {
         // CLIs when present, the recorded transport offline. detect() picks.
         let timeout = Duration::from_secs(60);
         let toolkit = OperatorTools::new(Toolkit::new(), &workdir)
-            .with_shell(move |cmd, cwd| real_shell(cmd, cwd, timeout))
+            .with_shell(move |cmd, cwd| dregg_agent::tools::real_shell(cmd, cwd, timeout))
             .with_http(real_http)
             .with_stripe_skills_boxed(stripe_skills::detect());
 
@@ -688,62 +699,8 @@ mod live {
 
     // ── real runners ───────────────────────────────────────────────────────────
 
-    /// A real shell command: `bash -c` in `cwd`, captured stdout/stderr/exit, with
-    /// a timeout (a SIGKILL on overrun → exit 124) and **cd persistence** (a `cd`
-    /// inside the command sticks to the next call via a trailing pwd marker).
-    fn real_shell(cmd: &str, cwd: &Path, timeout: Duration) -> Result<ShellOut, String> {
-        const MARKER: &str = "__DREGG_CWD__";
-        let wrapped =
-            format!("{cmd}\n__dregg_ec=$?\nprintf '\\n{MARKER}%s' \"$(pwd)\"\nexit $__dregg_ec");
-        let child = Command::new("bash")
-            .arg("-c")
-            .arg(&wrapped)
-            .current_dir(cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("spawn bash: {e}"))?;
-        let pid = child.id();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-        match rx.recv_timeout(timeout) {
-            Ok(Ok(out)) => {
-                let mut stdout = String::from_utf8_lossy(&out.stdout).into_owned();
-                let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-                let mut new_cwd = None;
-                if let Some(pos) = stdout.rfind(MARKER) {
-                    let cwd_str = stdout[pos + MARKER.len()..].trim().to_string();
-                    stdout.truncate(pos);
-                    stdout = stdout.trim_end().to_string();
-                    if !cwd_str.is_empty() {
-                        new_cwd = Some(PathBuf::from(cwd_str));
-                    }
-                }
-                Ok(ShellOut {
-                    exit: out.status.code().unwrap_or(-1) as i64,
-                    stdout,
-                    stderr,
-                    new_cwd,
-                })
-            }
-            Ok(Err(e)) => Err(format!("wait: {e}")),
-            Err(_) => {
-                let _ = Command::new("kill").arg("-9").arg(pid.to_string()).status();
-                Ok(ShellOut {
-                    exit: 124,
-                    stdout: String::new(),
-                    stderr: format!("timed out after {}s (killed)", timeout.as_secs()),
-                    new_cwd: None,
-                })
-            }
-        }
-    }
-
     /// A real HTTP GET via reqwest blocking (bounded body), off any async runtime.
-    fn real_http(url: &str) -> Result<HttpResp, String> {
+    pub fn real_http(url: &str) -> Result<HttpResp, String> {
         let url = url.to_string();
         let handle = std::thread::spawn(move || -> Result<HttpResp, String> {
             let client = reqwest::blocking::Client::builder()
@@ -923,5 +880,508 @@ mod live {
             self.recorded.borrow_mut().push(resp.clone());
             Ok(resp)
         }
+    }
+}
+
+// ─────────────────────────────── session / attach (the hosted REPL) ──────────
+//
+// The interactive twin of `run`: a persistent, budget-bounded, cap-gated agent
+// session the user DRIVES goal by goal. `session` runs it locally; `attach` is
+// the same REPL scoped to one account — the target an SSH `authorized_keys`
+// `command="dregg-agent attach --account … --budget … --caps …"` drops a
+// connecting user into (so the SSH session IS the agent REPL, per-user-isolated,
+// the brain + tools server-side). Std-only on the recorded path (`--replay`);
+// the live model path is behind `live-brain`, exactly like `run`.
+
+mod repl {
+    use std::io::{BufRead, Write};
+    use std::path::PathBuf;
+    use std::process::ExitCode;
+    use std::time::Duration;
+
+    use dregg_agent::agent::AgentBrain;
+    use dregg_agent::brain::{OpenAICompatBrain, ProviderKey, RecordedOpenAICaller};
+    use dregg_agent::session::{CapBundle, Session, parse_caps};
+    use dregg_agent::toolkit::Toolkit;
+    use dregg_agent::tools::OperatorTools;
+    use serde_json::Value;
+
+    use super::{flag, rule};
+
+    /// `session` (local) vs `attach` (the SSH forced-command drop-in for one account).
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Mode {
+        Session,
+        Attach,
+    }
+
+    /// The default bundle for an interactive session: a real shell + workdir fs +
+    /// GitHub egress (a useful, bounded starter powerbox).
+    const DEFAULT_CAPS: &str = "shell,fs,http:api.github.com";
+
+    const STEER: &str = "Work step by step using ONE tool call per turn. Keep reasoning brief. Call finish \
+         when the goal is met.";
+
+    /// Where the brain comes from for THIS session (one source, a fresh brain per goal).
+    enum BrainSource {
+        /// A recorded transport (std-only): canned model responses, replayed (and
+        /// repeated) so the confinement teeth + the loop are demoable without a key.
+        Replay {
+            responses: Vec<Value>,
+            base: String,
+            model: String,
+        },
+        /// The live model path (BYO key), behind `live-brain`.
+        #[cfg(feature = "live-brain")]
+        Live {
+            key: ProviderKey,
+            base: String,
+            model: String,
+        },
+    }
+
+    impl BrainSource {
+        /// The `(model, endpoint)` pair recorded into the session artifact.
+        fn model_endpoint(&self) -> (String, String) {
+            match self {
+                BrainSource::Replay { base, model, .. } => (model.clone(), base.clone()),
+                #[cfg(feature = "live-brain")]
+                BrainSource::Live { base, model, .. } => (model.clone(), base.clone()),
+            }
+        }
+        /// A one-line mode label for the banner.
+        fn label(&self) -> String {
+            match self {
+                BrainSource::Replay { .. } => {
+                    "recorded (replayed model responses — the confinement teeth are live)".into()
+                }
+                #[cfg(feature = "live-brain")]
+                BrainSource::Live { model, base, .. } => format!("live model {model} @ {base}"),
+            }
+        }
+    }
+
+    /// `dregg-agent session` / `dregg-agent attach`.
+    pub fn cmd_session(args: &[String], mode: Mode) -> ExitCode {
+        let account = flag(args, "--account")
+            .unwrap_or(if mode == Mode::Attach {
+                // attach without an explicit account is a misconfiguration — the
+                // forced-command must scope to one. Default to a clearly-local id.
+                "dga1_attached"
+            } else {
+                "dga1_local"
+            })
+            .to_string();
+        let budget: i64 = flag(args, "--budget")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(500);
+        let caps_str = flag(args, "--caps").unwrap_or(DEFAULT_CAPS).to_string();
+        let step_cap: u64 = flag(args, "--step-cap")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(16);
+        let out = flag(args, "--out").map(String::from);
+
+        let workdir = flag(args, "--workdir")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "dregg-agent-session-{}-{}",
+                    account.replace(['/', ':'], "_"),
+                    std::process::id()
+                ))
+            });
+        if let Err(e) = std::fs::create_dir_all(&workdir) {
+            eprintln!("cannot create workdir {}: {e}", workdir.display());
+            return ExitCode::FAILURE;
+        }
+        let workdir = workdir.canonicalize().unwrap_or(workdir);
+        let workdir_s = workdir.to_string_lossy().to_string();
+
+        let bundle = match parse_caps(&caps_str, "agent:session", budget, &workdir_s) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("bad --caps: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let mut spec = bundle.spec.clone();
+        spec.asset = "USD-CENTS".into();
+
+        let mut sess = match Session::open(&account, spec) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("session open failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let brain_src = match build_brain_source(args) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        // The server-side toolkit: a real shell (workdir-confined, timeout-bounded)
+        // + workdir fs + the real Stripe Skills (recorded offline). http egress is
+        // wired on the live build (the same runner `run` uses).
+        let timeout = Duration::from_secs(60);
+        #[allow(unused_mut)]
+        let mut toolkit = OperatorTools::new(Toolkit::new(), &workdir)
+            .with_shell(move |cmd, cwd| dregg_agent::tools::real_shell(cmd, cwd, timeout))
+            .with_stripe_skills_boxed(dregg_agent::stripe_skills::detect());
+        #[cfg(feature = "live-brain")]
+        {
+            toolkit = toolkit.with_http(super::live::real_http);
+        }
+
+        banner(mode, &sess, &workdir_s, &brain_src);
+
+        // ATTACH one-shot: `ssh acct@host "do the thing"` arrives as
+        // SSH_ORIGINAL_COMMAND — run that single goal non-interactively and exit.
+        if mode == Mode::Attach {
+            if let Some(cmd) = std::env::var("SSH_ORIGINAL_COMMAND")
+                .ok()
+                .filter(|c| !c.trim().is_empty())
+            {
+                run_one_goal(
+                    &mut sess,
+                    cmd.trim(),
+                    &bundle,
+                    &brain_src,
+                    step_cap,
+                    &toolkit,
+                );
+                finish(&sess, &brain_src, &workdir_s, &out);
+                return ExitCode::SUCCESS;
+            }
+        }
+
+        // The interactive REPL: a goal per line; `:`-commands inspect the session.
+        let stdin = std::io::stdin();
+        let mut lines = stdin.lock().lines();
+        loop {
+            prompt(&sess);
+            let line = match lines.next() {
+                Some(Ok(l)) => l,
+                _ => break, // EOF / detach
+            };
+            let g = line.trim();
+            if g.is_empty() {
+                continue;
+            }
+            match g {
+                ":quit" | ":exit" | ":q" => break,
+                ":help" | ":h" => print_help(),
+                ":status" | ":budget" => print_status(&sess),
+                ":caps" => print_caps(&sess),
+                ":history" => print_history(&sess),
+                ":verify" => print_verify(&sess),
+                other if other.starts_with(':') => {
+                    println!("  unknown command `{other}` — try :help")
+                }
+                _ => {
+                    run_one_goal(&mut sess, g, &bundle, &brain_src, step_cap, &toolkit);
+                    if sess.exhausted() {
+                        println!(
+                            "  [budget exhausted — the session ceiling is fully drawn; further \
+                             priced actions are refused in-band]"
+                        );
+                    }
+                }
+            }
+        }
+        finish(&sess, &brain_src, &workdir_s, &out);
+        ExitCode::SUCCESS
+    }
+
+    /// Pick the brain source from the args: `--replay` → recorded (std-only);
+    /// otherwise the live model (behind `live-brain`), else a helpful error.
+    fn build_brain_source(args: &[String]) -> Result<BrainSource, String> {
+        let base = flag(args, "--base")
+            .or_else(|| flag(args, "--llm-base"))
+            .unwrap_or("https://integrate.api.nvidia.com/v1")
+            .to_string();
+        let model = flag(args, "--model")
+            .or_else(|| flag(args, "--llm-model"))
+            .unwrap_or("recorded")
+            .to_string();
+        if let Some(path) = flag(args, "--replay") {
+            let responses = load_responses(path)?;
+            return Ok(BrainSource::Replay {
+                responses,
+                base,
+                model,
+            });
+        }
+        #[cfg(feature = "live-brain")]
+        {
+            let key = ProviderKey::from_env("nvidia", "NVIDIA_API_KEY")
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(|h| std::path::Path::new(&h).join(".nvidiakey"))
+                        .and_then(|p| ProviderKey::from_file("nvidia", p))
+                })
+                .ok_or_else(|| {
+                    "no model key: put it in ~/.nvidiakey or set NVIDIA_API_KEY (or use \
+                     --replay <resp.json>)"
+                        .to_string()
+                })?;
+            let model = if model == "recorded" {
+                "nvidia/llama-3.3-nemotron-super-49b-v1".to_string()
+            } else {
+                model
+            };
+            return Ok(BrainSource::Live { key, base, model });
+        }
+        #[cfg(not(feature = "live-brain"))]
+        Err(
+            "a session needs a brain: pass --replay <resp.json> for the recorded transport, \
+             or rebuild with --features live-brain for a live model"
+                .to_string(),
+        )
+    }
+
+    /// A fresh brain for ONE goal (the REPL hands each goal its own conversation).
+    fn make_brain(
+        src: &BrainSource,
+        goal: &str,
+        bundle: &CapBundle,
+        step_cap: u64,
+    ) -> Box<dyn AgentBrain> {
+        match src {
+            BrainSource::Replay {
+                responses,
+                base,
+                model,
+            } => {
+                let caller = RecordedOpenAICaller::repeating(responses.clone());
+                Box::new(
+                    OpenAICompatBrain::with_base(
+                        goal,
+                        bundle.services.clone(),
+                        bundle.cells.clone(),
+                        ProviderKey::unauthenticated(),
+                        base,
+                        model.clone(),
+                        caller,
+                    )
+                    .with_op_tools(bundle.op_tools.clone())
+                    .with_system_note(STEER)
+                    .with_step_cap(step_cap),
+                )
+            }
+            #[cfg(feature = "live-brain")]
+            BrainSource::Live { key, base, model } => {
+                let caller = dregg_agent::brain::LiveOpenAICompatCaller::new();
+                Box::new(
+                    OpenAICompatBrain::with_base(
+                        goal,
+                        bundle.services.clone(),
+                        bundle.cells.clone(),
+                        key.clone(),
+                        base,
+                        model.clone(),
+                        caller,
+                    )
+                    .with_op_tools(bundle.op_tools.clone())
+                    .with_system_note(STEER)
+                    .with_step_cap(step_cap),
+                )
+            }
+        }
+    }
+
+    /// Run one typed goal through the session and narrate its delta.
+    fn run_one_goal(
+        sess: &mut Session,
+        goal: &str,
+        bundle: &CapBundle,
+        src: &BrainSource,
+        step_cap: u64,
+        toolkit: &OperatorTools,
+    ) {
+        println!("\n──[ goal ]── {goal}");
+        println!("──[ reason → act → observe ]── (cap-gated · metered · receipted)\n");
+        let mut brain = make_brain(src, goal, bundle, step_cap);
+        let gr = sess.run_goal(goal, brain.as_mut(), toolkit);
+        for s in &gr.steps {
+            let mark = if s.outcome == "admitted" {
+                "✓"
+            } else {
+                "✗"
+            };
+            println!("  {mark} step {:>2}  {}", s.n, s.action);
+            println!("           {}", s.outcome);
+            if let Some(sum) = &s.tool_summary {
+                for line in sum.lines() {
+                    println!("           │ {line}");
+                }
+            }
+        }
+        if gr.steps.is_empty() {
+            println!("  (the model committed no admitted action)");
+        }
+        println!(
+            "\n  → {} admitted · {} cap-refused · {} budget-refused · consumed {}¢ / {}¢ · headroom {}¢",
+            gr.admitted,
+            gr.cap_refused,
+            gr.budget_refused,
+            gr.consumed,
+            sess.budget(),
+            gr.headroom
+        );
+    }
+
+    fn banner(mode: Mode, sess: &Session, workdir: &str, src: &BrainSource) {
+        rule();
+        match mode {
+            Mode::Session => {
+                println!(
+                    "  dregg-agent — a hosted, verifiable agent SESSION (drive it goal by goal)"
+                )
+            }
+            Mode::Attach => println!(
+                "  dregg-agent — you are ATTACHED to your hosted, verifiable agent session"
+            ),
+        }
+        rule();
+        println!();
+        println!("  ACCOUNT {}", sess.account());
+        println!("  BRAIN   {}", src.label());
+        println!(
+            "  BUDGET  {}¢   CAPS  {}",
+            sess.budget(),
+            sess.caps().join("  ·  ")
+        );
+        println!("  WORKDIR {workdir}");
+        println!("  AGENT   {}", sess.agent_id());
+        println!();
+        println!(
+            "  Type a goal and press enter. Commands: :status  :caps  :verify  :history  :help  :quit"
+        );
+    }
+
+    fn prompt(sess: &Session) {
+        print!("\n[{} · {}¢ left] goal> ", sess.account(), sess.headroom());
+        let _ = std::io::stdout().flush();
+    }
+
+    fn print_help() {
+        println!(
+            "  commands:\n\
+             \x20   <goal>     run a goal (reason→act→observe, cap-gated · metered · receipted)\n\
+             \x20   :status    the running budget (consumed / ceiling / headroom)\n\
+             \x20   :caps      the cap bundle this session is scoped to\n\
+             \x20   :verify    re-witness the WHOLE session so far (host-untrusted)\n\
+             \x20   :history   the goals run so far\n\
+             \x20   :quit      detach (the session artifact can still be verified)"
+        );
+    }
+
+    fn print_status(sess: &Session) {
+        println!(
+            "  budget {}¢ · consumed {}¢ · headroom {}¢ · {} goal(s) · {} receipted action(s)",
+            sess.budget(),
+            sess.consumed(),
+            sess.headroom(),
+            sess.goal_count(),
+            sess.report().receipts.len()
+        );
+    }
+
+    fn print_caps(sess: &Session) {
+        println!("  cap bundle (a sub-agent can only narrow these):");
+        for c in sess.caps() {
+            println!("   · {c}");
+        }
+    }
+
+    fn print_history(sess: &Session) {
+        if sess.history().is_empty() {
+            println!("  (no goals yet)");
+            return;
+        }
+        for (i, g) in sess.history().iter().enumerate() {
+            println!(
+                "  {:>2}. {}  ({} admitted · {} cap-refused · {} budget-refused · {}¢)",
+                i + 1,
+                g.goal,
+                g.admitted,
+                g.cap_refused,
+                g.budget_refused,
+                g.consumed
+            );
+        }
+    }
+
+    fn print_verify(sess: &Session) {
+        match sess.verify() {
+            Ok(v) => println!(
+                "  ✓ the WHOLE session re-witnesses: {} signed action(s) in one chain, \
+                 consumed {}¢ ≤ ceiling {}¢ (headroom {}¢) — host untrusted",
+                v.actions, v.consumed, v.budget, v.headroom
+            ),
+            Err(e) => println!("  ✗ session does NOT verify: {e}"),
+        }
+    }
+
+    /// On detach: print the final verify and (optionally) write the session
+    /// artifact, which `dregg-agent verify <file>` re-witnesses offline.
+    fn finish(sess: &Session, src: &BrainSource, workdir: &str, out: &Option<String>) {
+        println!();
+        rule();
+        print_verify(sess);
+        if let Some(path) = out {
+            let report = sess.report();
+            let (model, endpoint) = src.model_endpoint();
+            let goals: Vec<String> = sess.history().iter().map(|g| g.goal.clone()).collect();
+            let live = dregg_agent::live::LiveRun {
+                goal: if goals.is_empty() {
+                    "(empty session)".into()
+                } else {
+                    goals.join(" ; ")
+                },
+                model,
+                endpoint,
+                funding: format!(
+                    "hosted session budget of {}¢ (the ceiling the whole session draws from)",
+                    sess.budget()
+                ),
+                budget_cents: sess.budget(),
+                caps: sess.caps().to_vec(),
+                workdir: workdir.to_string(),
+                transcript: dregg_agent::live::transcript_of(&report),
+                run: report,
+                subagent_run: None,
+            };
+            match serde_json::to_string_pretty(&live) {
+                Ok(json) => match std::fs::write(path, json) {
+                    Ok(()) => {
+                        println!("  → wrote the session receipt to {path}");
+                        println!("  → audit it yourself:  dregg-agent verify {path}");
+                    }
+                    Err(e) => eprintln!("  failed to write {path}: {e}"),
+                },
+                Err(e) => eprintln!("  failed to serialize session: {e}"),
+            }
+        }
+        rule();
+    }
+
+    /// Load recorded model responses: a bare JSON array of chat-completions
+    /// responses, or a `{ "responses": [...] }` object (the `--record` capture).
+    fn load_responses(path: &str) -> Result<Vec<Value>, String> {
+        let raw = std::fs::read_to_string(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+        if let Ok(v) = serde_json::from_str::<Vec<Value>>(&raw) {
+            return Ok(v);
+        }
+        let obj: Value =
+            serde_json::from_str(&raw).map_err(|e| format!("cannot parse {path}: {e}"))?;
+        obj.get("responses")
+            .and_then(|r| r.as_array())
+            .map(|a| a.to_vec())
+            .ok_or_else(|| format!("{path}: expected a JSON array or a {{responses:[…]}} object"))
     }
 }

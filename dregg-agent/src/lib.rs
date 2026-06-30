@@ -58,6 +58,9 @@ pub mod tools;
 
 // ── the flexible live run + the earn-rail crypto (Stripe webhook verify) ──────
 pub mod live;
+
+// ── the hosted, persistent, multi-goal session (the SSH/portal attach unit) ───
+pub mod session;
 pub mod stripe;
 
 // ── the SPEND rail: the real Stripe Skills for Hermes (provision + pay CLIs) ───
