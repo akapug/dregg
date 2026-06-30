@@ -229,6 +229,7 @@ fn ungated_joint_prover_with_forged_cell_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         mut public_inputs,
+        custom_witness: _,
     } = rotated;
     let lie = public_inputs[PI_ROTATED_NEW] + BabyBear::ONE;
     public_inputs[PI_ROTATED_NEW] = lie;
@@ -236,6 +237,7 @@ fn ungated_joint_prover_with_forged_cell_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         public_inputs,
+        custom_witness: None,
     };
     let forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let cells = [forged, honest];

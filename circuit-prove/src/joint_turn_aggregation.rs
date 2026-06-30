@@ -174,6 +174,31 @@ impl RotatedParticipantLeg {
     }
 }
 
+impl CustomWitnessBundle {
+    /// Build the prover-side re-provable bundle from a [`crate::custom_proof_bind::BoundCustomProof`]
+    /// minted by [`crate::custom_proof_bind::prove_custom_program`] (which retains the trace witness).
+    ///
+    /// This is the RETENTION SEAM that graduates the custom binding from RE-EXEC-ONLY to REAL-FOLDED:
+    /// the turn-build path proves the custom sub-proof (yielding a `BoundCustomProof`), and this
+    /// projects its retained witness into the bundle the production custom-wide minter attaches to the
+    /// leg — so the deployed chain prover folds the sub-proof into the recursion tree a PURE LIGHT
+    /// CLIENT verifies.
+    ///
+    /// Returns `None` when the bound proof was reconstructed from the on-wire
+    /// [`dregg_turn::CustomProgramProof`] (no retained witness): such a proof carries the off-AIR
+    /// verify but cannot be folded — exactly the re-exec-only rung, fail-closed rather than fabricated.
+    pub fn from_bound_custom_proof(
+        bound: &crate::custom_proof_bind::BoundCustomProof,
+    ) -> Option<Self> {
+        Some(Self {
+            program: bound.program.clone(),
+            witness_values: bound.witness_values.clone()?,
+            num_rows: bound.num_rows?,
+            public_inputs: bound.public_inputs.clone(),
+        })
+    }
+}
+
 // NOTE (Bucket-F / PATH-PRESERVE Phase 5a): the rotated-leg MINTING recipe
 // (`mint_rotated_participant_leg`) lives in `dregg-turn`
 // (`turn/src/rotation_witness.rs`), NOT here. It drives `rotation_witness::produce`
@@ -704,6 +729,101 @@ impl RotatedParticipantLeg {
             descriptor: welded,
             public_inputs: dpis,
             custom_witness: None,
+        })
+    }
+
+    /// **THE PRODUCTION CUSTOM-WIDE LEG MINT — graduates the custom binding from RE-EXEC-ONLY to
+    /// REAL-FOLDED.** Mint the `customVmDescriptor2R24` WIDE leg for an [`Effect::Custom`] turn AND
+    /// ATTACH the prover-side re-provable [`CustomWitnessBundle`], so the deployed chain prover
+    /// ([`crate::ivc_turn_chain::prove_chain_core_rotated`]) takes the custom-binding fold branch:
+    /// it mints the DUAL-EXPOSE leg leaf (segment ++ the claimed `custom_proof_commitment` at PI
+    /// 46..49) and folds it against the RE-PROVEN custom sub-proof leaf through
+    /// [`crate::joint_turn_recursive::prove_custom_binding_node_segmented`], `connect`ing the leg's
+    /// claimed commitment to the sub-proof's GENUINE in-circuit commitment INSIDE the recursion tree
+    /// a PURE LIGHT CLIENT folds. A forged claim no verifying sub-proof of the bundle's PIs backs is
+    /// UNSAT ⇒ no root ⇒ the light client never receives a verifying artifact.
+    ///
+    /// This is the PRODUCTION twin of the test-only `with_custom_witness` wiring: the leg's claimed
+    /// commitment rides the `effects` (the `Effect::Custom.proof_commitment`, set at turn-build to
+    /// `BoundCustomProof::proof_commitment()`), and `bundle` is the retained re-provable witness
+    /// (build it via [`CustomWitnessBundle::from_bound_custom_proof`] over the SAME bound proof). The
+    /// downstream `dregg_turn::rotation_witness::mint_custom_wide_rotated_participant_leg` wrapper
+    /// feeds this the `Cell`-derived block witnesses.
+    ///
+    /// Fails closed if the lead effect is not [`Effect::Custom`] (the wide producer rejects a
+    /// non-Custom lead on the custom-row geometry) or if the minted leg does not publish the
+    /// commitment slice at PI 46..49 (a malformed custom leg the binding node could not bind).
+    pub fn mint_custom_wide_from_block_witnesses(
+        initial_state: &dregg_circuit::effect_vm::CellState,
+        effects: &[dregg_circuit::effect_vm::Effect],
+        before: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        after: &dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness,
+        turn_id: Option<BabyBear>,
+        bundle: CustomWitnessBundle,
+    ) -> Result<RotatedParticipantLeg, String> {
+        use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+        use crate::joint_turn_recursive::{CUSTOM_COMMIT_LEN, CUSTOM_COMMIT_PI_LO};
+        use dregg_circuit::descriptor_ir2::{
+            UMemBoundaryWitness, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+        };
+        use dregg_circuit::effect_vm::Effect;
+        use dregg_circuit::effect_vm::trace_rotated::{
+            empty_caveat_manifest, generate_rotated_effect_vm_descriptor_and_trace_wide,
+        };
+        let commit_pi_hi = CUSTOM_COMMIT_PI_LO + CUSTOM_COMMIT_LEN;
+
+        if !matches!(effects.first(), Some(Effect::Custom { .. })) {
+            return Err(format!(
+                "mint_custom_wide: lead effect must be Effect::Custom (got {:?})",
+                effects.first()
+            ));
+        }
+
+        let (desc, trace, mut dpis, map_heaps, mb) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                initial_state,
+                effects,
+                before,
+                after,
+                &empty_caveat_manifest(),
+                None,
+                None,
+                None,
+            )
+            .map_err(|e| format!("mint_custom_wide: wide custom dispatch failed: {e}"))?;
+
+        if dpis.len() < commit_pi_hi {
+            return Err(format!(
+                "mint_custom_wide: custom leg PI vector must carry the commitment slice at \
+                 {CUSTOM_COMMIT_PI_LO}..{commit_pi_hi} (got {})",
+                dpis.len()
+            ));
+        }
+
+        if let Some(tid) = turn_id {
+            dpis[pi::TURN_HASH_BASE] = tid;
+        }
+
+        let config = ir2_leaf_wrap_config();
+        let proof = prove_vm_descriptor2_for_config(
+            &desc,
+            &trace,
+            &dpis,
+            &mb,
+            &map_heaps,
+            &UMemBoundaryWitness::default(),
+            &config,
+        )
+        .map_err(|e| format!("mint_custom_wide: IR-v2 wide custom batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&desc, &proof, &dpis, &config).map_err(|e| {
+            format!("mint_custom_wide: minted wide custom proof self-verify failed: {e}")
+        })?;
+
+        Ok(RotatedParticipantLeg {
+            proof,
+            descriptor: desc,
+            public_inputs: dpis,
+            custom_witness: Some(bundle),
         })
     }
 

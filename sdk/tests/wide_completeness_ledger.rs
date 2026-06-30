@@ -487,6 +487,10 @@ fn bound_to_wire_and_back(
             .iter()
             .map(|&v| BabyBear::new(v))
             .collect(),
+        // The wire form drops the re-provable witness — a bound proof rebuilt off the wire carries
+        // the off-AIR verify but cannot be re-proven/folded (None), by design.
+        witness_values: None,
+        num_rows: None,
     }
 }
 

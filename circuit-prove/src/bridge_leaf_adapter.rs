@@ -204,6 +204,64 @@ pub fn prove_bridge_leaf(
         .map_err(|e| format!("bridge-action leaf recursion wrap failed: {e}"))
 }
 
+/// Prove a bridge action binding as a recursion-foldable leaf (as [`prove_bridge_leaf`]) AND
+/// RE-EXPOSE its 26-slot bound tuple `(nullifier, recipient, dest_federation, amount)` as an
+/// IN-CIRCUIT `expose_claim` (lanes `[0 .. BRIDGE_ACTION_PI_COUNT)`), read from the leaf's own
+/// FRI-bound descriptor PIs (not free scalars).
+///
+/// This is the BRIDGE analog of
+/// [`crate::custom_leaf_adapter::prove_custom_leaf_with_commitment`]: it is the SUB-PROOF half of
+/// the bridge-binding fold — the leaf whose exposed tuple
+/// [`crate::joint_turn_recursive::prove_bridge_binding_node`] /
+/// [`prove_bridge_binding_node_segmented`](crate::joint_turn_recursive::prove_bridge_binding_node_segmented)
+/// `connect`s to the bridge-mint leg's CLAIMED tuple. Because the claim reads the leaf's REAL bound
+/// PIs (the `PiBinding{First}` makes a tampered PI UNSAT), a prover cannot expose a tuple that
+/// disagrees with the action this leaf actually proves: the claim is welded to the execution,
+/// witnessable by a pure light client folding the tree.
+///
+/// Unlike custom (whose claim is a 4-felt in-circuit HASH of the PIs), the bridge tuple IS the claim
+/// — the 26 bound PI lanes are re-exposed directly through
+/// [`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`], no in-circuit hash needed.
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
+pub fn prove_bridge_leaf_tuple_claim(
+    backing: &BridgeActionWitness,
+    public_inputs: &[BabyBear],
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    if public_inputs.len() != BRIDGE_ACTION_PI_COUNT {
+        return Err(format!(
+            "bridge-action tuple-claim leaf expects {BRIDGE_ACTION_PI_COUNT} PI slots, got {}",
+            public_inputs.len()
+        ));
+    }
+    let desc2 = bridge_action_to_descriptor2()?;
+    let (base_trace, _trace_pis) = BridgeActionAir::generate_trace(backing);
+
+    let inner = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+        &desc2,
+        &base_trace,
+        public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+        &UMemBoundaryWitness::default(),
+        config,
+    )
+    .map_err(|e| format!("bridge-action tuple-claim leaf inner IR-v2 prove failed: {e}"))?;
+
+    // RE-EXPOSE the 26 bound PI lanes (the whole tuple) as the leaf's `expose_claim`, so the binding
+    // node can `connect` it to the bridge-mint leg's claimed tuple.
+    crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose(
+        &desc2,
+        &inner,
+        public_inputs,
+        config,
+        0,
+        BRIDGE_ACTION_PI_COUNT,
+    )
+    .map_err(|e| format!("bridge-action tuple-claim leaf expose-wrap failed: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

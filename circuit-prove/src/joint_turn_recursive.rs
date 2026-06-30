@@ -660,6 +660,314 @@ pub fn prove_custom_binding_node_segmented(
 }
 
 // ============================================================================
+// THE BRIDGE-ACTION FOLD-WIRE (mechanism + caller READY; the deployed-leg tuple emit is the named
+// big-bang piece). The bridge analog of the custom fold-wire above: bind the bridge-mint leg's
+// CLAIMED 26-slot full-fidelity tuple `(nullifier, recipient, dest_federation, amount)` to the
+// RE-PROVEN bridge-action sub-proof's GENUINE in-circuit tuple, INSIDE the recursion tree a pure
+// light client folds — so a re-executing validator's off-AIR `verify_bridge_action` is no longer
+// the ONLY enforcer.
+// ============================================================================
+//
+// The bridge-action binding is today verified OFF-AIR by `turn::executor::apply::apply_bridge_mint`
+// (`verify_bridge_action` over the typed limbs). A PURE LIGHT CLIENT folding only the recursion tree
+// never witnesses it. This fold-wire binds it IN the tree, EXACTLY mirroring the custom wire:
+//   * the bridge-mint leg leaf RE-EXPOSES its CLAIMED tuple (segment ++ the 26 limbs) —
+//     [`prove_bridge_binding_node_segmented`] consumes a DUAL-EXPOSE leg leaf whose `expose_claim`
+//     carries the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` AND the claimed tuple in lanes
+//     `[SEG_WIDTH .. SEG_WIDTH+BRIDGE_TUPLE_LEN)`;
+//   * the bridge SUB-PROOF leaf exposes its GENUINE in-circuit tuple
+//     ([`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`], lanes `[0 .. BRIDGE_TUPLE_LEN)`).
+// The node `connect`s the 26 lanes (a forged claim no sub-proof backs is UNSAT ⇒ no root) and
+// re-exposes the segment, folding into `aggregate_tree` like any per-turn segment leaf.
+//
+// ⚑ THE NAMED BIG-BANG PIECE (descriptor-emit, owned by another agent): the DEPLOYED bridge-mint
+// wide leg today binds only a compressed `mint_hash` digest (the substrate `BridgeMint` row's
+// `value_lo`), NOT the 26 full-fidelity limbs as descriptor PIs. So the DUAL-EXPOSE leg side
+// (segment ++ the 26-limb tuple at known PI slots, the bridge twin of
+// `prove_descriptor_leaf_dual_expose`) cannot be minted until the bridge-mint descriptor EMITS the
+// tuple at fixed PI slots (`BRIDGE_TUPLE_PI_LO..`). That descriptor-emit rides the big-bang VK regen.
+// The FOLD MECHANISM (`prove_bridge_binding_node` / `_segmented`) + the sub-proof leaf
+// (`prove_bridge_leaf_tuple_claim`) + this caller are READY: once the leg publishes the tuple, the
+// production bridge-mint minter attaches a `bridge_witness` (the twin of `custom_witness`) and the
+// chain prover takes the bridge-binding branch with zero new mechanism.
+
+/// Width of the bridge-action full-fidelity tuple claim (26 felts:
+/// 8 nullifier ++ 8 recipient ++ 8 dest_federation ++ 2 amount).
+pub const BRIDGE_TUPLE_LEN: usize = 26;
+
+/// **THE BRIDGE-BINDING MECHANISM NODE (the minimal fold tooth — no segment).** Aggregate a bridge
+/// turn's leg leaf (which must RE-EXPOSE its CLAIMED 26-slot tuple as an `expose_claim`, via
+/// [`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`]) WITH the bridge sub-proof
+/// leaf ([`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`]), CONNECTING the two 26-felt
+/// tuples in-circuit and re-exposing the now-bound tuple as the parent claim.
+///
+/// THE TOOTH: if the leg claims a tuple the bridge sub-proof does not back, the per-lane `connect` is
+/// a conflict and the aggregation is UNSAT — no root. There is no separate, swappable backing: the
+/// sub-proof's tuple is bound in-circuit to its REAL `PiBinding{First}` PIs, so a forged claim has no
+/// satisfying partner. This is the term-for-term bridge twin of [`prove_custom_binding_node`].
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
+pub fn prove_bridge_binding_node(
+    leg_tuple_leaf: &RecursionOutput<DreggRecursionConfig>,
+    bridge_subproof_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::expose_claim_instance_index;
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let leg_idx = expose_claim_instance_index(&leg_tuple_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason:
+                "bridge leg leaf carries no re-exposed tuple (expose_claim) table — it must be \
+                     wrapped via prove_descriptor_leaf_with_pi_slice_expose (the 26-slot tuple)"
+                    .to_string(),
+        }
+    })?;
+    let cs_idx = expose_claim_instance_index(&bridge_subproof_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason:
+                "bridge sub-proof leaf carries no exposed tuple (expose_claim) table — it must \
+                     be minted via prove_bridge_leaf_tuple_claim"
+                    .to_string(),
+        }
+    })?;
+
+    let left = leg_tuple_leaf.into_recursion_input::<BatchOnly>();
+    let right = bridge_subproof_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let lg = left_apt
+            .get(leg_idx)
+            .expect("bridge leg's re-exposed tuple instance present");
+        let cs = right_apt
+            .get(cs_idx)
+            .expect("bridge sub-proof's exposed tuple instance present");
+        debug_assert!(lg.len() >= BRIDGE_TUPLE_LEN && cs.len() >= BRIDGE_TUPLE_LEN);
+        // THE BINDING TOOTH, IN-CIRCUIT: the leg's CLAIMED tuple must equal the bridge sub-proof's
+        // GENUINE in-circuit tuple, lane by lane. A forged claim with no backing sub-proof is a
+        // conflict here ⇒ UNSAT ⇒ no root.
+        for k in 0..BRIDGE_TUPLE_LEN {
+            cb.connect(lg[k], cs[k]);
+        }
+        let bound: Vec<Target> = (0..BRIDGE_TUPLE_LEN).map(|k| lg[k]).collect();
+        cb.expose_as_public_output(&bound);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        BatchOnly,
+        _,
+        D,
+    >(&left, &right, config, &backend, &params, None, Some(&expose))
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("bridge-binding aggregation node failed: {e:?}"),
+    })
+}
+
+/// **THE SEGMENT-PRESERVING BRIDGE BINDING NODE (deployed bridge-binding, caller-ready).** The
+/// bridge twin of [`prove_custom_binding_node_segmented`]: aggregate a bridge turn's DUAL-EXPOSE leg
+/// leaf (whose single `expose_claim` carries the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` and the
+/// CLAIMED 26-slot tuple in lanes `[SEG_WIDTH .. SEG_WIDTH+BRIDGE_TUPLE_LEN)`) WITH the bridge
+/// sub-proof leaf ([`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`], whose
+/// `expose_claim` is the genuine tuple in lanes `[0 .. BRIDGE_TUPLE_LEN)`), and:
+///
+///   1. `connect`s the leg's claimed tuple lanes to the sub-proof's genuine tuple lanes (the binding
+///      tooth — a forged claim no sub-proof backs is a conflict ⇒ UNSAT ⇒ no root), and
+///   2. RE-EXPOSES the leg's SEGMENT lanes `[0 .. SEG_WIDTH)` as the parent claim.
+///
+/// The output exposes an ordinary `SEG_WIDTH`-lane chain segment, so it folds into
+/// [`crate::ivc_turn_chain::aggregate_tree`] like any other per-turn segment leaf — making the bridge
+/// full-fidelity binding REAL for a pure light client while preserving the chain endpoints/digest.
+///
+/// ⚑ The DUAL-EXPOSE leg leaf this consumes requires the deployed bridge-mint wide leg to PUBLISH the
+/// 26-limb tuple at fixed PI slots (`BRIDGE_TUPLE_PI_LO..`); that descriptor-emit is the named
+/// big-bang piece (see the module-level wire comment). This node + its mechanism are ready for it.
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
+pub fn prove_bridge_binding_node_segmented(
+    dual_expose_leg_leaf: &RecursionOutput<DreggRecursionConfig>,
+    bridge_subproof_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::{SEG_WIDTH, expose_claim_instance_index};
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let leg_idx = expose_claim_instance_index(&dual_expose_leg_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason:
+                "dual-expose bridge leg leaf carries no expose_claim table — it must be wrapped \
+                     to re-expose (segment ++ the 26-slot tuple)"
+                    .to_string(),
+        }
+    })?;
+    let cs_idx = expose_claim_instance_index(&bridge_subproof_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason:
+                "bridge sub-proof leaf carries no exposed tuple (expose_claim) table — it must \
+                     be minted via prove_bridge_leaf_tuple_claim"
+                    .to_string(),
+        }
+    })?;
+
+    let left = dual_expose_leg_leaf.into_recursion_input::<BatchOnly>();
+    let right = bridge_subproof_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let lg = left_apt
+            .get(leg_idx)
+            .expect("dual-expose bridge leg's claim instance present");
+        let cs = right_apt
+            .get(cs_idx)
+            .expect("bridge sub-proof's exposed tuple instance present");
+        debug_assert!(
+            lg.len() >= SEG_WIDTH + BRIDGE_TUPLE_LEN && cs.len() >= BRIDGE_TUPLE_LEN,
+            "dual-expose claim must carry segment ++ tuple; bridge leaf carries the tuple"
+        );
+        for k in 0..BRIDGE_TUPLE_LEN {
+            cb.connect(lg[SEG_WIDTH + k], cs[k]);
+        }
+        let seg: Vec<Target> = (0..SEG_WIDTH).map(|k| lg[k]).collect();
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        BatchOnly,
+        _,
+        D,
+    >(&left, &right, config, &backend, &params, None, Some(&expose))
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("segmented bridge-binding aggregation node failed: {e:?}"),
+    })
+}
+
+/// **THE SEGMENT-PRESERVING SOVEREIGN BINDING NODE (the sovereign analog of
+/// [`prove_custom_binding_node_segmented`]).** Aggregate a sovereign turn's DUAL-EXPOSE effect-vm leg
+/// leaf (whose single `expose_claim` carries the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` and the
+/// CLAIMED `SOVEREIGN_WITNESS_KEY_COMMIT` teeth in lanes `[SEG_WIDTH .. SEG_WIDTH+KEY_CLAIM_LEN)`)
+/// WITH the re-proved sovereign-authority leaf
+/// ([`crate::sovereign_leaf_adapter::prove_sovereign_leaf_with_key_claim`], whose `expose_claim` is
+/// the in-circuit-bound `key_commit` in lanes `[0 .. KEY_CLAIM_LEN)`), and:
+///
+///   1. `connect`s the leg's claimed `key_commit` lanes to the authority leaf's bound `key_commit`
+///      (the binding tooth — a forged sovereign turn whose teeth name a `key_commit` no authority
+///      leaf binds is a conflict ⇒ UNSAT ⇒ no root), and
+///   2. RE-EXPOSES the leg's SEGMENT lanes `[0 .. SEG_WIDTH)` as the parent claim.
+///
+/// The output exposes an ordinary `SEG_WIDTH`-lane chain segment, so it folds into
+/// [`crate::ivc_turn_chain::aggregate_tree`] like any other per-turn segment leaf. This is what makes
+/// the sovereign authority REAL for a pure light client: the owner-key digest the deployed leg claims
+/// is bound IN the deployed recursion tree the light client folds, to the authority tuple the
+/// sovereign leaf proves, while the chain `[genesis_root, final_root, num_turns, chain_digest]` still
+/// reaches the root.
+///
+/// THE NAMED SEAMS (honest):
+///   * The deployed sovereign leg must DUAL-EXPOSE its `SOVEREIGN_WITNESS_KEY_COMMIT` teeth (lanes
+///     `[SEG_WIDTH ..)`). Today the teeth are dead-zero (`EffectVmContext::default`); the teeth-fill
+///     on the rotated producer + the leg's dual-expose of them is the BIG-BANG DESCRIPTOR PIECE (a
+///     PI-exposure change, owned by the descriptor lane). This node is its consumer.
+///   * The node binds `key_commit` (the owner digest, leg (b)). Connecting the anchor (leg (a)) +
+///     sequence (leg (c)) teeth needs the leg to expose those slots too — the same big-bang piece,
+///     widened. The authority leaf already binds all four in-circuit (anchor/sequence/new are pinned
+///     PIs), so widening the connect is a lane-count change, not new soundness machinery.
+///   * Ed25519 verification (the owner key actually signed the tuple) stays OFF-AIR — the
+///     digest-of-attestation boundary (see `sovereign_leaf_adapter` module docs).
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`]. Both children re-expose FRI-bound
+/// PI lanes directly (no `recompose/coeff` table), so the plain backend suffices.
+pub fn prove_sovereign_binding_node_segmented(
+    dual_expose_leg_leaf: &RecursionOutput<DreggRecursionConfig>,
+    sovereign_authority_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::{SEG_WIDTH, expose_claim_instance_index};
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let ev_idx = expose_claim_instance_index(&dual_expose_leg_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "dual-expose sovereign leg leaf carries no expose_claim table — it must be \
+                     wrapped to expose segment ++ key_commit (the SOVEREIGN_WITNESS_KEY_COMMIT teeth)"
+                .to_string(),
+        }
+    })?;
+    let sa_idx = expose_claim_instance_index(&sovereign_authority_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason:
+                "sovereign-authority leaf carries no exposed key_commit (expose_claim) table — \
+                     it must be minted via prove_sovereign_leaf_with_key_claim"
+                    .to_string(),
+        }
+    })?;
+
+    let left = dual_expose_leg_leaf.into_recursion_input::<BatchOnly>();
+    let right = sovereign_authority_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let ev = left_apt
+            .get(ev_idx)
+            .expect("dual-expose sovereign leg's claim instance present");
+        let sa = right_apt
+            .get(sa_idx)
+            .expect("sovereign-authority leaf's exposed key_commit instance present");
+        debug_assert!(
+            ev.len() >= SEG_WIDTH + SOVEREIGN_KEY_CLAIM_LEN && sa.len() >= SOVEREIGN_KEY_CLAIM_LEN,
+            "dual-expose claim must carry segment ++ key_commit; authority leaf carries key_commit"
+        );
+        // THE BINDING TOOTH, IN-CIRCUIT: the leg's CLAIMED key_commit (lanes
+        // [SEG_WIDTH .. SEG_WIDTH+KEY_CLAIM_LEN)) must equal the authority leaf's BOUND key_commit,
+        // lane by lane. A sovereign turn whose teeth name an owner digest no authority leaf binds is a
+        // conflict here ⇒ UNSAT ⇒ no root.
+        for k in 0..SOVEREIGN_KEY_CLAIM_LEN {
+            cb.connect(ev[SEG_WIDTH + k], sa[k]);
+        }
+        // RE-EXPOSE ONLY THE SEGMENT (lanes [0 .. SEG_WIDTH)) as the parent claim.
+        let seg: Vec<Target> = (0..SEG_WIDTH).map(|k| ev[k]).collect();
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        BatchOnly,
+        _,
+        D,
+    >(&left, &right, config, &backend, &params, None, Some(&expose))
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("segmented sovereign-binding aggregation node failed: {e:?}"),
+    })
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 //

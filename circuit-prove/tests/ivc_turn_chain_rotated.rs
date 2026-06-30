@@ -443,6 +443,7 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         mut public_inputs,
+        custom_witness: _,
     } = rotated;
     let lie = n1 + BabyBear::ONE;
     public_inputs[PI_ROTATED_NEW] = lie;
@@ -450,6 +451,7 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         public_inputs,
+        custom_witness: None,
     };
     let t1_forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let turns = [t0, t1_forged];
