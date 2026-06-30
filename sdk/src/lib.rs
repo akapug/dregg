@@ -119,6 +119,10 @@ pub mod sealed_governance;
 // wire-free). It is unconditional in the offline core. The networked
 // `WireCodec` over it lives in `dregg-sdk-net`.
 pub mod embed;
+// The ONE source of truth for the dregg production domains (api / devnet / auth
+// / gateway / hosting / portal). Defaults to the current `*.fg-goose.online`
+// values; overridable via the `DREGG_*_DOMAIN` env vars. See `endpoints.rs`.
+pub mod endpoints;
 pub mod error;
 pub mod explain;
 pub mod factories;
@@ -182,6 +186,7 @@ pub mod cclerk {
 
 /// **Noun 1**: proof-of-execution for one committed turn, with the composed
 /// STARK lazily attached. See [`receipt`].
+pub use endpoints::DreggEndpoints;
 pub use receipt::{Receipt, TurnProof};
 
 /// **Noun 2**: the light-client artifact — the verdict from verifying ONE
