@@ -1711,4 +1711,89 @@ def effCapOpenWriteV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : E
     traceWidth  := (effCapOpenV3 base name n).traceWidth + AFTER_SPINE_SPAN
     constraints := (effCapOpenV3 base name n).constraints ++ afterSpineConstraints base.traceWidth }
 
+/-- Every after-spine constraint is a constraint of the write descriptor. -/
+theorem effCapOpenWriteV3_afterMem (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (c : VmConstraint2) (hc : c ∈ afterSpineConstraints base.traceWidth) :
+    c ∈ (effCapOpenWriteV3 base name n).constraints :=
+  List.mem_append_right _ hc
+
+/-- A `Satisfied2` of the write descriptor strips (constraint-subset) to a `Satisfied2` of the cap-open
+membership descriptor `effCapOpenV3` — the after-spine appendix is all `.lookup`/`.base (.gate …)`, reads no
+base column and contributes no map/mem op. -/
+theorem effCapOpenWriteV3_strips_to_capOpen (hash : List ℤ → ℤ) (base : EffectVmDescriptor2)
+    (name : String) (n : Nat) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (h : Satisfied2 hash (effCapOpenWriteV3 base name n) minit mfin maddrs t) :
+    Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t := by
+  have hmapOps : Dregg2.Circuit.DescriptorIR2.mapOpsOf (effCapOpenWriteV3 base name n)
+      = Dregg2.Circuit.DescriptorIR2.mapOpsOf (effCapOpenV3 base name n) := by
+    simp [Dregg2.Circuit.DescriptorIR2.mapOpsOf, effCapOpenWriteV3, afterSpineConstraints,
+      afterLeafWelds, beforeRootWelds, List.filterMap_append, List.filterMap_map, List.filterMap_cons]
+  have hmemOps : Dregg2.Circuit.DescriptorIR2.memOpsOf (effCapOpenWriteV3 base name n)
+      = Dregg2.Circuit.DescriptorIR2.memOpsOf (effCapOpenV3 base name n) := by
+    simp [Dregg2.Circuit.DescriptorIR2.memOpsOf, effCapOpenWriteV3, afterSpineConstraints,
+      afterLeafWelds, beforeRootWelds, List.filterMap_append, List.filterMap_map, List.filterMap_cons]
+  have hmemLog : Dregg2.Circuit.DescriptorIR2.memLog (effCapOpenWriteV3 base name n) t
+      = Dregg2.Circuit.DescriptorIR2.memLog (effCapOpenV3 base name n) t := by
+    simp [Dregg2.Circuit.DescriptorIR2.memLog, hmemOps]
+  have hmapLog : Dregg2.Circuit.DescriptorIR2.mapLog (effCapOpenWriteV3 base name n) t
+      = Dregg2.Circuit.DescriptorIR2.mapLog (effCapOpenV3 base name n) t := by
+    simp [Dregg2.Circuit.DescriptorIR2.mapLog, hmapOps]
+  exact
+    { rowConstraints := fun i hi c hc =>
+        h.rowConstraints i hi c (by
+          show c ∈ (effCapOpenV3 base name n).constraints ++ afterSpineConstraints base.traceWidth
+          exact List.mem_append_left _ hc)
+      rowHashes := h.rowHashes
+      rowRanges := h.rowRanges
+      memAddrsNodup := h.memAddrsNodup
+      memClosed := by have := h.memClosed; rwa [hmemLog] at this
+      memDisciplined := by have := h.memDisciplined; rwa [hmemLog] at this
+      memBalanced := by have := h.memBalanced; rwa [hmemLog] at this
+      memTableFaithful := by have := h.memTableFaithful; rwa [hmemLog] at this
+      mapTableFaithful := by have := h.mapTableFaithful; rwa [hmapLog] at this }
+
+/-- **`effCapOpenWriteV3_afterCore`** — the AFTER-spine `MembershipCore`, derived from `Satisfied2` of the
+write descriptor (cloning `effCapOpenV3_satisfiedEff`'s `core` block over `afterSpineConstraints`). The
+`dirBool` is reused from the cap-open read (`hdir`, the SHARED dir column). -/
+theorem effCapOpenWriteV3_afterCore (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 base name n) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (hdir : ∀ lvl < DEPTH,
+      (dirBoolGate (capOpenCols base.traceWidth) lvl).eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0) :
+    MembershipCore hash t.tf (afterSpineCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) := by
+  have hrow := hsat.rowConstraints i hi
+  have hmem := effCapOpenWriteV3_afterMem base name n
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
+  refine { leafHashed := ?_, nodeHashed := ?_, dirBool := ?_, rootPinned := ?_ }
+  · have hin : VmConstraint2.lookup (leafLookup (afterSpineCols base.traceWidth))
+        ∈ afterSpineConstraints base.traceWidth := by
+      simp [afterSpineConstraints]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt] using h
+  · intro lvl hlvl
+    have hin : VmConstraint2.lookup (nodeLookup (afterSpineCols base.traceWidth) lvl)
+        ∈ afterSpineConstraints base.traceWidth := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+        (List.mem_append_left _ ?_)))
+      exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt] using h
+  · intro lvl hlvl
+    have := hdir lvl hlvl
+    simpa [afterSpineCols_dir] using this
+  · intro k
+    have hin : VmConstraint2.base (.gate (rootPinGate (afterSpineCols base.traceWidth) k))
+        ∈ afterSpineConstraints base.traceWidth := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+        (List.mem_append_right _ ?_)))
+      exact List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h; simpa using h
+
 end Dregg2.Circuit.Emit.CapOpenEmit
