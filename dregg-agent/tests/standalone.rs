@@ -192,3 +192,60 @@ fn the_cap_gate_refuses_an_ungranted_tool() {
     );
     verify_agent_run(&report).expect("the run re-witnesses");
 }
+
+/// (a) THE DIRECT NOUS HERMES MODEL: the brain points at the **Nous Portal**
+/// (`http://127.0.0.1:8645/v1`, model `hermes-agent`) — the actual Hermes model,
+/// not a lookalike — and its native `tool_calls` drive a cap-gated, budget-drawn,
+/// receipted run that re-witnesses. (Recorded transport stands in for the live
+/// Portal; the live leg is identical the moment ~/.nousportalkey is present.)
+#[test]
+fn the_nous_portal_hermes_brain_targets_the_portal_and_is_confined() {
+    use dregg_agent::brain::{HERMES_PORTAL_MODEL, NOUS_PORTAL_BASE};
+
+    let cloud = AgentCloud::from_seed([77u8; 32]);
+    let handle = cloud
+        .deploy(&spec("agent:hermes", 10, &["check_health"], &[]))
+        .unwrap();
+    let toolkit = Toolkit::new()
+        .with_check_health("check_health", || HealthSnapshot::healthy("node up · Σδ=0"));
+
+    let caller = RecordedOpenAICaller::new(vec![
+        tool_call("invoke", r#"{"service":"check_health"}"#),
+        finish("health is green"),
+    ]);
+    // The brain is pointed at the Nous Portal base + the Hermes model id.
+    let mut brain = OpenAICompatBrain::with_base(
+        "Check the node is healthy, then finish.",
+        vec!["check_health".into()],
+        vec![],
+        ProviderKey::new("nous-portal", "sk-NOUSPORTAL-TESTKEY-DONOTLEAK"),
+        NOUS_PORTAL_BASE,
+        HERMES_PORTAL_MODEL,
+        caller,
+    );
+
+    let report = cloud.run_with_toolkit(&handle, &mut brain, &toolkit);
+    verify_agent_run(&report).expect("the Hermes-over-Portal run re-witnesses");
+    assert_eq!(
+        report.admitted, 1,
+        "the Hermes model drove the cap-gated tool"
+    );
+
+    // The request actually targeted the Nous Portal chat endpoint + the Hermes model.
+    let endpoints = brain.caller().endpoints_seen();
+    assert!(!endpoints.is_empty());
+    for e in endpoints {
+        assert_eq!(
+            e, "http://127.0.0.1:8645/v1/chat/completions",
+            "Portal endpoint"
+        );
+    }
+    for body in brain.caller().requests_seen() {
+        assert_eq!(
+            body.get("model").and_then(|m| m.as_str()),
+            Some(HERMES_PORTAL_MODEL),
+            "the request asked for the Hermes model"
+        );
+    }
+    assert_eq!(brain.model(), HERMES_PORTAL_MODEL);
+}
