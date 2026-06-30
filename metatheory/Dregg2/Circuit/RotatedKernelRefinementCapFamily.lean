@@ -92,6 +92,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
   (revokeCapabilityV3 delegateV3 delegateAttenV3 grantCapWriteV3 attenuateV3
    introduceWriteV3 revokeDelegationWriteV3 refreshDelegationWriteV3
    beforeCapRootCol afterCapRootCol beforeDelegRootCol afterDelegRootCol
+   beforeCapRootCols afterCapRootCols writesTo8 withSelectorGate_satisfied2
    heldReadOpRot keepWriteOpRot removeWriteOpRot
    delegateV3_forces_write grantCapWriteV3_forces_write delegateAttenV3_non_amp attenuateV3_non_amp
    introduceWriteV3_forces_write revokeDelegationWriteV3_forces_write
@@ -99,7 +100,10 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 open Dregg2.Circuit.Emit.CapOpenEmit
   (introduceWriteCapOpenV3 revokeDelegationWriteCapOpenV3 refreshDelegationWriteCapOpenV3
    delegateWriteCapOpenV3 grantCapWriteCapOpenV3
-   delegateAttenWriteCapOpenV3 attenuateCapOpenEffV3 capOpen_satisfied2_strips_to_base)
+   delegateAttenWriteCapOpenV3 attenuateCapOpenEffV3 capOpen_satisfied2_strips_to_base
+   effCapOpenWriteV3 effCapOpenWriteV3_forces_write8)
+open Dregg2.Circuit.DescriptorIR2 (ChipTableSoundN)
+open Dregg2.Circuit.DeployedCapOpen (capPermOut)
 
 set_option autoImplicit false
 
@@ -298,12 +302,13 @@ structure AttenuateWriteAnchor (S8 : Cap8Scheme)
   row : Nat
   hrow : row < tr.rows.length
   hactive : (envAt tr row).loc sel.ATTENUATE_CAPABILITY = 1
-  -- attenuate is the IN-PLACE update-at-key on the ROTATED cap-root limb (`keepWriteOpRot`, the
-  -- silent-forge close — note-spend-shaped, witness-carried): the decode's sorted-tree roots anchor to
-  -- the rotated BEFORE/AFTER cap-root limbs (`beforeCapRootCol`/`afterCapRootCol`, var 213/264), NOT the
-  -- v1-state CAP_ROOT cols (65/87, which FREEZE pass-through and are not commitment inputs).
-  oldAnchored : henc.oldRoot = (envAt tr row).loc (beforeCapRootCol EFFECT_VM_WIDTH)
-  newAnchored : henc.newRoot = (envAt tr row).loc (afterCapRootCol EFFECT_VM_WIDTH)
+  -- the active cap-write row is not the trailing/padding row (the gates bind under `when_transition`).
+  hnotlast : row + 1 ≠ tr.rows.length
+  -- attenuate is the IN-PLACE update-at-key on the ROTATED cap-root limb: the decode's sorted-tree roots
+  -- anchor to the FAITHFUL 8-felt BEFORE/AFTER cap-root blocks (`beforeCapRootCols`/`afterCapRootCols`,
+  -- the full ~124-bit committed root), NOT the v1-state CAP_ROOT cols (which FREEZE pass-through).
+  oldAnchored : henc.oldRoot = beforeCapRootCols (envAt tr row)
+  newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`attenuate_descriptorRefines_sat` — THE ATTENUATE CLASS-A REFINEMENT (write FORCED).** From
 `Satisfied2 hash attenuateV3` (via `attenuateV3_non_amp` on the MOVING write face, with the submask
@@ -312,34 +317,35 @@ sorted UPDATE-AT-KEY (the `keepWriteOp` recompute of the narrowed leaf at the to
 `attenuateV3`'s write op turns this — and the apex — RED. -/
 theorem attenuate_descriptorRefines_sat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
-      = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
-    (hsat : Satisfied2 hash attenuateV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 attenuateV3 name n) mi mf ma tr)
     (henc : AttenuateCapsTreeEncodes S8 pre post actor idx keep)
     (anc : AttenuateWriteAnchor S8 pre post actor idx keep hash mi mf ma tr henc) :
     Dregg2.Circuit.Spec.AuthorityAttenuation.AttenuateSpec pre actor idx keep post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot := by
   refine ⟨attenuate_descriptorRefines_exact S8 pre post actor idx keep henc, ?_⟩
   rw [anc.oldAnchored, anc.newAnchored]
-  exact (attenuateV3_non_amp hash mi mf ma tr hsub hsat anc.row anc.hrow anc.hactive).2.1
+  exact effCapOpenWriteV3_forces_write8 S8 attenuateV3 name n hash mi mf ma tr hChip hsat
+    anc.row anc.hrow anc.hnotlast
 
 /-- **CLASS-A TOOTH (attenuate) — a forged wrong post-root is UNSAT.** Mutation: dropping `keepWriteOp`
 from `attenuateV3` removes the forced `writesTo`, so this conclusion can no longer be drawn. -/
 theorem attenuate_sat_forces_postroot (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
-      = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
-    (hsat : Satisfied2 hash attenuateV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapOpenWriteV3 attenuateV3 name n) mi mf ma tr)
     (henc : AttenuateCapsTreeEncodes S8 pre post actor idx keep)
     (anc : AttenuateWriteAnchor S8 pre post actor idx keep hash mi mf ma tr henc) :
-    writesTo hash henc.oldRoot
+    writesTo8 S8 henc.oldRoot
       ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
       henc.newRoot :=
-  (attenuate_descriptorRefines_sat S8 pre post actor idx keep hash mi mf ma tr hsub hsat henc anc).2
+  (attenuate_descriptorRefines_sat S8 pre post actor idx keep name n hash mi mf ma tr hChip hsat henc anc).2
 
 /-- **`attenuate_descriptorRefines_capOpenSat` — the apex-wirable attenuate rung (tag 12).** Consumes
 `Satisfied2 hash attenuateCapOpenEffV3` (the LIVE cap-open authority wrapper, base `attenuateV3`) by
@@ -348,18 +354,20 @@ stripping the authority appendix + selector tooth to `Satisfied2 attenuateV3` an
 attenuateCapOpenEffV3`) wires this. -/
 theorem attenuate_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor : CellId) (idx : Nat) (keep : List Auth)
+    (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
-    (hsub : tr.tf (.custom Dregg2.Circuit.Emit.EffectVmEmitV2.SUBMASK_TID)
-      = Dregg2.Circuit.Emit.EffectVmEmitV2.subsetTable Dregg2.Circuit.Emit.EffectVmEmitV2.MASK_BITS)
-    (hsat : Satisfied2 hash attenuateCapOpenEffV3 mi mf ma tr)
+    (hChip : ChipTableSoundN (capPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate sel.ATTENUATE_CAPABILITY
+        (effCapOpenWriteV3 attenuateV3 name n)) mi mf ma tr)
     (henc : AttenuateCapsTreeEncodes S8 pre post actor idx keep)
     (anc : AttenuateWriteAnchor S8 pre post actor idx keep hash mi mf ma tr henc) :
     Dregg2.Circuit.Spec.AuthorityAttenuation.AttenuateSpec pre actor idx keep post
-    ∧ writesTo hash henc.oldRoot
+    ∧ writesTo8 S8 henc.oldRoot
         ((envAt tr anc.row).loc (prmCol CAP_KEY)) ((envAt tr anc.row).loc (prmCol KEEP_MASK))
         henc.newRoot :=
-  attenuate_descriptorRefines_sat S8 pre post actor idx keep hash mi mf ma tr hsub
-    (capOpen_satisfied2_strips_to_base hash _ attenuateV3 _ _ mi mf ma tr hsat) henc anc
+  attenuate_descriptorRefines_sat S8 pre post actor idx keep name n hash mi mf ma tr hChip
+    (withSelectorGate_satisfied2 hash _ (effCapOpenWriteV3 attenuateV3 name n) mi mf ma tr hsat) henc anc
 
 #assert_axioms attenuate_descriptorRefines_sat
 #assert_axioms attenuate_sat_forces_postroot
