@@ -2086,6 +2086,12 @@ pub const CAP_OPEN_LANE_SITES: usize = 1 + CAP_OPEN_DEPTH; // 17
 /// groups are committed in place). Written by `fill_cap_open` at `CAP_OPEN_BASE + 0..329`. Mirrors the
 /// Lean `CapOpenEmit.CAP_OPEN_SPAN = 329`.
 pub const CAP_OPEN_SPAN: usize = CAP_OPEN_MEMBERSHIP_COLS; // 329
+/// The AFTER-SPINE recompute appendix span the cap-WRITE descriptors (`effCapOpenWriteV3`: attenuate +
+/// the delegation-mutating writes) carry PAST the 329-col read appendix — `15 + 8·DEPTH = 143`
+/// (after-leaf + after-leaf-digest + `DEPTH·8` after-node), forcing the faithful 8-felt cap-WRITE
+/// (Lean `CapOpenEmit.AFTER_SPINE_SPAN`, the `*_forces_write8` weld). A WRITE cap-open descriptor's
+/// `trace_width` is `CAP_OPEN_WIDTH + CAP_OPEN_AFTER_SPINE_SPAN`; a READ-only one is `CAP_OPEN_WIDTH`.
+pub const CAP_OPEN_AFTER_SPINE_SPAN: usize = 15 + 8 * CAP_OPEN_DEPTH; // 143
 /// The cap-open trace width (`GRAD_ROT_WIDTH + 329 = 937` = the committed
 /// `attenuateCapOpenEffVmDescriptor2R24.trace_width` under the native 8-felt cap tree).
 pub const CAP_OPEN_WIDTH: usize = CAP_OPEN_BASE + CAP_OPEN_SPAN;
