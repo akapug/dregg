@@ -557,9 +557,20 @@ def mapLog (d : EffectVmDescriptor2) (t : VmTrace) : Table :=
     (mapOpsOf d).filterMap fun m =>
       if m.guard.eval a = 1 then some (m.rowAt a) else none
 
-/-- Per-row meaning of one v2 constraint. (`memOp`/`umemOp`/`proofBind` are `True` here: their
-content is the GLOBAL leg of `Satisfied2`/`Satisfied2U`/`Satisfied2Custom`, not a row-local
-equation.) -/
+/-- Per-row meaning of one v2 constraint. `memOp`/`umemOp`/`proofBind` are `True` here because they
+are not row-local equations — but their DEPLOYED status differs and the difference is load-bearing:
+* `memOp` — REAL: the content is the GLOBAL leg of `Satisfied2` (`memBalanced`), and that leg IS
+  deployed-enforced (the LogUp bus + Blum multiset balance + the verifier's zero-sum check). (One
+  open seam: the flat-memory `minit` boundary is not yet anchored to the committed pre-state root —
+  umem already closes this pattern via `whole_image_fold`.)
+* `umemOp` — its global leg lives in `Satisfied2U` (staged), with the boundary anchored to the
+  committed root.
+* `proofBind` — its content lives in `Satisfied2Custom`, which is NOT the deployed `Satisfied2`, and
+  the deployed prover does not yet fold the custom sub-proof leaf. So this arm is VACUOUS for a pure
+  light client as-shipped (`CustomCarrierAttack.deployed_admits_unbacked`); the real binding is the
+  FOLD (`CustomBindingFromFold` + `joint_turn_recursive.prove_custom_binding_node`), whose premise
+  (a verifying aggregate that folds the custom leaf) is met only once that node is on the deployed
+  prove path. Do NOT read this `True` as "compensated like memOp". -/
 def VmConstraint2.holdsAt (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
     (isFirst isLast : Bool) : VmConstraint2 → Prop
   | .base c       => c.holdsVm env isFirst isLast
@@ -599,6 +610,88 @@ theorem satisfied2_mem_consistent (hash : List ℤ → ℤ) (d : EffectVmDescrip
     (h : Satisfied2 hash d minit mfin maddrs t) :
     MemoryChecking.Consistent minit (memLog d t) :=
   MemoryChecking.memcheck_sound h.memAddrsNodup h.memClosed h.memDisciplined h.memBalanced
+
+/-! ## §6a' — the FLAT memory boundary is BOUND to committed pre/post-state (the anchor that
+CLOSES the flat-`minit` hole). The EXACT structural mirror of §6b's `satisfied2U_init_root`
+family, instantiated at the TOTAL flat image `minit : ℤ → ℤ`. A flat boundary declares every
+address PRESENT, so its boundary view is `boundaryCells (some ∘ minit) maddrs` — the same
+sorted-Poseidon2 leaf list the universal init side folds, with `Option`-wrap saturated to `some`.
+
+The hole these legs close: `Satisfied2` takes `minit`/`mfin` as FREE witness parameters with only
+`memBalanced` (the Blum balance RELATIVE to the prover's chosen `minit`). Nothing forced the
+declared `minit` to be the COMMITTED pre-state, so a prover could declare a forged `minit[a]` for
+an untouched address `a`, the balance still closes, and `verify_batch` accepted an image that was
+never committed prior state. These legs pin the flat boundary's init/fin root to a committed
+pre/post-state root (the `minit_root`/`mfin_root` PIs the emitter publishes); the `root_injective`
+forge tooth then REFUSES any boundary whose image differs from the committed state. The umem legs
+already carry the proofs — these re-state them at the flat denotation. -/
+
+/-- **The flat INIT boundary is BOUND to committed pre-state — `boundary_init_root_derived`
+applied.** If the committed PRE-state heap `mpre` has the lookup semantics of the declared flat
+init image `minit` over the declared, sorted addresses `as` (present at every declared address,
+absent off the list), then the committed pre-state root EQUALS the sorted-Poseidon2 root of the
+boundary view derived from `minit`. Pinning that derived root to the committed pre-state root (the
+`minit_root` PI) forces the declared init image to be the committed pre-state. The flat analog of
+`satisfied2U_init_root`; `minit` is the GIVEN, so no memcheck pinning is needed (it is even simpler
+than the universal side). -/
+theorem satisfied2_init_root (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {mpre : Heap.FeltHeap} {as : List ℤ}
+    (_h : Satisfied2 hash d minit mfin maddrs t)
+    (hs : Heap.SortedKeys mpre) (has : as.Pairwise (· < ·))
+    (hsem : ∀ a, Heap.get mpre a = if a ∈ as then some (minit a) else none) :
+    Heap.root hash mpre
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => some (minit a)) as) :=
+  UniversalMemory.boundary_init_root_derived hash hs has hsem
+
+/-- **The flat FINAL boundary is BOUND to committed post-state — `boundary_init_root_derived`
+applied to the final image.** The post-state companion of `satisfied2_init_root`: if the committed
+POST-state heap `mpost` has the lookup semantics of the claimed final image `(mfin ·).1` over the
+declared sorted addresses, then the committed post-state root EQUALS the sorted-Poseidon2 root of
+the boundary view derived from `mfin`. Pinning that to the `mfin_root` PI binds the carried-forward
+post-state. (That the claimed `mfin` is the GENUINE fold of `minit` + the log writes is the
+SEPARATE `memBalanced` leg — `satisfied2_mem_consistent`; this leg binds the published post-state
+ROOT to the claimed image, exactly as the init leg binds the pre-state root to `minit`.) -/
+theorem satisfied2_fin_root (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {mpost : Heap.FeltHeap} {as : List ℤ}
+    (_h : Satisfied2 hash d minit mfin maddrs t)
+    (hs : Heap.SortedKeys mpost) (has : as.Pairwise (· < ·))
+    (hsem : ∀ a, Heap.get mpost a = if a ∈ as then some (mfin a).1 else none) :
+    Heap.root hash mpost
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => some (mfin a).1) as) :=
+  UniversalMemory.boundary_init_root_derived hash hs has hsem
+
+/-- **The flat boundary binding is SOUND (the anti-forgery tooth) — `Heap.root_injective` under
+`Poseidon2SpongeCR`.** A committed pre-state map `mcommitted` and the prover's declared init heap
+`mdeclared` carry the SAME root iff they ARE the same map. So pinning the `minit_root` PI to the
+committed pre-state root forces the declared flat init image to be the committed pre-state — a
+forged `minit` (a tampered value at a declared address, the exploit the diagnosis confirmed)
+CANNOT keep the published root. The flat analog of `boundary_init_root_bound`. -/
+theorem satisfied2_init_root_bound (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {mcommitted mdeclared : Heap.FeltHeap}
+    (hroot : Heap.root hash mdeclared = Heap.root hash mcommitted) :
+    mdeclared = mcommitted :=
+  Heap.root_injective hash hCR hroot
+
+/-- **THE WHOLE-IMAGE flat init binding — `boundary_whole_image_sem` applied.** The no-extra-cells
+direction: if the committed pre-state root EQUALS the sorted-Poseidon2 fold of the ENTIRE declared
+flat boundary image `boundaryCells (some ∘ minit) as` — the obligation the in-circuit whole-image
+root-fold discharges (the `whole_image_fold` sorted-insert chip cross-bound to the `MemBoundary`
+table) — then under the named CR floor the committed heap agrees with the declared init image at
+EVERY address: declared cells open to `minit a`, and every address OFF the declared list is ABSENT.
+So a committed pre-state holding any value the boundary did not declare CANNOT keep the published
+root; the flat boundary image is the WHOLE committed pre-state. This is what rejects a forged
+`minit[a]=999` at an UNTOUCHED declared field: that forged image folds to a DIFFERENT root, so the
+`minit_root` PI pin against the committed pre-state root REFUSES. The flat companion of
+`satisfied2U_init_whole_image`. -/
+theorem satisfied2_init_whole_image (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    {mcommitted : Heap.FeltHeap} {minit : ℤ → ℤ} {as : List ℤ}
+    (has : as.Pairwise (· < ·))
+    (hpin : Heap.root hash mcommitted
+      = Heap.root hash (UniversalMemory.boundaryCells (fun a => some (minit a)) as)) :
+    ∀ a, Heap.get mcommitted a = if a ∈ as then some (minit a) else none :=
+  UniversalMemory.boundary_whole_image_sem hash hCR has hpin
 
 /-! ## §6b — `Satisfied2U`: the UNIVERSAL-memory denotation (the one-Blum-multiset leg).
 
@@ -1746,6 +1839,10 @@ def brokenEngine : ProofEngine :=
 #assert_axioms writesTo_functional
 #assert_axioms opensTo_none_of_gap
 #assert_axioms satisfied2_mem_consistent
+#assert_axioms satisfied2_init_root
+#assert_axioms satisfied2_fin_root
+#assert_axioms satisfied2_init_root_bound
+#assert_axioms satisfied2_init_whole_image
 #assert_axioms memOpsOf_embedV1
 #assert_axioms memLog_embedV1
 #assert_axioms memCheck_nil

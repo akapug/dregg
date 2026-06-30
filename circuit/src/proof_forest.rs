@@ -30,4 +30,14 @@ pub const CUTOVER_READY_SELECTORS: &[usize] = &[
     crate::effect_vm::columns::sel::REFRESH_DELEGATION,
     crate::effect_vm::columns::sel::REVOKE_DELEGATION,
     crate::effect_vm::columns::sel::INTRODUCE,
+    // CUSTOM (8): bound in the recursion tree a pure light client folds. The leg carries a
+    // `CustomWitnessBundle`; `ivc_turn_chain::prove_chain_core_rotated` folds the dual-expose leaf
+    // against the re-proven custom sub-proof leaf via
+    // `joint_turn_recursive::prove_custom_binding_node_segmented`, and a forged commitment makes the
+    // aggregate UNSAT (`custom_binding_deployed_tooth.rs`, both poles). This is the UNIVERSAL
+    // sub-proof-folding primitive — the same one bridge / factory / hatchery / DSL / membership /
+    // sovereign-transition ride: every off-AIR carrier becomes a recursion-tree leaf so the light
+    // client witnesses what a re-executing validator does. The production minters populate the
+    // witness bundle from the turn's bound sub-proof.
+    crate::effect_vm::columns::sel::CUSTOM,
 ];

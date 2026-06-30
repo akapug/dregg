@@ -7,24 +7,33 @@
 receipt-index/MMR root as a sponge limb". This module asks whether that obligation has an HONEST
 discharge against the commit the deployed chain actually folds, then closes the gap.
 
-## §1 — REFUTE (the vacuity is real at the model level)
+## §1 — THE REPAIR, WELDED INTO THE AGGREGATION MODEL (the chain folds the rotated commit)
 
-The chain folds `ChainStep.newRoot CH RH cmb compress compressN s = stateRoot … s.post.kernel
-s.turn = recStateCommit … s.post.kernel s.turn`. `recStateCommit k t = cmb (cellDigest … k t)
-(RH k)`, and `RH` is injective on EXACTLY sixteen NON-CELL kernel components
-(`StateCommit.RestHashIffFrame`: accounts · caps · bal · nullifiers · revoked · commitments ·
-slotCaveats · factories · lifecycle · deathCert · delegate · delegations · delegationEpoch ·
-delegationEpochAt · heaps) — **the receipt log is NOT among them.** `RecChainedState` carries the
-receipt `log : List Turn` ALONGSIDE the `kernel`, and `ChainStep.newRoot` reads `s.post.kernel`
-only. So the kernel commit a pure light client chains is BLIND to the receipt log:
+The aggregation model now folds `ChainStep.newRoot CH RH cmb compress compressN s =
+HistoryAggregation.chainedCommit … s.post s.turn = compressN [recStateCommit … s.post.kernel s.turn,
+logRoot … s.post.log]` — the deployed rotated commit `hash_many [d, iroot]`. The kernel-digest LIMB `d
+= recStateCommit … k t` is still blind to the receipt log (`recStateCommit k t = cmb (cellDigest … k t)
+(RH k)`, and `RH` is injective on the sixteen NON-CELL kernel components — accounts · caps · bal ·
+nullifiers · revoked · commitments · slotCaveats · factories · lifecycle · deathCert · delegate ·
+delegations · delegationEpoch · delegationEpochAt · heaps — **the receipt log is NOT among them**); that
+is precisely WHY the rotated commit absorbs the log as its SECOND limb:
 
-  * `recStateCommit_admits_receipt_omission` — the held commit is LITERALLY unchanged (`rfl`) when
-    the receipt log is replaced by one with a receipt DROPPED, while the receipt-log MMR roots
-    genuinely DIFFER (`mroot_injective`). A node drops a receipt; a pure LC is none the wiser.
-  * `hweld_over_kernel_commit_pins_at_most_one_log` — IF the kernel commit bound the log via
-    `CommitBindsMMR`, `commit_pins_mmr` forces a UNIQUE log; but the commit is the same for the
-    full and the omitting log, so the obligation cannot honestly hold for the genuine one while the
-    node serves the other. `hweld` over `recStateCommit` is vacuous-as-deployed.
+  * `recStateCommit_admits_receipt_omission` — the kernel-digest limb ALONE is LITERALLY unchanged
+    (`rfl`) when a receipt is dropped, while the receipt-log MMR roots DIFFER (`mroot_injective`). The
+    residual a kernel-only chained commit would leave open.
+  * `newRoot_binds_log` — the rotated `chainedCommit` CLOSES it: two steps sharing a turn whose
+    `newRoot`s agree have EQUAL receipt logs (`HistoryAggregation.root_tooth_pins_log`, the outer
+    sponge peel + `logRoot_injective`). A dropped/forged/reordered receipt MOVES the published commit;
+    the light client catches it. So `hweld` over the per-turn commitment is now DISCHARGED by the model.
+
+## §2 — the ROOT FACE grounded (the single deployed commit)
+
+The deployed Rust binds it: post-G4 the live chained commit is the ROTATED WIDE commitment
+(`circuit/src/effect_vm/trace_rotated.rs`, `B_IROOT = 37`, `state_commit = hash_many [d, iroot]`;
+`turn/src/executor/proof_verify.rs:349` "iroot … absorbed INTO the v9 commitment, which the proof
+binds"). The Lean twin is `RotationLayout.rotatedCommit`, whose `rotatedCommit_binds_mmr` discharges
+`CommitBindsMMR` **by `rfl`**. So the grounded theorems chain the rotated commit and consume the
+PROVEN binding — NO `hweld`:
 
 ## §2 — REPAIR (the guarantee made real-as-deployed)
 
@@ -43,14 +52,16 @@ answer to be EXACTLY the genuine range — omission impossible, forgery impossib
 `rfl` binding alone. Non-vacuity §3: the honest opening FIRES (returns the complete range) and an
 omitting answer is REJECTED (would force `[333] = [222,333]`, absurd).
 
-## §3 — the residual (named, not hidden)
+## §3/§4 — the residual CLOSED (whole-history non-omission, no `hweld`)
 
-The grounded theorems are the ROOT FACE — non-omission for ONE deployed published commit. Lifting to
-WHOLE-HISTORY (`AggregateAttests` over every folded step) needs the IVC aggregation model itself to
-fold the rotated commit: `HistoryAggregation.stateRoot := rotatedCommit` in place of the kernel
-`recStateCommit`. That is the precise minimal further weld (the deployed Rust already folds the
-rotated commit; only the Lean aggregation model still names the kernel commit). Tracked in the
-report; NOT discharged here.
+§2's grounded theorems are the ROOT FACE — non-omission for ONE deployed published commit. The lift to
+WHOLE-HISTORY (`AggregateAttests` over every folded step) needed the IVC aggregation model itself to
+fold the rotated commit. That is now DONE: `HistoryAggregation.chainedCommit` (= `hash_many [d, iroot]`,
+the deployed rotated commit) IS the per-turn commitment the chain folds (`ChainStep.oldRoot/newRoot`),
+so its receipt-log limb binds the log at EVERY step (`root_tooth_pins_log`). §4 re-exposes the closed
+headline `light_client_whole_history_non_omission` (= `RecursiveAggregation.non_omission_from_verification`):
+`verify agg.root = true` ⟹ `LogChained` over the whole history — omission impossible everywhere, no
+`hweld`. The aggregation model no longer lags the deployed Rust.
 
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem; crypto enters only as
@@ -70,32 +81,45 @@ open Dregg2.Lightclient.MMR
 open Dregg2.Lightclient.AttestedQuery
 open Dregg2.Lightclient.HistoryIndex
 open Dregg2.Circuit.RotationLayout (RotatedLimbs rotatedCommit rotatedCommit_binds_mmr demoLimbs)
-open Dregg2.Circuit.StateCommit (recStateCommit)
-open Dregg2.Distributed.HistoryAggregation (ChainStep stateRoot)
+open Dregg2.Circuit.StateCommit (recStateCommit compressNInjective)
+open Dregg2.Distributed.HistoryAggregation (ChainStep stateRoot chainedCommit logRoot logRoot_injective
+  root_tooth_pins_log LogChained LogGenesisPin SeamStruct)
+open Dregg2.Circuit.RecursiveAggregation (Aggregate EngineSound non_omission_from_verification)
 
-/-! ## §1 — REFUTE: the kernel commit the chain folds is BLIND to the receipt log. -/
+/-! ## §1 — THE REPAIR, WELDED INTO THE MODEL: the chain now folds the rotated commit (binds the log).
 
-/-- **The held commit ignores the receipt log.** `ChainStep.newRoot` reads `s.post.kernel` only;
-`RecChainedState` carries the receipt `log` SEPARATELY. So two chained states sharing a kernel + turn
-but carrying DIFFERENT receipt logs commit to the SAME `ChainStep.newRoot`. -/
-theorem newRoot_blind_to_log
+The kernel-only `recStateCommit` was BLIND to the receipt log; the canonical aggregation model now folds
+`HistoryAggregation.chainedCommit` (= `hash_many [d, iroot]`, the deployed rotated commit), so
+`ChainStep.newRoot` ABSORBS the receipt-log root as its second limb. The blindness is now a property of
+the KERNEL-DIGEST LIMB ALONE (`stateRoot`, the FIRST limb) — which is exactly WHY the rotated commit
+adds the second. -/
+
+/-- **The rotated commit BINDS the receipt log (the repair).** `ChainStep.newRoot` is now the rotated
+`chainedCommit`, which absorbs `logRoot … st.log`. Two steps sharing a turn whose `newRoot`s agree have
+EQUAL receipt logs — directly `HistoryAggregation.root_tooth_pins_log`, here for two `newRoot`s. A node
+that drops/forges/reorders a receipt MOVES the published commit; a pure light client, holding only that
+commit, now CATCHES it. (Contrast the pre-repair `newRoot_blind_to_log`, which this supersedes.) -/
+theorem newRoot_binds_log
     (CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ)
     (RH : Dregg2.Exec.RecordKernelState → ℤ)
     (cmb : ℤ → ℤ → ℤ) (compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
-    (s s' : ChainStep)
-    (hk : s.post.kernel = s'.post.kernel) (ht : s.turn = s'.turn) :
-    ChainStep.newRoot CH RH cmb compress compressN s
-      = ChainStep.newRoot CH RH cmb compress compressN s' := by
-  unfold ChainStep.newRoot stateRoot
-  rw [hk, ht]
+    (hCompressN : compressNInjective compressN)
+    (s s' : ChainStep) (ht : s.turn = s'.turn)
+    (h : ChainStep.newRoot CH RH cmb compress compressN s
+          = ChainStep.newRoot CH RH cmb compress compressN s') :
+    s.post.log = s'.post.log := by
+  unfold ChainStep.newRoot chainedCommit at h
+  rw [ht] at h
+  have hlimbs := hCompressN _ _ h
+  simp only [List.cons.injEq, and_true] at hlimbs
+  exact logRoot_injective compressN hCompressN hlimbs.2
 
-/-- **THE OMISSION ATTACK (mirrors `CustomCarrierAttack.deployed_admits_unbacked`).** The commit a
-pure light client chains, `recStateCommit … k t` (= `stateRoot`), is a function of the kernel `k` and
-turn `t` ALONE — it has no receipt-log input. So the full receipt log and ANY log with a receipt
-omitted map to the SAME chained commit (`rfl`), while their receipt-log MMR roots DIFFER
-(`mroot_injective`). A node drops a receipt and a pure LC, holding only that commit, cannot tell:
-the commit cannot pin a log it never absorbed. This is the explicit witness that
-`CommitBindsMMR … (recStateCommit … k t) L` has no honest discharge over the kernel commit. -/
+/-- **The kernel-digest LIMB alone admits omission — WHY the rotated commit needs the log root.** The
+FIRST limb `stateRoot … k t` (= `recStateCommit`, the kernel digest) is a function of the kernel and
+turn ALONE: the full receipt log and ANY log with a receipt omitted map to the SAME kernel-digest limb
+(`rfl`), while their receipt-log MMR roots DIFFER (`mroot_injective`). This is the residual that a
+kernel-ONLY chained commit would have left open — and precisely what the rotated commit's SECOND limb
+(`logRoot`, `newRoot_binds_log` above) closes. -/
 theorem recStateCommit_admits_receipt_omission
     (CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ)
     (RH : Dregg2.Exec.RecordKernelState → ℤ)
@@ -120,7 +144,7 @@ theorem commit_absorbing_root_pins_log_uniquely
     (hb : CommitBindsMMR hash limbs c L) (hb' : CommitBindsMMR hash limbs' c L') : L = L' :=
   (commit_pins_mmr hash hCR hb hb').symm
 
-#assert_axioms newRoot_blind_to_log
+#assert_axioms newRoot_binds_log
 #assert_axioms recStateCommit_admits_receipt_omission
 #assert_axioms commit_absorbing_root_pins_log_uniquely
 
@@ -218,5 +242,40 @@ theorem grounded_idx_fires_honest
 #assert_axioms grounded_mmr_fires_honest
 #assert_axioms grounded_mmr_rejects_omission
 #assert_axioms grounded_idx_fires_honest
+
+/-! ## §4 — WHOLE-HISTORY: the §3 residual CLOSED (the aggregation model folds the rotated commit).
+
+§2 grounded the ROOT FACE — non-omission for ONE deployed published commit. The §3 residual was the
+WHOLE-HISTORY lift: it needed the IVC aggregation model to fold the rotated commit, `stateRoot :=
+rotatedCommit` in place of the kernel `recStateCommit`. That is now DONE: `HistoryAggregation.chainedCommit`
+(= `hash_many [d, iroot]`) IS the per-turn commitment the chain folds (`ChainStep.oldRoot/newRoot`), so
+its second limb binds the receipt log at EVERY folded step (`root_tooth_pins_log`). The whole-history
+non-omission headline is therefore DERIVED from the one client check `verify agg.root = true`, with NO
+`hweld`: `RecursiveAggregation.non_omission_from_verification` yields `LogChained` over the entire
+attested history. We re-expose it here, in the grounded home, as the closed §3 residual. -/
+
+/-- **`light_client_whole_history_non_omission` — the §3 residual CLOSED.** A light client that checks
+ONLY `verify agg.root = true` learns the receipt log chains genuinely across the WHOLE history
+(`LogChained g steps`): no node dropped / forged / reordered / truncated a receipt at ANY folded step.
+The receipt-log binding is the rotated commit's second limb welded into the aggregation model
+(`root_tooth_pins_log`), discharged under the one CR floor (`compressNInjective`) — there is NO `hweld`
+hypothesis. This is `RecursiveAggregation.non_omission_from_verification`, the whole-history twin of §2's
+single-commit grounded non-omission. -/
+theorem light_client_whole_history_non_omission
+    {Proof : Type} {verify : Proof → Bool}
+    {CH : Dregg2.Exec.CellId → Dregg2.Exec.Value → ℤ}
+    {RH : Dregg2.Exec.RecordKernelState → ℤ}
+    {cmb : ℤ → ℤ → ℤ} {compress : ℤ → ℤ → ℤ} {compressN : List ℤ → ℤ}
+    (hCompressN : compressNInjective compressN)
+    {agg : Aggregate Proof} {g : Dregg2.Exec.RecChainedState} {steps : List ChainStep}
+    (es : EngineSound Proof verify CH RH cmb compress compressN agg g steps)
+    (hroot : verify agg.root = true)
+    (hgen : LogGenesisPin g steps) (hstruct : SeamStruct steps) :
+    LogChained g steps :=
+  non_omission_from_verification Proof verify CH RH cmb compress compressN
+    hCompressN agg g steps es hroot hgen hstruct
+
+#assert_axioms newRoot_binds_log
+#assert_axioms light_client_whole_history_non_omission
 
 end Dregg2.Lightclient.NonOmissionAttack

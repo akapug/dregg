@@ -120,18 +120,31 @@
 //! sidesteps the bus entirely: its host digest is lanes 0,4,8,12 = coeff-0 of separate ext limbs,
 //! exposable as-is with no decompose; the consecutive-lane custom commitment cannot.)
 //!
-//! ## The connect-into-the-fold step — DONE
+//! ## The connect-into-the-fold step — DEPLOYED (the binding is REAL for a pure light client)
 //!
-//! The exposed claim is now wired to the effect-vm leg's published `custom_proof_commitment` (IR2
-//! PI slots 46..49) by [`crate::joint_turn_recursive::prove_custom_binding_node`]: it folds this
-//! leaf against the effect-vm leg leaf (re-exposed via
-//! [`crate::ivc_turn_chain::prove_descriptor_leaf_with_pi_slice_expose`] — the inner descriptor PIs
-//! land in the primitive `Public` table and never reach a combine hook, so the leg must re-expose
-//! 46..49 through `expose_claim`) and `connect`s the two 4-felt claims in-circuit. A turn whose leg
-//! claims a commitment no verifying sub-proof backs is UNSAT (the `connect` is a conflict — no
-//! satisfying partner), so a PURE LIGHT CLIENT folding the tree now witnesses the binding
-//! `StarkSoundCustom` falsely assumed (the `forged_custom_commitment_is_rejected_by_the_fold`
-//! tooth).
+//! The exposed claim is connected to the effect-vm leg's published `custom_proof_commitment` (IR2
+//! PI slots 46..49) IN THE DEPLOYED CHAIN PROVER. For a custom turn,
+//! [`crate::ivc_turn_chain::prove_chain_core_rotated`] mints a DUAL-EXPOSE leg leaf
+//! ([`crate::ivc_turn_chain::prove_descriptor_leaf_dual_expose`] — its single `expose_claim` carries
+//! the chain SEGMENT in lanes `[0 .. SEG_WIDTH)` AND the claimed commitment in lanes
+//! `[SEG_WIDTH ..)`) and folds it against THIS custom sub-proof leaf under
+//! [`crate::joint_turn_recursive::prove_custom_binding_node_segmented`], which `connect`s the two
+//! 4-felt commitments in-circuit AND re-exposes the segment so the node folds into `aggregate_tree`
+//! like any segment leaf. A turn whose leg claims a commitment no verifying sub-proof backs is UNSAT
+//! (the `connect` is a conflict — no satisfying partner), so no root exists and a PURE LIGHT CLIENT
+//! verifying the deployed `WholeChainProof` never receives a verifying artifact. The premise of
+//! Lean `CustomBindingFromFold.custom_binding_from_fold` is now TRUE on the deployed path.
+//!
+//! The two formerly-blocking threads are landed: (1) the custom sub-proof's re-provable witness
+//! (`CellProgram` + trace witness + PIs) is retained PROVER-SIDE on
+//! [`crate::joint_turn_aggregation::RotatedParticipantLeg::custom_witness`] (NEVER on the wire
+//! `dregg_turn::CustomProgramProof`, which a light client sees), and (2) the dual-claim leaf +
+//! segment-preserving binding node carry the segment AND the commitment. End-to-end honest-accept +
+//! forged-reject through `prove_turn_chain_recursive` → `verify_turn_chain_recursive` is pinned by
+//! `circuit-prove/tests/custom_binding_deployed_tooth.rs`. The single-claim
+//! [`crate::joint_turn_recursive::prove_custom_binding_node`] + the
+//! `forged_custom_commitment_is_rejected_by_the_fold` stand-in tooth remain as the minimal MECHANISM
+//! teeth.
 
 use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,

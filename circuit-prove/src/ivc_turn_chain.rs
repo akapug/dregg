@@ -1453,6 +1453,132 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
     .map_err(|e| format!("rotated native-batch segment leaf-wrap failed: {e:?}"))
 }
 
+/// **THE DUAL-EXPOSE CUSTOM LEG LEAF (deployed custom-binding half #1).** Wrap one rotated
+/// `customVmDescriptor2R24` finalized-turn batch in-circuit exactly like
+/// [`prove_descriptor_leaf_rotated_with_segment`] AND expose, through ONE `expose_claim` table,
+/// BOTH:
+///
+///   * the constant-size ordered chain SEGMENT `[first_old8, last_new8, count, acc]` (lanes
+///     `[0 .. SEG_WIDTH)`), bound in-circuit to the descriptor's real rotated roots, and
+///   * the leg's CLAIMED `custom_proof_commitment` at IR2 PI
+///     `[CUSTOM_COMMIT_PI_LO .. CUSTOM_COMMIT_PI_LO+CUSTOM_COMMIT_LEN)` (lanes
+///     `[SEG_WIDTH .. SEG_WIDTH+CUSTOM_COMMIT_LEN)`), read from the same FRI-bound
+///     `air_public_targets` the segment endpoints come from.
+///
+/// The commitment lanes are APPENDED AFTER the segment, so a downstream segment consumer that
+/// reads only `[0 .. SEG_WIDTH)` (the host segment tooth, the plain `aggregate_tree` combine)
+/// sees the identical segment a [`prove_descriptor_leaf_rotated_with_segment`] leaf would expose.
+/// The appended commitment is consumed by exactly one parent —
+/// [`crate::joint_turn_recursive::prove_custom_binding_node_segmented`] — which `connect`s it to
+/// the custom sub-proof leaf's genuine commitment and RE-EXPOSES only the segment, so the binding
+/// node's output is an ordinary segment leaf to `aggregate_tree`. This is the dual-claim leaf the
+/// deployed light-client custom binding needs (the segment keeps the chain, the commitment lane
+/// carries the claim to be bound).
+pub fn prove_descriptor_leaf_dual_expose(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    use crate::joint_turn_recursive::{CUSTOM_COMMIT_LEN, CUSTOM_COMMIT_PI_LO};
+    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+    use dregg_circuit::effect_vm_descriptors::{
+        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
+    };
+
+    let commit_hi = CUSTOM_COMMIT_PI_LO + CUSTOM_COMMIT_LEN;
+    if descriptor_pis.len() < commit_hi {
+        return Err(format!(
+            "dual-expose custom leg needs >= {commit_hi} descriptor PIs to carry the \
+             custom_proof_commitment at [{CUSTOM_COMMIT_PI_LO}..{commit_hi}), got {}",
+            descriptor_pis.len()
+        ));
+    }
+
+    // FAITHFUL-FLOOR anchor sourcing — identical to `prove_descriptor_leaf_rotated_with_segment`.
+    let n = descriptor_pis.len();
+    let wide = n >= 2 * SEG_ANCHOR_WIDTH
+        && (desc.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+            || desc.name.ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX));
+    let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
+    let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
+
+    let (airs, table_public_inputs, common) =
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
+
+    let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend();
+
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let main = apt
+            .first()
+            .expect("custom descriptor leaf has a main instance with descriptor PIs");
+        debug_assert!(
+            main.len() >= commit_hi.max(V1_PI_COUNT + 2),
+            "custom descriptor PI vector must carry both the rotated commitments and the \
+             custom_proof_commitment slice"
+        );
+        // -- The SEGMENT (lanes [0 .. SEG_WIDTH)) — byte-identical to the plain segment leaf.
+        let (first_old8, last_new8): (Vec<p3_recursion::Target>, Vec<p3_recursion::Target>) =
+            if wide {
+                (
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[old_first + k]).collect(),
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[new_first + k]).collect(),
+                )
+            } else {
+                (
+                    vec![main[V1_PI_COUNT]; SEG_ANCHOR_WIDTH],
+                    vec![main[V1_PI_COUNT + 1]; SEG_ANCHOR_WIDTH],
+                )
+            };
+        let count = cb.define_const(RecursionChallenge::ONE);
+        let mut acc_inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+        acc_inputs.extend_from_slice(&first_old8);
+        acc_inputs.extend_from_slice(&last_new8);
+        let acc = seg_poseidon_commit(cb, &acc_inputs);
+        let mut claim = Vec::with_capacity(SEG_WIDTH + CUSTOM_COMMIT_LEN);
+        claim.extend_from_slice(&first_old8);
+        claim.extend_from_slice(&last_new8);
+        claim.push(count);
+        claim.extend_from_slice(&acc);
+        debug_assert_eq!(claim.len(), SEG_WIDTH);
+        // -- The CLAIMED custom commitment (lanes [SEG_WIDTH .. SEG_WIDTH+CUSTOM_COMMIT_LEN)),
+        // read from the leaf's own FRI-bound descriptor PIs (not free scalars).
+        for k in 0..CUSTOM_COMMIT_LEN {
+            claim.push(main[CUSTOM_COMMIT_PI_LO + k]);
+        }
+        debug_assert_eq!(claim.len(), SEG_WIDTH + CUSTOM_COMMIT_LEN);
+        cb.expose_as_public_output(&claim);
+    };
+
+    build_and_prove_next_layer_with_expose::<
+        DreggRecursionConfig,
+        dregg_circuit::descriptor_ir2::Ir2Air,
+        _,
+        D,
+    >(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("rotated dual-expose custom leaf-wrap failed: {e:?}"))
+}
+
 // ============================================================================
 // The whole-chain IVC artifact (K-fold).
 // ============================================================================
@@ -2696,15 +2822,56 @@ fn prove_chain_core_rotated(
 
     // One rotated descriptor leaf per finalized turn, EACH carrying its ordered segment
     // (first_old/last_new bound to the descriptor's real roots, count=1, acc=H(old,new)).
+    //
+    // CUSTOM-BINDING DEPLOYED WIRE: a turn whose leg carries a `custom_witness` bundle (a
+    // `Custom`-effect turn, `customVmDescriptor2R24`) does NOT get the plain segment leaf. Instead
+    // it gets a DUAL-EXPOSE leaf (segment ++ claimed `custom_proof_commitment` PI 46..49) folded
+    // against the RE-PROVEN custom sub-proof leaf through `prove_custom_binding_node_segmented` —
+    // the binding `connect`s the leg's claimed commitment to the sub-proof's genuine in-circuit
+    // commitment IN the recursion tree (so a forged claim with no backing sub-proof is UNSAT) and
+    // re-exposes the SAME segment, so the node folds into `aggregate_tree` like any segment leaf.
+    // This makes the custom binding REAL for a pure light client (the premise of
+    // `CustomBindingFromFold.custom_binding_from_fold` is now TRUE on the deployed path).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
-        let wrapped = prove_descriptor_leaf_rotated_with_segment(
-            &leg.descriptor,
-            &leg.proof,
-            &leg.public_inputs,
-            &config,
-        )
-        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+        let wrapped = match &leg.custom_witness {
+            Some(bundle) => {
+                let dual = prove_descriptor_leaf_dual_expose(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let custom_leaf = crate::custom_leaf_adapter::prove_custom_leaf_with_commitment(
+                    &bundle.program,
+                    &bundle.witness_values,
+                    bundle.num_rows,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("custom sub-proof leaf mint failed: {reason}"),
+                })?;
+                crate::joint_turn_recursive::prove_custom_binding_node_segmented(
+                    &dual,
+                    &custom_leaf,
+                    &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented custom-binding node failed: {e:?}"),
+                })?
+            }
+            None => prove_descriptor_leaf_rotated_with_segment(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                &config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?,
+        };
         batch_leaves.push(wrapped);
     }
 
