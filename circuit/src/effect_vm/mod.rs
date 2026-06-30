@@ -172,11 +172,13 @@ mod air;
 pub mod authority_digest_weld;
 pub mod carrier_floor_weld;
 mod cell_state;
+pub mod discharge_weld;
 mod effect;
 mod helpers;
 pub mod satisfaction_weld;
 mod trace;
 pub mod trace_rotated;
+pub mod vault_weld;
 mod verify;
 
 // (The v1 per-action proof granularity module + the large v1 hand-AIR test module
