@@ -1537,4 +1537,78 @@ theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List
 #assert_axioms v3RegistryCapOpenWriteWide_binds
 #assert_axioms v3RegistryCapOpenWriteWide_length
 
+/-! ## §11 — STEP A KEYSTONE: the trace-FORCED `writesTo8` from TWO node8 spines sharing a path.
+
+This is the soundness core that makes the faithful 8-felt `writesTo8` (`EffectVmEmitRotationV3.writesTo8`)
+TRACE-FORCED rather than laundered through `henc`'s `SpineCommits` carriers (the soundness downgrade the
+GENTIAN 8-lane tooth closes). It reduces the full-width cap-write forcing to TWO `MembershipCore` witnesses:
+
+  * `hBefore` — the cap-open READ already emitted: the held leaf (`leafOf cBefore`) recomposes the BEFORE
+    8-felt cap-root group (`groupVal env cBefore.capRoot`, pinned to `beforeCapRootCols`) along the path.
+  * `hAfter` — the post-write spine to be emitted: the in-place-narrowed leaf (`leafOf cAfter`, SAME key,
+    rights `mask_lo = v`) recomposes the AFTER 8-felt cap-root group (`groupVal env cAfter.capRoot`, pinned
+    to `afterCapRootCols`) along the **SAME** sibling/direction path (`cAfter.sib = cBefore.sib`,
+    `cAfter.dir = cBefore.dir`) — note-spend-shaped, the same-path update.
+
+The two cores share ONLY `sib`/`dir`; everything else (leaf, leafDigest, node, capRoot) differs. The path
+read off the columns (`pathOf8`) therefore coincides, and the two `recomposeUp8` legs witness `writesTo8`
+DIRECTLY — every one of the 8 felts of both roots is forced through `groupVal` (a `Fin 8 → ℤ` reader), NEVER
+the lane-0 squeeze. The remaining STEP-A work is purely the EMIT of `hAfter`'s spine + deriving its
+`MembershipCore` from `Satisfied2` of the after-spine appendix; this lemma closes the SOUNDNESS reduction. -/
+
+/-- **`capOpen_recompose8` — the explicit (non-existential) before/after recompose.** The `MembersAt8`
+twin of `capOpen_membership8` that EXPOSES the concrete path (`pathOf8 c env DEPTH`): under a sound WIDE
+chip table, the held leaf's native-8-felt digest recomposes the committed 8-felt cap-root GROUP along the
+column-read path. The `writesTo8` assembler instantiates this at BOTH the before and the after spine. -/
+theorem capOpen_recompose8 (S8 : Cap8Scheme) (sponge : List ℤ → ℤ)
+    (tf : TraceFamily) (c : CapOpenCols) (env : VmRowEnv)
+    (hChip : ChipTableSoundN (capPermOut S8) (tf .poseidon2))
+    (hcore : MembershipCore sponge tf c env) :
+    Dregg2.Circuit.DeployedCapTree.Cap8Scheme.recomposeUp8 S8
+        (Dregg2.Circuit.DeployedCapTree.Cap8Scheme.capLeafDigest8 S8 (leafOf c env))
+        (pathOf8 c env DEPTH)
+      = groupVal env c.capRoot := by
+  have hfold := recompose_reaches_cur8 S8 sponge tf c env hChip hcore DEPTH (le_refl _)
+  have hleaf := leafDigest_sound8 S8 sponge tf c env hChip hcore
+  rw [hleaf] at hfold
+  have hcurTop : curCol c DEPTH = c.node (DEPTH - 1) := rfl
+  rw [hcurTop] at hfold
+  have hroot : groupVal env (c.node (DEPTH - 1)) = groupVal env c.capRoot := by
+    funext i
+    have hpin := hcore.rootPinned i
+    unfold rootPinGate at hpin
+    simp only [EmittedExpr.eval] at hpin
+    simp only [groupVal]
+    linarith
+  rw [hfold, hroot]
+
+/-- **`capOpen_writesTo8` — THE STEP-A KEYSTONE.** Two `MembershipCore` witnesses sharing the sibling
+path (before = held-leaf membership against the BEFORE cap-root group; after = narrowed-leaf membership
+against the AFTER cap-root group) FORCE the faithful 8-felt `writesTo8` over the FULL ~124-bit root — NOT
+the lane-0 projection. The post root cannot be forged: a colliding cap tree (different leaves, same lane-0)
+yields a different `node8` fold top and FAILS ≥1 of the 8 `rootPinGate` lanes of `hAfter`. Trace-forced:
+the witnesses come from `Satisfied2`, never from `henc`'s `SpineCommits`. -/
+theorem capOpen_writesTo8 (S8 : Cap8Scheme) (sponge : List ℤ → ℤ)
+    (tf : TraceFamily) (cBefore cAfter : CapOpenCols) (env : VmRowEnv)
+    (hChip : ChipTableSoundN (capPermOut S8) (tf .poseidon2))
+    (hBefore : MembershipCore sponge tf cBefore env)
+    (hAfter  : MembershipCore sponge tf cAfter env)
+    (hsib : cAfter.sib = cBefore.sib)
+    (hdir : cAfter.dir = cBefore.dir)
+    (hkey : (leafOf cAfter env).slot_hash = (leafOf cBefore env).slot_hash) :
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.writesTo8 S8
+        (groupVal env cBefore.capRoot)
+        ((leafOf cBefore env).slot_hash) ((leafOf cAfter env).mask_lo)
+        (groupVal env cAfter.capRoot) := by
+  refine ⟨leafOf cBefore env, leafOf cAfter env, pathOf8 cBefore env DEPTH,
+    rfl, hkey, rfl, ?_, ?_⟩
+  · exact capOpen_recompose8 S8 sponge tf cBefore env hChip hBefore
+  · have hpath : pathOf8 cAfter env DEPTH = pathOf8 cBefore env DEPTH := by
+      simp only [pathOf8, dirBoolVal, hsib, hdir]
+    have hrec := capOpen_recompose8 S8 sponge tf cAfter env hChip hAfter
+    rwa [hpath] at hrec
+
+#assert_axioms capOpen_recompose8
+#assert_axioms capOpen_writesTo8
+
 end Dregg2.Circuit.Emit.CapOpenEmit
