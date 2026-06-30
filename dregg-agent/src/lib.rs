@@ -51,3 +51,7 @@ pub mod brain;
 pub mod federation_qa;
 pub mod harness;
 pub mod toolkit;
+
+// ── the earn rail + the autonomous-business demo ──────────────────────────────
+pub mod business;
+pub mod stripe;

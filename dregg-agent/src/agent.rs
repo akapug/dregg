@@ -171,6 +171,22 @@ pub enum AgentAction {
         /// The service to call.
         service: String,
     },
+    /// **A budget-gated, variable-amount priced call** — the spend rail. Like
+    /// [`Invoke`](AgentAction::Invoke) (cap: `invoke:<service>`), but its budget
+    /// draw is the call's *price* (`amount_cents`) rather than the flat
+    /// `cost_per_action`: so the budget cell IS the dollar ceiling and an
+    /// over-ceiling spend is refused **in-band, before the priced tool runs** (no
+    /// money moves). The amount is bound into the receipt (`cost`), so a forged
+    /// "I paid $X" breaks the signature. This is the outbound-Stripe-spend shape
+    /// (`stripe_pay`): a credit card the agent provably cannot max out past its
+    /// funded budget.
+    Spend {
+        /// The priced service / tool to call (e.g. `stripe_pay`).
+        service: String,
+        /// The dollar amount of the spend, in budget units (USD-cents). Drawn from
+        /// the budget cell as the action's cost. Must be `> 0`.
+        amount_cents: i64,
+    },
     /// Write the agent's own committed cell. Cap: `cell-write:<path>`.
     CellWrite {
         /// The cell path.
@@ -186,21 +202,37 @@ pub enum AgentAction {
 }
 
 impl AgentAction {
-    /// The capability this action needs to be admitted.
+    /// The capability this action needs to be admitted. A [`Spend`](AgentAction::Spend)
+    /// needs the same `invoke:<service>` authority as a plain invoke — the spend
+    /// rail does not widen reach, it only prices the draw.
     fn required_cap(&self) -> String {
         match self {
             AgentAction::Invoke { service } => invoke_cap(service),
+            AgentAction::Spend { service, .. } => invoke_cap(service),
             AgentAction::CellWrite { path, .. } => cell_write_cap(path),
             AgentAction::CellRead { path } => cell_read_cap(path),
         }
     }
 
-    /// A stable, human-readable label (also the receipt's `action` field).
+    /// A stable, human-readable label (also the receipt's `action` field). A
+    /// `spend:<service>` label distinguishes a priced spend from a flat invoke in
+    /// the P&L.
     fn label(&self) -> String {
         match self {
             AgentAction::Invoke { service } => format!("invoke:{service}"),
+            AgentAction::Spend { service, .. } => format!("spend:{service}"),
             AgentAction::CellWrite { path, .. } => format!("cell-write:{path}"),
             AgentAction::CellRead { path } => format!("cell-read:{path}"),
+        }
+    }
+
+    /// The budget units this action draws: a [`Spend`](AgentAction::Spend) draws
+    /// its variable `amount_cents` (the priced spend); everything else draws the
+    /// agent's flat `cost_per_action` default.
+    fn draw_cost(&self, default: i64) -> i64 {
+        match self {
+            AgentAction::Spend { amount_cents, .. } => *amount_cents,
+            _ => default,
         }
     }
 }
@@ -365,8 +397,17 @@ impl ToolOutcome {
 /// `cells` is the agent's committed cell heap (read-only) — a tool may read it
 /// for context (e.g. the deploy name the agent just wrote to `/deploy`).
 pub trait ToolKit {
-    /// Perform the admitted `service` call and return its verdict.
-    fn invoke(&self, service: &str, cells: &BTreeMap<String, String>) -> ToolOutcome;
+    /// Perform the admitted `service` call and return its verdict. `amount_cents`
+    /// is `Some` for a [`Spend`](AgentAction::Spend) (the priced amount already
+    /// drawn from the budget, before this runs — so a priced tool, e.g. a Stripe
+    /// payout, knows the dollar amount to move) and `None` for a flat
+    /// [`Invoke`](AgentAction::Invoke).
+    fn invoke(
+        &self,
+        service: &str,
+        amount_cents: Option<i64>,
+        cells: &BTreeMap<String, String>,
+    ) -> ToolOutcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -549,6 +590,27 @@ impl AgentRunReport {
                     r.tool_summary.clone().unwrap_or_default(),
                 ))
             })
+            .collect()
+    }
+
+    /// The total budget drawn by admitted **spends** (priced `spend:<service>`
+    /// actions) — the vendor outflow side of the P&L. A flat invoke / cell-op is
+    /// not a spend and is excluded.
+    pub fn spent_total(&self) -> i64 {
+        self.receipts
+            .iter()
+            .filter(|r| r.action.starts_with("spend:"))
+            .map(|r| r.cost)
+            .sum()
+    }
+
+    /// The admitted spends as `(service, amount_cents)` — the vendor ledger line
+    /// items, each traceable to a receipt.
+    pub fn spends(&self) -> Vec<(String, i64)> {
+        self.receipts
+            .iter()
+            .filter(|r| r.action.starts_with("spend:"))
+            .map(|r| (r.action.clone(), r.cost))
             .collect()
     }
 
@@ -1042,11 +1104,15 @@ impl AgentCloud {
                 continue;
             }
 
-            // (2) BOUND — draw the per-action cost from the budget cell. An
-            // exhausted budget refuses the action in-band (the runaway is
-            // contained); the draw is exactly-once per (agent, seq).
+            // (2) BOUND — draw the action's cost from the budget cell. A flat
+            // action draws `cost_per_action`; a `Spend` draws its variable
+            // `amount_cents` (the priced spend) so the budget cell IS the dollar
+            // ceiling. An over-ceiling draw refuses the action in-band — BEFORE the
+            // priced tool runs, so no money moves; the draw is exactly-once per
+            // (agent, seq).
+            let draw_amount = action.draw_cost(handle.cost_per_action);
             let key = MeterKey::new(&handle.id, seq as i64);
-            match self.meter.draw(&key, handle.cost_per_action, handle.block) {
+            match self.meter.draw(&key, draw_amount, handle.block) {
                 Ok(_) => {}
                 Err(MeterError::OverBudget { headroom, .. }) => {
                     budget_refused += 1;
@@ -1095,7 +1161,21 @@ impl AgentCloud {
                 }
                 AgentAction::Invoke { service } => {
                     if let Some(tk) = toolkit {
-                        let oc = tk.invoke(service, &cells);
+                        let oc = tk.invoke(service, None, &cells);
+                        tool_ok = Some(oc.ok);
+                        tool_summary = Some(oc.summary);
+                        tool_witnessed = oc.witnessed;
+                    }
+                }
+                AgentAction::Spend {
+                    service,
+                    amount_cents,
+                } => {
+                    // The budget already admitted this draw (over-ceiling refused
+                    // above), so reaching here means the spend is funded — dispatch
+                    // the priced tool (the Stripe payout) with the amount in hand.
+                    if let Some(tk) = toolkit {
+                        let oc = tk.invoke(service, Some(*amount_cents), &cells);
                         tool_ok = Some(oc.ok);
                         tool_summary = Some(oc.summary);
                         tool_witnessed = oc.witnessed;
@@ -1115,7 +1195,7 @@ impl AgentCloud {
                 seq,
                 agent: handle.id.clone(),
                 action: label.clone(),
-                cost: handle.cost_per_action,
+                cost: draw_amount,
                 consumed_after: consumed,
                 headroom_after: headroom,
                 cell_root: cell_root(&cells),
@@ -1326,6 +1406,69 @@ mod tests {
         assert!(matches!(
             verify_agent_run(&report),
             Err(AgentVerifyError::Chain(ChainError::BrokenLink { .. }))
+        ));
+    }
+
+    // ── THE SPEND RAIL: a priced spend draws its variable amount, over-ceiling refused ──
+
+    /// A struct-only toolkit for the spend tests: a `stripe_pay` priced tool that
+    /// always succeeds, recording the amount it was handed.
+    struct SpendKit;
+    impl ToolKit for SpendKit {
+        fn invoke(
+            &self,
+            service: &str,
+            amount_cents: Option<i64>,
+            _cells: &BTreeMap<String, String>,
+        ) -> ToolOutcome {
+            match (service, amount_cents) {
+                ("stripe_pay", Some(a)) => ToolOutcome::pass(format!("paid {a}c")),
+                _ => ToolOutcome::fail("not a priced spend".to_string()),
+            }
+        }
+    }
+
+    #[test]
+    fn a_priced_spend_draws_its_amount_and_over_ceiling_is_refused_before_money_moves() {
+        let cloud = AgentCloud::from_seed([70u8; 32]);
+        // Budget 5000 cents; the spend tool is in the bundle.
+        let handle = cloud
+            .deploy(&AgentSpec::new("agent:spender", 5000).with_service("stripe_pay"))
+            .unwrap();
+        let plan = vec![
+            AgentAction::Spend {
+                service: "stripe_pay".into(),
+                amount_cents: 1800,
+            }, // ok → consumed 1800
+            AgentAction::Spend {
+                service: "stripe_pay".into(),
+                amount_cents: 1200,
+            }, // ok → consumed 3000, headroom 2000
+            AgentAction::Spend {
+                service: "stripe_pay".into(),
+                amount_cents: 2500,
+            }, // 2500 > 2000 headroom → REFUSED in-band, no payout
+        ];
+        let report = cloud.run_with_toolkit(&handle, &mut PlannedBrain::new(plan), &SpendKit);
+
+        assert_eq!(report.admitted, 2, "two funded spends ran");
+        assert_eq!(
+            report.budget_refused, 1,
+            "the over-ceiling spend is refused"
+        );
+        assert_eq!(report.consumed, 3000, "the variable amounts were drawn");
+        assert_eq!(report.headroom, 2000, "the un-spent ceiling is the bound");
+        assert_eq!(report.spent_total(), 3000, "the P&L vendor outflow");
+        // The refused spend never reached the payout tool (no receipt for it).
+        assert_eq!(report.receipts.len(), 2);
+        // Every spend traces to a receipt and re-witnesses.
+        verify_agent_run(&report).expect("the spend run re-witnesses");
+        // A forged spend amount breaks the signature.
+        let mut forged = report.clone();
+        forged.receipts[0].cost = 1; // "I only paid 1c"
+        assert!(matches!(
+            verify_agent_run(&forged),
+            Err(AgentVerifyError::Chain(ChainError::BadSignature { .. }))
         ));
     }
 
