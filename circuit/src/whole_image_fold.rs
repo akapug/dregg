@@ -88,8 +88,8 @@
 //! arithmetic — the `hpin` content — is realized in the self-contained chip below.
 
 use crate::descriptor_ir2::{
-    EffectVmDescriptor2, MapKind, MapOpSpec, MemKind, UMemBoundaryWitness, UMemOpSpec,
-    VmConstraint2, WindowExpr, WindowGateSpec,
+    EffectVmDescriptor2, MapKind, MapOpSpec, MemBoundaryWitness, MemKind, MemOpSpec,
+    UMemBoundaryWitness, UMemOpSpec, VmConstraint2, WindowExpr, WindowGateSpec,
 };
 use crate::field::BabyBear;
 use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf, empty_heap_root};
@@ -470,6 +470,115 @@ pub fn verify_whole_image_fold_bound(
 ) -> Result<(), String> {
     assert_empty_root_pin(public_inputs)?;
     let desc = whole_image_fold_bound_descriptor(domain);
+    crate::descriptor_ir2::verify_vm_descriptor2(&desc, proof, public_inputs)
+}
+
+// ===========================================================================
+// THE FLAT-MEMORY TWIN — the fold chip bound to the FLAT memory boundary table.
+//
+// The exact mirror of the universal-boundary binding above, for the FLAT memory boundary
+// (`Ir2Air::MemBoundary`, `descriptor_ir2::MemBoundaryWitness`, Lean's `(minit, mfin, maddrs)`).
+// This closes the latent flat-`minit` hole: `setFieldDynVmDescriptor2` stores a cell's eight user
+// fields in FLAT memory at addresses `0..7`, so the seven UNtouched fields' committed values live
+// ONLY in the prover-chosen `minit` — an image the flat `MemBoundary` AIR never opens against a
+// committed root. The Lean soundness anchor is `DescriptorIR2.satisfied2_init_root` /
+// `satisfied2_init_root_bound` / `satisfied2_init_whole_image` (the flat structural twins of the
+// universal `satisfied2U_init_root` family); THIS chip is its in-circuit realization: it recomputes
+// the sorted-Poseidon2 root of the ENTIRE declared flat boundary image and pins it to a published
+// root, with each fold link cross-bound to the `MemBoundary` table.
+//
+// The binding rides the DEPLOYED flat-memory machinery, no new bus / column / AIR (the EXACT
+// structural twin of the universal binding, swapping `UMemOp::Read` ← `MemOp::Read` and
+// `BUS_UMEM_*` ← `BUS_MEM_*`): each real fold link drives a `MemOp::Read` against the boundary
+// table at `(WIF_KEY) → WIF_VALUE`, claiming the init tuple `(WIF_VALUE, serial 0)`. Two deployed
+// teeth bite together:
+//
+//   * the address-closure lookup (`Ir2Air::MemBoundary` → `BUS_MEM_ADDRS` table_entry) forces
+//     every folded `WIF_KEY` to be a DECLARED boundary address — a fold row over an address the
+//     boundary never declared has no `table_entry` to balance and REFUSES (`memClosed`);
+//   * the Blum balance (`BUS_MEM_CHECK`: the boundary SENDS each declared init cell
+//     `(addr, init_val, 0)`, the read RECEIVES its claimed prev `(addr, WIF_VALUE, 0)`) forces the
+//     folded `WIF_VALUE` to EQUAL the boundary's declared init value — a fold row whose value
+//     differs from the declared `minit[addr]` has no matching init send and REFUSES.
+//
+// Together: the fold folds EXACTLY the declared flat boundary cells, with their declared init
+// values, and pins that fold to the published root. A forged `minit[addr]` (the empirically
+// confirmed exploit) folds to a DIFFERENT root than the committed pre-state, so the `PiBinding`
+// against the committed-pre-state-root PI REFUSES — the forge tooth, in `verify_batch`.
+
+/// The flat-memory-bound whole-image fold descriptor: the self-contained fold chip
+/// ([`whole_image_fold_descriptor`]) PLUS one `MemOp::Read` per fold link binding the
+/// insert-chain `(WIF_KEY → WIF_VALUE)` rows to the FLAT memory boundary table's declared
+/// `(addr, init_val)` cells (the flat twin of [`whole_image_fold_bound_descriptor`]).
+pub fn whole_image_fold_bound_mem_descriptor() -> EffectVmDescriptor2 {
+    let mut desc = whole_image_fold_descriptor();
+    desc.name = "dregg-whole-image-fold-bound-mem-v1".to_string();
+    // The cross-table binding: read each folded cell against the flat boundary table. The read is
+    // a no-op on the map root (it rides the flat memory multiset, NOT the Merkle chain) — its sole
+    // job is to force `WIF_KEY` declared (`BUS_MEM_ADDRS`) and `WIF_VALUE` == the declared init
+    // value (`BUS_MEM_CHECK`). The read claims the init tuple `(WIF_VALUE, serial 0)`, so the Blum
+    // replay pins the value to the declared init image.
+    desc.constraints.push(VmConstraint2::MemOp(MemOpSpec {
+        guard: LeanExpr::Var(WIF_GUARD),
+        addr: LeanExpr::Var(WIF_KEY),
+        value: LeanExpr::Var(WIF_VALUE),
+        prev_value: LeanExpr::Var(WIF_VALUE),
+        prev_serial: LeanExpr::Const(0),
+        kind: MemKind::Read,
+    }));
+    desc
+}
+
+/// Build the flat memory boundary witness the bound fold binds against: the declared addresses of
+/// the cell's field plane, each carrying its declared init value. Strictly increasing by address
+/// (the `MemBoundary` AIR's Nodup + sorted discipline), mirroring the fold's distinct-address
+/// discipline. Returns `Err` on a duplicate address (a boundary declares each address once — the
+/// same canonicity [`build_whole_image_fold`] enforces).
+pub fn boundary_mem_witness_for_fold(leaves: &[HeapLeaf]) -> Result<MemBoundaryWitness, String> {
+    let mut sorted: Vec<HeapLeaf> = leaves.to_vec();
+    sorted.sort_by_key(|l| l.addr.as_u32());
+    for w in sorted.windows(2) {
+        if w[0].addr == w[1].addr {
+            return Err(format!(
+                "duplicate boundary address {} — a boundary declares each address once",
+                w[0].addr.as_u32()
+            ));
+        }
+    }
+    Ok(MemBoundaryWitness {
+        addrs: sorted.iter().map(|l| l.addr.as_u32()).collect(),
+        init_vals: sorted.iter().map(|l| l.value.as_u32()).collect(),
+    })
+}
+
+/// Prove the FLAT-BOUND whole-image fold: the published root is the in-circuit binary fold of
+/// EXACTLY the flat boundary table's declared cells, with their declared init values. The boundary
+/// witness MUST agree with `leaves` (use [`boundary_mem_witness_for_fold`] on the same leaves) — a
+/// mismatch (a forged `minit`) is the soundness tooth, exercised by the refusal test.
+pub fn prove_whole_image_fold_bound_mem(
+    witness: &WholeImageFoldWitness,
+    mem_boundary: &MemBoundaryWitness,
+) -> Result<crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>, String> {
+    let desc = whole_image_fold_bound_mem_descriptor();
+    crate::descriptor_ir2::prove_vm_descriptor2(
+        &desc,
+        &witness.trace,
+        &witness.public_inputs,
+        mem_boundary,
+        &witness.map_heaps,
+    )
+}
+
+/// Verify a flat-bound whole-image fold proof against the published-root public input. Pins PI 0
+/// to the canonical empty-heap root ([`assert_empty_root_pin`]) BEFORE the STARK check (same
+/// no-smuggled-start guarantee as [`verify_whole_image_fold`]), so the bound fold provably
+/// enumerates EXACTLY the declared boundary cells with no extras.
+pub fn verify_whole_image_fold_bound_mem(
+    proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
+    public_inputs: &[BabyBear],
+) -> Result<(), String> {
+    assert_empty_root_pin(public_inputs)?;
+    let desc = whole_image_fold_bound_mem_descriptor();
     crate::descriptor_ir2::verify_vm_descriptor2(&desc, proof, public_inputs)
 }
 

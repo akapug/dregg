@@ -992,3 +992,153 @@ fn whole_image_fold_bound_smuggled_start_root_refuses() {
         "the refusal must be the empty-root pin, not an incidental STARK mismatch"
     );
 }
+
+// ===========================================================================
+// THE FLAT-MEMORY whole-image fold — the EXACT twin of the universal bound fold above, against
+// the FLAT memory boundary table (`Ir2Air::MemBoundary`, the boundary `setFieldDynVmDescriptor2`
+// uses to hold a cell's eight user fields at addresses `0..7`). This closes the latent flat-`minit`
+// hole: the fold recomputes the sorted-Poseidon2 root of the ENTIRE declared flat boundary image
+// and pins it to the published (committed-pre-state) root, each fold link cross-bound to the
+// `MemBoundary` table via a `MemOp::Read`. The two deployed teeth (the `BUS_MEM_ADDRS`
+// address-closure + the `BUS_MEM_CHECK` Blum balance) refuse any folded cell the boundary never
+// declared, and any folded value differing from the declared `minit[addr]` — so a FORGED `minit`
+// folds to a different root and the published-root pin REFUSES in `verify_batch`. The Lean
+// soundness anchor is `DescriptorIR2.satisfied2_init_root` / `satisfied2_init_root_bound` /
+// `satisfied2_init_whole_image`.
+
+use dregg_circuit::whole_image_fold::{
+    boundary_mem_witness_for_fold, prove_whole_image_fold_bound_mem,
+    verify_whole_image_fold_bound_mem,
+};
+
+/// A flat field-plane view: the cell's user fields as `(addr, value)` leaves over the flat
+/// boundary's address space. Distinct addresses; the fold sorts.
+fn flat_fields(addr_values: &[(u32, u32)]) -> Vec<HeapLeaf> {
+    addr_values
+        .iter()
+        .map(|&(a, v)| HeapLeaf {
+            addr: BabyBear::new(a),
+            value: BabyBear::new(v),
+        })
+        .collect()
+}
+
+#[test]
+fn whole_image_fold_bound_mem_proves_against_boundary_table() {
+    // The HONEST flat-bound read: the fold folds exactly the flat boundary table's declared cells,
+    // each with its declared init value, and pins that fold to the published root. The combined
+    // proof (the fold Merkle chain + the per-cell `MemOp::Read` against the flat boundary table)
+    // proves and independently verifies.
+    let leaves = flat_fields(&[(1, 111), (3, 777), (7, 555)]);
+    assert!(leaves.len() >= 2, "the fold must be non-trivial");
+    let published = whole_boundary_fold(&leaves);
+
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+    let boundary = boundary_mem_witness_for_fold(&leaves).expect("flat boundary witness builds");
+    let proof = prove_whole_image_fold_bound_mem(&witness, &boundary)
+        .expect("the flat boundary-bound whole-image fold proves");
+    verify_whole_image_fold_bound_mem(&proof, &witness.public_inputs).expect(
+        "the flat boundary-bound whole-image fold verifies against the published commitment",
+    );
+}
+
+#[test]
+fn whole_image_fold_bound_mem_forged_minit_refuses() {
+    // THE TOOTH that flips the empirically-confirmed forged-accept: the fold folds the GENUINE
+    // committed field values, but the flat boundary DECLARES a forged `minit` value for one
+    // (untouched) field — `minit[7] = 999`. The per-cell `MemOp::Read`'s claimed prev value (the
+    // folded value) no longer matches the boundary's replayed init image at addr 7, so the
+    // `BUS_MEM_CHECK` Blum reconciliation REFUSES. A forged `minit` cannot keep the published
+    // (committed-pre-state) root — `Heap.root_injective` / `satisfied2_init_root_bound`, in-circuit.
+    let leaves = flat_fields(&[(1, 111), (3, 777), (7, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+
+    let mut boundary =
+        boundary_mem_witness_for_fold(&leaves).expect("flat boundary witness builds");
+    // Forge the declared init value at the untouched field addr 7 (the diagnosis's `minit[7]=999`).
+    let idx = boundary
+        .addrs
+        .iter()
+        .position(|&a| a == 7)
+        .expect("addr 7 declared");
+    boundary.init_vals[idx] = 999;
+
+    let outcome =
+        std::panic::catch_unwind(|| prove_whole_image_fold_bound_mem(&witness, &boundary));
+    let refused = match outcome {
+        Err(_) => true,
+        Ok(r) => r.is_err(),
+    };
+    assert!(
+        refused,
+        "a forged minit value differing from the folded committed value must refuse (the Blum tooth bites)"
+    );
+}
+
+#[test]
+fn whole_image_fold_bound_mem_undeclared_cell_refuses() {
+    // The fold folds a cell (addr 7) the flat boundary table never DECLARES. The per-cell
+    // `MemOp::Read` of that cell hits an undeclared address — no `table_entry` to balance the
+    // `BUS_MEM_ADDRS` closure (`memClosed`) — so the bound proof REFUSES (`committed ⊆ declared`).
+    let leaves = flat_fields(&[(1, 111), (3, 777), (7, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+
+    // The boundary DECLARES only two of the three folded cells (addr 7 omitted).
+    let declared: Vec<HeapLeaf> = leaves
+        .iter()
+        .filter(|l| l.addr != BabyBear::new(7))
+        .cloned()
+        .collect();
+    assert_eq!(
+        declared.len(),
+        leaves.len() - 1,
+        "exactly one cell undeclared"
+    );
+    let boundary = boundary_mem_witness_for_fold(&declared).expect("flat boundary witness builds");
+
+    let outcome =
+        std::panic::catch_unwind(|| prove_whole_image_fold_bound_mem(&witness, &boundary));
+    let refused = match outcome {
+        Err(_) => true,
+        Ok(r) => r.is_err(),
+    };
+    assert!(
+        refused,
+        "a folded cell the flat boundary never declared must refuse (the address-closure tooth bites)"
+    );
+}
+
+#[test]
+fn whole_image_fold_bound_mem_smuggled_start_root_refuses() {
+    // The smuggled-start tooth on the flat-bound wrapper: the bound verify wrapper pins PI 0 to the
+    // canonical empty root, so a non-empty start root holding undeclared cells is refused before
+    // the STARK is consulted (no-extra-cells: the fold must provably start from nothing).
+    let leaves = flat_fields(&[(1, 111), (3, 777), (7, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+    let boundary = boundary_mem_witness_for_fold(&leaves).expect("flat boundary witness builds");
+    let proof = prove_whole_image_fold_bound_mem(&witness, &boundary)
+        .expect("the honest bound fold proves");
+
+    // Honest empty-root start accepts.
+    verify_whole_image_fold_bound_mem(&proof, &witness.public_inputs)
+        .expect("the honest empty-root-start flat bound fold verifies");
+
+    // A non-empty smuggled start root in PI 0 is refused by the pin.
+    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
+        addr: BabyBear::new(99),
+        value: BabyBear::new(42),
+    }]);
+    let smuggled_pis = vec![smuggled_start, published];
+    let refused = verify_whole_image_fold_bound_mem(&proof, &smuggled_pis);
+    assert!(
+        refused.is_err(),
+        "a non-empty (smuggled-cells) start root in PI 0 must be refused (flat bound wrapper)"
+    );
+    assert!(
+        refused.unwrap_err().contains("empty-heap root"),
+        "the refusal must be the empty-root pin, not an incidental STARK mismatch"
+    );
+}
