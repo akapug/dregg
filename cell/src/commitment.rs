@@ -667,7 +667,7 @@ pub const V9_NUM_REGISTERS: usize = 24;
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
 /// perms_digest · vk_digest · mode · fields_root). Lean `preLimbsAt_length = 37` at R = 24, after
 /// the WAVE-3 mode/fields-root flag-day widening (35→37).
-pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5; // 37 (+ disc + perms + vk + mode + fields_root)
+pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5 + 30; // 67 (v10: +30 faithful-8-felt completion limbs 37..66, zero-filled until welded)
 
 /// The turn-level context the rotated commitment absorbs that is NOT cell-local: the
 /// boundary `cells_root` (the sorted-Poseidon2 root over present cells), the cell's committed
