@@ -58,17 +58,39 @@
 //! to first-row. The follow-up is a per-row PI gate in the IR-v2 main AIR. The demo
 //! program below does not use `PiBinding`, so this narrowing is not on the proven path.
 //!
-//! ## Constraint kinds this spike does NOT map (precise blockers, not fakes)
+//! ## Poseidon2 hash sites — the LANE-WITNESSING extension (now mapped)
 //!
-//! * `Hash` / `Hash2to1` / `Hash4to1` / `Hash3Cap` / `MerkleHash` /
-//!   `ChainedHash2to1` / `SeedHash2to1` — each is a Poseidon2 relation. In the
-//!   existing `DslCircuit` STARK these are OPAQUE (degree-1, the `dsl_plonky3`
-//!   lowering emits ZERO — they are not soundly enforced there either). The
-//!   faithful IR-v2 realization routes the permutation through a `Lookup` into the
-//!   declared Poseidon2 CHIP table (`TID_P2`), which requires witnessing all eight
-//!   permutation lanes per site in the trace. That is real trace-assembly work and
-//!   is the named follow-up; this adapter REFUSES these kinds rather than emit an
-//!   unconstrained gate.
+//! `Hash2to1` / `Hash4to1` / `Hash3Cap` / `MerkleHash` lower to `Lookup`s into the
+//! declared Poseidon2 CHIP table (`TID_P2`). One permutation = one 20-wide chip tuple
+//! `[arity, in0..in10, out0, lane1..lane7]`; the chip-table AIR EQUALITY-binds all 8
+//! output lanes to the genuine permutation (`out[i] == perm(ins)[i]`), so a forged
+//! digest OR a forged intermediate lane is UNSAT. The 7 lane columns are ALLOCATED past
+//! the base trace width per site and filled descriptor-side by `fill_chip_lanes`
+//! (the `trace_with_chip_lanes` weld); the digest (lane 0/out0) is the site's own output
+//! column, already filled by the `CellProgram`'s `generate_trace`. `MerkleHash`'s
+//! position-ordered child reconstruction is emitted as degree-4 Lagrange-indicator chip
+//! inputs (so the chip absorb's children match the evaluator at every grid position
+//! `{0,1,2,3}`, pinned by the program's own position-validity gate). A Merkle PATH is a
+//! chain of these sites (parent → next `current` via `Transition`) with the leaf/root
+//! pinned to PIs by the boundary `PiBinding`s — see the tooth tests. This mirrors the
+//! cap_root/heap_root in-circuit Merkle-open (a witnessed sibling path, constrained
+//! recompute), and is the shared primitive every hash-heavy carrier's path verification
+//! rides.
+//!
+//! ## Constraint kinds this extension does NOT map (precise blockers, not fakes)
+//!
+//! * `Hash` — the capacity-tagged fact-sponge `hash_fact(predicate, terms)` uses the
+//!   arity-7 cap-leaf / `FACT_MARK` fact-bus seeding (state[5]=FACT_MARK, state[6]=1),
+//!   NOT a narrow arity-2/3/4 absorb. Mapping it needs the chip's fact-bus path
+//!   (`BUS_FACT`) — the named follow-up.
+//! * `ChainedHash2to1` — a CROSS-ROW running hash `hash_2_to_1(local[seed],
+//!   next[input])`. A single-row `TID_P2` lookup tuple reads only the `local` window, so
+//!   it cannot seed from `next`; this needs a copy-forward witness column carrying the
+//!   prior accumulator onto the current row (the named follow-up). The `dregg-dfa-routing-v1`
+//!   route commitment uses this.
+//! * `SeedHash2to1` — `hash_2_to_1(pi[seed], local[input])` seeds the absorb from a
+//!   PUBLIC INPUT. A lookup tuple reads only columns, so it needs a first-row PI-bound
+//!   seed column (the named follow-up).
 //! * `Lookup { table_id, .. }` — a `CellProgram` lookup names an arbitrary
 //!   entry-set `LookupTable`. The IR-v2 `Lookup` targets DECLARED tables with FIXED
 //!   semantics (range / chip / submask), not arbitrary entry sets, so there is no
@@ -76,8 +98,8 @@
 //!   (the named small IR follow-up).
 //! * `TableFunction` — a fixed bivariate Lagrange polynomial. It IS pure-local and
 //!   gate-expressible IN PRINCIPLE (a large `Σ Lᵢ(a)Lⱼ(b)·outᵢⱼ` `LeanExpr`), but
-//!   the symbolic lowering is non-trivial and unexercised by the custom corpus, so
-//!   it is out of this spike's scope and refused.
+//!   the symbolic lowering is non-trivial and unexercised, so it is out of scope here.
+//!   The `dregg-dfa-routing-v1` transition table uses this.
 //!
 //! ## The remaining seam to the per-turn fold
 //!
@@ -146,11 +168,13 @@
 //! `forged_custom_commitment_is_rejected_by_the_fold` stand-in tooth remain as the minimal MECHANISM
 //! teeth.
 
+use dregg_circuit::cap_root::CAP_FACT_MARK;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
-    WindowExpr, WindowGateSpec, ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
+    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, Ir2Air, LookupSpec,
+    MemBoundaryWitness, TID_P2, UMemBoundaryWitness, VmConstraint2, WindowExpr, WindowGateSpec,
+    ir2_airs_and_common_for_config, prove_vm_descriptor2_for_config,
 };
-use dregg_circuit::dsl::circuit::{CellProgram, ConstraintExpr};
+use dregg_circuit::dsl::circuit::{BoundaryDef, BoundaryRow, CellProgram, ConstraintExpr};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
 use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 use std::collections::HashMap;
@@ -294,17 +318,174 @@ fn kind_name(expr: &ConstraintExpr) -> &'static str {
     }
 }
 
+// ============================================================================
+// Poseidon2 lane-witnessing (the shared MerkleHash / TID_P2 extension).
+//
+// A `CellProgram` Poseidon2 hash site (`Hash2to1` / `Hash4to1` / `Hash3Cap` /
+// `MerkleHash`) is ONE Poseidon2 permutation. The faithful IR-v2 carrier is a
+// `Lookup` into the declared chip table `TID_P2`, whose row is the 20-wide tuple
+// `[arity, in0..in10 (CHIP_RATE), out0, lane1..lane7]`. The chip-table AIR enforces
+// `out[i] == perm(ins)[i]` for ALL 8 output lanes, so a forged digest OR a forged
+// intermediate lane is UNSAT (`ir2_forged_output_lane_refuses`). The lookup balances
+// (LogUp) the main-side send against that genuine chip row, so the recompute is
+// witnessed by a pure light client folding the leaf — exactly the cap_root/heap_root
+// in-circuit Merkle-open pattern (a witnessed sibling path, constrained recompute).
+//
+// `out0` is the site's own DIGEST column (the `CellProgram` already fills it via
+// `generate_trace`); the 7 lane columns (lanes 1..7) are ALLOCATED past the base
+// trace width and filled descriptor-side by `fill_chip_lanes` (the
+// `trace_with_chip_lanes` weld inside `prove_vm_descriptor2_for_config`). A Merkle
+// PATH is many such sites chained: each level's parent (`out0`) feeds the next level's
+// `current` via a `Transition`, and the leaf/root are pinned to PIs by the boundary
+// `PiBinding`s — so a wrong sibling no longer reaches the root PI and the leaf is UNSAT.
+// ============================================================================
+
+/// Build one `TID_P2` chip lookup for a single Poseidon2 permutation site.
+///
+/// `arity` selects the chip's state seeding (2 = `hash_2_to_1`, 3 = `cap_node`
+/// `[FACT_MARK,l,r]`, 4 = `hash_4_to_1`), `ins` are the absorb input expressions
+/// (zero-padded to `CHIP_RATE`), `out0_col` is the digest column the program fills,
+/// and `lane_base..lane_base+6` are the 7 freshly-allocated lane columns (lanes 1..7).
+/// The resulting 20-wide tuple matches the chip-row shape `MainLayout::build` validates.
+fn chip_lookup_site(
+    arity: u32,
+    ins: &[LeanExpr],
+    out0_col: usize,
+    lane_base: usize,
+) -> VmConstraint2 {
+    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
+    tuple.push(LeanExpr::Const(arity as i64));
+    for i in 0..CHIP_RATE {
+        tuple.push(ins.get(i).cloned().unwrap_or(LeanExpr::Const(0)));
+    }
+    // out0 = the digest (lane 0); the AIR binds it to `perm(ins)[0]`.
+    tuple.push(LeanExpr::Var(out0_col));
+    // lanes 1..7 — the genuine distinct permutation lanes, witnessed columns the AIR
+    // EQUALITY-binds to `perm(ins)[i]` (a forged lane is UNSAT). `fill_chip_lanes` writes them.
+    for j in 0..(CHIP_OUT_LANES - 1) {
+        tuple.push(LeanExpr::Var(lane_base + j));
+    }
+    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
+    VmConstraint2::Lookup(LookupSpec {
+        table: TID_P2,
+        tuple,
+    })
+}
+
+/// The Lagrange leading coefficient `1 / ∏_{j≠i}(i − j)` of the degree-3 indicator
+/// `ind_i(p)` over the 4-point grid `{0,1,2,3}` (so `ind_i(i) = 1`, `ind_i(j≠i) = 0`),
+/// as a canonical BabyBear value. Used to express the position-dependent child
+/// reconstruction of `MerkleHash` as `LeanExpr` chip-input polynomials.
+fn lagrange_coeff(i: usize) -> BabyBear {
+    let mut denom = BabyBear::ONE;
+    for j in 0..4usize {
+        if j != i {
+            // (i − j) in the field (i, j ∈ 0..4 so the difference is small; lift via i64).
+            let d = i64_to_field(i as i64 - j as i64);
+            denom *= d;
+        }
+    }
+    denom
+        .inverse()
+        .expect("Lagrange denominator over a 4-point grid is a unit")
+}
+
+/// `n` (possibly negative, small) as a canonical BabyBear.
+fn i64_to_field(n: i64) -> BabyBear {
+    let p = BABYBEAR_P as i64;
+    let r = ((n % p) + p) % p;
+    BabyBear::new(r as u32)
+}
+
+/// The degree-3 position indicator `ind_i(position_col)` as a `LeanExpr`:
+/// `coeff_i · ∏_{j≠i}(position − j)`, which is `1` when `position == i` and `0` for the
+/// other grid points `{0,1,2,3}` (pinned by the program's position-validity gate).
+fn position_indicator(position_col: usize, i: usize) -> LeanExpr {
+    let mut acc = LeanExpr::Const(lagrange_coeff(i).as_u32() as i64);
+    for j in 0..4usize {
+        if j != i {
+            // (position − j)
+            let factor = LeanExpr::add(LeanExpr::Var(position_col), LeanExpr::Const(-(j as i64)));
+            acc = LeanExpr::mul(acc, factor);
+        }
+    }
+    acc
+}
+
+/// Sum a list of `LeanExpr`s (empty = `Const(0)`).
+fn add_all(terms: Vec<LeanExpr>) -> LeanExpr {
+    let mut it = terms.into_iter();
+    match it.next() {
+        None => LeanExpr::Const(0),
+        Some(first) => it.fold(first, LeanExpr::add),
+    }
+}
+
+/// The four `MerkleHash` children as `LeanExpr`s over `(current, sib0, sib1, sib2,
+/// position)`, reproducing the evaluator's reconstruction (`current` at slot
+/// `position`, siblings filling the other slots IN ORDER) for every grid position
+/// `{0,1,2,3}`. Each child is `ind_p·current + Σ [slot-belongs-to-sib_k]·sib_k`, a
+/// degree-4 polynomial; off-grid points are irrelevant (the LogUp balances over trace
+/// rows, where the position-validity gate pins `position ∈ {0,1,2,3}`).
+fn merkle_children_exprs(
+    current_col: usize,
+    sib_cols: &[usize; 3],
+    position_col: usize,
+) -> [LeanExpr; 4] {
+    let ind = |i: usize| position_indicator(position_col, i);
+    let cur = || LeanExpr::Var(current_col);
+    let sib = |k: usize| LeanExpr::Var(sib_cols[k]);
+    let mul = LeanExpr::mul;
+    // slot 0: current at p=0, else sib0 (the first non-position slot for p>0).
+    let child0 = add_all(vec![
+        mul(ind(0), cur()),
+        mul(add_all(vec![ind(1), ind(2), ind(3)]), sib(0)),
+    ]);
+    // slot 1: current at p=1; sib0 at p=0; sib1 at p∈{2,3}.
+    let child1 = add_all(vec![
+        mul(ind(1), cur()),
+        mul(ind(0), sib(0)),
+        mul(add_all(vec![ind(2), ind(3)]), sib(1)),
+    ]);
+    // slot 2: current at p=2; sib1 at p∈{0,1}; sib2 at p=3.
+    let child2 = add_all(vec![
+        mul(ind(2), cur()),
+        mul(add_all(vec![ind(0), ind(1)]), sib(1)),
+        mul(ind(3), sib(2)),
+    ]);
+    // slot 3: current at p=3, else sib2 (the last non-position slot for p<3).
+    let child3 = add_all(vec![
+        mul(ind(3), cur()),
+        mul(add_all(vec![ind(0), ind(1), ind(2)]), sib(2)),
+    ]);
+    [child0, child1, child2, child3]
+}
+
 /// Adapt a `CellProgram`'s [`CircuitDescriptor`] into the IR-v2
 /// [`EffectVmDescriptor2`] so it can prove through the general prover.
 ///
-/// Each `ConstraintExpr` maps per the module-level table. Hash/lookup/table-function
-/// kinds are REFUSED with a precise blocker (see the module docs) rather than
-/// silently emitted as unconstrained gates. The descriptor declares NO tables: the
-/// mapped corpus is pure main-table algebra (a hash/lookup kind that would need the
-/// chip/range tables is exactly what is refused above).
+/// Each `ConstraintExpr` maps per the module-level table. The Poseidon2 hash kinds
+/// `Hash2to1` / `Hash4to1` / `Hash3Cap` / `MerkleHash` lower to `TID_P2` chip lookups
+/// with per-site lane columns allocated past the base trace width (the lane-witnessing
+/// extension — see the section above). The remaining hash kinds (`Hash` fact-sponge,
+/// `ChainedHash2to1`, `SeedHash2to1`), arbitrary-entry `Lookup`, and `TableFunction`
+/// have no faithful single-permutation chip carrier and are REFUSED with a precise
+/// blocker. `BoundaryDef::PiBinding`/`Fixed` (first/last row) graduate to the row-tagged
+/// IR-v2 boundary carriers, so a chained Merkle path's leaf/root pins survive the lower.
 pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescriptor2, String> {
     let desc = &program.descriptor;
     let mut constraints: Vec<VmConstraint2> = Vec::with_capacity(desc.constraints.len());
+
+    // Chip-lane columns are appended PAST the base trace width: each Poseidon2 site
+    // claims `CHIP_OUT_LANES - 1` (= 7) fresh witnessed columns (lanes 1..7), filled
+    // descriptor-side by `fill_chip_lanes`. The digest (lane 0/out0) is the site's own
+    // output column (in-bounds, filled by `generate_trace`).
+    let mut width = desc.trace_width;
+    let alloc_lanes = |w: &mut usize| -> usize {
+        let base = *w;
+        *w += CHIP_OUT_LANES - 1;
+        base
+    };
 
     for expr in &desc.constraints {
         let c2 = match expr {
@@ -335,34 +516,105 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
                     on_transition: true,
                 })
             }
-            // The hash / lookup / table-function kinds have no faithful IR-v2 carrier
-            // in this spike — refuse with a precise blocker.
-            ConstraintExpr::Hash { .. }
-            | ConstraintExpr::Hash2to1 { .. }
-            | ConstraintExpr::Hash4to1 { .. }
-            | ConstraintExpr::Hash3Cap { .. }
-            | ConstraintExpr::MerkleHash { .. }
-            | ConstraintExpr::ChainedHash2to1 { .. }
-            | ConstraintExpr::SeedHash2to1 { .. } => {
-                return Err(format!(
-                    "constraint kind {} is a Poseidon2 relation; the faithful IR-v2 \
-                     route is a chip-table lookup (TID_P2) requiring per-site lane \
-                     witnessing — the named follow-up, not mapped in this spike",
-                    kind_name(expr)
-                ));
+            // ---- Poseidon2 hash sites → TID_P2 chip lookups (the lane-witnessing weld) ----
+            ConstraintExpr::Hash2to1 {
+                output_col,
+                input_col_a,
+                input_col_b,
+            } => {
+                let lane_base = alloc_lanes(&mut width);
+                chip_lookup_site(
+                    2,
+                    &[LeanExpr::Var(*input_col_a), LeanExpr::Var(*input_col_b)],
+                    *output_col,
+                    lane_base,
+                )
+            }
+            ConstraintExpr::Hash4to1 {
+                output_col,
+                input_cols,
+            } => {
+                let lane_base = alloc_lanes(&mut width);
+                chip_lookup_site(
+                    4,
+                    &input_cols
+                        .iter()
+                        .map(|&c| LeanExpr::Var(c))
+                        .collect::<Vec<_>>(),
+                    *output_col,
+                    lane_base,
+                )
+            }
+            ConstraintExpr::Hash3Cap {
+                output_col,
+                left_col,
+                right_col,
+            } => {
+                // The cap-tree node hash `cap_node(l, r) = absorb([FACT_MARK, l, r])`
+                // (arity-3 chip seeding), matching `cap_root::cap_node`.
+                let lane_base = alloc_lanes(&mut width);
+                chip_lookup_site(
+                    3,
+                    &[
+                        LeanExpr::Const(CAP_FACT_MARK as i64),
+                        LeanExpr::Var(*left_col),
+                        LeanExpr::Var(*right_col),
+                    ],
+                    *output_col,
+                    lane_base,
+                )
+            }
+            ConstraintExpr::MerkleHash {
+                output_col,
+                current_col,
+                sib_cols,
+                position_col,
+            } => {
+                // The 4-ary parent hash: reconstruct the position-ordered children as
+                // chip-input polynomials, then an arity-4 absorb (== `hash_4_to_1`).
+                let lane_base = alloc_lanes(&mut width);
+                let children = merkle_children_exprs(*current_col, sib_cols, *position_col);
+                chip_lookup_site(4, &children, *output_col, lane_base)
+            }
+            // ---- the remaining hash / lookup / table-function kinds: no faithful
+            //      single-permutation chip carrier in this extension — precise blockers. ----
+            ConstraintExpr::Hash { .. } => {
+                return Err(
+                    "constraint kind Hash (capacity-tagged fact-sponge `hash_fact`) uses the \
+                     arity-7 cap-leaf / FACT_MARK fact-bus seeding, NOT a narrow arity \
+                     2/3/4 absorb; map it via the fact-bus chip path (the named follow-up)"
+                        .to_string(),
+                );
+            }
+            ConstraintExpr::ChainedHash2to1 { .. } => {
+                return Err(
+                    "constraint kind ChainedHash2to1 is a CROSS-ROW running hash \
+                     (hash_2_to_1(local[seed], next[input])); a single-row TID_P2 lookup \
+                     tuple cannot read the `next` window — needs a copy-forward witness \
+                     column (the named follow-up)"
+                        .to_string(),
+                );
+            }
+            ConstraintExpr::SeedHash2to1 { .. } => {
+                return Err(
+                    "constraint kind SeedHash2to1 seeds the absorb from a PUBLIC INPUT \
+                     (hash_2_to_1(pi[seed], local[input])); a TID_P2 lookup tuple reads only \
+                     columns, so it needs a first-row PI-bound seed column (the named follow-up)"
+                        .to_string(),
+                );
             }
             ConstraintExpr::Lookup { table_id, .. } => {
                 return Err(format!(
                     "constraint kind Lookup(table \"{table_id}\") names an arbitrary \
                      CellProgram entry-set; IR-v2 lookups target fixed-semantics \
-                     declared tables only — no faithful target in this spike"
+                     declared tables only — no faithful target in this extension"
                 ));
             }
             ConstraintExpr::TableFunction { .. } => {
                 return Err(
                     "constraint kind TableFunction (bivariate Lagrange) is local-gate \
                      expressible in principle but its symbolic lowering is out of this \
-                     spike's scope"
+                     extension's scope"
                         .to_string(),
                 );
             }
@@ -372,9 +624,42 @@ pub fn cellprogram_to_descriptor2(program: &CellProgram) -> Result<EffectVmDescr
         constraints.push(c2);
     }
 
+    // Boundary pins (leaf/root for a Merkle path; any first/last cell binding) graduate
+    // to the row-tagged IR-v2 boundary carriers. `BoundaryRow::Index` has no row-tag
+    // carrier (`when_first_row`/`when_last_row` only), so it is refused.
+    for b in &desc.boundaries {
+        let vmrow = |row: &BoundaryRow| -> Result<VmRow, String> {
+            match row {
+                BoundaryRow::First => Ok(VmRow::First),
+                BoundaryRow::Last => Ok(VmRow::Last),
+                BoundaryRow::Index(i) => Err(format!(
+                    "boundary at absolute row {i} has no IR-v2 row-tag carrier (only \
+                     first/last are expressible)"
+                )),
+            }
+        };
+        let c2 = match b {
+            BoundaryDef::PiBinding { row, col, pi_index } => {
+                VmConstraint2::Base(VmConstraint::PiBinding {
+                    row: vmrow(row)?,
+                    col: *col,
+                    pi_index: *pi_index,
+                })
+            }
+            BoundaryDef::Fixed { row, col, value } => {
+                // `local[col] − value == 0`, guarded by the row tag.
+                VmConstraint2::Base(VmConstraint::Boundary {
+                    row: vmrow(row)?,
+                    body: sub(LeanExpr::Var(*col), LeanExpr::Const(value.as_u32() as i64)),
+                })
+            }
+        };
+        constraints.push(c2);
+    }
+
     Ok(EffectVmDescriptor2 {
         name: format!("custom-leaf::{}", desc.name),
-        trace_width: desc.trace_width,
+        trace_width: width,
         public_input_count: desc.public_input_count,
         tables: vec![],
         constraints,
@@ -895,6 +1180,207 @@ mod tests {
         assert_ne!(
             exposed_a, exposed_b,
             "distinct PIs MUST expose distinct commitments — the bind is real, not free"
+        );
+    }
+
+    // ========================================================================
+    // The Poseidon2 lane-witnessing / Merkle-path tooth.
+    //
+    // A real 4-ary Merkle membership `CellProgram` (`dsl::descriptors`'s carrier:
+    // a `MerkleHash` parent hash per level, `Transition` chain continuity, and
+    // first/last `PiBinding`s pinning leaf→root) lowers to a foldable IR-2 leaf via
+    // the TID_P2 chip-lookup weld. An honest path PROVES; a forged sibling (the leaf
+    // no longer climbs to the claimed root) is UNSAT.
+    // ========================================================================
+
+    use dregg_circuit::dsl::descriptors::{MERKLE_PUBLIC_INPUT_COUNT, merkle_poseidon2_descriptor};
+    use dregg_circuit::poseidon2::hash_4_to_1;
+
+    /// Reconstruct the 4 children EXACTLY as the DSL evaluator / the lowered chip
+    /// inputs do: `current` at slot `position`, siblings filling the others in order.
+    fn merkle_children(current: BabyBear, sibs: [BabyBear; 3], position: usize) -> [BabyBear; 4] {
+        let mut children = [BabyBear::ZERO; 4];
+        let mut sib_idx = 0;
+        for (i, child) in children.iter_mut().enumerate() {
+            if i == position {
+                *child = current;
+            } else {
+                *child = sibs[sib_idx];
+                sib_idx += 1;
+            }
+        }
+        children
+    }
+
+    /// One honest 4-ary Merkle path of `depth` levels (rows). Returns the per-column
+    /// witness + the public inputs `[leaf, root]`. Each level climbs `current →
+    /// hash_4_to_1(children)`; the next level's `current` is this level's `parent`,
+    /// and the final `parent` is the root.
+    fn honest_merkle_path(
+        leaf: BabyBear,
+        levels: &[([BabyBear; 3], usize)],
+    ) -> (HashMap<String, Vec<BabyBear>>, Vec<BabyBear>) {
+        let depth = levels.len();
+        let mut current_col = Vec::with_capacity(depth);
+        let mut sib0 = Vec::with_capacity(depth);
+        let mut sib1 = Vec::with_capacity(depth);
+        let mut sib2 = Vec::with_capacity(depth);
+        let mut position_col = Vec::with_capacity(depth);
+        let mut parent_col = Vec::with_capacity(depth);
+
+        let mut current = leaf;
+        for (sibs, position) in levels {
+            let children = merkle_children(current, *sibs, *position);
+            let parent = hash_4_to_1(&children);
+            current_col.push(current);
+            sib0.push(sibs[0]);
+            sib1.push(sibs[1]);
+            sib2.push(sibs[2]);
+            position_col.push(BabyBear::new(*position as u32));
+            parent_col.push(parent);
+            current = parent; // chain continuity: next current == this parent
+        }
+        let root = *parent_col.last().unwrap();
+
+        let mut w = HashMap::new();
+        w.insert("current".into(), current_col);
+        w.insert("sib0".into(), sib0);
+        w.insert("sib1".into(), sib1);
+        w.insert("sib2".into(), sib2);
+        w.insert("position".into(), position_col);
+        w.insert("parent".into(), parent_col);
+        (w, vec![leaf, root])
+    }
+
+    /// A 4-level path (`num_rows = 4`) over distinct sibling/position choices.
+    fn demo_levels() -> Vec<([BabyBear; 3], usize)> {
+        vec![
+            ([BabyBear::new(7), BabyBear::new(8), BabyBear::new(9)], 0),
+            ([BabyBear::new(11), BabyBear::new(12), BabyBear::new(13)], 2),
+            ([BabyBear::new(21), BabyBear::new(22), BabyBear::new(23)], 1),
+            ([BabyBear::new(31), BabyBear::new(32), BabyBear::new(33)], 3),
+        ]
+    }
+
+    /// The MerkleHash carrier maps: the descriptor lowers, the trace widens by the
+    /// per-site lane columns (one `MerkleHash` site ⇒ +7), and a TID_P2 chip lookup
+    /// plus the first/last boundary pins appear.
+    #[test]
+    fn merkle_membership_maps_to_descriptor2() {
+        let program = CellProgram::new(merkle_poseidon2_descriptor(), 1);
+        let desc2 = cellprogram_to_descriptor2(&program).expect("merkle membership maps");
+        // base width 6 + 7 lane columns for the single MerkleHash site.
+        assert_eq!(desc2.trace_width, 6 + (CHIP_OUT_LANES - 1));
+        assert_eq!(desc2.public_input_count, MERKLE_PUBLIC_INPUT_COUNT);
+        let chip_lookups = desc2
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, VmConstraint2::Lookup(l) if l.table == TID_P2))
+            .count();
+        assert_eq!(chip_lookups, 1, "the MerkleHash site is one chip lookup");
+        let pi_bindings = desc2
+            .constraints
+            .iter()
+            .filter(|c| matches!(c, VmConstraint2::Base(VmConstraint::PiBinding { .. })))
+            .count();
+        assert_eq!(
+            pi_bindings, 2,
+            "the leaf (first) + root (last) pins survive"
+        );
+    }
+
+    /// THE POSITIVE POLE: an honest Merkle membership path proves as a foldable IR-2
+    /// leaf — the chip lookup binds every level's parent to the genuine Poseidon2
+    /// permutation of its (position-ordered) children, and the chain climbs to the
+    /// claimed root.
+    #[test]
+    fn honest_merkle_path_proves_as_foldable_leaf() {
+        let program = CellProgram::new(merkle_poseidon2_descriptor(), 1);
+        let (w, pis) = honest_merkle_path(BabyBear::new(1234), &demo_levels());
+        let config = ir2_leaf_wrap_config();
+        prove_custom_leaf(&program, &w, 4, &pis, &config)
+            .expect("the honest Merkle membership path must prove as a foldable leaf");
+    }
+
+    /// THE NEGATIVE POLE: a FORGED path — one sibling corrupted while the claimed
+    /// `[leaf, root]` PIs and the parent chain are left intact — has no satisfying
+    /// assembly. The corrupted level's `parent` no longer equals the Poseidon2 hash of
+    /// the forged children, so the chip lookup's `out0 == perm(children)[0]` equality
+    /// (and the leaf→root chain) is violated: the leaf does NOT fold.
+    #[test]
+    fn forged_merkle_sibling_does_not_fold() {
+        let program = CellProgram::new(merkle_poseidon2_descriptor(), 1);
+        let (mut w, pis) = honest_merkle_path(BabyBear::new(1234), &demo_levels());
+        // FORGE: corrupt a sibling at level 1 WITHOUT recomputing parents/chain. The
+        // level-1 parent is now inconsistent with hash_4_to_1(forged children), and the
+        // PIs still claim the honest leaf/root — no witness satisfies the lowered leaf.
+        let sib0 = w.get_mut("sib0").unwrap();
+        sib0[1] = sib0[1] + BabyBear::ONE;
+        let config = ir2_leaf_wrap_config();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prove_custom_leaf(&program, &w, 4, &pis, &config)
+        }));
+        match result {
+            Err(_) => {}     // a debug constraint/chip builder panicked — rejected
+            Ok(Err(_)) => {} // the inner self-verify returned an error — rejected
+            Ok(Ok(_)) => panic!("a FORGED Merkle path minted a foldable leaf — soundness OPEN"),
+        }
+    }
+
+    /// A forged path that DOES recompute the chain (so every per-level `MerkleHash`
+    /// holds) but climbs to a DIFFERENT root, while the PIs still claim the honest
+    /// root, is also UNSAT — the last-row `parent == root` boundary pin bites.
+    #[test]
+    fn forged_merkle_root_pin_does_not_fold() {
+        let program = CellProgram::new(merkle_poseidon2_descriptor(), 1);
+        let honest_levels = demo_levels();
+        let (_honest_w, honest_pis) = honest_merkle_path(BabyBear::new(1234), &honest_levels);
+
+        // A self-consistent path over a DIFFERENT sibling set ⇒ a different (genuine)
+        // root, but we keep the HONEST [leaf, root] PIs. C2 holds per level; the
+        // last-row `parent == root_pi` boundary fails.
+        let mut other_levels = honest_levels;
+        other_levels[2].0[0] = other_levels[2].0[0] + BabyBear::new(99);
+        let (w, other_pis) = honest_merkle_path(BabyBear::new(1234), &other_levels);
+        assert_ne!(
+            other_pis[1], honest_pis[1],
+            "the forged path has a different root"
+        );
+        let config = ir2_leaf_wrap_config();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // honest_pis claims the honest root; `w` climbs to other root ⇒ pin fails.
+            prove_custom_leaf(&program, &w, 4, &honest_pis, &config)
+        }));
+        match result {
+            Err(_) => {}
+            Ok(Err(_)) => {}
+            Ok(Ok(_)) => panic!("a root-pin mismatch minted a foldable leaf — soundness OPEN"),
+        }
+    }
+
+    /// `dregg-dfa-routing-v1` now maps FURTHER: its `Hash4to1` entry-hash (C1) lowers
+    /// through the lane-witnessing weld (no longer the blocker). The first remaining
+    /// unmapped kind is `TableFunction` (the bivariate-Lagrange transition table) — the
+    /// precise named residual, ahead of the cross-row `ChainedHash2to1` and PI-seeded
+    /// `SeedHash2to1` route-commitment kinds.
+    #[test]
+    fn dfa_routing_maps_past_hash4to1_to_tablefunction() {
+        use dregg_circuit::dsl::dfa_routing::dfa_routing_descriptor;
+        // A minimal but TOTAL 2-state / 2-symbol transition relation (all 4 grid cells).
+        let transitions = [
+            (0u32, 0u32, 1u32),
+            (0u32, 1u32, 0u32),
+            (1u32, 0u32, 0u32),
+            (1u32, 1u32, 1u32),
+        ];
+        let program = CellProgram::new(dfa_routing_descriptor("dfa-test", &transitions), 1);
+        let err = cellprogram_to_descriptor2(&program)
+            .expect_err("dfa-routing still has unmapped kinds (TableFunction et al.)");
+        assert!(
+            err.contains("TableFunction"),
+            "Hash4to1 must now lower; the precise remaining blocker is TableFunction, got: {err}"
         );
     }
 }
