@@ -33,8 +33,8 @@
 //! same weld one proof up — see `stark_rehydrate::stark_chain_snapshot`.
 
 use dregg_app_framework::stark_rehydrate::{
-    PI_NEW_COMMIT, StarkRehydrateError, StarkSnapshot, TransferTurn, mint_transfer_leg,
-    verify_stark_leg, verify_stark_proof_against, witness_replay_is_genuine,
+    StarkRehydrateError, StarkSnapshot, TransferTurn, mint_transfer_leg, verify_stark_leg,
+    verify_stark_proof_against, witness_replay_is_genuine,
 };
 use dregg_app_framework::{
     AffordanceSpec, AgentCipherclerk, AppCipherclerk, AppSpec, AuthRequired, CellSpec,
@@ -182,10 +182,13 @@ fn main() {
     // ── 4) Anti-ghost: tamper / forge / wrong-circuit are REJECTED ─────────────
     println!("(4) anti-ghost (the STARK fails closed):");
 
-    // (a) A tampered post-state (PI 35 flipped — claim a DIFFERENT surface endpoint).
+    // (a) A tampered post-state — claim a DIFFERENT surface endpoint. H0 DEPLOYED-WIDE: the genuine
+    // post-state is the 8-felt wide AFTER anchor (PI tail); its head lane sits at `len - 8` and
+    // equals `endpoint_commitment()`. (The single-felt PI 35 is retired/unbound on the wide leg.)
     let mut tampered = snap.clone();
     let honest = tampered.endpoint_commitment();
-    tampered.proof.public_inputs[PI_NEW_COMMIT] = honest + BabyBear::ONE;
+    let pi_wide_new = tampered.proof.public_inputs.len() - 8;
+    tampered.proof.public_inputs[pi_wide_new] = honest + BabyBear::ONE;
     match tampered.rehydrate_for(&Membrane::new(AuthRequired::None), vault.surface()) {
         Err(StarkRehydrateError::StarkInvalid(_)) => {
             println!(

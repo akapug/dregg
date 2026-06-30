@@ -219,25 +219,26 @@ fn ungated_joint_prover_with_forged_cell_commit_cannot_produce_a_root() {
     let forged_cell = make_cell(100, 0, 0x77);
     let honest = make_cell(200, 1, 0x77);
 
-    // FORGE the rotated NEW commitment (PI 35 = V1_PI_COUNT + 1) on the cell's leg.
-    // Destructure the leg (all fields `pub`), mutate the claimed PI, rebuild — the
-    // proof object is unchanged; the lie is purely in the claimed PI the in-circuit
-    // verifier pins against the proof.
-    const PI_ROTATED_NEW: usize = dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT + 1;
+    // FORGE the rotated NEW commitment on the cell's leg. H0 DEPLOYED-WIDE: the single-felt rotated
+    // NEW-commit PI is RETIRED; the genuine bound carrier is the 8-felt wide AFTER-commit at the PI
+    // tail `[n-8 .. n)` — forge its HEAD lane. Destructure the leg (all fields `pub`), mutate the
+    // claimed PI, rebuild — the proof object is unchanged; the lie is purely in the claimed PI the
+    // in-circuit verifier pins against the proof.
     let DescriptorParticipant { rotated } = forged_cell.participant;
     let RotatedParticipantLeg {
         proof,
         descriptor,
         mut public_inputs,
-        custom_witness: _,
+        custom_witness,
     } = rotated;
-    let lie = public_inputs[PI_ROTATED_NEW] + BabyBear::ONE;
-    public_inputs[PI_ROTATED_NEW] = lie;
+    let pi_wide_new = public_inputs.len() - 8; // head lane of the AFTER 8-felt wide commit
+    let lie = public_inputs[pi_wide_new] + BabyBear::ONE;
+    public_inputs[pi_wide_new] = lie;
     let forged_leg = RotatedParticipantLeg {
         proof,
         descriptor,
         public_inputs,
-        custom_witness: None,
+        custom_witness,
     };
     let forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let cells = [forged, honest];

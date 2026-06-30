@@ -81,8 +81,10 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
         None,
     )
     .expect("rotated transfer leg mints + self-verifies");
-    let old_root = leg.old_root();
-    let new_root = leg.new_root();
+    // H0 DEPLOYED-WIDE: the deployed leg is WIDE-anchored — the single-felt rotated roots are RETIRED
+    // to zero, so report the HEAD felt (lane 0) of the GENUINE 8-felt wide anchors.
+    let old_root = leg.wide_old_root8().expect("deployed leg is wide-anchored")[0];
+    let new_root = leg.wide_new_root8().expect("deployed leg is wide-anchored")[0];
     (
         FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
@@ -137,12 +139,19 @@ fn running_summary_links_a_real_chain() {
     let (turns, genesis, final_root) = make_chain(1000, 0, 7, 3);
     // The turns already link by construction (make_chain asserts it); the accumulator's continuity
     // tooth is exactly this `old_root[i+1] == new_root[i]` check.
-    assert_eq!(turns[0].old_root(), genesis);
-    assert_eq!(turns[2].new_root(), final_root);
+    // H0 DEPLOYED-WIDE: continuity binds the GENUINE 8-felt wide anchor; compare its head felt.
+    assert_eq!(
+        turns[0].participant.rotated.wide_old_root8().unwrap()[0],
+        genesis
+    );
+    assert_eq!(
+        turns[2].participant.rotated.wide_new_root8().unwrap()[0],
+        final_root
+    );
     for i in 1..turns.len() {
         assert_eq!(
-            turns[i].old_root(),
-            turns[i - 1].new_root(),
+            turns[i].participant.rotated.wide_old_root8().unwrap()[0],
+            turns[i - 1].participant.rotated.wide_new_root8().unwrap()[0],
             "turn {i} must consume the running head"
         );
     }
@@ -223,11 +232,20 @@ fn incremental_accumulate_verifies_whole_history() {
     let summary = acc
         .summary()
         .expect("the accumulator has a summary after 3 turns");
-    // The running endpoints are now GENUINE 8-felt anchors (codex #4 closed). The mint fixture
-    // produces NARROW legs, so each anchor is the single rotated commit felt replicated across the
-    // eight lanes — hence `[genesis; 8]` / `[final_root; 8]`.
-    assert_eq!(summary.genesis_root, [genesis; 8]);
-    assert_eq!(summary.head_root, [final_root; 8]);
+    // H0 DEPLOYED-WIDE: the running endpoints are the GENUINE 8-felt (~124-bit) wide anchors read off
+    // the first/last legs — NOT a single rotated commit felt broadcast across the eight lanes.
+    let genesis8 = turns[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("first leg is wide-anchored");
+    let final8 = turns[turns.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("last leg is wide-anchored");
+    assert_eq!(summary.genesis_root, genesis8);
+    assert_eq!(summary.head_root, final8);
     assert_eq!(summary.num_turns, 3);
 
     // Finalize + self-verify (the setup-side entry mints the anchor it would distribute).
@@ -235,8 +253,13 @@ fn incremental_accumulate_verifies_whole_history() {
         .finalize_and_self_verify()
         .expect("the accumulated artifact must finalize + verify under its honest anchor");
     assert_eq!(whole.num_turns, 3);
-    assert_eq!(whole.genesis_root, [genesis; 8]);
-    assert_eq!(whole.final_root, [final_root; 8]);
+    assert_eq!(whole.genesis_root, genesis8);
+    assert_eq!(whole.final_root, final8);
+    assert_eq!(
+        whole.genesis_root[0], genesis,
+        "the head felt matches make_chain's scalar root"
+    );
+    assert_eq!(whole.final_root[0], final_root);
 
     // A light client re-runs the SAME check against the configured anchor — cost independent of n.
     verify_turn_chain_recursive(&whole, &vk)
@@ -304,8 +327,8 @@ fn online_mixed_root_forgery_rejected() {
     verify_turn_chain_recursive(&whole_a, &vk).expect("A's honest whole-chain proof verifies");
 
     // ----- (1) DIFFERENT-ENDPOINT forgery: carry B's claims against A's online root. -----
-    let b_genesis = turns_b[0].old_root();
-    let b_final = turns_b[1].new_root();
+    let b_genesis = turns_b[0].participant.rotated.wide_old_root8().unwrap()[0];
+    let b_final = turns_b[1].participant.rotated.wide_new_root8().unwrap()[0];
     assert_eq!(b_genesis, gb);
     assert_eq!(b_final, fb);
     assert_ne!(
