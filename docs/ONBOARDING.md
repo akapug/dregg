@@ -84,6 +84,7 @@ What composes there (repo `~/dev/DreggNet`):
   from `wasmtime`/`v8` to `firecracker`/`native+seccomp+landlock`, durable
   replay, capability gates at every boundary. This is what makes "durable
   container execution for agents" real, not a model.
+- **net/** — the serving + transport layer (the `httpe` HTTP gateway +
   WireGuard/Tailscale mesh). ember's own work; proprietary, Linux-targeted.
 - **the bridge + control plane** — turn a funded dregg `execution-lease` into a
   rail; schedule + provision + dispatch over the private overlay.
