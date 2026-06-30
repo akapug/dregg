@@ -63,7 +63,9 @@ open Dregg2.Circuit.StateCommit
 open Dregg2.Exec.ConsensusExec (teethGenesis honestTurn)
 -- the grounded-apex carriers + floor names:
 open Dregg2.AssuranceCase (deployed_system_secure)
-open Dregg2.Circuit.GroundedApex (engineSound_grounded BindingExtract)
+open Dregg2.Circuit.GroundedApex (engineSound_grounded engineSound_grounded_v2 BindingExtract)
+open Dregg2.Circuit.RecursiveSoundFromNodes
+  (PTree NodeCarrier rootP leavesP honestTree honest_node_carrier)
 open Dregg2.Circuit.CircuitSoundness (CommitSurface)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Circuit.WitnessRealizing (LeafRefinement)
@@ -156,6 +158,77 @@ theorem deployed_system_secure_grounded
 
 #assert_axioms deployed_system_secure_grounded
 
+/-- **`deployed_system_secure_grounded_v2` (THE GROUNDED COMPOSED APEX — NO CARRIED FRI).** Same
+conclusion as `deployed_system_secure_grounded`, but guarantee E's recursion leg no longer carries the
+whole-tree FRI hypothesis `hrec`: in its place a proof-carrying aggregation tree `t` + the per-node
+`NodeCarrier hc` (the localized `AggAirSound.FriExtract` floor over one node + its two children) + the
+wrapping facts, from which `engineSound_grounded_v2` DERIVES `recursive_sound` by the whole-tree fold
+(`RecursiveSoundFromNodes`). So the deployed capstone now trusts strictly
+`{the per-node FriExtract floor `hc`, Poseidon CR (the sponge `hCR` + the §8 injectivity carriers), the
+named `CommitSurface` set}` + the honest prover's realizer data (`hleaves`, `hbindExtract`) — with
+`recursive_sound`, `leaf_sound`, and `binding_sound` ALL derived: NO assumed `EngineSound`, NO carried
+whole-tree recursion hypothesis. Guarantees A–D pass through `deployed_system_secure` byte-for-byte. -/
+theorem deployed_system_secure_grounded_v2
+    -- A/B/C(c1+c2): the running-entry forest the node committed (UNCHANGED from the capstone).
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId)
+    (hrun : execFullForestG s f = some s')
+    (UC : Dregg2.Exec.UniversalBridge.UCodec)
+    (hcov : EachStepMemProg UC (lowerForestG f))
+    -- D: a committed noteSpend on the executable term IR (UNCHANGED).
+    {nf : Nat} {k k' : RecordKernelState}
+    (hspend : interp (noteSpendStmt nf) k = some k')
+    -- E: the published recursion aggregate + the GROUNDED-v2 inputs (per-node carrier, NOT `hrec`).
+    (hash : List ℤ → ℤ) (S : CommitSurface) (hCR : Poseidon2SpongeCR hash)
+    (H : ℤ → ℤ → ℤ)
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep)
+    (hleaves : List.Forall₂
+      (fun (p : AProof) (st : ChainStep) => Nonempty (LeafRefinement AProof verify hash S p st))
+      agg.leafProofs steps)
+    (hbindExtract : BindingExtract AProof verify hash CH RH cmb compress compressN agg steps)
+    (t : PTree AProof)
+    (hc : NodeCarrier verify H t)
+    (htroot : rootP t = agg.root)
+    (hwrap : ∀ p ∈ agg.leafProofs, p ∈ leavesP t)
+    (hbindleaf : agg.bindingProof ∈ leavesP t)
+    (hroot : verify agg.root = true)
+    (hCmb : compressInjective cmb) (hCompress : compressInjective compress)
+    (hCompressN : compressNInjective compressN) (hLeaf : cellLeafInjective CH)
+    (hRest : RestHashIffFrame RH)
+    (hgen : KernelGenesisPin g steps) (hstruct : SeamStruct steps) :
+    -- A:
+    (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
+    -- B:
+    ∧ recTotalAsset s'.kernel b = recTotalAsset s.kernel b
+    -- C(c1): per-node attestation
+    ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
+        execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa')
+    -- C(c2): the WHOLE TURN is a memory program
+    ∧ MemProgTrans UC s s'
+    -- D: freshness (no double-spend)
+    ∧ (nf ∉ k.nullifiers ∧ nf ∈ k'.nullifiers ∧ interp (noteSpendStmt nf) k' = none)
+    -- E: unfoolability — whole-history attestation + conservation FROM VERIFICATION
+    ∧ AggregateAttests AProof CH RH cmb compress compressN agg g steps
+    ∧ recTotal (lastStateOf g steps).kernel = recTotal g.kernel :=
+  -- A–D pass through `deployed_system_secure` untouched; guarantee E's `es` is DERIVED on the spot with
+  -- ALL THREE EngineSound legs grounded — `recursive_sound` now off the per-node carrier fold, not `hrec`.
+  deployed_system_secure
+    (verify := verify) (CH := CH) (RH := RH) (cmb := cmb) (compress := compress)
+    (compressN := compressN)
+    (s := s) (s' := s') (f := f) (b := b) (hrun := hrun)
+    (UC := UC) (hcov := hcov) (hspend := hspend)
+    (agg := agg) (g := g) (steps := steps)
+    (es := engineSound_grounded_v2 AProof verify hash S hCR CH RH cmb compress compressN H
+            agg g steps hleaves hbindExtract t hc htroot hwrap hbindleaf)
+    (hroot := hroot)
+    (hCmb := hCmb) (hCompress := hCompress) (hCompressN := hCompressN)
+    (hLeaf := hLeaf) (hRest := hRest) (hgen := hgen) (hstruct := hstruct)
+
+#assert_axioms deployed_system_secure_grounded_v2
+
 /-! ## Non-vacuity — the E-grounded engine FIRES on a real honest chain.
 
 The migration's only delta is guarantee E: where the original capstone took an assumed
@@ -199,5 +272,42 @@ theorem grounded_capstone_engine_fires
     rfl
 
 #assert_axioms grounded_capstone_engine_fires
+
+/-- **`grounded_capstone_engine_fires_v2` (THE NO-CARRIED-FRI E-ENGINE FIRES).** As
+`grounded_capstone_engine_fires`, but the engine threaded into guarantee E is `engineSound_grounded_v2`:
+the carried `hrec` is replaced by the concrete honest proof-carrying tree `honestTree` and its per-node
+carrier `honest_node_carrier`. So the whole-tree recursion fold is genuinely LOAD-BEARING in the firing —
+`recursive_sound` is DERIVED — and the grounded capstone's E-leg still concludes the real whole-history
+`AggregateAttests`. The only non-concrete input remains the per-leaf `Forall₂ LeafRefinement` (the audited
+STARK floor). -/
+theorem grounded_capstone_engine_fires_v2
+    (hash : List ℤ → ℤ) (S : CommitSurface) (hCR : Poseidon2SpongeCR hash)
+    (hleaves : List.Forall₂
+      (fun (p : RealProof) (st : ChainStep) => Nonempty (LeafRefinement RealProof acceptAll hash S p st))
+      realAggregate.leafProofs realSteps) :
+    AggregateAttests RealProof zCH zRH zcmb zcompress zcompressN realAggregate teethGenesis realSteps := by
+  have hbe : BindingExtract RealProof acceptAll hash zCH zRH zcmb zcompress zcompressN
+      realAggregate realSteps := by
+    intro _
+    refine ⟨[rowOf zCH zRH zcmb zcompress zcompressN honestStep],
+            pubOf zCH zRH zcmb zcompress zcompressN hash honestStep,
+            satisfies_one zCH zRH zcmb zcompress zcompressN hash honestStep,
+            represents_one zCH zRH zcmb zcompress zcompressN honestStep, rfl, ?_⟩
+    show realAggregate.finalRoot = (pubOf zCH zRH zcmb zcompress zcompressN hash honestStep).final
+    simp only [realAggregate, pubOf, realSteps]
+    exact foldedFinalRoot_eq_lastNew zCH zRH zcmb zcompress zcompressN teethGenesis [honestStep]
+      honestStep (by simp)
+  -- the carried `hrec` is GONE: the recursion leg comes from the concrete honest tree + per-node carrier.
+  exact light_client_verifies_whole_history RealProof acceptAll zCH zRH zcmb zcompress zcompressN
+    realAggregate teethGenesis realSteps
+    (engineSound_grounded_v2 RealProof acceptAll hash S hCR zCH zRH zcmb zcompress zcompressN
+      Dregg2.Circuit.RecursiveSoundFromNodes.zH
+      realAggregate teethGenesis realSteps hleaves hbe
+      honestTree honest_node_carrier rfl
+      (by intro p _; cases p; simp [leavesP, honestTree])
+      (by simp [leavesP, honestTree, realAggregate]))
+    rfl
+
+#assert_axioms grounded_capstone_engine_fires_v2
 
 end Dregg2.AssuranceCaseGrounded
