@@ -37,9 +37,11 @@ first-row) the Rust adapter documents.
    PI gate in the IR-v2 main AIR, exactly as the Rust adapter's module note says).
 4. `cell_to_descriptor_faithful` — the descriptor-level packaging (`sorry`-labelled: the full
    `Satisfied2` row-quantification over a mixed constraint list — mechanical but long).
-5. `engineBinding_over_faithful_encoding` — the bridge to `CustomApex` (`sorry`-labelled: it rests
-   on the staged `boundAt` + `EngineBinding` carrier that `CustomApex.lean` owns; stated here so the
-   encoding's role in the apex is explicit).
+
+(The former item 5, `engineBinding_over_faithful_encoding`, was a `True := trivial` placeholder for
+the now-deleted vacuous `CustomApex.lightclient_unfoolable_custom`; it is RETIRED. The deployed custom
+binding is real-as-deployed via the FOLD — `CustomBindingFromFold.custom_binding_from_fold` — not a row
+carrier. This file supplies only the faithful-encoding leg; the binding leg is the fold.)
 
 NO new axioms; `sorry` only on the labelled arms above. Import-clean. NOT added to `Dregg2.lean`
 (the main loop wires imports).
