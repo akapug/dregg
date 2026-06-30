@@ -131,9 +131,53 @@
 //!     `keep & held = keep`), enforced by per-bit decomposition — the custom-table CONTENTS
 //!     manifest is the named small IR follow-up on the Lean side; until it lands the id ↦
 //!     relation binding lives here, in one place.
-//!   * The memory boundary image (`minit`/`mfin`/declared addresses) is witness-supplied
-//!     (the `MemBoundaryWitness` instance); binding the init image to main-trace state
-//!     columns is part of the PI-v3 / witness-restructure ride-along, not this module.
+//!   * The FLAT memory boundary image (`minit`/`mfin`/declared addresses) is witness-supplied
+//!     (the `MemBoundaryWitness` instance). The flat boundary is the carrier
+//!     `setFieldDynVmDescriptor2` (the post-flag-day dynamic field write) uses to hold a cell's
+//!     eight user fields in FLAT MEMORY at addresses `0..7` (`EffectVmEmitV2.lean:51`) — the ONLY
+//!     flat-`mem_op` carrier in the wide+umem welded registry (every other member uses anchored
+//!     umem or hash-absorbed state), and STILL STAGED (the live per-slot `setfield-v1` is
+//!     hash-absorption-bound, `memops=0`).
+//!     SOUNDNESS ANCHOR — CLOSED (the flat twin of the umem anchor). The Lean denotation gained the
+//!     flat init/fin root legs + the forge tooth, `#assert_axioms`-clean, mirroring the universal
+//!     `satisfied2U_init_root` family EXACTLY (`DescriptorIR2.lean`, the §6a' block after
+//!     `satisfied2_mem_consistent`):
+//!       - `satisfied2_init_root` / `satisfied2_fin_root` — if the committed pre/post-state heap has
+//!         the declared `minit`/`mfin` lookup semantics over the declared sorted addresses, its
+//!         sorted-Poseidon2 root EQUALS the boundary fold `Heap.root (boundaryCells (some ∘ minit)
+//!         maddrs)` (the universal `boundary_init_root_derived`, the flat image saturated to `some`);
+//!       - `satisfied2_init_root_bound` — the forge tooth: `Heap.root_injective` under
+//!         `Poseidon2SpongeCR`, so a declared image differing from the committed pre-state CANNOT
+//!         keep the published root;
+//!       - `satisfied2_init_whole_image` — `boundary_whole_image_sem`: pinning the committed root to
+//!         the WHOLE-boundary fold forces the committed heap to BE the declared image at every
+//!         address (declared cells open to `minit a`, every address off the list ABSENT) — the
+//!         no-extra-cells direction that rejects a forged `minit[a]` at an untouched declared field.
+//!     IN-CIRCUIT REALIZATION — REALIZED as the flat-bound whole-image fold companion (the exact
+//!     twin of the umem `whole_image_fold_bound`, `crate::whole_image_fold::*_bound_mem`): the fold
+//!     recomputes the sorted-Poseidon2 root of the declared flat boundary image and pins it to the
+//!     published (committed-pre-state) root, each fold link cross-bound to the `MemBoundary` table
+//!     via a `MemOp::Read`. The two deployed teeth bite in `verify_batch` (no new bus/column/AIR):
+//!     the `BUS_MEM_ADDRS` address-closure refuses a folded cell the boundary never declared, and
+//!     the `BUS_MEM_CHECK` Blum balance refuses a folded value differing from the declared
+//!     `minit[addr]` — so a forged `minit` folds to a different root and the published-root pin
+//!     REFUSES (`tests/effect_vm_umem_real_turn.rs::whole_image_fold_bound_mem_forged_minit_refuses`
+//!     + honest-accept/undeclared/smuggled-start companions).
+//!     RESIDUAL — the per-EFFECT VK weld. Like the umem boundary (still "witness-supplied" at its
+//!     effect descriptors, the anchor realized as the `whole_image_fold` companion), the flat fold
+//!     is realized as a companion, NOT yet welded into `setFieldDynVmDescriptor2` itself. Welding it
+//!     — `setFieldDynVmDescriptor2` publishes `minit_root`/`mfin_root` PIs pinned to the turn's
+//!     committed pre/post-state root, with the fold (running-root columns in `Ir2Air::MemBoundary` +
+//!     the boundary producer, or an in-batch fold AIR) proving the pin, then `emit-descriptors.sh`
+//!     re-emit so its VK MOVES (`check-descriptor-drift.sh`) — is what makes a forged-`minit` proof
+//!     of setFieldDyn ITSELF refuse in `verify_batch` (today the companion is a separate proof).
+//!     Two known weld details: (a) the field addresses `0..7` include addr 0, which the binary
+//!     Merkle sorted-insert rejects as a sentinel collision (an address offset, or sentinel-handling
+//!     adjustment, is needed for the fold over the real `0..7` plane — the companion test uses
+//!     non-zero addresses, as the umem tests do); (b) the cross-binding `MemOp::Read` links join the
+//!     effect's memory log, so the fin-side fold + `setFieldDyn_memLog` need the joined-log
+//!     accounting worked through. The carrier stays STAGED until this weld lands; the soundness
+//!     anchor + the biting forge tooth are in place.
 //!   * v1 descriptors (no `"ir"` key) keep proving through `lean_descriptor_air::
 //!     prove_vm_descriptor` untouched — both registries live until the flag-day.
 
