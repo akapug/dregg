@@ -112,7 +112,7 @@ pub use acp_client::{
 pub use agent_peer::HermesAgentPeer;
 pub use brain::{
     AgentConvo, BrainStep, HttpLlm, LlmBrain, LlmHttpCaller, LlmKeys, LocalBrain, MoonshotCaller,
-    ToolObservation,
+    OpenAICompatCaller, ToolObservation,
 };
 pub use bridge::{HermesGateway, ToolMarket};
 #[cfg(unix)]

@@ -532,39 +532,48 @@ fn parse_provider_step(resp: &Value) -> BrainStep {
     }
 }
 
-// ───────────────────────── the Kimi (Moonshot) adapter ──────────────────────
+// ────────────────────── the OpenAI-compatible chat adapter ───────────────────
 
-/// A CONCRETE [`LlmHttpCaller`] for a **Kimi / Moonshot** endpoint (OpenAI-style
-/// chat/completions with tool-use). [`HttpLlm`] is provider-neutral — it emits a
-/// Messages-shaped request and parses a `content`-block response; this adapter
-/// maps that shape onto OpenAI's `messages` + `tool_calls` request and back, so a
-/// Moonshot model drops in behind the unchanged brain/gate/receipt rail.
+/// A CONCRETE [`LlmHttpCaller`] for **any OpenAI-compatible** chat/completions
+/// endpoint (chat messages + tool-use). [`HttpLlm`] is provider-neutral — it emits
+/// a Messages-shaped request and parses a `content`-block response; this adapter
+/// maps that shape onto OpenAI's `messages` + `tool_calls` request and back, so any
+/// OpenAI-shaped model drops in behind the unchanged brain/gate/receipt rail: a
+/// Kimi/Moonshot key, a local proxy, ollama, vLLM / LM Studio, OpenRouter, or a
+/// harness-exposed OpenAI endpoint. The endpoint + model are configured on
+/// [`HttpLlm`]; this adapter only translates the request/response shape.
 ///
 /// The actual bytes go over a BYO `post` seam (the operator's HTTP stack), so this
 /// crate adds no HTTP/TLS dependency: the live deployment injects a closure that
-/// POSTs to `https://api.moonshot.ai/v1/chat/completions` (or `.cn`) with the key
+/// POSTs to the configured `endpoint` (e.g. `http://localhost:11434/v1/chat/completions`
+/// for ollama, `https://api.moonshot.ai/v1/chat/completions` for Kimi) with the key
 /// in the `Authorization: Bearer` header; the tests inject a recorded responder.
 /// The api_key is the `post` argument — it never enters the request body.
-pub struct MoonshotCaller<P>
+pub struct OpenAICompatCaller<P>
 where
     P: FnMut(&str, &str, &Value) -> Result<Value, String>,
 {
     post: P,
 }
 
-impl<P> MoonshotCaller<P>
+/// Back-compat alias: this adapter shipped first as `MoonshotCaller`. Kimi/Moonshot
+/// is one OpenAI-compatible endpoint; the adapter is provider-agnostic.
+pub type MoonshotCaller<P> = OpenAICompatCaller<P>;
+
+impl<P> OpenAICompatCaller<P>
 where
     P: FnMut(&str, &str, &Value) -> Result<Value, String>,
 {
-    /// A Moonshot adapter over the BYO `post(endpoint, api_key, openai_request)`
-    /// transport. `post` is the ONLY thing that touches the network and the ONLY
-    /// place the key is used (in the auth header) — never the request body.
-    pub fn new(post: P) -> MoonshotCaller<P> {
-        MoonshotCaller { post }
+    /// An OpenAI-compatible adapter over the BYO `post(endpoint, api_key,
+    /// openai_request)` transport. `post` is the ONLY thing that touches the network
+    /// and the ONLY place the key is used (in the auth header) — never the request
+    /// body.
+    pub fn new(post: P) -> OpenAICompatCaller<P> {
+        OpenAICompatCaller { post }
     }
 }
 
-impl<P> LlmHttpCaller for MoonshotCaller<P>
+impl<P> LlmHttpCaller for OpenAICompatCaller<P>
 where
     P: FnMut(&str, &str, &Value) -> Result<Value, String>,
 {
