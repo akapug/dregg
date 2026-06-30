@@ -52,6 +52,17 @@ bincode = "1"
 # NO new crates to the lockfile beyond what `solana-vote-interface` already pins
 # (no curve25519 conflict). See docs/deos/TRUSTLESS-SOLANA-BRIDGE.md.
 solana-stake-interface = { version = "4.3.0", default-features = false }
+# The live off-chain relayer (`solana_relayer`) speaks the REAL Solana JSON-RPC
+# wire: pubkeys are base58 and account `data` is base64 over JSON-RPC. Both are
+# tiny, pure, and already in the workspace lock (pulled by reqwest et al.) — they
+# add NO new transitive crates. The JSON envelope is parsed with the existing
+# `serde_json` dep; the byte-pipe is the injected `JsonRpcTransport` seam (a
+# dependency-free `std::net` plain-HTTP transport ships for the local validator;
+# an https/TLS transport is injected by the deploy harness). No reqwest/tokio is
+# pulled into the verified core. See solana_relayer.rs docs. `bs58` is also used
+# by the `SOLANA_LOCAL=1`/`SOLANA_DEVNET=1` e2e harness pubkey decode.
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+bs58 = "0.5"
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -66,11 +77,6 @@ solana-hash = "4"
 # (pass 3) vote-account-data fixtures. `solana-vote-interface` + `bincode` are
 # already normal deps and are reused by the provenance tests.
 solana-pubkey = "4"
-# Base58 pubkey decode for the local-validator e2e harness (`solana_local_e2e`):
-# the harness script emits the harvested account pubkeys base58 (Solana's native
-# encoding); the gated test decodes them to the raw 32-byte form the verifier
-# hashes. Only used by the `SOLANA_LOCAL=1` e2e path.
-bs58 = "0.5"
 
 [[bench]]
 name = "presentation_bench"

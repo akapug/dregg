@@ -75,6 +75,15 @@ pub mod solana_wire;
 /// proven-from-the-bank-hash derivation. See `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
 pub mod solana_provenance;
 
+/// The **live off-chain relayer** (the watching service): a real Solana JSON-RPC
+/// client that watches the bridge vault for finalized locks, runs the off-chain
+/// verify (finality + the BR-2-B escrow-to-vault binding + structure/binding),
+/// and produces the committed-mint input. Replaces the in-memory feed stand-in.
+/// The in-circuit witness of the consensus path is the circuit swarm's G1
+/// VK-epoch (`dregg_circuit::bridge_action_air`). See `solana_relayer` docs and
+/// `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
+pub mod solana_relayer;
+
 /// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
 /// the new sibling AIR `dregg_circuit::bridge_action_air` that pins
 /// (nullifier, recipient, destination_federation, amount) at full byte/bit
@@ -126,6 +135,10 @@ pub use solana_provenance::{
     STAKE_HISTORY_SYSVAR_ID, STAKE_PROGRAM_ID, SYSVAR_OWNER_ID, VerifiedStakeTable,
     WeakSubjectivityAnchor, active_stake, decode_authorized_voter, decode_stake_delegation,
     decode_stake_history, derive_stake_table, effective_stake, rotate, vote_program_id,
+};
+pub use solana_relayer::{
+    AccountResponse, Commitment, JsonRpcTransport, ObservedLock, RelayerError, RpcAccount,
+    RpcError, SolanaJsonRpc, SolanaRelayer, SolanaRpc, StdHttpTransport,
 };
 pub use solana_trustless::{
     AccountInclusionProof, ConsensusEvidence, LockProofError, LockProofTrust, ProofMintError,
