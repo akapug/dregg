@@ -2048,8 +2048,8 @@ mod tests {
         assert_eq!(pre.len(), V9_NUM_PRE_LIMBS);
         assert_eq!(
             pre.len(),
-            37,
-            "33 base + disc + perms + vk + mode + fields_root (WAVE-2/3)"
+            67,
+            "37 base/WAVE-2/3 + 30 v10 faithful-8-felt completion limbs (37..66)"
         );
         // cells_root rides limb 0; the welded r0 (balance_lo) is non-zero for a funded cell.
         assert_eq!(pre[0], BabyBear::new(11));
@@ -2085,6 +2085,24 @@ mod tests {
             fields_root_felt(&cell.state.fields_root),
             "fields_root rides limb 36 (WAVE-3 flag-day; the openable sorted-Poseidon2 root felt)"
         );
+        // The FAITHFUL 8-felt cap root: lane 0 at limb 25, completion lanes 1..7 at limbs 51..57
+        // (`EffectVmEmitRotationV3.capRootGroupCol`). Lane 0 == the historical scalar cap-root felt.
+        let cap8 = compute_canonical_capability_root_8(&cell.capabilities);
+        assert_eq!(pre[25], cap8[0], "cap_root lane 0 rides limb 25");
+        assert_eq!(
+            pre[25],
+            compute_canonical_capability_root_felt(&cell.capabilities),
+            "cap_root limb-25 lane 0 == the historical scalar cap-root felt"
+        );
+        for i in 0..7 {
+            assert_eq!(
+                pre[51 + i],
+                cap8[1 + i],
+                "cap_root completion lane {} rides limb {}",
+                i + 1,
+                51 + i
+            );
+        }
     }
 
     /// The `lifecycle_disc` limb (32) is load-bearing: a different lifecycle discriminant MOVES the
