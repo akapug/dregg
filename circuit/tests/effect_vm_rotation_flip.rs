@@ -1410,7 +1410,8 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
 
     // The pre-limb vectors differ at the FAITHFUL 8-FELT AUTHORITY DIGEST (H1): limb 24 (limb-0) AND
     // the 7 headroom limbs 12..=18 (limb-1..7 of `compute_authority_digest_8`), which all fold the
-    // permissions — plus index 33 (the WAVE-2 perms-digest sub-limb). Every OTHER named limb
+    // permissions — plus the perms-digest sub-limbs: index 33 (WAVE-2 limb-0) AND the v10
+    // faithful-8-felt completion limbs 37..=43 (permsHash[1..7]). Every OTHER named limb
     // (cells_root, balance/nonce/fields, cap_root, nullifier/heap roots, lifecycle/epoch/height/disc,
     // vk, mode, fields-root) is identical, since only `permissions.send` changed.
     let pre_locked = compute_rotated_pre_limbs(&locked, &ctx);
@@ -1421,10 +1422,11 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
                 pre[i], pre_locked[i],
                 "authority-digest limb {i} (one of the faithful 8 felts) MUST move on a perms flip"
             );
-        } else if i == 33 {
+        } else if i == 33 || (37..=43).contains(&i) {
             assert_ne!(
                 pre[i], pre_locked[i],
-                "index 33 (perms-digest) MUST move on a perms flip"
+                "perms-digest limb {i} (limb-0 at 33 + the v10 faithful-8-felt perms completion \
+                 limbs 37..=43, carrying permsHash[1..7]) MUST move on a perms flip"
             );
         } else {
             assert_eq!(
