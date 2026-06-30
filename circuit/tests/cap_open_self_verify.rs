@@ -28,9 +28,9 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::columns::sel;
 use dregg_circuit::effect_vm::trace_rotated::{
-    CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, FACET_MASK_HI, RotatedBlockWitness,
-    SIGNATURE_AUTH_TAG, WRITE_MASK_LO, empty_caveat_manifest, generate_rotated_effect_vm_trace,
-    patch_attenuate_base_for_cap_open, widen_to_cap_open,
+    CAP_OPEN_AFTER_SPINE_SPAN, CAP_OPEN_BASE, CAP_OPEN_WIDTH, CapOpenWitness, FACET_MASK_HI,
+    RotatedBlockWitness, SIGNATURE_AUTH_TAG, WRITE_MASK_LO, empty_caveat_manifest,
+    generate_rotated_effect_vm_trace, patch_attenuate_base_for_cap_open, widen_to_cap_open,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
@@ -175,7 +175,15 @@ fn cap_open_witness() -> CapOpenWitness {
 #[test]
 fn cap_open_witness_and_appendix_are_genuine() {
     let desc = parse_vm_descriptor2(reg_json(CAP_OPEN_KEY)).expect("cap-open descriptor parses");
-    assert_eq!(desc.trace_width, CAP_OPEN_WIDTH, "cap-open width");
+    // attenuate is a cap-WRITE descriptor (`effCapOpenWriteV3`): the 329 read appendix PLUS the 143
+    // after-spine recompute that forces the faithful 8-felt cap-write (`*_forces_write8`). This
+    // structural test exercises the READ appendix at `[CAP_OPEN_BASE, +329)`; the after-spine sits past
+    // it (the full cap-write trace fill is the SDK-covered handoff `cap_open_attenuate_self_verifies`).
+    assert_eq!(
+        desc.trace_width,
+        CAP_OPEN_WIDTH + CAP_OPEN_AFTER_SPINE_SPAN,
+        "cap-open WRITE width = read appendix (CAP_OPEN_WIDTH) + after-spine"
+    );
     assert_eq!(
         desc.public_input_count, 46,
         "cap-open carries the rotated 46 PIs"
