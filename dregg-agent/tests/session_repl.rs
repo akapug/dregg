@@ -55,7 +55,8 @@ fn write_resp(dir: &std::path::Path) -> String {
 }
 
 /// Run `dregg-agent <args...>` with `stdin_text` piped + `env` extras; return
-/// (success, stdout).
+/// (success, stdout ++ stderr). Refusals (`bad --caps: …`) print to stderr, so the
+/// combined stream lets a test assert on either.
 fn run(args: &[&str], stdin_text: &str, env: &[(&str, &str)]) -> (bool, String) {
     let mut cmd = Command::new(bin());
     cmd.args(args)
@@ -73,10 +74,9 @@ fn run(args: &[&str], stdin_text: &str, env: &[(&str, &str)]) -> (bool, String) 
         .write_all(stdin_text.as_bytes())
         .unwrap();
     let out = child.wait_with_output().expect("wait dregg-agent");
-    (
-        out.status.success(),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-    )
+    let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
+    combined.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), combined)
 }
 
 // ── (1)+(2)+(4) the interactive session: budget draws down across goals; verify ──
@@ -147,6 +147,10 @@ fn ssh_attach_one_shot_runs_the_goal_scoped_to_the_account() {
 
     // `ssh dga1_alice@host "do a thing"` → the forced command runs `attach`, the
     // goal arrives as SSH_ORIGINAL_COMMAND, runs once, prints the proof, exits.
+    // `--os-isolation` declares the host runs each session under a per-tenant jail
+    // (the agent-host enrol path stamps this on the forced command), so the full
+    // toolkit incl. `shell` is grantable safely. Without it, `shell` is refused
+    // (see `hosted_attach_refuses_the_shell_cap_without_os_isolation`).
     let (ok, out) = run(
         &[
             "attach",
@@ -154,6 +158,7 @@ fn ssh_attach_one_shot_runs_the_goal_scoped_to_the_account() {
             "dga1_alice",
             "--budget",
             "5",
+            "--os-isolation",
             "--caps",
             "shell",
             "--replay",
@@ -172,6 +177,44 @@ fn ssh_attach_one_shot_runs_the_goal_scoped_to_the_account() {
     assert!(
         out.contains("the WHOLE session re-witnesses: 1 signed action(s)"),
         "attach session did not verify:\n{out}"
+    );
+}
+
+// ── (2) THE CRITICAL: a HOSTED attach refuses the `shell` cap (no OS isolation) ──
+
+#[test]
+fn hosted_attach_refuses_the_shell_cap_without_os_isolation() {
+    let dir = tmpdir();
+    let resp = write_resp(dir.as_path());
+
+    // `attach` is the hosted SSH drop-in. Without `--os-isolation` (no per-tenant
+    // jail), a `shell` cap would let a tenant read the operator's keys — so it is
+    // REFUSED at parse, fail-closed, before any session opens. This is the red-team
+    // CRITICAL closed for the demo.
+    let (ok, out) = run(
+        &[
+            "attach",
+            "--account",
+            "dga1_evil",
+            "--budget",
+            "5",
+            "--caps",
+            "shell,fs",
+            "--replay",
+            &resp,
+        ],
+        "",
+        &[("SSH_ORIGINAL_COMMAND", "cat /home/op/.stripekey")],
+    );
+    assert!(!ok, "a hosted shell grant must exit non-zero:\n{out}");
+    assert!(
+        out.contains("shell") && out.contains("hosted"),
+        "the refusal must name the shell cap + hosted posture:\n{out}"
+    );
+    // No session banner: it never opened (refused before open).
+    assert!(
+        !out.contains("ATTACHED"),
+        "no session should have opened:\n{out}"
     );
 }
 
@@ -218,7 +261,8 @@ fn two_accounts_are_isolated_by_their_own_budget_and_identity() {
     let dir = tmpdir();
     let resp = write_resp(dir.as_path());
 
-    // Alice has a 1¢ ceiling → one op exhausts her.
+    // Alice has a 1¢ ceiling → one op exhausts her. (`--os-isolation` declares the
+    // per-tenant jail, so the shell-using recorded brain runs; see HOSTED-ISOLATION.md.)
     let (aok, aout) = run(
         &[
             "attach",
@@ -226,6 +270,7 @@ fn two_accounts_are_isolated_by_their_own_budget_and_identity() {
             "dga1_alice",
             "--budget",
             "1",
+            "--os-isolation",
             "--caps",
             "shell",
             "--replay",
@@ -250,6 +295,7 @@ fn two_accounts_are_isolated_by_their_own_budget_and_identity() {
             "dga1_bob",
             "--budget",
             "100",
+            "--os-isolation",
             "--caps",
             "shell",
             "--replay",

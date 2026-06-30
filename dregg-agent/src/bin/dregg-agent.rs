@@ -70,9 +70,10 @@ fn usage() {
          \x20                 [--record resp.json | --replay resp.json] [--no-scale]\n\
          \x20 dregg-agent session [--account ID] [--budget N] [--caps a,b,…] [--workdir DIR]\n\
          \x20                     [--brain nemotron|hermes] [--model M] [--base URL]\n\
-         \x20                     [--replay resp.json] [--out session.json]\n\
+         \x20                     [--replay resp.json] [--out session.json] [--hosted]\n\
          \x20 dregg-agent attach  --account ID [--budget N] [--caps a,b,…] [--workdir DIR]\n\
-         \x20                     [--brain …] [--replay resp.json]   (the SSH forced-command target)\n\
+         \x20                     [--brain …] [--replay resp.json] [--os-isolation]\n\
+         \x20                     (the SSH forced-command target; HOSTED — no raw shell)\n\
          \x20 dregg-agent verify <run.json> [--tamper]\n\n\
          SESSION / ATTACH:\n\
          \x20 A persistent, budget-bounded, cap-gated agent session you DRIVE goal by\n\
@@ -89,7 +90,10 @@ fn usage() {
          CAPS (comma-separated): shell, fs, git:HOST, http:HOST, run_tests,\n\
          \x20                     provision:PROVIDER (Stripe Projects skill),\n\
          \x20                     pay:VENDOR (Stripe Link skill), spend (pay any vendor),\n\
-         \x20                     cell:/path  (each is a per-tool/per-resource grant)\n\n\
+         \x20                     cell:/path  (each is a per-tool/per-resource grant)\n\
+         \x20  `shell` is LOCAL-ONLY: a hosted session (attach, or session --hosted)\n\
+         \x20  refuses it — a raw shell can read the host's operator keys past the\n\
+         \x20  env-scrub. Restore it on a hosted box with per-tenant OS isolation.\n\n\
          The agent runs a real reason→act→observe loop on a live model; every tool\n\
          call is cap-gated + metered + receipted. verify re-witnesses run.json\n\
          offline; --tamper flips a line and it is caught (BadSignature)."
@@ -901,12 +905,12 @@ mod repl {
 
     use dregg_agent::agent::AgentBrain;
     use dregg_agent::brain::{OpenAICompatBrain, ProviderKey, RecordedOpenAICaller};
-    use dregg_agent::session::{CapBundle, Session, parse_caps};
+    use dregg_agent::session::{CapBundle, Confinement, Session, parse_caps_confined};
     use dregg_agent::toolkit::Toolkit;
     use dregg_agent::tools::OperatorTools;
     use serde_json::Value;
 
-    use super::{flag, rule};
+    use super::{flag, has, rule};
 
     /// `session` (local) vs `attach` (the SSH forced-command drop-in for one account).
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -915,9 +919,17 @@ mod repl {
         Attach,
     }
 
-    /// The default bundle for an interactive session: a real shell + workdir fs +
-    /// GitHub egress (a useful, bounded starter powerbox).
-    const DEFAULT_CAPS: &str = "shell,fs,http:api.github.com";
+    /// The default bundle for a LOCAL interactive session (the user's own box): a
+    /// real shell + workdir fs + GitHub egress (a useful, bounded starter powerbox).
+    const LOCAL_DEFAULT_CAPS: &str = "shell,fs,http:api.github.com";
+
+    /// The default bundle for a HOSTED session (`attach`, or `session --hosted`):
+    /// the **lexically-confined** tools only — NO raw `shell`. A hosted box also
+    /// holds the operator's keys, and a raw shell can read them (`cat
+    /// /home/op/.stripekey`) past the in-process env-scrub, so the hosted default is
+    /// fs (workdir-rooted) + per-host GitHub egress. `shell` returns on a hosted box
+    /// only behind per-tenant OS isolation (see DreggNet/docs/HOSTED-ISOLATION.md).
+    const HOSTED_DEFAULT_CAPS: &str = "fs,http:api.github.com";
 
     const STEER: &str = "Work step by step using ONE tool call per turn. Keep reasoning brief. Call finish \
          when the goal is met.";
@@ -975,7 +987,29 @@ mod repl {
         let budget: i64 = flag(args, "--budget")
             .and_then(|s| s.parse().ok())
             .unwrap_or(500);
-        let caps_str = flag(args, "--caps").unwrap_or(DEFAULT_CAPS).to_string();
+
+        // The confinement posture. `attach` is the hosted SSH/portal drop-in and is
+        // ALWAYS hosted (it runs on shared infra that holds the operator's keys);
+        // `session` is local by default but `--hosted`/`--untrusted` forces the
+        // hosted posture (no raw shell). `--os-isolation` asserts a per-tenant OS
+        // jail is present (a dedicated unprivileged user + namespace whose FS does
+        // not contain the operator keys — see HOSTED-ISOLATION.md), which restores
+        // the local posture (shell is safe again). `attach` honors `--os-isolation`
+        // too so the agent-host can re-grant shell once the jail is wired.
+        let os_isolation = has(args, "--os-isolation");
+        let forced_hosted =
+            mode == Mode::Attach || has(args, "--hosted") || has(args, "--untrusted");
+        let confinement = if forced_hosted && !os_isolation {
+            Confinement::Hosted
+        } else {
+            Confinement::Local
+        };
+        let default_caps = if confinement == Confinement::Hosted {
+            HOSTED_DEFAULT_CAPS
+        } else {
+            LOCAL_DEFAULT_CAPS
+        };
+        let caps_str = flag(args, "--caps").unwrap_or(default_caps).to_string();
         let step_cap: u64 = flag(args, "--step-cap")
             .and_then(|s| s.parse().ok())
             .unwrap_or(16);
@@ -997,7 +1031,13 @@ mod repl {
         let workdir = workdir.canonicalize().unwrap_or(workdir);
         let workdir_s = workdir.to_string_lossy().to_string();
 
-        let bundle = match parse_caps(&caps_str, "agent:session", budget, &workdir_s) {
+        let bundle = match parse_caps_confined(
+            &caps_str,
+            "agent:session",
+            budget,
+            &workdir_s,
+            confinement,
+        ) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("bad --caps: {e}");
@@ -1037,6 +1077,15 @@ mod repl {
         }
 
         banner(mode, &sess, &workdir_s, &brain_src);
+        match confinement {
+            Confinement::Hosted => println!(
+                "  CONFINE hosted — lexically-confined tools only (no raw shell; the host holds \
+                 operator keys). Restore shell with per-tenant OS isolation (--os-isolation)."
+            ),
+            Confinement::Local => println!(
+                "  CONFINE local — full toolkit incl. raw shell (this is your own machine)."
+            ),
+        }
 
         // ATTACH one-shot: `ssh acct@host "do the thing"` arrives as
         // SSH_ORIGINAL_COMMAND — run that single goal non-interactively and exit.
