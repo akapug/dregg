@@ -807,6 +807,48 @@ fn cross_cell_read_whole_image_tampered_value_refuses() {
     );
 }
 
+#[test]
+fn cross_cell_read_whole_image_smuggled_start_root_refuses() {
+    // The SMUGGLED-START tooth (latent vacuity B4): the descriptor's `PiBinding{First}` only
+    // forces the fold's first pre-root to EQUAL PI 0 — it does NOT force PI 0 to be the empty
+    // root. PI 0 is a verifier-side public input, so a prover could publish
+    // `[smuggled_root, published]` and start the fold from a NON-empty root holding cells the
+    // boundary never declared: every link would still be a genuine insert and both `PiBinding`s
+    // would pass, yet `published` would commit to the smuggled cells PLUS the declared ones —
+    // defeating the no-extra-cells guarantee. The verify wrapper pins PI 0 to the canonical
+    // empty root, so such a public-input vector is REFUSED before the STARK is even consulted.
+    let leaves = peer_with_fields(&[(1, 111), (3, 777), (5, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+    let proof = prove_whole_image_fold(&witness).expect("the honest fold proves");
+
+    // Honest PIs (empty-root start) accept.
+    verify_whole_image_fold(&proof, &witness.public_inputs)
+        .expect("the honest empty-root-start fold verifies");
+
+    // A NON-empty smuggled start root (e.g. a one-cell heap hiding an undeclared cell) in PI 0
+    // must be refused by the pin, independent of any proof.
+    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
+        addr: BabyBear::new(99),
+        value: BabyBear::new(42),
+    }]);
+    assert_ne!(
+        smuggled_start,
+        dregg_circuit::heap_root::empty_heap_root(),
+        "the smuggled start must be a genuinely non-empty root"
+    );
+    let smuggled_pis = vec![smuggled_start, published];
+    let refused = verify_whole_image_fold(&proof, &smuggled_pis);
+    assert!(
+        refused.is_err(),
+        "a non-empty (smuggled-cells) start root in PI 0 must be refused"
+    );
+    assert!(
+        refused.unwrap_err().contains("empty-heap root"),
+        "the refusal must be the empty-root pin, not an incidental STARK mismatch"
+    );
+}
+
 // ============================================================================
 // THE CROSS-TABLE WIRING — the fold chip bound to the universal boundary table.
 //
@@ -914,5 +956,39 @@ fn whole_image_fold_bound_boundary_value_mismatch_refuses() {
     assert!(
         refused,
         "a boundary cell value differing from the folded value must refuse (the Blum tooth bites)"
+    );
+}
+
+#[test]
+fn whole_image_fold_bound_smuggled_start_root_refuses() {
+    // The smuggled-start tooth (B4) on the BOUND wrapper: same as the unbound case — the bound
+    // verify wrapper pins PI 0 to the canonical empty root, so a non-empty start root holding
+    // undeclared cells is refused before the STARK is consulted.
+    let leaves = peer_with_fields(&[(1, 111), (3, 777), (5, 555)]);
+    let published = whole_boundary_fold(&leaves);
+    let witness = build_whole_image_fold(&leaves, published).expect("declared view folds");
+    let boundary =
+        boundary_witness_for_fold(&leaves, FIELD_DOMAIN).expect("boundary witness builds");
+    let proof = prove_whole_image_fold_bound(&witness, &boundary, FIELD_DOMAIN)
+        .expect("the honest bound fold proves");
+
+    // Honest empty-root start accepts.
+    verify_whole_image_fold_bound(&proof, &witness.public_inputs, FIELD_DOMAIN)
+        .expect("the honest empty-root-start bound fold verifies");
+
+    // A non-empty smuggled start root in PI 0 is refused by the pin.
+    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
+        addr: BabyBear::new(99),
+        value: BabyBear::new(42),
+    }]);
+    let smuggled_pis = vec![smuggled_start, published];
+    let refused = verify_whole_image_fold_bound(&proof, &smuggled_pis, FIELD_DOMAIN);
+    assert!(
+        refused.is_err(),
+        "a non-empty (smuggled-cells) start root in PI 0 must be refused (bound wrapper)"
+    );
+    assert!(
+        refused.unwrap_err().contains("empty-heap root"),
+        "the refusal must be the empty-root pin, not an incidental STARK mismatch"
     );
 }

@@ -305,11 +305,42 @@ pub fn prove_whole_image_fold(
     )
 }
 
+/// Pin PI 0 (`WIF_PI_EMPTY_ROOT`) to the canonical empty-heap root.
+///
+/// The descriptor's `PiBinding{First}` only forces the fold's first pre-root to EQUAL
+/// PI 0 — it does NOT force PI 0 itself to be the empty root. PI 0 is a verifier-side
+/// public input, so without this check a prover could supply `[smuggled_root, published]`
+/// and start the fold from a NON-empty root holding cells the boundary never declared:
+/// every fold link would still be a genuine insert and both `PiBinding`s would pass, yet
+/// the published root would commit to the smuggled cells PLUS the declared ones. The
+/// no-extra-cells (`committed ⊆ declared`) tooth bites only when the fold provably starts
+/// from nothing, so the verifier MUST pin PI 0 to the constant it knows.
+fn assert_empty_root_pin(public_inputs: &[BabyBear]) -> Result<(), String> {
+    let pi0 = *public_inputs.get(WIF_PI_EMPTY_ROOT).ok_or_else(|| {
+        format!(
+            "whole-image fold: missing PI {WIF_PI_EMPTY_ROOT} (empty-root pin); \
+             got {} public inputs",
+            public_inputs.len()
+        )
+    })?;
+    if pi0 != empty_heap_root() {
+        return Err(format!(
+            "whole-image fold: PI {WIF_PI_EMPTY_ROOT} is not the canonical empty-heap root \
+             — the fold must START from the empty root (no smuggled cells); refusing"
+        ));
+    }
+    Ok(())
+}
+
 /// Verify a whole-image fold proof against the published-root public input.
+///
+/// Pins PI 0 to the canonical empty-heap root ([`assert_empty_root_pin`]) BEFORE the STARK
+/// check, so the fold provably starts from nothing and the no-extra-cells tooth bites.
 pub fn verify_whole_image_fold(
     proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
     public_inputs: &[BabyBear],
 ) -> Result<(), String> {
+    assert_empty_root_pin(public_inputs)?;
     let desc = whole_image_fold_descriptor();
     crate::descriptor_ir2::verify_vm_descriptor2(&desc, proof, public_inputs)
 }
@@ -428,11 +459,16 @@ pub fn prove_whole_image_fold_bound(
 }
 
 /// Verify a bound whole-image fold proof against the published-root public input.
+///
+/// Pins PI 0 to the canonical empty-heap root ([`assert_empty_root_pin`]) BEFORE the STARK
+/// check (same no-smuggled-start guarantee as [`verify_whole_image_fold`]), so the bound
+/// fold provably enumerates EXACTLY the declared boundary cells with no extras.
 pub fn verify_whole_image_fold_bound(
     proof: &crate::descriptor_ir2::Ir2BatchProof<crate::descriptor_ir2::DreggStarkConfig>,
     public_inputs: &[BabyBear],
     domain: u32,
 ) -> Result<(), String> {
+    assert_empty_root_pin(public_inputs)?;
     let desc = whole_image_fold_bound_descriptor(domain);
     crate::descriptor_ir2::verify_vm_descriptor2(&desc, proof, public_inputs)
 }
