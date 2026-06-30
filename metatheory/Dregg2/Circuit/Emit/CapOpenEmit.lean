@@ -1611,4 +1611,104 @@ theorem capOpen_writesTo8 (S8 : Cap8Scheme) (sponge : List ℤ → ℤ)
 #assert_axioms capOpen_recompose8
 #assert_axioms capOpen_writesTo8
 
+/-! ## §12 — STEP A WIRING: the AFTER-SPINE appendix + the trace-FORCED `_forces_write8`.
+
+The §11 keystone (`capOpen_writesTo8`) reduces the faithful 8-felt cap-write to TWO `MembershipCore`
+witnesses sharing a path. §12 EMITS the after-spine (the post-write narrowed leaf's membership against the
+committed AFTER cap-root block) as a CONJUNCTION appended PAST the 329-col cap-open appendix, and derives its
+`MembershipCore` from `Satisfied2` (cloning `effCapOpenV3_satisfiedEff`'s `core` block) — so `writesTo8` is
+TRACE-FORCED from `Satisfied2`, NEVER laundered through `henc`'s `SpineCommits`.
+
+Layout (`AFTER_SPINE_BASE w = w + CAP_OPEN_SPAN`, i.e. the first column past the cap-open appendix):
+7 after-leaf cols `+0..6`, 8 after-leaf-digest cols `+7..14`, then `DEPTH` 8-felt node groups
+`+15+8·lvl..+7`. The after-spine `sib`/`dir` are SHARED with the cap-open read (`capOpenCols w`), so the two
+paths COINCIDE by construction. The after `capRoot` group IS the committed AFTER cap-root block columns
+(`capRootGroupCol (EFFECT_VM_WIDTH+91)`), so `groupVal env afterSpineCols.capRoot = afterCapRootCols env` by
+`rfl`. -/
+
+/-- An equality gate: `var a - var b = 0` (pins column `a` to column `b`). -/
+def eqGate (a b : Nat) : EmittedExpr :=
+  .add (.var a) (.mul (.const (-1)) (.var b))
+
+theorem eqGate_eval (a b : Nat) (env : VmRowEnv) :
+    (eqGate a b).eval env.loc = 0 ↔ env.loc a = env.loc b := by
+  simp only [eqGate, EmittedExpr.eval]; constructor <;> intro h <;> linarith
+
+/-- The after-spine appendix width: 7 after-leaf + 8 after-leaf-digest + `DEPTH·8` node = `15 + 8·DEPTH`. -/
+def AFTER_SPINE_SPAN : Nat := 15 + 8 * DEPTH
+
+/-- The first column of the after-spine appendix (past the 329-col cap-open appendix). -/
+def AFTER_SPINE_BASE (w : Nat) : Nat := w + CAP_OPEN_SPAN
+
+/-- The after-spine column layout. `sib`/`dir` SHARED with the cap-open read (`capOpenCols w`) so the path
+coincides; `capRoot` IS the committed AFTER cap-root block. The unused `src`/`effBit`/`bit` cols are parked
+past the node block (the `MembershipCore` reads only leaf/leafDigest/sib/dir/node/capRoot). -/
+def afterSpineCols (w : Nat) : CapOpenCols :=
+  { leaf       := fun i => AFTER_SPINE_BASE w + i.val
+  , leafDigest := fun i => AFTER_SPINE_BASE w + 7 + i.val
+  , sib        := (capOpenCols w).sib
+  , dir        := (capOpenCols w).dir
+  , node       := fun lvl i => AFTER_SPINE_BASE w + 15 + 8 * lvl + i.val
+  , capRoot    := fun i => Dregg2.Circuit.Emit.EffectVmEmitRotationV3.capRootGroupCol
+                             (EFFECT_VM_WIDTH + 91) i
+  , src        := AFTER_SPINE_BASE w + 15 + 8 * DEPTH
+  , effBit     := AFTER_SPINE_BASE w + 16 + 8 * DEPTH
+  , bit        := fun i => AFTER_SPINE_BASE w + 17 + 8 * DEPTH + i }
+
+/-- `afterSpineCols`'s `dir` is the read's `dir` (defeq) — so the read's `dirBool` discharges the after
+spine's too (no new dir gate needed). -/
+theorem afterSpineCols_dir (w : Nat) : (afterSpineCols w).dir = (capOpenCols w).dir := rfl
+
+/-- The after `capRoot` group is the committed AFTER cap-root block — `groupVal` over it IS
+`afterCapRootCols`. -/
+theorem afterSpine_capRoot_after (w : Nat) (env : VmRowEnv) :
+    groupVal env (afterSpineCols w).capRoot
+      = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.afterCapRootCols env := rfl
+
+/-- The 7 narrowed-leaf weld gates: the after leaf is the IN-PLACE narrow of the read leaf. `slot_hash`
+(leaf 0) = the read's key; `mask_lo` (leaf 3) = `param[KEEP_MASK]`; the other 5 fields = the held (read)
+leaf. -/
+def afterLeafWelds (w : Nat) : List VmConstraint2 :=
+  [ .base (.gate (eqGate ((afterSpineCols w).leaf 0) ((capOpenCols w).leaf 0)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 1) ((capOpenCols w).leaf 1)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 2) ((capOpenCols w).leaf 2)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 3)
+      (Dregg2.Circuit.Emit.EffectVmEmit.prmCol Dregg2.Circuit.Emit.EffectVmEmitV2.KEEP_MASK)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 4) ((capOpenCols w).leaf 4)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 5) ((capOpenCols w).leaf 5)))
+  , .base (.gate (eqGate ((afterSpineCols w).leaf 6) ((capOpenCols w).leaf 6))) ]
+
+/-- The 8 BEFORE cap-root weld gates: the cap-open read's appendix `capRoot` group equals the committed
+BEFORE cap-root block — so `groupVal env (capOpenCols w).capRoot = beforeCapRootCols env`. -/
+def beforeRootWelds (w : Nat) : List VmConstraint2 :=
+  (List.finRange 8).map (fun i =>
+    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i)
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.capRootGroupCol EFFECT_VM_WIDTH i))))
+
+/-- The key-bind gate: the read leaf's `slot_hash` (leaf 0) equals `param[CAP_KEY]` — so the forced write
+is keyed at the committed `CAP_KEY` column. -/
+def keyBindGate (w : Nat) : EmittedExpr :=
+  eqGate ((capOpenCols w).leaf 0)
+    (Dregg2.Circuit.Emit.EffectVmEmit.prmCol Dregg2.Circuit.Emit.EffectVmEmitV2.CAP_KEY)
+
+/-- The after-spine constraint list (appended past the cap-open appendix): the after leaf absorb, the 16
+after-node absorbs, the 8 after root-pins, the 7 narrowed-leaf welds, the 8 before cap-root welds, and the
+key bind. -/
+def afterSpineConstraints (w : Nat) : List VmConstraint2 :=
+  .lookup (leafLookup (afterSpineCols w))
+  :: ((List.range DEPTH).map (fun lvl => VmConstraint2.lookup (nodeLookup (afterSpineCols w) lvl)))
+  ++ ((List.finRange 8).map (fun i => VmConstraint2.base (.gate (rootPinGate (afterSpineCols w) i))))
+  ++ afterLeafWelds w
+  ++ beforeRootWelds w
+  ++ [VmConstraint2.base (.gate (keyBindGate w))]
+
+/-- **`effCapOpenWriteV3 base name n`** — the cap-open membership descriptor (`effCapOpenV3`) WIDENED by the
+after-spine appendix: the deployed write descriptor a light client checks. Its `Satisfied2` FORCES the
+faithful 8-felt cap-write (`*_forces_write8`). -/
+def effCapOpenWriteV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
+  { (effCapOpenV3 base name n) with
+    name        := name
+    traceWidth  := (effCapOpenV3 base name n).traceWidth + AFTER_SPINE_SPAN
+    constraints := (effCapOpenV3 base name n).constraints ++ afterSpineConstraints base.traceWidth }
+
 end Dregg2.Circuit.Emit.CapOpenEmit
