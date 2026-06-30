@@ -426,4 +426,108 @@ mod tests {
             );
         }
     }
+
+    /// THE WEDGE REGRESSION TEST — the verified Lean tau-ordering completes FAST on an n=5
+    /// cross-linked multi-round DAG (the shape that wedged the node). Before the
+    /// `BlocklaceFinality.tauOrderFast` memoization (the Lean parallel of the Rust `PastCache`), the
+    /// Lean `dregg_tau_order` export RE-TRAVERSED each block's causal past an exponential number of
+    /// times across the nested `ratifies`/`isSuperRatified`/`findAllFinalLeaders` loops — on a
+    /// cross-linked DAG it blew up and (run inline on a tokio worker) starved the runtime. With the
+    /// causal-past computed ONCE, the verified order is computed in milliseconds and AGREES with the
+    /// memoized Rust `ordering::tau` on the `(creator, seq)` set. This test builds a 5-node /
+    /// 6-round (30-block) fully cross-linked lace, runs the verified Lean export, and asserts it
+    /// completes well under a generous wall-clock bound — a former-exponential computation now linear-ish.
+    ///
+    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build).
+    #[test]
+    fn lean_tau_order_fast_on_cross_linked_n5_dag() {
+        if !dregg_lean_ffi::tau_order_available() {
+            eprintln!("SKIP: Lean raw tau-order export not linked (tau_order_available()==false)");
+            return;
+        }
+
+        // 5 nodes, 6 fully cross-linked rounds: each round's block references ALL of the previous
+        // round (the dense cross-linking that explodes an un-memoized causal-past traversal).
+        let keys: Vec<SigningKey> = (1u8..=5).map(key).collect();
+        let participants: Vec<[u8; 32]> =
+            keys.iter().map(|k| k.verifying_key().to_bytes()).collect();
+        let mut lace = Blocklace::new(keys[0].clone(), 3);
+
+        let mut r1_ids = Vec::new();
+        for (i, k) in keys.iter().enumerate() {
+            let b = Block::new(k, 0, Payload::Turn(vec![i as u8]), vec![]);
+            r1_ids.push(b.id());
+            lace.receive_block(b).expect("genesis insert");
+        }
+        let mut round_prev: Vec<BlockId> = r1_ids;
+        for round in 1u64..=5 {
+            let mut this_round = Vec::new();
+            for (i, k) in keys.iter().enumerate() {
+                let b = Block::new(
+                    k,
+                    round,
+                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
+                    round_prev.clone(),
+                );
+                this_round.push(b.id());
+                lace.receive_block(b).expect("round insert");
+            }
+            round_prev = this_round;
+        }
+
+        // Run the VERIFIED Lean tau-order (the live `dregg_tau_order` FFI = `tauOrderFast`), timed.
+        let t0 = std::time::Instant::now();
+        let order = VerifiedFinality::compute_order(&lace, &participants)
+            .expect("verified raw-order gate ran (archive present + wire non-ERR)");
+        let elapsed = t0.elapsed();
+
+        // The blow-up is gone: a former-exponential traversal now finishes near-instantly. The bound is
+        // deliberately generous (the memoized path is milliseconds; the un-memoized path on this dense
+        // 30-block DAG did not finish in any reasonable time).
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "verified Lean tau-order must complete fast on the n=5 cross-linked DAG (memoized \
+             causal-past); took {elapsed:?} — the wedge is back"
+        );
+
+        // Two full waves (wavelength 3, rounds 1..6) finalize, so the order is non-empty.
+        assert!(
+            !order.is_empty(),
+            "the n=5 / 6-round lace must finalize at least wave 1"
+        );
+
+        // DIFFERENTIAL: the verified Lean order AGREES with the memoized Rust `ordering::tau` on the
+        // (creator, seq) set — the same path the live node cross-checks.
+        let mut ordering_lace = dregg_blocklace::Blocklace::new();
+        let mut fin_to_ord: HashMap<BlockId, dregg_blocklace::BlockId> = HashMap::new();
+        let mut blocks: Vec<_> = lace.iter().collect();
+        blocks.sort_by(|(_, a), (_, b)| a.seq.cmp(&b.seq).then_with(|| a.creator.cmp(&b.creator)));
+        let mut ord_to_cs: HashMap<dregg_blocklace::BlockId, ([u8; 32], u64)> = HashMap::new();
+        for (fin_id, b) in &blocks {
+            let preds: Vec<dregg_blocklace::BlockId> = b
+                .predecessors
+                .iter()
+                .filter_map(|p| fin_to_ord.get(p).copied())
+                .collect();
+            let ob = dregg_blocklace::Block::new(b.creator, b.seq, preds, vec![]);
+            let oid = ob.id();
+            ordering_lace.insert_unverified(ob).ok();
+            fin_to_ord.insert(**fin_id, oid);
+            ord_to_cs.insert(oid, (b.creator, b.seq));
+        }
+        let rust_order = dregg_blocklace::ordering::tau(&ordering_lace, &participants);
+        let rust_cs: std::collections::HashSet<([u8; 32], u64)> = rust_order
+            .iter()
+            .filter_map(|oid| ord_to_cs.get(oid).copied())
+            .collect();
+        let lean_cs: std::collections::HashSet<([u8; 32], u64)> = order
+            .iter()
+            .filter_map(|id| lace.get(id).map(|b| (b.creator, b.seq)))
+            .collect();
+        assert_eq!(
+            lean_cs, rust_cs,
+            "verified Lean tau-order and memoized Rust tau must agree on the (creator, seq) set on \
+             the n=5 cross-linked DAG"
+        );
+    }
 }
