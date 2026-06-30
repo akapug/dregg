@@ -130,12 +130,19 @@ fn hex32(b: [u8; 32]) -> String {
 /// around it is the `invoke` rail this toolkit plugs into.
 pub type ToolFn = Box<dyn Fn(&BTreeMap<String, String>) -> ToolOutcome + Send + Sync>;
 
+/// A **priced** tool's handler: it receives the spend's dollar amount (USD-cents,
+/// already drawn from the budget cell before this runs) and the agent's committed
+/// cells, and returns its verdict. The seam a budget-gated, variable-amount spend
+/// (e.g. an outbound Stripe payout) plugs into.
+pub type PricedToolFn = Box<dyn Fn(i64, &BTreeMap<String, String>) -> ToolOutcome + Send + Sync>;
+
 /// The concrete toolkit: a registry of named tools the `invoke` rail dispatches
 /// to. Build it with the `with_*` constructors, then run an agent with
 /// [`AgentCloud::run_with_toolkit`](crate::agent::AgentCloud::run_with_toolkit).
 #[derive(Default)]
 pub struct Toolkit {
     tools: BTreeMap<String, ToolFn>,
+    priced_tools: BTreeMap<String, PricedToolFn>,
 }
 
 impl Toolkit {
@@ -143,7 +150,44 @@ impl Toolkit {
     pub fn new() -> Toolkit {
         Toolkit {
             tools: BTreeMap::new(),
+            priced_tools: BTreeMap::new(),
         }
+    }
+
+    /// Register a **priced** tool under `name` — a tool reached by a
+    /// [`Spend`](crate::agent::AgentAction::Spend) whose handler receives the spend
+    /// amount (USD-cents) already drawn from the budget. The budget gate has
+    /// already refused any over-ceiling amount *before* this runs, so the handler
+    /// only ever sees a funded amount (no money moves on a refusal).
+    pub fn with_priced_tool(
+        mut self,
+        name: impl Into<String>,
+        f: impl Fn(i64, &BTreeMap<String, String>) -> ToolOutcome + Send + Sync + 'static,
+    ) -> Toolkit {
+        self.priced_tools.insert(name.into(), Box::new(f));
+        self
+    }
+
+    /// Wire a **budget-gated outbound Stripe spend** tool (`stripe_pay`): a priced
+    /// tool whose dollar amount is drawn from the budget cell. `payout` performs
+    /// the payout for `amount_cents` and returns `Ok(payout_id)` / `Err(reason)`
+    /// (the live path shells the Stripe Link CLI / a payout API; the demo injects a
+    /// deterministic recorded stand-in). The amount itself is bound into the
+    /// receipt (`cost`) by the run loop, so a forged "I paid $X" breaks the
+    /// signature; this tool records the payout id + amount in the verdict summary.
+    pub fn with_stripe_pay(
+        self,
+        name: impl Into<String>,
+        payout: impl Fn(i64) -> Result<String, String> + Send + Sync + 'static,
+    ) -> Toolkit {
+        self.with_priced_tool(name, move |amount_cents, _cells| {
+            match payout(amount_cents) {
+                Ok(payout_id) => ToolOutcome::pass(format!(
+                    "stripe payout of {amount_cents}c submitted (payout {payout_id})"
+                )),
+                Err(reason) => ToolOutcome::fail(format!("stripe payout FAILED: {reason}")),
+            }
+        })
     }
 
     /// Register an arbitrary tool under `name`. The lower-level seam every named
@@ -158,15 +202,19 @@ impl Toolkit {
         self
     }
 
-    /// The registered tool names (the services an agent's bundle should grant to
-    /// reach them).
+    /// The registered tool names (flat + priced) — the services an agent's bundle
+    /// should grant to reach them.
     pub fn names(&self) -> Vec<String> {
-        self.tools.keys().cloned().collect()
+        self.tools
+            .keys()
+            .chain(self.priced_tools.keys())
+            .cloned()
+            .collect()
     }
 
-    /// `true` iff `name` is registered.
+    /// `true` iff `name` is registered (as a flat or a priced tool).
     pub fn has(&self, name: &str) -> bool {
-        self.tools.contains_key(name)
+        self.tools.contains_key(name) || self.priced_tools.contains_key(name)
     }
 
     // ── check_health / monitor (std-only) ────────────────────────────────────
@@ -431,7 +479,19 @@ where
 }
 
 impl ToolKit for Toolkit {
-    fn invoke(&self, service: &str, cells: &BTreeMap<String, String>) -> ToolOutcome {
+    fn invoke(
+        &self,
+        service: &str,
+        amount_cents: Option<i64>,
+        cells: &BTreeMap<String, String>,
+    ) -> ToolOutcome {
+        // A priced spend dispatches to the priced registry (the amount in hand);
+        // a flat invoke dispatches to the flat registry.
+        if let Some(amount) = amount_cents {
+            if let Some(f) = self.priced_tools.get(service) {
+                return f(amount, cells);
+            }
+        }
         match self.tools.get(service) {
             Some(f) => f(cells),
             // The rail already cap-gated the call, so reaching here means the
@@ -720,14 +780,14 @@ mod tests {
         // GOOD: a tool fetching the intact chain passes.
         let good = source.receipts.clone();
         let good_tk = Toolkit::new().with_verify_receipts("monitor", move || good.clone());
-        let oc = good_tk.invoke("monitor", &BTreeMap::new());
+        let oc = good_tk.invoke("monitor", None, &BTreeMap::new());
         assert!(oc.ok, "intact chain re-witnesses: {}", oc.summary);
 
         // BAD: a tool fetching a spliced chain fails.
         let mut bad = source.receipts.clone();
         bad.remove(1);
         let bad_tk = Toolkit::new().with_verify_receipts("monitor", move || bad.clone());
-        let oc = bad_tk.invoke("monitor", &BTreeMap::new());
+        let oc = bad_tk.invoke("monitor", None, &BTreeMap::new());
         assert!(!oc.ok, "a spliced chain is caught");
         assert!(
             oc.summary.contains("INVALID"),

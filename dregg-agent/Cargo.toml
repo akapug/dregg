@@ -34,6 +34,13 @@ serde_json = { workspace = true }
 blake3 = "1"
 # The receipt attestation + the credential caveat-chain signatures.
 ed25519-dalek = { version = "2.1", features = ["std", "rand_core"] }
+# The genuine Stripe webhook signature scheme: HMAC-SHA256 over `{t}.{body}`
+# (`stripe.rs`, the earn path). Stripe signs with SHA-256, so a faithful verify
+# needs it — same crypto tier as blake3/ed25519, no cloud/HTTP dependency.
+hmac = "0.12"
+sha2 = "0.10"
+# Constant-time signature comparison (the webhook verify must not leak via timing).
+subtle = "2.6"
 # The `dga1_`/`dgd1_` credential wire form (base64url).
 base64 = { workspace = true }
 # OS randomness for key/nonce generation (the credential root key, mint nonces).

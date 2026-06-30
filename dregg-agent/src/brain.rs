@@ -536,7 +536,15 @@ impl<C: OpenAICompatCaller> OpenAICompatBrain<C> {
     /// The key is not here; the body is safe to witness.
     fn tool_specs(&self) -> Value {
         let mut tools = Vec::new();
-        if !self.services.is_empty() {
+        // The flat `invoke` services exclude `stripe_pay`, which is advertised as
+        // its own priced tool (a variable dollar amount) below.
+        let invoke_services: Vec<String> = self
+            .services
+            .iter()
+            .filter(|s| s.as_str() != "stripe_pay")
+            .cloned()
+            .collect();
+        if !invoke_services.is_empty() {
             tools.push(json!({
                 "type": "function",
                 "function": {
@@ -546,9 +554,31 @@ impl<C: OpenAICompatCaller> OpenAICompatBrain<C> {
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "service": { "type": "string", "enum": self.services }
+                            "service": { "type": "string", "enum": invoke_services }
                         },
                         "required": ["service"]
+                    }
+                }
+            }));
+        }
+        // The budget-gated, variable-amount spend rail (an outbound Stripe payout):
+        // its dollar `amount_cents` is drawn from the budget cell, so an
+        // over-ceiling spend is refused in-band before any money moves.
+        if self.services.iter().any(|s| s == "stripe_pay") {
+            tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": "stripe_pay",
+                    "description": "Pay a vendor a variable dollar amount via Stripe. \
+                                    The amount is drawn from your budget cell; a spend \
+                                    over your remaining budget is refused before it runs.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vendor": { "type": "string" },
+                            "amount_cents": { "type": "integer" }
+                        },
+                        "required": ["vendor", "amount_cents"]
                     }
                 }
             }));
@@ -745,8 +775,19 @@ fn parse_arguments(arguments: Option<&Value>) -> Value {
 /// `finish` and any unrecognized tool (the turn ends rather than fabricating).
 fn map_tool_call(name: &str, args: &Value) -> Option<AgentAction> {
     let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+    // An amount can arrive as a JSON number or a numeric string.
+    let n = |k: &str| {
+        args.get(k).and_then(|v| {
+            v.as_i64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+        })
+    };
     match name {
         "invoke" => s("service").map(|service| AgentAction::Invoke { service }),
+        "stripe_pay" => n("amount_cents").map(|amount_cents| AgentAction::Spend {
+            service: "stripe_pay".to_string(),
+            amount_cents,
+        }),
         "cell_write" => match (s("path"), s("value")) {
             (Some(path), Some(value)) => Some(AgentAction::CellWrite { path, value }),
             _ => None,
