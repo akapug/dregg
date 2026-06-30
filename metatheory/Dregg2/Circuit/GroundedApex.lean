@@ -44,6 +44,7 @@ import Dregg2.Circuit.BindingAirSound
 import Dregg2.Circuit.AggAirSound
 import Dregg2.Circuit.WitnessRealizing
 import Dregg2.Circuit.DescriptorRefinesComplete
+import Dregg2.Circuit.RecursiveSoundFromNodes
 
 namespace Dregg2.Circuit.GroundedApex
 
@@ -60,6 +61,9 @@ open Dregg2.Circuit.WitnessRealizing
   (LeafRefinement engineSound_of_refinements lightclient_unfoolable_witness_realized
    emptyState emptyKernel_wf genuinePi)
 open Dregg2.Circuit.DescriptorRefinesComplete (DescriptorRefinesComplete descriptorRefines_complete)
+open Dregg2.Circuit.RecursiveSoundFromNodes
+  (PTree NodeCarrier rootP leavesP recursive_sound_from_nodes engineSound_recursive_derived
+   honestTree honest_node_carrier)
 open Dregg2.Circuit.CircuitSoundnessAssembled (Rfix kstepAll)
 open Dregg2.Circuit.ClosureSurface (S_live)
 open Dregg2.Circuit.ClosureLog (StateDecodeLog)
@@ -131,6 +135,37 @@ theorem engineSound_grounded
         binding_air_discharges_binding_sound CH RH cmb compress compressN hash rows pub steps g hsat hrep
       exact ⟨hbound, hgen.trans hg, hfin.trans hf⟩)
 
+/-! ## §2b — `engineSound_grounded_v2`: ALL THREE legs derived — `recursive_sound` off the per-node fold.
+
+`engineSound_grounded` (§2) still carries the FRI-composition leg `hrec` (`= recursive_sound`). This v2
+DROPS `hrec` and instead consumes the proof-carrying aggregation tree `t` + the per-node `NodeCarrier`
+(the localized `AggAirSound.FriExtract` floor) + the wrapping facts; `RecursiveSoundFromNodes.recursive_sound_from_nodes`
+runs the WHOLE-TREE fold (`all_leaves_verify`) over them to PRODUCE the exact `hrec` shape, which it then
+hands to `engineSound_grounded`. So the engine is assembled with NO carried `EngineSound` leg: `leaf_sound`
+is derived from the refinement family, `binding_sound` from the binding-AIR extraction, and `recursive_sound`
+from the per-node carrier fold. The remaining floor is the PER-NODE carrier `hc` (the standard in-circuit
+recursion-verifier soundness, localized to one node + its two children — strictly smaller than the carried
+whole-tree `hrec`) + the realizer data, NO whole-tree FRI-composition hypothesis. -/
+theorem engineSound_grounded_v2
+    (Proof : Type) (verify : Proof → Bool) (hash : List ℤ → ℤ) (S : CommitSurface)
+    (hCR : Poseidon2SpongeCR hash)
+    (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
+    (cmb compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+    (H : ℤ → ℤ → ℤ)
+    (agg : Aggregate Proof) (g : RecChainedState) (steps : List ChainStep)
+    (hleaves : List.Forall₂ (fun p s => Nonempty (LeafRefinement Proof verify hash S p s))
+      agg.leafProofs steps)
+    (hbindExtract : BindingExtract Proof verify hash CH RH cmb compress compressN agg steps)
+    (t : PTree Proof)
+    (hc : NodeCarrier verify H t)
+    (htroot : rootP t = agg.root)
+    (hwrap : ∀ p ∈ agg.leafProofs, p ∈ leavesP t)
+    (hbind : agg.bindingProof ∈ leavesP t) :
+    EngineSound Proof verify CH RH cmb compress compressN agg g steps :=
+  engineSound_grounded Proof verify hash S hCR CH RH cmb compress compressN agg g steps
+    hleaves hbindExtract
+    (recursive_sound_from_nodes verify H agg t hc htroot hwrap hbind)
+
 /-! ## §3 — `light_client_verifies_whole_history_grounded`: the whole-history apex on the grounded engine. -/
 
 /-- **`light_client_verifies_whole_history_grounded` (THE GROUNDED WHOLE-HISTORY APEX).** Same conclusion
@@ -156,6 +191,34 @@ theorem light_client_verifies_whole_history_grounded
   light_client_verifies_whole_history Proof verify CH RH cmb compress compressN agg g steps
     (engineSound_grounded Proof verify hash S hCR CH RH cmb compress compressN agg g steps
       hleaves hbindExtract hrec)
+    hroot
+
+/-- **`light_client_verifies_whole_history_grounded_v2` (THE GROUNDED WHOLE-HISTORY APEX — NO CARRIED FRI).**
+Same conclusion as `light_client_verifies_whole_history_grounded`, but the whole-tree FRI hypothesis `hrec`
+is GONE: in its place the per-node `NodeCarrier hc` over the proof-carrying tree `t` (+ the wrapping facts),
+from which `engineSound_grounded_v2` DERIVES `recursive_sound` by the whole-tree fold. The deployed light
+client now rests on `{the per-node FriExtract floor `hc`, Poseidon CR `hCR`}` + realizer data (`hleaves`,
+`hbindExtract`) — every `EngineSound` leg DERIVED, no carried whole-tree recursion hypothesis. -/
+theorem light_client_verifies_whole_history_grounded_v2
+    (Proof : Type) (verify : Proof → Bool) (hash : List ℤ → ℤ) (S : CommitSurface)
+    (hCR : Poseidon2SpongeCR hash)
+    (CH : CellId → Value → ℤ) (RH : RecordKernelState → ℤ)
+    (cmb compress : ℤ → ℤ → ℤ) (compressN : List ℤ → ℤ)
+    (H : ℤ → ℤ → ℤ)
+    (agg : Aggregate Proof) (g : RecChainedState) (steps : List ChainStep)
+    (hleaves : List.Forall₂ (fun p s => Nonempty (LeafRefinement Proof verify hash S p s))
+      agg.leafProofs steps)
+    (hbindExtract : BindingExtract Proof verify hash CH RH cmb compress compressN agg steps)
+    (t : PTree Proof)
+    (hc : NodeCarrier verify H t)
+    (htroot : rootP t = agg.root)
+    (hwrap : ∀ p ∈ agg.leafProofs, p ∈ leavesP t)
+    (hbind : agg.bindingProof ∈ leavesP t)
+    (hroot : verify agg.root = true) :
+    AggregateAttests Proof CH RH cmb compress compressN agg g steps :=
+  light_client_verifies_whole_history Proof verify CH RH cmb compress compressN agg g steps
+    (engineSound_grounded_v2 Proof verify hash S hCR CH RH cmb compress compressN H agg g steps
+      hleaves hbindExtract t hc htroot hwrap hbind)
     hroot
 
 /-! ## §4 — `lightclient_unfoolable_grounded`: the single-transition apex with `WitnessDecodes` REALIZED. -/
@@ -291,6 +354,40 @@ theorem grounded_light_client_fires
   have h := hatt.every_turn honestStep (by simp [realSteps])
   simpa [honestStep] using h
 
+/-- **`grounded_light_client_fires_v2` (THE NO-CARRIED-FRI WHOLE-HISTORY APEX FIRES).** As
+`grounded_light_client_fires`, but through `light_client_verifies_whole_history_grounded_v2`: the carried
+`hrec` is replaced by the concrete honest proof-carrying tree `honestTree` and its per-node carrier
+`honest_node_carrier` (the `[1→2] ⋆ [2→3]` honest combine of `RecursiveSoundFromNodes`). So the whole-tree
+recursion fold is genuinely LOAD-BEARING in the firing — `recursive_sound` is DERIVED, not supplied — and
+the apex still concludes the TRUE executor fact `recCexec teethGenesis honestTurn = some honestStep.post`.
+The only non-concrete input remains the per-leaf `Forall₂ LeafRefinement` (the audited STARK floor). -/
+theorem grounded_light_client_fires_v2
+    (hash : List ℤ → ℤ) (S : CommitSurface) (hCR : Poseidon2SpongeCR hash)
+    (hleaves : List.Forall₂ (fun p s => Nonempty (LeafRefinement RealProof acceptAll hash S p s))
+      (realAggregate.leafProofs) realSteps) :
+    recCexec teethGenesis honestTurn = some honestStep.post := by
+  have hbe : BindingExtract RealProof acceptAll hash zCH zRH zcmb zcompress zcompressN
+      realAggregate realSteps := by
+    intro _
+    refine ⟨[rowOf zCH zRH zcmb zcompress zcompressN honestStep],
+            pubOf zCH zRH zcmb zcompress zcompressN hash honestStep,
+            satisfies_one zCH zRH zcmb zcompress zcompressN hash honestStep,
+            represents_one zCH zRH zcmb zcompress zcompressN honestStep, rfl, ?_⟩
+    show realAggregate.finalRoot = (pubOf zCH zRH zcmb zcompress zcompressN hash honestStep).final
+    simp only [realAggregate, pubOf, realSteps]
+    exact foldedFinalRoot_eq_lastNew zCH zRH zcmb zcompress zcompressN teethGenesis [honestStep]
+      honestStep (by simp)
+  -- the carried `hrec` is GONE: the recursion leg comes from the concrete honest tree + per-node carrier.
+  have hatt := light_client_verifies_whole_history_grounded_v2 RealProof acceptAll hash S hCR
+    zCH zRH zcmb zcompress zcompressN RecursiveSoundFromNodes.zH
+    realAggregate teethGenesis realSteps hleaves hbe
+    honestTree honest_node_carrier rfl
+    (by intro p _; cases p; simp [leavesP, honestTree])
+    (by simp [leavesP, honestTree, realAggregate])
+    rfl
+  have h := hatt.every_turn honestStep (by simp [realSteps])
+  simpa [honestStep] using h
+
 /-- **`lightclient_unfoolable_grounded_fires` (THE GROUNDED SINGLE-TRANSITION APEX FIRES).** On the
 genuine empty-cell boundary (`emptyState ⟶ emptyState`, whose `recStateCommit`-bound roots are CONCRETE —
 `emptyKernel_wf`), `lightclient_unfoolable_grounded` fires: the witness→state realizer is discharged with
@@ -316,12 +413,15 @@ end Vacuity
 /-! ## §6 — Axiom hygiene (every grounded apex `#assert_axioms`-clean: no fresh axiom). -/
 
 #assert_axioms engineSound_grounded
+#assert_axioms engineSound_grounded_v2
 #assert_axioms light_client_verifies_whole_history_grounded
+#assert_axioms light_client_verifies_whole_history_grounded_v2
 #assert_axioms lightclient_unfoolable_grounded
 #assert_axioms lightclient_unfoolable_grounded_live
 -- non-vacuity (the grounded apexes fire on a real honest chain):
 #assert_axioms engineSound_grounded_constructs
 #assert_axioms grounded_light_client_fires
+#assert_axioms grounded_light_client_fires_v2
 #assert_axioms lightclient_unfoolable_grounded_fires
 
 end Dregg2.Circuit.GroundedApex
