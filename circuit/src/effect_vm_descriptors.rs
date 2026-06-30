@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "60beddb40247270bad03e89b6f82a4d6bed61c83f36cdd633566ece219ed1b29";
+    "2854d327e6979f5d90973ededc03af94d0b3fd4dc2bafc045c0e57fdcf7c150d";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -1203,7 +1203,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "f49d155b329a6d491444428a01cd818b6d6c99909e69f2197cef9176459b774f";
+    "5bf1911306caafde0d357ba0f1951bef8e08669d5990f6d22b89b1dae8216583";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1229,7 +1229,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "9adb6ce1a79b35571055e1817303a72a32b30a6e8523c675def7e05e1bef2924";
+    "ec63398203dc84a3cc2f0f8446dd18889b11f55a4d5df5ebe7348283567f9c6c";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2014,37 +2014,62 @@ mod tests {
                 // inherits 47 PIs. Every other cap-open member rides a non-birth base (46 PIs).
                 let is_spawn = key.starts_with("spawn");
                 let extra_pis = if is_tb { 3 } else { 0 } + if is_spawn { 1 } else { 0 };
-                // Phase B-GATE: the rotated base graduation appends `7·n_rot_sites` lane columns,
-                // and the cap-open appendix is now 210 (91 base+mask + 7·17 lane cols for the leaf
-                // + 16 node absorbs). Both surpluses are multiples of 7; the concrete widths are
-                // pinned by the emit goldens + fingerprints.
-                let cap_span = 7 + 1 + 3 * 16 + 3 + 32 + 7 * 17; // CAP_OPEN_SPAN = 210
+                // Phase H-CAP-8: the FAITHFUL 8-FELT cap-open appendix. The native `node8` arity-16
+                // tree commits the WHOLE 8-felt digest group per absorb (the 7 spare permutation
+                // lanes are PROMOTED into the bound fold — no separate `7·17` lane tail). The Lean
+                // twin `CapOpenEmit.CAP_OPEN_SPAN = 7 + 8 + DEPTH·17 + 8 + 2 + MASK_BITS`:
+                //   7 leaf scalar + 8 leaf-digest + DEPTH·(8 sib + 1 dir + 8 node) + 8 cap_root
+                //   + src + effBit + 32 mask-bit = 7 + 8 + 16·17 + 8 + 2 + 32 = 329.
+                let cap_span = 7 + 8 + 16 * 17 + 8 + 2 + 32; // CAP_OPEN_SPAN = 329
+                // The cap-WRITE members (`effCapOpenWriteV3`: attenuate + the delegation-mutating
+                // writes) carry the AFTER-SPINE recompute appendix PAST the 329-col read appendix —
+                // `CapOpenEmit.AFTER_SPINE_SPAN = 15 + 8·DEPTH = 143` (after-leaf + after-leaf-digest
+                // + DEPTH·8 after-node), forcing the faithful 8-felt cap-WRITE (`*_forces_write8`).
+                let after_spine_span = 15 + 8 * 16; // AFTER_SPINE_SPAN = 143
                 let rot_base = V1_WIDTH + APPENDIX_SPAN;
+                let appendix = cap_span + extra_cols;
+                // The rotated base graduates by `7·n_rot_sites` wire-commit lane cols (still 7-felt;
+                // only the CAP DIGEST groups went 8-felt). So the width is
+                //   rot_base + 7·n_sites + 329 (+ 2 TB) (+ 143 after-spine for write/attenuate).
+                // 143 % 7 ≠ 0, so the with/without-after-spine forms are mutually EXCLUSIVE — the
+                // residual cleanly decides which member this is (no name-keyed dispatch).
                 assert!(
-                    d.trace_width >= rot_base + cap_span + extra_cols
-                        && (d.trace_width - (rot_base + cap_span + extra_cols)) % 7 == 0,
-                    "{key}: cap-open trace width = rotated base (+ 7·n_rot_sites lane cols) + 210 \
-                     cap-membership appendix (91 base+mask + 7·17 chip lane cols) (+2 TB cols)"
+                    d.trace_width >= rot_base + appendix,
+                    "{key}: cap-open trace width below rotated base + 329 cap-membership appendix"
+                );
+                let surplus = d.trace_width - rot_base - appendix;
+                let has_after_spine = surplus % 7 != 0;
+                let lane_surplus = if has_after_spine {
+                    surplus.checked_sub(after_spine_span)
+                } else {
+                    Some(surplus)
+                };
+                assert!(
+                    matches!(lane_surplus, Some(s) if s % 7 == 0),
+                    "{key}: cap-open trace width = rotated base (+ 7·n_rot_sites lane cols) + 329 \
+                     cap-membership appendix (+2 TB cols) (+143 after-spine for write/attenuate)"
                 );
                 assert_eq!(
                     d.public_input_count,
                     46 + extra_pis,
                     "{key}: cap-open carries the rotated 46-PI vector (+3 turn-identity PIs for TB)"
                 );
-                // The cap-open appendix declares EXACTLY 17 poseidon2 chip lookups whose DIGEST
-                // (out0, tuple col CHIP_RATE+1) lands in the cap-membership column block
-                // `[cap_open_base, cap_open_base + 91)`: 1 leaf absorb + 16 node absorbs. (Phase
-                // B-GATE: the 7-felt lane columns are appended at the VERY END of the descriptor,
-                // so an `any(var >= cap_open_base)` heuristic would over-count — every lookup now
-                // carries lane cols past the base. Keying on out0's appendix range is exact.)
+                // The cap-open READ appendix declares EXACTLY 17 poseidon2 chip lookups whose DIGEST
+                // (out0, tuple col CHIP_RATE+1) lands in the cap-membership CORE column block
+                // `[cap_open_base, cap_open_base + 287)` (= leaf 7 + leaf-digest 8 + DEPTH·17 level
+                // blocks; `capRoot` starts at +287): 1 leaf absorb + 16 node absorbs. The after-spine
+                // recompute's own 17 lookups land at `[cap_open_base + 329, …)` — PAST the core
+                // window — so a write member still counts exactly the read spine's 17.
                 use crate::descriptor_ir2::CHIP_RATE;
-                // Phase B-GATE: the cap-membership appendix now starts at the GRADUATED rotated
-                // width (the rotated lanes are appended past 328, so the cap block was shifted to
-                // `base.traceWidth`). Recover that base from the total width: `cap_open_base =
-                // trace_width - CAP_OPEN_SPAN(210) - extra_cols`. The 91 cap-membership cols sit at
-                // `[cap_open_base, cap_open_base + 91)`; the 119 cap lane cols follow.
-                let cap_span = 7 + 1 + 3 * 16 + 3 + 32 + 7 * 17; // CAP_OPEN_SPAN = 210
-                let cap_open_base = d.trace_width - cap_span - extra_cols;
+                // Recover the appendix base from the total width. The cap appendix starts at the
+                // GRADUATED rotated width (`base.traceWidth`); for write/attenuate members the
+                // after-spine sits past it, so subtract it too: `cap_open_base = trace_width -
+                // CAP_OPEN_SPAN(329) - extra_cols (- AFTER_SPINE_SPAN(143) if write)`.
+                let cap_membership_core = 7 + 8 + 16 * 17; // leaf + leaf-digest + DEPTH·17 = 287
+                let cap_open_base = d.trace_width
+                    - cap_span
+                    - extra_cols
+                    - if has_after_spine { after_spine_span } else { 0 };
                 let cap_lookups = d
                     .constraints
                     .iter()
@@ -2053,7 +2078,7 @@ mod tests {
                             matches!(
                                 l.tuple.get(CHIP_RATE + 1),
                                 Some(LeanExpr::Var(v))
-                                    if *v >= cap_open_base && *v < cap_open_base + 91
+                                    if *v >= cap_open_base && *v < cap_open_base + cap_membership_core
                             )
                         } else {
                             false
@@ -2062,7 +2087,7 @@ mod tests {
                     .count();
                 assert_eq!(
                     cap_lookups, 17,
-                    "{key}: cap-open appendix declares 1 leaf + 16 node chip lookups"
+                    "{key}: cap-open read appendix declares 1 leaf + 16 node chip lookups"
                 );
                 continue;
             }
