@@ -836,13 +836,21 @@ mod tests {
             None,
         )
         .expect("rotated transfer leg mints + self-verifies");
-        // Read the ROTATED chain roots off the leg BEFORE it moves into the participant.
-        let old_root = leg.old_root();
-        let new_root = leg.new_root();
+        // H0 DEPLOYED-WIDE: the deployed leg is now WIDE-anchored — the single-felt rotated roots
+        // (PI 42/43) are RETIRED to zero, so the chain genesis/final/continuity bind the GENUINE
+        // 8-felt (~124-bit) wide anchors. Report their HEAD felt (lane 0) as the scalar root the
+        // finality seam (`agg.final_root[0]`) compares; the full 8-felt array is read off the leg
+        // where the whole-history anchor itself is asserted.
+        let old8 = leg
+            .wide_old_root8()
+            .expect("deployed transfer leg is wide-anchored (8-felt before commit)");
+        let new8 = leg
+            .wide_new_root8()
+            .expect("deployed transfer leg is wide-anchored (8-felt after commit)");
         (
             FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
-            old_root,
-            new_root,
+            old8[0],
+            new8[0],
         )
     }
 
@@ -896,13 +904,34 @@ mod tests {
             attested.num_turns, 3,
             "the light client learns ALL three turns are attested"
         );
+        // H0 DEPLOYED-WIDE: the attested endpoints are the GENUINE 8-felt (~124-bit) wide anchors —
+        // the first turn's `wide_old_root8` and the last turn's `wide_new_root8` — NOT a broadcast of
+        // a single ~31-bit rotated commit felt across the lanes. Assert the FULL eight lanes.
+        let genesis8 = turns[0]
+            .participant
+            .rotated
+            .wide_old_root8()
+            .expect("first turn's leg is wide-anchored");
+        let final8 = turns[turns.len() - 1]
+            .participant
+            .rotated
+            .wide_new_root8()
+            .expect("last turn's leg is wide-anchored");
         assert_eq!(
-            attested.genesis_root, [genesis; SEG_ANCHOR_WIDTH],
-            "attested genesis = real genesis root (narrow leg broadcasts across the 8 anchor lanes)"
+            attested.genesis_root, genesis8,
+            "attested genesis = the first turn's GENUINE 8-felt wide before-commit anchor"
         );
         assert_eq!(
-            attested.final_root, [final_root; SEG_ANCHOR_WIDTH],
-            "attested final = real folded final root (broadcast across the 8 anchor lanes)"
+            attested.final_root, final8,
+            "attested final = the last turn's GENUINE 8-felt wide after-commit anchor"
+        );
+        assert_eq!(
+            attested.genesis_root[0], genesis,
+            "the wide anchor's head felt is the scalar genesis the finality seam compares"
+        );
+        assert_eq!(
+            attested.final_root[0], final_root,
+            "the wide anchor's head felt is the scalar final the finality seam compares"
         );
         assert_eq!(
             attested.chain_digest, agg.chain_digest,
@@ -1369,29 +1398,34 @@ mod tests {
     /// PIs) can. `fold_and_attest` refuses with `TurnProofInvalid` and grants NO attestation.
     #[test]
     fn light_client_rejects_forged_turn() {
-        use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
         use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
         use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
 
         let (mut turns, _g, real_final) = make_chain(1000, 0, 7, 3);
-        const PI_ROTATED_NEW: usize = V1_PI_COUNT + 1; // rotated NEW-commit (PI 35)
 
         // Destructure the LAST turn's leg, forge its claimed post-state root, rebuild it.
+        // H0 DEPLOYED-WIDE: the binding state anchor is the GENUINE 8-felt wide AFTER-commit at the
+        // PI tail `[n-8 .. n)` (the single-felt rotated NEW-commit PI 43 is RETIRED to zero / unbound
+        // — forging it would no longer change anything). Forge the head lane of the wide anchor; the
+        // proof's bound wide carrier disagrees with the tampered PI ⇒ the leaf re-verify is UNSAT.
         let last = turns.len() - 1;
         let DescriptorParticipant { rotated } = turns.remove(last).participant;
         let RotatedParticipantLeg {
             proof,
             descriptor,
             mut public_inputs,
+            custom_witness,
         } = rotated;
-        let lie = public_inputs[PI_ROTATED_NEW] + BabyBear::ONE;
-        public_inputs[PI_ROTATED_NEW] = lie;
+        let pi_wide_new = public_inputs.len() - 8; // first lane of the AFTER 8-felt wide commit
+        let lie = public_inputs[pi_wide_new] + BabyBear::ONE;
+        public_inputs[pi_wide_new] = lie;
         assert_ne!(lie, real_final, "the forged final root must differ");
         turns.push(FinalizedTurn::new(DescriptorParticipant::rotated(
             RotatedParticipantLeg {
                 proof,
                 descriptor,
                 public_inputs,
+                custom_witness,
             },
         )));
 
@@ -1416,8 +1450,10 @@ mod tests {
         use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
 
         let (mut turns, _g, _f) = make_chain(1000, 0, 7, 3);
-        let prev_new = turns[0].new_root();
-        let next_old = turns[2].old_root();
+        // H0 DEPLOYED-WIDE: continuity binds the GENUINE 8-felt wide anchors; read the head lane the
+        // host `ChainBreak` reports (`turn_anchors8`'s lane 0).
+        let prev_new = turns[0].participant.rotated.wide_new_root8().unwrap()[0];
+        let next_old = turns[2].participant.rotated.wide_old_root8().unwrap()[0];
         assert_ne!(
             next_old, prev_new,
             "after the drop the surviving turns must NOT be continuous"
@@ -1450,8 +1486,9 @@ mod tests {
         use dregg_circuit_prove::ivc_turn_chain::TurnChainError;
 
         let (mut turns, _g, _f) = make_chain(1000, 0, 7, 3);
-        let prev_new = turns[0].new_root();
-        let swapped_in_old = turns[2].old_root();
+        // H0 DEPLOYED-WIDE: continuity binds the GENUINE 8-felt wide anchors (head lane shown here).
+        let prev_new = turns[0].participant.rotated.wide_new_root8().unwrap()[0];
+        let swapped_in_old = turns[2].participant.rotated.wide_old_root8().unwrap()[0];
         assert_ne!(
             swapped_in_old, prev_new,
             "the swapped-in turn must NOT continue turn 0"

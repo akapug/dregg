@@ -233,62 +233,50 @@ impl RotatedParticipantLeg {
     ) -> Result<RotatedParticipantLeg, String> {
         use crate::ivc_turn_chain::ir2_leaf_wrap_config;
         use dregg_circuit::descriptor_ir2::{
-            MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
-            prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+            UMemBoundaryWitness, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
         };
         use dregg_circuit::effect_vm::trace_rotated::{
-            empty_caveat_manifest, generate_rotated_effect_vm_trace,
-            rotated_descriptor_name_for_effect, transfer_caveat_manifest,
+            empty_caveat_manifest, generate_rotated_effect_vm_descriptor_and_trace_wide,
+            transfer_caveat_manifest,
         };
-        use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 
-        // Resolve the rotated descriptor for this turn's single cohort effect — the `*R24` wire
-        // name and the staged-registry JSON, exactly as the live SDK rotated prover does
-        // (`sdk::full_turn_proof::rotated_descriptor_json_for_effects`).
-        let lead = effects
-            .first()
-            .ok_or_else(|| "mint_rotated_participant_leg: empty effect slice".to_string())?;
-        let r24_name = rotated_descriptor_name_for_effect(lead).ok_or_else(|| {
-            format!(
-                "mint_rotated_participant_leg: effect {lead:?} is not a rotated R=24 cohort member"
-            )
-        })?;
-        for e in &effects[1..] {
-            if rotated_descriptor_name_for_effect(e) != Some(r24_name) {
-                return Err(
-                    "mint_rotated_participant_leg: heterogeneous multi-effect turn (one rotated \
-                     descriptor per leg)"
-                        .to_string(),
-                );
-            }
+        // H0 DEPLOYED-WIDE FLIP: the deployed-default leaf is now the WIDE (8-felt / ~124-bit
+        // faithful commit) form. Previously this minted the narrow `*R24` descriptor (PI 46) whose
+        // sole state anchor was the single rotated commit felt (PI 42/43, ~31-bit-birthday under a
+        // whole-history fold). It now mints the wide twin via the SAME full-cohort dispatch the live
+        // SDK wide prover runs (`generate_rotated_effect_vm_descriptor_and_trace_wide`): a 62-PI
+        // vector whose last 16 PIs are the genuine 8-felt before/after commit anchors. The
+        // aggregation reads them through [`crate::ivc_turn_chain::turn_anchors8`] /
+        // [`leg_is_wide_anchored`] (now PI-length-keyed), so the whole-history genesis/final/continuity
+        // all bind the ~124-bit anchor.
+        //
+        // The value/field/create cohort rides the bare wide producer with NO special witnesses
+        // (`None` for the note-spend grow-gate nullifiers / refusal fields / cap-write tree). An
+        // effect that needs one of those (note-spend / refusal / the cap-WRITE attenuate family) is
+        // NOT served by this simple recipe — it routes through the dedicated wide minters
+        // (`mint_welded_wide_*` / `mint_custom_wide_*`); here it fails closed at the wide dispatcher
+        // rather than minting a 1-felt-anchored leg.
+        if effects.is_empty() {
+            return Err("mint_rotated_participant_leg: empty effect slice".to_string());
         }
-        let json = V3_STAGED_REGISTRY_TSV
-            .lines()
-            .find_map(|line| {
-                let mut it = line.splitn(3, '\t');
-                if it.next() == Some(r24_name) {
-                    let _display = it.next();
-                    it.next()
-                } else {
-                    None
-                }
-            })
-            .ok_or_else(|| {
-                format!("mint_rotated_participant_leg: '{r24_name}' not in V3_STAGED_REGISTRY_TSV")
-            })?;
-        let desc = parse_vm_descriptor2(json).map_err(|e| {
-            format!("mint_rotated_participant_leg: descriptor '{r24_name}' parse failed: {e}")
-        })?;
-
         let caveat = match effects {
             [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
             _ => empty_caveat_manifest(),
         };
-        let (trace, mut dpis) =
-            generate_rotated_effect_vm_trace(initial_state, effects, before, after, &caveat)
-                .map_err(|e| {
-                    format!("mint_rotated_participant_leg: rotated trace generation failed: {e}")
-                })?;
+        let (wide_desc, wide_trace, mut dpis, map_heaps, mem_boundary) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                initial_state,
+                effects,
+                before,
+                after,
+                &caveat,
+                None,
+                None,
+                None,
+            )
+            .map_err(|e| {
+                format!("mint_rotated_participant_leg: wide producer dispatch failed: {e}")
+            })?;
 
         // Optional shared-turn-id override (joint participants). The EffectVm AIRs do not
         // constrain TURN_HASH (it is an executor-trusted shared PI), so overriding the carried
@@ -299,25 +287,24 @@ impl RotatedParticipantLeg {
         }
 
         let wrap_config = ir2_leaf_wrap_config();
-        let mem_boundary = MemBoundaryWitness::default();
         let umem_boundary = UMemBoundaryWitness::default();
         let proof = prove_vm_descriptor2_for_config(
-            &desc,
-            &trace,
+            &wide_desc,
+            &wide_trace,
             &dpis,
             &mem_boundary,
-            &[],
+            &map_heaps,
             &umem_boundary,
             &wrap_config,
         )
-        .map_err(|e| format!("mint_rotated_participant_leg: IR-v2 batch prove failed: {e}"))?;
-        verify_vm_descriptor2_with_config(&desc, &proof, &dpis, &wrap_config).map_err(|e| {
-            format!("mint_rotated_participant_leg: minted proof self-verify failed: {e}")
-        })?;
+        .map_err(|e| format!("mint_rotated_participant_leg: wide IR-v2 batch prove failed: {e}"))?;
+        verify_vm_descriptor2_with_config(&wide_desc, &proof, &dpis, &wrap_config).map_err(
+            |e| format!("mint_rotated_participant_leg: minted wide proof self-verify failed: {e}"),
+        )?;
 
         Ok(RotatedParticipantLeg {
             proof,
-            descriptor: desc,
+            descriptor: wide_desc,
             public_inputs: dpis,
             custom_witness: None,
         })

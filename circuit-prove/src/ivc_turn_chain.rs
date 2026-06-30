@@ -920,21 +920,25 @@ pub(crate) fn turn_anchors8(
 }
 
 /// Whether a leg genuinely publishes the 8-felt wide anchors at its PI tail (a WIDE / wide-welded
-/// leg), as opposed to a narrow leg whose `[n-16..n]` PIs are NOT the wide commit. Decided by the
-/// descriptor name (the staged wide-weld suffixes) AND a PI vector long enough to carry the tail —
-/// the SAME predicate the in-circuit leaf branches on, so host and circuit agree lane-for-lane.
+/// leg), as opposed to a narrow leg whose `[n-16..n]` PIs are NOT the wide commit.
+///
+/// **H0 DEPLOYED-WIDE FLIP:** the discriminator is now STRUCTURAL — a leg is wide-anchored iff its
+/// PI vector carries the full 16-felt wide commit tail past the rotated prefix, i.e.
+/// `len >= WIDE_PI_COUNT` (62). This SUPERSEDES the prior weld-suffix name check, which only
+/// recognized the `-umem*-wide-welded-staged` cohort: the BARE wide registry members
+/// (`generate_rotated_effect_vm_descriptor_and_trace_wide`, the deployed default the
+/// `mint_*` recipes now mint) share the narrow members' NAMES — the wide-ness lives in the trace
+/// geometry + the 16 appended PIs, NOT the name — so a name check cannot see them. The length check
+/// is a strict superset: every wide variant (bare / single-domain-welded / multi-domain-welded /
+/// cap-open-tb) appends the wide tail LAST and lands at `>= 62`, while every narrow leg (rotated
+/// prefix 46, custom 50, cap-open-tb 49, grow-gate 47) stays `<= 50`. It is the SAME predicate the
+/// in-circuit leaf branches on (`prove_descriptor_leaf_rotated_with_segment_config`), so host and
+/// circuit agree lane-for-lane on which legs read the genuine ~124-bit anchors.
 pub(crate) fn leg_is_wide_anchored(
     leg: &crate::joint_turn_aggregation::RotatedParticipantLeg,
 ) -> bool {
-    use dregg_circuit::effect_vm_descriptors::{
-        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
-    };
-    leg.public_inputs.len() >= 2 * SEG_ANCHOR_WIDTH
-        && (leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
-            || leg
-                .descriptor
-                .name
-                .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX))
+    use dregg_circuit::effect_vm::trace_rotated::WIDE_PI_COUNT;
+    leg.public_inputs.len() >= WIDE_PI_COUNT
 }
 
 /// The per-turn (descriptor-leaf) segment: `first_old8`/`last_new8` are the leg's 8-felt anchors
@@ -1356,21 +1360,21 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
     descriptor_pis: &[BabyBear],
     config: &DreggRecursionConfig,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
-    use dregg_circuit::effect_vm_descriptors::{
-        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
-    };
+    use dregg_circuit::effect_vm::trace_rotated::{V1_PI_COUNT, WIDE_PI_COUNT};
 
-    // FAITHFUL-FLOOR: source the two 8-felt state anchors the SAME way [`turn_anchors8`] does
-    // host-side, so the in-circuit segment is byte-identical to the host root segment.
+    // FAITHFUL-FLOOR: source the two 8-felt state anchors the SAME way [`turn_anchors8`] /
+    // [`leg_is_wide_anchored`] do host-side, so the in-circuit segment is byte-identical to the host
+    // root segment.
     //   - WIDE / wide-welded leg: the GENUINE 8-felt `wide_old_root8`/`wide_new_root8` ride at the
     //     PI tail `[n-16..n]`, bound in-circuit (their `PiBinding` makes a tampered anchor UNSAT);
     //   - narrow leg: BROADCAST the single rotated commit PIs (34/35) across all eight lanes —
     //     the SAME bound PI target replicated, matching the host broadcast in `turn_anchors8`.
+    //
+    // H0 DEPLOYED-WIDE FLIP: the wide branch is selected STRUCTURALLY (`n >= WIDE_PI_COUNT`), the
+    // exact host mirror of [`leg_is_wide_anchored`] — the bare wide cohort (whose name equals its
+    // narrow twin's) is now recognized by its 16-felt PI tail, not a weld suffix.
     let n = descriptor_pis.len();
-    let wide = n >= 2 * SEG_ANCHOR_WIDTH
-        && (desc.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
-            || desc.name.ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX));
+    let wide = n >= WIDE_PI_COUNT;
     let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
     let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
 
@@ -2951,14 +2955,21 @@ fn generate_chain_trace_rotated_continuity(turns: &[&FinalizedTurn]) -> Result<(
     if turns.len() < 2 {
         return Err(TurnChainError::TooFewTurns { count: turns.len() });
     }
+    // H0 DEPLOYED-WIDE: continuity is checked at the GENUINE 8-felt anchor ([`turn_anchors8`]) — the
+    // SAME lane-by-lane endpoints the in-circuit segment combine binds (`L.last_new8 == R.first_old8`,
+    // accumulator.rs). For a WIDE leg these are the ~124-bit faithful anchors (the single-felt rotated
+    // roots PI 42/43 are RETIRED to zero, so the old 1-felt check would be vacuously 0==0); for a
+    // narrow leg they are the single rotated commit felt broadcast across all eight lanes, so the
+    // check degrades exactly to the prior 1-felt continuity. Either way the host pre-check mirrors the
+    // in-circuit tooth and never passes vacuously on a wide chain break.
     for i in 1..turns.len() {
-        let (_, prev_new) = rotated_roots(turns[i - 1]);
-        let (this_old, _) = rotated_roots(turns[i]);
+        let (_, prev_new) = turn_anchors8(turns[i - 1]);
+        let (this_old, _) = turn_anchors8(turns[i]);
         if prev_new != this_old {
             return Err(TurnChainError::ChainBreak {
                 index: i,
-                expected_old_root: prev_new.0,
-                found_old_root: this_old.0,
+                expected_old_root: prev_new[0].0,
+                found_old_root: this_old[0].0,
             });
         }
     }
