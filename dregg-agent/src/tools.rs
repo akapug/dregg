@@ -70,15 +70,28 @@ pub fn real_shell(cmd: &str, cwd: &Path, timeout: std::time::Duration) -> Result
     const MARKER: &str = "__DREGG_CWD__";
     let wrapped =
         format!("{cmd}\n__dregg_ec=$?\nprintf '\\n{MARKER}%s' \"$(pwd)\"\nexit $__dregg_ec");
-    let child = Command::new("bash")
+    let mut command = Command::new("bash");
+    command
         .arg("-c")
         .arg(&wrapped)
         .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn bash: {e}"))?;
+        .stderr(Stdio::piped());
+    // CONFINEMENT (key-leak defence in depth): the hosted agent process inherits the
+    // OPERATOR'S environment + home — where the operator's keys live
+    // (`~/.nousportalkey`, `~/.stripekey`, `~/.nvidiakey`, `~/.kimikey`). A real
+    // `bash -c` a tenant drives could otherwise read them (`echo $NOUS_PORTAL_KEY`,
+    // `cat ~/.stripekey`). Before spawning we (1) strip every secret-bearing env var
+    // so an `env` dump / `$VAR` expansion leaks nothing, and (2) re-root `HOME` (+ the
+    // temp/XDG roots) inside the workdir so a `~`-relative read resolves into the
+    // sandbox, never the operator home. This does NOT confine an *absolute*-path read
+    // (`cat /home/op/.stripekey`) or raw egress (`curl … -d @/abs/path`): closing
+    // those needs OS-level isolation (a per-tenant unprivileged user / container /
+    // namespace whose filesystem does not contain the operator keys) — see the
+    // red-team report. `harden_shell_env` is the in-process floor under that.
+    harden_shell_env(&mut command, cwd);
+    let child = command.spawn().map_err(|e| format!("spawn bash: {e}"))?;
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -115,6 +128,54 @@ pub fn real_shell(cmd: &str, cwd: &Path, timeout: std::time::Duration) -> Result
             })
         }
     }
+}
+
+/// `true` iff an env var NAME smells like a secret (so we strip it before handing a
+/// tenant-driven shell the operator's environment). A deny-by-pattern over the
+/// substrings real secrets carry, plus the dregg/provider keys by exact name.
+fn is_secret_env(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    const NEEDLES: &[&str] = &[
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE",
+        "SESSION",
+        "COOKIE",
+        "BEARER",
+        "API",
+        "AUTH",
+        "STRIPE",
+        "NOUS",
+    ];
+    // PATH / LANG / TERM / SHLVL etc. never match these needles; the few benign
+    // names that would (e.g. a user's `…_API_BASE`) are safe to drop from a shell.
+    NEEDLES.iter().any(|n| upper.contains(n))
+}
+
+/// Strip secret-bearing env vars from `command` and re-root the home/temp/XDG dirs
+/// inside the sandbox, so a tenant-driven `bash -c` cannot dump the operator's keys
+/// via the environment or resolve `~` into the operator's home. The in-process floor
+/// under real OS isolation (which the deploy must add for absolute-path reads).
+fn harden_shell_env(command: &mut std::process::Command, sandbox: &Path) {
+    for (name, _) in std::env::vars_os() {
+        let name = name.to_string_lossy();
+        if is_secret_env(&name) {
+            command.env_remove(name.as_ref());
+        }
+    }
+    // `~` / $HOME, the temp roots, and the XDG dirs all point inside the sandbox, so
+    // a `~`-relative or default-temp read/write stays confined.
+    let s = sandbox.as_os_str();
+    command
+        .env("HOME", s)
+        .env("TMPDIR", s)
+        .env("XDG_CONFIG_HOME", s)
+        .env("XDG_DATA_HOME", s)
+        .env("XDG_CACHE_HOME", s);
 }
 
 /// What an HTTP GET returned: the status code and the (UTF-8-lossy) body.
@@ -722,6 +783,59 @@ mod tests {
         let d = std::env::temp_dir().join(format!("dregg-tools-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    // ── TOOTH: the real shell cannot read the operator's keys via env or `~` ──
+    // The hosted agent process holds the operator's provider keys in its
+    // environment + home; a tenant-driven `bash -c` must not be able to exfiltrate
+    // them. `harden_shell_env` strips secret env vars and re-roots `~` into the
+    // sandbox. (Absolute-path reads remain an OS-isolation concern — see the report.)
+    #[test]
+    fn real_shell_scrubs_secret_env_and_reroots_home() {
+        let wd = tmpdir("hardened-shell");
+        // Plant operator secrets exactly as the deploy would expose them.
+        unsafe {
+            std::env::set_var("NOUS_PORTAL_KEY", "sk-OPERATOR-NOUS-DONOTLEAK");
+            std::env::set_var("STRIPE_SECRET_KEY", "sk_live_DONOTLEAK");
+            std::env::set_var("DREGG_HARMLESS", "ok-to-see");
+        }
+        // …and a key FILE in the *real* operator home, reachable only via `~`.
+        let real_home = std::env::var_os("HOME").map(PathBuf::from);
+
+        let out = real_shell(
+            "echo \"env=[$NOUS_PORTAL_KEY][$STRIPE_SECRET_KEY]\"; echo \"home=$HOME\"; echo \"harmless=$DREGG_HARMLESS\"",
+            &wd,
+            std::time::Duration::from_secs(10),
+        )
+        .expect("shell runs");
+
+        // The secrets are GONE from the environment the tenant's shell sees.
+        assert!(
+            out.stdout.contains("env=[][]"),
+            "secret env vars must be scrubbed, got: {}",
+            out.stdout
+        );
+        // `~`/$HOME points INTO the sandbox, not the operator home.
+        assert!(
+            out.stdout.contains(&format!("home={}", wd.display())),
+            "HOME must be re-rooted into the sandbox, got: {}",
+            out.stdout
+        );
+        if let Some(h) = &real_home {
+            assert!(
+                !out.stdout.contains(&format!("home={}", h.display())),
+                "HOME must NOT be the operator home"
+            );
+        }
+        // A non-secret env var is still passed (we strip secrets, not everything).
+        assert!(out.stdout.contains("harmless=ok-to-see"));
+
+        unsafe {
+            std::env::remove_var("NOUS_PORTAL_KEY");
+            std::env::remove_var("STRIPE_SECRET_KEY");
+            std::env::remove_var("DREGG_HARMLESS");
+        }
+        std::fs::remove_dir_all(&wd).ok();
     }
 
     // ── a real fs op is cap-gated to the workdir, metered, receipted ──────────
