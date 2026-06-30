@@ -41,27 +41,25 @@
 //!
 //! [`cellprogram_to_descriptor2`] maps the PURE-ALGEBRAIC `ConstraintExpr` kinds
 //! (`Equality`/`Multiplication`/`Binary`/`Polynomial`/`Gated`/`InvertedGated`/`Squared`/
-//! `ConditionalNonzero`/`AtLeastOne`/`Transition`/`PiBinding`) faithfully, and REFUSES the
-//! Poseidon2-relation kinds (`Hash`/`Hash2to1`/`Hash4to1`/`Hash3Cap`/`MerkleHash`/`ChainedHash2to1`/
-//! `SeedHash2to1`) and `Lookup`/`TableFunction` with a precise blocker (the named IR-v2 follow-ups).
+//! `ConditionalNonzero`/`AtLeastOne`/`Transition`/`PiBinding`) faithfully, the Poseidon2-relation
+//! kinds (`Hash2to1`/`Hash4to1`/`Hash3Cap`/`MerkleHash`) via the `TID_P2` lane-witnessing weld, the
+//! cross-row running hash (`ChainedHash2to1` + its `SeedHash2to1` seed) via a copy-forward accumulator
+//! column, and `TableFunction` via its bivariate-Lagrange gate. It still REFUSES the arity-7 fact-sponge
+//! `Hash`, an arbitrary-entry `Lookup`, an UNSEEDED chain, and `BoundaryRow::Index` (the named residuals).
 //!
 //! Consequence, stated honestly:
 //!
 //! * An **algebraic DSL/Dfa transition** (a state-advance / continuity predicate over arithmetic
 //!   columns, e.g. [`tests::dfa_advance_program`]) REUSES the custom leaf machinery DIRECTLY — it
 //!   folds and exposes a bound PI-commitment with ZERO new mechanism.
-//! * The **production `dregg-dfa-routing-v1`** descriptor does NOT yet reuse: it uses `Hash4to1`
-//!   (entry-hash C1), `ChainedHash2to1` (running-hash C3), `SeedHash2to1` (the table-commitment
-//!   seed), and `TableFunction` (the GAP-A transition table). All four are exactly the kinds
-//!   `cellprogram_to_descriptor2` REFUSES. So routing `dregg-dfa-routing-v1` through the leaf needs
-//!   the SAME two named IR-v2 extensions the custom carrier already names: (1) the Poseidon2 chip-table
-//!   lookup (`TID_P2`) so the hash relations are witnessed per-site, and (2) an IR-v2 custom-contents
-//!   table for the `TableFunction`/`Lookup`. [`dsl_leaf_unmapped_kinds`] reports a program's gap
-//!   precisely; [`tests::routing_descriptor_hits_named_poseidon2_gap`] pins it on the real descriptor.
-//!
-//! This is the honest blocker the task asked for: the leaf REUSES for the algebraic DSL fragment, and
-//! the production routing program's hash/table kinds are a REAL (named, shared-with-custom) gap, not an
-//! absence.
+//! * The **production `dregg-dfa-routing-v1`** descriptor now ALSO fully reuses: its `Hash4to1`
+//!   (entry-hash C1), `ChainedHash2to1` (running-hash C3) + `SeedHash2to1` (the table-commitment
+//!   seed), and `TableFunction` (the GAP-A transition table) all lower to the foldable IR-2 leaf
+//!   (`TID_P2` chip lookups + the copy-forward accumulator + the Lagrange gate). A light client
+//!   folding the leaf witnesses the routing predicate's hash chain + transition table in-AIR.
+//!   [`dsl_leaf_unmapped_kinds`] reports a program's gap precisely (now empty for the router);
+//!   [`tests::routing_descriptor_fully_maps`] pins the full lowering on the real descriptor, and the
+//!   honest-folds / forged-UNSAT teeth live in `custom_leaf_adapter`'s `*_dfa_routing_*` tests.
 //!
 //! ## The named big-bang piece — the deployed-descriptor PI exposure for the Dfa leg
 //!
@@ -365,13 +363,14 @@ mod tests {
         }
     }
 
-    /// THE NAMED GAP, on the REAL production descriptor: `dregg-dfa-routing-v1` uses `Hash4to1` /
-    /// `ChainedHash2to1` / `SeedHash2to1` / `TableFunction`, all of which the custom adapter REFUSES.
-    /// So the production routing program does NOT yet reuse the leaf — it needs the same two named
-    /// IR-v2 extensions the custom carrier names (Poseidon2 chip-table lookup + custom-contents table).
-    /// This pins the honest blocker.
+    /// THE PRODUCTION DESCRIPTOR FULLY MAPS: `dregg-dfa-routing-v1` uses `Hash4to1` (entry-hash,
+    /// lane-witnessed), `ChainedHash2to1` + `SeedHash2to1` (the running-hash chain, lowered via a
+    /// copy-forward accumulator column), and `TableFunction` (the bivariate-Lagrange transition
+    /// table) — ALL now mapped by `cellprogram_to_descriptor2`. So the production routing program
+    /// REUSES the leaf machinery with no unmapped kinds: a pure light client folding the leaf
+    /// witnesses the routing predicate's hash relations + transition table in-AIR.
     #[test]
-    fn routing_descriptor_hits_named_poseidon2_gap() {
+    fn routing_descriptor_fully_maps() {
         // The exact 4-state router transition table (dfa_circuit.rs / dfa_routing.rs tests).
         let table = [[1u32, 2, 1, 3], [1, 2, 1, 3], [1, 2, 3, 3], [3, 3, 3, 3]];
         let mut transitions = Vec::new();
@@ -386,13 +385,9 @@ mod tests {
         );
         let program = CellProgram::new(descriptor, 1);
 
-        let err = dsl_leaf_unmapped_kinds(&program).expect_err(
-            "dregg-dfa-routing-v1 uses Poseidon2/TableFunction kinds the adapter refuses",
-        );
-        // The first refused kind is the C1 entry hash (`Hash4to1`), a Poseidon2 relation.
         assert!(
-            err.contains("Hash4to1") && err.contains("Poseidon2"),
-            "the gap must name the Poseidon2 hash carrier; got: {err}"
+            dsl_leaf_unmapped_kinds(&program).is_ok(),
+            "dregg-dfa-routing-v1 now fully lowers (Hash4to1 + running-hash chain + TableFunction)"
         );
     }
 }
