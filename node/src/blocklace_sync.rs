@@ -1027,11 +1027,38 @@ impl BlocklaceHandle {
                 .collect();
 
             let order_gate_armed = crate::finality_gate::finality_gate_enabled();
-            match if order_gate_armed {
-                crate::finality_gate::VerifiedFinality::compute_order(&lace, &participants)
+            // Run the verified-Lean tau-order FFI on a BLOCKING thread (`spawn_blocking`), never inline
+            // on this tokio worker. The verified ordering is O(history) and — even with the memoized
+            // Lean causal-past (`BlocklaceFinality.tauOrderFast`, the parallel of the Rust `PastCache`)
+            // — a large lace can still take real CPU time; running it inline PINNED the async worker and
+            // STARVED the runtime (gossip/QUIC/`/status` froze) on a cross-linked DAG (the finality
+            // wedge). On a blocking thread the async runtime stays responsive regardless of how long the
+            // ordering takes. The lace snapshot + participants are moved into the closure (owned).
+            let lean_order_opt = if order_gate_armed {
+                let lace_ffi = lace.clone();
+                let participants_ffi = participants.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::finality_gate::VerifiedFinality::compute_order(
+                        &lace_ffi,
+                        &participants_ffi,
+                    )
+                })
+                .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "verified tau-order FFI blocking task panicked/cancelled — falling back \
+                             to the Rust `ordering::tau` order for this poll"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
-            } {
+            };
+            match lean_order_opt {
                 Some(lean_order) => {
                     // DIFFERENTIAL: assert the verified Lean order and the Rust `tau` order AGREE.
                     // The two id schemes differ (blake3 vs interned `Nat`), so we compare on the
@@ -1121,8 +1148,26 @@ impl BlocklaceHandle {
         let gate_armed = participants.len() > 1
             && !ordered_from_lean
             && crate::finality_gate::finality_gate_enabled();
+        // Belt-and-suspenders consistency gate FFI — also on a BLOCKING thread (see the tau-order FFI
+        // above) so it can never starve the async runtime, regardless of lace size.
         let verified = if gate_armed {
-            crate::finality_gate::VerifiedFinality::compute(&lace, &participants)
+            let lace_ffi = lace.clone();
+            let participants_ffi = participants.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::finality_gate::VerifiedFinality::compute(&lace_ffi, &participants_ffi)
+            })
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "verified finality-gate FFI blocking task panicked/cancelled — failing open \
+                         (un-gated) for this poll"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };

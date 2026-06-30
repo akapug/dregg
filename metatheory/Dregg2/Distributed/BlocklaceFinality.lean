@@ -281,6 +281,198 @@ def tauOrder (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List
   ((findAllFinalLeaders B participants wavelength).foldl
     (tauStep B participants wavelength) ([], [])).1
 
+/-! ## 6b. THE MEMOIZED FAST PATH — the SAME `tauOrder`, with the causal past computed ONCE.
+
+**Why.** The pure `tauOrder` above RE-COMPUTES `causalPastIncl` for the same block ids an
+EXPONENTIAL number of times: `ratifies` rebuilds an observer's past and, per past block, calls
+`approves` (another past) + `hasEquivInPast` (another past); `isSuperRatified` calls `ratifies` per
+wave-end block; `findAllFinalLeaders` calls `isSuperRatified` per wave; `leaderCoverage` calls
+`ratifies` + `causalPastIncl` again. On a cross-linked DAG (the live `n=5` shape) this nested
+re-traversal blows up — the finality-FFI wedge the node hit (the `dregg_tau_order` export pinned a
+tokio worker and starved the runtime).
+
+**The fix, proof-preserving.** A parallel stack that threads a `PastCache` — each block's inclusive
+causal past computed ONCE — mirroring the Rust `PastCache` (`blocklace/src/ordering.rs:41`). Every
+function gets a `…C` twin that LOOKS UP the past instead of recomputing it; each twin is proved EQUAL
+(`…C_eq`) to its pure original at `cache = mkPastCache B`, so the safety theorems and `#guard`s about
+`tauOrder`/`tauGolden`/`findAllFinalLeaders` (which the originals back) are untouched. The
+order-faithful equality `tauOrderFast_eq : tauOrderFast = tauOrder` lets the live gate exports
+(`FinalityGate.tauOrderGate`/`finalizeGate`) run the FAST path while every proof that named `tauOrder`
+stays valid by rewriting through the equality. Building the cache is `O(|B|)` calls to the
+(individually polynomial) `causalPastIncl`, and the lookups replace the exponential re-traversal — the
+blow-up is gone (the §9 `…Fast` `#guard`s witness identical output on the concrete trace). -/
+
+/-- A memo of each block's inclusive causal past — an assoc list keyed by `BlockId`, the Lean
+analogue of the Rust `PastCache` (`HashMap<BlockId, Rc<HashSet<BlockId>>>`). -/
+abbrev PastCache := List (BlockId × List BlockId)
+
+/-- Build the cache: compute `causalPastIncl B b.id` ONCE per block in `B`. -/
+def mkPastCache (B : Lace) : PastCache :=
+  B.map (fun b => (b.id, causalPastIncl B b.id))
+
+/-- Look up a block's causal past in `cache`, FALLING BACK to the pure `causalPastIncl` on a miss (an
+id not in `B`). The fallback makes correctness UNCONDITIONAL: `cachedPast B (mkPastCache B) h` is
+ALWAYS `causalPastIncl B h` — a hit returns the value the cache stored (= `causalPastIncl B h`), a
+miss recomputes it. On the live path every observed id is present, so it is always a hit (the
+speedup). -/
+def cachedPast (B : Lace) (cache : PastCache) (h : BlockId) : List BlockId :=
+  match cache.find? (fun p => p.1 == h) with
+  | some p => p.2
+  | none   => causalPastIncl B h
+
+/-- **`cachedPast_eq`** — the cache is FAITHFUL: a lookup via `mkPastCache B` returns EXACTLY the pure
+`causalPastIncl B h`, for every `h`. So replacing `causalPastIncl` with `cachedPast … (mkPastCache B)`
+anywhere is value-preserving — the engine of every `…C_eq` below. -/
+theorem cachedPast_eq (B : Lace) (h : BlockId) :
+    cachedPast B (mkPastCache B) h = causalPastIncl B h := by
+  unfold cachedPast
+  cases hf : (mkPastCache B).find? (fun p => p.1 == h) with
+  | none => rfl
+  | some p =>
+    have hp1 : p.1 = h := by
+      have h2 := List.find?_some hf
+      simpa using h2
+    have hmem : p ∈ mkPastCache B := List.mem_of_find?_eq_some hf
+    unfold mkPastCache at hmem
+    obtain ⟨b, _hb, hbp⟩ := List.mem_map.mp hmem
+    have hb_id : b.id = p.1 := by rw [← hbp]
+    have hb_v : causalPastIncl B b.id = p.2 := by rw [← hbp]
+    show p.2 = causalPastIncl B h
+    rw [← hb_v, hb_id, hp1]
+
+/-- `hasEquivInPast` with the cache (`§4`). -/
+def hasEquivInPastC (B : Lace) (cache : PastCache) (observer : BlockId) (creator : AuthorId) : Bool :=
+  let past := cachedPast B cache observer
+  let creatorBlocks : List Block :=
+    past.filterMap (fun bid => match B.lookup bid with
+                                | some b => if b.creator = creator then some b else none
+                                | none   => none)
+  creatorBlocks.any (fun a =>
+    creatorBlocks.any (fun b => a.id ≠ b.id && roundOf B a.id == roundOf B b.id))
+
+theorem hasEquivInPastC_eq (B : Lace) (observer : BlockId) (creator : AuthorId) :
+    hasEquivInPastC B (mkPastCache B) observer creator = hasEquivInPast B observer creator := by
+  simp only [hasEquivInPastC, hasEquivInPast, cachedPast_eq]
+
+/-- `approves` with the cache (`§4`). -/
+def approvesC (B : Lace) (cache : PastCache) (o l : Block) : Bool :=
+  (cachedPast B cache o.id).contains l.id && ¬ hasEquivInPastC B cache o.id l.creator
+
+theorem approvesC_eq (B : Lace) (o l : Block) :
+    approvesC B (mkPastCache B) o l = approves B o l := by
+  simp only [approvesC, approves, cachedPast_eq, hasEquivInPastC_eq]
+
+/-- `ratifies` with the cache (`§4`). -/
+def ratifiesC (B : Lace) (cache : PastCache) (participants : List AuthorId) (o l : Block) : Bool :=
+  let past := cachedPast B cache o.id
+  let approvingParticipants : Nat :=
+    (participants.filter (fun p =>
+      past.any (fun bid => match B.lookup bid with
+                            | some b => b.creator == p && approvesC B cache b l
+                            | none   => false))).length
+  approvingParticipants ≥ superMajority participants.length
+
+theorem ratifiesC_eq (B : Lace) (participants : List AuthorId) (o l : Block) :
+    ratifiesC B (mkPastCache B) participants o l = ratifies B participants o l := by
+  simp only [ratifiesC, ratifies, cachedPast_eq, approvesC_eq]
+
+/-- `isSuperRatified` with the cache (`§4`). -/
+def isSuperRatifiedC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+    (l : Block) (waveEndRound : Nat) : Bool :=
+  let endBlocks := blocksAtRound B waveEndRound
+  let ratifyingCreators : List AuthorId :=
+    (endBlocks.filterMap (fun bid => match B.lookup bid with
+       | some b => if ratifiesC B cache participants b l then some b.creator else none
+       | none   => none)).dedup
+  ratifyingCreators.length ≥ superMajority participants.length
+
+theorem isSuperRatifiedC_eq (B : Lace) (participants : List AuthorId) (l : Block) (waveEndRound : Nat) :
+    isSuperRatifiedC B (mkPastCache B) participants l waveEndRound
+      = isSuperRatified B participants l waveEndRound := by
+  simp only [isSuperRatifiedC, isSuperRatified, ratifiesC_eq]
+
+/-- `finalLeaderAt` with the cache (`§5`). -/
+def finalLeaderAtC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+    (wave wavelength : Nat) : Option Block :=
+  match leaderCandidates B participants wave wavelength with
+  | [l] => if isSuperRatifiedC B cache participants l (waveLastRound wave wavelength) then some l else none
+  | _   => none
+
+theorem finalLeaderAtC_eq (B : Lace) (participants : List AuthorId) (wave wavelength : Nat) :
+    finalLeaderAtC B (mkPastCache B) participants wave wavelength
+      = finalLeaderAt B participants wave wavelength := by
+  simp only [finalLeaderAtC, finalLeaderAt, isSuperRatifiedC_eq]
+
+/-- `findAllFinalLeaders` with the cache (`§5`). -/
+def findAllFinalLeadersC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+    (wavelength : Nat) : List Block :=
+  let mr := maxRound B
+  let waveCount := if wavelength == 0 then 0 else mr / wavelength + 1
+  (List.range waveCount).filterMap (fun w => finalLeaderAtC B cache participants w wavelength)
+
+theorem findAllFinalLeadersC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
+    findAllFinalLeadersC B (mkPastCache B) participants wavelength
+      = findAllFinalLeaders B participants wavelength := by
+  simp only [findAllFinalLeadersC, findAllFinalLeaders, finalLeaderAtC_eq]
+
+/-- `leaderCoverage` with the cache (`§6`). -/
+def leaderCoverageC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+    (l : Block) (wavelength : Nat) : List BlockId :=
+  let lr := roundOf B l.id
+  let lwave := roundToWave lr wavelength
+  let waveEnd := waveLastRound lwave wavelength
+  let endBlocks := blocksAtRound B waveEnd
+  (endBlocks.flatMap (fun bid => match B.lookup bid with
+     | some b => if ratifiesC B cache participants b l then cachedPast B cache bid else []
+     | none   => [])).dedup
+
+theorem leaderCoverageC_eq (B : Lace) (participants : List AuthorId) (l : Block) (wavelength : Nat) :
+    leaderCoverageC B (mkPastCache B) participants l wavelength
+      = leaderCoverage B participants l wavelength := by
+  simp only [leaderCoverageC, leaderCoverage, cachedPast_eq, ratifiesC_eq]
+
+/-- `leaderSegment` with the cache (`§6`). -/
+def leaderSegmentC (B : Lace) (cache : PastCache) (participants : List AuthorId) (wavelength : Nat)
+    (prevCovered : List BlockId) (l : Block) : List BlockId :=
+  let coverage := leaderCoverageC B cache participants l wavelength
+  let newBlocks := (coverage.filter (fun bid => ¬ prevCovered.contains bid)).filter
+    (fun bid => match B.lookup bid with
+      | some b => ¬ hasEquivInPastC B cache l.id b.creator
+      | none   => false)
+  xsortBy B newBlocks
+
+theorem leaderSegmentC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat)
+    (prevCovered : List BlockId) (l : Block) :
+    leaderSegmentC B (mkPastCache B) participants wavelength prevCovered l
+      = leaderSegment B participants wavelength prevCovered l := by
+  simp only [leaderSegmentC, leaderSegment, leaderCoverageC_eq, hasEquivInPastC_eq]
+
+/-- `tauStep` with the cache (`§6`). -/
+def tauStepC (B : Lace) (cache : PastCache) (participants : List AuthorId) (wavelength : Nat)
+    (acc : List BlockId × List BlockId) (l : Block) : List BlockId × List BlockId :=
+  (acc.1 ++ leaderSegmentC B cache participants wavelength acc.2 l,
+   leaderCoverageC B cache participants l wavelength)
+
+theorem tauStepC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
+    tauStepC B (mkPastCache B) participants wavelength = tauStep B participants wavelength := by
+  funext acc l
+  simp only [tauStepC, tauStep, leaderSegmentC_eq, leaderCoverageC_eq]
+
+/-- **`tauOrderFast B participants wavelength`** — the SAME finalized order as `tauOrder`, computed
+with the causal past memoized ONCE (`mkPastCache B`, shared by the whole fold). This is the function
+the live gate exports run. -/
+def tauOrderFast (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
+  let cache := mkPastCache B
+  ((findAllFinalLeadersC B cache participants wavelength).foldl
+    (tauStepC B cache participants wavelength) ([], [])).1
+
+/-- **`tauOrderFast_eq`** — the memoized fast path computes EXACTLY the pure `tauOrder` (order-faithful,
+not merely set-equal). So every theorem and `#guard` that names `tauOrder` transfers to `tauOrderFast`
+by rewriting, and the live gate may run the fast path with no loss of the verified guarantee. -/
+theorem tauOrderFast_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
+    tauOrderFast B participants wavelength = tauOrder B participants wavelength := by
+  simp only [tauOrderFast, tauOrder, findAllFinalLeadersC_eq, tauStepC_eq]
+
 /-! ## 7. THE SAFETY PROPERTY — no two conflicting final leaders per wave + determinism.
 
 The property the node RELIES on: a wave anchors AT MOST ONE final leader, and the finalized order
@@ -454,6 +646,17 @@ The Rust side checks `ordering::tau(&lace, &participants)` over the same DAG yie
 def tauGolden (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List (AuthorId × Nat) :=
   (tauOrder B participants wavelength).filterMap (fun id => (B.lookup id).map (fun b => (b.creator, b.seq)))
 
+/-- **`tauGoldenFast`** — the `(creator, seq)` projection of the MEMOIZED fast order (the gate's
+projection export, `FinalityGate.finalizeGate`). Computes the same set as `tauGolden`, fast. -/
+def tauGoldenFast (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List (AuthorId × Nat) :=
+  (tauOrderFast B participants wavelength).filterMap
+    (fun id => (B.lookup id).map (fun b => (b.creator, b.seq)))
+
+/-- **`tauGoldenFast_eq`** — the fast projection equals the pure `tauGolden` (via `tauOrderFast_eq`). -/
+theorem tauGoldenFast_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
+    tauGoldenFast B participants wavelength = tauGolden B participants wavelength := by
+  simp only [tauGoldenFast, tauGolden, tauOrderFast_eq]
+
 -- the model FINALIZES all nine blocks on the 3-node trace (Rust: result.len() == 9).
 #guard (tauOrder trace3 trace3Participants 3).length == 9
 -- EXACTLY ONE final leader, and it is creator 1's genesis (wave-0 round-robin leader).
@@ -468,6 +671,15 @@ def tauGolden (B : Lace) (participants : List AuthorId) (wavelength : Nat) : Lis
 #guard (tauOrder traceEquiv trace3Participants 3).all
         (fun id => match traceEquiv.lookup id with | some b => b.creator != 1 | none => true)
 #guard hasEquivInPast traceEquiv 11 1   -- the fork IS detected from a downstream observer.
+
+-- THE MEMOIZED FAST PATH agrees with the pure rule on the concrete traces (the live gate exports run
+-- `tauOrderFast`/`tauGoldenFast`; the exponential re-traversal is gone, the order is IDENTICAL).
+#guard tauOrderFast trace3 trace3Participants 3 == tauOrder trace3 trace3Participants 3
+#guard tauGoldenFast trace3 trace3Participants 3 == tauGolden trace3 trace3Participants 3
+#guard tauGoldenFast trace3 trace3Participants 3
+        == [(1,0),(2,0),(3,0),(1,1),(2,1),(3,1),(1,2),(2,2),(3,2)]
+#guard (tauOrderFast traceEquiv trace3Participants 3).all
+        (fun id => match traceEquiv.lookup id with | some b => b.creator != 1 | none => true)
 
 /-! The `#guard`s above are the project's machine-checked non-vacuity teeth (the sanctioned
 mechanism for executable, `qsort`-laden defs — a false `#guard` is a BUILD ERROR, exactly like a
@@ -487,3 +699,6 @@ constrain a REAL, non-trivial finalized order, and the model reproduces the node
 #assert_axioms findAllFinalLeaders_deterministic
 #assert_axioms tau_drives_verified_run
 #assert_axioms tau_execution_agreement
+#assert_axioms cachedPast_eq
+#assert_axioms tauOrderFast_eq
+#assert_axioms tauGoldenFast_eq
