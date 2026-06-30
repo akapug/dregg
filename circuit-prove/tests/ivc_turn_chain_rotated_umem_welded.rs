@@ -187,12 +187,14 @@ fn welded_umem_forged_post_commit_refused() {
         proof,
         descriptor,
         mut public_inputs,
+        custom_witness: _,
     } = rotated;
     public_inputs[PI_ROTATED_NEW] = n1 + BabyBear::ONE;
     let forged_leg = RotatedParticipantLeg {
         proof,
         descriptor,
         public_inputs,
+        custom_witness: None,
     };
     let t1_forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let turns = [t0, t1_forged];

@@ -479,6 +479,75 @@ pub fn mint_rotated_participant_leg(
     )
 }
 
+/// **THE CUSTOM-WIDE LEG MINTING RECIPE — the production custom-binding fold plug.** Build a
+/// [`RotatedParticipantLeg`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg) for
+/// an [`Effect::Custom`](dregg_circuit::effect_vm::Effect::Custom) turn from the real before/after
+/// actor `Cell`s, routing through the WIDE custom mint
+/// ([`RotatedParticipantLeg::mint_custom_wide_from_block_witnesses`](dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg::mint_custom_wide_from_block_witnesses))
+/// — the `customVmDescriptor2R24` leg that publishes the claimed `custom_proof_commitment` at PI
+/// 46..49 — and ATTACHING the prover-side re-provable [`CustomWitnessBundle`](dregg_circuit_prove::joint_turn_aggregation::CustomWitnessBundle).
+///
+/// This is the path that makes the custom binding REAL-FOLDED in production: the chain prover folds
+/// the attached witness's sub-proof leaf into the recursion tree a PURE LIGHT CLIENT verifies, so a
+/// forged `custom_proof_commitment` (one no verifying sub-proof of the bundle's PIs backs) is UNSAT
+/// — rejected without any off-AIR re-execution. Build `bundle` via
+/// [`CustomWitnessBundle::from_bound_custom_proof`](dregg_circuit_prove::joint_turn_aggregation::CustomWitnessBundle::from_bound_custom_proof)
+/// over the SAME `BoundCustomProof` whose `proof_commitment()` was threaded into the
+/// `Effect::Custom`'s `proof_commitment` field at turn-build.
+///
+/// Fails closed if the lead effect is not `Effect::Custom`, or if the bound proof carried no
+/// retained witness (a wire-reconstructed proof — `from_bound_custom_proof` returns `None`).
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn mint_custom_wide_rotated_participant_leg(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &[u8; 32],
+    commitments_root: &[u8; 32],
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+    bundle: dregg_circuit_prove::joint_turn_aggregation::CustomWitnessBundle,
+) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
+    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).map_err(|e| {
+        format!("mint_custom_wide_rotated_participant_leg: ledger seed failed: {e:?}")
+    })?;
+
+    let before_w = produce(
+        before_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let after_w = produce(
+        after_cell,
+        &ledger,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+    );
+    let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
+        RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).map_err(|e| {
+            format!("mint_custom_wide_rotated_participant_leg: rotated block witness: {e}")
+        })
+    };
+
+    RotatedParticipantLeg::mint_custom_wide_from_block_witnesses(
+        initial_state,
+        effects,
+        &bridge(&before_w)?,
+        &bridge(&after_w)?,
+        turn_id,
+        bundle,
+    )
+}
+
 /// **THE WELDED ROTATED+UMEM LEG MINTING RECIPE (STAGED, VK-RISK-FREE) — the IVC half of the
 /// flag-day weld.** Like [`mint_rotated_participant_leg`], but the minted leg carries the WELDED
 /// rotated+umem descriptor: it derives the SAME turn's universal-memory touch (the pre→post
