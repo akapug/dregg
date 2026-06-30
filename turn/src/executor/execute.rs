@@ -337,6 +337,15 @@ impl TurnExecutor {
             intro_lifetime: self.max_introduction_lifetime,
             current_timestamp: self.current_timestamp as u64,
             federation_id: self.local_federation_id,
+            // THE EPOCH §5 fee-distribution targets — the host policy `distribute_fee_shares`
+            // applies (proposer fee/2, treasury fee*3/10, fee_well the remainder). The verified
+            // kernel runs `distributeFee` against fixed PLACEHOLDER cells (`admCtxOfHost`'s
+            // 0xF00/0xF01) + burns the residue, so the producer's reconstituted ledger carries no
+            // real fee-well credit; threading the real targets lets the producer apply the IDENTICAL
+            // distribution to the reconstituted ledger so a fee-bearing turn agrees on `.root()`.
+            proposer_cell: self.proposer_cell,
+            treasury_cell: self.treasury_cell,
+            fee_well_cell: self.fee_well_cell,
         }
     }
 
