@@ -727,6 +727,33 @@ structure DeployedFaithfulEff8 (vkOfTag : ℤ → Nat) (provided : AuthProvided)
       ∧ isEffectPermitted c.facet effectBit = true
       ∧ c.tier.isSatisfiedBy provided = true
 
+/-- **`DeployedFaithful8`** — the 8-felt TRANSFER-facet faithfulness (the `EFFECT_TRANSFER` instance of
+`DeployedFaithfulEff8`). Membership over `MembersAt8`, root 8-felt. -/
+structure DeployedFaithful8 (vkOfTag : ℤ → Nat) (provided : AuthProvided)
+    (caps : FacetCaps) (root : Digest8) (leafAt : Label → Label → CapLeaf) : Prop where
+  /-- FAITHFULNESS: a transfer-conferring 8-felt member opening witnesses a REAL held `FacetCap`. -/
+  backed : ∀ (actor src : Label),
+    MembersAt8 S8 root (leafAt actor src) →
+    CapHashScheme.confersTransferLeaf vkOfTag provided (leafAt actor src) →
+    ∃ c : FacetCap, c ∈ caps actor ∧ c.target = src
+      ∧ isEffectPermitted c.facet EFFECT_TRANSFER = true
+      ∧ c.tier.isSatisfiedBy provided = true
+
+/-- **`deployedCapOpen8_implies_authorizedB` — THE 8-FELT TRANSFER AUTHORITY BRIDGE.** The 8-felt twin
+of `CapHashScheme.deployedCapOpen_implies_authorizedB`. -/
+theorem deployedCapOpen8_implies_authorizedB
+    (vkOfTag : ℤ → Nat) (provided : AuthProvided)
+    (caps : FacetCaps) (root : Digest8) (leafAt : Label → Label → CapLeaf)
+    (hfaith : DeployedFaithful8 S8 vkOfTag provided caps root leafAt)
+    (actor src dst : Label) (amt : ℤ)
+    (hopen : MembersAt8 S8 root (leafAt actor src))
+    (hconf : CapHashScheme.confersTransferLeaf vkOfTag provided (leafAt actor src)) :
+    authorizedFacetB caps provided { actor := actor, src := src, dst := dst, amt := amt } = true := by
+  obtain ⟨c, hmem, htgt, hfacet, htier⟩ := hfaith.backed actor src hopen hconf
+  exact authorizedFacetB_holds_transfer_cap caps provided
+    { actor := actor, src := src, dst := dst, amt := amt } c hmem htgt
+    (by simpa [turnEffectBit] using hfacet) htier
+
 /-- **`deployedCapOpen8_implies_authorizedEffB` — THE 8-FELT EFFECT-GENERAL AUTHORITY BRIDGE.** Given
 the 8-felt commitment relation AND an 8-felt opening whose leaf confers `effectBit` on BOTH axes, the
 GENERAL `authorizedFacetEffB … effectBit` PASSES. A RE-INSTANTIATION of the 1-felt bridge — the
@@ -906,6 +933,7 @@ theorem empty_caps_unauthorized :
 #assert_axioms Cap8Scheme.capLeafDigest8_injective
 #assert_axioms Cap8Scheme.nodeOf8_injective
 #assert_axioms Cap8Scheme.recomposeUp8_inj_of_path
+#assert_axioms Cap8Scheme.deployedCapOpen8_implies_authorizedB
 #assert_axioms Cap8Scheme.deployedCapOpen8_implies_authorizedEffB
 #assert_axioms Cap8Scheme.deployedFaithfulEff_canonical8
 #assert_axioms Reference8.refChip8CR
