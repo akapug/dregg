@@ -340,131 +340,199 @@ theorem cachedPast_eq (B : Lace) (h : BlockId) :
     show p.2 = causalPastIncl B h
     rw [← hb_v, hb_id, hp1]
 
-/-- `hasEquivInPast` with the cache (`§4`). -/
-def hasEquivInPastC (B : Lace) (cache : PastCache) (observer : BlockId) (creator : AuthorId) : Bool :=
+/-! ### THE ROUND CACHE — the SECOND memoization, killing `computeRounds` recomputation.
+
+**Why.** The `PastCache` above memoized the causal past, but it did NOT touch the OTHER un-memoized
+recompute in this file: `roundOf B h` is `roundLookup (computeRounds B) h` — it folds `computeRounds`
+over the WHOLE lace on EVERY call, and `roundOf` is called pervasively (inside `maxRound`'s `B.map`,
+`blocksAtRound`'s `B.filter`, the `xsortBy` qsort comparator twice-per-comparison, and the nested
+`creatorBlocks.any (… creatorBlocks.any (… roundOf …))` of `hasEquivInPast`). So even with the past
+memoized, the fast fold re-derived `computeRounds B` (itself O(n²) over the `List`-backed lace)
+thousands of times per finalization — the EXACT `causalPast`-class sibling, on the same live
+`@[export] dregg_tau_order` / `dregg_blocklace_finalize` path.
+
+**The fix, proof-preserving.** A `RoundCache` = `computeRounds B` built ONCE (the Lean analogue of the
+Rust `rounds: HashMap<BlockId, u64>`, `ordering.rs::compute_rounds`), threaded alongside `cache`. Each
+round-reading primitive gets an `…R` twin that LOOKS UP the precomputed rounds; each is proved EQUAL
+to its pure original at `rc = mkRoundCache B` — definitionally (`rfl`), since `roundOfR (mkRoundCache B)`
+unfolds to exactly `roundOf B`. The `…C` fast twins now thread `rc` and call the `…R` primitives, so
+`computeRounds B` is folded ONCE per finalization instead of per-`roundOf`. The `…C_eq` theorems keep
+their statements (now also fixing `rc = mkRoundCache B`) and the safety theorems / `#guard`s about the
+pure rule are untouched. -/
+
+/-- A memo of the computed round map — `computeRounds B` built ONCE (the Lean analogue of the Rust
+`rounds: HashMap<BlockId, u64>`, `ordering.rs::compute_rounds`). -/
+abbrev RoundCache := List (BlockId × Nat)
+
+/-- Build the round cache: run the `computeRounds` fold over `B` ONCE. -/
+def mkRoundCache (B : Lace) : RoundCache := computeRounds B
+
+/-- `roundOf` against a precomputed round cache (the lookup that replaces the per-call recompute). -/
+def roundOfR (rc : RoundCache) (h : BlockId) : Nat := (roundLookup rc h).getD 0
+
+theorem roundOfR_eq (B : Lace) (h : BlockId) : roundOfR (mkRoundCache B) h = roundOf B h := rfl
+
+/-- `maxRound` against the cache. -/
+def maxRoundR (rc : RoundCache) (B : Lace) : Nat :=
+  (B.map (fun b => roundOfR rc b.id)).foldl Nat.max 0
+
+theorem maxRoundR_eq (B : Lace) : maxRoundR (mkRoundCache B) B = maxRound B := rfl
+
+/-- `blocksAtRound` against the cache. -/
+def blocksAtRoundR (rc : RoundCache) (B : Lace) (r : Nat) : List BlockId :=
+  (B.filter (fun b => roundOfR rc b.id == r)).map (·.id)
+
+theorem blocksAtRoundR_eq (B : Lace) (r : Nat) :
+    blocksAtRoundR (mkRoundCache B) B r = blocksAtRound B r := rfl
+
+/-- `xsortBy` against the cache. -/
+def xsortByR (rc : RoundCache) (ids : List BlockId) : List BlockId :=
+  (ids.toArray.qsort (fun a b =>
+    roundOfR rc a < roundOfR rc b || (roundOfR rc a == roundOfR rc b && a < b))).toList
+
+theorem xsortByR_eq (B : Lace) (ids : List BlockId) :
+    xsortByR (mkRoundCache B) ids = xsortBy B ids := rfl
+
+/-- `leaderCandidates` against the cache. -/
+def leaderCandidatesR (rc : RoundCache) (B : Lace) (participants : List AuthorId)
+    (wave wavelength : Nat) : List Block :=
+  match waveLeader wave participants with
+  | none => []
+  | some lk =>
+      let ws := waveFirstRound wave wavelength
+      B.filter (fun b => b.creator == lk && roundOfR rc b.id == ws)
+
+theorem leaderCandidatesR_eq (B : Lace) (participants : List AuthorId) (wave wavelength : Nat) :
+    leaderCandidatesR (mkRoundCache B) B participants wave wavelength
+      = leaderCandidates B participants wave wavelength := rfl
+
+/-- `hasEquivInPast` with both caches (`§4`). -/
+def hasEquivInPastC (B : Lace) (cache : PastCache) (rc : RoundCache) (observer : BlockId) (creator : AuthorId) : Bool :=
   let past := cachedPast B cache observer
   let creatorBlocks : List Block :=
     past.filterMap (fun bid => match B.lookup bid with
                                 | some b => if b.creator = creator then some b else none
                                 | none   => none)
   creatorBlocks.any (fun a =>
-    creatorBlocks.any (fun b => a.id ≠ b.id && roundOf B a.id == roundOf B b.id))
+    creatorBlocks.any (fun b => a.id ≠ b.id && roundOfR rc a.id == roundOfR rc b.id))
 
 theorem hasEquivInPastC_eq (B : Lace) (observer : BlockId) (creator : AuthorId) :
-    hasEquivInPastC B (mkPastCache B) observer creator = hasEquivInPast B observer creator := by
-  simp only [hasEquivInPastC, hasEquivInPast, cachedPast_eq]
+    hasEquivInPastC B (mkPastCache B) (mkRoundCache B) observer creator = hasEquivInPast B observer creator := by
+  simp only [hasEquivInPastC, hasEquivInPast, cachedPast_eq, roundOfR_eq]
 
-/-- `approves` with the cache (`§4`). -/
-def approvesC (B : Lace) (cache : PastCache) (o l : Block) : Bool :=
-  (cachedPast B cache o.id).contains l.id && ¬ hasEquivInPastC B cache o.id l.creator
+/-- `approves` with both caches (`§4`). -/
+def approvesC (B : Lace) (cache : PastCache) (rc : RoundCache) (o l : Block) : Bool :=
+  (cachedPast B cache o.id).contains l.id && ¬ hasEquivInPastC B cache rc o.id l.creator
 
 theorem approvesC_eq (B : Lace) (o l : Block) :
-    approvesC B (mkPastCache B) o l = approves B o l := by
+    approvesC B (mkPastCache B) (mkRoundCache B) o l = approves B o l := by
   simp only [approvesC, approves, cachedPast_eq, hasEquivInPastC_eq]
 
-/-- `ratifies` with the cache (`§4`). -/
-def ratifiesC (B : Lace) (cache : PastCache) (participants : List AuthorId) (o l : Block) : Bool :=
+/-- `ratifies` with both caches (`§4`). -/
+def ratifiesC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId) (o l : Block) : Bool :=
   let past := cachedPast B cache o.id
   let approvingParticipants : Nat :=
     (participants.filter (fun p =>
       past.any (fun bid => match B.lookup bid with
-                            | some b => b.creator == p && approvesC B cache b l
+                            | some b => b.creator == p && approvesC B cache rc b l
                             | none   => false))).length
   approvingParticipants ≥ superMajority participants.length
 
 theorem ratifiesC_eq (B : Lace) (participants : List AuthorId) (o l : Block) :
-    ratifiesC B (mkPastCache B) participants o l = ratifies B participants o l := by
+    ratifiesC B (mkPastCache B) (mkRoundCache B) participants o l = ratifies B participants o l := by
   simp only [ratifiesC, ratifies, cachedPast_eq, approvesC_eq]
 
-/-- `isSuperRatified` with the cache (`§4`). -/
-def isSuperRatifiedC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+/-- `isSuperRatified` with both caches (`§4`). -/
+def isSuperRatifiedC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId)
     (l : Block) (waveEndRound : Nat) : Bool :=
-  let endBlocks := blocksAtRound B waveEndRound
+  let endBlocks := blocksAtRoundR rc B waveEndRound
   let ratifyingCreators : List AuthorId :=
     (endBlocks.filterMap (fun bid => match B.lookup bid with
-       | some b => if ratifiesC B cache participants b l then some b.creator else none
+       | some b => if ratifiesC B cache rc participants b l then some b.creator else none
        | none   => none)).dedup
   ratifyingCreators.length ≥ superMajority participants.length
 
 theorem isSuperRatifiedC_eq (B : Lace) (participants : List AuthorId) (l : Block) (waveEndRound : Nat) :
-    isSuperRatifiedC B (mkPastCache B) participants l waveEndRound
+    isSuperRatifiedC B (mkPastCache B) (mkRoundCache B) participants l waveEndRound
       = isSuperRatified B participants l waveEndRound := by
-  simp only [isSuperRatifiedC, isSuperRatified, ratifiesC_eq]
+  simp only [isSuperRatifiedC, isSuperRatified, blocksAtRoundR_eq, ratifiesC_eq]
 
-/-- `finalLeaderAt` with the cache (`§5`). -/
-def finalLeaderAtC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+/-- `finalLeaderAt` with both caches (`§5`). -/
+def finalLeaderAtC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId)
     (wave wavelength : Nat) : Option Block :=
-  match leaderCandidates B participants wave wavelength with
-  | [l] => if isSuperRatifiedC B cache participants l (waveLastRound wave wavelength) then some l else none
+  match leaderCandidatesR rc B participants wave wavelength with
+  | [l] => if isSuperRatifiedC B cache rc participants l (waveLastRound wave wavelength) then some l else none
   | _   => none
 
 theorem finalLeaderAtC_eq (B : Lace) (participants : List AuthorId) (wave wavelength : Nat) :
-    finalLeaderAtC B (mkPastCache B) participants wave wavelength
+    finalLeaderAtC B (mkPastCache B) (mkRoundCache B) participants wave wavelength
       = finalLeaderAt B participants wave wavelength := by
-  simp only [finalLeaderAtC, finalLeaderAt, isSuperRatifiedC_eq]
+  simp only [finalLeaderAtC, finalLeaderAt, leaderCandidatesR_eq, isSuperRatifiedC_eq]
 
-/-- `findAllFinalLeaders` with the cache (`§5`). -/
-def findAllFinalLeadersC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+/-- `findAllFinalLeaders` with both caches (`§5`). -/
+def findAllFinalLeadersC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId)
     (wavelength : Nat) : List Block :=
-  let mr := maxRound B
+  let mr := maxRoundR rc B
   let waveCount := if wavelength == 0 then 0 else mr / wavelength + 1
-  (List.range waveCount).filterMap (fun w => finalLeaderAtC B cache participants w wavelength)
+  (List.range waveCount).filterMap (fun w => finalLeaderAtC B cache rc participants w wavelength)
 
 theorem findAllFinalLeadersC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
-    findAllFinalLeadersC B (mkPastCache B) participants wavelength
+    findAllFinalLeadersC B (mkPastCache B) (mkRoundCache B) participants wavelength
       = findAllFinalLeaders B participants wavelength := by
-  simp only [findAllFinalLeadersC, findAllFinalLeaders, finalLeaderAtC_eq]
+  simp only [findAllFinalLeadersC, findAllFinalLeaders, maxRoundR_eq, finalLeaderAtC_eq]
 
-/-- `leaderCoverage` with the cache (`§6`). -/
-def leaderCoverageC (B : Lace) (cache : PastCache) (participants : List AuthorId)
+/-- `leaderCoverage` with both caches (`§6`). -/
+def leaderCoverageC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId)
     (l : Block) (wavelength : Nat) : List BlockId :=
-  let lr := roundOf B l.id
+  let lr := roundOfR rc l.id
   let lwave := roundToWave lr wavelength
   let waveEnd := waveLastRound lwave wavelength
-  let endBlocks := blocksAtRound B waveEnd
+  let endBlocks := blocksAtRoundR rc B waveEnd
   (endBlocks.flatMap (fun bid => match B.lookup bid with
-     | some b => if ratifiesC B cache participants b l then cachedPast B cache bid else []
+     | some b => if ratifiesC B cache rc participants b l then cachedPast B cache bid else []
      | none   => [])).dedup
 
 theorem leaderCoverageC_eq (B : Lace) (participants : List AuthorId) (l : Block) (wavelength : Nat) :
-    leaderCoverageC B (mkPastCache B) participants l wavelength
+    leaderCoverageC B (mkPastCache B) (mkRoundCache B) participants l wavelength
       = leaderCoverage B participants l wavelength := by
-  simp only [leaderCoverageC, leaderCoverage, cachedPast_eq, ratifiesC_eq]
+  simp only [leaderCoverageC, leaderCoverage, roundOfR_eq, blocksAtRoundR_eq, cachedPast_eq, ratifiesC_eq]
 
-/-- `leaderSegment` with the cache (`§6`). -/
-def leaderSegmentC (B : Lace) (cache : PastCache) (participants : List AuthorId) (wavelength : Nat)
+/-- `leaderSegment` with both caches (`§6`). -/
+def leaderSegmentC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId) (wavelength : Nat)
     (prevCovered : List BlockId) (l : Block) : List BlockId :=
-  let coverage := leaderCoverageC B cache participants l wavelength
+  let coverage := leaderCoverageC B cache rc participants l wavelength
   let newBlocks := (coverage.filter (fun bid => ¬ prevCovered.contains bid)).filter
     (fun bid => match B.lookup bid with
-      | some b => ¬ hasEquivInPastC B cache l.id b.creator
+      | some b => ¬ hasEquivInPastC B cache rc l.id b.creator
       | none   => false)
-  xsortBy B newBlocks
+  xsortByR rc newBlocks
 
 theorem leaderSegmentC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat)
     (prevCovered : List BlockId) (l : Block) :
-    leaderSegmentC B (mkPastCache B) participants wavelength prevCovered l
+    leaderSegmentC B (mkPastCache B) (mkRoundCache B) participants wavelength prevCovered l
       = leaderSegment B participants wavelength prevCovered l := by
-  simp only [leaderSegmentC, leaderSegment, leaderCoverageC_eq, hasEquivInPastC_eq]
+  simp only [leaderSegmentC, leaderSegment, leaderCoverageC_eq, hasEquivInPastC_eq, xsortByR_eq]
 
-/-- `tauStep` with the cache (`§6`). -/
-def tauStepC (B : Lace) (cache : PastCache) (participants : List AuthorId) (wavelength : Nat)
+/-- `tauStep` with both caches (`§6`). -/
+def tauStepC (B : Lace) (cache : PastCache) (rc : RoundCache) (participants : List AuthorId) (wavelength : Nat)
     (acc : List BlockId × List BlockId) (l : Block) : List BlockId × List BlockId :=
-  (acc.1 ++ leaderSegmentC B cache participants wavelength acc.2 l,
-   leaderCoverageC B cache participants l wavelength)
+  (acc.1 ++ leaderSegmentC B cache rc participants wavelength acc.2 l,
+   leaderCoverageC B cache rc participants l wavelength)
 
 theorem tauStepC_eq (B : Lace) (participants : List AuthorId) (wavelength : Nat) :
-    tauStepC B (mkPastCache B) participants wavelength = tauStep B participants wavelength := by
+    tauStepC B (mkPastCache B) (mkRoundCache B) participants wavelength = tauStep B participants wavelength := by
   funext acc l
   simp only [tauStepC, tauStep, leaderSegmentC_eq, leaderCoverageC_eq]
 
 /-- **`tauOrderFast B participants wavelength`** — the SAME finalized order as `tauOrder`, computed
-with the causal past memoized ONCE (`mkPastCache B`, shared by the whole fold). This is the function
-the live gate exports run. -/
+with BOTH the causal past (`mkPastCache B`) AND the round map (`mkRoundCache B`) memoized ONCE, shared
+by the whole fold. This is the function the live gate exports run; both whole-lace derived maps are
+built once instead of being re-derived per `roundOf`/`causalPastIncl` call. -/
 def tauOrderFast (B : Lace) (participants : List AuthorId) (wavelength : Nat) : List BlockId :=
   let cache := mkPastCache B
-  ((findAllFinalLeadersC B cache participants wavelength).foldl
-    (tauStepC B cache participants wavelength) ([], [])).1
+  let rc := mkRoundCache B
+  ((findAllFinalLeadersC B cache rc participants wavelength).foldl
+    (tauStepC B cache rc participants wavelength) ([], [])).1
 
 /-- **`tauOrderFast_eq`** — the memoized fast path computes EXACTLY the pure `tauOrder` (order-faithful,
 not merely set-equal). So every theorem and `#guard` that names `tauOrder` transfers to `tauOrderFast`
