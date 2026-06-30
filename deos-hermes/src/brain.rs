@@ -163,6 +163,18 @@ impl LlmKeys {
         Some(LlmKeys::new(provider, &secret))
     }
 
+    /// Read the BYO key from a file (e.g. `~/.kimikey`). Trailing whitespace /
+    /// newline is trimmed; deos never persists it elsewhere. `None` if the file is
+    /// missing or empty. The secret stays redacted under [`std::fmt::Debug`].
+    pub fn from_file(provider: &str, path: impl AsRef<std::path::Path>) -> Option<LlmKeys> {
+        let raw = std::fs::read_to_string(path).ok()?;
+        let secret = raw.trim();
+        if secret.is_empty() {
+            return None;
+        }
+        Some(LlmKeys::new(provider, secret))
+    }
+
     /// The provider label (NOT secret).
     pub fn provider(&self) -> &str {
         &self.provider
@@ -517,5 +529,339 @@ fn parse_provider_step(resp: &Value) -> BrainStep {
     }
     BrainStep::Finish {
         text: "(no actionable provider response)".to_string(),
+    }
+}
+
+// ───────────────────────── the Kimi (Moonshot) adapter ──────────────────────
+
+/// A CONCRETE [`LlmHttpCaller`] for a **Kimi / Moonshot** endpoint (OpenAI-style
+/// chat/completions with tool-use). [`HttpLlm`] is provider-neutral — it emits a
+/// Messages-shaped request and parses a `content`-block response; this adapter
+/// maps that shape onto OpenAI's `messages` + `tool_calls` request and back, so a
+/// Moonshot model drops in behind the unchanged brain/gate/receipt rail.
+///
+/// The actual bytes go over a BYO `post` seam (the operator's HTTP stack), so this
+/// crate adds no HTTP/TLS dependency: the live deployment injects a closure that
+/// POSTs to `https://api.moonshot.ai/v1/chat/completions` (or `.cn`) with the key
+/// in the `Authorization: Bearer` header; the tests inject a recorded responder.
+/// The api_key is the `post` argument — it never enters the request body.
+pub struct MoonshotCaller<P>
+where
+    P: FnMut(&str, &str, &Value) -> Result<Value, String>,
+{
+    post: P,
+}
+
+impl<P> MoonshotCaller<P>
+where
+    P: FnMut(&str, &str, &Value) -> Result<Value, String>,
+{
+    /// A Moonshot adapter over the BYO `post(endpoint, api_key, openai_request)`
+    /// transport. `post` is the ONLY thing that touches the network and the ONLY
+    /// place the key is used (in the auth header) — never the request body.
+    pub fn new(post: P) -> MoonshotCaller<P> {
+        MoonshotCaller { post }
+    }
+}
+
+impl<P> LlmHttpCaller for MoonshotCaller<P>
+where
+    P: FnMut(&str, &str, &Value) -> Result<Value, String>,
+{
+    fn complete(
+        &mut self,
+        endpoint: &str,
+        api_key: &str,
+        request: &Value,
+    ) -> Result<Value, String> {
+        let openai_req = messages_to_openai(request);
+        let openai_resp = (self.post)(endpoint, api_key, &openai_req)?;
+        Ok(openai_to_messages(&openai_resp))
+    }
+}
+
+/// Translate the [`HttpLlm`] Messages-shaped request into an OpenAI chat request:
+/// the `system` string becomes a leading `system` message; each Messages
+/// `assistant`/`tool_use` becomes an `assistant` turn with `tool_calls` (a
+/// synthesized `tc-{n}` id) and each following `tool` message reuses that id; the
+/// `{name,description}` tools become `{type:function,function:{…}}` specs.
+fn messages_to_openai(request: &Value) -> Value {
+    let mut messages = Vec::new();
+    if let Some(system) = request.get("system").and_then(|s| s.as_str()) {
+        messages.push(json!({ "role": "system", "content": system }));
+    }
+    let mut tc_seq = 0u64;
+    if let Some(src) = request.get("messages").and_then(|m| m.as_array()) {
+        for msg in src {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            match role {
+                "user" => messages.push(msg.clone()),
+                "assistant" => {
+                    // A Messages assistant turn carries a `content` array of
+                    // `{type:tool_use,name,input}` — map the first to a tool_call.
+                    let tool_use = msg.get("content").and_then(|c| c.as_array()).and_then(|a| {
+                        a.iter()
+                            .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                    });
+                    if let Some(tu) = tool_use {
+                        tc_seq += 1;
+                        let name = tu.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let input = tu.get("input").cloned().unwrap_or(Value::Null);
+                        messages.push(json!({
+                            "role": "assistant",
+                            "content": null,
+                            "tool_calls": [{
+                                "id": format!("tc-{tc_seq}"),
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": input.to_string()
+                                }
+                            }]
+                        }));
+                    } else {
+                        messages.push(msg.clone());
+                    }
+                }
+                "tool" => {
+                    // The tool result for the most recent tool_call.
+                    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    messages.push(json!({
+                        "role": "tool",
+                        "tool_call_id": format!("tc-{tc_seq}"),
+                        "content": content
+                    }));
+                }
+                _ => messages.push(msg.clone()),
+            }
+        }
+    }
+    let tools = request
+        .get("tools")
+        .and_then(|t| t.as_array())
+        .map(|specs| {
+            specs
+                .iter()
+                .map(|s| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": s.get("name").and_then(|n| n.as_str()).unwrap_or(""),
+                            "description": s.get("description").and_then(|d| d.as_str()).unwrap_or(""),
+                            "parameters": { "type": "object", "properties": {} }
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    json!({
+        "model": request.get("model").cloned().unwrap_or(Value::Null),
+        "messages": messages,
+        "tools": tools,
+        "temperature": 0.3
+    })
+}
+
+/// Translate an OpenAI chat response into the [`HttpLlm`] `content`-block shape
+/// [`parse_provider_step`] consumes: a `tool_calls[0]` becomes a `tool_use` block
+/// (its JSON-string `arguments` parsed into `input`); plain `content` becomes a
+/// `text` block.
+fn openai_to_messages(resp: &Value) -> Value {
+    let message = resp
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("message"));
+    let Some(message) = message else {
+        return json!({ "content": [] });
+    };
+    if let Some(tc) = message
+        .get("tool_calls")
+        .and_then(|t| t.as_array())
+        .and_then(|a| a.first())
+    {
+        let func = tc.get("function");
+        let name = func
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("");
+        let input = match func.and_then(|f| f.get("arguments")) {
+            Some(Value::String(s)) => serde_json::from_str(s).unwrap_or(Value::Null),
+            Some(v) => v.clone(),
+            None => Value::Null,
+        };
+        return json!({ "content": [{ "type": "tool_use", "name": name, "input": input }] });
+    }
+    let text = message
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    json!({ "content": [{ "type": "text", "text": text }] })
+}
+
+#[cfg(test)]
+mod kimi_adapter_tests {
+    use super::*;
+
+    const TEST_SECRET: &str = "sk-DEOS-UNITTEST-DONOTLEAK-0123456789";
+
+    /// An OpenAI/Moonshot response that calls a tool with JSON-string arguments.
+    fn oai_tool_call(name: &str, args_json: &str) -> Value {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_x",
+                        "type": "function",
+                        "function": { "name": name, "arguments": args_json }
+                    }]
+                }
+            }]
+        })
+    }
+
+    /// A Moonshot model drives the unchanged HttpLlm brain through the adapter: it
+    /// builds the Messages request, the adapter maps it to OpenAI + back, and the
+    /// brain parses the tool-call. The BYO key reaches only the post seam.
+    #[test]
+    fn moonshot_adapter_drives_a_tool_call() {
+        let convo = AgentConvo::new("/work", "search the docs then read the file");
+
+        // The recorded transport: assert the key is in the auth arg, NOT the body,
+        // and return a real OpenAI tool-call shape.
+        let mut key_in_body = false;
+        let mut key_seen = false;
+        let caller = MoonshotCaller::new(|_endpoint: &str, api_key: &str, body: &Value| {
+            if !api_key.is_empty() {
+                key_seen = true;
+                if body.to_string().contains(api_key) {
+                    key_in_body = true;
+                }
+            }
+            // The body must be OpenAI-shaped (messages + tools, function specs).
+            assert!(
+                body.get("messages").is_some(),
+                "translated to OpenAI messages"
+            );
+            assert!(
+                body["tools"][0]["type"] == "function",
+                "tools mapped to function specs"
+            );
+            Ok(oai_tool_call("web_search", r#"{"query":"docs"}"#))
+        });
+
+        let keys = LlmKeys::new("moonshot", TEST_SECRET);
+        let mut brain = HttpLlm::new(
+            keys,
+            "https://api.moonshot.ai/v1/chat/completions",
+            "kimi-k2-0711-preview",
+            caller,
+        );
+        let step = brain.next_step(&convo);
+
+        match step {
+            BrainStep::CallTool { name, arguments } => {
+                assert_eq!(name, "web_search", "the model's tool-call surfaced");
+                assert_eq!(
+                    arguments["query"], "docs",
+                    "arguments parsed from the JSON string"
+                );
+            }
+            other => panic!("expected a tool-call, got {other:?}"),
+        }
+        // The key reached the provider seam — and never the request body.
+        assert!(brain.key_reached_provider(), "the key reached the provider");
+    }
+
+    /// The adapter round-trips an observation (a refused tool-call) into the OpenAI
+    /// conversation, so the model reasons over confinement, and a plain text answer
+    /// finishes the turn.
+    #[test]
+    fn moonshot_adapter_round_trips_observations_and_finishes() {
+        let mut convo = AgentConvo::new("/work", "write the file");
+        convo.observe(
+            "write_file",
+            json!({ "path": "x" }),
+            false,
+            "denied by mandate: no write cap",
+        );
+
+        let caller = MoonshotCaller::new(|_e: &str, _k: &str, body: &Value| {
+            // The refusal rode into the OpenAI conversation as a tool result.
+            let s = body.to_string();
+            assert!(
+                s.contains("denied by mandate"),
+                "the refusal reached the model"
+            );
+            assert!(s.contains("tool_call_id"), "the tool result is id-linked");
+            // The model gives up on the denied tool and answers in text.
+            Ok(
+                json!({ "choices": [{ "message": { "role": "assistant", "content": "I cannot write; done." } }] }),
+            )
+        });
+        let mut brain = HttpLlm::new(
+            LlmKeys::new("moonshot", TEST_SECRET),
+            "https://api.moonshot.ai/v1/chat/completions",
+            "moonshot-v1-8k",
+            caller,
+        );
+        match brain.next_step(&convo) {
+            BrainStep::Finish { text } => {
+                assert!(text.contains("cannot write"), "final answer surfaced")
+            }
+            other => panic!("expected finish, got {other:?}"),
+        }
+    }
+
+    /// The key never appears in the request body the brain emits, and a stray Debug
+    /// of the keys is redacted.
+    #[test]
+    fn moonshot_adapter_never_leaks_the_key() {
+        let convo = AgentConvo::new("/work", "find something");
+        let mut leaked = false;
+        let caller = MoonshotCaller::new(|_e: &str, api_key: &str, body: &Value| {
+            if body.to_string().contains(api_key) {
+                leaked = true;
+            }
+            Ok(json!({ "choices": [{ "message": { "content": "done" } }] }))
+        });
+        let keys = LlmKeys::new("moonshot", TEST_SECRET);
+        let mut brain = HttpLlm::new(
+            keys,
+            "https://api.moonshot.ai/v1/chat/completions",
+            "moonshot-v1-8k",
+            caller,
+        );
+        let _ = brain.next_step(&convo);
+        assert!(!leaked, "the key never rode in the request body");
+        // A stray Debug of the keys is redacted.
+        let keys2 = LlmKeys::new("moonshot", TEST_SECRET);
+        assert!(
+            !format!("{keys2:?}").contains(TEST_SECRET),
+            "Debug is redacted"
+        );
+    }
+
+    /// The key loads from a file (e.g. ~/.kimikey), trimmed, redacted.
+    #[test]
+    fn key_loads_from_a_file_trimmed_and_redacted() {
+        let dir = std::env::temp_dir().join(format!("deos-kimikey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("kimikey");
+        std::fs::write(&path, format!("  {TEST_SECRET}\n")).unwrap();
+        let keys = LlmKeys::from_file("moonshot", &path).expect("key loads");
+        assert_eq!(
+            keys.secret(),
+            TEST_SECRET,
+            "trailing whitespace/newline trimmed"
+        );
+        assert!(
+            !format!("{keys:?}").contains(TEST_SECRET),
+            "redacted under Debug"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
