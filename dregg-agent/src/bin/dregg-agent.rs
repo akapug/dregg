@@ -55,7 +55,9 @@ fn usage() {
          \x20                 [--model M] [--base URL] [--step-cap N] [--out run.json]\n\
          \x20                 [--record resp.json | --replay resp.json] [--no-scale]\n\
          \x20 dregg-agent verify <run.json> [--tamper]\n\n\
-         CAPS (comma-separated): shell, fs, git:HOST, http:HOST, spend, run_tests,\n\
+         CAPS (comma-separated): shell, fs, git:HOST, http:HOST, run_tests,\n\
+         \x20                     provision:PROVIDER (Stripe Projects skill),\n\
+         \x20                     pay:VENDOR (Stripe Link skill), spend (pay any vendor),\n\
          \x20                     cell:/path  (each is a per-tool/per-resource grant)\n\n\
          The agent runs a real reason→act→observe loop on a live model; every tool\n\
          call is cap-gated + metered + receipted. verify re-witnesses run.json\n\
@@ -108,12 +110,19 @@ fn cmd_verify(args: &[String]) -> ExitCode {
     println!();
 
     if tamper {
-        // Prefer a spend receipt (the "I barely paid" forgery); else any receipt.
+        // Prefer a Stripe-pay receipt (the "I barely paid" forgery — a real dollar
+        // amount bound into the receipt); else a legacy spend; else any receipt.
         let idx = run
             .run
             .receipts
             .iter()
-            .position(|r| r.action.starts_with("spend:"))
+            .position(|r| r.action.starts_with("stripe_pay"))
+            .or_else(|| {
+                run.run
+                    .receipts
+                    .iter()
+                    .position(|r| r.action.starts_with("spend:"))
+            })
             .or(if run.run.receipts.is_empty() {
                 None
             } else {
@@ -200,19 +209,25 @@ mod live {
         LiveOpenAICompatCaller, OpenAICompatBrain, OpenAICompatCaller, ProviderKey,
     };
     use dregg_agent::live::{LiveRun, transcript_of};
+    use dregg_agent::stripe_skills;
     use dregg_agent::toolkit::Toolkit;
     use dregg_agent::tools::{HttpResp, OperatorTools, ShellOut};
     use serde_json::Value;
 
-    /// A real, default-demoable goal that exercises git + shell + fs + http +
-    /// the budget-gated spend — all real, ~30-60s, network-light.
+    /// A real, default-demoable goal that exercises git + shell + fs + http + the
+    /// two real **Stripe Skills** (provision a SaaS, pay a vendor) — all real,
+    /// ~30-60s, network-light. The Stripe legs run against the recorded transport
+    /// offline and the live CLIs the moment a test key + the CLIs are present.
     const DEFAULT_GOAL: &str = "Clone the small repo https://github.com/octocat/Hello-World \
         into your workdir, list the files you cloned and read the README, then GET \
         https://api.github.com/repos/octocat/Hello-World and report the repo's description. \
-        Finally pay 12 cents to the vendor 'compute' via stripe_pay for the work you did. \
-        Stay under budget and call finish with a one-line summary of what you found.";
+        Then provision your own database with stripe_provision (provider neon, service \
+        postgres, amount_cents 1900) and pay 50 cents to the vendor 'openai' via stripe_pay \
+        (memo: inference) for the work you did. Stay under budget and call finish with a \
+        one-line summary of what you found.";
 
-    const DEFAULT_CAPS: &str = "shell,fs,git:github.com,http:api.github.com,spend";
+    const DEFAULT_CAPS: &str =
+        "shell,fs,git:github.com,http:api.github.com,provision:neon,pay:openai";
 
     pub fn run(args: &[String]) -> ExitCode {
         let goal = flag(args, "--goal").unwrap_or(DEFAULT_GOAL).to_string();
@@ -287,27 +302,25 @@ mod live {
         println!("  BUDGET  {budget}¢   STEP-CAP {step_cap}   WORKDIR {workdir_s}");
         println!("  CAPS    {}", handle.caps.join("  ·  "));
 
-        // Funding (honest): a real Stripe test PaymentIntent if a test key is
-        // present; otherwise a real budget-ledger allowance, labeled as such.
-        let stripe_key = stripe_test_key();
-        let funding = match &stripe_key {
-            Some(_) => format!("Stripe test-mode PaymentIntent for {budget}¢ (live money leg)"),
-            None => format!(
-                "operator allowance of {budget}¢ (REAL budget-ledger ceiling; set ~/.stripekey \
-                 or STRIPE_API_KEY for a live Stripe test PaymentIntent money leg)"
-            ),
-        };
+        // Funding (honest): the budget cell is the spend ceiling; the Stripe Skills
+        // (provision + pay) draw from it. Live the moment the CLIs + a test key land.
+        let funding = format!(
+            "operator budget of {budget}¢ (the spend ceiling the Stripe Skills draw from) · \
+             Stripe Skills: {}",
+            stripe_skills::status_line()
+        );
         println!("  FUNDING {funding}");
         println!();
 
         // The real operator toolkit: real shell (timeout + cwd), real http
         // (reqwest), real fs (std, workdir-confined), git via the shell runner,
-        // plus a budget-gated stripe_pay spend (real Stripe test call if a key is set).
+        // plus the REAL **Stripe Skills** (stripe_provision + stripe_pay) — the live
+        // CLIs when present, the recorded transport offline. detect() picks.
         let timeout = Duration::from_secs(60);
-        let inner = build_inner_toolkit(stripe_key);
-        let toolkit = OperatorTools::new(inner, &workdir)
+        let toolkit = OperatorTools::new(Toolkit::new(), &workdir)
             .with_shell(move |cmd, cwd| real_shell(cmd, cwd, timeout))
-            .with_http(real_http);
+            .with_http(real_http)
+            .with_stripe_skills_boxed(stripe_skills::detect());
 
         // The brain: a live model over native tool_calls (confirmed), driving the
         // reason→act→observe loop. Replay re-feeds a recorded transcript.
@@ -454,7 +467,8 @@ mod live {
             "   ✓ sub-agent deployed (shell only, budget {}¢) — provably narrower",
             child.budget
         );
-        // One in-bundle op + two it CANNOT reach (no http grant, no spend grant).
+        // One in-bundle op + two it CANNOT reach (no http grant, no pay grant —
+        // a Stripe pay to a vendor outside the child's bundle is cap-refused).
         let plan = vec![
             AgentAction::Op(ToolCall::new(
                 "shell",
@@ -464,10 +478,14 @@ mod live {
                 "http_get",
                 [("url".into(), "https://api.github.com/zen".into())],
             )),
-            AgentAction::Spend {
-                service: "stripe_pay".into(),
-                amount_cents: 5,
-            },
+            AgentAction::Op(ToolCall::new(
+                op::STRIPE_PAY,
+                [
+                    ("vendor".into(), "openai".into()),
+                    ("amount_cents".into(), "5".into()),
+                    ("memo".into(), "burst".into()),
+                ],
+            )),
         ];
         let report = cloud.run_with_toolkit(&child, &mut PlannedBrain::new(plan), toolkit);
         for s in transcript_of(&report) {
@@ -508,9 +526,23 @@ mod live {
                         op_tools.push(t.to_string());
                     }
                 }
+                // The Stripe Link skill (`stripe_pay`), per-vendor. `pay:VENDOR`
+                // grants exactly that vendor; bare `spend` grants any vendor.
+                t if t.starts_with("pay:") => {
+                    let vendor = &t["pay:".len()..];
+                    spec = spec.with_stripe_pay(vendor);
+                    op_tools.push(op::STRIPE_PAY.to_string());
+                }
                 "spend" => {
-                    spec = spec.with_service("stripe_pay");
-                    services.push("stripe_pay".to_string());
+                    spec =
+                        spec.with_grant(dregg_agent::grant::CapGrant::Prefix("pay:".to_string()));
+                    op_tools.push(op::STRIPE_PAY.to_string());
+                }
+                // The Stripe Projects skill (`stripe_provision`), per-provider.
+                t if t.starts_with("provision:") => {
+                    let provider = &t["provision:".len()..];
+                    spec = spec.with_stripe_provision(provider);
+                    op_tools.push(op::STRIPE_PROVISION.to_string());
                 }
                 t if t.starts_with("http:") => {
                     let host = &t["http:".len()..];
@@ -560,17 +592,6 @@ mod live {
             .with_op_tools(op_tools.to_vec())
             .with_system_note("Work step by step using ONE tool call per turn. Keep reasoning brief. Call finish when the goal is met.")
             .with_step_cap(step_cap)
-    }
-
-    // ── the flat/priced inner toolkit (run_tests + the spend rail) ────────────
-
-    fn build_inner_toolkit(stripe_key: Option<String>) -> Toolkit {
-        Toolkit::new().with_stripe_pay("stripe_pay", move |amount_cents| match &stripe_key {
-            Some(key) => real_stripe_payment_intent(key, amount_cents),
-            None => Ok(format!(
-                "ledger-{amount_cents}c (budget enforced; Stripe live leg needs a test key)"
-            )),
-        })
     }
 
     // ── real runners ───────────────────────────────────────────────────────────
@@ -651,53 +672,6 @@ mod live {
             .map_err(|_| "http thread panicked".to_string())?
     }
 
-    /// A REAL Stripe **test-mode** PaymentIntent (only with an `sk_test_` key). The
-    /// genuine money leg: POST /v1/payment_intents (amount, usd, automatic methods,
-    /// confirm with the `pm_card_visa` test method). Returns the PaymentIntent id.
-    fn real_stripe_payment_intent(key: &str, amount_cents: i64) -> Result<String, String> {
-        if !key.starts_with("sk_test_") {
-            return Err("refusing a non-test Stripe key (demo is test-mode only)".into());
-        }
-        let key = key.to_string();
-        let handle = std::thread::spawn(move || -> Result<String, String> {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .map_err(|e| format!("client: {e}"))?;
-            let resp = client
-                .post("https://api.stripe.com/v1/payment_intents")
-                .basic_auth(&key, Some(""))
-                .form(&[
-                    ("amount", amount_cents.to_string()),
-                    ("currency", "usd".to_string()),
-                    ("payment_method", "pm_card_visa".to_string()),
-                    ("confirm", "true".to_string()),
-                    ("automatic_payment_methods[enabled]", "true".to_string()),
-                    (
-                        "automatic_payment_methods[allow_redirects]",
-                        "never".to_string(),
-                    ),
-                ])
-                .send()
-                .map_err(|e| format!("stripe send: {e}"))?;
-            let v: Value = resp.json().map_err(|e| format!("stripe decode: {e}"))?;
-            if let Some(id) = v.get("id").and_then(|i| i.as_str()) {
-                Ok(id.to_string())
-            } else {
-                Err(format!(
-                    "stripe error: {}",
-                    v.get("error")
-                        .and_then(|e| e.get("message"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("unknown")
-                ))
-            }
-        });
-        handle
-            .join()
-            .map_err(|_| "stripe thread panicked".to_string())?
-    }
-
     // ── keys + record/replay ────────────────────────────────────────────────────
 
     fn nvidia_key() -> Option<ProviderKey> {
@@ -706,19 +680,6 @@ mod live {
                 .map(|h| Path::new(&h).join(".nvidiakey"))
                 .and_then(|p| ProviderKey::from_file("nvidia", p))
         })
-    }
-
-    fn stripe_test_key() -> Option<String> {
-        if let Ok(k) = std::env::var("STRIPE_API_KEY")
-            && !k.is_empty()
-        {
-            return Some(k);
-        }
-        std::env::var_os("HOME")
-            .map(|h| Path::new(&h).join(".stripekey"))
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
     }
 
     /// The capture format: the recorded model responses plus the workdir they ran

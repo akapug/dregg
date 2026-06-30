@@ -33,6 +33,7 @@ use std::sync::Mutex;
 
 use crate::agent::{ToolCall, ToolKit, ToolOutcome, WitnessedRun, op};
 use crate::receipt::BodyHasher;
+use crate::stripe_skills::StripeSkills;
 use crate::toolkit::{Toolkit, code_root};
 
 /// What a real shell run produced: the exit code, captured stdout/stderr, and the
@@ -87,6 +88,10 @@ pub struct OperatorTools {
     shell: Option<ShellFn>,
     /// The injected http runner.
     http: Option<HttpFn>,
+    /// The injected **Stripe Skills** transport (`stripe_provision` / `stripe_pay`
+    /// — the real Stripe Projects + Link CLIs, or the recorded stub). `None` ⇒ the
+    /// skills are unwired (a call fails closed before any effect).
+    skills: Option<Box<dyn StripeSkills>>,
 }
 
 impl OperatorTools {
@@ -103,6 +108,7 @@ impl OperatorTools {
             inner,
             shell: None,
             http: None,
+            skills: None,
         }
     }
 
@@ -122,6 +128,25 @@ impl OperatorTools {
         f: impl Fn(&str) -> Result<HttpResp, String> + Send + Sync + 'static,
     ) -> OperatorTools {
         self.http = Some(Box::new(f));
+        self
+    }
+
+    /// Wire the **Stripe Skills** transport — the real Stripe Projects + Link CLIs
+    /// (live the moment the CLIs + a test key are present) or the recorded stub
+    /// (the offline / green-test default). Use
+    /// [`crate::stripe_skills::detect`] to pick automatically, or pass a concrete
+    /// transport. Once wired, the agent can call `stripe_provision` (provision a
+    /// SaaS) and `stripe_pay` (pay a vendor) on the same cap · budget · receipt
+    /// rail as every other tool.
+    pub fn with_stripe_skills(mut self, skills: impl StripeSkills + 'static) -> OperatorTools {
+        self.skills = Some(Box::new(skills));
+        self
+    }
+
+    /// Wire an already-boxed Stripe Skills transport (e.g. the result of
+    /// [`crate::stripe_skills::detect`]).
+    pub fn with_stripe_skills_boxed(mut self, skills: Box<dyn StripeSkills>) -> OperatorTools {
+        self.skills = Some(skills);
         self
     }
 
@@ -193,6 +218,10 @@ impl ToolKit for OperatorTools {
             }
             op::HTTP_GET => format!("http:{}", call.url_host("url")),
             op::GIT_CLONE => format!("http:{}", call.url_host("url")),
+            // The Stripe Skills are gated per resource: only a `provision:<provider>`
+            // / `pay:<vendor>` grant in the bundle reaches them.
+            op::STRIPE_PROVISION => format!("provision:{}", call.arg("provider").unwrap_or("")),
+            op::STRIPE_PAY => format!("pay:{}", call.arg("vendor").unwrap_or("")),
             other => format!("op:{other}"),
         }
     }
@@ -206,6 +235,8 @@ impl ToolKit for OperatorTools {
             op::MKDIR => self.op_mkdir(call),
             op::HTTP_GET => self.op_http_get(call),
             op::GIT_CLONE => self.op_git_clone(call),
+            op::STRIPE_PROVISION => self.op_stripe_provision(call),
+            op::STRIPE_PAY => self.op_stripe_pay(call),
             other => ToolOutcome::fail(format!("unknown operator tool `{other}`")),
         }
     }
@@ -431,6 +462,88 @@ impl OperatorTools {
                 ))
             }
             Err(e) => ToolOutcome::fail(format!("git clone exec error: {e}")),
+        }
+    }
+
+    /// `stripe_provision` — the **Stripe Projects skill** (`stripe projects add
+    /// <provider>/<service>`): the agent provisions its own SaaS. By the time this
+    /// runs the rail has already cap-gated `provision:<provider>` and drawn the
+    /// tier cost from the budget (an over-budget provision was refused in-band,
+    /// before the CLI ran). The outcome (provider/service, the resource id, the
+    /// synced cred KEY names — never values) is bound into a [`WitnessedRun`]; the
+    /// key is read at runtime by the transport and redacted from every byte here.
+    fn op_stripe_provision(&self, call: &ToolCall) -> ToolOutcome {
+        let provider = call.arg("provider").unwrap_or("").trim();
+        let service = call.arg("service").unwrap_or("").trim();
+        if provider.is_empty() || service.is_empty() {
+            return ToolOutcome::fail("stripe_provision: need a `provider` and a `service`");
+        }
+        let Some(skills) = &self.skills else {
+            return ToolOutcome::fail("Stripe Skills transport not wired on this toolkit");
+        };
+        let amount = call.amount_cents().unwrap_or(0);
+        match skills.provision(provider, service, amount) {
+            Ok(out) => {
+                let summary = format!(
+                    "[{}] provisioned {provider}/{service} → {} (synced: {}) · {}",
+                    skills.mode(),
+                    out.resource_id,
+                    if out.synced_creds.is_empty() {
+                        "—".to_string()
+                    } else {
+                        out.synced_creds.join(", ")
+                    },
+                    out.detail
+                );
+                ToolOutcome::pass(summary).with_witness(witness(
+                    &format!("stripe_provision[{provider}/{service}]"),
+                    &[provider, service, &out.resource_id],
+                    0,
+                    &[&out.resource_id, &out.synced_creds.join(",")],
+                ))
+            }
+            Err(e) => ToolOutcome::fail(format!("stripe_provision {provider}/{service}: {e}")),
+        }
+    }
+
+    /// `stripe_pay` — the **Stripe Link skill** (`@stripe/link-cli`): the agent
+    /// pays for a service it uses. The variable amount was drawn from the budget
+    /// cell first (an over-ceiling pay was refused in-band — no money moved), and
+    /// the cap-gate already admitted `pay:<vendor>`. The amount is bound into the
+    /// receipt twice over — as the action's `cost` (the budget draw) and in the
+    /// [`WitnessedRun`] — so a forged "I paid $5 not $500" breaks the signature.
+    fn op_stripe_pay(&self, call: &ToolCall) -> ToolOutcome {
+        let vendor = call.arg("vendor").unwrap_or("").trim();
+        let memo = call.arg("memo").unwrap_or("").trim();
+        let Some(amount) = call.amount_cents() else {
+            return ToolOutcome::fail("stripe_pay: need an integer `amount_cents`");
+        };
+        if vendor.is_empty() {
+            return ToolOutcome::fail("stripe_pay: need a `vendor`");
+        }
+        if amount <= 0 {
+            return ToolOutcome::fail("stripe_pay: `amount_cents` must be > 0");
+        }
+        let Some(skills) = &self.skills else {
+            return ToolOutcome::fail("Stripe Skills transport not wired on this toolkit");
+        };
+        match skills.pay(vendor, amount, memo) {
+            Ok(out) => {
+                let summary = format!(
+                    "[{}] paid {amount}c to {vendor} via {} → {} · {}",
+                    skills.mode(),
+                    out.method,
+                    out.payment_id,
+                    out.detail
+                );
+                ToolOutcome::pass(summary).with_witness(witness(
+                    &format!("stripe_pay[{vendor}={amount}c]"),
+                    &[vendor, &amount.to_string(), memo],
+                    0,
+                    &[&out.payment_id, &out.amount_cents.to_string()],
+                ))
+            }
+            Err(e) => ToolOutcome::fail(format!("stripe_pay {vendor}: {e}")),
         }
     }
 }
@@ -764,6 +877,244 @@ mod tests {
             report2.cap_refused, 1,
             "child cannot climb to the parent tree"
         );
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    // ═════ THE REAL STRIPE SKILLS — provision SaaS + pay for services ═════════
+    // `stripe_provision` (Stripe Projects CLI) and `stripe_pay` (Stripe Link CLI)
+    // ride the operator rail: per-resource cap-gated, budget-drawn, receipted.
+
+    use crate::stripe_skills::RecordedStripeSkills;
+
+    /// An operator toolkit wired with the recorded Stripe Skills transport (the
+    /// offline / green default — the live CLI leg is proven in `stripe_skills`).
+    fn skill_tools(workdir: &Path) -> OperatorTools {
+        OperatorTools::new(Toolkit::new(), workdir).with_stripe_skills(RecordedStripeSkills::new())
+    }
+
+    // ── the agent provisions a SaaS + pays for a service, both receipted ──────
+    #[test]
+    fn the_agent_provisions_a_saas_and_pays_for_a_service() {
+        let wd = tmpdir("skills");
+        let cloud = AgentCloud::from_seed([90u8; 32]);
+        // Granted: provision from `neon`, pay the vendor `openai`. Budget 5000c.
+        let handle = cloud
+            .deploy(
+                &AgentSpec::new("agent:founder", 5000)
+                    .with_stripe_provision("neon")
+                    .with_stripe_pay("openai"),
+            )
+            .unwrap();
+        let toolkit = skill_tools(&wd);
+
+        let plan = vec![
+            op(
+                "stripe_provision",
+                &[
+                    ("provider", "neon"),
+                    ("service", "postgres"),
+                    ("amount_cents", "1900"),
+                ],
+            ),
+            op(
+                "stripe_pay",
+                &[
+                    ("vendor", "openai"),
+                    ("amount_cents", "500"),
+                    ("memo", "inference"),
+                ],
+            ),
+        ];
+        let report = cloud.run_with_toolkit(
+            &handle,
+            &mut crate::agent::PlannedBrain::new(plan),
+            &toolkit,
+        );
+
+        assert_eq!(report.admitted, 2, "both skills ran");
+        assert_eq!(report.receipts.len(), 2, "each is receipted");
+        assert!(report.all_tools_passed(), "{:?}", report.tool_results());
+        // The provision tier cost + the pay amount were drawn from the budget cell.
+        assert_eq!(
+            report.consumed,
+            1900 + 500,
+            "the budget cell drew both prices"
+        );
+        // The receipts bind the cost = the amount (the forged-amount tooth basis).
+        let pay = report
+            .receipts
+            .iter()
+            .find(|r| r.action.starts_with("stripe_pay"))
+            .expect("the pay is receipted");
+        assert_eq!(pay.cost, 500, "the pay amount is bound into the receipt");
+        let prov = report
+            .receipts
+            .iter()
+            .find(|r| r.action.starts_with("stripe_provision"))
+            .expect("the provision is receipted");
+        assert_eq!(prov.cost, 1900, "the tier cost is bound into the receipt");
+        // The verdicts name the recorded transport + what was provisioned/paid.
+        assert!(
+            report
+                .tool_results()
+                .iter()
+                .any(|(_, _, s)| s.contains("neon/postgres"))
+        );
+        assert!(
+            report
+                .tool_results()
+                .iter()
+                .any(|(_, _, s)| s.contains("openai"))
+        );
+        // The whole run re-witnesses without trusting the host.
+        verify_agent_run(&report).expect("the Stripe-Skills run re-witnesses");
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    // ── TOOTH: an over-budget pay is REFUSED in-band, before any money moves ──
+    #[test]
+    fn an_over_budget_pay_is_refused_before_money_moves() {
+        let wd = tmpdir("skills-budget");
+        let cloud = AgentCloud::from_seed([91u8; 32]);
+        // Budget 300c — a 500c pay cannot be funded.
+        let handle = cloud
+            .deploy(&AgentSpec::new("agent:broke", 300).with_stripe_pay("openai"))
+            .unwrap();
+        let toolkit = skill_tools(&wd);
+        let plan = vec![op(
+            "stripe_pay",
+            &[("vendor", "openai"), ("amount_cents", "500"), ("memo", "x")],
+        )];
+        let report = cloud.run_with_toolkit(
+            &handle,
+            &mut crate::agent::PlannedBrain::new(plan),
+            &toolkit,
+        );
+
+        assert_eq!(report.admitted, 0, "the over-budget pay never ran");
+        assert_eq!(report.budget_refused, 1, "refused by the meter");
+        assert_eq!(report.receipts.len(), 0, "no receipt — no money moved");
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    // ── TOOTH: a non-granted vendor / provider is CAP-refused (no receipt) ────
+    #[test]
+    fn a_non_granted_vendor_or_provider_is_cap_refused() {
+        let wd = tmpdir("skills-cap");
+        let cloud = AgentCloud::from_seed([92u8; 32]);
+        // Granted ONLY: pay openai, provision neon. Everything else is refused.
+        let handle = cloud
+            .deploy(
+                &AgentSpec::new("agent:scoped", 5000)
+                    .with_stripe_pay("openai")
+                    .with_stripe_provision("neon"),
+            )
+            .unwrap();
+        let toolkit = skill_tools(&wd);
+        let plan = vec![
+            // A vendor the bundle never granted.
+            op(
+                "stripe_pay",
+                &[
+                    ("vendor", "evilcorp"),
+                    ("amount_cents", "500"),
+                    ("memo", "x"),
+                ],
+            ),
+            // A provider the bundle never granted.
+            op(
+                "stripe_provision",
+                &[
+                    ("provider", "shadyhost"),
+                    ("service", "vm"),
+                    ("amount_cents", "100"),
+                ],
+            ),
+            // The granted vendor still works (proves the gate is per-resource).
+            op(
+                "stripe_pay",
+                &[
+                    ("vendor", "openai"),
+                    ("amount_cents", "500"),
+                    ("memo", "ok"),
+                ],
+            ),
+        ];
+        let report = cloud.run_with_toolkit(
+            &handle,
+            &mut crate::agent::PlannedBrain::new(plan),
+            &toolkit,
+        );
+
+        assert_eq!(
+            report.cap_refused, 2,
+            "the two non-granted resources are refused"
+        );
+        assert_eq!(report.admitted, 1, "only the granted vendor ran");
+        assert_eq!(
+            report.receipts.len(),
+            1,
+            "a cap-refused call leaves no receipt"
+        );
+        verify_agent_run(&report).expect("the run re-witnesses");
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    // ── TOOTH: a forged "I paid $5 not $500" breaks the receipt signature ─────
+    #[test]
+    fn a_forged_pay_amount_breaks_the_receipt() {
+        let wd = tmpdir("skills-forge");
+        let cloud = AgentCloud::from_seed([93u8; 32]);
+        let handle = cloud
+            .deploy(&AgentSpec::new("agent:liar", 5000).with_stripe_pay("openai"))
+            .unwrap();
+        let toolkit = skill_tools(&wd);
+        let plan = vec![op(
+            "stripe_pay",
+            &[("vendor", "openai"), ("amount_cents", "500"), ("memo", "x")],
+        )];
+        let mut report = cloud.run_with_toolkit(
+            &handle,
+            &mut crate::agent::PlannedBrain::new(plan),
+            &toolkit,
+        );
+        verify_agent_run(&report).expect("the honest pay re-witnesses");
+        assert_eq!(report.receipts[0].cost, 500);
+        // Forge "I only paid 5c" after sealing → the signature no longer matches.
+        report.receipts[0].cost = 5;
+        assert!(
+            verify_agent_run(&report).is_err(),
+            "the forged amount is caught (BadSignature)"
+        );
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    // ── the skills fail closed when the transport is not wired ────────────────
+    #[test]
+    fn skills_fail_closed_without_a_transport() {
+        let wd = tmpdir("skills-unwired");
+        let cloud = AgentCloud::from_seed([94u8; 32]);
+        let handle = cloud
+            .deploy(&AgentSpec::new("agent:nowire", 5000).with_stripe_pay("openai"))
+            .unwrap();
+        // An OperatorTools with NO stripe skills wired.
+        let toolkit = OperatorTools::new(Toolkit::new(), &wd);
+        let plan = vec![op(
+            "stripe_pay",
+            &[("vendor", "openai"), ("amount_cents", "500"), ("memo", "x")],
+        )];
+        let report = cloud.run_with_toolkit(
+            &handle,
+            &mut crate::agent::PlannedBrain::new(plan),
+            &toolkit,
+        );
+        // Cap ✓ + budget drawn, but the tool fails closed (no transport) — a real,
+        // receipted FAIL, not a refusal.
+        assert_eq!(report.admitted, 1);
+        let (_, ok, summary) = &report.tool_results()[0];
+        assert!(!ok, "fails closed: {summary}");
+        assert!(summary.contains("not wired"), "{summary}");
+        verify_agent_run(&report).expect("the fail re-witnesses");
         std::fs::remove_dir_all(&wd).ok();
     }
 }
