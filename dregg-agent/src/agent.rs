@@ -96,10 +96,28 @@ pub mod op {
     pub const HTTP_GET: &str = "http_get";
     /// `git clone` a repo into the workdir. Cap: `http:<host>` (the fetch egress).
     pub const GIT_CLONE: &str = "git_clone";
+    /// **Provision a SaaS via the Stripe Projects skill** (`stripe projects add
+    /// <provider>/<service>`). Cap: `provision:<provider>` (per-provider). The
+    /// agent provisions its own infrastructure; the tier cost is drawn from the
+    /// budget cell (over-budget → refused in-band before the CLI runs).
+    pub const STRIPE_PROVISION: &str = "stripe_provision";
+    /// **Pay a vendor via the Stripe Link skill** (`@stripe/link-cli`). Cap:
+    /// `pay:<vendor>` (per-vendor). The agent pays for the services it uses; the
+    /// variable `amount_cents` is drawn from the budget cell (over-ceiling →
+    /// refused in-band before any money moves).
+    pub const STRIPE_PAY: &str = "stripe_pay";
 
     /// Every operator tool name (for the spec helper / display).
     pub const ALL: &[&str] = &[
-        SHELL, FS_READ, FS_WRITE, LIST_DIR, MKDIR, HTTP_GET, GIT_CLONE,
+        SHELL,
+        FS_READ,
+        FS_WRITE,
+        LIST_DIR,
+        MKDIR,
+        HTTP_GET,
+        GIT_CLONE,
+        STRIPE_PROVISION,
+        STRIPE_PAY,
     ];
 }
 
@@ -150,8 +168,22 @@ impl ToolCall {
             op::FS_WRITE | op::MKDIR => format!("fs-write:{}", self.arg("path").unwrap_or("")),
             op::HTTP_GET => format!("http:{}", self.url_host("url")),
             op::GIT_CLONE => format!("http:{}", self.url_host("url")),
+            // The Stripe Skills are gated PER RESOURCE: only `provision:<provider>`
+            // / `pay:<vendor>` grants reach them (a sub-agent can only narrow).
+            op::STRIPE_PROVISION => format!("provision:{}", self.arg("provider").unwrap_or("")),
+            op::STRIPE_PAY => format!("pay:{}", self.arg("vendor").unwrap_or("")),
             other => format!("op:{other}"),
         }
+    }
+
+    /// The variable budget amount (USD-cents) this call draws, if it carries an
+    /// `amount_cents` arg — the priced operator tools (`stripe_pay`'s pay amount,
+    /// `stripe_provision`'s tier cost) draw their *price* from the budget cell
+    /// rather than the flat `cost_per_action`, so the cell IS the dollar ceiling
+    /// and an over-ceiling spend is refused in-band before the CLI runs.
+    pub fn amount_cents(&self) -> Option<i64> {
+        self.arg("amount_cents")
+            .and_then(|s| s.trim().parse::<i64>().ok())
     }
 
     /// A short human label for logs/receipts (`shell:cargo test`, `git_clone:…`).
@@ -162,6 +194,16 @@ impl ToolCall {
                 self.arg("path").unwrap_or("").to_string()
             }
             op::HTTP_GET | op::GIT_CLONE => self.arg("url").unwrap_or("").to_string(),
+            op::STRIPE_PROVISION => format!(
+                "{}/{}",
+                self.arg("provider").unwrap_or(""),
+                self.arg("service").unwrap_or("")
+            ),
+            op::STRIPE_PAY => format!(
+                "{}={}c",
+                self.arg("vendor").unwrap_or(""),
+                self.arg("amount_cents").unwrap_or("?")
+            ),
             _ => String::new(),
         };
         let detail: String = detail.chars().take(48).collect();
@@ -275,6 +317,19 @@ impl AgentSpec {
         self.with_grant(CapGrant::Exact(format!("http:{}", host.as_ref())))
     }
 
+    /// Grant the **Stripe Projects skill** for one `provider` (`provision:<provider>`):
+    /// the agent may provision SaaS from that provider only (a sub-agent can narrow,
+    /// never widen, and a non-granted provider is cap-refused before the CLI runs).
+    pub fn with_stripe_provision(self, provider: impl AsRef<str>) -> AgentSpec {
+        self.with_grant(CapGrant::Exact(format!("provision:{}", provider.as_ref())))
+    }
+
+    /// Grant the **Stripe Link skill** for one `vendor` (`pay:<vendor>`): the agent
+    /// may pay that vendor only (the amount is still bounded by the budget cell).
+    pub fn with_stripe_pay(self, vendor: impl AsRef<str>) -> AgentSpec {
+        self.with_grant(CapGrant::Exact(format!("pay:{}", vendor.as_ref())))
+    }
+
     /// The full resource-scoped grant bundle: an `invoke:` exact per service, a
     /// `cell-read:`/`cell-write:` exact pair per cell, plus the explicit
     /// [`grants`](AgentSpec::grants).
@@ -385,12 +440,17 @@ impl AgentAction {
         }
     }
 
-    /// The budget units this action draws: a [`Spend`](AgentAction::Spend) draws
-    /// its variable `amount_cents` (the priced spend); everything else draws the
-    /// agent's flat `cost_per_action` default.
+    /// The budget units this action draws: a [`Spend`](AgentAction::Spend) — or a
+    /// priced [`Op`](AgentAction::Op) carrying an `amount_cents` arg (a Stripe
+    /// Skill) — draws its variable price; everything else draws the agent's flat
+    /// `cost_per_action` default.
     fn draw_cost(&self, default: i64) -> i64 {
         match self {
             AgentAction::Spend { amount_cents, .. } => *amount_cents,
+            // A priced operator tool (a Stripe Skill carrying an `amount_cents`
+            // arg) draws its price from the budget cell; every other op draws the
+            // flat `cost_per_action`.
+            AgentAction::Op(call) => call.amount_cents().unwrap_or(default),
             _ => default,
         }
     }

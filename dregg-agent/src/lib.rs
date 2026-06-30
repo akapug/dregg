@@ -56,3 +56,6 @@ pub mod tools;
 // ── the flexible live run + the earn-rail crypto (Stripe webhook verify) ──────
 pub mod live;
 pub mod stripe;
+
+// ── the SPEND rail: the real Stripe Skills for Hermes (provision + pay CLIs) ───
+pub mod stripe_skills;

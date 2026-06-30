@@ -566,14 +566,11 @@ impl<C: OpenAICompatCaller> OpenAICompatBrain<C> {
     /// The key is not here; the body is safe to witness.
     fn tool_specs(&self) -> Value {
         let mut tools = Vec::new();
-        // The flat `invoke` services exclude `stripe_pay`, which is advertised as
-        // its own priced tool (a variable dollar amount) below.
-        let invoke_services: Vec<String> = self
-            .services
-            .iter()
-            .filter(|s| s.as_str() != "stripe_pay")
-            .cloned()
-            .collect();
+        // The flat `invoke` services (run_tests / verify_deploy / check_health …).
+        // The Stripe Skills (`stripe_provision` / `stripe_pay`) are NOT flat
+        // services — they ride the operator rail (per-resource cap-gated) and are
+        // advertised through `op_tools` below.
+        let invoke_services: Vec<String> = self.services.clone();
         if !invoke_services.is_empty() {
             tools.push(json!({
                 "type": "function",
@@ -587,28 +584,6 @@ impl<C: OpenAICompatCaller> OpenAICompatBrain<C> {
                             "service": { "type": "string", "enum": invoke_services }
                         },
                         "required": ["service"]
-                    }
-                }
-            }));
-        }
-        // The budget-gated, variable-amount spend rail (an outbound Stripe payout):
-        // its dollar `amount_cents` is drawn from the budget cell, so an
-        // over-ceiling spend is refused in-band before any money moves.
-        if self.services.iter().any(|s| s == "stripe_pay") {
-            tools.push(json!({
-                "type": "function",
-                "function": {
-                    "name": "stripe_pay",
-                    "description": "Pay a vendor a variable dollar amount via Stripe. \
-                                    The amount is drawn from your budget cell; a spend \
-                                    over your remaining budget is refused before it runs.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "vendor": { "type": "string" },
-                            "amount_cents": { "type": "integer" }
-                        },
-                        "required": ["vendor", "amount_cents"]
                     }
                 }
             }));
@@ -774,15 +749,7 @@ enum ParseOutcome {
 impl<C: OpenAICompatCaller> OpenAICompatBrain<C> {
     /// The advertised tool names (for the unknown-tool error hint).
     fn advertised_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .services
-            .iter()
-            .filter(|s| s.as_str() != "stripe_pay")
-            .map(|_| "invoke".to_string())
-            .collect();
-        if self.services.iter().any(|s| s == "stripe_pay") {
-            names.push("stripe_pay".to_string());
-        }
+        let mut names: Vec<String> = self.services.iter().map(|_| "invoke".to_string()).collect();
         if !self.cells.is_empty() {
             names.push("cell_write".to_string());
             names.push("cell_read".to_string());
@@ -920,7 +887,6 @@ fn spend_cents(args: &Value) -> Option<i64> {
 /// A short required-argument hint for a known tool (for the bad-args feedback).
 fn arg_hint(name: &str) -> &'static str {
     match name {
-        "stripe_pay" => "needs an integer `amount_cents`",
         "invoke" => "needs a string `service`",
         "cell_write" => "needs `path` and `value`",
         "cell_read" => "needs `path`",
@@ -929,6 +895,8 @@ fn arg_hint(name: &str) -> &'static str {
         op::FS_WRITE => "needs `path` and `content`",
         op::HTTP_GET => "needs a string `url`",
         op::GIT_CLONE => "needs a string `url`",
+        op::STRIPE_PROVISION => "needs `provider` and `service` (+ optional `amount_cents`)",
+        op::STRIPE_PAY => "needs `vendor` and an integer `amount_cents`",
         _ => "check the required arguments",
     }
 }
@@ -939,7 +907,6 @@ fn is_known_tool(name: &str) -> bool {
     matches!(
         name,
         "invoke"
-            | "stripe_pay"
             | "cell_write"
             | "cell_read"
             | "finish"
@@ -950,6 +917,8 @@ fn is_known_tool(name: &str) -> bool {
             | op::MKDIR
             | op::HTTP_GET
             | op::GIT_CLONE
+            | op::STRIPE_PROVISION
+            | op::STRIPE_PAY
     )
 }
 
@@ -974,6 +943,12 @@ fn canonical_tool(name: &str) -> &str {
         "mkdir" | "make_dir" | "makedir" | "create_dir" | "create_directory" => op::MKDIR,
         "http_get" | "http" | "fetch" | "curl" | "http_fetch" | "wget" | "get_url" => op::HTTP_GET,
         "git_clone" | "clone" | "git" | "gitclone" | "git_pull" => op::GIT_CLONE,
+        // the Stripe Skills + common aliases
+        "stripe_provision" | "provision" | "provision_saas" | "stripe_projects"
+        | "projects_add" => op::STRIPE_PROVISION,
+        "stripe_pay" | "pay" | "link_cli" | "stripe_link" | "link_pay" | "stripe_buy" | "buy" => {
+            op::STRIPE_PAY
+        }
         // flat rails (unchanged)
         other => other,
     }
@@ -995,24 +970,24 @@ fn map_tool_call(name: &str, args: &Value) -> Option<AgentAction> {
     let s = |k: &str| args.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
     match name {
         "invoke" => s("service").map(|service| AgentAction::Invoke { service }),
-        "stripe_pay" => spend_cents(args).map(|amount_cents| AgentAction::Spend {
-            service: "stripe_pay".to_string(),
-            amount_cents,
-        }),
         "cell_write" => match (s("path"), s("value")) {
             (Some(path), Some(value)) => Some(AgentAction::CellWrite { path, value }),
             _ => None,
         },
         "cell_read" => s("path").map(|path| AgentAction::CellRead { path }),
         // The rich operator tools → AgentAction::Op (the run loop cap-gates the
-        // resource and runs the real shell / fs / http / git).
+        // resource and runs the real shell / fs / http / git, or the Stripe
+        // Skills: provision a SaaS, pay a vendor — per-resource cap-gated, the
+        // amount drawn from the budget cell).
         op::SHELL
         | op::FS_READ
         | op::FS_WRITE
         | op::LIST_DIR
         | op::MKDIR
         | op::HTTP_GET
-        | op::GIT_CLONE => Some(AgentAction::Op(op_tool_call(name, args))),
+        | op::GIT_CLONE
+        | op::STRIPE_PROVISION
+        | op::STRIPE_PAY => Some(AgentAction::Op(op_tool_call(name, args))),
         _ => None,
     }
 }
@@ -1025,6 +1000,8 @@ fn op_tool_call(name: &str, args: &Value) -> ToolCall {
         op::FS_WRITE => &["path", "content"],
         op::HTTP_GET => &["url"],
         op::GIT_CLONE => &["url", "dest"],
+        op::STRIPE_PROVISION => &["provider", "service", "amount_cents"],
+        op::STRIPE_PAY => &["vendor", "amount_cents", "memo"],
         _ => &[],
     };
     let mut map = std::collections::BTreeMap::new();
@@ -1042,6 +1019,14 @@ fn op_tool_call(name: &str, args: &Value) -> ToolCall {
                 map.insert((*k).to_string(), val);
             }
         }
+    }
+    // Normalize the spend amount (a Stripe Skill's price) into clean integer cents,
+    // tolerant of how a model phrases it (`500`, `"$5"`, `5.0` dollars → `500`), so
+    // the budget draw (`ToolCall::amount_cents`) and the receipt agree.
+    if matches!(name, op::STRIPE_PROVISION | op::STRIPE_PAY)
+        && let Some(cents) = spend_cents(args)
+    {
+        map.insert("amount_cents".to_string(), cents.to_string());
     }
     ToolCall {
         tool: name.to_string(),
@@ -1101,6 +1086,36 @@ fn op_tool_spec(tool: &str) -> Option<Value> {
                 "properties": { "url": { "type": "string" },
                                 "dest": { "type": "string", "description": "optional subdir" } },
                 "required": ["url"] }
+        }),
+        op::STRIPE_PROVISION => json!({
+            "name": op::STRIPE_PROVISION,
+            "description": "Provision your own SaaS via the Stripe Projects skill \
+                            (`stripe projects add <provider>/<service>`, e.g. neon/postgres, \
+                            twilio/sms, vercel/hosting). Credentials are synced for you. Only \
+                            providers you are granted are reachable; the tier cost is drawn \
+                            from your budget (over-budget is refused before it provisions).",
+            "parameters": { "type": "object",
+                "properties": {
+                    "provider": { "type": "string", "description": "neon | twilio | vercel | …" },
+                    "service": { "type": "string", "description": "the service, e.g. postgres" },
+                    "amount_cents": { "type": "integer", "description": "the tier cost in cents" }
+                },
+                "required": ["provider", "service"] }
+        }),
+        op::STRIPE_PAY => json!({
+            "name": op::STRIPE_PAY,
+            "description": "Pay a vendor for a service you use via the Stripe Link skill \
+                            (one-time virtual card / shared payment token). The amount is \
+                            drawn from your budget cell; a pay over your remaining budget is \
+                            refused before any money moves. Only vendors you are granted are \
+                            reachable.",
+            "parameters": { "type": "object",
+                "properties": {
+                    "vendor": { "type": "string" },
+                    "amount_cents": { "type": "integer" },
+                    "memo": { "type": "string", "description": "what the payment is for" }
+                },
+                "required": ["vendor", "amount_cents"] }
         }),
         _ => return None,
     };
@@ -1164,6 +1179,81 @@ mod tests {
             .with_verify_deploy("verify_deploy", || {
                 Ok("served bytes match the committed root".to_string())
             })
+    }
+
+    // ── THE STRIPE SKILLS: the model provisions a SaaS + pays for a service ───
+    // The recorded model decides to call `stripe_provision` (Stripe Projects) then
+    // `stripe_pay` (Stripe Link); both fire as per-resource cap-gated, budget-drawn,
+    // receipted operator tools, and the whole run re-witnesses.
+    #[test]
+    fn the_model_provisions_a_saas_and_pays_for_a_service_via_stripe_skills() {
+        use crate::stripe_skills::RecordedStripeSkills;
+        use crate::tools::OperatorTools;
+
+        let cloud = AgentCloud::from_seed([47u8; 32]);
+        let wd = std::env::temp_dir().join(format!("dregg-brain-skills-{}", std::process::id()));
+        std::fs::create_dir_all(&wd).unwrap();
+        // Granted: provision from neon, pay openai. Budget 5000c. The skills are
+        // operator tools, so they ride `op_tools`, not `services`.
+        let handle = cloud
+            .deploy(
+                &AgentSpec::new("agent:founder", 5000)
+                    .with_stripe_provision("neon")
+                    .with_stripe_pay("openai"),
+            )
+            .unwrap();
+
+        // The model's recorded reasoning: provision postgres, pay for inference.
+        let caller = RecordedKimiCaller::new(vec![
+            oai_tool_call(
+                op::STRIPE_PROVISION,
+                r#"{"provider":"neon","service":"postgres","amount_cents":1900}"#,
+            ),
+            oai_tool_call(
+                op::STRIPE_PAY,
+                r#"{"vendor":"openai","amount_cents":500,"memo":"inference"}"#,
+            ),
+            oai_finish("Provisioned neon/postgres and paid openai 500c for inference."),
+        ]);
+        let mut brain = KimiBrain::with_defaults(
+            "Provision a Postgres DB and pay OpenAI for inference, under budget.",
+            vec![],
+            vec![],
+            test_key(),
+            caller,
+        )
+        .with_op_tools(vec![
+            op::STRIPE_PROVISION.to_string(),
+            op::STRIPE_PAY.to_string(),
+        ]);
+
+        let toolkit =
+            OperatorTools::new(Toolkit::new(), &wd).with_stripe_skills(RecordedStripeSkills::new());
+        let report = cloud.run_with_toolkit(&handle, &mut brain, &toolkit);
+
+        assert_eq!(report.admitted, 2, "both skills fired");
+        assert_eq!(
+            report.consumed,
+            1900 + 500,
+            "the budget cell drew both prices"
+        );
+        assert!(report.all_tools_passed(), "{:?}", report.tool_results());
+        assert!(
+            report
+                .receipts
+                .iter()
+                .any(|r| r.action.starts_with("stripe_provision")),
+            "the provision is receipted"
+        );
+        assert!(
+            report
+                .receipts
+                .iter()
+                .any(|r| r.action.starts_with("stripe_pay")),
+            "the pay is receipted"
+        );
+        verify_agent_run(&report).expect("the Stripe-Skills run re-witnesses");
+        std::fs::remove_dir_all(&wd).ok();
     }
 
     // ── THE LIVE LOOP: the LLM reasons → tool → cap-gated + budget-drawn + receipted ──
