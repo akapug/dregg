@@ -3593,11 +3593,80 @@ pub fn generate_rotated_transfer_cap_open_tb_wide(
     Ok((trace, dpis))
 }
 
-/// **THE WIDE NOTESPEND trace generator (grow-gate cohort).** Wraps the deployment-real nullifier-
-/// tree generator ([`generate_rotated_note_spend_trace_with_nullifier_tree`], which overrides limb 26
-/// with the openable accumulator roots + recomputes the block commits), then appends the wide
-/// carriers at `GRAD_ROT_WIDTH = 608`. The grow-gate member carries the extra PI[38] (the nullifier
-/// pin) before the 16 wide PIs (wide member width 816 / PI 55). Returns `(trace, dpis, map_heaps)`.
+/// The §J′ INSERT-shaped accumulator host geometry (the DEPLOYED `effAccumInsertV3 … baseV3 …`): the
+/// `effHeapOpenV3` heap-open READ appendix sits at the base descriptor's width (`GRAD_ROT_WIDTH`, where
+/// `graduateV1` ends), spanning `CAP_OPEN_SPAN` columns, so the insert host is `GRAD_ROT_WIDTH +
+/// CAP_OPEN_SPAN` wide (the wide member is `+480` on top). Matches the Lean `effAccumInsertV3 =
+/// effHeapOpenV3 base ++ accumInsertConstraints` (the weld/bind gates add no columns).
+pub const ACCUM_INSERT_READ_BASE: usize = GRAD_ROT_WIDTH;
+pub const ACCUM_INSERT_HOST_WIDTH: usize = GRAD_ROT_WIDTH + CAP_OPEN_SPAN;
+
+/// **`lay_accum_insert_read_appendix`** — lay the §J′ `effAccumInsertV3` heap-open READ appendix on every
+/// row of a grow-gate wide trace. Opens the spliced `(key, value)` leaf against the AFTER accumulator
+/// root over the `CanonicalHeapTree8::insert_witness` after-membership path (`siblings`/`directions`/
+/// `new_root` — the spliced leaf's membership in the REBUILT tree), so a `Satisfied2` of the deployed
+/// insert descriptor TRACE-FORCES `MembersAt8 afterRoot (key, value)`. The read's `capRoot` group lands
+/// `= new_root`, which the descriptor's `afterGroupWeldsI` gates weld to the AFTER accumulator block the
+/// tree generator already laid; the read leaf's `(addr, value)` IS `(key, value)`, satisfying the KEY /
+/// VALUE bind gates. `before_leaves` is the BEFORE accumulator leaf-set (the SAME set threaded into the
+/// tree generator, so `new_root` matches the AFTER block). The key MUST be FRESH (else `insert_witness`
+/// refuses — fail closed, no fabricated post-root). Grows each row to [`ACCUM_INSERT_HOST_WIDTH`].
+fn lay_accum_insert_read_appendix(
+    trace: &mut [Vec<BabyBear>],
+    before_leaves: &[crate::heap_root::HeapLeaf],
+    key_col: usize,
+    value_col: usize,
+) -> Result<(), String> {
+    use crate::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf};
+    // The spliced leaf's `(key, value)` are read from the descriptor's KEY / VALUE param columns on the
+    // lead (row 0). The read appendix's `(addr, value)` IS `(key, value)`, so the KEY/VALUE bind gates
+    // hold; and the key/value param columns are held CONSTANT across ALL rows (the bind gates are per-row
+    // `.base (.gate …)`, forced on every non-last row) — mirroring how `generate_rotated_heap_write_wide`
+    // lays its coll/key/value param columns on every row. (Param columns are OFF the commitment chain, so
+    // this does not disturb the block commits the tree generator already recomputed.)
+    let key = trace[0][key_col];
+    let value = trace[0][value_col];
+    let before_tree = CanonicalHeapTree8::new(before_leaves.to_vec(), HEAP_TREE_DEPTH);
+    let w = before_tree
+        .insert_witness(HeapLeaf { addr: key, value })
+        .ok_or_else(|| {
+            format!(
+                "accum insert wide: 8-felt insert_witness for the fresh key {} failed (key already \
+                 present in the BEFORE accumulator, or a sentinel) — the sorted insert refuses (fail \
+                 closed, no fabricated post-root)",
+                key.as_u32()
+            )
+        })?;
+    if w.siblings.len() != HEAP_TREE_DEPTH || w.directions.len() != HEAP_TREE_DEPTH {
+        return Err(format!(
+            "accum insert wide: after-membership path length {}/{} != depth {HEAP_TREE_DEPTH}",
+            w.siblings.len(),
+            w.directions.len()
+        ));
+    }
+    let read_leaf = HeapLeaf { addr: key, value };
+    for row in trace.iter_mut() {
+        row[key_col] = key;
+        row[value_col] = value;
+        row.resize(ACCUM_INSERT_HOST_WIDTH, BabyBear::ZERO);
+        fill_heap_open_read(
+            row,
+            ACCUM_INSERT_READ_BASE,
+            read_leaf,
+            &w.siblings,
+            &w.directions,
+            w.new_root,
+        );
+    }
+    Ok(())
+}
+
+/// **THE WIDE NOTESPEND trace generator (grow-gate cohort, §J′ INSERT-shaped deploy).** Wraps the
+/// deployment-real nullifier-tree generator ([`generate_rotated_note_spend_trace_with_nullifier_tree`],
+/// which overrides limb 26 with the openable accumulator roots + recomputes the block commits), lays the
+/// `effAccumInsertV3` heap-open READ appendix (the spliced nullifier leaf opening against the AFTER
+/// nullifier root over the `insert_witness` after-membership path — the deployed insert host), then
+/// appends the wide carriers at [`ACCUM_INSERT_HOST_WIDTH`]. Returns `(trace, dpis, map_heaps)`.
 pub fn generate_rotated_note_spend_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -3606,6 +3675,7 @@ pub fn generate_rotated_note_spend_wide(
     caveat: &RotatedCaveatManifest,
     before_nullifiers: &[crate::heap_root::HeapLeaf],
 ) -> RotatedTraceWithHeaps {
+    use super::columns::{PARAM_BASE, param};
     let (mut trace, base_pis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
         initial_state,
         effects,
@@ -3614,7 +3684,15 @@ pub fn generate_rotated_note_spend_wide(
         caveat,
         before_nullifiers,
     )?;
-    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    // §J′: the nullifier key rides param slot 0 (`NULLIFIER_PARAM_COL = prmCol 0`), value slot 1
+    // (`prmCol NOTE_VALUE_LO`) — the SAME columns the tree generator reads. Lay the insert read appendix.
+    lay_accum_insert_read_appendix(
+        &mut trace,
+        before_nullifiers,
+        PARAM_BASE + param::NULLIFIER,
+        PARAM_BASE + param::NOTE_VALUE_LO,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
 }
 
@@ -3629,6 +3707,7 @@ pub fn generate_rotated_note_create_wide(
     caveat: &RotatedCaveatManifest,
     before_commitments: &[crate::heap_root::HeapLeaf],
 ) -> RotatedTraceWithHeaps {
+    use super::columns::{PARAM_BASE, param};
     let (mut trace, base_pis, map_heaps) =
         generate_rotated_note_create_trace_with_commitments_tree(
             initial_state,
@@ -3638,14 +3717,22 @@ pub fn generate_rotated_note_create_wide(
             caveat,
             before_commitments,
         )?;
-    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    // §J′: the commitment key rides param slot 0 (`COMMITMENT_KEY_PARAM_COL = prmCol 0`), value slot 1.
+    lay_accum_insert_read_appendix(
+        &mut trace,
+        before_commitments,
+        PARAM_BASE + param::NULLIFIER,
+        PARAM_BASE + param::NOTE_VALUE_LO,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
 }
 
-/// **THE WIDE CREATECELL/FACTORY/SPAWN trace generator (grow-gate cohort).** Wraps the accounts-tree
-/// generator ([`generate_rotated_create_cell_trace_with_accounts_tree`], limb-0 override + recompute),
-/// then appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
-pub fn generate_rotated_create_cell_wide(
+/// **THE BARE accounts-grow wide trace (NO §J′ insert appendix).** factory / spawn ride THIS: their wide
+/// descriptors (`factoryVmDescriptor2R24` / `spawnVmDescriptor2R24`) stay BARE — only createCell (tag 17)
+/// is deployed as the §J′ `effAccumInsertV3` insert host. The shared accounts-tree generator (limb-0
+/// override + recompute) + wide carriers at `GRAD_ROT_WIDTH`. Returns `(trace, dpis, map_heaps)`.
+fn generate_rotated_accounts_grow_wide_bare(
     initial_state: &CellState,
     effects: &[Effect],
     before_w: &RotatedBlockWitness,
@@ -3662,6 +3749,41 @@ pub fn generate_rotated_create_cell_wide(
         before_accounts,
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    Ok((trace, dpis, map_heaps))
+}
+
+/// **THE WIDE CREATECELL trace generator (grow-gate cohort, §J′ INSERT-shaped deploy).** Wraps the
+/// accounts-tree generator ([`generate_rotated_create_cell_trace_with_accounts_tree`], limb-0 override +
+/// recompute), lays the `effAccumInsertV3` accounts-insert READ appendix (the born cell id opening
+/// against the AFTER cells root over the `insert_witness` after-membership path — the deployed insert
+/// host), then appends the wide carriers at [`ACCUM_INSERT_HOST_WIDTH`]. factory / spawn route through
+/// [`generate_rotated_accounts_grow_wide_bare`] instead (their descriptors stay bare).
+pub fn generate_rotated_create_cell_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_accounts: &[crate::heap_root::HeapLeaf],
+) -> RotatedTraceWithHeaps {
+    use super::columns::{PARAM_BASE, param};
+    let (mut trace, base_pis, map_heaps) = generate_rotated_create_cell_trace_with_accounts_tree(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_accounts,
+    )?;
+    // §J′: the new-cell key rides param slot 0 (`NEW_CELL_KEY_PARAM_COL = prmCol 0`), and IS its own leaf
+    // value (a born-empty cell — the descriptor's valueCol = keyCol). Lay the accounts insert appendix.
+    lay_accum_insert_read_appendix(
+        &mut trace,
+        before_accounts,
+        PARAM_BASE + param::NULLIFIER,
+        PARAM_BASE + param::NULLIFIER,
+    )?;
+    let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
 }
 
@@ -3691,7 +3813,7 @@ pub fn generate_rotated_create_from_factory_wide(
                 .into(),
         );
     }
-    generate_rotated_create_cell_wide(
+    generate_rotated_accounts_grow_wide_bare(
         initial_state,
         effects,
         before_w,
@@ -3732,7 +3854,7 @@ pub fn generate_rotated_spawn_wide(
                 .into(),
         );
     }
-    generate_rotated_create_cell_wide(
+    generate_rotated_accounts_grow_wide_bare(
         initial_state,
         effects,
         before_w,

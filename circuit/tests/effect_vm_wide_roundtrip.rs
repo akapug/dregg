@@ -33,11 +33,11 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    RotatedBlockWitness, SET_FIELD_DYN_HOST_WIDTH, WIDE_BEFORE_CBASE, WIDE_COMMIT_CARRIER,
-    WIDE_WIDTH, empty_caveat_manifest, generate_rotated_create_cell_wide,
-    generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
-    generate_rotated_note_spend_wide, generate_rotated_set_field_dyn_wide,
-    generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
+    RotatedBlockWitness, SET_FIELD_DYN_HOST_WIDTH, WIDE_COMMIT_CARRIER, empty_caveat_manifest,
+    generate_rotated_create_cell_wide, generate_rotated_create_from_factory_wide,
+    generate_rotated_note_create_wide, generate_rotated_note_spend_wide,
+    generate_rotated_set_field_dyn_wide, generate_rotated_spawn_wide,
+    generate_rotated_transfer_shape_wide,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
@@ -93,10 +93,13 @@ fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
     RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("pre-iroot limbs")
 }
 
-/// The columns of the BEFORE 8-felt commit carrier (carrier 12) at the 816-wide host base
-/// (`WIDE_BEFORE_CBASE = 608`): the 8 felts the wide BEFORE PIs publish on the first row.
+/// The columns of the BEFORE 8-felt commit carrier (carrier 12): the 8 felts the wide BEFORE PIs publish
+/// on the first row. The carrier base is the HOST width (`= wide width − 480`, where `append_wide_carriers`
+/// lays `cb_before`), which is `WIDE_BEFORE_CBASE` for the bare cohort but WIDER for the §J′ insert-shaped
+/// grow-gate hosts (the heap-open READ appendix). Derive it from the trace so both shapes read right.
 fn before_commit_8(trace: &[Vec<BabyBear>]) -> [BabyBear; 8] {
-    let base = WIDE_BEFORE_CBASE + 8 * WIDE_COMMIT_CARRIER; // 704
+    let host_width = trace[0].len() - 480;
+    let base = host_width + 8 * WIDE_COMMIT_CARRIER;
     core::array::from_fn(|j| trace[0][base + j])
 }
 
@@ -111,11 +114,10 @@ fn assert_roundtrip(
     map_heaps: &[Vec<HeapLeaf>],
     wide_pi_base: usize,
 ) {
-    assert_eq!(
-        trace[0].len(),
-        WIDE_WIDTH,
-        "{name}: wide width matches WIDE_WIDTH"
-    );
+    // The descriptor (from the Lean-verified wide-registry TSV) is the authoritative width pin; the
+    // insert-shaped grow-gate members (§J′ `effAccumInsertV3` hosts) are legitimately WIDER than the bare
+    // cohort `WIDE_WIDTH` (they carry the heap-open READ appendix), exactly as heapWrite's after-spine
+    // host is. So we pin the trace against the DESCRIPTOR width, not the bare-cohort constant.
     assert_eq!(
         desc.trace_width,
         trace[0].len(),
