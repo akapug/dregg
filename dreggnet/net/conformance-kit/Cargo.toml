@@ -1,0 +1,36 @@
+# net/conformance-kit — the artifact-agnostic conformance / test / perf kit.
+#
+# THE SKELETON of the kit specified in docs/engine/42-CONFORMANCE-KIT.md and the
+# reconciled seam contract docs/engine/48-SEAM-AUDIT.md (authoritative over 42-47).
+#
+# This crate is the FOURTH consumer of the one DSL description: it runs ONE corpus
+# of vectors against ALL backends (current-net-rust · external-oracle · formal-model ·
+# generated-engine) through ONE uniform `SutAdapter` surface. The generated engine
+# does NOT exist yet; this skeleton pins the types/traits that are well-defined TODAY
+# and leaves engine/oracle wiring as `todo!()` bodies and named seams.
+#
+# It is deliberately SELF-CONTAINED: it does NOT depend on net/httpe (or any net
+# crate) so `cargo build -p conformance-kit` builds standalone. The per-backend
+# adapter bodies that DO need net/httpe internals are stubbed behind the trait.
+[package]
+name = "conformance-kit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "conformance_kit"
+path = "src/lib.rs"
+
+[dependencies]
+# The 9-flag ObservedFields mask (42 §1 / 48 C-8) and the perf ProbeMask.
+bitflags = "2"
+# Content addressing: of_bytes == b3sum (43 §9, hash.rs). Real, not stubbed.
+blake3 = "1"
+# The corpus hash preimage is dCBOR over serde-serializable cores (43 §9). Here we
+# only carry the `T: serde::Serialize` BOUND faithfully; the dCBOR codec body is a
+# named-deferred seam (the spec/orchestrator unit owns the frozen Canonical impl).
+serde = { version = "1", features = ["derive"] }

@@ -1,0 +1,3 @@
+# local build/ship outputs — never commit (cross-built binaries, image tarballs)
+.stage/
+.artifacts/

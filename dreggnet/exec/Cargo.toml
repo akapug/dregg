@@ -1,0 +1,196 @@
+[package]
+name = "dreggnet-exec"
+description = "DreggNet → polyana execution surface (workload runner)"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+
+[lib]
+name = "dreggnet_exec"
+
+[features]
+# `polyana` (default-on at rung 2) wires the real polyana execution engine.
+# Turning it OFF (`--no-default-features`) drops every polyana crate, the
+# wasmtime/wasmi native trees, and the tokio runtime — `run_workload` then
+# compiles to an honest "not wired" bail. The default is ON because rung 2's
+# whole point is that `cargo test -p dreggnet-exec` drives a real workload.
+default = ["polyana", "python", "node", "firecracker"]
+polyana = [
+  "dep:polyana-core",
+  "dep:polyana-wasmi-provider",
+  "dep:polyana-wasmtime",
+  "dep:tokio",
+  "dep:wat",
+]
+# `python` (default-on) wires the REAL native CPython tier (`lang = "python"`)
+# via `polyana-python-provider`: a genuine `python3` subprocess (NOT a wasm
+# CPython port), cap-gated by seccomp + Landlock on Linux and process-isolated
+# on macOS, fed real JSON args over polyana's stdin/stdout wire. The crate
+# compiles on every platform (its seccomp/landlock deps are Linux-gated); the
+# default-on `run_workload`-drives-real-CPython test skips when `python3` is not
+# on PATH. This is the native-polyglot path — polyana's own stated direction
+# away from taxing non-wasm languages through a wasm costume.
+python = ["polyana", "dep:polyana-python-provider"]
+# `caged` wires the `CapTier::Caged` tier: a real OS-sandboxed native process
+# via `polyana-native-process-provider` (seccomp-bpf syscall allowlist +
+# Landlock filesystem allowlist). NOT default-on: the native sandbox actually
+# RUNS only on Linux (the provider's `instantiate` returns a clean error on
+# every other OS), so the macOS-buildable wasm tiers stay the default-green
+# path. The provider crate itself compiles cross-platform (its seccomp/landlock
+# deps are `cfg(target_os = "linux")`-gated internally), so `--features caged`
+# compiles everywhere — verify the Linux build with
+# `cargo zigbuild --target x86_64-unknown-linux-gnu --features caged`. The live
+# end-to-end run is a Linux-only `#[ignore]`d test.
+caged = ["polyana", "dep:polyana-native-process-provider"]
+# `node` (default-on) wires the REAL native Node.js tier (`lang = "node"`/`"js"`)
+# via `polyana-node-provider`: a genuine `node` subprocess (NOT the broken
+# in-process V8 isolate pool), cap-gated by seccomp + Landlock on Linux and
+# process-isolated on macOS, fed real JSON args over polyana's stdin/stdout
+# wire. The crate compiles on every platform (its seccomp/landlock deps are
+# Linux-gated); the default-on test skips when `node` is not on PATH. Same
+# native-polyglot shape as the `python` tier.
+node = ["polyana", "dep:polyana-node-provider"]
+# `host-api` (NOT default-on) wires the §3 inner host-API spine: a workload
+# becomes a TRANSACTING AGENT — it calls dregg services (`invoke`) and reads /
+# writes its own committed cell (`cell_read` / `cell_write`) from inside the
+# sandbox, mid-execution, over polyana's duplex guest wire, each call cap-gated
+# (`gate_effect_set` attenuation from the lease's `CapBundle`), metered, and
+# receipted (`turn_shadow_receipt`, chained). It pulls `polyana-dregg-bridge`
+# with `dregg-verify` ON — the real cap-gate / witness / receipt surface from
+# `emberian/dregg`. That surface is AGPL (DreggNet is already AGPL, so this is
+# fine) AND link-heavy (the dregg verified-core's plonky3 / ark tree), so it is
+# kept behind an EXPLICIT, non-default feature: the lean auto-deploy `exec`
+# build (and any Apache-pure consumer) does not pull it. Verify the spine with
+# `cargo test -p dreggnet-exec --features host-api host_api` (drives a real
+# CPython + node workload that transacts). The wire itself lives in polyana
+# (the generic `HostBroker` hook on the python/node providers); this feature
+# wires DreggNet's concrete cap-gated/metered/receipted broker over it.
+host-api = [
+  "polyana",
+  "python",
+  "node",
+  "dep:polyana-dregg-bridge",
+  "dep:blake3",
+  "dep:async-trait",
+]
+# `firecracker` (default-on) wires the `CapTier::MicroVm` strong-isolation tier
+# via `polyana-firecracker-provider`: a per-workload Firecracker microVM (the
+# fly.io / Lambda model — a separate guest kernel per workload, KVM hardware
+# boundary). The provider crate compiles on every platform (pure Rust, no
+# unsafe, tokio child-process only), so the feature is default-on; the actual
+# VM boot requires the `firecracker` binary + `/dev/kvm` (Linux + virtualization)
+# + a kernel/rootfs image. Where those are absent (macOS dev, the edge t3 with
+# no nested virt) `instantiate` fails cleanly — never a silent downgrade to a
+# weaker tier. The guest runs the real language runtime inside the VM, reached
+# over the vsock guest wire; the image is built by the provider's
+# `image/build-image.sh`, and the jailer (cgroup/namespace/chroot) is supported
+# for the production isolation posture.
+firecracker = ["polyana", "dep:polyana-firecracker-provider"]
+# `kimi-live` (NOT default-on) wires the LIVE Kimi (Moonshot) brain transport
+# ([`kimi::LiveKimiCaller`]): a real `reqwest::blocking` POST to the
+# OpenAI-compatible chat endpoint, the BYO key (`~/.kimikey`) in the
+# `Authorization: Bearer` header. OFF by default so the std-only green build (the
+# recorded-transport tests) needs no HTTP/TLS stack; the live impl still compiles
+# under this feature, and the live call is an `#[ignore]`d test. The `KimiBrain`
+# itself + the recorded transport + the cap/budget/receipt teeth are std-only and
+# always built.
+kimi-live = ["dregg-agent/live-brain"]
+
+[dependencies]
+anyhow = { workspace = true }
+# THE OPEN-SOURCE AGENT RUNTIME (breadstuffs, AGPL): the agent loop + budget +
+# meter + the OpenAI-compatible / Hermes brain + the BYO-harness + the cap-gated
+# toolkit + the federation-QA core. EXTRACTED to the substrate; the cloud now
+# WRAPS it (re-exported from `lib.rs`, with the polyana compute engine injected
+# behind the toolkit's runner seam — see `src/agent_toolkit.rs`). One agent
+# runtime; the cloud is the wrapper. See breadstuffs `docs/AGENT-RUNTIME-OPEN-SOURCE.md`.
+dregg-agent = { path = "../../dregg-agent" }
+
+# polyana's execution surface, path-dep'd from the submodule (../polyana).
+# polyana-core defines the `ExecutionProvider` trait + `ArtifactStore`;
+# polyana-wasmi-provider is the lightest concrete backend (pure-Rust wasmi
+# interpreter, WasmSandbox enforcement) — enough to drive the add dogfood
+# without the heavier native/firecracker provider trees. Both are optional so
+# the polyana feature gates the whole engine in/out. (polyana-core itself hard-
+# deps wasmtime 44, so the `polyana` feature is the build-cost line.)
+polyana-core = { path = "../polyana/src/core", optional = true }
+polyana-wasmi-provider = { path = "../polyana/src/wasmi-provider", optional = true }
+# The stronger wasm tier: polyana-wasmtime is the Wasmtime + Cranelift JIT
+# backend at `EnforcementLevel::WasmFullSandbox` (linear-memory + cap-gated
+# host imports + a fuel meter + WASI Preview 2 preopens) — strictly above the
+# pure-interpreter wasmi provider's `WasmSandbox` in polyana's enforcement
+# ordering. It's cross-platform (Cranelift builds on macOS), and `polyana-core`
+# already hard-deps wasmtime 44, so wiring this tier reuses an engine the build
+# already pays for rather than pulling a new native tree. Drives the
+# `CapTier::JitSandboxed` rung.
+polyana-wasmtime = { path = "../polyana/src/wasmtime", optional = true }
+# The OS-sandbox tier: polyana-native-process-provider runs a host binary
+# (ELF / shebang script) as a child process under seccomp-bpf + Landlock,
+# reporting `EnforcementLevel::OsSandbox` — the `CapTier::Caged` backend. Pulled
+# in only by the `caged` feature. The crate compiles on every platform (its
+# seccomp/landlock primitives are `cfg(target_os = "linux")` deps), but the
+# child sandbox only actually engages on Linux; off-Linux `instantiate` returns
+# a clean error rather than running unsandboxed.
+polyana-native-process-provider = { path = "../polyana/src/native-process-provider", optional = true }
+# The real native CPython tier: polyana-python-provider spawns a genuine
+# `python3` subprocess (seccomp + Landlock cage on Linux, process isolation on
+# macOS) speaking polyana's newline-JSON wire. Pulled in by the `python` feature.
+# Compiles cross-platform (its seccomp/landlock deps are Linux-gated); enables
+# DreggNet to run REAL Python agent workloads, not a wasm costume.
+polyana-python-provider = { path = "../polyana/src/python-provider", optional = true }
+# The real native Node.js tier: polyana-node-provider spawns a genuine `node`
+# subprocess (seccomp + Landlock cage on Linux, process isolation on macOS)
+# speaking polyana's newline-JSON wire. Pulled in by the `node` feature. The
+# non-isolate-pool route for JavaScript — closes the gap left by the broken
+# in-process `polyana-v8-provider`. Compiles cross-platform.
+polyana-node-provider = { path = "../polyana/src/node-provider", optional = true }
+# The strong-isolation microVM tier: polyana-firecracker-provider spawns a
+# per-workload Firecracker microVM (separate guest kernel, KVM boundary) —
+# `CapTier::MicroVm`. Pulled in by the `firecracker` feature. Pure-Rust /
+# cross-platform compile; the live VM boot needs the `firecracker` binary +
+# `/dev/kvm` + a kernel/rootfs image and fails cleanly where absent.
+polyana-firecracker-provider = { path = "../polyana/src/firecracker-provider", optional = true }
+# The §3 host-API broker's dregg surface (gated by the `host-api` feature, with
+# `dregg-verify` ON): re-exports `gate_effect_set` / `CapBundle` / `GateRefusal`
+# (cap-attenuation) + `turn_shadow_receipt` / `TurnShadowReceipt` (the chained
+# receipt) from `emberian/dregg`. AGPL + link-heavy → optional, non-default.
+polyana-dregg-bridge = { path = "../polyana/src/dregg-bridge", features = ["dregg-verify"], optional = true }
+# The §3 broker's committed-cell state root (a content hash of the workload's
+# cell map → the receipt's pre/post `*_state_root`). Gated by `host-api`.
+blake3 = { version = "1", optional = true }
+# The §3 broker impls polyana-core's async `HostBroker` trait. Gated by `host-api`.
+async-trait = { version = "0.1", optional = true }
+# The provider trait is async; we drive it on a current-thread runtime so
+# `run_workload` stays a synchronous DreggNet-facing call.
+tokio = { workspace = true, optional = true }
+# Assembles the WAT workload source into a wasm module for the dogfood.
+wat = { version = "1", optional = true }
+# Public `Input::Json` arg variant + native-tier arg marshalling.
+serde_json = { workspace = true }
+# The Verifiable Agent Cloud onramp (`agent`): serde-derive on the agent spec /
+# run report so the CLI persists + re-witnesses an agent run. Std for the
+# String/Vec/BTreeMap fields.
+serde = { workspace = true, features = ["std"] }
+# NB: the cap bundle / powerbox (the `dga1_` credential, attenuate-only-narrows),
+# the receipt chain + non-witness verifier, and the replenishing-budget meter all
+# now live in the open-source `dregg-agent` crate (above) — the cloud no longer
+# depends on `dreggnet-webauth` / `dreggnet-receipt` for the agent runtime.
+# The per-tenant log store — the compute-tier run captures its output lines into a
+# `LogSink` keyed by resource + owner (the `capture` module), so `dregg-cloud logs`
+# shows a tenant their app's real output. Dependency-light (serde + sha2, std), so
+# it does not weigh on the lean `exec` build the way the polyana engine does.
+dreggnet-logs = { path = "../dreggnet-logs" }
+
+[dev-dependencies]
+# The capture round-trip tests write a `LogSink` under a scratch dir.
+tempfile = { workspace = true }
+
+# Workload-exec characterization (latency/throughput per cap-tier + a wide
+# N-thread scaling sweep). Hand-rolled timing harness — no criterion dep, fully
+# offline; `harness = false` so it runs its own `fn main()`.
+[[bench]]
+name = "workload_exec"
+harness = false
