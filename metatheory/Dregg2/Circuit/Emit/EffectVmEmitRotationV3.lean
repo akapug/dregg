@@ -1431,6 +1431,55 @@ theorem afterFieldsRootCols_lane0 (env : VmRowEnv) :
     afterFieldsRootCols env 0 = env.loc (EFFECT_VM_WIDTH + 119 + B_FIELDS_ROOT) := by
   simp [afterFieldsRootCols, fieldsRootGroupCol]
 
+/-! ### v11 — the FAITHFUL 8-felt ACCUMULATOR root column GROUPS (nullifier@26 · commitments@27 ·
+cells@0), the exact twins of the cap/heap/fields groups above, over the 21 NEW DEDICATED completion
+limbs 67..87 (never shared with another family — a shared block would break OLD/NEW commit continuity
+cross-turn). Each accumulator's genuine node8 `root8` rides lane 0 (its historical scalar limb) ‖ 7
+dedicated completion limbs. The deployed Rust producer fills all 8 lanes via `CanonicalHeapTree8`, and
+the map-op node8 AIR binds them lane-for-lane (deployed-faithful, ~124-bit — NEVER the lane-0 squeeze). -/
+
+/-- The nullifier-root 8-felt column at lane `i` (lane 0 = limb `B_NULLIFIER_ROOT_OFF` = 26; the seven
+DEDICATED completion limbs 67..73 for lanes 1..7). -/
+def nullifierRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
+  blockBase + (if i = 0 then B_NULLIFIER_ROOT_OFF else 66 + (i : Nat))
+
+/-- The commitments-root 8-felt column at lane `i` (lane 0 = limb `B_COMMITMENTS_ROOT` = 27; the seven
+DEDICATED completion limbs 74..80 for lanes 1..7). -/
+def commitmentsRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
+  blockBase + (if i = 0 then B_COMMITMENTS_ROOT else 73 + (i : Nat))
+
+/-- The cells-root 8-felt column at lane `i` (lane 0 = limb 0 = accounts root; the seven DEDICATED
+completion limbs 81..87 for lanes 1..7). -/
+def cellsRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
+  blockBase + (if i = 0 then 0 else 80 + (i : Nat))
+
+/-- The BEFORE/AFTER-block nullifier-root 8-felt column groups (lane 0 = the scalar limb 26). -/
+def beforeNullifierRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (nullifierRootGroupCol EFFECT_VM_WIDTH i)
+def afterNullifierRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (nullifierRootGroupCol (EFFECT_VM_WIDTH + 119) i)
+
+/-- The BEFORE/AFTER-block commitments-root 8-felt column groups (lane 0 = the scalar limb 27). -/
+def beforeCommitmentsRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (commitmentsRootGroupCol EFFECT_VM_WIDTH i)
+def afterCommitmentsRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (commitmentsRootGroupCol (EFFECT_VM_WIDTH + 119) i)
+
+/-- The BEFORE/AFTER-block cells-root 8-felt column groups (lane 0 = the scalar limb 0). -/
+def beforeCellsRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (cellsRootGroupCol EFFECT_VM_WIDTH i)
+def afterCellsRootGroup : Fin 8 → EmittedExpr :=
+  fun i => .var (cellsRootGroupCol (EFFECT_VM_WIDTH + 119) i)
+
+/-- Lane 0 of each accumulator group IS the existing scalar limb (the projection the scalar `writesTo`
+forces) — the 8-felt group REFINES the lane-0 write. -/
+theorem nullifierRootGroupCol_lane0 (bb : Nat) :
+    nullifierRootGroupCol bb 0 = bb + B_NULLIFIER_ROOT_OFF := by simp [nullifierRootGroupCol]
+theorem commitmentsRootGroupCol_lane0 (bb : Nat) :
+    commitmentsRootGroupCol bb 0 = bb + B_COMMITMENTS_ROOT := by simp [commitmentsRootGroupCol]
+theorem cellsRootGroupCol_lane0 (bb : Nat) :
+    cellsRootGroupCol bb 0 = bb + 0 := by simp [cellsRootGroupCol]
+
 /-- **`fieldsWritesTo8 S8 oldRoot k v newRoot`** — the native-`node8` fields-tree UPDATE-AT-KEY over the
 FULL 8-felt root: some sibling/direction `path` recomposes `oldRoot` from the fields leaf `(k, oldVal)`,
 and recomposes `newRoot` from the in-place-updated leaf `(k, v)` along the SAME path. The faithful 8-felt
@@ -1899,10 +1948,10 @@ so the gate's key IS the same nullifier the apex reads. -/
 NON-MEMBER of the BEFORE nullifier tree (limb 26); the root is unchanged by an absent read. -/
 def nullifierFreshOp : MapOp :=
   { guard   := .var EffectVmEmitNoteSpend.SEL_NOTE_SPEND
-  , root    := scalarRootGroup (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , root    := beforeNullifierRootGroup
   , key     := .var NULLIFIER_PARAM_COL
   , value   := .const 0
-  , newRoot := scalarRootGroup (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , newRoot := beforeNullifierRootGroup
   , op      := .absent }
 
 /-- The SET-INSERT (the deployed `gNoteGrow` face): the AFTER nullifier root (limb 26 of the
@@ -1910,10 +1959,10 @@ after block) IS the genuine sorted write of `param0` into the BEFORE root. The n
 (`param::NOTE_VALUE_LO`) rides as the leaf value so a spent nullifier carries its note datum. -/
 def nullifierInsertOp : MapOp :=
   { guard   := .var EffectVmEmitNoteSpend.SEL_NOTE_SPEND
-  , root    := scalarRootGroup (beforeNullifierRootCol EFFECT_VM_WIDTH)
+  , root    := beforeNullifierRootGroup
   , key     := .var NULLIFIER_PARAM_COL
   , value   := .var (prmCol EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
-  , newRoot := scalarRootGroup (afterNullifierRootCol EFFECT_VM_WIDTH)
+  , newRoot := afterNullifierRootGroup
   , op      := .insert }
 
 /-- **`noteSpendV3`** — the rotated note-spend WITH the nullifier PI weld AND the KERNEL-SET
@@ -2102,10 +2151,10 @@ write of the note commitment (`param0`) into the BEFORE root, with the note valu
 leaf value. Guarded by the noteCreate selector. -/
 def commitmentsInsertOp : MapOp :=
   { guard   := .var EffectVmEmitNoteCreate.SEL_NOTE_CREATE
-  , root    := scalarRootGroup (beforeCommitmentsRootCol EFFECT_VM_WIDTH)
+  , root    := beforeCommitmentsRootGroup
   , key     := .var COMMITMENT_KEY_PARAM_COL
   , value   := .var (prmCol EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
-  , newRoot := scalarRootGroup (afterCommitmentsRootCol EFFECT_VM_WIDTH)
+  , newRoot := afterCommitmentsRootGroup
   , op      := .insert }
 
 /-- **`noteCreateV3`** — the rotated noteCreate WITH the commitment PI weld AND the KERNEL-SET
@@ -2215,10 +2264,10 @@ runtime selector column `sel`. `keyCol` is `param0` for createCell/spawn (the ne
 for factory (the derived child VK). -/
 def cellsFreshOp (sel keyCol : Nat) : MapOp :=
   { guard   := .var sel
-  , root    := scalarRootGroup (beforeCellsRootCol EFFECT_VM_WIDTH)
+  , root    := beforeCellsRootGroup
   , key     := .var keyCol
   , value   := .const 0
-  , newRoot := scalarRootGroup (beforeCellsRootCol EFFECT_VM_WIDTH)
+  , newRoot := beforeCellsRootGroup
   , op      := .absent }
 
 /-- The SET-INSERT: the AFTER cells root (limb 0 of the after block) IS the genuine sorted write of
@@ -2226,10 +2275,10 @@ the new-cell key (`keyCol`) into the BEFORE root. The key rides as its own leaf 
 cell). -/
 def cellsInsertOp (sel keyCol : Nat) : MapOp :=
   { guard   := .var sel
-  , root    := scalarRootGroup (beforeCellsRootCol EFFECT_VM_WIDTH)
+  , root    := beforeCellsRootGroup
   , key     := .var keyCol
   , value   := .var keyCol
-  , newRoot := scalarRootGroup (afterCellsRootCol EFFECT_VM_WIDTH)
+  , newRoot := afterCellsRootGroup
   , op      := .insert }
 
 /-- The factory's new-cell key column (`param1`, the derived child VK — `CHILD_VK_DERIVED`); factory's
