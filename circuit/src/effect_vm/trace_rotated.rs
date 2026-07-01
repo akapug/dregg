@@ -1297,7 +1297,7 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
     audit_value: BabyBear,
 ) -> RotatedTraceWithHeaps {
     use super::columns::PARAM_BASE;
-    use crate::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+    use crate::heap_root::{CanonicalHeapTree8, HEAP_DIGEST_W, HEAP_TREE_DEPTH, HeapLeaf};
 
     if !matches!(effects.first(), Some(Effect::Refusal { .. })) {
         return Err("fields-root write wiring is only for a Refusal lead effect".into());
@@ -1325,7 +1325,11 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
     // (= BEFORE with the audit slot's value WRITTEN to `audit_value` — the in-place update the
     // `.write` op forces). The audit slot MUST be present in BEFORE (we reserve it above), else the
     // `.write` op has no `update_witness` and the prover REFUSES.
-    let before_tree = CanonicalHeapTree::new(before_leaves.clone(), HEAP_TREE_DEPTH);
+    // The BEFORE fields tree at NATIVE 8-FELT width (`CanonicalHeapTree8`) — the openable accumulator's
+    // FAITHFUL ~124-bit root, NOT the lossy 1-felt scalar the GENTIAN tooth refutes. The audit slot MUST
+    // be present (reserved above); the `.write` is an UPDATE of a present key (8-felt `update_witness`),
+    // and a missing key fails closed (no fabricated post-root).
+    let before_tree = CanonicalHeapTree8::new(before_leaves.clone(), HEAP_TREE_DEPTH);
     if before_tree.position_of(audit_key).is_none() {
         return Err(
             "refusal fields-root write: the audit slot is not present in the BEFORE tree — the \
@@ -1333,25 +1337,34 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
                 .into(),
         );
     }
-    let before_root = before_tree.root();
-    let after_leaves: Vec<HeapLeaf> = before_tree
-        .sorted_leaves()
-        .iter()
-        .filter(|l| {
-            l.addr != crate::heap_root::SENTINEL_MIN && l.addr != crate::heap_root::SENTINEL_MAX
+    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let after_root8: [BabyBear; HEAP_DIGEST_W] = before_tree
+        .update_witness(HeapLeaf {
+            addr: audit_key,
+            value: audit_value,
         })
-        .map(|l| {
-            if l.addr == audit_key {
-                HeapLeaf {
-                    addr: audit_key,
-                    value: audit_value,
-                }
-            } else {
-                *l
+        .ok_or_else(|| {
+            "refusal fields-root write: 8-felt update witness for the audit slot failed".to_string()
+        })?
+        .new_root;
+
+    // Mirror of `EffectVmEmitRotationV3.fieldsRootGroupCol`: lane 0 = limb `B_FIELDS_ROOT` (36); the seven
+    // completion limbs are NON-contiguous — 65,66 (past heap's 58..64) for lanes 1,2 and the repurposed
+    // register-headroom limbs 19..23 for lanes 3..7.
+    let fields_group_col = |block_base: usize, lane: usize| -> usize {
+        block_base
+            + match lane {
+                0 => B_FIELDS_ROOT,
+                1 => 65,
+                2 => 66,
+                3 => 19,
+                4 => 20,
+                5 => 21,
+                6 => 22,
+                7 => 23,
+                _ => unreachable!("fields root8 has 8 lanes"),
             }
-        })
-        .collect();
-    let after_root = CanonicalHeapTree::new(after_leaves, HEAP_TREE_DEPTH).root();
+    };
 
     // Fill the declared audit-felt param column (col 70) with the written value on EVERY row, so the
     // map-op's value column is the row's own published column (the noteSpend pattern — the gate reads
@@ -1360,21 +1373,144 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
         row[PARAM_BASE + REFUSAL_AUDIT_FELT_PARAM] = audit_value;
     }
 
-    // Override limb 36 of BOTH blocks on EVERY row with the openable accumulator roots, then recompute
+    // Write the FAITHFUL 8-felt before/after fields-root GROUP into BOTH rotated blocks (lane 0 the
+    // scalar limb 36, lanes 1..7 the completion limbs 65,66,19..23 — the map-op `.write` root/newRoot
+    // groups the deployed AIR binds all eight lanes of), NEVER the lane-0 scalar squeeze. Then recompute
     // the dependent chained commitments so the published `STATE_COMMIT` binds the written map.
     for row in trace.iter_mut() {
-        row[BEFORE_BASE + B_FIELDS_ROOT] = before_root;
-        row[AFTER_BASE + B_FIELDS_ROOT] = after_root;
+        for lane in 0..HEAP_DIGEST_W {
+            row[fields_group_col(BEFORE_BASE, lane)] = before_root8[lane];
+            row[fields_group_col(AFTER_BASE, lane)] = after_root8[lane];
+        }
         recompute_block_commit(row, BEFORE_BASE);
         recompute_block_commit(row, AFTER_BASE);
     }
 
-    // Re-derive the OLD/NEW rotated commit PIs (the limb-36 override + the audit-felt param fill moved
+    // Re-derive the OLD/NEW rotated commit PIs (the group override + the audit-felt param fill moved
     // the commitments).
     dpis[V1_PI_COUNT] = trace[0][BEFORE_BASE + B_STATE_COMMIT]; // PI 34: rotated OLD commit
     dpis[V1_PI_COUNT + 1] = trace[trace.len() - 1][AFTER_BASE + B_STATE_COMMIT]; // PI 35: NEW commit
 
     Ok((trace, dpis, vec![before_leaves]))
+}
+
+/// The host (pre-wide-append) width of the DEPLOYED refusal fields-write descriptor
+/// `refusalVmDescriptor2R24` (OPTION I): the after-spine membership-forcing `effFieldsWriteV3
+/// refusalFieldsWriteV3` (Lean `FieldsOpenEmit.effFieldsWriteV3`), EXACTLY as heap deploys
+/// `effHeapWriteV3` — the Class-A base `refusalFieldsWriteV3` (**829** wide) WIDENED by the fields-open
+/// READ appendix (`CAP_OPEN_SPAN = 329`) + the AFTER-spine appendix (`AFTER_SPINE_SPAN = 143`):
+/// `829 + 329 + 143 = 1301`. A satisfying trace FORCES the faithful 8-felt fields-write over the full
+/// ~124-bit BEFORE/AFTER root blocks (`effFieldsWriteV3_forces_write8`) — never the lane-0 squeeze the
+/// map_op-only host would leave. The wide carrier lands at THIS host width: `1301 + 368 = 1669`.
+pub const REFUSAL_WRITE_HOST_WIDTH: usize = 1301;
+/// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width).
+pub const REFUSAL_WRITE_READ_BASE: usize = 829;
+
+/// **THE WIDE REFUSAL FIELDS-WRITE producer (`refusalVmDescriptor2R24` wide member, 1669-wide / 70-PI,
+/// OPTION I).** The deployed after-spine `effFieldsWriteV3 refusalFieldsWriteV3 …` a light client checks:
+/// the Class-A refusal base ([`generate_rotated_refusal_trace_with_fields_tree`], which lays the genuine
+/// 8-felt fields-root GROUP + the record pin + the audit param) WIDENED by (a) the fields-open READ
+/// appendix at [`REFUSAL_WRITE_READ_BASE`] (the OLD audit leaf `(audit_key, old_value)` opened against the
+/// BEFORE `root8`) and (b) the AFTER-spine appendix at `read_base + CAP_OPEN_SPAN` (the UPDATED audit leaf
+/// `(audit_key, audit_value)` opened against the AFTER `root8`, over the SHARED sibling path from
+/// `update_witness`), then the generic [`append_wide_carriers`] at the host width. A satisfying trace
+/// FORCES `fieldsWritesTo8` over the FULL committed BEFORE/AFTER fields-root blocks — the deployed twin of
+/// the heap wide producer. Returns `(trace, dpis, map_heaps)` ready for `prove_vm_descriptor2` against the
+/// wide `refusalVmDescriptor2R24` (`dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen`).
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_refusal_write_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_fields_leaves: &[crate::heap_root::HeapLeaf],
+    audit_value: BabyBear,
+) -> RotatedTraceWithHeaps {
+    use crate::heap_root::{CanonicalHeapTree8, HEAP_DIGEST_W, HEAP_TREE_DEPTH, HeapLeaf};
+
+    // The Class-A refusal base (829 wide, group already laid over the faithful 8-felt fields-root).
+    let (mut trace, base_pis, map_heaps) = generate_rotated_refusal_trace_with_fields_tree(
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        before_fields_leaves,
+        audit_value,
+    )?;
+    if trace[0].len() != ROT_WIDTH {
+        return Err(format!(
+            "refusal fields-write wide: base trace width {} != {ROT_WIDTH}",
+            trace[0].len()
+        ));
+    }
+
+    // Recompute the 8-felt membership path the after-spine descriptor opens. `update_witness` recomposes
+    // the AFTER root over the SAME sibling path, so the before-open (OLD leaf) and after-open (UPDATED
+    // leaf) SHARE `(siblings, directions)` — exactly the keystone `fieldsOpen_writesTo8`'s `hsib`/`hdir`.
+    let audit_key = crate::openable_fields_root::field_key_hash(
+        crate::openable_fields_root::REFUSAL_AUDIT_EXT_KEY,
+    );
+    let before_leaves = &map_heaps[0];
+    let before_tree = CanonicalHeapTree8::new(before_leaves.clone(), HEAP_TREE_DEPTH);
+    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let old_value = before_tree
+        .sorted_leaves()
+        .iter()
+        .find(|l| l.addr == audit_key)
+        .map(|l| l.value)
+        .ok_or_else(|| "refusal fields-write wide: BEFORE audit leaf vanished".to_string())?;
+    let update = before_tree
+        .update_witness(HeapLeaf {
+            addr: audit_key,
+            value: audit_value,
+        })
+        .ok_or_else(|| "refusal fields-write wide: 8-felt update witness failed".to_string())?;
+    let fields_siblings: Vec<[BabyBear; HEAP_DIGEST_W]> = update.siblings.clone();
+    let fields_directions: Vec<u8> = update.directions.clone();
+    if fields_siblings.len() != HEAP_TREE_DEPTH || fields_directions.len() != HEAP_TREE_DEPTH {
+        return Err(format!(
+            "refusal fields-write wide: membership path length {}/{} != depth {HEAP_TREE_DEPTH}",
+            fields_siblings.len(),
+            fields_directions.len()
+        ));
+    }
+    let read_base = REFUSAL_WRITE_READ_BASE; // 829
+    let after_spine_base = read_base + CAP_OPEN_SPAN; // 1158
+    let read_leaf = HeapLeaf {
+        addr: audit_key,
+        value: old_value,
+    };
+    // Grow each row to the deployed host width and lay the membership appendix (the READ open of the OLD
+    // audit leaf against the BEFORE root8, and the after-spine open of the UPDATED audit leaf against the
+    // AFTER root8, over the SHARED sibling path). SHARED byte-for-byte with heap's `fill_heap_open_read` /
+    // `fill_heap_after_spine` — the fields tree IS a `CanonicalHeapTree8`.
+    for row in trace.iter_mut() {
+        row.resize(REFUSAL_WRITE_HOST_WIDTH, BabyBear::ZERO);
+        fill_heap_open_read(
+            row,
+            read_base,
+            read_leaf,
+            &fields_siblings,
+            &fields_directions,
+            before_root8,
+        );
+        fill_heap_after_spine(
+            row,
+            after_spine_base,
+            audit_key,
+            audit_value,
+            &fields_siblings,
+            &fields_directions,
+        );
+    }
+
+    // The generic widener at the deployed host width (retires the two 1-felt commit pins, appends the 16
+    // wide commit PIs — the 8-felt ~124-bit before/after anchors). `base_pis` is the 54-PI refusal vector.
+    let dpis = append_wide_carriers(&mut trace, base_pis, REFUSAL_WRITE_HOST_WIDTH);
+    debug_assert_eq!(trace[0].len(), REFUSAL_WRITE_HOST_WIDTH + 368); // 1669
+    Ok((trace, dpis, map_heaps))
 }
 
 /// The cap-tree write-op kind a write-bearing cap-open wrapper carries (the `map_op` on the
