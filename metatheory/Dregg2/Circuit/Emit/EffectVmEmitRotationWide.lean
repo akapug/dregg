@@ -355,7 +355,7 @@ commits, so the wide commitment binds the SAME 37 limbs + iroot, at full 8-felt 
 Layout (past `rotateV3 d`'s width `w = d.traceWidth + APPENDIX_SPAN`):
   * BEFORE wide carriers at `w` (13×8 = 104 columns); the wide BEFORE block's limbs are the live
     BEFORE block's columns `d.traceWidth + 0 .. + 88`.
-  * AFTER wide carriers at `w + 184`; the wide AFTER block's limbs are the live AFTER block's
+  * AFTER wide carriers at `w + 240`; the wide AFTER block's limbs are the live AFTER block's
     columns `d.traceWidth + 119 + 0 .. + 88`.
   * 16 appended PI slots: `piCount' .. piCount'+7` = BEFORE commit's 8 columns (first row),
     `piCount'+8 .. +15` = AFTER commit's 8 columns (last row), where `piCount' = (rotateV3 d).piCount`. -/
@@ -380,9 +380,9 @@ def rotateV3Wide (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
   let cbB := wideBeforeCBase w
   let cbA := wideAfterCBase w
   { host with
-    traceWidth := w + 368           -- + 2 × (13 carriers × 8)
+    traceWidth := w + 480           -- + 2 × (30 carriers × 8)
     piCount    := host.piCount + 16
-    tables     := v2Tables (w + 368)
+    tables     := v2Tables (w + 480)
     constraints := host.constraints
       ++ rotV3WideLookups bb cbB
       ++ rotV3WideLookups ab cbA
@@ -690,9 +690,9 @@ def wideAppend (h : EffectVmDescriptor2) (bb ab : Nat) : EffectVmDescriptor2 :=
   let cbB := wideBeforeCBase w
   let cbA := wideAfterCBase w
   { h with
-    traceWidth := w + 368           -- + 2 × (13 carriers × 8)
+    traceWidth := w + 480           -- + 2 × (30 carriers × 8)
     piCount    := h.piCount + 16
-    tables     := v2Tables (w + 368)
+    tables     := v2Tables (w + 480)
     constraints := (h.constraints.filter (fun c => !isLegacyCommitPin1 bb ab c))
       ++ rotV3WideLookups bb cbB
       ++ rotV3WideLookups ab cbA
@@ -1017,7 +1017,7 @@ the gate's selector column and the host's columns are below `wideBeforeCBase hos
 wide block cannot collide with the gate. (`withSelectorGate` does not change width/piCount, so the
 host width is the graduated rotation's — `wideAppend` bases past it.) -/
 theorem wideAppendOverGated_width (d : EffectVmDescriptor) (s : Nat) :
-    (wideAppendOverGated d s).traceWidth = (withSelectorGate s (v3Of d)).traceWidth + 368
+    (wideAppendOverGated d s).traceWidth = (withSelectorGate s (v3Of d)).traceWidth + 480
     ∧ (wideAppendOverGated d s).piCount = (withSelectorGate s (v3Of d)).piCount + 16 := by
   unfold wideAppendOverGated wideAppend; exact ⟨rfl, rfl⟩
 
