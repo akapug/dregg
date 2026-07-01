@@ -1057,7 +1057,20 @@ pub fn compute_rotated_pre_limbs(
     // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
     // NEW LAST pre-iroot limbs). Byte-identical to `rotation_witness::{mode_felt,fields_root_felt}`.
     pre[35] = mode_felt(&cell.mode);
-    pre[36] = fields_root_felt(&cell.state.fields_root);
+    // limb 36: fields_root lane-0 (welded) ‖ extras 65,66,19,20,21,22,23: the SEVEN fields-root
+    // completion felts (Phase H-FIELDS-8). The faithful native-`node8` (arity-16) 8-felt sorted-Merkle
+    // root over the cell's user-field map — the circuit's 8-felt `fields_root` column GROUP carries lane
+    // 0 = limb 36, lanes 1..7 = limbs 65,66,19,20,21,22,23. The in-circuit refusal fields-write map_op
+    // FORCES the AFTER group to the `writesTo8` native update, so a ~31-bit collision at lane-0 differing
+    // in any completion felt is UNSAT (the fields GENTIAN law). This REPLACES the lossy 1-felt
+    // `fields_root_felt(&cell.state.fields_root)`. Byte-identical to
+    // `rotation_witness::compute_rotated_pre_limbs`.
+    let fields8 = crate::state::compute_canonical_fields_root_8(&cell.state.fields_map);
+    pre[36] = fields8[0];
+    let fields_lanes = [65usize, 66, 19, 20, 21, 22, 23];
+    for i in 0..7 {
+        pre[fields_lanes[i]] = fields8[1 + i];
+    }
     pre
 }
 
