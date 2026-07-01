@@ -32,6 +32,7 @@ import Dregg2.Circuit.Emit.CapOpenEmit
 import Dregg2.Circuit.Emit.CapOpenTurnPins
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.HeapOpenEmit
+import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
@@ -41,8 +42,26 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (wideAppend)
 def main : IO Unit := do
   -- positions 0..44: the 45 emit-source wide members (`v3RegistryCapOpenWide`), keyed by the live
   -- registry key (`burnVmDescriptor2R24` etc., `#guard`-proven name-stable with `v3RegistryCapOpen`).
+  -- OPTION I (fields): position 7 (`refusalVmDescriptor2R24`) is REPLACED IN PLACE by the after-spine
+  -- membership-forcing `effFieldsWriteV3 refusalFieldsWriteV3 …` (EXACTLY as heap deploys `effHeapWriteV3`
+  -- at position 46 and cap deploys `effCapOpenWriteV3`) — the DEPLOYED refusal descriptor's `Satisfied2`
+  -- FORCES the faithful 8-felt fields-write over the full ~124-bit BEFORE/AFTER fields-root blocks
+  -- (`FieldsOpenEmit.effFieldsWriteV3_forces_write8`), never the lane-0 squeeze the map_op-only host would
+  -- leave. The wide member stays keyed `refusalVmDescriptor2R24` (member count UNCHANGED at 57); only the
+  -- host (name + width) grows — the base `refusalFieldsWriteV3` (829) widened by the fields-open READ
+  -- appendix (329) + the AFTER-spine appendix (143) → host 1301, wide 1669. `bb` is the refusal FACE width
+  -- (`refusalVmDescriptor.traceWidth = EFFECT_VM_WIDTH = 188`), aligning the after-spine's committed
+  -- fields-root blocks (`fieldsRootGroupCol (EFFECT_VM_WIDTH + 91)`) with the wide AFTER rotated carrier.
   for (key, d) in v3RegistryCapOpenWide do
-    IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
+    if key == "refusalVmDescriptor2R24" then
+      let rfHost := Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+        "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
+      let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
+      let rfWide := wideAppend rfHost rfBB (rfBB + 91)
+      IO.println s!"{key}\t{rfWide.name}\t{emitVmJson2 rfWide}"
+    else
+      IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
   -- position 45: `transferCapOpenTB` made 8-felt-wide. The host is the SAME `effCapOpenV3TB transferV3
   -- … EFF_TRANSFER` the live `EmitRotationV3.lean` emits (the +2 turn-identity columns / +3 PI pins);
   -- the BEFORE limbs are laid by `rotateV3 transferV3` at the transfer FACE width, so `bb =

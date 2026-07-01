@@ -62,6 +62,7 @@ import Dregg2.Circuit.Spec.refreshdelegation
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.CapOpenEmit
 import Dregg2.Circuit.Emit.HeapOpenEmit
+import Dregg2.Circuit.Emit.FieldsOpenEmit
 
 namespace Dregg2.Circuit.RotatedKernelRefinementCapFamily
 
@@ -1457,5 +1458,52 @@ theorem heapWrite_forces_postleaf (S8 : Heap8Scheme) (path : List (Dregg2.Circui
 
 #assert_axioms heapWrite_forces_write8_sat
 #assert_axioms heapWrite_forces_postleaf
+
+/-! ## §I — refusal fields-write (the THIRD and LAST faithful 8-felt root): the DEPLOYED after-spine
+`effFieldsWriteV3` FORCES `fieldsWritesTo8` over the committed BEFORE/AFTER fields-root blocks. The fields
+twin of the heap `§H` trio, but fields carries NO authority AND — unlike heap's runtime `HEAP_ADDR` — the
+audit-slot key is a COMPILE-TIME CONSTANT (`refusalAuditKeyFelt` via `constEqGate`), so the deliverable is
+the faithful 8-felt fields-write bound at the reserved audit slot, written to `REFUSAL_AUDIT_FELT_COL`.
+Consumes `FieldsOpenEmit.effFieldsWriteV3_forces_write8` (OPTION I: the deployed refusal descriptor IS the
+after-spine `effFieldsWriteV3 refusalFieldsWriteV3 …`, EXACTLY as heap deploys `effHeapWriteV3` — the
+apex's `Rfix 39` quantifies over it). -/
+
+open Dregg2.Circuit.DeployedFieldsTree (Fields8Scheme)
+open Dregg2.Circuit.Emit.FieldsOpenEmit (effFieldsWriteV3 fieldsPermOut)
+
+/-- **`refusalWrite_forces_write8_sat` — THE FIELDS CLASS-A 8-FELT DELIVERABLE (deployed-descriptor
+forced).** From `Satisfied2 (effFieldsWriteV3 base name)` (the DEPLOYED after-spine fields-write descriptor,
+`base` the Class-A `refusalFieldsWriteV3`) + the named WIDE chip soundness, an active (non-last) row FORCES
+the faithful 8-felt `fieldsWritesTo8` over the FULL committed BEFORE/AFTER fields-root blocks
+(`beforeFieldsRootCols`/`afterFieldsRootCols`, the whole ~124-bit root) — keyed at the CONSTANT
+`refusalAuditKeyFelt`, written to `REFUSAL_AUDIT_FELT_COL`. NEVER the lane-0 squeeze the map_op-only
+descriptor leaves. This is what `CircuitSoundnessAssembled.Rfix 39 = effFieldsWriteV3 refusalFieldsWriteV3 …`
+quantifies over. Editing the after-spine appendix turns this — and the apex — RED. -/
+theorem refusalWrite_forces_write8_sat (S8 : Fields8Scheme)
+    (base : Dregg2.Circuit.DescriptorIR2.EffectVmDescriptor2) (name : String)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hChip : ChipTableSoundN (fieldsPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effFieldsWriteV3 base name) mi mf ma tr)
+    (i : Nat) (hi : i < tr.rows.length) (hnotlast : i + 1 ≠ tr.rows.length) :
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.fieldsWritesTo8 S8
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.beforeFieldsRootCols (envAt tr i))
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalAuditKeyFelt
+      ((envAt tr i).loc Dregg2.Circuit.Emit.EffectVmEmitRotationV3.REFUSAL_AUDIT_FELT_COL)
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.afterFieldsRootCols (envAt tr i)) :=
+  Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3_forces_write8
+    S8 base name hash mi mf ma tr hChip hsat i hi hnotlast
+
+/-- **CLASS-A FIELDS TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Along the
+FIXED sibling path the forced `fieldsWritesTo8` fixes, the after fields-root determines the after leaf digest
+(`Fields8Scheme.recomposeUp8` injective at full ~124-bit width): a forged after fields-root reached by a
+DIFFERENT post-leaf along the genuine path is impossible. The deployed twin of the Rust GENTIAN weld
+(`fields_root_gentian_weld.rs`). -/
+theorem refusalWrite_forces_postleaf (S8 : Fields8Scheme) (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8))
+    {a b : Digest8}
+    (h : Fields8Scheme.recomposeUp8 S8 a path = Fields8Scheme.recomposeUp8 S8 b path) : a = b :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.fieldsWritesTo8_forces_postleaf S8 path h
+
+#assert_axioms refusalWrite_forces_write8_sat
+#assert_axioms refusalWrite_forces_postleaf
 
 end Dregg2.Circuit.RotatedKernelRefinementCapFamily

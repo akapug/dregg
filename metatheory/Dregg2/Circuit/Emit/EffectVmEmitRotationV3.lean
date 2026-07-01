@@ -4052,10 +4052,10 @@ since the audit slot is a RESERVED, present key — an update, not a fresh inser
 into the BEFORE `fields_root`. -/
 def refusalFieldsWriteOp : MapOp :=
   { guard   := .var EffectVmEmitRefusal.SEL_REFUSAL
-  , root    := scalarRootGroup (beforeFieldsRootCol EFFECT_VM_WIDTH)
+  , root    := beforeFieldsRootGroup
   , key     := .const refusalAuditKeyFelt
   , value   := .var REFUSAL_AUDIT_FELT_COL
-  , newRoot := scalarRootGroup (afterFieldsRootCol EFFECT_VM_WIDTH)
+  , newRoot := afterFieldsRootGroup
   , op      := .write }
 
 /-- **`refusalFieldsWriteV3`** — the LIVE rotated refusal WITH the record-digest pin (belt) AND the

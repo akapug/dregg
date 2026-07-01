@@ -55,6 +55,7 @@ are LOAD-BEARING in the final apex, and the carried set is the per-effect decode
 hypotheses, never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureTransfer
+import Dregg2.Circuit.Emit.FieldsOpenEmit
 
 namespace Dregg2.Circuit.ClosureFanoutGenuine
 
@@ -526,8 +527,15 @@ theorem closedLogExtract_refusal_closed
             compressN2 hash t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 39 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  -- OPTION I: `Rfix 39 = effFieldsWriteV3 refusalFieldsWriteV3 …` (`actionTagToPos 39 = 55`,
+  -- `v3RegistryHeap` tail). STRIP the after-spine + read appendices (both ADDITIVE — no map/mem op) down
+  -- to the Class-A base `refusalFieldsWriteV3`, so the base-level `refusal_closedLog_sat` rung lifts to
+  -- the DEPLOYED after-spine descriptor the apex quantifies over.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3_satisfied2_strips_to_base hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+      "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen" minit mfin maddrs t hsat
   obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact refusal_closedLog_sat compressN2 hN hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
