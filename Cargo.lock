@@ -12369,18 +12369,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "polyana-bridge"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "dregg-cell",
- "dregg-query",
- "dregg-turn",
- "hex",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "polyval"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
