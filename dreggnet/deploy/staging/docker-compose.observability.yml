@@ -169,10 +169,10 @@ services:
       prometheus:
         condition: service_healthy
     environment:
-      # The admin login. Override by exporting GRAFANA_ADMIN_PASSWORD before
-      # `docker compose up`; the baked default is the credential reported out of band.
+      # The admin login. GRAFANA_ADMIN_PASSWORD is REQUIRED — set it before
+      # `docker compose up`. No secret is baked here; unset fails loudly.
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-jtB2twnhJ8cKN4ayAseW0wdW}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD (rotate the leaked default)}
       # No anonymous access, no signups — admin login is the only door.
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
