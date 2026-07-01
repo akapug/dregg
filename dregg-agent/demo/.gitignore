@@ -10,3 +10,7 @@ skills-run.json
 film.cast
 film.gif
 film.mp4
+
+# browser-surface films (large; regenerate with capture/run-capture.sh + capture/stitch.sh)
+film-browser.mp4
+film-full.mp4

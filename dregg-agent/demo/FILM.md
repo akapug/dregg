@@ -9,13 +9,19 @@ One command records the whole arc:
 demo/film.sh            # plays the ~2-min arc in your terminal
 ```
 
-The rendered deliverable (kept local, gitignored — regenerate any time):
+The rendered deliverables (all kept local, gitignored — regenerate any time):
 
 | file | what | size |
 |------|------|------|
-| `demo/film.mp4`  | the video (share this) | ~3.9 MB, **1:51** |
-| `demo/film.gif`  | the loop (tweet / README) | ~6.8 MB |
+| `demo/film-full.mp4`    | **the single ~2-min cut** — terminal agent (2× recap) → the browser arc | ~9 MB, **1:59** |
+| `demo/film-browser.mp4` | the companion browser film — cockpit · extension · panes | ~6 MB, **1:08** |
+| `demo/film.mp4`  | the terminal-only agent film (full speed) | ~3.9 MB, **1:51** |
+| `demo/film.gif`  | the terminal loop (tweet / README) | ~6.8 MB |
 | `demo/film.cast` | the asciinema recording (reproducible source) | ~14 KB |
+
+The **terminal** half is `demo/film.sh` (asciinema). The **browser** half is captured
+with Playwright against the real DreggNet surfaces run locally — see
+[The browser surfaces](#the-browser-surfaces-the-web-half) and `demo/capture/`.
 
 ## The arc (what a judge sees)
 
@@ -55,6 +61,66 @@ reveal) — see below.
 > tool-call is cap-gated, metered, receipted. The over-budget spend? Refused, no
 > money moved. Tamper one line → `BadSignature`. Verify-don't-trust, all the way
 > down. #dregg
+
+## The browser surfaces (the web half)
+
+The terminal film is only half the product. The **web** half — the star, and the
+prettiest half — is captured with Playwright driving the **real** DreggNet
+surfaces run locally, in `demo/capture/`. It is composited into `film-full.mp4`
+(after the terminal recap) and stands alone as `film-browser.mp4`.
+
+Every browser frame carries a **◉ RECORDED LOCALLY** badge and an on-screen
+honesty caption. The surfaces are real server-renders / the real MV3 extension —
+driven against local fixtures, a dev subject, and a stub node (no live-cloud
+claim).
+
+### Browser shot-list + honesty (the `film-browser.mp4` order)
+
+| # | ~time | surface (real binary) | on screen | what's REAL vs demo |
+|---|-------|-----------------------|-----------|---------------------|
+| B0 | 0:00–0:03 | title card | "the web side of the product" | — |
+| B1 | 0:03–0:26 | **web COCKPIT** (`dreggnet-attach`) | give a goal → the **reason→act→observe** stream, signed receipts (#seq · signed · ←prev) accumulating; the out-of-bundle `exfiltrate` probe **✗ refused** ("no money moved"); the **budget gauge** draws down → **VERIFY** ✓ *the proof held* → the **tamper** self-demo ✗ *flip one line → BadSignature*; then a **tiny budget** so the ceiling bites | the receipt-chain **verify + tamper are REAL** (re-witnessed in-browser, no host trusted). The tool verdicts are **canned/demo** — the server labels them "demo verdict (canned — not re-witnessed)"; the film does **not** dress them as live-witnessed. Brain = the scripted demo planner (the live Hermes brain is the reviewed-go swap). |
+| B2 | 0:26–0:42 | **cipherclerk EXTENSION** (`extension/`, MV3 unpacked) | create a **cap-account** (a key, not a password) → **LOG IN** (challenge → sign → session; subject `dregg:…`) → **Powerbox**: grant an **attenuated `dregg-cap:`** scoped to one action/cell ("bounded, cannot be amplified") | login is the **REAL** challenge/sign handshake — the wallet signs the nonce with its real Ed25519 key and the **local stub webauth verifies** the signature before minting a session (a forged sig is rejected). The powerbox `dregg-cap:` is a **REAL** attenuated bearer cap minted by the wallet WASM. The stub's node status + the derived subject are canned. |
+| B3 | 0:42–0:50 | **CONSOLE** (`dreggnet-console`) | "my stuff", cap-scoped: $DREGG balance/spend, sites, servers, agents | real server-render over the **deterministic console fixtures**, narrowed to the signed-in subject. |
+| B4 | 0:50–0:57 | **STATUS** (`dreggnet-status`) | "is the cloud up?" — services + the **federation (n=5)** panel | real render over the **`STATUS_DEMO` healthy fixture** (honest devnet posture; **no live-n=5 claim**). |
+| B5 | 0:57–1:04 | **LANDING** (`dreggnet-landing`) | the public front door | real server-render, served locally. |
+| B6 | 1:04–1:08 | close card | "verify-don't-trust, all the way down · Hermes · NVIDIA · Stripe · DreggNet" | — |
+
+`film-full.mp4` = the terminal agent film (a 2× recap) → a "BROWSER surfaces"
+divider → B1…B6. Both films are 1280×800.
+
+### Re-capture the browser surfaces (exact commands)
+
+```sh
+# 0. build the DreggNet server binaries once
+(cd ~/dev/DreggNet && cargo build -p dreggnet-attach -p dreggnet-console \
+     -p dreggnet-status -p dreggnet-landing)
+
+# 0b. the extension dist/ is a build artifact (gitignored) — rebuild it from src
+#     (this repo ships the powerbox-grant fix in src/; `dist/` must be regenerated)
+(cd ~/dev/breadstuffs/extension && node build.mjs)
+
+# 1. install the capture deps (Playwright chromium is reused from the cache)
+cd ~/dev/breadstuffs/dregg-agent/demo/capture && npm install
+
+# 2. run the servers + a stub node/webauth, drive every surface, record clips
+./run-capture.sh                 # writes out/{cockpit,extension,console,status,landing}.webm
+
+# 3. composite -> ../film-browser.mp4 (companion) and ../film-full.mp4 (~2:00)
+./stitch.sh
+```
+
+Knobs: `DREGGNET_DIR` / `EXT_DIR` point at the checkouts; the surfaces bind on
+`127.0.0.1:8100–8103` (attach/console/status/landing) and the stub node on `:8420`.
+The capture scripts (`capture-*.mjs`, `mock-node.mjs`, `lib.mjs`) hold the exact
+drive + the honesty captions; `run-capture.sh` / `stitch.sh` orchestrate. Media +
+`node_modules` are gitignored.
+
+**Honest labels (browser):** every surface is recorded locally with a badge; the
+cockpit **verify + tamper** are real and the tool-verdicts are demo-labelled (no
+faked live-witnessed green); the extension **login** is the real challenge/sign
+flow against a **local stub-webauth** (labelled); console/status/landing are real
+renders over **fixtures**; no live-cloud / live-n=5 claim.
 
 ## What is live vs recorded (honest — read this before you post)
 
