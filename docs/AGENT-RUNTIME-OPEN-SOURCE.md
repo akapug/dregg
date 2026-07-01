@@ -24,7 +24,7 @@ of owning it.
 `dregg-agent/` — a workspace member next to `deos-hermes/` (the confined Hermes
 agent surface). AGPL, substrate-only, public on `github.com/emberian/dregg`. It
 was lifted out of the private cloud (`exec/`), where it had grown up coupled to
-the cloud only at *one* seam (the polyana compute engine). Post-AGPL-firewall
+the cloud only at *one* seam (the owned wasmi compute engine). Post-AGPL-firewall
 dissolution, everything else it needs is the substrate.
 
 ## The dependency boundary
@@ -56,9 +56,9 @@ dissolution, everything else it needs is the substrate.
    ┌──────────────────────────────────────────────────────────────────┐
    │  pub use dregg_agent::{agent, budget, meter, harness,             │
    │                        federation_qa, brain, toolkit}             │
-   │  + PolyanaToolkit ext — injects the real polyana compute engine   │
+   │  + SandboxToolkit ext — injects the owned wasmi compute engine   │
    │    (run_workload) as the toolkit's run_tests / run_workload runner │
-   │  + rewitness_run_tests — the Layer-3 re-witness riding polyana    │
+   │  + rewitness_run_tests — the Layer-3 re-witness riding the owned sandbox    │
    │  + model.rs (cloud workload taxonomy), egress, host_api, capture  │
    └──────────────────────────────────────────────────────────────────┘
 ```
@@ -78,7 +78,7 @@ supplies the cloud-only implementations behind traits/closures.
 | The BYO-harness (confined child process) | **open** | std process I/O |
 | The toolkit registry + `ToolKit` trait | **open** | closures all the way down |
 | `check_health` / `verify_deploy` tools | **open seam** | already closure-injected — the *cloud* supplies the probe / verifier closure |
-| The **compute engine** (`run_tests` / `run_workload`) | **seam → cloud** | the toolkit takes an injected `Fn(&str,&str) -> Result<RunReport,String>` runner; the cloud wires the real **polyana** sandbox behind it (`PolyanaToolkit`) |
+| The **compute engine** (`run_tests` / `run_workload`) | **seam → cloud** | the toolkit takes an injected `Fn(&str,&str) -> Result<RunReport,String>` runner; the cloud wires the owned **wasmi** sandbox behind it (`SandboxToolkit`) |
 | The federation-QA **live node** read | **seam → cloud** | the quorum-QA *core* (the re-witness attestation) is open; the live-node fetch is the injected surface |
 | Cloud workload taxonomy (`model.rs`), egress accounting, host-API spine, log capture | **cloud** (`exec`) | genuinely cloud/hosting concerns |
 
@@ -87,8 +87,8 @@ tools (`run_tests`, `run_workload`) no longer call a crate-private `run_workload
 engine. They take an **injected runner closure**, so the open core has no
 compute-engine dependency at all. The witness binding (`WitnessedRun` over
 `(command, code_root, exit, output_digest)`) — the security-critical part — stays
-in the open core; only the *execution* is injected. The cloud's `PolyanaToolkit`
-extension trait wires the real polyana sandbox as that runner.
+in the open core; only the *execution* is injected. The cloud's `SandboxToolkit`
+extension trait wires the owned wasmi sandbox as that runner.
 
 ## The hackathon proof
 
