@@ -61,6 +61,7 @@ import Dregg2.Circuit.Spec.authorityrevocation
 import Dregg2.Circuit.Spec.refreshdelegation
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.CapOpenEmit
+import Dregg2.Circuit.Emit.HeapOpenEmit
 
 namespace Dregg2.Circuit.RotatedKernelRefinementCapFamily
 
@@ -1410,5 +1411,51 @@ theorem revokeCapability_capOpenSat_rejects_forged_postroot (hash : List ℤ →
 #assert_axioms revokeCapability_capOpenSat_rejects_forged_postroot
 #assert_axioms revokeCapability_execFullA_sat
 #assert_axioms revokeCapability_sat_rejects_wrong_caps
+
+/-! ## §H — heapWrite (the SECOND faithful 8-felt root): the DEPLOYED after-spine `effHeapWriteV3`
+FORCES `heapWritesTo8` over the committed BEFORE/AFTER heap-root blocks. The heap twin of the cap
+`*_descriptorRefines_sat` trio, but heap carries NO authority — the membership open is a pure
+`(addr, value)` leaf, so the deliverable is the faithful 8-felt heap-write bound DIRECTLY over env
+columns (scalar-rooted decode, NO anchor struct). Consumes `HeapOpenEmit.effHeapWriteV3_forces_write8`
+(OPTION I: the deployed heap-write descriptor IS the after-spine `effHeapWriteV3 heapWriteV3 …`, EXACTLY
+as cap deploys `effCapOpenWriteV3` — the apex's `Rfix 56` quantifies over it). -/
+
+open Dregg2.Circuit.DeployedHeapTree (Heap8Scheme)
+open Dregg2.Circuit.Emit.HeapOpenEmit (effHeapWriteV3 heapPermOut)
+
+/-- **`heapWrite_forces_write8_sat` — THE HEAP CLASS-A 8-FELT DELIVERABLE (deployed-descriptor forced).**
+From `Satisfied2 (effHeapWriteV3 base name)` (the DEPLOYED after-spine heap-write descriptor, `base` the
+Class-A splice `heapWriteV3`) + the named WIDE chip soundness, an active (non-last) row FORCES the
+faithful 8-felt `heapWritesTo8` over the FULL committed BEFORE/AFTER heap-root blocks
+(`beforeHeapRootCols`/`afterHeapRootCols`, the whole ~124-bit root) — keyed at `HEAP_ADDR`, written to
+`param[VALUE]`. NEVER the lane-0 squeeze the map_op-only descriptor leaves. This is what
+`CircuitSoundnessAssembled.Rfix 56 = effHeapWriteV3 heapWriteV3 …` quantifies over. Editing the
+after-spine appendix turns this — and the apex — RED. -/
+theorem heapWrite_forces_write8_sat (S8 : Heap8Scheme)
+    (base : Dregg2.Circuit.DescriptorIR2.EffectVmDescriptor2) (name : String)
+    (hash : List ℤ → ℤ) (mi : ℤ → ℤ) (mf : ℤ → ℤ × Nat) (ma : List ℤ) (tr : VmTrace)
+    (hChip : ChipTableSoundN (heapPermOut S8) (tr.tf .poseidon2))
+    (hsat : Satisfied2 hash (effHeapWriteV3 base name) mi mf ma tr)
+    (i : Nat) (hi : i < tr.rows.length) (hnotlast : i + 1 ≠ tr.rows.length) :
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8 S8
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.beforeHeapRootCols (envAt tr i))
+      ((envAt tr i).loc Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.HEAP_ADDR)
+      ((envAt tr i).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.hp.VALUE))
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.afterHeapRootCols (envAt tr i)) :=
+  Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3_forces_write8
+    S8 base name hash mi mf ma tr hChip hsat i hi hnotlast
+
+/-- **CLASS-A HEAP TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Along the
+FIXED sibling path the forced `heapWritesTo8` fixes, the after heap-root determines the after leaf digest
+(`Heap8Scheme.recomposeUp8` injective at full ~124-bit width): a forged after heap-root reached by a
+DIFFERENT post-leaf along the genuine path is impossible. The deployed twin of the Rust GENTIAN weld
+(`heap_root_gentian_weld.rs`). -/
+theorem heapWrite_forces_postleaf (S8 : Heap8Scheme) (path : List (Dregg2.Circuit.CapMerkleGeneric.StepG Digest8))
+    {a b : Digest8}
+    (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) : a = b :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.heapWritesTo8_forces_postleaf S8 path h
+
+#assert_axioms heapWrite_forces_write8_sat
+#assert_axioms heapWrite_forces_postleaf
 
 end Dregg2.Circuit.RotatedKernelRefinementCapFamily
