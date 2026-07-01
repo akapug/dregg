@@ -1026,7 +1026,23 @@ fn op_tool_call(name: &str, args: &Value) -> ToolCall {
     };
     let mut map = std::collections::BTreeMap::new();
     for k in keys {
-        if let Some(v) = args.get(*k) {
+        // Accept the canonical arg name, or a common model synonym for it (models
+        // frequently emit `command` for a shell, `repo` for a clone URL, `file`
+        // for a path, `body`/`text` for content — coerce to the canonical key so a
+        // sensible tool-call is not lost to a naming quibble).
+        let synonyms: &[&str] = match *k {
+            "cmd" => &["cmd", "command", "shell", "bash"],
+            "url" => &["url", "repo", "repository", "link"],
+            "path" => &["path", "file", "filename", "dir", "directory"],
+            "content" => &["content", "body", "text", "data"],
+            _ => &[],
+        };
+        let lookups = if synonyms.is_empty() {
+            &[*k][..]
+        } else {
+            synonyms
+        };
+        if let Some(v) = lookups.iter().find_map(|s| args.get(*s)) {
             // Accept a string, or coerce a non-string scalar to its text form.
             let val = v
                 .as_str()
@@ -1151,6 +1167,22 @@ mod tests {
 
     /// A fake key for the hermetic tests — distinctive so a leak is unmistakable.
     const TEST_SECRET: &str = "sk-UNITTEST-DONOTLEAK-abcdef0123456789";
+
+    #[test]
+    fn op_tool_call_accepts_common_arg_synonyms() {
+        // Models frequently emit `command` for a shell (the canonical arg is `cmd`)
+        // and `repo` for a clone URL; coerce them so a sensible call is not lost.
+        let shell = op_tool_call(op::SHELL, &json!({ "command": "ls -la" }));
+        assert_eq!(shell.args.get("cmd").map(String::as_str), Some("ls -la"));
+        let clone = op_tool_call(op::GIT_CLONE, &json!({ "repo": "https://x/y" }));
+        assert_eq!(
+            clone.args.get("url").map(String::as_str),
+            Some("https://x/y")
+        );
+        // The canonical name still wins and is unaffected.
+        let canon = op_tool_call(op::SHELL, &json!({ "cmd": "echo hi" }));
+        assert_eq!(canon.args.get("cmd").map(String::as_str), Some("echo hi"));
+    }
 
     fn test_key() -> ProviderKey {
         ProviderKey::new("moonshot", TEST_SECRET)

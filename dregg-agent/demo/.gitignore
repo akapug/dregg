@@ -3,3 +3,10 @@ run.json
 resp.json
 *.run.json
 skills-run.json
+
+# rendered film artifacts (large; regenerate with demo/film.sh + asciinema/agg).
+# The .cast is the reproducible recording; the .gif/.mp4 are the deliverables —
+# kept locally for ember/Alif to grab, not committed.
+film.cast
+film.gif
+film.mp4
