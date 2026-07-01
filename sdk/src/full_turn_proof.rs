@@ -45,9 +45,7 @@
 //! - Non-revocation root matches the federation's published revocation accumulator
 
 use dregg_circuit::cap_root::CapLeaf;
-use dregg_circuit::dsl::cap_membership::{
-    cap_membership_circuit_descriptor, prove_cap_membership_p3, verify_cap_membership_p3,
-};
+use dregg_circuit::dsl::cap_membership::verify_cap_membership_p3;
 use dregg_circuit::dsl::derivation::{
     derivation_circuit_descriptor, prove_derivation_p3, verify_derivation_p3,
 };
@@ -580,8 +578,9 @@ pub struct CapMembershipWitness {
     /// The consumed capability's canonical 7-field leaf preimage.
     pub leaf: CapLeaf,
     /// Sibling digests along the membership path, bottom-up
-    /// (`CAP_TREE_DEPTH` entries).
-    pub siblings: Vec<BabyBear>,
+    /// (`CAP_TREE_DEPTH` entries). Native 8-felt `node8` digests (Phase H-CAP-8):
+    /// each is a `[BabyBear; 8]` `Digest8`, NOT a lane-0 scalar.
+    pub siblings: Vec<[BabyBear; 8]>,
     /// Direction bits (0 = current node is the LEFT child, 1 = right).
     pub directions: Vec<u8>,
     /// **(cap-WRITE light-client axis)** The holder cell's FULL sorted c-list leaf-set — the
@@ -602,7 +601,9 @@ impl CapMembershipWitness {
     pub fn from_consumed(w: &dregg_turn::ConsumedCapWitness) -> Self {
         Self {
             leaf: w.cap_leaf(),
-            siblings: w.siblings.iter().map(|&s| BabyBear::new(s)).collect(),
+            // Native 8-felt: each `[u32; 8]` limb-array → a `[BabyBear; 8]` digest
+            // (per-lane, NOT a lane-0 projection).
+            siblings: w.siblings.iter().map(|s| s.map(BabyBear::new)).collect(),
             directions: w.directions.clone(),
             clist_leaves: Vec::new(),
         }
@@ -636,10 +637,12 @@ pub struct CapMembershipExpectation {
     /// capability (an inflated-mask tamper mismatches).
     pub leaf: CapLeaf,
     /// The holder's CANONICAL pre-state `capability_root` (the same value the
-    /// EffectVm row's `cap_root` column is seeded from — cap Phase A). The
-    /// verifier pins the leg's `pi[CAP_ROOT]` to it — so membership is in THE
-    /// holder's real c-list tree, not a prover-chosen one.
-    pub cap_root: BabyBear,
+    /// EffectVm row's `cap_root` column is seeded from — cap Phase A). Native
+    /// 8-felt `node8` `Digest8` (Phase H-CAP-8): the FULL-width (~124-bit) root,
+    /// NOT the lane-0 historical scalar. The verifier pins the AUTHORITY leg's
+    /// 8-felt `pi[CAP_ROOT..]` to it — so membership is in THE holder's real
+    /// c-list tree, not a prover-chosen one.
+    pub cap_root: [BabyBear; 8],
 }
 
 /// What the VERIFIER expects of the slot-caveat manifest for a CAPACITY cell — the
@@ -751,9 +754,11 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
         circuits.push(non_revocation_circuit_descriptor());
     }
 
-    // Cap-membership (consumed capability ∈ openable capability_root).
+    // Cap-membership (consumed capability ∈ openable capability_root). Deferred until the
+    // standalone leg is widened to native 8-felt `node8` (see §5b) — `has_cap_membership`
+    // stays false today, so this fingerprint entry is dormant.
     if components.has_cap_membership {
-        circuits.push(cap_membership_circuit_descriptor());
+        circuits.push(dregg_circuit::dsl::cap_membership::cap_membership_circuit_descriptor());
     }
 
     let circuit_refs: Vec<&CircuitDescriptor> = circuits.iter().collect();
@@ -4264,31 +4269,27 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // ========================================================================
     // 5b. Cap-membership proof (consumed capability — cap Phase D)
     // ========================================================================
-    if let Some(cap_witness) = &witness.cap_membership {
-        // AUDITED PATH: capability membership in the openable sorted-Poseidon2
-        // capability tree is proven through the real Plonky3 verifier
-        // (`p3-batch-stark`) via `prove_cap_membership_p3`. Every node hash
-        // (`hash_fact(left, [right])` — the exact `CanonicalCapTree` node) is
-        // arithmetized in-circuit by the real Poseidon2 gadget, and the leaf
-        // digest / path-top root are pinned by row-0 / last-row boundaries.
-        let leaf_digest = cap_witness.leaf.digest();
-        let (cap_proof, cap_pi) =
-            prove_cap_membership_p3(leaf_digest, &cap_witness.siblings, &cap_witness.directions)
-                .map_err(|e| {
-                    SdkError::InvalidWitness(format!("cap-membership p3 proof failed: {e}"))
-                })?;
-        let cap_proof_bytes = postcard::to_allocvec(&cap_proof).map_err(|e| {
-            SdkError::InvalidWitness(format!("cap-membership p3 proof serialize failed: {e}"))
-        })?;
-
-        components.has_cap_membership = true;
-        all_public_inputs.extend_from_slice(&cap_pi);
-        sub_proofs.push(AttachedSubProof {
-            label: "cap-membership".into(),
-            proof_bytes: cap_proof_bytes,
-            sub_public_inputs: cap_pi,
-            vk_hash: compute_vk_hash_bytes(&cap_membership_circuit_descriptor()),
-        });
+    //
+    // ⚑ NATIVE-8-FELT DEFERRAL (Phase H-CAP-8). The standalone DSL-p3 cap-membership
+    // leg (`dsl::cap_membership`) is a SINGLE-felt Poseidon2 Merkle STARK: its `Hash3Cap`
+    // node arithmetization binds ONE `poseidon2_permute_expr` output, and the DSL AIR
+    // framework has no multi-output (8-felt `node8`) hash form. The cap tree is now native
+    // 8-felt (`cap_root::cap_node8`, `CapLeaf::digest → [8]`), so this leg CANNOT faithfully
+    // carry the 8-felt witness. Feeding it the lane-0 projection would be a degraded-felt
+    // (~31-bit) regression — EXACTLY the truncation we refuse. So the standalone leg is NOT
+    // emitted until it is genuinely widened to `node8` (a Poseidon2-expr-gadget change that
+    // exposes 8 output lanes + 16 PIs — the reported deeper surface, out of the SDK lane).
+    //
+    // The genuine 8-felt AUTHORITY / holder-membership binding is NOT lost: on the deployed
+    // ROTATED path it rides the in-circuit CROWN cap-open leg (`build_effect_vm_cap_open_leg`
+    // → `from_membership_for`, which fills its per-level `cur8/sib8/node8` columns from the
+    // SAME `cap_node8` the cap tree commits and pins the real 8-felt `cap_root`). A caller
+    // that supplies a `CapMembershipExpectation` to `verify_full_turn_bound` while no
+    // standalone 8-felt leg is present is FAIL-CLOSED (MissingComponent) — never a silent
+    // lane-0 accept.
+    if witness.cap_membership.is_some() {
+        // Referenced for intent; the standalone leg is deferred (see the node8 surface above).
+        // `components.has_cap_membership` stays false until the widened leg is emitted.
     }
 
     // ========================================================================
@@ -5039,16 +5040,23 @@ pub fn verify_full_turn_bound(
             .ok_or(FullTurnVerifyError::MissingComponent(
                 "cap-membership".into(),
             ))?;
-        let proof_leaf_digest = cap_sub.sub_public_inputs.first().copied().ok_or_else(|| {
-            FullTurnVerifyError::MalformedPublicInputs(
-                "cap-membership PI missing leaf_digest (pi[0])".into(),
-            )
-        })?;
-        let proof_cap_root = cap_sub.sub_public_inputs.get(1).copied().ok_or_else(|| {
-            FullTurnVerifyError::MalformedPublicInputs(
-                "cap-membership PI missing cap_root (pi[1])".into(),
-            )
-        })?;
+        // Native 8-felt AUTHORITY binding (Phase H-CAP-8): the standalone cap-membership
+        // leg's PI is `[leaf_digest(8) ‖ cap_root(8)]` — the FULL-width node8 digests, NOT
+        // a lane-0 scalar. Pin BOTH the 8-felt leaf digest AND the 8-felt canonical
+        // pre-state cap_root, so the ~124-bit collision floor (matching the deployed
+        // FRI/STARK soundness) carries end-to-end. A leg that publishes fewer than 16 PIs
+        // is malformed and rejected here (never lane-0-narrowed to fit).
+        let pis = &cap_sub.sub_public_inputs;
+        if pis.len() < 16 {
+            return Err(FullTurnVerifyError::MalformedPublicInputs(format!(
+                "cap-membership PI carries {} felts, need 16 (leaf_digest[8] ‖ cap_root[8])",
+                pis.len()
+            )));
+        }
+        let mut proof_leaf_digest = [BabyBear::ZERO; 8];
+        proof_leaf_digest.copy_from_slice(&pis[0..8]);
+        let mut proof_cap_root = [BabyBear::ZERO; 8];
+        proof_cap_root.copy_from_slice(&pis[8..16]);
         if proof_cap_root != expected.cap_root {
             return Err(FullTurnVerifyError::CapRootMismatch {
                 expected: expected.cap_root,
@@ -5420,10 +5428,10 @@ pub enum FullTurnVerifyError {
     /// membership path into a prover-chosen tree (or a DIFFERENT cell's
     /// cap_root spliced in) publishes a different root and is rejected here.
     CapRootMismatch {
-        /// The canonical pre-state capability root the verifier expects.
-        expected: BabyBear,
-        /// The root the proof's membership path actually tops.
-        got: BabyBear,
+        /// The canonical pre-state capability root the verifier expects (native 8-felt).
+        expected: [BabyBear; 8],
+        /// The root the proof's membership path actually tops (native 8-felt).
+        got: [BabyBear; 8],
     },
     /// The cap-membership sub-proof proves membership of a leaf that is NOT
     /// the consumed capability disclosed in the receipt. The circuit's row-0
@@ -5432,10 +5440,10 @@ pub enum FullTurnVerifyError {
     /// 7-field leaf preimage — so a leaf-field tamper (e.g. an inflated
     /// `EffectMask`) mismatches and is rejected here.
     CapLeafMismatch {
-        /// Digest of the receipt-disclosed consumed-cap leaf.
-        expected: BabyBear,
-        /// The leaf digest the proof actually attests.
-        got: BabyBear,
+        /// Digest of the receipt-disclosed consumed-cap leaf (native 8-felt).
+        expected: [BabyBear; 8],
+        /// The leaf digest the proof actually attests (native 8-felt).
+        got: [BabyBear; 8],
     },
     /// The non-revocation sub-proof proves freshness against a revocation
     /// accumulator root that is NOT the canonical root the verifier expects for
