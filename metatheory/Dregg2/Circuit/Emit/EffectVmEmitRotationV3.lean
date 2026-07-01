@@ -95,6 +95,10 @@ import Dregg2.Circuit.Emit.EffectVmEmitEmitEvent
 -- column GROUP commits. ACYCLIC: DeployedCapTree's emit chain bottoms out at EffectVmEmitCapRoot →
 -- EffectVmEmit, never reaching this Rotation layer.
 import Dregg2.Circuit.DeployedCapTree
+-- v10 faithful-8-felt HEAP-root: the native `node8` heap-tree carrier + recompose spine (the SECOND
+-- faithful root, the exact twin of `DeployedCapTree`'s `Cap8Scheme`). ACYCLIC: `DeployedHeapTree`
+-- imports only `DeployedCapTree` + `CapMerkleGeneric`, already in this layer's closure.
+import Dregg2.Circuit.DeployedHeapTree
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 
@@ -113,6 +117,8 @@ open Dregg2.Substrate.Heap (refSponge)
 open Dregg2.Circuit.DeployedCapTree (Digest8 Cap8Scheme CapLeaf)
 open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (recomposeUp8 capLeafDigest8 recomposeUp8_inj_of_path)
 open Dregg2.Circuit.CapMerkleGeneric (StepG)
+-- v10 faithful-8-felt HEAP-root: the native `node8` heap-tree carrier + recompose spine.
+open Dregg2.Circuit.DeployedHeapTree (Heap8Scheme)
 
 set_option linter.unusedVariables false
 set_option autoImplicit false
@@ -1220,6 +1226,69 @@ genuine post-leaf along the genuine path — the GENTIAN close at full width, NO
 theorem writesTo8_forces_postleaf (S8 : Cap8Scheme) (path : List (StepG Digest8))
     {a b : Digest8} (h : recomposeUp8 S8 a path = recomposeUp8 S8 b path) : a = b :=
   recomposeUp8_inj_of_path S8 path h
+
+/-! ### v10 — the FAITHFUL 8-felt HEAP-root column GROUP + the native-`node8` heap-write relation
+`heapWritesTo8` (the SECOND faithful root, the exact twin of the cap-root group above).
+
+The scalar heap `writesTo` on the lane-0 heap-root limb (limb `B_HEAP_ROOT = 28`) is only the ~31-bit
+lane-0 PROJECTION of the deployed 8-felt heap root. v10 commits the FULL 8-felt root: limb 28 (lane 0) ‖
+the seven completion limbs 58..64 (lanes 1..7) — both blocks — absorbed into the wide state commit. The
+GROUP readers below pin those eight columns to a `Digest8`; `heapWritesTo8` is the native arity-16 `node8`
+UPDATE-AT-KEY over the FULL 8-felt heap root (`Heap8Scheme.recomposeUp8`, ~124-bit), NEVER a lane-0 squeeze
+(the soundness downgrade the heap GENTIAN tooth closes). The anti-forge tooth is the recompose injectivity
+(`recomposeUp8_inj_of_path`): a forged high-felt post-root forces a different post-leaf. -/
+
+/-- The heap-root limb in the rotated block (the fourth faithful-root limb, after `cap_root`=25,
+`nullifier_root`=26, `commitments_root`=27). Lane 0 of the 8-felt heap-root group. -/
+def B_HEAP_ROOT : Nat := 28
+
+/-- The BEFORE-block scalar heap-root column (lane 0 = limb `B_HEAP_ROOT` = 28). -/
+def beforeHeapRootCol (w : Nat) : Nat := w + B_HEAP_ROOT
+
+/-- The AFTER-block scalar heap-root column. -/
+def afterHeapRootCol (w : Nat) : Nat := w + 91 + B_HEAP_ROOT
+
+/-- The heap-root 8-felt column at lane `i` in the block based at `blockBase` (limb `B_HEAP_ROOT` = 28 for
+lane 0; the seven completion limbs 58..64 for lanes 1..7 — the cap completions 51..57 shifted by 7). The
+cap/heap/fields groups SHARE the ONE `node8` lane by design; heap's completions sit ABOVE cap's. -/
+def heapRootGroupCol (blockBase : Nat) (i : Fin 8) : Nat :=
+  blockBase + (if i = 0 then B_HEAP_ROOT else 50 + (i : Nat) + 7)
+
+/-- The BEFORE-block 8-felt heap-root digest read off the row env (lane 0 = `beforeHeapRootCol`). -/
+def beforeHeapRootCols (env : VmRowEnv) : Digest8 :=
+  fun i => env.loc (heapRootGroupCol EFFECT_VM_WIDTH i)
+
+/-- The AFTER-block 8-felt heap-root digest read off the row env (lane 0 = `afterHeapRootCol`). -/
+def afterHeapRootCols (env : VmRowEnv) : Digest8 :=
+  fun i => env.loc (heapRootGroupCol (EFFECT_VM_WIDTH + 91) i)
+
+/-- Lane 0 of the BEFORE heap group IS the existing scalar heap-root limb (the projection the scalar
+`writesTo` forces) — the 8-felt relation REFINES the lane-0 write rather than replacing it. -/
+theorem beforeHeapRootCols_lane0 (env : VmRowEnv) :
+    beforeHeapRootCols env 0 = env.loc (beforeHeapRootCol EFFECT_VM_WIDTH) := by
+  simp [beforeHeapRootCols, heapRootGroupCol, beforeHeapRootCol]
+
+/-- Lane 0 of the AFTER heap group IS the existing scalar post heap-root limb. -/
+theorem afterHeapRootCols_lane0 (env : VmRowEnv) :
+    afterHeapRootCols env 0 = env.loc (afterHeapRootCol EFFECT_VM_WIDTH) := by
+  simp [afterHeapRootCols, heapRootGroupCol, afterHeapRootCol]
+
+/-- **`heapWritesTo8 S8 oldRoot k v newRoot`** — the native-`node8` heap-tree UPDATE-AT-KEY over the FULL
+8-felt root: some sibling/direction `path` recomposes `oldRoot` from the heap leaf `(k, oldVal)`, and
+recomposes `newRoot` from the in-place-updated leaf `(k, v)` along the SAME path. The faithful 8-felt twin
+of the scalar heap `writesTo` (which is the lane-0 projection). Heap leaves are `(addr, value)`, so the
+key IS the address and the written value is the leaf's second field — no `CapLeaf` re-encoding residual. -/
+def heapWritesTo8 (S8 : Heap8Scheme) (oldRoot : Digest8) (k v : ℤ) (newRoot : Digest8) : Prop :=
+  ∃ (oldVal : ℤ) (path : List (StepG Digest8)),
+    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, oldVal)) path = oldRoot ∧
+    Heap8Scheme.recomposeUp8 S8 (Heap8Scheme.heapLeafDigest8 S8 (k, v)) path = newRoot
+
+/-- **The 8-felt heap anti-forge tooth.** Along a FIXED sibling path the post-root pins the post-leaf digest
+(`Heap8Scheme.recomposeUp8` injective at the full ~124-bit width). A forged `newRoot` cannot be reached with
+the genuine post-leaf along the genuine path — the heap GENTIAN close at full width, NOT lane-0. -/
+theorem heapWritesTo8_forces_postleaf (S8 : Heap8Scheme) (path : List (StepG Digest8))
+    {a b : Digest8} (h : Heap8Scheme.recomposeUp8 S8 a path = Heap8Scheme.recomposeUp8 S8 b path) : a = b :=
+  Heap8Scheme.recomposeUp8_inj_of_path S8 path h
 
 /-- The held-capability MEMBERSHIP read on the ROTATED before-block cap-root limb (limb 25). The before
 `cap_root` (rotated limb) opens at `param[CAP_KEY]` to `param[HELD_MASK]` (root unchanged — a read). The
