@@ -89,6 +89,7 @@ import Dregg2.Circuit.RotatedKernelRefinementFacet
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 import Dregg2.Circuit.Emit.HeapOpenEmit
+import Dregg2.Circuit.Emit.FieldsOpenEmit
 
 namespace Dregg2.Circuit.CircuitSoundnessAssembled
 
@@ -194,9 +195,23 @@ def v3RegistryHeap : List (String × EffectVmDescriptor2) :=
         -- HERE so `Rfix 3 = supplyMintV3`; tag 20 (bridgeMint) keeps pos 2 (its own descriptor).
         -- Positions 0..53 are UNCHANGED, so every prior `Rfix_*` rfl-correspondence is preserved.
         ("supplyMintVmDescriptor2R24",
-         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3)]
+         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3),
+        -- The DEPLOYED REFUSAL FIELDS-WRITE descriptor (position 55, OPTION I): the after-spine
+        -- membership `effFieldsWriteV3 refusalFieldsWriteV3 …` (EXACTLY as heap deploys `effHeapWriteV3`
+        -- and cap deploys `effCapOpenWriteV3`). `actionTagToPos 39` re-keys HERE so `Rfix 39` quantifies
+        -- over the descriptor a light client actually verifies — whose `Satisfied2` FORCES the faithful
+        -- 8-felt fields-write (`RotatedKernelRefinementCapFamily.refusalWrite_forces_write8_sat` via
+        -- `FieldsOpenEmit.effFieldsWriteV3_forces_write8`) over the full ~124-bit BEFORE/AFTER fields-root
+        -- blocks, NOT the lane-0 squeeze the map_op-only host would leave. The THIRD faithful 8-felt
+        -- Merkle root, deployed. The cohort's authority-only `refusalFieldsWriteV3` [pos 7] stays for the
+        -- live prover route + the bare slot. Positions 0..54 are UNCHANGED, so every prior `Rfix_*`
+        -- rfl-correspondence is preserved.
+        ("refusalFieldsWriteVmDescriptor2R24",
+         Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+           Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+           "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen")]
 
-theorem v3RegistryHeap_length : v3RegistryHeap.length = 55 := by
+theorem v3RegistryHeap_length : v3RegistryHeap.length = 56 := by
   simp [v3RegistryHeap, Dregg2.Circuit.Emit.CapOpenEmit.v3RegistryCapOpen_length]
 
 /-- The heapWrite member lands at tail position 45 — `Rfix 56` resolves THERE. -/
@@ -267,7 +282,11 @@ def actionTagToPos : EffectIdx → Nat
   | 27 => 3    -- noteSpend       → noteSpendVmDescriptor2R24
   | 28 => 4    -- noteCreate      → noteCreateVmDescriptor2R24
   | 38 => 21   -- makeSovereign   → makeSovereignVmDescriptor2R24
-  | 39 => 7    -- refusal         → refusalVmDescriptor2R24
+  | 39 => 55   -- refusal          → refusalFieldsWriteVmDescriptor2R24 (OPTION I: the DEPLOYED after-spine
+               --                   fields-write `effFieldsWriteV3 refusalFieldsWriteV3 …`, `v3RegistryHeap`
+               --                   tail pos 55; `Rfix 39` FORCES the faithful 8-felt fields-write over the
+               --                   full ~124-bit BEFORE/AFTER fields-root blocks — the THIRD faithful root.
+               --                   The cohort's `refusalFieldsWriteV3` [pos 7] stays for the live prover route.)
   | 40 => 25   -- receiptArchive  → receiptArchiveVmDescriptor2R24
   | 47 => 11   -- pipelinedSend   → pipelinedSendVmDescriptor2R24
   | 52 => 5    -- cellSeal        → cellSealVmDescriptor2R24
@@ -318,6 +337,21 @@ theorem Rfix_heapWrite :
     Rfix 56 = Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3
         Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
         "dregg-effectvm-heapWrite-v1-rot24-v3-write-heapopen" := rfl
+
+/-- **`Rfix_refusal` — OPTION I: refusal (tag 39) ranges over its OWN DEPLOYED fields-write descriptor.**
+`actionTagToPos 39 = 55` and `v3RegistryHeap`'s position-55 entry is the DEPLOYED after-spine membership
+descriptor `effFieldsWriteV3 refusalFieldsWriteV3 …` (EXACTLY as heap deploys `effHeapWriteV3`). So
+`vkOfRegistry Rfix` / the apex's `StarkSound hash Rfix` quantify over the descriptor a light client
+actually verifies, and the refusal rung
+(`RotatedKernelRefinementCapFamily.refusalWrite_forces_write8_sat`) discharges its refinement about the
+RIGHT one: a satisfying `Satisfied2 (Rfix 39)` FORCES the faithful 8-felt `fieldsWritesTo8` over the FULL
+committed BEFORE/AFTER fields-root blocks (`FieldsOpenEmit.effFieldsWriteV3_forces_write8`) — NEVER the
+lane-0 squeeze the map_op-only host would leave. The THIRD and LAST faithful 8-felt Merkle root, deployed:
+all three named roots (cap · heap · fields) now faithful. -/
+theorem Rfix_refusal :
+    Rfix 39 = Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+        "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen" := rfl
 
 /-- **`Rfix_setProgram` — SetProgram (tag 13) ranges over its OWN LIVE descriptor.** `actionTagToPos
 13 = 51` and `v3RegistryHeap`'s position-51 entry is the genuine Class-A `setProgramV3` (the program
