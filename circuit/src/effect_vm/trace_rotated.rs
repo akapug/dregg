@@ -87,14 +87,14 @@ pub const NUM_REGISTERS: usize = 24;
 /// perms_digest · vk_digest · **mode** · **fields_root**). Lean `preLimbsAt_length = 37` at R = 24,
 /// after the WAVE-3 mode/fields-root flag-day widening (NUM_PRE_LIMBS 35→37 — the committed mode byte +
 /// fields_root digest sub-limbs, the NEW LAST pre-iroot limbs).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 30; // 67 (v10: +30 faithful-8-felt completion limbs 37..66)
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 51; // 88 (v11: +21 dedicated accumulator-8-felt completion limbs 67..87 over v10's 67)
 
 /// A rotated block: 37 limbs + iroot + state_commit + 12 chain carriers = 51 columns. The 37-limb
 /// body chains as a 4-wide head (limbs 0..3) + ELEVEN 3-wide groups (limbs 4..36, exactly 33 = 11×3,
 /// NO arity-2 leftover — the WAVE-2 vk singleton is absorbed into the eleventh group) + the iroot
 /// alone, so the chain-carrier count stays 12 over the 35-limb shape (B_SPAN 49→51 — two more limbs,
 /// no new carrier).
-pub const B_SPAN: usize = 91;
+pub const B_SPAN: usize = 119;
 /// The widened-caveat region: 29 manifest + 9 chain + 1 commit = 39 columns.
 pub const C_SPAN: usize = 39;
 /// The appendix: two blocks + the caveat region.
@@ -163,7 +163,7 @@ pub const B_MODE: usize = 35;
 /// map root, the setFieldDyn / refusal weld limb). Lean `EffectVmEmitRotationV3.B_FIELDS_ROOT`.
 pub const B_FIELDS_ROOT: usize = 36;
 /// In-block offset of the iroot carrier (absorbed last, limb 37, shifted +2 by the mode/fields-root limbs).
-pub const B_IROOT: usize = 67;
+pub const B_IROOT: usize = 88;
 /// In-block offset of the `state_commit` carrier (the chain's final digest).
 pub const B_STATE_COMMIT: usize = 68;
 /// In-block base of the chained-absorption intermediate carriers (12 sites, 39..=50).
@@ -3022,13 +3022,13 @@ pub fn transfer_caveat_manifest() -> RotatedCaveatManifest {
 
 /// The committed wide trace width (`wideAppend` adds 208 = 2 × 13 × 8 carrier columns to the
 /// 608-wide rotated base): `transferVmDescriptor2R24Wide.trace_width`.
-pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 368; // v10: + 2 × 23 × 8
+pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 480; // v11: + 2 × 30 × 8
 /// The base column of the BEFORE 13×8 wide carrier block (`wideBeforeCBase = h.traceWidth = 608`).
 pub const WIDE_BEFORE_CBASE: usize = GRAD_ROT_WIDTH; // 608
 /// The base column of the AFTER 13×8 wide carrier block (`wideAfterCBase = h.traceWidth + 184`).
-pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + 184; // v10: + 23 × 8
+pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + 240; // v11: + 30 × 8
 /// The number of 8-felt carriers per wide commitment chain (head + 11 body + final).
-pub const WIDE_NUM_CARRIERS: usize = 23;
+pub const WIDE_NUM_CARRIERS: usize = 30;
 /// The in-block carrier index of the final 8-felt commitment carrier (carrier 12).
 pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 12
 /// The committed wide public-input count (`h.piCount + 16` = 38 + 16).
