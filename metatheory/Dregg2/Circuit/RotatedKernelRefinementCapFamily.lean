@@ -1620,8 +1620,10 @@ theorem nullifierInsert_forces_write8_sat (S8 : Heap8Scheme)
     (hChip : ChipTableSoundN (Dregg2.Circuit.Emit.HeapOpenEmit.heapPermOut S8) (tr.tf .poseidon2))
     (hsat : Satisfied2 hash (effAccumInsertV3 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
               Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
-              (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO) base name) mi mf ma tr)
+              (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+              (some Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND) base name) mi mf ma tr)
     (i : Nat) (hi : i < tr.rows.length) (hnotlast : i + 1 ≠ tr.rows.length)
+    (hselActive : (envAt tr i).loc Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND = 1)
     (spine : List ℤ)
     (hbefore : SpineCommits8 S8
       (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.beforeNullifierRootCols (envAt tr i)) spine)
@@ -1641,7 +1643,10 @@ theorem nullifierInsert_forces_write8_sat (S8 : Heap8Scheme)
     S8 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
     (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
-    base name hash mi mf ma tr hChip hsat i hi hnotlast spine hbefore g hcov hafter
+    (some Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND)
+    base name hash mi mf ma tr hChip hsat i hi hnotlast
+    (fun s hs => Option.some_inj.mp hs ▸ hselActive)
+    spine hbefore g hcov hafter
 
 /-- **`commitmentsInsert_forces_write8_sat` — THE COMMITMENTS-ACCUMULATOR INSERT 8-FELT DELIVERABLE.** FORCES
 `accumInserts8` over the committed BEFORE/AFTER commitments-root groups (limb 27 ‖ 74..80) — keyed at
@@ -1652,7 +1657,7 @@ theorem commitmentsInsert_forces_write8_sat (S8 : Heap8Scheme)
     (hChip : ChipTableSoundN (Dregg2.Circuit.Emit.HeapOpenEmit.heapPermOut S8) (tr.tf .poseidon2))
     (hsat : Satisfied2 hash (effAccumInsertV3 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
               Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
-              (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO) base name) mi mf ma tr)
+              (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO) none base name) mi mf ma tr)
     (i : Nat) (hi : i < tr.rows.length) (hnotlast : i + 1 ≠ tr.rows.length)
     (spine : List ℤ)
     (hbefore : SpineCommits8 S8
@@ -1673,7 +1678,10 @@ theorem commitmentsInsert_forces_write8_sat (S8 : Heap8Scheme)
     S8 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
     (prmCol Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
-    base name hash mi mf ma tr hChip hsat i hi hnotlast spine hbefore g hcov hafter
+    none
+    base name hash mi mf ma tr hChip hsat i hi hnotlast
+    (fun s hs => by simp at hs)
+    spine hbefore g hcov hafter
 
 /-- **`cellsInsert_forces_write8_sat` — THE CELLS/ACCOUNTS-ACCUMULATOR INSERT 8-FELT DELIVERABLE.** FORCES
 `accumInserts8` over the committed BEFORE/AFTER cells-root groups (limb 0 ‖ 81..87) — keyed at the new-cell id
@@ -1684,7 +1692,7 @@ theorem cellsInsert_forces_write8_sat (S8 : Heap8Scheme)
     (hChip : ChipTableSoundN (Dregg2.Circuit.Emit.HeapOpenEmit.heapPermOut S8) (tr.tf .poseidon2))
     (hsat : Satisfied2 hash (effAccumInsertV3 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
               Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
-              Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL base name) mi mf ma tr)
+              Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL none base name) mi mf ma tr)
     (i : Nat) (hi : i < tr.rows.length) (hnotlast : i + 1 ≠ tr.rows.length)
     (spine : List ℤ)
     (hbefore : SpineCommits8 S8
@@ -1705,7 +1713,10 @@ theorem cellsInsert_forces_write8_sat (S8 : Heap8Scheme)
     S8 Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
-    base name hash mi mf ma tr hChip hsat i hi hnotlast spine hbefore g hcov hafter
+    none
+    base name hash mi mf ma tr hChip hsat i hi hnotlast
+    (fun s hs => by simp at hs)
+    spine hbefore g hcov hafter
 
 /-- **CLASS-A ACCUMULATOR TOOTH — the post-root pins the post-leaf (the 8-felt GENTIAN, NOT lane-0).** Shared
 across all three accumulator families (SAME `Heap8Scheme`): along the FIXED sibling path the forced

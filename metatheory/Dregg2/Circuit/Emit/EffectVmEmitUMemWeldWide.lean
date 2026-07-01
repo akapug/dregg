@@ -190,6 +190,7 @@ def noteSpendInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
     (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
       Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+    (some Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND)
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
     "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
@@ -201,6 +202,7 @@ def noteCreateInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
     (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
       Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
+    none
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
     "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
@@ -211,6 +213,7 @@ def createCellInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+    none
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
     "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth

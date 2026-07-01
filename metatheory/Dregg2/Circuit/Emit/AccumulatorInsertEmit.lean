@@ -171,69 +171,107 @@ def afterGroupWeldsI (groupCol : Nat → Fin 8 → Nat) (w : Nat) : List VmConst
   (List.finRange 8).map (fun i =>
     VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i) (groupCol (EFFECT_VM_WIDTH + 119) i))))
 
-/-- The key-bind gate: the read leaf's `addr` (leaf 0) equals the accumulator's published KEY column. -/
-def keyBindGateI (keyCol : Nat) (w : Nat) : EmittedExpr :=
-  eqGate ((capOpenCols w).leaf 0) keyCol
+/-- **The SELECTOR-GATED bind gate.** With `sel = none` the bind is UNCONDITIONAL (`var a - var col =
+0`, byte-identical to a bare `eqGate` — the noteCreate/createCell families whose base economics do not
+force the VALUE column to `0` off-row). With `sel = some s` the bind is GATED by the effect's runtime
+selector column `s` (`var s · (var a - var col) = 0`): ACTIVE on the firing row (`s = 1`, forcing `a =
+col` — the REAL bind, never removed) and VACUOUS on padding/off-row (`s = 0`) — the nullifier family,
+whose base noteSpend economics force `NOTE_VALUE_LO = 0` on non-spend rows (conflicting with an
+unconditional per-row value bind). The MEMBERSHIP + rootPin welds (`afterGroupWeldsI`) stay
+UNCONDITIONAL regardless: the producer lays the appendix leaf constant, so the fold reaches the
+after-root on every row. -/
+def bindGateI (sel : Option Nat) (a col : Nat) : EmittedExpr :=
+  match sel with
+  | none   => eqGate a col
+  | some s => .mul (.var s) (eqGate a col)
 
-/-- The value-bind gate: the read leaf's `value` (leaf 1) equals the accumulator's published VALUE column. -/
-def valueBindGateI (valueCol : Nat) (w : Nat) : EmittedExpr :=
-  eqGate ((capOpenCols w).leaf 1) valueCol
+/-- The selector-gated bind forces `a = col` on any row where the gate holds AND (when gated) the
+selector is `1`. Ungated (`none`): unconditional. Gated (`some s`): needs `env s = 1` (the active
+firing row). -/
+theorem bindGateI_forces (sel : Option Nat) (a col : Nat) (env : VmRowEnv)
+    (h : (bindGateI sel a col).eval env.loc = 0)
+    (hsel : ∀ s, sel = some s → env.loc s = 1) :
+    env.loc a = env.loc col := by
+  cases sel with
+  | none => exact (eqGate_eval a col env).mp (by simpa [bindGateI] using h)
+  | some s =>
+    have hs : env.loc s = 1 := hsel s rfl
+    have hg : (eqGate a col).eval env.loc = 0 := by
+      have : env.loc s * (eqGate a col).eval env.loc = 0 := by
+        simpa [bindGateI, EmittedExpr.eval] using h
+      rw [hs, one_mul] at this; exact this
+    exact (eqGate_eval a col env).mp hg
 
-/-- The insert-appendix constraint list: the 8 AFTER-root welds + the key bind + the value bind. All
-`.base (.gate …)` — reads no base column, contributes no map/mem op (so the strip is additive). -/
-def accumInsertConstraints (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat) (w : Nat) :
-    List VmConstraint2 :=
+/-- The key-bind gate: the read leaf's `addr` (leaf 0) equals the accumulator's published KEY column,
+selector-gated by `sel`. -/
+def keyBindGateI (sel : Option Nat) (keyCol : Nat) (w : Nat) : EmittedExpr :=
+  bindGateI sel ((capOpenCols w).leaf 0) keyCol
+
+/-- The value-bind gate: the read leaf's `value` (leaf 1) equals the accumulator's published VALUE
+column, selector-gated by `sel`. -/
+def valueBindGateI (sel : Option Nat) (valueCol : Nat) (w : Nat) : EmittedExpr :=
+  bindGateI sel ((capOpenCols w).leaf 1) valueCol
+
+/-- The insert-appendix constraint list: the 8 AFTER-root welds (UNCONDITIONAL) + the selector-gated key
+bind + the selector-gated value bind. All `.base (.gate …)` — reads no base column, contributes no
+map/mem op (so the strip is additive) regardless of `sel`. -/
+def accumInsertConstraints (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
+    (sel : Option Nat) (w : Nat) : List VmConstraint2 :=
   afterGroupWeldsI groupCol w
-  ++ [VmConstraint2.base (.gate (keyBindGateI keyCol w)),
-      VmConstraint2.base (.gate (valueBindGateI valueCol w))]
+  ++ [VmConstraint2.base (.gate (keyBindGateI sel keyCol w)),
+      VmConstraint2.base (.gate (valueBindGateI sel valueCol w))]
 
-/-- **`effAccumInsertV3 groupCol keyCol valueCol base name`** — the insert-shaped accumulator-write
+/-- **`effAccumInsertV3 groupCol keyCol valueCol sel base name`** — the insert-shaped accumulator-write
 descriptor: the reused heap-open read (`effHeapOpenV3`) with its `capRoot` welded to the AFTER
-accumulator block + the KEY/VALUE binds. NO after-spine (the insert has no shared before/after path;
-the fresh-key non-membership is the deployed `.absent` map-op, not a second in-row membership). Its
-`Satisfied2` FORCES `MembersAt8 afterRoot (key, value)` (`effAccumInsertV3_forces_afterMembership`). -/
+accumulator block + the SELECTOR-GATED KEY/VALUE binds. NO after-spine (the insert has no shared
+before/after path; the fresh-key non-membership is the deployed `.absent` map-op, not a second in-row
+membership). Its `Satisfied2` FORCES `MembersAt8 afterRoot (key, value)`
+(`effAccumInsertV3_forces_afterMembership`) on the active row. `sel = none` is byte-identical to the
+un-gated descriptor (the always-bound families); `sel = some s` gates the binds on the runtime selector
+`s` (the nullifier family). -/
 def effAccumInsertV3 (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
-    (base : EffectVmDescriptor2) (name : String) : EffectVmDescriptor2 :=
+    (sel : Option Nat) (base : EffectVmDescriptor2) (name : String) : EffectVmDescriptor2 :=
   { (effHeapOpenV3 base name) with
     name        := name
     constraints := (effHeapOpenV3 base name).constraints
-                     ++ accumInsertConstraints groupCol keyCol valueCol base.traceWidth }
+                     ++ accumInsertConstraints groupCol keyCol valueCol sel base.traceWidth }
 
 /-- Every insert-appendix constraint is a constraint of the write descriptor. -/
 theorem effAccumInsertV3_appMem (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
-    (base : EffectVmDescriptor2) (name : String)
-    (c : VmConstraint2) (hc : c ∈ accumInsertConstraints groupCol keyCol valueCol base.traceWidth) :
-    c ∈ (effAccumInsertV3 groupCol keyCol valueCol base name).constraints :=
+    (sel : Option Nat) (base : EffectVmDescriptor2) (name : String)
+    (c : VmConstraint2) (hc : c ∈ accumInsertConstraints groupCol keyCol valueCol sel base.traceWidth) :
+    c ∈ (effAccumInsertV3 groupCol keyCol valueCol sel base name).constraints :=
   List.mem_append_right _ hc
 
 /-- A `Satisfied2` of the insert descriptor strips (constraint-subset) to a `Satisfied2` of the reused
 heap-open read `effHeapOpenV3` — the insert appendix is all `.base (.gate …)`, reads no base column and
 contributes no map/mem op. -/
 theorem effAccumInsertV3_strips_to_open (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
+    (sel : Option Nat)
     (hash : List ℤ → ℤ) (base : EffectVmDescriptor2)
     (name : String) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : VmTrace)
-    (h : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol base name) minit mfin maddrs t) :
+    (h : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol sel base name) minit mfin maddrs t) :
     Satisfied2 hash (effHeapOpenV3 base name) minit mfin maddrs t := by
-  have hmapOps : Dregg2.Circuit.DescriptorIR2.mapOpsOf (effAccumInsertV3 groupCol keyCol valueCol base name)
+  have hmapOps : Dregg2.Circuit.DescriptorIR2.mapOpsOf (effAccumInsertV3 groupCol keyCol valueCol sel base name)
       = Dregg2.Circuit.DescriptorIR2.mapOpsOf (effHeapOpenV3 base name) := by
     simp [Dregg2.Circuit.DescriptorIR2.mapOpsOf, effAccumInsertV3, accumInsertConstraints,
       afterGroupWeldsI, List.filterMap_append, List.filterMap_map, List.filterMap_cons]
-  have hmemOps : Dregg2.Circuit.DescriptorIR2.memOpsOf (effAccumInsertV3 groupCol keyCol valueCol base name)
+  have hmemOps : Dregg2.Circuit.DescriptorIR2.memOpsOf (effAccumInsertV3 groupCol keyCol valueCol sel base name)
       = Dregg2.Circuit.DescriptorIR2.memOpsOf (effHeapOpenV3 base name) := by
     simp [Dregg2.Circuit.DescriptorIR2.memOpsOf, effAccumInsertV3, accumInsertConstraints,
       afterGroupWeldsI, List.filterMap_append, List.filterMap_map, List.filterMap_cons]
-  have hmemLog : Dregg2.Circuit.DescriptorIR2.memLog (effAccumInsertV3 groupCol keyCol valueCol base name) t
+  have hmemLog : Dregg2.Circuit.DescriptorIR2.memLog (effAccumInsertV3 groupCol keyCol valueCol sel base name) t
       = Dregg2.Circuit.DescriptorIR2.memLog (effHeapOpenV3 base name) t := by
     simp [Dregg2.Circuit.DescriptorIR2.memLog, hmemOps]
-  have hmapLog : Dregg2.Circuit.DescriptorIR2.mapLog (effAccumInsertV3 groupCol keyCol valueCol base name) t
+  have hmapLog : Dregg2.Circuit.DescriptorIR2.mapLog (effAccumInsertV3 groupCol keyCol valueCol sel base name) t
       = Dregg2.Circuit.DescriptorIR2.mapLog (effHeapOpenV3 base name) t := by
     simp [Dregg2.Circuit.DescriptorIR2.mapLog, hmapOps]
   exact
     { rowConstraints := fun i hi c hc =>
         h.rowConstraints i hi c (by
           show c ∈ (effHeapOpenV3 base name).constraints
-                     ++ accumInsertConstraints groupCol keyCol valueCol base.traceWidth
+                     ++ accumInsertConstraints groupCol keyCol valueCol sel base.traceWidth
           exact List.mem_append_left _ hc)
       rowHashes := h.rowHashes
       rowRanges := h.rowRanges
@@ -246,19 +284,19 @@ theorem effAccumInsertV3_strips_to_open (groupCol : Nat → Fin 8 → Nat) (keyC
 
 /-- Any insert-appendix `.base (.gate g)` constraint forces `g.eval = 0` on an active (non-last) row. -/
 theorem accumInsertI_gate_forces (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
-    (base : EffectVmDescriptor2) (name : String)
+    (sel : Option Nat) (base : EffectVmDescriptor2) (name : String)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : VmTrace)
-    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol base name) minit mfin maddrs t)
+    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol sel base name) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (g : EmittedExpr)
     (hin : VmConstraint2.base (.gate g)
-             ∈ accumInsertConstraints groupCol keyCol valueCol base.traceWidth) :
+             ∈ accumInsertConstraints groupCol keyCol valueCol sel base.traceWidth) :
     g.eval (envAt t i).loc = 0 := by
   have hrow := hsat.rowConstraints i hi
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
-  have h := hrow _ (effAccumInsertV3_appMem groupCol keyCol valueCol base name _ hin)
+  have h := hrow _ (effAccumInsertV3_appMem groupCol keyCol valueCol sel base name _ hin)
   simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
   simpa using h
 
@@ -267,19 +305,20 @@ descriptor TRACE-FORCES `MembersAt8 afterRoot (key, value)` over the FULL commit
 group (`groupCol (EFFECT_VM_WIDTH + 119)`, the whole ~124-bit root) at the accumulator's published
 `keyCol`/`valueCol` — the spliced-leaf membership in the rebuilt after-tree. -/
 theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
-    (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
+    (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat) (sel : Option Nat)
     (base : EffectVmDescriptor2) (name : String)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : VmTrace)
     (hChip : ChipTableSoundN (heapPermOut S8) (t.tf .poseidon2))
-    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol base name) minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
+    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol sel base name) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (hsel : ∀ s, sel = some s → (envAt t i).loc s = 1) :
     MembersAt8 S8 (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 119) k))
       ((envAt t i).loc keyCol, (envAt t i).loc valueCol) := by
   set e := envAt t i with he
   set w := base.traceWidth with hw
   -- the membership core from the reused heap-open read.
-  have hopenSat := effAccumInsertV3_strips_to_open groupCol keyCol valueCol
+  have hopenSat := effAccumInsertV3_strips_to_open groupCol keyCol valueCol sel
     hash base name minit mfin maddrs t hsat
   have hcore : HeapMembershipCore t.tf (capOpenCols w) e :=
     effHeapOpenV3_core base name hash minit mfin maddrs t hopenSat i hi hnotlast
@@ -292,28 +331,28 @@ theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
     funext k
     have hin : VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot k)
         (groupCol (EFFECT_VM_WIDTH + 119) k)))
-        ∈ accumInsertConstraints groupCol keyCol valueCol w := by
+        ∈ accumInsertConstraints groupCol keyCol valueCol sel w := by
       refine List.mem_append_left _ ?_
       exact List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
     have := (eqGate_eval _ _ e).mp
-      (accumInsertI_gate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
+      (accumInsertI_gate_forces groupCol keyCol valueCol sel base name hash minit mfin maddrs t hsat
         i hi hnotlast _ hin)
     simpa [groupVal] using this
-  -- key/value binds: the read leaf's (addr, value) is (keyCol, valueCol).
+  -- key/value binds: the read leaf's (addr, value) is (keyCol, valueCol), selector-gated (`hsel`).
   have hkeyb : e.loc ((capOpenCols w).leaf 0) = e.loc keyCol := by
-    have hin : VmConstraint2.base (.gate (keyBindGateI keyCol w))
-        ∈ accumInsertConstraints groupCol keyCol valueCol w := by
+    have hin : VmConstraint2.base (.gate (keyBindGateI sel keyCol w))
+        ∈ accumInsertConstraints groupCol keyCol valueCol sel w := by
       refine List.mem_append_right _ ?_; simp
-    exact (eqGate_eval _ _ e).mp
-      (accumInsertI_gate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
-        i hi hnotlast _ hin)
+    exact bindGateI_forces sel ((capOpenCols w).leaf 0) keyCol e
+      (accumInsertI_gate_forces groupCol keyCol valueCol sel base name hash minit mfin maddrs t hsat
+        i hi hnotlast _ hin) hsel
   have hvalb : e.loc ((capOpenCols w).leaf 1) = e.loc valueCol := by
-    have hin : VmConstraint2.base (.gate (valueBindGateI valueCol w))
-        ∈ accumInsertConstraints groupCol keyCol valueCol w := by
+    have hin : VmConstraint2.base (.gate (valueBindGateI sel valueCol w))
+        ∈ accumInsertConstraints groupCol keyCol valueCol sel w := by
       refine List.mem_append_right _ ?_; simp
-    exact (eqGate_eval _ _ e).mp
-      (accumInsertI_gate_forces groupCol keyCol valueCol base name hash minit mfin maddrs t hsat
-        i hi hnotlast _ hin)
+    exact bindGateI_forces sel ((capOpenCols w).leaf 1) valueCol e
+      (accumInsertI_gate_forces groupCol keyCol valueCol sel base name hash minit mfin maddrs t hsat
+        i hi hnotlast _ hin) hsel
   have hpair : heapLeafPairOf (capOpenCols w) e = (e.loc keyCol, e.loc valueCol) := by
     simp only [heapLeafPairOf, hkeyb, hvalb]
   rw [hroot, hpair] at hmem0
@@ -328,13 +367,14 @@ set-recompute ride the realizable carriers (`SpineCommits8`, a HYPOTHESIS — th
 `compute_canonical_heap_root_8` fold — never an axiom, never lane-0). The insert twin of
 `AccumulatorOpenEmit.effAccumWriteV3_forces_write8`, CORRECT-shaped for the genuine sorted insert. -/
 theorem effAccumInsertV3_forces_write8 (S8 : Heap8Scheme)
-    (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat)
+    (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat) (sel : Option Nat)
     (base : EffectVmDescriptor2) (name : String)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : VmTrace)
     (hChip : ChipTableSoundN (heapPermOut S8) (t.tf .poseidon2))
-    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol base name) minit mfin maddrs t)
+    (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol sel base name) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (hsel : ∀ s, sel = some s → (envAt t i).loc s = 1)
     (spine : List ℤ)
     (hbefore : SpineCommits8 S8 (fun k => (envAt t i).loc (groupCol EFFECT_VM_WIDTH k)) spine)
     (g : GapOpen8 S8 (fun k => (envAt t i).loc (groupCol EFFECT_VM_WIDTH k)) ((envAt t i).loc keyCol))
@@ -346,8 +386,8 @@ theorem effAccumInsertV3_forces_write8 (S8 : Heap8Scheme)
         ((envAt t i).loc keyCol)
         ((envAt t i).loc valueCol)
         (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 119) k)) := by
-  have hafterMem := effAccumInsertV3_forces_afterMembership S8 groupCol keyCol valueCol
-    base name hash minit mfin maddrs t hChip hsat i hi hnotlast
+  have hafterMem := effAccumInsertV3_forces_afterMembership S8 groupCol keyCol valueCol sel
+    base name hash minit mfin maddrs t hChip hsat i hi hnotlast hsel
   exact accumInsert_writesTo8 S8 _ _ _ _ spine hbefore g hcov hafterMem hafter
 
 #assert_axioms effAccumInsertV3_forces_afterMembership

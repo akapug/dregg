@@ -3616,14 +3616,23 @@ fn lay_accum_insert_read_appendix(
     before_leaves: &[crate::heap_root::HeapLeaf],
     key_col: usize,
     value_col: usize,
+    gated: bool,
 ) -> Result<(), String> {
     use crate::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf};
     // The spliced leaf's `(key, value)` are read from the descriptor's KEY / VALUE param columns on the
-    // lead (row 0). The read appendix's `(addr, value)` IS `(key, value)`, so the KEY/VALUE bind gates
-    // hold; and the key/value param columns are held CONSTANT across ALL rows (the bind gates are per-row
-    // `.base (.gate …)`, forced on every non-last row) — mirroring how `generate_rotated_heap_write_wide`
-    // lays its coll/key/value param columns on every row. (Param columns are OFF the commitment chain, so
-    // this does not disturb the block commits the tree generator already recomputed.)
+    // active spend row (row 0). The read appendix's `(addr, value)` IS `(key, value)`, so the KEY/VALUE
+    // bind gates hold on the active row. Two regimes:
+    //   * `gated = false` (noteCreate / createCell): the bind gates are UNCONDITIONAL `eqGate`s, so the
+    //     key/value param columns are held CONSTANT across ALL rows (mirroring
+    //     `generate_rotated_heap_write_wide`). Those families' base economics do not force the value
+    //     column to `0` off-row, so a constant write is consistent.
+    //   * `gated = true` (noteSpend): the bind gates are SELECTOR-GATED (`sel::NOTE_SPEND · (leaf −
+    //     col)`), VACUOUS on padding (`sel = 0`). The base noteSpend economics force `NOTE_VALUE_LO = 0`
+    //     on non-spend rows, so we must LEAVE the base key/value columns untouched (0 on padding); the
+    //     active row already carries the real key/value from the tree generator, satisfying the ACTIVE
+    //     bind. The UNCONDITIONAL after-root membership weld is laid on every row regardless (below).
+    // (Param columns are OFF the commitment chain, so this does not disturb the block commits the tree
+    // generator already recomputed.)
     let key = trace[0][key_col];
     let value = trace[0][value_col];
     let before_tree = CanonicalHeapTree8::new(before_leaves.to_vec(), HEAP_TREE_DEPTH);
@@ -3646,8 +3655,13 @@ fn lay_accum_insert_read_appendix(
     }
     let read_leaf = HeapLeaf { addr: key, value };
     for row in trace.iter_mut() {
-        row[key_col] = key;
-        row[value_col] = value;
+        // Ungated families pin the key/value columns constant on every row; the selector-gated
+        // noteSpend leaves them as the base generator laid them (real on the active row, 0 on padding),
+        // so the gated bind is satisfied on the active row and vacuous (never violated) on padding.
+        if !gated {
+            row[key_col] = key;
+            row[value_col] = value;
+        }
         row.resize(ACCUM_INSERT_HOST_WIDTH, BabyBear::ZERO);
         fill_heap_open_read(
             row,
@@ -3691,6 +3705,7 @@ pub fn generate_rotated_note_spend_wide(
         before_nullifiers,
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NOTE_VALUE_LO,
+        true, // selector-gated: base noteSpend forces NOTE_VALUE_LO=0 off-row; gate the value bind
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
@@ -3723,6 +3738,7 @@ pub fn generate_rotated_note_create_wide(
         before_commitments,
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NOTE_VALUE_LO,
+        false, // unconditional bind: noteCreate economics do not force the value column to 0 off-row
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
@@ -3782,6 +3798,7 @@ pub fn generate_rotated_create_cell_wide(
         before_accounts,
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NULLIFIER,
+        false, // unconditional bind: createCell births an empty cell (valueCol = keyCol), consistent off-row
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
