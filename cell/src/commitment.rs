@@ -1019,8 +1019,18 @@ pub fn compute_rotated_pre_limbs(
     pre[26] = hash_bytes(&ctx.nullifier_root);
     // limb 27: commitments_root (the noteCreate shielded-set root — the flag-day new limb).
     pre[27] = hash_bytes(&ctx.commitments_root);
-    // limb 28: heap_root.
-    pre[28] = hash_bytes(&cell.state.heap_root);
+    // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
+    // (Phase H-HEAP-8). The faithful native-`heap_node8` (arity-16) 8-felt sorted-Merkle root over the
+    // cell's heap map — the circuit's 8-felt `heap_root` column GROUP carries lane 0 = limb 28, lanes
+    // 1..7 = limbs 58..64. The in-circuit heap-write map_op FORCES the AFTER group to the `writesTo8`
+    // native update, so a ~31-bit collision at lane-0 differing in any completion felt is UNSAT (the
+    // heap GENTIAN law). This REPLACES the lossy 1-felt `hash_bytes(&cell.state.heap_root)`.
+    // Byte-identical to `rotation_witness::compute_rotated_pre_limbs`.
+    let heap8 = crate::state::compute_canonical_heap_root_8(&cell.state.heap_map);
+    pre[28] = heap8[0];
+    for i in 0..7 {
+        pre[58 + i] = heap8[1 + i];
+    }
     // limbs 29,30,31: lifecycle (opaque felt), epoch, committed_height.
     pre[29] = v9_lifecycle_felt(&cell.lifecycle);
     pre[30] = BabyBear::new((cell.state.delegation_epoch() & 0x7FFF_FFFF) as u32);

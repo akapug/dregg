@@ -387,8 +387,17 @@ pub fn produce(
     pre_limbs[26] = root_felt(nullifier_root);
     // limb 27: commitments_root (the noteCreate shielded-set root — the flag-day new limb).
     pre_limbs[27] = root_felt(commitments_root);
-    // limb 28: heap_root.
-    pre_limbs[28] = root_felt(&cell.state.heap_root);
+    // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
+    // (Phase H-HEAP-8). The faithful native-`heap_node8` (arity-16) 8-felt sorted-Merkle root over
+    // the cell's heap map — cell and circuit fold through the SAME impl (`compute_canonical_heap_root_8`),
+    // so the `heap_root ↔ heap_root` weld holds lane-for-lane by construction (the heap GENTIAN tooth
+    // guards it). Byte-identical to `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy
+    // 1-felt `root_felt(&cell.state.heap_root)` — the degraded-felt gate is satisfied for heap_root.
+    let heap8 = dregg_cell::state::compute_canonical_heap_root_8(&cell.state.heap_map);
+    pre_limbs[28] = heap8[0];
+    for i in 0..7 {
+        pre_limbs[58 + i] = heap8[1 + i];
+    }
     // limbs 29,30,31: lifecycle (opaque felt), epoch, committed_height.
     pre_limbs[29] = lifecycle_felt(&cell.lifecycle);
     pre_limbs[30] = epoch_felt(cell.state.delegation_epoch());
