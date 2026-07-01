@@ -1,5 +1,12 @@
 # dregg-agent — a real, flexible, live operator agent you can audit
 
+> **Watch the ~2-minute film:** `demo/film.sh` plays the whole arc (OPERATE →
+> SPEND → PROVE → CLOUD) paced for video; the rendered `demo/film.mp4` /
+> `demo/film.gif` are the deliverables. See **[`FILM.md`](./FILM.md)** for the
+> timed shot-list, the narration script, the live-vs-recorded honesty notes, and
+> the exact re-film + render commands.
+
+
 Hand a **live model** an *arbitrary* natural-language goal, a **budget**, and a
 **cap bundle**. It runs a genuine **reason → act → observe** loop: the model
 decides the next tool call, and every call is **cap-gated · metered · receipted**
