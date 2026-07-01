@@ -33,6 +33,8 @@ epoch (the owner's separate go).
 -/
 import Dregg2.Circuit.Emit.CapOpenEmit
 import Dregg2.Circuit.Emit.CapOpenTurnPins
+import Dregg2.Circuit.Emit.HeapOpenEmit
+import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
@@ -122,7 +124,8 @@ def weldedWriteTail : List (String × EffectVmDescriptor2) :=
 write tail.** `WIDE_REGISTRY_STAGED_TSV` is a 57-member cover of the live V3 registry: the 45
 `v3RegistryCapOpenWide` crown + the 9 §10 write-tail wrappers + THESE three —
 `transferCapOpenTBVmDescriptor2R24` (the turn-identity-pinned transfer cap-open),
-`heapWriteVmDescriptor2R24` (the Class-A sorted-Merkle splice), `supplyMintVmDescriptor2R24` (the
+`heapWriteVmDescriptor2R24` (the AFTER-SPINE membership-forcing heap-write `effHeapWriteV3 heapWriteV3
+…` over the Class-A sorted-Merkle splice base), `supplyMintVmDescriptor2R24` (the
 dedicated `sel.MINT` mint). They have NO `v3RegistryCapOpenWide` / `…WriteWide` emit source, so the
 welded twin set omitted them — yet each is a deployed wide member a turn routes to, so a welded proof
 routed to one bound NO cohort descriptor on the wire. Built at the SAME wide geometry
@@ -133,13 +136,20 @@ def liveOnlyWideHosts : List (String × EffectVmDescriptor2) :=
   let tbHost := Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
     Dregg2.Circuit.Emit.CapOpenEmit.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
-  let tbWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend tbHost tbBB (tbBB + 51)
+  let tbWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend tbHost tbBB (tbBB + 119)
+  -- heapWrite: the AFTER-SPINE membership-forcing heap-write host (`effHeapWriteV3 heapWriteV3 …`),
+  -- EXACTLY the bare `EmitWideRegistryProbe` position-46 host — the Class-A splice base widened by the
+  -- heap-open READ appendix + the AFTER-spine membership appendix, so the deployed descriptor's
+  -- `Satisfied2` FORCES the faithful 8-felt heap-write (`HeapOpenEmit.effHeapWriteV3_forces_write8`),
+  -- never the lane-0 squeeze the raw map_op-only splice host left. `ab = bb + 119` (`B_SPAN`).
   let hwBB := Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth
-  let hwWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
-    Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3 hwBB (hwBB + 51)
+  let hwHost := Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3
+    Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
+    "dregg-effectvm-heapWrite-v1-rot24-v3-write-heapopen"
+  let hwWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend hwHost hwBB (hwBB + 119)
   let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
   let smWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
-    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 51)
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 119)
   [ ("transferCapOpenTBVmDescriptor2R24", tbWide)
   , ("heapWriteVmDescriptor2R24", hwWide)
   , ("supplyMintVmDescriptor2R24", smWide) ]
@@ -152,15 +162,41 @@ resolves a Lean-grounded welded descriptor. -/
 def weldedLiveOnlyTail : List (String × EffectVmDescriptor2) :=
   liveOnlyWideHosts.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
 
+/-- **The AFTER-SPINE refusal wide host.** The bare wide registry (`EmitWideRegistryProbe`) REPLACES the
+position-7 `refusalVmDescriptor2R24` crown member IN PLACE with the after-spine membership-forcing
+`effFieldsWriteV3 refusalFieldsWriteV3 …` (EXACTLY as heap deploys `effHeapWriteV3` and cap deploys
+`effCapOpenWriteV3`): the DEPLOYED refusal descriptor's `Satisfied2` FORCES the faithful 8-felt
+fields-write over the full ~124-bit BEFORE/AFTER fields-root blocks
+(`FieldsOpenEmit.effFieldsWriteV3_forces_write8`). Built at the SAME geometry the bare emit uses —
+`bb = refusalVmDescriptor.traceWidth`, `ab = bb + 119` (`B_SPAN`) — so the welded twin welds onto the
+GENUINE after-spine wide, not the stale record-pin refusal (`v3RegistryCapOpenWide`'s own position-7
+entry is the pre-after-spine refusal; the bare emit + this welded emit both override it). -/
+def refusalAfterSpineWide : EffectVmDescriptor2 :=
+  let rfHost := Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+    "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
+  let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend rfHost rfBB (rfBB + 119)
+
+/-- **The 45 AUTHORITY-crown wide HOSTS** — `v3RegistryCapOpenWide` with the position-7 refusal member
+REPLACED by the after-spine `refusalAfterSpineWide` (key-stable, so the by-name resolver is unchanged),
+mirroring the bare `EmitWideRegistryProbe` override. Every OTHER crown member is a faithful after-spine
+wide already (the cap-open crown carriers the 8-felt anchors), so only refusal needs the swap. -/
+def crownWideHosts : List (String × EffectVmDescriptor2) :=
+  v3RegistryCapOpenWide.map (fun e =>
+    if e.1 == "refusalVmDescriptor2R24" then (e.1, refusalAfterSpineWide) else e)
+
 /-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of the wire's WIDE
-cap-open registry: every `v3RegistryCapOpenWide` AUTHORITY-crown member welded with the domain its
-effect touches, PLUS the §10 WRITE-bearing cap-open tail welded the same way (`weldedWriteTail`) — the
-write wrappers the deployed wire routes the write-bearing cap siblings to — PLUS the 3 live-only wide
-members (`weldedLiveOnlyTail`) the bare wide registry carries beyond those two sets, completing the
+cap-open registry: every `crownWideHosts` AUTHORITY-crown member (the 45 `v3RegistryCapOpenWide`
+members with refusal advanced to the after-spine fields-write host) welded with the domain its effect
+touches, PLUS the §10 WRITE-bearing cap-open tail welded the same way (`weldedWriteTail`) — the write
+wrappers the deployed wire routes the write-bearing cap siblings to (already the after-spine
+`effCapOpenWriteV3` hosts) — PLUS the 3 live-only wide members (`weldedLiveOnlyTail`, transfer /
+after-spine heap-write / mint) the bare wide registry carries beyond those two sets, completing the
 57/57 cover. Keyed by the SAME live registry key (name-stable, so the by-name executor verifier
 resolves the welded member as `<live key>`). The driver writes these exact bytes to the staged TSV. -/
 def weldedWideRegistry : List (String × EffectVmDescriptor2) :=
-  v3RegistryCapOpenWide.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
+  crownWideHosts.map (fun e => (e.1, weldUMemIntoWide e.2 (wideKeyUMemDomain e.1)))
     ++ weldedWriteTail
     ++ weldedLiveOnlyTail
 
@@ -185,8 +221,14 @@ is pinned; these `#guard`s pin the SHAPE the bytes realize). -/
 -- THE NO-NARROWING INVARIANT: the weld is additive — `traceWidth = host + 7` and `piCount` is
 -- UNCHANGED (the 16 wide-commit PIs / the 8-felt anchors ride through at the same offsets). Checked on
 -- the crown members, the welded write tail, AND the 3 live-only welded twins.
-#guard (v3RegistryCapOpenWide.zip (weldedWideRegistry.take 45)).all
+#guard (crownWideHosts.zip (weldedWideRegistry.take 45)).all
   (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
+-- The refusal crown host is the AFTER-SPINE fields-write wide (host + 7 over the after-spine host, NOT
+-- the stale `v3RegistryCapOpenWide` position-7 record-pin refusal); the other 44 crown hosts are
+-- `v3RegistryCapOpenWide`'s own members, so the crown keys stay name-stable.
+#guard crownWideHosts.map (·.1) == v3RegistryCapOpenWide.map (·.1)
+#guard (crownWideHosts.filter (·.1 == "refusalVmDescriptor2R24")).map (·.2.traceWidth)
+  == [refusalAfterSpineWide.traceWidth]
 #guard ((v3RegistryCapOpenWriteWide.filter (fun e => e.1 != grantCapWriteKey)).zip
     ((weldedWideRegistry.drop 45).take 9)).all
   (fun p => p.2.2.traceWidth == p.1.2.traceWidth + 7 ∧ p.2.2.piCount == p.1.2.piCount)
