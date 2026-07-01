@@ -3941,19 +3941,117 @@ async fn execute_finalized_turn(
     // `canonical_ledger_root` commits only `cell.state`). The submitter no longer
     // provisions authoritatively at faucet-submission time in multi-party mode
     // (see `api.rs`), so it reaches this same path and provisions identically.
-    provision_transfer_destinations(&mut s.ledger, &signed_turn.turn.call_forest);
-
     // THE SWAP — producer mode (authority inversion), now the DEFAULT — through the ONE
     // shared producer gate every ingress uses (`executor_setup::execute_via_producer`,
     // #171): finalized turns, thin-HTTP turns, and remote signed envelopes all execute
     // on the same authoritative state producer.
     let lean_producer_enabled = s.lean_producer_enabled;
-    let exec_result = crate::executor_setup::execute_via_producer(
-        &executor,
-        &signed_turn.turn,
-        &mut s.ledger,
-        lean_producer_enabled,
-    );
+
+    // ─── A1 FIX — the confirmed n=5 finalization-stall root cause ─────────────
+    // The EXECUTION FFI (`dregg_exec_full_forest_auth`, reached through
+    // `execute_via_producer`) used to run INLINE on the tokio async worker while
+    // this function held the GLOBAL `state.write()` lock (acquired above) for the
+    // FFI's ENTIRE duration. At n=5 that pinned the worker AND held the write lock
+    // across the whole (slow) FFI, starving the producer / round / super-ratify
+    // loop — so `execute_finalized_turn` never completed the promotion and turns
+    // never finalized. (The `24dcd0474` wedge fix moved the ORDERING FFI off the
+    // worker but left THIS execution FFI inline-under-lock.)
+    //
+    // Fix: run the FFI on a `spawn_blocking` thread against a CLONE of the
+    // pre-state (CLONE-IN), releasing the global write lock for the FFI's whole
+    // duration, then re-apply the committed post-state under a BRIEF re-acquired
+    // lock as a per-cell OVERLAY of exactly the cells this turn touched. We do NOT
+    // wholesale-replace `s.ledger` (that would clobber concurrent writers on OTHER
+    // cells — the service inserts / the atomic-coordinator commit). This changes
+    // only WHERE/HOW the verified executor runs; the Lean executor stays
+    // authoritative and its post-state is installed verbatim.
+    let pre_ledger = s.ledger.clone();
+    let mut exec_ledger = s.ledger.clone();
+    // Every value the remainder of this function needs from the pre-state has
+    // already been captured into owned locals above (new_height, now, and the
+    // full_turn_* proving snapshots), so releasing the guard here is sound.
+    drop(s);
+
+    let turn_for_exec = signed_turn.turn.clone();
+    let exec_join = tokio::task::spawn_blocking(move || {
+        // Provision Transfer destinations on the CLONE the FFI executes against
+        // (byte-deterministic — the identical zero-stub every node inserts). The
+        // pre→post diff below classifies each provisioned+credited destination as
+        // a created cell, so the overlay installs it on the authoritative ledger.
+        provision_transfer_destinations(&mut exec_ledger, &turn_for_exec.call_forest);
+        let result = crate::executor_setup::execute_via_producer(
+            &executor,
+            &turn_for_exec,
+            &mut exec_ledger,
+            lean_producer_enabled,
+        );
+        (result, exec_ledger)
+    });
+    let (exec_result, exec_ledger) = match exec_join.await {
+        Ok(v) => v,
+        Err(e) => {
+            error!(
+                block_id = %block_id,
+                turn_hash = %turn_hash_hex,
+                error = %e,
+                "finalized-turn EXECUTION task panicked/cancelled; turn NOT applied"
+            );
+            return;
+        }
+    };
+
+    // The COMPLETE set of cells this turn changed — the full pre→post cell diff.
+    // Unlike the executor's `LedgerDelta` (which omits the heap_root / lifecycle /
+    // program / vk / delegation dimensions — see `compute_delta_from_journal`), a
+    // whole-`Cell` diff captures EVERY committed change, so overlaying it
+    // reproduces the exact post-state a re-executing validator computes. `Cell`'s
+    // `PartialEq` compares content only (the leaf cache is excluded), so there are
+    // no false positives.
+    let touched_ids = ledger_touched_diff(&pre_ledger, &exec_ledger);
+
+    // Re-acquire the global write lock BRIEFLY to install the result.
+    let mut s = state.write().await;
+
+    // CONCURRENCY GUARD (validate-or-reject, never overwrite). The FFI executed
+    // against a snapshot taken while the lock was released. In multi-party mode
+    // the other ingress paths only STAGE during this window (the faucet executes
+    // against a scratch clone — see `api.rs`; `/turn/atomic` stages a proposal;
+    // consensus is the sole authoritative writer), so the touched set is normally
+    // untouched by anyone else. If a concurrent path DID write a cell this turn
+    // also changed, the snapshot is stale and overlaying it would silently clobber
+    // that write — so we DECLINE to install and surface it loudly. The durable
+    // commit is then NOT written, so identity-recovery re-applies this turn
+    // against fresh state (idempotently) rather than corrupting the live root now.
+    let concurrent_conflict = touched_ids
+        .iter()
+        .any(|id| pre_ledger.get(id) != s.ledger.get(id));
+    if concurrent_conflict {
+        error!(
+            block_id = %block_id,
+            turn_hash = %turn_hash_hex,
+            "A1 concurrency guard: a concurrent ledger write landed on a cell this \
+             finalized turn touched during the off-lock exec window — the execution \
+             snapshot is STALE. DECLINING to install (validate-or-reject); the turn \
+             re-applies from the durable cursor on restart"
+        );
+        return;
+    }
+
+    // Install the COMPLETE post-state for exactly the touched cells (overlay, not
+    // replace): remove+insert so an updated cell's full new content lands verbatim,
+    // a created cell is inserted, and a destroyed cell (present pre, absent post)
+    // is removed. Concurrent inserts on OTHER cells are left intact.
+    for id in &touched_ids {
+        match exec_ledger.get(id) {
+            Some(cell) => {
+                let _ = s.ledger.remove(id);
+                let _ = s.ledger.insert_cell(cell.clone());
+            }
+            None => {
+                let _ = s.ledger.remove(id);
+            }
+        }
+    }
 
     match exec_result {
         dregg_turn::TurnResult::Committed {
@@ -4053,6 +4151,14 @@ async fn execute_finalized_turn(
             //    the authority leg PROVES the delegated cap was really held — the
             //    former soundness residual (proving WITHOUT the authority leg) is
             //    CLOSED.
+            // A1 item 4 — the full-turn PROVING FFI below still runs inline under
+            // the (now briefly re-acquired) write lock. It is gated on
+            // `full_turn_proving_enabled`, which is OFF by default and only ON with
+            // `--prove-turns` / `DREGG_PROVE_TURNS=1` (see `main.rs`), so it is OFF
+            // the n=5 finalization hot path this fix targets. When proving IS
+            // enabled it should get the same `spawn_blocking` + off-lock treatment
+            // as the execution FFI above (the named follow-up); a proving validator
+            // otherwise re-introduces a per-turn lock hold for the prover's duration.
             let full_turn_proof_attached: Option<Vec<u8>> =
                 if let Some((pre_balance, pre_nonce)) = full_turn_pre_state {
                     let effects: Vec<dregg_turn::Effect> = signed_turn
@@ -5703,6 +5809,236 @@ mod tests {
         }
     }
 
+    // ─── A1 FIX — off-lock finalized execution + concurrency safety ──────────
+    //
+    // The confirmed n=5 finalization-stall root cause: the EXECUTION FFI ran
+    // inline on the tokio worker while `execute_finalized_turn` held the global
+    // write lock for the FFI's whole duration, starving the producer/round loop.
+    // The fix runs the FFI on `spawn_blocking` against a CLONE of the pre-state
+    // (lock released), then re-applies the committed post-state under a brief
+    // re-acquired lock as a per-cell OVERLAY of exactly the cells the turn touched
+    // (never a wholesale ledger replace). These two tests cover the make-or-break
+    // (a real finalized turn advances height 0 -> 1 through `execute_finalized_turn`
+    // with A1) and the install mechanism + concurrency guard in isolation.
+
+    /// THE MAKE-OR-BREAK: a finalized Transfer turn executes through the REAL
+    /// `execute_finalized_turn` (the live commit path, now off-lock) and advances
+    /// the attested height 0 -> 1 — the local confirmation that A1 unblocks
+    /// finalization (the execution completes + promotes, no wedge), and the ledger
+    /// reflects the committed transfer. Forces the deterministic Rust producer path
+    /// so the test does not depend on a Lean-linked archive; the A1 change (WHERE
+    /// the FFI runs + HOW its result is installed) is identical either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a1_finalized_turn_advances_height_zero_to_one_off_lock() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        // Deterministic Rust producer (no Lean-archive dependence).
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+
+        // The federation id the node's executor binds (fresh state, not
+        // federation-configured): blake3(node cclerk pubkey). The turn's per-action
+        // signature MUST bind the SAME id or admission rejects.
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        // Fund a sender cell; the destination is fresh (materialized by the path).
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"a1-finalize:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x3Cu8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+        }
+
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+        let turn_data = postcard::to_stdvec(&signed).expect("encode signed turn");
+
+        // A minimal real handle; `execute_finalized_turn` reads only `handle.lace`
+        // for the OPTIONAL finality round (an empty lace yields round None — fine).
+        let self_key = [0x9Au8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        let block_id = BlockId([0x11u8; 32]);
+
+        let height_before = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(height_before, 0, "fresh node starts at attested height 0");
+
+        // With A1 the execution FFI runs off the worker + off the lock, so this
+        // COMPLETES (does not wedge) and promotes.
+        execute_finalized_turn(&state, &handle, block_id, &turn_data, None, 0).await;
+
+        let height_after = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            height_after, 1,
+            "a finalized turn MUST advance attested height 0 -> 1 with A1 — the unlock"
+        );
+
+        // The ledger reflects the committed transfer.
+        let s = state.read().await;
+        assert_eq!(
+            s.ledger
+                .get(&dest)
+                .expect("destination materialized by the finalized path")
+                .state
+                .balance(),
+            4_200,
+            "destination holds exactly the transferred amount"
+        );
+        assert_eq!(
+            s.ledger
+                .get(&sender)
+                .expect("sender present")
+                .state
+                .balance(),
+            1_000_000 - 4_200 - signed.turn.fee as i64,
+            "sender debited by amount + burned fee"
+        );
+    }
+
+    /// A1 install mechanism + concurrency guard, in isolation and deterministic.
+    /// Mirrors `execute_finalized_turn`'s new flow: execute the finalized turn
+    /// against a CLONE of the pre-state (the off-lock `spawn_blocking` step), diff
+    /// pre->post for the COMPLETE touched set (`ledger_touched_diff`), then overlay
+    /// exactly those cells onto the authoritative ledger. Proves (a) the overlay
+    /// reproduces the transfer's post-state, (b) a concurrent write to a DISJOINT
+    /// cell during the window is PRESERVED (a wholesale replace would drop it), and
+    /// (c) the guard DETECTS a concurrent SAME-cell write (validate-or-reject,
+    /// never a silent overwrite).
+    #[test]
+    fn a1_overlay_installs_poststate_and_guards_concurrent_writes() {
+        let federation_id = [0u8; 32]; // bare-executor convention (Rust producer path)
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"a1-overlay:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x7Eu8; 32]);
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+
+        // The authoritative ledger (sender funded, dest absent).
+        let mut authoritative = node_genesis_ledger(sender_pk, 1_000_000);
+
+        // === off-lock exec against a CLONE of the pre-state (spawn_blocking step) ===
+        let pre_ledger = authoritative.clone();
+        let mut exec_ledger = authoritative.clone();
+        provision_transfer_destinations(&mut exec_ledger, &signed.turn.call_forest);
+        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        match crate::executor_setup::execute_via_producer(
+            &executor,
+            &signed.turn,
+            &mut exec_ledger,
+            false,
+        ) {
+            dregg_turn::TurnResult::Committed { .. } => {}
+            other => panic!("finalized transfer must commit, got {other:?}"),
+        }
+        let touched = ledger_touched_diff(&pre_ledger, &exec_ledger);
+        assert!(
+            touched.contains(&sender) && touched.contains(&dest),
+            "the touched set must include the debited sender and the credited destination"
+        );
+
+        // === a CONCURRENT writer touches a DISJOINT cell during the window ===
+        let bystander = dregg_cell::Cell::with_balance([0xABu8; 32], [0u8; 32], 777);
+        let bystander_id = bystander.id();
+        authoritative
+            .insert_cell(bystander)
+            .expect("concurrent disjoint insert");
+
+        // Guard: a DISJOINT concurrent write is NOT a conflict.
+        let conflict = touched
+            .iter()
+            .any(|id| pre_ledger.get(id) != authoritative.get(id));
+        assert!(
+            !conflict,
+            "a concurrent write to a DISJOINT cell must not register as a conflict"
+        );
+
+        // === overlay install (the per-cell, non-replace apply) ===
+        for id in &touched {
+            match exec_ledger.get(id) {
+                Some(cell) => {
+                    let _ = authoritative.remove(id);
+                    authoritative
+                        .insert_cell(cell.clone())
+                        .expect("overlay insert");
+                }
+                None => {
+                    let _ = authoritative.remove(id);
+                }
+            }
+        }
+
+        // (a) the transfer landed.
+        assert_eq!(
+            authoritative.get(&dest).expect("dest").state.balance(),
+            4_200,
+            "destination credited by the overlay"
+        );
+        assert_eq!(
+            authoritative.get(&sender).expect("sender").state.balance(),
+            1_000_000 - 4_200 - signed.turn.fee as i64,
+            "sender debited by amount + burned fee"
+        );
+        // (b) the concurrent disjoint cell is PRESERVED (a wholesale replace drops it).
+        assert_eq!(
+            authoritative
+                .get(&bystander_id)
+                .expect("bystander preserved")
+                .state
+                .balance(),
+            777,
+            "a concurrent write to ANOTHER cell survives the overlay (no wholesale replace)"
+        );
+
+        // === (c) the guard DETECTS a concurrent SAME-cell write ===
+        let mut authoritative2 = node_genesis_ledger(sender_pk, 1_000_000);
+        let pre_ledger2 = authoritative2.clone();
+        // A concurrent path mutates the SENDER (a cell this turn also touches).
+        let mut moved = authoritative2.get(&sender).expect("sender present").clone();
+        moved.state.set_balance(500_000);
+        let _ = authoritative2.remove(&sender);
+        authoritative2
+            .insert_cell(moved)
+            .expect("concurrent same-cell write");
+        let conflict2 = touched
+            .iter()
+            .any(|id| pre_ledger2.get(id) != authoritative2.get(id));
+        assert!(
+            conflict2,
+            "a concurrent SAME-cell write MUST be detected as a conflict (validate-or-reject)"
+        );
+    }
+
     /// `provision_transfer_destinations` is deterministic and idempotent: the
     /// stub it inserts is byte-identical regardless of node, and a second call
     /// (or a destination that already exists) leaves the cell untouched.
@@ -7077,6 +7413,42 @@ fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> 
         push(&mut ids, *to);
     }
     ids
+}
+
+/// The COMPLETE set of cell ids whose CONTENT differs between two ledgers — the
+/// A1 off-lock execution path's authoritative touched set.
+///
+/// A finalized turn is executed against a CLONE of the pre-state on a
+/// `spawn_blocking` thread (so the FFI holds neither the async worker nor the
+/// global write lock); this diff of the resulting post-state against the pre-state
+/// is exactly the set the caller overlays onto the authoritative ledger. It is a
+/// whole-`Cell` comparison, so — unlike [`touched_cell_ids`] over the executor's
+/// `LedgerDelta`, which omits the heap_root / lifecycle / program / vk /
+/// delegation dimensions — it captures EVERY committed change and reproduces the
+/// exact post-state a re-executing validator computes. `Cell`'s `PartialEq`
+/// compares content only (the leaf-digest cache is excluded from `PartialEq`), so
+/// two byte-equal cells never register as a spurious change. Order-stable,
+/// deduplicated (a created/updated cell appears once; a removed cell — present
+/// pre, absent post — is included so the overlay can delete it).
+fn ledger_touched_diff(
+    pre: &dregg_cell::Ledger,
+    post: &dregg_cell::Ledger,
+) -> Vec<dregg_cell::CellId> {
+    let mut touched: Vec<dregg_cell::CellId> = Vec::new();
+    // Created or updated: present in post with content differing from pre.
+    for (id, cell) in post.iter() {
+        match pre.get(id) {
+            Some(prev) if prev == cell => {}
+            _ => touched.push(*id),
+        }
+    }
+    // Removed: present in pre, absent in post.
+    for (id, _) in pre.iter() {
+        if post.get(id).is_none() {
+            touched.push(*id);
+        }
+    }
+    touched
 }
 
 /// Provision any missing Transfer destination as a deterministic zero-balance
