@@ -65,7 +65,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf};
+use dregg_circuit::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf};
 use dregg_turn::rotation_witness as rw;
 
 /// The rotated OLD/NEW commit PI slots (the rotated leg's published commitment) — the four-pin
@@ -228,7 +228,8 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
         addr: nf_key,
         value: nf_value,
     });
-    let honest_after_root = CanonicalHeapTree::new(honest_after_leaves, HEAP_TREE_DEPTH).root();
+    let honest_after_root =
+        CanonicalHeapTree8::new(honest_after_leaves, HEAP_TREE_DEPTH).root8()[0];
     assert_eq!(
         trace[trace.len() - 1][AFTER_BASE + B_NULLIFIER_ROOT],
         honest_after_root,
@@ -388,7 +389,8 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
         addr: cm_key,
         value: cm_value,
     });
-    let honest_after_root = CanonicalHeapTree::new(honest_after_leaves, HEAP_TREE_DEPTH).root();
+    let honest_after_root =
+        CanonicalHeapTree8::new(honest_after_leaves, HEAP_TREE_DEPTH).root8()[0];
     assert_eq!(
         trace[trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
         honest_after_root,
