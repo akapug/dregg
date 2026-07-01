@@ -9,12 +9,53 @@ pasted (truncated) as the expected result.
 What you need: this repo and `cargo`. `python3` and `curl` for the raw HTTP bits.
 Docker for the site section.
 
+**Verified vs marshal-only — read this first.** dregg's whole point is that the
+node's state producer IS the *verified Lean executor*. But that executor links a
+~180 MB native archive (`dregg-lean-ffi/libdregg_lean.a`, the "Lean seed") that is
+**gitignored** — a fresh clone does **not** have it. So there are two build modes:
+
+- **verified** (`state_producer:"lean"`): the node runs the proved Lean function.
+  Needs the seed **and** the elan/Lean toolchain on PATH. Get the seed the fast
+  way — `./scripts/fetch-lean-seed.sh` downloads a prebuilt one in minutes — or
+  the slow way, `./scripts/bootstrap.sh` (compiles it from source, **hours** the
+  first time because it builds mathlib).
+- **marshal-only** (`state_producer:"rust"`): a plain `cargo build` with **no
+  seed** silently builds this — the node runs the *un-verified* Rust executor. It
+  is fine for UI/dev, but it is **not** the verified node. Nothing errors; the
+  node just logs `MARSHAL-ONLY BUILD DETECTED` at startup.
+
+The one-command path that does the right thing (fetch seed → build → run →
+report which mode you got) is **`./scripts/run-node-10min.sh`**. The sections
+below are the same steps by hand. Full detail: `docs/LEAN-SEED-ARTIFACT.md` and
+`docs/BUILD-LEAN-LINKED-NODE.md`.
+
 ---
 
-## 1. Run a node (the verified Lean producer, on localhost)
+## 1. Run a node (on localhost)
 
-The node's state producer is the Lean executor itself. Build it, initialize a
-data directory, and start it with the faucet on.
+### The verified path (the point of dregg)
+
+```sh
+# 1. elan + the pinned Lean toolchain on PATH (installs in minutes; NO mathlib compile):
+curl https://elan.lean-lang.org/elan-init.sh -sSf | sh    # then re-open your shell
+# 2. fetch the prebuilt Lean seed for your platform (minutes, not the hours-long bootstrap):
+./scripts/fetch-lean-seed.sh
+# 3. build the node, FAILING LOUD if it would silently degrade to marshal-only:
+DREGG_REQUIRE_LEAN=1 cargo build -p dregg-node
+./target/debug/dregg-node init --data-dir /tmp/my-dregg
+./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
+```
+
+If no seed release has been cut yet, step 2 fails loud and tells you your two
+options (bootstrap from source, or cut a release — `docs/LEAN-SEED-ARTIFACT.md`).
+The `DREGG_REQUIRE_LEAN=1` in step 3 guarantees you can never *think* you built a
+verified node when you didn't — the build panics with the exact missing piece
+instead of quietly shipping the Rust executor.
+
+### The marshal-only path (un-verified, fine for UI/dev)
+
+If you just want to click around and don't need the verified executor, skip the
+seed entirely:
 
 ```sh
 cargo build -p dregg-node
@@ -22,7 +63,7 @@ cargo build -p dregg-node
 ./target/debug/dregg-node run  --data-dir /tmp/my-dregg --enable-faucet --port 8421 &
 ```
 
-Check it:
+### Check it either way
 
 ```sh
 curl -s http://localhost:8421/status
@@ -34,8 +75,11 @@ curl -s http://localhost:8421/status
  "lean_producer":true,"full_turn_proving":false,"producer_covered_effects":21}
 ```
 
-`state_producer:"lean"` is the point: the node executes turns by calling the
-verified Lean function, not a Rust reimplementation. (`full_turn_proving` is off
+`state_producer:"lean"` / `lean_producer:true` is the point: the node executes
+turns by calling the verified Lean function, not a Rust reimplementation. A
+marshal-only node instead reads `state_producer:"rust"` / `lean_producer:false`
+here (and logged `MARSHAL-ONLY BUILD DETECTED` on startup). (`full_turn_proving`
+is off
 by default — the per-turn STARK is on the hot path; pass `--prove-turns` to turn
 it on, which is what an audit-grade node runs.)
 
