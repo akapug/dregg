@@ -4270,26 +4270,41 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 5b. Cap-membership proof (consumed capability — cap Phase D)
     // ========================================================================
     //
-    // ⚑ NATIVE-8-FELT DEFERRAL (Phase H-CAP-8). The standalone DSL-p3 cap-membership
-    // leg (`dsl::cap_membership`) is a SINGLE-felt Poseidon2 Merkle STARK: its `Hash3Cap`
-    // node arithmetization binds ONE `poseidon2_permute_expr` output, and the DSL AIR
-    // framework has no multi-output (8-felt `node8`) hash form. The cap tree is now native
-    // 8-felt (`cap_root::cap_node8`, `CapLeaf::digest → [8]`), so this leg CANNOT faithfully
-    // carry the 8-felt witness. Feeding it the lane-0 projection would be a degraded-felt
-    // (~31-bit) regression — EXACTLY the truncation we refuse. So the standalone leg is NOT
-    // emitted until it is genuinely widened to `node8` (a Poseidon2-expr-gadget change that
-    // exposes 8 output lanes + 16 PIs — the reported deeper surface, out of the SDK lane).
-    //
-    // The genuine 8-felt AUTHORITY / holder-membership binding is NOT lost: on the deployed
-    // ROTATED path it rides the in-circuit CROWN cap-open leg (`build_effect_vm_cap_open_leg`
-    // → `from_membership_for`, which fills its per-level `cur8/sib8/node8` columns from the
-    // SAME `cap_node8` the cap tree commits and pins the real 8-felt `cap_root`). A caller
-    // that supplies a `CapMembershipExpectation` to `verify_full_turn_bound` while no
-    // standalone 8-felt leg is present is FAIL-CLOSED (MissingComponent) — never a silent
-    // lane-0 accept.
-    if witness.cap_membership.is_some() {
-        // Referenced for intent; the standalone leg is deferred (see the node8 surface above).
-        // `components.has_cap_membership` stays false until the widened leg is emitted.
+    // ⚑ NATIVE-8-FELT (Phase H-CAP-8, node8 CLOSE). The standalone DSL-p3 cap-membership
+    // leg (`dsl::cap_membership`) is now a FAITHFUL 8-felt Poseidon2 Merkle STARK: its
+    // `MerkleHash8` node arithmetization binds ALL 8 `poseidon2_permute_expr_lanes` output
+    // lanes of the arity-16 `cap_node8` compression (the multi-output DSL-AIR gadget), so it
+    // carries the native 8-felt witness at the full ~124-bit collision floor — NO lane-0
+    // projection anywhere. It pins a 16-felt public input `[leaf_digest(8) ‖ cap_root(8)]`;
+    // `verify_full_turn_bound` step 9 pins BOTH the 8-felt leaf digest (to the receipt-disclosed
+    // consumed cap) AND the 8-felt canonical pre-state `cap_root`, so "some leaf ∈ some tree"
+    // becomes "THE disclosed capability ∈ THE holder's real c-list" — production authority,
+    // no longer fail-closed.
+    if let Some(cap) = &witness.cap_membership {
+        // The 8-felt leaf digest of the consumed capability (the same value the verifier
+        // recomputes from the receipt-disclosed 7-field preimage) + the native 8-felt sibling
+        // path (`node8` digests, NOT lane-0 scalars).
+        let leaf_digest8 = cap.leaf.digest();
+        let (cap_proof, cap_pi) = dregg_circuit::dsl::cap_membership::prove_cap_membership_p3(
+            leaf_digest8,
+            &cap.siblings,
+            &cap.directions,
+        )
+        .map_err(|e| SdkError::InvalidWitness(format!("cap-membership p3 proof failed: {e}")))?;
+        let cap_proof_bytes = postcard::to_allocvec(&cap_proof).map_err(|e| {
+            SdkError::InvalidWitness(format!("cap-membership p3 proof serialize failed: {e}"))
+        })?;
+
+        components.has_cap_membership = true;
+        all_public_inputs.extend_from_slice(&cap_pi);
+        sub_proofs.push(AttachedSubProof {
+            label: "cap-membership".into(),
+            proof_bytes: cap_proof_bytes,
+            sub_public_inputs: cap_pi,
+            vk_hash: compute_vk_hash_bytes(
+                &dregg_circuit::dsl::cap_membership::cap_membership_circuit_descriptor(),
+            ),
+        });
     }
 
     // ========================================================================
@@ -4551,20 +4566,21 @@ pub fn verify_full_turn_bound(
                         reason: format!("cap-membership p3 deserialize: {e}"),
                     }
                 })?;
-                // Cap-membership PI is [leaf_digest, cap_root]; both bound
-                // in-circuit (row-0 / last-row boundaries). Carrying both to
-                // the audited verifier re-binds them (a proof for a different
-                // leaf or tree is UNSAT under these PIs).
-                let leaf_digest = attached.sub_public_inputs.first().copied().ok_or_else(|| {
-                    FullTurnVerifyError::MalformedPublicInputs(
-                        "cap-membership PI missing leaf_digest (pi[0])".into(),
-                    )
-                })?;
-                let cap_root = attached.sub_public_inputs.get(1).copied().ok_or_else(|| {
-                    FullTurnVerifyError::MalformedPublicInputs(
-                        "cap-membership PI missing cap_root (pi[1])".into(),
-                    )
-                })?;
+                // Native 8-felt cap-membership PI is [leaf_digest(8) ‖ cap_root(8)]; all
+                // 16 felts bound in-circuit (row-0 / last-row 8-lane boundaries). Carrying
+                // the full 16 to the audited verifier re-binds them (a proof for a different
+                // leaf or tree — even one agreeing on lane 0 — is UNSAT under these PIs).
+                let pis = &attached.sub_public_inputs;
+                if pis.len() < 16 {
+                    return Err(FullTurnVerifyError::MalformedPublicInputs(format!(
+                        "cap-membership PI carries {} felts, need 16 (leaf_digest[8] ‖ cap_root[8])",
+                        pis.len()
+                    )));
+                }
+                let mut leaf_digest = [BabyBear::ZERO; 8];
+                leaf_digest.copy_from_slice(&pis[0..8]);
+                let mut cap_root = [BabyBear::ZERO; 8];
+                cap_root.copy_from_slice(&pis[8..16]);
                 verify_cap_membership_p3(&p3, leaf_digest, cap_root)
             }
             other => Err(format!("unknown sub-proof label: {}", other)),

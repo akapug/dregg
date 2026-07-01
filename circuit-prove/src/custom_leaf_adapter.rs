@@ -326,6 +326,7 @@ fn kind_name(expr: &ConstraintExpr) -> &'static str {
         ConstraintExpr::Hash2to1 { .. } => "Hash2to1",
         ConstraintExpr::Hash4to1 { .. } => "Hash4to1",
         ConstraintExpr::Hash3Cap { .. } => "Hash3Cap",
+        ConstraintExpr::MerkleHash8 { .. } => "MerkleHash8",
         ConstraintExpr::MerkleHash { .. } => "MerkleHash",
         ConstraintExpr::Lookup { .. } => "Lookup",
         ConstraintExpr::ChainedHash2to1 { .. } => "ChainedHash2to1",
@@ -809,6 +810,20 @@ fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                 let lane_base = alloc_lanes(&mut width);
                 let children = merkle_children_exprs(*current_col, sib_cols, *position_col);
                 chip_lookup_site(4, &children, *output_col, lane_base)
+            }
+            // The native 8-felt cap-tree node8 compression is a MULTI-output (8-lane)
+            // Poseidon2 site arithmetized only by the DSL batch-stark AIR (`dsl_p3_air`,
+            // via `poseidon2_permute_expr_lanes`). This IR-v2 chip adapter carries
+            // single-output (out0) chip sites, so it has no faithful carrier for the
+            // 8-output node8 — a precise blocker, never a lane-0 downgrade.
+            ConstraintExpr::MerkleHash8 { .. } => {
+                return Err(
+                    "constraint kind MerkleHash8 (native 8-felt cap_node8, arity-16 compression) \
+                     is an 8-OUTPUT Poseidon2 site; this IR-v2 chip adapter carries single-output \
+                     (out0) chip sites only. It is arithmetized by the DSL batch-stark AIR \
+                     (dsl_p3_air, 8-lane exposure), not folded here"
+                        .to_string(),
+                );
             }
             // ---- the remaining hash / lookup / table-function kinds: no faithful
             //      single-permutation chip carrier in this extension — precise blockers. ----
