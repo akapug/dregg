@@ -618,7 +618,9 @@ mod tests {
         let permuted = vec![leaf(5, 50), leaf(7, 70), leaf(2, 20)];
         assert_eq!(whole_boundary_fold(&permuted), published);
         let w = build_whole_image_fold(&permuted, published).expect("folds");
-        assert_eq!(w.public_inputs, vec![empty_heap_root(), published]);
+        let mut expected = empty_heap_root_8().to_vec();
+        expected.extend_from_slice(&published);
+        assert_eq!(w.public_inputs, expected);
     }
 
     /// A map declares each key ONCE: a duplicate boundary address has no sorted-insert witness
@@ -634,8 +636,10 @@ mod tests {
     #[test]
     fn empty_view_folds_to_empty_root() {
         let published = whole_boundary_fold(&[]);
-        assert_eq!(published, empty_heap_root());
+        assert_eq!(published, empty_heap_root_8());
         let w = build_whole_image_fold(&[], published).expect("empty folds");
-        assert_eq!(w.public_inputs, vec![empty_heap_root(), empty_heap_root()]);
+        let mut expected = empty_heap_root_8().to_vec();
+        expected.extend_from_slice(&empty_heap_root_8());
+        assert_eq!(w.public_inputs, expected);
     }
 }
