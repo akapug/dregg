@@ -162,12 +162,12 @@ pub const B_MODE: usize = 35;
 /// In-block offset of the committed `fields_root` digest limb (limb 36 — the WAVE-3 flag-day overflow
 /// map root, the setFieldDyn / refusal weld limb). Lean `EffectVmEmitRotationV3.B_FIELDS_ROOT`.
 pub const B_FIELDS_ROOT: usize = 36;
-/// In-block offset of the iroot carrier (absorbed last, limb 37, shifted +2 by the mode/fields-root limbs).
+/// In-block offset of the iroot carrier (absorbed last, limb 88 in the v11 accumulator-8-felt geometry).
 pub const B_IROOT: usize = 88;
-/// In-block offset of the `state_commit` carrier (the chain's final digest).
-pub const B_STATE_COMMIT: usize = 68;
-/// In-block base of the chained-absorption intermediate carriers (12 sites, 39..=50).
-pub const B_CHAIN_BASE: usize = 69;
+/// In-block offset of the `state_commit` carrier (the chain's final digest, carrier index B_SPAN-1-29).
+pub const B_STATE_COMMIT: usize = 89;
+/// In-block base of the chained-absorption intermediate carriers (v11: 29 sites at 90..=118).
+pub const B_CHAIN_BASE: usize = 90;
 
 /// Absolute base column of the BEFORE rotated block.
 pub const BEFORE_BASE: usize = V1_WIDTH; // 186
