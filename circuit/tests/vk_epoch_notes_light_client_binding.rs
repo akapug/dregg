@@ -56,11 +56,11 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
-    AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE, GRAD_ROT_WIDTH,
-    ROT_WIDTH, RotatedBlockWitness, WIDE_WIDTH, append_wide_carriers, empty_caveat_manifest,
-    generate_rotated_note_create_trace_with_commitments_tree, generate_rotated_note_create_wide,
-    generate_rotated_note_spend_trace_with_nullifier_tree, recompute_after_blocks_for_test,
-    rotated_descriptor_name_for_effect,
+    AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE, CAP_OPEN_SPAN,
+    GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, WIDE_WIDTH, append_wide_carriers,
+    empty_caveat_manifest, generate_rotated_note_create_trace_with_commitments_tree,
+    generate_rotated_note_create_wide, generate_rotated_note_spend_trace_with_nullifier_tree,
+    recompute_after_blocks_for_test, rotated_descriptor_name_for_effect,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
@@ -561,8 +561,9 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     .expect("the live wide note-create producer must build a wide trace (was fail-closed before the weld)");
     assert_eq!(
         wide_trace[0].len(),
-        WIDE_WIDTH,
-        "wide member width matches WIDE_WIDTH"
+        WIDE_WIDTH + CAP_OPEN_SPAN,
+        "note-create is now the insert-shaped effAccumInsertV3 member: WIDE_WIDTH + the \
+         CAP_OPEN_SPAN read appendix (the commitments-accumulator sorted-insert membership)"
     );
     assert_eq!(
         wide_dpis.len(),
@@ -609,8 +610,8 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         append_wide_carriers(&mut base_trace, base_dpis, GRAD_ROT_WIDTH);
     assert_eq!(
         base_trace[0].len(),
-        WIDE_WIDTH,
-        "forged wide width matches WIDE_WIDTH"
+        WIDE_WIDTH + CAP_OPEN_SPAN,
+        "forged wide width matches the insert-shaped WIDE_WIDTH + CAP_OPEN_SPAN"
     );
     assert_ne!(
         base_trace[base_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
