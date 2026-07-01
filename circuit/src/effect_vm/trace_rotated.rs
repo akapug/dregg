@@ -1446,8 +1446,14 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
 /// ~124-bit BEFORE/AFTER root blocks (`effFieldsWriteV3_forces_write8`) — never the lane-0 squeeze the
 /// map_op-only host would leave. The wide carrier lands at THIS host width: `1301 + 480 = 1669`.
 pub const REFUSAL_WRITE_HOST_WIDTH: usize = 1455; // v11: wide 1935 − 480
-/// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width).
-pub const REFUSAL_WRITE_READ_BASE: usize = 829;
+/// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width =
+/// the graduated rotated base `GRAD_ROT_WIDTH`). v11 grew the graduated base by +154 (828→982, the
+/// deployed Lean base is 983), so the READ appendix sits at 983 — `REFUSAL_WRITE_HOST_WIDTH −
+/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1455 − 472 = 983`. (The v10 value 829 laid the
+/// membership 154 columns too low, so the deployed after-spine constraints — which reference the
+/// v11 base — read zero-padding and rejected.)
+pub const REFUSAL_WRITE_READ_BASE: usize =
+    REFUSAL_WRITE_HOST_WIDTH - CAP_OPEN_SPAN - CAP_OPEN_AFTER_SPINE_SPAN;
 
 /// **THE WIDE REFUSAL FIELDS-WRITE producer (`refusalVmDescriptor2R24` wide member, 1669-wide / 70-PI,
 /// OPTION I).** The deployed after-spine `effFieldsWriteV3 refusalFieldsWriteV3 …` a light client checks:
@@ -3333,8 +3339,15 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
 /// (`effHeapWriteV3_forces_write8`) — never the lane-0 squeeze the map_op-only host would leave. The
 /// wide carriers land at THIS host width: `1287 + 480 = 1655`.
 pub const HEAP_WRITE_HOST_WIDTH: usize = 1441; // v11: wide 1921 − 480
-/// The heap-open READ appendix base column (the splice base `heapWriteV3`'s trace width).
-pub const HEAP_WRITE_READ_BASE: usize = 815;
+// NB: the READ appendix base is `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN − AFTER_SPINE_SPAN`
+// (the graduated Class-A heap base, v11 = 969); see [`HEAP_WRITE_READ_BASE`] below.
+/// The heap-open READ appendix base column (the splice base `heapWriteV3`'s trace width = the
+/// graduated Class-A heap base). v11 grew the base by +154 (deployed Lean base is 969), so the READ
+/// appendix sits at `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1441 − 472
+/// = 969`. (The v10 value 815 laid the membership 154 columns too low against the deployed after-spine
+/// constraints.)
+pub const HEAP_WRITE_READ_BASE: usize =
+    HEAP_WRITE_HOST_WIDTH - CAP_OPEN_SPAN - CAP_OPEN_AFTER_SPINE_SPAN;
 
 /// **THE WIDE HEAP-WRITE trace generator (`heapWriteVmDescriptor2R24` wide member, 1183-wide / 20-PI).**
 ///
@@ -4167,7 +4180,12 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
                  `.write` map-op gate; an empty fields tree is UNSAT (the honest refusal fails closed)"
                     .to_string()
             })?;
-        generate_rotated_refusal_wide(
+        // OPTION I: the deployed refusal descriptor `refusalVmDescriptor2R24` (registry
+        // `effFieldsWriteV3 refusalFieldsWriteV3`, trace_width 1935) is the AFTER-SPINE
+        // membership-forcing host. Lay the after-spine trace (`generate_rotated_refusal_write_wide`
+        // — the fields-open READ appendix + the AFTER-spine open of the UPDATED audit leaf) so the
+        // GENUINE ~124-bit fields-root write is forced, never the old lane-0 squeeze.
+        generate_rotated_refusal_write_wide(
             initial_state,
             effects,
             before,

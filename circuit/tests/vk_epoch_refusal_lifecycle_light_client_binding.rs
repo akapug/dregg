@@ -584,15 +584,18 @@ fn wide_fields_write_proves_and_verifies() {
 
     let name = "refusalVmDescriptor2R24";
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
+    // v11 geometry (the Lean-authoritative deployed bare wide, drift-clean): the graduated base grew
+    // +154 (v10 host 1301 → v11 host 1455), so the after-spine wide is 1455 + 480 = 1935 (was 1669 in
+    // v10). The producer's READ appendix base tracks GRAD_ROT_WIDTH via `REFUSAL_WRITE_READ_BASE`.
     assert_eq!(
-        desc.trace_width, 1669,
-        "refusal fields-write wide width 1669 (OPTION I after-spine)"
+        desc.trace_width, 1935,
+        "refusal fields-write wide width 1935 (OPTION I after-spine, v11 graduated base)"
     );
     assert_eq!(
         desc.public_input_count, 70,
         "refusal fields-write wide 70 PIs (54 base + 16 wide)"
     );
-    assert_eq!(trace[0].len(), 1669);
+    assert_eq!(trace[0].len(), 1935);
     assert_eq!(dpis.len(), 70);
 
     let mb = MemBoundaryWitness::default();
@@ -601,7 +604,7 @@ fn wide_fields_write_proves_and_verifies() {
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .unwrap_or_else(|e| panic!("refusal fields-write WIDE proof must verify: {e}"));
     eprintln!(
-        "WIDE refusal fields-write: PROVED + VERIFIED at 1669 (genuine sorted-Merkle audit-slot write \
+        "WIDE refusal fields-write: PROVED + VERIFIED at 1935 (genuine sorted-Merkle audit-slot write \
          over the faithful 8-felt fields root + 8-felt commit, 70 PIs) — the THIRD faithful root deployed."
     );
 }

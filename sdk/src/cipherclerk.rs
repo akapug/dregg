@@ -5572,8 +5572,12 @@ impl AgentCipherclerk {
                         "refusal precompute: missing fields-tree context (refusal_fields)".into(),
                     )
                 })?;
+            // OPTION I: the deployed `refusalVmDescriptor2R24` is the after-spine
+            // `effFieldsWriteV3` host (trace_width 1935). Use the after-spine producer so this
+            // precompute's 16 wide PIs match the actual proof (which routes through
+            // `generate_rotated_effect_vm_descriptor_and_trace_wide`'s after-spine refusal arm).
             let (t, d, _heaps) =
-                dregg_circuit::effect_vm::trace_rotated::generate_rotated_refusal_wide(
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_refusal_write_wide(
                     &initial_vm_state,
                     &vm_effects,
                     &before_bw,
