@@ -51,14 +51,14 @@ def main : IO Unit := do
   -- host (name + width) grows — the base `refusalFieldsWriteV3` (829) widened by the fields-open READ
   -- appendix (329) + the AFTER-spine appendix (143) → host 1301, wide 1669. `bb` is the refusal FACE width
   -- (`refusalVmDescriptor.traceWidth = EFFECT_VM_WIDTH = 188`), aligning the after-spine's committed
-  -- fields-root blocks (`fieldsRootGroupCol (EFFECT_VM_WIDTH + 91)`) with the wide AFTER rotated carrier.
+  -- fields-root blocks (`fieldsRootGroupCol (EFFECT_VM_WIDTH + 119)`) with the wide AFTER rotated carrier.
   for (key, d) in v3RegistryCapOpenWide do
     if key == "refusalVmDescriptor2R24" then
       let rfHost := Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
         "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
       let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
-      let rfWide := wideAppend rfHost rfBB (rfBB + 91)
+      let rfWide := wideAppend rfHost rfBB (rfBB + 119)
       IO.println s!"{key}\t{rfWide.name}\t{emitVmJson2 rfWide}"
     else
       IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
@@ -70,7 +70,7 @@ def main : IO Unit := do
   let tbHost := Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
     Dregg2.Circuit.Emit.CapOpenEmit.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
-  let tbWide := wideAppend tbHost tbBB (tbBB + 91)
+  let tbWide := wideAppend tbHost tbBB (tbBB + 119)
   IO.println s!"transferCapOpenTBVmDescriptor2R24\t{tbWide.name}\t{emitVmJson2 tbWide}"
   -- position 46: `heapWrite` (the after-spine membership-forcing heap-write descriptor, OPTION I) made
   -- 8-felt-wide — EXACTLY as cap deploys `effCapOpenWriteV3`. The host is `effHeapWriteV3 heapWriteV3
@@ -80,12 +80,12 @@ def main : IO Unit := do
   -- BEFORE/AFTER root blocks (`HeapOpenEmit.effHeapWriteV3_forces_write8`) — never the lane-0 squeeze the
   -- map_op-only path would leave. `rotateV3` lays the BEFORE limbs at the splice FACE width, so `bb =
   -- heapWriteSpliceVmDescriptor.traceWidth (= EFFECT_VM_WIDTH)`, aligning the after-spine's committed
-  -- heap-root blocks (`heapRootGroupCol (EFFECT_VM_WIDTH + 91)`) with the wide AFTER rotated carrier.
+  -- heap-root blocks (`heapRootGroupCol (EFFECT_VM_WIDTH + 119)`) with the wide AFTER rotated carrier.
   let hwBB := Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth
   let hwHost := Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3
     Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
     "dregg-effectvm-heapWrite-v1-rot24-v3-write-heapopen"
-  let hwWide := wideAppend hwHost hwBB (hwBB + 91)
+  let hwWide := wideAppend hwHost hwBB (hwBB + 119)
   IO.println s!"heapWriteVmDescriptor2R24\t{hwWide.name}\t{emitVmJson2 hwWide}"
   -- positions 47..55: the WRITE-bearing cap-open tail (`v3RegistryCapOpenWriteWide`, §10) made
   -- 8-felt-wide, in its own order, EXCEPT `grantCapWriteCapOpen` — which is NOT a member of the live
@@ -98,5 +98,5 @@ def main : IO Unit := do
   -- withSelectorGate sel.MINT (v3OfFrozen mintTickFace)`; the BEFORE limbs are laid at the mint FACE
   -- width, so `bb = mintTickFace.traceWidth` (the SAME base as the cohort `mint` member, position 2).
   let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
-  let smWide := wideAppend Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 91)
+  let smWide := wideAppend Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 119)
   IO.println s!"supplyMintVmDescriptor2R24\t{smWide.name}\t{emitVmJson2 smWide}"

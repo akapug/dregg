@@ -527,7 +527,7 @@ def afterSpineCols (w : Nat) : CapOpenCols :=
   , dir        := (capOpenCols w).dir
   , node       := fun lvl i => AFTER_SPINE_BASE w + 15 + 8 * lvl + i.val
   , capRoot    := fun i => Dregg2.Circuit.Emit.EffectVmEmitRotationV3.capRootGroupCol
-                             (EFFECT_VM_WIDTH + 91) i
+                             (EFFECT_VM_WIDTH + 119) i
   , src        := AFTER_SPINE_BASE w + 15 + 8 * DEPTH
   , effBit     := AFTER_SPINE_BASE w + 16 + 8 * DEPTH
   , bit        := fun i => AFTER_SPINE_BASE w + 17 + 8 * DEPTH + i }
@@ -748,7 +748,7 @@ def attenuateCapOpenEffV3 : EffectVmDescriptor2 :=
 #guard attenuateCapOpenEffV3.traceWidth == attenuateV3.traceWidth + CAP_OPEN_SPAN + AFTER_SPINE_SPAN
 
 -- Each fan-out descriptor adds the 70-constraint effect-general appendix + the selector-gate tooth
--- (+71 constraints total) + 91 cols past its base.
+-- (+71 constraints total) + 119 cols past its base.
 #guard delegateCapOpenV3.constraints.length == grantCapV3.constraints.length + 78
 #guard introduceCapOpenV3.constraints.length == introduceV3.constraints.length + 78
 #guard grantCapCapOpenV3.constraints.length == grantCapV3.constraints.length + 78
@@ -1317,7 +1317,7 @@ and the cap-open appendix (`effCapOpenV3` appends at `base.traceWidth`, well PAS
 pin (`rotateV3WithFeePin` appends only a `.piBinding`, touching NO limb column) / `graduateV1` chip lanes all
 land STRICTLY PAST the limbs. So the limb base `bb` for each cap-open member is its underlying v1 FACE's
 `traceWidth` — NOT `base.traceWidth`, NOT `member.traceWidth`. Symbolic (the face `.traceWidth`), so it tracks
-any face refactor. `ab = bb + B_SPAN = bb + 91` for all. The base→face map:
+any face refactor. `ab = bb + B_SPAN = bb + 119` for all. The base→face map:
 
   * 36 `delegateCapOpenV3`         = `withSelectorGate (effCapOpenV3 grantCapV3 …)`          → face `attenuateVmDescriptor` (`grantCapV3 = v3Of attenuate`)
   * 37 `introduceCapOpenV3`        = `withSelectorGate (effCapOpenV3 introduceV3 …)`         → face `introduceVmDescriptor`
@@ -1333,7 +1333,7 @@ any face refactor. `ab = bb + B_SPAN = bb + 91` for all. The base→face map:
 /-- The per-member BEFORE-limb base `bb` of each of the 9 cap-open / `-eff` / fee'd members
 (`v3RegistryCapOpen` positions 36..44), aligned position-for-position with that tail: the underlying v1
 FACE descriptor's `traceWidth` (where `rotateV3`/`rotateV3FrozenAuthority` laid the BEFORE limbs, PAST which
-the cap-open appendix / fee pin / chip lanes all land). The AFTER base is `bb + 91` (`B_SPAN`). Symbolic. -/
+the cap-open appendix / fee pin / chip lanes all land). The AFTER base is `bb + 119` (`B_SPAN`). Symbolic. -/
 def v3RegistryCapOpenWideBB : List Nat :=
   [ Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.attenuateVmDescriptor.traceWidth      -- 36 delegate  (grantCapV3 = v3Of attenuate)
   , Dregg2.Circuit.Emit.EffectVmEmitIntroduce.introduceVmDescriptor.traceWidth       -- 37 introduce
@@ -1358,7 +1358,7 @@ def v3RegistryCapOpenWide : List (String × EffectVmDescriptor2) :=
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.v3RegistryWide
     ++ ((v3RegistryCapOpen.drop 36).zip v3RegistryCapOpenWideBB).map
         (fun (e : (String × EffectVmDescriptor2) × Nat) =>
-          (e.1.1, Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend e.1.2 e.2 (e.2 + 91)))
+          (e.1.1, Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend e.1.2 e.2 (e.2 + 119)))
 
 theorem v3RegistryCapOpenWide_length : v3RegistryCapOpenWide.length = 45 := by
   have hcohort : Dregg2.Circuit.Emit.EffectVmEmitRotationWide.v3RegistryWide.length = 36 := by decide
@@ -1381,7 +1381,7 @@ theorem v3RegistryCapOpenWide_is_wideAppend :
       ∃ (h : EffectVmDescriptor2) (bb : Nat),
         h ∈ v3RegistryCapOpen.map (·.2)
         ∧ v3RegistryCapOpenWide[i].2
-            = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 91) := by
+            = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 119) := by
   intro i hi
   by_cases hlt : i < Dregg2.Circuit.Emit.EffectVmEmitRotationWide.v3RegistryWide.length
   · -- cohort half: reuse the §8 structural witness; the host is a `v3Registry` member, which is a
@@ -1451,12 +1451,12 @@ theorem v3RegistryCapOpenWide_sound (hash : List ℤ → ℤ)
     ∃ (h : EffectVmDescriptor2) (bb : Nat),
       h ∈ v3RegistryCapOpen.map (·.2)
       ∧ Satisfied2 hash
-          (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 91))
+          (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 119))
           minit mfin maddrs t := by
   obtain ⟨h, bb, hmem, heq⟩ := v3RegistryCapOpenWide_is_wideAppend i hi
   refine ⟨h, bb, hmem, ?_⟩
   rw [heq] at hsat
-  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 91)
+  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 119)
     minit mfin maddrs t hsat
 
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR (Poseidon2WideCR Poseidon2Width8 wireCommitR8)
@@ -1473,7 +1473,7 @@ theorem v3RegistryCapOpenWide_binds (hash : List ℤ → ℤ) (permW : List ℤ 
     (i : Nat) (hi : i < v3RegistryCapOpenWide.length)
     (h : EffectVmDescriptor2) (bb : Nat)
     (heq : v3RegistryCapOpenWide[i].2
-        = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 91))
+        = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 119))
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
     (hchipN : ChipTableSoundN permW (t.tf .poseidon2))
@@ -1489,12 +1489,12 @@ theorem v3RegistryCapOpenWide_binds (hash : List ℤ → ℤ) (permW : List ℤ 
     (hpubAfter : ∀ m, m < 8 →
       (envAt t k).pub (h.piCount + 8 + m) = (envAt t' l).pub (h.piCount + 8 + m)) :
     (preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
-      ∧ (envAt t a).loc (bb + 67) = (envAt t' b).loc (bb + 67))
-    ∧ (preLimbsWide (bb + 91) (envAt t k).loc = preLimbsWide (bb + 91) (envAt t' l).loc
-      ∧ (envAt t k).loc (bb + 91 + 67) = (envAt t' l).loc (bb + 91 + 67)) := by
+      ∧ (envAt t a).loc (bb + 88) = (envAt t' b).loc (bb + 88))
+    ∧ (preLimbsWide (bb + 119) (envAt t k).loc = preLimbsWide (bb + 119) (envAt t' l).loc
+      ∧ (envAt t k).loc (bb + 119 + 88) = (envAt t' l).loc (bb + 119 + 88)) := by
   rw [heq] at hsat hsat'
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_binds_published
-    hash permW hCR hW h bb (bb + 91)
+    hash permW hCR hW h bb (bb + 119)
     minit mfin maddrs t minit' mfin' maddrs' t' hchipN hchipN' hsat hsat'
     a b ha hb hfirst hfirst' k l hk hl hlast hlast' hpubBefore hpubAfter
 
@@ -1517,7 +1517,7 @@ theorem v3RegistryCapOpenWide_transferEff_is_wideAppend :
     v3RegistryCapOpenWide[42]?.map (·.2)
       = some (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend transferCapOpenEffV3
           Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth
-          (Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth + 91)) := by
+          (Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth + 119)) := by
   rfl
 
 -- a high-limb (>lane0) flip of the cap-open member's pre-limbs MOVES the published 8-felt commit:
@@ -1587,7 +1587,7 @@ The keys are the LIVE `V3_STAGED_REGISTRY_TSV` keys `EmitRotationV3.lean` emits,
 + `cap_open_key_has_wide_twin` look the wide member up by the SAME key. -/
 def v3RegistryCapOpenWriteWide : List (String × EffectVmDescriptor2) :=
   v3RegistryCapOpenWriteWideTable.map
-    (fun e => (e.1, Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend e.2.1 e.2.2 (e.2.2 + 91)))
+    (fun e => (e.1, Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend e.2.1 e.2.2 (e.2.2 + 119)))
 
 theorem v3RegistryCapOpenWriteWide_length : v3RegistryCapOpenWriteWide.length = 10 := by
   simp [v3RegistryCapOpenWriteWide, v3RegistryCapOpenWriteWideTable]
@@ -1601,7 +1601,7 @@ theorem v3RegistryCapOpenWriteWide_is_wideAppend :
     ∀ (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length),
       ∃ (h : EffectVmDescriptor2) (bb : Nat),
         v3RegistryCapOpenWriteWide[i].2
-          = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 91) := by
+          = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 119) := by
   intro i hi
   have hlen : v3RegistryCapOpenWriteWide.length = v3RegistryCapOpenWriteWideTable.length := by
     simp [v3RegistryCapOpenWriteWide]
@@ -1622,12 +1622,12 @@ theorem v3RegistryCapOpenWriteWide_sound (hash : List ℤ → ℤ)
     (hsat : Satisfied2 hash v3RegistryCapOpenWriteWide[i].2 minit mfin maddrs t) :
     ∃ (h : EffectVmDescriptor2) (bb : Nat),
       Satisfied2 hash
-        (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 91))
+        (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.dropLegacyCommitPins1 h bb (bb + 119))
         minit mfin maddrs t := by
   obtain ⟨h, bb, heq⟩ := v3RegistryCapOpenWriteWide_is_wideAppend i hi
   refine ⟨h, bb, ?_⟩
   rw [heq] at hsat
-  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 91)
+  exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_satisfied2_host hash h bb (bb + 119)
     minit mfin maddrs t hsat
 
 /-- **`v3RegistryCapOpenWriteWide_binds` — THE 8-FELT BINDING FOLD over the WRITE-cap tail.** Every wide
@@ -1640,7 +1640,7 @@ theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List
     (i : Nat) (hi : i < v3RegistryCapOpenWriteWide.length)
     (h : EffectVmDescriptor2) (bb : Nat)
     (heq : v3RegistryCapOpenWriteWide[i].2
-        = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 91))
+        = Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend h bb (bb + 119))
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (minit' : ℤ → ℤ) (mfin' : ℤ → ℤ × Nat) (maddrs' : List ℤ) (t' : VmTrace)
     (hchipN : ChipTableSoundN permW (t.tf .poseidon2))
@@ -1656,12 +1656,12 @@ theorem v3RegistryCapOpenWriteWide_binds (hash : List ℤ → ℤ) (permW : List
     (hpubAfter : ∀ m, m < 8 →
       (envAt t k).pub (h.piCount + 8 + m) = (envAt t' l).pub (h.piCount + 8 + m)) :
     (preLimbsWide bb (envAt t a).loc = preLimbsWide bb (envAt t' b).loc
-      ∧ (envAt t a).loc (bb + 67) = (envAt t' b).loc (bb + 67))
-    ∧ (preLimbsWide (bb + 91) (envAt t k).loc = preLimbsWide (bb + 91) (envAt t' l).loc
-      ∧ (envAt t k).loc (bb + 91 + 67) = (envAt t' l).loc (bb + 91 + 67)) := by
+      ∧ (envAt t a).loc (bb + 88) = (envAt t' b).loc (bb + 88))
+    ∧ (preLimbsWide (bb + 119) (envAt t k).loc = preLimbsWide (bb + 119) (envAt t' l).loc
+      ∧ (envAt t k).loc (bb + 119 + 88) = (envAt t' l).loc (bb + 119 + 88)) := by
   rw [heq] at hsat hsat'
   exact Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend_binds_published
-    hash permW hCR hW h bb (bb + 91)
+    hash permW hCR hW h bb (bb + 119)
     minit mfin maddrs t minit' mfin' maddrs' t' hchipN hchipN' hsat hsat'
     a b ha hb hfirst hfirst' k l hk hl hlast hlast' hpubBefore hpubAfter
 
