@@ -56,8 +56,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
-    AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE, CAP_OPEN_SPAN,
-    GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, WIDE_WIDTH, append_wide_carriers,
+    ACCUM_INSERT_HOST_WIDTH, AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT,
+    BEFORE_BASE, CAP_OPEN_SPAN, ROT_WIDTH, RotatedBlockWitness, WIDE_WIDTH, append_wide_carriers,
     empty_caveat_manifest, generate_rotated_note_create_trace_with_commitments_tree,
     generate_rotated_note_create_wide, generate_rotated_note_spend_trace_with_nullifier_tree,
     recompute_after_blocks_for_test, rotated_descriptor_name_for_effect,
@@ -584,48 +584,55 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     verify_vm_descriptor2(&wide_desc, &proof, &wide_dpis)
         .expect("NO DOWNGRADE: the honest wide noteCreate proof must verify independently");
 
-    // NEGATIVE TOOTH (the bite, at wide geometry): rebuild the BASE trace, forge the AFTER
-    // commitments-root limb (a root the kernel never grew), recompute the base AFTER block, then
-    // re-append the wide carriers — but PUBLISH THE HONEST wide PIs (the light client is shown the
-    // honest commit). The `.insert` grow-gate pins `after == insert(before, key)` against the forged
-    // AFTER root limb → no witness → UNSAT, regardless of the published PIs.
-    let (mut base_trace, base_dpis, _heaps) =
-        generate_rotated_note_create_trace_with_commitments_tree(
-            &st,
-            &effects,
-            &bridge(&before_w),
-            &bridge(&after_w),
-            &caveat,
-            &before_commitments,
-        )
-        .expect("base commitments-tree trace builds");
+    // NEGATIVE TOOTH (the bite, at wide geometry, ISOLATED to the grow-gate): CLONE the honest WIDE
+    // trace (insert-shaped, 1792, carrying the GENUINE §J′ insert READ appendix that opens the fresh
+    // commitment against the honest post-insert root), forge the AFTER commitments-root limb (a root
+    // the kernel never grew), re-fill the base AFTER-block commit chain (`recompute_after_blocks_for_test`)
+    // AND re-fill the wide carriers over the forged base (`append_wide_carriers`, which resizes to the
+    // SAME 1792 layout the honest producer laid at `ACCUM_INSERT_HOST_WIDTH`, re-reads the 8-felt wide
+    // commit from the now-forged AFTER block, and re-derives the wide commit PIs — leaving the §J′
+    // insert appendix at `ACCUM_INSERT_READ_BASE` UNTOUCHED). The forged trace is now FULLY
+    // self-consistent at 1792 EXCEPT the in-circuit `.insert` grow-gate: the appendix still proves
+    // `insert(before, key) == honest_root`, but the AFTER commitments-root limb is forged, so the
+    // grow-gate pins the limb against the appendix's genuine post-insert root → forged ≠ honest → no
+    // membership witness → UNSAT. This is a REAL grow-gate refuse — an adversary presenting a FULLY
+    // self-consistent forged commit (matching carriers + PIs) is STILL caught by the grow-gate — NOT a
+    // width mismatch and NOT a stale-carrier/PI mismatch.
     let bump = BabyBear::new(0x9999);
-    for row in base_trace.iter_mut() {
+    let mut forged_trace = wide_trace.clone();
+    for row in forged_trace.iter_mut() {
         row[AFTER_BASE + B_COMMITMENTS_ROOT] = row[AFTER_BASE + B_COMMITMENTS_ROOT] + bump;
     }
-    recompute_after_blocks_for_test(&mut base_trace);
-    // Re-append the wide carriers over the forged base limbs (so the forged trace is internally
-    // self-consistent at the wide geometry — the ONLY thing broken is the in-circuit grow-gate).
-    let _forged_self_consistent_dpis =
-        append_wide_carriers(&mut base_trace, base_dpis, GRAD_ROT_WIDTH);
+    recompute_after_blocks_for_test(&mut forged_trace);
+    // Re-fill the wide carriers + re-derive the wide commit PIs over the forged base (the honest
+    // producer's base PI prefix rides `wide_dpis[..base_pi_len]`; the wide append re-adds the 8 BEFORE
+    // + 8 AFTER commit felts). This makes the wide 8-felt-commit absorb lookups + PI bindings hold for
+    // the forged base, so the ONLY unsatisfiable constraint left is the grow-gate.
+    let base_pi_len = wide_dpis.len() - 16;
+    let forged_dpis = append_wide_carriers(
+        &mut forged_trace,
+        wide_dpis[..base_pi_len].to_vec(),
+        ACCUM_INSERT_HOST_WIDTH,
+    );
     assert_eq!(
-        base_trace[0].len(),
+        forged_trace[0].len(),
         WIDE_WIDTH + CAP_OPEN_SPAN,
         "forged wide width matches the insert-shaped WIDE_WIDTH + CAP_OPEN_SPAN"
     );
     assert_ne!(
-        base_trace[base_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
+        forged_trace[forged_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
         wide_trace[wide_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
         "the forged AFTER commitments-root differs from the honest (grow-gate's UNSAT precondition)"
     );
 
-    // Publish the HONEST wide PIs against the FORGED wide trace: the grow-gate `.insert` has no
-    // membership/update witness for the forged after-root → UNSAT.
+    // The forged wide trace is fully self-consistent (carriers + PIs re-derived over the forged base)
+    // EXCEPT the `.insert` grow-gate: the appendix's genuine post-insert root ≠ the forged AFTER
+    // commitments-root limb → no membership witness → UNSAT.
     assert!(
         refused(
             &wide_desc,
-            &base_trace,
-            &wide_dpis,
+            &forged_trace,
+            &forged_dpis,
             &mem_boundary,
             &wide_map_heaps
         ),
