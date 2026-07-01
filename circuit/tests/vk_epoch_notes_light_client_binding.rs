@@ -57,7 +57,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
     AFTER_BASE, B_COMMITMENTS_ROOT, B_NULLIFIER_ROOT, B_STATE_COMMIT, BEFORE_BASE, GRAD_ROT_WIDTH,
-    ROT_WIDTH, RotatedBlockWitness, append_wide_carriers, empty_caveat_manifest,
+    ROT_WIDTH, RotatedBlockWitness, WIDE_WIDTH, append_wide_carriers, empty_caveat_manifest,
     generate_rotated_note_create_trace_with_commitments_tree, generate_rotated_note_create_wide,
     generate_rotated_note_spend_trace_with_nullifier_tree, recompute_after_blocks_for_test,
     rotated_descriptor_name_for_effect,
@@ -559,8 +559,8 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     .expect("the live wide note-create producer must build a wide trace (was fail-closed before the weld)");
     assert_eq!(
         wide_trace[0].len(),
-        GRAD_ROT_WIDTH + 208,
-        "wide member width 816"
+        WIDE_WIDTH,
+        "wide member width matches WIDE_WIDTH"
     );
     assert_eq!(
         wide_dpis.len(),
@@ -607,8 +607,8 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         append_wide_carriers(&mut base_trace, base_dpis, GRAD_ROT_WIDTH);
     assert_eq!(
         base_trace[0].len(),
-        GRAD_ROT_WIDTH + 208,
-        "forged wide width"
+        WIDE_WIDTH,
+        "forged wide width matches WIDE_WIDTH"
     );
     assert_ne!(
         base_trace[base_trace.len() - 1][AFTER_BASE + B_COMMITMENTS_ROOT],
