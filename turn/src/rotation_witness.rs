@@ -421,7 +421,19 @@ pub fn produce(
     // makeSovereign mode CONSTANT-force limb and the setFieldDyn / refusal fields-root weld limb, the
     // NEW LAST pre-iroot limbs).
     pre_limbs[35] = mode_felt(&cell.mode);
-    pre_limbs[36] = fields_root_felt(&cell.state.fields_root);
+    // limb 36: fields_root lane-0 (welded) ‖ extras 65,66,19,20,21,22,23: the SEVEN fields-root
+    // completion felts (Phase H-FIELDS-8). The faithful native-`node8` (arity-16) 8-felt sorted-Merkle
+    // root over the cell's user-field map — cell and circuit fold through the SAME impl
+    // (`compute_canonical_fields_root_8`), so the `fields_root ↔ fields_root` weld holds lane-for-lane by
+    // construction (the fields GENTIAN tooth guards it). Byte-identical to
+    // `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy 1-felt
+    // `fields_root_felt(&cell.state.fields_root)` — the degraded-felt gate is satisfied for fields_root.
+    let fields8 = dregg_cell::state::compute_canonical_fields_root_8(&cell.state.fields_map);
+    pre_limbs[36] = fields8[0];
+    let fields_lanes = [65usize, 66, 19, 20, 21, 22, 23];
+    for i in 0..7 {
+        pre_limbs[fields_lanes[i]] = fields8[1 + i];
+    }
 
     let iroot_val = iroot(receipt_hashes);
     let state_commit = wire_commit(&pre_limbs, iroot_val);

@@ -383,6 +383,23 @@ pub fn compute_fields_root(map: &BTreeMap<u64, FieldElement>) -> [u8; 32] {
     babybear_to_bytes32(root)
 }
 
+/// Compute the FAITHFUL 8-felt canonical fields root over a user-field map: the
+/// FULL native-`node8` (arity-16) sorted-Poseidon2 Merkle root the EffectVM
+/// circuit's 8-felt `fields_root` column GROUP carries (lane 0 ‖ lanes 1..7).
+/// Lane 0 is byte-identical to the lane-0 projection the historical scalar
+/// [`compute_fields_root`] committed; lanes 1..7 are the ~124-bit completion the
+/// faithful weld commits at the rotated-block limbs 36 (lane 0) ‖ 65,66,19..23
+/// (lanes 1..7) in `compute_rotated_pre_limbs`. The fields tree reuses the SAME
+/// [`HeapLeaf`] / `heap_node8` lane as cap/heap (cap/heap/fields all share one
+/// node8 lane), folded over the SAME [`fields_root_leaves`] the 1-felt
+/// [`compute_fields_root`] uses. Cell and circuit fold through the SAME
+/// implementation, so they agree lane-for-lane (the fields GENTIAN differential
+/// guards it). The 8-felt twin of [`compute_canonical_heap_root_8`] and
+/// [`crate::commitment::compute_canonical_capability_root_8`].
+pub fn compute_canonical_fields_root_8(map: &BTreeMap<u64, FieldElement>) -> [BabyBear; 8] {
+    compute_canonical_heap_root_8_circuit(fields_root_leaves(map))
+}
+
 /// The canonical 32-byte encoding of a BabyBear felt: the felt's 4
 /// little-endian bytes in the low 4 positions, the rest zero. Deterministic
 /// and injective on canonical BabyBear values (< p), so distinct roots encode
