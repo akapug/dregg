@@ -7,7 +7,7 @@ registry (57 members):
 
   `<live key>\t<member.name>\t<emitVmJson2 (wide member)>`
 
-Each wide member is the proven `wideAppend host bb (bb+51)` of the corresponding live descriptor — the
+Each wide member is the proven `wideAppend host bb (bb+91)` of the corresponding live descriptor — the
 two 13×8 BEFORE/AFTER carriers + the 16 wide commit PIs (the 8-felt ~124-bit before/after anchors)
 appended past the host, NO narrowing. The emit order is the live order:
 
@@ -50,13 +50,13 @@ def main : IO Unit := do
   let tbHost := Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
     Dregg2.Circuit.Emit.CapOpenEmit.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
-  let tbWide := wideAppend tbHost tbBB (tbBB + 51)
+  let tbWide := wideAppend tbHost tbBB (tbBB + 91)
   IO.println s!"transferCapOpenTBVmDescriptor2R24\t{tbWide.name}\t{emitVmJson2 tbWide}"
   -- position 46: `heapWrite` (the Class-A sorted-Merkle splice descriptor) made 8-felt-wide. The host
   -- is `graduateV1 (rotateV3 heapWriteSpliceVmDescriptor)` + the splice `MapOp`; `rotateV3` lays the
   -- BEFORE limbs at the splice FACE width, so `bb = heapWriteSpliceVmDescriptor.traceWidth`.
   let hwBB := Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth
-  let hwWide := wideAppend Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3 hwBB (hwBB + 51)
+  let hwWide := wideAppend Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3 hwBB (hwBB + 91)
   IO.println s!"heapWriteVmDescriptor2R24\t{hwWide.name}\t{emitVmJson2 hwWide}"
   -- positions 47..55: the WRITE-bearing cap-open tail (`v3RegistryCapOpenWriteWide`, §10) made
   -- 8-felt-wide, in its own order, EXCEPT `grantCapWriteCapOpen` — which is NOT a member of the live
@@ -69,5 +69,5 @@ def main : IO Unit := do
   -- withSelectorGate sel.MINT (v3OfFrozen mintTickFace)`; the BEFORE limbs are laid at the mint FACE
   -- width, so `bb = mintTickFace.traceWidth` (the SAME base as the cohort `mint` member, position 2).
   let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
-  let smWide := wideAppend Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 51)
+  let smWide := wideAppend Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 91)
   IO.println s!"supplyMintVmDescriptor2R24\t{smWide.name}\t{emitVmJson2 smWide}"
