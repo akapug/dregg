@@ -3882,18 +3882,42 @@ async fn execute_finalized_turn(
 
     // AUTHORITY path (cap Phase D): capture the actor cell's CANONICAL
     // pre-execution `capability_root` — the sorted-Poseidon2 root over its
-    // c-list (cap Phase A's openable scheme, the same value the Effect-VM
-    // row's cap_root column is seeded from). A capability-gated turn's
-    // cap-membership leg is bound against THIS root, never one from the
-    // receipt/prover. Captured BEFORE execution (effects may mutate the
-    // c-list). A missing cell has the canonical EMPTY root.
-    let full_turn_pre_cap_root: dregg_circuit::field::BabyBear = if s.full_turn_proving_enabled {
+    // c-list (cap Phase A's openable scheme) — in the TWO forms the two legs
+    // consume. `full_turn_pre_cap_root` (SCALAR lane-0, `_felt`) seeds the
+    // Effect-VM row's `cap_root` column (`CellState::capability_root: BabyBear`,
+    // the historical scalar column, with the wide lanes 1..7 carried separately
+    // at the rotated extras). `full_turn_pre_cap_root_8` (FULL native 8-felt,
+    // `_8`) is the openable membership root the cap-membership leg /
+    // `CapMembershipExpectation.cap_root` binds — the ~124-bit faithful root, NOT
+    // a lane-0 squeeze. A capability-gated turn's cap-membership leg is bound
+    // against THIS root, never one from the receipt/prover. Captured BEFORE
+    // execution (effects may mutate the c-list). A missing cell has the canonical
+    // EMPTY root.
+    let (full_turn_pre_cap_root, full_turn_pre_cap_root_8): (
+        dregg_circuit::field::BabyBear,
+        [dregg_circuit::field::BabyBear; 8],
+    ) = if s.full_turn_proving_enabled {
         s.ledger
             .get(&signed_turn.turn.agent)
-            .map(|cell| dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities))
-            .unwrap_or_else(dregg_circuit::cap_root::empty_capability_root)
+            .map(|cell| {
+                (
+                    dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities),
+                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    dregg_cell::compute_canonical_capability_root_felt(
+                        &dregg_cell::CapabilitySet::new(),
+                    ),
+                    dregg_circuit::cap_root::empty_capability_root(),
+                )
+            })
     } else {
-        dregg_circuit::cap_root::empty_capability_root()
+        (
+            dregg_cell::compute_canonical_capability_root_felt(&dregg_cell::CapabilitySet::new()),
+            dregg_circuit::cap_root::empty_capability_root(),
+        )
     };
 
     // FRESHNESS path: capture the node's CANONICAL spent-nullifier set BEFORE this
@@ -3922,7 +3946,7 @@ async fn execute_finalized_turn(
     // with no bearer authorization yields an empty map (zero cost on the hot path).
     let full_turn_delegator_cap_roots: HashMap<
         dregg_types::CellId,
-        dregg_circuit::field::BabyBear,
+        [dregg_circuit::field::BabyBear; 8],
     > = if s.full_turn_proving_enabled {
         crate::turn_proving::delegator_pre_state_cap_roots(&signed_turn.turn.call_forest, &s.ledger)
     } else {
@@ -4188,7 +4212,7 @@ async fn execute_finalized_turn(
                     };
                     let bearer_cap_witness: Option<(
                         &dregg_turn::ConsumedCapWitness,
-                        dregg_circuit::field::BabyBear,
+                        [dregg_circuit::field::BabyBear; 8],
                     )> = bearer_cap.and_then(|w| {
                         match full_turn_delegator_cap_roots.get(&w.holder) {
                             Some(root) => Some((w, *root)),
@@ -4257,6 +4281,7 @@ async fn execute_finalized_turn(
                                 pre_balance,
                                 pre_nonce,
                                 full_turn_pre_cap_root,
+                                full_turn_pre_cap_root_8,
                                 &effects,
                                 computed_hash,
                                 consumed,
