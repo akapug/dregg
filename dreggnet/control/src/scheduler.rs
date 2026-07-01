@@ -287,7 +287,7 @@ mod tests {
         let w = s.workload(&id).expect("tracked");
         assert_eq!(w.state, WorkloadState::Completed);
 
-        // The durable workflow really ran on polyana: step1 = add(40,2) = 42, step2 = 84.
+        // The durable workflow really ran on the owned sandbox: step1 = add(40,2) = 42, step2 = 84.
         let out = w.output.expect("output");
         assert_eq!(out.step1, "42");
         assert_eq!(out.step2, "84");

@@ -14,11 +14,10 @@ publish step. The steps below are not executed by CI or by an agent.
 
 - `gh` CLI authenticated as `emberian` (`gh auth status`).
 - The working tree clean and on the branch you intend to publish.
-- The `polyana` submodule is referenced over SSH (`git@github.com:<operator>/polyana.git`).
-  CI clones submodules with `submodules: recursive`; for that to work on GitHub
-  Actions the runner needs read access to `<operator>/polyana` (a deploy key or a PAT
-  added as an Actions secret), since it is a separate (cross-org) repo. Sort this
-  before relying on the `service-stack` / `gateway-linux` jobs to be green.
+- Compute is owned and in-crate (the `Sandboxed` wasm tier runs on a vendored
+  pure-Rust `wasmi` interpreter) — there is **no external compute submodule** to
+  clone and no cross-org deploy key or PAT to arrange. CI builds the workspace
+  directly.
 
 ## 1. Create the private repo
 
@@ -64,8 +63,8 @@ git push origin --tags
 - Set the default branch in the GitHub repo settings (`main` or `dev`, your call).
 - Confirm the repo is **Private** (Settings → General → Danger Zone shows it).
 - Confirm CI ran: the `CI` workflow triggers on push to `dev`/`main` and on PRs
-  (see `.github/workflows/ci.yml`). If the submodule jobs fail to clone polyana,
-  add the polyana read credential per the Prerequisites note above.
+  (see `.github/workflows/ci.yml`). Compute is in-crate, so there is no submodule
+  clone step that could fail for want of a credential.
 - Confirm no secrets leaked into history — `.gitignore` excludes `target/`,
   `.env*`, `secrets/`, key material (`*.pem`/`*.key`/`*.p12`), and
   `credentials.json`. The repo is private regardless, but keep credentials out.

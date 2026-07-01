@@ -24,7 +24,7 @@ therefore measured across two repos:
 `perf/` (`dregg-perf`, `perf/Cargo.toml`) is the production turn-proof perf
 suite: 16 criterion benches + 4 binaries, every one over the PUBLIC API of the
 live commit/prove path. Each bench is SMOKE (default, tiny input) vs FULL
-(`PERF_FULL=1`, the node-a capture input) — `perf/src/lib.rs::perf_full()`.
+(`PERF_FULL=1`, the persvati capture input) — `perf/src/lib.rs::perf_full()`.
 
 | Bench (`perf/benches/`) | Measures | Live function |
 | --- | --- | --- |
@@ -41,7 +41,7 @@ live commit/prove path. Each bench is SMOKE (default, tiny input) vs FULL
 | `poseidon2.rs` | the in-circuit hash primitive (permute / 2→1 / sponge) | `Poseidon2State::permute`, `hash_2_to_1`, `hash_many` |
 | `membrane.rs` | "invite someone to my computer": fork / mint cap / drive gated / stitch + roundtrip | `World::fork`, `SharedFork::construct`, `commit_turn_gated`, `Stitch::settle` |
 | `data_plane.rs` | cap-gated receipted message Bus (enqueue / drain / publish fan-out S∈{4,32,128}) | `captp::data_plane::Bus` |
-| `ui_projection.rs` | deos first-paint DATA cost (gpui-free; GPU paint is on node-a) | `demo_world`, `Shell::compose_scene/compose`, `AffordanceSurface::project_for` |
+| `ui_projection.rs` | deos first-paint DATA cost (gpui-free; GPU paint is on persvati) | `demo_world`, `Shell::compose_scene/compose`, `AffordanceSurface::project_for` |
 
 Binaries: `perf-report` (full-system report on the real commit path),
 `proof-sizes` (wire-byte regression vs committed baseline), `perf-summary`,
@@ -73,44 +73,45 @@ through `perf/`.)
 
 ### 1.3 DreggNet — the cloud service layer
 
-DreggNet's bench infrastructure lives mostly in `polyana` (the execution
-substrate, its own Apache-2.0 workspace) and the vendored Elide `net/` stack.
-The DreggNet-native service crates (`exec` / `durable` / `bridge` / `control` /
-`gateway` / `webapp`) currently have NO benches — they are covered only by
-integration tests (e.g. `bridge/tests/lease_watcher.rs`,
-`bridge/tests/lease_drives_durable_workflow.rs`). **This is the largest gap.**
+DreggNet's bench infrastructure lives in the vendored Elide `net/` stack.
+Compute is now OWNED and in-crate (the owned, vendored pure-Rust `wasmi` sandbox
+engine); the former external compute-substrate benches were **removed along with
+that submodule** and are not in-repo. The DreggNet-native service crates
+(`exec` / `durable` / `bridge` / `control` / `gateway` / `webapp`) currently
+have NO benches — they are covered only by integration tests (e.g.
+`bridge/tests/lease_watcher.rs`, `bridge/tests/lease_drives_durable_workflow.rs`).
+**This is the largest gap.**
 
 | Bench | Measures |
 | --- | --- |
 | `net/httpe/benches/http_alloc.rs` + `alloc_count.rs` | gateway allocation counts (cache store/lookup, header parse zero-alloc, cookie jar); counting global allocator |
 | `net/transport/benches/profile.rs` | sustained transport: echo throughput, RTT p50/p90/p99/p999, connect-disconnect churn; `--servers/--clients/--conns/--payload`, JSON out, remote-capable |
 | `net/transport/benches/quic_io.rs` | UDP backends: blocking baseline vs io_uring (RecvMsgMulti+GSO/GRO) vs SO_REUSEPORT multi-core; ops/sec + p50/p99 (Linux io_uring) |
-| `polyana/benches/src/bench_server_request.rs` | end-to-end HTTP req/sec (axum in-process: `/health`, `/api/v1/actors`) |
-| `polyana/benches/src/bench_durable_eventstore.rs` | durable event-store append + replay-fold at 100/1k/10k events (events/sec) |
-| `polyana/benches/src/bench_wasm_instantiate.rs` | wasm compile cold / instantiate fresh-store / instantiate pre-pooled (the InstancePool payoff) |
-| `polyana/benches/src/bench_provider_comparison.rs` | **wasmtime vs wasmi** cold-start + warm-call (the cap-tier cost split: Cranelift JIT vs pure-Rust interpreter) |
-| `polyana/benches/src/bench_policy_decide.rs` | tenant policy hot path (compile / check_intent / authorize_persist) — every cross-boundary effect |
-| `polyana/benches/src/bench_capability_set.rs` + `bench_cap_floor.rs` | capability linear scan + R1 cap-floor matcher at set sizes 1/16/64/100 (every boundary crossing) |
-| `polyana/benches/src/bench_mailbox.rs` | actor mailbox push/pop, fill/drain 16/256/4096, multi-priority, capacity churn |
-| `polyana/benches/src/bench_artifact_store.rs` | content-addressed store (Blake3 dedup) at 1KB/64KB/1MB (bytes/sec) |
-| `polyana/src/bench/benches/{wasmtime_instantiate,cross_provider,replay_determinism,handle_codec}.rs` | instantiate hot path, `dyn` provider vtable cost, JCS canonical-bytes (~5µs budget), handle↔ArtifactId codec (<10ns target) |
-| `polyana/src/bench-substrate/benches/substrate.rs` | scenario runner with p99.9/p99.99 tail-latency (the ADR-acceptance four-9s envelope) |
-| `polyana/benches/graal-bridge-perf/src/main.rs` | subprocess vs in-process JNI bridge; ADR-0053 gate ≥5x (target 10x) |
-| `polyana/src/graalvm-polyglot-provider/benches/wave_m_v2d.rs` | JNI hot-path canonical eval (feature-gated) |
+
+(The former external compute-substrate benches — HTTP req/sec, durable
+event-store, wasm instantiate, provider comparison, policy-decide, cap-floor,
+mailbox, artifact-store, cross-provider, the substrate four-9s scenario runner,
+the JNI bridge benches — lived in the now-removed submodule and are gone. Owned
+in-crate equivalents over `exec`/`durable` are unbuilt: part of the §3 gap.)
 
 **Cap-tiers (sandbox execution model)** — `bridge/src/lib.rs::CapGrade`:
-- `Sandboxed` — wasmi (pure-Rust interpreter; lowest cold-start; numeric-only;
-  UNMETERED today) or wasmtime (Cranelift JIT; full Component-Model; fuel-metered
-  ~50M units default).
-- `Caged` — native process under seccomp+Landlock (Linux); includes native
-  CPython (`python3` subprocess).
-- `MicroVm` — firecracker hardware isolation (KVM).
-  (v8/Node steered around — double-`OwnedIsolate` SIGSEGV; GraalVM not wired.)
+- `Sandboxed` — the owned, vendored pure-Rust `wasmi` interpreter (zero unsafe,
+  no external submodule); GENUINELY executes (the `add(40,2)=42` dogfood runs
+  here). Provider label `dreggnet-wasmi`. This is the one live tier.
+- `JitSandboxed` — the (future) owned JIT engine. A fail-closed seam today
+  (`ExecError::NotWired` / `TierNotServed`) — never a fake run, never a silent
+  downgrade.
+- `Caged` — native process isolation, the (future) owned native/python/node
+  engine. A fail-closed seam today; provider label `dreggnet-native (seam)`.
+- `MicroVm` — microVM hardware isolation (Firecracker), the (future) owned
+  microVM engine. A fail-closed seam today; provider label `dreggnet-microvm (seam)`.
+- `Gpu` — the (future) owned GPU engine. A fail-closed seam today.
 
 **Lease lifecycle** — `bridge/src/lib.rs::Lease` + `LeaseWatcher`:
 open (`Lease::funded(lessee, cap_grade, asset, budget_units, per_period_units)`)
 → fund (`budget_units>0`, entered into the watcher feed) → run
-(`fulfill` spawns a durable polyana workflow; `cap_grade` picks the provider) →
+(`fulfill` spawns a durable metered workflow; `cap_grade` picks the provider —
+the owned wasmi engine for `Sandboxed`, a fail-closed seam for stronger tiers) →
 meter (each durable step charges `per_period_units` vs `budget_units`) → reap
 (success / over-budget `StandingObligation` lapse `ReapReason::OverBudget` / or
 unfunded reaped before start — no unpaid work claimed).
@@ -173,17 +174,19 @@ limb is the known-broken floor being widened —
    leases/sec), gateway req/sec end-to-end (httpe→ingress→workload), durable
    checkpoint/resume cost at the DreggNet layer, or webapp (agent-served route)
    req/sec.
-2. **No macro/throughput load-gen harness.** Everything in `dregg-perf` and
-   `polyana/benches` is a micro-bench (single op, criterion). There is no
-   harness that drives N concurrent leases/workloads/agents and reports
-   aggregate throughput + tail latency under contention.
+2. **No macro/throughput load-gen harness.** Everything in `dregg-perf` is a
+   micro-bench (single op, criterion). There is no harness that drives N
+   concurrent leases/workloads/agents and reports aggregate throughput + tail
+   latency under contention.
 3. **No WIDE (multi-node) measurement.** Everything runs in-process on one box.
    N-node throughput, federation gossip/sync, and cross-federation bridge cost
    are unmeasured (one staging box today).
-4. **Cap-tier workload latency is not measured end-to-end.** `bench_provider_
-   comparison` times wasm instantiate + warm-call in isolation; there is no
-   "run a representative agent workload under each tier (native-CPython /
-   wasmtime / wasmi), wall-to-wall through the lease" number.
+4. **Cap-tier workload latency is not measured end-to-end.** The owned `wasmi`
+   sandbox (`Sandboxed`) is the only tier that genuinely runs; the stronger
+   tiers (`JitSandboxed`/`Caged`/`MicroVm`/`Gpu`) are fail-closed seams until an
+   owned engine is wired. So there is no "run a representative agent workload
+   under each tier, wall-to-wall through the lease" number — and only the owned
+   wasmi tier can be measured today.
 5. **Symbolic/collapse, FFI, and many `dregg-perf` benches lack a committed FULL
    baseline.** The only captured baseline is SMOKE (`smoke-2026-06-22-m2max`).
 6. **No flamegraph/`perf` bottleneck-isolation artifacts** are committed; the
@@ -200,16 +203,16 @@ behaviour under load. For DreggNet:
 
 | Metric | Definition | Where measured | Status |
 | --- | --- | --- | --- |
-| Workload exec latency | wall-to-wall to run one agent workload, per cap-tier (native-CPython / wasmtime / wasmi) | new DreggNet macro harness over `bridge`+`polyana` | GAP (micro only) |
+| Workload exec latency | wall-to-wall to run one agent workload, per cap-tier (the owned wasmi `Sandboxed` tier today; JIT/native/microVM/GPU seams when wired) | new DreggNet macro harness over `bridge`+`exec` | GAP (micro only) |
 | Workload throughput | workloads/sec at saturation, per tier | new macro harness | GAP |
 | Lease lifecycle throughput | leases/sec through open→fund→run→meter→reap | new `bridge` bench over `LeaseWatcher` | GAP |
-| Durable checkpoint/resume | append + replay-fold cost; crash→recover→resume | `polyana bench_durable_eventstore` (exists); DreggNet `durable` (gap) | PARTIAL |
-| Gateway req/sec | httpe→ingress→workload end-to-end | `net/transport profile.rs` + `polyana bench_server_request` (component); end-to-end (gap) | PARTIAL |
+| Durable checkpoint/resume | append + replay-fold cost; crash→recover→resume | DreggNet `durable` (gap — the former external event-store bench went with the removed submodule) | GAP |
+| Gateway req/sec | httpe→ingress→workload end-to-end | `net/transport profile.rs` (component); end-to-end (gap) | PARTIAL |
 | Webapp req/sec | agent-declared route served under a lease | new `webapp` bench | GAP |
 | Per-turn kernel cost | executor turns/sec + commitment cost | `dregg-perf` executor_turn / embedded_commit / commitment | HAVE |
 | Proof / aggregate cost | prove + verify + recursion fold | `dregg-perf` prove/verify/cohort/recursion_fold | HAVE |
 | Bridge verify | trustless cross-chain lock-proof | `bridge/benches/solana_verify_bench` | HAVE |
-| Policy / cap-gate cost | per-boundary admit/deny | `polyana bench_policy_decide` / `bench_cap_floor` | HAVE |
+| Policy / cap-gate cost | per-boundary admit/deny | new owned bench (the former external policy/cap-floor benches went with the removed submodule) | GAP |
 
 ### 4.2 Scaling axis — WIDE (horizontal)
 
@@ -224,9 +227,10 @@ Concretely:
   needs a populated-ledger sweep.)
 - **N agents / N concurrent leases** — leases/sec and p50/p99 workload latency
   as concurrent funded leases climb. Where does `LeaseWatcher::fulfill` serialize?
-- **N workloads per tier** — workloads/sec under wasmtime (InstancePool depth
-  vs cold Cranelift) and wasmi (unmetered → wall-clock timeout risk) and
-  native-CPython (subprocess spawn).
+- **N workloads per tier** — workloads/sec under the owned `wasmi` sandbox (the
+  one live tier). The stronger tiers (JIT/native/microVM/GPU) are fail-closed
+  seams until an owned engine is wired, so per-tier saturation is measurable
+  only for wasmi today.
 - **N nodes** — aggregate cluster throughput (deferred to the fleet; modeled
   analytically now, see §4.4).
 
@@ -249,8 +253,9 @@ What to find: at saturation on ONE box, **turns/sec and workloads/sec**, and
 - **executor / commitment** — turns/sec admitted (no proof): the v9 rotated
   per-cell commit (~157 ms full, but ~µs incremental) is the long pole; confirm
   incremental commitment stays O(touched).
-- **sandbox spawn** — wasmtime cold (Cranelift) vs pre-pooled vs wasmi vs
-  native-CPython subprocess: cold-start dominates short workloads.
+- **sandbox spawn** — the owned `wasmi` interpreter cold vs warm: cold-start
+  dominates short workloads. (The JIT/native/microVM engines are fail-closed
+  seams until wired; their spawn cost is future work.)
 - **durable I/O** — append + fsync + replay-fold throughput.
 - **gateway** — accept/parse/route req/sec (zero-alloc header parse already
   asserted in `http_alloc`).
@@ -282,8 +287,8 @@ numbers as measured.
   criterion bench in the owning crate (the `dregg-perf` pattern).
 - **Macro/throughput:** a NEW load-gen harness (the named gap) that drives N
   concurrent leases/workloads/agents against a running DreggNet and reports
-  throughput + p50/p99/p99.9 tail (reuse the `polyana bench-substrate` four-9s
-  envelope + `net/transport profile.rs` JSON/remote shape).
+  throughput + p50/p99/p99.9 tail (reuse the four-9s tail-latency envelope +
+  `net/transport profile.rs` JSON/remote shape).
 - **Realistic workload mix — the agent-business loop:** pay → lease →
   run → meter → reap, repeated by N agents. This is the load-gen's default
   scenario; it exercises bridge + lease + sandbox + durable + commit + (optional)
@@ -295,7 +300,7 @@ numbers as measured.
   flamegraph as an artifact per axis so the bottleneck is profiled, not inferred.
 - **Regression tracking:** extend the committed-baseline pattern
   (`perf/baselines/`, `proof-sizes --json`) to the macro numbers; capture FULL
-  baselines on node-a, not just SMOKE on a laptop.
+  baselines on persvati, not just SMOKE on a laptop.
 
 ### 4.6 Targets — what "good" looks like
 
@@ -304,8 +309,9 @@ baseline lands; these are the bar, not measurements):
 
 **Cheap box (one staging node, e.g. M2-class / small cloud VM):**
 - executor admit: ≥ 10⁴ turns/sec (≈ the ~8 µs/turn floor, single-threaded).
-- workload exec latency: wasmi/wasmtime warm < 10 ms; native-CPython < 100 ms
-  (subprocess spawn dominated); cold wasmtime amortized by the InstancePool.
+- workload exec latency: owned `wasmi` (the live `Sandboxed` tier) warm < 10 ms.
+  The JIT/native/microVM tiers are fail-closed seams; their latency targets
+  apply once an owned engine is wired.
 - lease lifecycle: ≥ 10³ leases/sec through open→fund→meter→reap (sans the
   workload run itself).
 - gateway: ≥ 10⁴ req/sec on the zero-alloc fast path; webapp route p99 < 50 ms.
@@ -337,6 +343,6 @@ baseline lands; these are the bar, not measurements):
    leases, per-tier workload saturation; instrument the named contention points.
 4. **VERTICAL saturation + flamegraphs** (gap §3.6/§4.3): confirm the prover /
    commitment / spawn / durable / gateway bottleneck per workload class.
-5. **FULL baselines** (gap §3.5) on node-a for the existing `dregg-perf` suite.
+5. **FULL baselines** (gap §3.5) on persvati for the existing `dregg-perf` suite.
 6. **Federation** (gap §3.3/§4.4): analytic model now; fleet bench when the
    fleet exists.

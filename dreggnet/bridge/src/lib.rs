@@ -1,23 +1,22 @@
 //! `dreggnet-bridge` — the keystone where a funded dregg execution-lease drives a
-//! durable polyana workflow.
+//! durable metered workflow.
 //!
 //! ```text
 //!   dregg execution-lease  (the AUTHORIZATION — who, what cap-grade, what budget)
 //!     └─ dreggnet-bridge    (THIS crate — map the lease → a tier, fulfill it)
 //!        └─ dreggnet-durable (the durable, exactly-once, crash-resumable workflow)
-//!           └─ dreggnet-exec (run_workload → polyana, at the mapped cap-tier)
-//!              └─ polyana    (the sandboxed execution engine)
+//!           └─ dreggnet-exec (run_workload → the owned wasmi sandbox, at the mapped cap-tier)
 //! ```
 //!
 //! ## What the bridge does (the 5-step lease⟷workload weld)
 //!
 //! 1. Take a funded dregg [`Lease`] (its lessee, authorized [`CapGrade`], asset,
 //!    and `budget_units`).
-//! 2. Map the lease's cap-grade → a polyana [`CapTier`] + provider/lang
+//! 2. Map the lease's cap-grade → a [`CapTier`] + provider/lang
 //!    ([`map_cap_grade`]). The lease's authorized grade picks the sandbox tier; a
 //!    workload that demands a stronger floor than the lease authorizes is refused.
 //! 3. [`fulfill`] launches the durable [`dreggnet_durable`] workflow over the
-//!    mapped tier — each step runs on polyana via `dreggnet-exec`, and the
+//!    mapped tier — each step runs on the owned wasmi sandbox via `dreggnet-exec`, and the
 //!    `MeterTick` activity charges `per_period_units` against the lease budget.
 //! 4. An over-budget tick **fails the workflow** (lapse → reap): no work runs
 //!    beyond what the lease's budget proves was paid for.
@@ -32,7 +31,7 @@
 //! ## Real vs mock (read this)
 //!
 //! - **Real:** the durable workflow, exactly-once metering, crash-resume, the
-//!   polyana execution (the `add(40,2)` / `*2` steps genuinely run in the wasmi
+//!   owned wasmi execution (the `add(40,2)` / `*2` steps genuinely run in the owned wasmi
 //!   sandbox), and the budget gate (an over-budget tick fails the workflow).
 //! - **Mock by default:** the [`Lease`] struct mirrors breadstuffs' `LeaseTerms`
 //!   (`starbridge-apps/execution-lease` + `sdk/src/service_economy.rs`). On the
@@ -73,7 +72,7 @@ pub use watch::{
 /// `grade >= floor` means "this lease may run a workload that demands `floor`".
 ///
 /// This is the lease-side authorization that [`map_cap_grade`] turns into a
-/// concrete polyana [`CapTier`] + provider/language chain. It mirrors the
+/// concrete [`CapTier`] + provider/language chain. It mirrors the
 /// grade a real dregg lease cell would carry in its committed state (the
 /// breadstuffs `execution-lease` factory's `allowed_cap_templates`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -97,14 +96,14 @@ impl std::fmt::Display for CapGrade {
     }
 }
 
-/// The polyana provider + language chain a [`CapGrade`] resolves to: the sandbox
+/// The engine provider + language chain a [`CapGrade`] resolves to: the sandbox
 /// tier ([`CapTier`]) the workload runs at, the provider family that enforces it,
 /// and the workload language that family accepts at this rung.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TierBinding {
-    /// The polyana sandbox tier the workload instantiates at.
+    /// The sandbox tier the workload instantiates at.
     pub tier: CapTier,
-    /// The polyana provider family that enforces `tier`.
+    /// The engine provider family that enforces `tier`.
     pub provider: &'static str,
     /// The workload language this provider family accepts at `tier` (the `lang`
     /// `dreggnet_exec::run_workload` routes at that tier: `wat` for wasmi/Sandboxed,
@@ -112,46 +111,44 @@ pub struct TierBinding {
     pub lang: &'static str,
 }
 
-/// Map a lease's authorized [`CapGrade`] → the polyana [`CapTier`] + provider/lang
-/// chain it picks.
+/// Map a lease's authorized [`CapGrade`] → the [`CapTier`] + provider/lang chain
+/// it picks.
 ///
-/// Each grade resolves to the provider family `dreggnet-exec` actually serves at
-/// that tier, and the `lang` is the language that family accepts there (matching
+/// Each grade resolves to the provider family `dreggnet-exec` serves at that
+/// tier, and the `lang` is the language that family accepts there (matching
 /// `dreggnet-exec`'s own `run_workload` routing — see its module docs):
-///   - `Sandboxed` → wasmi, `wat`;
-///   - `Caged` → the OS-sandboxed native-process provider, `native` (a host binary;
-///     `dreggnet-exec` *refuses* `wat` at `Caged` — `caged_routing_refuses_mismatched_lang`);
-///   - `MicroVm` → the firecracker provider, which is lang-agnostic at the hardware
-///     boundary (the guest runs the language runtime inside), so `lang` is the guest
-///     entrypoint; `wat` is the demo entrypoint.
+///   - `Sandboxed` → the OWNED wasmi interpreter, `wat` (the genuinely-executed tier);
+///   - `Caged` → the OS-sandboxed native tier, `native` (an honest fail-closed seam
+///     in `dreggnet-exec` today — no owned native engine linked);
+///   - `MicroVm` → the hardware-isolated microVM tier, lang-agnostic at the boundary
+///     (an honest fail-closed seam in `dreggnet-exec` today).
 ///
-/// The native-process (`caged` feature) and firecracker (`firecracker` feature)
-/// providers ARE wired in `dreggnet-exec`; this binding is what the control plane
-/// schedules against (the `tier` picks the [`MachineSpec`] backend) and the floor
-/// check below ranks the grade by. The in-process durable workflow the bridge
-/// drives today runs every grade at the [`CapTier::Sandboxed`] wasmi floor — a
-/// stronger grade satisfies a weaker floor, so a `Caged`/`MicroVm` lease may run
-/// the sandboxed durable workload — so this binding's `lang` is NOT itself the
-/// dispatch lang for that in-process step (that is hardcoded `wat`@`sandboxed`).
+/// This binding is what the control plane schedules against (the `tier` picks the
+/// [`MachineSpec`] backend) and the floor check below ranks the grade by. The
+/// in-process durable workflow the bridge drives today runs every grade at the
+/// [`CapTier::Sandboxed`] owned-wasmi floor — a stronger grade satisfies a weaker
+/// floor, so a `Caged`/`MicroVm` lease may run the sandboxed durable workload — so
+/// this binding's `lang` is NOT itself the dispatch lang for that in-process step
+/// (that is hardcoded `wat`@`sandboxed`).
 pub fn map_cap_grade(grade: CapGrade) -> TierBinding {
     match grade {
         CapGrade::Sandboxed => TierBinding {
             tier: CapTier::Sandboxed,
-            provider: "polyana-wasmi-provider",
+            provider: "dreggnet-wasmi",
             lang: "wat",
         },
         CapGrade::Caged => TierBinding {
             tier: CapTier::Caged,
-            // Wired in dreggnet-exec behind the `caged` feature (OsSandbox:
-            // seccomp-bpf + Landlock). This tier serves `native`/`bin`, not `wat`.
-            provider: "polyana-native-process-provider (seccomp+landlock)",
+            // The OS-sandboxed native tier (seccomp-bpf + Landlock) — an honest
+            // fail-closed seam in dreggnet-exec today. Serves `native`/`bin`, not `wat`.
+            provider: "dreggnet-native (seam)",
             lang: "native",
         },
         CapGrade::MicroVm => TierBinding {
             tier: CapTier::MicroVm,
-            // Wired in dreggnet-exec behind the `firecracker` feature. Lang-agnostic
-            // at the hardware boundary; `lang` names the guest entrypoint.
-            provider: "polyana-microvm-provider (firecracker)",
+            // The hardware-isolated microVM tier — an honest fail-closed seam in
+            // dreggnet-exec today. Lang-agnostic; `lang` names the guest entrypoint.
+            provider: "dreggnet-microvm (seam)",
             lang: "wat",
         },
     }
@@ -213,7 +210,7 @@ impl Lease {
         self.funded && self.per_period_units > 0 && self.budget_units >= 0
     }
 
-    /// The polyana tier binding this lease's cap-grade resolves to.
+    /// The tier binding this lease's cap-grade resolves to.
     pub fn tier_binding(&self) -> TierBinding {
         map_cap_grade(self.cap_grade)
     }
@@ -312,10 +309,10 @@ pub fn workflow_input_for_lease(
     })
 }
 
-/// **Fulfill a lease** — launch the durable polyana workflow over the lease's
+/// **Fulfill a lease** — launch the durable metered workflow over the lease's
 /// mapped tier, metered against the lease budget, and run it to completion.
 ///
-/// Each durable step runs on polyana via `dreggnet-exec`; the `MeterTick` charges
+/// Each durable step runs on the owned wasmi sandbox via `dreggnet-exec`; the `MeterTick` charges
 /// `per_period_units` against the lease budget. If a tick would exceed
 /// `budget_units` the workflow fails ([`BridgeError::WorkflowFailed`] carrying the
 /// lapse detail) — no work runs beyond what the lease authorizes. An unfunded
@@ -327,7 +324,7 @@ pub fn workflow_input_for_lease(
 /// store in the crate's integration test, driving the same [`workflow_input_for_lease`]
 /// gate.
 ///
-/// ## Why an on-disk WAL store (the node-b power-event deadlock)
+/// ## Why an on-disk WAL store (the snoopy power-event deadlock)
 ///
 /// duroxide's `SqliteProvider::new_in_memory()` opens `sqlite::memory:?cache=shared`.
 /// A **shared-cache in-memory** SQLite database uses **table-level** locking, and
@@ -340,7 +337,7 @@ pub fn workflow_input_for_lease(
 /// post-power-event restart produces, with the edge re-dispatching + health checks +
 /// retries piling up — the agent drowns in a "database is deadlocked, backing off"
 /// retry storm that pegs the runtime and starves its accept loop: it serves nothing
-/// despite the bind (the node-b symptom an operator reported).
+/// despite the bind (the snoopy symptom David reported).
 ///
 /// The fix is to back the store with an **on-disk** SQLite database instead. A file
 /// store uses **WAL** journaling (duroxide sets `journal_mode = WAL` for file DBs),
@@ -359,10 +356,10 @@ pub async fn fulfill(lease: &Lease, instance: &str) -> Result<WorkflowOutput, Br
 
 /// A caller-declared workload to run under a lease — the language + program source
 /// the `dreggnet run --source` verb threads through. The program runs as a single
-/// durable, exactly-once-metered step on polyana at the lease's sandbox floor.
+/// durable, exactly-once-metered step on the owned sandbox at the lease's sandbox floor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkloadSource {
-    /// The polyana workload language (`wat`/`wasm` at this rung).
+    /// The owned-sandbox workload language (`wat`/`wasm` at this rung).
     pub lang: String,
     /// The program source (WAT text for `wat`/`wasm`).
     pub source: String,
@@ -401,7 +398,7 @@ pub async fn fulfill_workload(
 /// (the process-unique, drop-cleaned store), returning its [`WorkflowOutput`]. The
 /// shared core of [`fulfill`] (the fixed demo) and [`fulfill_workload`] (a
 /// caller-declared program) — see the [`fulfill`] doc-comment for *why* the store is
-/// on-disk and not the in-memory shared-cache store (the node-b power-event deadlock).
+/// on-disk and not the in-memory shared-cache store (the snoopy power-event deadlock).
 async fn run_orchestration(
     orchestration: &str,
     input_json: &str,
@@ -468,7 +465,7 @@ mod tests {
     fn cap_grade_maps_to_tier_and_provider() {
         let s = map_cap_grade(CapGrade::Sandboxed);
         assert_eq!(s.tier, CapTier::Sandboxed);
-        assert_eq!(s.provider, "polyana-wasmi-provider");
+        assert_eq!(s.provider, "dreggnet-wasmi");
         assert_eq!(s.lang, "wat");
 
         assert_eq!(map_cap_grade(CapGrade::Caged).tier, CapTier::Caged);

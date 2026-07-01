@@ -66,9 +66,9 @@ Workspace members (from `Cargo.toml`):
 
 - **`net/*`** — the Elide HTTP-engine stack: `httpe` (the full gateway), `transport`, `iocoreo`, `pki`, `tailscale`, `wireguard`, plus vendored local Elide deps (`base` `core` `sys` `dns` `nodeapi` `rpc` `bindings` `builder` `macros` `native-dispatch` `foreign-gai` `jvm-stubs`) + `conformance-kit`. **These are the non-relicensable piece** — ember's own work as research director at Elide Technologies, carry an Elide proprietary header, *not relicensable*. This was *why* DreggNet could not be open-sourced — until the Elide net stack was ejected (see `ELIDE-NET-EJECTION.md`); DreggNet is now AGPL-3.0.
 - **Service layers:** `gateway`, `control`, `exec`, `storage`, `webapp`, `billing`, `guard`, `org`, `dregg-secrets`, `dreggnet-logs`, `console`, `status`, `landing`, `attach`, `agent-host`, `ops`, `webauth`.
-- **Runtime/data:** `durable`, `bridge` (fulfills a dregg execution-lease on polyana), `umem` (registries-as-umem heap), `http` (clean-room HTTP/1.1 vocabulary), `receipt`.
-- **Integrations:** `dregg-domains`, `dregg-ipfs`, `sandstorm-bridge`, `dregg-deploy` (DreggNet's git-auto-deploy), `deploy/node-agent`, `tests/workload`.
-- **`polyana/`** — git submodule → `polyana`, **Apache-2.0**, co-developed with an operator. Excluded from the workspace; NOT DreggNet-owned, NOT breadstuffs.
+- **Runtime/data:** `durable`, `bridge` (fulfills a dregg execution-lease on the owned sandbox), `umem` (registries-as-umem heap), `http` (clean-room HTTP/1.1 vocabulary), `receipt`.
+- **Integrations:** `dregg-domains`, `dregg-ipfs`, `sandstorm-bridge`, `dregg-deploy` (DreggNet's git-auto-deploy), `deploy/persvati-agent`, `tests/workload`.
+- **Compute** — the sandbox is now **owned and in-crate** (no external submodule): the `Sandboxed` wasm tier runs on a vendored pure-Rust `wasmi` interpreter (zero `unsafe`) that genuinely executes; every stronger tier is a fail-closed seam (see below).
 
 ### Surprises / gotchas worth flagging
 
@@ -194,7 +194,7 @@ AGPL-release path would require decoupling the Elide net stack (`httpe` +
 pure-std HTTP/1.1 vocabulary "so the gateway can drop the Elide `httpe`
 dependency") + the artifact-agnostic `conformance-kit` are the *start* of that
 decouple, but `httpe` is still the live gateway and the mesh still rides Elide
-`wireguard`/`tailscale`. `polyana` is already Apache-2.0 (no blocker there).
+`wireguard`/`tailscale`. Compute is owned and in-crate (no external dependency, no blocker there).
 
 Verdict: **🔴 by design; not the goal.**
 

@@ -41,13 +41,13 @@ same template over a different cell.
 | 3 | **Pub/sub & messaging** | the **reactor** (on-chain command-cell → reactive) + SSE | `publish` (a cap-gated turn appends to a topic cell) → subscribers stream cell events | per-message / per-delivery | each delivered event carries its receipt; subscriber re-witnesses the topic root | **roadmap** |
 | 4 | **Queues / task queue** | the **conditional-batch / cq** (durable, atomic) | `enqueue` (cap-gated turn) → durable workers `lease`+`ack`; exactly-once | per-enqueue + per-lease | the cq is itself a committed cell; dequeue leaves a receipt | **roadmap** |
 | 5 | **Scheduled / cron jobs** | the **durable layer** on a timer (`dreggnet-durable`) | register a schedule cell → durable workflow fires per period | per-run (a metered durable workflow) | each run is a durable, crash-resumable, exactly-once-metered workflow | **near** (the durable runtime exists; the timer trigger is the new bit) |
-| 6 | **Functions (FaaS)** | the **wasm tier** (`dreggnet-exec` → polyana) | deploy a wasm handler → invoke per request, runs in the sandbox at the lease's cap-tier | per-invocation (metered through the bridge) | the handler runs at the cap-grade the lease authorizes; output rides a receipt | **shipped (compute)** — exposed as the agent-web-app router (`webapp/`); the "deploy a standalone function" front door is the packaging step |
+| 6 | **Functions (FaaS)** | the **wasm tier** (`dreggnet-exec` → the owned wasmi sandbox) | deploy a wasm handler → invoke per request, runs in the sandbox at the lease's cap-tier | per-invocation (metered through the bridge) | the handler runs at the cap-grade the lease authorizes; output rides a receipt | **shipped (compute)** — exposed as the agent-web-app router (`webapp/`); the "deploy a standalone function" front door is the packaging step |
 | 7 | **Secrets / KMS** | the **cipherclerk** (caps/secrets) + cap-bounded grants | `store/grant/use` a secret; a grant is an attenuated cap, never the plaintext | per-grant / per-use | a use leaves a receipt; the secret never leaves its cap boundary | **roadmap** (generalizes the existing BYO-keys pattern) |
-| 8 | **Naming / DNS** | the **nameservice** (cell-based names) | `register/resolve/transfer` a name cell; ties to `example.com` | per-registration / per-renewal | the name→target binding is a committed cell a resolver re-witnesses | **near** (the nameservice cell exists in breadstuffs; DreggNet exposes resolution — already used by hosting's `<name>.example.com`) |
+| 8 | **Naming / DNS** | the **nameservice** (cell-based names) | `register/resolve/transfer` a name cell; ties to `dregg.works` | per-registration / per-renewal | the name→target binding is a committed cell a resolver re-witnesses | **near** (the nameservice cell exists in breadstuffs; DreggNet exposes resolution — already used by hosting's `<name>.dregg.works`) |
 | 9 | **Identity / auth** | the **credential ZK presentation** (cap attenuation) | `issue/present/verify` — auth-as-a-service over attenuable credentials | per-verification | a presentation is a zero-knowledge proof the verifier checks; no secret disclosed | **roadmap** |
-| 10 | **Static web hosting** | site = **cell** (the template `storage` generalizes) | `publish` a minisite cell; serve read-only over `<name>.example.com` | per-publish / per-GB-served | trustless cell projection (`deos-view`) re-witnesses served bytes | **shipped** (`webapp/src/hosting.rs`) |
-| 11 | **Agent-served web APIs** | the **wasm tier** + router (`webapp/`) | an agent declares routes → polyana handlers; DreggNet serves them | per-request (`LeasedRouter` → `402` if over budget) | each request runs through a durable, exactly-once-metered workflow | **shipped** (`webapp/`) |
-| 12 | **Compute lease (durable execution)** | the **bridge** (`execution-lease` → polyana) | rent a funded durable runtime at a cap-tier | per-period meter tick | exactly-once metering, crash-resume within budget | **shipped** (`bridge/`, `control/`) |
+| 10 | **Static web hosting** | site = **cell** (the template `storage` generalizes) | `publish` a minisite cell; serve read-only over `<name>.dregg.works` | per-publish / per-GB-served | trustless cell projection (`deos-view`) re-witnesses served bytes | **shipped** (`webapp/src/hosting.rs`) |
+| 11 | **Agent-served web APIs** | the **wasm tier** + router (`webapp/`) | an agent declares routes → owned-sandbox handlers; DreggNet serves them | per-request (`LeasedRouter` → `402` if over budget) | each request runs through a durable, exactly-once-metered workflow | **shipped** (`webapp/`) |
+| 12 | **Compute lease (durable execution)** | the **bridge** (`execution-lease` → the owned sandbox) | rent a funded durable runtime at a cap-tier | per-period meter tick | exactly-once metering, crash-resume within budget | **shipped** (`bridge/`, `control/`) |
 | 13 | **Agent coordination** | branch/stitch over **cells** + the durable layer | agents share a cell-fork they each drive, stitched by the settlement rail | per-turn | each coordination turn is a receipted, settlement-sound merge | **shipped (substrate)** — the orchestration/swarm apps in breadstuffs; DreggNet exposes it as a service |
 
 Rows 10–13 are today's offering (`compute-lease, web-hosting, agent-coordination,
@@ -120,7 +120,7 @@ cell and the period-fire loop. Metered per run.
 
 ### 6. Functions (FaaS)
 
-The wasm tier (`dreggnet-exec` → polyana) already runs a handler in the sandbox at
+The wasm tier (`dreggnet-exec` → the owned wasmi sandbox) already runs a handler in the sandbox at
 the cap-grade the lease authorizes (`webapp/`'s router is this, behind HTTP
 routes). The standalone-function front door is the packaging step: deploy a wasm
 component as a named function cell, invoke it per request, meter per invocation
@@ -139,8 +139,8 @@ crosses its cap boundary, which is the verification.
 
 The nameservice is cell-based naming: a name is a cell binding `<name> → target`,
 registered/resolved/transferred by cap-gated turns. DreggNet already consumes it —
-hosting resolves `<name>.example.com` to a site cell — and exposes it as a managed
-naming service (the `<name>.store.example.com` endpoint a bucket can address is the
+hosting resolves `<name>.dregg.works` to a site cell — and exposes it as a managed
+naming service (the `<name>.store.dregg.works` endpoint a bucket can address is the
 same mechanism). The binding is a committed cell a resolver re-witnesses. Metered
 per registration / renewal.
 

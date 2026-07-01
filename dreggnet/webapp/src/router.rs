@@ -1,18 +1,18 @@
 //! The router: turn an inbound [`WebRequest`] into a [`WebResponse`] by running
-//! the matched route's polyana handler.
+//! the matched route's owned-sandbox handler.
 //!
 //! ```text
 //!   WebRequest ─▶ WebApp::match_route ─▶ Handler::build_source (fill the template)
 //!                                          │
 //!                                          ▼
-//!                       dreggnet_exec::run_workload  (the handler RUNS on polyana)
+//!                       dreggnet_exec::run_workload  (the handler RUNS on the owned sandbox)
 //!                                          │  Output { values }
 //!                                          ▼
 //!                       ResponseSpec::render ─▶ WebResponse
 //! ```
 //!
 //! Two entry points:
-//! - [`Router`] — serve a request directly (the handler runs on polyana; no
+//! - [`Router`] — serve a request directly (the handler runs on the owned sandbox; no
 //!   metering). This is the path that proves request→handler→response.
 //! - [`LeasedRouter`] — the same, but **metered against a funded dregg
 //!   execution-lease**: each served request charges `per_period_units` against the
@@ -32,7 +32,7 @@ use dreggnet_durable::{WorkloadRun, WorkloadSpec, run_workflow_on_disk_blocking}
 use crate::http::{WebRequest, WebResponse};
 use crate::spec::{Handler, HandlerError, Route, WebApp};
 
-/// Serve an agent-assembled [`WebApp`] by running its handlers on polyana.
+/// Serve an agent-assembled [`WebApp`] by running its handlers on the owned sandbox.
 pub struct Router {
     app: WebApp,
 }
@@ -48,9 +48,9 @@ impl Router {
         &self.app
     }
 
-    /// Route + serve one request. A matched route's handler runs on polyana and
+    /// Route + serve one request. A matched route's handler runs on the owned sandbox and
     /// its result is rendered; an unmatched route is a `404`, a handler build
-    /// error a `4xx`, and a polyana execution failure a `502`.
+    /// error a `4xx`, and a the owned sandbox execution failure a `502`.
     pub fn serve(&self, req: &WebRequest) -> WebResponse {
         let Some(route) = self.app.match_route(req.method, &req.path) else {
             return WebResponse::error(404, format!("no route for {} {}", req.method, req.path));
@@ -76,7 +76,7 @@ pub fn handler_workload_spec(
     })
 }
 
-/// Run one matched route's handler on polyana and render the response. Shared by
+/// Run one matched route's handler on the owned sandbox and render the response. Shared by
 /// [`Router`] and [`LeasedRouter`].
 fn run_handler(route: &crate::spec::Route, req: &WebRequest) -> WebResponse {
     let source = match route.handler.build_source(&req.query) {
@@ -90,7 +90,7 @@ fn run_handler(route: &crate::spec::Route, req: &WebRequest) -> WebResponse {
 
     match dreggnet_exec::run_workload(&route.handler.lang, &source, tier) {
         Ok(out) => route.response.render(&out.values),
-        // The handler ran (or failed to assemble/run) inside polyana — a 502 is
+        // The handler ran (or failed to assemble/run) inside the owned sandbox — a 502 is
         // the honest "the served upstream (the sandboxed handler) erred" code.
         Err(e) => WebResponse::error(502, format!("handler execution failed: {e}")),
     }
@@ -132,7 +132,7 @@ impl MeterSnapshot {
 /// `lease.budget_units`) and refused with `402` **before any handler runs** if it would
 /// exceed the budget. A request that clears the gate is then run THROUGH the durable layer:
 /// the handler is wrapped as a one-step [`WorkflowInput`] and executed by
-/// [`dreggnet_durable`] — the handler runs on polyana, its result is durably checkpointed,
+/// [`dreggnet_durable`] — the handler runs on the owned sandbox, its result is durably checkpointed,
 /// and the `MeterTick` charges the step exactly-once. So a served request gets the bridge's
 /// full durability guarantee: a crash mid-request resumes exactly-once (no double-charge, no
 /// re-run of a completed step), the same invariant the durable bridge enforces per step.
@@ -241,7 +241,7 @@ impl LeasedRouter {
     /// per-request cost against the lease budget *before* running the handler; an
     /// over-budget request is refused with `402` and the handler never runs. A
     /// request that clears the gate runs THROUGH [`dreggnet_durable`] (the handler
-    /// executes on polyana, checkpointed, metered exactly-once). Returns the
+    /// executes on the owned sandbox, checkpointed, metered exactly-once). Returns the
     /// response and the meter snapshot after this request.
     pub fn serve(&self, req: &WebRequest) -> (WebResponse, MeterSnapshot) {
         // Match first: an unmatched route is a 404 and is NOT charged (no work).
@@ -285,7 +285,7 @@ impl LeasedRouter {
     }
 
     /// Run one matched route's handler as a one-step durable workflow over this router's
-    /// **on-disk** durable store and render the response. The handler runs on polyana inside
+    /// **on-disk** durable store and render the response. The handler runs on the owned sandbox inside
     /// [`dreggnet_durable`], checkpointed to disk and metered exactly-once; the within-workflow
     /// budget is exactly one step's cost, so the durable `MeterTick` mirrors the lease's
     /// per-request charge. Because the store is on disk, a request that crashes mid-workflow
@@ -304,7 +304,7 @@ impl LeasedRouter {
 
         let resp = match run_workflow_on_disk_blocking(&input, &instance, &db_path) {
             Ok(out) => route.response.render(&out.outputs),
-            // The handler ran (or failed) inside the durable workflow on polyana — a
+            // The handler ran (or failed) inside the durable workflow on the owned sandbox — a
             // 502 is the honest "the served upstream handler erred" code.
             Err(e) => WebResponse::error(502, format!("durable handler workflow failed: {e}")),
         };

@@ -46,7 +46,7 @@ A DreggNet cloud is, at the load level, four nouns and one loop:
 The simulator drives **all five** through their real public surfaces. It does *not*
 re-implement the loop or the economy; it feeds the real `Orchestrator` a population
 of real `Lease`s from real (channel or node-API) `LeaseSource`s, dispatches to
-loopback `:8021/fulfill` backends that speak the real node-agent contract
+loopback `:8021/fulfill` backends that speak the real persvati-agent contract
 (budget-gated exactly like the real agent), and settles on the real
 `ConservingLedger` (the faithful in-process twin of the dregg `Payable`). The only
 things mocked are the things the offline gauntlet already mocks: the lease *source*
@@ -68,20 +68,24 @@ A run is parameterized by a **load profile** — the knobs a scenario sets:
 | `backends` | fleet size + per-backend capacity | `DREGGNET_WL_BACKENDS` |
 | `duration` | wall-clock for soak; or `until N leases settle` | `DREGGNET_WL_DURATION` |
 
-The **realistic tier mix** (from `docs/COMPUTE-TIERS.md`, the four wired tiers) the
-default profile draws from:
+The **realistic tier mix** (from `docs/COMPUTE-TIERS.md`) the default profile draws
+from. Only the base `Sandboxed` tier genuinely executes today; every stronger tier is
+a **fail-closed seam** (`ExecError::NotWired` / `TierNotServed`), so a workload targeting
+it records SKIPPED (seam), never a false pass:
 
 - **40 % `Sandboxed`** — lightweight trusted wasm (pure arithmetic, bounded), the
-  cheapest real sandbox (`polyana-wasmi`).
-- **30 % `JitSandboxed`** — untrusted wasm needing a runaway bound (`wasmtime`, fuel).
-- **20 % `Caged`** — interpreted polyglot (Python/Node subprocess), semi-trusted.
-  *Skips cleanly when `python3`/`node` are absent — the harness records SKIPPED, never
-  a false pass, mirroring the exec crate's own tests.*
-- **10 % `MicroVm`** — strong isolation (Firecracker). *Skips when `/dev/kvm` is
-  absent (macOS, CI), recorded SKIPPED.*
+  only real sandbox today: the owned, vendored pure-Rust wasmi interpreter
+  (`dreggnet-wasmi`).
+- **30 % `JitSandboxed`** — untrusted wasm needing a runaway bound. **Fail-closed seam
+  today** (owned JIT engine is future work); recorded SKIPPED (seam).
+- **20 % `Caged`** — interpreted polyglot (native/python/node). **Fail-closed seam
+  today** (`dreggnet-native (seam)`; owned native/interpreter engines are future work);
+  recorded SKIPPED (seam), never a false pass.
+- **10 % `MicroVm`** — strong isolation (microVM). **Fail-closed seam today**
+  (`dreggnet-microvm (seam)`; owned microVM engine is future work); recorded SKIPPED (seam).
 
-On a host without the native runtimes/KVM, a scenario degrades to the wasm tiers and
-records the skipped fraction — the wasm tiers run everywhere, so every scenario has a
+On any host, a scenario degrades to the `Sandboxed` wasm tier (which runs everywhere)
+and records the skipped fraction for the seam tiers — so every scenario has a
 non-empty load even on a bare macOS box.
 
 ### Tenant identity (the isolation substrate)

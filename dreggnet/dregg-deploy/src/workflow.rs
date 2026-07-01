@@ -15,7 +15,7 @@
 //! mid-build resumes from its last checkpoint — a completed Clone/Build is **replayed from
 //! history, never re-run** (no re-clone, no re-build), and the meter is never double-charged.
 //! This mirrors `dreggnet-durable`'s pattern exactly; it builds its OWN registries because the
-//! deploy's activities (git/build/publish) are not the polyana+meter activities that crate
+//! deploy's activities (git/build/publish) are not the compute+meter activities that crate
 //! registers.
 //!
 //! The build runs in the cap-bounded exec tier (or as a bounded build subprocess), metered
@@ -66,7 +66,7 @@ pub struct DeploySpec {
     /// The ref to pin (branch/tag/commit); `None` = the remote default branch.
     #[serde(default)]
     pub git_ref: Option<String>,
-    /// The subdomain label to publish under (`<name>.example.com`).
+    /// The subdomain label to publish under (`<name>.dregg.works`).
     pub site_name: String,
     /// The publishing owner/agent (the cap holder).
     pub owner: String,
@@ -441,7 +441,7 @@ pub fn build_deploy_registries(
                     .await
                     .map_err(|e| format!("publish join: {e}"))??;
                     meter::add(&instance, "run:publish", 1);
-                    let url = format!("https://{}.example.com/", args.site_name);
+                    let url = format!("https://{}.dregg.works/", args.site_name);
                     // Capture the publish turn-receipt hash before moving fields out:
                     // the DeployReceipt is a typed VIEW carrying it.
                     let publish_receipt_hash = receipt.receipt_hash();

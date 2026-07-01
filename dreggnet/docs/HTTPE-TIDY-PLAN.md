@@ -1,7 +1,7 @@
 # HTTPE-TIDY-PLAN — tidying the gateway's HTTP engine for production
 
 The DreggNet gateway (`dreggnet-gateway`) is the public-facing serving layer:
-it serves the fly-compatible machines API, the `*.example.com` static minisites
+it serves the fly-compatible machines API, the `*.dregg.works` static minisites
 (the permissionless-hosting surface), and the friendly root/status/health
 surfaces. This document assesses the HTTP engine the gateway is built on (the
 bundled Elide `net/httpe` stack), names the production-readiness gaps, and lays
@@ -31,7 +31,7 @@ That coupling is the center of gravity for the tidy-up.
 ### 1.1 What `httpe` is
 
 `net/httpe` (crate `elidehttp`, lib name `elidehttp`) is the full Elide HTTP
-engine, vendored from an internal Elide HTTP-engine source tree. It is a single
+engine, vendored from the Elide source tree (`~/elide/dhttp`). It is a single
 sophisticated crate covering, per `net/httpe/src/lib.rs`:
 
 - **The CQ engine** (`cq/`, `pub(crate)`) — a compio/io_uring + ntex event loop;
@@ -75,7 +75,7 @@ The gateway's library handlers (`gateway/src/{http,hosting,webapp}.rs`) implemen
 2. Hand-parses the request: reads to the `\r\n\r\n` header terminator, parses the
    request line, `Content-Length`, and `Host` with ad-hoc
    `String::from_utf8_lossy` scans (`parse_content_length`, `parse_header`).
-3. Routes by `Host`: `<name>.example.com` → `SiteHostHandler`; the Caddy
+3. Routes by `Host`: `<name>.dregg.works` → `SiteHostHandler`; the Caddy
    on-demand-TLS `ask` probe (`GET /internal/site-exists?domain=…`) → a
    site-existence check; everything else → the machines route table
    (`MachinesHandler::dispatch_async`, which blocks on a shared tokio runtime for
@@ -101,8 +101,6 @@ and connection limits are all handled **by Caddy at the edge**, not by httpe.
 - **`jvm-stubs`** force-links the JVM extern symbols so the engine links without a
   real JVM (`#[cfg(test)] extern crate jvm_stubs`); the JVM FFI is present but
   inert for DreggNet's use.
-- **Excluded:** only `polyana` (its own Apache-2.0 workspace, referenced as a
-  submodule, never absorbed).
 - **`net/builder/build.rs`** skips the monorepo `make setup` / GraalVM gate
   (dev-ergonomics; nothing in the net stack links the GraalVM engine);
   `net/rpc/build.rs` resolves its capnp schema dir relative to the crate.
@@ -196,7 +194,7 @@ public surface, even behind Caddy:
 ### 2.2 TLS / cert handling (the on-demand / wildcard flow)
 
 TLS is **entirely Caddy's** (`deploy/staging/Caddyfile`): Caddy terminates TLS
-and reverse-proxies plain HTTP to `gateway:8080`. For `*.example.com` it uses
+and reverse-proxies plain HTTP to `gateway:8080`. For `*.dregg.works` it uses
 **on-demand TLS** — a per-name Let's Encrypt cert minted over HTTP-01 on first
 request, gated by the gateway's `GET /internal/site-exists?domain=…` `ask`
 endpoint so only published sites mint certs (rate-limit hygiene). This is a clean
@@ -208,9 +206,9 @@ plan):
 - **Per-name on-demand certs don't scale to a large or hostile site population.**
   Let's Encrypt rate limits (certs/registered-domain/week) bite when many sites
   are published, and an attacker who can publish names can drive issuance churn.
-  The documented stronger option is a **DNS-01 wildcard** `*.example.com` (one
+  The documented stronger option is a **DNS-01 wildcard** `*.dregg.works` (one
   cert, no per-name issuance) — deferred only because it needs a Caddy
-  DNS-provider plugin + an API token for the `example.com` zone.
+  DNS-provider plugin + an API token for the `dregg.works` zone.
 - **Custom user domains** (a user's own `example.com` → their site) are the real
   permissionless-hosting frontier; they require the on-demand path *plus* a
   domain-ownership check in the `ask` endpoint (today it only checks site
@@ -260,7 +258,7 @@ build.
 
 As in 1.5: the branch-pinned forks (rustls, ntex ×16, hickory) are **not
 reproducible across a lock refresh**. For a production service this is the
-highest-leverage supply-chain fix: pin every `third-party` git dep by `rev=`
+highest-leverage supply-chain fix: pin every `elide-tools` git dep by `rev=`
 (not `branch=`) or vendor them, so a `cargo update` cannot silently change the
 engine. The rev-pinned ones (compio, jni) already meet this bar. Separately, the
 EAP timebomb + premium-feature gating live in the linked code; the gateway never
@@ -280,7 +278,7 @@ tail latency on the hosting/machines surface.
 ### 2.8 Production hardening (the public-internet surface)
 
 - **No rate-limiting / per-IP caps** at the gateway for the public
-  `*.example.com` surface. Caddy could add `rate_limit` (needs a plugin; not
+  `*.dregg.works` surface. Caddy could add `rate_limit` (needs a plugin; not
   configured). The unbounded thread-per-connection model is the DoS vector (2.1).
 - The operator surfaces (machines API, ops, grafana) are well-gated by the
   `webauth` dregg-capability `forward_auth` at Caddy — that part is solid. The
@@ -366,9 +364,9 @@ shared-helper extraction) and tests.
    connections to cut per-request TCP + alloc cost. Changes the wire behavior;
    measure first.
 
-10. **B3 — DNS-01 wildcard cert for `*.example.com`.** Replace on-demand per-name
+10. **B3 — DNS-01 wildcard cert for `*.dregg.works`.** Replace on-demand per-name
     issuance with a single wildcard cert (Caddy DNS-provider plugin + a
-    `example.com`-zone API token). Removes the Let's Encrypt rate-limit /
+    `dregg.works`-zone API token). Removes the Let's Encrypt rate-limit /
     issuance-churn exposure. A deploy/Caddy + secret change; ties to the
     permissionless-cloud plan. Keep the on-demand `ask` path for **custom user
     domains** and extend the `ask` to check domain-ownership, not just site
@@ -380,7 +378,7 @@ shared-helper extraction) and tests.
     content-addressed store rather than holding every asset in memory). Changes
     the hosting data plane.
 
-12. **B5 — Pin every `third-party` git dep by `rev=`.** Convert the
+12. **B5 — Pin every `elide-tools` git dep by `rev=`.** Convert the
     branch-pinned forks (rustls, the 16 ntex crates, hickory) to exact `rev=`
     pins (or vendor them) so a lock refresh cannot silently change the engine.
     Touches the workspace `[patch]` set and may shift resolved code → re-lock
@@ -389,7 +387,7 @@ shared-helper extraction) and tests.
     `wireguard`, `pki` — which keeps the closure.)
 
 13. **B6 — Public-surface rate-limiting.** Per-IP / per-name request caps on the
-    public `*.example.com` surface (Caddy `rate_limit` plugin at the edge, or a
+    public `*.dregg.works` surface (Caddy `rate_limit` plugin at the edge, or a
     gateway-side limiter). Public behavior change.
 
 ### Dependency order (the through-line)

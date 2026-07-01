@@ -22,7 +22,7 @@
 //! - **[`Funding`]** — where the spend bound comes from. EVERY variant lowers to a
 //!   single [`BudgetTerms`] → one verified [`ReplenishingBudget`](crate::budget::ReplenishingBudget)
 //!   cell, drawn through the one [`Meter`]. There is no second metering mechanism.
-//! - **[`Authority`]** — what the run may do (a polyana cap-grade, or an
+//! - **[`Authority`]** — what the run may do (a cap-grade, or an
 //!   attenuable `dga1_` cap bundle).
 //! - **[`Trigger`]** — what causes a run (invoke · push-deploy · cron · event ·
 //!   agent-brain · watch).
@@ -162,12 +162,12 @@ impl Funding {
 }
 
 /// **Authority** — what a run is allowed to do. The two shapes DreggNet actually
-/// uses: a coarse polyana isolation grade (the lease paths) and the fine-grained
+/// uses: a coarse isolation grade (the lease paths) and the fine-grained
 /// attenuable cap bundle (the agent path).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Authority {
-    /// A polyana isolation grade name (`sandboxed` / `caged` / `microvm`) — the
+    /// An isolation grade name (`sandboxed` / `caged` / `microvm`) — the
     /// lease/server/orchestrator cap-grade.
     CapGrade(String),
     /// An attenuable `dga1_` cap bundle (the powerbox): `invoke:<svc>`,
@@ -247,7 +247,7 @@ impl ExecutionModel {
     // ---- the EXISTING five paths, recovered as points ---------------------
 
     /// The request-scoped **lease** (`dreggnet_control::scheduler`): run once,
-    /// prepaid budget, a polyana cap-grade, started by invoke.
+    /// prepaid budget, a cap-grade, started by invoke.
     pub fn lease(
         name: impl Into<String>,
         asset: impl Into<String>,

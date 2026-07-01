@@ -18,68 +18,84 @@ default-green preserved, no shared-manifest edit-war).
 
 `dreggnet-exec` (`exec/src/lib.rs`) is the seam. `run_workload_with_input(lang,
 source, cap_tier, &[Input])` routes a `(lang, CapTier)` pair to a concrete
-`polyana_core::ExecutionProvider`, refusing any run whose tier demands more
-isolation than the chosen provider guarantees (never a silent downgrade).
+`ExecutionProvider`, refusing any run whose tier demands more isolation than the
+chosen provider guarantees (never a silent downgrade). Compute is **owned and
+in-crate**: there is no external compute submodule and no external dependency —
+the one engine that genuinely executes is a vendored pure-Rust `wasmi`
+interpreter (zero unsafe).
 
 Wired today:
 
 | `CapTier`      | lang(s)                       | provider                          | enforcement          |
 |----------------|-------------------------------|-----------------------------------|----------------------|
-| `Sandboxed`    | `wasm`/`wat` (core)           | `polyana-wasmi-provider`          | `WasmSandbox`        |
-| `JitSandboxed` | `wasm`/`wat` (component)      | `polyana-wasmtime`                | `WasmFullSandbox`    |
-| `Caged`        | `native`/`bin`, `python`, `node` | native-process / python / node provider | `OsSandbox` / `None` |
-| `MicroVm`      | any (VM runs the runtime)     | `polyana-firecracker-provider`    | `Container` (gated)  |
+| `Sandboxed`    | `wasm`/`wat` (core)           | the owned wasmi engine (`dreggnet-wasmi`) | `WasmSandbox` — **REAL, genuinely runs** |
+| `JitSandboxed` | `wasm`/`wat` (component)      | (future) owned JIT engine         | fail-closed seam (`ExecError::NotWired`) |
+| `Caged`        | `native`/`bin`, `python`, `node` | (future) owned native/python/node engine (`dreggnet-native (seam)`) | fail-closed seam (`ExecError::NotWired`) |
+| `MicroVm`      | any (VM runs the runtime)     | (future) owned microVM engine (`dreggnet-microvm (seam)`) | fail-closed seam (`TierNotServed`) |
+
+The `Sandboxed` wasmi tier is the only tier that genuinely executes today — the
+`add(40,2)=42` dogfood runs on it. Every stronger tier (`JitSandboxed`/JIT,
+`Caged`/native, `MicroVm`/Firecracker/microVM, `Gpu`, and the native
+python/node interpreter langs) is an **honest, fail-closed seam**: it returns
+`ExecError::NotWired` / `TierNotServed`, never a fake run and never a silent
+downgrade. Wiring an owned engine for each stronger tier is future work.
 
 Three facts shape the whole plan:
 
-1. **polyana already has the providers.** `polyana/src/` carries a deep
-   interpreter family (`python`, `node`, `php-fpm`, `ruby`, `luajit`, plus
-   `*-runtime-embedded`: `lua`, `perl`, `bash`, `awk`, `sed`, `grep`, `sort`,
-   `haskell`, `ocaml`, `zig`, `rust`) and a compiled-language family (`swift`,
-   `nim`, `koka`, `moonbit`, `roc`, `crystal`, `dart`, `dotnet-aot`, `jvm`,
-   `graal`, `lean`, `llvm-bitcode`, `cosmocc`). **Adding a language to DreggNet
-   is mostly wiring an existing provider into the router**, not writing a
-   runtime. The four shipped interpreter providers (python/ruby/luajit/php-fpm)
-   share one pattern (§1).
+1. **Compute is owned; only the wasmi sandbox runs today.** The owned wasmi
+   engine genuinely executes core wasm/wat under the `Sandboxed` tier. Every
+   other language and tier — the interpreter family (`python`, `node`, `php`,
+   `ruby`, `lua`, …) and the compiled-language family — is a **fail-closed seam**
+   today, not a shipped runtime. **Adding a language to DreggNet means building
+   or vendoring an owned engine for its tier**, then wiring it into the router;
+   until then the router refuses the tier loudly rather than faking it (§1).
 
-2. **One wire everywhere.** Every native tier speaks polyana's newline-delimited
-   JSON wire: host writes `{"fn":"run","args":[...]}`, guest replies
-   `{"ok":[...]}` / `{"err":"..."}`. The firecracker tier carries that same wire
-   into the VM over **vsock**. This single wire is the carrier for the inner
-   host-API (§3) and for streaming (§4) — we extend it, we don't replace it.
+2. **One wire everywhere.** The design for every native tier is a
+   newline-delimited JSON wire: host writes `{"fn":"run","args":[...]}`, guest
+   replies `{"ok":[...]}` / `{"err":"..."}`. The (future) microVM tier carries
+   that same wire into the VM over **vsock**. This single wire is the carrier for
+   the inner host-API (§3) and for streaming (§4) — we extend it, we don't
+   replace it. Today it is realized only for the owned wasmi sandbox; the native
+   and microVM legs of it are part of the owned-engine build.
 
 3. **The cap/tenant lane is still stubbed at the exec rung.** Every
    `instantiate_with_caps` call passes `&[]` (deny-all) plus a single static
    `TENANT = "dreggnet-exec"` (`exec/src/lib.rs`). The bridge
    (`bridge/src/lib.rs::map_cap_grade`) maps a lease's `CapGrade` → tier but
    hardcodes `lang = "wat"` and does not yet derive the tenant from the lessee.
-   Firecracker's `enforce_capabilities` is a documented no-op (the
-   `Capability` → tap/MMDS/drive/vsock-port translation is "slice-3"). These
+   The (future) microVM engine's `enforce_capabilities` is a documented no-op (the
+   `Capability` → tap/MMDS/drive/vsock-port translation is unbuilt). These
    stubs are the real per-tenant + resource work (§2).
 
 ---
 
 ## 1. More languages
 
+Today the only language that genuinely runs is core wasm/wat on the owned wasmi
+sandbox. Every additional language below is a **fail-closed seam** until an owned
+engine for its tier is built or vendored — the router refuses it with
+`ExecError::NotWired` rather than faking a run. This section is the plan for that
+owned-engine build, not a claim that the languages already work.
+
 ### 1.1 The pattern to add one (the newline-JSON wire)
 
 A new interpreter language is four mechanical pieces, all behind a per-language
-cargo feature:
+cargo feature — and, first, an **owned engine** that actually hosts the runtime:
 
-1. **A `run_on_<lang>` fn** in `exec/src/lib.rs`, copy-shaped from
-   `run_on_python` / `run_on_node`: build the runtime, construct the provider,
-   `store(NativeBinary, source)`, `load_component`, `instantiate_with_caps`,
-   `call(ENTRYPOINT, args)` under `workload_timeout()`, surface
-   `Output { values, enforcement }`.
+1. **A `run_on_<lang>` fn** in `exec/src/lib.rs`: build the owned runtime,
+   construct the provider, `store(NativeBinary, source)`, `load_component`,
+   `instantiate_with_caps`, `call(ENTRYPOINT, args)` under `workload_timeout()`,
+   surface `Output { values, enforcement }`. Until the owned engine exists this
+   is the fail-closed `NotWired` seam.
 2. **A match arm** in `run_workload_with_input` routing `"<lang>"` (and aliases)
-   to it, with the `#[cfg(not(feature))]` honest-`NotWired` twin.
-3. **A feature** in `exec/Cargo.toml` pulling the polyana provider crate.
-4. **Dogfood tests** mirroring the python/node set: real-args add, text-arg
+   to it, with the honest-`NotWired` twin as the default.
+3. **A feature** in `exec/Cargo.toml` pulling the owned engine crate.
+4. **Dogfood tests** mirroring the wasmi set: real-args add, text-arg
    roundtrip, runaway-times-out, syntax-error-fails-cleanly, skip-if-absent.
 
-Because the providers already exist and share the wire, each language is **S–M**
-once the first non-python/node one lands. The *first* one (PHP) also pins the
-generic shape; budget it **M**.
+Because each interpreter needs an owned engine built (not merely wired), the
+*first* one is the load-bearing effort — it builds the generic owned-engine shape
+the rest reuse. Budget it **L**; the followers are **M** once the shape lands.
 
 > **Swarm hazard:** the match arm + Cargo feature are edits to *shared* files
 > (`exec/src/lib.rs`, `exec/Cargo.toml`). Agents draft the disjoint
@@ -89,29 +105,30 @@ generic shape; budget it **M**.
 
 ### 1.2 Which languages next (prioritized by cloud value × low effort)
 
-The providers already in polyana make these near-free; ordered by demand:
+Each of these is a fail-closed seam today and wants an owned engine built;
+ordered by demand:
 
-1. **PHP** (`polyana-php-fpm-provider`) — **M** (first one; sets the shape).
-   High cloud demand (WordPress-class). Provider is shipped + cage-aware.
+1. **PHP** — **L** (first one; builds the owned-engine shape). High cloud demand
+   (WordPress-class). *Safe-autonomous.*
+2. **Ruby** — **M**. Rails/scripts. *Safe-autonomous.*
+3. **Lua / LuaJIT** — **M**. Embedded/edge logic, tiny cold-start.
    *Safe-autonomous.*
-2. **Ruby** (`polyana-ruby-provider`) — **S**. Rails/scripts. Shipped provider.
-   *Safe-autonomous.*
-3. **Lua / LuaJIT** (`polyana-luajit-provider`) — **S**. Embedded/edge logic,
-   tiny cold-start. Shipped provider. *Safe-autonomous.*
-4. **Bash / POSIX shell** (`bash-runtime-embedded`) — **S**. Glue/ops workloads;
-   the most-requested "just run my script." *Safe-autonomous.*
-5. **Go / Rust / compiled native** via the `Caged` `native`/`bin` path — **M**.
-   The `native-process-provider` already runs an arbitrary host binary; the work
-   is accepting `&[u8]` ELF (today `run_on_native_process` takes text/shebang)
-   and a small upload convention. *Safe-autonomous (additive arg path).*
+4. **Bash / POSIX shell** — **M**. Glue/ops workloads; the most-requested "just
+   run my script." *Safe-autonomous.*
+5. **Go / Rust / compiled native** via the `Caged` `native`/`bin` path — **M–L**.
+   An owned native-process engine runs an arbitrary host binary under an OS
+   sandbox; the work is the engine plus accepting `&[u8]` ELF and a small upload
+   convention. *Safe-autonomous (additive arg path).*
 6. **Compiled-on-ingest languages** (`swift`, `nim`, `roc`, `moonbit`, `zig`,
-   `crystal`, `dotnet-aot`) — **M each**. These providers compile source → a
-   native artifact then run it; they want a *build cache* (§1.3) to amortize the
-   compile. Lower priority than the interpreters. *Safe-autonomous per language.*
+   `crystal`, `dotnet-aot`) — **M each**, atop the owned native engine. These
+   compile source → a native artifact then run it; they want a *build cache*
+   (§1.3) to amortize the compile. Lower priority than the interpreters.
+   *Safe-autonomous per language.*
 
-Recommended overnight batch: **PHP → Ruby → Lua → Bash** (four arms, one
-quiet-window manifest pass), then the `native`/ELF widening. That quadruples the
-language surface with shipped providers and zero new runtimes.
+Recommended sequencing: build the first owned interpreter engine (**PHP**), which
+pins the shape, then **Ruby → Lua → Bash** reuse it, then the `native`/ELF owned
+engine widens to the compiled languages. Each step lifts one seam into a real
+run; none is "free wiring" — the owned engine is the work.
 
 ### 1.3 Cross-cutting language work (do once, benefits all)
 
@@ -131,36 +148,34 @@ language surface with shipped providers and zero new runtimes.
 
 ## 2. Tier robustness
 
-### 2.1 Firecracker completion (the `MicroVm` tier → live boot)
+### 2.1 The `MicroVm` tier (a fail-closed seam → an owned microVM engine)
 
-The provider's VM lifecycle is real (spawn the `firecracker` API process,
-per-handle keying, vsock UDS, teardown on drop). The named remaining work, in
-build order:
+The `MicroVm` tier is a **fail-closed seam** today (`TierNotServed`, provider
+label `dreggnet-microvm (seam)`): there is no engine behind it and it never fakes
+a run. The named work to build an owned Firecracker/microVM engine, in build
+order:
 
-1. **Image build → a committed boot asset.** Run the provider's
-   `image/build-image.sh` on a KVM host (the node-a / homelab checkout —
-   fast-forward it first), producing `vmlinux.bin` + `rootfs.ext4` + the
-   in-guest agent. Publish their paths via the existing
+1. **Image build → a committed boot asset.** Build `vmlinux.bin` +
+   `rootfs.ext4` + the in-guest agent on a KVM host (the persvati / homelab
+   checkout — fast-forward it first). Publish their paths via the existing
    `DREGGNET_FC_KERNEL` / `DREGGNET_FC_ROOTFS` env knobs. **M.** *Not
    default-green-safe to run in CI (needs `/dev/kvm`); safe to script + stage on
    the homelab. Autonomous on a KVM box, gated elsewhere.*
-2. **Guest-plane end-to-end.** Confirm the host→guest vsock + newline-JSON wire
-   drives `call` round-trip inside a booted VM (the same wire the native tiers
-   speak). The provider's `call` already reaches the agent over vsock; the gap
-   is an exercised live boot. **M**, depends on (1). *Autonomous on a KVM host.*
-3. **Jailer-as-standard.** `FirecrackerProvider::with_jailer` exists (cgroup +
-   namespaces + chroot + privilege-drop). Make jailer the **default** launch
-   path for production hosts via a `microvm_config` knob
-   (`DREGGNET_FC_JAILER=1` → `with_jailer`), defaulting on where the jailer
-   binary + root-then-drop are available. **S**, depends on (1). *Safe-autonomous
-   (config + plumbing).*
-4. **`EnforcementLevel::FullVm`.** Today the provider reports `Container` because
-   the core enum lacks a VM rung, so `MicroVm`'s floor is `Container` — weaker
-   than the hardware boundary actually delivered. Add `FullVm` to
-   `polyana_core::EnforcementLevel` (strongest), make the firecracker provider
-   report it, and raise `cap_tier_enforcement(MicroVm)` to `FullVm`. **M** (it is
-   a shared-enum edit in polyana core → ripples to the ordering tests; do it in a
-   quiet window). *Polyana-core edit — coordinate; not a casual parallel edit.*
+2. **Guest-plane end-to-end.** Build + confirm the host→guest vsock +
+   newline-JSON wire drives `call` round-trip inside a booted VM (the same wire
+   the native tiers will speak). **M**, depends on (1). *Autonomous on a KVM
+   host.*
+3. **Jailer-as-standard.** A `with_jailer` launch path (cgroup + namespaces +
+   chroot + privilege-drop) as the **default** for production hosts via a
+   `microvm_config` knob (`DREGGNET_FC_JAILER=1`), defaulting on where the jailer
+   binary + root-then-drop are available. **S**, depends on (1).
+   *Safe-autonomous (config + plumbing).*
+4. **`EnforcementLevel::FullVm`.** The core enum lacks a VM rung, so `MicroVm`'s
+   floor would be `Container` — weaker than the hardware boundary a VM delivers.
+   Add `FullVm` to the exec `EnforcementLevel` (strongest), have the owned
+   microVM engine report it, and raise `cap_tier_enforcement(MicroVm)` to
+   `FullVm`. **M** (a shared-enum edit → ripples to the ordering tests; do it in
+   a quiet window). *Coordinate; not a casual parallel edit.*
 
 ### 2.2 Real per-tenant isolation (replace the single static `TENANT`)
 
@@ -169,7 +184,7 @@ filesystem + cage all key to a single tenant — no per-tenant partition.
 
 - **Thread the lessee through as the tenant.** The bridge already holds the
   lease's `lessee`; derive `tenant_id` from it (`CapabilityScope::actor(tenant,
-  actor)` is the polyana-side shape) and pass it down through `run_workload_*`
+  actor)` is the engine-side shape) and pass it down through `run_workload_*`
   instead of the constant. **M.** Touches the `run_workload` signatures (shared
   file) → main-loop-serialized; the per-provider plumbing is already there
   (`instantiate_with_caps(component, caps, tenant_id)`). *Coordinated, not
@@ -189,10 +204,10 @@ wall_secs, fs_bytes, fd_count }` carried from the lease and enforced per tier:
 
 - **wasmtime:** fuel (already) + a memory-pages cap + epoch-based wall bound. **S.**
 - **native tiers (python/node/php/…):** `setrlimit` (RLIMIT_AS, RLIMIT_CPU,
-  RLIMIT_NOFILE, RLIMIT_FSIZE) in the provider's `pre_exec`, plus the existing
-  kill-on-timeout. The providers already do `pre_exec` for seccomp/Landlock — add
-  rlimits in the same hook. **M** (a polyana-provider edit, mirrored across the
-  interpreter family). *Polyana edit; coordinate.*
+  RLIMIT_NOFILE, RLIMIT_FSIZE) in the owned engine's `pre_exec`, plus the
+  existing kill-on-timeout. The owned native engines do `pre_exec` for
+  seccomp/Landlock — add rlimits in the same hook. **M** (an owned-engine edit,
+  mirrored across the interpreter family). *Owned-engine edit; coordinate.*
 - **firecracker:** VM `machine-config` (vcpu_count, mem_size_mib) from the limits,
   plus jailer cgroup caps. **S**, depends on §2.1. *Safe-autonomous.*
 
@@ -202,8 +217,9 @@ tier's enforcement.
 
 ### 2.4 The cap → sandbox-resource translation (`enforce_capabilities` is a no-op)
 
-This is the load-bearing one. `firecracker-provider::enforce_capabilities`
-accepts any cap set and does nothing; the mapping is named in its own docstring:
+This is the load-bearing one. The (future) microVM engine's
+`enforce_capabilities` accepts any cap set and does nothing; the intended mapping
+is:
 
 ```
 Capability::Network    → tap device + MMDS routing  (allowlisted egress)
@@ -223,8 +239,8 @@ boot, cannot mutate after) rather than post-hoc `enforce_capabilities`:
   invoke. **S**, but co-designed with §3.
 
 **Dependency:** §2.4 sits under §3 (the host-API is a vsock service the cap set
-gates) and under §2.1 (needs a live boot to test). **M–L total.** *Polyana
-firecracker-provider edit; coordinate, but high-value — do it early.*
+gates) and under §2.1 (needs a live boot to test). **M–L total.** *Owned microVM
+engine edit; coordinate, but high-value — do it early.*
 
 ---
 
@@ -275,7 +291,7 @@ frames as today. For firecracker the identical frames ride vsock — the
 ### 3.3 Cap-threading
 
 The lease's `CapBundle` is the guest's **ambient authority**, delivered at spawn
-via the existing `POLYANA_CAPS_JSON` / `instantiate_with_caps` path. Every
+via the owned engine's caps-passing env / `instantiate_with_caps` path. Every
 host-call **attenuates from it**: the broker runs the requested effect set
 through `gate_effect_set(held = lease bundle, requested)` (the dregg-bridge
 surface already re-exports `gate_effect_set` / `gate_auth` / `CapBundle`). A
@@ -301,11 +317,10 @@ receipt chain** (`previous_receipt_hash`). The result: a workload's whole run is
 verifiable chain of *who-called-what-service / moved-what-value / wrote-which-cell*
 — a re-witnessable audit of the agent's transactions, not just a function return.
 
-> **License gate:** the receipting/gate surface lives behind the
-> `dregg-verify` feature in `polyana-dregg-bridge` (AGPL-isolated). DreggNet is
-> already AGPL, so this is fine on the DreggNet side — but the broker that calls
-> it must keep the feature gate explicit so a default polyana build stays
-> Apache-pure.
+> **Feature gate:** the receipting/gate surface lives behind the `dregg-verify`
+> feature in the dregg bridge (AGPL-isolated). DreggNet is already AGPL, so this
+> is fine on the DreggNet side; the broker that calls it keeps the feature gate
+> explicit so a build that doesn't need the verified-receipt surface stays lean.
 
 **Build order for §3:** the wire (§3.1, **M**, safe-autonomous, additive frame on
 the native tiers) → `invoke` (§3.2.1) + cap-threading (§3.3) + metering (§3.4) +
@@ -329,18 +344,19 @@ ProviderDelta` chunks (ADR-0013), with `supports_streaming()` and a
   single `Final` delta where not. **M.**
 - **Provider `call_stream` impls** for the native tiers: the guest emits
   `{"stream":<n>,"chunk":...}` frames on the wire (a natural extension of §3.1),
-  terminated by `{"stream":<n>,"final":...}`. **M** per tier; firecracker rides
-  the same frames over vsock (its `call_stream` slot is noted slice-3). *Polyana
-  edits; coordinate.*
+  terminated by `{"stream":<n>,"final":...}`. **M** per tier; the (future) microVM
+  engine rides the same frames over vsock (its `call_stream` slot is unbuilt).
+  *Owned-engine edits; coordinate.*
 - **SSE/webapp surface:** the webapp router streams deltas to the client; pairs
   with the pub/sub service (SERVICES #3). **M**, depends on the above.
 
 ### 4.2 Long-running workloads (the durable layer)
 
-`polyana-long-lived-guest` (ADR-0099) is the persistent-guest primitive:
+The owned long-lived-guest primitive (ADR-0099) is the persistent-guest shape:
 spawn / health / quiesce / teardown / respawn, with a `CapBundleEnv` carried at
-spawn and a `cap_hash` proving the bundle survives respawn. Pair it with
-`dreggnet-durable`:
+spawn and a `cap_hash` proving the bundle survives respawn. It is part of the
+owned-engine build (a fail-closed seam until the native engines land). Pair it
+with `dreggnet-durable`:
 
 - **A long workload = a durable workflow** whose steps each drive a long-lived
   guest; the meter ticks per period; an over-budget tick **lapses → reaps** the
@@ -442,21 +458,23 @@ files only in serialized quiet-window passes:
 
 ### The coordinate-with-a-human (or KVM-host) batch
 
-- **Firecracker live boot, jailer-default, `FullVm`** (§2.1) — needs `/dev/kvm`
-  (the node-a/homelab checkout, fast-forwarded). Autonomous *on* a KVM box;
-  the `FullVm` core-enum edit is a shared-polyana-enum change → quiet window.
+- **The owned microVM engine live boot, jailer-default, `FullVm`** (§2.1) —
+  needs `/dev/kvm` (the persvati/homelab checkout, fast-forwarded). Autonomous
+  *on* a KVM box; the `FullVm` core-enum edit is a shared-enum change → quiet
+  window.
 - **The tenant thread + fs partition** (§2.2) — changes `run_workload_*`
   signatures (shared file) and the bridge; main-loop-serialized.
-- **The cap→sandbox-resource translation** (§2.4) and **rlimits in the
-  interpreter providers** (§2.3) — polyana-provider edits mirrored across the
-  family; high value, do early, but coordinate the shared edits.
+- **The cap→sandbox-resource translation** (§2.4) and **rlimits in the owned
+  interpreter engines** (§2.3) — owned-engine edits mirrored across the family;
+  high value, do early, but coordinate the shared edits.
 - **`transfer` / `subturn`** (§3.2.3–4) and **the long-running durable layer**
   (§4.2) — value-movement + new exec surfaces; land after the keystone proves out.
 
 ### The one-line through-line
 
-Wire the languages polyana already ships, make the strong tier (firecracker)
-boot for real with real per-tenant + per-resource cap translation, and — the
+Build the owned engines for each language, make the strong tier (the owned
+microVM engine) boot for real with real per-tenant + per-resource cap
+translation, and — the
 distinctive part — give the guest a cap-bounded, metered, receipted host-API so a
 DreggNet workload *transacts* instead of merely *computes*. Streaming, long-running,
 and stateful all fall out of that one host-API spine; the benchmarks price it.

@@ -1,4 +1,4 @@
-//! `agent_toolkit` — the cloud's polyana wiring over the open-source toolkit.
+//! `agent_toolkit` — the cloud's owned compute wiring over the open-source toolkit.
 //!
 //! The agent toolkit itself — the [`Toolkit`] registry, the cap-gated / metered /
 //! receipted tool dispatch, the witness binding, the health probe, the receipt-log
@@ -8,7 +8,7 @@
 //! **injected runner** ([`dregg_agent::toolkit::RunFn`]).
 //!
 //! This module re-exports that open toolkit and adds the DreggNet-side compute
-//! wiring: [`PolyanaToolkit`] injects the real polyana sandbox engine
+//! wiring: [`SandboxToolkit`] injects the OWNED wasmi sandbox engine
 //! ([`crate::run_workload`]) as the toolkit's `run_tests` / `run_workload` runner,
 //! and [`rewitness_run_tests`] rides the same engine for the Layer-3 re-witness.
 //! The open core owns the witness; the cloud owns the engine — one agent runtime,
@@ -16,24 +16,21 @@
 
 pub use dregg_agent::toolkit::*;
 
-#[cfg(feature = "polyana")]
 use dregg_agent::agent::{ReWitness, WitnessedRun};
 // `RunReport` and `Toolkit` come in via the `pub use dregg_agent::toolkit::*`
 // glob above (re-stating them in a private `use` would shadow that re-export).
 
-/// Map a polyana [`crate::Output`] to the open toolkit's [`RunReport`].
-#[cfg(feature = "polyana")]
+/// Map an [`crate::Output`] to the open toolkit's [`RunReport`].
 fn report_of(out: crate::Output) -> RunReport {
     RunReport::new(out.values, out.enforcement)
 }
 
-/// The cloud's polyana compute wiring over the open [`Toolkit`]. Injects the real
-/// [`crate::run_workload`] sandbox engine as the toolkit's run_tests / run_workload
-/// runner, so the witnessed binding (computed in the open core) ties to a genuine
-/// sandboxed execution at `tier`.
-#[cfg(feature = "polyana")]
-pub trait PolyanaToolkit: Sized {
-    /// Wire a **run_tests** tool whose runner is the polyana sandbox at `tier`.
+/// The cloud's owned compute wiring over the open [`Toolkit`]. Injects the owned
+/// [`crate::run_workload`] wasmi sandbox engine as the toolkit's run_tests /
+/// run_workload runner, so the witnessed binding (computed in the open core) ties
+/// to a genuine sandboxed execution at `tier`.
+pub trait SandboxToolkit: Sized {
+    /// Wire a **run_tests** tool whose runner is the owned sandbox at `tier`.
     fn with_run_tests_in(
         self,
         name: impl Into<String>,
@@ -42,7 +39,7 @@ pub trait PolyanaToolkit: Sized {
         tier: crate::CapTier,
     ) -> Toolkit;
 
-    /// Wire a **run_workload** tool whose runner is the polyana sandbox at `tier`.
+    /// Wire a **run_workload** tool whose runner is the owned sandbox at `tier`.
     fn with_run_workload_in(
         self,
         name: impl Into<String>,
@@ -52,8 +49,7 @@ pub trait PolyanaToolkit: Sized {
     ) -> Toolkit;
 }
 
-#[cfg(feature = "polyana")]
-impl PolyanaToolkit for Toolkit {
+impl SandboxToolkit for Toolkit {
     fn with_run_tests_in(
         self,
         name: impl Into<String>,
@@ -83,13 +79,12 @@ impl PolyanaToolkit for Toolkit {
     }
 }
 
-/// The **re-witness oracle** for a `run_tests` binding, riding the polyana engine:
+/// The **re-witness oracle** for a `run_tests` binding, riding the owned engine:
 /// re-execute `source` (the code the binding's `code_root` commits to) at `tier`
 /// and reproduce its `(exit, output_digest)`. Handed to
 /// [`dregg_agent::agent::verify_witnessed_qa`] as the `rerun` closure. Returns
 /// `None` (fail-closed) when `source` does not match the binding's `code_root` or
 /// the workload could not be executed.
-#[cfg(feature = "polyana")]
 pub fn rewitness_run_tests(
     lang: &str,
     source: &str,
@@ -103,7 +98,7 @@ pub fn rewitness_run_tests(
     })
 }
 
-#[cfg(all(test, feature = "polyana"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use dregg_agent::agent::{
@@ -111,7 +106,7 @@ mod tests {
     };
 
     /// A core-module WAT that exports `run` returning the i32 `n` — a suite
-    /// reporting `n` failures (0 = green), executed by the REAL polyana engine.
+    /// reporting `n` failures (0 = green), executed by the OWNED wasmi engine.
     fn wat_returning(n: i32) -> String {
         format!("(module (func (export \"run\") (result i32) (i32.const {n})))")
     }
@@ -123,14 +118,14 @@ mod tests {
         s
     }
 
-    /// The polyana wrapper genuinely runs a wat suite in the sandbox, binds the
+    /// The owned wrapper genuinely runs a wat suite in the sandbox, binds the
     /// witness, and the whole run re-witnesses — proving the cloud's engine wiring
     /// over the open toolkit.
     #[test]
-    fn polyana_run_tests_binds_a_real_sandboxed_execution() {
+    fn run_tests_binds_a_real_sandboxed_execution() {
         let cloud = AgentCloud::from_seed([60u8; 32]);
         let handle = cloud
-            .deploy(&spec("agent:polyqa", 10, &["run_tests"]))
+            .deploy(&spec("agent:sbxqa", 10, &["run_tests"]))
             .unwrap();
         let src = wat_returning(0);
         let deployed_root = code_root(&src);
@@ -149,11 +144,11 @@ mod tests {
         let report = cloud.run_with_toolkit(&handle, &mut PlannedBrain::new(plan), &toolkit);
         verify_agent_run(&report).expect("the chain + bound re-witness");
 
-        // Layer 3: re-run the bound on the real engine — it reproduces the result.
+        // Layer 3: re-run the bound on the owned engine — it reproduces the result.
         let v = verify_witnessed_qa(&report, &deployed_root, |w| {
             rewitness_run_tests("wat", &src, crate::CapTier::Sandboxed, w)
         })
-        .expect("the witnessed execution re-witnesses on the real engine");
+        .expect("the witnessed execution re-witnesses on the owned engine");
         assert_eq!(v.passed, 1, "the suite really passed on re-execution");
     }
 }

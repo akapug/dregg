@@ -3,7 +3,7 @@
 //! These are deliberately small, server-independent value types: a [`WebRequest`]
 //! (method, path, parsed query, body) and a [`WebResponse`] (status, content-type,
 //! body). The [`Router`](crate::Router) maps one to the other by running the
-//! matched route's polyana handler. Keeping them independent of any HTTP server
+//! matched route's owned-sandbox handler. Keeping them independent of any HTTP server
 //! is what lets the same routing run under the portable `dreggnet-serve` binary
 //! (std TCP, cross-platform) *and* under the Linux-only `httpe` gateway.
 //!

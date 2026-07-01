@@ -11,7 +11,7 @@ prove the QA actually happened and was real — not just "the agent said so"?***
 (the agent-in-the-world thesis), `docs/RECEIPT-CONTRACT.md`,
 `docs/REPLENISHING-BUDGET.md`. The code lives in the open-source `dregg-agent`
 crate — `breadstuffs/dregg-agent/src/{agent,federation_qa,receipt,meter,budget}.rs`
-— re-exported and wired to the real polyana compute engine by DreggNet at
+— re-exported and wired to the real owned wasmi compute engine by DreggNet at
 `exec/src/agent_toolkit.rs`. Verify any file:line against HEAD before relying on
 it; this is a design doc, not a status board.*
 
@@ -160,11 +160,11 @@ the declared code and the fabricated result fails to reproduce.
 
 **Grounded in.** `dregg-agent/src/agent.rs` — `verify_witnessed_qa` (≈ line 764), the
 `WitnessedRun` struct (≈ line 287). The re-execution oracle is injected: DreggNet wires
-the real polyana sandbox engine as the runner (`exec/src/agent_toolkit.rs` —
+the real owned wasmi sandbox engine as the runner (`exec/src/agent_toolkit.rs` —
 `with_run_tests_in` / `rewitness_run_tests` riding `crate::run_workload`), so the bound
-ties to a genuine sandboxed execution at a compute tier. Tooth:
-`polyana_run_tests_binds_a_real_sandboxed_execution` (the real wat suite runs in the
-sandbox, the witness binds, the whole run re-witnesses).
+ties to a genuine sandboxed execution at the owned `Sandboxed` compute tier. Tooth:
+`run_tests_binds_a_real_sandboxed_execution` (the real wat suite runs in the owned
+wasmi sandbox, the witness binds, the whole run re-witnesses).
 
 **The honest limit — the one that forces L4.** The re-execution still runs in **the
 same compute substrate** that produced the original verdict. So L3 proves "*this
@@ -200,7 +200,7 @@ not dropped as noise. This is **operator-independent**: no single substrate is t
 - *No genuine agreement* — when no single result reaches the threshold (the operators
   truly disagree), the verdict is **not** attested (`NoQuorum`), refused fail-closed.
 
-**A bonus the topology buys for free.** `node-b-lean` and `node-b-rust` re-running the
+**A bonus the topology buys for free.** `snoopy-lean` and `snoopy-rust` re-running the
 same QA and agreeing carries the **rust↔lean differential** cross-check all the way
 down to the QA layer — two independent implementations of the executor agreeing on the
 result, not just two copies of one.
@@ -268,11 +268,11 @@ residual*:
 - **L1 + L2** are LIVE and proven (the receipt chain, the budget cell, the cap bundle —
   re-witnessed by `verify_agent_run`, teeth in `agent.rs`).
 - **L3** is LIVE on the local / single-substrate path (the witness binds a *real*
-  sandboxed execution via the polyana engine wiring; `verify_witnessed_qa` re-executes
+  sandboxed execution via the owned wasmi engine wiring; `verify_witnessed_qa` re-executes
   it). Its honest limit (operator-dependence) is stated, not hidden.
 - **L4** is BUILT and tested as the open-source `federation_qa` core (quorum attest +
   `verify_quorum_cert`, full teeth). Pointing it at the **live n=4 nodes** (`edge` ·
-  `node-a` · `node-b-lean` · `node-b-rust`) as a wired production path is a
+  `persvati` · `snoopy-lean` · `snoopy-rust`) as a wired production path is a
   *reviewed-go* — the mechanism exists; the live wiring is the go-live (§4).
 - **L5** is, and always will be, out of scope by category.
 
@@ -322,7 +322,7 @@ paper-green.
 core — the receipt chain, the budget/meter, the cap braid, the witnessed `run_tests`, and
 `federation_qa` — lives in the open-source `dregg-agent` crate, depending on nothing but
 the substrate and owning no compute engine (its compute tools take an *injected* runner;
-`dregg-agent/src/toolkit.rs`). DreggNet is a thin wrapper that injects the real polyana
+`dregg-agent/src/toolkit.rs`). DreggNet is a thin wrapper that injects the real owned wasmi
 engine (`exec/src/agent_toolkit.rs`). This matters for the claim: *anyone* can run the
 agent, *anyone* can be a federation operator, and *anyone* can `verify_quorum_cert`
 against a pinned operator set — the proof is not "trust dregg-cloud," it is "re-witness it

@@ -4,9 +4,9 @@
 //!
 //! 1. [`full_stack_lease_to_reap`] drives the layers **directly in one process** —
 //!    lease → `Scheduler::place` → `LocalProvider` provisions → the bridge fulfills →
-//!    the durable polyana workflow runs (`add(40,2)=42`, then `*2=84`) → the meter
+//!    the durable metered workflow runs (`add(40,2)=42`, then `*2=84`) → the meter
 //!    ticks (2 units) → the result is returned → the machine is reaped. This is the
-//!    layers-compose proof: every rung (control → bridge → durable → exec → polyana)
+//!    layers-compose proof: every rung (control → bridge → durable → exec → the owned sandbox)
 //!    is exercised in a single test.
 //!
 //! 2. [`cli_lease_run_status_flow`] drives the **`dregg-cloud` binary itself** against a
@@ -20,7 +20,7 @@ use dreggnet_control::{
     WorkloadState,
 };
 
-/// The whole stack in one test: lease → schedule → provision → fulfill (durable polyana
+/// The whole stack in one test: lease → schedule → provision → fulfill (durable the owned sandbox
 /// workflow) → meter → result → reap.
 #[tokio::test]
 async fn full_stack_lease_to_reap() {
@@ -31,15 +31,15 @@ async fn full_stack_lease_to_reap() {
     // The control plane over the in-process LocalProvider (the genuine run path).
     let scheduler = Scheduler::new(LocalProvider::new(), MachineSize::Small, "local");
 
-    // Place: provision a machine → fulfill the lease as a durable polyana workflow.
+    // Place: provision a machine → fulfill the lease as a durable metered workflow.
     let workload_id = scheduler.place(lease).await.expect("placed");
     let workload = scheduler.workload(&workload_id).expect("tracked");
 
-    // The durable workflow really ran on polyana, metered against the budget.
+    // The durable workflow really ran on the owned sandbox, metered against the budget.
     assert_eq!(workload.state, WorkloadState::Completed);
     let out = workload.output.clone().expect("workflow output");
-    assert_eq!(out.step1, "42", "step1 = add(40,2) on polyana");
-    assert_eq!(out.step2, "84", "step2 = step1 * 2 on polyana");
+    assert_eq!(out.step1, "42", "step1 = add(40,2) on the owned sandbox");
+    assert_eq!(out.step2, "84", "step2 = step1 * 2 on the owned sandbox");
     assert_eq!(out.meter_units, 2, "two metered steps at cost 1 each");
 
     // A machine was provisioned and is Running until reaped.

@@ -343,7 +343,7 @@ fn env_gateway() -> (MachineGateway, String) {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(8021);
-        let backend = ComputeBackend::node_a(overlay, port);
+        let backend = ComputeBackend::persvati(overlay, port);
         let desc = format!(
             "dispatch over the {} overlay to {} (a created machine RUNS a real metered workload there)",
             backend.backend(),

@@ -35,19 +35,22 @@ test `$DREGG` / DEC), what you *get back*.
 
 | Capability | The one thing you do | You pay | You get back |
 |---|---|---|---|
-| **Durable metered compute** | Open a funded execution-lease and run a workload on the polyana sandbox | metered DEC per step, capped by your budget | a durable checkpoint + a `TurnReceipt`; a run past your budget is refused by the executor, not trusted |
+| **Durable metered compute** | Open a funded execution-lease and run a workload on the owned wasmi sandbox | metered DEC per step, capped by your budget | a durable checkpoint + a `TurnReceipt`; a run past your budget is refused by the executor, not trusted |
 | **BYO-key Hermes** | Claim a channel and drive an agent loop through your own LLM key | metered DEC per call (rate + token budget) | the result + a receipt; an over-budget/over-rate call is refused in-band, naming the leg that bit |
 | **Agent coordination** | Post a service request / promise to the intent ring; pipeline your payment against their promise | the agreed price, settled atomically | one verified all-or-nothing settlement (per-asset Σδ=0); if either side fails, nothing moves |
-| **Minisite hosting** | Publish a directory of static files under a name | a cap-gated publish turn | the site served at `<name>.example.com`, plus a `PublishReceipt` proving who published what at which content root |
-| **Agent web APIs** | Declare HTTP routes bound to polyana handlers | metered DEC per request (1 unit/request when leased) | DreggNet routes each request to its handler, runs it on the sandbox, serves the response; an exhausted lease yields `402`, no work served |
-| **Verifiable receipts** | Open any cell card on `portal.example.com` | nothing (read-only) | the cell's committed history re-verified **in your own browser** by a wasm light client — don't trust, verify |
+| **Minisite hosting** | Publish a directory of static files under a name | a cap-gated publish turn | the site served at `<name>.dregg.works`, plus a `PublishReceipt` proving who published what at which content root |
+| **Agent web APIs** | Declare HTTP routes bound to owned-sandbox handlers | metered DEC per request (1 unit/request when leased) | DreggNet routes each request to its handler, runs it on the sandbox, serves the response; an exhausted lease yields `402`, no work served |
+| **Verifiable receipts** | Open any cell card on `portal.dregg.studio` | nothing (read-only) | the cell's committed history re-verified **in your own browser** by a wasm light client — don't trust, verify |
 
 Where each one lives, and the honest "what's real vs. a later rung" line:
 
 - **Durable metered compute** — `docs/COMPUTE-TIERS.md` (the cap-grade → sandbox
-  tier → polyana provider map: `Sandboxed`/`JitSandboxed` wasm are real on every
-  platform; `Caged` native/python/node real on Linux; `MicroVm` Firecracker is
-  wired, live boot hardware-gated) and the SDK `ExecutionLease`
+  tier → provider map: `Sandboxed` wasm is real on every platform via the owned,
+  vendored pure-Rust `wasmi` engine — the `add(40,2)=42` dogfood genuinely runs here;
+  every stronger tier — `JitSandboxed`/JIT, `Caged` native/python/node, `MicroVm`
+  Firecracker, `Gpu` — is an honest fail-closed seam today (`ExecError::NotWired` /
+  `TierNotServed`), never a fake run or silent downgrade; wiring an owned engine per
+  tier is future work) and the SDK `ExecutionLease`
   (`breadstuffs/docs/guide/AGENT-QUICKSTART.md` §3).
 - **BYO-key Hermes** — the Discord bot's per-user agent loop and the SDK
   `ToolGateway` (metered, rate-limited, charged invocation):
@@ -56,7 +59,7 @@ Where each one lives, and the honest "what's real vs. a later rung" line:
   `breadstuffs/docs/guide/SERVICE-ECONOMY-SDK.md` (the
   `dregg.intents.requestService` facade over `ServicePromiseExchange`).
 - **Minisite hosting** — `docs/WEB-HOSTING.md` (a site is a dregg cell; publish is
-  cap-gated + receipted; serve is read-only; the `example.com` Caddy/DNS wiring is
+  cap-gated + receipted; serve is read-only; the `dregg.works` Caddy/DNS wiring is
   the deploy lane's step).
 - **Agent web APIs** — `docs/AGENT-WEB-APPS.md` (the `dreggnet-webapp` `Router`,
   the portable `dreggnet-serve`, the leased `402`-on-exhaustion path).
@@ -207,7 +210,7 @@ site cell (cap-gated, receipted) and serve it (from this repo):
 ```sh
 cargo run -p dreggnet-webapp --bin dreggnet-host -- \
   --dir ./site --name blog --owner agent:me --port 8080
-curl -s -H 'Host: blog.example.com' http://localhost:8080/      # served by Host
+curl -s -H 'Host: blog.dregg.works' http://localhost:8080/      # served by Host
 curl -s http://localhost:8080/blog/                             # no-DNS local fallback
 ```
 
@@ -241,7 +244,7 @@ curl -s http://localhost:8421/api/receipts                 # the chain, newest f
 curl -N "http://localhost:8421/api/events/stream"          # live SSE feed of every receipt
 ```
 
-Then open it on the portal (`portal.example.com`, read-only v1) or, locally, the
+Then open it on the portal (`portal.dregg.studio`, read-only v1) or, locally, the
 explorer (`breadstuffs/QUICKSTART.md` §6) — the in-tab wasm light client
 re-verifies the cell's committed history against the network root. Don't trust the
 server; verify it.
@@ -269,7 +272,7 @@ binary's developer cloud verbs — `login` / `deploy` / `domains` / `run` / `ls`
 
 > Everything `dregg-cloud` records here is **local** (a `state.json` under the state
 > dir) — `ls` says so in its header. The content is published + served locally; the
-> public `<name>.example.com` edge is the gateway-mount step. Honest by design.
+> public `<name>.dregg.works` edge is the gateway-mount step. Honest by design.
 
 ```sh
 # Build the CLI (binary at target/debug/dregg-cloud).
@@ -288,13 +291,13 @@ dregg-cloud login --new
 #    + receipted, with the build commit folded into the cell's content_root.
 dregg-cloud deploy https://github.com/you/blog.git --name blog
 #   published locally (not yet served on the public edge):
-#     site  blog  (will serve at https://blog.example.com/)
+#     site  blog  (will serve at https://blog.dregg.works/)
 #     verify  the source-commitment manifest is at /.well-known/dregg-deploy.json
 
 # 2b. Serve that deploy LOCALLY over HTTP (a real round-trip you can curl):
 dregg-cloud deploy https://github.com/you/blog.git --name blog --serve --port 8080 &
-curl -s -H 'Host: blog.example.com' http://127.0.0.1:8080/        # your index.html
-curl -s -H 'Host: blog.example.com' http://127.0.0.1:8080/.well-known/dregg-deploy.json
+curl -s -H 'Host: blog.dregg.works' http://127.0.0.1:8080/        # your index.html
+curl -s -H 'Host: blog.dregg.works' http://127.0.0.1:8080/.well-known/dregg-deploy.json
 
 # 3. Bind a custom domain (cap-gated). `verify` proves control via LIVE DNS — it
 #    never trusts the value you pass, so it only goes green once you publish the TXT.
@@ -364,7 +367,7 @@ endpoints transition the record today) — `docs/RUN-LOCALLY.md` "What is live v
 deferred".
 
 The dynamic data plane (`dreggnet-serve` / the gateway's `WebAppHandler`) serves
-an agent's declared routes (`GET /hello`, `GET /add?a=&b=`, …) bound to polyana
+an agent's declared routes (`GET /hello`, `GET /add?a=&b=`, …) bound to owned-sandbox
 handlers — `docs/AGENT-WEB-APPS.md`. The static data plane (`dreggnet-host` / the
 gateway's `SiteHostHandler`) serves published site cells by `Host` —
 `docs/WEB-HOSTING.md`.

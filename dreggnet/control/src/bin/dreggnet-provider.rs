@@ -273,7 +273,7 @@ async fn run_demo_lease(
     match provider.run_lease(&machine, &lease, &instance).await {
         Ok(out) => {
             eprintln!(
-                "  workload completed on polyana: step1={} step2={} meter_units={}",
+                "  workload completed on the owned sandbox: step1={} step2={} meter_units={}",
                 out.step1, out.step2, out.meter_units
             );
         }

@@ -2,7 +2,7 @@
 //!
 //! The build is the one step that runs untrusted repo code, so it is **cap-bounded**:
 //!
-//! - [`BuildPlan::Compute`] runs a polyana program through [`dreggnet_exec::run_workload`] at
+//! - [`BuildPlan::Compute`] runs a wasm program through [`dreggnet_exec::run_workload`] at
 //!   a declared [`BuildTier`] — the genuinely sandboxed, exec-metered build (the literal
 //!   "build in the wasm/Caged tier"). This is the path proven in-process end-to-end.
 //! - [`BuildPlan::Command`] runs a build command (e.g. `npm run build`) as a wall-clock-

@@ -87,7 +87,7 @@ crate adopts the discipline without a heavy dependency. It provides:
 | `BindReceipt` | `DreggNet/dregg-domains/src/lib.rs` | **made real** — a bind IS a turn; a signed `DomainRegistry` seals each *successful* bind (a rejected bind never advances the chain). |
 | `BucketReceipt` / `PutReceipt` / `DeleteReceipt` | `DreggNet/storage/src/registry.rs` | **made real** — each bucket op IS a turn; `BucketRegistry::signed(..)` seals all three kinds into ONE shared chain. |
 | `DeployReceipt` | `DreggNet/dregg-deploy/src/workflow.rs` | **typed view** — a deploy IS a publish turn; `DeployReceipt.turn_receipt_hash` carries the underlying `PublishReceipt`'s hash, re-witnessable against the publish chain (no parallel "deploy receipt" notion). |
-| metering `Receipt`.`grant_chain` | `DreggNet/polyana/src/core/src/capability_spec.rs` | **the lie — removed.** The field was shaped, always `None`, never verified: a receipt declaring an attenuation lineage it never bound. Removed across the struct, the `persist` builder, the JSON schema + fixtures. Authority comes from the gate decision; the chained `TurnShadowReceipt` is polyana's re-witnessable receipt. |
+| metering `Receipt`.`grant_chain` | (removed with the external compute submodule; compute is now owned/in-crate) | **the lie — removed.** The field was shaped, always `None`, never verified: a receipt declaring an attenuation lineage it never bound. Removed across the struct, the `persist` builder, the JSON schema + fixtures. Authority comes from the gate decision; the chained `TurnShadowReceipt` is the owned sandbox's re-witnessable receipt. |
 
 `signed(..)` takes a 32-byte secret seed: a deployed host configures a persistent
 secret; the unsigned default (`new()`) leaves a bare projection — a *log*, honest
@@ -119,5 +119,5 @@ verified by the same `verify_chain`. The receipt is again the thing that lets us
   advance the chain; a tampered site fails.
 - `dregg-deploy`: a signed deploy's `DeployReceipt.turn_receipt_hash` equals the
   reconstructed publish turn-receipt hash (it is a genuine view).
-- `polyana`: the `grant_chain` lie is gone — struct, builder, schema, and fixtures;
-  `polyana-core` / `polyana-policy` conformance stays green.
+- owned compute: the `grant_chain` lie is gone — struct, builder, schema, and fixtures;
+  the owned sandbox conformance stays green.

@@ -27,7 +27,7 @@ control plane — nodes never expose a public port. One command per machine:
 curl -fsSL https://tailscale.com/install.sh | sh
 
 sudo tailscale up \
-  --login-server=https://headscale.dreggnet.example.com \
+  --login-server=https://headscale.dreggnet.fg-goose.online \
   --authkey=<fresh reusable preauth key — see MESH.md> \
   --hostname=<node-name> \
   --accept-routes=false
@@ -36,7 +36,7 @@ sudo tailscale up \
 Confirm the control plane is up:
 
 ```sh
-curl -s https://headscale.dreggnet.example.com/health   # {"status":"pass"}
+curl -s https://headscale.dreggnet.fg-goose.online/health   # {"status":"pass"}
 ```
 
 Once `tailscale up` returns you're on the overlay — the edge can reach you, no
@@ -45,7 +45,7 @@ e.g. `100.64.0.x`).
 
 > ⚠ **One control server at a time.** `tailscaled` supports a single control
 > server, so joining headscale **replaces** any membership in the public Tailscale
-> tailnet on that box (this bit node-a — its old public-tailnet address went
+> tailnet on that box (this bit persvati — its old public-tailnet address went
 > away). That's required (edge + your box must share ONE mesh), but anything that
 > reached your box on the public tailnet must now use the headscale overlay.
 
@@ -86,15 +86,15 @@ Full deploy mechanics (the compose unit, the `9420/udp` gotcha): NODE-OPS.md.
 ### Compute backend (fast, no-Lean build)
 
 This **scales with load** — cores + RAM in proportion to the workloads you take.
-It does **not** need the Lean kernel (it runs metered polyana workloads + STARK
-proving, not the verified node). Run the `node-agent` pattern as a systemd
+It does **not** need the Lean kernel (it runs metered owned-sandbox workloads + STARK
+proving, not the verified node). Run the `persvati-agent` pattern as a systemd
 service bound to `0.0.0.0:8021`:
 
 ```sh
-# (build natively: cargo build --release -p dreggnet-node-agent)
-sudo cp deploy/node-agent/node-agent.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now node-agent.service
-journalctl -u node-agent.service -f
+# (build natively: cargo build --release -p dreggnet-persvati-agent)
+sudo cp deploy/persvati-agent/persvati-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now persvati-agent.service
+journalctl -u persvati-agent.service -f
 
 # smoke test the /fulfill contract:
 curl -s -X POST http://127.0.0.1:8021/fulfill -d '{}'
@@ -102,7 +102,7 @@ curl -s -X POST http://127.0.0.1:8021/fulfill -d '{}'
 ```
 
 Dispatch reaches it as: **edge gateway → overlay → `POST <overlay-ip>:8021/fulfill`**.
-Full backend detail: `deploy/COMPUTE-BACKEND.md`, `deploy/COMPUTE-OFFERING.md`.
+Full backend detail: `deploy/PERSVATI-BACKEND.md`, `deploy/COMPUTE-OFFERING.md`.
 
 ## 4. The reciprocal ssh-key exchange
 
@@ -119,7 +119,7 @@ cat >> ~/.ssh/authorized_keys < their-key.pub
 ```
 
 The edge's own key is `~/.ssh/dreggnet-staging.pem` (the operator reaches the edge
-as `ubuntu@<EDGE_HOST>`); reaching your box happens over the overlay address,
+as `ubuntu@34.224.208.52`); reaching your box happens over the overlay address,
 not a public IP. Keep this to keys you trust — these boxes are independently
 operated on purpose (that independence is the security property, FEDERATION.md).
 

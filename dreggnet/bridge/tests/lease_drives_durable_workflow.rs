@@ -1,13 +1,13 @@
-//! The keystone proof: a funded dregg execution-lease drives a durable polyana
+//! The keystone proof: a funded dregg execution-lease drives a durable metered
 //! workflow end to end, metered against the lease budget, exactly-once across a
 //! crash.
 //!
-//! This composes rung 2 (real polyana execution) + the durable layer (exactly-once
+//! This composes rung 2 (real owned-wasmi execution) + the durable layer (exactly-once
 //! crash-resume) + the lease gate (this rung) into one weld:
 //!
-//!   1. A FUNDED lease (budget 100, 1 unit/step) drives a 2-step polyana workflow:
-//!        step1 = polyana `add(40,2)` → "42"  (then metered: 1 unit)
-//!        step2 = polyana `42 * 2`    → "84"  (then metered: 2 units total)
+//!   1. A FUNDED lease (budget 100, 1 unit/step) drives a 2-step metered workflow:
+//!        step1 = `add(40,2)` → "42"  (then metered: 1 unit)
+//!        step2 = `42 * 2`    → "84"  (then metered: 2 units total)
 //!      end to end, within budget.
 //!   2. An OVER-BUDGET lease (budget 1, 1 unit/step) FAILS: step1's tick fits
 //!      (total 1), step2's tick lapses (total 2 > 1) → the workflow fails and
@@ -29,34 +29,34 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::Runtime;
 use duroxide::{Client, OrchestrationStatus};
 
-/// 1. A funded lease drives the durable 2-step polyana workflow end to end, the
+/// 1. A funded lease drives the durable 2-step metered workflow end to end, the
 ///    meter ticks once per step, total within budget.
 #[tokio::test]
 async fn funded_lease_drives_durable_two_step_workflow_within_budget() {
     let lease = Lease::funded("agent-fulfill", CapGrade::Sandboxed, "USD-test", 100, 1);
     assert!(lease.is_active());
 
-    // The lease's cap-grade picks the polyana tier the workload runs at.
+    // The lease's cap-grade picks the tier the workload runs at.
     let binding = lease.tier_binding();
-    assert_eq!(binding.provider, "polyana-wasmi-provider");
+    assert_eq!(binding.provider, "dreggnet-wasmi");
 
     let out: WorkflowOutput = fulfill(&lease, "bridge-e2e-1")
         .await
         .expect("funded lease should fulfill end to end");
 
-    // The values were computed ON POLYANA, across the durable workflow.
-    assert_eq!(out.step1, "42", "step1 = polyana add(40,2)");
-    assert_eq!(out.step2, "84", "step2 = polyana 42*2");
+    // The values were computed ON THE OWNED SANDBOX, across the durable workflow.
+    assert_eq!(out.step1, "42", "step1 = add(40,2)");
+    assert_eq!(out.step2, "84", "step2 = 42*2");
     // The meter charged exactly twice against the lease budget (1 unit/step).
     assert_eq!(out.meter_units, 2, "two metered steps, within budget 100");
 
-    // Each step's polyana work ran exactly once.
+    // Each step ran exactly once.
     assert_eq!(metrics::run_calls("bridge-e2e-1", "step1"), 1);
     assert_eq!(metrics::run_calls("bridge-e2e-1", "step2"), 1);
 }
 
 /// 1b. A funded lease runs a CALLER-DECLARED workload (the `run --source` path):
-///     the program the caller actually wrote runs on polyana, not the fixed demo.
+///     the program the caller actually wrote runs on the owned sandbox, not the fixed demo.
 #[tokio::test]
 async fn funded_lease_runs_a_caller_declared_workload() {
     let lease = Lease::funded("agent-source", CapGrade::Sandboxed, "USD-test", 100, 1);
@@ -237,7 +237,7 @@ async fn funded_lease_workflow_resumes_exactly_once_within_budget_across_a_crash
         };
         let out: WorkflowOutput = serde_json::from_str(&output).unwrap();
 
-        // Right values, on polyana, across the crash, within the lease budget.
+        // Right values, on the owned sandbox, across the crash, within the lease budget.
         assert_eq!(out.step1, "42");
         assert_eq!(out.step2, "84");
         assert_eq!(out.meter_units, 2, "two metered steps, within budget 100");

@@ -17,7 +17,7 @@ resource is a first-class dregg object, not reimplemented infrastructure.***
 
 ## 0 · The correction — resources, not infrastructure
 
-The swarm built a competent generic cloud: polyana sandbox tiers, a WireGuard mesh, an
+The swarm built a competent generic cloud: an owned wasmi sandbox tier, a WireGuard mesh, an
 object store, a metering pipeline, invoices. It is real and it works on the local path.
 But it is built the way *every* cloud is built — machines, registries, and a mesh as
 **in-memory generic state with dregg cap-gates bolted on top** (`storage/src/registry.rs`
@@ -91,9 +91,10 @@ authorization seam: the **execution-lease** (`sdk/src/service_economy.rs:305`,
 `FieldLte{step ≤ max_steps} ∧ Monotonic{step}` (`service_economy.rs:267`) the executor
 binds into every committed transition — a rewind to forge head-room is *refused on the
 verified commit path*, not by a watchdog. The DreggNet `bridge` crate maps a funded lease's
-`CapGrade` → a polyana `CapTier` and runs the workload on real sandboxes
-(`bridge/src/lib.rs`): wasmi → wasmtime+fuel → seccomp+Landlock `Caged` → Firecracker
-`MicroVm` → GPU passthrough, refusing any silent downgrade (`exec/src/lib.rs`). Metering is
+`CapGrade` → a `CapTier` and runs the `Sandboxed` tier on the owned wasmi sandbox
+(`bridge/src/lib.rs`); the stronger tiers — JIT → `Caged` → `MicroVm`/Firecracker → GPU
+passthrough — are honest fail-closed seams today, refusing any silent downgrade
+(`exec/src/lib.rs`). Metering is
 a **conserving `Transfer`** with exactly-once durable settlement (`durable/`,
 `control/src/settle_ledger.rs`), so a crash resumes *within the same budget* and never
 double-charges.
@@ -115,8 +116,9 @@ object, and multi-tenant fairness is literally the attenuation tree.
 > holding one root that both forks descend from the same authorized image within the same
 > conserved budget — re-executing nothing.
 
-**REACHABLE-FROM-HEAD:** lease → cap-tier → polyana with conserving metered settlement is
-wired and runs (`bridge/`, `exec/`, `durable/`). Snapshot/fork/time-travel exist as umem
+**REACHABLE-FROM-HEAD:** lease → cap-tier → the owned wasmi sandbox with conserving metered
+settlement is wired and runs (the `Sandboxed` tier genuinely executes; stronger tiers are
+fail-closed seams today) (`bridge/`, `exec/`, `durable/`). Snapshot/fork/time-travel exist as umem
 primitives in breadstuffs (`umem_time_travel.rs`, `continuation.rs`). The PoC is welding
 them: a workload-cell whose checkpoint is a umem boundary, forked by `SpawnWithDelegation`.
 
@@ -317,8 +319,9 @@ The whole point is that these are not abstractions floating free — they **rede
 infrastructure.** dregg reaches the world at four seams, each already partly built:
 
 - **Real compute.** The `bridge` crate is the funded-lease → real-sandbox weld
-  (`bridge/src/lib.rs`): a dregg cap-grade authorizes a polyana cap-tier, the workload genuinely
-  runs (wasmi/wasmtime/seccomp/Firecracker/GPU), and the meter charges a conserving `Transfer`.
+  (`bridge/src/lib.rs`): a dregg cap-grade authorizes a cap-tier, the workload genuinely
+  runs on the owned wasmi `Sandboxed` tier (the stronger tiers — JIT/`Caged`/`MicroVm`/GPU —
+  are fail-closed seams today), and the meter charges a conserving `Transfer`.
   The authorization is dregg; the silicon is real; the settlement is proven. *This is the
   template for every resource:* a dregg token redeemed against a metered real backend with
   exactly-once durable accounting.
@@ -398,8 +401,8 @@ objects, extended into the real world.
 
 **Reachable from HEAD (the weld, not new crypto):**
 
-- Compute-as-leased-cell with conserving metered settlement on real polyana tiers (`bridge/`,
-  `exec/`, `durable/`) — *live on the local path.*
+- Compute-as-leased-cell with conserving metered settlement on the owned wasmi Sandboxed tier
+  (`bridge/`, `exec/`, `durable/`) — *live on the local path; stronger tiers are fail-closed seams.*
 - Snapshot/fork/time-travel/continuation as umem primitives (breadstuffs) — *built, to be
   welded onto the workload-cell.*
 - Storage-as-umem-cell with verified GET / cap-gated PUT (`storage/`) — *live; FNV→umem-root

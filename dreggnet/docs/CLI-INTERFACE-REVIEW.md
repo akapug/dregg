@@ -75,8 +75,8 @@ genuinely nice differentiators.
   with the `Host:` header and the no-DNS path-prefix fallback — `main.rs:2345`).
 
 **`run` / `run --source`** (`cmd_run`, `main.rs:2048`) — **The weakest verb's UX.**
-The plumbing is real (the declared WAT threads into a durable polyana workflow,
-the wasmi steps run, the meter charges). But:
+The plumbing is real (the declared WAT threads into a durable metered workflow,
+the owned wasmi sandbox steps run, the meter charges). But:
 - **Rough (judge-hits-it):** with a WAT exporting `main` instead of `run`, the run
   produces `state reaped` + `(no output — the lease lapsed and the machine was
   reaped)` (`main.rs:2129`). That message blames the **lease/budget**. The actual
@@ -233,7 +233,7 @@ call pointed at a node") but the framing oversells the cloud connection.
   calls it.** The control-plane→gateway wire that would let a client open a lease
   on a remote node is not connected to any client.
 - The only "live" endpoints a user can point at are read-only and external to the
-  CLI: `portal.example.com` (a wasm light client, browser) and the Discord bot
+  CLI: `portal.dregg.studio` (a wasm light client, browser) and the Discord bot
   (token-gated). Neither is the CLI/SDK "interface with the cloud."
 
 So the honest current shape: **the CLI is a faithful local simulation of the cloud

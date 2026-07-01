@@ -44,7 +44,7 @@ if [ -z "$BIN" ]; then
   done
 fi
 if [ -z "$BIN" ]; then
-  note "building dreggnet-crash-resume (first build compiles polyana — heavy)…"
+  note "building dreggnet-crash-resume (first build compiles the workspace)…"
   ( cd "$ROOT" && cargo build -p dreggnet-cli --bin dreggnet-crash-resume >/dev/null 2>&1 ) \
     && BIN="$ROOT/target/debug/dreggnet-crash-resume"
 fi

@@ -34,7 +34,7 @@
 //! - **Mesh-wired:** [`run_lease`](VmProvider::run_lease) reaches the instance over the
 //!   secure plane ([`crate::mesh`]). A real fleet is built with [`Ec2Provider::for_fleet`],
 //!   which attaches the **real overlay mesh** ([`crate::TailscaleMesh`], the proven
-//!   edge→node-a `:8021/fulfill` path) as the configured default; `Ec2Provider::new`
+//!   edge→persvati `:8021/fulfill` path) as the configured default; `Ec2Provider::new`
 //!   stays mesh-less so unit tests attach a [`crate::StubMesh`] explicitly. With a mesh
 //!   and the worker's mesh identity registered ([`Ec2Provider::register_mesh_node`]) it
 //!   establishes a [`MeshLink`](crate::MeshLink), health-checks the node, and dispatches
@@ -109,11 +109,11 @@ impl AwsCli for SystemAwsCli {
 }
 
 /// Configuration for the AWS EC2 provider: the AMI to boot (a DreggNet worker image
-/// carrying the bridge + polyana) and a tag used to scope `list`/reaping to machines
+/// carrying the bridge + the owned sandbox) and a tag used to scope `list`/reaping to machines
 /// this control plane owns.
 #[derive(Clone)]
 pub struct Ec2Provider {
-    /// The AMI id the worker image is published as (the DreggNet bridge+polyana image).
+    /// The AMI id the worker image is published as (the DreggNet bridge+the owned sandbox image).
     pub ami_id: String,
     /// The tag key/value stamped on every instance this provider rents, so `list`
     /// only returns machines this control plane owns.
@@ -172,7 +172,7 @@ impl Ec2Provider {
 
     /// Build an EC2 provider for a **real fleet**: the AMI/owner, an optional
     /// security group, and the real overlay mesh ([`crate::TailscaleMesh`], the
-    /// proven edge→node-a `:8021/fulfill` path) attached as the dispatch plane.
+    /// proven edge→persvati `:8021/fulfill` path) attached as the dispatch plane.
     /// This is the configured default a real fleet runs with — [`Ec2Provider::new`]
     /// stays mesh-less so unit tests attach a [`crate::StubMesh`] explicitly.
     pub fn for_fleet(

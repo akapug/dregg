@@ -71,7 +71,7 @@ There is **no rotation, no recovery, no revocation path anywhere in DreggNet**: 
 grep for `next_keys_digest`/`KeyRotationGate`/`pre-rotation`/`social.recovery`/
 `guardian`/`rotate` over the Rust tree returns nothing (the only `revoke` hit is a pun
 in `org/src/cap.rs:173`). DreggNet does **not** depend on the substrate's identity
-crates — only `demo/stripe-receiver`, an optional `polyana` feature, and an optional
+crates — only `demo/stripe-receiver`, the optional owned-compute lane, and an optional
 `durable` pg-backend reach into breadstuffs at all; `webauth` is a self-contained
 port (`webauth/Cargo.toml:7-13`). So the substrate's rotation machinery is not merely
 unwired — it is firewalled out of the default closure by design.
@@ -253,7 +253,7 @@ which collides with `webauth`'s deliberate "offline + AGPL-free default closure"
 discipline (`webauth/Cargo.toml:7-13`). The natural resolution: run the
 rotation/recovery turns in the **control plane / a dregg-backed issuer service** (which
 *may* take the AGPL dregg dependency, like `demo/stripe-receiver` and the optional
-`polyana`/`durable` lanes already do), while the offline forward-auth verifier stays a
+owned-compute/`durable` lanes already do), while the offline forward-auth verifier stays a
 pure credential checker — it just verifies `dga1_` *sessions* whose issuing key is now
 a rotatable identity cell instead of a static root. The proofs, the executor gate, and
 the e2e tests already exist; the build is the *binding*, not the mechanism.

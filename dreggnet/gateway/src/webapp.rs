@@ -3,14 +3,14 @@
 //! This is the gateway-side adoption of [`dreggnet_webapp`]: where
 //! [`crate::MachinesHandler`] is the fly *control* plane (create/inspect/reap
 //! machines), [`WebAppHandler`] is the *data* plane — it routes inbound HTTP for
-//! a served app to that app's polyana handlers, the realization of "the gateway
-//! routes inbound HTTP to a leased polyana workload."
+//! a served app to that app's owned-sandbox handlers, the realization of "the gateway
+//! routes inbound HTTP to a leased owned-sandbox workload."
 //!
 //! ```text
 //!   inbound HTTP  ──▶  WebAppHandler::dispatch
 //!                        │  dreggnet_webapp::Router::serve  (match the route)
 //!                        ▼
-//!                      dreggnet_exec::run_workload          (the handler runs on polyana)
+//!                      dreggnet_exec::run_workload          (the handler runs on the owned sandbox)
 //!                        │
 //!                        ▼
 //!                      fly-shaped HTTP response written back
@@ -46,7 +46,7 @@ struct ServeGuard {
     site_id: String,
 }
 
-/// The gateway HTTP handler that serves one agent-assembled [`WebApp`] over polyana.
+/// The gateway HTTP handler that serves one agent-assembled [`WebApp`] over the owned sandbox.
 pub struct WebAppHandler {
     router: Arc<Router>,
     serve_guard: Option<ServeGuard>,
@@ -159,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn serves_add_route_over_polyana() {
+    fn serves_add_route_over_the_sandbox() {
         let handler = WebAppHandler::new(assemble::demo_app("demo"));
         let raw = run(&handler, Method::Get, "/add?a=40&b=2");
         assert!(raw.contains("200 OK"), "raw: {raw}");

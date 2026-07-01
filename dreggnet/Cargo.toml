@@ -1,7 +1,7 @@
 # DreggNet workspace.
 #
-# The net/ crates were bundled from an internal Elide HTTP-engine source tree.
-# They share one [workspace.package] +
+# The net/ crates were bundled from the Elide HTTP-engine tree
+# (/Users/ember/elide/dhttp). They share one [workspace.package] +
 # [workspace.dependencies] surface; this root reconstitutes that surface so the
 # bundled crates resolve their `{ workspace = true }` references.
 #
@@ -70,7 +70,7 @@ members = [
   # + manage THEIR OWN sites/servers/agents/domains/storage/$DREGG, cap-scoped to
   # the webauth `dga1_` subject (the cap holder = the owner of their cells), with
   # in-page verify-don't-trust. Pure-std HTTP server like ops; std-only deps
-  # (webauth + the exec `agent`/`budget` braid, no polyana), cross-builds trivially.
+  # (webauth + the exec `agent`/`budget` braid), cross-builds trivially.
   "console",
   # The PORTAL WEB ATTACH — the web twin of the SSH attach: a signed-in user
   # drives THEIR OWN hosted, cap+budget+receipt-bounded agent session in the
@@ -78,7 +78,7 @@ members = [
   # the budget meter + accumulating receipts → verify-in-browser). Built against
   # the hosted-session contract (`dreggnet_exec::live::LiveRun`), cap-scoped to the
   # webauth `dga1_` subject. Pure-std HTTP+SSE server like ops/console; std-only
-  # deps (webauth + the exec `agent`/`live` braid, no polyana), cross-builds trivially.
+  # deps (webauth + the exec `agent`/`live` braid), cross-builds trivially.
   "attach",
   # The PUBLIC STATUS PAGE — the no-auth "is the cloud up?" page anyone can check.
   # The public subset of `ops`: an overall banner + per-service rows + the n=5
@@ -94,8 +94,8 @@ members = [
   # quickstart. Pure-std HTTP server like ops/console/status (no httpe closure),
   # cross-builds trivially; links into `status` + `console`.
   "landing",
-  # The agent-served-web-API capability: an agent declares routes → polyana
-  # handlers; DreggNet runs them on polyana under a lease and serves them.
+  # The agent-served-web-API capability: an agent declares routes → owned wasm
+  # handlers; DreggNet runs them on the owned sandbox under a lease and serves them.
   "webapp",
   # The ONE product-wide receipt contract: a receipt is prev-hash-chained +
   # ed25519-signed + re-witnessable (the kernel TurnReceipt/BridgeReceipt
@@ -141,8 +141,8 @@ members = [
   # docs/IPFS-INTEGRATION-PLAN.md.
   "dregg-ipfs",
   # The compute-backend bridge agent — serves /fulfill on the mesh (:8021), the
-  # dispatch_lease_over_mesh target. Deployed on the compute node (see deploy/).
-  "deploy/node-agent",
+  # dispatch_lease_over_mesh target. Deployed on persvati (see deploy/).
+  "deploy/persvati-agent",
   # The dregg-cap forward-auth service — Caddy's `forward_auth` calls its /auth
   # to gate the operator surfaces (ops/grafana/gateway admin) on a dregg
   # capability instead of legacy basic-auth. Pure-std HTTP, cross-builds like ops.
@@ -190,21 +190,14 @@ members = [
   # are cap teeth. Disjoint new crate over webauth; std-only, cross-builds like ops.
   "org",
 ]
-exclude = [
-  # polyana is its own (Apache-2.0) workspace, pinned as a submodule and
-  # referenced — never absorbed. `dreggnet-exec` path-deps two of its member
-  # crates (polyana-core + polyana-wasmi-provider) behind the `polyana`
-  # feature; cargo resolves them inside polyana's own workspace. Excluding it
-  # here keeps the two workspaces distinct.
-  "polyana",
-]
+exclude = []
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.94.0"
 authors = ["DreggNet"]
-license = "AGPL-3.0-only"
+license = "Private"
 homepage = "https://ember.software"
 documentation = "https://ember.software"
 repository = "https://github.com/emberian/DreggNet"
@@ -231,25 +224,23 @@ split-debuginfo = "unpacked"
 [patch.crates-io]
 ## Patch set. The Elide net/* stack was ejected (docs/ELIDE-NET-EJECTION.md), so the
 ## net-only forks it required (ntex, compio, jni) were removed — cargo confirmed they
-## are no longer in the crate graph. The `rustls` / `hickory-dns` transport forks it
-## once required have been repointed to their crates.io upstreams (they were forks of
-## OSS crates, no longer needed with the net stack gone); the workspace resolves them
-## from crates.io directly.
+## are no longer in the crate graph. The elide-tools forks of `rustls` and `hickory-dns`
+## below are still pulled by remaining OSS deps (reqwest/tls, dns); they are forks of
+## OSS (not Elide-proprietary) and can be repointed to crates.io upstream in a later
+## cleanup pass (verify with a full `cargo build --workspace`).
 
-## DREGG verified-lease lane (the `dreggnet-bridge` `dregg-verify` feature).
-## emberian/dregg's `polyana-bridge` graph needs these: `dregg-hints` requires the
-## `serde_with` feature on Ember's arkworks fork, and `dregg-hints` links the
-## vendored lockstitch 0.29.0. Cargo does NOT inherit patches across path/git
-## deps, so the sibling polyana workspace's patches must be reconstituted here for
-## the dregg tree to resolve. Inert on the default build (no ark-serialize /
-## lockstitch edge until the feature is enabled).
-ark-serialize = { git = "https://github.com/emberian/algebra", rev = "814047cb263115c6388f237614f7fdbff8170c61" }
-ark-serialize-derive = { git = "https://github.com/emberian/algebra", rev = "814047cb263115c6388f237614f7fdbff8170c61" }
-lockstitch = { path = "polyana/src/dregg-bridge/vendor/lockstitch-0.29.0" }
+## Version Pins / Overrides
+# Branch pins converted to the exact resolved revs from Cargo.lock (C1, the
+# reproducibility floor): a `branch = "…"` lets a `cargo update` silently float
+# the gateway's whole transport to a branch tip. These rev pins are the SHAs the
+# lockfile already resolves to — same build, now non-floating.
+hickory-resolver = { git = "https://github.com/elide-tools/hickory-dns.git", rev = "8fb939826631b467360b94853bc6b1f8698c2f5c" }
+hickory-proto = { git = "https://github.com/elide-tools/hickory-dns.git", rev = "8fb939826631b467360b94853bc6b1f8698c2f5c" }
 
-## rustls / hickory-dns: the transport forks the ejected net stack once required
-## are gone; these crates now resolve from their crates.io upstreams via the
-## [workspace.dependencies] version pins below (rustls 0.23, hickory 0.x).
+## rustls Fork (zero-copy unbuffered plaintext, secret injection, 0-RTT
+## unbuffered API, external PSK) — required by net/pki. rev = branch
+## `elide/zero-copy-plaintext` tip at lock time.
+rustls = { git = "https://github.com/elide-tools/rustls.git", rev = "6031dba85d97e5f20410bbe40eee461cc0b69bf3" }
 
 [workspace.dependencies]
 
@@ -297,6 +288,7 @@ cap-time-ext = { version = "4" }
 capnp = { version = "0.25.0", features = ["std", "alloc"] }
 capnp-futures = { version = "0" }
 capnp-rpc = { version = "0" }
+capnp-serde = { git = "https://github.com/elide-tools/capnp-serde", rev = "8f6c59d32e046b5fdf4a4fd8d6b00909a4820344" }
 capnpc = { version = "0" }
 caps = { version = "0" }
 castaway = { version = "0" }
@@ -306,6 +298,9 @@ clap = { version = "4", features = ["derive", "env", "unicode", "help", "wrap_he
 clap_complete = { version = "4" }
 clap-help = { version = "1" }
 clap_mangen = { version = "0" }
+clap-i18n-richformatter = { git = "https://github.com/elide-tools/clap-i18n-richformatter.git", rev = "4f71b294f0f4593b8cfcae02541b28b989282fa2", features = [
+  "derive",
+] }
 clap-verbosity-flag = { version = "3" }
 compact_str = { version = "0" }
 compio-buf = { version = "0.8" }
@@ -376,12 +371,23 @@ itoa = { version = "1" }
 ip_network = { version = "0.4" }
 ip_network_table = { version = "0.2" }
 ipnet = { version = "2", features = ["serde"] }
+i18n-embed = { git = "https://github.com/elide-tools/cargo-i18n.git", rev = "06fdcd5e1ca473886ab187370affc014f0e82c10", features = [
+  "fluent-system",
+  "arc-swap",
+  "parking_lot",
+  "rust-embed",
+  "log",
+] }
+i18n-embed-fl = { git = "https://github.com/elide-tools/cargo-i18n.git", rev = "06fdcd5e1ca473886ab187370affc014f0e82c10" }
 indicatif = { version = "0" }
 inventory = { version = "0" }
 inquire = { version = "0" }
 java-properties = { version = "2" }
+java_native = { git = "https://github.com/elide-tools/jni-macros", rev = "7dc95cc2d7534761d0b16899dcda9e7729bdb89d" }
+# java_native = { git = "https://github.com/elide-tools/jni-macros", rev = "842f2ab6077ba5cb4afe8a113bc7526fb107f691" }
 jni = { version = "0.21.1", default-features = false, features = [] }
 jni-sys = { version = "0.4" }
+keygen-rs = { git = "https://github.com/elide-tools/keygen-rs.git", branch = "compio", features = ["license-key"] }
 lazy_static = { version = "1.5.0" }
 libc = { version = "0" }
 libsqlite3-sys = { version = "0" }
@@ -400,6 +406,8 @@ memmap2 = { version = "0" }
 metrics = { version = "0" }
 miette = { version = "7" }
 mimalloc = { version = "0", features = ["v3"] }
+minify-html = { git = "https://github.com/elide-tools/minify-html", rev = "fd04871b057ee204e6ba23e63e52a658da6eaadc" }
+miring = { git = "https://github.com/elide-tools/miring", rev = "7f5897457b64597902221c49a02bf8e2c74bc598" }
 ml-kem = { version = "0.2", default-features = false, features = ["std"] }
 moka = { version = "0", features = ["sync"] }
 nid = { version = "3" }
@@ -522,6 +530,15 @@ snowid = { version = "2" }
 spdlog-rs = { version = "0", features = ["source-location", "flexible-string", "log", "native", "serde_json"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "postgres"] }
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+syntect = { git = "https://github.com/elide-tools/syntect", rev = "72669d1a8580633a657c37d35d2f84a8d4a7beb8", default-features = false, features = [
+  "default-fancy",
+  "default-syntaxes",
+  "default-themes",
+  "compression-zstd",
+  "dump-create",
+  "dump-load",
+  "parsing",
+] }
 sys-locale = { version = "0" }
 tar = { version = "0.4" }
 tempfile = { version = "3" }

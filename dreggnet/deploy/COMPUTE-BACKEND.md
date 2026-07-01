@@ -19,7 +19,7 @@ the whole DreggNet stack natively — no cross-compile, no zigbuild.**
 | postgres (durable / billing) | ✅ | |
 | headscale (mesh control + embedded DERP) | ✅ | |
 | **bridge agent (`:8021` `/fulfill`)** | | ✅ the heavy workloads |
-| polyana exec runtime (wasmi/wasmtime/python tiers) | | ✅ |
+| owned-sandbox exec runtime (owned wasmi tier; stronger tiers are seams) | | ✅ |
 | prover (STARK turn proving) | | ✅ memory/CPU hungry → home |
 | dregg node (Lean `libdregg_lean.a`) | (federation size 1) | optional co-locate |
 
@@ -36,7 +36,7 @@ marginal cost (home power). The edge is a thin door; node-a is the engine room.
 - **Lean toolchain:** `elan` + `lake` (Lean 4.30.0), for the optional dregg node
   (`libdregg_lean.a` is only needed for the `dregg-verify` / federation-node lane;
   the default backend build does **not** link Lean).
-- **Source:** `~/dev/DreggNet` (with the `polyana` submodule populated) and
+- **Source:** `~/dev/DreggNet` and
   `~/dev/breadstuffs` as siblings — the path-deps (`demo/stripe-receiver`,
   `dregg-verify`) resolve against the sibling layout.
 - **The bridge agent:** `deploy/node-agent/` — a new workspace member, built
@@ -48,7 +48,7 @@ marginal cost (home power). The edge is a thin door; node-a is the engine room.
 edge control plane (`control/src/mesh.rs::dispatch_lease_over_mesh`) connects to a
 fleet node over the overlay and `POST`s a funded lease to
 `http://<overlay-addr>:8021/fulfill`. The agent is what answers that POST on
-node-a: it runs the lease as a **real durable polyana workflow** via
+node-a: it runs the lease as a **real durable metered workflow** via
 `dreggnet_bridge::fulfill` (the lease⟷tier⟷meter weld — add(40,2)→×2 genuinely
 runs in the wasmi sandbox) and returns the metered result.
 
@@ -79,7 +79,7 @@ An unfunded / over-budget lease returns `402` with `{"ok":false,"error":...}` an
 
 ```sh
 cd ~/dev/DreggNet
-cargo build --release -p dreggnet-bridge          # the lease->durable->polyana core
+cargo build --release -p dreggnet-bridge          # the lease->durable->owned-sandbox core
 cargo build --release -p dreggnet-node-agent  # the :8021 agent
 # the edge services (built on the edge, not node-a): gateway / control / cli
 ```
@@ -140,7 +140,7 @@ as fallback). The switch required `--force-reauth` (changing `--login-server`).
 
 - **PROVEN — edge→overlay→node-a, end to end.** From the AWS edge box
   (`ssh -i dreggnet-staging.pem ubuntu@<EDGE_HOST>`), over the headscale overlay:
-  `POST http://100.64.0.2:8021/fulfill` runs the real durable polyana workload on
+  `POST http://100.64.0.2:8021/fulfill` runs the real durable metered workload on
   node-a's cores and returns the metered result — verified for both the dogfood
   (`{}` → `step1=42, step2=84, meter_units=2`) and a funded `edge-dispatch` lease.
   `GET /health` answers `ok` over the overlay; `tailscale ping 100.64.0.2` from the
@@ -172,7 +172,7 @@ as fallback). The switch required `--force-reauth` (changing `--login-server`).
 
 ## What node-a can now host to cut cloud spend
 
-- All lease execution (the polyana wasmi/wasmtime/python tiers) — moved off any
+- All lease execution (the owned wasmi sandbox tier; stronger tiers are seams) — moved off any
   cloud worker onto the multi-core box.
 - STARK turn proving — the memory/CPU-hungry job the t3 edge can't afford
   (`DREGG_PROVE_TURNS=0` on the edge precisely because a t3 chokes). node-a makes

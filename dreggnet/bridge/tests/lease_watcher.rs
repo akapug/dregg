@@ -1,11 +1,11 @@
 //! The watcher proof: DreggNet watches a feed of funded dregg execution-leases and
 //! fulfills each — the WATCH→FULFILL→REAP loop, end to end, over a [`MockFeed`].
 //!
-//! Rung 3 (`fulfill`) welded a single lease to a durable polyana workflow. This
+//! Rung 3 (`fulfill`) welded a single lease to a durable metered workflow. This
 //! proves the loop around it:
 //!
 //!   1. A MockFeed yields TWO funded leases → the watcher fulfills BOTH (each runs
-//!      its durable 2-step polyana workflow — `add(40,2)`→`*2` — metered against its
+//!      its durable 2-step metered workflow — `add(40,2)`→`*2` — metered against its
 //!      own budget, with its own per-instance meter ledger).
 //!   2. An OVER-BUDGET lease (budget 1, 1 unit/step) is REAPED: step1's tick fits,
 //!      step2's lapses → the workflow fails → NO claimable result. No unpaid work is
@@ -64,8 +64,8 @@ async fn watcher_fulfills_funded_leases_and_reaps_lapsed_ones() {
         .find(|f| f.instance == "watch-funded-a")
         .expect("funded-a fulfilled");
     assert_eq!(a.lessee, "agent-a");
-    assert_eq!(a.output.step1, "42"); // polyana add(40, 2)
-    assert_eq!(a.output.step2, "84"); // polyana 42 * 2
+    assert_eq!(a.output.step1, "42"); // owned wasmi add(40, 2)
+    assert_eq!(a.output.step2, "84"); // owned wasmi 42 * 2
     assert_eq!(a.output.meter_units, 2); // two steps × 1 unit
     assert_eq!(metrics::meter_units("watch-funded-a"), 2);
 

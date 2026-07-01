@@ -101,8 +101,8 @@ crate it should depend on · the simplification.
   isolation"). The `Lease` struct is a **MOCK** (`bridge/src/lib.rs:32-39`) and the
   dev source is `MockFeed` (`bridge/src/watch.rs:235-313`) *because* the real read
   is firewalled.
-- **What was avoided.** `polyana-dregg-bridge` (re-exports breadstuffs
-  `polyana-bridge`: `gate_effect_set`, `witness_receipt`,
+- **What was avoided.** the breadstuffs dregg bridge (re-exporting
+  `gate_effect_set`, `witness_receipt`,
   `query_shadow_attest_whole_log`) + `dregg-query` — i.e. the light-client-verified
   funded-execution-lease read (`VerifiedNodeLeaseSource`, **already built** behind
   the feature in `bridge/src/dregg_verify.rs`).
@@ -139,26 +139,18 @@ crate it should depend on · the simplification.
   as in 1b — Poseidon2 carrier pulls the plonky3/babybear closure; gate on
   heaviness or split an artifact, not on license.)
 
-### 1d. `polyana` keeps the dregg surface behind a "thin proven surface only / Apache-pure" isolation
+### 1d. [DISSOLVED] the former external compute engine's Apache-isolation no longer applies
 
-- **File:line.** `polyana/src/dregg-bridge/README.md:24-36` + `src/lib.rs:15-19`
-  ("License (load-bearing)": *"the default-off `dregg-verify` feature is the only
-  thing keeping the normal build Apache-pure … a binary built with `dregg-verify`
-  on is a derivative work of AGPL code and must not be distributed under
-  Apache-2.0"*). `polyana/src/runtime/Cargo.toml:59` ("default-off AGPL shadow
-  witness lane") and `:147` ("default-off AGPL feature").
-  `polyana/Cargo.toml:38-40` ("LICENSE-LOAD-BEARING: emberian/dregg is AGPL-3.0…").
-- **The nuance — partly legitimate.** Polyana is genuinely intended to ship
-  **Apache-2.0** as a *standalone* engine (a different product surface than
-  DreggNet). For *that* product the Apache-pure gate is a real, ember-chosen
-  boundary, **not** bogus — it is ember choosing Apache for polyana-the-engine.
-  **What is bogus is only the part where DreggNet (AGPL-bound) mirrors polyana's
-  Apache-isolation as if DreggNet needed it.** DreggNet does not — it's AGPL.
-- **Simplification.** Leave polyana's own Apache gate alone (ember's product
-  choice). On the **DreggNet side**, stop treating "polyana keeps it off, so we
-  keep it off" as a constraint (`bridge/Cargo.toml:34-39` cites polyana's gate as
-  its reason). DreggNet may take the dregg lane on by default regardless of what
-  polyana's default is.
+- **What it was.** An earlier version of this census flagged an external,
+  Apache-2.0 compute engine that kept the dregg surface behind a "thin proven
+  surface only / Apache-pure" isolation, and noted that DreggNet was mirroring
+  *its* Apache-isolation as if DreggNet needed it.
+- **Now moot — the external engine is gone.** Compute is **owned and in-crate**:
+  the `CapTier::Sandboxed` wasm tier runs on an owned, vendored pure-Rust `wasmi`
+  interpreter (no external submodule, no external dependency). There is no external
+  Apache-2.0 engine left to mirror, so the "keep it off because the engine keeps it
+  off" false dependency has vanished by construction. DreggNet is AGPL and takes the
+  dregg lane on its own terms.
 
 ### 1e. `demo/stripe-receiver` is a standalone workspace "so the product never links dregg"
 
@@ -196,9 +188,9 @@ crate it should depend on · the simplification.
 
 This is a **different, genuine** constraint. Do not dissolve it.
 
-- **Whose copyright.** The `net/*` crates carry an **Elide Technologies, Inc.**
-  proprietary header — e.g. `net/httpe/src/lib.rs:1-12` carries a proprietary Elide
-  license header, which is why it could not ship under AGPL. Confirmed
+- **Whose copyright.** The `net/*` crates carry the **Elide Technologies, Inc.**
+  proprietary header — e.g. `net/httpe/src/lib.rs:1-12`: *"Copyright (c) 2026 Elide
+  Technologies, Inc. All Rights Reserved. PROPRIETARY AND CONFIDENTIAL."* Confirmed
   for the whole stack in `docs/NET-CRATES-STALENESS.md:206-213` (`license =
   "Private"`, workspace) and `ARCHITECTURE.md:99-103`. These are **ember's own work
   as research director at Elide — freely USABLE here by right, but NOT
@@ -249,9 +241,9 @@ VK-affecting.
 | # | Dissolution | Files | port→depend / stub→real / gated→default | Disposition | What simplifies / deletes |
 |---|---|---|---|---|---|
 | **1** | **Account-recovery weld** — depend on the real identity cell + `KeyRotationGate` | `webauth/src/cred.rs`, `webauth/Cargo.toml`, `webauth/src/lib.rs:127-133` | port→depend (step 1) **+** the recovery weld (step 2) | step 1 **safe-autonomous**; step 2 **needs-care** (load-bearing identity) | **deletes the `cred.rs` port**; closes the rotation/recovery/revocation GAP (`KEY-RECOVERY-AND-KERI.md`) |
-| **2** | **Verified lease read on by default** — depend on `polyana-dregg-bridge` + `dregg-query` | `bridge/Cargo.toml:29-71`, `bridge/src/dregg_verify.rs:78-88`, `bridge/src/watch.rs:40,304` | gated→default (strip license; keep/relabel heaviness) | **needs-care** (live node + root `[patch]` reconcile) | **deletes the `Lease` mock + `MockFeed`** path's reason-to-exist; collapses to `DreggNodeFeed` |
+| **2** | **Verified lease read on by default** — depend on the breadstuffs dregg bridge + `dregg-query` | `bridge/Cargo.toml:29-71`, `bridge/src/dregg_verify.rs:78-88`, `bridge/src/watch.rs:40,304` | gated→default (strip license; keep/relabel heaviness) | **needs-care** (live node + root `[patch]` reconcile) | **deletes the `Lease` mock + `MockFeed`** path's reason-to-exist; collapses to `DreggNodeFeed` |
 | **3** | **Real Poseidon2 content-root** — depend on `dregg-circuit`, delete the FNV stubs | `webapp/Cargo.toml:17-27,93-99`, `webapp/src/hosting.rs:44,180,424`, `storage/src/object.rs:47-50,187-223` | stub→real (FNV→Poseidon2); gated→default | **safe-autonomous** for the swap (heaviness → relabel/split, not license) | **deletes two `Fnv` hashers**; the on-chain content commitment becomes real |
-| **4** | **Stop mirroring polyana's Apache isolation** on the DreggNet side | `bridge/Cargo.toml:34-39`, the DreggNet-side citations of polyana's gate | gated→default (leave polyana's *own* Apache gate alone) | **safe-autonomous** (DreggNet-local reasoning only) | removes the "polyana keeps it off so we do" false dependency |
+| **4** | **[DISSOLVED] external-engine Apache-isolation mirror** — moot now that compute is owned in-crate | `bridge/Cargo.toml:34-39` (any stale citation of an external engine's gate) | dissolved by construction (no external engine remains) | **safe-autonomous** (DreggNet-local reasoning only) | removes the "the engine keeps it off so we do" false dependency |
 | **5** | **Fold `demo/stripe-receiver` into the workspace** | `demo/stripe-receiver/Cargo.toml:1-11,23,61-63` | standalone→member; depend on `dregg-bridge` | **safe-autonomous** (demo tool) | **deletes the standalone `[workspace]` + duplicate `[patch]`** ceremony |
 | **6** | **Scrub the "AGPL flip / license isolation" doctrine** from disposition columns | `STAND-INS-CENSUS.md:265-268`, `CRITIQUE-ARCH.md:270,307`, `MATURATION-PLAN.md:378`, `NAMED-RUNGS.md:34`, `SELF-HOST.md:118-120`, `TESTING.md:78`, `GO-REAL.md:16`, `VISION.md:253`, `DEVELOPERS.md:424`, `LIFTOFF-SURPASS-MATRIX.md:198-203`, `DEVNET-ROADMAP.md:21-22`, `ORCHESTRATION-LOOP.md:109` | doc cleanup | **safe-autonomous** | the genuine remaining gates become **live-node + heaviness**, never license |
 | **E** | **(REAL, separate) httpe-decouple** — own the ~6 thin types, drop the Elide engine | `gateway/Cargo.toml:35`, `gateway/src/main.rs`, new `gateway-http`; plan in `HTTPE-TIDY-PLAN.md:344-356` | NOT a firewall dissolution — **required pre-AGPL** decouple | **needs-care** (dependency-surface change; ember reviews) | removes Elide-proprietary code + EAP timebomb + Linux-only + fork closure from the shippable graph |

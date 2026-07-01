@@ -142,7 +142,7 @@ umem-ref and one that consumes one):
 
 1. **Live in-sandbox image capture.** Today the `ComputeCell` heap holds the server's
    dregg-visible **working state** (the `(key→value)` cells a workload reads/writes
-   through the `exec/src/host_api.rs` seam). Capturing a *live polyana / Firecracker
+   through the `exec/src/host_api.rs` seam). Capturing a *live sandbox / microVM
    process image* (the OS memory of a running sandbox) into that heap is the kernel
    effect — until it lands, the working-state heap is the checkpointable surface, and a
    wake re-provisions a fresh backend that resumes from the restored working state

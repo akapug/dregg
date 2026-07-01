@@ -18,7 +18,7 @@ path = "src/lib.rs"
 # NOT meter; it AGGREGATES already-metered, already-settled charges into per-account
 # invoices, enforces per-account spend caps + budget alerts, and estimates the DEC
 # cost of a resource declaration before it is deployed. Std-only + dependency-light +
-# portable (serde + the receipt contract + the exec budget cell, no polyana/control
+# portable (serde + the receipt contract + the exec budget cell, no compute/control
 # execution closure), so `cargo test -p dreggnet-billing` runs the whole teeth suite
 # on any host. The live wires are NAMED SEAMS (see lib.rs): the console billing panel,
 # the `dregg-cloud invoice` / `estimate` CLI verbs, and the control settle-ledger
@@ -35,7 +35,7 @@ serde_json = { workspace = true }
 dreggnet-receipt = { path = "../receipt" }
 # The replenishing-budget cell — the rate-bounded-ceiling primitive a per-account
 # SPEND CAP is enforced through (a spend cap IS a ceiling). Linked with default
-# features OFF so none of the heavy polyana/wasmtime/tokio execution tree comes
+# features OFF so none of the heavy wasmtime/tokio execution tree comes
 # along; only the std-only `budget` module is used (the same way `guard` does).
 dreggnet-exec = { path = "../exec", default-features = false }
 

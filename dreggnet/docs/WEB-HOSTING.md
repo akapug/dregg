@@ -1,19 +1,19 @@
-# Web hosting — minisites on `example.com`
+# Web hosting — minisites on `dregg.works`
 
 DreggNet hosts static minisites on the verified rail: **a site is a dregg cell.**
 An agent or user publishes static web content (HTML/CSS/JS, images — a whole
-`index.html` + assets) under a name, and it is served at `<name>.example.com`.
+`index.html` + assets) under a name, and it is served at `<name>.dregg.works`.
 Publishing is a cap-gated, receipted turn, so *who published what* is provable;
 serving is read-only and public.
 
 This is the static sibling of the agent-served web API (`docs/AGENT-WEB-APPS.md`):
-that capability serves an agent's *dynamic* routes → polyana handlers; this one
+that capability serves an agent's *dynamic* routes → owned sandbox handlers; this one
 serves *static* content out of a published cell.
 
 ```text
   PUBLISH (cap-gated, receipted)              SERVE (read-only, public)
   ────────────────────────────               ─────────────────────────
-  PublishCap  site-host/<name>               GET https://<name>.example.com/
+  PublishCap  site-host/<name>               GET https://<name>.dregg.works/
     └─ SiteRegistry::publish ─▶ SiteCell       └─ Caddy (wildcard TLS)
          { name, owner, content_root,              └─ gateway  SiteHostHandler
            content: path → Asset }                      └─ SiteRegistry::resolve
@@ -27,7 +27,7 @@ A hosted minisite is a `SiteCell` (`webapp/src/hosting.rs`):
 
 | field          | meaning                                                            |
 |----------------|-------------------------------------------------------------------|
-| `name`         | the route name — the subdomain label served at `<name>.example.com` |
+| `name`         | the route name — the subdomain label served at `<name>.dregg.works` |
 | `owner`        | the publishing cell/agent (the cap holder) — provable in the receipt |
 | `content_root` | a deterministic commitment to the content (the cell's umem heap root on a real node) |
 | `content`      | the served assets: a `path → Asset` map (`Asset` = bytes + content-type) |
@@ -50,8 +50,8 @@ Three ways to drive it:
   directory of static files, publishes it as a site cell, and serves it:
   ```sh
   dreggnet-host --dir ./site --name blog --owner agent:ember --port 8080
-  # by Host (what example.com routes):
-  curl -s -H 'Host: blog.example.com' http://localhost:8080/
+  # by Host (what dregg.works routes):
+  curl -s -H 'Host: blog.dregg.works' http://localhost:8080/
   # no-DNS local fallbacks:
   curl -s -H 'Host: blog' http://localhost:8080/style.css   # bare-label Host
   curl -s http://localhost:8080/blog/                       # /<name>/… path prefix
@@ -69,7 +69,7 @@ The gateway resolves an inbound request's `Host` to a published site cell and
 serves its content read-only:
 
 - `gateway/src/hosting.rs` — `SiteHostHandler`, the `httpe` handler over a shared
-  `Arc<SiteRegistry>`. It reads the `Host` header, resolves `<name>.example.com`
+  `Arc<SiteRegistry>`. It reads the `Host` header, resolves `<name>.dregg.works`
   → the site cell (`SiteRegistry::resolve`), and serves the requested path's asset
   with its correct content-type. An unknown host or path is a `404`.
 - Standard static-host path conventions apply: `/` and a trailing-slash directory
@@ -79,20 +79,20 @@ serves its content read-only:
   cross-platform); the `httpe` `SiteHostHandler` is the Linux production mount —
   the same split the dynamic webapp `Router`/`dreggnet-serve` already use.
 
-Host resolution (`site_name_from_host`): `<name>.example.com[:port]` → `name`;
-the bare apex `example.com` and `www.example.com` resolve to nothing (no per-site
+Host resolution (`site_name_from_host`): `<name>.dregg.works[:port]` → `name`;
+the bare apex `dregg.works` and `www.dregg.works` resolve to nothing (no per-site
 landing); a bare single label (`blog`, `blog:8080`) is taken as the name for
 no-DNS local testing.
 
-> **Subdomain, not path-prefix.** Sites are served at `<name>.example.com`, not
-> `example.com/<name>`. Subdomain isolation is cleaner: each site gets its own
+> **Subdomain, not path-prefix.** Sites are served at `<name>.dregg.works`, not
+> `dregg.works/<name>`. Subdomain isolation is cleaner: each site gets its own
 > origin (separate cookie/storage/CORS scope), and a wildcard proxy rule routes
 > them all without per-site Caddy edits. (The `dreggnet-host` binary additionally
 > accepts a `/<name>/…` path prefix purely as a no-DNS local convenience.)
 
-## `example.com` routing — DNS + Caddy (design; deferred to the deploy lane)
+## `dregg.works` routing — DNS + Caddy (design; deferred to the deploy lane)
 
-The edge box (`<EDGE_HOST>`) runs Caddy as the only public door; it terminates
+The edge box (`34.224.208.52`) runs Caddy as the only public door; it terminates
 TLS and reverse-proxies to `gateway:8080` (see `deploy/staging/Caddyfile`). Web
 hosting needs two additions, **to be wired by whoever owns `deploy/`** — this doc
 is the spec, the live `Caddyfile` is intentionally NOT edited here.
@@ -100,23 +100,23 @@ is the spec, the live `Caddyfile` is intentionally NOT edited here.
 ### 1. DNS — a wildcard record
 
 ```
-*.example.com.   A   <EDGE_HOST>      ; (or CNAME → the edge name)
-example.com.     A   <EDGE_HOST>      ; apex (optional: a landing page)
+*.dregg.works.   A   34.224.208.52      ; (or CNAME → the edge name)
+dregg.works.     A   34.224.208.52      ; apex (optional: a landing page)
 ```
 
-A wildcard `*.example.com` so any published `<name>.example.com` reaches the edge
+A wildcard `*.dregg.works` so any published `<name>.dregg.works` reaches the edge
 without a per-site DNS change.
 
 ### 2. Caddy — a wildcard host block
 
-Add a block that matches `*.example.com` and proxies to the gateway, which does
+Add a block that matches `*.dregg.works` and proxies to the gateway, which does
 the per-site resolution by `Host`:
 
 ```caddy
-# *.example.com — published minisite cells, served by the gateway's SiteHostHandler.
+# *.dregg.works — published minisite cells, served by the gateway's SiteHostHandler.
 # NO basic-auth: a published public site is served to anyone (the publish was the
 # cap-gated step; reads are free). The gateway resolves the Host to the site cell.
-*.example.com {
+*.dregg.works {
 	encode gzip
 	reverse_proxy gateway:8080
 }
@@ -125,12 +125,12 @@ the per-site resolution by `Host`:
 ### 3. Wildcard TLS — the one real requirement
 
 A wildcard host needs a wildcard certificate, which Let's Encrypt only issues over
-the **DNS-01** challenge (HTTP-01 cannot satisfy `*.example.com`). Two options:
+the **DNS-01** challenge (HTTP-01 cannot satisfy `*.dregg.works`). Two options:
 
 - **Wildcard cert via DNS-01 (recommended).** Configure Caddy with the DNS
-  provider plugin for wherever `example.com` is hosted and issue `*.example.com`:
+  provider plugin for wherever `dregg.works` is hosted and issue `*.dregg.works`:
   ```caddy
-  *.example.com {
+  *.dregg.works {
   	tls {
   		dns <provider> {env.DNS_API_TOKEN}
   	}
@@ -178,9 +178,9 @@ the **DNS-01** challenge (HTTP-01 cannot satisfy `*.example.com`). Two options:
   the cross-target Linux build (`cargo zigbuild --target x86_64-unknown-linux-gnu
   -p dreggnet-gateway`).
 
-**Deferred — the live `example.com` deploy** (owned by the `deploy/` lane):
+**Deferred — the live `dregg.works` deploy** (owned by the `deploy/` lane):
 
-- The DNS wildcard `*.example.com → <EDGE_HOST>` and the Caddy wildcard host
+- The DNS wildcard `*.dregg.works → 34.224.208.52` and the Caddy wildcard host
   block + wildcard TLS (DNS-01 cert, or on-demand) specified above. The live
   `Caddyfile` is not edited here.
 - Mounting `SiteHostHandler` in the gateway serving binary's connection loop
@@ -203,12 +203,12 @@ can be served **trustlessly**: the cell's content wrapped so the visitor's brows
 re-witnesses that the served bytes match the committed cell state (per-asset
 openings against the heap root), re-witnessing nothing itself. This is exactly the
 projection `deos-view::render_trustless_cell_document` performs for any dregg cell —
-the same renderer the public portal (`portal.example.com`) already uses to serve
+the same renderer the public portal (`portal.dregg.studio`) already uses to serve
 trustless cell cards (light-client verify in the tab).
 
 That renderer lives in the breadstuffs `deos-view` workspace (AGPL, separate). The
 hosting layer here carries the `content_root` commitment it needs and the cell
 shape it renders; the plain serving above is the public read path, and the
 trustless wrap is the verify-in-tab upgrade over the same site cell. So a minisite
-on `example.com` is not just *served* — it can be *proven* to be the genuine
+on `dregg.works` is not just *served* — it can be *proven* to be the genuine
 published cell, the docuverse property applied to ordinary web content.

@@ -1,8 +1,8 @@
 //! Crash-recovery proof for the DreggNet durable layer.
 //!
-//! A 2-step durable workflow runs on polyana through `dreggnet-exec`:
-//!   step1 = polyana `add(40, 2)`  →  "42"   (then metered)
-//!   step2 = polyana `42 * 2`      →  "84"   (then metered)
+//! A 2-step durable workflow runs on the owned sandbox through `dreggnet-exec`:
+//!   step1 = the owned sandbox `add(40, 2)`  →  "42"   (then metered)
+//!   step2 = the owned sandbox `42 * 2`      →  "84"   (then metered)
 //!
 //! We checkpoint after step1 (the workflow parks on an external event), then SIMULATE A
 //! CRASH by tearing down the entire duroxide runtime. A fresh runtime is then created
@@ -133,7 +133,7 @@ async fn durable_workflow_resumes_exactly_once_across_a_simulated_crash() {
         };
         let out: WorkflowOutput = serde_json::from_str(&output).unwrap();
 
-        // The workflow computed the right values, on polyana, across the crash.
+        // The workflow computed the right values, on the owned sandbox, across the crash.
         assert_eq!(out.step1, "42", "step1 = add(40,2)");
         assert_eq!(out.step2, "84", "step2 = step1 * 2");
         assert_eq!(out.meter_units, 2, "two metered steps total");
@@ -162,11 +162,11 @@ async fn durable_workflow_resumes_exactly_once_across_a_simulated_crash() {
 }
 
 /// The general path: an ARBITRARY list of `WorkloadSpec` steps runs as a durable workflow.
-/// Each step runs on polyana, is checkpointed, and is metered exactly-once. This is the
+/// Each step runs on the owned sandbox, is checkpointed, and is metered exactly-once. This is the
 /// shape an agent-served web request runs through (one handler = one step).
 #[tokio::test]
 async fn arbitrary_workloadspec_runs_durably_and_meters() {
-    // Two unrelated polyana workloads (not the built-in add/double demo).
+    // Two unrelated owned-sandbox workloads (not the built-in add/double demo).
     let steps = vec![
         wat_step("alpha", "i32.mul", 21, 2), // 42
         wat_step("beta", "i32.add", 50, 50), // 100
@@ -177,7 +177,7 @@ async fn arbitrary_workloadspec_runs_durably_and_meters() {
         .await
         .expect("arbitrary durable workflow completes");
 
-    // Both arbitrary workloads genuinely ran on polyana, in order.
+    // Both arbitrary workloads genuinely ran on the owned sandbox, in order.
     assert_eq!(out.outputs, vec!["42".to_string(), "100".to_string()]);
     // step1/step2 mirror the first two for back-compat readers.
     assert_eq!(out.step1, "42");

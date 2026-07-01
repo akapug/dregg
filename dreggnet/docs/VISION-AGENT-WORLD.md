@@ -68,7 +68,7 @@ leased and what it spent.
 
 - **Compute** — the execution lease is the unit. A funded dregg `execution-lease`
   authorizes a workload (lessee · cap-grade · asset · budget); DreggNet's bridge
-  maps the cap-grade → a polyana sandbox tier and runs the workload, ticking a meter
+  maps the cap-grade → an owned-sandbox tier and runs the workload, ticking a meter
   against the lease budget (`bridge/src/lib.rs`, the 5-step weld). On the substrate
   side the same shape is `ExecutionLease::open/fund/run`
   (`breadstuffs/sdk/src/service_economy.rs:328`): `open` spawns a cap-scoped worker
@@ -168,8 +168,8 @@ destination (`egress:api.openai.com:443`, `egress:*.internal:8080`,
 `egress:10.0.0.0/8:*`). Attenuation can only *remove* an `egress:` cap, so a
 sub-agent's reach is a subset of its parent's. The policy projects into the real
 wasmtime WASI network policy (deny-all → `allow_tcp(false)`; a grant →
-`socket_addr_check` admitting *only* the named pairs, proven against polyana's own
-projection at `egress.rs:982`), and egress is **metered like bandwidth** — a mining
+`socket_addr_check` admitting *only* the named pairs, proven against the owned
+engine's own projection at `egress.rs:982`), and egress is **metered like bandwidth** — a mining
 / DDoS / exfil loop hits a hard `402` ceiling, and every grant exercised or refused
 is logged. So "the agent may call OpenAI and Stripe and nothing else" is a *cap*,
 not a hope, and the audit shows exactly what it reached. **LIVE** in-process

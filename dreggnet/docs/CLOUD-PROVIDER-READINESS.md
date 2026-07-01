@@ -65,7 +65,7 @@ outside the gateway's slow-loris hardening comment (`gateway/src/main.rs:36`).
 There is no abuse-report endpoint, no content scanning (no SafeBrowsing/known-bad
 hash check on published sites, no malware scan on uploads), no takedown workflow,
 and no de-publish/de-route control surfaced anywhere.
-- A published site is `webapp/src/hosting.rs::SiteRegistry` + a `<name>.example.com`
+- A published site is `webapp/src/hosting.rs::SiteRegistry` + a `<name>.dregg.works`
   route in `gateway/src/hosting.rs`; nothing can *unpublish* it operationally
   except deleting the in-process cell. There is `cli ... destroy` for the *owner*,
   but no *operator* takedown of someone else's content.
@@ -212,17 +212,17 @@ existential gap is **content + legal + identity-economics**, not sandbox escape.
 | Health checks | **HAVE** | `gateway/src/status.rs:228-262` | — |
 | Alerting | **HAVE (operator-only)** | `docs/MONITORING.md` §3; ops `/api/alerts` | — |
 | Per-tenant runtime **log** aggregation / tail / search | **LACK** | `dregg-cloud logs` prints **cached local metadata**, not a tail (`cli/src/main.rs:1272-1304`); real log-tail is **operator-only** Docker tailing (`ops/src/docker.rs:113`) | BLOCKER · M |
-| Distributed traces (customer) | **PARTIAL (internal)** | polyana spans, not exposed | NICE · M |
+| Distributed traces (customer) | **PARTIAL (internal)** | owned sandbox spans, not exposed | NICE · M |
 | Per-tenant / per-resource status surface | **PARTIAL** | console models exist but use **fixtures**, live aggregation deferred (`console/src/source.rs`) | IMPORTANT · M |
 | Public **status page** (customer uptime/incidents) | **LACK** | gateway `/` is operator-informational; portal is a cell viewer | IMPORTANT · M |
 
 ### DNS / domains
 | Capability | Status | Grounding | Crit · Effort |
 |---|---|---|---|
-| `<name>.example.com` subdomain serving | **HAVE** | `gateway/src/hosting.rs` (`SiteHostHandler`) | — |
+| `<name>.dregg.works` subdomain serving | **HAVE** | `gateway/src/hosting.rs` (`SiteHostHandler`) | — |
 | Custom-domain BYO bind + TXT/CNAME verify | **HAVE (core, hardened)** | `dregg-domains/src/{lib,live}.rs`; DOM-1/DOM-2 fixed (real `LiveDns`, owner-checked `DomainCap`) | — |
 | Per-custom-domain cert (on-demand TLS) | **PARTIAL** | `cert_ok()` logic exists, **`ask` endpoint not served**, no cert provisioner wired (`gateway/src/hosting.rs:114`, DEVWORK) | IMPORTANT · M (reviewed-go) |
-| Wildcard `*.example.com` TLS | **PARTIAL** | specced (Caddy DNS-01, `docs/WEB-HOSTING.md`), owned by deploy lane | IMPORTANT · M |
+| Wildcard `*.dregg.works` TLS | **PARTIAL** | specced (Caddy DNS-01, `docs/WEB-HOSTING.md`), owned by deploy lane | IMPORTANT · M |
 | DNS zones / records as a product | **LACK** | nameservice cell in breadstuffs (SERVICES.md #8 near) | NICE · M |
 
 ### Reliability / DR

@@ -19,13 +19,13 @@ This guide is the unit a stranger runs to host their own provider:
       mock for dev)             Ec2Provider)         ─────▶ dreggnet-serve
                                   │                          (agent-served web apps)
                                   ▼
-                                the bridge → durable polyana workload, metered
+                                the bridge → durable metered workload
 ```
 
 ## What a provider is
 
 A provider is a [`VmProvider`](../control/src/provider.rs): it rents machines,
-places a funded lease on one, runs the lease as a durable, metered polyana
+places a funded lease on one, runs the lease as a durable, metered
 workload (via the bridge), and reaps the machine when the lease lapses. Two
 backends ship today:
 
@@ -89,7 +89,8 @@ DREGGNET_NODE_URL=https://my-node:9090 DREGGNET_REGION=home-lab dreggnet-provide
 
 With a **local** backend and **mock** cells, the entrypoint runs a demo lease
 through the provider to prove the wiring on your host — it provisions a machine,
-runs the metered durable polyana workload (`add(40,2)=42`, `*2=84`), and reaps:
+runs the metered durable workload on the owned wasmi sandbox (`add(40,2)=42`,
+`*2=84`), and reaps:
 
 ```
 dreggnet-provider: resolved plan
@@ -99,7 +100,7 @@ dreggnet-provider: resolved plan
   backend      : local
 dreggnet-provider: built `local` provider
   provisioned machine <id> (local)
-  workload completed on polyana: step1=42 step2=84 meter_units=2
+  workload completed on dreggnet-wasmi: step1=42 step2=84 meter_units=2
   reaped machine <id>
 dreggnet-provider: demo OK — the configured provider ran a metered, sandboxed workload.
 ```
@@ -130,14 +131,14 @@ gateway or the portable `dreggnet-serve` binary:
 - **The fly-machines API** (`dreggnet-gateway`) — the control plane: create /
   inspect / reap durable workloads. See `docs/RUN-LOCALLY.md`.
 - **Agent-served web apps** (`dreggnet-webapp`) — the data plane: an agent
-  declares HTTP routes bound to polyana handlers, and the provider runs each
-  inbound request's handler on polyana and serves the response. See
+  declares HTTP routes bound to owned-sandbox handlers, and the provider runs each
+  inbound request's handler on the owned sandbox and serves the response. See
   `docs/AGENT-WEB-APPS.md`.
 
 ## What is real vs. the named next step
 
 - **Real:** the `ProviderConfig` (file + env), `build_provider()` for both
-  backends, the `local` end-to-end demo (provision → metered durable polyana
+  backends, the `local` end-to-end demo (provision → metered durable
   workload → reap), the `ec2` argv + JSON parse.
 - **Named next step:** the live lease-watch run loop against a real dregg node
   (the `dregg-verify` light-client RPC), and EC2 provisioning against real AWS

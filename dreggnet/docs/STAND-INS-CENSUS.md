@@ -27,8 +27,10 @@ This census is **honest in both directions**: some "stand-ins" are *deliberate,
 sound boundaries* (the AGPL link-isolation gate, the LocalProvider dev default,
 the `DnsResolver` trait seam, the deos-hermes confinement stand-in) and are NOT
 debt — they are called out in [§ Deliberate sound boundaries](#deliberate-sound-boundaries-not-fakes).
-Out of scope: the `polyana` submodule (separate repo) and `net/tailscale`
-(vendored upstream) — their internal stubs are not DreggNet's to replace here.
+Out of scope: `net/tailscale` (vendored upstream) — its internal stubs are not
+DreggNet's to replace here. (There is no external compute submodule anymore:
+compute is now OWNED and in-crate — the owned, vendored pure-Rust `wasmi`
+sandbox engine.)
 
 Effort: **S** = <1 day · **M** = 1–5 days · **L** = 1–2 weeks.
 Disposition: **safe-autonomous** (no live deploy / real money / external service
@@ -42,7 +44,7 @@ Disposition: **safe-autonomous** (no live deploy / real money / external service
 |---|--------------|-------------------|-----------|--------|-------------|-------------------|-----------|
 | **Compute / exec** |
 | 1 | `invoke()` resolves a **caller-registered service map** | `exec/src/host_api.rs:62-67` | the breadstuffs **ToolGateway** cap/turn rail | M | reviewed-go (cross-repo wire) | **Yes** — `breadstuffs/deos-hermes/src/{lib,bridge}.rs` | new |
-| 2 | Firecracker `MicroVm` **boots then `call()` errors** (dead guest plane) | `exec/src/lib.rs:1117`; `polyana/src/firecracker-provider/src/lib.rs:20` | vsock+JSON guest wire + kernel/rootfs image + jailer | M | reviewed-go (KVM hardware) | partial (VM lifecycle real; guest unbuilt) | UNDER-WIRED-features #8 |
+| 2 | Stronger cap-tiers (`JitSandboxed`/`Caged`/`MicroVm`/`Gpu`) are **fail-closed seams** (`ExecError::NotWired`/`TierNotServed` — honest refusal, never a fake run) | `exec/src/lib.rs:1117` | an OWNED engine per tier (owned JIT; owned native/python/node; owned microVM guest wire + kernel/rootfs image + jailer; owned GPU) | M | reviewed-go (KVM hardware for microVM) | seam is honest; owned engines unbuilt | UNDER-WIRED-features #8 |
 | 3 | `Ec2Provider` reports a **stubbed AWS API surface** | `control/src/ec2.rs:98,168` | live `aws ec2 run-instances` + mesh dispatch | M–L | reviewed-go (real cloud / $) | argv builder real; no API exec | UNDER-WIRED-features #22 |
 | **Hosting / web** |
 | 4 | Web-publish writes an **in-process `SiteRegistry`**; `content_root` is an **FNV-1a** stand-in | `webapp/src/hosting.rs:44,424`; `webapp/src/hosting.rs:180` | `Effect::Write` to a dregg node → committed **Poseidon2** umem heap root, witnessed as a receipt (the `dregg-verify` flip) | M | reviewed-go (AGPL flip + live node) | **Yes** — Poseidon2 in breadstuffs; `bridge/src/dregg_verify.rs` is the read half | UNDER-WIRED-features #18/#19 |
@@ -86,17 +88,22 @@ already the real surface."* The surrounding spine **is** real: `gate_effect_set`
 - **Effort:** M (cross-repo wire; the bridge vocabulary already maps `invoke →
   tool-call`). **Disposition:** reviewed-go (touches the AGPL core seam).
 
-### 2 — Firecracker microVM: boots then refuses
+### 2 — Stronger cap-tiers: honest fail-closed seams
 
-`exec/src/lib.rs:1117`; `polyana/src/firecracker-provider/src/lib.rs:20` ("dead
-guest plane"). The VM **lifecycle** is real (spawn the firecracker API process,
-boot, teardown, `with_jailer`), but a booted VM **errors on `call()`** because the
-vsock guest-invocation wire + in-guest agent are not landed. No workload runs
-inside a microVM yet — it boots and refuses (the clean, honest hardware-gated
-refusal on a non-KVM host). Full detail in UNDER-WIRED-features #8.
+`exec/src/lib.rs:1117`. Only the `Sandboxed` tier genuinely runs (on the owned,
+vendored pure-Rust `wasmi` interpreter — the `add(40,2)=42` dogfood executes
+there). Every stronger tier — `JitSandboxed`/JIT, `Caged`/native+python+node,
+`MicroVm`/Firecracker/microVM, `Gpu` — is a **fail-closed seam**
+(`ExecError::NotWired`/`TierNotServed`): an honest refusal, never a fake run and
+never a silent downgrade. There is no external compute submodule and no VM
+lifecycle scaffold anymore; wiring an OWNED engine per tier (an owned JIT; an
+owned native/python/node engine; an owned microVM guest wire + kernel/rootfs
+image + jailer; an owned GPU engine) is the future work. Full detail in
+UNDER-WIRED-features #8.
 
-- **Real impl exists:** partial (lifecycle real; guest plane unbuilt).
-- **Effort:** M. **Disposition:** reviewed-go (KVM hardware).
+- **Real impl exists:** no — the owned engines are unbuilt; the seam is honest
+  (fail-closed) today.
+- **Effort:** M. **Disposition:** reviewed-go (KVM hardware for the microVM tier).
 
 ### 3 — `Ec2Provider` stubbed AWS API
 
@@ -245,10 +252,11 @@ complete:
 Honest the other way — these read as "stand-ins" but are *correct, sound
 boundaries*, and replacing them would be a regression or a license violation:
 
-- **`exec/src/lib.rs:869,1001-1030`** — when the `polyana` feature is off (or on
-  macOS where a tier is unsandboxed), `exec` returns **`Err`** rather than a fake
-  success. An honest refusal is the right behavior; there is nothing to "make
-  real."
+- **`exec/src/lib.rs:869,1001-1030`** — for any tier without an owned engine
+  wired (every tier above the owned `wasmi` `Sandboxed` tier), `exec` returns
+  **`Err`** (`ExecError::NotWired`/`TierNotServed`) rather than a fake success or
+  a silent downgrade. An honest fail-closed refusal is the right behavior; there
+  is nothing to "make real" here (the owned-engine work is tracked under #2).
 - **`CellSource::Mock` + `LocalProvider` (#11)** — the deliberate offline/dev
   default so the binary builds + runs green with no node. The real path is opt-in
   (`--features dregg-verify` + a node URL), exactly the no-reflexive-features

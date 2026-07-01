@@ -166,8 +166,9 @@ oversell the body.**
   `:50`), so tamper/reorder/replay of a settlement row is caught for real; exactly-once
   `(lease,period)` settlement with write-ahead+fsync (`settle_ledger.rs`) is the
   product's high-water mark.
-- **`exec/` honestly delegates** — `run_workload` is a thin seam over polyana's real
-  polyglot engine (`exec/src/lib.rs:1`, Apache-2.0, co-developed); the cap-grade→tier→provider
+- **`exec/` honestly delegates** — `run_workload` is a thin seam over the owned wasmi
+  sandbox engine (`exec/src/lib.rs:1`, in-crate, zero unsafe); the Sandboxed wasm tier
+  genuinely runs, while stronger tiers are fail-closed seams; the cap-grade→tier→provider
   floor check (no silent downgrade) is the right dregg-shaped boundary. Not a clone.
 
 ### The generic body (the myopia — what's NOT dregg yet)
@@ -215,7 +216,7 @@ unlocks, reachable-vs-horizon, and the named substrate seam (the swarm's work).
   the sandbox** (the §2 agent-world superpower). The single change that most converts
   "verifiable fly.io" into "the cloud whose unit of compute is a unit of account and
   authority."
-- **Reachable vs horizon.** The lease→cap-tier→polyana weld with conserving metered
+- **Reachable vs horizon.** The lease→cap-tier→owned-sandbox weld with conserving metered
   settlement is **REACHABLE — live on the local path** (`bridge/`, `exec/`, `durable/`);
   snapshot/fork/time-travel/continuation exist as **proven umem primitives in
   breadstuffs**. The PoC is welding them onto the workload-cell.
@@ -294,7 +295,7 @@ unlocks, reachable-vs-horizon, and the named substrate seam (the swarm's work).
 - **Move.** Identity port → dependency (`webauth/cred.rs` → a `dregg-auth` dependency,
   closing the rotation/recovery gap); the `exec` `ReplenishingBudget` twin → land the
   widening in breadstuffs at `cell/src/budget.rs` and depend (twin→proof); give the
-  polyana workload a cell handle so it can pay/attenuate from inside the cage; reframe
+  owned sandbox workload a cell handle so it can pay/attenuate from inside the cage; reframe
   the `control/src/mesh.rs` WireGuard overlay as **cap-materialized routing** (service
   reachability is a capability, not an IP route).
 - **Deletes.** The remaining twins; the standalone non-dregg mesh addressing.

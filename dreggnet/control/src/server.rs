@@ -192,7 +192,7 @@ impl ServerRecord {
     }
 
     /// Reconstruct the [`MachineSpec`] the server provisions a backend to. The
-    /// cap-grade resolves to its polyana isolation tier via the bridge's mapping —
+    /// cap-grade resolves to its the owned sandbox isolation tier via the bridge's mapping —
     /// the same grade→tier routing the scheduler uses.
     pub fn spec(&self) -> MachineSpec {
         let tier = dreggnet_bridge::map_cap_grade(cap_grade_from_str(&self.cap_grade)).tier;

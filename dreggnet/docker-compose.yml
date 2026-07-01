@@ -29,8 +29,8 @@ services:
       retries: 10
 
   # The DreggNet operator container — the runnable wasmi-tier exec demo path.
-  # The `dreggnet` CLI drives control → bridge → durable → exec → polyana,
-  # genuinely running a metered, durable, sandboxed workload. It is an operator
+  # The `dreggnet` CLI drives control → bridge → durable → exec (owned wasmi
+  # sandbox), genuinely running a metered, durable, sandboxed workload. It is an operator
   # CLI (not a long-running daemon), so this service idles and you drive it with
   # `docker compose exec dreggnet dreggnet ...` (or `run --rm dreggnet dreggnet-demo`).
   dreggnet:

@@ -4,7 +4,7 @@
 //! `dregg.toml` manifest in the repo (or a caller-supplied override). It answers the one
 //! question the deploy workflow's Build step needs: *how is this repo turned into a tree of
 //! servable bytes?* — with no build step (a static site), with a build command run in a
-//! cap-bounded tier (a node/bundler build), with a polyana compute workload run through the
+//! cap-bounded tier (a node/bundler build), with a sandbox compute workload run through the
 //! exec tier (the wasm/Caged build), or — detected but routed elsewhere — a long-running
 //! server (the persistent-servers lane, §3.3).
 
@@ -79,11 +79,11 @@ pub enum BuildPlan {
         #[serde(default)]
         tier: BuildTier,
     },
-    /// Run a polyana program through the exec compute tier — the literal "build in the
+    /// Run a wasm program through the exec compute tier — the literal "build in the
     /// wasm/Caged tier" path — and write its output as a generated artifact. The genuinely
     /// cap-bounded, exec-metered build ([`dreggnet_exec::run_workload`]).
     Compute {
-        /// The polyana provider family (`wat`/`wasm`/`python`/`node`).
+        /// The sandbox provider family (`wat`/`wasm`/`python`/`node`).
         lang: String,
         /// The program source.
         source: String,

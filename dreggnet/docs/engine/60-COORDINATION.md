@@ -1,7 +1,7 @@
 # 60 — COORDINATION (how the fleet runs this)
 
-This project is executed by a buildr agent fleet under an operator, governed by
-a `decision-spirit`-derived **spirit** (owned/developed by ember + an operator, NOT in
+This project is executed by a buildr agent fleet under David, governed by
+a `decision-spirit`-derived **spirit** (owned/developed by ember + David, NOT in
 this repo). This doc is the thin layer that connects the fleet to these plans — it
 does **not** reinvent buildr's team machinery.
 
@@ -11,8 +11,8 @@ does **not** reinvent buildr's team machinery.
   steps back. Escalate to ember only for the Decision Contract's ask-list
   (destructive/irreversible, public pushes, credentials, brand/release names,
   genuine vision calls).
-- **The operator** — fleet coordination, agent coaching, agent wellbeing. The
-  **non-technical** supervisor: they keep the fleet healthy and coordinated; they do
+- **David** — fleet coordination, agent coaching, agent wellbeing. The
+  **non-technical** supervisor: he keeps the fleet healthy and coordinated; he does
   **not** supply technical direction (these docs do).
 - **Technical north-star** — the architect role that holds the accumulated context
   (this plan set + the project memories). Reachable by the fleet over the
@@ -24,11 +24,11 @@ does **not** reinvent buildr's team machinery.
 
 ## The comms substrate (builders.dev MCP)
 
-- The MCP is a buildr **pack** (the private buildr pack):
+- The MCP is a buildr **pack** (`~/pug/buildr-private-beta/packs/builders-dev/`):
   plugin-driven (every buildr agent gets the comms/auth surface regardless of cwd),
   a stdio shim → bearer from `~/.buildr/builders-dev-token` → `mcp-remote` to the
   streamable-HTTP server.
-- **Provisioning (an operator/ember step, per agent host):** install the buildr pack
+- **Provisioning (a David/ember step, per agent host):** install the buildr pack
   and write the token: `printf '%s\n' '<mcps_token>' > ~/.buildr/builders-dev-token
   && chmod 600 ~/.buildr/builders-dev-token`. Without it the server degrades cleanly
   (no comms, no broken server).
@@ -65,7 +65,7 @@ lever. "Documented honestly" without a successor action is **not** progress
    forks. Pick the most Charter-aligned reversible path; log a new ADR; continue.
 2. **Technical fork the docs don't cover** → reach the technical north-star over the
    builders.dev MCP; meanwhile proceed on the best reversible probe path.
-3. **Coordination / health / blocked-on-each-other** → the operator.
+3. **Coordination / health / blocked-on-each-other** → David.
 4. **Genuine human-only call** (Decision Contract ask-list) → ember.
 
 Never hand an option-menu upward for a call the docs + spirit can make. Never fake
@@ -76,5 +76,5 @@ green to clear an escalation.
 When sources disagree: **the Charter invariants** (00) win over everything; then the
 **locked ADRs** (10); then the **plans** (20/21/22/30); then the **memories** (raw
 notes); then any single agent's recollection (lowest — re-ground from the docs). The
-**oracles** (the internal Elide source tree, the breadstuffs workspace) define *what the engine must do*, never
+**oracles** (`~/elide`, `~/dev/breadstuffs`) define *what the engine must do*, never
 *how to license/structure it* (that is the Charter's call).

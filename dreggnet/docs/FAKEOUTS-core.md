@@ -126,7 +126,7 @@ role and defaulting `DREGG_REQUIRE_LEAN=1` in distribution builds.
   collision-resistant) is **RESOLVED**: both now call
   `dregg_circuit::poseidon2::hash_many_8`, pinned to the same `emberian/dregg` rev, with a
   regression test (`content_root_is_the_real_poseidon2_root_not_fnv`). Residual `fnv1a`
-  hits are only in `polyana/` demo adapters + `net/httpe` load-balancing (non-soundness).
+  hits are only in `net/httpe` load-balancing (non-soundness).
 - **Finality / super-ratify** (`blocklace/src/ordering.rs:233-345`) — real DAG causal-past
   quorum: `supermajority_threshold(n)=(n*2/3)+1`, `n=0 ⇒ 1` (fail-closed empty committee),
   `is_super_ratified` counts distinct wave-end ratifiers ≥ supermajority. No hardcoded

@@ -53,10 +53,10 @@ build() {
 
   echo "==> cross-building gateway + cli + ops for $TARGET"
   # NOTE: the gateway pulls the heavy Linux-only Elide net closure (httpe: forked
-  # ntex/compio/rustls + capnp codegen) and the exec/durable/polyana closure. The
+  # ntex/compio/rustls + capnp codegen) and the exec/durable compute closure. The
   # cli is pure-Rust over the control plane. The ops dashboard is pure-std (no
   # httpe) + sqlx-postgres for the meter outbox. A cold build is heavy; if `exec/`
-  # is mid-flight (polyana-improvement lane) it may transiently fail — that is the
+  # is mid-flight (exec-improvement lane) it may transiently fail — that is the
   # documented exec-green dependency, NOT a deploy bug. Fail loudly, do not ship
   # stale artifacts.
   # `dreggnet-provider` (W3) is the autonomous orchestrator daemon the compose's
@@ -80,7 +80,7 @@ build() {
   # --delete in ship() does NOT wipe /opt/dreggnet/headscale on the box (the
   # headscale DB itself lives in a docker named volume and is untouched).
   cp -r "$HERE/headscale" "$STAGE_DIR/headscale"
-  # The PUBLIC portal (portal.example.com): the baked static site (index.html,
+  # The PUBLIC portal (portal.dregg.studio): the baked static site (index.html,
   # cell.html, portal.js, styles.css) is committed under deploy/staging/portal; the
   # wasm light-client bundle (~15MB, kept out of git) is copied fresh from breadstuffs
   # at stage time. Regenerate the static site with:
@@ -88,7 +88,7 @@ build() {
   #     --example portal_bake -- ~/dev/DreggNet/deploy/staging/portal
   cp -r "$HERE/portal" "$STAGE_DIR/portal"
   # The published minisites (static web hosting): `sites/<name>/…` is mounted into
-  # the gateway (`/srv/sites`) and published at boot as `<name>.example.com`. Must
+  # the gateway (`/srv/sites`) and published at boot as `<name>.dregg.works`. Must
   # be staged so the rsync --delete does not wipe /opt/dreggnet/sites on the box.
   [ -d "$HERE/sites" ] && cp -r "$HERE/sites" "$STAGE_DIR/sites" || mkdir -p "$STAGE_DIR/sites"
   BREADSTUFFS="${BREADSTUFFS:-$HOME/dev/breadstuffs}"

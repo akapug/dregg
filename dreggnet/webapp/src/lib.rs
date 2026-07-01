@@ -3,7 +3,7 @@
 //! DreggNet's headline vision is *fully agentic web-facing apps*: an agent
 //! autonomously assembles a web API and DreggNet runs + serves it. This crate is
 //! the capability that makes a request to a served route turn into a real run of
-//! the agent's handler **on polyana**, metered against a dregg execution-lease.
+//! the agent's handler **on the owned sandbox**, metered against a dregg execution-lease.
 //!
 //! ```text
 //!   agent assembles                 DreggNet runs + serves
@@ -12,7 +12,7 @@
 //!     Route { GET /add ─▶ handler },                 │ match the route
 //!     Route { GET /hello ─▶ handler },               │ Handler::build_source
 //!   ] }                                              ▼
-//!                                    dreggnet_exec::run_workload  (polyana sandbox)
+//!                                    dreggnet_exec::run_workload  (owned wasm sandbox)
 //!                                                    │ Output { values }
 //!                                                    ▼
 //!                                    ResponseSpec::render ─▶ WebResponse
@@ -21,17 +21,17 @@
 //! ## The slice that is real today
 //!
 //! - An agent declares a [`WebApp`] (plain `serde` data — a JSON document, or the
-//!   [`assemble`] builders): routes binding a method + path to a polyana
+//!   [`assemble`] builders): routes binding a method + path to a the owned sandbox
 //!   [`Handler`] and a [`ResponseSpec`].
 //! - [`Router::serve`] matches a request to a route, builds the handler's
 //!   concrete workload (filling [`HandlerBody::Templated`] placeholders from the
-//!   request query, integer-validated), **runs it on polyana** via
+//!   request query, integer-validated), **runs it on the owned sandbox** via
 //!   [`dreggnet_exec::run_workload`], and renders the result.
 //! - [`LeasedRouter`] runs each served request as a **durable, exactly-once-metered
 //!   workflow** against a funded dregg [`Lease`](dreggnet_bridge::Lease) — validated
 //!   through the bridge's real gate. It refuses an over-budget request with `402`
 //!   before the handler runs, and a request that clears the gate runs THROUGH
-//!   [`dreggnet_durable`]: the handler executes on polyana, its result is durably
+//!   [`dreggnet_durable`]: the handler executes on the owned sandbox, its result is durably
 //!   checkpointed, and the meter charges the step exactly-once (so a crash mid-request
 //!   resumes exactly-once — the same guarantee the durable bridge gives per step).
 //! - The bundled `dreggnet-serve` binary serves an assembled app over real TCP
@@ -42,10 +42,10 @@
 //!
 //! - **Path patterns** — routes match an *exact* path; `/users/{id}` params are a
 //!   later rung. Per-request inputs reach a handler through the query string.
-//! - **Request body → handler** — the handler entrypoint is polyana's zero-arg
+//! - **Request body → handler** — the handler entrypoint is the sandbox's zero-arg
 //!   `run`; request data reaches the handler via templated query params, not the
 //!   request body. A richer handler ABI (request bytes in, response bytes out)
-//!   waits on a polyana host-import shape for it.
+//!   waits on a sandbox host-import shape for it.
 //! - **Per-request durable store** — [`LeasedRouter`] runs each request through a
 //!   full durable `dreggnet_durable` workflow over an **on-disk** SQLite store
 //!   (`run_workflow_on_disk_blocking` under `std::env::temp_dir()/dreggnet-webapp/<app>`,
@@ -64,7 +64,7 @@
 //! minisites on the verified rail: **a site is a dregg cell** ([`SiteCell`]). An
 //! agent/user publishes content (HTML/CSS/JS) under a name via a cap-gated,
 //! receipted [`SiteRegistry::publish`], and the gateway resolves
-//! `<name>.example.com` → the site cell → its content. Because the cell carries a
+//! `<name>.dregg.works` → the site cell → its content. Because the cell carries a
 //! content commitment, the same content can be served *trustlessly* (the
 //! `deos-view` projection). See the [`hosting`] module docs.
 //!

@@ -21,14 +21,14 @@ path = "src/bin/crash-resume.rs"
 # `dregg-cloud` — the operator CLI (ARCHITECTURE.md ladder top, the operator face). It is a
 # thin face over the control plane: every subcommand routes through
 # `dreggnet-control::Scheduler` over the in-process `LocalProvider`, which fulfills a
-# funded lease as a durable polyana workflow via the bridge. The CLI persists its
+# funded lease as a durable metered workflow via the bridge. The CLI persists its
 # lease + workload registry to a JSON state dir so `lease open`, `run`, and `status`
 # share state across invocations.
 #
 #   dreggnet-cli  (THIS crate — the operator face)
 #     └─ dreggnet-control  (Scheduler + LocalProvider: place → fulfill → reap)
-#        └─ dreggnet-bridge (fulfills the lease as a durable polyana workflow)
-#           └─ dreggnet-durable / dreggnet-exec / polyana
+#        └─ dreggnet-bridge (fulfills the lease as a durable metered workflow)
+#           └─ dreggnet-durable / dreggnet-exec (owned wasmi sandbox)
 
 [dependencies]
 anyhow = { workspace = true }

@@ -1,5 +1,5 @@
 //! Bridge characterization: the lease gate (pure validation) and full lease
-//! fulfillment (`fulfill` — a funded lease driven as a durable, metered polyana
+//! fulfillment (`fulfill` — a funded lease driven as a durable, metered
 //! workflow over a fresh in-memory SQLite store), sequential and concurrent.
 //!
 //! Hand-rolled `harness = false` bench (no criterion; offline).
@@ -31,7 +31,7 @@ fn env_usize(key: &str, default: usize) -> usize {
 fn main() {
     println!("\n=== DreggNet bridge / lease-fulfillment characterization ===");
     println!("    fulfill() = validate lease -> open in-mem durable store -> run the");
-    println!("    fixed add->double workflow on polyana, metered against the budget\n");
+    println!("    fixed add->double workflow on the owned sandbox, metered against the budget\n");
 
     let lease = Lease::funded("agent-bench", CapGrade::Sandboxed, "USD-test", 1_000_000, 1);
 

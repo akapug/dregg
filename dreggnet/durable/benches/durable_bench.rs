@@ -1,11 +1,11 @@
-//! Durable-layer characterization: the cost of running a polyana workload as a
+//! Durable-layer characterization: the cost of running an owned-sandbox workload as a
 //! crash-resumable `duroxide` workflow, the per-step overhead, and the on-disk
 //! (SQLite) checkpoint + crash-resume cost.
 //!
 //! Hand-rolled `harness = false` bench (no criterion; offline). It reports:
 //!   1. in-memory workflow latency at 1/2/4/8 steps — a linear fit separates the
 //!      fixed per-workflow runtime cost from the marginal per-step (durable
-//!      checkpoint + meter-tick + polyana run) cost;
+//!      checkpoint + meter-tick + the owned sandbox run) cost;
 //!   2. on-disk SQLite: a full run-to-completion (incl. WAL fsync) of a 2-step
 //!      workflow — the durable-I/O tax over the in-memory path;
 //!   3. checkpoint + crash-resume: run-to-park, tear the runtime down, reopen the
@@ -27,7 +27,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::Runtime;
 use duroxide::{Client, OrchestrationStatus};
 
-/// A trivial sandboxed WAT step (add of two literals) — keeps the *polyana* cost
+/// A trivial sandboxed WAT step (add of two literals) — keeps the *the owned sandbox* cost
 /// minimal so the measured number is dominated by the durable machinery, not the
 /// guest. (Workload-guest cost is characterized in the exec bench.)
 fn wat_add_step(label: &str, x: i32, y: i32) -> WorkloadSpec {
@@ -104,7 +104,7 @@ fn in_memory_run(steps: usize, counter: &mut u64) {
 
 fn main() {
     println!("\n=== DreggNet durable-layer characterization ===");
-    println!("    a polyana workload run as a crash-resumable duroxide workflow");
+    println!("    a owned-sandbox workload run as a crash-resumable duroxide workflow");
     println!("    (in-memory SQLite store; trivial WAT step so the number is the durable tax)\n");
 
     let iters = env_usize("BENCH_ITERS", 200);

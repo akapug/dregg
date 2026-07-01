@@ -2,9 +2,9 @@
 
 DreggNet's headline vision is **fully agentic web-facing apps**: an agent
 autonomously assembles a web API and DreggNet runs + serves it. An agent
-declares a set of HTTP routes, each bound to a polyana workload handler;
-DreggNet routes each inbound request to its handler, **runs the handler on
-polyana** under a dregg execution-lease, and serves the response.
+declares a set of HTTP routes, each bound to a sandbox workload handler;
+DreggNet routes each inbound request to its handler, **runs the handler on the
+owned wasmi sandbox** under a dregg execution-lease, and serves the response.
 
 This is the `dreggnet-webapp` crate.
 
@@ -15,7 +15,7 @@ This is the `dreggnet-webapp` crate.
      GET /add   ─▶ handler,                          │ match the route
      GET /hello ─▶ handler,                          │ Handler::build_source
    ] }                                               ▼
-                                    dreggnet_exec::run_workload  (polyana sandbox)
+                                    dreggnet_exec::run_workload  (owned wasmi sandbox)
                                                      │ Output { values }
                                                      ▼
                                     ResponseSpec::render ─▶ WebResponse
@@ -25,7 +25,7 @@ This is the `dreggnet-webapp` crate.
 
 A `WebApp` is plain `serde` data — an agent can produce it as a JSON document or
 with the `assemble` builders. A route binds a method + exact path to a `Handler`
-(a polyana workload) and a `ResponseSpec` (how to render the handler's result).
+(a sandbox workload) and a `ResponseSpec` (how to render the handler's result).
 
 A handler is either:
 
@@ -53,7 +53,7 @@ platform (the wasm tiers run on macOS + Linux):
 ```sh
 dreggnet-serve --port 8787
 curl -s localhost:8787/hello
-#   hello from an agent-served endpoint — the polyana sandbox computed 42
+#   hello from an agent-served endpoint — the owned wasmi sandbox computed 42
 curl -s 'localhost:8787/add?a=40&b=2'
 #   {"result":42}          (the addition genuinely runs in the wasm sandbox)
 ```
@@ -73,7 +73,7 @@ dreggnet-serve --port 8787 --lease-budget 2
 
 The Linux-only `httpe` gateway adopts the same `Router` via
 `gateway::WebAppHandler` (`gateway/src/webapp.rs`), so a served app's data-plane
-traffic is routed to its polyana handlers through the production gateway. The
+traffic is routed to its sandbox handlers through the production gateway. The
 fly-machines API (`MachinesHandler`) is the control plane; `WebAppHandler` is
 the data plane.
 
@@ -90,15 +90,15 @@ per request.
 
 - **Real:** an agent declares a `WebApp` (data); `Router::serve` matches a
   request, builds the handler's concrete workload (filling templated params,
-  integer-validated), runs it on polyana, and renders the response; the metered
+  integer-validated), runs it on the owned wasmi sandbox, and renders the response; the metered
   `LeasedRouter`; the portable `dreggnet-serve` HTTP server; the gateway
   `WebAppHandler` (cross-compiles for Linux).
 - **Path patterns** — routes match an *exact* path; `/users/{id}` params are a
   later rung. Per-request inputs reach a handler via the query string.
-- **Request body → handler** — the handler entrypoint is polyana's zero-arg
+- **Request body → handler** — the handler entrypoint is the sandbox's zero-arg
   `run`; request data reaches the handler via templated query params, not the
-  body. A richer handler ABI (request bytes in, response bytes out) waits on a
-  polyana host-import shape for it.
+  body. A richer handler ABI (request bytes in, response bytes out) waits on an
+  owned-sandbox host-import shape for it.
 - **Per-request durability** — `LeasedRouter` meters over the real `Lease` gate
   but runs each request through the direct exec path, not a full durable
   per-request `dreggnet_durable` workflow (crash-resume of an in-flight

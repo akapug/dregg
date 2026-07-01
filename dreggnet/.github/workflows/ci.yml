@@ -1,4 +1,4 @@
-# DreggNet CI — the build-gate for the AGPL serving stack.
+# DreggNet CI — the build-gate for the proprietary serving stack.
 #
 # DreggNet is a Linux serving stack (the net/ gateway uses epoll/io_uring and
 # Linux-only socket primitives — see ARCHITECTURE.md "Target: Linux"). The
@@ -13,8 +13,8 @@
 #
 # The toolchain is pinned by rust-toolchain.toml (nightly-2026-03-24); each job
 # also names it explicitly so the setup action installs the right channel +
-# components. polyana is a submodule (path-deps from exec/gateway), checked out
-# recursively.
+# components. The exec crate path-deps only owned workspace crates plus wasmi
+# from crates.io — no git submodule is needed to build.
 name: CI
 
 on:
@@ -32,23 +32,27 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # The macOS-buildable service stack. exec path-deps polyana (default `polyana`
-  # feature → wasmtime/cranelift), so the runner needs cmake + clang for the
-  # native build scripts in the polyana/wasmtime tree (preinstalled on the
+  # The macOS-buildable service stack. exec uses the owned pure-Rust wasmi
+  # sandbox, so no native toolchain is strictly required; cmake is kept as a
+  # belt-and-suspenders for any transitive build script (preinstalled on the
   # GitHub macos-latest image; the `brew install` is a no-op safety net).
   service-stack:
     name: Service stack (macOS)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Ensure cmake (native build scripts)
         run: brew list cmake >/dev/null 2>&1 || brew install cmake
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-03-24
       - uses: Swatinem/rust-cache@v2
+      # The second block (storage/org/status/attach/billing/agent-host/umem) was
+      # EXCLUDED from CI until the test-rigor audit (docs/TEST-RIGOR-agent-cloud.md
+      # §G5) — their real tests never ran, and `dreggnet-umem` holds the ONLY
+      # real-Poseidon2-crypto tests (it depends on `dregg-cell` non-optionally). They
+      # are portable and now run here. (`dreggnet-gateway` is Linux-only and runs in
+      # the `gateway-linux` job below.)
       - name: cargo test (service crates)
         run: |
           cargo test \
@@ -57,7 +61,15 @@ jobs:
             -p dreggnet-exec \
             -p dreggnet-bridge \
             -p dreggnet-control \
-            -p dreggnet-webapp
+            -p dreggnet-webapp \
+            -p dreggnet-ops \
+            -p dreggnet-storage \
+            -p dreggnet-org \
+            -p dreggnet-status \
+            -p dreggnet-attach \
+            -p dreggnet-billing \
+            -p dreggnet-agent-host \
+            -p dreggnet-umem
 
   # The Linux-only net gateway. httpe (and its transport closure) use epoll/
   # io_uring + Linux socket primitives and do not compile on macOS, so they are
@@ -70,8 +82,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -112,8 +122,6 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -129,15 +137,13 @@ jobs:
   # The service-stack characterization benches (exec/durable/webapp) — a
   # compile-and-quick-run SMOKE, not a perf gate. It proves the benches build and
   # their harnesses run; `make bench-smoke` caps iterations to a handful and skips
-  # the durable bench's slow on-disk duroxide path. exec path-deps polyana, so the
-  # native build scripts need cmake + clang (mirrors the gateway/clippy jobs).
+  # the durable bench's slow on-disk duroxide path. cmake + clang are installed to
+  # mirror the gateway/clippy jobs' build environment.
   bench-smoke:
     name: Benches (smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -177,8 +183,6 @@ jobs:
       DATABASE_URL: postgres://dreggnet:dreggnet@localhost:5432/dreggnet
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -197,13 +201,11 @@ jobs:
   # the service-stack test list, so CI never built or tested it. It is portable
   # (pure tokio over dreggnet-bridge); build + test it here. (It carries 0 tests
   # today — this lane is the build gate + the home for its tests when they land.)
-  node-agent:
-    name: Node agent
+  persvati-agent:
+    name: Persvati agent
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -213,8 +215,8 @@ jobs:
         with:
           toolchain: nightly-2026-03-24
       - uses: Swatinem/rust-cache@v2
-      - name: cargo test (node-agent)
-        run: cargo test -p dreggnet-node-agent
+      - name: cargo test (persvati-agent)
+        run: cargo test -p dreggnet-persvati-agent
 
   # The workload-simulation suite (docs/WORKLOAD-TEST-PLAN.md) — the only place the
   # multi-tenant concurrency + economy (Σδ=0, no double-charge) invariants run
@@ -228,8 +230,6 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - name: Install build deps
         run: |
           sudo apt-get update
@@ -241,3 +241,50 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: make test-workload
         run: make test-workload
+
+  # The twin==substrate cross-check (docs/TEST-RIGOR-agent-cloud.md F1/G1). Every
+  # default test settles on the in-process `ConservingLedger` twin; this lane runs
+  # the SAME settlement sweep through the twin AND the real `dregg_cell::CellState`
+  # substrate (`--features dregg-conserve`) and asserts they agree — so the twin is
+  # provably faithful, not just assumed. It needs the sibling breadstuffs (dregg)
+  # checkout for the `dregg-cell` path-dep — the same cross-repo boundary that keeps
+  # the pg-dregg verified-store lane out of single-repo CI — so it is nightly/on-
+  # demand and gated on a repo-access token secret (DREGG_REPO_TOKEN). With the token
+  # absent it self-skips loudly (never a false green); wire the token to run it real.
+  twin-substrate:
+    name: twin==substrate (nightly)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: DreggNet
+      # The sibling dregg (breadstuffs) checkout, for the `dregg-cell` path-dep
+      # (`../../breadstuffs/cell`). Needs a token with read access to emberian/dregg;
+      # continue-on-error so an unconfigured token yields a clean skip below, not a
+      # hard CI failure.
+      - name: Checkout sibling breadstuffs (dregg)
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: emberian/dregg
+          token: ${{ secrets.DREGG_REPO_TOKEN }}
+          path: breadstuffs
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential perl pkg-config libssl-dev cmake clang
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-03-24
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test (twin==substrate, dregg-conserve)
+        working-directory: DreggNet
+        run: |
+          if [ ! -d ../breadstuffs/cell ]; then
+            echo "::warning::sibling breadstuffs checkout absent (set the DREGG_REPO_TOKEN secret) — skipping the twin==substrate lane"
+            exit 0
+          fi
+          cargo test -p dreggnet-durable --features dregg-conserve \
+            --test twin_equals_substrate

@@ -24,7 +24,7 @@ laundered fakes. They are listed below the "verified-real" ledger.
 ### MEDIUM — `federation_qa` is a real crypto primitive that is NOT WIRED into the bin or demo (named-not-wired)
 
 - **file:line** — `src/federation_qa.rs` (whole module); `src/lib.rs:53` (`pub mod federation_qa;` — the only non-test reference in the crate).
-- **pretends** — the module header (`src/federation_qa.rs:1-60`) describes "the QA verdict is submitted to **the live federation (the n=4 nodes — edge · node-a · node-b-lean · node-b-rust)**", each operator re-executing "on its OWN substrate", and says "In production the oracle is the operator's local tier run … on its own node" (`:121-122`).
+- **pretends** — the module header (`src/federation_qa.rs:1-60`) describes "the QA verdict is submitted to **the live federation (the n=4 nodes — edge · persvati · snoopy-lean · snoopy-rust)**", each operator re-executing "on its OWN substrate", and says "In production the oracle is the operator's local tier run … on its own node" (`:121-122`).
 - **does** — `Operator` (`:127-131`) holds an **injected in-process closure** `rerun: Box<dyn Fn(&WitnessedRun) -> Option<ReWitness>>`. There is **no code path anywhere in the crate that constructs a `Federation`, contacts a remote node, or wires a per-operator remote substrate** — the only callers are the module's own `#[cfg(test)]` tests, which build 4 keypairs + 4 closures in one process. The demo (`demo/business.sh`) never invokes it. The quorum-verify LOGIC itself is genuinely real (see ledger below): `verify_quorum_cert` (`:400-482`) does real ed25519 per-vote verification, rejects unknown/duplicate/off-topic/forged votes, enforces the threshold, and names dissenters — non-vacuous.
 - **severity** — MEDIUM. Not a demo fakeout (it is never on the demo path, so it fakes nothing a judge runs), and the verify logic is real. But the "the live federation (n=4 nodes)" / "In production the oracle is the operator's local tier run on its own node" framing over-states integration: the production remote-node oracle is unimplemented; only the in-process closure exists. A reader of the header could believe 4 independent machines are contacted.
 - **fakeout-or-honest-label** — MIXED. The body honestly says "in the std/test path it is a supplied closure" (`:123`) and the boundary section (`:50-60`) is candid that light-client-witnessed re-exec is the deeper unclosed seam. The *over-claim* is only the "live federation" / "in production … on its own node" phrasing versus zero wiring.
@@ -77,7 +77,7 @@ laundered fakes. They are listed below the "verified-real" ledger.
 - `stripe_skills.rs:110-176` `RecordedStripeSkills` — labelled `"recorded"`, `live:false`, "(needs a key)"-style funding notes.
 - `harness.rs:161` `MockHarness` — named "the fake harness driver"; the real path is `SubprocessHarness`.
 - `hermes.rs:186` `recorded_hermes_demo_calls` — "honestly labelled, never a faked live success" (`hermes.rs:47`).
-- `toolkit.rs:592` `runner` — a test-only "mock compute runner"; the cloud wires polyana behind the same seam.
+- `toolkit.rs:592` `runner` — a test-only "mock compute runner"; the cloud wires the owned sandbox engine behind the same seam.
 - `demo/business.sh:63-69` — prints "(no model key — replaying a bundled transcript; tools run for real)" before a `--replay`.
 - `demo/run.json` / `skills-run.json` `funding` — "Stripe Skills: RECORDED — set ~/.stripekey … for the live leg".
 

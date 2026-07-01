@@ -24,7 +24,7 @@
 //!   config round-trips into a real userspace engine (boringtun-backed).
 //! - [`Mesh`] / [`MeshLink`] — the link abstraction: `connect(node) -> MeshLink`,
 //!   then `health_check()` / `dispatch_target(port)` over the established link.
-//! - [`TailscaleMesh`] — the **live** backend the edge↔node-a deploy uses: it
+//! - [`TailscaleMesh`] — the **live** backend the edge↔persvati deploy uses: it
 //!   rides the host's existing tailnet/headscale overlay (no per-process tunnel),
 //!   addresses each node by its tailnet IP, and is cross-platform.
 //! - [`StubMesh`] — a cross-platform backend for the macOS dev host and unit tests;
@@ -38,12 +38,12 @@
 //! [`dispatch_lease_over_mesh`] (wired into [`crate::Ec2Provider::run_lease`])
 //! establishes the link, health-checks the node over it, then issues the real
 //! `POST <overlay-addr>:8021/fulfill` carrying the lease and decodes the durable
-//! metered [`DurableOutput`] the remote bridge agent (the node-agent) returns.
+//! metered [`DurableOutput`] the remote bridge agent (the persvati-agent) returns.
 //! All three legs are real over a live link; a 4xx refusal maps to a lapse. A plain
 //! [`StubMesh`] link (no live tunnel, no override) has no dispatch carrier, so a
 //! dispatch over it surfaces as the named live-overlay step (the honest macOS-dev
-//! / no-tailnet default). Proven live edge→node-a through the control plane (see
-//! `deploy/COMPUTE-BACKEND.md`); the unit tests drive the POST against a local
+//! / no-tailnet default). Proven live edge→persvati through the control plane (see
+//! `deploy/PERSVATI-BACKEND.md`); the unit tests drive the POST against a local
 //! fulfill stub.
 
 use std::collections::HashMap;
@@ -269,7 +269,7 @@ enum LinkState {
     /// The host is already on the tailnet/headscale overlay (e.g. `tailscale0` is
     /// up and routes the overlay CIDR). The link addresses the node by its tailnet
     /// IP and lets the host carry the bytes — no per-process tunnel, so this is
-    /// cross-platform and is what the live edge↔node-a deploy uses. `health_check`
+    /// cross-platform and is what the live edge↔persvati deploy uses. `health_check`
     /// and the dispatch POST are real TCP over the host overlay.
     Tailscale,
     /// A real WireGuard engine is up for this link. `peer_count` is the number of
@@ -409,7 +409,7 @@ impl StubMesh {
     /// A stub whose links are reachable *and* send the dispatch POST to `addr` — a
     /// concrete local fulfill stub. This is how a unit test drives the real POST
     /// code path (`POST /fulfill`) against a loopback server that speaks the same
-    /// `:8021/fulfill` contract the node-agent does, with no live overlay.
+    /// `:8021/fulfill` contract the persvati-agent does, with no live overlay.
     pub fn dispatching_to(addr: SocketAddr) -> StubMesh {
         StubMesh {
             reachable: true,
@@ -437,9 +437,9 @@ impl Mesh for StubMesh {
 }
 
 /// The mesh that rides the host's existing tailnet/headscale overlay — the backend
-/// the **live** edge↔node-a deploy uses. It does not stand up its own tunnel: it
+/// the **live** edge↔persvati deploy uses. It does not stand up its own tunnel: it
 /// assumes the host is already on the overlay (`tailscale0` is up and routes the
-/// overlay CIDR, as on the DreggNet edge `100.64.0.1` reaching node-a
+/// overlay CIDR, as on the DreggNet edge `100.64.0.1` reaching persvati
 /// `100.64.0.2`), addresses each node by its tailnet IP, and lets the host carry the
 /// bytes. So it is cross-platform (no Linux-only WireGuard engine) and its links are
 /// live: `health_check` is a real TCP probe and the dispatch POST is real HTTP over
@@ -534,7 +534,7 @@ pub fn default_mesh(_config: MeshConfig) -> std::sync::Arc<dyn Mesh> {
 /// workload to its bridge agent. This is the control-plane-uses-the-mesh path:
 /// it establishes the link, health-checks the node over it, and then issues the
 /// real `POST <overlay-addr>:8021/fulfill` carrying the lease, returning the
-/// durable metered result the remote bridge agent (the node-agent) produces.
+/// durable metered result the remote bridge agent (the persvati-agent) produces.
 ///
 /// All three legs are real:
 /// - **connect** — on Linux this builds a real WireGuard engine from the rendered
@@ -542,8 +542,8 @@ pub fn default_mesh(_config: MeshConfig) -> std::sync::Arc<dyn Mesh> {
 /// - **health-check** — the node must answer over the link before it is handed work.
 /// - **dispatch** — a real HTTP `POST /fulfill` to the link's dispatch target (the
 ///   node's overlay address for a live WireGuard link; a local fulfill stub for a
-///   [`StubMesh::dispatching_to`] link in a unit test). The node-agent runs the
-///   lease as a durable polyana workflow and returns the metered [`DurableOutput`].
+///   [`StubMesh::dispatching_to`] link in a unit test). The persvati-agent runs the
+///   lease as a durable metered workflow and returns the metered [`DurableOutput`].
 ///
 /// A plain stub link (the macOS dev host / honest default — no live tunnel, no
 /// override) has no dispatch carrier, so dispatch over it surfaces as the named
@@ -590,7 +590,7 @@ pub async fn dispatch_lease_over_mesh(
 
 /// Issue the real `POST <target>/fulfill` carrying `lease`, and decode the durable
 /// metered [`DurableOutput`] the bridge agent returns. This speaks exactly the
-/// `:8021/fulfill` contract the node-agent serves (`deploy/node-agent`):
+/// `:8021/fulfill` contract the persvati-agent serves (`deploy/persvati-agent`):
 /// the request body is the JSON lease descriptor, the response body is the metered
 /// `{ step1, step2, outputs, meter_units, … }`.
 ///
@@ -973,7 +973,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_issues_a_real_post_and_decodes_the_metered_result() {
         // The dispatch code path for real: stand up a local fulfill stub speaking
-        // the same `:8021/fulfill` contract the node-agent does, point a stub
+        // the same `:8021/fulfill` contract the persvati-agent does, point a stub
         // mesh link at it, and dispatch a funded lease. The control plane must
         // issue a real `POST /fulfill` carrying the lease and decode the durable
         // metered result back — the gateway→(bridge agent) path with the overlay
@@ -1005,7 +1005,7 @@ mod tests {
 
     #[tokio::test]
     async fn tailscale_mesh_dispatches_over_a_live_link() {
-        // The live backend the edge↔node-a deploy uses: a TailscaleMesh link is
+        // The live backend the edge↔persvati deploy uses: a TailscaleMesh link is
         // live (a real TCP probe + a real POST to the node's tailnet IP), riding
         // the host overlay. Pointing the node's overlay address at a loopback
         // fulfill stub exercises the genuine backend path with no live overlay.
@@ -1065,7 +1065,7 @@ mod tests {
     /// Stand up a local server speaking the `:8021/fulfill` contract: for every
     /// `POST /fulfill` it captures the raw request into `captured`, then replies
     /// `status`. With `body = None` it returns a canned metered success envelope
-    /// (the shape the node-agent produces for the `add(40,2)→×2` dogfood lease);
+    /// (the shape the persvati-agent produces for the `add(40,2)→×2` dogfood lease);
     /// with a body it returns that verbatim. Bare connect-then-close probes (the
     /// health-check leg) are ignored, so the live-link path (probe + POST) is served.
     /// Loops for the test's lifetime. Returns the loopback address to dispatch at.

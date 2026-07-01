@@ -1,6 +1,6 @@
 [package]
 name = "dreggnet-webapp"
-description = "DreggNet agent-served web apps: an agent declares routes → polyana handlers; DreggNet runs them on polyana under a lease and serves them over HTTP"
+description = "DreggNet agent-served web apps: an agent declares routes → owned-wasm handlers; DreggNet runs them on the owned sandbox under a lease and serves them over HTTP"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -14,12 +14,12 @@ path = "src/lib.rs"
 
 # The agent-served-web-API capability (ARCHITECTURE.md headline: "fully agentic
 # web-facing apps"). An agent assembles a `WebApp` — a set of HTTP routes, each
-# bound to a polyana workload handler — and DreggNet serves it:
+# bound to an owned-sandbox workload handler — and DreggNet serves it:
 #
 #   inbound HTTP  ──▶  Router::serve   (match the route)
 #                        │  build the handler's WorkloadSpec from the request
 #                        ▼
-#                      dreggnet_exec::run_workload  (the handler RUNS on polyana)
+#                      dreggnet_exec::run_workload  (the handler RUNS on the owned sandbox)
 #                        │  render the returned value(s)
 #                        ▼
 #                      WebResponse     (served back over HTTP)
@@ -28,19 +28,19 @@ path = "src/lib.rs"
 # (the wasm tiers build + run on macOS and Linux) and `dreggnet-bridge` (for the
 # `Lease` type + the real lease gate, for per-request metering), NOT on the
 # Linux-only `net/` gateway stack. So `cargo test -p dreggnet-webapp` runs a real
-# request→polyana-handler→response end to end on any host, and the bundled
+# request→owned-sandbox-handler→response end to end on any host, and the bundled
 # `dreggnet-serve` binary serves an assembled WebApp over real TCP cross-platform.
 # The fly-machines gateway (Linux-only) adopts this crate's `Router` to route
 # inbound HTTP to a served app (`gateway/src/webapp.rs`).
 
 # A cross-platform serving binary: bind a TCP listener and serve an assembled
-# WebApp over a small HTTP/1.1 loop, routing each request to its polyana handler.
+# WebApp over a small HTTP/1.1 loop, routing each request to its owned-sandbox handler.
 [[bin]]
 name = "dreggnet-serve"
 path = "src/bin/dreggnet-serve.rs"
 
 # The static-hosting serving binary: publish a directory as a minisite cell
-# (cap-gated, receipted) and serve it by `Host` the way `example.com` routes.
+# (cap-gated, receipted) and serve it by `Host` the way `dregg.works` routes.
 #   dreggnet-host --dir ./site --name blog --port 8080
 [[bin]]
 name = "dreggnet-host"
@@ -51,7 +51,7 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# The execution surface: a handler RUNS as a real polyana workload through this
+# The execution surface: a handler RUNS as a real owned-sandbox workload through this
 # (the wasm tiers run on macOS + Linux, so the served handler genuinely executes
 # in the sandbox on any host).
 dreggnet-exec = { path = "../exec" }

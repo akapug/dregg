@@ -3,10 +3,10 @@
 ## Layering (bottom → top)
 
 ```
-  the fleet (bare metal / cloud)                ← the host
+  Hetzner fleet (bare metal / cloud)            ← the host
   └─ wireguard (boringtun) / tailscale mesh     ← secure plane between control + fleet (control::wg + TailscaleMesh)
-     └─ polyana (submodule)                      ← the execution engine (sandboxed, durable, polyglot)
-        └─ dreggnet-bridge (build)               ← fulfills a dregg execution-lease ⟷ a live polyana workload
+     └─ dreggnet-exec (owned, in-crate)          ← the execution engine (owned wasmi sandbox; stronger tiers are fail-closed seams)
+        └─ dreggnet-bridge (build)               ← fulfills a dregg execution-lease ⟷ a live sandbox workload
            └─ dreggnet-control (build)           ← scheduling, provisioning, lifecycle, billing-ticks
               └─ dreggnet-gateway (dreggnet-http) ← the public API (fly.io-compatible surface), per-workload ingress
                  └─ agents                        ← rent durable execution, reach their workload
@@ -17,20 +17,20 @@ dregg (`~/dev/breadstuffs`, AGPL) provides the **rail**: the `execution-lease` c
 `StandingObligation` (per-period metering), the ToolGateway (pay-per-tool). DreggNet
 consumes that rail and provides the **reality**.
 
-## polyana integration
+## The owned execution engine
 
-polyana is `akapug/polyana` (Apache-2.0), co-developed with an external contributor. It must NOT be forked
-or absorbed.
-- **Pinned:** added as a git submodule at `polyana/` (`git submodule add
-  git@github.com:akapug/polyana.git polyana`, on `main`). Portable + version-pinned.
-- **Local dev:** the sibling polyana checkout is always current with upstream;
-  a `polyana` feature on `dreggnet-exec` (rung 2) will path-dep `polyana-core` from
-  either the submodule or the sibling.
-- DreggNet uses polyana's exec surface — the `polyana-core::ExecutionProvider` trait
-  (`src/core/src/provider.rs`: `load_component` → `instantiate_with_caps(cap_tier)` →
-  `call`) and the `polyana-mcp-server` front door — to run a workload at the cap-grade
-  the dregg lease authorizes. polyana already carries a counterpart
-  `polyana-dregg-bridge` crate (`src/dregg-bridge`) that references the dregg repo.
+The compute is **owned and in-crate** — there is no external submodule and no
+external compute dependency.
+- **`dreggnet-exec`** is the execution seam. The `Sandboxed` cap-tier runs on a
+  vendored pure-Rust `wasmi` interpreter (zero unsafe), which genuinely executes
+  (the `add(40,2)=42` dogfood runs here).
+- Every stronger tier (`JitSandboxed`/JIT, `Caged`/native, `MicroVm`/microVM,
+  `Gpu`, and the native python/node langs) is an honest, fail-closed seam today
+  (`ExecError::NotWired`/`TierNotServed`) — never a fake run, never a silent
+  downgrade. Wiring an owned engine per tier is future work.
+- `dreggnet-exec` maps the dregg lease's cap-grade → a sandbox tier → the owned
+  engine, running a workload at the cap-grade the dregg lease authorizes. See
+  `docs/COMPUTE-TIERS.md`.
 
 ## Build status — the serving layer is owned, AGPL-clean
 
@@ -53,7 +53,7 @@ linked Elide code — `control → wireguard` (Linux-only) — was replaced by `
 ### Target + cross-build
 
 `boringtun` is cross-platform userspace, so the mesh engine now builds on every host
-(the old Elide net stack was Linux-only). The deploy target is still Linux (the bare-metal
+(the old Elide net stack was Linux-only). The deploy target is still Linux (the Hetzner
 fleet); from a macOS dev box `cargo-zigbuild` cross-compiles:
 
 ```
@@ -64,12 +64,13 @@ cargo zigbuild --target x86_64-unknown-linux-gnu -p dreggnet-gateway   # the gat
 ## The bridge (the keystone — where the two halves meet)
 
 A funded dregg `execution-lease` (the verified record: who, what cap-grade, what budget,
-metered per-period) is the *authorization*; the bridge turns it into a running polyana
+metered per-period) is the *authorization*; the bridge turns it into a running sandbox
 workload:
 1. Watch dregg for funded/active leases (via the dregg node / light client).
-2. Map the lease's cap-grade → a polyana sandbox tier (wasmtime / native+seccomp /
-   firecracker / …) and language/provider chain.
-3. Launch the workload on the fleet; checkpoint its durable image (polyana replay).
+2. Map the lease's cap-grade → a sandbox tier (the owned `wasmi` `Sandboxed` tier;
+   stronger tiers — JIT / native+seccomp / microVM — are fail-closed seams today)
+   and language routing.
+3. Launch the workload on the fleet; checkpoint its durable image (replay).
 4. Tick the lease meter (`StandingObligation`) each period; settle via `Payable`.
 5. On lapse / revocation, reap the workload. On stitch/branch (dregg's reversibility),
    fork the durable image.
@@ -115,11 +116,11 @@ node's bridge agent over the tunnel — that needs two machines, not a unit test
 Rungs 1–5 are **done and build today**; rung 6 (live metal) is the build ahead.
 
 1. ✅ **Workspace + green build** — a coherent Cargo workspace that builds on the owned `dreggnet-http` serving vocabulary (the Elide `net/*` stack has since been ejected — `docs/ELIDE-NET-EJECTION.md`).
-2. ✅ **polyana wired** — submodule (or path-dep) + a `dreggnet-exec` crate that runs a trivial workload through polyana's provider API (the `add(40,2)=42` dogfood, but driven by us).
-3. ✅ **The bridge** — `dreggnet-bridge`: read a (mock, then `dregg-verify`-decoded) dregg `execution-lease` → launch a durable polyana workflow at the mapped tier → tick the meter. The lease⟷workload⟷meter weld is proven end to end.
-4. ✅ **The control plane** — `dreggnet-control`: scheduling, provider provisioning (bare-metal + EC2), fleet lifecycle, the settlement ledger, the mesh.
+2. ✅ **Owned engine wired** — a `dreggnet-exec` crate that runs a trivial workload through the owned `wasmi` sandbox (the `add(40,2)=42` dogfood, driven by us); stronger tiers are fail-closed seams.
+3. ✅ **The bridge** — `dreggnet-bridge`: read a (mock, then `dregg-verify`-decoded) dregg `execution-lease` → launch a durable metered workflow at the mapped tier → tick the meter. The lease⟷workload⟷meter weld is proven end to end.
+4. ✅ **The control plane** — `dreggnet-control`: scheduling, provider provisioning (Hetzner + EC2), fleet lifecycle, the settlement ledger, the mesh.
 5. ✅ **The gateway** — `dreggnet-gateway`: the runnable fly-compatible machines API server binary; per-workload ingress over the mesh.
-6. **Bare-metal deploy** — real metal, the live mesh, a first paying workload. (The build ahead.)
+6. **Hetzner deploy** — real metal, the live mesh, a first paying workload. (The build ahead.)
 
 ## Productization (the two vision rungs above the ladder)
 
@@ -127,8 +128,8 @@ Rungs 1–5 are **done and build today**; rung 6 (live metal) is the build ahead
 
 The headline vision: **fully agentic web-facing apps** — an agent autonomously
 assembles a web API and DreggNet runs + serves it. An agent declares a `WebApp`
-(routes → polyana handlers, plain `serde` data); the router matches an inbound
-request, **runs the matched handler on polyana** (`dreggnet_exec::run_workload`),
+(routes → sandbox handlers, plain `serde` data); the router matches an inbound
+request, **runs the matched handler on the owned sandbox** (`dreggnet_exec::run_workload`),
 and renders the response. A `LeasedRouter` meters each served request against a
 funded dregg execution-lease (validated through the bridge's real gate) and
 refuses an over-budget request with `402` before the handler runs.

@@ -1,6 +1,6 @@
 //! Control-plane characterization: the full lease lifecycle through the
 //! scheduler — `place` (provision a LocalProvider machine + fulfill the lease as
-//! a durable, metered polyana workflow) and `reap` (terminate the machine) —
+//! a durable, metered workflow) and `reap` (terminate the machine) —
 //! sequential latency and concurrent throughput (leases/sec vs N).
 //!
 //! The `LocalProvider` runs the workload in-process via the bridge (the proven

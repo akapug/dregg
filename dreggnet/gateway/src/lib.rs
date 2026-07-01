@@ -14,7 +14,7 @@
 //!                          MachineGateway          (records the machine + its lease)
 //!                            │  workflow_input_for_lease   (the bridge's REAL lease gate)
 //!                            ▼
-//!                          dreggnet_bridge::fulfill (the durable polyana workload, metered)
+//!                          dreggnet_bridge::fulfill (the durable owned-sandbox workload, metered)
 //! ```
 //!
 //! ## The fly-compatible surface
@@ -30,7 +30,7 @@
 //!
 //! The durable launch ([`MachineGateway::fulfill`]) either **dispatches the lease
 //! over the overlay to a compute node** (a [`ComputeBackend`], the live
-//! edge→node-a path via [`dreggnet_control::dispatch_lease_over_mesh`]) or, with
+//! edge→persvati path via [`dreggnet_control::dispatch_lease_over_mesh`]) or, with
 //! no backend configured, fulfills it **in-process** ([`dreggnet_bridge::fulfill`],
 //! the single-box / dev default). The serving binary blocks on it from the create
 //! request path (the connection loop is synchronous thread-per-connection), so a
@@ -43,7 +43,7 @@
 //!   so a small workload can use the cheaper sandbox tier the bridge wires today.
 //! - The lease budget is currently *derived from the guest size*; a real funded
 //!   lease is read from a dregg lease cell (the bridge's `dregg-verify` lane).
-//! - `image` is a polyana workload reference, not an OCL image pull.
+//! - `image` is an owned-sandbox workload reference, not an OCL image pull.
 //!
 //! Built on the gateway's own clean-room HTTP value vocabulary
 //! ([`dreggnet_http`]) over a hand-rolled `std::net` serving loop — pure-`std`,

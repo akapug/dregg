@@ -1,6 +1,6 @@
 [package]
 name = "dreggnet-bridge"
-description = "DreggNet bridge (the keystone): a funded dregg execution-lease drives a durable polyana workflow, metered against the lease budget"
+description = "DreggNet bridge (the keystone): a funded dregg execution-lease drives a durable metered workflow on the owned sandbox, metered against the lease budget"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -16,8 +16,7 @@ name = "dreggnet_bridge"
 #   dregg execution-lease  (the AUTHORIZATION — who, what cap-grade, what budget)
 #     └─ dreggnet-bridge    (THIS crate — maps the lease → a tier, fulfills it)
 #        └─ dreggnet-durable (the durable, exactly-once, crash-resumable workflow)
-#           └─ dreggnet-exec (run_workload → polyana, at the mapped cap-tier)
-#              └─ polyana    (the sandboxed execution engine)
+#           └─ dreggnet-exec (run_workload → the owned wasmi sandbox, at the mapped cap-tier)
 #
 # The honest invariant (ARCHITECTURE.md "The bridge"): the bridge never lets a
 # workload run beyond what the lease authorizes, and never claims more than the
@@ -28,66 +27,21 @@ name = "dreggnet_bridge"
 
 [features]
 default = []
-# `dregg-verify` is the (off-by-default) lane toward polyana's own
-# `polyana-dregg-bridge` (the dregg verified-core surface). It is OFF by default
-# for two load-bearing reasons:
-#   1. LICENSE — `emberian/dregg` is AGPL-3.0-or-later; pulling it in is what
-#      makes a build a derivative work. Polyana keeps its default build
-#      Apache-pure behind the same gate (see polyana/src/dregg-bridge/README.md);
-#      DreggNet keeps the default `dreggnet-bridge` build off that lane too, so
-#      `cargo test -p dreggnet-bridge` resolves + builds offline with zero dregg
-#      git in the lock.
-#   2. THE REAL READ — `DreggNodeFeed` (see `crate::watch` / `crate::dregg_verify`)
-#      reads funded execution-lease grants from a dregg node's receipt log via
-#      `polyana_dregg_bridge::query_shadow_attest_whole_log` (the attested
-#      whole-log read) and decodes each into a `Lease`. That code is REAL and lives
-#      behind `#[cfg(feature = "dregg-verify")]` today; flipping the feature on is a
-#      two-part step (the `dreggnet-bridge`-local dep AND a root [patch]
-#      reconciliation), so the feature value stays `[]` here — see FLIP-ON below.
-#
-# FLIP-ON (verified mechanical, but a ROOT-workspace change the main loop owns):
-#   a. In THIS file, replace `dregg-verify = []` with:
-#        dregg-verify = ["dep:polyana-dregg-bridge", "polyana-dregg-bridge/dregg-verify"]
-#      and add to [dependencies]:
-#        polyana-dregg-bridge = { path = "../polyana/src/dregg-bridge", optional = true }
-#      (path-dep'd from the sibling polyana workspace exactly as `dreggnet-exec`
-#      path-deps polyana's provider crates.)
-#   b. In the DreggNet ROOT Cargo.toml `[patch.crates-io]`, port the three patches
-#      polyana's root carries (Cargo does NOT inherit patches across git/path deps,
-#      so the dregg tree does not resolve without them — `dregg-hints` needs the
-#      `serde_with` feature on Ember's arkworks fork, and the bridge links the
-#      vendored lockstitch):
-#        ark-serialize        = { git = "https://github.com/emberian/algebra", rev = "814047cb263115c6388f237614f7fdbff8170c61" }
-#        ark-serialize-derive = { git = "https://github.com/emberian/algebra", rev = "814047cb263115c6388f237614f7fdbff8170c61" }
-#        lockstitch           = { path = "polyana/src/dregg-bridge/vendor/lockstitch-0.29.0" }
-#
-# FLIPPED ON: the verified on-chain lease read is wired. The root [patch.crates-io]
-# carries the three patches this graph needs (ark-serialize/-derive on Ember's
-# `serde_with` arkworks fork + the vendored lockstitch), so the whole workspace
-# resolves with the `polyana-dregg-bridge` path-dep present. The default build
-# still does NOT compile the dregg verified core (the feature is off by default);
-# `--features dregg-verify` links it and turns on the light-client-verified decode
-# in `crate::dregg_verify` / `crate::watch::DreggNodeFeed`.
-dregg-verify = ["dep:polyana-dregg-bridge", "polyana-dregg-bridge/dregg-verify", "dep:dregg-query"]
+# NOTE: the light-client verified read of a real dregg node's receipt log (funded
+# execution-lease grants → `Lease`) is a NAMED SEAM (`crate::dregg_verify`). Its
+# earlier implementation rode an external re-export of the
+# dregg verified core; that external engine is no longer part of DreggNet. The
+# verified-read wire is now an owned-dregg-verify dependency to be brought in
+# directly (not via an external submodule) — until then `crate::dregg_verify`
+# fails closed. See `docs/COMPUTE-TIERS.md` / `crate::dregg_verify`.
 
 [dependencies]
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# The dregg verified-core surface (cap-gate + verified whole-log attestation +
-# funded-lease decode), re-exported from the sibling polyana workspace. Optional:
-# resolved into the lockfile but only COMPILED under `dregg-verify`.
-polyana-dregg-bridge = { path = "../polyana/src/dregg-bridge", optional = true }
-# The dregg attested-query client types (`IndexRangeResponse` / `EffectSummary` /
-# `ReceiptRecord`) for the LIGHT-CLIENT verified lease read: the node's certified
-# `/api/receipts/index/range` slice is verified against the published receipt-chain
-# MMR root (the non-omission `RangeOpening`) before any grant is trusted. Same
-# pinned dregg rev as `polyana-dregg-bridge`; optional, compiled only under the feature.
-dregg-query = { git = "https://github.com/emberian/dregg.git", rev = "a0a0a019692870d9ec992744042de2df8c19be0c", package = "dregg-query", optional = true }
-
-# The durable, exactly-once, crash-resumable workflow layer (wraps a polyana
-# workload as a duroxide orchestration + the MeterTick activity).
+# The durable, exactly-once, crash-resumable workflow layer (wraps an owned
+# sandbox workload as a duroxide orchestration + the MeterTick activity).
 dreggnet-durable = { path = "../durable" }
 # The execution surface — for the CapTier the lease cap-grade maps onto.
 dreggnet-exec = { path = "../exec" }
@@ -102,7 +56,7 @@ tokio = { workspace = true }
 tempfile = { workspace = true }
 # The concurrent-fulfill deadlock regression captures duroxide's WARN events
 # (via a minimal in-test `tracing::Subscriber`) to assert NO "database is
-# deadlocked" storm occurs (the node-b power-event symptom).
+# deadlocked" storm occurs (the snoopy power-event symptom).
 tracing = { workspace = true }
 
 # Lease-fulfillment characterization (gate + sequential/concurrent fulfill).

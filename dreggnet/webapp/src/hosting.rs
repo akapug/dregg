@@ -1,14 +1,14 @@
 //! `hosting` — static minisite hosting on the verified rail: **a site is a dregg cell.**
 //!
-//! Where [`crate::router`] serves an agent's *dynamic* API (routes → polyana
+//! Where [`crate::router`] serves an agent's *dynamic* API (routes → the owned sandbox
 //! handlers), this module serves *static* web content — a minisite (HTML/CSS/JS,
 //! images, a whole `index.html` + assets) — backed by a dregg cell. The headline
-//! shape DreggNet exposes on `example.com`:
+//! shape DreggNet exposes on `dregg.works`:
 //!
 //! ```text
 //!   PUBLISH (a cap-gated, receipted turn)        SERVE (read-only, public)
 //!   ─────────────────────────────────────        ─────────────────────────
-//!   PublishCap  site-host/<name>                  GET  https://<name>.example.com/
+//!   PublishCap  site-host/<name>                  GET  https://<name>.dregg.works/
 //!     └─ SiteRegistry::publish ─▶ SiteCell          └─ SiteRegistry::resolve
 //!          { name, owner, content_root,                  │ host → <name>
 //!            content: path → Asset }                     │ path → Asset
@@ -181,7 +181,7 @@ impl SiteContent {
 /// the publish turn writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SiteCell {
-    /// The route name — the subdomain label served at `<name>.example.com`.
+    /// The route name — the subdomain label served at `<name>.dregg.works`.
     pub name: String,
     /// The owner cell/agent that published this site (the cap holder). Provable:
     /// the publish receipt binds `(name, owner, content_root)`.
@@ -565,7 +565,7 @@ impl BandwidthMeter {
 /// The registry of published site cells — the hosting **data plane**.
 ///
 /// Publishing inserts a cap-gated, receipted [`SiteCell`]; serving resolves an
-/// inbound request's `Host` (`<name>.example.com`) to the named cell and serves its
+/// inbound request's `Host` (`<name>.dregg.works`) to the named cell and serves its
 /// content. This is what the gateway adopts (`gateway/src/hosting.rs`) and what the
 /// portable `dreggnet-host` binary serves over real TCP.
 ///
@@ -880,7 +880,7 @@ impl SiteRegistry {
 
     /// Resolve + serve one request, given the request's `Host` header.
     ///
-    /// Extracts the `<name>` label from `<name>.example.com` (port + apex stripped),
+    /// Extracts the `<name>` label from `<name>.dregg.works` (port + apex stripped),
     /// looks up the site cell, and serves `req`'s path against its content. An
     /// unresolvable host is a `404`; a request the host resolves to but whose path
     /// misses is the cell's own `404`.
@@ -897,7 +897,7 @@ impl SiteRegistry {
     /// bandwidth counter (the single byte-counting hook, so neither the wildcard nor
     /// the custom-domain serving path double-counts).
     ///
-    /// This is the serving-loop entry both `<name>.example.com` ([`resolve`]) and a
+    /// This is the serving-loop entry both `<name>.dregg.works` ([`resolve`]) and a
     /// verified custom domain (`gateway/src/hosting.rs`) funnel through.
     pub fn serve_site(&self, name: &str, req: &WebRequest) -> WebResponse {
         // A lapsed site (budget exhausted) is refused 402 before any content read.
@@ -952,8 +952,8 @@ impl SiteRegistry {
 
 /// Extract the site `<name>` label from a request `Host`.
 ///
-/// `<name>.example.com[:port]` → `Some(name)`. The bare apex `example.com` and
-/// `www.example.com` resolve to `None` (no per-site landing here). For local
+/// `<name>.dregg.works[:port]` → `Some(name)`. The bare apex `dregg.works` and
+/// `www.dregg.works` resolve to `None` (no per-site landing here). For local
 /// testing without DNS, a host that is *exactly* a bare label (no dot, e.g.
 /// `blog` or `blog:8080`) resolves to that label, so `curl -H 'Host: blog'` hits
 /// the `blog` site against a local gateway.
@@ -963,8 +963,8 @@ pub fn site_name_from_host(host: &str) -> Option<String> {
     if host.is_empty() {
         return None;
     }
-    if let Some(label) = host.strip_suffix(".example.com") {
-        // `<name>.example.com`; reject the `www` apex alias and empty/multi-label.
+    if let Some(label) = host.strip_suffix(".dregg.works") {
+        // `<name>.dregg.works`; reject the `www` apex alias and empty/multi-label.
         if label.is_empty() || label == "www" || label.contains('.') {
             return None;
         }
@@ -1189,7 +1189,7 @@ pub fn sample_site() -> SiteContent {
         .with(
             "/index.html",
             "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/style.css\">\
-             <title>hosted on example.com</title></head>\
+             <title>hosted on dregg.works</title></head>\
              <body><h1>hello from a dregg cell</h1>\
              <p>this minisite is backed by a published site cell.</p></body></html>",
         )
@@ -1223,16 +1223,16 @@ mod tests {
     #[test]
     fn host_resolution() {
         assert_eq!(
-            site_name_from_host("blog.example.com").as_deref(),
+            site_name_from_host("blog.dregg.works").as_deref(),
             Some("blog")
         );
         assert_eq!(
-            site_name_from_host("Blog.example.com:443").as_deref(),
+            site_name_from_host("Blog.dregg.works:443").as_deref(),
             Some("blog")
         );
-        assert_eq!(site_name_from_host("example.com"), None);
-        assert_eq!(site_name_from_host("www.example.com"), None);
-        assert_eq!(site_name_from_host("a.b.example.com"), None);
+        assert_eq!(site_name_from_host("dregg.works"), None);
+        assert_eq!(site_name_from_host("www.dregg.works"), None);
+        assert_eq!(site_name_from_host("a.b.dregg.works"), None);
         // local-testing bare-label fallback
         assert_eq!(site_name_from_host("blog").as_deref(), Some("blog"));
         assert_eq!(site_name_from_host("blog:8080").as_deref(), Some("blog"));
@@ -1296,7 +1296,7 @@ mod tests {
             .with(
                 "/index.html",
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/style.css\">\
-                 <title>hosted on example.com</title></head>\
+                 <title>hosted on dregg.works</title></head>\
                  <body><h1>hello from a dregg cell</h1>\
                  <p>this minisite is backed by a published site cell.</p></body></html>",
             );
@@ -1449,22 +1449,22 @@ mod tests {
             .expect("publish");
 
         // Serve the index over the host resolver.
-        let resp = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let resp = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(resp.status, 200);
         assert_eq!(resp.content_type, "text/html; charset=utf-8");
         assert!(resp.body_str().contains("hello from a dregg cell"));
 
         // Serve the stylesheet with the right content-type.
-        let css = reg.resolve("blog.example.com", &WebRequest::get("/style.css"));
+        let css = reg.resolve("blog.dregg.works", &WebRequest::get("/style.css"));
         assert_eq!(css.status, 200);
         assert_eq!(css.content_type, "text/css; charset=utf-8");
 
         // Unknown site → 404.
-        let miss = reg.resolve("nope.example.com", &WebRequest::get("/"));
+        let miss = reg.resolve("nope.dregg.works", &WebRequest::get("/"));
         assert_eq!(miss.status, 404);
 
         // Unknown path on a known site → 404.
-        let miss2 = reg.resolve("blog.example.com", &WebRequest::get("/nope"));
+        let miss2 = reg.resolve("blog.dregg.works", &WebRequest::get("/nope"));
         assert_eq!(miss2.status, 404);
     }
 
@@ -1494,9 +1494,9 @@ mod tests {
             .expect("publish");
 
         // Each successful serve records its delivered body bytes against the site.
-        let r1 = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let r1 = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(r1.status, 200);
-        let r2 = reg.resolve("blog.example.com", &WebRequest::get("/style.css"));
+        let r2 = reg.resolve("blog.dregg.works", &WebRequest::get("/style.css"));
         assert_eq!(r2.status, 200);
         let expected = r1.body.len() as u64 + r2.body.len() as u64;
         assert_eq!(bw.served("blog"), expected);
@@ -1504,7 +1504,7 @@ mod tests {
 
         // HB-2: a miss (404) IS billable egress now — its delivered body bytes accrue,
         // so error responses are no longer free.
-        let miss = reg.resolve("blog.example.com", &WebRequest::get("/nope"));
+        let miss = reg.resolve("blog.dregg.works", &WebRequest::get("/nope"));
         assert_eq!(miss.status, 404);
         let after_miss = expected + miss.body.len() as u64;
         assert_eq!(
@@ -1517,7 +1517,7 @@ mod tests {
         bw.mark_billed("blog", after_miss);
         assert_eq!(bw.unbilled("blog"), 0);
         // A re-serve accrues fresh unbilled bytes.
-        let r3 = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let r3 = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(bw.unbilled("blog"), r3.body.len() as u64);
     }
 
@@ -1534,7 +1534,7 @@ mod tests {
         // A huge request path: the 404 body is BOUNDED (no large-path amplification),
         // and the bytes that ARE delivered are metered (not free).
         let huge = format!("/{}", "a".repeat(100_000));
-        let miss = reg.resolve("blog.example.com", &WebRequest::get(&huge));
+        let miss = reg.resolve("blog.dregg.works", &WebRequest::get(&huge));
         assert_eq!(miss.status, 404);
         assert!(
             miss.body.len() < 1_000,
@@ -1549,7 +1549,7 @@ mod tests {
         // A 402 refusal (lapsed) is the system's stop — not billed.
         bw.lapse("blog");
         let before = bw.served("blog");
-        let refused = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let refused = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(refused.status, 402);
         assert_eq!(bw.served("blog"), before, "a 402 refusal is not billed");
     }
@@ -1563,7 +1563,7 @@ mod tests {
 
         // Live: serves normally.
         assert_eq!(
-            reg.resolve("blog.example.com", &WebRequest::get("/"))
+            reg.resolve("blog.dregg.works", &WebRequest::get("/"))
                 .status,
             200
         );
@@ -1571,7 +1571,7 @@ mod tests {
         // Lapse (budget exhausted): serving is refused with 402, and no bytes accrue.
         let served_before = bw.served("blog");
         bw.lapse("blog");
-        let lapsed = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let lapsed = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(lapsed.status, 402);
         assert!(lapsed.body_str().contains("lapsed"));
         assert_eq!(
@@ -1583,7 +1583,7 @@ mod tests {
         // Reinstated (top-up): serving resumes.
         bw.reinstate("blog");
         assert_eq!(
-            reg.resolve("blog.example.com", &WebRequest::get("/"))
+            reg.resolve("blog.dregg.works", &WebRequest::get("/"))
                 .status,
             200
         );
@@ -1602,20 +1602,20 @@ mod tests {
 
         // One index serve to size the body, then fund a budget that covers exactly ONE
         // more such serve (the high-water authorization the control plane sets).
-        let probe = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let probe = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(probe.status, 200);
         let body = probe.body.len() as u64;
         let served_so_far = bw.served("blog");
         bw.set_budget("blog", served_so_far + body); // room for exactly one more
 
         // The next serve fits (served == budget): delivered + recorded.
-        let ok = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let ok = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(ok.status, 200);
         assert_eq!(bw.served("blog"), served_so_far + body);
 
         // The bomb: the following serve would exceed the funded budget → 402 IN-BAND,
         // with NO lapse() call and NO roll-up sweep. The body is not delivered.
-        let bomb = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let bomb = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(
             bomb.status, 402,
             "in-band budget gate refuses before delivery"
@@ -1632,7 +1632,7 @@ mod tests {
 
         // A coverage top-up lifts the ceiling and serving resumes in-band.
         bw.add_budget("blog", body);
-        let resumed = reg.resolve("blog.example.com", &WebRequest::get("/"));
+        let resumed = reg.resolve("blog.dregg.works", &WebRequest::get("/"));
         assert_eq!(resumed.status, 200, "a top-up resumes serving in-band");
     }
 }

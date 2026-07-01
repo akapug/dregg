@@ -1,16 +1,16 @@
 //! Serve published minisite cells through the gateway — static hosting on
-//! `example.com`.
+//! `dregg.works`.
 //!
 //! This is the gateway-side adoption of [`dreggnet_webapp::hosting`]: where
-//! [`crate::WebAppHandler`] is the *dynamic* data plane (routes → polyana
+//! [`crate::WebAppHandler`] is the *dynamic* data plane (routes → the owned sandbox
 //! handlers), [`SiteHostHandler`] is the *static* data plane — it resolves an
-//! inbound request's `Host` (`<name>.example.com`) to a published
+//! inbound request's `Host` (`<name>.dregg.works`) to a published
 //! [`SiteCell`](dreggnet_webapp::hosting::SiteCell) and serves the cell's content,
-//! the realization of "a minisite published as a dregg cell, served on example.com."
+//! the realization of "a minisite published as a dregg cell, served on dregg.works."
 //!
 //! ```text
-//!   GET https://<name>.example.com/path
-//!        │  Host: <name>.example.com
+//!   GET https://<name>.dregg.works/path
+//!        │  Host: <name>.dregg.works
 //!        ▼
 //!   SiteHostHandler::dispatch
 //!        │  dreggnet_webapp::SiteRegistry::resolve   (host → site cell → asset)
@@ -42,7 +42,7 @@
 //! - **`dreggnet_webapp::serve_http`** is the PORTABLE-BINARY loop: its own
 //!   cross-platform std `TcpListener` loop, shared (after the de-duplication) by
 //!   BOTH portable binaries — `dreggnet-host` (static, over a [`SiteRegistry`])
-//!   and `dreggnet-serve` (dynamic, over a polyana `Router`).
+//!   and `dreggnet-serve` (dynamic, over a owned-sandbox `Router`).
 //!
 //! Both are now plain-`std` loops (the gateway no longer links any third-party
 //! HTTP engine); the duplication that was collapsed is the portable std-TCP loop
@@ -62,12 +62,12 @@ use dreggnet_webapp::{SiteRegistry, WebRequest, WebResponse};
 use crate::webresp::{map_method, write};
 
 /// The gateway HTTP handler that serves published minisite cells by `Host` — both the
-/// `<name>.example.com` wildcard path and **verified BYO custom domains**.
+/// `<name>.dregg.works` wildcard path and **verified BYO custom domains**.
 ///
 /// It holds the [`SiteRegistry`] (the wildcard data plane) and the
 /// [`DomainRegistry`] (the custom-domain control plane). A verified custom `Host`
 /// resolves to its bound site cell; everything else falls through to the
-/// `<name>.example.com` resolution. Both registries are shared (`Arc`) so a publish
+/// `<name>.dregg.works` resolution. Both registries are shared (`Arc`) so a publish
 /// or a bind elsewhere is served here without a rebuild.
 pub struct SiteHostHandler {
     registry: Arc<SiteRegistry>,
@@ -126,17 +126,17 @@ impl SiteHostHandler {
         &self.domains
     }
 
-    /// Whether this handler serves `host` — a published `<name>.example.com` site or
+    /// Whether this handler serves `host` — a published `<name>.dregg.works` site or
     /// a *verified* custom domain. (Routing decision for the serving loop: a host
     /// this returns `true` for goes to the static data plane, not the machines API.)
     pub fn serves_host(&self, host: &str) -> bool {
         let bare = host.split(':').next().unwrap_or(host).trim();
-        (bare.ends_with(".example.com") && site_name_from_host(host).is_some())
+        (bare.ends_with(".dregg.works") && site_name_from_host(host).is_some())
             || self.domains.site_for_host(host).is_some()
     }
 
     /// Whether a per-domain certificate should be minted for `host` — the Caddy
-    /// on-demand-TLS `ask` decision: a published `<name>.example.com` site OR a
+    /// on-demand-TLS `ask` decision: a published `<name>.dregg.works` site OR a
     /// custom domain whose control is **proven against live DNS** (never an
     /// unverified / squatted domain).
     ///
@@ -172,7 +172,7 @@ impl SiteHostHandler {
     /// Resolve `host` to a published site and serve `target` against its content.
     ///
     /// A verified custom domain resolves to its bound site cell; otherwise the
-    /// `<name>.example.com` path. The serving binary passes the `Host` it read off
+    /// `<name>.dregg.works` path. The serving binary passes the `Host` it read off
     /// the socket; the [`Handler::handle`] trait surface reads it from the request.
     pub fn dispatch(
         &self,
@@ -212,7 +212,7 @@ mod tests {
     fn registry_with_blog() -> Arc<SiteRegistry> {
         let reg = SiteRegistry::new();
         let content = SiteContent::new()
-            .with("/index.html", "<h1>served on example.com</h1>")
+            .with("/index.html", "<h1>served on dregg.works</h1>")
             .with("/style.css", "h1{color:teal}");
         reg.publish(
             &PublishCap::for_site("agent:ember", "blog"),
@@ -234,16 +234,16 @@ mod tests {
     #[test]
     fn serves_the_published_index_by_host() {
         let handler = SiteHostHandler::new(registry_with_blog());
-        let raw = run(&handler, "blog.example.com", "/");
+        let raw = run(&handler, "blog.dregg.works", "/");
         assert!(raw.contains("200 OK"), "raw: {raw}");
         assert!(raw.contains("text/html"), "raw: {raw}");
-        assert!(raw.contains("served on example.com"), "raw: {raw}");
+        assert!(raw.contains("served on dregg.works"), "raw: {raw}");
     }
 
     #[test]
     fn serves_css_with_correct_content_type() {
         let handler = SiteHostHandler::new(registry_with_blog());
-        let raw = run(&handler, "blog.example.com", "/style.css");
+        let raw = run(&handler, "blog.dregg.works", "/style.css");
         assert!(raw.contains("200 OK"), "raw: {raw}");
         assert!(raw.contains("text/css"), "raw: {raw}");
     }
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn unknown_host_is_404() {
         let handler = SiteHostHandler::new(registry_with_blog());
-        let raw = run(&handler, "nope.example.com", "/");
+        let raw = run(&handler, "nope.dregg.works", "/");
         assert!(raw.contains("404 Not Found"), "raw: {raw}");
     }
 
@@ -276,7 +276,7 @@ mod tests {
         let handler = SiteHostHandler::with_domains(registry, Arc::clone(&domains));
 
         // Unverified: the handler does not serve the custom host (falls through →
-        // example.com path, which 404s the unknown host), and no cert is minted.
+        // dregg.works path, which 404s the unknown host), and no cert is minted.
         assert!(!handler.serves_host("blog.example.com"));
         assert!(!handler.cert_ok("blog.example.com"));
         assert!(run(&handler, "blog.example.com", "/").contains("404"));
@@ -288,6 +288,6 @@ mod tests {
         assert!(handler.cert_ok("blog.example.com"));
         let raw = run(&handler, "blog.example.com", "/");
         assert!(raw.contains("200 OK"), "raw: {raw}");
-        assert!(raw.contains("served on example.com"), "raw: {raw}");
+        assert!(raw.contains("served on dregg.works"), "raw: {raw}");
     }
 }

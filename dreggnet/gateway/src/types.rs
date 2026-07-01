@@ -104,8 +104,8 @@ impl Default for GuestConfig {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct MachineConfig {
     /// The workload image / artifact reference. (DIVERGENCE: fly pulls an OCI
-    /// image; DreggNet's bridge runs a polyana workload — the image string is
-    /// the workload reference the bridge resolves to a polyana component.)
+    /// image; DreggNet's bridge runs an owned-sandbox workload — the image string is
+    /// the workload reference the bridge resolves to a the owned sandbox component.)
     #[serde(default)]
     pub image: String,
     /// Guest sizing.
@@ -169,7 +169,7 @@ pub struct Machine {
 /// DreggNet-specific result attached to a [`Machine`] after it runs.
 ///
 /// On success it carries the **real** durable metered result the node returned
-/// (the polyana step outputs + the `meter_units` charged against the lease). On a
+/// (the the owned sandbox step outputs + the `meter_units` charged against the lease). On a
 /// lapse (an over-budget / refused lease) or an infrastructure failure it carries
 /// the reason, so the machine record reflects exactly what happened to the work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

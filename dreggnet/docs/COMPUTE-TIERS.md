@@ -1,180 +1,138 @@
 # DreggNet Compute Tiers
 
-DreggNet runs a (dregg-authorized) workload through [polyana](../polyana)'s real
-polyglot execution engine. `dreggnet-exec` (`exec/src/lib.rs`) is the seam that
-maps a lease's **capability grade** to a **sandbox tier** to a concrete polyana
-`ExecutionProvider`, and refuses to run a workload whose cap-tier demands more
-isolation than the selected provider can guarantee — never a silent downgrade.
+DreggNet runs a (dregg-authorized) workload through an **owned, in-crate**
+execution engine. `dreggnet-exec` (`exec/src/lib.rs`) is the seam that maps a
+lease's **capability grade** to a **sandbox tier** to a concrete execution
+engine, and refuses to run a workload whose cap-tier demands more isolation than
+the selected engine can guarantee — never a silent downgrade.
+
+Today exactly one tier has an owned engine linked: `Sandboxed` runs on a
+pure-Rust `wasmi` interpreter that is vendored into the crate (zero unsafe, no
+external submodule). Every stronger tier is an **honest, fail-closed seam** —
+it refuses cleanly (`ExecError::NotWired` / `TierNotServed`) rather than pretend
+to run or quietly downgrade. Wiring an owned engine for each stronger tier is
+future work.
 
 This document is the what-is: which tier for which trust level, what is real
-versus hardware-gated, and the resource each tier needs.
+versus a fail-closed seam, and the resource each tier needs.
 
-## The cap-grade → tier → provider map
+## The cap-grade → tier → engine map
 
 `CapTier` is ordered weakest → strongest isolation. Each grade routes to exactly
-one provider family; `dreggnet_exec::run_workload_with_input` does the routing.
+one engine; `dreggnet_exec::run_workload_with_input` does the routing.
 
-| `CapTier`      | trust level / use                                  | lang(s)                   | provider                          | enforcement (Linux / macOS)        | feature        |
-|----------------|----------------------------------------------------|---------------------------|-----------------------------------|------------------------------------|----------------|
-| `Sandboxed`    | trusted/bounded compute, cheapest real sandbox     | `wasm` / `wat` (core)     | `polyana-wasmi-provider`          | `WasmSandbox` (both)               | `polyana`      |
-| `JitSandboxed` | untrusted wasm needing a runaway bound             | `wasm` / `wat` (component)| `polyana-wasmtime`                | `WasmFullSandbox` (both)           | `polyana`      |
-| `Caged`        | semi-trusted native code / polyglot agents         | `native`/`bin`, `python`/`py`, `node`/`js` | `polyana-native-process-provider`, `polyana-python-provider`, `polyana-node-provider` | `OsSandbox` / `None` | `caged`, `python`, `node` |
-| `MicroVm`      | **untrusted** workloads, homelab's big boxes       | any (VM runs the runtime) | `polyana-firecracker-provider`    | `Container` (direct) / `FullVm` (jailed) / refuses | `firecracker`  |
-| `Gpu`          | **heavy compute** — ML / inference / CUDA          | any (VM runs the runtime) | GPU-passthrough VM seam (VFIO / MIG) | `FullVm` / refuses              | `polyana`      |
+| `CapTier`      | trust level / use                                  | lang(s)                   | engine                            | status |
+|----------------|----------------------------------------------------|---------------------------|-----------------------------------|--------|
+| `Sandboxed`    | trusted/bounded compute, cheapest real sandbox     | `wasm` / `wat` (core)     | owned `wasmi` interpreter (`WasmSandbox`) | **REAL** — genuinely executes |
+| `JitSandboxed` | untrusted wasm needing a runaway bound             | `wasm` / `wat` (component)| (future) owned JIT engine         | fail-closed seam |
+| `Caged`        | semi-trusted native code / polyglot agents         | `native`/`bin`, `python`/`py`, `node`/`js` | (future) owned native/python/node engines | fail-closed seam |
+| `MicroVm`      | **untrusted** workloads, homelab's big boxes       | any (VM runs the runtime) | (future) owned microVM engine     | fail-closed seam |
+| `Gpu`          | **heavy compute** — ML / inference / CUDA          | any (VM runs the runtime) | (future) owned GPU-passthrough VM engine | fail-closed seam |
 
-`enforcement` is the isolation grade the workload *actually* ran under, as
-reported by the provider, and is surfaced in `Output::enforcement` — a downgrade
-is made LOUD, not silent. On macOS the OS cage (seccomp + Landlock) does not
-exist, so the native tiers report `None` (process isolation only); the wasm
-tiers are identical on every platform.
+The bridge maps grades to provider labels for records: `Sandboxed` →
+`dreggnet-wasmi`, `Caged` → `dreggnet-native (seam)`, `MicroVm` →
+`dreggnet-microvm (seam)`.
 
-### Why a stronger provider can't be silently substituted
+`enforcement` is the isolation grade the workload *actually* ran under, surfaced
+in `Output::enforcement` — a downgrade is made LOUD, not silent. The owned
+`wasmi` tier is identical on every platform.
 
-`check_floor` refuses to run a tier on a provider whose enforcement is below the
-tier's floor. The wasm interpreter (`WasmSandbox`) does not clear the
+### Why a stronger tier can't be silently substituted
+
+`check_floor` refuses to run a tier on an engine whose enforcement is below the
+tier's floor. The owned `wasmi` interpreter (`WasmSandbox`) does not clear the
 `JitSandboxed` floor (`WasmFullSandbox`), so the JIT tier never downgrades to the
-interpreter. The native tiers are kept distinct by provider *identity* + lang
-routing (a wasm provider is never constructed for a `native`/`python`/`node`
-workload, and vice-versa).
+interpreter. The stronger tiers have no owned engine linked yet, so they refuse
+cleanly (`ExecError::NotWired` / `TierNotServed`) — the seam is honest, never a
+fake run.
 
 ## The tiers in detail
 
-### `Sandboxed` / `JitSandboxed` — wasm (REAL)
+### `Sandboxed` — wasm (REAL, owned)
 
-Two in-process wasm backends. `wasmi` is a pure interpreter (numeric args only,
-no fuel meter — for trusted/bounded compute). `wasmtime` is Cranelift JIT + a
-fuel meter + WASI Preview 2 (numeric + string args; a runaway component traps
-"out of fuel" instead of hanging). Both run on every platform and carry the
-unconditional default-green coverage.
+The owned, in-crate `wasmi` engine: a pure-Rust wasm interpreter (numeric args,
+no fuel meter — for trusted/bounded compute), zero unsafe, no external submodule.
+It runs on every platform, genuinely executes (the `add(40,2)=42` dogfood runs
+here), and carries the unconditional default-green coverage. Enforcement is
+reported as `WasmSandbox`.
 
-### `Caged` — native + seccomp (REAL)
+### `JitSandboxed` — JIT wasm (SEAM)
 
-A real host process run as a child under a seccomp-bpf syscall allowlist + a
-Landlock filesystem allowlist (Linux), speaking polyana's newline-JSON wire
-(`{"fn":"run","args":[...]}` → `{"ok":[...]}` / `{"err":"..."}`). Three providers
-serve this grade:
+The untrusted-wasm tier that needs a runaway bound (a fuel meter / component
+model). No owned JIT engine is linked yet, so this tier is a fail-closed seam:
+`run_workload` refuses cleanly rather than downgrade to the interpreter. Wiring
+an owned JIT engine (with a fuel meter so a runaway component traps "out of fuel"
+instead of hanging) is future work.
 
-- **`native`/`bin`** — `polyana-native-process-provider`: an arbitrary host
-  binary (ELF / shebang script). Off by default (`caged` feature) because the
-  cage only *engages* on Linux. As of this pass it threads the lease's cap
-  bundle + tenant into the cage via `instantiate_with_caps` (network syscalls
-  are denied without a Network cap; filesystem caps become Landlock paths;
-  `POLYANA_TENANT` / `POLYANA_CAPS_JSON` reach the guest).
-- **`python`/`py`** — `polyana-python-provider`: a genuine `python3`
-  subprocess (NOT a wasm CPython port). Default-on (`python`).
-- **`node`/`js`** — `polyana-node-provider`: a genuine `node` subprocess (NOT
-  the in-process V8 isolate pool, which SIGSEGVs on the second isolate).
-  Default-on (`node`). Real JSON args reach the handler; a runaway guest is
-  killed at the wall-clock deadline (`ExecError::Timeout`); a syntax error fails
-  cleanly. Cap bundle + tenant are threaded exactly like the Python tier.
+### `Caged` — native + OS cage (SEAM)
 
-All three report `OsSandbox` on Linux and `None` on macOS, where the live
-end-to-end run is proven (the cage is exercised by the providers' own
-Linux-gated tests + the differential against the Lean spec).
+A host-process tier for semi-trusted native code and polyglot agents — a child
+process under an OS syscall/filesystem cage (seccomp-bpf + Landlock on Linux).
+Three langs would route here — `native`/`bin`, `python`/`py`, `node`/`js` — but
+no owned engine is linked for any of them today, so each is a fail-closed seam
+(`ExecError::NotWired`). The bridge records the `dreggnet-native (seam)` label.
+Wiring owned native/python/node engines (threading the lease's cap bundle +
+tenant into the cage) is future work.
 
-### `MicroVm` — Firecracker (REAL; live boot proven, direct + jailed)
+### `MicroVm` — microVM (SEAM)
 
 The strong-isolation tier for **untrusted** workloads and the homelab's
-KVM-capable boxes: a per-workload Firecracker microVM with its own guest kernel
-behind the KVM boundary (the fly.io / AWS-Lambda model). Routed for every lang —
-the VM runs the language runtime inside, reached over a **vsock + newline-JSON
-wire**: `run_on_microvm` ships a `{"lang","source","fn","args"}` request line to
-a tiny in-guest agent, which runs the real runtime and replies `{"ok":[...]}` /
-`{"err":"..."}`. Wired behind the default-on `firecracker` feature.
+KVM-capable boxes: a per-workload microVM with its own guest kernel behind the
+KVM boundary (the fly.io / AWS-Lambda model). No owned microVM engine is linked
+yet, so this tier is a fail-closed seam: `run_workload` refuses cleanly and names
+what is absent, never downgrading to a weaker tier. The bridge records the
+`dreggnet-microvm (seam)` label.
 
-The live VM boot needs three host facilities:
+A future owned microVM engine will need three host facilities:
 
-1. the `firecracker` binary on `PATH`,
-2. `/dev/kvm` — Linux + hardware virtualization (the homelab / node-a boxes
-   have it; an edge `t3` without nested virt does NOT — check before relying on
-   it), and
-3. a guest kernel + rootfs image (built by the provider's `image/build-image.sh`).
+1. a microVM launcher binary on `PATH`,
+2. `/dev/kvm` — Linux + hardware virtualization, and
+3. a guest kernel + rootfs image.
 
-`run_on_microvm` checks (1) and (2) up front and **refuses cleanly** when either
-is missing, naming what's absent — it never downgrades to a weaker tier. Where
-the hardware is present it constructs the provider, loads the workload, boots the
-VM, runs the guest, and tears it down.
+Wiring the owned engine (VM boot, in-guest agent over a vsock + newline-JSON
+wire, direct vs jailed enforcement, capability gating inside the VM, and
+per-call trace records) is future work.
 
-**Direct vs jailed (`Container` vs `FullVm`).** By default firecracker is spawned
-directly (the dev / CI posture) and the run reports `EnforcementLevel::Container`.
-Setting `DREGGNET_FC_JAILER` routes every VM through the firecracker **jailer**
-(a cgroup, fresh namespaces, a `chroot` into a private jail root, and a privilege
-drop to an unprivileged uid/gid before exec'ing firecracker — the production
-posture); the run then reports the stronger `EnforcementLevel::FullVm`. The jailer
-requires the launching process to start as root (its precondition for building
-the cgroup/namespaces/chroot) and drops privilege after. `--cgroup-version 2` is
-passed so it works on modern cgroup-v2-only hosts.
+### `Gpu` — GPU passthrough VM (SEAM)
 
-**Proven live (node-a, Firecracker v1.10.1, cgroup v2).** A real CPython
-workload boots inside a **jailed** microVM, returns `42` over vsock at `FullVm`,
-and is torn down — `~0.8–1.1 s` end to end, repeatably (the provider clears any
-stale jail before launch and removes the jail tree on drop, so consecutive runs
-don't collide). Tests: `polyana-firecracker-provider`'s `jailed_microvm_boot`
-integration test (provider level) and `dreggnet-exec`'s
-`tests/microvm_kvm.rs::microvm_runs_real_cpython{,_jailed}` (full stack). Both are
-`#[ignore]`d and self-skip off a KVM host, so the default suite stays green
-everywhere; the live proof runs on node-a.
+The heavy-compute tier — ML / inference / CUDA. A hardware-isolated VM with a
+**passed-through GPU** (a whole device via VFIO, or an NVIDIA MIG slice). The VM
+boundary is mandatory (GPU passthrough is unsafe without it), so the floor is
+`FullVm`. No owned engine is linked yet, so this tier is a fail-closed seam:
+`run_workload` refuses cleanly, naming what is missing (no GPU device / no VMM
+configured), never a silent downgrade to CPU-only.
 
-The remaining production work is capability gating inside the VM (the
-`Capability` → tap/MMDS/drive/vsock-port translation) and per-call trace records.
-
-### `Gpu` — GPU passthrough VM (DESIGN + SEAM; live boot hardware-gated)
-
-The heavy-compute tier — ML / inference / CUDA — the one axis the Liftoff matrix
-flagged Akash ahead on. A hardware-isolated VM with a **passed-through GPU**:
-either a whole device via **VFIO**, or an **NVIDIA MIG** slice (an A100/H100
-partitioned into isolated GPU instances). The VM boundary is mandatory (GPU
-passthrough is unsafe without it), so the floor is `FullVm`.
-
-**Not Firecracker.** Firecracker is deliberately CPU-only — no PCI passthrough —
-so the Gpu tier routes to a separate passthrough-VM provider seam: a
-passthrough-capable VMM (Cloud-Hypervisor / QEMU) that binds the GPU into the
-guest. `run_on_gpu` gates and refuses cleanly, naming what's missing: no GPU
-device on the host → names the missing hardware; a GPU but no `DREGGNET_GPU_VMM`
-configured → names the missing provider seam. Never a silent downgrade to
-CPU-only.
-
-**The cap-grade → GPU + metering** (the `dreggnet_exec::gpu` module):
+The metering design is retained in `dreggnet_exec::gpu`:
 
 - `GpuClass` — `Mig { compute_sevenths, memory_gib }` (MIG granularity is 1/7th of
-  the physical GPU; the profiles are 1g.5gb / 2g.10gb / 3g.20gb / 7g.40gb) or
+  the physical GPU; profiles 1g.5gb / 2g.10gb / 3g.20gb / 7g.40gb) or
   `Whole { memory_gib }`. Fixes the guest VRAM ceiling + the metering rate.
-- `GpuBounds` — `GpuClass` + a hard `max_gpu_seconds` budget (refuse a spent
-  lease; tear down an overrun — the GPU analogue of the CPU wall-clock timeout).
-- `GpuMeter` — accrues **GPU-seconds** scaled by the compute fraction (a 1g MIG
-  slice bills 1/7th the GPU-seconds of a whole GPU for the same wall-clock),
-  settling through the same conserving exactly-once `$DREGG` rail.
+- `GpuBounds` — `GpuClass` + a hard `max_gpu_seconds` budget.
+- `GpuMeter` — accrues **GPU-seconds** scaled by the compute fraction, settling
+  through the same conserving exactly-once `$DREGG` rail.
 
-**Wired now:** the `CapTier::Gpu` variant, the routing + clean refusal, the host
-GPU probe, the `FullVm` floor, and the `GpuClass` / `GpuBounds` / `GpuMeter` types
-+ tests. **Hardware-gated remaining (reviewed-go fleet rung):** a discrete GPU
-bound to `vfio-pci` (or a MIG-partitioned card) on a fleet GPU node, the
-passthrough-VM provider implementation, and the bridge-rung settlement of
-GPU-seconds. node-a carries only an integrated APU (no passthrough device), so
-the live GPU boot is queued for real GPU hardware.
+Wiring the owned passthrough-VM engine (a passthrough-capable VMM binding the GPU
+into the guest) is future work.
 
 ## Resource needs at a glance
 
 | tier         | needs                                                            |
 |--------------|-----------------------------------------------------------------|
-| `Sandboxed`  | nothing host-side (pure interpreter)                            |
-| `JitSandboxed` | nothing host-side (Cranelift builds + runs everywhere)       |
-| `Caged`      | the interpreter binary (`python3` / `node`) on PATH; Linux for the seccomp + Landlock cage |
-| `MicroVm`    | `firecracker` binary + `/dev/kvm` + a guest kernel/rootfs image (Linux + hardware virtualization); the jailed (`FullVm`) posture also needs root + the `jailer` binary |
-| `Gpu`        | a GPU bound to `vfio-pci` (or a MIG-partitioned card) + a passthrough-VM VMM (`DREGGNET_GPU_VMM`) on a fleet GPU node |
+| `Sandboxed`  | nothing host-side (owned pure-Rust interpreter)                |
+| `JitSandboxed` | an owned JIT engine (future work)                             |
+| `Caged`      | an owned native/python/node engine + (Linux) the seccomp + Landlock cage (future work) |
+| `MicroVm`    | an owned microVM engine + a launcher binary + `/dev/kvm` + a guest kernel/rootfs image (future work) |
+| `Gpu`        | an owned passthrough-VM engine + a GPU bound to `vfio-pci` (or a MIG-partitioned card) on a fleet GPU node (future work) |
 
 ## Building
 
-The default build wires the wasm, Python, Node, and Firecracker tiers:
+The default build wires the owned `wasmi` sandbox tier:
 
 ```
-cargo test -p dreggnet-exec          # default = ["polyana","python","node","firecracker"]
-cargo test -p dreggnet-exec --features caged   # add the native-binary Caged tier
+cargo test -p dreggnet-exec          # owned wasmi Sandboxed tier, default-green
 ```
 
-The native-interpreter tiers (`python` / `node`) and the `firecracker` tier
-compile on every platform; their default-on tests skip cleanly when the
-interpreter (`python3` / `node`) is absent or when `/dev/kvm` + `firecracker`
-are unavailable. Turning the `polyana` feature off
-(`--no-default-features`) drops the whole engine and `run_workload` compiles to
-an honest "not wired" bail.
+The `Sandboxed` tier compiles and runs on every platform. Every stronger tier is
+a fail-closed seam today: `run_workload` compiles to an honest "not wired" bail
+(`ExecError::NotWired` / `TierNotServed`) rather than a fake run or a silent
+downgrade. Wiring an owned engine for each stronger tier is future work.

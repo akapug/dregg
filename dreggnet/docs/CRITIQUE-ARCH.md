@@ -85,7 +85,7 @@ abstractions and **different** lifecycle state machines:
 | | `Scheduler` (`control/src/scheduler.rs`) | `Orchestrator` (`control/src/orchestrator.rs`) |
 |---|---|---|
 | infra abstraction | `VmProvider` + `Machine` (`provider.rs`) | `BackendRegistry` + `Backend` (`fleet.rs`) + `Mesh` |
-| concrete backends | `LocalProvider`, `Ec2Provider` | mesh-dispatched node-a agents |
+| concrete backends | `LocalProvider`, `Ec2Provider` | mesh-dispatched persvati agents |
 | lifecycle enum | `WorkloadState` (`scheduler.rs:49`) | `OrchestratedWorkload` (`orchestrator.rs`) |
 | dispatch | `VmProvider::run_lease` | `dispatch_lease_over_mesh` |
 | entry | `Scheduler::place` | `Orchestrator::tick` / `run_until_shutdown` |
@@ -255,33 +255,35 @@ boundary. Pure mechanical cleanup, large clarity payoff.
 ## S7b — Runtime/backend choices hidden behind cargo features (against the house rule)
 
 The codebase has a stated rule — *no reflexive cargo features*: don't feature-gate
-runtime choices or load-bearing backends; use a trait + runtime select. Two features
-violate it, and one obeys it (worth contrasting):
+runtime choices or load-bearing backends; use a trait + runtime select. One feature
+still violates it, one now obeys it (was a violation, now resolved), and one is the
+legitimate exception:
 
-- **`polyana` (default-on) gates the execution engine** — `exec/Cargo.toml:20`,
-  `default = ["polyana", "python", "node", "firecracker"]`. With the feature off,
-  `run_workload` bails "not wired." Which executor runs a workload is a *runtime*
-  property of a tier, not a compile-time identity; gating it by a default feature means
-  a contributor who builds `--no-default-features` gets a silently inert exec crate.
+- **Compute engine — RESOLVED.** The old critique here was that `exec`'s execution
+  engine was a default-on feature over an external submodule. That is gone: compute is
+  now **owned and in-crate** (`exec/Cargo.toml`, `default = []`). The `Sandboxed` tier
+  runs on the owned pure-Rust `wasmi` interpreter (a normal crates.io dep, zero
+  `unsafe`), and which engine serves a workload is chosen at **runtime** by the lease's
+  `CapTier`. Every stronger tier (JIT/`Caged`/`MicroVm`/GPU/native/python/node) is an
+  honest fail-closed seam (`ExecError::TierNotServed` / `NotWired`) — not a feature
+  toggle and never a silent downgrade. This is exactly the runtime-select shape the
+  rule asks for.
 - **`pg` (vs default `sqlite`) gates the durable backend** — `durable/Cargo.toml:42–51`.
   A silent SQLite↔Postgres swap behind a feature, with the pg test `#[ignore]`d +
   `DATABASE_URL`-gated. Backend selection belongs at runtime (config), not in the
-  feature set.
+  feature set. This one remains to fix.
 - **Contrast — `dregg-verify` is correct.** `bridge/Cargo.toml:30/71` keeps it
   off-by-default purely as an **AGPL link-isolation** boundary (the one legitimate use
-  of a feature here), with explicit FLIP-ON docs. Keep this; fix the other two.
+  of a feature here), with explicit FLIP-ON docs. Keep this; fix `pg`.
 
-This compounds a **fragile submodule seam**: the root `[patch.crates-io]` path-deps
-`lockstitch = { path = "polyana/src/dregg-bridge/vendor/lockstitch-0.29.0" }`
-(`Cargo.toml:136`). A stale/unfetched polyana submodule makes that path vanish, so a
-`--features dregg-verify` build **hard-breaks** at resolution. The submodule
-(`.gitmodules`) pins no ref (follows the remote's default branch), so the durable build
-path's correctness depends on an untracked external HEAD.
+The old **fragile submodule seam** is likewise gone: there is no compute submodule and
+no external compute dependency, so no `[patch.crates-io]` path-dep into an untracked
+external HEAD can vanish under the durable build path.
 
-**Fix direction:** make exec's engine and durable's store **runtime-selected** (a
-provider trait + a config enum, as `VmProvider`/`Settlement` already do elsewhere);
-reserve features for true link-isolation (`dregg-verify`). Rev/SHA-pin the polyana
-submodule.
+**Fix direction:** make durable's store **runtime-selected** (a provider trait + a
+config enum, as `VmProvider`/`Settlement` already do elsewhere); reserve features for
+true link-isolation (`dregg-verify`). The exec-engine half of this is already done
+(owned, in-crate, runtime-selected by tier).
 
 ## S8 — Smaller debt: god-crate, stale lock debris, deep re-export coupling, sibling-path drift
 
@@ -361,6 +363,6 @@ submodule.
 | S5 | Data plane in-memory (sites/domains/buckets) vs durable settlement | **S5** | durable data-plane store before exactly-once billing |
 | S6 | 3 hand-rolled HTTP models atop httpe + bespoke node client | **S6** | one shared `http-types` + one node client |
 | S7 | 24 hand-rolled error enums, 1 thiserror; stringly cross-crate seams | **S7** | thiserror everywhere; `#[from]` typed sources |
-| S7b | `polyana`/`pg` features gate runtime/backend choices; stale submodule hard-breaks `dregg-verify` | **S7** | runtime-select via trait; pin submodule |
+| S7b | `pg` feature gates the durable backend choice (compute-engine + submodule halves now RESOLVED — owned/in-crate) | **S7** | runtime-select durable store via trait |
 | S8 | 9K control god-crate; stale sandstorm lock; blanket re-exports; sibling-path drift | **S8** | split control; delete dead lock; pin sibling |
 | ✓ | durable exactly-once · Settlement seam · host-API spine · receipt design · honest catalogs | **solid** | build more like settle_ledger.rs |

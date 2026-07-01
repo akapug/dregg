@@ -1,10 +1,10 @@
 //! The declarative shape of an agent-served web app: a [`WebApp`] is a set of
-//! [`Route`]s, each binding an HTTP method + path to a polyana [`Handler`] and a
+//! [`Route`]s, each binding an HTTP method + path to a owned-sandbox [`Handler`] and a
 //! [`ResponseSpec`] for rendering the handler's result.
 //!
 //! Everything here is `serde`-serializable, on purpose: an agent declares an app
 //! as plain data (a JSON document), and DreggNet runs it. The agent supplies the
-//! handler logic as a polyana workload (WAT today); per-request inputs reach a
+//! handler logic as an owned-sandbox workload (WAT today); per-request inputs reach a
 //! handler via [`HandlerBody::Templated`] placeholders that are **integer-validated**
 //! before assembly (so a templated handler cannot be turned into a WAT-injection
 //! vector by a crafted query value).
@@ -62,7 +62,7 @@ impl WebApp {
     }
 }
 
-/// One route: a method + exact path bound to a polyana handler and a response
+/// One route: a method + exact path bound to a owned-sandbox handler and a response
 /// renderer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Route {
@@ -71,7 +71,7 @@ pub struct Route {
     /// The exact request path this route serves (e.g. `/add`). Path-pattern
     /// params (`/users/{id}`) are a later rung; exact match is the first slice.
     pub path: String,
-    /// The polyana handler that produces the route's result.
+    /// The owned-sandbox handler that produces the route's result.
     pub handler: Handler,
     /// How the handler's returned value(s) are rendered into a response.
     #[serde(default)]
@@ -90,14 +90,14 @@ impl Route {
     }
 }
 
-/// A polyana workload handler: the agent's code that computes a route's result.
+/// A owned-sandbox workload handler: the agent's code that computes a route's result.
 ///
 /// The handler runs through [`dreggnet_exec::run_workload`] at the declared
 /// `cap_tier`, exporting the conventional zero-arg `run` entrypoint and returning
 /// the value(s) the [`ResponseSpec`] renders.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Handler {
-    /// The polyana provider family: `"wat"`/`"wasm"` (the wired tiers).
+    /// The sandbox provider family: `"wat"`/`"wasm"` (the wired tiers).
     #[serde(default = "Handler::default_lang")]
     pub lang: String,
     /// The sandbox grade the dregg lease authorizes: `"sandboxed"` (wasmi),

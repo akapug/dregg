@@ -1,13 +1,12 @@
 //! `dreggnet-durable` — DBOS-style durable, transactional, recoverable workflows
-//! over polyana execution.
+//! over owned-sandbox execution.
 //!
 //! This is the layer BETWEEN the two halves of DreggNet:
 //!
 //! ```text
 //!   dregg (meters / pays / verifies the lease — breadstuffs, AGPL)
 //!     └─ dreggnet-durable (THIS crate — durable workflow, exactly-once, crash-resume)
-//!        └─ dreggnet-exec  (run_workload → polyana)
-//!           └─ polyana     (the sandboxed execution engine)
+//!        └─ dreggnet-exec  (run_workload → the owned wasmi sandbox)
 //! ```
 //!
 //! ## The model (duroxide / Durable-Task / Temporal lineage)
@@ -22,10 +21,10 @@
 //!
 //! A DreggNet durable workload is therefore:
 //! - a [`WorkflowInput`]-parameterized orchestration ([`ORCHESTRATION_NAME`]) whose
-//!   steps are [`ACTIVITY_RUN_WORKLOAD`] activities, each of which runs a real polyana
+//!   steps are [`ACTIVITY_RUN_WORKLOAD`] activities, each of which runs a real owned-wasmi
 //!   workload via [`dreggnet_exec::run_workload`];
 //! - a [`ACTIVITY_METER_TICK`] activity per step that ticks the lease meter — the
-//!   transactional twin of the work: a step's polyana effect and its meter tick are
+//!   transactional twin of the work: a step's sandbox effect and its meter tick are
 //!   both durable history events, so they are recovered together-or-not on replay
 //!   (the DBOS "durable step + transactional outbox" shape, with the duroxide store as
 //!   the outbox).
@@ -130,7 +129,7 @@ pub const ORCHESTRATION_NAME: &str = "DreggNetDurableWorkload";
 /// [`WorkloadSpec`] steps ([`WorkloadRun`]) run as durable, exactly-once-metered steps.
 pub const ORCHESTRATION_WORKLOAD_RUN: &str = "DreggNetWorkloadRun";
 
-/// The activity that runs one polyana workload step (via [`dreggnet_exec::run_workload`]).
+/// The activity that runs one owned-sandbox workload step (via [`dreggnet_exec::run_workload`]).
 pub const ACTIVITY_RUN_WORKLOAD: &str = "RunWorkload";
 
 /// The activity that ticks the lease meter for one step (the transactional twin of work).
@@ -153,10 +152,10 @@ pub struct MeterCharge {
     pub amount: i64,
 }
 
-/// One polyana workload step: a program to run through `dreggnet-exec`.
+/// One owned-sandbox workload step: a program to run through `dreggnet-exec`.
 ///
 /// `label` identifies the step in the durable history + meter ledger (e.g. `"step1"`).
-/// `lang`/`source` are the polyana provider family + program (WAT text for `wasm`/`wat`).
+/// `lang`/`source` are the sandbox lang + program (WAT text for `wasm`/`wat`).
 /// `cap_tier` is the sandbox grade the dregg lease authorizes (`"sandboxed"`/`"caged"`/`"microvm"`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkloadSpec {
@@ -205,10 +204,10 @@ impl Default for WorkflowInput {
 }
 
 /// The input to the **general** durable workflow ([`ORCHESTRATION_WORKLOAD_RUN`]): an
-/// arbitrary, ordered list of polyana [`WorkloadSpec`] steps, each run as its own durable,
+/// arbitrary, ordered list of [`WorkloadSpec`] steps, each run as its own durable,
 /// checkpointed, exactly-once-metered step.
 ///
-/// This is the parameterized counterpart to the fixed-demo [`WorkflowInput`]. Any polyana
+/// This is the parameterized counterpart to the fixed-demo [`WorkflowInput`]. Any
 /// workload runs through it — an agent-served web request runs as a one-step `WorkloadRun`,
 /// a batch job as an N-step one. Each step charges `cost_per_step` against `budget_units`;
 /// a step whose charge would exceed the budget fails the workflow (lease lapse → reap)
@@ -249,11 +248,11 @@ impl WorkloadRun {
 /// The terminal result of a durable workflow.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkflowOutput {
-    /// The first step's polyana value. The demo path's `add(40, 2)` lands here; the general
+    /// The first step's value. The demo path's `add(40, 2)` lands here; the general
     /// path mirrors `outputs[0]` here for back-compat readers.
     #[serde(default)]
     pub step1: String,
-    /// The second step's polyana value. The demo path's `step1 * 2` lands here; the general
+    /// The second step's value. The demo path's `step1 * 2` lands here; the general
     /// path mirrors `outputs[1]` here for back-compat readers.
     #[serde(default)]
     pub step2: String,
@@ -492,7 +491,7 @@ pub mod pg {
 #[cfg(feature = "pg")]
 pub use pg::{MeterRow, ensure_meter_schema, read_meter_outbox};
 
-/// The synchronous core of a workload step: run it through polyana, return its first
+/// The synchronous core of a workload step: run it through the owned sandbox, return its first
 /// output value. Shared by the activity and available for direct (non-durable) callers.
 pub fn run_workload_step(spec: &WorkloadSpec) -> Result<String> {
     let tier = spec.tier().map_err(|e| anyhow::anyhow!(e))?;
@@ -586,7 +585,7 @@ fn build_with_backend(
     use duroxide::{OrchestrationContext, OrchestrationRegistry};
 
     let activities = ActivityRegistry::builder()
-        // RunWorkload: decode a WorkloadSpec, run it on polyana, return the first value.
+        // RunWorkload: decode a WorkloadSpec, run it on the owned sandbox, return the first value.
         // `run_workload` drives its own current-thread runtime, so we offload it to a
         // blocking thread (we are already inside duroxide's tokio runtime here).
         .register(
@@ -626,7 +625,7 @@ fn build_with_backend(
     let orchestrations = OrchestrationRegistry::builder()
         // The general workload runner: an ARBITRARY list of WorkloadSpec steps run
         // durably. Each step gates its charge BEFORE running (an exhausted lease reaps the
-        // step rather than running-and-not-paying), runs on polyana, then meters — so every
+        // step rather than running-and-not-paying), runs on the owned sandbox, then meters — so every
         // step is its own checkpointed, exactly-once, metered durable unit. This is the path
         // an agent-served web request runs through.
         .register(ORCHESTRATION_WORKLOAD_RUN, |ctx: OrchestrationContext, input: String| async move {
@@ -686,7 +685,7 @@ fn build_with_backend(
                 serde_json::from_str(&input).map_err(|e| format!("bad WorkflowInput: {e}"))?;
 
             // --- Built-in demo path: the fixed add → double chain. ---
-            // --- Step 1: run add(40,2) on polyana, then meter it. ---
+            // --- Step 1: run add(40,2) on the owned sandbox, then meter it. ---
             // Gate the charge BEFORE it commits: the lease scope starts at 0 (lease_id =
             // this instance), so step1's projected total is exactly `cost_per_step`.
             let step1_spec = serde_json::to_string(&step1_add_spec()).map_err(|e| e.to_string())?;
@@ -760,7 +759,7 @@ fn build_with_backend(
 /// the caller until it finishes, and return its [`WorkflowOutput`].
 ///
 /// This drives its own current-thread tokio runtime, so a synchronous, tokio-free caller can
-/// run a request as a real durable workflow: the steps run on polyana, each is checkpointed,
+/// run a request as a real durable workflow: the steps run on the owned sandbox, each is checkpointed,
 /// and the `MeterTick` charges exactly-once. An over-budget step fails the workflow (the lease
 /// lapse → reap), surfaced here as `Err`.
 ///

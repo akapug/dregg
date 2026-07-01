@@ -17,7 +17,7 @@ name = "dregg_deploy"
 # is crash-resumable + exactly-once + metered, the same way a compute lease is. This
 # crate is a thin WELD over four already-built surfaces, not a new engine:
 #   - `duroxide`         — the durable-execution runtime (its own registries here, since
-#                          `dreggnet-durable` registers only the polyana + meter activities;
+#                          `dreggnet-durable` registers only the compute + meter activities;
 #                          the deploy needs Clone/Build/Publish activities of its own).
 #   - `dreggnet-exec`    — the cap-bounded compute tier a build runs in (the wasm/Caged path).
 #   - `dreggnet-webapp`  — the site-publish flow (a built tree → a `SiteCell` + receipt).

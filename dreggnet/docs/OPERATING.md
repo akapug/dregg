@@ -21,23 +21,23 @@ headscale mesh, and a home compute backend.
    community ── Discord ──► dreggnet-discord-bot ──► dregg-node (edge) ──► chain
                                   │                        ▲
                                   └── /admin (Caddy) ──────┘
-   portal.example.com ──► edge bot read API ──► live cells (trustless verify in-tab)
+   portal.dregg.studio ──► edge bot read API ──► live cells (trustless verify in-tab)
                           headscale overlay 100.64.0.0/10
-   AWS edge box  ◄──────────────── mesh ────────────────►  node-a (compute backend)
-   (stable IP, node-0 + gateway + bot)                     (node-1 + polyana exec + STARK proving)
+   AWS edge box  ◄──────────────── mesh ────────────────►  persvati (compute backend)
+   (stable IP, node-0 + gateway + bot)                     (node-1 + owned-sandbox exec + STARK proving)
 ```
 
 | node | host | overlay | role |
 |---|---|---|---|
-| **edge** (node-0) | AWS `<EDGE_HOST>` (t3.medium, EIP, `<INSTANCE_ID>`, us-east-1c) | `100.64.0.1` | the public door: Caddy (TLS + basic-auth), gateway (Fly-machines API), control (lease dispatch), postgres, headscale + DERP relay, a `dregg-node`, the Discord bot |
-| **node-a** (node-1) | ember's home Linux box (multi-core, Ubuntu) | `100.64.0.2` | the engine room: the polyana compute backend (`:8021/fulfill`), STARK turn proving, a `dregg-node` |
-| homelab ×3 | an operator (target) | `100.64.0.x` | additional independent consensus nodes + compute backends → the 5-quorum |
+| **edge** (node-0) | AWS `34.224.208.52` (t3.medium, EIP, `i-03365e2bcf4ea08b2`, us-east-1c) | `100.64.0.1` | the public door: Caddy (TLS + basic-auth), gateway (Fly-machines API), control (lease dispatch), postgres, headscale + DERP relay, a `dregg-node`, the Discord bot |
+| **persvati** (node-1) | ember's home Linux box (24c / 83 GiB / Ubuntu) | `100.64.0.2` | the engine room: the owned sandbox compute backend (`:8021/fulfill`), STARK turn proving, a `dregg-node` |
+| homelab ×3 | pug (target) | `100.64.0.x` | additional independent consensus nodes + compute backends → the 5-quorum |
 
 The economic shape: cloud spend is pinned to **one small always-on edge box**
 (stable IP, TLS, mesh control, relay, orchestration front); everything that
 scales with load — lease execution + STARK proving — runs on hardware already
-owned, at ~free marginal cost. The edge is a thin door; node-a is the engine
-room. Full detail: `deploy/COMPUTE-BACKEND.md`,
+owned, at ~free marginal cost. The edge is a thin door; persvati is the engine
+room. Full detail: `deploy/PERSVATI-BACKEND.md`,
 `deploy/ARCHITECTURE-COMPUTE-BACKEND.md`.
 
 ### Ports
@@ -46,7 +46,7 @@ room. Full detail: `deploy/COMPUTE-BACKEND.md`,
   `/api/receipts`, faucet, turn submission).
 - `:9420` (**udp**) — blocklace gossip (QUIC/quinn). It is UDP; a tcp-only port
   mapping silently fails to peer. On the edge (docker bridge) publish
-  `"9420:9420/udp"`; node-a uses `network_mode: host`.
+  `"9420:9420/udp"`; persvati uses `network_mode: host`.
 - `:8021` (tcp, overlay) — the compute backend's `/fulfill` + `/health`.
 - `:80`/`:443` — Caddy, the only public HTTP surface on the edge.
 
@@ -58,11 +58,11 @@ independent boxes, full BFT mode, signed quorum over the overlay), but **no faul
 tolerance** — both must be online and honest for the chain to progress. At
 **n=5 → threshold 4, f=1**: survives one down/Byzantine node. The load-bearing
 fact for "resists attackers" is that the extra nodes are **independently
-operated** (an operator's homelab), not just the count. Full table + the verified
+operated** (pug's homelab), not just the count. Full table + the verified
 cross-node finality proof: `deploy/FEDERATION.md`.
 
-Live federation id (committee = {edge, node-a}, epoch 0, threshold 2):
-`<FEDERATION_ID>`.
+Live federation id (committee = {edge, persvati}, epoch 0, threshold 2):
+`4cf296834d87503f9bbe913c45dc7508a082473d4a15ffa5070e1a867d7b654c`.
 
 ---
 
@@ -78,7 +78,7 @@ federation (consensus committee membership). The canonical operator spec is
 ```sh
 # install tailscale if absent: curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up \
-  --login-server=https://headscale.dreggnet.example.com \
+  --login-server=https://headscale.dreggnet.fg-goose.online \
   --authkey=<reusable preauth key> \
   --hostname=<node-name>
 ```
@@ -87,24 +87,24 @@ Get a fresh reusable pre-auth key on the edge (the live keys are **not** committ
 to the repo — regenerate, don't paste from history):
 
 ```sh
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST>
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
 cd /opt/dreggnet
 docker compose exec headscale headscale preauthkeys create --user 1 --reusable --expiration 720h
 # (--user wants the numeric id; `headscale users list` shows ember = id 1)
 ```
 
-`https://headscale.dreggnet.example.com/health` → `{"status":"pass"}`
+`https://headscale.dreggnet.fg-goose.online/health` → `{"status":"pass"}`
 confirms the control plane is up and the join works.
 
 **2. Pick a role** (run either or both):
 
-- **Compute backend** — run the polyana exec+prover agent (the `node-agent`
+- **Compute backend** — run the owned-sandbox exec+prover agent (the `persvati-agent`
   pattern) as a systemd service bound to `0.0.0.0:8021`. It serves
-  `:8021/fulfill` on the overlay and runs durable, metered polyana workloads
-  (wasm/python tiers) + STARK proving. Scales with load. Smoke:
+  `:8021/fulfill` on the overlay and runs durable, metered workloads (the wasm
+  tier genuinely runs; the python tier is a fail-closed seam today) + STARK proving. Scales with load. Smoke:
   `curl -s -X POST http://127.0.0.1:8021/fulfill -d '{}'` → a metered result.
-  Concrete deploy + systemd unit: `deploy/COMPUTE-BACKEND.md`,
-  `deploy/node-agent/`.
+  Concrete deploy + systemd unit: `deploy/PERSVATI-BACKEND.md`,
+  `deploy/persvati-agent/`.
 - **Consensus node** — run `dregg-node` (the `dregg-node:staging` image, or a
   native build). Modest resources. Joining the *committee* changes the
   `federation_id`, so growing the committee is a coordinated re-roll (the static
@@ -117,7 +117,7 @@ confirms the control plane is up and the join works.
 ### The staging stack (edge box)
 
 The design principle: **the box just RUNS.** Heavy compilation happens off-box
-(cross-build on a Mac, or natively on node-a); the box only pulls images and
+(cross-build on a Mac, or natively on persvati); the box only pulls images and
 runs `docker compose up`. A small box OOMs building the Rust closure — never
 build Rust on the edge.
 
@@ -126,13 +126,13 @@ build Rust on the edge.
 | `dreggnet-gateway`, `dreggnet` (cli) | cross-build with `cargo zigbuild --target x86_64-unknown-linux-gnu`, rsync, wrap in debian-slim | pure cross-compilable Rust |
 | postgres | `postgres:16-bookworm` (pulled) | stock |
 | `dregg-node` | pre-built linux/amd64 image (`docker save`/`load`) | links a **host-native Lean archive** — **cannot** be cross-compiled |
-| `dreggnet-discord-bot` | built native on node-a (`--features dregg-sdk/no-lean-link`), `docker save`/`load` to the edge | glibc binary; no Lean (signs+submits over HTTP, the node proves) |
+| `dreggnet-discord-bot` | built native on persvati (`--features dregg-sdk/no-lean-link`), `docker save`/`load` to the edge | glibc binary; no Lean (signs+submits over HTTP, the node proves) |
 
 Deploy from a dev Mac:
 
 ```sh
 cp deploy/staging/.env.example deploy/staging/.env   # fill DREGG_NODE_IMAGE, secrets
-BOX_HOST=<EDGE_HOST> SSH_KEY=~/.ssh/dreggnet-staging.pem \
+BOX_HOST=34.224.208.52 SSH_KEY=~/.ssh/dreggnet-staging.pem \
   deploy/staging/deploy.sh        # build (zigbuild) + ship (rsync) + up
 # sub-commands: deploy.sh {build|ship|up|down|logs|build-node}
 ```
@@ -140,7 +140,7 @@ BOX_HOST=<EDGE_HOST> SSH_KEY=~/.ssh/dreggnet-staging.pem \
 On the box:
 
 ```sh
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST>
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
 cd /opt/dreggnet
 docker compose ps                         # what's running
 docker compose up -d <service>            # (re)start one service
@@ -157,7 +157,7 @@ service comes back after a box reboot. Full mechanics + the `.env` wiring:
 `dregg-node` links `libdregg_lean.a` (the native objects the Lean compiler emits
 for the verified kernel) **unconditionally**. That archive is host-architecture
 and **cannot be cross-compiled** — build the node image where a Lean toolchain
-lives (a linux/amd64 box with elan/lake + warm mathlib; node-a qualifies),
+lives (a linux/amd64 box with elan/lake + warm mathlib; persvati qualifies),
 then `docker save | ssh … docker load` it onto the edge. See
 `deploy/staging/README.md` §"The dregg node".
 
@@ -166,19 +166,19 @@ then `docker save | ssh … docker load` it onto the edge. See
 Caddy is the only public door (TLS + basic-auth on the gated surface, no auth on
 the public portal). Two faces (`deploy/staging/Caddyfile`):
 
-- **`portal.example.com`** — public, read-only: the static portal + its `/api/*`
+- **`portal.dregg.studio`** — public, read-only: the static portal + its `/api/*`
   + `/observability/*` proxied to the edge bot's read surface.
-- **`dreggnet.example.com`** — gated operator surface (gateway machines API +
+- **`dreggnet.fg-goose.online`** — gated operator surface (gateway machines API +
   the bot's `/admin`), behind HTTP basic-auth.
 
 The lesson baked into the Caddyfile: clients hitting the **raw IP** send no TLS
 SNI, so set `default_sni localhost` and ship an internal-CA fallback cert so
-`https://<EDGE_HOST>/` handshakes *before* the real domain certs land.
+`https://34.224.208.52/` handshakes *before* the real domain certs land.
 Automatic Let's Encrypt (HTTP-01 over `:80`) issues once the A-record
 propagates; **after the A-record lands, `docker compose restart caddy`** to clear
-any ACME backoff so the real cert issues promptly. DNS: `example.com` stays
-pristine for production; the live records hang off `example.com` /
-`example.com`.
+any ACME backoff so the real cert issues promptly. DNS: `dregg.net` stays
+pristine for production; the live records hang off `fg-goose.online` /
+`dregg.studio`.
 
 ### The Discord bot — the single token-drop
 
@@ -188,16 +188,16 @@ The bot is built, shipped to the edge, and wired into the staging compose; it is
 `docker compose up -d dreggnet-discord-bot`. The full go-live runbook (OAuth
 invite URL, `FEDERATION_ID` matching, the `/admin` portal): `deploy/staging/MINI-DEVNET.md`.
 
-### node-a compute agent restart
+### Persvati compute agent restart
 
 ```sh
-sudo systemctl status node-agent.service
-sudo systemctl restart node-agent.service
-journalctl -u node-agent.service -f
+sudo systemctl status persvati-agent.service
+sudo systemctl restart persvati-agent.service
+journalctl -u persvati-agent.service -f
 ```
 
 `Restart=on-failure` + `WantedBy=multi-user.target` → survives crashes + reboots.
-Install + build steps: `deploy/COMPUTE-BACKEND.md`.
+Install + build steps: `deploy/PERSVATI-BACKEND.md`.
 
 ---
 
@@ -207,7 +207,7 @@ Install + build steps: `deploy/COMPUTE-BACKEND.md`.
 |---|---|---|
 | **edge** (t3.medium, AWS) | ~$0.0416/hr (~$30/mo) | ~$1.60/mo (EBS only) when stopped |
 | Elastic IP | free while associated | ~$3.6/mo if allocated-but-unassociated — **keep it on the box** |
-| **node-a** | ~free at the margin (home power, owned hardware) | — |
+| **persvati** | ~free at the margin (home power, owned hardware) | — |
 | **homelab** (later) | ~free at the margin (owned hardware) | — |
 
 The edge is the **only recurring cloud spend, and it does not grow with load** —
@@ -228,9 +228,9 @@ resize commands: `deploy/staging/USING-STAGING.md`, `deploy/staging/README.md`.
 | Join the overlay (per-node) | `deploy/FABRIC-JOIN.md` |
 | Consensus federation + committee re-roll + quorum | `deploy/FEDERATION.md` |
 | The compute backend (architecture) | `deploy/ARCHITECTURE-COMPUTE-BACKEND.md` |
-| The node-a deployment (concrete) | `deploy/COMPUTE-BACKEND.md` |
+| The persvati deployment (concrete) | `deploy/PERSVATI-BACKEND.md` |
 | Early-era compute (the offering) | `deploy/COMPUTE-OFFERING.md` |
-| The node-agent + systemd unit | `deploy/node-agent/` |
+| The persvati agent + systemd unit | `deploy/persvati-agent/` |
 | Staging deploy mechanics | `deploy/staging/README.md` |
 | Staging operate (logins, stop/start, cost) | `deploy/staging/USING-STAGING.md` |
 | Discord bot go-live + mini-devnet | `deploy/staging/MINI-DEVNET.md` |

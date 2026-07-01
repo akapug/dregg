@@ -25,8 +25,8 @@ path = "src/bin/dreggnet-provider.rs"
 #
 #   dregg execution-lease   (the AUTHORIZATION — who, what cap-grade, what budget)
 #     └─ dreggnet-control    (THIS crate — decides WHICH machine, places + reaps)
-#        └─ dreggnet-bridge   (fulfills the lease as a durable polyana workflow)
-#           └─ dreggnet-durable / dreggnet-exec / polyana
+#        └─ dreggnet-bridge   (fulfills the lease as a durable metered workflow)
+#           └─ dreggnet-durable / dreggnet-exec (owned wasmi sandbox)
 #
 # The bridge runs a workload on the LOCAL machine; the control plane chooses the
 # machine. The `VmProvider` trait is the rentable-machine abstraction: the
@@ -37,19 +37,12 @@ path = "src/bin/dreggnet-provider.rs"
 
 [features]
 default = []
-# Link the dregg verified core so the orchestration loop reads leases through the
-# LIGHT-CLIENT VERIFIED on-chain read (`VerifiedNodeLeaseSource` →
-# `dreggnet_bridge::dregg_verify::verified_leases_from_range`) rather than trusting
-# the node's cell API. Off by default; the heavy verified-core link is opt-in.
-dregg-verify = ["dreggnet-bridge/dregg-verify", "dep:dregg-query"]
+# NOTE: the light-client verified on-chain lease read (`VerifiedNodeLeaseSource`
+# → `dreggnet_bridge::dregg_verify`) is an honest, fail-closed named seam — its
+# verified-core dep is owned future work (see `dreggnet_bridge::dregg_verify`).
+# The orchestration loop reads leases from the node's cell API until it lands.
 
 [dependencies]
-# The dregg attested-query types (`Mmr` / `IndexRangeResponse` / `ReceiptRecord`),
-# used by the trusted-root-anchor + windowed-read tests to build REAL receipt-index
-# MMR openings the `VerifiedNodeLeaseSource` verifies. Optional + compiled only
-# under `dregg-verify` (same pinned rev as the bridge); the default build links no
-# dregg git.
-dregg-query = { git = "https://github.com/emberian/dregg.git", rev = "a0a0a019692870d9ec992744042de2df8c19be0c", package = "dregg-query", optional = true }
 anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -79,7 +72,7 @@ toml = "0.9"
 # `net` lets a live (Linux) `MeshLink` TCP-probe a fleet node over the overlay.
 tokio = { workspace = true, features = ["process", "time", "net"] }
 
-# The bridge fulfills a funded lease as a durable polyana workflow on the local
+# The bridge fulfills a funded lease as a durable metered workflow on the local
 # machine; the control plane drives it for the `LocalProvider` path.
 dreggnet-bridge = { path = "../bridge" }
 # The durable layer carries the meter + the conserving `Settlement` (Payable) rail

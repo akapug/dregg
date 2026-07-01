@@ -64,7 +64,7 @@ startup gate, and the soak/flake hygiene that earns the word "stable."
 | **NODE-1** | anchor recovery's "expected" root to the federation-signed attested root (verify a quorum sig over `(height, ledger_root)`), not the self-stored unsigned redb root (`node/src/state.rs`, `persist/src/commit_log.rs`) | M | SAFE |
 | **NODE-2** | persist a signed monotonic high-water mark; refuse a store below it (anti-rollback on boot) | M | SAFE |
 | **MESH-2** | auth the node read API (`/api/cells`, `/api/cell`, `/api/receipts/*`, `/checkpoint/latest` are plain GETs today) — bearer or tailnet identity on reads. The bind-scoping half (`0.0.0.0`→`127.0.0.1`/overlay, drop `ports:` for `expose:`) is a **compose edit = deploy config** (REVIEWED-GO, §2) | S (code) | SAFE (code) / REVIEWED (compose) |
-| **GW-1 / GW-2** | app-layer auth on the gateway machines API (`/v1/apps/{app}/…`); bind the lessee to the authenticated principal not the URL segment; close the `*.example.com`/`www` fall-through (`gateway/src/http.rs`, `webapp/src/hosting.rs`) | M | SAFE (code) |
+| **GW-1 / GW-2** | app-layer auth on the gateway machines API (`/v1/apps/{app}/…`); bind the lessee to the authenticated principal not the URL segment; close the `*.dregg.works`/`www` fall-through (`gateway/src/http.rs`, `webapp/src/hosting.rs`) | M | SAFE (code) |
 | **F2** | back admission bonds with a verified locked-cell commitment (`admission.rs`) | M | SAFE |
 | **WALLET-3** | move `dregg:subscribe` behind per-origin approval; don't deliver `receipt`/`activity` to unapproved origins | S | SAFE |
 | **WALLET-4** | add the `walletExists()` guard + replace-confirmation to `recoverFromMnemonic` | S | SAFE |
@@ -131,7 +131,7 @@ script; the human runs the swap.
 
 The manual redeploy is the single biggest ops drag. Today (per `OPERATING.md`,
 `runbooks/{UPGRADE,DEPLOY}.md`): build **off-box** (Mac `cargo zigbuild` for
-gateway/cli/ops/webauth; node-a native for the node image — it links
+gateway/cli/ops/webauth; persvati native for the node image — it links
 `libdregg_lean.a` and **cannot** be cross-compiled — and the bot), ship via
 `docker save|gzip|scp|docker load` + rsync, then on-box `docker compose up -d`
 one service at a time in the order **postgres → node → gateway → bot → ops**. CI
@@ -145,7 +145,7 @@ The phased pipeline (build the automation tonight; gate the prod-touching flips)
 | Phase | Goal | Concrete work | Autonomy |
 |---|---|---|---|
 | **P1 — repeatable deploy script** | one command, no surprises | `deploy/staging/deploy.sh` already does build+ship+up; harden it into `deploy-edge.sh {build,ship,up,upgrade,verify}` covering all four pieces + a post-deploy smoke (`curl /health /status \| jq .dag_height`; cross-node faucet transfer) | SAFE to **author + dry-run**; the live `ship/up` is REVIEWED-GO |
-| **P2 — image registry** | versioned, rollback-able artifacts | push `dregg-node` + `dregg-bot` to GHCR on a successful node-a build, tag by `git` short-sha; `.env` pulls by tag; rollback = prior tag (replaces `docker save/load`) | SAFE to author the workflow; enabling the push is REVIEWED-GO (registry creds) |
+| **P2 — image registry** | versioned, rollback-able artifacts | push `dregg-node` + `dregg-bot` to GHCR on a successful persvati build, tag by `git` short-sha; `.env` pulls by tag; rollback = prior tag (replaces `docker save/load`) | SAFE to author the workflow; enabling the push is REVIEWED-GO (registry creds) |
 | **P3 — multi-node CI** | prove federation in CI | a `docker compose`/Kind harness that stands up an n=2 committee, validates finality over the mesh, runs `control/tests/go_real_loop.rs` + `bridge/tests/windowed_verified_read.rs` against **live** nodes (not stubs); gate on multi-node finality + verified-read success | SAFE (CI authoring + local validation) |
 | **P4 — orchestrated rolling upgrade** | encode `UPGRADE.md` so a human can't fumble the order | `deploy-edge.sh upgrade <tag>` enforces postgres→node→gateway→bot→ops, graceful SIGTERM + `stop_grace_period`, waits each healthcheck, greps for STORE-INTEGRITY, keeps the prior tag for rollback; one-node-at-a-time committee discipline + Lean-archive-consistency assertion | SAFE to author; the live run is REVIEWED-GO |
 | **P5 — bootstrap + secrets automation** | kill the manual key steps | webauth `dregg-authctl keygen`+`mint` as a first-boot entrypoint (if root pubkey empty); headscale ephemeral+single-use preauth keys (MESH-1) via a rotation cron; a `reroll-federation.sh` that signs/distributes a new `genesis.json` in quorum order | SAFE to author scripts; **running any rotation / committee re-roll is REVIEWED-GO** |
@@ -154,7 +154,7 @@ The phased pipeline (build the automation tonight; gate the prod-touching flips)
 Cross-cutting deploy items already named: **node-image** (NAMED-RUNGS #4 — the
 Lean-on-Linux builder, gates the staging end-to-end), **dregg-web-auth live
 rewire** (deployed in parallel with basic-auth, fail-closed, break-glass token;
-the switch to cap-only is a coordinated REVIEWED-GO), **`example.com` DNS+Caddy
+the switch to cap-only is a coordinated REVIEWED-GO), **`dregg.works` DNS+Caddy
 live deploy** (NAMED-RUNGS #16, REVIEWED-GO — public surface), **private GitHub
 remote** (NAMED-RUNGS #10 — `origin` now exists; ensure `dev` is pushed, SAFE).
 
@@ -180,7 +180,7 @@ benched (`dregg-perf`'s 16 criterion benches + the per-crate suites); the
 ### 3.2 The benchmark harness (SAFE to build tonight)
 
 Execution order from `PERF-CHARACTERIZATION.md` §5, all SAFE (build + run on a dev
-box / node-a, capture baselines, commit artifacts; reversible, no prod effect):
+box / persvati, capture baselines, commit artifacts; reversible, no prod effect):
 
 1. **DreggNet service-layer micro-benches** — `bridge` lease lifecycle, `durable`
    checkpoint/resume, `gateway`/`webapp` req/sec, per-tier workload latency
@@ -188,8 +188,8 @@ box / node-a, capture baselines, commit artifacts; reversible, no prod effect):
 2. **The macro/throughput load-gen harness** — drives N concurrent
    leases/workloads/agents (the pay→lease→run→meter→reap loop; promote
    `perf/src/bin/orchestration_demo.rs`); reports throughput + p50/p99/p99.9 tail
-   (reuse `polyana bench-substrate`'s four-9s envelope + `net/transport
-   profile.rs`'s JSON/remote shape).
+   (reuse the `net/transport profile.rs` JSON/remote shape for the four-9s
+   envelope).
 3. **WIDE sweeps** — populated-ledger commitment (1→10³→10⁶ cells: does the
    sparse-Merkle + cap-root cache keep commitment O(touched)?), N-concurrent
    leases, per-tier saturation; instrument the named contention points (ledger
@@ -198,7 +198,7 @@ box / node-a, capture baselines, commit artifacts; reversible, no prod effect):
 4. **VERTICAL saturation + flamegraphs** — confirm the predicted bottleneck per
    workload class (prover is the prime suspect at ~21,000× the executor); commit
    the flamegraph as an artifact per axis (profiled, not inferred).
-5. **FULL baselines on node-a** — the existing `dregg-perf` suite only has a
+5. **FULL baselines on persvati** — the existing `dregg-perf` suite only has a
    SMOKE baseline (`smoke-2026-06-22-m2max`); capture FULL on real hardware.
 6. **FEDERATION** — modeled analytically now (per-node × N − gossip overhead);
    real multi-node bench DEFERRED to the fleet (REVIEWED-GO when the fleet exists).
@@ -236,7 +236,7 @@ do not pre-optimize.
 
 | Target | The lever (design, not a commitment) | Gate |
 |---|---|---|
-| **Heavy Lean build** | the node image's `libdregg_lean.a` is the long pole (the ~190MB libLean.a elaborator tail named in memory); the strip 179MB→75MB closure work is the source-split lane. Bounded build (`taskset -c 0-5 -j6` + earlyoom) is the operational mitigation today | measure build time/mem on node-a |
+| **Heavy Lean build** | the node image's `libdregg_lean.a` is the long pole (the ~190MB libLean.a elaborator tail named in memory); the strip 179MB→75MB closure work is the source-split lane. Bounded build (`taskset -c 0-5 -j6` + earlyoom) is the operational mitigation today | measure build time/mem on persvati |
 | **Proof time** | full prove ~147 ms/turn vs ~8 µs execute (~21,000×). Lever: admit interactively (~µs symbolic), prove **asynchronously** off the hot path, aggregate via recursion fold so a node sustains *prove-throughput ≥ admit-rate*, not per-turn proving. Confirm proving is never the latency a user feels | the macro harness + the async-proof histogram |
 | **Gossip / sync efficiency** | the bounded gossip-stream + receiver backpressure already landed (`923becc66`); measure per-node bandwidth/CPU to converge vs federation size + churn (the FEDERATION axis) | fleet bench (REVIEWED-GO) |
 | **Compute cold-start** | wasmtime Cranelift cold vs the `InstancePool` pre-pooled path (`bench_wasm_instantiate` shows the payoff); native-CPython subprocess spawn dominates short workloads | per-tier saturation sweep |
@@ -282,8 +282,8 @@ ember**).
 | **#15 real `MeterTick` → Payable** (one Postgres txn = duroxide checkpoint + lease charge) | features | OPEN | SAFE (code + test over `pg-dregg`) |
 | **#7 / #19 `dregg-verify` RPC transport** (the light-client receipt-log fetch) | NAMED-RUNGS, features | OPEN | the transport + decode are SAFE; **flipping `dregg-verify` ON as the deployed default = AGPL-derivative + workspace-lock = REVIEWED-GO** |
 | #5/#17 Solana mainnet-real (geyser inclusion proofs) + mainnet relayer wire | NAMED-RUNGS | OPEN | the verifier is SAFE; deploying a live mainnet relayer = REVIEWED-GO |
-| #6/#18 polyana Node tier + args threading; #14 firecracker guest plane | NAMED-RUNGS, features #8 | OPEN | SAFE (code, hardware-gated tests skip cleanly) |
-| #20–#22 the distributed loop (mesh overlay + deploy `dreggnet-provider` + node-a) | features | OPEN | code SAFE; **the fleet deploy + the live-edge operator step = REVIEWED-GO** |
+| #6/#18 owned native/interpreter engine (Caged tier) + args threading; #14 owned microVM engine guest plane | NAMED-RUNGS, features #8 | OPEN | SAFE (code, hardware-gated tests skip cleanly) |
+| #20–#22 the distributed loop (mesh overlay + deploy `dreggnet-provider` + persvati) | features | OPEN | code SAFE; **the fleet deploy + the live-edge operator step = REVIEWED-GO** |
 
 ### 5.3 Tier C — the VK epoch (the gated flag-day; DESIGN+PROVE+STAGE safe, FLIP reviewed)
 
@@ -312,10 +312,13 @@ The LANGUAGE-EXEC strands (`CELL-PROGRAM-LANGUAGE.md` grammar atoms — 3 landed
 `DERIVATIVE-MATCHING-DESIGN.md` — Brzozowski Stage 3 landed, Stage 5 open research;
 `DOCUMENT-LANGUAGE.md` — the patch-theory document core) plus the features long
 tail (#23/#24/#25 conditional/pending/remote-eventual node wiring, #26 EVM
-settlement, #27 deos-hermes live agent, #28–#31 cockpit/deos wiring, #32 polyana
-upstream langs). All SAFE (code + proof + test, no prod/VK effect) except where a
-new selector or a live deploy is involved. Decision of record (HORIZONLOG
-2026-06-28): **NEVER language-as-wasm** — real CPython/Node only.
+settlement, #27 deos-hermes live agent, #28–#31 cockpit/deos wiring, #32 the
+owned interpreter/native engines). All SAFE (code + proof + test, no prod/VK
+effect) except where a new selector or a live deploy is involved. Decision of
+record (HORIZONLOG 2026-06-28): **NEVER language-as-wasm** — the stronger langs
+want real owned CPython/Node engines, which are fail-closed seams today (the
+owned engine is future work); only the owned wasmi `Sandboxed` tier genuinely
+runs.
 
 ---
 
@@ -337,8 +340,9 @@ hard to reverse or reaches the live network, it is REVIEWED-GO.
   Each lands with its regression test; the lib suites stay green.
 - **Wiring built-but-not-live features at the executor/library layer** — the M2
   privacy Effects + admission gates (#1–#3), `MeterTick`→Payable (#15), the
-  `dregg-verify` RPC transport + decode (#7/#19), the polyana Node tier + args
-  (#6/#18), the firecracker guest plane (#14), the conditional/pending node wiring
+  `dregg-verify` RPC transport + decode (#7/#19), the owned native/interpreter
+  engine (Caged tier) + args (#6/#18), the owned microVM engine guest plane
+  (#14), the conditional/pending node wiring
   (#23/#24/#25) — the *code + tests*, NOT the deployed-VK flip or the live deploy.
 - **VK-epoch DESIGN + PROVE + BUILD + STAGE** — the gadgets, the staged
   descriptors, the Lean apexes, the domain-2 burn-down precursor (resolve the
@@ -346,7 +350,7 @@ hard to reverse or reaches the live network, it is REVIEWED-GO.
   **up to but not including** committing the VK + flipping the deployed default.
 - **The benchmark + measure axes (§3)** — build every service-layer bench, the
   load-gen harness, the WIDE/VERTICAL sweeps, capture FULL baselines on a dev box /
-  node-a, commit flamegraphs.
+  persvati, commit flamegraphs.
 - **The o11y completion (§3.3)** — new Grafana panels, new/tuned Prometheus alert
   rules, wiring the sandbox-denial + bridge-relayer metric sources. Config + code,
   reversible.
@@ -367,7 +371,7 @@ hard to reverse or reaches the live network, it is REVIEWED-GO.
   epoch's *flag-day*. (Per memory's be-thoughtful scar: a kernel/effect/commitment
   change from thin context is exactly the forbidden move.)
 - **Live-prod / staging deploys** — any `ship`/`docker compose up` against the
-  edge or node-a, the redeploy of the accumulated fixes (§1.5), the node-image
+  edge or persvati, the redeploy of the accumulated fixes (§1.5), the node-image
   swap. Outward-facing; money + keys are live.
 - **Genesis / committee / federation changes** — committee re-roll, `federation_id`
   change, `node.key` rotation, adding a committee member. Coordinated, breaks the id.
@@ -379,7 +383,7 @@ hard to reverse or reaches the live network, it is REVIEWED-GO.
   workspace-lock decision (license/legal, not just code).
 - **Bridge relayer / webhook DEPLOY** — the BR fixes are in; standing up a live
   relayer or webhook server (and the mainnet geyser path) is the gate.
-- **Public-surface changes** — `example.com` DNS + Caddy live deploy, the Discord
+- **Public-surface changes** — `dregg.works` DNS + Caddy live deploy, the Discord
   bot token go-live, the webauth switch to cap-only (drop basic-auth), any
   secret/key rotation run.
 - **Anything that finalizes irreversibly on the live chain** — a real on-chain

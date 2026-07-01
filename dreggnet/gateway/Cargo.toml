@@ -10,11 +10,11 @@ path = "src/lib.rs"
 
 [features]
 default = []
-# Gate creates on the LIGHT-CLIENT VERIFIED on-chain funded-lease read (LEASE-1a):
-# `AttestedFunding::from_verified_source` / `NodeFunding` read funding through the
-# control plane's `VerifiedNodeLeaseSource` rather than the node cell API. Off by
-# default (the heavy verified-core link is opt-in); propagates to control.
-dregg-verify = ["dreggnet-control/dregg-verify"]
+# NOTE: gating creates on the light-client verified on-chain funded-lease read
+# (`AttestedFunding` / `NodeFunding` via the control plane's verified source) is
+# an honest, fail-closed named seam whose verified-core dep is owned future work
+# (see `dreggnet_bridge::dregg_verify`). Gating reads funding from the node cell
+# API until it lands.
 
 # The runnable serving binary: binds a TCP listener and serves the machines-API
 # `Handler` over a small HTTP/1.1 connection loop.
@@ -37,12 +37,12 @@ path = "src/main.rs"
 # links no third-party HTTP engine; its server is the hand-rolled `std::net`
 # thread-per-connection loop in `main.rs`.
 dreggnet-http = { path = "../http" }
-# The keystone: a funded dregg execution-lease → a durable polyana workload.
+# The keystone: a funded dregg execution-lease → a durable metered workload.
 # A create runs through the bridge's real lease gate; fulfill is the real launch.
 dreggnet-bridge = { path = "../bridge" }
 # The control plane's REAL dispatch primitive: a created machine's lease is
 # dispatched over the overlay to a compute node (`dispatch_lease_over_mesh` +
-# `TailscaleMesh`, the live edge→node-a path). Used, not re-implemented.
+# `TailscaleMesh`, the live edge→persvati path). Used, not re-implemented.
 dreggnet-control = { path = "../control" }
 # The per-account ABUSE-PREVENTION gate: a create consults the `Guard` for account
 # standing + deploy-rate + per-account quota (refused in-band → 402/429/403), and the
@@ -50,12 +50,12 @@ dreggnet-control = { path = "../control" }
 # permissionless-cloud admission layer over the gateway's create + serve chokepoints.
 dreggnet-guard = { path = "../guard" }
 # The agent-served-web-API capability: the data-plane handler
-# (`gateway/src/webapp.rs`) routes inbound HTTP to a served app's polyana
+# (`gateway/src/webapp.rs`) routes inbound HTTP to a served app's owned-sandbox
 # handlers via `dreggnet_webapp::Router`.
 dreggnet-webapp = { path = "../webapp" }
 # Custom domains (BYO): the cap-gated DomainBinding cell + DNS challenge-verify
 # (TXT/CNAME) + the verified custom-Host resolution the static data plane adopts
-# beside the `<name>.example.com` SiteRegistry, and the on-demand-TLS `ask` gate.
+# beside the `<name>.dregg.works` SiteRegistry, and the on-demand-TLS `ask` gate.
 dregg-domains = { path = "../dregg-domains" }
 # The durable object-store core: the cap-gated, metered, receipted `BucketRegistry`
 # the storage data-plane handler (`gateway/src/storage.rs`) mounts over HTTP — the

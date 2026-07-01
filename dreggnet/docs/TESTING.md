@@ -45,9 +45,12 @@ the lease→durable workflow and the lease watcher
 publish→serve round-trip + durable-request resume
 (`webapp/tests/{site_publish_serve,durable_request_resume,durable_request_real_restart}.rs`).
 
-`dreggnet-exec` runs polyana's wasm tiers (default-on: `polyana`, `python`, `node`,
-`firecracker`); the wasm tiers run everywhere, and the native/VM tiers skip cleanly
-when their interpreter (`python3` / `node`) or `/dev/kvm` is absent — see
+`dreggnet-exec` runs the owned, vendored pure-Rust `wasmi` sandbox for the `Sandboxed`
+wasm tier — it genuinely executes everywhere (zero `unsafe`, no external submodule; the
+`add(40,2)=42` dogfood runs here). Every stronger tier — `JitSandboxed`/JIT, `Caged`/native,
+`MicroVm`/Firecracker, `Gpu`, and the python/node interpreter langs — is an honest,
+fail-closed seam today (`ExecError::NotWired` / `TierNotServed`): never a fake run, never a
+silent downgrade. Wiring an owned engine for each stronger tier is future work — see
 `docs/COMPUTE-TIERS.md`.
 
 This is the same crate set CI tests on its macOS service-stack job (`.github/workflows/ci.yml`).

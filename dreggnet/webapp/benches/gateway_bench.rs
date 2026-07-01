@@ -1,6 +1,6 @@
 //! Gateway / webapp characterization: requests/sec through the router. Three
 //! paths:
-//!   1. `Router::serve` — the non-durable data plane (match -> polyana handler ->
+//!   1. `Router::serve` — the non-durable data plane (match -> owned-sandbox handler ->
 //!      render). The raw request-routing + handler-exec floor.
 //!   2. `LeasedRouter::serve` — the metered durable data plane: gate the lease
 //!      budget, then run the handler THROUGH a one-step durable workflow.
@@ -63,7 +63,7 @@ fn bench<F: FnMut()>(label: &str, iters: usize, warmup: usize, mut f: F) {
 
 fn main() {
     println!("\n=== DreggNet gateway / webapp (router) characterization ===");
-    println!("    a served GET /add?a=40&b=2 -> polyana wasm handler -> rendered response\n");
+    println!("    a served GET /add?a=40&b=2 -> owned wasm handler -> rendered response\n");
 
     let req = WebRequest::get("/add?a=40&b=2");
 

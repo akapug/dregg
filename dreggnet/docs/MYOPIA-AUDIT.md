@@ -183,22 +183,24 @@ fly.io" into "a cloud whose unit of compute is a unit of account and authority."
 
 ---
 
-## 4 · Execution tiers (`exec/`) — delegated, not cloned (the honest exception)
+## 4 · Execution tiers (`exec/`) — owned + in-crate (the wasm tier real, the rest honest seams)
 
-**What we built.** `exec/src/lib.rs::run_workload` is a **thin seam over polyana**
-(`polyana`, Apache-2.0, co-developed — the real polyglot engine), mapping a
-dregg lease's `CapTier` → a polyana sandbox provider (wasmi/wasmtime/seccomp+Landlock/
-Firecracker). It does NOT reimplement an execution engine — it delegates, and the
-cap-grade→tier→provider floor check (never a silent downgrade) is dregg-shaped.
+**What we built.** `exec/src/lib.rs::run_workload` maps a dregg lease's `CapTier` → an
+**owned, in-crate** execution engine. The `Sandboxed` tier runs on an owned, vendored
+pure-Rust `wasmi` interpreter (zero `unsafe`, no external dependency, provider
+`dreggnet-wasmi`) that genuinely executes. Every stronger tier — `JitSandboxed`/JIT,
+`Caged`/native, `MicroVm`/Firecracker, `Gpu`, and the native python/node langs — is an
+honest, **fail-closed seam** (`ExecError::TierNotServed` / `NotWired`): never a fake run,
+never a silent downgrade. The cap-grade→tier→engine floor check is dregg-shaped.
 `exec/src/budget.rs::ReplenishingBudget` (the sporadic-server replenishing meter the
 front office leans on) is a real, sound ceiling cell — though a **twin** of the proven
 `cell/src/allowance.rs` (`SOUNDNESS-TWINS-CENSUS` #5).
 
-**Native version / load-bearing.** This is the **least myopic core surface**: the
-engine is genuinely external+real, and the cap→tier mapping is the right dregg-shaped
-boundary. The gap is narrower — the workload is a polyana component instance, **not a
-cell** (so it can't transact/hold-caps/pay from inside, the §2 VISION superpower), and
-the metering cell is a twin rather than the proven allowance cell.
+**Native version / load-bearing.** The owned wasmi Sandboxed tier is real and the
+cap→tier mapping is the right dregg-shaped boundary. Two gaps remain: the workload is a
+wasmi module instance, **not a cell** (so it can't transact/hold-caps/pay from inside,
+the §2 VISION superpower), the metering cell is a twin rather than the proven allowance
+cell, and the stronger tiers await an owned engine each (fail-closed until then).
 
 **The re-dregg move.** Land the `ReplenishingBudget` widening *in breadstuffs* at the
 named `cell/src/budget.rs` home and depend on it (twin→proof); give the workload a
@@ -302,7 +304,7 @@ secrets, logs, invoices) are generic in-memory structures, not umem cells. So ev
   publish as a crash-resumable workflow metered through the real
   `dreggnet_exec::meter::ReplenishingMeter` (resumes from the meter's own dedup, never
   double-charges) — load-bearing. **Generic part:** publish lands in the `SiteRegistry`
-  (inherits §1's substrate gap); the build sandbox is a cap-bounded polyana run (good).
+  (inherits §1's substrate gap); the build sandbox is a cap-bounded owned-wasmi run (good).
   Native-in-metering, generic-in-output-cell.
 - **`dregg-ipfs/` — a generic pinning bridge (correctly thin).** The real claim ("a
   dregg blake3 commitment IS an IPFS CIDv1") is verified as a **pure encoding

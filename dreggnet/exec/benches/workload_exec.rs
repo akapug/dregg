@@ -57,7 +57,7 @@ const WASMI_LOOP: &str = r#"
         (local.get $acc)))
 "#;
 
-/// CPython (Caged): a guest that speaks polyana's newline-JSON wire and sums args.
+/// CPython (Caged): a guest that speaks the owned sandbox's newline-JSON wire and sums args.
 const PY_ADD: &str = r#"import sys, json
 for line in sys.stdin:
     line = line.strip()
@@ -137,7 +137,7 @@ fn env_usize(key: &str, default: usize) -> usize {
 }
 
 fn python3_available() -> bool {
-    let bin = std::env::var("POLYANA_PYTHON_BIN").unwrap_or_else(|_| "python3".into());
+    let bin = std::env::var("DREGGNET_PYTHON_BIN").unwrap_or_else(|_| "python3".into());
     std::process::Command::new(&bin)
         .arg("--version")
         .output()

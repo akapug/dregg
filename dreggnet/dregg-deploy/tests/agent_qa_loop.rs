@@ -23,7 +23,7 @@ use std::sync::Arc;
 use dregg_deploy::{DeployEngine, DeploySpec, deploy_in_memory_blocking};
 use dreggnet_exec::CapTier;
 use dreggnet_exec::agent::{AgentAction, AgentCloud, AgentSpec, PlannedBrain, verify_agent_run};
-use dreggnet_exec::agent_toolkit::{HealthSnapshot, PolyanaToolkit, Toolkit};
+use dreggnet_exec::agent_toolkit::{HealthSnapshot, SandboxToolkit, Toolkit};
 use dreggnet_webapp::hosting::SiteRegistry;
 use dreggnet_webapp::verify::{SiteReceiptBundle, verify_site_bundle};
 

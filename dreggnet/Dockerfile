@@ -3,11 +3,11 @@
 # DreggNet container image — runs the Linux serving stack on a Mac via Docker.
 #
 # DEFAULT BUILD = the `dregg-cloud` operator CLI: the runnable "wasmi-tier exec"
-# demo path. It drives control → bridge → durable → exec → polyana, genuinely
-# running a metered, durable, sandboxed workload (add(40,2)=42, *2=84) in the
-# pure-Rust wasmi sandbox and the Cranelift/Wasmtime JIT tier. Its dependency
-# closure does NOT pull the Linux-only `net/` (httpe) stack, so it builds and
-# runs cleanly in a Linux container without the heavy Elide net closure.
+# demo path. It drives control → bridge → durable → exec (owned wasmi sandbox),
+# genuinely running a metered, durable, sandboxed workload (add(40,2)=42) in the
+# owned pure-Rust wasmi sandbox; the stronger tiers are honest fail-closed seams.
+# Its dependency closure does NOT pull the Linux-only `net/` (httpe) stack, so it
+# builds and runs cleanly in a Linux container without the heavy Elide net closure.
 #
 # NOT THE DEFAULT = the httpe `dreggnet-gateway` (the fly-compatible machines
 # API). It is a real serving binary: `dreggnet-gateway --port 8080` binds a TCP
@@ -40,9 +40,10 @@ ENV CARGO_TERM_COLOR=always \
 #  - build-essential + perl: native build scripts (and openssl-sys `vendored`,
 #    which durable requests on Linux, compile from source).
 #  - libssl-dev + pkg-config: the high-level `openssl` crate is pulled into the
-#    CLI graph (via polyana) with a non-vendored openssl-sys, so the build links
-#    Debian's system OpenSSL.
-#  - cmake + clang: native build scripts in the polyana/wasmtime tree.
+#    CLI graph with a non-vendored openssl-sys, so the build links Debian's
+#    system OpenSSL.
+#  - cmake + clang: kept for any transitive native build script. The owned wasmi
+#    interpreter is pure-Rust and needs no cmake/clang/native compute-engine tree.
 #  - git + ca-certificates: fetch the [patch.crates-io] git forks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -62,8 +63,9 @@ WORKDIR /src
 COPY rust-toolchain.toml ./
 RUN rustup show
 
-# The whole workspace (the .dockerignore trims target/ and .git/). The polyana
-# submodule source is checked out in the working tree and ships in the context.
+# The whole workspace (the .dockerignore trims target/ and .git/). The compute
+# engine is the owned in-crate wasmi sandbox — no submodule, all sources ship in
+# the context.
 COPY . .
 
 # Build + lift the binary out of the BuildKit cache mount in the same step.
@@ -100,8 +102,8 @@ ENV DREGGNET_STATE_DIR=/var/lib/dreggnet
 RUN mkdir -p /var/lib/dreggnet
 WORKDIR /var/lib/dreggnet
 
-# A turnkey end-to-end demo: open a funded lease, run a metered durable polyana
-# workload, print the lifecycle + meter. `docker compose run --rm dreggnet dreggnet-demo`.
+# A turnkey end-to-end demo: open a funded lease, run a metered durable workload,
+# print the lifecycle + meter. `docker compose run --rm dreggnet dreggnet-demo`.
 RUN cat > /usr/local/bin/dreggnet-demo <<'EOF' \
  && chmod +x /usr/local/bin/dreggnet-demo
 #!/bin/sh

@@ -37,7 +37,7 @@ Effort: **S** = <1 day · **M** = 1–5 days · **L** = 1–2 weeks.
 | 7 | Private-voting secret tally | dregg | LIVE ballots / DESIGNED tally | med | H | tally is plaintext+monotone, no ZK |
 | 8 | Firecracker microVM tier | DreggNet | FLAG-GATED, guest-plane DEAD | high | M | VM boots, `call()` errors — vsock guest wire + image build + jailer-as-standard |
 | 9 | Caged native+seccomp+landlock tier | DreggNet | FLAG-GATED (off) | med | S | `--features caged`; Linux-only enforcement |
-| 10 | SBX / polyana-bridge cap-aware seam | dregg | LIB-ONLY | med | M | no binary routes exec→polyana through it |
+| 10 | SBX / dregg-bridge cap-aware seam | dregg | LIB-ONLY | med | M | no binary routes exec→sandbox through it |
 | 11 | pg-dregg (dregg-in-Postgres) | dregg | LIB-ONLY, workspace-excluded | high | M–L | no daemon imports it |
 | 12 | pg-dregg proof-gate circuit-link (S3) | dregg | DESIGNED+BUILT 90% | high | M | one circuit flip; attests nothing until then |
 | 13 | node `pg-mirror-live` writer | dregg | FLAG-GATED + env-coupled | med | S | feature + `DREGG_PG_MIRROR_URL`; blocked on #12 |
@@ -49,7 +49,7 @@ Effort: **S** = <1 day · **M** = 1–5 days · **L** = 1–2 weeks.
 | 19 | `dregg-verify` verified on-chain read | DreggNet | FLAG-GATED (off, AGPL) | high | L | default build is Apache-pure; needs workspace patch unification + a live node with data |
 | 20 | Mesh dispatch (two-node WireGuard) | DreggNet | DEMO-STUB (`StubMesh` Unimplemented) | high | L | overlay handshake never brought up |
 | 21 | `dreggnet-provider` autonomous loop | DreggNet | DESIGNED (real loop, not deployed) | high | L | not in the fleet; gated on operator lease-mint step |
-| 22 | node-a compute backend (`:8021`) | DreggNet | DESIGNED | high | L | hardware not provisioned |
+| 22 | Persvati compute backend (`:8021`) | DreggNet | DESIGNED | high | L | hardware not provisioned |
 | 23 | ConditionalBatch / ConditionalTurn | dregg | FLAG-GATED (HTTP API, no executor wire) | med | M | resolves over HTTP pool; no node→executor advance |
 | 24 | PendingTurnRegistry (async coord) | dregg | LIB-ONLY | med | M–H | zero node wiring |
 | 25 | Remote (cross-fed) EventualRef | dregg | DESIGNED (local LIVE) | med | M | `federation_id` field exists, executor never fetches remote receipt |
@@ -59,7 +59,7 @@ Effort: **S** = <1 day · **M** = 1–5 days · **L** = 1–2 weeks.
 | 29 | starbridge-v2 `process-pd` | dregg | FLAG-GATED, half-built | med | M | surface→child-PD re-home not in live migrate path |
 | 30 | starbridge-v2 `live-brain`/`agent-js`/`card-pane` | dregg | FLAG-GATED (off, size) | high | S | built + render-tested; off-default to avoid mozjs weight |
 | 31 | node `deos-host` headless runner | dregg | FLAG-GATED (off, size) | med | S | opt-in to avoid SpiderMonkey in default build |
-| 32 | polyana upstream-track langs | DreggNet | DESIGNED | low | L | Zig/Crystal/Nim/etc. exit "not yet linked" |
+| 32 | upstream-track langs | DreggNet | DESIGNED | low | L | Zig/Crystal/Nim/etc. exit "not yet linked" |
 
 \* low *today* — it is the missing foundation for any future 2PC.
 
@@ -111,36 +111,32 @@ awaiting an *Effect-vocabulary integration*.
   blind the choice and prove tally consistency in zero knowledge." So: ballot
   privacy LIVE; secret tally DESIGNED.
 
-### Compute tiers (DreggNet `exec` → polyana)
+### Compute tiers (DreggNet `exec` → the owned sandbox)
 
-The wasm (`Sandboxed`/`JitSandboxed`), Python, and Node tiers are genuinely
-**LIVE** and default-on: real wasmi/wasmtime, real `python3`/`node` subprocesses,
-real metering. The two top tiers are softer:
+Only the base wasm tier is genuinely **LIVE**: `CapTier::Sandboxed` runs on an
+**owned, vendored pure-Rust `wasmi` interpreter** (zero unsafe, no external
+submodule), and it really executes — the `add(40,2)=42` dogfood runs here, with
+real metering. It emits the provider label `dreggnet-wasmi`. **Every stronger
+tier is an honest, fail-closed seam today** (`ExecError::NotWired` /
+`TierNotServed`) — never a fake run, never a silent downgrade. Wiring an owned
+engine for each is future work:
 
-- **#8 Firecracker microVM** — default-on (`firecracker` feature), routed for
-  `CapTier::MicroVm`, and the VM *lifecycle* is real (spawn the firecracker API
-  process, boot a guest, `drop_instance` teardown; `with_jailer` constructor
-  exists). **But the guest plane is dead in slice-1:** a booted VM errors on
-  `call()` because the vsock guest-invocation wire + the in-guest agent are not
-  landed (`polyana/src/firecracker-provider/src/lib.rs:20` "dead guest plane";
-  `exec/src/lib.rs:1117`). So **no workload actually executes inside a microVM
-  yet** — it boots and then refuses. Named remaining (slice-2/3): the vsock+JSON
-  wire, the kernel/rootfs **image build**, and the **jailer** (chroot+cgroup) as
-  the production default. On a non-KVM host it is proven only to the clean
-  hardware-gated refusal. *(The COMPUTE-TIERS.md doc is the accurate account;
-  an earlier read that called it "fully wired with vsock+jailer" over-read the
-  `with_jailer` constructor.)*
-- **#9 Caged (native + seccomp + Landlock)** — built and tested but **off by
-  default** (the `caged` feature is absent from `exec`'s default set). Routes
-  `CapTier::Caged` to `polyana-native-process-provider` for generic host
-  binaries / shebang scripts. Enforcement only engages on Linux. Flip with
-  `--features caged`.
-- **#10 SBX / polyana-bridge cap-aware seam** — `breadstuffs/polyana-bridge` is
-  a workspace member but a **LIB-ONLY** crate: exercised only by
-  `polyana-bridge/tests/seam.rs`, with zero call sites in any binary. It is the
-  intended dregg-cap-aware boundary between exec and polyana; nothing routes
-  through it live. (No "polyana branch / commit 88566718" exists in the local
-  history — that framing is stale.)
+- **#8 Firecracker microVM** — `CapTier::MicroVm` is a **fail-closed seam**: it
+  refuses cleanly (`dreggnet-microvm (seam)`) rather than executing. The owned
+  microVM engine (guest plane, vsock+JSON wire, kernel/rootfs image build, jailer
+  chroot+cgroup) is future work. No workload runs inside a microVM today; the
+  tier honestly reports it is not served.
+- **#9 Caged (native + seccomp + Landlock)** — `CapTier::Caged` is a
+  **fail-closed seam** (`dreggnet-native (seam)`): it refuses generic host
+  binaries / shebang scripts rather than running them. The owned native engine
+  (seccomp + Landlock enforcement) is future work.
+- **#10 SBX / dregg-bridge cap-aware seam** — the dregg-cap-aware boundary
+  between `exec` and the owned sandbox is a **LIB-ONLY** seam: no binary routes
+  execution through it live yet.
+
+(The `JitSandboxed`/JIT wasm tier and the native `python`/`node` interpreter
+langs are likewise fail-closed seams today — an owned engine for each is future
+work. Do not read these as "live": only the base `Sandboxed` wasmi tier runs.)
 
 ### Durable settlement & Postgres (both repos)
 
@@ -188,7 +184,7 @@ The libraries beneath it are mostly complete-but-unmounted:
   trustless object store (`BucketRegistry`, `StorageCap`, Poseidon2
   `content_root`, `verify_opening`). **No gateway HTTP handler is mounted** —
   `storage/lib.rs` says outright "neither is wired live here." LIB-ONLY.
-- **#17 WebApp metered router** — `Router` (route → polyana handler) is tested
+- **#17 WebApp metered router** — `Router` (route → sandbox handler) is tested
   and the gateway serves it, but **unmetered**; the `LeasedRouter` (metered
   against a funded lease + durable) is not deployed. Multi-app-per-gateway is "a
   later rung." Hosting is wired; metered routing is not.
@@ -224,8 +220,8 @@ distributed half is designed but not deployed:
   period → reap, with the `DurableSettleLedger` dedup) is **fully coded** but
   **not in the staging fleet**, and its live end-to-end is gated on a one-time
   operator step (unlock the node, mint a funded execution-lease).
-- **#22 node-a compute backend** — the `:8021` bridge agent that answers
-  `POST /fulfill`; designed in `deploy/COMPUTE-BACKEND.md`, hardware not yet
+- **#22 Persvati compute backend** — the `:8021` bridge agent that answers
+  `POST /fulfill`; designed in `deploy/PERSVATI-BACKEND.md`, hardware not yet
   provisioned.
 
 ### Promises / partial-turn / reactor (dregg)
@@ -280,11 +276,9 @@ A pleasant surprise: most of this cluster is **LIVE**, not spec-only.
   avoid the multi-GB mozjs/SpiderMonkey weight. FLAG-GATED, no correctness gap.
 - **#31 node `deos-host`** — a headless JS-program runner against the node's
   ledger, off-default to keep SpiderMonkey out of the standard build.
-- **#32 polyana upstream-track languages** — Zig/Crystal/Nim and other langs
-  exit `78` "not yet linked"; the embedding framework is real, per-language
-  providers are incomplete. Also smaller polyana scaffolds: v8 `stream` module
-  (`#[ignore]`, "next slice"), ruby ActiveJob `:async` adapter ("not wired"),
-  graal streaming shim, pkg-proxy advisory DB.
+- **#32 upstream-track languages** — Zig/Crystal/Nim and other langs
+  exit `78` "not yet linked"; per-language owned engines are future work
+  (fail-closed seams today).
 
 ---
 
@@ -301,9 +295,11 @@ So the census is honest in both directions:
 - **CapTP pipelining** — used by the node's channels/handoff/mailbox paths.
 - **DreggNet gateway** — httpe `:8080` in staging, machines API, static
   minisite serving, lease-gated.
-- **Compute** — wasm (wasmi + wasmtime/JIT), Python, and Node tiers genuinely
-  execute and meter, default-on.
-- **Durable execution** — real polyana workloads as duroxide orchestrations,
+- **Compute** — the base `Sandboxed` wasm tier genuinely executes and meters on
+  the owned, vendored pure-Rust `wasmi` interpreter (the `add(40,2)=42` dogfood
+  runs here, `dreggnet-wasmi`). Every stronger tier (JIT, Caged/native, MicroVm,
+  python/node) is a fail-closed seam today — an owned engine for each is future work.
+- **Durable execution** — real metered workloads as duroxide orchestrations,
   per-step metering, crash-resume proven on on-disk SQLite (single host).
 - **Settlement** — `NodeApiSettlement` posts real conserving `Transfer` turns
   with a fsync'd exactly-once dedup ledger (live in the `dreggnet-provider`
@@ -326,7 +322,7 @@ So the census is honest in both directions:
    one Effect-vocabulary integration away from shippable shielded transfers and
    ZK attestations.
 4. **#20–#22 the distributed loop** (mesh overlay + deploy `dreggnet-provider` +
-   node-a) is the largest-effort, highest-value lift to a real autonomous
+   persvati) is the largest-effort, highest-value lift to a real autonomous
    metered fleet — gated mostly on deployment/ops, not code.
 5. **#8 firecracker guest plane** — make the strong-isolation tier actually run
    workloads (vsock wire + image build), not just boot-and-refuse.

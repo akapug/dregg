@@ -11,8 +11,8 @@ This runbook brings up the runnable demo on any machine with Docker.
 
 | Piece | Status | Notes |
 |---|---|---|
-| `dregg-cloud` CLI (operator face) | **runs** | the wasmi-tier exec demo path: drives control → bridge → durable → exec → polyana; genuinely runs a metered, durable, sandboxed workload |
-| polyana wasmi sandbox + Wasmtime JIT tiers | **runs** | the `add(40,2)=42` / `*2=84` workflow executes in the pure-Rust wasmi sandbox and the Cranelift JIT tier |
+| `dregg-cloud` CLI (operator face) | **runs** | the wasmi-tier exec demo path: drives control → bridge → durable → exec → the owned wasmi sandbox; genuinely runs a metered, durable, sandboxed workload |
+| owned wasmi sandbox (`Sandboxed` tier) | **runs** | the `add(40,2)=42` / `*2=84` workflow executes in the owned pure-Rust `wasmi` interpreter (provider `dreggnet-wasmi`, zero `unsafe`, in-crate). Every stronger tier (JIT/`Caged`/`MicroVm`/GPU) is an honest fail-closed seam (`ExecError::TierNotServed` / `NotWired`) — never a fake run, never a silent downgrade |
 | `postgres` | **runs** | the durable `pg` store + meter outbox boundary; where `pg-dregg` composes the lease/meter/checkpoint in one txn |
 | durable store (bundled SQLite) | **runs** | the default CLI demo path; crash-exact resume over an on-disk DB |
 | durable `pg` store | **opt-in** | same workflow, Postgres-backed checkpoints; its resume test is `DATABASE_URL`-gated |
@@ -21,14 +21,9 @@ This runbook brings up the runnable demo on any machine with Docker.
 ## Prerequisites
 
 - Docker Desktop (or any Docker Engine) with Compose v2.
-- The repository checked out **with the polyana submodule populated** — the
-  `exec` crate path-deps polyana:
-
-  ```sh
-  git submodule update --init polyana
-  ```
-
-  (The image build copies the submodule source from the working tree.)
+- A plain checkout of the repository — nothing to init. Compute is **owned and
+  in-crate**: the `exec` crate depends on the pure-Rust `wasmi` interpreter from
+  crates.io (no external submodule, no path-dep to fetch).
 
 ## Bring it up
 
@@ -38,7 +33,7 @@ docker compose ps                 # both healthy/running
 ```
 
 The first build is heavy: it installs the pinned nightly toolchain
-(`nightly-2026-03-24`), compiles polyana (Wasmtime/Cranelift) and the durable
+(`nightly-2026-03-24`), compiles the owned wasmi sandbox and the durable
 stack, and vendors OpenSSL from source. BuildKit cache mounts make rebuilds fast.
 
 ## The end-to-end demo (one command)
@@ -47,7 +42,7 @@ stack, and vendors OpenSSL from source. BuildKit cache mounts make rebuilds fast
 docker compose run --rm dreggnet dreggnet-demo
 ```
 
-This opens a funded lease, runs a metered durable polyana workload, and prints
+This opens a funded lease, runs a metered durable sandboxed workload, and prints
 the lifecycle + meter. Expected output includes:
 
 ```

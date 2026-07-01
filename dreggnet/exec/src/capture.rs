@@ -7,17 +7,16 @@
 //!
 //! ## What gets captured at this rung
 //!
-//! polyana's provider wire owns the child process's raw stdout fd (it speaks the
-//! newline-JSON protocol over it), so the **tenant-visible output** of a run is
-//! the entrypoint's returned values ([`crate::Output::values`]) — the program's
-//! real result lines — and any failure is the [`crate::ExecError`] message. We
-//! capture values as `stdout` records and an error as a `stderr` record. This is
-//! honest: these are the workload's genuine output, not metadata.
+//! The **tenant-visible output** of a run is the entrypoint's returned values
+//! ([`crate::Output::values`]) — the program's real result lines — and any
+//! failure is the [`crate::ExecError`] message. We capture values as `stdout`
+//! records and an error as a `stderr` record. This is honest: these are the
+//! workload's genuine output, not metadata.
 //!
 //! The deeper raw-stdout interleave (a `print()` mid-run, distinct from the
-//! returned value) rides the polyana guest wire and is a **named seam** for the
-//! integration pass — it lands the moment the provider surfaces a side-channel
-//! line stream. The deploy/build path (`dregg-deploy`) already has true child
+//! returned value) rides the engine's guest wire and is a **named seam** for the
+//! integration pass — it lands the moment an owned engine surfaces a
+//! side-channel line stream. The deploy/build path (`dregg-deploy`) already has true child
 //! stdout/stderr (`git clone`, the build command) and is the richest near-term
 //! capture site — also a named seam owned by that lane.
 //!
@@ -77,7 +76,6 @@ pub fn capture_line(
 /// keyed by `resource_id` / `owner`. The one-call capture wire for the run path:
 /// the result lines (or the error) land in the tenant log as a side effect, and
 /// the run's [`Output`]/[`crate::ExecError`] is returned unchanged.
-#[cfg(feature = "polyana")]
 pub fn run_workload_captured(
     lang: &str,
     source: &str,
@@ -154,9 +152,8 @@ mod tests {
         assert_eq!(sink.tail("wl_z", 0, ALICE).unwrap().len(), 1);
     }
 
-    // The real compute tier → capture round trip (default-on `polyana` feature):
-    // a wat workload returns a value, and that value lands in the tenant log.
-    #[cfg(feature = "polyana")]
+    // The owned compute tier → capture round trip: a wat workload returns a
+    // value, and that value lands in the tenant log.
     #[test]
     fn run_workload_captured_lands_the_real_output() {
         // A core-module wat that exports `run` returning the constant 7.

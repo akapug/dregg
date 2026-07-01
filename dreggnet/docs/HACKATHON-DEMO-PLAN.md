@@ -78,14 +78,14 @@ number in a database the host can edit.*
 budget cell + a cap bundle (`AgentCloud::deploy`, `agent.rs:906`). Its brain is **Hermes
 on Nemotron** (`OpenAICompatBrain::with_base(... "https://integrate.api.nvidia.com/v1",
 "nvidia/…-nemotron-…")`, `brain.rs:486`). The model reasons → emits a tool-call →
-`run_tests` runs the customer's suite in the real polyana wasm sandbox
-(`exec/src/agent_toolkit.rs::PolyanaToolkit::with_run_tests_in`). Every tool-call is
+`run_tests` runs the customer's suite in the real owned wasmi sandbox
+(`exec/src/agent_toolkit.rs::SandboxToolkit::with_run_tests_in`). Every tool-call is
 cap-gated, budget-drawn, and the verdict is **bound into the receipt** — and the
 compute-tier tool binds a `WitnessedRun` `(command · code_root · result)` so a verifier
 can later re-execute it and confirm *these tests ran on this code with this result*
 (`toolkit.rs::run_tests_verdict`, `agent.rs::verify_witnessed_qa` ≈ line 764). The agent
 *cannot claim a green it did not run.*
-→ **operate = the cloud cells + the witnessed toolkit** (LIVE on the local/polyana path).
+→ **operate = the cloud cells + the witnessed toolkit** (LIVE on the local owned-sandbox path).
 
 **Beat 3 — SPEND (the agent pays its vendor, bounded).** Having earned the fee and done
 the work, the agent pays for the compute/SaaS it consumed via a Stripe spend. This rides
@@ -132,7 +132,7 @@ can reproduce offline.**
 |---|---|---|
 | **earn** | receipted Stripe-in: `stripe_mirror::mint_against_webhook` → conserved `Effect::Mint`, receipted | LIVE, tested |
 | **spend** | budget-gated Stripe-out: `stripe_pay` tool over the `invoke` rail, amount drawn from the budget cell, receipted | new glue (§3.2) |
-| **operate** | the cloud cells + witnessed toolkit (`run_tests`/`check_health`/`verify_deploy`), verdict bound in receipt | LIVE on polyana path |
+| **operate** | the cloud cells + witnessed toolkit (`run_tests`/`check_health`/`verify_deploy`), verdict bound in receipt | LIVE on owned-sandbox path |
 | **scale** | `deploy_subagent` — budget + cap attenuation, no-amplify on both axes | LIVE, tested |
 | **prove** | `verify_agent_run` + `verify_witnessed_qa` — re-witness, host untrusted; headroom = could-have bound | LIVE, tested |
 | **safely** | cap-gate + in-band budget refusal + NemoClaw guard composed (§3.4) | LIVE braid; NemoClaw = stretch |
@@ -242,7 +242,7 @@ deploy — and proves it.*
 
 - **Done (LIVE, tested):** the runtime (budget·cap·receipt braid, `agent.rs`), the
   provider-agnostic brain incl. live HTTP (`brain.rs`), the witnessed toolkit
-  (`toolkit.rs`) + polyana injection (`exec/src/agent_toolkit.rs`), sub-agent
+  (`toolkit.rs`) + the owned wasmi sandbox injection (`exec/src/agent_toolkit.rs`), sub-agent
   attenuation, `verify_agent_run` / `verify_witnessed_qa`, the Stripe verify+mint earn
   path (`stripe_mirror.rs` + `demo/stripe-receiver`), federation-attested QA
   (`federation_qa.rs`).

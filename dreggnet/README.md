@@ -1,121 +1,82 @@
-# DreggNet — the verifiable agent cloud
+# DreggNet — the operated service layer
 
-DreggNet is the **operated service layer** that runs real agent workloads on real
-metal and settles them against the public, formally-verified **dregg** substrate.
-dregg says *what was promised, paid, and owed* — verifiably. DreggNet *delivers
-it*: it schedules the workload, serves it, meters it, and bills for it, with every
-charge traceable back to a signed, re-witnessable receipt.
+**AGPL-3.0, open-core.** The public, formally-verified dregg substrate lives at
+`github.com/emberian/dregg` (AGPL-3.0); **DreggNet** is the operated layer, also
+AGPL-3.0, that runs real workloads on real metal and earns the revenue. The moat is
+not secret code — it is the live network, the multi-operator federation, and the
+verifiable proofs (verify, don't trust). (This working repo is kept private for its
+history, live-infra config, and retained third-party Elide sources; the product ships
+as a clean public AGPL snapshot.)
 
-This repository is **AGPL-3.0-only** (see `LICENSE`). It builds on the public
-substrate at **`github.com/emberian/dregg`** (also AGPL-3.0); DreggNet depends on
-dregg, and nothing in dregg depends on DreggNet (clean open-core hygiene).
+## The split (open core)
 
-## Honest status — read this first
+| | what it is | license | where |
+|---|---|---|---|
+| **dregg** | the verified ocap substrate — kernel, value layer, intent ring, Payable, the execution-*lease* (the on-substrate, light-client-witnessed *record* of a workload + its metering + payment) | AGPL-3.0, public | `~/dev/breadstuffs` |
+| **DreggNet** | the thing that actually *runs* the workload, serves it, and hosts it — and bills for it | AGPL-3.0, open | here |
 
-DreggNet is an **early, real, multi-operator devnet**, not a turnkey production
-cloud. What is true today, stated without overclaiming:
-
-- **The serving layer is real and links zero proprietary code.** An earlier build
-  vendored a proprietary `net/*` stack; it has been fully **ejected** (see
-  `docs/ELIDE-NET-EJECTION.md`). The gateway runs on the owned, pure-`std`
-  `dreggnet-http` vocabulary; the mesh runs on the owned `control::wg` engine over
-  `boringtun` (Cloudflare, BSD-3-Clause). DreggNet now links **no** proprietary
-  network code.
-- **The service crates build and test** on macOS and Linux (`cli`, `exec`,
-  `bridge`, `control`, `webapp`, `durable`, `gateway`, and friends). The
-  `dreggnet-gateway` (a Fly-machines-compatible API server) builds and runs on
-  Linux (the deploy target).
-- **A dregg node runs, but is *silently unverified* on a fresh clone.** The
-  verified, Lean-linked node needs a host-native Lean archive (the "seed"). Without
-  it, `cargo build -p dregg-node` compiles **marshal-only** — it runs and commits
-  turns, but with the un-verified Rust executor, not the verified producer. To get
-  a genuinely verified node, build with `DREGG_REQUIRE_LEAN=1` (a fail-loud gate)
-  and provide the Lean seed. See `docs/SELF-HOST-READINESS.md` for the exact trap
-  and the recipe.
-- **Finality is being hardened.** A small federation runs; sustained multi-node
-  finality is under active hardening, not a settled guarantee.
-- **The cloud is not one-command self-hostable, by design.** Provider backends
-  (bare-metal/EC2 provisioning, the scheduler, settlement) reach live infrastructure
-  behind their own operator config and credentials. The public tree ships those
-  configs as **templates** (hostnames/IPs/keys are placeholders like `<EDGE_HOST>`,
-  `<NODE_TAILNET_IP>`, `example.com` — fill your own).
-
-The honest one-liner: **dregg's half is verifiable; DreggNet's half is the
-operated, paid reality — and neither claim outruns the other.**
-
-For the grounded maturity picture, read: `docs/SELF-HOST-READINESS.md`,
-`docs/DEPLOY-READINESS.md`, `docs/CLOUD-PROVIDER-READINESS.md`, the `docs/FAKEOUTS-*.md`
-(what looks done but isn't), and the `docs/TEST-RIGOR-*.md` (how thoroughly each
-surface is actually tested).
+dregg says *what was promised, paid, and owed*, verifiably. DreggNet *delivers it*.
+The substrate is the open, trustless rail; the moat is the operated network + federation + proofs, not closed code.
 
 ## What composes here
 
-- **the substrate dependency** — the verified ocap core (kernel, value layer,
-  intent ring, Payable, the execution-*lease*) lives in the public `emberian/dregg`
-  repo (AGPL-3.0). DreggNet path-/git-depends on it.
-- **polyana** (`polyana/`, a git submodule → `akapug/polyana`, Apache-2.0; co-developed
-  with an external contributor) — the real polyglot execution engine (many language families; sandbox
-  tiers from `wasmtime`/`v8`/`graal` up to `native+seccomp+landlock`/`firecracker`;
-  durable replay; capability gates at every boundary). It is a **separate
-  workspace**, referenced never absorbed; it is **not vendored into this tree** —
-  initialize it as a submodule to build the `polyana`-feature paths.
-- **the serving + transport layer** — DreggNet-owned, AGPL-clean:
-  - `http/` (`dreggnet-http`) — the clean-room, pure-`std` HTTP/1.1 value vocabulary.
-  - `control/src/wg.rs` — the owned userspace WireGuard config/engine over `boringtun`.
+- **the owned execution engine** (`exec/`, `dreggnet-exec`) — an owned, in-crate
+  compute sandbox. The `Sandboxed` tier runs on a vendored pure-Rust `wasmi`
+  interpreter (zero unsafe, no external submodule) that genuinely executes (the
+  `add(40,2)=42` dogfood runs here). Every stronger sandbox tier
+  (`JitSandboxed`/JIT, `Caged`/native, `MicroVm`/microVM, `Gpu`, and the
+  native python/node langs) is an honest, fail-closed seam today
+  (`ExecError::NotWired`/`TierNotServed`) — never a fake run, never a silent
+  downgrade; wiring an owned engine for each is future work. Capability gates at
+  every boundary. See `docs/COMPUTE-TIERS.md`.
+- **the serving + transport layer** — DreggNet-owned, AGPL-clean. An earlier build
+  vendored ember's Elide (research-director) net/* stack, which was
+  Elide-proprietary and **not relicensable** — the one thing blocking a public
+  release. It has been **ejected** (see `docs/ELIDE-NET-EJECTION.md`):
+  - `http/` (`dreggnet-http`) — the clean-room, pure-`std` HTTP/1.1 value vocabulary
+    (Method/StatusCode/Request/ResponseWriter/Handler) the gateway serves on. Replaces
+    the Elide `httpe` engine.
+  - `control/src/wg.rs` — the owned userspace WireGuard config parser + engine over
+    `boringtun` (Cloudflare, BSD-3-Clause). Replaces the Elide `wireguard`/`tailscale`
+    mesh engine; `TailscaleMesh` rides the host's existing tailnet/headscale overlay.
   - `net/conformance-kit` — the DreggNet-authored conformance/perf kit (the only
-    surviving crate under `net/`; self-contained, no proprietary code).
+    surviving crate under `net/`; self-contained, no Elide code).
 - **the bridge** (`bridge/`) — fulfills a dregg `execution-lease` by running the
-  workload on polyana through the durable layer, metered and charged against the
-  lease budget.
-- **the control plane** (`control/`) — the orchestrator/provider/trust-rail:
-  provisioning, scheduler + fleet lifecycle, settlement ledger, and the
-  wireguard/tailscale mesh + node API.
-- **the gateway** (`gateway/`) — the live product host: `dreggnet-gateway`, a
-  runnable Fly-machines-compatible API server serving the route table + lease gate.
+  workload on the owned sandbox through the durable layer, metered + charged against the
+  lease budget; the lease cell on dregg ⟷ the live workload on DreggNet. Real
+  library: the funded-lease → tier → durable-workflow → meter weld, plus the
+  `dregg-verify` lease-watcher that decodes funded execution-lease grants off a
+  dregg node's receipt log (the live light-client RPC fetch is the named next
+  step). Driven by control/gateway; not a standalone daemon.
+- **the control plane** (`control/`) — the orchestrator / provider / trust-rail:
+  Hetzner + EC2 provisioning, the scheduler + fleet lifecycle, the provision
+  server, the settlement ledger, and the wireguard/tailscale mesh + node API.
+  A substantial real crate (~10K LOC) that builds; some provider backends still
+  reach live infra behind their own config/credentials.
+- **the gateway** (`gateway/`) — the live product host: `dreggnet-gateway` is a
+  runnable fly-compatible machines-API server binary (~5K LOC) that binds a TCP
+  listener and serves the real route table + lease gate over HTTP. Builds and
+  runs (on Linux — the deploy target).
 
 ## The flow (an agent rents durable execution)
 
-1. An agent opens a paid `execution-lease` on **dregg** (verified, settled via Payable).
-2. **DreggNet** sees the funded lease and schedules a **polyana** workload on the
-   fleet at the sandbox tier the cap-grade demands, networked over the mesh.
-3. The workload runs durably (polyana checkpoint/replay); the agent's state is a
-   passable, witnessed image.
-4. Metering ticks the lease on dregg; payment settles through Payable. Non-payment
-   lapses the lease and the container is reaped.
-5. The agent reaches its workload through `dreggnet-gateway` over the mesh.
+1. Agent posts an intent / opens an `execution-lease` on **dregg** (verified, paid via Payable; the intent ring can even match a *promise* of execution).
+2. **DreggNet** sees the funded lease, schedules a workload on the owned sandbox on the **Hetzner** fleet (the right sandbox tier per the cap-grade), networked via **wireguard/tailscale**.
+3. The workload runs durably (checkpoint/replay); the agent's state is a passable, witnessed image.
+4. Metering ticks the lease on dregg (`StandingObligation` per-period); payment settles through Payable (a real conserving `Transfer`). Non-payment lapses the lease → the container is reaped.
+5. The agent reaches its workload through the **`dreggnet-gateway`** (fly.io-compatible if we choose) over the mesh.
 
-## Build & run (honest quickstart)
+The honest line: **dregg's half is verifiable; DreggNet's half is the operated, paid reality.** Neither claim outruns the other.
 
-Prerequisites: the pinned Rust toolchain (`rust-toolchain.toml`), and the public
-**dregg** substrate available where the manifests expect it. Some crates path-dep
-a sibling checkout (`../breadstuffs` → the `emberian/dregg` clone); others git-dep
-`emberian/dregg` directly. Clone the substrate alongside this repo, or adjust the
-paths, before building.
+## Status
 
-```sh
-# service crates (build + test on macOS/Linux):
-cargo build -p dreggnet-cli -p dreggnet-gateway -p dreggnet-control
-
-# the gateway is the deploy target (Linux):
-cargo run -p dreggnet-gateway
-
-# a local dregg node — NOTE: marshal-only (UNVERIFIED) without the Lean seed:
-cargo build -p dregg-node
-# for a genuinely verified node, provide the Lean seed and:
-DREGG_REQUIRE_LEAN=1 cargo build -p dregg-node --release
-```
-
-The staging templates under `deploy/staging/` (docker-compose, Caddyfile, `.env.example`)
-are the operator starting point — every hostname/IP/credential is a placeholder to
-fill. See `docs/DEPLOY-READINESS.md` and `runbooks/` for the ordered plan.
-
-## Layout
-
-`docs/` is the working design + audit corpus (grounded status, critiques, plans).
-`runbooks/` is the operator playbook set. `deploy/` holds the (templated) staging +
-observability configs. The remaining top-level directories are the workspace crates
-described above.
-
-## License
-
-AGPL-3.0-only. See `LICENSE`. Copyright (C) 2026 ember arlynx.
+The serving layer is live: the `dreggnet-gateway` runs on the owned `dreggnet-http`
+vocabulary and cross-builds from macOS with `cargo-zigbuild`. The Elide net/* stack has
+been ejected — DreggNet now links zero Elide code (`docs/ELIDE-NET-EJECTION.md`).
+The execution engine is owned and in-crate (the owned `wasmi` sandbox; stronger
+tiers are fail-closed seams — see `docs/COMPUTE-TIERS.md`). The bridge (lease→durable
+workflow→meter), the control plane (provisioning, scheduler, fleet, settlement, mesh),
+and the `dreggnet-gateway` fly-compatible machines-API server all exist and build today.
+The build ahead is the live deploy: wiring the provider backends to real Hetzner infra
+and the bridge's lease-watcher to a live dregg light-client RPC. See `ARCHITECTURE.md`
+for the build ladder and the exact vendoring/pinning.

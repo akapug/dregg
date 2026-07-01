@@ -114,7 +114,7 @@ is a real crash-mid-request→resume over on-disk state. But no live *attach* se
 `DreggNet/exec/tests/microvm_kvm.rs` is `#![cfg(feature = "firecracker")]` (`:23`) AND the two
 real-boot tests are `#[ignore]` (`:52`,`:87`) — real only on a manual KVM box run with
 `--ignored`. `exec/src/egress.rs` is tested at policy/projection level (`:872-1123`), including a
-real projection into polyana's `WasiCapabilityPlan` (`:1080`, feature-gated) — but NO test opens
+real projection into the owned sandbox's `WasiCapabilityPlan` (`:1080`, feature-gated) — but NO test opens
 a socket and confirms a blocked `connect()` actually fails at the OS/wasmtime layer.
 
 ---

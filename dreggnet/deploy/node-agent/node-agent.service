@@ -1,5 +1,5 @@
 [Unit]
-Description=DreggNet compute-backend bridge agent (lease -> durable polyana workflow) on :8021
+Description=DreggNet compute-backend bridge agent (lease -> durable metered workflow) on :8021
 Documentation=https://ember.software
 After=network-online.target
 Wants=network-online.target
@@ -11,7 +11,7 @@ User=dregg
 WorkingDirectory=/opt/dreggnet
 ExecStart=/opt/dreggnet/target/release/node-agent
 Environment=NODE_AGENT_BIND=0.0.0.0:8021
-# polyana's python tier spawns a real python3 subprocess; keep PATH sane.
+# the native python tier (a seam today) would spawn a python3 subprocess; keep PATH sane.
 Environment=PATH=/home/dregg/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 RestartSec=3

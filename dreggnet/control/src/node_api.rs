@@ -8,7 +8,7 @@
 //! `:8420`). This module talks to that node over its HTTP API the way any client
 //! would: it `GET`s the public cell-read endpoints and `POST`s a settlement turn
 //! to the node's submit endpoint. It links **no dregg kernel crate** — there is
-//! no `dregg-verify` feature, no `polyana-dregg-bridge` dep, no arkworks /
+//! no `dregg-verify` feature, no `the owned sandbox-dregg-bridge` dep, no arkworks /
 //! `serde_with` fork, and no root `[patch]` change. DreggNet stays a clean network
 //! client of a separate (AGPL) node *process*, exactly as a Postgres client is not
 //! a derivative of Postgres. The verified decode and the conserving execution
@@ -1267,9 +1267,9 @@ mod tests {
         );
 
         let settlement =
-            NodeApiSettlement::new(&host_port, "b").map_backend("node-a", cell_id(0x07));
+            NodeApiSettlement::new(&host_port, "b").map_backend("persvati", cell_id(0x07));
         // A named backend resolves to its payable cell id.
-        let charge = LeaseCharge::new(&lessee, "node-a", cell_id(1), "lease-y", 1, 50);
+        let charge = LeaseCharge::new(&lessee, "persvati", cell_id(1), "lease-y", 1, 50);
         match settlement.settle(&charge) {
             Err(SettleError::Backend(why)) => assert!(why.contains("insufficient balance")),
             other => panic!("expected a backend refusal, got {other:?}"),

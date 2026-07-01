@@ -33,9 +33,9 @@ time = { workspace = true, features = ["formatting", "macros"] }
 # console scopes by, the cap vocabulary, and (in tests) minting credentials.
 dreggnet-webauth = { path = "../webauth" }
 # The Verifiable Agent Cloud onramp (std-only `agent` + `budget` modules, built
-# WITHOUT the heavy polyana engine): the agent panel's budget-bound + receipt
+# WITHOUT the heavy compute engine): the agent panel's budget-bound + receipt
 # chain + QA proof, and the in-page re-witness (`verify_agent_run` /
-# `verify_witnessed_qa`). `default-features = false` drops polyana/wasmtime/tokio
+# `verify_witnessed_qa`). `default-features = false` drops the heavy wasmtime/tokio
 # entirely — the agent braid is std-only and compiles bare.
 dreggnet-exec = { path = "../exec", default-features = false }
 # The receipt contract (re-witnessable chain) the agent run report rides.

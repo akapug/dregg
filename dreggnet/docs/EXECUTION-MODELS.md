@@ -24,7 +24,7 @@ ExecutionModel  =  lifecycle  ×  funding  ×  authority  ×  trigger
 |---------------|---------------------------------------------------------------------------------------|----------------------------|
 | **lifecycle** | run-to-completion · persistent-served · scheduled · streaming · reactive               | the run loop (how often it draws) |
 | **funding**   | prepaid · metered · refilling · escrow-bonded                                          | **one** `BudgetTerms` → `ReplenishingBudget` cell, drawn through the one `Meter` |
-| **authority** | cap-grade (sandboxed/caged/microvm) · cap-bundle (`dga1_` powerbox, attenuable)        | `webauth` credential / the polyana tier |
+| **authority** | cap-grade (sandboxed/caged/microvm) · cap-bundle (`dga1_` powerbox, attenuable)        | `webauth` credential / the owned sandbox tier |
 | **trigger**   | invoke · push-deploy · cron · event · agent-brain · watch                              | the entry that starts a run |
 
 The load-bearing fact is the **funding** column: every funding variant lowers to a

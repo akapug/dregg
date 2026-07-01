@@ -29,6 +29,6 @@ serde = { workspace = true, features = ["std", "derive"] }
 dreggnet-receipt = { path = "../receipt" }
 # The replenishing-budget cell — the rate-bounded-ceiling primitive the quota and
 # the rate-limiter are built over (a quota IS a rate-bounded ceiling). Linked with
-# default features OFF so none of the heavy polyana/wasmtime/tokio execution tree
+# default features OFF so none of the heavy wasmtime/tokio execution tree
 # comes along; only the std-only `budget` module is used.
 dreggnet-exec = { path = "../exec", default-features = false }

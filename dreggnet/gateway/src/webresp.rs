@@ -2,7 +2,7 @@
 //! `dreggnet-http` [`ResponseWriter`].
 //!
 //! Both data-plane handlers — [`crate::SiteHostHandler`] (static minisites) and
-//! [`crate::WebAppHandler`] (the polyana-served app) — translate a
+//! [`crate::WebAppHandler`] (the the owned sandbox-served app) — translate a
 //! [`WebResponse`] into the same wire bytes. This module holds that one
 //! translation (method mapping, status mapping, and the response write) so the
 //! two handlers share it instead of carrying near-identical private copies.

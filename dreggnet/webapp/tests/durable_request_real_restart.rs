@@ -234,7 +234,7 @@ async fn child_resumes_request_from_disk_exactly_once() {
     };
     let out: WorkflowOutput = serde_json::from_str(&output).unwrap();
 
-    // The request computed `21 * 2 = 42` on polyana, recovered across a real process restart.
+    // The request computed `21 * 2 = 42` on the owned sandbox, recovered across a real process restart.
     assert_eq!(
         out.outputs,
         vec!["42".to_string()],

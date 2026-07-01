@@ -22,7 +22,7 @@
 //! `exec::run_workload_with_input` resolves a workload's lease → an account
 //! [`SecretStore`] + the lease's credential → calls [`inject_for_workload`] →
 //! applies [`InjectedSecrets::env_vars`] / [`InjectedSecrets::files`] to the
-//! polyana sandbox spec. That edit lands in `exec` when this crate is adopted.
+//! sandbox spec. That edit lands in `exec` when this crate is adopted.
 
 use std::collections::BTreeMap;
 

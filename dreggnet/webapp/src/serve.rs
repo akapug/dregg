@@ -3,7 +3,7 @@
 //! A reusable, server-independent realization of static hosting on the verified
 //! rail: given a [`SiteRegistry`] of published site cells, [`serve_registry`] binds a
 //! `std` [`TcpListener`] and serves each request by resolving its `Host` to the site
-//! cell the way the `example.com` gateway will (`<name>.example.com`), with a no-DNS
+//! cell the way the `dregg.works` gateway will (`<name>.dregg.works`), with a no-DNS
 //! `Host: <name>` / `/<name>/…` path-prefix fallback for local use.
 //!
 //! This is the shared core of the `dreggnet-host` binary and the `dreggnet deploy
@@ -24,7 +24,7 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 ///
 /// This is the single request shape BOTH portable serving front-ends drive through
 /// the shared loop — the static [`serve_registry`] (resolves `host`) and the dynamic
-/// `dreggnet-serve` binary (serves the `target`+`body` through a polyana `Router`) —
+/// `dreggnet-serve` binary (serves the `target`+`body` through a owned-sandbox `Router`) —
 /// so the HTTP/1.1 connection plumbing (header read, request-line + content-length
 /// parse, body read, response write) is written ONCE here rather than copied per
 /// front-end.
@@ -47,7 +47,7 @@ pub struct ServeRequest {
 ///
 /// This is the de-duplicated core of the two portable serving front-ends:
 /// [`serve_registry`] (static minisites over a [`SiteRegistry`]) and the
-/// `dreggnet-serve` binary (dynamic agent apps over a polyana `Router`) both bind
+/// `dreggnet-serve` binary (dynamic agent apps over a owned-sandbox `Router`) both bind
 /// through here, supplying only the per-request handler closure. (The Linux-only
 /// `httpe` gateway is a SEPARATE serving engine — Elide's `Handler` trait over
 /// `elidehttp`, not std `TcpListener` — so it keeps its own loop in
@@ -164,7 +164,7 @@ pub fn serve_connection(stream: TcpStream, registry: &SiteRegistry) -> std::io::
     })
 }
 
-/// Resolve a request: by `Host` first (`<name>.example.com`, what example.com
+/// Resolve a request: by `Host` first (`<name>.dregg.works`, what dregg.works
 /// routes); falling back to a `/<name>/…` path prefix for no-DNS local testing.
 pub fn dispatch(
     registry: &SiteRegistry,
@@ -200,10 +200,10 @@ pub fn dispatch(
 
 /// Resolve a request for the well-known receipt path to the site's
 /// [`SiteReceiptBundle`] JSON, or `None` if the request is not for that path. Honors
-/// both the host-based (`<name>.example.com`) and the `/<name>/…` path-prefix forms.
+/// both the host-based (`<name>.dregg.works`) and the `/<name>/…` path-prefix forms.
 fn receipt_response(registry: &SiteRegistry, host: &str, target: &str) -> Option<WebResponse> {
     let path = target.split('?').next().unwrap_or(target);
-    // Host-based: `<name>.example.com` + the exact well-known path.
+    // Host-based: `<name>.dregg.works` + the exact well-known path.
     if let Some(name) = site_name_from_host(host).filter(|n| registry.get(n).is_some()) {
         if path == SITE_RECEIPT_PATH {
             return Some(bundle_response(registry, &name));
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn dispatch_resolves_by_host() {
         let registry = registry_with_blog();
-        let resp = dispatch(&registry, "blog.example.com", HttpMethod::Get, "/");
+        let resp = dispatch(&registry, "blog.dregg.works", HttpMethod::Get, "/");
         assert_eq!(resp.status, 200);
         assert!(resp.body_str().contains("hi from blog"));
     }
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn dispatch_unknown_site_is_404() {
         let registry = registry_with_blog();
-        let resp = dispatch(&registry, "ghost.example.com", HttpMethod::Get, "/");
+        let resp = dispatch(&registry, "ghost.dregg.works", HttpMethod::Get, "/");
         assert_eq!(resp.status, 404);
     }
 
@@ -362,7 +362,7 @@ mod tests {
         });
 
         let mut conn = TcpStream::connect(addr).expect("connect");
-        conn.write_all(b"GET / HTTP/1.1\r\nHost: blog.example.com\r\nConnection: close\r\n\r\n")
+        conn.write_all(b"GET / HTTP/1.1\r\nHost: blog.dregg.works\r\nConnection: close\r\n\r\n")
             .unwrap();
         let mut resp = String::new();
         conn.read_to_string(&mut resp).unwrap();

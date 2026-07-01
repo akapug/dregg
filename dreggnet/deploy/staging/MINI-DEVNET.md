@@ -11,14 +11,14 @@ shipped, the single token-drop that takes it live, and the mini-devnet shape.
 
 ## 1. What is live right now
 
-On the AWS edge box (`<INSTANCE_ID>`, EIP `<EDGE_HOST>`):
+On the AWS edge box (`i-03365e2bcf4ea08b2`, EIP `34.224.208.52`):
 
 | Piece | State | Reached at |
 |---|---|---|
 | `dregg-node` (federation size 1, solo) | **healthy** | `:8420` API, `:9420` gossip; `/health` returns `healthy:true` |
 | `gateway` (httpe machines API) | up | Caddy `/` (basic-auth) |
 | `caddy` (TLS + basic-auth) | up | `:443` (real domain + raw-IP fallback) |
-| `headscale` (mesh control + DERP) | up | `headscale.dreggnet.example.com`, STUN `:3478/udp` |
+| `headscale` (mesh control + DERP) | up | `headscale.dreggnet.fg-goose.online`, STUN `:3478/udp` |
 | `postgres` (durable / billing) | healthy | internal |
 | `dreggnet-discord-bot` | **wired, token-gated** | Caddy `/admin*`; live the moment a real `DISCORD_TOKEN` is set |
 
@@ -43,7 +43,7 @@ the Lean kernel archive: the bot signs+submits turns to the node over HTTP and
 lets the *node* prove, so we build with `--features dregg-sdk/no-lean-link`
 (`dregg-lean-ffi`'s build script then skips the archive link entirely).
 
-On a capable native-Linux box (the reference builder is a multi-core native-Linux box):
+On a capable native-Linux box (the reference builder is **persvati**, 24 cores):
 
 ```sh
 cd ~/dev/breadstuffs/discord-bot
@@ -53,7 +53,7 @@ cargo build --release --features dregg-sdk/no-lean-link
 ```
 
 > The binary is a glibc (gnu) binary. The runtime image base must have glibc
-> **>=** the build box's glibc. the reference build box is glibc 2.42, so `discord-bot/Dockerfile`
+> **>=** the build box's glibc. persvati is glibc 2.42, so `discord-bot/Dockerfile`
 > bases on `ubuntu:25.10` (glibc 2.42). Build the binary and the image on the
 > same box and there is nothing to worry about.
 
@@ -66,14 +66,14 @@ no Rust), then `docker save`d + loaded onto the edge box — the same shape the
 dregg-node image uses.
 
 ```sh
-# on the build box (node-a), in the breadstuffs checkout:
+# on the build box (persvati), in the breadstuffs checkout:
 cd ~/dev/breadstuffs/discord-bot
 docker build -t dregg-discord-bot:staging .
 
 # ship to the edge (save → scp → load):
 docker save dregg-discord-bot:staging | gzip > /tmp/dregg-bot.tgz
-scp -i ~/.ssh/dreggnet-staging.pem /tmp/dregg-bot.tgz ubuntu@<EDGE_HOST>:/tmp/
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST> \
+scp -i ~/.ssh/dreggnet-staging.pem /tmp/dregg-bot.tgz ubuntu@34.224.208.52:/tmp/
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52 \
   'gunzip -c /tmp/dregg-bot.tgz | docker load'
 ```
 
@@ -104,7 +104,7 @@ already in place.
 2. On the edge box, fill the secrets in `/opt/dreggnet/.env` (NOT committed):
 
    ```sh
-   ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST>
+   ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
    sudo -e /opt/dreggnet/.env     # or append with the values:
    #   DISCORD_TOKEN=<the bot token>
    #   DISCORD_APP_ID=<the numeric application id>
@@ -130,9 +130,9 @@ already in place.
 
 4. **FEDERATION_ID** (so transfers verify on the solo node). Already set in
    `.env` to the current node's value
-   `<FEDERATION_ID>`
+   `5ceebd3a8ea48d4f47ace367a1e05ec1aea7d3d97e7ac146002153cf69db4283`
    (= `blake3(node_public_key)`; pubkey
-   `<EDGE_NODE_PUBKEY>`). If the
+   `70f3967847f789aa62236caff978456e3d32848c295f262edb494611e8d83734`). If the
    node key is ever rotated, the bot logs the new value at startup
    ("Set FEDERATION_ID=<hex> to match") — paste it into `/opt/dreggnet/.env` and
    `docker compose up -d dreggnet-discord-bot` again.
@@ -162,14 +162,14 @@ users→cells, semi-private channels, recent Hermes verdicts/receipts, cap recor
 It is reached through Caddy with **defence in depth**:
 
 1. Caddy `handle /admin*` reverse-proxies to `dreggnet-discord-bot:8080`, behind
-   the existing **basic-auth** (ember / an operator).
+   the existing **basic-auth** (ember / pug).
 2. The bot's `ADMIN_TOKEN` gates it again underneath (Bearer header or `?token=`).
 
 ```sh
 # real domain (once DNS + Let's Encrypt are live):
-curl -u ember:<pw> 'https://dreggnet.example.com/admin?token=<ADMIN_TOKEN>'
+curl -u ember:<pw> 'https://dreggnet.fg-goose.online/admin?token=<ADMIN_TOKEN>'
 # raw IP / pre-DNS (self-signed):
-curl -k -u ember:<pw> 'https://<EDGE_HOST>/admin?token=<ADMIN_TOKEN>'
+curl -k -u ember:<pw> 'https://34.224.208.52/admin?token=<ADMIN_TOKEN>'
 ```
 
 No `ADMIN_TOKEN` set → the portal returns 404 (disabled). Wrong token → 401.
@@ -183,17 +183,17 @@ No `ADMIN_TOKEN` set → the portal returns 404 (disabled). Wrong token → 401.
                                   │                        ▲
                                   └── /admin (Caddy) ──────┘
                           headscale overlay 100.64.0.0/10
-   AWS edge box  ◄──────────────── mesh ────────────────►  node-a (compute backend)
-   (stable IP, node + gateway + bot)                       (polyana exec + STARK proving)
+   AWS edge box  ◄──────────────── mesh ────────────────►  persvati (compute backend)
+   (stable IP, node + gateway + bot)                       (owned-sandbox exec + STARK proving)
 ```
 
 - **Edge box** — the always-on public face: the `federation-size 1` (solo) dregg
   node, the gateway, Caddy (TLS + basic-auth), headscale, and the bot. Every user
   cell + turn the bot submits lands on **this** node's chain.
-- **node-a** — joins the headscale tailnet as the **compute backend** (the heavy
-  polyana lease execution + memory-hungry STARK proving live here, off the small
+- **persvati** — joins the headscale tailnet as the **compute backend** (the heavy
+  owned-sandbox lease execution + memory-hungry STARK proving live here, off the small
   edge box). It is **compute, not a second consensus node** today: the edge node
-  stays solo (`--federation-size 1`), node-a contributes cycles over the mesh.
+  stays solo (`--federation-size 1`), persvati contributes cycles over the mesh.
   See `deploy/ARCHITECTURE-COMPUTE-BACKEND.md`.
 - **Peering option (future).** To make it a true 2-node consensus federation,
   rebuild both nodes with `--federation-size 2` and matching `--node-index 0/1`

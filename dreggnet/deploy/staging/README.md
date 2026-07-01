@@ -54,7 +54,7 @@ that needs it.
 
 ```sh
 cp deploy/staging/.env.example deploy/staging/.env   # fill DREGG_NODE_IMAGE
-BOX_HOST=<BUILDER_HOST> \
+BOX_HOST=ec2-3-95-22-43.compute-1.amazonaws.com \
 SSH_KEY=~/.ssh/dreggnet-staging.pem \
   deploy/staging/deploy.sh            # build (zigbuild) + ship (rsync) + up
 ```
@@ -71,8 +71,8 @@ curl -s http://<box>:8420/health                       # the dregg node
 
 ## ⚠ Dependency: exec-green
 
-The gateway + cli cross-build pulls the `exec/` → polyana closure. The
-polyana-improvement lane is mid-flight on `exec/`, so a **cold cross-build may
+The gateway + cli cross-build pulls the `exec/` compute closure. The
+exec-improvement lane is mid-flight on `exec/`, so a **cold cross-build may
 transiently fail** until that lane is green. The deploy script fails loudly
 (no stale-artifact fallback) rather than ship a half-built binary. The node,
 gateway, and cli are the stable surfaces; the *full* end-to-end deploy waits on
@@ -103,8 +103,8 @@ stop the instance, `aws ec2 modify-instance-attribute --instance-id <id>
 
 A live t3.medium staging box (us-east-1):
 
-- **Instance:** `<INSTANCE_ID>` (t3.medium, us-east-1c)
-- **Public IP / DNS:** `<BUILDER_HOST>` / `<BUILDER_HOST>`
+- **Instance:** `i-03365e2bcf4ea08b2` (t3.medium, us-east-1c)
+- **Public IP / DNS:** `3.95.22.43` / `ec2-3-95-22-43.compute-1.amazonaws.com`
 - **AMI:** `ami-0a02a779008fa3b99` (Ubuntu 24.04 LTS amd64)
 - **Key pair:** `dreggnet-staging` → `~/.ssh/dreggnet-staging.pem`
 - **Security group:** `sg-0d76f69da366c1e91` — ingress 22 (ssh), 8080 (gateway),
@@ -121,7 +121,7 @@ A live t3.medium staging box (us-east-1):
 ### Manage the box
 
 ```sh
-REGION=us-east-1; IID=<INSTANCE_ID>
+REGION=us-east-1; IID=i-03365e2bcf4ea08b2
 aws ec2 stop-instances      --region $REGION --instance-ids $IID   # stop billing (keep disk)
 aws ec2 start-instances     --region $REGION --instance-ids $IID   # resume
 aws ec2 describe-instances  --region $REGION --instance-ids $IID \

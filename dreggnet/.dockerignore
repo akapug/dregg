@@ -1,7 +1,7 @@
 # Keep the Docker build context small + the build hermetic.
 #
 # The CLI image builds `-p dreggnet-cli`, whose dependency closure is
-# control → bridge → durable → exec → polyana (wasmi/wasmtime). Cargo still needs
+# control → bridge → durable → exec (owned wasmi sandbox). Cargo still needs
 # every workspace member's Cargo.toml to resolve the workspace, so the `net/`
 # sources stay in the context, but the giant build artifacts and VCS metadata do
 # not need to ship to the daemon.

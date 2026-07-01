@@ -1,6 +1,6 @@
 [package]
 name = "dreggnet-durable"
-description = "DreggNet durable-execution layer: a polyana workload as a duroxide workflow, checkpointed for crash-exact resume"
+description = "DreggNet durable-execution layer: an owned-sandbox workload as a duroxide workflow, checkpointed for crash-exact resume"
 version = { workspace = true }
 edition = { workspace = true }
 rust-version = { workspace = true }
@@ -11,9 +11,9 @@ repository = { workspace = true }
 [lib]
 name = "dreggnet_durable"
 
-# This crate WRAPS a `dreggnet-exec` polyana workload into a durable, recoverable
+# This crate WRAPS a `dreggnet-exec` owned-sandbox workload into a durable, recoverable
 # `duroxide` workflow (DBOS / Durable-Task / Temporal lineage). Each workflow step
-# runs on polyana; its result is checkpointed to the duroxide `Provider` store, so a
+# runs on the owned sandbox; its result is checkpointed to the duroxide `Provider` store, so a
 # crash mid-workflow resumes exactly-once from the last completed step rather than
 # re-running it.
 #
@@ -79,7 +79,7 @@ duroxide-pg = { version = "0.1.34", optional = true }
 # `PostgresProvider` checkpoints into (`store.pool()`), so the version + feature set are
 # matched to duroxide-pg's so the `PgPool` type unifies to one sqlx build.
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-native-tls", "postgres"], optional = true }
-# The execution surface: a workflow step runs a real polyana workload through this.
+# The execution surface: a workflow step runs a real owned-sandbox workload through this.
 dreggnet-exec = { path = "../exec" }
 # The REAL breadstuffs verified store — OPTIONAL, pulled ONLY by the `pg-dregg`
 # feature (the off-by-default AGPL verified-store lane). `default-features = false`

@@ -42,23 +42,18 @@
 //!
 //! ## Enforcement
 //!
-//! * **wasmtime (in-process, proven here).** [`EgressPolicy::to_polyana_caps`]
-//!   projects the policy into polyana `Network` capabilities. Deny-all projects
-//!   to the EMPTY set → polyana's `wasi_capability_plan` yields
-//!   `WasiNetworkPolicy::Deny` → the `WasiCtxBuilder` is built with
-//!   `allow_tcp(false)/allow_udp(false)`, so the guest's `connect()` fails
-//!   closed. A granted destination projects to a `Network` cap carrying
-//!   `allow=`/`allow_cidr=` constraints → polyana's `WasiNetworkPolicy::Allowlist`
-//!   installs a `socket_addr_check` that admits ONLY the granted (ip, port)
-//!   pairs. [`EgressPolicy::allows_addr`] is the exact predicate that closure
-//!   runs, so the in-process decision is unit-testable without a live socket.
-//! * **firecracker / Caged (live host enforcement, NAMED seam).** A microVM /
-//!   netns tier enforces egress at the host: no tap device / no route / a
-//!   filtered tap to the allowed destinations unless an `egress:` cap grants
-//!   it. The policy + the destination allowlist are computed here; the live
+//! * **In-process (proven here).** [`EgressPolicy::allows_addr`] is the exact
+//!   deny-by-default predicate an owned sandbox engine consults per socket:
+//!   deny-all admits nothing; a granted destination admits ONLY the granted
+//!   (ip, port) pairs. It is unit-testable without a live socket, so the
+//!   in-process decision is proven here regardless of which engine backs the
+//!   wasm tier.
+//! * **microVM / Caged (live host enforcement, NAMED seam).** A microVM / netns
+//!   tier enforces egress at the host: no tap device / no route / a filtered tap
+//!   to the allowed destinations unless an `egress:` cap grants it. The policy +
+//!   the destination allowlist are computed here; the live
 //!   `Capability → tap/MMDS/route` translation is the named host-netns seam —
-//!   see [`firecracker_netns_seam`] and `polyana/src/firecracker-provider`
-//!   (`enforce_capabilities`, "Remaining work / caps").
+//!   see [`firecracker_netns_seam`].
 //!
 //! ## Metering + receipts
 //!
@@ -772,9 +767,8 @@ impl<'a> EgressGuard<'a> {
 ///
 /// This is the policy half of the **named host-netns seam**: DreggNet computes
 /// the allowlist here; the live `Capability → tap/MMDS/route` translation that
-/// installs it in the guest's network namespace is the remaining work in
-/// `polyana/src/firecracker-provider` (`enforce_capabilities`, documented under
-/// "Remaining work / caps" as the `Capability → tap-device gating` item). Until
+/// installs it in the guest's network namespace is the remaining work of an
+/// owned microVM engine (the `Capability → tap-device gating` item). Until
 /// that lands, a microVM tier MUST be launched with NO tap device unless this
 /// list is non-empty — i.e. the deny-default holds at the VM boundary by
 /// withholding the network interface entirely, never by trusting the guest.
@@ -797,63 +791,6 @@ pub fn firecracker_netns_seam(policy: &EgressPolicy) -> Vec<String> {
             format!("{host}:{port}")
         })
         .collect()
-}
-
-// ===========================================================================
-// The cap → sandbox-resource projection (the polyana wasmtime wire)
-// ===========================================================================
-
-/// The polyana wasmtime wiring: project an [`EgressPolicy`] into polyana
-/// `Network` capabilities. Behind the `polyana` feature (the wasmtime engine).
-#[cfg(feature = "polyana")]
-mod polyana_wire {
-    use super::*;
-    use polyana_core::capability::{Capability, EffectKind, ResourcePattern};
-
-    impl EgressPolicy {
-        /// Project this policy into polyana `Network` capabilities — the
-        /// cap→sandbox-resource translation the wasmtime provider consumes.
-        ///
-        /// * **deny-all → the EMPTY set.** No `Network` cap → polyana's
-        ///   `wasi_capability_plan` leaves `WasiNetworkPolicy::Deny` → the
-        ///   `WasiCtxBuilder` is built `allow_tcp(false)/allow_udp(false)`:
-        ///   the guest cannot open ANY outbound socket. This is the
-        ///   no-cap-no-egress proof for the in-process path.
-        /// * **a granted destination → one `Network` cap** carrying an
-        ///   `allow=<host>:<port>` (or `allow_cidr=<net>/<prefix>:<port>`)
-        ///   constraint. polyana folds these into a
-        ///   `WasiNetworkPolicy::Allowlist` whose `socket_addr_check` admits
-        ///   ONLY the listed (ip, port) pairs — so `egress:host:443` reaches
-        ///   exactly that, not everything.
-        pub fn to_polyana_caps(&self) -> Vec<Capability> {
-            self.rules
-                .iter()
-                .map(|r| {
-                    let port = match r.port {
-                        PortMatch::Any => "*".to_string(),
-                        PortMatch::Exact(p) => p.to_string(),
-                    };
-                    let constraint = match &r.host {
-                        HostMatch::Any => format!("allow=*:{port}"),
-                        HostMatch::Ip(ip) => format!("allow={ip}:{port}"),
-                        HostMatch::Cidr(net, prefix) => format!("allow_cidr={net}/{prefix}:{port}"),
-                        // A domain grant carries the name; the in-process
-                        // socket_addr_check (which sees resolved IPs) cannot
-                        // enforce it, so it is recorded as an allow-by-name the
-                        // resolver/live tier honors. It does NOT widen the
-                        // IP-level allowlist.
-                        HostMatch::Domain(d) => format!("allow_name={d}:{port}"),
-                        HostMatch::DomainSuffix(b) => format!("allow_name=*.{b}:{port}"),
-                    };
-                    Capability {
-                        kind: EffectKind::Network,
-                        resource: ResourcePattern::Exact("egress-allowlist".to_string()),
-                        constraints: vec![constraint],
-                    }
-                })
-                .collect()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1049,65 +986,6 @@ mod tests {
     }
 
     // ── the firecracker host-netns seam (named) ───────────────────────────
-
-    // ── the wasmtime in-process wire, proven through polyana's own projection ─
-    //
-    // These drive `EgressPolicy::to_polyana_caps()` through polyana's REAL
-    // `wasi_capability_plan` — the same function the wasmtime provider calls to
-    // build the WASI ctx — so the deny-default + per-destination guarantees are
-    // proven against the actual sandbox projection, not a re-implementation.
-    #[cfg(feature = "polyana")]
-    mod polyana_wire {
-        use super::*;
-        use polyana_core::capability::CapabilitySet;
-        use polyana_wasmtime::{WasiNetworkPolicy, wasi_capability_plan};
-
-        fn plan_for(policy: &EgressPolicy) -> polyana_wasmtime::WasiCapabilityPlan {
-            let mut caps = CapabilitySet::new();
-            for c in policy.to_polyana_caps() {
-                caps.add(c);
-            }
-            wasi_capability_plan(&caps)
-        }
-
-        #[test]
-        fn no_egress_cap_projects_to_wasmtime_deny_no_socket() {
-            // The E-5 deny-default proof on the real in-process path: a workload
-            // with no egress cap projects to the EMPTY cap set → polyana plans
-            // `WasiNetworkPolicy::Deny` + an empty allowlist → the WASI ctx is
-            // built allow_tcp(false), so the guest opens NO outbound socket.
-            let plan = plan_for(&EgressPolicy::deny_all());
-            assert_eq!(plan.network, WasiNetworkPolicy::Deny);
-            assert!(plan.egress_allow.is_empty());
-        }
-
-        #[test]
-        fn one_egress_cap_projects_to_an_allowlist_of_exactly_that_destination() {
-            let policy = EgressPolicy::from_caps(["egress:93.184.216.34:443"]).unwrap();
-            let plan = plan_for(&policy);
-            assert_eq!(
-                plan.egress_allow.len(),
-                1,
-                "exactly one destination admitted"
-            );
-            let rule = &plan.egress_allow[0];
-            // the granted (ip, port) is admitted by the actual socket_addr_check
-            // predicate polyana installs…
-            assert!(rule.admits(v4(93, 184, 216, 34), 443));
-            // …and nothing else is (different host, different port).
-            assert!(!rule.admits(v4(1, 2, 3, 4), 443));
-            assert!(!rule.admits(v4(93, 184, 216, 34), 8080));
-        }
-
-        #[test]
-        fn cidr_egress_cap_projects_to_a_block_scoped_allowlist() {
-            let policy = EgressPolicy::from_caps(["egress:10.0.0.0/8:443"]).unwrap();
-            let plan = plan_for(&policy);
-            let rule = &plan.egress_allow[0];
-            assert!(rule.admits(v4(10, 9, 9, 9), 443));
-            assert!(!rule.admits(v4(11, 0, 0, 1), 443));
-        }
-    }
 
     #[test]
     fn firecracker_seam_renders_the_allowlist_for_the_host_enforcer() {

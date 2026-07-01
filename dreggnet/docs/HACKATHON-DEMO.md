@@ -17,7 +17,7 @@ This doc is the demo package: (1) the runnable demo, (2) the video script,
   earn / hold        pay via Stripe         spend on a dregg          run durable
   value      ──────▶ (signed webhook  ─────▶ execution-lease  ──────▶ metered compute
                       → conserving           (resolve_pay,            on DreggNet
-                      USD-credit mint)        Σδ = 0)                  (polyana, crash-resumable)
+                      USD-credit mint)        Σδ = 0)                  (owned sandbox, crash-resumable)
   ▲                                                                        │
   └────────────────────────── a receipt + a meter you can verify ─────────┘
 ```
@@ -166,8 +166,9 @@ run, on a formally-verified rail.**
 an open, formally-verified capability substrate (dregg). The loop: an agent pays via
 Stripe; a signed webhook mints conserved USD-credit to the agent's dregg cell
 (idempotent, conserving); the agent spends it opening + funding an **execution-lease**;
-DreggNet fulfills the lease as a **durable, metered, sandboxed** workload (polyana,
-wasm tier today; native-seccomp / firecracker tiers mapped). The meter charges per
+DreggNet fulfills the lease as a **durable, metered, sandboxed** workload (the owned
+wasmi sandbox, wasm tier genuinely running today; native / firecracker tiers are
+fail-closed seams — owned engines are future work). The meter charges per
 step transactionally — charge commits with the durable checkpoint — so a crash
 resumes within the same budget and an over-budget tick lapses → the workload is
 reaped. No compute runs that wasn't paid for.
@@ -210,7 +211,7 @@ the other.**
   (a run past it is refused by the kernel, not by app code).
   (`breadstuffs/sdk/src/service_economy.rs`)
 - **The durable workload:** `dregg-cloud run` genuinely executes `add(40,2)=42` then
-  `*2=84` in the wasmi sandbox via polyana, through control → bridge → durable → exec.
+  `*2=84` in the owned wasmi sandbox, through control → bridge → durable → exec.
   (`cli/`, `bridge/`, `durable/`, `exec/`)
 - **The meter:** each durable step charges against the lease budget; an over-budget
   tick lapses the workflow → the machine is reaped (no unpaid work). Crash-resume is

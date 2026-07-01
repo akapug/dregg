@@ -68,25 +68,25 @@ coordination artifacts*:
 | `DequeueProof` / `RangeCertificate` | `breadstuffs/storage`, `dregg-query` | delivery / non-omission | **yes** |
 | `SettleReceipt` | `DreggNet/durable/src/settle.rs:105` | exactly-once sidecar | partial — *on-chain*-coordinated |
 | `HostingReceipt` | `DreggNet/control/src/hosting_meter.rs:186` | wrapper over `SettleReceipt` | no (metadata) |
-| `TurnShadowReceipt` | `DreggNet/polyana/.../dregg_turn_shadow.rs` | chained workload attestation | weak — produced, barely consumed |
-| metering `Receipt` | `DreggNet/polyana/src/core/.../capability_spec.rs:263` | log | **no** — and *misshapen* (below) |
 | `DeployReceipt` / `BindReceipt` / `PublishReceipt` | `DreggNet/dregg-deploy`, `dregg-domains`, `webapp/hosting.rs:247` | logs | no (stand-ins) |
 | `BucketReceipt` / `PutReceipt` / `DeleteReceipt` | `DreggNet/storage/src/registry.rs:302` | logs | no |
 
-Two findings sharpen the drift:
+Two findings once sharpened the drift — both in the **external compute submodule that has
+since been fully removed** (compute is now owned and in-crate). They are recorded here as
+the pattern to never reintroduce:
 
-1. **A receipt that lies about what it carries.** The polyana metering `Receipt`
-   (`DreggNet/polyana/src/core/src/capability_spec.rs:217-226`) declares a `grant_chain`
-   field for capability lineage that is *shaped but never populated or verified* — the
-   comment admits it is "ALWAYS `None`, and nothing downstream checks it for authority."
-   This is the inverse of the kernel receipt: a record that *looks* like it binds authority
-   and binds nothing. That is not a receipt; it is a struct wearing the word.
+1. **A receipt that lied about what it carried.** The removed submodule's metering `Receipt`
+   declared a `grant_chain` field for capability lineage that was *shaped but never populated
+   or verified* — "ALWAYS `None`, and nothing downstream checks it for authority." That was
+   the inverse of the kernel receipt: a record that *looked* like it bound authority and
+   bound nothing. That is not a receipt; it is a struct wearing the word. With the submodule
+   gone, so is the struct.
 
-2. **Even within one subsystem the model is not unified.** polyana carries *two* receipt
-   notions at once — a decent chained `TurnShadowReceipt` (`exec/src/host_api.rs:561`,
-   prev-hash-linked, gated by `EffectIntent`) *and* the degraded metering `Receipt` above.
-   There is no single `Q`-type, no shared verifier, across the product surface; each crate
-   rolls its own and most never get verified by anyone.
+2. **Even within one subsystem the model was not unified.** The same removed submodule
+   carried *two* receipt notions at once — a decent chained workload-attestation receipt
+   (prev-hash-linked, gated by `EffectIntent`) *and* the degraded metering `Receipt` above.
+   There was no single `Q`-type, no shared verifier. The owned in-crate compute is the
+   replacement and must not re-open that split.
 
 **Verdict (receipts):** the core receipt model is coherent and load-bearing; `BridgeReceipt`
 is exactly the offchain-coordination primitive the thesis wants. But the product layers have
@@ -271,10 +271,11 @@ coordination where the thesis put it.
   non-witness*. Make `DeployReceipt`/`PublishReceipt`/`BindReceipt`/storage receipts either
   *be* that (sign + chain them so a client can verify a deploy without trusting the host) or
   stop calling them receipts (they are logs).
-- **Kill the lying field**: either populate and verify polyana's `Receipt.grant_chain`
-  (`capability_spec.rs:217`) or delete it. A receipt that shapes authority it never binds is
-  worse than none.
-- Unify polyana on the chained `TurnShadowReceipt`; retire the parallel metering `Receipt`.
+- **Keep the lying field dead**: the compute submodule's `Receipt.grant_chain` — shaped
+  authority it never bound — was removed with that submodule. The owned in-crate compute
+  must not reintroduce it: a receipt that shapes authority it never binds is worse than none.
+- Keep the owned compute on a single chained workload-attestation receipt; never re-add a
+  parallel metering `Receipt`.
 
 ### 5.2 Make settlement reconcile-at-boundary, not per-op
 
@@ -321,7 +322,7 @@ coordination where the thesis put it.
 | `TurnReceipt` chain, `BridgeReceipt`, `DequeueProof`, MMR attest | **Yes** | offchain-verifiable, chained/signed |
 | blocklace `ExecutionTier` (Sovereign default) | **Yes** | most turns never touch consensus |
 | Verification-mode ladder in the kernel | **Yes** | proving off the commit path (`prove_pool` drops-on-full) |
-| polyana metering `Receipt`, deploy/publish/storage receipts | **Drift** | logs named "receipt"; one carries unbound authority |
+| deploy/publish/storage receipts | **Drift** | logs named "receipt" |
 | Bridge ingest (5 chains, `StructureOnly`) | **Drift** | over-relayed, no single abstraction, sub-light-client trust |
 | Cloud settlement cadence | **Drift** | per-op eager Transfer; no reconcile-at-boundary |
 | S3 proof-attested per-period `Payable` | **Drift** | collapses the fidelity ladder to Full-prove-everything |

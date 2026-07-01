@@ -5,11 +5,11 @@ The layer **between** the two halves of DreggNet:
 ```
   dregg (breadstuffs, AGPL)  — meters / pays / verifies the execution-lease
     └─ dreggnet-durable       — THIS layer: durable, transactional, recoverable workflow
-       └─ dreggnet-exec       — run_workload → polyana
-          └─ polyana          — the sandboxed execution engine (rung 2 landed)
+       └─ dreggnet-exec       — run_workload → the owned wasmi sandbox
+          └─ owned wasmi      — the sandboxed execution engine (rung 2 landed)
 ```
 
-polyana *executes*; dregg *meters and pays*; this layer makes a workload a **durable
+The owned sandbox *executes*; dregg *meters and pays*; this layer makes a workload a **durable
 workflow** — one that survives a crash and resumes exactly-once from its last checkpoint,
 with the work and the meter committed together-or-not.
 
@@ -64,13 +64,13 @@ checkpoints share one transactional boundary.
 
 Both licenses are permissive (MIT, PostgreSQL/BSD-style) — clean for the moat.
 
-## The design: a polyana workload as a durable workflow
+## The design: a metered workload as a durable workflow
 
 A DreggNet durable workload is a duroxide orchestration (`ORCHESTRATION_NAME =
-"DreggNetDurableWorkload"`) whose steps are activities that run real polyana workloads:
+"DreggNetDurableWorkload"`) whose steps are activities that run real metered workloads:
 
 1. **`RunWorkload`** activity — decodes a `WorkloadSpec { label, lang, source, cap_tier }`,
-   runs it through `dreggnet_exec::run_workload` (real wasmi execution on polyana),
+   runs it through `dreggnet_exec::run_workload` (real wasmi execution on the owned sandbox),
    returns the first output value. `run_workload` drives its own current-thread tokio
    runtime, so the activity offloads it via `tokio::task::spawn_blocking` (it is already
    inside duroxide's runtime). The result is a durable history event → replayed, never
@@ -78,7 +78,7 @@ A DreggNet durable workload is a duroxide orchestration (`ORCHESTRATION_NAME =
 
 2. **`MeterTick`** activity — charges `cost_per_step` units against the lease meter for
    this instance and returns the running total. This is the **transactional twin** of the
-   work: a step's polyana effect and its meter tick are both durable history events, so on
+   work: a step's sandbox effect and its meter tick are both durable history events, so on
    replay they are recovered together-or-not. This is the DBOS shape — *durable steps + a
    transactional outbox* — with the duroxide store as the outbox.
 
@@ -108,7 +108,7 @@ A funded dregg `execution-lease` authorizes a durable workflow. `WorkflowInput` 
 The meter tick currently updates an in-process ledger (`dreggnet_durable::metrics`,
 keyed per workflow instance — observable and concurrency-safe). The **bridge-rung step**
 is to make the `MeterTick` activity a real dregg `Payable` charge so the meter tick and
-the polyana effect commit in one transaction against `pg-dregg`. `MeterTick` is the
+the sandbox effect commit in one transaction against `pg-dregg`. `MeterTick` is the
 single seam where that charge lands — nothing else in the workflow changes.
 
 ## Durability boundary (honest)
@@ -132,7 +132,7 @@ Durability is exactly the durability of the duroxide `Provider` store.
 `durable/` (`dreggnet-durable`) with `cargo test -p dreggnet-durable` green:
 
 - **`durable_workflow_resumes_exactly_once_across_a_simulated_crash`** — runs the 2-step
-  workflow on polyana over an on-disk SQLite store; parks after step1's checkpoint; tears
+  workflow on the owned sandbox over an on-disk SQLite store; parks after step1's checkpoint; tears
   the **entire duroxide runtime down** (the simulated crash); creates a **fresh runtime
   over the same on-disk store** and resumes. Asserts: step1's activity ran **exactly once**
   across the crash (replayed, not re-run), step2 runs once in the second runtime and
@@ -148,7 +148,7 @@ The full DreggNet workspace builds green with the crate added.
 1. **Real durable Postgres store** — swap the SQLite provider for `duroxide-pg` so the
    checkpoints live in Postgres (the multi-host/replicated durability boundary). Same
    workflow code.
-2. **Real meter wire** — make `MeterTick` a dregg `Payable` charge so the polyana effect
+2. **Real meter wire** — make `MeterTick` a dregg `Payable` charge so the sandbox effect
    and the lease meter-tick commit in one transaction; in the `pg-dregg` deployment that
    transaction is the same Postgres transaction as the duroxide checkpoint (true
    together-or-not), and `pg_durable` becomes the in-database composition.

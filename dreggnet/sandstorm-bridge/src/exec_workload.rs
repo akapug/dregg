@@ -47,7 +47,7 @@ pub fn cap_tier_for(tier: SandboxTier) -> CapTier {
 
 /// The language the in-sandbox handler runs as. The representative handler is Python
 /// (the native CPython tier — `dreggnet-exec`'s default-on `python` feature), a real
-/// `python3` subprocess speaking the polyana newline-JSON wire. A real catalog grain
+/// `python3` subprocess speaking the newline-JSON wire. A real catalog grain
 /// runs whatever its `.spk` chroot `continueCommand` launches (the reviewed-go step).
 const HANDLER_LANG: &str = "python";
 
@@ -55,7 +55,7 @@ const HANDLER_LANG: &str = "python";
 /// the same contract as [`crate::bridge::NotesApp`] (read needs `view`, write needs
 /// `edit`, state persists in `/var`), but it runs as a genuine `python3` subprocess
 /// through the real `dreggnet-exec` tier rather than in-process. It reads one request
-/// envelope `{grain request + permissions + /var}` from the polyana wire and returns
+/// envelope `{grain request + permissions + /var}` from the the sandbox wire and returns
 /// `{status, body, var}`.
 const NOTES_HANDLER_PY: &str = r#"import sys, json
 
@@ -101,7 +101,7 @@ for line in sys.stdin:
 #[derive(Clone, Debug)]
 pub struct GrainRun {
     pub response: HttpResponse,
-    /// The polyana `EnforcementLevel` the run achieved (`"OsSandbox"` on a Linux
+    /// The sandbox enforcement level the run achieved (`"OsSandbox"` on a Linux
     /// Caged host, `"Container"` on a KVM MicroVm host, `"None"` where the OS cannot
     /// cage — surfaced so the operator sees the real posture).
     pub enforcement: String,

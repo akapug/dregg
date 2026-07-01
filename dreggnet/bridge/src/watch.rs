@@ -1,6 +1,6 @@
 //! The lease **WATCHER** — the second half of the DreggNet bridge.
 //!
-//! Rung 3 ([`crate::fulfill`]) welded a *single* funded lease to a durable polyana
+//! Rung 3 ([`crate::fulfill`]) welded a *single* funded lease to a durable metered
 //! workflow. This module closes the loop: DreggNet **watches a feed of funded dregg
 //! execution-leases and fulfills each as it arrives**.
 //!
@@ -15,7 +15,7 @@
 //! ## What the watch loop does (per lease)
 //!
 //! 1. Pull the next funded [`crate::Lease`] off the [`LeaseFeed`].
-//! 2. Its cap-grade already maps to a polyana tier via [`crate::map_cap_grade`];
+//! 2. Its cap-grade already maps to a tier via [`crate::map_cap_grade`];
 //!    [`crate::fulfill`] runs that mapping + the budget gate on the same path, so the
 //!    watcher just hands the lease to `fulfill`.
 //! 3. Spawn the durable workflow as a tracked, **running** task (concurrent — the
@@ -294,70 +294,44 @@ impl LeaseFeed for MockFeed {
 /// The **real** lease feed: funded execution-leases read from a dregg node's
 /// receipt log via a verified whole-log attestation.
 ///
-/// Behind the `dregg-verify` feature, [`from_node_log`](DreggNodeFeed::from_node_log)
-/// runs [`crate::dregg_verify::read_funded_leases`]: it attests the node's receipt
-/// log (`query_shadow_attest_whole_log` — fail-closed if the log does not verify
-/// against its MMR root), decodes each attested funded execution-lease grant into a
-/// [`crate::Lease`], and queues the result. [`next_lease`](LeaseFeed::next_lease)
-/// then drains that queue to the watch→fulfill→reap loop, which is unchanged.
+/// The verified read + funded-lease decode is an honest, fail-closed named SEAM
+/// ([`crate::dregg_verify`]): it binds against the dregg verified-core surface
+/// (`query_shadow_attest_whole_log` — fail-closed if the log does not verify
+/// against its MMR root), and the owned `dregg-verify` dep that supplies that
+/// surface is future work. Until it lands, the only constructor
+/// ([`new`](DreggNodeFeed::new)) leaves the queue empty: the feed yields nothing
+/// and a watch run over it is a clean no-op, so no un-verified on-chain lease is
+/// ever fulfilled.
 ///
-/// On the default Apache/offline build the dregg verified-core is NOT linked (AGPL
-/// isolation — see [`crate::dregg_verify`]), so `from_node_log` does not exist and
-/// the only constructor ([`new`](DreggNodeFeed::new)) leaves the queue empty: the
-/// feed yields nothing and a watch run over it is a clean no-op.
-///
-/// **What is real vs pending a live node:** the verified read + funded-lease decode
-/// are real (exercised feature-on in `dregg_verify`'s tests). The *transport* that
-/// fetches the receipt-log records from a live dregg node / light client over
-/// `node_endpoint` is the remaining step — today the records are handed to
-/// `from_node_log`; the live light-client RPC that produces them is named, not yet
-/// wired (see `crate::dregg_verify`).
+/// The *transport* that fetches the receipt-log records from a live dregg node /
+/// light client over `node_endpoint` is the remaining step alongside the owned
+/// verified-read dep (see `crate::dregg_verify`).
 pub struct DreggNodeFeed {
     /// The dregg node / light-client endpoint the real read polls. Recorded so the
-    /// routing is explicit even on the default build.
+    /// routing is explicit even before the verified-read dep is taken.
     pub node_endpoint: String,
     /// Decoded funded leases awaiting delivery to the watcher, in receipt order.
-    /// Empty on the default build (no constructor populates it without the
-    /// verified-core link), which is what makes the feed structurally inert there.
+    /// Empty until the owned verified-read wire lands, which is what makes the feed
+    /// structurally inert (fail-closed) today.
     pending: std::collections::VecDeque<FeedItem>,
 }
 
 impl DreggNodeFeed {
     /// Name the real feed against a dregg node endpoint, with no leases queued.
-    /// On the default build this is the only constructor, so the feed is inert
-    /// (yields `None`). Feed it via [`from_node_log`](DreggNodeFeed::from_node_log)
-    /// under `dregg-verify`.
+    /// This is the only constructor until the owned verified-read wire lands, so
+    /// the feed is inert (yields `None`) — fail-closed.
     pub fn new(node_endpoint: impl Into<String>) -> DreggNodeFeed {
         DreggNodeFeed {
             node_endpoint: node_endpoint.into(),
             pending: std::collections::VecDeque::new(),
         }
     }
-
-    /// Build the real feed from a dregg node's receipt-log records: attest the
-    /// whole log and decode every funded execution-lease grant into a queued
-    /// [`FeedItem`] (see [`crate::dregg_verify::read_funded_leases`]). Returns
-    /// `Err` if the log is empty or does not verify against its root (fail-closed).
-    ///
-    /// `records` is the receipt log fetched from the node at `node_endpoint`; the
-    /// live light-client RPC that produces it is the remaining transport step.
-    #[cfg(feature = "dregg-verify")]
-    pub fn from_node_log(
-        node_endpoint: impl Into<String>,
-        records: &[polyana_dregg_bridge::QueryShadowRecord],
-    ) -> Result<DreggNodeFeed, polyana_dregg_bridge::QueryShadowError> {
-        let pending = crate::dregg_verify::read_funded_leases(records)?.into();
-        Ok(DreggNodeFeed {
-            node_endpoint: node_endpoint.into(),
-            pending,
-        })
-    }
 }
 
 impl LeaseFeed for DreggNodeFeed {
     fn next_lease(&mut self) -> impl Future<Output = Option<FeedItem>> + Send {
-        // Drain the queue the verified read filled. On the default build the queue
-        // is always empty (no `from_node_log`), so the feed is a clean no-op.
+        // Drain the queue the verified read would fill. The queue is always empty
+        // until the owned verified-read wire lands, so the feed is a clean no-op.
         async move { self.pending.pop_front() }
     }
 }
@@ -367,25 +341,21 @@ mod tests {
     use super::*;
     use crate::CapGrade;
 
-    /// The named real feed is inert on the default build: with the verified core
-    /// NOT linked, `new` is the only constructor and it yields nothing, so a watch
-    /// run over it is a clean no-op. (Feature-on, `from_node_log` populates it — see
-    /// `crate::dregg_verify`'s tests — so this default-build assertion is gated off.)
-    #[cfg(not(feature = "dregg-verify"))]
+    /// The named real feed is inert (fail-closed) until the owned verified-read
+    /// wire lands: `new` is the only constructor and it yields nothing, so a watch
+    /// run over it is a clean no-op — no un-verified on-chain lease is fulfilled.
     #[tokio::test]
-    async fn dregg_node_feed_is_inert_on_default_build() {
+    async fn dregg_node_feed_is_inert_fail_closed() {
         assert!(!crate::dregg_verify::DREGG_VERIFY_ENABLED);
         let feed = DreggNodeFeed::new("dregg-node://localhost");
         let report = LeaseWatcher::watch(feed).await;
         assert_eq!(report.total(), 0);
     }
 
-    /// Feature-on, an empty node feed (no records fed) still yields nothing — a
-    /// watch over a not-yet-populated `DreggNodeFeed::new` is a clean no-op.
-    #[cfg(feature = "dregg-verify")]
+    /// An empty node feed still yields nothing — a watch over a not-yet-populated
+    /// `DreggNodeFeed::new` is a clean no-op.
     #[tokio::test]
-    async fn dregg_node_feed_new_is_empty_until_populated() {
-        assert!(crate::dregg_verify::DREGG_VERIFY_ENABLED);
+    async fn dregg_node_feed_new_is_empty() {
         let feed = DreggNodeFeed::new("dregg-node://localhost");
         let report = LeaseWatcher::watch(feed).await;
         assert_eq!(report.total(), 0);

@@ -20,14 +20,14 @@
 //!   dregg-cloud lease open   → register a funded (mock) execution-lease
 //!   dregg-cloud run --source → Scheduler::place_workload(lease, the declared program)
 //!                             → LocalProvider provisions a machine
-//!                               → the bridge fulfills it as a durable polyana workflow
+//!                               → the bridge fulfills it as a durable metered workflow
 //!                                 (the YOUR-WAT program runs, metered against the budget)
 //!   dregg-cloud status       → the lifecycle + meter of every scheduled workload
 //! ```
 //!
 //! ## Real vs mock (honest)
 //!
-//! - **Real:** the control-plane place→provision→fulfill path; the durable polyana
+//! - **Real:** the control-plane place→provision→fulfill path; the durable the owned sandbox
 //!   workflow (the wasmi steps genuinely run in the sandbox); `run --source` threads
 //!   the caller's declared WAT program all the way into the durable workflow, so the
 //!   program you wrote is the program that runs; the meter (each durable step charges
@@ -112,7 +112,7 @@ struct Cli {
     state_dir: PathBuf,
 
     /// Interface with a LIVE DreggNet cloud at this gateway URL (e.g.
-    /// `https://dreggnet.example.com`) instead of the in-process local
+    /// `https://dreggnet.fg-goose.online`) instead of the in-process local
     /// simulation. When set, the cloud verbs (`deploy`, `run`, `status`/`ls`, and
     /// the `machines` subcommands) make REAL HTTP calls to the gateway's
     /// fly-compatible machines API — funded, metered, and receipted by the live
@@ -132,7 +132,7 @@ enum Command {
         #[command(subcommand)]
         action: LeaseAction,
     },
-    /// Schedule a funded lease onto the LocalProvider, fulfill it as a durable polyana
+    /// Schedule a funded lease onto the LocalProvider, fulfill it as a durable the owned sandbox
     /// workflow, and print the result + the meter.
     Run {
         /// The lease id (from `dregg-cloud lease open`).
@@ -164,7 +164,7 @@ enum Command {
     Deploy {
         /// The repo to deploy — a git URL, a `file://` path, or a local path.
         repo: String,
-        /// The subdomain label to publish under (`<name>.example.com`). Defaults to the
+        /// The subdomain label to publish under (`<name>.dregg.works`). Defaults to the
         /// repo's basename.
         #[arg(long)]
         name: Option<String>,
@@ -181,7 +181,7 @@ enum Command {
         budget: i64,
         /// After publishing, serve the site LOCALLY over HTTP and print the real local
         /// URL (a genuine round-trip you can `curl`), instead of just recording it. The
-        /// public `<name>.example.com` edge is a separate gateway-mount step.
+        /// public `<name>.dregg.works` edge is a separate gateway-mount step.
         #[arg(long)]
         serve: bool,
         /// The port `--serve` binds (on `127.0.0.1`).
@@ -305,10 +305,10 @@ enum DomainAction {
     Add {
         /// The custom domain to bind (e.g. `shop.example.com`).
         domain: String,
-        /// The site `<name>` (whose `<name>.example.com` cell serves the bytes).
+        /// The site `<name>` (whose `<name>.dregg.works` cell serves the bytes).
         #[arg(long)]
         site: String,
-        /// Prove control by CNAME (`<domain>` → `<site>.example.com`) instead of TXT.
+        /// Prove control by CNAME (`<domain>` → `<site>.dregg.works`) instead of TXT.
         #[arg(long)]
         cname: bool,
         /// The binding owner (the cap holder). Defaults to the logged-in account.
@@ -1166,7 +1166,7 @@ fn cmd_domains_add(
     let challenge = &receipt.challenge;
     let prog = prog();
     println!(
-        "bound {} → {}.example.com (owner {})",
+        "bound {} → {}.dregg.works (owner {})",
         receipt.domain, receipt.site, receipt.owner
     );
     println!("  state     pending — publish this DNS record to prove control:");
@@ -1286,7 +1286,7 @@ fn cmd_domains_verify(
         verified.domain, verified.verified_seq
     );
     println!(
-        "  now routes {} → {}.example.com (and is cert-eligible)",
+        "  now routes {} → {}.dregg.works (and is cert-eligible)",
         verified.domain, verified.site
     );
 
@@ -1324,7 +1324,7 @@ fn cmd_ls(dir: &Path, endpoint: Option<&str>) -> Result<()> {
         // The site name + the canonical public address it WILL serve at; published
         // locally today (not served on the public edge — see `deploy` output).
         println!(
-            "  {:<24}  {}.example.com  ({})  (local — published, not served)",
+            "  {:<24}  {}.dregg.works  ({})  (local — published, not served)",
             short(&d.id),
             d.site_name,
             short(&d.commit)
@@ -1350,7 +1350,7 @@ fn cmd_ls(dir: &Path, endpoint: Option<&str>) -> Result<()> {
         } else {
             "pending"
         };
-        println!("  {:<24}  → {}.example.com  ({state})", b.domain, b.site);
+        println!("  {:<24}  → {}.dregg.works  ({state})", b.domain, b.site);
     }
 
     println!("\nworkloads ({})", store.workloads.len());
@@ -1429,7 +1429,7 @@ fn cmd_verify(dir: &Path, target: &str, url: Option<&str>, tamper: bool) -> Resu
     // non-witness read path), else from the locally recorded bundle.
     let mut bundle = match url {
         Some(addr) => {
-            let host = format!("{}.example.com", deploy.site_name);
+            let host = format!("{}.dregg.works", deploy.site_name);
             println!(
                 "fetching the receipt bundle from http://{addr}{} (Host: {host}) ...",
                 dreggnet_webapp::SITE_RECEIPT_PATH
@@ -2414,7 +2414,7 @@ fn cmd_machines(dir: &Path, endpoint: Option<&str>, action: MachineAction) -> Re
 }
 
 /// `dregg-cloud run` — schedule a funded lease onto the LocalProvider, fulfill it as a
-/// durable polyana workflow, and print the result + the meter.
+/// durable metered workflow, and print the result + the meter.
 async fn cmd_run(
     dir: &Path,
     endpoint: Option<&str>,
@@ -2491,7 +2491,7 @@ async fn cmd_run(
 
     // Route through the control plane: place the lease onto the LocalProvider, which
     // provisions a machine + fulfills the lease running the declared workload as a
-    // durable polyana workflow via the bridge. This is the genuine end-to-end path
+    // durable metered workflow via the bridge. This is the genuine end-to-end path
     // (the wasmi steps really run).
     let scheduler = Scheduler::new(LocalProvider::new(), MachineSize::Small, "local");
     let workload_id = scheduler
@@ -2765,7 +2765,7 @@ async fn cmd_deploy(
     // durable store + the cloned/built tree live under the state dir so a crashed deploy is
     // resumable. The CLI runs the pipeline end-to-end and publishes into `registry`; with
     // `--serve` it then serves that registry locally (a real round-trip). The public
-    // `<name>.example.com` edge is the separate gateway-mount step.
+    // `<name>.dregg.works` edge is the separate gateway-mount step.
     let id = uuid::Uuid::new_v4().to_string();
     let deploy_root = dir.join("deploys");
     let workroot = deploy_root.join("work");
@@ -2786,7 +2786,7 @@ async fn cmd_deploy(
     spec.budget_units = budget;
     spec.cost_per_step = 1;
 
-    println!("deploying `{repo}` → {site_name}.example.com ...");
+    println!("deploying `{repo}` → {site_name}.dregg.works ...");
     let receipt = deploy_on_disk(engine, &spec, &id, &db_path)
         .await
         .map_err(|e| anyhow!("deploy failed: {e}"))?;
@@ -2868,7 +2868,7 @@ async fn cmd_deploy(
         // print the actual local URL the operator can `curl` right now.
         let bind = format!("127.0.0.1:{port}");
         println!("\nserving locally at http://{bind}/ (Ctrl-C to stop):");
-        println!("  curl -s -H 'Host: {served_name}.example.com' http://{bind}/");
+        println!("  curl -s -H 'Host: {served_name}.dregg.works' http://{bind}/");
         println!("  curl -s http://{bind}/{served_name}/   # no-DNS path-prefix fallback");
         // serve_registry blocks until a fatal bind/accept error; a successful serve
         // runs until the operator interrupts it.

@@ -28,14 +28,14 @@ use crate::types::{CreateMachineRequest, DispatchReport, Machine, MachineState};
 /// The gateway maps a fly create onto a dregg [`Lease`] and then dispatches that
 /// lease's durable workload over the control plane's **real** dispatch primitive
 /// ([`dreggnet_control::dispatch_lease_over_mesh`]) to a compute node over the
-/// private overlay (the live edge→node-a path). Without one configured, the
+/// private overlay (the live edge→persvati path). Without one configured, the
 /// gateway falls back to fulfilling the lease in-process on this host (the dev /
 /// single-box path), so the default build stays self-contained.
 pub struct ComputeBackend {
     /// The secure-plane mesh the dispatch rides (`TailscaleMesh` on the live edge,
     /// `StubMesh` in tests).
     mesh: Arc<dyn Mesh>,
-    /// The compute node the workload is dispatched to (e.g. node-a at
+    /// The compute node the workload is dispatched to (e.g. persvati at
     /// `100.64.0.2:8021`).
     node: MeshNode,
 }
@@ -48,11 +48,11 @@ impl ComputeBackend {
 
     /// The live edge backend: dispatch over the host's tailnet/headscale overlay
     /// (a [`TailscaleMesh`]) to the compute node at `overlay_addr:agent_port` (e.g.
-    /// node-a, `100.64.0.2:8021`). This is the deployed path — the same overlay
-    /// hop `deploy/COMPUTE-BACKEND.md` proved end to end.
-    pub fn node_a(overlay_addr: Ipv4Addr, agent_port: u16) -> ComputeBackend {
+    /// persvati, `100.64.0.2:8021`). This is the deployed path — the same overlay
+    /// hop `deploy/PERSVATI-BACKEND.md` proved end to end.
+    pub fn persvati(overlay_addr: Ipv4Addr, agent_port: u16) -> ComputeBackend {
         let mut node = MeshNode::new(
-            MachineId("node-a".to_string()),
+            MachineId("persvati".to_string()),
             // public_key + endpoint are cosmetic for the TailscaleMesh backend (it
             // rides the host overlay rather than standing up its own tunnel); the
             // overlay address + agent port are what carry the dispatch.
@@ -176,7 +176,7 @@ impl MachineGateway {
     }
 
     /// A gateway that dispatches a created machine's workload over the overlay to a
-    /// real compute node (the live edge→node-a path) instead of running it
+    /// real compute node (the live edge→persvati path) instead of running it
     /// in-process. Attach a funding source with [`funded_by`](Self::funded_by).
     pub fn with_compute(backend: ComputeBackend) -> Self {
         MachineGateway {
@@ -388,7 +388,7 @@ impl MachineGateway {
     /// lease is **dispatched over the overlay to a real compute node** via the
     /// control plane's dispatch primitive
     /// ([`dreggnet_control::dispatch_lease_over_mesh`] →
-    /// `POST <overlay-addr>:8021/fulfill`): the node runs it as a durable polyana
+    /// `POST <overlay-addr>:8021/fulfill`): the node runs it as a durable the owned sandbox
     /// workflow metered against the lease budget and returns the metered result.
     /// Without one, the lease is fulfilled **in-process** on this host
     /// ([`dreggnet_bridge::fulfill`]) — the dev / single-box path.
@@ -743,7 +743,7 @@ mod tests {
     /// mesh to a compute node and records the **real metered result** on the
     /// machine. This drives the genuine create→dispatch code path
     /// ([`dreggnet_control::dispatch_lease_over_mesh`]) against a loopback fulfill
-    /// stub speaking the same `:8021/fulfill` contract the node-agent does — the
+    /// stub speaking the same `:8021/fulfill` contract the persvati-agent does — the
     /// gateway→node path with the overlay hop swapped for loopback.
     #[tokio::test]
     async fn create_then_fulfill_dispatches_and_records_the_metered_result() {
@@ -752,7 +752,7 @@ mod tests {
         // A compute backend whose stub mesh link sends the dispatch POST to the
         // loopback fulfill stub (StubMesh::dispatching_to is control's test seam).
         let node = MeshNode::new(
-            MachineId("node-a".into()),
+            MachineId("persvati".into()),
             "tailscale-overlay",
             format!("{addr}"),
             Ipv4Addr::new(100, 64, 0, 2),
@@ -794,7 +794,7 @@ mod tests {
         )
         .await;
         let node = MeshNode::new(
-            MachineId("node-a".into()),
+            MachineId("persvati".into()),
             "tailscale-overlay",
             format!("{addr}"),
             Ipv4Addr::new(100, 64, 0, 2),
@@ -817,7 +817,7 @@ mod tests {
 
     /// A minimal loopback server speaking the `:8021/fulfill` contract: it replies
     /// `status`, with a canned metered success envelope when `body` is `None`. This
-    /// stands in for the node-agent so the gateway's dispatch path is exercised
+    /// stands in for the persvati-agent so the gateway's dispatch path is exercised
     /// with no live overlay.
     async fn spawn_fulfill_stub(status: u16, body: Option<String>) -> std::net::SocketAddr {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

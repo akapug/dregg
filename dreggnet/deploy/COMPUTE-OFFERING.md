@@ -2,7 +2,7 @@
 
 This is the user-facing shape of DreggNet compute: how someone gets work executed
 on the network, what hardware backs it today, and how it surfaces to them. It is
-the product view of the machinery in `deploy/COMPUTE-BACKEND.md` (the backend) and
+the product view of the machinery in `deploy/PERSVATI-BACKEND.md` (the backend) and
 `control/src/mesh.rs` (the dispatch path).
 
 The one-line model: **a user opens a funded lease; the control plane dispatches it
@@ -31,9 +31,9 @@ have the same path scale cleanly as more hardware joins.
    to expose any public port. It establishes the link, health-checks the node, then
    issues a real `POST <overlay-addr>:8021/fulfill` carrying the lease
    (`dispatch_lease_over_mesh`, `control/src/mesh.rs`).
-3. **Run.** The node's bridge agent (`deploy/node-agent`) runs the lease as a
-   **real durable polyana workflow** (`dreggnet_bridge::fulfill`): each step runs in
-   the polyana sandbox at the lease's tier, and a `MeterTick` charges
+3. **Run.** The node's bridge agent (`deploy/persvati-agent`) runs the lease as a
+   **real durable metered workload** (`dreggnet_bridge::fulfill`): each step runs in
+   the owned wasmi sandbox at the lease's tier, and a `MeterTick` charges
    `per_period_units` against the budget. Because the meter ticks are durable
    history, a crash resumes *within the same budget* — exactly-once metering, no
    double-charge.
@@ -50,13 +50,13 @@ over-budget tick stops the workflow, and the dispatch path maps a refusal
 
 | node | role | capacity | cost |
 | --- | --- | --- | --- |
-| **node-a** (primary) | home Linux box, runs the bridge agent + polyana | a multi-core Linux box | ~free at the margin (home power, owned hardware) |
-| **edge** (AWS, `<EDGE_HOST>`) | thin door: stable IP, TLS, headscale mesh control + DERP, orchestration front | one small always-on t3-class box | the only recurring cloud spend; does not grow with load |
+| **persvati** (primary) | home Linux box, runs the bridge agent + owned wasmi sandbox | 24 cores / 83 GiB RAM / ~289 GiB free | ~free at the margin (home power, owned hardware) |
+| **edge** (AWS, `34.224.208.52`) | thin door: stable IP, TLS, headscale mesh control + DERP, orchestration front | one small always-on t3-class box | the only recurring cloud spend; does not grow with load |
 | **homelab** (later) | additional compute backends — BIG machines | lots of CPU / RAM / disk | ~free at the margin (owned hardware) |
 
 The economic point is that cloud spend is pinned to one small edge box, and
 everything that scales with load — lease execution and STARK proving — runs on
-hardware that is already owned. node-a is the engine room; the edge is a thin
+hardware that is already owned. persvati is the engine room; the edge is a thin
 door.
 
 ## How it surfaces
@@ -65,7 +65,7 @@ door.
   maps to a lease, runs it through the bridge's real validation gate
   (`workflow_input_for_lease`), and — when the gateway is dispatch-configured
   (`DREGGNET_DISPATCH=tailscale`, the live edge default) — **dispatches that lease
-  over the overlay to the compute node** (`dispatch_lease_over_mesh` → node-a's
+  over the overlay to the compute node** (`dispatch_lease_over_mesh` → persvati's
   `:8021/fulfill`) so the created machine RUNS a real durable metered workload. The
   machine record reflects the outcome: `started` with the real `meter_units` + step
   outputs under a `dregg` field, or `failed` with the lapse reason (an over-budget /
@@ -82,7 +82,7 @@ door.
   (`dreggnet-control` re-exports `Lease` / `CapGrade` / `DurableOutput`) drives a
   lease and reads back its metered result.
 
-Whatever the surface, the lease/run flow lands on **real node-a compute** over the
+Whatever the surface, the lease/run flow lands on **real persvati compute** over the
 overlay — the same `:8021/fulfill` contract end to end.
 
 ## Budgets (early era)
@@ -93,17 +93,17 @@ the run (so a runaway workload lapses rather than consuming the box), it is just
 subsidized rather than billed. As the offering matures, the same `budget_units` /
 `per_period_units` become the billing knob without any change to the execution path.
 
-## The scale path — node-a now, homelab later
+## The scale path — persvati now, homelab later
 
 The dispatch path is backend-agnostic in exactly the way that makes scaling a
 matter of adding nodes, not rewriting the plane:
 
-- **Now:** one compute backend — node-a at `100.64.0.2:8021` on the headscale
+- **Now:** one compute backend — persvati at `100.64.0.2:8021` on the headscale
   overlay, the edge at `100.64.0.1`. The control plane dispatches to it over the
   tailnet (`TailscaleMesh`, `control/src/mesh.rs`).
 - **Later (homelab):** each homelab machine — the BIG-CHUNGUS boxes, lots of
   RAM/CPU/disk — joins the same headscale overlay (`deploy/FABRIC-JOIN.md`) and runs
-  the **same** `node-agent` on `:8021`. It registers a mesh node; the control
+  the **same** `persvati-agent` on `:8021`. It registers a mesh node; the control
   plane gains another `MeshNode` to dispatch to. Nothing about the lease, the
   `/fulfill` contract, or the metering changes — a new backend is one more overlay
   address speaking the same protocol.
@@ -116,11 +116,11 @@ matter of adding nodes, not rewriting the plane:
 - **Dispatch path closed + proven through the control plane.**
   `dispatch_lease_over_mesh` issues the real `POST /fulfill` (it no longer returns
   an `Unimplemented` plan). Backends: `TailscaleMesh` (the live overlay backend the
-  edge↔node-a deploy uses), `WireguardMesh` (Linux, self-managed tunnel), and
+  edge↔persvati deploy uses), `WireguardMesh` (Linux, self-managed tunnel), and
   `StubMesh` (tests / macOS dev host).
-- **Proven live, edge→node-a, via the control plane (not raw curl):** from the
+- **Proven live, edge→persvati, via the control plane (not raw curl):** from the
   edge (`100.64.0.1`), a funded lease dispatched through `dreggnet-control` over the
-  headscale overlay ran on node-a's cores and returned the metered result
+  headscale overlay ran on persvati's cores and returned the metered result
   (`step1=42, step2=84, meter_units=2`); an under-budget lease came back as a lapse
   (`HTTP 402` → `WorkloadLapsed`), no work claimed. (Driven with the
   `dispatch_over_tailscale` example built for `x86_64-unknown-linux-gnu`, run on the

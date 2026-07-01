@@ -22,11 +22,13 @@ What is genuinely here today, grounded to code:
 
 - **The serving spine.** The full Elide `httpe` gateway + its dep closure build
   green for Linux (`net/`), the WireGuard/Tailscale mesh between control and fleet
-  (`control/src/mesh.rs`), and **polyana** — the polyglot execution engine (34
-  language families; sandbox tiers from `wasmtime`/`v8` to `Caged`
-  seccomp+Landlock and `MicroVm` Firecracker; durable replay).
+  (`control/src/mesh.rs`), and **the owned compute sandbox** — the `Sandboxed` wasm
+  tier genuinely runs on an owned, vendored pure-Rust `wasmi` interpreter (zero
+  unsafe, in-crate, no external submodule); every stronger tier (`JitSandboxed`/JIT,
+  `Caged` seccomp+Landlock native, `MicroVm` Firecracker, `Gpu`) is a fail-closed
+  seam today — an owned engine per tier is future work — with durable replay.
 - **The lease economy.** A funded dregg `execution-lease` authorizes a workload;
-  the bridge maps cap-grade → sandbox tier, runs it on polyana, ticks a
+  the bridge maps cap-grade → sandbox tier, runs it on the owned sandbox, ticks a
   `StandingObligation` meter, and settles each charge as a real conserving
   `Effect::Transfer` — exactly-once, crash-safe, re-witnessable
   (`control/src/{orchestrator,settle_ledger,node_api}.rs`, `durable/`).
@@ -44,7 +46,7 @@ What is genuinely here today, grounded to code:
 
 The honest line, carried from `docs/LIFTOFF-SURPASS-MATRIX.md`: nearly everything
 LIVE is proven *built + locally*, not yet *operated on a public edge*. The live
-`example.com` edge, real cert issuance, the on-chain `Effect::Write` that replaces
+`dregg.works` edge, real cert issuance, the on-chain `Effect::Write` that replaces
 the FNV `content_root` stand-in with the real Poseidon2 heap root, the Firecracker
 guest plane + a GPU tier, and real `$DREGG` billing are reviewed-go / operational
 gaps. The vision below is reached *from these primitives*, and every reach names

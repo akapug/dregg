@@ -50,7 +50,7 @@ autonomous* + *unblocks-other-work* first.
 | 3 | **Capture & surface build/workload output on failure** (today a failed `npm run build` or lapsed workload shows only an exit code / "lapsed" label — no stderr) | deploy/CLI | `dregg-deploy/src/build.rs:74-78`; `cli/src/main.rs:844-845` | M | high | safe-autonomous |
 | 4 | **`--owner` should default to the logged-in identity** (after `dregg-cloud login`, deploy/domains still default `owner="operator"`) | CLI | `cli/src/main.rs:120,138` | S | high | safe-autonomous |
 | 5 | **Path parameters in the router** (`/users/{id}`); today only whole-path `match_route` — blocks any REST app | webapp | `webapp/src/router.rs:50-61`; `webapp/src/lib.rs:97` | M | high | needs-a-decision |
-| 6 | **Request body → handler ABI** (handlers are zero-arg `run`; the body is parsed but never passed) — blocks POST/PUT apps | webapp | `webapp/src/lib.rs:98-101`; `webapp/src/http.rs` | M | high | reviewed-go (polyana host-import) |
+| 6 | **Request body → handler ABI** (handlers are zero-arg `run`; the body is parsed but never passed) — blocks POST/PUT apps | webapp | `webapp/src/lib.rs:98-101`; `webapp/src/http.rs` | M | high | reviewed-go (owned-sandbox host-import) |
 | 7 | **Rate-limit publish + domain-verify** (a cap holder can republish / re-verify unbounded → DOS the bandwidth meter / DNS resolver) | hosting/domains | `webapp/src/hosting.rs:589-623`; `dregg-domains/src/lib.rs` (verify) | S | high | safe-autonomous |
 | 8 | **Rate-card API + free-tier flag** (pricing is hardcoded Rust; no endpoint to read it, no config switch between `free()` and real pricing) | billing | `control/src/hosting_meter.rs:68-110` | S | high | safe-autonomous |
 | 9 | **Persistent-server health probe** (`ServerFleet::health` returns `!is_running` — no real TCP/heartbeat probe; ingress can't gate on liveness) | control/servers | `control/src/server.rs:1104-1120` | M | high | reviewed-go (network IO) |
@@ -117,7 +117,7 @@ moves the root); `cert_ok()` decision logic; bandwidth accounting.
 
 ## WEBAPP DYNAMIC API — the leased router (`webapp/router.rs`, `gateway/webapp.rs`)
 
-**Solid:** `Router::serve` route-match + polyana handler run + render; 402 on
+**Solid:** `Router::serve` route-match + owned-sandbox handler run + render; 402 on
 over-budget; on-disk SQLite durability across restart (single-host).
 
 ### Half-built / stubbed
@@ -130,7 +130,7 @@ over-budget; on-disk SQLite durability across restart (single-host).
 - **Path parameters** — `webapp/src/router.rs:50-61`; `lib.rs:97`. Whole-path
   match only. Effort M, **high**, needs-a-decision. *(Top-10 #5.)*
 - **Request body → handler** — `webapp/src/lib.rs:98-101`. Zero-arg handlers;
-  body parsed but not threaded. Effort M, **high**, reviewed-go (polyana
+  body parsed but not threaded. Effort M, **high**, reviewed-go (owned-sandbox
   host-import ABI). *(Top-10 #6.)*
 - **Streaming responses** (`http.rs:98-105`, buffered `Vec<u8>`), **middleware
   pipeline** (`router.rs:54-62`), **per-route rate-limit / 429** — each Effort
@@ -210,7 +210,7 @@ workflow; the deny-default build sandbox; symlink refusal at build + publish.
   honest error). No Python/Go/Rust/Hugo/Next/Vite/etc. Effort M, high,
   safe-autonomous (harden the matcher).
 - **Publish lands in the in-process `SiteRegistry`** — `dregg-deploy/src/workflow.rs:156`;
-  `cli/src/main.rs:914`. Live `*.example.com` serving is the gateway-mount rung.
+  `cli/src/main.rs:914`. Live `*.dregg.works` serving is the gateway-mount rung.
   Effort L, high, reviewed-go.
 - **Compute build path uses repo-declared lang/source only** —
   `dregg-deploy/src/build.rs:80-91`. Runtime-supplied workloads are bridge-side
@@ -455,7 +455,7 @@ stripe-receiver's *real* breadstuffs HMAC verify + replay-window + consume-once 
   reviewed-go.
 - **Cap-grade admission is an enum check, not the real `gate_effect_set`** —
   `bridge/src/lib.rs:258-289`. Effort S, high, safe-autonomous (swap when
-  polyana-dregg-bridge is available).
+  the owned-compute↔dregg gate is wired).
 - **Stripe receiver is a single-process demo** — `demo/stripe-receiver/src/main.rs`
   (real crypto, no HA/persistence/dedup-across-instances). Effort L, med,
   needs-a-decision (on-ramp topology).

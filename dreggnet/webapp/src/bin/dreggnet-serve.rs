@@ -2,9 +2,9 @@
 //!
 //! A portable (std `TcpListener`, cross-platform) serving binary: it binds a
 //! listener and serves a [`WebApp`]'s routes over a small HTTP/1.1 loop, routing
-//! each inbound request to its polyana handler via
+//! each inbound request to its owned-sandbox handler via
 //! [`dreggnet_webapp::Router`]. This is the any-host realization of "the gateway
-//! routes inbound HTTP to a leased polyana workload" — the Linux-only `httpe`
+//! routes inbound HTTP to a leased owned-sandbox workload" — the Linux-only `httpe`
 //! gateway adopts the same `Router`.
 //!
 //! ```sh
@@ -88,7 +88,7 @@ fn main() -> std::io::Result<()> {
 
     // The shared portable serving loop (`webapp/src/serve.rs`, also driving the
     // static `dreggnet-host` path) — this dynamic front-end just supplies the
-    // per-request handler, routing the parsed request through the polyana `Router`.
+    // per-request handler, routing the parsed request through the owned-sandbox `Router`.
     serve_http(&bind, move |req: &ServeRequest| {
         serving.serve(&WebRequest::new(req.method, &req.target, req.body.clone()))
     })

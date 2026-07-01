@@ -4,7 +4,7 @@
 //!
 //! Two proofs:
 //!   1. A request served through [`LeasedRouter`] runs THROUGH the durable layer:
-//!      the handler executes on polyana, is metered, and the response is rendered
+//!      the handler executes on the owned sandbox, is metered, and the response is rendered
 //!      from the durable workflow's output — and an over-budget request is refused.
 //!   2. A request's durable workflow resumes EXACTLY-ONCE across a simulated crash:
 //!      the handler step is checkpointed, the runtime is torn down, a fresh runtime
@@ -23,7 +23,7 @@ use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::runtime::Runtime;
 use duroxide::{Client, OrchestrationStatus};
 
-/// A served request runs as a durable workflow: the handler executes on polyana,
+/// A served request runs as a durable workflow: the handler executes on the owned sandbox,
 /// is metered against the lease, and the response is rendered from the workflow's
 /// output. The budget gate still refuses an over-budget request.
 #[test]
@@ -32,13 +32,13 @@ fn webapp_request_runs_as_a_durable_metered_workflow() {
     let lease = Lease::funded("agent-x", CapGrade::Sandboxed, "USD", 2, 1);
     let router = LeasedRouter::new(assemble::demo_app("agent-x"), lease).unwrap();
 
-    // GET /add?a=40&b=2 → the handler runs on polyana inside a durable workflow.
+    // GET /add?a=40&b=2 → the handler runs on the owned sandbox inside a durable workflow.
     let (r1, m1) = router.serve(&WebRequest::get("/add?a=40&b=2"));
     assert_eq!(r1.status, 200, "served durably: {}", r1.body_str());
     assert_eq!(
         r1.body_str(),
         "{\"result\":42}",
-        "polyana computed the sum durably"
+        "the owned sandbox computed the sum durably"
     );
     assert_eq!(m1.charged, 1, "the request was metered against the lease");
 
@@ -155,7 +155,7 @@ async fn webapp_request_resumes_exactly_once_across_a_crash() {
         };
         let out: WorkflowOutput = serde_json::from_str(&output).unwrap();
 
-        // The handler computed `21 * 2 = 42` on polyana, recovered across the crash.
+        // The handler computed `21 * 2 = 42` on the owned sandbox, recovered across the crash.
         assert_eq!(out.outputs, vec!["42".to_string()]);
         // EXACTLY-ONCE: the handler was replayed from the checkpoint, never re-run,
         // and the meter was charged exactly once — the crash double-charged nothing.

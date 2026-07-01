@@ -25,7 +25,7 @@ Status grading (against HEAD of this repo, 2026-06-29):
 
 > Honesty caveat that colours the whole matrix: almost everything LIVE here is
 > proven on the **local / in-process / LocalProvider path**, not on a live public
-> edge. The live `example.com` edge, real cert issuance, the on-chain `Effect::Write`
+> edge. The live `dregg.works` edge, real cert issuance, the on-chain `Effect::Write`
 > that replaces the FNV `content_root` stand-in, and real $DREGG billing are all
 > **reviewed-go** (`docs/OVERNIGHT-GOAL.md` guardrails) and several are not yet
 > operating (`docs/GO-REAL.md`: the recovered edge node's receipt log is empty and
@@ -41,7 +41,7 @@ Status grading (against HEAD of this repo, 2026-06-29):
 | Axis | Liftoff's offering | DreggNet status | How we surpass (or the gap + plan) |
 |---|---|---|---|
 | **Static websites** | Host a site, no gatekeepers | **LIVE** (`webapp/src/hosting.rs` `SiteCell`, cap-gated publish + `PublishReceipt`; served by `gateway/src/hosting.rs`; round-trip tested over real TCP, `webapp/tests/site_publish_serve.rs`) | A site **IS a cell** carrying a `content_root` commitment → trustless serving (§2): the visitor re-witnesses the served bytes. *Seam:* `content_root` is an FNV-1a stand-in (`hosting.rs:180`) until the `dregg-verify` on-chain `Effect::Write` flip lands the real Poseidon2 heap root. |
-| **SSL / TLS** | Automatic SSL certs | **v1** (wildcard `*.example.com` via Caddy DNS-01 is specced, `docs/WEB-HOSTING.md` §3; the on-demand-TLS `ask` hook is designed) | Match on wildcard; surpass via the **verified `ask` endpoint** (Caddy only mints a cert for a cell a tenant has cap-proven they own). *Gap:* per-custom-domain cert automation is unbuilt; live cert issuance is reviewed-go (deploy lane). |
+| **SSL / TLS** | Automatic SSL certs | **v1** (wildcard `*.dregg.works` via Caddy DNS-01 is specced, `docs/WEB-HOSTING.md` §3; the on-demand-TLS `ask` hook is designed) | Match on wildcard; surpass via the **verified `ask` endpoint** (Caddy only mints a cert for a cell a tenant has cap-proven they own). *Gap:* per-custom-domain cert automation is unbuilt; live cert issuance is reviewed-go (deploy lane). |
 | **Custom domains (BYO)** | Bind your own domain | **v1 → GAP** (`dregg-domains/` crate exists: `DomainBinding` cell + TXT/CNAME challenge state machine; **`MockDns` stand-in**, no live resolver — `dregg-domains/src/lib.rs:237`) | A `DomainBinding` is a **cap-gated receipted cell** → "who proved control of this domain, when" is provable. *Gap to close:* a real `DnsResolver` (hickory/trust-dns) replacing `MockDns` (effort S) + the live cert mint (reviewed-go). |
 | **Auto-deploy (git push → build → host)** | "You ship, we host" — the keystone DX | **GAP** (no clone/build/publish pipeline today; publish is a *pre-built* directory via `dreggnet-host`) | **The build IS a durable workflow** (`dregg-deploy` core over `durable/`): crash-resumable, exactly-once-metered, and the **cloned commit hash is recorded in the receipt** → "built from *that* commit" is provable (reproducibility Liftoff can't offer). *Gap to close:* build `dregg-deploy` (BuildPlan + framework detect + Clone/Build/Publish), static+node paths local e2e (safe-autonomous); the public push-webhook is reviewed-go. |
 | **Persistent servers** | Long-running instances | **PARTIAL** (fly-compatible machines API CRUD + lease-gated admission LIVE: `gateway/src/route.rs`, `types.rs`; but records are in-memory + request-scoped — no durable long-running process; create→fulfill seam deferred) | A server = a **long-lived durable workflow** metered per-period uptime (`StandingObligation`), reaped on lease lapse → **you pay only while it's awake** (Sandstorm-style sleep). *Gap to close:* the persistent-server workload shape + create→fulfill durable launch seam + a persistent machine store (SQLite/duroxide-pg); live fleet boot reviewed-go. |
@@ -50,12 +50,12 @@ Status grading (against HEAD of this repo, 2026-06-29):
 | **No-KYC / chain-as-account** | Wallet = account, no ID | **LIVE (surpasses)** (`webauth/` cap-auth: a wallet-held `dga1_` credential, ed25519 caveat-chain, attenuable, offline-verifiable) | Not just "no KYC" — **fine-grained attenuable, revocable, offline-verifiable delegation**. The wallet is the account *and* you can hand a teammate/CI a strictly-attenuated sub-capability. |
 | **Object storage** | (none disclosed) | **LIVE** (`storage/`, cap-gated `create/put/get/list/delete`, trustless `verified_get` + pure `verify_opening`) | Trustless reads: a flipped byte or forged root is caught client-side. *Seam:* the leaf hash is an FNV-1a stand-in for Poseidon2 until the same on-chain flip as hosting (`storage/src/object.rs:47`). |
 | **Databases** | (none disclosed) | **v1 / near** (KV = the kvstore register-file cell pattern, a thin managed wrap over the pg-dregg verified store — `docs/SERVICES.md` row 2) | A verified KV/DB: committed register state + replayable receipts over the proof-attested pg-dregg store. *Gap:* the managed surface + metering is the new bit; a relational/SQL product is roadmap. |
-| **Functions / FaaS** | (none disclosed) | **LIVE (compute) / v1 (front door)** (the wasm tier `dreggnet-exec` → polyana runs handlers at the lease's cap-tier; exposed as the agent-web-app router `webapp/`) | Handlers run at exactly the cap-grade the lease authorizes; output rides a receipt. *Gap:* the standalone "deploy a function" packaging front door. |
-| **Compute / servers (real)** | Trusted servers | **LIVE (substrate) / PARTIAL (fleet)** (durable metered compute on polyana tiers: `Sandboxed`/`JitSandboxed` wasm on every platform, `Caged` native/python/node on Linux; `MicroVm` Firecracker wired, guest plane + live boot hardware-gated — `docs/COMPUTE-TIERS.md`) | **Durable, receipted, cap-tiered, privacy-capable** compute; crash-resume exactly-once. *Gap:* the Firecracker guest wire (`exec/src/lib.rs:1117`) + a real multi-node fleet (today a 2→5 node devnet); both reviewed-go (KVM hardware / fleet). |
+| **Functions / FaaS** | (none disclosed) | **LIVE (compute) / v1 (front door)** (the wasm tier `dreggnet-exec` → the owned wasmi sandbox runs handlers at the lease's `Sandboxed` cap-tier; exposed as the agent-web-app router `webapp/`) | Handlers run at exactly the cap-grade the lease authorizes; output rides a receipt. *Gap:* the standalone "deploy a function" packaging front door. |
+| **Compute / servers (real)** | Trusted servers | **LIVE (owned wasmi tier) / SEAM (stronger tiers) / PARTIAL (fleet)** (durable metered compute: the `Sandboxed` tier genuinely runs on the owned, vendored pure-Rust `wasmi` interpreter on every platform; every stronger tier — `JitSandboxed`/JIT, `Caged`/native+python+node, `MicroVm`/Firecracker, `Gpu` — is an honest **fail-closed seam** today (`ExecError::NotWired`/`TierNotServed`), never a fake run — `docs/COMPUTE-TIERS.md`) | **Durable, receipted, cap-tiered, privacy-capable** compute; crash-resume exactly-once. *Gap:* wiring an owned engine for each stronger tier (`exec/src/lib.rs`) + a real multi-node fleet (today a 2→5 node devnet); both reviewed-go (owned-engine work / fleet). |
 | **App catalog** | One site per launch | **v1 (Sandstorm integration)** (`sandstorm-bridge/` prototype: `.spk` manifest parser, grain=cell lifecycle, powerbox=cap ceremony, 13 tests) | **Hundreds of cap-secured self-hostable apps** (Etherpad/Wekan/Gitea/…), each a verifiable metered grain; the powerbox becomes *provable* (§2). *Gap to close:* the `.spk` reader (Ed25519+XZ+capnp unpack), the descriptor↔Pred bridge, the http-bridge shim; executing real catalog code is reviewed-go. |
 | **Scheduled / cron** | (none disclosed) | **v1 / near** (the durable runtime exists; the timer-trigger cell + period-fire loop is the new bit — `docs/SERVICES.md` row 5) | Each run is a durable, crash-resumable, exactly-once-metered workflow. |
-| **Pub/sub · queues · secrets · naming · identity** | (none disclosed) | **roadmap / near** (reactor+SSE, conditional-batch cq, cipherclerk, nameservice, credential-ZK — `docs/SERVICES.md` rows 3,4,7,8,9) | Each is the *same cell-shaped template*, paid + verified; naming is already consumed by hosting's `<name>.example.com`. |
-| **Light-client verifiable receipts** | (none — structurally impossible) | **LIVE** (`portal.example.com` read-only v1: in-tab wasm/recursive-STARK light client re-verifies a cell's committed history) | See §2 — this is the category gap. |
+| **Pub/sub · queues · secrets · naming · identity** | (none disclosed) | **roadmap / near** (reactor+SSE, conditional-batch cq, cipherclerk, nameservice, credential-ZK — `docs/SERVICES.md` rows 3,4,7,8,9) | Each is the *same cell-shaped template*, paid + verified; naming is already consumed by hosting's `<name>.dregg.works`. |
+| **Light-client verifiable receipts** | (none — structurally impossible) | **LIVE** (`portal.dregg.studio` read-only v1: in-tab wasm/recursive-STARK light client re-verifies a cell's committed history) | See §2 — this is the category gap. |
 | **Token launch / launchpad** | Couples a Solana token launch to a hosted site | **substrate-LIVE, no product** ($DREGG / per-asset-well supply model, provable `Effect::Mint`/`Burn` exist in breadstuffs; no "launch a coin + a site together" product) | *Gap (optional):* a launchpad product is not built and may not be wanted — but the substrate (an issuer-cell asset-well + cap-gated mint) is *stronger* than an SPL mint. See §3. |
 
 **Supporting LIVE capabilities Liftoff has no equivalent of:** durable execution
@@ -145,7 +145,7 @@ Match the polish, beat it on provenance. (`docs/PERMISSIONLESS-CLOUD-PLAN.md` §
 **The gap:** a global anycast edge, hundreds of PoPs, instant cache invalidation,
 mature autoscaling, five-nines operation. DreggNet runs a **2-node devnet heading
 to 5** (`docs/DEVELOPERS.md` §6), serving is single-edge (the recovered
-`<EDGE_HOST>` box), and the live public edge is **not yet operating** — the
+`34.224.208.52` box), and the live public edge is **not yet operating** — the
 node's receipt log is empty and submit is operator-locked (`docs/GO-REAL.md`).
 
 **The plan to close:** this is an *operational* gap, not a code gap, and most of it
@@ -160,14 +160,16 @@ close the operational gap incrementally on real hardware (reviewed-go).
 ### 3.3 GPU + heavy compute marketplace — Akash is AHEAD
 
 **The gap:** Akash has a live GPU mainnet (~334 GPU units Q1'26), Starcluster, and
-a deep provider marketplace; Spheron similar. DreggNet's compute is CPU-tiered
-(wasm/Caged/MicroVm), the Firecracker **guest plane is unbuilt** (boots then
-`call()` errors — `docs/STAND-INS-CENSUS.md` #2), and there is no GPU tier.
+a deep provider marketplace; Spheron similar. DreggNet's compute genuinely runs
+only the `Sandboxed` wasm tier (the owned wasmi interpreter); every stronger tier
+(`Caged`/native, `MicroVm`/Firecracker, `Gpu`) is a **fail-closed seam** today
+(`docs/STAND-INS-CENSUS.md` #2), and there is no GPU tier.
 
-**The plan to close:** finish the Firecracker guest wire (vsock+JSON guest +
-kernel/rootfs image + jailer — reviewed-go, KVM hardware) to make `MicroVm` a real
-VM tier; add a **GPU cap-tier** to the `CapTier` map (`exec/src/lib.rs`,
-`docs/COMPUTE-TIERS.md`) as a later rung. The leapfrog: even a smaller fleet is
+**The plan to close:** wire an **owned microVM engine** for `MicroVm` (guest
+wire + kernel/rootfs image + jailer — reviewed-go, KVM hardware) to make it a real
+VM tier, and an owned native/python/node engine for `Caged`; add a **GPU cap-tier**
+to the `CapTier` map (`exec/src/lib.rs`, `docs/COMPUTE-TIERS.md`) as a later rung.
+The leapfrog: even a smaller fleet is
 **durable + receipted + cap-tiered + privacy-capable** — an Akash workload is a
 trusted VM; a DreggNet workload is a witnessed, exactly-once-metered transition.
 Match the tiers over time; surpass on verifiability + agent-nativeness now.

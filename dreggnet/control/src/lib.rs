@@ -4,8 +4,8 @@
 //! ```text
 //!   dregg execution-lease  (the AUTHORIZATION — who, what cap-grade, what budget)
 //!     └─ dreggnet-control   (THIS crate — decides WHICH machine, places + reaps)
-//!        └─ dreggnet-bridge  (fulfills the lease as a durable polyana workflow)
-//!           └─ dreggnet-durable / dreggnet-exec / polyana
+//!        └─ dreggnet-bridge  (fulfills the lease as a durable metered workflow)
+//!           └─ dreggnet-durable / dreggnet-exec / the owned sandbox
 //! ```
 //!
 //! The bridge ([`dreggnet_bridge::fulfill`]) runs a durable workflow on the *local*

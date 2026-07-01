@@ -5,7 +5,7 @@
 //! edge control plane connects to a fleet node over the headscale/WireGuard
 //! overlay and `POST`s a funded lease to `http://<overlay-addr>:8021/fulfill`.
 //! This binary is what answers that POST on the compute node — it runs the lease as a
-//! **real durable polyana workflow** via [`dreggnet_bridge::fulfill`] and returns
+//! **real durable metered workflow** via [`dreggnet_bridge::fulfill`] and returns
 //! the metered result.
 //!
 //! It binds `0.0.0.0:8021` (`DEFAULT_AGENT_PORT`) so it is reachable both on the
@@ -124,7 +124,7 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(&bind).await?;
     eprintln!("node-agent: bridge agent listening on http://{bind}");
     eprintln!("  GET  /health");
-    eprintln!("  POST /fulfill   (run a funded lease as a durable polyana workflow)");
+    eprintln!("  POST /fulfill   (run a funded lease as a durable metered workflow)");
     eprintln!("  smoke: curl -s -X POST http://{bind}/fulfill -d '{{}}'");
 
     let counter = std::sync::Arc::new(AtomicU64::new(0));

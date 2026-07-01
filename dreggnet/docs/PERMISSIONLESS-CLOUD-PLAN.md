@@ -57,9 +57,9 @@ core wired, a named seam open; GAP = not built yet. File paths are the grounding
 
 | Liftoff feature | DreggNet status | Where / the seam |
 |---|---|---|
-| **Static websites** | **LIVE** | `webapp/src/hosting.rs` `SiteCell` (site = cell), cap-gated publish + `PublishReceipt`, served by `gateway/src/hosting.rs` `SiteHostHandler` over `<name>.example.com`. |
-| **SSL certs** | **PARTIAL** | Wildcard `*.example.com` TLS via Caddy DNS-01 is specced (`docs/WEB-HOSTING.md` §3) but owned by the `deploy/` lane; per-(custom)-domain cert issuance is unbuilt. |
-| **Custom domains (BYO)** | **GAP** | Only `<name>.example.com` subdomains. No BYO-domain binding, DNS-verification, or per-domain cert automation. |
+| **Static websites** | **LIVE** | `webapp/src/hosting.rs` `SiteCell` (site = cell), cap-gated publish + `PublishReceipt`, served by `gateway/src/hosting.rs` `SiteHostHandler` over `<name>.dregg.works`. |
+| **SSL certs** | **PARTIAL** | Wildcard `*.dregg.works` TLS via Caddy DNS-01 is specced (`docs/WEB-HOSTING.md` §3) but owned by the `deploy/` lane; per-(custom)-domain cert issuance is unbuilt. |
+| **Custom domains (BYO)** | **GAP** | Only `<name>.dregg.works` subdomains. No BYO-domain binding, DNS-verification, or per-domain cert automation. |
 | **Auto-deploy (git push → build → host)** | **GAP** | The keystone DX feature. No git clone, no build step, no publish pipeline. Today: publish a *pre-built* directory via `dreggnet-host`. |
 | **Persistent servers** (long-running instances) | **PARTIAL** | Fly-compatible machines API is LIVE for CRUD + lease-gated admission (`gateway/src/route.rs`, `types.rs`), but machine records are in-memory + request-scoped; no durable long-running server process. |
 | **The deploy CLI / ship→host DX** | **PARTIAL** | `dregg-cloud lease/run/status` is operator-facing (`cli/src/main.rs`), `wat`-only. No `dregg-cloud deploy` app-developer onramp. |
@@ -94,11 +94,11 @@ build → publish a site/server cell → live, every step receipted.
     │
     ▼  ① CLONE       — fetch the repo at a pinned commit (the source commitment)
     ▼  ② DETECT      — framework heuristic → a BuildPlan (static | node | …)
-    ▼  ③ BUILD       — run the build in a polyana tier (Caged/MicroVm), cap-bounded,
+    ▼  ③ BUILD       — run the build in an owned-sandbox tier (Caged/MicroVm — fail-closed seams today), cap-bounded,
     │                   metered against a deploy-lease; output = a dist/ tree
     ▼  ④ PUBLISH     — SiteRegistry::publish(dist) → a SiteCell + PublishReceipt
     │                   (OR register a server machine, for a server target — §3.3)
-    ▼  ⑤ LIVE        — served at <name>.example.com (or the bound custom domain)
+    ▼  ⑤ LIVE        — served at <name>.dregg.works (or the bound custom domain)
 ```
 
 Design decisions:
@@ -140,7 +140,7 @@ verification, DNS guidance, and automatic certs.
     │
     ▼  ① BIND        — a DomainBinding cell { domain, site_cell, owner } (cap-gated)
     ▼  ② CHALLENGE   — emit a DNS TXT challenge (_dregg-verify.shop.example.com = nonce)
-    │                   OR a CNAME target (shop.example.com → blog.example.com)
+    │                   OR a CNAME target (shop.example.com → blog.dregg.works)
     ▼  ③ VERIFY      — poll DNS until the TXT/CNAME proves control → mark verified
     ▼  ④ CERT        — gateway answers Caddy on-demand-TLS `ask` for verified domains;
     │                   Caddy mints a per-domain cert over ACME HTTP-01
@@ -161,7 +161,7 @@ Design decisions:
   domain a tenant has proven they control (rate-limit-safe, no DNS-plugin needed).
 - **Gateway routing** extends `site_name_from_host` (`gateway/src/hosting.rs`) with
   a `host → site_cell` map keyed on bound custom domains, beside the
-  `<name>.example.com` subdomain path.
+  `<name>.dregg.works` subdomain path.
 
 **Tonight-safe subset:** the `DomainBinding` cell + cap-gate + receipt, the
 challenge/verify state machine (TXT + CNAME), the gateway custom-Host resolution,
@@ -179,7 +179,7 @@ cap-bounded long-running server.
   POST /v1/apps/{app}/machines  { config, server: { entry, port } }
     │                            (or: dregg-cloud deploy . --server)
     ▼  ① ADMIT       — lease-gated (existing bridge gate, refuse unfunded/over-grade)
-    ▼  ② LAUNCH      — fulfill the record as a LONG-RUNNING polyana workload (a server
+    ▼  ② LAUNCH      — fulfill the record as a LONG-RUNNING owned-sandbox workload (a server
     │                   entrypoint that stays up), as a durable workflow → crash-resume
     ▼  ③ INGRESS     — gateway routes the app's data-plane traffic to the machine
     │                   (over the wireguard mesh on a real fleet; in-process locally)
@@ -195,7 +195,7 @@ Design decisions:
   (today they vanish — in-memory `HashMap`). The create→fulfill seam (the named
   rung) is the wire from "record admitted" to "durable server launched."
 - **A server workload shape.** Generalize the fixed 2-step demo workflow to a
-  long-running entrypoint (a polyana workload that serves, rather than computes a
+  long-running entrypoint (an owned sandbox workload that serves, rather than computes a
   value and exits) with a health probe — the gateway ingress routes to it.
 - **Metering is per-period uptime, not per-step.** Reuse `StandingObligation`: a
   server bills per wall-clock period (the rent model already in
@@ -209,7 +209,7 @@ Design decisions:
 **Tonight-safe subset:** the persistent-server workload shape + the create→fulfill
 durable launch seam + per-period uptime metering + lifecycle (start/stop/reap) +
 a persistent machine record (SQLite store), proven in-process / over LocalProvider
-end-to-end. **Reviewed-go:** the live fleet boot (Hetzner/node-a, real KVM
+end-to-end. **Reviewed-go:** the live fleet boot (Hetzner/persvati, real KVM
 Firecracker, the two-node mesh handshake).
 
 ### 3.4 The `dregg-cloud deploy` CLI — the ship→host onramp
@@ -372,7 +372,7 @@ queue to `MORNING-REVIEW.md`.
   integration) — "enabling auto-deploy/CI-deploy" is explicitly REVIEWED-GO.
 - **Real DNS / real public cert issuance** for custom domains (the live `deploy/`
   Caddy edit, a real domain pointed at the edge).
-- The **live fleet boot** for persistent servers (Hetzner/node-a, real KVM
+- The **live fleet boot** for persistent servers (Hetzner/persvati, real KVM
   Firecracker, the two-node mesh handshake) — beyond the n4 devnet.
 - **Charging real money** on the live edge (flip real hosting billing on) — the
   early era is subsidized; this is an ember decision.

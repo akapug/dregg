@@ -3,9 +3,9 @@
 //! servable [`WebApp`].
 //!
 //! This is the seam an autonomous agent drives: it declares routes (method, path,
-//! a polyana handler, a response shape) and gets back a [`WebApp`] DreggNet can
+//! a owned-sandbox handler, a response shape) and gets back a [`WebApp`] DreggNet can
 //! run + serve. The two bundled handlers exercise both handler shapes against the
-//! real polyana sandbox:
+//! real owned wasm sandbox:
 //!
 //! - [`hello_route`] — a [`HandlerBody::Static`](crate::HandlerBody::Static)
 //!   handler: a fixed WAT module that computes `21 * 2` in the wasm sandbox; the
@@ -18,7 +18,7 @@
 use crate::spec::{Handler, ResponseSpec, Route, WebApp};
 
 /// A static handler that computes `21 * 2 = 42` inside the wasm sandbox — the
-/// "hello" endpoint's proof that a real polyana run backs the response.
+/// "hello" endpoint's proof that a real owned-wasm run backs the response.
 pub fn hello_handler() -> Handler {
     Handler::static_wat(
         r#"
@@ -35,7 +35,7 @@ pub fn hello_route() -> Route {
         "/hello",
         hello_handler(),
         ResponseSpec::text(
-            "hello from an agent-served endpoint — the polyana sandbox computed {0}\n",
+            "hello from an agent-served endpoint — the owned wasm sandbox computed {0}\n",
         ),
     )
 }
@@ -59,7 +59,7 @@ pub fn add_route() -> Route {
 }
 
 /// A demo app an agent might assemble: a `/hello` greeting and an `/add` API,
-/// both backed by real polyana handlers.
+/// both backed by real owned-sandbox handlers.
 pub fn demo_app(name: impl Into<String>) -> WebApp {
     WebApp::new(name).route(hello_route()).route(add_route())
 }
@@ -71,9 +71,9 @@ mod tests {
     use crate::router::Router;
 
     /// The headline proof: a request to a served route runs the agent's handler
-    /// on polyana and returns the computed response.
+    /// on the owned sandbox and returns the computed response.
     #[test]
-    fn add_route_runs_on_polyana_and_returns_the_sum() {
+    fn add_route_runs_on_the_sandbox_and_returns_the_sum() {
         let router = Router::new(demo_app("demo"));
         let resp = router.serve(&WebRequest::get("/add?a=40&b=2"));
         assert_eq!(resp.status, 200, "body: {}", resp.body_str());
@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn hello_route_runs_on_polyana() {
+    fn hello_route_runs_on_the_sandbox() {
         let router = Router::new(demo_app("demo"));
         let resp = router.serve(&WebRequest::get("/hello"));
         assert_eq!(resp.status, 200);

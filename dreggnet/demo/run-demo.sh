@@ -9,8 +9,8 @@
 #
 #   * dregg (AGPL, public — ~/dev/breadstuffs): the verified payment + lease RAIL.
 #       Stripe webhook → conserving USD-credit mint → resolve_pay → execution-lease.
-#   * DreggNet (AGPL, here): the thing that actually RUNS the workload —
-#       a metered, crash-resumable durable polyana job in a wasm sandbox.
+#   * DreggNet (proprietary, here): the thing that actually RUNS the workload —
+#       a metered, crash-resumable durable metered workload in a wasm sandbox.
 #
 # The two halves are licensed apart and live in separate repos, so this is a
 # scripted narrative that drives BOTH. Every step below is labelled:
@@ -105,11 +105,11 @@ if [ "$DO_DREGG" = 1 ]; then
       "$GRN" "$BOLD" "$RST"
 fi
 
-# ── ACT II — DreggNet runs the durable, metered workload (here, AGPL) ──
+# ── ACT II — DreggNet runs the durable, metered workload (here, proprietary) ──
 if [ "$DO_DREGGNET" = 1 ]; then
   step "ACT II — DreggNet runs the durable, metered workload (the operated reality)"
   narrated "The funded lease authorizes work. DreggNet schedules + runs it."
-  note "Repo: $ROOT  (DreggNet, AGPL — the moat that runs the workload)"
+  note "Repo: $ROOT  (DreggNet, proprietary — the moat that runs the workload)"
 
   # Resolve a `dreggnet` binary: prebuilt → build → docker fallback.
   BIN="${DREGGNET_BIN:-}"
@@ -119,7 +119,7 @@ if [ "$DO_DREGGNET" = 1 ]; then
   fi
   if [ -z "$BIN" ]; then
     if command -v cargo >/dev/null 2>&1; then
-      note "building the dreggnet CLI (first build compiles polyana/wasmtime — heavy)…"
+      note "building the dreggnet CLI (first build compiles the workspace)…"
       ( cd "$ROOT" && cargo build -p dreggnet-cli --release >/dev/null 2>&1 ) \
         && BIN="$ROOT/target/release/dreggnet" || true
     fi
@@ -148,8 +148,8 @@ if [ "$DO_DREGGNET" = 1 ]; then
     printf '%s\n' "$OUT" | sed 's/^/      /'
     LEASE="$(printf '%s\n' "$OUT" | sed -n 's/^lease opened: //p')"
 
-    real "run the workload — a durable, metered polyana job in the wasm sandbox"
-    note "control → bridge → durable → exec → polyana. add(40,2)=42, then *2=84."
+    real "run the workload — a durable, metered workload in the wasm sandbox"
+    note "control → bridge → durable → exec (owned wasmi sandbox). add(40,2)=42."
     note "each durable step charges the meter; an over-budget tick lapses → reap."
     printf '   %s$ dreggnet run --lease %s --lang wat --source workload.wat%s\n' \
       "$DIM" "${LEASE:0:8}…" "$RST"
@@ -176,7 +176,7 @@ fi
 step "THE LOOP"
 cat <<EOF
    earn/hold  →  pay via Stripe  →  spend on a dregg lease  →  run durable metered compute
-   ${DIM}(value)        (real webhook→mint)   (resolve_pay, Σδ=0)     (polyana, crash-resumable)${RST}
+   ${DIM}(value)        (real webhook→mint)   (resolve_pay, Σδ=0)     (owned wasmi sandbox, crash-resumable)${RST}
 
    The agent paid Stripe and got verifiable, durable, metered compute —
    on a formally-verified rail. Boundaries are theorems; every spend a receipt.
