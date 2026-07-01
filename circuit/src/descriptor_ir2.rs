@@ -217,9 +217,7 @@ use crate::field::{BABYBEAR_P, BabyBear};
 // `HEAP_TREE_DEPTH` indexes the map-absent AIR column layout (verify-needed); the tree
 // type / leaf / sentinels are prover-only (the witness map openings live in `build_traces`).
 use crate::heap_root::HEAP_TREE_DEPTH;
-use crate::heap_root::{
-    CanonicalHeapTree, CanonicalHeapTree8, HeapLeaf, SENTINEL_MAX, SENTINEL_MIN, heap_node8,
-};
+use crate::heap_root::{CanonicalHeapTree8, HeapLeaf, SENTINEL_MAX, SENTINEL_MIN, heap_node8};
 use crate::lean_descriptor_air::{
     EFFECTVM_STATE_AFTER_BASE, EFFECTVM_STATE_BEFORE_BASE, JsonCursor, LeanExpr, VmConstraint,
     VmHashSite, VmRow, const_to_expr, parse_expr, parse_hash_site, parse_range,
