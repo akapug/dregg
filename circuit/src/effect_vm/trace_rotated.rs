@@ -107,15 +107,15 @@ pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 328
 /// (`*VmDescriptor2R24`, e.g. `attenuateVmDescriptor2R24`) carries — the per-site lane blocks
 /// Phase B-GATE appends at the END of the rotated layout (each chip tuple is now 17-wide:
 /// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). The
-/// committed graduated width is `ROT_WIDTH + 7 * N_ROT_SITES = 328 + 280 = 608`, matching the TSV
+/// committed graduated width is `ROT_WIDTH + 7 * N_ROT_SITES = 464 + 518 = 982`, matching the TSV
 /// `attenuateVmDescriptor2R24.trace_width`. Graduation APPENDS (positions < ROT_WIDTH unchanged).
-pub const N_ROT_SITES: usize = 60;
+pub const N_ROT_SITES: usize = 74;
 
 /// The GRADUATED rotated trace width: the un-graduated rotated columns PLUS the 7×`N_ROT_SITES`
 /// appended chip-lane columns (`328 + 280 = 608` = the committed `attenuateVmDescriptor2R24`
 /// trace_width). The honest rotated lane columns (`ROT_WIDTH .. GRAD_ROT_WIDTH`) are filled
 /// automatically by the prove wrapper's `descriptor_ir2::fill_chip_lanes`.
-pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 608
+pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 982 (v11: +154 over v10's 828)
 
 /// In-block offset of the AUTHORITY-DIGEST limb (r23, limb 24) — the single felt
 /// folding ALL authority-bearing cell state no other rotated limb carries
