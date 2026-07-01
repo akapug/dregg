@@ -431,6 +431,76 @@ theorem effHeapWriteV3_strips_to_heapOpen (hash : List ℤ → ℤ) (base : Effe
       memTableFaithful := by have := h.memTableFaithful; rwa [hmemLog] at this
       mapTableFaithful := by have := h.mapTableFaithful; rwa [hmapLog] at this }
 
+/-! ### The heap-open APPENDIX-STRIP-TO-BASE bridge (`effHeapWriteV3_satisfied2_strips_to_base`).
+
+The heap-open READ appendix (`heapOpenConstraints`) is all `.lookup`/`.base (.gate …)` — it surfaces NO
+map/mem op — so a `Satisfied2` of `effHeapOpenV3 base name` restricts to a `Satisfied2` of the bare
+`base` (the appendix reads no base column and contributes no offline-checking op), exactly as the cap
+`effCapOpenV3_satisfied2_strips_to_base` does. Composed with `effHeapWriteV3_strips_to_heapOpen`, this
+lets the DEPLOYED after-spine `effHeapWriteV3 heapWriteV3 …` (`= Rfix 56`) strip all the way to the
+Class-A splice base `heapWriteV3`, so the base-level `heapWrite_*_sat` rungs lift to the apex descriptor. -/
+
+/-- `effHeapOpenV3` gathers exactly `base`'s map ops (the read appendix is all lookups + base gates). -/
+theorem effHeapOpenV3_mapOpsOf (base : EffectVmDescriptor2) (name : String) :
+    Dregg2.Circuit.DescriptorIR2.mapOpsOf (effHeapOpenV3 base name)
+      = Dregg2.Circuit.DescriptorIR2.mapOpsOf base := by
+  simp [Dregg2.Circuit.DescriptorIR2.mapOpsOf, effHeapOpenV3, heapOpenConstraints,
+    Dregg2.Circuit.Emit.CapOpenEmit.nodeLookups, Dregg2.Circuit.Emit.CapOpenEmit.dirBoolGates,
+    Dregg2.Circuit.Emit.CapOpenEmit.rootPinGates, List.filterMap_append, List.filterMap_map]
+
+/-- `effHeapOpenV3` gathers exactly `base`'s mem ops. -/
+theorem effHeapOpenV3_memOpsOf (base : EffectVmDescriptor2) (name : String) :
+    Dregg2.Circuit.DescriptorIR2.memOpsOf (effHeapOpenV3 base name)
+      = Dregg2.Circuit.DescriptorIR2.memOpsOf base := by
+  simp [Dregg2.Circuit.DescriptorIR2.memOpsOf, effHeapOpenV3, heapOpenConstraints,
+    Dregg2.Circuit.Emit.CapOpenEmit.nodeLookups, Dregg2.Circuit.Emit.CapOpenEmit.dirBoolGates,
+    Dregg2.Circuit.Emit.CapOpenEmit.rootPinGates, List.filterMap_append, List.filterMap_map]
+
+/-- ...so the gathered memory log is `base`'s, op-for-op. -/
+theorem effHeapOpenV3_memLog (base : EffectVmDescriptor2) (name : String) (t : VmTrace) :
+    Dregg2.Circuit.DescriptorIR2.memLog (effHeapOpenV3 base name) t
+      = Dregg2.Circuit.DescriptorIR2.memLog base t := by
+  simp [Dregg2.Circuit.DescriptorIR2.memLog, effHeapOpenV3_memOpsOf]
+
+/-- ...and the gathered map log is `base`'s. -/
+theorem effHeapOpenV3_mapLog (base : EffectVmDescriptor2) (name : String) (t : VmTrace) :
+    Dregg2.Circuit.DescriptorIR2.mapLog (effHeapOpenV3 base name) t
+      = Dregg2.Circuit.DescriptorIR2.mapLog base t := by
+  simp [Dregg2.Circuit.DescriptorIR2.mapLog, effHeapOpenV3_mapOpsOf]
+
+/-- **`effHeapOpenV3_satisfied2_strips_to_base`** — a `Satisfied2` of the heap-open-widened descriptor
+restricts to a `Satisfied2` of the bare `base` (constraint-subset monotonicity + the appendix
+contributing no map/mem op). The heap analog of `effCapOpenV3_satisfied2_strips_to_base`. -/
+theorem effHeapOpenV3_satisfied2_strips_to_base (hash : List ℤ → ℤ) (base : EffectVmDescriptor2)
+    (name : String) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (h : Satisfied2 hash (effHeapOpenV3 base name) minit mfin maddrs t) :
+    Satisfied2 hash base minit mfin maddrs t :=
+  { rowConstraints := fun i hi c hc =>
+      h.rowConstraints i hi c (by
+        show c ∈ base.constraints ++ heapOpenConstraints base.traceWidth
+        exact List.mem_append_left _ hc)
+    rowHashes := h.rowHashes
+    rowRanges := h.rowRanges
+    memAddrsNodup := h.memAddrsNodup
+    memClosed := by have := h.memClosed; rwa [effHeapOpenV3_memLog] at this
+    memDisciplined := by have := h.memDisciplined; rwa [effHeapOpenV3_memLog] at this
+    memBalanced := by have := h.memBalanced; rwa [effHeapOpenV3_memLog] at this
+    memTableFaithful := by have := h.memTableFaithful; rwa [effHeapOpenV3_memLog] at this
+    mapTableFaithful := by have := h.mapTableFaithful; rwa [effHeapOpenV3_mapLog] at this }
+
+/-- **`effHeapWriteV3_satisfied2_strips_to_base`** — THE FULL APEX BRIDGE: a `Satisfied2` of the DEPLOYED
+after-spine heap-write `effHeapWriteV3 base name` (the shape `Rfix 56` returns) restricts to a
+`Satisfied2` of the bare `base` (the Class-A splice `heapWriteV3`). Composes the after-spine strip
+(`effHeapWriteV3_strips_to_heapOpen`) with the read-appendix strip
+(`effHeapOpenV3_satisfied2_strips_to_base`) — both appendices are ADDITIVE (all lookups + base gates,
+no map/mem op), so the base-level `heapWrite_*_sat` keystones lift to the apex's deployed descriptor. -/
+theorem effHeapWriteV3_satisfied2_strips_to_base (hash : List ℤ → ℤ) (base : EffectVmDescriptor2)
+    (name : String) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (h : Satisfied2 hash (effHeapWriteV3 base name) minit mfin maddrs t) :
+    Satisfied2 hash base minit mfin maddrs t :=
+  effHeapOpenV3_satisfied2_strips_to_base hash base name minit mfin maddrs t
+    (effHeapWriteV3_strips_to_heapOpen hash base name minit mfin maddrs t h)
+
 /-- **`effHeapWriteV3_afterCore`** — the AFTER-spine `HeapMembershipCore`, derived from `Satisfied2` of the
 write descriptor. The `dirBool` is reused from the read (the SHARED dir column). -/
 theorem effHeapWriteV3_afterCore (base : EffectVmDescriptor2) (name : String)
