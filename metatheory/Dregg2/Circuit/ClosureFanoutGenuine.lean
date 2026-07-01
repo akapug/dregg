@@ -230,9 +230,15 @@ theorem closedLogExtract_heapWrite_closed
       HeapWriteTraceReadout (LH := LH) (hash := hash) minit mfin maddrs t pubLogPost pre post) :
     ClosedLogExtract Slive LH hash Rfix 56 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- `Rfix 56 = heapWriteV3` definitionally (`actionTagToPos 56 = 45`, `v3RegistryHeap` tail).
+  -- OPTION I: `Rfix 56 = effHeapWriteV3 heapWriteV3 …` (`actionTagToPos 56 = 45`, `v3RegistryHeap`
+  -- tail). STRIP the after-spine + read appendices (both ADDITIVE — no map/mem op) down to the Class-A
+  -- splice base `heapWriteV3`, so the base-level `heapWrite_closedLog_sat` rung lifts to the DEPLOYED
+  -- after-spine descriptor the apex quantifies over.
   have hsat' : Satisfied2 hash Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3_satisfied2_strips_to_base hash
+      Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
+      "dregg-effectvm-heapWrite-v1-rot24-v3-write-heapopen" minit mfin maddrs t hsat
   obtain ⟨actor, target, addr, v, newRoot, permOut, hside, hpub, logNeeds⟩ :=
     readout minit mfin maddrs t pubLogPost pre post hsat
   exact heapWrite_closedLog_sat hash hside hsat' pre post actor target addr v newRoot
