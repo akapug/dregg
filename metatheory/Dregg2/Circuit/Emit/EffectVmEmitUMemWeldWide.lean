@@ -35,6 +35,7 @@ import Dregg2.Circuit.Emit.CapOpenEmit
 import Dregg2.Circuit.Emit.CapOpenTurnPins
 import Dregg2.Circuit.Emit.HeapOpenEmit
 import Dregg2.Circuit.Emit.FieldsOpenEmit
+import Dregg2.Circuit.Emit.AccumulatorInsertEmit
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
@@ -178,13 +179,56 @@ def refusalAfterSpineWide : EffectVmDescriptor2 :=
   let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend rfHost rfBB (rfBB + 119)
 
+/-- **The §J′ INSERT-shaped accumulator wide hosts** — the insert twins of `refusalAfterSpineWide`. Each
+is `wideAppend (effAccumInsertV3 groupCol keyCol valueCol baseV3 …) bb (bb+119)` at the accumulator's v1
+FACE `bb` (the SAME geometry the bare emit + `v3RegistryWideBB` use). The DEPLOYED accumulator descriptor
+FORCES the faithful 8-felt INSERT over the genuine sorted fresh-key insert (`effAccumInsertV3_forces_
+write8`), NEVER the lane-0 squeeze. Key-stable swaps into `crownWideHosts` (positions 3/4/22). -/
+def noteSpendInsertWide : EffectVmDescriptor2 :=
+  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
+    (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+      Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
+    "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
+  let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+
+def noteCreateInsertWide : EffectVmDescriptor2 :=
+  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
+    (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+      Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
+    "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
+  let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+
+def createCellInsertWide : EffectVmDescriptor2 :=
+  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
+    "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
+  let bb := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+
 /-- **The 45 AUTHORITY-crown wide HOSTS** — `v3RegistryCapOpenWide` with the position-7 refusal member
-REPLACED by the after-spine `refusalAfterSpineWide` (key-stable, so the by-name resolver is unchanged),
-mirroring the bare `EmitWideRegistryProbe` override. Every OTHER crown member is a faithful after-spine
-wide already (the cap-open crown carriers the 8-felt anchors), so only refusal needs the swap. -/
+REPLACED by the after-spine `refusalAfterSpineWide` AND the §J′ accumulator positions (3/4/22:
+noteSpend/noteCreate/createCell) REPLACED by their insert-shaped `effAccumInsertV3` wide hosts
+(key-stable, so the by-name resolver is unchanged), mirroring the bare `EmitWideRegistryProbe` overrides.
+Every OTHER crown member is a faithful after-spine wide already (the cap-open crown carries the 8-felt
+anchors), so only refusal + the three accumulators need the swap. -/
 def crownWideHosts : List (String × EffectVmDescriptor2) :=
   v3RegistryCapOpenWide.map (fun e =>
-    if e.1 == "refusalVmDescriptor2R24" then (e.1, refusalAfterSpineWide) else e)
+    if e.1 == "refusalVmDescriptor2R24" then (e.1, refusalAfterSpineWide)
+    else if e.1 == "noteSpendVmDescriptor2R24" then (e.1, noteSpendInsertWide)
+    else if e.1 == "noteCreateVmDescriptor2R24" then (e.1, noteCreateInsertWide)
+    else if e.1 == "createCellVmDescriptor2R24" then (e.1, createCellInsertWide)
+    else e)
 
 /-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of the wire's WIDE
 cap-open registry: every `crownWideHosts` AUTHORITY-crown member (the 45 `v3RegistryCapOpenWide`

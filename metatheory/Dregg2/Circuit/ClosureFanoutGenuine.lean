@@ -56,6 +56,9 @@ hypotheses, never as axioms. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.ClosureTransfer
 import Dregg2.Circuit.Emit.FieldsOpenEmit
+import Dregg2.Circuit.Emit.AccumulatorInsertEmit
+import Dregg2.Circuit.Emit.EffectVmEmitNoteSpend
+import Dregg2.Circuit.Emit.EffectVmEmitNoteCreate
 
 namespace Dregg2.Circuit.ClosureFanoutGenuine
 
@@ -654,8 +657,21 @@ theorem closedLogExtract_createCell_closed
             hash minit mfin maddrs t pre post actor newCell)) :
     ClosedLogExtract Slive LH hash Rfix 17 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  -- §J′: `Rfix 17 = effAccumInsertV3 cellsRootGroupCol … createCellV3 …` (`actionTagToPos 17 = 58`).
+  -- STRIP the insert appendix (weld gates + binds) + the heap-open READ appendix (both ADDITIVE — no
+  -- map/mem op) down to the base `createCellV3`, so the base-level `createCell_closedLog_sat` rung lifts
+  -- to the DEPLOYED insert descriptor the apex quantifies over.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.HeapOpenEmit.effHeapOpenV3_satisfied2_strips_to_base hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
+      "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen" minit mfin maddrs t
+      (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3_strips_to_open
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+        hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
+        "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen" minit mfin maddrs t hsat)
   obtain ⟨actor, newCell, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact createCell_closedLog_sat hash hsat' pre post actor newCell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
@@ -708,8 +724,20 @@ theorem closedLogExtract_noteSpend_closed
             hash minit mfin maddrs t pre post nf actor spendProof)) :
     ClosedLogExtract Slive LH hash Rfix 27 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  -- §J′: `Rfix 27 = effAccumInsertV3 nullifierRootGroupCol … noteSpendV3 …` (`actionTagToPos 27 = 56`).
+  -- STRIP the insert appendix + the heap-open READ appendix (both ADDITIVE) down to the base `noteSpendV3`.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.HeapOpenEmit.effHeapOpenV3_satisfied2_strips_to_base hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
+      "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen" minit mfin maddrs t
+      (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3_strips_to_open
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
+        (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+          Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+        hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
+        "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen" minit mfin maddrs t hsat)
   obtain ⟨nf, actor, spendProof, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact noteSpend_closedLog_sat hash hsat' pre post nf actor spendProof pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
@@ -725,8 +753,20 @@ theorem closedLogExtract_noteCreate_closed
             hash minit mfin maddrs t pre post cm actor)) :
     ClosedLogExtract Slive LH hash Rfix 28 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  -- §J′: `Rfix 28 = effAccumInsertV3 commitmentsRootGroupCol … noteCreateV3 …` (`actionTagToPos 28 = 57`).
+  -- STRIP the insert appendix + the heap-open READ appendix (both ADDITIVE) down to the base `noteCreateV3`.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.HeapOpenEmit.effHeapOpenV3_satisfied2_strips_to_base hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
+      "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen" minit mfin maddrs t
+      (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3_strips_to_open
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
+        (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+          Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
+        hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
+        "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen" minit mfin maddrs t hsat)
   obtain ⟨cm, actor, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact noteCreate_closedLog_sat hash hsat' pre post cm actor pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 

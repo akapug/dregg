@@ -33,6 +33,7 @@ import Dregg2.Circuit.Emit.CapOpenTurnPins
 import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.HeapOpenEmit
 import Dregg2.Circuit.Emit.FieldsOpenEmit
+import Dregg2.Circuit.Emit.AccumulatorInsertEmit
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
@@ -60,6 +61,49 @@ def main : IO Unit := do
       let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
       let rfWide := wideAppend rfHost rfBB (rfBB + 119)
       IO.println s!"{key}\t{rfWide.name}\t{emitVmJson2 rfWide}"
+    -- §J′ (INSERT-shaped accumulator deploy): positions 3/4/22 (noteSpend/noteCreate/createCell) are
+    -- REPLACED IN PLACE by the insert-shaped `effAccumInsertV3 … base …` host (EXACTLY as refusal is
+    -- advanced to `effFieldsWriteV3`, heap to `effHeapWriteV3`, cap to `effCapOpenWriteV3`). The DEPLOYED
+    -- accumulator descriptor's `Satisfied2` TRACE-FORCES the spliced-leaf membership in the REBUILT AFTER
+    -- tree over the full ~124-bit BEFORE/AFTER accumulator-root groups
+    -- (`AccumulatorInsertEmit.effAccumInsertV3_forces_write8`), over the GENUINE sorted fresh-key insert
+    -- (NOT the non-fitting update-at-key shape) — NEVER the lane-0 squeeze the map_op-only host leaves.
+    -- The wide member stays keyed by its live registry key (member count UNCHANGED at 57); only the host
+    -- (name + width) grows by the heap-open READ appendix. `bb` is each accumulator's v1 FACE width (the
+    -- SAME `bb` `v3RegistryWideBB` uses), aligning the wide AFTER carrier's committed accumulator-root
+    -- block with the rotated AFTER block the read appendix welds to.
+    else if key == "noteSpendVmDescriptor2R24" then
+      let nsHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
+        (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+          Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
+        "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
+      let nsBB := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
+      let nsWide := wideAppend nsHost nsBB (nsBB + 119)
+      IO.println s!"{key}\t{nsWide.name}\t{emitVmJson2 nsWide}"
+    else if key == "noteCreateVmDescriptor2R24" then
+      let ncHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
+        (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
+          Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
+        "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
+      let ncBB := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
+      let ncWide := wideAppend ncHost ncBB (ncBB + 119)
+      IO.println s!"{key}\t{ncWide.name}\t{emitVmJson2 ncWide}"
+    else if key == "createCellVmDescriptor2R24" then
+      let ccHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
+        "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
+      let ccBB := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth
+      let ccWide := wideAppend ccHost ccBB (ccBB + 119)
+      IO.println s!"{key}\t{ccWide.name}\t{emitVmJson2 ccWide}"
     else
       IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
   -- position 45: `transferCapOpenTB` made 8-felt-wide. The host is the SAME `effCapOpenV3TB transferV3
