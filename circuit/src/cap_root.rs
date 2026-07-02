@@ -1008,6 +1008,80 @@ mod tests {
         }
     }
 
+    /// **INSERT witness (the keystone deploy):** the spliced leaf's AFTER path recomposes the
+    /// rebuilt root (byte-identical to the cell-side post-grant root), the non-membership bracket
+    /// genuinely brackets the fresh key, and a present / sentinel-colliding key is REFUSED.
+    #[test]
+    fn insert_witness_recomposes_rebuilt_root_and_brackets() {
+        let a = leaf(10, 1, 1, 0x0F);
+        let b = leaf(30, 2, 1, 0x0F);
+        let tree = CanonicalCapTree::new(vec![a, b], CAP_TREE_DEPTH);
+        let fresh = leaf(20, 3, 1, 0x03);
+        let w = tree.insert_witness(fresh).expect("fresh key splices");
+        // The AFTER path recomposes the FULL sorted rebuild (cell-side byte-identity).
+        assert_eq!(
+            recompose_membership(fresh.digest(), &w.siblings, &w.directions),
+            w.new_root,
+            "the spliced leaf's AFTER path recomposes the rebuilt root"
+        );
+        assert_eq!(
+            w.new_root,
+            compute_capability_root(vec![a, b, fresh]),
+            "the AFTER root IS the cell-side post-grant root"
+        );
+        assert_eq!(w.old_root, tree.root());
+        assert_ne!(
+            w.old_root, w.new_root,
+            "the insert genuinely moves the root"
+        );
+        // The non-membership bracket: pred < key < succ, both committed BEFORE members.
+        assert!(w.pred.slot_hash.as_u32() < fresh.slot_hash.as_u32());
+        assert!(fresh.slot_hash.as_u32() < w.succ.slot_hash.as_u32());
+        assert!(tree.position_of(w.pred.slot_hash).is_some());
+        assert!(tree.position_of(w.succ.slot_hash).is_some());
+        // FAIL CLOSED: a present key / a sentinel key refuses (no fabricated after-root).
+        assert!(tree.insert_witness(a).is_none(), "present key refused");
+        assert!(
+            tree.insert_witness(sentinel_leaf(SENTINEL_MIN)).is_none(),
+            "sentinel refused"
+        );
+    }
+
+    /// **REMOVE witness (the keystone deploy):** the tombstone zero-fold's AFTER root is
+    /// byte-identical to the cell-side post-revoke root (`new_with_tombstones`), and an
+    /// absent key is REFUSED.
+    #[test]
+    fn remove_witness_matches_tombstone_root() {
+        let a = leaf(10, 1, 1, 0x0F);
+        let b = leaf(30, 2, 1, 0x0F);
+        let tree = CanonicalCapTree::new(vec![a, b], CAP_TREE_DEPTH);
+        let w = tree
+            .remove_witness(a.slot_hash)
+            .expect("present key removes");
+        assert_eq!(w.removed, a);
+        assert_eq!(w.old_root, tree.root());
+        assert_eq!(
+            w.new_root,
+            compute_capability_root_with_tombstones(vec![b], &[a.slot_hash]),
+            "the tombstone zero-fold root IS the cell-side post-revoke root"
+        );
+        assert_ne!(
+            w.old_root, w.new_root,
+            "the remove genuinely moves the root"
+        );
+        // FAIL CLOSED: an absent key refuses.
+        assert!(
+            tree.remove_witness(slot_hash(99)).is_none(),
+            "absent key refused"
+        );
+        // A second remove of the SAME (now tombstoned) key refuses too.
+        let after = CanonicalCapTree::new_with_tombstones(vec![b], &[a.slot_hash], CAP_TREE_DEPTH);
+        assert!(
+            after.remove_witness(a.slot_hash).is_none(),
+            "a ghost (already-tombstoned) key refused"
+        );
+    }
+
     /// The empty root is deterministic and non-zero (the sentinels hash into a
     /// real value, not the all-zero default).
     #[test]
