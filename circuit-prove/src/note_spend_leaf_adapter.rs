@@ -70,27 +70,27 @@
 //! double-mint guard's connect target: the deployed descriptor ALREADY commits the
 //! faithful `nullifier_root` (pre-limb 26) and `NOTESPEND_NULLIFIER` (PI 198).
 //!
-//! ## ⚑ THE VK-GATED SEAM (named, exactly like `dsl_leaf_adapter.rs` §BIG-BANG)
+//! ## THE FORMERLY-VK-GATED SEAM — CLOSED (the felt-domain mint_hash thread)
 //!
-//! Two pieces ride the big-bang VK regen and are NOT built here (no descriptor emit,
-//! no registry touch):
+//! The two pieces named here as riding the big-bang VK regen have LANDED:
 //!
-//! 1. **The `mintV3` mint_hash PI-emit.** The deployed BridgeMint leg's `mint_hash`
-//!    is `hash_to_bb(blake3(nullifier ‖ postcard(source_root) ‖ dest_fed ‖
-//!    asset_le))` (`turn/src/executor/effect_vm_bridge.rs:288-302`) — a BYTE-domain
-//!    fold no circuit can recompute, read by zero constraints, and not exposed as a
-//!    PI. The sound emit follows the `lifecycle_payload_felt` precedent: the rotated
-//!    bridge-mint descriptor emits the FELT-domain [`note_spend_mint_hash_felt`] at a
-//!    fixed rotated-cohort PI slot (appended after `ROT_PI_COUNT = 46`) — a
-//!    VK-affecting descriptor-emit.
-//! 2. **The deployed-path fold arm.** Wiring `prove_note_spend_binding_node_segmented`
-//!    into `prove_chain_core_rotated` (the dual-expose leg leaf reading that new PI)
-//!    is the same integration-lane edit every carrier shares.
+//! 1. **The `mintV3` mint_hash PI-emit** — via the STEP-1 EXECUTOR RE-ALIGN (the
+//!    `687601953` membership-compress precedent, stronger than the descriptor-side
+//!    `lifecycle_payload_felt` shape originally sketched): `effect_vm_bridge.rs` (and
+//!    the SDK/differential projector twins) now derive `mint_hash` AS the FELT-domain
+//!    [`note_spend_mint_hash_felt`] (`dsl::note_spending::bridge_mint_hash_felt`, over
+//!    the six compressed felts `apply_bridge_mint` enforces the note-spend STARK
+//!    against), and the deployed `mintVmDescriptor2R24` (Lean `mintV3BridgeHash`)
+//!    pins the mint row's `param0` at PI 46 (`withMintHashPin`, producer-filled —
+//!    the STEP-3/4 regen).
+//! 2. **The deployed-path fold arm** — `prove_chain_core_rotated`'s Bridge arm mints
+//!    the dual-expose leg at PI 46 and folds THIS module's backing leaf under
+//!    [`prove_note_spend_mint_binding_node_segmented`] (one connected lane binds the
+//!    whole spend tuple through the in-AIR `hash_fact` chain).
 //!
-//! Until the regen lands, `apply_bridge_mint`'s off-AIR `verify_note_spend_dsl_full`
-//! remains the deployed enforcer; this leaf is its light-client-witnessable twin, and
-//! `Dregg2.Circuit.BridgeBackingAttack` STANDS (no flip — the deployed edge is not
-//! wired).
+//! `apply_bridge_mint`'s off-AIR `verify_note_spend_dsl_full` remains the executor
+//! enforcer; this leaf is its light-client-witnessable twin, now CONNECTED on the
+//! deployed path.
 
 use dregg_circuit::descriptor_ir2::{
     CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
@@ -745,6 +745,91 @@ pub fn prove_note_spend_binding_node_segmented(
     )
     .map_err(|e| JointAggError::AggregationProofInvalid {
         reason: format!("segmented note-spend binding aggregation node failed: {e:?}"),
+    })
+}
+
+/// **THE DEPLOYED MINT-HASH BINDING NODE (the 7th carrier's live shape).** The leg is a
+/// DUAL-EXPOSE leaf over the deployed `mintVmDescriptor2R24` (`mintV3BridgeHash`): its
+/// `expose_claim` = segment lanes `[0 .. SEG_WIDTH)` ++ ONE claimed lane — the published
+/// mint-hash PI 46 (the STEP-1 felt-domain `note_spend_mint_hash_felt` the producer filled and
+/// the pin welded to the mint row's `param0`). The sub-proof leaf is
+/// [`prove_note_spend_leaf_with_claim`] (7 exposed lanes, lane [`NOTE_SPEND_MINT_HASH_PI`] the
+/// in-AIR-recomputed identity over the REAL verified spend). The node `connect`s the leg's ONE
+/// claimed lane to the leaf's lane 6 and re-exposes the segment.
+///
+/// ONE lane suffices to bind the WHOLE tuple: lane 6 is the `hash_fact` chain over the leaf's
+/// OWN PI-pinned `(nullifier, root, value_lo, asset, dest_fed, value_hi)` (the in-AIR recompute
+/// — `forged_mint_hash_does_not_fold`), so under Poseidon2-CR a leg identity that connects IS
+/// the identity of exactly that verified spend — which nullifier, from which source root, to
+/// which federation, which asset, the full u64 amount. A leg claiming a mint identity no
+/// verifying note-spend backs is a `connect` conflict ⇒ UNSAT ⇒ no root.
+///
+/// `config` must be [`crate::ivc_turn_chain::ir2_leaf_wrap_config`].
+pub fn prove_note_spend_mint_binding_node_segmented(
+    dual_expose_leg_leaf: &RecursionOutput<DreggRecursionConfig>,
+    note_spend_leaf: &RecursionOutput<DreggRecursionConfig>,
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, JointAggError> {
+    use crate::ivc_turn_chain::{SEG_WIDTH, expose_claim_instance_index};
+    use crate::plonky3_recursion_impl::recursive::create_recursion_backend;
+    use p3_circuit::CircuitBuilder;
+    use p3_recursion::{BatchOnly, Target, build_and_prove_aggregation_layer_with_expose};
+
+    type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericConfig>::Challenge;
+
+    let leg_idx = expose_claim_instance_index(&dual_expose_leg_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "dual-expose bridge-mint leg leaf carries no expose_claim table — it must \
+                     re-expose (segment ++ the published mint-hash PI)"
+                .to_string(),
+        }
+    })?;
+    let cs_idx = expose_claim_instance_index(&note_spend_leaf.0).ok_or_else(|| {
+        JointAggError::AggregationProofInvalid {
+            reason: "note-spend sub-proof leaf carries no exposed tuple (expose_claim) table — \
+                     it must be minted via prove_note_spend_leaf_with_claim"
+                .to_string(),
+        }
+    })?;
+
+    let left = dual_expose_leg_leaf.into_recursion_input::<BatchOnly>();
+    let right = note_spend_leaf.into_recursion_input::<BatchOnly>();
+
+    let backend = create_recursion_backend();
+    let params = ProveNextLayerParams::default();
+
+    let expose = move |cb: &mut CircuitBuilder<RecursionChallenge>,
+                       left_apt: &[Vec<Target>],
+                       right_apt: &[Vec<Target>]| {
+        let lg = left_apt
+            .get(leg_idx)
+            .expect("dual-expose bridge-mint leg's claim instance present");
+        let cs = right_apt
+            .get(cs_idx)
+            .expect("note-spend sub-proof's exposed tuple instance present");
+        debug_assert!(
+            lg.len() >= SEG_WIDTH + 1 && cs.len() >= NOTE_SPEND_CLAIM_LEN,
+            "dual-expose claim must carry segment ++ the mint-hash lane; note-spend leaf \
+             carries the 7-lane tuple"
+        );
+        // THE BINDING TOOTH, IN-CIRCUIT: the leg's published mint identity must equal the
+        // note-spend leaf's in-AIR-recomputed identity over its genuine verified spend.
+        cb.connect(lg[SEG_WIDTH], cs[NOTE_SPEND_MINT_HASH_PI]);
+        let seg: Vec<Target> = (0..SEG_WIDTH).map(|k| lg[k]).collect();
+        cb.expose_as_public_output(&seg);
+    };
+
+    build_and_prove_aggregation_layer_with_expose::<DreggRecursionConfig, BatchOnly, BatchOnly, _, D>(
+        &left,
+        &right,
+        config,
+        &backend,
+        &params,
+        None,
+        Some(&expose),
+    )
+    .map_err(|e| JointAggError::AggregationProofInvalid {
+        reason: format!("segmented bridge mint-hash binding aggregation node failed: {e:?}"),
     })
 }
 

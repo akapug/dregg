@@ -443,47 +443,55 @@ fn broken_order_rejected() {
     }
 }
 
-/// **THE UNFILLED-CARRIER FAIL-CLOSED TOOTH (Step-2 witness socket).** The generalized
-/// `CarrierWitness` socket carries ONE remaining STAGED variant (bridge) whose fold arm has
-/// not landed (custom/factory/hatchery/sovereign/membership/dsl are fold-wired). The
-/// fail-closed law: an unfilled carrier witness NEVER silently proves — attaching one must make
-/// the chain prover REFUSE (no artifact at all), never silently degrade to the plain segment
-/// leaf (which would yield a verifying artifact that does NOT witness the promised carrier
-/// binding — laundered vacuity). `None` remains the sanctioned re-exec rung.
+/// **THE MISMATCHED-CARRIER FAIL-CLOSED TOOTH (Step-2 witness socket, post-bridge-fill).**
+/// Every `CarrierWitness` variant is now fold-wired (custom/factory/hatchery/sovereign/
+/// membership/dsl/bridge), so the fail-closed discipline lives in the claim-pin ADMISSION:
+/// attaching a carrier witness to a leg whose descriptor does NOT genuinely pin that
+/// carrier's claim slots must make the chain prover REFUSE (no artifact at all), never
+/// silently fold a claim over an unpinned/wrong-column slot (laundered vacuity). Here: a
+/// BRIDGE witness on a plain TRANSFER leg — the transfer descriptor's PI 46 is an rc pin
+/// (LAST row, caveat-region column), not the bridge mint-hash pin (FIRST row, `prmCol 0`),
+/// so the admission refuses. `None` remains the sanctioned re-exec rung.
 ///
 /// CHEAP enough to run in CI: it mints 2 chain legs, but the refusal fires in
 /// `prove_chain_core_rotated`'s per-leaf match on turn 0 BEFORE any leaf-wrap recursion proving.
 #[test]
-fn unfilled_carrier_witness_is_refused_fail_closed() {
-    use dregg_circuit::bridge_action_air::BridgeActionWitness;
+fn mismatched_carrier_witness_is_refused_fail_closed() {
+    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit_prove::joint_turn_aggregation::{BridgeWitnessBundle, CarrierWitness};
 
     let (mut turns, _g, _f) = make_chain(1000, 0, 7, 2);
 
-    // Attach a STAGED bridge witness (honest-by-construction stub) to turn 0's leg. The chain is
-    // otherwise fully honest — the ONLY reason to refuse is the unfilled carrier arm.
-    let action = BridgeActionWitness {
-        nullifier: [1u8; 32],
-        recipient: [2u8; 32],
-        destination_federation: [3u8; 32],
-        amount: 42,
-    };
+    // Attach an HONEST bridge witness to turn 0's TRANSFER leg. The chain is otherwise fully
+    // honest — the ONLY reason to refuse is the claim-pin admission (the leg's descriptor
+    // does not pin the bridge mint-hash claim slot).
+    let note_spend = NoteSpendingWitness::from_note_limbs(
+        &[7u8; 32],
+        42,
+        3,
+        &[8u8; 32],
+        &[9u8; 32],
+        test_spending_key(0x77),
+        vec![],
+        vec![],
+    );
     turns[0].participant.rotated.carrier_witness = Some(CarrierWitness::Bridge(
-        BridgeWitnessBundle::from_action_witness(&action),
+        BridgeWitnessBundle::from_note_spend_witness(&note_spend),
     ));
 
     match prove_turn_chain_recursive(&turns) {
         Err(TurnChainError::TurnProofInvalid { index, reason }) => {
             assert_eq!(index, 0, "the refusal names the witnessed turn");
             assert!(
-                reason.contains("'bridge'") && reason.contains("UNFILLED"),
-                "the refusal names the carrier + the unfilled arm; got: {reason}"
+                reason.contains("'bridge'"),
+                "the refusal names the carrier; got: {reason}"
             );
         }
         Ok(_) => panic!(
-            "an unfilled carrier witness must NEVER fold to a verifying root (fail-closed law)"
+            "a carrier witness on a pin-less leg must NEVER fold to a verifying root \
+             (fail-closed law)"
         ),
-        Err(other) => panic!("expected the unfilled-carrier TurnProofInvalid, got {other:?}"),
+        Err(other) => panic!("expected the admission TurnProofInvalid, got {other:?}"),
     }
 }
 

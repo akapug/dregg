@@ -2854,6 +2854,17 @@ pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 58;
 /// the in-AIR welds stay the named `MembershipAuthRootEdge` seams). Same fail-closed
 /// admission discipline.
 pub const MEMBERSHIP_CLAIM_PI_LO: usize = 50;
+/// The bridge leg's felt mint-hash claim PI — **NATIVE**: the committed mint row
+/// (`mintV3BridgeHash`, the STEP-3/4 regen) pins the mint row's `param0` (`prmCol 0` — since
+/// the STEP-1 executor re-align, the FELT-domain `note_spend_mint_hash_felt` over the six
+/// compressed felts `apply_bridge_mint` enforces the note-spend STARK against) at PI 46 on
+/// the FIRST row (Lean keystone `withMintHashPin_publishes`; rc rides 47..50, wide anchors
+/// 51..66). ONE lane binds the whole spend tuple: the identity is the leaf's in-AIR
+/// `hash_fact` chain over its own PI-pinned `(nullifier, root, value_lo, asset, dest_fed,
+/// value_hi)`. Same fail-closed admission discipline.
+pub const BRIDGE_MINT_HASH_PI: usize = 46;
+/// The bridge claim length (the single felt mint identity lane).
+pub const BRIDGE_MINT_HASH_CLAIM_LEN: usize = 1;
 
 /// **The DSL/Dfa rc claim PI base — DERIVED PER MEMBER from the committed registry row.**
 ///
@@ -3045,17 +3056,14 @@ fn prove_chain_core_rotated(
     // for a pure light client (the premise of `CustomBindingFromFold.custom_binding_from_fold` is
     // now TRUE on the deployed path).
     //
-    // THE CARRIER ARMS: custom + the four v12 carriers (factory / hatchery / sovereign /
-    // membership) + dsl are FOLD-WIRED — each mints a dual-expose leaf at its claim PI slots
-    // (gated by `carrier_claim_pins_admitted`, which REFUSES a leg whose descriptor does not
-    // carry the STEP-3 claim pins — the big-bang regen tie) and binds the re-proven carrier
-    // leaf under its segment-preserving binding node. The ONE REMAINING staged arm (bridge)
-    // is explicitly FAIL-CLOSED: an unfilled carrier witness NEVER silently proves — the
-    // prover REFUSES the leg (no artifact) rather than silently degrading to the re-exec rung
-    // with the witness attached. A turn that WANTS the re-exec rung carries
-    // `carrier_witness: None` (the sanctioned path, identical to today's non-carrier turns).
-    // There is deliberately NO wildcard arm, so a new variant is a compile error here (the
-    // wave must decide its fold branch).
+    // THE CARRIER ARMS: ALL SEVEN are FOLD-WIRED — custom + the four v12 carriers (factory /
+    // hatchery / sovereign / membership) + dsl + bridge. Each mints a dual-expose leaf at its
+    // claim PI slots (gated by `carrier_claim_pins_admitted`, which REFUSES a leg whose
+    // descriptor does not carry the STEP-3 claim pins — the big-bang regen tie) and binds the
+    // re-proven carrier leaf under its segment-preserving binding node. A turn that WANTS the
+    // re-exec rung carries `carrier_witness: None` (the sanctioned path, identical to today's
+    // non-carrier turns). There is deliberately NO wildcard arm, so a new variant is a compile
+    // error here (the wave must decide its fold branch).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
         let wrapped = match &leg.carrier_witness {
@@ -3088,22 +3096,58 @@ fn prove_chain_core_rotated(
                     reason: format!("segmented custom-binding node failed: {e:?}"),
                 })?
             }
-            // THE ONE REMAINING UNFILLED CARRIER ARM — FAIL-CLOSED (its wave fills its own
-            // arm; until then a leg carrying the witness is REFUSED, never silently folded
-            // without its carrier binding). ⚑ BRIDGE (named residual, v12 big-bang pass): the
-            // backing leaf exists (`note_spend_leaf_adapter` — the REAL note-spend STARK
-            // re-proven as a foldable IR2 leaf, exposing the FELT-domain mint identity
-            // `note_spend_mint_hash_felt` recomputed in-AIR), but the LEG side has no sound
-            // claim slot to connect: the deployed BridgeMint row's `mint_hash` (`prmCol 0`) is
-            // the executor's BYTE-domain `hash_to_bb(blake3(...))` (`effect_vm_bridge.rs`) — no
-            // circuit recomputes it, and pinning it would publish a value the felt-domain leaf
-            // can NEVER connect to (a dead-end exposure). The sound emit needs the FELT-domain
-            // identity as leg carrier material (a STEP-2.5-scale executor→witness→producer
-            // thread of the spend tuple, or the executor mint_hash re-align to
-            // `note_spend_mint_hash_felt` — the membership `687601953` precedent). Until that
-            // lands: fail-closed, `Dregg2.Circuit.BridgeBackingAttack` STANDS, no flip.
-            Some(CarrierWitness::Bridge(_)) => {
-                return Err(unfilled_carrier_arm(i, "bridge"));
+            // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the
+            // felt-domain mint_hash thread: (STEP 1) the executor re-aligned `mint_hash` to
+            // the FELT-domain `note_spend_mint_hash_felt` (the `687601953` precedent — over
+            // the six compressed felts `apply_bridge_mint` enforces the REAL note-spend STARK
+            // against); (STEP 2/3/4) the deployed `mintVmDescriptor2R24` (`mintV3BridgeHash`)
+            // pins the mint row's `param0` at PI 46, producer-filled. The arm mirrors the
+            // factory shape: (1) ADMIT the leg's claim slot (fail-closed on a pin-less or
+            // wrong-column descriptor — the regen tie; the expected pin is the FIRST-row
+            // `prmCol 0`, never a free column), (2) mint the DUAL-EXPOSE leaf (segment ++ the
+            // published mint identity), (3) re-prove the REAL foreign note-spend STARK as the
+            // G2 backing leaf (`prove_note_spend_leaf_with_claim` — spending-key knowledge +
+            // Merkle membership + full-width commitment, with the mint identity recomputed
+            // IN-AIR at lane 6; the binding-only `bridge_action_air` was REFUSED as backing),
+            // (4) fold under the mint-hash binding node — the in-circuit `connect` makes a
+            // published mint identity no verifying note-spend backs UNSAT.
+            Some(CarrierWitness::Bridge(bundle)) => {
+                use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    BRIDGE_MINT_HASH_PI,
+                    BRIDGE_MINT_HASH_CLAIM_LEN,
+                    "bridge",
+                    Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    BRIDGE_MINT_HASH_PI,
+                    BRIDGE_MINT_HASH_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let backing = crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim(
+                    &bundle.note_spend,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("bridge note-spend backing leaf mint failed: {reason}"),
+                })?;
+                crate::note_spend_leaf_adapter::prove_note_spend_mint_binding_node_segmented(
+                    &dual, &backing, &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented bridge mint-hash binding node failed: {e:?}"),
+                })?
             }
             // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
             // (the dsl adapter REUSES custom's leaf + binding-node machinery; the claim shape
@@ -3378,25 +3422,11 @@ fn prove_chain_core_rotated(
     })
 }
 
-/// **THE FAIL-CLOSED REFUSAL for an UNFILLED carrier fold arm** (the socket half of the
-/// fail-open law). A [`CarrierWitness`] variant whose fold arm has not landed is a
-/// prover-side programming error, NOT a degradable input: silently minting the plain segment
-/// leaf would produce a verifying artifact that does NOT witness the carrier binding the
-/// attached witness promises (laundered vacuity). So the prover refuses loudly — the caller
-/// either detaches the witness (`carrier_witness: None`, the sanctioned re-exec rung) or lands
-/// the carrier's binding arm. Exercised by
-/// `ivc_turn_chain_rotated::unfilled_carrier_witness_is_refused_fail_closed`.
-fn unfilled_carrier_arm(index: usize, carrier: &'static str) -> TurnChainError {
-    TurnChainError::TurnProofInvalid {
-        index,
-        reason: format!(
-            "carrier witness '{carrier}' is attached but its fold arm is UNFILLED (its carrier \
-             wave has not landed): refusing to fold — an unfilled carrier witness never silently \
-             proves. Detach the witness (carrier_witness: None) to take the re-exec rung, or land \
-             the '{carrier}' binding arm."
-        ),
-    }
-}
+// (The `unfilled_carrier_arm` fail-closed refusal helper is RETIRED: every `CarrierWitness`
+// variant is fold-wired — custom/factory/hatchery/sovereign/membership/dsl/bridge. The
+// fail-closed discipline lives on in `carrier_claim_pins_admitted` (a leg whose descriptor
+// does not genuinely pin the claim slots is refused) and in the no-wildcard match (a NEW
+// variant is a compile error until its wave decides its fold branch).)
 
 /// Host-side continuity check ONLY (the `ChainBreak` tooth), extracted so the rotated fold no
 /// longer needs the full binding-trace generation just to validate ordering. Returns `Ok(())`

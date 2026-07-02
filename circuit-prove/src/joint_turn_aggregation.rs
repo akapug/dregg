@@ -236,32 +236,50 @@ pub struct CustomWitnessBundle {
     pub public_inputs: Vec<BabyBear>,
 }
 
-/// STAGED bridge-carrier bundle — the prover-side inputs
-/// [`crate::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim`] consumes (the typed 26-slot
-/// action tuple). ⚑ SOUNDNESS CAVEAT (carrier-deployment spec): the `bridge_action_air` is a
-/// BINDING-ONLY AIR — folding it alone binds a PROVER-CHOSEN tuple (no Merkle membership, no
-/// spending-key knowledge) and is NOT the sound deployed path. The bridge wave re-proves the
-/// REAL foreign note-spend STARK as a G2 backing leaf (`note_spend_leaf_adapter`, new) and
-/// grows this bundle with that witness; until then the fold arm is FAIL-CLOSED (refused).
+/// FOLD-WIRED (the 7th carrier) bridge-carrier bundle — the prover-side inputs
+/// [`crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim`] consumes: the REAL
+/// foreign note-spend witness (spending key, 28-limb commitment preimage, Merkle path) — the
+/// G2 backing the carrier-deployment spec mandates. Folding the binding-only
+/// `bridge_action_air` was REFUSED as the backing (a prover-chosen tuple, no membership / no
+/// key knowledge — the vacuous connect the fail-open law forbids); this bundle re-proves the
+/// REAL spend STARK, whose leaf exposes the FELT-domain mint identity
+/// (`note_spend_mint_hash_felt`, in-AIR-recomputed at claim lane 6) the deployed leg's
+/// mint-hash PI (46, `mintV3BridgeHash`) connects to.
 #[derive(Clone)]
 pub struct BridgeWitnessBundle {
-    /// The typed bridge-action witness (nullifier / recipient / dest-federation / amount).
-    pub action: dregg_circuit::bridge_action_air::BridgeActionWitness,
-    /// The 26-slot bound tuple PIs (for an honest bundle, `action.public_inputs()`).
+    /// The REAL note-spend witness (the SAME `NoteSpendingWitness` the off-AIR
+    /// `verify_note_spend_dsl_full` path proves).
+    pub note_spend: dregg_circuit::note_spending_air::NoteSpendingWitness,
+    /// The 7-slot claim tuple `[nullifier, merkle_root, value_lo, asset_type,
+    /// destination_federation, value_hi, mint_hash]` (for an honest bundle,
+    /// [`crate::note_spend_leaf_adapter::note_spend_leaf_public_inputs`]).
     pub public_inputs: Vec<BabyBear>,
 }
 
 impl BridgeWitnessBundle {
-    /// Project the honest bundle from the typed action witness (PIs derived from the witness
-    /// itself, so claim == execution by construction). The bridge wave's production projection
-    /// (off the retained turn-build data, fail-closed `None` off-wire) supersedes this stub.
-    pub fn from_action_witness(
-        action: &dregg_circuit::bridge_action_air::BridgeActionWitness,
+    /// Project the honest bundle from the typed note-spend witness (PIs derived from the
+    /// witness itself — including the in-AIR-recomputable felt mint identity at lane 6 — so
+    /// claim == execution by construction).
+    pub fn from_note_spend_witness(
+        note_spend: &dregg_circuit::note_spending_air::NoteSpendingWitness,
     ) -> Self {
         Self {
-            public_inputs: action.public_inputs(),
-            action: action.clone(),
+            public_inputs: crate::note_spend_leaf_adapter::note_spend_leaf_public_inputs(
+                note_spend,
+            ),
+            note_spend: note_spend.clone(),
         }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the bridge twin of
+    /// [`SovereignWitnessBundle::from_retained_authority`]. The turn-build path RETAINS the
+    /// note-spend witness (the same material the source-federation spend proof was minted
+    /// from); a wire-rehydrated turn retains nothing (`None`) — the re-exec rung,
+    /// FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_bridge(
+        retained: Option<&dregg_circuit::note_spending_air::NoteSpendingWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_note_spend_witness)
     }
 }
 
