@@ -481,6 +481,50 @@ theorem withSovereignKeyCommit_rejects_forged (A : List ℤ → Digest8) (hash :
     (withSovereignKeyCommit_forces A hash base teethPiLo minit mfin maddrs t hChip hsat
       i hi hnotlast q)
 
+/-- **THE PEEL — `Satisfied2 (withSovereignKeyCommit base teethPiLo) ⟹ Satisfied2 base`.** The
+key-commit compose only APPENDS constraints (4 chip lookups + 4 teeth-weld gates) and widens
+`traceWidth` (which `Satisfied2` never reads): the inner constraints stay members
+(`List.mem_append_left`), the sites / ranges are the record-update-inherited `base` fields, and the
+appended fragment contributes NO mem/map op — so every existing per-effect soundness lemma lifts to
+the composed descriptor by peeling the compose first. The `withSovereignKeyCommit` analog of
+`effFieldsWriteV3_satisfied2_strips_to_base` (the deployed-refusal precedent); the missing lemma the
+big-bang registry re-key needed. -/
+theorem satisfied2_of_withSovereignKeyCommit (hash : List ℤ → ℤ)
+    (base : EffectVmDescriptor2) (teethPiLo : Nat)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (h : Satisfied2 hash (withSovereignKeyCommit base teethPiLo) minit mfin maddrs t) :
+    Satisfied2 hash base minit mfin maddrs t := by
+  have hmapOps : Dregg2.Circuit.DescriptorIR2.mapOpsOf (withSovereignKeyCommit base teethPiLo)
+      = Dregg2.Circuit.DescriptorIR2.mapOpsOf base := by
+    simp [Dregg2.Circuit.DescriptorIR2.mapOpsOf, withSovereignKeyCommit, keyCommitConstraints,
+      List.filterMap_append, List.filterMap_map]
+  have hmemOps : Dregg2.Circuit.DescriptorIR2.memOpsOf (withSovereignKeyCommit base teethPiLo)
+      = Dregg2.Circuit.DescriptorIR2.memOpsOf base := by
+    simp [Dregg2.Circuit.DescriptorIR2.memOpsOf, withSovereignKeyCommit, keyCommitConstraints,
+      List.filterMap_append, List.filterMap_map]
+  have hmemLog : Dregg2.Circuit.DescriptorIR2.memLog (withSovereignKeyCommit base teethPiLo) t
+      = Dregg2.Circuit.DescriptorIR2.memLog base t := by
+    simp [Dregg2.Circuit.DescriptorIR2.memLog, hmemOps]
+  have hmapLog : Dregg2.Circuit.DescriptorIR2.mapLog (withSovereignKeyCommit base teethPiLo) t
+      = Dregg2.Circuit.DescriptorIR2.mapLog base t := by
+    simp [Dregg2.Circuit.DescriptorIR2.mapLog, hmapOps]
+  exact
+    { rowConstraints := fun i hi c hc =>
+        h.rowConstraints i hi c (by
+          show c ∈ base.constraints
+            ++ keyCommitConstraints BEFORE_BLOCK_BASE B_PUBKEY8 base.traceWidth teethPiLo
+          exact List.mem_append_left _ hc)
+      rowHashes := h.rowHashes
+      rowRanges := h.rowRanges
+      memAddrsNodup := h.memAddrsNodup
+      memClosed := by have := h.memClosed; rwa [hmemLog] at this
+      memDisciplined := by have := h.memDisciplined; rwa [hmemLog] at this
+      memBalanced := by have := h.memBalanced; rwa [hmemLog] at this
+      memTableFaithful := by have := h.memTableFaithful; rwa [hmemLog] at this
+      mapTableFaithful := by have := h.mapTableFaithful; rwa [hmapLog] at this }
+
+#assert_axioms satisfied2_of_withSovereignKeyCommit
+
 /-! ### §2b — membership: the 1-felt sender-leaf compress (chip-native `node8` form).
 
 ⚑ NAMED MISMATCH (module doc): the executor's `membership_verifier.rs::compress` is TODAY
