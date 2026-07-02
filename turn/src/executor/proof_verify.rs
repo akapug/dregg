@@ -838,6 +838,20 @@ impl TurnExecutor {
                 &placeholder,
                 &caveat,
             )
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::BridgeMint { .. }) {
+            // BridgeMint carries the FELT mint-hash pin at PI ROT_PI_COUNT (46) — the STEP-2/3
+            // bridge-carrier exposure (51-PI base). The reconstructed PI 46 is EXECUTOR-DERIVED:
+            // `vm_effects` came from `convert_turn_effects_to_vm` over the turn's OWN
+            // `PortableNoteProof` (the same material `apply_bridge_mint` verified the note-spend
+            // STARK against), so the published mint identity is anchored to what the executor
+            // enforces — never a prover-supplied free PI.
+            dregg_circuit::effect_vm::trace_rotated::generate_rotated_bridge_mint_wide(
+                &initial_vm_state,
+                &vm_effects,
+                &placeholder,
+                &placeholder,
+                &caveat,
+            )
         } else {
             generate_rotated_transfer_shape_wide(
                 &initial_vm_state,

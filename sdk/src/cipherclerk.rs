@@ -5826,6 +5826,22 @@ impl AgentCipherclerk {
                 &caveat,
             )
             .map_err(|e| SdkError::InvalidWitness(format!("wide custom trace generation: {e}")))?
+        } else if matches!(
+            vm_effects.first(),
+            Some(dregg_circuit::effect_vm::Effect::BridgeMint { .. })
+        ) {
+            // The felt mint-hash pin member (51-PI base; PI 46 = the projector-derived
+            // `note_spend_mint_hash_felt`) — no longer the bare transfer shape.
+            dregg_circuit::effect_vm::trace_rotated::generate_rotated_bridge_mint_wide(
+                &initial_vm_state,
+                &vm_effects,
+                &before_bw,
+                &after_bw,
+                &caveat,
+            )
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!("wide bridge-mint trace generation: {e}"))
+            })?
         } else {
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_transfer_shape_wide(
                 &initial_vm_state,

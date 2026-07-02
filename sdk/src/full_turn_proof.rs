@@ -465,6 +465,23 @@ impl RotationTurnWitness {
                         SdkError::InvalidWitness(format!("wide_commit_anchors record-pin: {e}"))
                     })?;
                     d
+                } else if matches!(lead, E::BridgeMint { .. }) {
+                    // The felt mint-hash pin member (51-PI base) — no longer the bare
+                    // transfer shape. PI 46 is the projector-derived felt mint identity.
+                    let (_t, d) =
+                        dregg_circuit::effect_vm::trace_rotated::generate_rotated_bridge_mint_wide(
+                            s_k,
+                            run_effects,
+                            &before,
+                            after_block,
+                            caveat,
+                        )
+                        .map_err(|e| {
+                            SdkError::InvalidWitness(format!(
+                                "wide_commit_anchors bridge-mint: {e}"
+                            ))
+                        })?;
+                    d
                 } else if matches!(
                     lead,
                     E::CreateCell { .. }

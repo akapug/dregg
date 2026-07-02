@@ -598,6 +598,43 @@ pub fn generate_rotated_effect_vm_trace(
         debug_assert_eq!(dpis.len(), ROT_NULLIFIER_PI_COUNT + 16);
     }
 
+    // THE BRIDGE-MINT FELT MINT-HASH PIN (STEP 2/3 — the bridge carrier's deployed-leg exposure).
+    // The deployed `mintVmDescriptor2R24` (Lean `mintV3BridgeHash`) carries a FIFTH appended PI
+    // pin welding the mint row's `mint_hash` (`param::MINT_HASH = param0`, col `PARAM_BASE + 0`)
+    // to rotated PI slot 46 on the FIRST row — the bridge twin of the noteSpend nullifier weld.
+    // Since the STEP-1 executor re-align, `mint_hash` is the FELT-DOMAIN
+    // `note_spend_mint_hash_felt` (`dsl::note_spending::bridge_mint_hash_felt` over the six
+    // compressed felts `apply_bridge_mint` enforces the note-spend STARK against), so the
+    // published PI is the value the recursion note-spend leaf recomputes IN-AIR at its claim
+    // lane 6 — the fold's `connect` anchor. Rides BEFORE the dsl rc tail (rc 47..50) —
+    // per-effect extras first, rc last-pre-wide. The supply-mint member (`sel::MINT`,
+    // `supplyMintVmDescriptor2R24`) keeps the 46-PI shape (no pin).
+    if matches!(effects.first(), Some(Effect::BridgeMint { .. })) {
+        use super::columns::{PARAM_BASE, param};
+
+        // SINGLE-MINT INVARIANT (the noteSpend single-spend discipline, same reasoning): the
+        // pin is a FIRST-row pin against ONE PI slot, and the fold's binding node connects ONE
+        // exposed mint identity to ONE re-proven note-spend leaf. A second BridgeMint on a
+        // non-first row would be UNPINNED — its mint identity would escape the fold's backing
+        // check (fail-open). So the rotated bridge-mint leg accepts exactly ONE mint row; a
+        // multi-BridgeMint turn fails closed here and falls back to the v1 leg.
+        let mint_count = effects
+            .iter()
+            .filter(|e| matches!(e, Effect::BridgeMint { .. }))
+            .count();
+        if mint_count != 1 {
+            return Err(format!(
+                "rotated bridge-mint leg supports exactly one mint row (the single-identity \
+                 fold-backing shape), got {mint_count}; a multi-BridgeMint turn must use the v1 \
+                 leg. Rotating it would leave the non-first mint's identity unpinned and ESCAPE \
+                 the note-spend fold backing."
+            ));
+        }
+
+        dpis.push(r0[PARAM_BASE + param::MINT_HASH]); // PI 46: the felt-domain bridge-mint identity
+        debug_assert_eq!(dpis.len(), ROT_NULLIFIER_PI_COUNT);
+    }
+
     // THE COMMITMENTS-SET GROW-GATE PIN (noteCreate — the deployment-real commitment set-insert
     // close, the `commitments_root` flag-day). The live `noteCreateVmDescriptor2R24` carries a FIFTH
     // pin welding the published note commitment (`param0`, col `PARAM_BASE + 0` — the
@@ -3712,6 +3749,39 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
     Ok((trace, dpis))
 }
 
+/// **THE WIDE BRIDGE-MINT trace generator (`mintVmDescriptor2R24` wide, 67-PI).** The bridge-mint
+/// member carries the FELT mint-hash pin at PI `ROT_PI_COUNT` (46) — the STEP-2/3 bridge-carrier
+/// exposure (Lean `mintV3BridgeHash`; base 46 + mint_hash + 4 dsl rc = 51) — so it can no longer
+/// ride the bare transfer shape. This appends the 16 wide commit PIs at `GRAD_ROT_WIDTH`:
+/// `51 + 16 = 67` (= `WIDE_PI_COUNT + 1`). The published PI 46 is the projector-derived
+/// `note_spend_mint_hash_felt` (see the base generator's bridge-mint arm); the verifier's
+/// reconstruction recomputes it from the turn's OWN `PortableNoteProof` via
+/// `convert_turn_effects_to_vm`, so the anchor is executor-derived, never prover-supplied.
+/// Returns `(trace, dpis)`.
+pub fn generate_rotated_bridge_mint_wide(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    let (mut trace, base_pis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+    if base_pis.len() != ROT_PI_COUNT + 1 + DFA_RC_LEN {
+        return Err(format!(
+            "bridge-mint wide generator: base PI vector {} != {} (the bridge-mint descriptor \
+             carries the rotated vector + the felt mint-hash pin at PI 46 + the 4 dsl rc PIs at \
+             47..50)",
+            base_pis.len(),
+            ROT_PI_COUNT + 1 + DFA_RC_LEN
+        ));
+    }
+    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
+    debug_assert_eq!(trace[0].len(), WIDE_WIDTH);
+    debug_assert_eq!(dpis.len(), WIDE_PI_COUNT + 1); // 46 base + mint_hash + 4 rc + 16 wide = 67
+    Ok((trace, dpis))
+}
+
 /// The host (pre-wide-append) width of the `heapWriteVmDescriptor2R24` descriptor. OPTION I: the
 /// DEPLOYED host is the after-spine membership-forcing `effHeapWriteV3 heapWriteV3` (Lean
 /// `HeapOpenEmit.effHeapWriteV3`), EXACTLY as cap deploys `effCapOpenWriteV3` — the Class-A splice base
@@ -4756,6 +4826,12 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
     } else if matches!(lead, Effect::SpawnWithDelegation { .. }) {
         generate_rotated_spawn_wide(initial_state, effects, before, after, caveat, &[])
             .map_err(|e| format!("wide spawn generation: {e}"))?
+    } else if matches!(lead, Effect::BridgeMint { .. }) {
+        // The felt mint-hash pin member (51 base PIs) — no longer the bare transfer shape.
+        let (t, d) =
+            generate_rotated_bridge_mint_wide(initial_state, effects, before, after, caveat)
+                .map_err(|e| format!("wide bridge-mint generation: {e}"))?;
+        (t, d, vec![])
     } else if matches!(lead, Effect::SetField { field_idx, .. } if *field_idx >= 8) {
         // setFieldDyn carries the DISTINCT 581-wide V1Face geometry + a mem-boundary witness
         // (NOT map_heaps); the dedicated block below overrides these placeholders.
