@@ -1671,9 +1671,14 @@ theorem closedLogExtract_transfer
     ClosedLogExtract
       (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest) LH hash Rfix 0 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- `Rfix 0` is `transferV3` definitionally (registry position 0).
+  -- `Rfix 0` is `withDfaRcPins transferV3` definitionally (registry position 0, rc-EMIT-wrapped:
+  -- the uniform DSL rc wrap appends only 4 `.piBinding` pins). PEEL the wrap
+  -- (`satisfied2_of_withDfaRcPins`) down to the base `transferV3` so the base-level
+  -- `transfer_closedLog` rung lifts to the DEPLOYED rc-pinned descriptor the apex quantifies over.
   have hsat' : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
-      Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t := hsat
+      Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withDfaRcPins hash
+      Dregg2.Circuit.RotatedKernelRefinement.transferV3 hsat
   obtain ⟨tr, a, permOut, hside, hpub, logNeeds⟩ := extract minit mfin maddrs t pubLogPost pre post hsat'
   exact transfer_closedLog hash hside hsat' pre post tr a pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds

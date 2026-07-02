@@ -335,8 +335,12 @@ theorem closedLogExtract_transfer_closed
     ClosedLogExtract
       (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest) LH hash Rfix 0 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- `Rfix 0 = transferV3` definitionally (the re-key preserves the transfer slot).
-  have hsat' : Satisfied2 hash transferV3 minit mfin maddrs t := hsat
+  -- `Rfix 0 = withDfaRcPins transferV3` definitionally (the re-key preserves the transfer slot;
+  -- the uniform DSL rc-EMIT wrap appends only 4 `.piBinding` pins). PEEL the wrap
+  -- (`satisfied2_of_withDfaRcPins`) down to the base `transferV3` so the base-level rungs lift to
+  -- the DEPLOYED rc-pinned descriptor the apex quantifies over.
+  have hsat' : Satisfied2 hash transferV3 minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withDfaRcPins hash transferV3 hsat
   -- bind the readout ONCE so the floors (`ledger`/`toyAuthOf`, stated at `(readout …)` projections)
   -- align with the row designation `tr`/`a`/`rd` here (no `obtain`, which would break the alias).
   set r := readout minit mfin maddrs t pre post hsat' with hr

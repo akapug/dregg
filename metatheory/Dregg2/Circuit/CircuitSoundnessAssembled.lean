@@ -367,11 +367,17 @@ def Rfix : Registry := fun e =>
 (`match` is total). -/
 theorem Rfix_total (e : EffectIdx) : ∃ d : EffectVmDescriptor2, Rfix e = d := ⟨Rfix e, rfl⟩
 
-/-- **`Rfix_transfer` — the key correspondence: the transfer tag lands at the transfer descriptor.**
-`actionTag (.balanceA …) = 0` and `actionTagToPos 0 = 0`, and `v3Registry`'s position-`0` entry is the
-transfer descriptor `v3OfFrozen transferVmDescriptor = transferV3`. So `Rfix 0` IS the genuine transfer
-descriptor — the rung at the transfer tag discharges its refinement about the right descriptor. -/
-theorem Rfix_transfer : Rfix 0 = Dregg2.Circuit.RotatedKernelRefinement.transferV3 := rfl
+/-- **`Rfix_transfer` — the key correspondence: the transfer tag lands at the transfer descriptor,
+rc-EMIT-wrapped.** `actionTag (.balanceA …) = 0` and `actionTagToPos 0 = 0`, and the DEPLOYED
+`v3Registry`'s position-`0` entry is the transfer descriptor `v3OfFrozen transferVmDescriptor =
+transferV3` wrapped through the uniform DSL rc-EMIT (`withDfaRcPins` — the whole 36-member cohort
+publishes the 4-felt `Witnessed{Dfa}` route-commitment carrier as its LAST 4 member PIs). The wrap
+only APPENDS `.piBinding` pins (`satisfied2_of_withDfaRcPins` peels it), so `Rfix 0` IS the genuine
+transfer descriptor UP TO the additive rc pins — the rung at the transfer tag discharges its
+refinement about the right descriptor via the peel. -/
+theorem Rfix_transfer :
+    Rfix 0 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+      Dregg2.Circuit.RotatedKernelRefinement.transferV3 := rfl
 
 /-- **`Rfix_heapWrite` — GAP-2 + OPTION I: heapWrite (tag 56) ranges over its OWN DEPLOYED descriptor.**
 `actionTagToPos 56 = 45` and `v3RegistryHeap`'s position-45 entry is now the DEPLOYED after-spine
