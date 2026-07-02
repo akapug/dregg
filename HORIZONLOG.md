@@ -8,6 +8,17 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## NOW-STATE addition (2026-07-02, Fable — PR #23 coordination note for the VK lane)
+- ALIF'S PR #23 (dregg, `feat/stripe-kernel-attested`) RIDES THE BIG-BANG REGEN — named here so the
+  descriptor-regen driver batches it: the mintV3 bridge-tuple PI widening (46→72, `bridgeTuplePiExposure`,
+  `EffectVmEmitRotationV3.lean`) is Lean-widened but registry-UNREGENERATED. Its only merge conflicts vs
+  main are the 4 Lean-EMITTED artifacts (3 staged registry TSVs + `effect_vm_descriptors.rs`) — resolve by
+  REGENERATION after merging the Lean sides (never hand-merge), i.e. fold into the ONE shared universal-fold
+  descriptor regen. Same-landing follow-up: `proof_verify.rs` must reconstruct PI [46..72) from
+  `apply_bridge_mint` (Fiat-Shamir consistency; flagged in the PR body). The DECO/zkTLS Lean modules
+  (`Crypto/Deco.lean` + `Verify/Stripe*`) auto-merge clean + are assert_axioms-clean per the PR. e2e pole:
+  `circuit-prove/tests/bridge_mint_deployed_tooth.rs` (`--ignored`).
+
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
 - G1 BRIDGE FOREIGN-PROOF BINDING — residual NAMED + scoped (2026-06-29). Catalog `docs/UNDER-WIRED-circuit.md`
   G1: a pure light client sees a `BridgeMint` balance credit (in the deployed per-turn VK) but NOT the
