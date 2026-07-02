@@ -21,7 +21,7 @@ apex re-key rides `CircuitSoundnessAssembled.v3RegistryHeap` tail positions (the
 ## §Sovereign — EXACT executor match (SAT by construction)
 
 `withSovereignKeyCommit makeSovereignV3 SOVEREIGN_KEY_COMMIT_COL` binds the FOUR executor KEY_COMMIT
-teeth (`columns.rs::WITNESS_KEY_COMMIT_0..3` = cols 23..=26, row-0-pinned to PI by the ALREADY-CLOSED
+teeth (`columns.rs::WITNESS_KEY_COMMIT_0..3` = cols 113..=116, row-0-pinned to PI by the ALREADY-CLOSED
 record-pin family — `makeSovereignV3.piCount = 54` is UNTOUCHED, the gate only widens `traceWidth` and
 appends 4 chip lookups + 4 teeth welds) to the in-AIR `canonical_32_to_felts_4` of the committed
 `B_PUBKEY8` octet. The executor's `KEY_COMMIT` (`proof_verify.rs::pubkey_to_witness_key_commit` =
@@ -68,12 +68,15 @@ open Dregg2.Circuit.Emit.CapOpenEmit (transferV3)
 
 set_option autoImplicit false
 
-/-- The sovereign KEY_COMMIT teeth column base (`columns.rs::WITNESS_KEY_COMMIT_0`, cols 23..=26 —
-the executor's row-0-PI-pinned owner-key-commit teeth). -/
-def SOVEREIGN_KEY_COMMIT_COL : Nat := 23
+/-- The sovereign KEY_COMMIT teeth column base — the ABSOLUTE trace column of the executor's
+row-0-PI-pinned owner-key-commit teeth: `AUX_BASE (90) + aux_off::WITNESS_KEY_COMMIT_0 (23) = 113`
+(cols 113..=116). ⚑ `columns.rs::WITNESS_KEY_COMMIT_0..3 = 23..=26` are aux OFFSETS, not absolute
+columns — the tooth's fill site is `AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0`
+(`sovereign_binding_deployed_tooth.rs`, `trace.rs:1005`). -/
+def SOVEREIGN_KEY_COMMIT_COL : Nat := 113
 
 /-- **`makeSovereignV3Keyed`** — the deployed `makeSovereignVmDescriptor2R24` COMPOSED with the in-AIR
-KEY_COMMIT compress gate: the 4 executor teeth (cols 23..=26) are forced EQUAL to
+KEY_COMMIT compress gate: the 4 executor teeth (cols 113..=116) are forced EQUAL to
 `canonical_32_to_felts_4` of the committed `B_PUBKEY8` octet. `piCount = 54` UNCHANGED (the record-pin
 is closed; the gate binds EXISTING teeth columns, adding only trace width + chip lookups). -/
 def makeSovereignV3Keyed : EffectVmDescriptor2 :=
@@ -83,7 +86,7 @@ def makeSovereignV3Keyed : EffectVmDescriptor2 :=
 theorem makeSovereignV3Keyed_piCount : makeSovereignV3Keyed.piCount = makeSovereignV3.piCount := rfl
 
 /-- **THE SOVEREIGN KEYSTONE, on the deployed base.** A `Satisfied2` of the composed descriptor
-forces every published KEY_COMMIT tooth (cols 23..=26) EQUAL to `canonical_32_to_felts_4`
+forces every published KEY_COMMIT tooth (cols 113..=116) EQUAL to `canonical_32_to_felts_4`
 (`A := chip_absorb_all_lanes`) of the committed BEFORE `B_PUBKEY8` octet — a forged sovereign owner
 key is UNSAT for a ledgerless client. Direct instantiation of `withSovereignKeyCommit_forces`. -/
 theorem makeSovereignV3Keyed_forces (A : List ℤ → Digest8) (hash : List ℤ → ℤ)
@@ -117,7 +120,7 @@ theorem makeSovereignV3Keyed_rejects_forged (A : List ℤ → Digest8) (hash : L
 /-! ## §4 — THE DEPLOYED SOVEREIGN MEMBER (big-bang regen): teeth PI pins + the KEY_COMMIT gate.
 
 The annotated fold-arm convention (`ivc_turn_chain.rs::SOVEREIGN_KEY_COMMIT_PI_LO = 58`,
-`sovereign_binding_deployed_tooth.rs`): the 4 KEY_COMMIT teeth (cols 23..=26) publish at the
+`sovereign_binding_deployed_tooth.rs`): the 4 KEY_COMMIT teeth (cols 113..=116) publish at the
 POST-rc tail — PIs 58..61 on the narrow member (54 record-pin + 4 rc, THEN the teeth), strictly
 AHEAD of the 16 wide anchors on the wide member (62..77). So the compose order is
 `gate ∘ teethPins ∘ rc` (narrow) and `gate ∘ wideAppend ∘ teethPins ∘ rc` (wide) — the teeth pins
@@ -126,7 +129,7 @@ digest appendix sits past everything (`dgBase = base.traceWidth`), leaving every
 position untouched (the producer twin appends the 32 appendix columns at the trace end). -/
 
 /-- **`withSovereignTeethPins g`** — APPEND 4 `.piBinding .first` pins publishing the executor
-KEY_COMMIT teeth columns (`SOVEREIGN_KEY_COMMIT_COL + q`, cols 23..=26) as 4 TAIL PIs
+KEY_COMMIT teeth columns (`SOVEREIGN_KEY_COMMIT_COL + q`, cols 113..=116) as 4 TAIL PIs
 (`g.piCount + q`), bumping `piCount` by 4. Mirrors `withAfterOctetPins` exactly (additive; no
 site / range / mem-op / map-op touched), at the `.first` row (the teeth are row-0 turn claims,
 not AFTER-block state). -/
@@ -174,7 +177,7 @@ theorem satisfied2_of_withSovereignTeethPins (hash : List ℤ → ℤ) (g : Effe
     , mapTableFaithful := by rw [← hmap]; exact h.mapTableFaithful }
 
 /-- **`withSovereignTeethPins_publishes`** — on the FIRST row of a `Satisfied2` witness, each of
-the 4 published TAIL PIs (`g.piCount + q`) EQUALS its teeth column (cols 23..=26). The `.first`-row
+the 4 published TAIL PIs (`g.piCount + q`) EQUALS its teeth column (cols 113..=116). The `.first`-row
 twin of `withDfaRcPins_publishes`. -/
 theorem withSovereignTeethPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
@@ -322,7 +325,7 @@ theorem makeSovereignV3DeployedWide_publishes_key_commit (A : List ℤ → Diges
     (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 151))
     SOVEREIGN_KEY_COMMIT_COL minit mfin maddrs t hChip hsat 0 h0 hnotlast q
   -- the pin: member of the pinned host, surviving the wide legacy-pin filter (its column is a
-  -- teeth column 23..=26, never `bb + B_STATE_COMMIT`).
+  -- teeth column 113..=116, never `bb + B_STATE_COMMIT`).
   have hinHost : VmConstraint2.base
       (.piBinding .first (SOVEREIGN_KEY_COMMIT_COL + q.val)
         ((withDfaRcPins makeSovereignV3).piCount + q.val))
@@ -444,7 +447,7 @@ theorem withMembershipTeethPins_publishes (hash : List ℤ → ℤ) (g : EffectV
 
 /-- **`transferV3Membership`** — the NARROW deployed membership-teeth transfer member (the apex
 `Rfix 0` re-key target): the cohort transfer + rc + the two teeth pins (piCount `46 → 50 → 52`;
-teeth at PI 50..51, the annotated `MEMBERSHIP_CLAIM_PI_LO`; teeth columns at 608..609). -/
+teeth at PI 50..51, the annotated `MEMBERSHIP_CLAIM_PI_LO`; teeth columns at 1163..1164). -/
 def transferV3Membership : EffectVmDescriptor2 :=
   withMembershipTeethPins (withDfaRcPins transferV3)
 
@@ -453,19 +456,85 @@ def transferV3Membership : EffectVmDescriptor2 :=
 def TR_WIDE_BB : Nat :=
   Dregg2.Circuit.Emit.EffectVmEmitTransfer.transferVmDescriptor.traceWidth
 
-/-- **`transferV3MembershipWide`** — the WIDE deployed membership-teeth transfer member (the
-`WIDE_REGISTRY_STAGED_TSV` row under the live key): teeth PIs 50..51 strictly AHEAD of the 16
-wide anchors (52..67); the wide carriers base past the teeth columns (1165). -/
-def transferV3MembershipWide : EffectVmDescriptor2 :=
-  wideAppend transferV3Membership TR_WIDE_BB (TR_WIDE_BB + 151)
+/-- **`withMembershipTeethPinsAt teethCol g`** — the COLUMN-PARAMETRIC twin of
+`withMembershipTeethPins`: append the 2 teeth PI pins publishing columns `teethCol`/`teethCol+1`
+at the tail PIs (`g.piCount + j`), WITHOUT touching `traceWidth` (the caller places the columns —
+the wide member needs them PAST the wide carriers, exactly where the fold tooth's
+`insert_tail_claim_pins` twin staged them). -/
+def withMembershipTeethPinsAt (teethCol : Nat) (g : EffectVmDescriptor2) : EffectVmDescriptor2 :=
+  { g with
+    piCount := g.piCount + 2
+    constraints := g.constraints ++ (List.range 2).map (fun j =>
+      VmConstraint2.base (.piBinding .first (teethCol + j) (g.piCount + j))) }
 
--- Geometry: narrow 52 PIs / width 1165; wide 68 PIs / 1773 wide.
+theorem withMembershipTeethPinsAt_constraints (teethCol : Nat) (g : EffectVmDescriptor2) :
+    (withMembershipTeethPinsAt teethCol g).constraints
+      = g.constraints ++ (List.range 2).map (fun j =>
+          VmConstraint2.base (.piBinding .first (teethCol + j) (g.piCount + j))) := rfl
+
+/-- The WIDE membership teeth columns: PAST the wide carriers (`1163 + 608 = 1771..1772` — the
+producer lays the host at 1163, `append_wide_carriers` the 608 carrier columns at 1163..1770, and
+the teeth ride the END, exactly the `membership_binding_deployed_tooth.rs` twin geometry). -/
+def MEMBERSHIP_TEETH_COL_WIDE : Nat := 1771
+
+#guard MEMBERSHIP_TEETH_COL_WIDE == transferV3.traceWidth + 608
+
+/-- **`transferV3MembershipWide`** — the WIDE deployed membership-teeth transfer member (the
+`WIDE_REGISTRY_STAGED_TSV` row under the live key `transferVmDescriptor2R24`): teeth PIs 50..51
+strictly AHEAD of the 16 wide anchors (52..67); the wide carriers at the HOST width 1163 (the
+producer's `append_wide_carriers` base — UNSHIFTED); the teeth COLUMNS past them (1771..1772);
+`traceWidth` bumped +2 to cover them. -/
+def transferV3MembershipWide : EffectVmDescriptor2 :=
+  let w := wideAppend (withMembershipTeethPinsAt MEMBERSHIP_TEETH_COL_WIDE (withDfaRcPins transferV3))
+    TR_WIDE_BB (TR_WIDE_BB + 151)
+  { w with traceWidth := w.traceWidth + 2 }
+
+-- Geometry: narrow 52 PIs / width 1165; wide 68 PIs / 1773 wide (carriers 1163.., teeth 1771..1772).
 #guard transferV3.piCount == 46
 #guard transferV3Membership.piCount == 52
 #guard transferV3Membership.traceWidth == transferV3.traceWidth + 2
 #guard transferV3.traceWidth == 1163
 #guard transferV3MembershipWide.piCount == 68
-#guard transferV3MembershipWide.traceWidth == 1163 + 2 + 608
+#guard transferV3MembershipWide.traceWidth == 1163 + 608 + 2
+
+/-- **THE DEPLOYED MEMBERSHIP EXPOSURE KEYSTONE (wide — the `WIDE_REGISTRY_STAGED_TSV` member the
+fold tooth proves).** On any `Satisfied2` witness of the wide member, each published teeth PI
+(50..51) EQUALS its teeth column (1771..1772) on the first row — the exposure the fold arm's
+admission gate (`carrier_claim_pins_admitted`) requires: a genuine `PiBinding` at every claim
+slot. (The BINDING of the claimed tuple is the FOLD edge — `MembershipBackingAttack` §A/§A′
+stand as deployed-AIR facts; see the §5 module doc.) -/
+theorem transferV3MembershipWide_publishes_teeth (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash transferV3MembershipWide minit mfin maddrs t)
+    (h0 : 0 < t.rows.length) :
+    ∀ j : Fin 2, (envAt t 0).loc (MEMBERSHIP_TEETH_COL_WIDE + j.val)
+      = (envAt t 0).pub ((withDfaRcPins transferV3).piCount + j.val) := by
+  intro j
+  have hfirstt : ((0 : Nat) == 0) = true := rfl
+  have hinHost : VmConstraint2.base
+      (.piBinding .first (MEMBERSHIP_TEETH_COL_WIDE + j.val)
+        ((withDfaRcPins transferV3).piCount + j.val))
+      ∈ (withMembershipTeethPinsAt MEMBERSHIP_TEETH_COL_WIDE (withDfaRcPins transferV3)).constraints := by
+    rw [withMembershipTeethPinsAt_constraints]
+    exact List.mem_append_right _ (List.mem_map.mpr ⟨j.val, List.mem_range.mpr j.isLt, rfl⟩)
+  have hnp : isLegacyCommitPin1 TR_WIDE_BB (TR_WIDE_BB + 151)
+      (VmConstraint2.base (.piBinding .first (MEMBERSHIP_TEETH_COL_WIDE + j.val)
+        ((withDfaRcPins transferV3).piCount + j.val))) = false := by
+    have hj : j.val < 2 := j.isLt
+    have hbb : TR_WIDE_BB + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_STATE_COMMIT = 301 := by
+      decide
+    simp only [isLegacyCommitPin1, beq_eq_false_iff_ne, ne_eq, hbb, MEMBERSHIP_TEETH_COL_WIDE]
+    omega
+  have hin : VmConstraint2.base
+      (.piBinding .first (MEMBERSHIP_TEETH_COL_WIDE + j.val)
+        ((withDfaRcPins transferV3).piCount + j.val))
+      ∈ transferV3MembershipWide.constraints :=
+    wideAppend_mem_of_host _ TR_WIDE_BB (TR_WIDE_BB + 151) _ hinHost hnp
+  have h := hsat.rowConstraints 0 h0 _ hin
+  simp only [VmConstraint2.holdsAt, hfirstt, holdsVm_piFirst_true] at h
+  exact h
+
+#assert_axioms transferV3MembershipWide_publishes_teeth
 
 /-- **THE FULL PEEL — `Satisfied2 transferV3Membership ⟹ Satisfied2 transferV3`** (teeth pins →
 rc), the chain the apex `Rfix 0` rung re-key consumes. -/

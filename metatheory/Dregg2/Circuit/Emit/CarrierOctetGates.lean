@@ -38,7 +38,7 @@ BUILT AGAINST monolith checkpoint `85170b24c` (STEP 1b — all Emit consumers gr
     [1,5,3,7]` (`quadIdx`). `hash_4_to_1(x) = perm(st[0..4]=x, st[4]=4, 0…)[0]` is EXACTLY the
     deployed chip's arity-4 row (`chip_absorb_all_lanes(4, x)[0]` — `st[4] = arity` for arity 4,
     lanes 7.. zero-padded). So the KEY_COMMIT teeth (4 felts, `columns.rs::WITNESS_KEY_COMMIT_0..3`
-    = cols 23..26, row-0-pinned to PI) are FOUR arity-4 chip lookups over the committed octet —
+    = aux offsets 23..26, ABSOLUTE cols 113..=116 = AUX_BASE + offset, row-0-pinned to PI) are FOUR arity-4 chip lookups over the committed octet —
     `withSovereignKeyCommit` realizes the executor's function EXACTLY. ⚑ The STEP-2 producer fill
     of the pubkey octet must therefore be `canonical_32_to_felts_8(pubkey)` (the 30-bit form).
 
@@ -391,7 +391,7 @@ def keyCommitConstraints (blockBase octetBase dgBase teethPiLo : Nat) : List VmC
 def KEY_COMMIT_SPAN : Nat := 32
 
 /-- **`withSovereignKeyCommit base teethPiLo`** — a descriptor WIDENED by the key-commit appendix:
-the 4 published KEY_COMMIT teeth (`SOVEREIGN_WITNESS_KEY_COMMIT`, `columns.rs` cols 23..26,
+the 4 published KEY_COMMIT teeth (`SOVEREIGN_WITNESS_KEY_COMMIT`, `columns.rs` aux offsets 23..26 = ABSOLUTE cols 113..=116,
 row-0-pinned to PI) are forced equal to the in-AIR `canonical_32_to_felts_4` of the committed
 BEFORE-block pubkey octet (the OPERATED cell's owner key — `before_cell.public_key()`). -/
 def withSovereignKeyCommit (base : EffectVmDescriptor2) (teethPiLo : Nat) :
