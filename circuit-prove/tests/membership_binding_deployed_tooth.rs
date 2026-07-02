@@ -140,8 +140,8 @@ fn membership_twin() -> (EffectVmDescriptor2, usize, usize) {
     (twin, insert_at, teeth_col)
 }
 
-/// Mint the membership-edge wide `Transfer` leg (DEBIT keeps the nonce: `before=(b,n)` →
-/// `after=(b-amount,n)`), the teeth columns carrying `tuple`, published at the claim PIs.
+/// Mint the membership-edge wide `Transfer` leg (the rotated generator ticks the AFTER nonce: `before=(b,n)` →
+/// `after=(b-amount,n+1)`), the teeth columns carrying `tuple`, published at the claim PIs.
 fn mint_membership_leg(
     before_balance: i64,
     amount: u64,
@@ -235,7 +235,9 @@ fn build_chain(bundle_tuple: SenderMembershipWitness) -> Vec<FinalizedTurn> {
         Some(CarrierWitness::Membership(bundle)),
     );
     let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
-    let t1_leg = mint_membership_leg(993, 7, 0, leg_tuple, None);
+    // The rotated generator TICKS the AFTER-block nonce (limb r1) on a transfer turn, so t1's
+    // BEFORE state must carry nonce 1 for the 8-felt anchors to chain lane-by-lane.
+    let t1_leg = mint_membership_leg(993, 7, 1, leg_tuple, None);
     let t1 = FinalizedTurn::new(DescriptorParticipant::rotated(t1_leg));
     assert_eq!(
         t0.new_root(),

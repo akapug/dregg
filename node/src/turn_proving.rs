@@ -406,12 +406,27 @@ fn rotation_witness_for_self_sovereign_impl(
         return None;
     }
 
+    // v12 CARRIER MATERIAL (STEP-2.5, the cipherclerk thread mirrored): a factory turn's AFTER
+    // commitment publishes the installed child VK on octet 88..95 (non-zero); every non-factory
+    // lead keeps the zero `Default` octet. The BEFORE block always keeps the zero octet (the
+    // child is BORN by this turn).
+    let after_material = match effects.first() {
+        Some(dregg_turn::Effect::CreateCellFromFactory { params, .. }) => {
+            dregg_cell::commitment::RotationCarrierMaterial {
+                child_vk: params.program_vk,
+                contract_hash: None,
+            }
+        }
+        _ => dregg_cell::commitment::RotationCarrierMaterial::default(),
+    };
+
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = rw::produce(
         after_cell,
@@ -419,6 +434,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &after_material,
     );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
@@ -531,12 +547,26 @@ fn rotation_witness_for_capability_turn(
     // nonce delta is UNSAT — `setFieldTick_rejects_wrong_nonce_delta` / `mintTick_rejects_wrong_nonce_delta`).
     // No broken-descriptor fallback remains: EVERY cohort effect rotates.
 
+    // v12 CARRIER MATERIAL (STEP-2.5, the cipherclerk thread mirrored — see the self-sovereign
+    // builder above): a factory lead carries the installed child VK on the AFTER octet; every
+    // other lead keeps the zero `Default`.
+    let after_material = match effects.first() {
+        Some(dregg_turn::Effect::CreateCellFromFactory { params, .. }) => {
+            dregg_cell::commitment::RotationCarrierMaterial {
+                child_vk: params.program_vk,
+                contract_hash: None,
+            }
+        }
+        _ => dregg_cell::commitment::RotationCarrierMaterial::default(),
+    };
+
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = rw::produce(
         after_cell,
@@ -544,6 +574,7 @@ fn rotation_witness_for_capability_turn(
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &after_material,
     );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
