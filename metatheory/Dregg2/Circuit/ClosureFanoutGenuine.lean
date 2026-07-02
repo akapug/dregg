@@ -688,8 +688,21 @@ theorem closedLogExtract_createCellFromFactory_closed
             hash minit mfin maddrs t pre post actor newCell vk)) :
     ClosedLogExtract Slive LH hash Rfix 18 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
+  -- STEP 3: `Rfix 18 = factoryV3Carriers = withAfterOctetPins (withAfterOctetPins factoryV3
+  -- B_CHILD_VK_OCTET) B_CONTRACT_HASH_OCTET` (the two ADDITIVE carrier-octet `.piBinding` pin cohorts —
+  -- child_vk8 then contract_hash8). PEEL both cohorts (`satisfied2_of_withAfterOctetPins`, twice) down
+  -- to the base `factoryV3` so the base-level `createCellFromFactory_closedLog_sat` rung lifts to the
+  -- DEPLOYED octet-pinned descriptor the apex quantifies over.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.factoryV3
-      minit mfin maddrs t := hsat
+      minit mfin maddrs t :=
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withAfterOctetPins hash
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.factoryV3
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CHILD_VK_OCTET
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withAfterOctetPins hash
+        (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withAfterOctetPins
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.factoryV3
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CHILD_VK_OCTET)
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_CONTRACT_HASH_OCTET hsat)
   obtain ⟨actor, newCell, vk, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact createCellFromFactory_closedLog_sat hash hsat' pre post actor newCell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
