@@ -1183,11 +1183,12 @@ impl AgentCipherclerk {
         }
     }
 
-    /// **THE DOMAIN-1 UMEM-WELD PRODUCER TOGGLE.** Arm (or disarm) the staged WIDE+UMEM welded mint on
-    /// the sovereign rotated producer. STAGED / VK-RISK-FREE: when armed, a single-cohort sovereign turn
-    /// whose descriptor key has a Lean-emitted welded twin mints the welded form (the universal-memory
-    /// leg BESIDE the 8-felt commit, accepted ADDITIVELY by the deployed executor); when disarmed (the
-    /// default) the byte-identical BARE wide leg runs. Used by the loud-probe + the gated VK epoch.
+    /// **THE DOMAIN-1 UMEM-WELD PRODUCER TOGGLE.** Arm (or disarm) the WIDE+UMEM welded mint on the
+    /// sovereign rotated producer. Since the umem VK epoch (G4 — `da0c47dd6`/`443661298`) the welded
+    /// form IS the deployed default (`umem_weld_staged_enabled: true` in both constructors; the
+    /// executor DROPS the bare wide member from the accept set when a welded twin exists). This setter
+    /// survives as a runtime ROLLBACK knob only: `false` re-mints the byte-identical bare wide leg
+    /// (admitted solely for the by-design bare carve-outs + multi-cohort chain legs).
     pub fn set_umem_weld_staged_enabled(&mut self, enabled: bool) {
         self.umem_weld_staged_enabled = enabled;
     }
