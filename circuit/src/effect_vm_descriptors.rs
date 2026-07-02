@@ -1204,7 +1204,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "4640cd17c237d346518fc997887ea42f1857ab8eae1f2809313a5fbd2f52c574";
+    "a68612f0cc9bd8a3ac7cc55b7acb5538cb592b0371cc9eca31f6baaa46946465";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -2357,8 +2357,8 @@ mod tests {
             } else if key == "setFieldDynVmDescriptor2R24" {
                 // THE DYNAMIC setField fields-root weld (WAVE 3): the fifth pin welds the AFTER
                 // block's committed `fields_root` sub-limb to PI[46] (col `afterFieldsRootCol
-                // setFieldDynV1Face.traceWidth` = 331 in the v11 pre_limbs geometry — the AFTER block
-                // moved +28 with the B_SPAN 91→119 grow, over v10's 303 — the declared
+                // setFieldDynV1Face.traceWidth` = 363 in the v12 pre_limbs geometry — the AFTER block
+                // moved +32 with the B_SPAN 119→151 grow, over v11's 331 — the declared
                 // post-`fields_root` param), so a forged post-`fields_root` is UNSAT in-circuit
                 // (Lean `setFieldDynForcedV3`).
                 assert_eq!(
@@ -2367,8 +2367,8 @@ mod tests {
                 );
                 assert_eq!(
                     nullifier_pins,
-                    vec![(331, pi_base + 4)],
-                    "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (331, v11) to PI[46]"
+                    vec![(363, pi_base + 4)],
+                    "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (363, v12) to PI[46]"
                 );
             } else if key == "settleEscrowSatVmDescriptor2R24" {
                 // THE WELDED SEALED-ESCROW SATISFACTION descriptor (VK-EPOCH §6 BLOCKER 1, STAGED):
@@ -2510,16 +2510,16 @@ mod tests {
                 "wide registry key {i} name-stable with the live registry"
             );
             let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
-            // the wide member is `host + 368` (the v10 pre_limbs re-lay grew the carrier blocks) and
-            // `host.piCount + 16`. The host widths in play are 801 (custom/setFieldDyn → 1169), 829
-            // (the rotated cohort → 1197), 1287 (the heapWrite after-spine membership host, OPTION I —
-            // the splice base 815 + read appendix 329 + after-spine 143 → 1655), and the faithful
-            // 8-felt cap-open family: 1158 (non-write cap-open → 1526), 1160 (the turn-identity-pinned
-            // transferCapOpenTB → 1528) and 1301 (the cap-WRITE members with the after-spine recompute,
-            // attenuate + the delegation writes → 1669): every wide width is `host + 368`.
+            // the wide member is `host + 608` (the v12 pre_limbs re-lay grew the carrier blocks) and
+            // `host.piCount + 16`. The host widths in play are 1131 (custom/setFieldDyn → 1739), 1159
+            // (the rotated cohort GRAD_ROT_WIDTH → 1767), 1617 (the heapWrite after-spine membership
+            // host, OPTION I → 2225), and the faithful 8-felt cap-open family: 1488 (non-write
+            // cap-open → 2096), 1490 (the turn-identity-pinned transferCapOpenTB → 2098) and 1631
+            // (the cap-WRITE members with the after-spine recompute, attenuate + the delegation
+            // writes → 2239): every wide width is `host + 608`.
             assert!(
-                matches!(d.trace_width, 1169 | 1197 | 1526 | 1528 | 1655 | 1669),
-                "{key}: wide width {} is a known wide geometry (1169 / 1197 / 1526 / 1528 / 1655 / 1669)",
+                matches!(d.trace_width, 1739 | 1767 | 2096 | 2098 | 2225 | 2239),
+                "{key}: wide width {} is a known wide geometry (1739 / 1767 / 2096 / 2098 / 2225 / 2239)",
                 d.trace_width
             );
             // Every wide member carries the 16 wide-commit PIs (the 8-felt ~124-bit before/after

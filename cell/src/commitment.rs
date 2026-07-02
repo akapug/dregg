@@ -2076,8 +2076,8 @@ mod tests {
         assert_eq!(pre.len(), V9_NUM_PRE_LIMBS);
         assert_eq!(
             pre.len(),
-            67,
-            "37 base/WAVE-2/3 + 30 v10 faithful-8-felt completion limbs (37..66)"
+            112,
+            "37 base/WAVE-2/3 + 51 faithful-8-felt completion limbs (37..87, v10+v11) + 24 v12 carrier-material octets (88..111)"
         );
         // cells_root rides limb 0; the welded r0 (balance_lo) is non-zero for a funded cell.
         assert_eq!(pre[0], BabyBear::new(11));
