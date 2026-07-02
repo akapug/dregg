@@ -259,6 +259,60 @@ design: the campaign refutes its own green first, then repairs.
 "committed-in-state ≠ grounded-in-fold" (sovereign: pubkey IS committed but teeth are
 prover-free self-pins → needs the grounding hash-site).
 
+### `[@wave-2]` BANG WAVE (sovereign) — the third edge is BLOCKED-ON-WIDENING (stop-condition)
+
+Grounded at HEAD `746435722`. The sovereign third edge was ATTEMPTED and the
+stop-condition fired — the SECOND carrier after factory to hit a widening wall (this
+supersedes this row's earlier "partial, P1-then-P2 is a per-carrier wave" reading).
+
+**What is real (verified in-source):** the owner pubkey IS committed and the teeth
+columns DO exist — that part of the anchor is sound:
+- `KEY_COMMIT` teeth cols exist: `columns.rs:274-277` (aux 23..26) + PI pins
+  `air.rs:189` / `pi.rs:240`; leaf + binding node + refutation all committed
+  (`sovereign_leaf_adapter.rs`, `joint_turn_recursive.rs:900`,
+  `SovereignBackingAttack.lean`).
+- The pubkey is committed into the FAITHFUL ~124-bit 8-felt authority digest
+  (`compute_authority_digest_8` = `blake3(authority_residue_bytes)` where
+  `authority_residue_bytes` absorbs `cell.public_key`, `commitment.rs:849`) and into the
+  whole-state BLAKE3 commitment (`:209`). Both are genuinely faithful (not 31-bit).
+
+**Why the FAITHFUL third edge is NOT buildable at HEAD (the wall):** P2 requires an
+in-AIR gate `Poseidon2(pubkey_limb) == teeth` anchored to a FAITHFUL COMMITTED pubkey.
+But the owner pubkey enters felt-commitment form **only through BLAKE3 folds**
+(`commitment.rs:209/849/1850` — verified: those are the *only* sites) — it is NOT carried
+as a Poseidon2/AIR-reconstructable committed column anywhere in the rotated trace
+(`grep pubkey circuit/src/effect_vm/trace_rotated.rs` = 0 hits). The teeth today are
+row-0 self-pins (aux == PI boundary, `trace.rs:1005-1014`), off-AIR recomputed by the
+executor (`proof_verify.rs:2548 pubkey_to_witness_key_commit`); the fold's binding node
+`connect`s leg.teeth == leaf.key_commit (both prover-controlled — the vacuous connect the
+fail-open law forbids). To make the teeth non-forgeable in-AIR you need the pubkey as a
+committed AIR-reconstructable form, and there are exactly two routes, both bigger than a
+per-carrier wave:
+  - **(a) geometry widening** — surface the pubkey as named rotated pre-limbs feeding
+    `compute_rotated_pre_limbs` → `wireCommitR` → `state_commit`. `V9_NUM_PRE_LIMBS` is
+    fully allocated at 88 (limbs 67..87 are the accumulator-8-felt completion, §1d — no
+    free/reserved slot), so this GROWS the vector = a v12 geometry epoch: ALL rotated VKs
+    move, keystone re-grounds, registry-wide regen + `Rfix` re-pins, devnet re-genesis.
+    The direct mirror of factory's §5 item-9 route (a).
+  - **(b) in-AIR Ed25519** — verify the owner signature over `(key_commit, sequence,
+    anchor, new)` in-circuit, forcing `key_commit` to a verifying key. This is the NAMED
+    TERMINAL crypto seam the leaf docstring (`sovereign_leaf_adapter.rs:50-59`), the
+    binding-node seams (`joint_turn_recursive.rs:895`), and `SovereignBackingAttack.lean`
+    §C all already name as off-AIR. Not a per-carrier wave.
+
+Recomputing the committed BLAKE3 authority digest in-AIR from pubkey felts (to bind teeth
+to the existing faithful anchor without widening) is terminal-infeasible — BLAKE3 is not
+AIR-friendly (the reason it is the named off-AIR seam).
+
+**Decision:** do NOT run P1 in isolation. P1 (fill the dead-zero teeth + set
+`is_sovereign_cell = 1` + the sovereign witness arm) changes deployed sovereign-proof PI
+VALUES with ZERO soundness benefit absent P2, and wiring the fold + flipping
+`SovereignBackingAttack → SovereignBindingFromFold` on P1 alone would LAUNDER VACUITY
+(the connect stays forger-controlled). The `SovereignBackingAttack.lean` refutation
+STANDS (correct at HEAD). The sovereign third edge is blocked behind an ember-decision on
+route (a) vs (b), exactly like factory. hatchery-contract/bridge (the other DEEPEST) are
+unaffected by this finding.
+
 ---
 
 ## 4. THE BIG BANG — is it fireable now? NO. Here's the exact remaining emit.
@@ -363,6 +417,17 @@ carrier touches only {its bare + wide + welded descriptor} + 3 registry fingerpr
    is neither, and the kernel key is `CellId::derive_raw(owner_pubkey, token_id)` (owner
    AND token) while the vm key folds owner_pubkey alone — a second named divergence.
    hatchery-invariant (which RIDES the factory teeth) is blocked behind the same item.
+10. `[@wave-2]` **The sovereign third-edge WIDENING** — the BANG-WAVE (sovereign)
+    stop-condition finding (§3 sovereign row `[@wave-2]` block). Unlike factory, the owner
+    key IS committed faithfully (~124-bit 8-felt BLAKE3 authority digest), but ONLY through
+    BLAKE3 folds (`commitment.rs:209/849`) — never as an AIR-reconstructable Poseidon2 limb.
+    So P2's in-AIR `Poseidon2(pubkey_limb)==teeth` gate has no faithful anchor to bind, and
+    surfacing one is a bigger epoch: (a) a v12 geometry widening adding the pubkey to the
+    rotated pre-limbs (`V9_NUM_PRE_LIMBS` full at 88, no free slot — all rotated VKs move +
+    registry regen + devnet re-genesis), or (b) in-AIR Ed25519 (the named terminal seam).
+    P1 in isolation is forbidden (deployed-PI churn with no soundness gain; flipping the
+    refutation on P1 alone launders vacuity). Blocked behind an ember-decision on route
+    (a) vs (b). The `SovereignBackingAttack.lean` refutation STANDS.
 
 ---
 
@@ -397,9 +462,18 @@ template, de-risks the socket before the DEEPEST binds):
    4-felt OWNER_CELL_ID leaf-domain redefinition (plain connect, no in-AIR Poseidon2);
    dsl Layer A (non-VK manifest) then Layer B (dfaPiExposure).
 
-4. **sovereign P1 then P2**: P1 (non-VK) fills the dead-zero KEY_COMMIT teeth from
-   `before_cell.public_key()` + adds the sovereign arm; P2 (VK) welds the
-   `IS_SOVEREIGN_CELL`-gated in-AIR `Poseidon2(pubkey_limb)==teeth`. Ed25519 stays off-AIR.
+4. **sovereign P1 then P2**: `[@wave-2]` **ATTEMPTED AND STOPPED — the stop-condition
+   fired** (§3 sovereign row, the `[@wave-2]` block). P1 (non-VK) fills the dead-zero
+   KEY_COMMIT teeth from `before_cell.public_key()` + adds the sovereign arm; P2 (VK)
+   welds the `IS_SOVEREIGN_CELL`-gated in-AIR `Poseidon2(pubkey_limb)==teeth`. But P2's
+   faithful anchor does not exist at HEAD: the owner pubkey is committed only via BLAKE3
+   folds (`commitment.rs:209/849`), never as an AIR-reconstructable Poseidon2 limb, so the
+   in-AIR gate needs either (a) a v12 geometry widening surfacing the pubkey as a rotated
+   pre-limb (no free slot — `V9_NUM_PRE_LIMBS` full at 88) or (b) in-AIR Ed25519 (the
+   named terminal seam) — both bigger than a per-carrier wave. Do NOT run P1 alone
+   (changes deployed PI values with no soundness gain; flipping the refutation on P1 alone
+   launders vacuity). Blocked behind an ember-decision on route (a) vs (b), like factory.
+   Ed25519 stays off-AIR.
 
 5. **bridge + hatchery-contract** (DEEPEST, own lanes): bridge = the `note_spend_leaf_
    adapter.rs` G2 backing leaf + mint_hash-in-circuit + `mintV3` PI expose (NEVER fold
