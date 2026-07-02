@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "f3c25203de26437e0623c86863a6053fcbd4d24b5d4b96bbf9795743d59e0a6b";
+    "6323bb065e4083068cafbed526babe6a0a7652885fc02fe3e2e0c68a6231511d";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -2357,7 +2357,8 @@ mod tests {
             } else if key == "setFieldDynVmDescriptor2R24" {
                 // THE DYNAMIC setField fields-root weld (WAVE 3): the fifth pin welds the AFTER
                 // block's committed `fields_root` sub-limb to PI[46] (col `afterFieldsRootCol
-                // setFieldDynV1Face.traceWidth` = 303 in the v10 pre_limbs geometry, the declared
+                // setFieldDynV1Face.traceWidth` = 331 in the v11 pre_limbs geometry — the AFTER block
+                // moved +28 with the B_SPAN 91→119 grow, over v10's 303 — the declared
                 // post-`fields_root` param), so a forged post-`fields_root` is UNSAT in-circuit
                 // (Lean `setFieldDynForcedV3`).
                 assert_eq!(
@@ -2366,8 +2367,8 @@ mod tests {
                 );
                 assert_eq!(
                     nullifier_pins,
-                    vec![(303, pi_base + 4)],
-                    "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (303) to PI[46]"
+                    vec![(331, pi_base + 4)],
+                    "setFieldDyn: the fifth pin welds the AFTER fields_root weld col (331, v11) to PI[46]"
                 );
             } else if key == "settleEscrowSatVmDescriptor2R24" {
                 // THE WELDED SEALED-ESCROW SATISFACTION descriptor (VK-EPOCH §6 BLOCKER 1, STAGED):
