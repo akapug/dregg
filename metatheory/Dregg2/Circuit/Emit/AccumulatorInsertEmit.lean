@@ -166,10 +166,10 @@ deployed node8-AIR insert faithfulness, EXACTLY as `AccumulatorOpenEmit.effAccum
 (non-fitting) update shape — here the shape is CORRECT for the accumulators' genuine sorted insert. -/
 
 /-- The 8 AFTER accumulator-root weld gates: the read appendix `capRoot` group equals the committed
-AFTER accumulator block (`groupCol (EFFECT_VM_WIDTH + 119)`) — the spliced leaf opens against AFTER. -/
+AFTER accumulator block (`groupCol (EFFECT_VM_WIDTH + 151)`) — the spliced leaf opens against AFTER. -/
 def afterGroupWeldsI (groupCol : Nat → Fin 8 → Nat) (w : Nat) : List VmConstraint2 :=
   (List.finRange 8).map (fun i =>
-    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i) (groupCol (EFFECT_VM_WIDTH + 119) i))))
+    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i) (groupCol (EFFECT_VM_WIDTH + 151) i))))
 
 /-- **The SELECTOR-GATED bind gate.** With `sel = none` the bind is UNCONDITIONAL (`var a - var col =
 0`, byte-identical to a bare `eqGate` — the noteCreate/createCell families whose base economics do not
@@ -302,7 +302,7 @@ theorem accumInsertI_gate_forces (groupCol : Nat → Fin 8 → Nat) (keyCol valu
 
 /-- **`effAccumInsertV3_forces_afterMembership`** — THE STEP-B DELIVERABLE: a `Satisfied2` of the insert
 descriptor TRACE-FORCES `MembersAt8 afterRoot (key, value)` over the FULL committed AFTER accumulator
-group (`groupCol (EFFECT_VM_WIDTH + 119)`, the whole ~124-bit root) at the accumulator's published
+group (`groupCol (EFFECT_VM_WIDTH + 151)`, the whole ~124-bit root) at the accumulator's published
 `keyCol`/`valueCol` — the spliced-leaf membership in the rebuilt after-tree. -/
 theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
     (groupCol : Nat → Fin 8 → Nat) (keyCol valueCol : Nat) (sel : Option Nat)
@@ -313,7 +313,7 @@ theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
     (hsat : Satisfied2 hash (effAccumInsertV3 groupCol keyCol valueCol sel base name) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (hsel : ∀ s, sel = some s → (envAt t i).loc s = 1) :
-    MembersAt8 S8 (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 119) k))
+    MembersAt8 S8 (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 151) k))
       ((envAt t i).loc keyCol, (envAt t i).loc valueCol) := by
   set e := envAt t i with he
   set w := base.traceWidth with hw
@@ -327,10 +327,10 @@ theorem effAccumInsertV3_forces_afterMembership (S8 : Heap8Scheme)
     ⟨_, hrec⟩
   -- weld: the read capRoot group IS the committed AFTER accumulator group.
   have hroot : groupVal e (capOpenCols w).capRoot
-      = (fun k => e.loc (groupCol (EFFECT_VM_WIDTH + 119) k)) := by
+      = (fun k => e.loc (groupCol (EFFECT_VM_WIDTH + 151) k)) := by
     funext k
     have hin : VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot k)
-        (groupCol (EFFECT_VM_WIDTH + 119) k)))
+        (groupCol (EFFECT_VM_WIDTH + 151) k)))
         ∈ accumInsertConstraints groupCol keyCol valueCol sel w := by
       refine List.mem_append_left _ ?_
       exact List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
@@ -379,13 +379,13 @@ theorem effAccumInsertV3_forces_write8 (S8 : Heap8Scheme)
     (hbefore : SpineCommits8 S8 (fun k => (envAt t i).loc (groupCol EFFECT_VM_WIDTH k)) spine)
     (g : GapOpen8 S8 (fun k => (envAt t i).loc (groupCol EFFECT_VM_WIDTH k)) ((envAt t i).loc keyCol))
     (hcov : g.coversSpine spine)
-    (hafter : SpineCommits8 S8 (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 119) k))
+    (hafter : SpineCommits8 S8 (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 151) k))
                 (sortedInsert ((envAt t i).loc keyCol) spine)) :
     accumInserts8 S8
         (fun k => (envAt t i).loc (groupCol EFFECT_VM_WIDTH k))
         ((envAt t i).loc keyCol)
         ((envAt t i).loc valueCol)
-        (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 119) k)) := by
+        (fun k => (envAt t i).loc (groupCol (EFFECT_VM_WIDTH + 151) k)) := by
   have hafterMem := effAccumInsertV3_forces_afterMembership S8 groupCol keyCol valueCol sel
     base name hash minit mfin maddrs t hChip hsat i hi hnotlast hsel
   exact accumInsert_writesTo8 S8 _ _ _ _ spine hbefore g hcov hafterMem hafter

@@ -137,20 +137,20 @@ def liveOnlyWideHosts : List (String × EffectVmDescriptor2) :=
   let tbHost := Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
     Dregg2.Circuit.Emit.CapOpenEmit.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
-  let tbWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend tbHost tbBB (tbBB + 119)
+  let tbWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend tbHost tbBB (tbBB + 151)
   -- heapWrite: the AFTER-SPINE membership-forcing heap-write host (`effHeapWriteV3 heapWriteV3 …`),
   -- EXACTLY the bare `EmitWideRegistryProbe` position-46 host — the Class-A splice base widened by the
   -- heap-open READ appendix + the AFTER-spine membership appendix, so the deployed descriptor's
   -- `Satisfied2` FORCES the faithful 8-felt heap-write (`HeapOpenEmit.effHeapWriteV3_forces_write8`),
-  -- never the lane-0 squeeze the raw map_op-only splice host left. `ab = bb + 119` (`B_SPAN`).
+  -- never the lane-0 squeeze the raw map_op-only splice host left. `ab = bb + 151` (`B_SPAN`).
   let hwBB := Dregg2.Circuit.Emit.EffectVmEmitHeapRoot.heapWriteSpliceVmDescriptor.traceWidth
   let hwHost := Dregg2.Circuit.Emit.HeapOpenEmit.effHeapWriteV3
     Dregg2.Circuit.RotatedKernelRefinementExercise.heapWriteV3
     "dregg-effectvm-heapWrite-v1-rot24-v3-write-heapopen"
-  let hwWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend hwHost hwBB (hwBB + 119)
+  let hwWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend hwHost hwBB (hwBB + 151)
   let smBB := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintTickFace.traceWidth
   let smWide := Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend
-    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 119)
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.supplyMintV3 smBB (smBB + 151)
   [ ("transferCapOpenTBVmDescriptor2R24", tbWide)
   , ("heapWriteVmDescriptor2R24", hwWide)
   , ("supplyMintVmDescriptor2R24", smWide) ]
@@ -169,7 +169,7 @@ position-7 `refusalVmDescriptor2R24` crown member IN PLACE with the after-spine 
 `effCapOpenWriteV3`): the DEPLOYED refusal descriptor's `Satisfied2` FORCES the faithful 8-felt
 fields-write over the full ~124-bit BEFORE/AFTER fields-root blocks
 (`FieldsOpenEmit.effFieldsWriteV3_forces_write8`). Built at the SAME geometry the bare emit uses —
-`bb = refusalVmDescriptor.traceWidth`, `ab = bb + 119` (`B_SPAN`) — so the welded twin welds onto the
+`bb = refusalVmDescriptor.traceWidth`, `ab = bb + 151` (`B_SPAN`) — so the welded twin welds onto the
 GENUINE after-spine wide, not the stale record-pin refusal (`v3RegistryCapOpenWide`'s own position-7
 entry is the pre-after-spine refusal; the bare emit + this welded emit both override it). -/
 def refusalAfterSpineWide : EffectVmDescriptor2 :=
@@ -177,10 +177,10 @@ def refusalAfterSpineWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
     "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
   let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
-  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend rfHost rfBB (rfBB + 119)
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend rfHost rfBB (rfBB + 151)
 
 /-- **The §J′ INSERT-shaped accumulator wide hosts** — the insert twins of `refusalAfterSpineWide`. Each
-is `wideAppend (effAccumInsertV3 groupCol keyCol valueCol baseV3 …) bb (bb+119)` at the accumulator's v1
+is `wideAppend (effAccumInsertV3 groupCol keyCol valueCol baseV3 …) bb (bb+151)` at the accumulator's v1
 FACE `bb` (the SAME geometry the bare emit + `v3RegistryWideBB` use). The DEPLOYED accumulator descriptor
 FORCES the faithful 8-felt INSERT over the genuine sorted fresh-key insert (`effAccumInsertV3_forces_
 write8`), NEVER the lane-0 squeeze. Key-stable swaps into `crownWideHosts` (positions 3/4/22). -/
@@ -194,7 +194,7 @@ def noteSpendInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
     "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
-  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
 def noteCreateInsertWide : EffectVmDescriptor2 :=
   let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
@@ -206,7 +206,7 @@ def noteCreateInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
     "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
-  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
 def createCellInsertWide : EffectVmDescriptor2 :=
   let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
@@ -217,7 +217,7 @@ def createCellInsertWide : EffectVmDescriptor2 :=
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
     "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
   let bb := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth
-  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 119)
+  Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
 /-- **The 45 AUTHORITY-crown wide HOSTS** — `v3RegistryCapOpenWide` with the position-7 refusal member
 REPLACED by the after-spine `refusalAfterSpineWide` AND the §J′ accumulator positions (3/4/22:

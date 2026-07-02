@@ -85,7 +85,7 @@ base). The Rust twin is `satisfaction_weld::before_field_col`. -/
 def beforeFieldCol (k : Nat) : Nat := EFFECT_VM_WIDTH + 4 + k
 
 /-- The rotated AFTER-block field column for slot `k` (the after block based at
-`EFFECT_VM_WIDTH + B_SPAN`, the rotated block span — 119 at v11). Derived from the canonical
+`EFFECT_VM_WIDTH + B_SPAN`, the rotated block span — 151 at v12). Derived from the canonical
 `EffectVmEmitRotationV3.B_SPAN`, NOT a frozen literal, so it tracks the rotated block geometry (the
 prior hard-coded `51` was the pre-v11 `B_SPAN` and drifted the AFTER-leg gates off the producer's
 columns). The Rust twin is `satisfaction_weld::after_field_col` (`AFTER_BASE = V1_WIDTH + B_SPAN`). -/
