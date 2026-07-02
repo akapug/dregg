@@ -4673,6 +4673,123 @@ theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) 
         let env : VmRowEnv := ⟨fun c => if c == tw + 151 + off then 0 else 0, fun _ => 0, fun k => if k == 46 then 1 else 0⟩;
         decide (env.loc (tw + 151 + off) ≠ env.pub 46))   -- frozen-Live (0) ≠ sealed PI[46] ⇒ pin REJECTS
 
+/-! ## §v12 — THE DIRECT CARRIER-OCTET PI PINS (factory `child_vk` · hatchery `contract_hash`).
+
+The RESOLVED-FORK direct-pin lane (NOT the `CarrierOctetGates` eqGate wrap): the v12 carrier octets
+are already COMMITTED columns (STEP-2 producer fill, `rotation_witness.rs::produce` /
+`commitment.rs::compute_rotated_pre_limbs`), so pinning the AFTER-block octet directly to TAIL PIs
+PUBLISHES it — SAT-by-construction (a forged post-state that changed the octet mismatches the
+committed `state_commit`). Structurally identical to `withRecordPin8Headroom2` (the AFTER-block
+authority-limb pins), so the apex consumes the `rotV3_publishes`-shape forcing below. -/
+
+/-- In-block base of the v12 `child_vk` carrier octet (limbs 88..=95); `B_IROOT − 24`. Rust twin
+`trace_rotated::B_CHILD_VK_OCTET`. The hatchery-INVARIANT carrier rides this octet
+(`invariant_digest === child_vk`), so it consumes the SAME pins. -/
+def B_CHILD_VK_OCTET : Nat := B_IROOT - 24
+/-- In-block base of the v12 `contract_hash` carrier octet (limbs 96..=103); `B_IROOT − 16`. Rust
+twin `trace_rotated::B_CONTRACT_HASH_OCTET`. -/
+def B_CONTRACT_HASH_OCTET : Nat := B_IROOT - 16
+
+#guard B_CHILD_VK_OCTET == 88
+#guard B_CONTRACT_HASH_OCTET == 96
+
+/-- **`withAfterOctetPins g octetBase`** — APPEND 8 `.piBinding .last` pins publishing the AFTER-block
+committed carrier octet (`EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + octetBase + k`, `k < 8`) as 8 TAIL PIs
+(`g.piCount + k`), bumping `piCount` by 8. Mirrors `withRecordPin8Headroom2` exactly — additive, no
+site / range / mem-op / map-op touched, so every existing forcing keystone lifts by
+`List.mem_append_left` (the peel below). -/
+def withAfterOctetPins (g : EffectVmDescriptor2) (octetBase : Nat) : EffectVmDescriptor2 :=
+  { g with
+    piCount := g.piCount + 8
+    constraints := g.constraints ++ (List.range 8).map (fun k =>
+      VmConstraint2.base (.piBinding .last (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (octetBase + k))
+        (g.piCount + k))) }
+
+/-- The 8 octet pins are the ONLY constraints past the inner descriptor's (single `++`). -/
+theorem withAfterOctetPins_constraints (g : EffectVmDescriptor2) (octetBase : Nat) :
+    (withAfterOctetPins g octetBase).constraints
+      = g.constraints ++ (List.range 8).map (fun k =>
+          VmConstraint2.base (.piBinding .last (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (octetBase + k))
+            (g.piCount + k))) := rfl
+
+/-- The octet pins are `.piBinding`s, so they contribute NO mem-op (the mem log is unchanged). -/
+theorem memOpsOf_withAfterOctetPins (g : EffectVmDescriptor2) (octetBase : Nat) :
+    memOpsOf (withAfterOctetPins g octetBase) = memOpsOf g := by
+  simp [memOpsOf, withAfterOctetPins, List.filterMap_append, List.filterMap_map]
+
+/-- The octet pins contribute NO map-op (the map log is unchanged). -/
+theorem mapOpsOf_withAfterOctetPins (g : EffectVmDescriptor2) (octetBase : Nat) :
+    mapOpsOf (withAfterOctetPins g octetBase) = mapOpsOf g := by
+  simp [mapOpsOf, withAfterOctetPins, List.filterMap_append, List.filterMap_map]
+
+/-- **THE PEEL** — `Satisfied2 (withAfterOctetPins g octetBase) ⟹ Satisfied2 g`. The wrap only APPENDS
+`.piBinding` constraints (and bumps `piCount`): the inner constraints stay members
+(`List.mem_append_left`), sites / ranges / mem / map logs are unchanged, so every existing per-effect
+soundness lemma lifts to the wrapped descriptor by peeling the wrap first. Mirrors
+`satisfied2_of_withRecordPin8Headroom2`. -/
+theorem satisfied2_of_withAfterOctetPins (hash : List ℤ → ℤ) (g : EffectVmDescriptor2) (octetBase : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2 hash (withAfterOctetPins g octetBase) minit mfin maddrs t) :
+    Satisfied2 hash g minit mfin maddrs t := by
+  have hmem : memLog (withAfterOctetPins g octetBase) t = memLog g t := by
+    simp [memLog, memOpsOf_withAfterOctetPins]
+  have hmap : mapLog (withAfterOctetPins g octetBase) t = mapLog g t := by
+    simp [mapLog, mapOpsOf_withAfterOctetPins]
+  exact
+    { rowConstraints := fun i hi c hc => h.rowConstraints i hi c (by
+        rw [withAfterOctetPins_constraints]; exact List.mem_append_left _ hc)
+    , rowHashes := h.rowHashes
+    , rowRanges := h.rowRanges
+    , memAddrsNodup := h.memAddrsNodup
+    , memClosed := fun op hop => h.memClosed op (by rw [hmem]; exact hop)
+    , memDisciplined := by rw [← hmem]; exact h.memDisciplined
+    , memBalanced := by rw [← hmem]; exact h.memBalanced
+    , memTableFaithful := by rw [← hmem]; exact h.memTableFaithful
+    , mapTableFaithful := by rw [← hmap]; exact h.mapTableFaithful }
+
+/-- **`withAfterOctetPins_publishes` — THE `rotV3_publishes`-shape forcing.** On any LAST row of a
+`Satisfied2` witness, each of the 8 published TAIL PIs (`g.piCount + k`) EQUALS its committed
+AFTER-block octet column — so the apex reads the committed carrier octet off the PI vector, and a
+forged post-state octet (a laundered `child_vk` / `contract_hash`) is UNSAT (it would break both the
+pin and the committed `state_commit`). -/
+theorem withAfterOctetPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDescriptor2) (octetBase : Nat)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash (withAfterOctetPins g octetBase) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
+    ∀ k : Fin 8, (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (octetBase + k.val))
+      = (envAt t i).pub (g.piCount + k.val) := by
+  intro k
+  have hlastt : (i + 1 == t.rows.length) = true := by simp [hlast]
+  have hin : VmConstraint2.base
+      (.piBinding .last (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (octetBase + k.val)) (g.piCount + k.val))
+      ∈ (withAfterOctetPins g octetBase).constraints := by
+    rw [withAfterOctetPins_constraints]
+    exact List.mem_append_right _ (List.mem_map.mpr ⟨k.val, List.mem_range.mpr k.isLt, rfl⟩)
+  have h := hsat.rowConstraints i hi _ hin
+  simp only [VmConstraint2.holdsAt, hlastt, holdsVm_piLast_true] at h
+  exact h
+
+#assert_axioms satisfied2_of_withAfterOctetPins
+#assert_axioms withAfterOctetPins_publishes
+
+/-- **`factoryV3Carriers`** — the deployed `factoryVmDescriptor2R24` WITH the two direct carrier-octet
+pin cohorts TAIL-appended after PI 46: the `child_vk8` octet (limbs 88..=95, PI 47..54 — factory's
+installed child VK, which the hatchery-INVARIANT carrier also rides) then the `contract_hash8` octet
+(limbs 96..=103, PI 55..62 — the hatchery-mint `HpresProof::Attested` content hash, ZERO on a plain
+factory turn). `piCount 47 → 63`. Both pins publish the STEP-2-filled octet; the SDK/executor thread
+the material (`child_vk` = the executor's `effective_vk`; `contract_hash` at the hatchery-mint site). -/
+def factoryV3Carriers : EffectVmDescriptor2 :=
+  withAfterOctetPins (withAfterOctetPins factoryV3 B_CHILD_VK_OCTET) B_CONTRACT_HASH_OCTET
+
+-- The two octet cohorts land the child_vk pins at PI 47..54 and the contract_hash pins at 55..62.
+#guard factoryV3.piCount == 47
+#guard factoryV3Carriers.piCount == 63
+-- The grow-gate map-ops (accounts set-insert) survive the additive octet pins (they are `.piBinding`s).
+#guard (mapOpsOf factoryV3Carriers).length == 2
+-- traceWidth / tables / sites are untouched by the additive pins (registry invariants hold).
+#guard factoryV3Carriers.traceWidth == factoryV3.traceWidth
+#guard factoryV3Carriers.tables.length == 5
+
 /-- **`v3Registry`** — the full 35-member cohort at the rotated block (the 27 v2-graduated members
 + the 8 STEP-1-widened; keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver
 `EmitRotationV3.lean`). -/
@@ -4710,7 +4827,7 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
       withSelectorGate sel.GRANT_CAP (v3Of EffectVmEmitAttenuateA.attenuateVmDescriptor))
   , ("makeSovereignVmDescriptor2R24", makeSovereignV3)
   , ("createCellVmDescriptor2R24", createCellV3)
-  , ("factoryVmDescriptor2R24", factoryV3)
+  , ("factoryVmDescriptor2R24", factoryV3Carriers)
   , ("spawnVmDescriptor2R24", spawnV3)
   , ("receiptArchiveVmDescriptor2R24", receiptArchiveV3)
   , ("cellUnsealVmDescriptor2R24", cellUnsealV3)
