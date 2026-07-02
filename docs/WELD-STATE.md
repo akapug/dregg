@@ -250,7 +250,7 @@ design: the campaign refutes its own green first, then repairs.
 | **custom** | — | yes (PI 46–49 deployed) | **PRESENT** | none — buff-in-production. (NB: the deeper per-turn `proofBind True→boundAt` in-AIR flip + 4→8-felt lift is a SEPARATE deployed VK epoch, still pending — `docs/reference/lean-circuit.md` §Custom, `CustomApex.lean`. The recursion-tree fold is what's buffed.) |
 | **factory** | SHALLOW→**BLOCKED-ON-WIDENING** | `[@wave-1 7c4257824]` CORRECTED: child_vk is NOT committed at HEAD in ANY in-AIR form, at any width. Rotated PI 38 carries the born cell's vm KEY = `hash_to_bb(owner_pubkey)` under the MISNOMER `child_vk_derived` (`turn/src/executor/effect_vm_bridge.rs:131-139`); the actual installed authority `effective_vk` (`apply.rs:2376-2421`) never reaches the VmEffect at all; the cells leaf is `(key, key)` with 1-felt contents (`trace_rotated.rs:1167-1189` — 8-felt-ness is in the DIGESTS only, `HeapLeaf` = 1-felt addr + 1-felt value); params carry no vk limbs (factory uses param0/param1 only, both ~31-bit `fold_bytes32_to_bb` folds); the born cell's state block is off-row, bound only via byte-domain blake3 `effects_hash` (Lean `EffectVmEmitCreateCellFromFactory.lean` §RT) | absent | the third edge CANNOT be built until a faithful committed carrier of child_vk EXISTS — a WIDENING epoch first (§5 item 9: three routes + blast radii). Do NOT expose unanchored witness-column teeth (6 free param cols exist — using them = the vacuous connect). Derivation (child_vk=Poseidon2(factory_vk‖params)) = named off-AIR. |
 | **dsl** | SHALLOW | Witnessed{Dfa} `⇒ None` — commits NOTHING (`mod.rs:462`) | absent | Layer A (non-VK): split out of None → tag-20 manifest entry riding caveatCommit→PI 45. Layer B (VK): `dfaPiExposure`. Reduces to Poseidon2-CR. |
-| **membership** | SHALLOW | authorized_root committed as pointer (PI 45) + value (fields_root); sender as OWNER_CELL_ID | absent | expose (sender_leaf, authorized_root) PIs. RECOMMENDED: redefine membership leaf domain to 4-felt OWNER_CELL_ID → sender tie is a plain connect (no in-AIR Poseidon2 re-derive). Merkle path stays off-AIR (named). |
+| **membership** | `[@wave-3]` SHALLOW→**BLOCKED-ON-WIDENING** | CORRECTED: NEITHER anchor is a faithful AIR-committed felt in the rotated leg. The sender leaf is `poseidon2::hash_many(encode_hash(sender_PUBKEY))` (1-felt) — 0 hits for pubkey/sender/compress in `trace_rotated.rs`; OWNER_CELL_ID commits a DIFFERENT value (`cell_id = BLAKE3(pubkey‖token)`) by a DIFFERENT hash (`canonical_32_to_felts_4`, 4-felt) AND is ZERO-DEFAULTED in the rotated generator (`trace_rotated.rs:372-377 ..Default::default()`). The authorized_root VALUE is uncommitted: the SenderAuthorized manifest entry (tag 11) carries only the slot INDEX with `params=[0;4]` (`executor/mod.rs:341`), the value lives only in the folded `fields_root` digest (limb 36), and `verify.rs:523` DEFERS tag 11. | absent | see `[@wave-3]` block below — the third edge cannot be built non-vacuously at HEAD; the census's "plain connect to OWNER_CELL_ID / root committed as value" was WRONG (both anchors walled). |
 | **hatchery-invariant** | SHALLOW | invariant_digest === child_program_vk === FACTORY's child_vk | absent | RIDES factory's CreateCellFromFactory leg + one extra connect to a re-proved contract-attestation leaf. SHARES factory teeth. |
 | **bridge** | **DEEPEST** | the 26-limb tuple is ENTIRELY uncommitted; mint_hash read in ZERO constraints | absent | ⚑ folding `bridge_action_air` is UNSOUND (prover-chosen tuple, no Merkle/key). SOUND path: re-prove the REAL foreign note_spend STARK as a foldable G2 leaf (`note_spend_leaf_adapter.rs`, new), recompute mint_hash in-circuit, connect to a newly-exposed mint_hash PI on `mintV3`. Double-mint = orthogonal re-exec nullifier guard. |
 | **hatchery-contract** | **DEEPEST** | contract_hash stored-only (SDK `MintedKind.hpres`), off-VK, read by zero constraints | absent | NEW on-VK binding: add contract_hash[8] teeth on FactoryDescriptor + its hash. (The invariant half is shallow, rides factory.) |
@@ -312,6 +312,76 @@ VALUES with ZERO soundness benefit absent P2, and wiring the fold + flipping
 STANDS (correct at HEAD). The sovereign third edge is blocked behind an ember-decision on
 route (a) vs (b), exactly like factory. hatchery-contract/bridge (the other DEEPEST) are
 unaffected by this finding.
+
+### `[@wave-3]` BANG WAVE (membership) — the third edge is BLOCKED-ON-WIDENING (stop-condition)
+
+Grounded at HEAD `dcf9b289e`. The membership third edge was ATTEMPTED and the stop-condition
+fired — the THIRD carrier after factory + sovereign to hit a widening wall. This SUPERSEDES
+the census verdict this wave was launched with ("membership is CLASS-1, buildable NOW, no
+v12; sender anchors to OWNER_CELL_ID via a plain connect; authorized_root committed as
+pointer + value"). Two independent groundings refute BOTH halves of that verdict.
+
+**The membership relation's two endpoints (`sender_leaf`, `authorized_root`) are neither of
+them a faithful, AIR-reconstructable committed felt in the deployed rotated leg** — so there
+is nothing to `connect` a published teeth column TO. A `connect` to either would be the exact
+vacuous / dead-zero self-pin the FAIL-OPEN LAW forbids:
+
+- **SENDER (a sovereign-style wall, WORSE):** the deployed off-AIR check
+  (`membership_verifier.rs:143`) is `leaf = compress(candidate)` where `candidate` is the
+  turn sender's raw 32-byte **PUBLIC KEY** (`execute_tree.rs:1322` → `PredicateInput::Sender(pk)`)
+  and `compress` is 1-felt `poseidon2::hash_many(encode_hash(bytes))`. That value is NOT in
+  the rotated AIR: `grep pubkey|public_key|sender|compress trace_rotated.rs` = 0 hits (every
+  `hash_many` there is a STATE_COMMIT / Merkle-node hash). OWNER_CELL_ID (PI 194) does NOT
+  serve as its anchor for THREE independent reasons: (i) it commits a DIFFERENT value —
+  `cell_id = BLAKE3(pubkey ‖ token)` (`types/src/lib.rs:701`), not the pubkey; (ii) by a
+  DIFFERENT hash — `canonical_32_to_felts_4` (4-felt, `trace.rs:26`), not `hash_many` (so a
+  plain connect is a type mismatch, never satisfiable, and there is no in-AIR re-derive since
+  the 4-felt form does not yield back the 32 bytes `compress` needs); and (iii) in the ROTATED
+  generator `owner_cell_id` is **zero-defaulted** (`trace_rotated.rs:372-377`, 0 hits) — so
+  OWNER_CELL_ID is `canonical_id_to_felts_4([0;32])`, a dead-zero sentinel, exactly like the
+  sovereign KEY_COMMIT teeth. A connect to it is the vacuous connect.
+- **ROOT (uncommitted value):** `authorized_root = root_felt_from_slot(commitment)` — the low
+  4 bytes of `fields[set_root_index]`. In the rotated AIR that slot reaches committed state
+  ONLY through the folded `fields_root` digest (limb 36, whole-map Poseidon2 fold — the
+  individual felt is not recoverable without an in-AIR MAP-OPEN). The SenderAuthorized caveat
+  manifest entry (tag 11 = `SLOT_CAVEAT_TAG_SENDER_AUTHORIZED`) carries only the slot INDEX
+  with `params=[0;4]` (`executor/mod.rs:326-343`), and `verify.rs:523-529` DEFERS the tag
+  (in-AIR no-op). So binding the root needs a NEW in-AIR fields_root open gadget — not the
+  "committed as value" plain connect the verdict claimed.
+
+**The one genuinely closed seam (worth recording, but NOT sufficient):** the §5-item-4
+terminal Merkle seam is CLOSED for the LEAF. `custom_leaf_adapter::cellprogram_to_descriptor2`
+now maps `ConstraintExpr::MerkleHash` via the `TID_P2` lane-witnessing weld
+(`custom_leaf_adapter.rs:802`, Merkle-path test `:1524+`), and `merkle_poseidon2_descriptor`
+(`dsl/descriptors.rs:102`) IS a `MerkleHash` descriptor — so the REAL membership Merkle STARK
+is re-provable as a fully-witnessed foldable leaf (like dsl routing), NOT the trivial 2-felt
+tuple binder the current `membership_leaf_adapter.rs` uses (its "MerkleHash refused / path
+off-AIR" docstring at `:34-57` is STALE). BUT a fully-witnessed leaf folds VACUOUSLY without
+the third edge: the prover picks ANY `(sender, root)` pair, proves a genuine path between
+them, and nothing forces `sender == the real actor` or `root == the cell's real authorized
+set` (exactly the §A/§A′ forgeries of `MembershipBackingAttack.lean`). The walls are the
+ENDPOINT ANCHORS, not the path.
+
+**Decision:** do NOT build. Building the census's "plain connect" (leaf.sender == OWNER_CELL_ID,
+leaf.root == manifest param) would LAUNDER VACUITY — OWNER_CELL_ID is a dead-zero domain
+mismatch and the manifest param is zeroed. Do NOT touch the rotated `owner_cell_id`
+zero-default in isolation either (changing that deployed PI value has zero soundness benefit
+absent the full binding — the same "P1 alone is forbidden" logic as sovereign). The
+`MembershipBackingAttack.lean` refutation STANDS (correct at HEAD; both §A and §A′ live).
+Blocked behind an ember-decision on one of two routes, both bigger than a per-carrier wave:
+  - **(a) v12 geometry widening** — surface `compress(sender_pubkey)` as a named rotated
+    pre-limb AND open the authorized-root felt out of `fields_root` in-AIR. `V9_NUM_PRE_LIMBS`
+    is full at 88 (no free slot), so this GROWS the vector: all rotated VKs move, keystone
+    re-grounds, registry-wide regen + Rfix re-pins, devnet re-genesis. The direct mirror of
+    factory §5 item-9 (a) and sovereign §5 item-10 (a).
+  - **(b) semantic redefinition of `AuthorizedSet`** — make the authorized set a set of 4-felt
+    OWNER_CELL_IDs (not 1-felt `compress(pubkey)` leaves). This requires FIRST fixing the
+    rotated leg to actually populate `owner_cell_id` (today zero-defaulted), THEN changing the
+    executor's `membership_verifier` leaf domain to match, PLUS re-genesis of every deployed
+    cell's authorized-set root. An ember-decision about what "authorized set" MEANS, not a
+    circuit wave.
+
+hatchery-invariant does NOT ride membership; factory/sovereign/bridge are unaffected.
 
 ---
 
@@ -428,6 +498,22 @@ carrier touches only {its bare + wide + welded descriptor} + 3 registry fingerpr
     P1 in isolation is forbidden (deployed-PI churn with no soundness gain; flipping the
     refutation on P1 alone launders vacuity). Blocked behind an ember-decision on route
     (a) vs (b). The `SovereignBackingAttack.lean` refutation STANDS.
+11. `[@wave-3]` **The membership third-edge WIDENING** — the BANG WAVE (membership)
+    stop-condition finding (§3 membership row `[@wave-3]` block). The census verdict that
+    launched the wave ("CLASS-1, plain connect to OWNER_CELL_ID, root committed as value") was
+    WRONG on both anchors: (i) the sender leaf is `compress(sender_PUBKEY)` (1-felt hash_many),
+    absent from the rotated AIR — OWNER_CELL_ID is a different value (`BLAKE3(pubkey‖token)`),
+    a different hash (4-felt canonical), AND zero-defaulted in the rotated leg
+    (`trace_rotated.rs:372`); (ii) the authorized-root value is uncommitted — only in the
+    folded `fields_root` (needs an in-AIR map-open), the manifest tag-11 entry zeroes its
+    params, and `verify.rs:523` defers it. The Merkle-PATH seam (§5 item 4) IS now closed for
+    the leaf (`MerkleHash` maps via TID_P2), but a witnessed leaf folds vacuously without the
+    walled endpoint anchors. Routes: (a) a v12 geometry widening surfacing `compress(pubkey)`
+    + a fields_root open (all rotated VKs move + regen + re-genesis), or (b) a semantic
+    redefinition of `AuthorizedSet` to 4-felt OWNER_CELL_IDs (first un-defaulting the rotated
+    `owner_cell_id`, then the executor domain + set-root re-genesis — an ember-decision). P1 in
+    isolation (un-defaulting owner_cell_id alone) is forbidden (deployed-PI churn, no soundness
+    gain). The `MembershipBackingAttack.lean` refutation STANDS.
 
 ---
 
@@ -458,9 +544,16 @@ template, de-risks the socket before the DEEPEST binds):
    `prove_turn_chain_recursive → verify_turn_chain_recursive` — and flip
    `FactoryBackingAttack.lean → FactoryBindingFromFold.lean`.
 
-3. **membership + dsl** (SHALLOW, share the caveat-manifest pattern): membership via the
-   4-felt OWNER_CELL_ID leaf-domain redefinition (plain connect, no in-AIR Poseidon2);
-   dsl Layer A (non-VK manifest) then Layer B (dfaPiExposure).
+3. **membership + dsl** (SHALLOW, share the caveat-manifest pattern): `[@wave-3]` **membership
+   ATTEMPTED AND STOPPED — the stop-condition fired** (§3 membership row + §5 item 11). The
+   "4-felt OWNER_CELL_ID leaf-domain redefinition (plain connect)" the census recommended is
+   NOT buildable at HEAD: OWNER_CELL_ID is a dead-zero domain-mismatched sentinel in the
+   rotated leg and the authorized-root value is uncommitted (only in the folded fields_root).
+   Both anchors are walls; building the connect would launder vacuity. Blocked behind an
+   ember-decision (route (a) v12 widening vs (b) AuthorizedSet redefinition). **dsl is
+   unaffected** — its Layer A (non-VK manifest) then Layer B (`dfaPiExposure`) route stands
+   (the Dfa commitment rides the caveatCommit like custom, a different mechanism than the
+   membership endpoint-anchoring problem).
 
 4. **sovereign P1 then P2**: `[@wave-2]` **ATTEMPTED AND STOPPED — the stop-condition
    fired** (§3 sovereign row, the `[@wave-2]` block). P1 (non-VK) fills the dead-zero
