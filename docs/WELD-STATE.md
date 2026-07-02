@@ -249,7 +249,7 @@ design: the campaign refutes its own green first, then repairs.
 |---|---|---|---|---|
 | **custom** | — | yes (PI 46–49 deployed) | **PRESENT** | none — buff-in-production. (NB: the deeper per-turn `proofBind True→boundAt` in-AIR flip + 4→8-felt lift is a SEPARATE deployed VK epoch, still pending — `docs/reference/lean-circuit.md` §Custom, `CustomApex.lean`. The recursion-tree fold is what's buffed.) |
 | **factory** | SHALLOW→**BLOCKED-ON-WIDENING** | `[@wave-1 7c4257824]` CORRECTED: child_vk is NOT committed at HEAD in ANY in-AIR form, at any width. Rotated PI 38 carries the born cell's vm KEY = `hash_to_bb(owner_pubkey)` under the MISNOMER `child_vk_derived` (`turn/src/executor/effect_vm_bridge.rs:131-139`); the actual installed authority `effective_vk` (`apply.rs:2376-2421`) never reaches the VmEffect at all; the cells leaf is `(key, key)` with 1-felt contents (`trace_rotated.rs:1167-1189` — 8-felt-ness is in the DIGESTS only, `HeapLeaf` = 1-felt addr + 1-felt value); params carry no vk limbs (factory uses param0/param1 only, both ~31-bit `fold_bytes32_to_bb` folds); the born cell's state block is off-row, bound only via byte-domain blake3 `effects_hash` (Lean `EffectVmEmitCreateCellFromFactory.lean` §RT) | absent | the third edge CANNOT be built until a faithful committed carrier of child_vk EXISTS — a WIDENING epoch first (§5 item 9: three routes + blast radii). Do NOT expose unanchored witness-column teeth (6 free param cols exist — using them = the vacuous connect). Derivation (child_vk=Poseidon2(factory_vk‖params)) = named off-AIR. |
-| **dsl** | `[@wave-4]` SHALLOW → **CONFIRMED CLASS-1 (BUILDABLE, not walled)** | Witnessed{Dfa} `⇒ None` — commits NOTHING TODAY (`mod.rs:462`), BUT the anchor `rc` is a SELF-CONTAINED 4-felt proof-commitment (`custom_proof_pi_commitment` over the DfaProofWire PIs — the SAME host fn custom uses), not an external committed-state value → no v12 widening needed | absent today; the recipe is real (see `[@wave-4]` block) | Layer A (non-VK): split out of None → tag-20 manifest entry, `rc[0..4]` into `params[0..4]` (FAITHFUL 4-felt, NOT membership's zeroed params). Step-5: dual-expose the committed manifest `rc` PI + fold-connect to the re-proved Dfa leaf. Reduces to Poseidon2-CR (`DslBackingAttack.dslEngineBinding_of_floor`). |
+| **dsl** | `[@wave-5 BUILD-PASS]` SHALLOW → **BLOCKED-ON-VK-EMIT** (the `[@wave-4]` non-VK Layer A is REFUTED at the code level) | Witnessed{Dfa} `⇒ None` (`mod.rs:462`) — commits NOTHING TODAY, AND the `[@wave-4]` fix site is WRONG: `SLOT_CAVEAT_MANIFEST_BASE` (≈102, the V1/`BASE_COUNT=209` layout) is NOT in the DEPLOYED ROTATED fold dpis. The rotated leg's dpis are the COMPACT `pis[..V1_PI_COUNT=42]` + 4 (rotated commits/height + ONE folded `caveatCommit` felt at PI 45) = `ROT_PI_COUNT=46` (`trace_rotated.rs:427-432`); wide appends teeth after 46 (custom's rc at 46..49, `joint_turn_recursive.rs:104`). A tag-20 entry at PI≈102 would be a value the rotated fold path NEVER reads. `rc` IS still a self-contained 4-felt `custom_proof_pi_commitment` (no v12 widening) — but exposing it faithfully needs a NEW rotated-cohort PI slot appended after 46 = a **VK-affecting descriptor-emit** (the code's own `dsl_leaf_adapter.rs:72-81` §"THE BIG-BANG PIECE" already states this: "rides the VK regen"). | absent — the DUAL-EXPOSE leg leaf cannot be minted until the rotated Dfa-gated cohort emits `rc` at a fixed PI (VK regen) | STOP: Layer A as specified (`mod.rs` tag-20 at `SLOT_CAVEAT_MANIFEST_BASE`) is vacuity-laundering (dead PI offset). The sound emit is a rotated-descriptor rc-PI append + VK regen (big-bang lane), NOT non-VK. `DslBackingAttack.lean` STANDS. |
 | **membership** | `[@wave-3]` SHALLOW→**BLOCKED-ON-WIDENING** | CORRECTED: NEITHER anchor is a faithful AIR-committed felt in the rotated leg. The sender leaf is `poseidon2::hash_many(encode_hash(sender_PUBKEY))` (1-felt) — 0 hits for pubkey/sender/compress in `trace_rotated.rs`; OWNER_CELL_ID commits a DIFFERENT value (`cell_id = BLAKE3(pubkey‖token)`) by a DIFFERENT hash (`canonical_32_to_felts_4`, 4-felt) AND is ZERO-DEFAULTED in the rotated generator (`trace_rotated.rs:372-377 ..Default::default()`). The authorized_root VALUE is uncommitted: the SenderAuthorized manifest entry (tag 11) carries only the slot INDEX with `params=[0;4]` (`executor/mod.rs:341`), the value lives only in the folded `fields_root` digest (limb 36), and `verify.rs:523` DEFERS tag 11. | absent | see `[@wave-3]` block below — the third edge cannot be built non-vacuously at HEAD; the census's "plain connect to OWNER_CELL_ID / root committed as value" was WRONG (both anchors walled). |
 | **hatchery-invariant** | SHALLOW | invariant_digest === child_program_vk === FACTORY's child_vk | absent | RIDES factory's CreateCellFromFactory leg + one extra connect to a re-proved contract-attestation leaf. SHARES factory teeth. |
 | **bridge** | **DEEPEST** | the 26-limb tuple is ENTIRELY uncommitted; mint_hash read in ZERO constraints | absent | ⚑ folding `bridge_action_air` is UNSOUND (prover-chosen tuple, no Merkle/key). SOUND path: re-prove the REAL foreign note_spend STARK as a foldable G2 leaf (`note_spend_leaf_adapter.rs`, new), recompute mint_hash in-circuit, connect to a newly-exposed mint_hash PI on `mintV3`. Double-mint = orthogonal re-exec nullifier guard. |
@@ -384,6 +384,10 @@ Blocked behind an ember-decision on one of two routes, both bigger than a per-ca
 hatchery-invariant does NOT ride membership; factory/sovereign/bridge are unaffected.
 
 ### `[@wave-4]` BANG WAVE (dsl) — VERIFY-FIRST verdict: **BUILDABLE (the last clean class-1)**, NOT a stop
+> ⚠ **SUPERSEDED by `[@wave-5]` below.** The "non-VK Layer A via `SLOT_CAVEAT_MANIFEST_BASE`" recipe
+> in this block is REFUTED at the code level (that PI offset is absent from the deployed rotated fold
+> dpis; the faithful `rc` emit is VK-affecting). Read `[@wave-5]` for the corrected verdict. The paper
+> record below is retained for the shape of the reasoning, not the state.
 
 Grounded at HEAD `a64cb90ac`. dsl was the last class-1 candidate; unlike factory/sovereign/
 membership (all three STOPPED on a widening wall), the dsl VERIFY-FIRST verdict is **BUILD** —
@@ -461,6 +465,58 @@ tooth + flip together, one coordinated change, + devnet re-genesis since PI valu
 emit-site pinned). The coordinated Layer-A+Step-5+flip build was NOT executed this session (a
 correct, non-vacuous fold-tooth-biting build exceeds a safe single pass; a partial commit is
 forbidden). dsl is the ONE confirmed remaining class-1 carrier.
+
+### `[@wave-5]` BANG WAVE (dsl BUILD-PASS) — the non-VK Layer A is REFUTED; emit is VK-gated. **STOP.**
+
+Grounded at HEAD `06cde93ac`, code-level verify-first (executed the BUILD pass; stopped at Layer A
+when the fix-site failed to ground). The `[@wave-4]` recipe's Layer A — "route `rc` into the
+DEPLOYED off-AIR slot-caveat manifest (`SLOT_CAVEAT_MANIFEST_BASE`) as a tag-20 entry, making `rc` a
+FRI-bound PI of every Dfa-gated turn's deployed proof" — rests on a PI-LAYOUT MISCONCEPTION and does
+NOT hold on the deployed light-client fold path:
+
+- **The deployed fold consumes ROTATED-COMPACT legs, not the V1/`BASE_COUNT=209` layout.**
+  `prove_turn_chain_recursive → prove_chain_core_rotated` folds `RotatedParticipantLeg`s. A rotated
+  leg's dpis are built as `pis[..V1_PI_COUNT=42]` + 4 appended felts (rotated OLD/NEW commit, committed
+  height, and ONE folded `caveatCommit` felt at PI 45) = `ROT_PI_COUNT = 46`
+  (`circuit/src/effect_vm/trace_rotated.rs:427-432`, `V1_PI_COUNT=42`/`ROT_PI_COUNT=46` at `:186-188`).
+  Wide legs append their teeth AFTER 46 (custom's `custom_proof_commitment` at IR2 PI 46..49,
+  `custom_program_vk_hash` at 50..53 — `joint_turn_recursive.rs:104`, `generate_rotated_custom_wide`).
+- **`SLOT_CAVEAT_MANIFEST_BASE` (≈102) is ABSENT from the rotated fold dpis.** It is computed from the
+  V1 209-wide base layout (`pi.rs:425`, `SLOT_CAVEAT_COUNT+1`) and is written only by the V1 base-PI
+  builder (`trace.rs:1434-1440`), which the rotated wide generators do NOT run for that region — only
+  the first 42 base felts survive into a rotated leg. A tag-20 entry at PI≈102 is therefore a value the
+  rotated fold path (and every dual-expose `claim_pi_lo`) NEVER reads. Routing `rc` there churns deployed
+  PI values with ZERO soundness benefit = exactly the vacuity-laundering the anti-vacuity law forbids.
+- **The rotated caveat carrier is ONE folded felt (PI 45), not 4 exposable `rc` felts.** The rotated
+  `RotatedCaveatManifest` commits via the in-AIR `caveatCommit` chain folded to the single PI-45 felt
+  (`trace_rotated.rs:431`); `dual_expose_at` needs 4 CONSECUTIVE exposed felts to `connect` to the
+  leaf's 4-felt commitment. A single folded commitment cannot carry the 4-felt bind.
+- **The faithful emit is VK-affecting — and the code already says so.** Exposing `rc` faithfully needs a
+  NEW rotated-cohort PI slot appended after 46 (the twin of custom's 46..49), which extends the
+  descriptor's `air_public_targets` = a VK change. `circuit-prove/src/dsl_leaf_adapter.rs:64-81`
+  (§"The named big-bang piece") states this verbatim: "**THE BIG-BANG PIECE (VK-affecting
+  descriptor-emit):** the deployed turn / precondition descriptor must EMIT the Dfa caveat's
+  PI-commitment … at fixed PI slots … That emit rides the VK regen. Until it lands, the DUAL-EXPOSE Dfa
+  leg leaf … cannot be minted." When the `[@wave-4]` doc (non-VK) and the code disagree, the code wins
+  (MEMORY grounded-what-is rule) — and here the code was right all along.
+
+**Why this is milder than the factory/sovereign/membership walls (but still a STOP).** Those three need
+a v12 GEOMETRY WIDENING to faithfully commit an EXTERNAL state anchor (child_vk / owner-pubkey /
+authorized-root). dsl needs no widening — `rc` is self-referential (the sub-proof's own 4-felt output,
+`custom_proof_pi_commitment`), and the FOLD MECHANISM is fully READY (`prove_dsl_leaf_with_commitment` /
+`prove_dsl_binding_node_segmented` reuse the custom path term-for-term, `DslBackingAttack.
+dslEngineBinding_of_floor` reduces to Poseidon2-CR). dsl's gate is a plain **rotated-descriptor rc-PI
+append + VK regen** (schedule it into the big-bang / VK-epoch lane, an ember/big-bang decision), NOT a
+geometry epoch. But it IS VK-affecting, so it is NOT the "non-VK, buildable class-1" the `[@wave-4]`
+verdict promised.
+
+**What was NOT done (correctly).** No `mod.rs` Layer A churn (the tag-20-at-`SLOT_CAVEAT_MANIFEST_BASE`
+entry is vacuous), no `CarrierWitness::Dsl` fold arm, no `DslBackingAttack → DslBindingFromFold` flip.
+`DslBackingAttack.lean` STANDS at HEAD (correct — the emit is not built, and now shown to be VK-gated).
+The refutation is the resumable artifact; a re-run resumes from "schedule the VK-affecting rc-emit," not
+from a partial non-VK build. Corollary: with dsl reclassified, there is NO remaining non-VK class-1
+carrier — every off-custom carrier is either a geometry wall (factory/sovereign/membership/bridge) or a
+VK-emit gate (dsl), i.e. all remaining third edges ride a VK/geometry epoch.
 
 ---
 
@@ -629,14 +685,19 @@ template, de-risks the socket before the DEEPEST binds):
    NOT buildable at HEAD: OWNER_CELL_ID is a dead-zero domain-mismatched sentinel in the
    rotated leg and the authorized-root value is uncommitted (only in the folded fields_root).
    Both anchors are walls; building the connect would launder vacuity. Blocked behind an
-   ember-decision (route (a) v12 widening vs (b) AuthorizedSet redefinition). **dsl is
-   unaffected** — `[@wave-4]` VERIFY-FIRST verdict = **BUILD** (§3 dsl row + the `[@wave-4]` block):
-   dsl's `rc` is a SELF-CONTAINED 4-felt `custom_proof_pi_commitment` bound by the fold (custom's
-   exact mechanism), NOT an external committed anchor — it fits FAITHFULLY in a tag-20 manifest
-   entry's `params[0..4]` (unlike membership's zeroed params) with no v12 widening. Bounded build
-   (Layer A manifest split + Step-5 dual-expose/connect/fold-tooth + flip
-   `DslBackingAttack→DslBindingFromFold`), all-or-nothing (Layer A alone is forbidden — it launders
-   vacuity like the sovereign/membership P1). Not yet executed; `DslBackingAttack.lean` STANDS.
+   ember-decision (route (a) v12 widening vs (b) AuthorizedSet redefinition). **dsl:
+   `[@wave-5]` BUILD-PASS ATTEMPTED AND STOPPED** (§3 dsl row + the `[@wave-5]` block). The
+   `[@wave-4]` non-VK Layer A is REFUTED at the code level: its fix-site `SLOT_CAVEAT_MANIFEST_BASE`
+   (≈102, V1/`BASE_COUNT=209` layout) is ABSENT from the DEPLOYED ROTATED fold dpis (which are
+   `pis[..42]` + 4 = `ROT_PI_COUNT=46`, `trace_rotated.rs:427-432`; the rotated caveat carrier is ONE
+   folded felt at PI 45, not 4 exposable `rc` felts). dsl's `rc` IS still a self-contained 4-felt
+   `custom_proof_pi_commitment` (no v12 widening) and the fold mechanism is READY — but faithful
+   exposure needs a NEW rotated-cohort PI slot appended after 46 = a **VK-affecting descriptor-emit**
+   (the code's own `dsl_leaf_adapter.rs:64-81` §"THE BIG-BANG PIECE" already says "rides the VK
+   regen"). Milder than the geometry walls (self-referential anchor, no widening) but STILL VK-gated,
+   so NOT the non-VK class-1 the `[@wave-4]` verdict promised. Layer-A-at-≈102 = vacuity-laundering
+   (dead offset) — NOT built. `DslBackingAttack.lean` STANDS. **Net: NO remaining non-VK class-1
+   carrier; every off-custom third edge rides a VK or geometry epoch.**
 
 4. **sovereign P1 then P2**: `[@wave-2]` **ATTEMPTED AND STOPPED — the stop-condition
    fired** (§3 sovereign row, the `[@wave-2]` block). P1 (non-VK) fills the dead-zero
