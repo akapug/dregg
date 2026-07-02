@@ -766,10 +766,12 @@ committed AFTER cap-root — the cap-tree INSERT the light client witnesses
 (`CapInsertEmit.effCapInsertV3_forces_write8`) — while the surviving `submaskLookup` over
 `[KEEP_MASK, HELD_MASK]` enforces the narrow. The apex (`Rfix 11`) wires it.
 
-The crown binds `EFF_DELEGATION_OPS` (`1 <<< 16`) ON THE SPLICED LEAF: the conferred narrowed edge must
-still permit `EFFECT_DELEGATION_OPS` under this descriptor (the honest-producer contract the SDK route
-enforces at witness build; the delegator's held anchor permitting `EFFECT_DELEGATION_OPS` is checked
-producer-side, `from_membership_for`). -/
+The crown binds `EFF_DELEGATION_OPS` (`1 <<< 16`) ON THE SPLICED LEAF, which the honest producer
+builds AS-IS from the delegator's held (anchor) leaf — same target/tier/mask — so the facet is
+permitted whenever the anchor permits it (the honest-producer liveness invariant; the anchor check is
+`from_membership_for` producer-side). The NARROW itself rides the surviving `submaskLookup` over the
+param columns (`KEEP_MASK ⊑ HELD_MASK`); the conferred payload datum rides the spliced leaf's
+`breadstuff` field. -/
 def delegateAttenWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
     (effCapInsertV3 EffectVmEmitRotationV3.delegateAttenV3

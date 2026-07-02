@@ -3149,18 +3149,23 @@ fn build_effect_vm_cap_open_leg(
                  not the holder's genuine pre-state (no silent forge)"
             )));
         }
-        // The SPLICED leaf: the conferred edge at the fresh key. The conferred mask is the effect's
-        // payload value (`cap_entry[1]`/`intro_hash[1]`/`narrower_commitment[1]`); target/tier/expiry/
-        // breadstuff inherit the delegator's held (anchor) leaf — a delegation confers an edge over
-        // the SAME target under the delegator's committed tier.
+        // The SPLICED leaf: the conferred edge at the fresh key, conferred AS-IS from the delegator's
+        // held (anchor) leaf — same target/tier/mask/expiry (a delegation confers the held edge; the
+        // recipient's authority is bounded by the delegator's, and the crown facet the descriptor
+        // binds on the spliced leaf is therefore ALWAYS permitted whenever the anchor permits it —
+        // the honest-producer liveness invariant). The effect's conferred payload datum
+        // (`cap_entry[1]`/`intro_hash[1]` — a hash limb on the executor-bridge path, a mask on the
+        // prover-site path) rides the leaf's `breadstuff` field, binding it into the spliced digest;
+        // for delegateAtten the NARROW is enforced by the surviving submask lookup over the param
+        // columns (KEEP col 73 = the payload value ⊑ HELD col 72 = the anchor mask).
         let spliced = dregg_circuit::cap_root::CapLeaf {
             slot_hash: ins_key,
             target: cap.leaf.target,
             auth_tag: cap.leaf.auth_tag,
-            mask_lo: ins_value,
-            mask_hi: BabyBear::ZERO,
+            mask_lo: cap.leaf.mask_lo,
+            mask_hi: cap.leaf.mask_hi,
             expiry: cap.leaf.expiry,
-            breadstuff: cap.leaf.breadstuff,
+            breadstuff: ins_value,
         };
         let iw = before_tree.insert_witness(spliced).ok_or_else(|| {
             SdkError::InvalidWitness(format!(
@@ -8870,13 +8875,8 @@ mod tests {
             fresh_key, other.slot_hash,
             "fresh edge absent from the c-list"
         );
-        // The conferred mask MUST permit the crown facet the deployed descriptor binds on the
-        // SPLICED leaf (`selectedBitGate n` — the honest-producer contract).
-        assert_eq!(
-            fresh_value.as_u32() as u64 & route_eff_bit as u64,
-            route_eff_bit as u64,
-            "the conferred mask must carry the crown facet bit"
-        );
+        // (The conferred payload value is ARBITRARY — a hash limb on the executor-bridge path; the
+        // spliced leaf inherits the ANCHOR's mask as-is, so the crown facet is always permitted.)
 
         // The holder's BEFORE tree: the GENUINE deployed CanonicalCapTree (sorted, sentinel-
         // bracketed) — the tree `insert_witness` rebuilds and the cell-side root commits.
