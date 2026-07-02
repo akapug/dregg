@@ -510,9 +510,10 @@ impl RotatedParticipantLeg {
         self
     }
 
-    /// Attach a carrier witness of any variant (builder-style). NB: SIX carriers are
-    /// deployed-wired (custom / factory / hatchery / sovereign / membership / dsl); the one
-    /// staged carrier (bridge) REFUSES (fail-closed) until its wave lands.
+    /// Attach a carrier witness of any variant (builder-style). ALL SEVEN carriers are
+    /// deployed-wired (custom / factory / hatchery / sovereign / membership / dsl / bridge);
+    /// a leg whose descriptor does not pin the carrier's claim slots is REFUSED by the fold
+    /// arm's admission (fail-closed).
     pub fn with_carrier_witness(mut self, witness: CarrierWitness) -> Self {
         self.carrier_witness = Some(witness);
         self
