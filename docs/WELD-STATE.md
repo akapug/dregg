@@ -103,11 +103,13 @@ TWO FLAT-RECORD TWINS ONLY (`cell/src/commitment.rs` `compute_rotated_pre_limbs`
 `rotation_witness.rs:67`); the CIRCUIT TRACE producers DO fill genuine
 `CanonicalHeapTree8::root8()` into the accumulator lanes (nullifier 26‖67..73
 `trace_rotated.rs:1094-1110`, commitments 27‖74..80 `:1272-1287`, cells 0‖81..87
-`:1192-1207` — commit `cbaf7b05b`). Also `[@bae447985]`: the whole-image STATE_COMMIT
-DIGEST is still the 1-felt squeeze at the live default; the 8-felt chip-chain twin
-`compute_canonical_state_commitment_v9_felt8` (`commitment.rs:1219`) is the staged,
-deliberately-gated flag-day (`:1213-1217`) — the six roots are faithful as committed
-COMPONENTS, the final digest cut is the named separate epoch. This is the `fields[0..7]` / flat-mem grind, a
+`:1192-1207` — commit `cbaf7b05b`). Also `[@a1a627d4d+]` CORRECTION: the whole-image STATE_COMMIT digest flag-day
+ALREADY FIRED (`9e5a83935`, 2026-06-19) — `compute_canonical_state_commitment_v9_felt8`
+(`commitment.rs:1219`) IS the deployed end-to-end 8-felt binding (producer/executor/LC);
+the earlier "staged" reading here quoted a stale header comment (since fixed). The one
+load-bearing ~31-bit LC surface left is the `transferCapOpenTB` 1-felt V3-registry
+fallback (`full_turn_proof.rs:4285-4295`, the sole cap-open key without a wide twin) —
+the transferCapOpenTB wide-twin grind is its named close. This is the `fields[0..7]` / flat-mem grind, a
 named follow-up — it is NOT one of the six Merkle roots and does NOT block the carrier bang
 (carriers anchor to the roots, not the flat field limbs). But it IS a ~31-bit surface still
 standing; flag it as the standing crumb.

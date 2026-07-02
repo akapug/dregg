@@ -242,11 +242,13 @@ Two honest residuals in this producer: `fields[0..7]` still fold 32B → 1 felt
 (~31-bit, `// ast-grep-ignore`-allowlisted, `cell/src/commitment.rs:990`), and the
 v11 accumulator completion limbs 67..87 are zero-filled here ("until
 producer-welded", `cell/src/commitment.rs:702`) — their genuine node8 fill lives on
-the circuit trace-producer path. The faithful 8-felt whole-image digest twin
+the circuit trace-producer path. The faithful 8-felt whole-image digest
 `compute_canonical_state_commitment_v9_felt8` (`cell/src/commitment.rs:1219`)
-remains staged, not the live default — cutting the proof-bound `STATE_COMMIT` from
-the 1-felt squeeze to all 8 felts is the named flag-day
-(`cell/src/commitment.rs:1213-1217`).
+IS the live deployed binding (the flag-day fired — `9e5a83935`): producer,
+executor verifier, and light client all bind the 8-felt commit; the 1-felt
+`_v9_felt` survives with test/bench callers only. The one remaining 1-felt LC
+surface is the `transferCapOpenTB` V3-registry fallback (see
+`docs/reference/faithful-commitment.md`, residual 3).
 
 ## `Note` — the evidence substance
 

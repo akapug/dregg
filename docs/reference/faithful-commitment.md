@@ -222,15 +222,18 @@ over the commitment producers with an inline `// ast-grep-ignore` allowlist;
    until producer-welded" (`commitment.rs:702`, `rotation_witness.rs:67`) — the
    nullifier/commitments roots enter them as 1-felt `hash_bytes`
    (`commitment.rs:1019`, `:1021`).
-3. **The whole-image 8-felt STATE_COMMIT digest is the STAGED flag-day** — the
-   live default `compute_canonical_state_commitment_v9_felt`
-   (`cell/src/commitment.rs:1187`) squeezes the (faithful-component) pre-limbs to
-   ONE felt; the faithful 8-felt chip-chain twin
-   `compute_canonical_state_commitment_v9_felt8` (`:1219`) is "ADDITIVE /
-   NOT-YET-WIRED … until the rotated trace + PI + executor flag-day cuts the
-   proof-bound `STATE_COMMIT` over to all 8 felts" (`:1213-1217`). The 32-byte
-   ledger default likewise ("do NOT bump the live default — that is the flag-day,
-   G2", `:1198`).
+3. **`transferCapOpenTB` — the ONE load-bearing ~31-bit LC surface left.** The
+   whole-image 8-felt digest flag-day FIRED long ago (`9e5a83935`, 2026-06-19):
+   `compute_canonical_state_commitment_v9_felt8` (`cell/src/commitment.rs:1219`)
+   IS the deployed end-to-end binding (producer `cipherclerk.rs:5750`, executor
+   `proof_verify.rs:853` "the 1-felt waist is GONE", LC `full_turn_proof.rs:4217`);
+   a stale header comment previously claimed otherwise (fixed at `:1213`). The
+   1-felt `_v9_felt` (`:1187`) has test/bench callers only. What genuinely remains
+   1-felt on the LC wire: `transferCapOpenTB` — the sole cap-open key with NO wide
+   twin (the cohort weld refuses its multi-domain/turn-bound projection), so
+   `full_turn_proof.rs:4285-4295` falls back to the 1-felt V3 registry for it
+   alone (a reject tooth at `:4266-4272` bars the fallback for any key that HAS a
+   wide twin). Closing it = the transferCapOpenTB wide-twin grind.
 4. **The `Faithful8` type-wall** — a planned Rust newtype capstone (only
    constructor = the faithful conversions), named in
    `docs/FAITHFUL-COMMITMENT-LAW.md:84` and cross-referenced by the ast-grep rule

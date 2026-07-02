@@ -1210,12 +1210,14 @@ pub fn compute_canonical_state_commitment_v9(cell: &Cell, ctx: &V9RotationContex
 /// `EffectVmEmitRotationR.wireCommitR8` and the producer twin
 /// `dregg_turn::rotation_witness::wire_commit_8`.
 ///
-/// ADDITIVE / NOT-YET-WIRED: this is the staged faithful commitment. The live default
-/// ([`compute_canonical_state_commitment_v9_felt`]) is the 1-felt chain until the rotated trace +
-/// PI + executor flag-day cuts the proof-bound `STATE_COMMIT` over to all 8 felts (the trace-
-/// geometry cascade `B_STATE_COMMIT` 1→8 + the chip sites arity-4→arity-11). The collision-
-/// distinguishing / intermediate-carrier teeth on the chain primitive live in `dregg-circuit`
-/// (`poseidon2::wire_commit_8_*`).
+/// THE LIVE DEPLOYED COMMITMENT (the flag-day FIRED — `9e5a83935`, 2026-06-19): this 8-felt
+/// (~124-bit) chain IS the published whole-image state binding end-to-end — producer
+/// (`cipherclerk` publishes `felt8_to_bytes32` of the wide commit-8), executor verifier (WIDE
+/// registry only; the 1-felt waist is GONE), and the SDK light client. The shipped strategy
+/// kept `B_STATE_COMMIT` 1-wide in-trace and instead exposed 16 wide carrier PIs beside it.
+/// The 1-felt [`compute_canonical_state_commitment_v9_felt`] survives with test/bench callers
+/// only. The collision-distinguishing / intermediate-carrier teeth on the chain primitive live
+/// in `dregg-circuit` (`poseidon2::wire_commit_8_*`).
 pub fn compute_canonical_state_commitment_v9_felt8(
     cell: &Cell,
     ctx: &V9RotationContext,
