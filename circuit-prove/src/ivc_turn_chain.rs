@@ -2855,6 +2855,47 @@ pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 58;
 /// admission discipline.
 pub const MEMBERSHIP_CLAIM_PI_LO: usize = 50;
 
+/// **The DSL/Dfa rc claim PI base — DERIVED PER MEMBER from the committed registry row.**
+///
+/// The dsl rc-EMIT (`withDfaRcPins`, cohort-wide) pins the 4-felt DFA route-commitment
+/// carrier at FIXED trace COLUMNS (`CAVEAT_BASE + C_DFA_RC_OFF + k`, row LAST) but at
+/// PER-MEMBER PI indices: the wrap appended the rc as the LAST 4 member PIs at emit time
+/// (transfer 46..49), and the post-exposure v12 members appended their carrier teeth AFTER it
+/// (membership teeth at 50..51 on the wide transfer; sovereign KEY_COMMIT at 58..61 past its
+/// record-pin8, rc at 54..57) — so unlike factory/hatchery/sovereign/membership there is no
+/// single `*_PI_LO` constant. The sound derivation reads the leg's OWN committed descriptor:
+/// find the `PiBinding` that publishes rc lane 0 (column `CAVEAT_BASE + C_DFA_RC_OFF`, row
+/// LAST) and take its `pi_index`; [`carrier_claim_pins_admitted`] then enforces that all
+/// [`DFA_RC_LEN`](dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN) slots are contiguous
+/// pins of exactly the rc columns. A descriptor with NO rc pin (the pre-rc corpus) is refused
+/// — the fail-closed law.
+pub fn dsl_rc_claim_pi_lo(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+) -> Result<usize, String> {
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::effect_vm::trace_rotated::{C_DFA_RC_OFF, CAVEAT_BASE};
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+
+    let rc_col0 = CAVEAT_BASE + C_DFA_RC_OFF;
+    desc.constraints
+        .iter()
+        .find_map(|c| match c {
+            VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index })
+                if *row == VmRow::Last && *col == rc_col0 =>
+            {
+                Some(*pi_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            format!(
+                "dsl: leg descriptor carries NO rc pin (no last-row PiBinding at the DFA \
+                 route-commitment carrier column {rc_col0}) — the pre-rc corpus, or a member \
+                 outside the `withDfaRcPins` cohort; refusing to fold (fail-closed)"
+            )
+        })
+}
+
 /// **THE CARRIER-CLAIM ADMISSION GATE (the fold arms' fail-closed half).** A carrier fold
 /// arm may dual-expose the leg's claim slice `[claim_pi_lo .. claim_pi_lo+claim_len)` ONLY
 /// when:
@@ -3005,11 +3046,11 @@ fn prove_chain_core_rotated(
     // now TRUE on the deployed path).
     //
     // THE CARRIER ARMS: custom + the four v12 carriers (factory / hatchery / sovereign /
-    // membership) are FOLD-WIRED — each mints a dual-expose leaf at its claim PI slots (gated
-    // by `carrier_claim_pins_admitted`, which REFUSES a leg whose descriptor does not carry
-    // the STEP-3 claim pins — the big-bang regen tie) and binds the re-proven carrier leaf
-    // under its segment-preserving binding node. The two REMAINING staged arms (bridge / dsl)
-    // are explicitly FAIL-CLOSED: an unfilled carrier witness NEVER silently proves — the
+    // membership) + dsl are FOLD-WIRED — each mints a dual-expose leaf at its claim PI slots
+    // (gated by `carrier_claim_pins_admitted`, which REFUSES a leg whose descriptor does not
+    // carry the STEP-3 claim pins — the big-bang regen tie) and binds the re-proven carrier
+    // leaf under its segment-preserving binding node. The ONE REMAINING staged arm (bridge)
+    // is explicitly FAIL-CLOSED: an unfilled carrier witness NEVER silently proves — the
     // prover REFUSES the leg (no artifact) rather than silently degrading to the re-exec rung
     // with the witness attached. A turn that WANTS the re-exec rung carries
     // `carrier_witness: None` (the sanctioned path, identical to today's non-carrier turns).
@@ -3047,7 +3088,7 @@ fn prove_chain_core_rotated(
                     reason: format!("segmented custom-binding node failed: {e:?}"),
                 })?
             }
-            // THE TWO REMAINING UNFILLED CARRIER ARMS — FAIL-CLOSED (each wave fills its own
+            // THE ONE REMAINING UNFILLED CARRIER ARM — FAIL-CLOSED (its wave fills its own
             // arm; until then a leg carrying the witness is REFUSED, never silently folded
             // without its carrier binding). ⚑ BRIDGE (named residual, v12 big-bang pass): the
             // backing leaf exists (`note_spend_leaf_adapter` — the REAL note-spend STARK
@@ -3064,8 +3105,74 @@ fn prove_chain_core_rotated(
             Some(CarrierWitness::Bridge(_)) => {
                 return Err(unfilled_carrier_arm(i, "bridge"));
             }
-            Some(CarrierWitness::Dsl(_)) => {
-                return Err(unfilled_carrier_arm(i, "dsl"));
+            // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
+            // (the dsl adapter REUSES custom's leaf + binding-node machinery; the claim shape
+            // is the SAME 4-felt PI-commitment). Differences, both fail-closed:
+            //
+            //   * the rc claim slots are DERIVED per member from the leg's committed
+            //     descriptor ([`dsl_rc_claim_pi_lo`] — the `withDfaRcPins` pins ride at fixed
+            //     COLUMNS but per-member PI indices), then admitted through
+            //     `carrier_claim_pins_admitted` with the rc columns as the expected pins;
+            //   * the ZERO SENTINEL is REFUSED: a turn without a Dfa caveat publishes rc = 0
+            //     (`RotatedCaveatManifest::dfa_rc` default) — folding a witness against it
+            //     would bind a vacuous claim no predicate gated. Such a turn takes the
+            //     re-exec rung (`carrier_witness: None`), never a fabricated fold.
+            Some(CarrierWitness::Dsl(bundle)) => {
+                use dregg_circuit::effect_vm::trace_rotated::{
+                    C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN,
+                };
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                let rc_lo = dsl_rc_claim_pi_lo(&leg.descriptor)
+                    .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    rc_lo,
+                    DFA_RC_LEN,
+                    "dsl",
+                    Some((CAVEAT_BASE + C_DFA_RC_OFF, VmRow::Last)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                if leg.public_inputs[rc_lo..rc_lo + DFA_RC_LEN]
+                    .iter()
+                    .all(|f| *f == BabyBear::ZERO)
+                {
+                    return Err(TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!(
+                            "dsl: the leg's published route-commitment at PI {rc_lo}..{} is the \
+                             ZERO sentinel (no Dfa caveat gated this turn) — refusing to fold a \
+                             vacuous claim; detach the witness (carrier_witness: None) to take \
+                             the re-exec rung",
+                            rc_lo + DFA_RC_LEN
+                        ),
+                    });
+                }
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    rc_lo,
+                    DFA_RC_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dsl_leaf = crate::dsl_leaf_adapter::prove_dsl_leaf_with_commitment(
+                    &bundle.program,
+                    &bundle.witness_values,
+                    bundle.num_rows,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("dsl sub-proof leaf mint failed: {reason}"),
+                })?;
+                crate::dsl_leaf_adapter::prove_dsl_binding_node_segmented(&dual, &dsl_leaf, &config)
+                    .map_err(|e| TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!("segmented dsl-binding node failed: {e:?}"),
+                    })?
             }
             // THE FOUR v12 CARRIER FOLD ARMS (factory · hatchery · sovereign · membership) —
             // each mirrors the Custom arm: (1) ADMIT the leg's claim slots through

@@ -444,7 +444,8 @@ fn broken_order_rejected() {
 }
 
 /// **THE UNFILLED-CARRIER FAIL-CLOSED TOOTH (Step-2 witness socket).** The generalized
-/// `CarrierWitness` socket carries six STAGED variants whose fold arms have not landed. The
+/// `CarrierWitness` socket carries ONE remaining STAGED variant (bridge) whose fold arm has
+/// not landed (custom/factory/hatchery/sovereign/membership/dsl are fold-wired). The
 /// fail-closed law: an unfilled carrier witness NEVER silently proves — attaching one must make
 /// the chain prover REFUSE (no artifact at all), never silently degrade to the plain segment
 /// leaf (which would yield a verifying artifact that does NOT witness the promised carrier

@@ -33,8 +33,8 @@ use dregg_circuit::field::BabyBear;
 use dregg_circuit_prove::factory_leaf_adapter::FactoryBackingWitness;
 use dregg_circuit_prove::hatchery_leaf_adapter::HatcheryAttestationWitness;
 use dregg_circuit_prove::joint_turn_aggregation::{
-    CarrierWitness, FactoryWitnessBundle, HatcheryWitnessBundle, MembershipWitnessBundle,
-    RotatedParticipantLeg, SovereignWitnessBundle,
+    CarrierWitness, DslWitnessBundle, FactoryWitnessBundle, HatcheryWitnessBundle,
+    MembershipWitnessBundle, RotatedParticipantLeg, SovereignWitnessBundle,
 };
 use dregg_circuit_prove::membership_leaf_adapter::SenderMembershipWitness;
 use dregg_circuit_prove::sovereign_leaf_adapter::{KEY_COMMIT_LEN, SovereignAuthorityWitness};
@@ -81,6 +81,11 @@ pub struct RetainedCarrierMaterial {
     /// Sender-membership (`SenderAuthorized { PublicRoot }`-caveated turn): the
     /// `(sender_leaf, authorized_root)` tuple the caveat check verified.
     pub membership: Option<SenderMembershipWitness>,
+    /// DSL/Dfa route (a `Witnessed{Dfa}`-caveated turn): the re-provable predicate-transition
+    /// bundle the turn-build proved locally ([`retain_dfa_route`] — the `DfaProofWire` on the
+    /// wire carries only `(public_inputs, stark)`, never the trace witness, so a rehydrated
+    /// turn cannot fill this lane).
+    pub dsl: Option<DslWitnessBundle>,
 }
 
 impl RetainedCarrierMaterial {
@@ -90,6 +95,7 @@ impl RetainedCarrierMaterial {
             && self.hatchery.is_none()
             && self.sovereign.is_none()
             && self.membership.is_none()
+            && self.dsl.is_none()
     }
 
     /// **THE ATTACH SITE** — the four-carrier mirror of the custom wire's
@@ -168,6 +174,9 @@ impl RetainedCarrierMaterial {
         if let Some(b) = MembershipWitnessBundle::from_retained_membership(self.membership.as_ref())
         {
             set(CarrierWitness::Membership(b), &mut witness)?;
+        }
+        if let Some(b) = DslWitnessBundle::from_retained_dsl(self.dsl.as_ref()) {
+            set(CarrierWitness::Dsl(b), &mut witness)?;
         }
 
         Ok(match witness {
@@ -291,6 +300,40 @@ pub fn retain_sender_membership(
     Some(SenderMembershipWitness {
         sender_leaf: dregg_commit::typed::compress_member(sender_pk),
         authorized_root,
+    })
+}
+
+/// Retain the DSL/Dfa ROUTE witness for a `Witnessed{Dfa}`-caveated turn — the dsl mirror of
+/// how custom retains its proof wire (`BoundCustomProof` keeps `witness_values`/`num_rows`
+/// only when built locally). The retention site is the turn-build that PROVES the
+/// `DfaProofWire` (`dregg_turn::executor::membership_verifier::prove_dfa_transition` consumes
+/// exactly these arguments), which is the only place the trace witness exists: the wire
+/// itself carries only `(public_inputs, stark)` bytes, so a wire-rehydrated turn has nothing
+/// to retain here (the re-exec rung — the off-AIR `DslCircuitDfaVerifier` still verifies it).
+///
+/// * `program` is resolved from the HOST-TRUSTED `ProgramRegistry` by the caveat's
+///   `vk_hash` commitment — the SAME fail-closed lookup the off-AIR verifier performs, so a
+///   self-declared circuit is never retained (**fail-closed `None`** when unregistered).
+/// * `wire_public_inputs` are the `DfaProofWire.public_inputs`; the fold's binding requires
+///   `custom_proof_pi_commitment(wire_public_inputs)` == the leg's published rc, which holds
+///   by construction when the SAME inputs fed `dfa_route_commitment` into the leg's caveat
+///   manifest (`RotatedCaveatManifest::dfa_rc`).
+///
+/// The fold arm additionally refuses the ZERO rc sentinel, so retaining this lane for a
+/// turn that carries no Dfa caveat cannot fold a vacuous claim — it is refused loudly.
+pub fn retain_dfa_route(
+    programs: &dregg_circuit::dsl::circuit::ProgramRegistry,
+    vk_hash: &[u8; 32],
+    witness_values: &std::collections::HashMap<String, Vec<BabyBear>>,
+    num_rows: usize,
+    wire_public_inputs: &[BabyBear],
+) -> Option<DslWitnessBundle> {
+    let program = programs.get(vk_hash)?;
+    Some(DslWitnessBundle {
+        program: program.clone(),
+        witness_values: witness_values.clone(),
+        num_rows,
+        public_inputs: wire_public_inputs.to_vec(),
     })
 }
 

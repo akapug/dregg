@@ -177,9 +177,13 @@ pub enum CarrierWitness {
     /// (`MEMBERSHIP_CLAIM_PI_LO`) to the re-proven membership leaf; pin-less legs are refused
     /// (fail-closed, the big-bang regen tie).
     Membership(MembershipWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the DSL/Dfa carrier's re-provable predicate
-    /// program witness (structurally the custom shape — the dsl adapter REUSES the custom leaf
-    /// machinery).
+    /// FOLD-WIRED (the 6th carrier): the DSL/Dfa carrier's re-provable predicate program
+    /// witness (structurally the custom shape — the dsl adapter REUSES the custom leaf
+    /// machinery). The fold arm derives the rc claim slots per member from the leg's
+    /// committed descriptor (`ivc_turn_chain::dsl_rc_claim_pi_lo` — the `withDfaRcPins`
+    /// cohort-wide emit), REFUSES a pin-less descriptor AND the zero rc sentinel (a no-Dfa
+    /// turn never folds a vacuous claim), and binds the re-proven DSL transition leaf to the
+    /// published route-commitment.
     Dsl(DslWitnessBundle),
 }
 
@@ -407,11 +411,13 @@ impl MembershipWitnessBundle {
     }
 }
 
-/// STAGED DSL/Dfa-carrier bundle — structurally the CUSTOM shape (the dsl adapter
+/// FOLD-WIRED DSL/Dfa-carrier bundle — structurally the CUSTOM shape (the dsl adapter
 /// [`crate::dsl_leaf_adapter::prove_dsl_leaf_with_commitment`] REUSES
 /// `prove_custom_leaf_with_commitment`): the re-provable predicate-transition `CellProgram` +
-/// trace witness + PIs. Fold arm FAIL-CLOSED until the dsl wave lands it.
-#[derive(Clone)]
+/// trace witness + PIs. For an honest bundle
+/// `custom_proof_pi_commitment(public_inputs)` equals the leg's published route-commitment
+/// (the `dfa_route_commitment` rc PIs) — the fold's `connect` requires it.
+#[derive(Clone, Debug)]
 pub struct DslWitnessBundle {
     /// The Dfa predicate-transition `CellProgram` the sub-proof attests.
     pub program: dregg_circuit::dsl::circuit::CellProgram,
@@ -437,6 +443,18 @@ impl DslWitnessBundle {
             num_rows: bound.num_rows?,
             public_inputs: bound.public_inputs.clone(),
         })
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the dsl twin of
+    /// `SovereignWitnessBundle::from_retained_authority`. The turn-build path RETAINS the
+    /// Dfa predicate-transition material (program + trace witness + the `DfaProofWire`
+    /// public inputs) at the site that PROVED the wire
+    /// (`dregg_turn::executor::membership_verifier::prove_dfa_transition` holds exactly
+    /// this); a wire-rehydrated turn retains nothing — the `DfaProofWire` carries only
+    /// `(public_inputs, stark)` bytes, never the trace witness — so it projects `None`:
+    /// the re-exec rung, FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_dsl(retained: Option<&DslWitnessBundle>) -> Option<Self> {
+        retained.cloned()
     }
 }
 
@@ -470,9 +488,9 @@ impl RotatedParticipantLeg {
         self
     }
 
-    /// Attach a carrier witness of any variant (builder-style). NB: only the
-    /// [`CarrierWitness::Custom`] arm is deployed-wired today; the six staged carriers'
-    /// fold arms REFUSE (fail-closed) until their waves land.
+    /// Attach a carrier witness of any variant (builder-style). NB: SIX carriers are
+    /// deployed-wired (custom / factory / hatchery / sovereign / membership / dsl); the one
+    /// staged carrier (bridge) REFUSES (fail-closed) until its wave lands.
     pub fn with_carrier_witness(mut self, witness: CarrierWitness) -> Self {
         self.carrier_witness = Some(witness);
         self
