@@ -5423,6 +5423,26 @@ impl AgentCipherclerk {
         let mut ctx_ledger = dregg_cell::Ledger::new();
         let _ = ctx_ledger.insert_cell(before_cell.clone());
 
+        // v12 CARRIER MATERIAL (STEP-2.5) — capture the REAL child VK so a factory turn's AFTER
+        // commitment publishes the installed child VK on octet 88..95 (non-zero), not the vacuous
+        // `Default` zero the generic path carries. The effective child VK the executor installs
+        // (`apply_create_cell_from_factory`'s `effective_vk`) is `params.program_vk` for the Fixed /
+        // FromSet / None strategies; a Derived VK is computed by the executor from the factory
+        // descriptor's `base_vk`, which the ledgerless SDK cannot recompute — such a turn carries the
+        // claimed `program_vk` here (the caller supplies the resolved child VK on the Derived path).
+        // The octet rides the AFTER block ONLY (the child is BORN by this turn); the BEFORE block keeps
+        // the zero octet, so before/after commitments differ by exactly the carried child VK. The
+        // `Default` (None) on every non-factory lead leaves octet 88 zero, as required.
+        let after_material = match effects.first() {
+            Some(Effect::CreateCellFromFactory { params, .. }) => {
+                dregg_cell::commitment::RotationCarrierMaterial {
+                    child_vk: params.program_vk,
+                    contract_hash: None,
+                }
+            }
+            _ => dregg_cell::commitment::RotationCarrierMaterial::default(),
+        };
+
         let before_w = rw::produce(
             &before_cell,
             &ctx_ledger,
@@ -5437,7 +5457,7 @@ impl AgentCipherclerk {
             &nullifier_root,
             &commitments_root,
             &receipt_hashes,
-            &Default::default(),
+            &after_material,
         );
 
         // THE REFUSAL `fields_root` WRITE-GATE CONTEXT (the light-client close's deployed prover wire).

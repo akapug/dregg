@@ -917,6 +917,147 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
     }
 }
 
+/// STEP-2.5 CARRIER-MATERIAL VERIFICATION — the factory `child_vk8` (octet 88..=95) and the hatchery
+/// `contract_hash8` (octet 96..=103) rotated carrier octets carry the REAL threaded material NON-ZERO
+/// in the deployed commitment, and the THREE producers of the rotated pre-limbs agree octet-for-octet:
+///   1. `dregg_turn::rotation_witness::produce` (the turn-side flat producer the SDK commit sites
+///      thread — `cipherclerk::prove_sovereign_turn_rotated` for a factory turn / a hatchery mint),
+///   2. `dregg_cell::commitment::compute_rotated_pre_limbs` (the cell-side flat producer, the SDK's
+///      `before_commit_8` debug cross-check twin),
+///   3. the `fill_block` trace generator (which copies the block witness's `pre_limbs` — octets < 112
+///      — into the AFTER block, then chains `state_commit` over them).
+/// Before STEP-2.5 every producer passed `Default` material → the octets published ZERO (VACUOUS,
+/// the whole point of this step); this asserts the honest turn now publishes the executor-installed
+/// child VK / the `HpresProof::Attested` contract hash, and that all three producers still agree.
+#[test]
+fn rotated_carrier_octets_carry_real_child_vk_and_contract_hash_three_way() {
+    use dregg_cell::commitment::{RotationCarrierMaterial, compute_rotated_pre_limbs};
+    use dregg_circuit::effect_vm::bytes32_to_8_limbs;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, generate_rotated_create_from_factory_wide,
+    };
+    use dregg_circuit::heap_root::HeapLeaf;
+
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[7u8; 32]];
+
+    let before_cell = producer_cell(40_000, 0);
+    let after_cell = producer_cell(40_000, 1);
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let st = CellState::new(40_000, 0);
+    // The factory grow-gate births the derived child key (`param1 = CHILD_VK_DERIVED`) into the
+    // accounts set; a non-zero key that is NOT already present (the `.absent` no-collision op).
+    let factory_effect = Effect::CreateCellFromFactory {
+        factory_vk: BabyBear::new(0xFAC),
+        child_vk_derived: BabyBear::new(0xCE11),
+    };
+    let before_accounts = vec![
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
+    ];
+
+    // A closure asserting one octet is threaded byte-identically by all three producers, and is the
+    // real (non-zero) material — with the BEFORE block staying ZERO (the carrier is born by the turn).
+    let check_octet = |material: RotationCarrierMaterial, base: usize, expect8: [BabyBear; 8]| {
+        assert!(
+            expect8.iter().any(|f| *f != BabyBear::ZERO),
+            "the threaded carrier material is NON-ZERO (non-vacuous)"
+        );
+        // producer #1 — the turn-side flat producer: material on the AFTER block only.
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nullifier_root,
+            &commitments_root,
+            &receipt_log,
+            &material,
+        );
+        assert_eq!(
+            &after_w.pre_limbs[base..base + 8],
+            &expect8[..],
+            "producer #1 (rotation_witness::produce) AFTER octet == the threaded material"
+        );
+        assert!(
+            before_w.pre_limbs[base..base + 8]
+                .iter()
+                .all(|f| *f == BabyBear::ZERO),
+            "the BEFORE block keeps the ZERO octet (Default material — the child/attestation is born \
+             by this turn)"
+        );
+        // producer #2 — the cell-side flat producer (the SDK's debug cross-check twin), SAME material.
+        let after_pre = compute_rotated_pre_limbs(
+            &after_cell,
+            &V9RotationContext {
+                cells_root: after_w.pre_limbs[0],
+                nullifier_root,
+                commitments_root,
+                iroot: after_w.iroot,
+                material,
+            },
+        );
+        assert_eq!(
+            &after_pre[base..base + 8],
+            &expect8[..],
+            "producer #2 (compute_rotated_pre_limbs) agrees octet-for-octet"
+        );
+        // producer #3 — the fill_block trace generator (via the deployed factory wide wrapper; the
+        // octet is a copied witness limb, so the copy-agreement is generator-independent).
+        let (trace, _dpis, _mh) = generate_rotated_create_from_factory_wide(
+            &st,
+            &[factory_effect.clone()],
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &empty_caveat_manifest(),
+            &before_accounts,
+        )
+        .expect("factory wide trace generates over the carrier-material after-witness");
+        let trace_after: Vec<BabyBear> = (0..8).map(|i| trace[0][AFTER_BASE + base + i]).collect();
+        assert_eq!(
+            trace_after, expect8,
+            "producer #3 (fill_block trace) carries the SAME octet — the 3-way agreement holds"
+        );
+    };
+
+    // FACTORY: octet 88..=95 = the executor-installed effective child VK (`params.program_vk` on the
+    // SDK path). Non-zero, threaded, three-way-agreeing.
+    let child_vk = [0x9Au8; 32];
+    check_octet(
+        RotationCarrierMaterial {
+            child_vk: Some(child_vk),
+            contract_hash: None,
+        },
+        B_CHILD_VK_OCTET,
+        bytes32_to_8_limbs(&child_vk),
+    );
+
+    // HATCHERY: octet 96..=103 = the `HpresProof::Attested{contract_hash}` forever-crown hash.
+    let contract_hash = [0xC7u8; 32];
+    check_octet(
+        RotationCarrierMaterial {
+            child_vk: None,
+            contract_hash: Some(contract_hash),
+        },
+        B_CONTRACT_HASH_OCTET,
+        bytes32_to_8_limbs(&contract_hash),
+    );
+}
+
 /// THE C7 LAST-FLIP-GATE (end-to-end, in-circuit): a real ROTATED `SetField` turn AND a real
 /// ROTATED `BridgeMint` turn each prove + verify through their rotated descriptors
 /// (`setFieldVmDescriptor2-{slot}R24` / `mintVmDescriptor2R24`), and the NONCE-TICK SOUNDNESS
