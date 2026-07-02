@@ -100,8 +100,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
    beforeCapRootCol afterCapRootCol beforeDelegRootCol afterDelegRootCol
    beforeCapRootCols afterCapRootCols writesTo8 withSelectorGate withSelectorGate_satisfied2
    heldReadOpRot keepWriteOpRot removeWriteOpRot
-   delegateAttenV3_non_amp attenuateV3_non_amp
-   refreshDelegationWriteV3_forces_write)
+   delegateAttenV3_non_amp attenuateV3_non_amp)
 open Dregg2.Circuit.Emit.CapOpenEmit
   (introduceWriteCapOpenV3 revokeDelegationWriteCapOpenV3 refreshDelegationWriteCapOpenV3
    delegateWriteCapOpenV3 grantCapWriteCapOpenV3
@@ -1203,13 +1202,16 @@ record-layer §7 binding (`delegRoot_moves_under_spec`) tied that move to the `D
 WRITE was a prover-supplied `SpineCommits` hypothesis (`RefreshDelegationCapsTreeEncodes.hold`/`.hnew`),
 unanchored to any in-circuit write gate — `EffectVmEmitRefreshDelegation.delegRoot_runtime_column_pending`.
 
-The close mirrors the cap-write rebase exactly, on the DELEG tree: the DEPLOYED `refreshDelegationWriteV3`
-(`v3OfWithCapWrite …Genuine [delegReadOpRot, delegUpdateWriteOpRot]`) carries the in-row DELEG-tree
-UPDATE-write on the ROTATED before/after limbs (note-spend-shaped — refresh FREEZES `caps` on the v1
-column, so the rotated cap-root limb is free to carry the DELEG accumulator). `refreshDelegationWriteV3_forces_write`
-FORCES `writesTo deleg_root_before child_key snapshot deleg_root_after` from `Satisfied2`; `writesTo` is
-FUNCTIONAL under CR — a forged post-deleg-root is UNSAT. With this rung the apex consumes `Satisfied2` of a
-descriptor that FORCES the delegations-tree write — refreshDelegation reaches CLASS A. -/
+The close mirrors the attenuate UPDATE-shaped keystone exactly, on the DELEG tree: the DEPLOYED
+`refreshDelegationWriteCapOpenV3` (`effCapOpenWriteV3` over the map-op-free `refreshDelegationWriteV3`
+base) carries the after-spine UPDATE-AT-KEY over the ROTATED before/after 8-felt root groups
+(note-spend-shaped — refresh FREEZES `caps` on the v1 column, so the rotated cap-root group is free to
+carry the DELEG accumulator). `effCapOpenWriteV3_forces_write8` FORCES the faithful 8-felt
+`writesTo8 deleg_root_before child_key snapshot deleg_root_after` from `Satisfied2` — a forged
+post-deleg-root is UNSAT. (The arity-2 scalar `delegReadOpRot`/`delegUpdateWriteOpRot` pair was
+shape-UNSAT against the deployed native-8-felt witness heaps and is DROPPED.) With this rung the apex
+consumes `Satisfied2` of a descriptor that FORCES the delegations-tree write — refreshDelegation reaches
+CLASS A. -/
 
 /-- **`RefreshDelegationWriteAnchor` — the realizable trace seam for refreshDelegation** (the DELEG-tree
 UPDATE on the moving genuine face). The decode's DELEG sorted-tree roots (`RefreshDelegationCapsTreeEncodes`'s
@@ -1231,8 +1233,8 @@ structure RefreshDelegationWriteAnchor (S8 : Cap8Scheme)
   newAnchored : henc.newRoot = afterCapRootCols (envAt tr row)
 
 /-- **`refreshDelegation_descriptorRefines_sat` — THE REFRESHDELEGATION CLASS-A REFINEMENT (DELEG write
-FORCED).** From `Satisfied2 hash refreshDelegationWriteV3` (via `refreshDelegationWriteV3_forces_write` on
-the moving genuine face), the kernel `RefreshDelegationSpec` HOLDS AND the post DELEG-root is the
+FORCED).** From `Satisfied2 hash (effCapOpenWriteV3 refreshDelegationWriteV3 name n)` (via
+`effCapOpenWriteV3_forces_write8` on the moving genuine face), the kernel `RefreshDelegationSpec` HOLDS AND the post DELEG-root is the
 DEPLOYED-FORCED genuine sorted UPDATE-AT-KEY of the child's snapshot at the child key against the
 membership-opened before DELEG-root. The `delegRoot_runtime_column_pending` supplied-digest gap is GONE —
 guarantee A circuit-forced over the delegations tree. The `refreshDelegationsMap` overwrite + frame + log
@@ -1255,7 +1257,7 @@ theorem refreshDelegation_descriptorRefines_sat (S8 : Cap8Scheme)
     anc.row anc.hrow anc.hnotlast
 
 /-- **CLASS-A TOOTH (refreshDelegation) — a forged wrong post-deleg-root is UNSAT.** Mutation: dropping
-`delegUpdateWriteOpRot` from `refreshDelegationWriteV3` removes the forced `writesTo`, so this conclusion
+the after-spine welds from `effCapOpenWriteV3` removes the forced `writesTo8`, so this conclusion
 can no longer be drawn — editing the deleg-write descriptor reds the apex. -/
 theorem refreshDelegation_sat_forces_delegroot (S8 : Cap8Scheme)
     (pre post : RecChainedState) (actor child : CellId)
@@ -1295,12 +1297,12 @@ theorem refreshDelegation_descriptorRefines_capOpenSat (S8 : Cap8Scheme)
 #assert_axioms refreshDelegation_sat_forces_delegroot
 #assert_axioms refreshDelegation_descriptorRefines_capOpenSat
 
-/-! `revokeCapability` (tag 24) needs NO strip bridge: its DEPLOYED write rides `revokeCapabilityV3` directly
-(`v3OfWith … [heldReadOp, removeWriteOp]`), whose `revokeCapability_descriptorRefines_sat` (§3.A) already
-carries the `Satisfied2 revokeCapabilityV3` write leg. The apex wires that rung over `revokeCapabilityV3`; the
-cap-open wrapper's authority appendix rides the SEPARATE `revokeCapabilityCapOpenV3` keystone
-(`revokeCapabilityCapOpenV3_authorizes`). The two legs (authority READ via the cap-open wrapper, cap-tree
-WRITE via `revokeCapabilityV3`) are independent rungs the apex composes. -/
+/-! `revokeCapability` (tag 24): the write leg rides the REMOVE-shaped keystone wrap
+(`effCapRemoveV3 revokeCapabilityV3` = `revokeCapabilityWriteCapOpenV3`, §3.A below — the SDK's
+effective write route), mirroring `revokeDelegation_descriptorRefines_capOpenSat`. The apex's `Rfix 24`
+stays on the authority-only `revokeCapabilityCapOpenV3` keystone
+(`revokeCapabilityCapOpenV3_authorizes`); the §3.A write rung is the light-client REMOVE the SDK route
+proves+verifies. -/
 
 #assert_axioms delegate_descriptorRefines_capOpenSat
 #assert_axioms grantCap_descriptorRefines_capOpenSat
@@ -1353,138 +1355,177 @@ private def demoSpine : List ℤ := [10, 20, 30]
 #assert_axioms grantCap_descriptorRefines_sat
 #assert_axioms delegateAtten_descriptorRefines_sat
 
-/-! ## §3.A — revokeCapability: CLASS A from the DEPLOYED `revokeCapabilityV3` (the write-leg IS deployed).
+/-! ## §3.A — revokeCapability: CLASS A from the DEPLOYED REMOVE-shaped keystone wrap
+(`effCapRemoveV3 revokeCapabilityV3` — the write-leg IS deployed).
 
-Unlike the §1–§3 modelled-`SpineCommits` decodes and §3.5's moving-face gaps, `revokeCapability` carries its
-remove-WRITE on the live wire AT HEAD already: `revokeCapabilityV3 = v3OfWith … [.mapOp heldReadOp, .mapOp
-removeWriteOp]`, `removeWriteOp` being the genuine `writesTo cap_root key 0 cap_root_after` (the ZERO-sentinel
-remove). So `revokeCapability` is CLASS A by the same recipe Birth/Notes/cellSeal use — the DEPLOYED gate
-forces the felt-level cap-tree write, and a `WitnessDecodes`-class seam lifts it to the kernel `removeEdgeCaps`
-move. `revokeCapabilityV3_non_amp` (mirrors `attenuateV3_non_amp`) forces `opensTo` (held authenticated) +
-`writesTo … 0 …` (the ZERO remove) from `Satisfied2 hash revokeCapabilityV3`; the `capsMoveDecodes` seam lifts
-the forced write to `removeEdgeCaps`. No submask lookup — revoke deletes a slot, non-amplification is
-structural. -/
-
-theorem revokeCapabilityV3_non_amp (hash : List ℤ → ℤ)
-    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.REVOKE_CAPABILITY = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY))
-        (some ((envAt t i).loc (prmCol HELD_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) 0
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (heldReadOpRot sel.REVOKE_CAPABILITY),
-      .mapOp (removeWriteOpRot sel.REVOKE_CAPABILITY)] :
-      List Dregg2.Circuit.DescriptorIR2.VmConstraint2), c ∈ revokeCapabilityV3.constraints :=
-    fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (heldReadOpRot sel.REVOKE_CAPABILITY)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (removeWriteOpRot sel.REVOKE_CAPABILITY)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
+The arity-2 scalar map-op pair (`heldReadOpRot`/`removeWriteOpRot`) was shape-UNSAT against the deployed
+arity-7 `CanonicalCapTree` (its arity-2 heap fold never matches the native-8-felt witness heaps, and its
+scalar root left the seven high felts unbound) and is DROPPED from `revokeCapabilityV3`. The cap-tree
+REMOVE is now FORCED by the SHAPE-MATCHED keystone wrap: `effCapRemoveV3 revokeCapabilityV3` FORCES the
+removed-leaf membership in BEFORE (`CapRemoveEmit.effCapRemoveV3_forces_write8` → `capRemoves8`; the
+AFTER root is the deployed tombstone zero-fold `cap_root.rs::CanonicalCapTree::remove_witness` — exactly
+the executor's `capabilities.revoke` tombstone semantics). The `capsMoveDecodes` seam lifts the forced
+8-felt remove to the kernel `removeEdgeCaps` move. No submask lookup — revoke deletes a slot,
+non-amplification is structural. Mirrors `revokeDelegation_descriptorRefines_capOpenSat` EXACTLY. -/
 
 /-- **`RevokeCapabilityTraceReadout` — the realizable circuit-witness extraction for revokeCapability.** The
 `WitnessDecodes` class of cellSeal's `CellSealTraceReadout`: the ACTIVE cap-graph row + its selector + the
-cap-remove seam (the deployed-forced ZERO-write IS the kernel `removeEdgeCaps` move) + receipt + frame. -/
-structure RevokeCapabilityTraceReadout (hash : List ℤ → ℤ)
+cap-remove seam (the deployed-forced 8-felt tombstone REMOVE IS the kernel `removeEdgeCaps` move) +
+receipt + frame + the REMOVE-shaped realizable carriers (what the deployed
+`CanonicalCapTree::remove_witness` computes — the readout twin of `RevokeDelegationWriteAnchor`'s
+carrier fields): the BEFORE cap-root commits a sorted spine, and the revoked key's non-membership
+bracket in the AFTER tree (the pred/succ `GapOpen` covering the REMOVED spine) is genuinely realizable
+— after the tombstone the neighbors bracket the gone key. -/
+structure RevokeCapabilityTraceReadout (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pre post : RecChainedState) (holder target : CellId) : Type where
   row : Nat
   hrow : row < t.rows.length
   hsel : (envAt t row).loc sel.REVOKE_CAPABILITY = 1
+  -- the faithful cap-tree↔kernel-`Caps` encoding seam (a HYPOTHESIS, never an axiom): the forced
+  -- 8-felt tombstone REMOVE at the crown-opened leaf IS the kernel `removeEdgeCaps` move.
   capsMoveDecodes :
-    writesTo hash ((envAt t row).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t row).loc (prmCol CAP_KEY)) 0
-        ((envAt t row).loc (afterCapRootCol EFFECT_VM_WIDTH))
+    capRemoves8 S8 (beforeCapRootCols (envAt t row))
+        (leafOf (capOpenCols
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth) (envAt t row))
+        (afterCapRootCols (envAt t row))
       → post.kernel.caps = removeEdgeCaps pre.kernel.caps holder target
   logAdv : post.log = authReceipt holder :: pre.log
   frame : KernelFrameExceptCaps pre post
 
-/-- **`revokeCapability_forced_sat` — the cap-edge removal is FORCED by the DEPLOYED `revokeCapabilityV3`.** -/
-theorem revokeCapability_forced_sat (hash : List ℤ → ℤ)
-    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+/-- **`RevokeCapabilityWriteAnchor` — the realizable REMOVE carriers for revokeCapability** (what the
+deployed `CanonicalCapTree::remove_witness` computes — the readout-linked twin of
+`RevokeDelegationWriteAnchor`'s carrier fields, AT the readout's active row): the BEFORE cap-root commits
+a sorted spine, the revoked key's non-membership bracket in the AFTER tree (the pred/succ `GapOpen`
+covering the REMOVED spine) is genuinely realizable — after the tombstone the neighbors bracket the gone
+key — and the AFTER root commits the removed spine. -/
+structure RevokeCapabilityWriteAnchor (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target) :
+    Type where
+  -- the active cap-write row is not the trailing/padding row (the welds bind under `when_transition`).
+  hnotlast : rd.row + 1 ≠ t.rows.length
+  spine : List ℤ
+  hold : SpineCommits S8 (beforeCapRootCols (envAt t rd.row)) spine
+  gap : GapOpen S8 (afterCapRootCols (envAt t rd.row))
+    (keyOf (leafOf (capOpenCols
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth) (envAt t rd.row)))
+  gapCov : gap.coversSpine (sortedRemove
+    (keyOf (leafOf (capOpenCols
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth) (envAt t rd.row))) spine)
+  hnew : SpineCommits S8 (afterCapRootCols (envAt t rd.row))
+    (sortedRemove
+      (keyOf (leafOf (capOpenCols
+        Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth) (envAt t rd.row))) spine)
+
+/-- **`revokeCapability_forced_sat` — the cap-edge removal is FORCED by the DEPLOYED keystone wrap.**
+From `Satisfied2 hash (effCapRemoveV3 revokeCapabilityV3 name n)` (the removed-leaf membership in BEFORE
+is TRACE-FORCED, `CapRemoveEmit.effCapRemoveV3_forces_beforeMembership`) + the readout's realizable
+REMOVE carriers, the faithful 8-felt `capRemoves8` holds and the `capsMoveDecodes` seam lifts it to the
+kernel `removeEdgeCaps` move. -/
+theorem revokeCapability_forced_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t)
+    (pre post : RecChainedState) (holder target : CellId)
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd) :
     post.kernel.caps = removeEdgeCaps pre.kernel.caps holder target :=
   rd.capsMoveDecodes
-    (revokeCapabilityV3_non_amp hash hsat rd.row rd.hrow rd.hsel).2
+    (effCapRemoveV3_forces_write8 S8 revokeCapabilityV3 name n hash minit mfin maddrs t hChip hsat
+      rd.row rd.hrow anc.hnotlast anc.spine anc.hold anc.gap anc.gapCov anc.hnew)
 
-/-- **`revokeCapability_descriptorRefines_sat` — THE CLASS-A REFINEMENT for revokeCapability.** The
-`removeEdgeCaps` move is forced from the DEPLOYED remove-write's `Satisfied2`; editing `revokeCapabilityV3`'s
-constraints turns this RED. -/
-theorem revokeCapability_descriptorRefines_sat (hash : List ℤ → ℤ)
+/-- **`revokeCapability_descriptorRefines_sat` — THE CLASS-A REFINEMENT for revokeCapability (remove
+FORCED).** The `removeEdgeCaps` move is forced from the DEPLOYED keystone wrap's `Satisfied2`
+(`capRemoves8` over the FULL 8-felt groups, never lane-0); editing the deployed BEFORE welds turns this
+RED. -/
+theorem revokeCapability_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd) :
     RevokeSpec pre holder target post :=
-  ⟨trivial, revokeCapability_forced_sat hash hsat pre post holder target rd, rd.logAdv,
+  ⟨trivial, revokeCapability_forced_sat S8 hash name n hChip hsat pre post holder target rd anc, rd.logAdv,
    rd.frame.frAccounts, rd.frame.frCell, rd.frame.frNullifiers, rd.frame.frRevoked,
    rd.frame.frCommitments, rd.frame.frBal, rd.frame.frSlotCaveats, rd.frame.frFactories,
    rd.frame.frLifecycle, rd.frame.frDeathCert, rd.frame.frDelegate, rd.frame.frDelegations,
    rd.frame.frDelegationEpoch, rd.frame.frDelegationEpochAt, rd.frame.frHeaps⟩
 
 /-- **`revokeCapability_execFullA_sat` — the Class-A refinement against the executor arm.** -/
-theorem revokeCapability_execFullA_sat (hash : List ℤ → ℤ)
+theorem revokeCapability_execFullA_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd) :
     execFullA pre (.revoke holder target) = some post :=
   (execFullA_revoke_iff_spec pre holder target post).mpr
-    (revokeCapability_descriptorRefines_sat hash hsat pre post holder target rd)
+    (revokeCapability_descriptorRefines_sat S8 hash name n hChip hsat pre post holder target rd anc)
 
 /-- **CLASS-A TOOTH — a forged wrong-caps revokeCapability witness is UNSAT.** -/
-theorem revokeCapability_sat_rejects_wrong_caps (hash : List ℤ → ℤ)
+theorem revokeCapability_sat_rejects_wrong_caps (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash revokeCapabilityV3 minit mfin maddrs t)
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target)
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd)
     (hwrong : post.kernel.caps ≠ removeEdgeCaps pre.kernel.caps holder target) :
     False :=
-  hwrong (revokeCapability_forced_sat hash hsat pre post holder target rd)
+  hwrong (revokeCapability_forced_sat S8 hash name n hChip hsat pre post holder target rd anc)
 
 /-- **`revokeCapability_descriptorRefines_capOpenSat` — the apex-wirable, LIGHT-CLIENT revokeCapability
 rung (the ROUTE-FORGE close).** Consumes `Satisfied2 hash revokeCapabilityWriteCapOpenV3` — the SINGLE
-descriptor that carries BOTH the cap-membership authority crown AND the cap-tree REMOVE — by stripping the
-cap-open authority appendix + selector tooth to the base `revokeCapabilityV3` (via
-`capOpen_satisfied2_strips_to_base`) and applying `revokeCapability_descriptorRefines_sat`. This is the
-revokeCapability twin of `revokeDelegation_descriptorRefines_capOpenSat`: it makes the cap-tree REMOVE
-light-client-verifiable IN the descriptor the SDK route proves+verifies, NOT a SEPARATE
-`revokeCapabilityV3` rung the apex composes off-wire. Editing `revokeCapabilityV3`'s `removeWriteOpRot`
-turns this — and the SDK route — RED. -/
-theorem revokeCapability_descriptorRefines_capOpenSat (hash : List ℤ → ℤ)
+descriptor that carries BOTH the cap-membership authority crown AND the cap-tree REMOVE — by stripping
+the selector tooth (via `withSelectorGate_satisfied2`) and applying
+`revokeCapability_descriptorRefines_sat`. This is the revokeCapability twin of
+`revokeDelegation_descriptorRefines_capOpenSat`: it makes the cap-tree REMOVE light-client-verifiable IN
+the descriptor the SDK route proves+verifies. Editing the deployed BEFORE welds turns this — and the SDK
+route — RED. -/
+theorem revokeCapability_descriptorRefines_capOpenSat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.revokeCapabilityWriteCapOpenV3 minit mfin maddrs t)
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_CAPABILITY
+        (effCapRemoveV3 revokeCapabilityV3 name n)) minit mfin maddrs t)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target) :
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd) :
     RevokeSpec pre holder target post :=
-  revokeCapability_descriptorRefines_sat hash
-    (Dregg2.Circuit.Emit.CapOpenEmit.capOpen_satisfied2_strips_to_base hash _ revokeCapabilityV3 _ _
-      minit mfin maddrs t hsat)
-    pre post holder target rd
+  revokeCapability_descriptorRefines_sat S8 hash name n hChip
+    (withSelectorGate_satisfied2 hash _ (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t hsat)
+    pre post holder target rd anc
 
-/-- **CLASS-A ROUTE TOOTH (revokeCapability) — a forged wrong-caps post-root on the WRITE-CAPOPEN wrapper is
-UNSAT.** The route-level twin of `revokeCapability_sat_rejects_wrong_caps`: over the LIVE
-`revokeCapabilityWriteCapOpenV3` (the descriptor the SDK route verifies), a post-state whose caps are NOT the
-genuine `removeEdgeCaps` move cannot arise from a `Satisfied2` witness — the stripped `removeWriteOpRot` FORCES
-the REMOVE. Perturbing `removeWriteOpRot`'s value (the REMOVE sentinel) breaks the strip and reds this. -/
-theorem revokeCapability_capOpenSat_rejects_forged_postroot (hash : List ℤ → ℤ)
+/-- **CLASS-A ROUTE TOOTH (revokeCapability) — a forged wrong-caps post-root on the WRITE-CAPOPEN wrapper
+is UNSAT.** Over the LIVE `revokeCapabilityWriteCapOpenV3` (the descriptor the SDK route verifies), a
+post-state whose caps are NOT the genuine `removeEdgeCaps` move cannot arise from a `Satisfied2` witness
+— the keystone welds FORCE the tombstone REMOVE. Perturbing the BEFORE welds breaks the force and reds
+this. -/
+theorem revokeCapability_capOpenSat_rejects_forged_postroot (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+    (name : String) (n : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.revokeCapabilityWriteCapOpenV3 minit mfin maddrs t)
+    (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
+    (hsat : Satisfied2 hash
+      (withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_CAPABILITY
+        (effCapRemoveV3 revokeCapabilityV3 name n)) minit mfin maddrs t)
     (pre post : RecChainedState) (holder target : CellId)
-    (rd : RevokeCapabilityTraceReadout hash minit mfin maddrs t pre post holder target)
+    (rd : RevokeCapabilityTraceReadout S8 hash minit mfin maddrs t pre post holder target)
+    (anc : RevokeCapabilityWriteAnchor S8 hash minit mfin maddrs t pre post holder target rd)
     (hwrong : post.kernel.caps ≠ removeEdgeCaps pre.kernel.caps holder target) :
     False :=
-  hwrong (revokeCapability_forced_sat hash
-    (Dregg2.Circuit.Emit.CapOpenEmit.capOpen_satisfied2_strips_to_base hash _ revokeCapabilityV3 _ _
-      minit mfin maddrs t hsat)
-    pre post holder target rd)
+  hwrong (revokeCapability_forced_sat S8 hash name n hChip
+    (withSelectorGate_satisfied2 hash _ (effCapRemoveV3 revokeCapabilityV3 name n) minit mfin maddrs t hsat)
+    pre post holder target rd anc)
 
-#assert_axioms revokeCapabilityV3_non_amp
 #assert_axioms revokeCapability_forced_sat
 #assert_axioms revokeCapability_descriptorRefines_sat
 #assert_axioms revokeCapability_descriptorRefines_capOpenSat

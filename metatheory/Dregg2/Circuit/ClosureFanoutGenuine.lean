@@ -694,24 +694,28 @@ theorem closedLogExtract_createCellFromFactory_closed
   exact createCellFromFactory_closedLog_sat hash hsat' pre post actor newCell vk pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **spawn (19).** Receipt is `createReceipt actor child`. `Rfix 19 = spawnWriteCapOpenV3` (the
-WRITE-FORCING cap-open wrapper): the spawn cap handoff is FORCED — the readout's `capsMoveDecodes` seam
-is pinned by the LIVE cap-tree insert write. Editing `spawnWriteV3`'s insert op turns this — and the
-apex — RED. -/
+INSERT-shaped keystone wrap `effCapInsertV3 spawnWriteV3`): the spawn cap handoff is FORCED — the
+readout's `capsMoveDecodes` seam is pinned by the keystone welds (`capInserts8`) + the realizable
+`SpawnWriteAnchor` carriers. Editing the deployed AFTER welds turns this — and the apex — RED. -/
 theorem closedLogExtract_spawn_closed
+    (Scap : Dregg2.Circuit.DeployedCapTree.Cap8Scheme)
     (readout : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pubLogPost : ℤ) (pre post : RecChainedState),
       Satisfied2 hash (Rfix 19) minit mfin maddrs t →
+      Dregg2.Circuit.DescriptorIR2.ChipTableSoundN (Dregg2.Circuit.DeployedCapOpen.capPermOut Scap) (t.tf .poseidon2) ×'
       Σ' (actor child target : CellId),
         PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log)) ×'
         (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log →
-          Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout
-            hash minit mfin maddrs t pre post actor child target)) :
+          Σ' (rd : Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout
+                Scap hash minit mfin maddrs t pre post actor child target),
+            Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnWriteAnchor
+              Scap hash minit mfin maddrs t pre post actor child target rd)) :
     ClosedLogExtract Slive LH hash Rfix 19 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.CapOpenEmit.spawnWriteCapOpenV3
       minit mfin maddrs t := hsat
-  obtain ⟨actor, child, target, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
-  exact spawn_closedLog_sat hash hsat' pre post actor child target pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
+  obtain ⟨hChip, actor, child, target, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
+  exact spawn_closedLog_sat Scap hash hChip hsat' pre post actor child target pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 
 /-- **noteSpend (27).** Receipt is `noteSpendReceipt actor`. -/
 theorem closedLogExtract_noteSpend_closed
@@ -1037,10 +1041,14 @@ structure ClosureReadouts
         Dregg2.Circuit.RotatedKernelRefinementBirth.CreateFromFactoryTraceReadout hash minit mfin maddrs t pre post actor newCell vk)
   rdSpawn : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 19) minit mfin maddrs t →
+    Dregg2.Circuit.DescriptorIR2.ChipTableSoundN (Dregg2.Circuit.DeployedCapOpen.capPermOut Scap) (t.tf .poseidon2) ×'
     Σ' (actor child target : CellId),
       PLift (pubLogPost = LH (Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log)) ×'
       (post.log = Dregg2.Circuit.Spec.AccountGrowth.createReceipt actor child :: pre.log →
-        Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout hash minit mfin maddrs t pre post actor child target)
+        Σ' (rd : Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnTraceReadout
+              Scap hash minit mfin maddrs t pre post actor child target),
+          Dregg2.Circuit.RotatedKernelRefinementBirth.SpawnWriteAnchor
+            Scap hash minit mfin maddrs t pre post actor child target rd)
   rdNoteSpend : ∀ minit mfin maddrs t pubLogPost pre post,
     Satisfied2 hash (Rfix 27) minit mfin maddrs t →
     Σ' (nf : Nat) (actor : CellId) (spendProof : Bool),
@@ -1110,7 +1118,7 @@ theorem closedLogExtract_all_genuine
   | 16 => exact closedLogExtract_exercise_closed rds.rdExercise
   | 17 => exact closedLogExtract_createCell_closed rds.rdCreateCell
   | 18 => exact closedLogExtract_createCellFromFactory_closed rds.rdCreateCellFromFactory
-  | 19 => exact closedLogExtract_spawn_closed rds.rdSpawn
+  | 19 => exact closedLogExtract_spawn_closed Scap rds.rdSpawn
   | 20 => exact closedLogExtract_bridgeMint_closed rds.rdBridgeMint
   | 27 => exact closedLogExtract_noteSpend_closed rds.rdNoteSpend
   | 28 => exact closedLogExtract_noteCreate_closed rds.rdNoteCreate

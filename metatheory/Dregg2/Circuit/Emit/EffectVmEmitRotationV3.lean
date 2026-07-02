@@ -1618,14 +1618,17 @@ def attenuateV3 : EffectVmDescriptor2 :=
   v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
     [.lookup submaskLookup]
 
-/-- The rotated REVOKE-CAPABILITY (sel 24) WITH the cap-crown circuit leg, on the ROTATED-limb write path:
-held-membership map read (`heldReadOpRot`) + the ZERO-value REMOVE-write (`removeWriteOpRot` — the slot deleted
-on the rotated AFTER cap-root limb; NO submask — revoke deletes a slot, it does not narrow rights). Guarded on
-`sel.REVOKE_CAPABILITY = 24` (the FIRING selector), so var 264 is GENUINELY bound. -/
+/-- The rotated REVOKE-CAPABILITY (sel 24): the arity-2 map-ops DROPPED (the REMOVE-shaped after-spine
+deploy — mirroring `revokeDelegationWriteV3`'s remove drop). The cap-tree REMOVE is FORCED by the deployed
+`effCapRemoveV3` wrap (`CapRemoveEmit.effCapRemoveV3_forces_write8`: the removed-leaf membership in BEFORE
+is TRACE-FORCED over the FULL committed 8-felt cap-root groups; the AFTER root is the deployed tombstone
+zero-fold `cap_root.rs::CanonicalCapTree::remove_witness` — exactly the executor's `capabilities.revoke`
+tombstone semantics), not the scalar `heldReadOpRot`/`removeWriteOpRot` pair (whose arity-2 heap fold is
+UNSAT against the deployed arity-7 `CanonicalCapTree` and whose scalar root left the seven high felts
+unbound). NO submask — revoke deletes a slot, it does not narrow rights; NO epoch gate — revokeCapability
+does not bump the delegation epoch (unlike revokeDelegation). -/
 def revokeCapabilityV3 : EffectVmDescriptor2 :=
-  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (heldReadOpRot sel.REVOKE_CAPABILITY),
-     .mapOp (removeWriteOpRot sel.REVOKE_CAPABILITY)]
+  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick []
 
 /-- The rotated DELEGATE (the unattenuated cross-vat grant), on the ROTATED-limb write path with the
 arity-2 map-ops DROPPED (the INSERT-shaped after-spine deploy): the faithful 8-felt cap-tree INSERT is
@@ -1799,16 +1802,17 @@ def delegUpdateWriteOpRot (s : Nat) : MapOp :=
   , op      := .write }
 
 /-- The rotated REFRESH-DELEGATION on the MOVING genuine face (no `gCapPass` freeze — the rotated limb is
-free to carry the deleg move) WITH the DELEG-tree circuit leg: the child-key membership-read + the
-snapshot UPDATE-write. The genuine face frees the rotated cap-root limb; `delegUpdateWriteOpRot` FORCES it
-to be the genuine sorted update of the child's snapshot at the child key against the membership-opened
-before DELEG-root. The v1-state `cap_root` column stays FROZEN (refresh's `caps` unchanged); the DELEG
-WRITE is now in-circuit-forced (no longer the `delegRoot_runtime_column_pending` supplied digest). NO
-submask — refresh re-arms an existing delegation (`granted = held`, non-amplification reflexive). -/
+free to carry the deleg move): the arity-2 map-ops DROPPED (the UPDATE-shaped after-spine deploy —
+mirroring `attenuateV3`'s update drop). The faithful 8-felt DELEG-tree UPDATE-AT-KEY is FORCED by the
+deployed `effCapOpenWriteV3` wrap (`CapOpenEmit.effCapOpenWriteV3_forces_write8` — the update-at-key
+after-spine over the FULL committed 8-felt root groups; the rotated cap-root group carries the DELEG
+accumulator on a refresh row, refresh freezes `caps` on the v1 column), not the scalar
+`delegReadOpRot`/`delegUpdateWriteOpRot` pair (whose arity-2 heap fold is UNSAT against the deployed
+native-8-felt witness heaps and whose scalar root left the seven high felts unbound). The DELEG WRITE
+stays in-circuit-forced (never the `delegRoot_runtime_column_pending` supplied digest). NO submask —
+refresh re-arms an existing delegation (`granted = held`, non-amplification reflexive). -/
 def refreshDelegationWriteV3 : EffectVmDescriptor2 :=
-  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (delegReadOpRot sel.REFRESH_DELEGATION),
-     .mapOp (delegUpdateWriteOpRot sel.REFRESH_DELEGATION)]
+  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick []
 
 /-- The rotated dynamic setField WITH its memory ops (the Blum write→read transport). -/
 def setFieldDynV3 : EffectVmDescriptor2 :=
@@ -2365,19 +2369,20 @@ cap to the child (`spawnCapsMap k actor child target := child ↦ [heldCapTo k.c
 INSERT into the cap-tree). This descriptor FORCES that handoff in-circuit on TWO limbs that coexist:
 - limb 0 (cells-tree): the accounts grow-gate (`cellsFreshOp` + `cellsInsertOp`) — the child id INSERTed
   into accounts, EXACTLY as `spawnV3` (the cells-tree weld is untouched by `weldsAtNoCapRoot`);
-- limb 25 (cap-tree): the cap handoff (`anchorReadOpRot` + `insertWriteOpRot`) — the parent's held cap to
-  `target` membership-read at a PRESENT anchor, then the conferred edge sorted-INSERTed at the child key.
+- limb 25 (cap-tree): the cap handoff INSERT-shaped after-spine deploy — the arity-2 map-ops
+  (`anchorReadOpRot` + `insertWriteOpRot`) are DROPPED (mirroring `delegateV3`); the cap-tree INSERT is
+  FORCED by the deployed `effCapInsertV3` wrap (`CapInsertEmit.effCapInsertV3_forces_write8` — the
+  spliced-leaf membership in the REBUILT AFTER tree over the FULL committed 8-felt cap-root groups),
+  not the scalar pair (UNSAT against the deployed arity-7 `CanonicalCapTree::insert_witness`).
 
 The cap handoff (the parent→child CAPABILITY confer) was the named PHASE-D residual on `spawnV3` (frozen
-`cap_root`/gCapPass); freeing limb 25 and driving the insert FORCES it, exactly as `delegateV3`. -/
+`cap_root`/gCapPass); freeing limb 25 and riding the keystone wrap FORCES it, exactly as `delegateV3`. -/
 def spawnWriteV3 : EffectVmDescriptor2 :=
   let base := graduateV1 (rotateV3WithNewCellKeyPinCapWrite NEW_CELL_KEY_PARAM_COL
     EffectVmEmitSpawn.spawnActorVmDescriptor)
   { base with constraints := base.constraints
       ++ [.mapOp (cellsFreshOp EffectVmEmitSpawn.SEL_SPAWN_RT NEW_CELL_KEY_PARAM_COL),
-          .mapOp (cellsInsertOp EffectVmEmitSpawn.SEL_SPAWN_RT NEW_CELL_KEY_PARAM_COL),
-          .mapOp (anchorReadOpRot EffectVmEmitSpawn.SEL_SPAWN_RT),
-          .mapOp (insertWriteOpRot EffectVmEmitSpawn.SEL_SPAWN_RT)] }
+          .mapOp (cellsInsertOp EffectVmEmitSpawn.SEL_SPAWN_RT NEW_CELL_KEY_PARAM_COL)] }
 
 /-- **`createCellV3_grow_gate_forces_set_insert` — the live descriptor FORCES the accounts
 set-insert + freshness.** On a satisfying `createCellV3` witness whose createCell selector fires, the
@@ -2466,34 +2471,15 @@ theorem spawnWriteV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
     NEW_CELL_KEY_PARAM_COL)) (by simp [spawnWriteV3])
   exact ⟨(hfresh hspawn).1, hins hspawn⟩
 
-/-- **`spawnWriteV3_forces_write` — the spawn parent→child cap-tree INSERT is FORCED in-circuit.** On an
-active spawn row of a `Satisfied2 spawnWriteV3` witness: the parent's held cap to `target` is
-membership-read against the before cap-root (a PRESENT anchor at `param[ANCHOR_KEY]` → `param[ANCHOR_MASK]`),
-and the post `cap_root` is the GENUINE sorted insert of the conferred edge (`param[KEEP_MASK]`) at the
-child key (`param[CAP_KEY]`). Mirrors `delegateV3_forces_write` EXACTLY over the spawn selector — this is
-the cap handoff that was the named PHASE-D residual, now FORCED. -/
-theorem spawnWriteV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash spawnWriteV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc EffectVmEmitSpawn.SEL_SPAWN_RT = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol ANCHOR_KEY)) (some ((envAt t i).loc (prmCol ANCHOR_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hread := hrowc (.mapOp (anchorReadOpRot EffectVmEmitSpawn.SEL_SPAWN_RT))
-    (by simp [spawnWriteV3])
-  have hwrite := hrowc (.mapOp (insertWriteOpRot EffectVmEmitSpawn.SEL_SPAWN_RT))
-    (by simp [spawnWriteV3])
-  exact ⟨(hread hactive).1, hwrite hactive⟩
+-- (`spawnWriteV3_forces_write` — the arity-2 map-op cap-handoff theorem — is DELETED: the scalar
+-- `anchorReadOpRot`/`insertWriteOpRot` pair was shape-UNSAT against the deployed arity-7
+-- `CanonicalCapTree::insert_witness`. The cap handoff is now FORCED by the deployed `effCapInsertV3`
+-- wrap: `CapInsertEmit.effCapInsertV3_forces_write8`, consumed by `RotatedKernelRefinementBirth`.)
 
 #assert_axioms createCellV3_grow_gate_forces_set_insert
 #assert_axioms factoryV3_grow_gate_forces_set_insert
 #assert_axioms spawnV3_grow_gate_forces_set_insert
 #assert_axioms spawnWriteV3_grow_gate_forces_set_insert
-#assert_axioms spawnWriteV3_forces_write
 
 -- The new-cell-key pin lands at PI slot 46; each rotated create-family descriptor publishes 39 PIs.
 #guard ROT_NEW_CELL_KEY_PI == 42 + 4
@@ -4707,16 +4693,17 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard graduable (rotateV3 EffectVmEmitEmitEvent.emitEventVmDescriptor)
 -- The extras ride: attenuate carries ONLY the submask non-amp lookup (+1; the two scalar map-ops were
 -- DROPPED — the faithful 8-felt cap-write is forced by the cap-open AFTER-SPINE, not an arity-2 map-op),
--- revoke its 2 cap-crown constraints (held-read + remove-write, no submask), setFieldDyn its 2 mem ops.
+-- revokeCapability carries NO extras (its scalar held-read + remove-write pair is DROPPED — the
+-- REMOVE-shaped after-spine deploy, `effCapRemoveV3`), setFieldDyn its 2 mem ops.
 -- Both rebased onto the ROTATED-limb cap-write base (`v3OfWithCapWrite` over the tick face).
 #guard attenuateV3.constraints.length
         == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
 #guard revokeCapabilityV3.constraints.length
-        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 2
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length
 #guard (memOpsOf setFieldDynV3).length == 2
 #guard (mapOpsOf setFieldDynV3).length == 0
 #guard (mapOpsOf attenuateV3).length == 0
-#guard (mapOpsOf revokeCapabilityV3).length == 2
+#guard (mapOpsOf revokeCapabilityV3).length == 0
 -- The cap-family WRITE close (INSERT/REMOVE-shaped after-spine deploy): delegate/grantCap/introduce
 -- carry NO map ops (the arity-2 scalar pair is DROPPED — the faithful 8-felt cap-tree INSERT is
 -- FORCED by the deployed `effCapInsertV3` wrap, never the lane-0 squeeze); delegateAtten keeps ONLY
@@ -4731,11 +4718,17 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
         == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
 #guard revokeDelegationWriteV3.constraints.length
         == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
+#guard refreshDelegationWriteV3.constraints.length
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length
 #guard (mapOpsOf delegateV3).length == 0
 #guard (mapOpsOf grantCapWriteV3).length == 0
 #guard (mapOpsOf introduceWriteV3).length == 0
 #guard (mapOpsOf delegateAttenV3).length == 0
 #guard (mapOpsOf revokeDelegationWriteV3).length == 0
+#guard (mapOpsOf refreshDelegationWriteV3).length == 0
+-- spawn keeps EXACTLY its 2 cells-tree grow-gate map-ops (limb 0); the 2 cap-tree map-ops (limb 25)
+-- are DROPPED (the INSERT-shaped after-spine deploy — the cap handoff rides `effCapInsertV3`).
+#guard (mapOpsOf spawnWriteV3).length == 2
 -- The rotated Custom carries EXACTLY its one proof-binding op + the eight `customPiExposure`
 -- PI pins past the rotated passthrough base (no mem/map ops — the recursive-proof binding is
 -- Custom's only NEWLY-EXPRESSIBLE leg; the eight pins publish its bound (commit, vk) columns).
@@ -4885,29 +4878,11 @@ theorem revokeDelegationWriteV3_rejects_wrong_epoch (hash : List ℤ → ℤ)
     ¬ Satisfied2 hash revokeDelegationWriteV3 minit mfin maddrs t :=
   fun hsat => hwrong (revokeDelegationWriteV3_forces_epoch_bump hash minit mfin maddrs t hsat i hi hnl hactive)
 
-/-- **`refreshDelegationWriteV3_forces_write` — the refreshDelegation DELEGATIONS-tree UPDATE is FORCED
-in-circuit.** On an active cap-graph row of a `Satisfied2 refreshDelegationWriteV3` witness: the child's
-present snapshot is membership-read against the before DELEG-root (the rotated cap-root limb), and the
-post DELEG-root is the GENUINE sorted UPDATE-AT-KEY of the recomputed snapshot (`param[KEEP_MASK]`) at the
-child key (`param[CAP_KEY]`). Forced from the deployed `delegUpdateWriteOpRot` on the MOVING genuine face —
-the DELEG WRITE that was the `delegRoot_runtime_column_pending` supplied digest is now in-circuit-bound. -/
-theorem refreshDelegationWriteV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash refreshDelegationWriteV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.REFRESH_DELEGATION = 1) :
-    opensTo hash ((envAt t i).loc (beforeDelegRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) (some ((envAt t i).loc (prmCol HELD_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeDelegRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterDelegRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (delegReadOpRot sel.REFRESH_DELEGATION),
-      .mapOp (delegUpdateWriteOpRot sel.REFRESH_DELEGATION)] : List VmConstraint2),
-      c ∈ refreshDelegationWriteV3.constraints := fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (delegReadOpRot sel.REFRESH_DELEGATION)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (delegUpdateWriteOpRot sel.REFRESH_DELEGATION)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
+-- (`refreshDelegationWriteV3_forces_write` — the arity-2 map-op DELEG-write theorem — is DELETED: the
+-- scalar `delegReadOpRot`/`delegUpdateWriteOpRot` pair was shape-UNSAT against the deployed
+-- native-8-felt witness heaps. The DELEG-tree UPDATE-AT-KEY is now FORCED by the deployed
+-- `effCapOpenWriteV3` wrap: `CapOpenEmit.effCapOpenWriteV3_forces_write8`, consumed by
+-- `RotatedKernelRefinementCapFamily.refreshDelegation_descriptorRefines_sat`.)
 
 /-- The rotated Custom declares EXACTLY the one proof-binding op (the rotated graduation
 contributes none; the extras add exactly `customProofBind`). -/
@@ -4944,7 +4919,6 @@ theorem customV3_binds_proof (hash : List ℤ → ℤ)
 #assert_axioms revokeDelegationWriteV3_forces_epoch_bump
 #assert_axioms revokeDelegationWriteV3_rejects_wrong_epoch
 #assert_axioms epochBumpGate_forces
-#assert_axioms refreshDelegationWriteV3_forces_write
 #assert_axioms proofBindsOf_customV3
 #assert_axioms customV3_binds_proof
 #assert_axioms noteSpendV3_grow_gate_forces_set_insert
