@@ -5,7 +5,7 @@
 //! STEP-3 KEYED wide sovereign leg — the executor `KEY_COMMIT` teeth (`columns.rs`
 //! `WITNESS_KEY_COMMIT_0..3`, filled from `before_cell.public_key()` exactly as the executor's
 //! `pubkey_to_witness_key_commit` computes them) PUBLISHED at the tail claim PIs
-//! (`SOVEREIGN_KEY_COMMIT_PI_LO` = 54..57) — PLUS the prover-side `SovereignWitnessBundle`
+//! (`SOVEREIGN_KEY_COMMIT_PI_LO` = 58..61, post-rc-wrap) — PLUS the prover-side `SovereignWitnessBundle`
 //! (the re-provable authority tuple), folds it through the DEPLOYED chain prover's Sovereign
 //! arm, and verifies through the light-client verifier.
 //!
@@ -118,14 +118,14 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
 }
 
 /// The STEP-3 KEYED twin of the deployed wide makeSovereign descriptor: the 4 KEY_COMMIT teeth
-/// columns row-0-pinned to the tail claim PIs (54..57), anchors shifted past them. THE
+/// columns row-0-pinned to the tail claim PIs (58..61, post-rc-wrap), anchors shifted past them. THE
 /// REGEN-RIDER: the committed registry row (+ the in-AIR chip-compress gate) supersedes this.
 fn keyed_sovereign_twin() -> (EffectVmDescriptor2, usize) {
     let desc = deployed_wide_descriptor("makeSovereignVmDescriptor2R24");
     let insert_at = desc.public_input_count - 16; // the narrow PI tail (54), ahead of the anchors
     assert_eq!(
         insert_at, SOVEREIGN_KEY_COMMIT_PI_LO,
-        "the narrow sovereign PI count (record-pin8 closed, 54) is the teeth claim base"
+        "the narrow sovereign PI count (record-pin8 + the 4 rc, 58) is the teeth claim base"
     );
     let kc_col = AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0;
     let pins: Vec<TailClaimPin> = (0..KEY_COMMIT_LEN)

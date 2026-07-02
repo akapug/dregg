@@ -170,6 +170,8 @@ fn pinned_factory_twin() -> (EffectVmDescriptor2, usize) {
 fn mint_factory_leg(
     balance: i64,
     nonce: u64,
+    child_vk_derived: BabyBear,
+    before_accounts: &[HeapLeaf],
     before_material: &RotationCarrierMaterial,
     after_material: &RotationCarrierMaterial,
     witness: Option<CarrierWitness>,
@@ -177,7 +179,7 @@ fn mint_factory_leg(
     let st = CellState::new(balance as u64, nonce as u32);
     let effects = vec![Effect::CreateCellFromFactory {
         factory_vk: BabyBear::new(0xFAC),
-        child_vk_derived: BabyBear::new(0xCE11),
+        child_vk_derived,
     }];
     let before_cell = producer_cell(balance, nonce);
     let after_cell = producer_cell(balance, nonce + 1);
@@ -204,25 +206,13 @@ fn mint_factory_leg(
         after_material,
     );
 
-    // The accounts-set grow-gate opens against a threaded BEFORE leaf set (test seed).
-    let before_accounts = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0xAA01),
-            value: BabyBear::new(0xAA01),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0xAA02),
-            value: BabyBear::new(0xAA02),
-        },
-    ];
-
     let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
         &st,
         &effects,
         &bridge(&before_w),
         &bridge(&after_w),
         &empty_caveat_manifest(),
-        &before_accounts,
+        before_accounts,
     )
     .expect("deployed factory wide trace generates");
 
@@ -271,20 +261,50 @@ fn backing_bundle(child_vk_bytes: &[u8; 32]) -> FactoryWitnessBundle {
 }
 
 /// Build the 2-turn chain: turn 0 = the witnessed factory turn (bundle attached), turn 1 = a
-/// plain factory turn linking off turn 0's post-state (SAME material on its BEFORE side, so the
-/// rotated commitment chains).
+/// plain factory turn linking off turn 0's post-state (SAME material on its BEFORE side AND the
+/// GROWN accounts set — t0's born child is in t1's BEFORE tree — so the rotated commitment,
+/// including the accounts-root limb group the grow-gate rewrites, chains lane-by-lane at the
+/// 8-felt anchors). t1 births a DIFFERENT child (the `.absent` no-collision gate refuses a
+/// re-creation of t0's child).
 fn build_chain(bundle: FactoryWitnessBundle) -> Vec<FinalizedTurn> {
     let balance = 1000i64;
     let m = material();
+    let base_accounts = vec![
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
+    ];
+    let child0 = BabyBear::new(0xCE11);
     let t0_leg = mint_factory_leg(
         balance,
         0,
+        child0,
+        &base_accounts,
         &RotationCarrierMaterial::default(),
         &m,
         Some(CarrierWitness::Factory(bundle)),
     );
     let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
-    let t1_leg = mint_factory_leg(balance, 1, &m, &m, None);
+    // t1's BEFORE accounts tree = t0's AFTER tree (base + child0), the temporal link.
+    let mut grown_accounts = base_accounts.clone();
+    grown_accounts.push(HeapLeaf {
+        addr: child0,
+        value: child0,
+    });
+    let t1_leg = mint_factory_leg(
+        balance,
+        1,
+        BabyBear::new(0xCE12),
+        &grown_accounts,
+        &m,
+        &m,
+        None,
+    );
     let t1 = FinalizedTurn::new(DescriptorParticipant::rotated(t1_leg));
     assert_eq!(
         t0.new_root(),

@@ -2844,19 +2844,21 @@ pub const HATCHERY_CONTRACT_HASH_PI_LO: usize = 55;
 /// PI-EXPOSURE is the named big-bang regen piece. CONVENTION (the TAIL-append discipline
 /// every carrier cohort follows): the 4 teeth pins land after the narrow sovereign PI count
 /// 54 → PI 54..57. The fold arm admits only a leg whose descriptor genuinely pins these
-/// slots, so a mismatched convention fails closed, never folds wrong. ⚑ NB: the in-flight
-/// uniform DSL rc-EMIT wrap (`withDfaRcPins`, +4 tail PIs on EVERY cohort member) lands
-/// OUTERMOST on the bare registry — when the sovereign teeth exposure is composed after it,
-/// this base bumps 54 → 58 (a one-line change; the admission gate + the tooth assert loudly).
-pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 54;
+/// slots, so a mismatched convention fails closed, never folds wrong. ⚑ NB: the uniform DSL
+/// rc-EMIT wrap (`withDfaRcPins`, +4 tail PIs on EVERY cohort member) LANDED with the big-bang
+/// regen — the committed narrow makeSovereign member is 58 PIs (54 + rc 46..49… i.e. the
+/// record-pin8 54 + the 4 rc), so the teeth exposure composed after it lands at PI 58..61
+/// (the pre-annotated 54 → 58 bump).
+pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 58;
 /// The membership leg's `(sender_leaf, authorized_root)` claim PI base — the membership
 /// third edge (`MembershipAuthRootEdge`, commit `346629d0c`) is built parametrically; the
 /// deployed-leg PI exposure at fixed slots is the named big-bang regen piece. CONVENTION
 /// (TAIL-append after the bare rotated 46 on the caveat-carrying transfer-family leg):
 /// PI 46..47. Same fail-closed admission discipline. ⚑ NB: same `withDfaRcPins` note as
-/// [`SOVEREIGN_KEY_COMMIT_PI_LO`] — when the membership exposure is composed after the
-/// uniform rc wrap, this base bumps 46 → 50.
-pub const MEMBERSHIP_CLAIM_PI_LO: usize = 46;
+/// [`SOVEREIGN_KEY_COMMIT_PI_LO`] — the rc wrap LANDED with the big-bang regen, so the
+/// committed narrow transfer member is 50 PIs (46 + the 4 rc) and the membership exposure
+/// composed after it lands at PI 50..51 (the pre-annotated 46 → 50 bump).
+pub const MEMBERSHIP_CLAIM_PI_LO: usize = 50;
 
 /// **THE CARRIER-CLAIM ADMISSION GATE (the fold arms' fail-closed half).** A carrier fold
 /// arm may dual-expose the leg's claim slice `[claim_pi_lo .. claim_pi_lo+claim_len)` ONLY

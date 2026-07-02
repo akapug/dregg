@@ -113,7 +113,29 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
 /// The STEP-3 pinned factory twin (see `factory_binding_deployed_tooth.rs`) — the hatchery
 /// claim is the SECOND octet cohort (PI 55..62) of the SAME descriptor.
 fn pinned_factory_twin() -> (EffectVmDescriptor2, usize) {
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
+
     let desc = deployed_wide_descriptor("factoryVmDescriptor2R24");
+    // REGEN AUTO-SWITCH: the big-bang regen landed the committed `factoryV3Carriers` row — the
+    // octet pins are NATIVE (and the rc tail rides after them), so use the row as-is (the twin
+    // transform retires itself). The loud assert heeds a moved PI base.
+    let native_pin = desc.constraints.iter().find_map(|c| match c {
+        VmConstraint2::Base(VmConstraint::PiBinding { col, pi_index, .. })
+            if *col == AFTER_BASE + B_CONTRACT_HASH_OCTET =>
+        {
+            Some(*pi_index)
+        }
+        _ => None,
+    });
+    if let Some(pi) = native_pin {
+        assert_eq!(
+            pi, HATCHERY_CONTRACT_HASH_PI_LO,
+            "the committed regen row pins contract_hash8 at a different PI base — bump \
+             HATCHERY_CONTRACT_HASH_PI_LO (ivc_turn_chain) to match the emitted geometry"
+        );
+        return (desc, pi - 8); // the claim-splice base (child_vk8) — unused on the native row
+    }
     let insert_at = desc.public_input_count - 16;
     assert_eq!(
         insert_at + 8,
@@ -139,6 +161,8 @@ fn pinned_factory_twin() -> (EffectVmDescriptor2, usize) {
 fn mint_hatchery_leg(
     balance: i64,
     nonce: u64,
+    child_vk_derived: BabyBear,
+    before_accounts: &[HeapLeaf],
     before_material: &RotationCarrierMaterial,
     after_material: &RotationCarrierMaterial,
     witness: Option<CarrierWitness>,
@@ -146,7 +170,7 @@ fn mint_hatchery_leg(
     let st = CellState::new(balance as u64, nonce as u32);
     let effects = vec![Effect::CreateCellFromFactory {
         factory_vk: BabyBear::new(0xFAC),
-        child_vk_derived: BabyBear::new(0xCE11),
+        child_vk_derived,
     }];
     let before_cell = producer_cell(balance, nonce);
     let after_cell = producer_cell(balance, nonce + 1);
@@ -171,24 +195,13 @@ fn mint_hatchery_leg(
         after_material,
     );
 
-    let before_accounts = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0xAA01),
-            value: BabyBear::new(0xAA01),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0xAA02),
-            value: BabyBear::new(0xAA02),
-        },
-    ];
-
     let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
         &st,
         &effects,
         &bridge(&before_w),
         &bridge(&after_w),
         &empty_caveat_manifest(),
-        &before_accounts,
+        before_accounts,
     )
     .expect("deployed factory wide trace generates");
 
@@ -238,15 +251,43 @@ fn attestation_bundle(contract_hash_bytes: &[u8; 32]) -> HatcheryWitnessBundle {
 fn build_chain(bundle: HatcheryWitnessBundle) -> Vec<FinalizedTurn> {
     let balance = 1000i64;
     let m = material();
+    let base_accounts = vec![
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
+    ];
+    let child0 = BabyBear::new(0xCE11);
     let t0_leg = mint_hatchery_leg(
         balance,
         0,
+        child0,
+        &base_accounts,
         &RotationCarrierMaterial::default(),
         &m,
         Some(CarrierWitness::Hatchery(bundle)),
     );
     let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
-    let t1_leg = mint_hatchery_leg(balance, 1, &m, &m, None);
+    // t1's BEFORE accounts tree = t0's AFTER tree (base + child0), the temporal link; t1 births
+    // a DIFFERENT child (the `.absent` no-collision gate refuses a re-creation).
+    let mut grown_accounts = base_accounts.clone();
+    grown_accounts.push(HeapLeaf {
+        addr: child0,
+        value: child0,
+    });
+    let t1_leg = mint_hatchery_leg(
+        balance,
+        1,
+        BabyBear::new(0xCE12),
+        &grown_accounts,
+        &m,
+        &m,
+        None,
+    );
     let t1 = FinalizedTurn::new(DescriptorParticipant::rotated(t1_leg));
     assert_eq!(
         t0.new_root(),

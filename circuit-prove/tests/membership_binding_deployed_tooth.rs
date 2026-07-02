@@ -3,7 +3,7 @@
 //!
 //! Builds a REAL 2-turn chain whose FIRST turn is a sender-authorized `Transfer` turn carrying
 //! the v12 membership-edge wide leg — the `(sender_leaf, authorized_root)` teeth PUBLISHED at
-//! the tail claim PIs (`MEMBERSHIP_CLAIM_PI_LO` = 46..47 on the caveat-carrying transfer
+//! the tail claim PIs (`MEMBERSHIP_CLAIM_PI_LO` = 50..51, post-rc-wrap, on the caveat-carrying transfer
 //! family) — PLUS the prover-side `MembershipWitnessBundle` (the re-provable membership
 //! tuple), folds it through the DEPLOYED chain prover's Membership arm, and verifies through
 //! the light-client verifier.
@@ -250,7 +250,7 @@ fn build_chain(bundle_tuple: SenderMembershipWitness) -> Vec<FinalizedTurn> {
 // ============================================================================
 
 /// POSITIVE POLE — an honest sender-authorized transfer (the membership bundle's tuple == the
-/// leg's published `(sender_leaf, authorized_root)` teeth at PI 46..47) folds through the
+/// leg's published `(sender_leaf, authorized_root)` teeth at PI 50..51, post-rc-wrap) folds through the
 /// DEPLOYED chain prover's Membership arm and the LIGHT CLIENT ACCEPTS.
 #[test]
 #[ignore = "SLOW: real deployed membership-binding recursion fold (~minutes); run with --ignored"]
