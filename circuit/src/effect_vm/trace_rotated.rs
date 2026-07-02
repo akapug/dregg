@@ -3104,6 +3104,7 @@ pub fn generate_rotated_cap_attenuate_after_spine_wide(
 #[allow(clippy::too_many_arguments)]
 pub fn apply_rotated_cap_write_after_spine(
     trace: &mut [Vec<BabyBear>],
+    dpis: &mut [BabyBear],
     before_root8: [BabyBear; CAP_OPEN_DIGEST_W],
     after_root8: [BabyBear; CAP_OPEN_DIGEST_W],
     cap_key: BabyBear,
@@ -3141,6 +3142,14 @@ pub fn apply_rotated_cap_write_after_spine(
         recompute_block_commit(row, BEFORE_BASE);
         recompute_block_commit(row, AFTER_BASE);
     }
+    // Re-derive the OLD/NEW rotated commit PIs (the cap-root group override moved the rotated
+    // commit) — exactly as `generate_rotated_cap_write_base` re-derives them. The WIDE member
+    // retires these 1-felt pins (`dropLegacyCommitPins1`), but the NARROW keystone leg still
+    // binds them.
+    if dpis.len() > V1_PI_COUNT + 1 {
+        dpis[V1_PI_COUNT] = trace[0][BEFORE_BASE + B_STATE_COMMIT]; // rotated OLD commit
+        dpis[V1_PI_COUNT + 1] = trace[trace.len() - 1][AFTER_BASE + B_STATE_COMMIT]; // rotated NEW commit
+    }
     Ok(())
 }
 
@@ -3165,8 +3174,10 @@ pub fn generate_rotated_cap_insert_after_spine_wide(
     anchor_key: BabyBear,
     anchor_mask: BabyBear,
 ) -> Result<Vec<BabyBear>, String> {
+    let mut base_pis = base_pis;
     apply_rotated_cap_write_after_spine(
         trace,
+        &mut base_pis,
         before_root8,
         after_root8,
         inserted_key,
@@ -3194,8 +3205,10 @@ pub fn generate_rotated_cap_remove_after_spine_wide(
     removed_key: BabyBear,
     held_value: BabyBear,
 ) -> Result<Vec<BabyBear>, String> {
+    let mut base_pis = base_pis;
     apply_rotated_cap_write_after_spine(
         trace,
+        &mut base_pis,
         before_root8,
         after_root8,
         removed_key,

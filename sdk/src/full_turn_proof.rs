@@ -3213,8 +3213,10 @@ fn build_effect_vm_cap_open_leg(
                 ))
             })?
         } else {
+            let mut dpis = dpis;
             dregg_circuit::effect_vm::trace_rotated::apply_rotated_cap_write_after_spine(
                 &mut trace,
+                &mut dpis,
                 before_root8,
                 iw.new_root,
                 ins_key,
@@ -3239,6 +3241,21 @@ fn build_effect_vm_cap_open_leg(
             // deployed tombstone zero-fold over the SAME path (`CanonicalCapTree::remove_witness`
             // semantics — the revoked position collapses to the ZERO digest; positions do not shift,
             // so every other capability's witness stays valid).
+            //
+            // Producer-side guard (no silent forge): the node's declared c-list MUST contain the
+            // revoked key — a node that cannot exhibit the revoked edge in the holder's genuine
+            // pre-state c-list cannot mint the remove leg.
+            if !cap
+                .clist_leaves
+                .iter()
+                .any(|l| l.addr == cap.leaf.slot_hash)
+            {
+                return Err(SdkError::InvalidWitness(format!(
+                    "cap remove after-spine ({effective_key}): the revoked key {} is NOT in the \
+                     supplied c-list — the remove has no declared membership (no silent forge)",
+                    cap.leaf.slot_hash.as_u32()
+                )));
+            }
             let after_root8 = dregg_circuit::cap_root::recompose_membership(
                 dregg_circuit::cap_root::CAP_ZERO8,
                 &cap.siblings,
@@ -3259,8 +3276,10 @@ fn build_effect_vm_cap_open_leg(
                     ))
                 })?
             } else {
+                let mut dpis = dpis;
                 dregg_circuit::effect_vm::trace_rotated::apply_rotated_cap_write_after_spine(
                     &mut trace,
+                    &mut dpis,
                     cap_open.cap_root,
                     after_root8,
                     cap.leaf.slot_hash,
@@ -7578,47 +7597,43 @@ mod tests {
         let desc = dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json)
             .expect("write wrapper parses");
 
-        // The AFTER cap-root is now the ROTATED-BLOCK cap-root limb (var 264 = `AFTER_BASE + B_CAP_ROOT`),
-        // NOT the v1-state cap-root col 87 (the `264 == 87` weld was dropped, so the cap-root advances on
-        // the rotated limb like note-spend's nullifier root, dodging the v1-state continuity transitions).
-        // It MUST be defined by EXACTLY ONE map_op `new_root` — the sole, on-the-wire-verifiable definition
-        // (the genuine sorted cap-tree REMOVE). And the v1-state col 87 must NOT be a map_op new_root (it is
-        // FROZEN pass-through, so its continuity weld holds trivially).
-        // Phase H-CAP-8: the AFTER cap-root is a NATIVE 8-felt digest GROUP, not a 1-felt scalar.
-        // Its map_op `new_root` is the 8-lane group `[lane0=332 (AFTER cap-root limb, was scalar
-        // var 264) ‖ lanes 1..7 = 358..=364]`. Match the FULL group lane-for-lane (never a lane-0
-        // squeeze) so the "exactly one map_op advances the AFTER cap-root" tooth still bites.
-        let after_cap_root_group: Vec<LeanExpr> = std::iter::once(332usize)
-            .chain(358..=364)
-            .map(LeanExpr::Var)
-            .collect();
-        let map_op_264_count = desc
+        // THE REMOVE KEYSTONE SHAPE (`effCapRemoveV3`): the arity-2 map-op is GONE (its update-at-key
+        // `writesTo` could not express the deployed ZERO-digest tombstone leaf — the break this deploy
+        // closed); the cap-tree REMOVE is carried by the 8 BEFORE cap-root WELD gates pinning the
+        // cap-open READ's `capRoot` group to the committed BEFORE cap-root block `[lane0=var 213 ‖
+        // lanes 1..7 = vars 239..=245]` — the read opens the REMOVED leaf against BEFORE, and the
+        // committed AFTER group carries the tombstone zero-fold (witness-carried, wide-anchored).
+        let map_ops = desc
             .constraints
             .iter()
-            .filter(|c| matches!(c, VmConstraint2::MapOp(m) if m.new_root == after_cap_root_group))
+            .filter(|c| matches!(c, VmConstraint2::MapOp(_)))
             .count();
         assert_eq!(
-            map_op_264_count, 1,
-            "the AFTER cap-root (rotated limb 8-felt group, lane0=var 332) MUST be defined by EXACTLY \
-             ONE map_op `new_root` — the on-the-wire-verifiable sorted cap-tree REMOVE (descriptor: {})",
+            map_ops, 0,
+            "the revokeDelegation keystone wrapper carries NO arity-2 map-op (the REMOVE rides the \
+             before-root welds + the tombstone zero-fold) — descriptor: {}",
             desc.name
         );
-        // The v1-state cap-root column (var 87) is FROZEN pass-through: no map_op `new_root` lane may
-        // write it.
-        let map_op_87_count = desc
-            .constraints
-            .iter()
-            .filter(|c| {
-                matches!(c, VmConstraint2::MapOp(m)
-                if m.new_root.iter().any(|e| matches!(e, LeanExpr::Var(87))))
-            })
-            .count();
-        assert_eq!(
-            map_op_87_count, 0,
-            "the v1-state cap-root col 87 must be FROZEN pass-through (NOT a map_op new_root) — the \
-             cap-root advances on the rotated limb (var 264) instead (descriptor: {})",
-            desc.name
-        );
+        let before_group: Vec<usize> = std::iter::once(213usize).chain(239..=245).collect();
+        for (lane, g) in before_group.iter().enumerate() {
+            let has_weld = desc.constraints.iter().any(|c| {
+                matches!(c,
+                    VmConstraint2::Base(dregg_circuit::lean_descriptor_air::VmConstraint::Gate(
+                        LeanExpr::Add(_, r)))
+                    if matches!(&**r, LeanExpr::Mul(cneg, v)
+                        if matches!(&**cneg, LeanExpr::Const(-1))
+                            && matches!(&**v, LeanExpr::Var(x) if x == g)))
+            });
+            assert!(
+                has_weld,
+                "the revokeDelegation keystone wrapper MUST weld the read capRoot lane {lane} to the \
+                 committed BEFORE cap-root var {g} (the effCapRemoveV3 before-root weld) — descriptor: {}",
+                desc.name
+            );
+        }
+        // The v1-state cap-root column (var 87) stays FROZEN pass-through: no map_op writes it (there
+        // are no map ops at all).
+        let _ = LeanExpr::Var(87);
 
         // The cap-tree->map_heaps bridge itself is sound + ready: it builds the genuine BEFORE/AFTER
         // roots over the real c-list (a wrong key fails closed — no fabricated post-root). Exercise it
@@ -8774,6 +8789,251 @@ mod tests {
         );
     }
 
+    /// **THE INSERT-AFTER-SPINE prove/verify/forge harness (the keystone deploy — delegate /
+    /// introduce / delegateAtten).** The deployed wrappers are the INSERT-shaped keystone descriptors
+    /// (`effCapInsertV3`): the cap-open READ opens the SPLICED (conferred) leaf against the REBUILT
+    /// AFTER cap-root over the `CanonicalCapTree::insert_witness` after-membership path; the BEFORE
+    /// root + the fresh key's non-membership bracket ride the witness carriers; NO arity-2 map-op,
+    /// NO map heap. The fixture builds the holder's BEFORE tree as a genuine `CanonicalCapTree`
+    /// (anchor + one filler leaf) and threads BOTH the arity-2 c-list (the write-route activation
+    /// signal) and the FULL 7-field `cap_leaves` (the rebuild witness). Arms:
+    ///   (1) GENUINE — the WIDE keystone leg proves + light-client-verifies;
+    ///   (2) FORGE TOOTH (wire) — a forged 8-felt AFTER-commit PI is REJECTED;
+    ///   (3) FORGE (present key) — a c-list ALREADY containing the fresh edge key fails closed
+    ///       (`insert_witness` refuses — no fabricated after-root);
+    ///   (4) FORGE (mismatched c-list) — a 7-field c-list that does NOT rebuild the membership
+    ///       root fails closed (the anchor path and the supplied tree disagree — no silent forge).
+    ///
+    /// `route_eff_bit` is the crown facet the deployed descriptor binds — checked against the ANCHOR
+    /// (producer-side authority guard) AND against the SPLICED leaf (the descriptor's
+    /// `selectedBitGate` on the conferred mask), so `fresh_edge.1` MUST carry bit
+    /// `log2(route_eff_bit)`.
+    #[cfg(feature = "prover")]
+    fn run_insert_after_spine_prove_verify_forge(
+        effect: VmEffect,
+        fresh_edge: (BabyBear, BabyBear),
+        route_eff_bit: u32,
+        expected_write_key: &str,
+    ) {
+        // The anchor's held mask defaults to exactly the crown facet bit (the as-is conferral).
+        run_insert_after_spine_prove_verify_forge_masked(
+            effect,
+            fresh_edge,
+            route_eff_bit,
+            route_eff_bit,
+            expected_write_key,
+        )
+    }
+
+    /// As [`run_insert_after_spine_prove_verify_forge`] with an explicit ANCHOR held mask —
+    /// delegateAtten narrows `keep ⊑ held`, so its anchor must hold a SUPERSET of the conferred
+    /// mask (the surviving `submaskLookup` over cols 73/72 bites otherwise).
+    #[cfg(feature = "prover")]
+    fn run_insert_after_spine_prove_verify_forge_masked(
+        effect: VmEffect,
+        fresh_edge: (BabyBear, BabyBear),
+        route_eff_bit: u32,
+        anchor_mask_lo: u32,
+        expected_write_key: &str,
+    ) {
+        use dregg_circuit::cap_root::{CAP_TREE_DEPTH, CanonicalCapTree, CapLeaf};
+        use dregg_circuit::effect_vm::trace_rotated::{FACET_MASK_HI, SIGNATURE_AUTH_TAG};
+        use dregg_circuit::heap_root::HeapLeaf;
+        use dregg_turn::rotation_witness as rw;
+
+        // The ANCHOR cap (the delegator's held authority) — its full mask MUST permit the route's
+        // eff_bit (`from_membership_for` submask), and its slot_hash is the present anchor key.
+        let anchor = CapLeaf {
+            slot_hash: BabyBear::new(0xA0C0),
+            target: BabyBear::new(7_777),
+            auth_tag: BabyBear::new(SIGNATURE_AUTH_TAG),
+            mask_lo: BabyBear::new(anchor_mask_lo),
+            mask_hi: BabyBear::new(FACET_MASK_HI),
+            expiry: BabyBear::new(0x00FF_FFFF),
+            breadstuff: BabyBear::new(99),
+        };
+        let other = CapLeaf {
+            slot_hash: BabyBear::new(0xBEEF),
+            target: BabyBear::new(123),
+            auth_tag: BabyBear::new(1),
+            mask_lo: BabyBear::new(route_eff_bit),
+            mask_hi: BabyBear::new(0),
+            expiry: BabyBear::new(9),
+            breadstuff: BabyBear::new(0),
+        };
+        let (fresh_key, fresh_value) = fresh_edge;
+        assert_ne!(
+            fresh_key, anchor.slot_hash,
+            "fresh edge distinct from anchor"
+        );
+        assert_ne!(
+            fresh_key, other.slot_hash,
+            "fresh edge absent from the c-list"
+        );
+        // The conferred mask MUST permit the crown facet the deployed descriptor binds on the
+        // SPLICED leaf (`selectedBitGate n` — the honest-producer contract).
+        assert_eq!(
+            fresh_value.as_u32() as u64 & route_eff_bit as u64,
+            route_eff_bit as u64,
+            "the conferred mask must carry the crown facet bit"
+        );
+
+        // The holder's BEFORE tree: the GENUINE deployed CanonicalCapTree (sorted, sentinel-
+        // bracketed) — the tree `insert_witness` rebuilds and the cell-side root commits.
+        let before_tree = CanonicalCapTree::new(vec![anchor, other], CAP_TREE_DEPTH);
+        let mw = before_tree
+            .membership_witness(anchor.slot_hash)
+            .expect("the anchor is a member of the BEFORE tree");
+        let clist_leaves = vec![
+            HeapLeaf {
+                addr: anchor.slot_hash,
+                value: anchor.target,
+            },
+            HeapLeaf {
+                addr: other.slot_hash,
+                value: other.target,
+            },
+        ];
+        let cap = CapMembershipWitness {
+            leaf: mw.leaf,
+            siblings: mw.siblings.clone(),
+            directions: mw.directions.clone(),
+            clist_leaves: clist_leaves.clone(),
+            cap_leaves: vec![anchor, other],
+            cap_tombstones: Vec::new(),
+        };
+
+        // A real granting turn (nonce-tick passthrough base).
+        let before_balance: u64 = 100_000;
+        let initial = CellState::new(before_balance, 0);
+        let effects = vec![effect];
+        let mut pk = [0u8; 32];
+        pk[0] = 7;
+        let mut before_cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], before_balance as i64);
+        before_cell.permissions = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut after_cell = before_cell.clone();
+        let _ = after_cell.state.increment_nonce();
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
+        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+
+        let route = cap_open_route_for_run(&effects).expect("a wired cap-open route");
+        let effective_key = cap_open_effective_key(&route, &cap);
+        assert_eq!(
+            effective_key, expected_write_key,
+            "with a genuine c-list the EFFECTIVE descriptor is the INSERT keystone wrapper"
+        );
+        assert_eq!(
+            cap_insert_payload_for(&effects, &cap),
+            Some((fresh_key, fresh_value)),
+            "the fresh conferred edge derived from the effect must match"
+        );
+
+        // ── ARM (1): GENUINE — the WIDE keystone leg proves + light-client-verifies. The spliced
+        // leaf's membership in the REBUILT AFTER tree is what the deployed read opens; a wrong
+        // after-root is unbuildable (the witness IS the rebuild).
+        let (proof, dpis) = prove_effect_vm_cap_open(
+            &initial, &effects, &before_w, &after_w, &cap, &route, None, true,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "the INSERT keystone wrapper ({expected_write_key}) MUST genuinely prove — \
+                         the spliced-leaf AFTER membership + witness-carried BEFORE root: {e:?}"
+            )
+        });
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize insert keystone leg");
+        let vk_hash =
+            cap_open_wide_vk_hash_by_key(effective_key).expect("wide insert keystone vk_hash");
+        verify_effect_vm_rotated_with_cutover(&proof_bytes, &dpis, &vk_hash).unwrap_or_else(|e| {
+            panic!(
+                "the INSERT keystone wrapper ({expected_write_key}) MUST light-client-verify — the \
+                 genuine post-cap-root is on the wire: {e:?}"
+            )
+        });
+
+        // ── ARM (2): FORGE TOOTH (wire) — a forged 8-felt AFTER-commit PI is REJECTED (the wide
+        // carrier binds the committed cap-root groups the keystone welds).
+        let n_pis = dpis.len();
+        let mut forged = dpis.clone();
+        forged[n_pis - 1] = forged[n_pis - 1] + BabyBear::new(0x9999);
+        assert!(
+            verify_effect_vm_rotated_with_cutover(&proof_bytes, &forged, &vk_hash).is_err(),
+            "a forged 8-felt commit PI on the insert keystone leg MUST be REJECTED"
+        );
+
+        // ── ARM (3): FORGE (present key) — a c-list ALREADY containing the fresh edge key fails
+        // closed (`insert_witness` refuses a present key — no fabricated after-root, no no-op
+        // laundering).
+        let colliding = CapLeaf {
+            slot_hash: fresh_key,
+            ..other
+        };
+        let collide_tree = CanonicalCapTree::new(vec![anchor, other, colliding], CAP_TREE_DEPTH);
+        let mw_c = collide_tree
+            .membership_witness(anchor.slot_hash)
+            .expect("anchor member of the colliding tree");
+        let cap_collide = CapMembershipWitness {
+            leaf: mw_c.leaf,
+            siblings: mw_c.siblings,
+            directions: mw_c.directions,
+            clist_leaves: clist_leaves.clone(),
+            cap_leaves: vec![anchor, other, colliding],
+            cap_tombstones: Vec::new(),
+        };
+        assert!(
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_collide,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
+            "a c-list ALREADY containing the fresh edge key MUST fail closed (the sorted insert \
+             refuses a present key)"
+        );
+
+        // ── ARM (4): FORGE (mismatched c-list) — a supplied 7-field c-list that does NOT rebuild
+        // the membership-opened root fails closed (the anchor path and the tree disagree — the
+        // c-list is not the holder's genuine pre-state; no silent forge of a different tree).
+        let cap_mismatch = CapMembershipWitness {
+            leaf: mw.leaf,
+            siblings: mw.siblings.clone(),
+            directions: mw.directions.clone(),
+            clist_leaves,
+            cap_leaves: vec![anchor], // `other` dropped — rebuilds a DIFFERENT root
+            cap_tombstones: Vec::new(),
+        };
+        assert!(
+            prove_effect_vm_cap_open(
+                &initial,
+                &effects,
+                &before_w,
+                &after_w,
+                &cap_mismatch,
+                &route,
+                None,
+                false
+            )
+            .is_err(),
+            "a 7-field c-list that does not rebuild the membership root MUST fail closed"
+        );
+    }
+
     /// **THE WIDE WRITE-CAP FLAG-DAY harness (§10 close — no ~31-bit waist for a WRITE-cap turn).** Given
     /// an INSERT-cap-write effect + its route, this proves the WRITE wrapper WIDE (the 8-felt ~124-bit
     /// commit appended past the membership crown + the cap-tree write `map_op`), light-client-verifies the
@@ -8788,59 +9048,53 @@ mod tests {
         route_eff_bit: u32,
         expected_write_key: &str,
     ) {
-        use dregg_circuit::cap_root::CapLeaf;
-        use dregg_circuit::effect_vm::trace_rotated::{
-            CapOpenWitness, FACET_MASK_HI, SIGNATURE_AUTH_TAG,
-        };
+        use dregg_circuit::cap_root::{CAP_TREE_DEPTH, CanonicalCapTree, CapLeaf};
+        use dregg_circuit::effect_vm::trace_rotated::{FACET_MASK_HI, SIGNATURE_AUTH_TAG};
         use dregg_circuit::heap_root::HeapLeaf;
         use dregg_turn::rotation_witness as rw;
 
-        let anchor: [BabyBear; 7] = [
-            BabyBear::new(0xA0C0),
-            BabyBear::new(7_777),
-            BabyBear::new(SIGNATURE_AUTH_TAG),
-            BabyBear::new(route_eff_bit),
-            BabyBear::new(FACET_MASK_HI),
-            BabyBear::new(0x00FF_FFFF),
-            BabyBear::new(99),
-        ];
-        let other: [BabyBear; 7] = [
-            BabyBear::new(0xBEEF),
-            BabyBear::new(123),
-            BabyBear::new(1),
-            BabyBear::new(route_eff_bit),
-            BabyBear::new(0),
-            BabyBear::new(9),
-            BabyBear::new(0),
-        ];
-        let leaf_cl = |l: &[BabyBear; 7]| CapLeaf {
-            slot_hash: l[0],
-            target: l[1],
-            auth_tag: l[2],
-            mask_lo: l[3],
-            mask_hi: l[4],
-            expiry: l[5],
-            breadstuff: l[6],
+        // The INSERT keystone fixture: the holder's BEFORE tree is a genuine CanonicalCapTree
+        // (mirroring `run_insert_after_spine_prove_verify_forge` — the keystone read opens the
+        // SPLICED leaf against the rebuilt AFTER tree, so the full 7-field c-list is threaded).
+        let anchor = CapLeaf {
+            slot_hash: BabyBear::new(0xA0C0),
+            target: BabyBear::new(7_777),
+            auth_tag: BabyBear::new(SIGNATURE_AUTH_TAG),
+            mask_lo: BabyBear::new(route_eff_bit),
+            mask_hi: BabyBear::new(FACET_MASK_HI),
+            expiry: BabyBear::new(0x00FF_FFFF),
+            breadstuff: BabyBear::new(99),
         };
-        let built = CapOpenWitness::build_for(&[other, anchor], 1, route_eff_bit)
-            .expect("cap-open membership path builds for the anchor");
+        let other = CapLeaf {
+            slot_hash: BabyBear::new(0xBEEF),
+            target: BabyBear::new(123),
+            auth_tag: BabyBear::new(1),
+            mask_lo: BabyBear::new(route_eff_bit),
+            mask_hi: BabyBear::new(0),
+            expiry: BabyBear::new(9),
+            breadstuff: BabyBear::new(0),
+        };
+        let before_tree = CanonicalCapTree::new(vec![anchor, other], CAP_TREE_DEPTH);
+        let mw = before_tree
+            .membership_witness(anchor.slot_hash)
+            .expect("the anchor is a member of the BEFORE tree");
         let (fresh_key, fresh_value) = fresh_edge;
         let clist_leaves = vec![
             HeapLeaf {
-                addr: anchor[0],
-                value: anchor[1],
+                addr: anchor.slot_hash,
+                value: anchor.target,
             },
             HeapLeaf {
-                addr: other[0],
-                value: other[1],
+                addr: other.slot_hash,
+                value: other.target,
             },
         ];
         let cap = CapMembershipWitness {
-            leaf: leaf_cl(&anchor),
-            siblings: built.siblings.to_vec(),
-            directions: built.directions.to_vec(),
+            leaf: mw.leaf,
+            siblings: mw.siblings.clone(),
+            directions: mw.directions.clone(),
             clist_leaves: clist_leaves.clone(),
-            cap_leaves: Vec::new(),
+            cap_leaves: vec![anchor, other],
             cap_tombstones: Vec::new(),
         };
 
@@ -8948,7 +9202,10 @@ mod tests {
         use dregg_circuit::cap_root::CapLeaf;
         use dregg_circuit::effect_vm::AttenuateWitness;
         const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
-        let fresh = (BabyBear::new(0xED6E), BabyBear::new(0x0F));
+        let fresh = (
+            BabyBear::new(0xED6E),
+            BabyBear::new(EFFECT_DELEGATION_OPS | 0x0F),
+        );
         let zero_leaf = CapLeaf {
             slot_hash: BabyBear::ZERO,
             target: BabyBear::ZERO,
@@ -8988,22 +9245,25 @@ mod tests {
         );
     }
 
-    /// **delegate (cross-vat grant) — genuine prove + verify + forge.** `GrantCapability` routes to
-    /// `delegateWriteCapOpenVmDescriptor2R24` (the MOVING attenuate-genuine TICK base — v1-state cap_root
-    /// is a PASSTHROUGH, the advance rides the openable rotated cap-root limb). The fresh edge is
-    /// `cap_entry[0..2]`. The grant is the GRANTER-side direction (`phase_b: Some` — the v1-state
-    /// cap_root passes through, matching the genuine moving face the write wrapper requires; the legacy
-    /// recipient-install `phase_b: None` arm LEGACY-advances v1-state col 87, which the genuine face does
-    /// NOT, so it is not the honest base for the wrapper).
+    /// **delegate (cross-vat grant) — genuine prove + verify + forge (the INSERT keystone deploy).**
+    /// `GrantCapability` routes to `delegateWriteCapOpenVmDescriptor2R24` — now the INSERT-shaped
+    /// keystone wrapper (`effCapInsertV3`): the cap-open READ opens the SPLICED conferred leaf against
+    /// the REBUILT AFTER cap-root (`CanonicalCapTree::insert_witness`); no arity-2 map-op. The fresh
+    /// edge is `cap_entry[0..2]`; its conferred mask carries the DELEGATION_OPS bit (an as-is
+    /// delegation of a DELEGATION_OPS-permitting held cap). The grant is the GRANTER-side direction
+    /// (`phase_b: Some` — the v1-state cap_root passes through, the genuine moving face).
     #[cfg(feature = "prover")]
     #[test]
     fn cap_write_delegate_proves_and_verifies_light_client() {
         use dregg_circuit::cap_root::CapLeaf;
         use dregg_circuit::effect_vm::AttenuateWitness;
-        // The delegate WRITE wrapper binds the DELEGATION_OPS facet (1<<16), NOT GRANT_CAPABILITY — the
-        // membership crown's `effBitGate` pins var 667 == 65536. So the anchor cap permits DELEGATION_OPS.
+        // The delegate keystone wrapper binds the DELEGATION_OPS facet (1<<16) on the SPLICED leaf —
+        // the anchor cap permits DELEGATION_OPS and the as-is conferral carries it.
         const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
-        let fresh = (BabyBear::new(0xED6E), BabyBear::new(0x0F)); // distinct from anchor/other keys
+        let fresh = (
+            BabyBear::new(0xED6E),
+            BabyBear::new(EFFECT_DELEGATION_OPS | 0x0F),
+        ); // distinct from anchor/other keys; mask carries the crown bit
         let zero_leaf = CapLeaf {
             slot_hash: BabyBear::ZERO,
             target: BabyBear::ZERO,
@@ -9023,7 +9283,7 @@ mod tests {
             held_expiry_height: None,
             granted_expiry_height: None,
         };
-        run_insert_cap_write_prove_verify_forge(
+        run_insert_after_spine_prove_verify_forge(
             VmEffect::GrantCapability {
                 cap_entry: [
                     fresh.0,
@@ -9089,9 +9349,10 @@ mod tests {
         };
 
         // The fresh conferred edge (the new cap slot felt + its conferred mask) — distinct from the
-        // anchor (0xA0C0) and other (0xBEEF) c-list keys.
+        // anchor (0xA0C0) and other (0xBEEF) c-list keys. The conferred mask carries the
+        // DELEGATION_OPS bit (the INSERT keystone crown binds it on the SPLICED leaf).
         let fresh_key = BabyBear::new(0x67A7);
-        let fresh_value = BabyBear::new(0x0F);
+        let fresh_value = BabyBear::new(EFFECT_DELEGATION_OPS | 0x0F);
         let zero_leaf = CapLeaf {
             slot_hash: BabyBear::ZERO,
             target: BabyBear::ZERO,
@@ -9200,9 +9461,16 @@ mod tests {
             fresh_key, other_deleg[0],
             "the fresh edge MUST be absent from the c-list"
         );
-        let built_deleg =
-            CapOpenWitness::build_for(&[other_deleg, anchor_deleg], 1, EFFECT_DELEGATION_OPS)
-                .expect("the DELEGATION_OPS membership path builds for the anchor");
+        // The INSERT keystone fixture: the holder's BEFORE tree is a genuine CanonicalCapTree; the
+        // membership path opens the anchor against ITS root, and the FULL 7-field c-list is threaded
+        // so the spliced AFTER tree can be rebuilt (`insert_witness`).
+        let before_tree = dregg_circuit::cap_root::CanonicalCapTree::new(
+            vec![leaf_cl(&anchor_deleg), leaf_cl(&other_deleg)],
+            dregg_circuit::cap_root::CAP_TREE_DEPTH,
+        );
+        let mw_deleg = before_tree
+            .membership_witness(anchor_deleg[0])
+            .expect("the anchor is a member of the BEFORE tree");
         let clist_leaves = vec![
             HeapLeaf {
                 addr: anchor_deleg[0],
@@ -9215,10 +9483,10 @@ mod tests {
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
-            siblings: built_deleg.siblings.to_vec(),
-            directions: built_deleg.directions.to_vec(),
+            siblings: mw_deleg.siblings.clone(),
+            directions: mw_deleg.directions.clone(),
             clist_leaves,
-            cap_leaves: Vec::new(),
+            cap_leaves: vec![leaf_cl(&anchor_deleg), leaf_cl(&other_deleg)],
             cap_tombstones: Vec::new(),
         };
         let effective_key = cap_open_effective_key(&route, &cap);
@@ -9252,18 +9520,19 @@ mod tests {
              post-cap-root (the conferred edge) is on-the-wire light-client-verifiable",
         );
 
-        // ── ARM (2): FORGE. A c-list MISSING the anchor key — the held-authority `read` op has no
-        // membership witness, so the bridge FAILS CLOSED. A fabricated post-cap-root is NOT provable.
+        // ── ARM (2): FORGE. A 7-field c-list MISSING the anchor — it rebuilds a DIFFERENT tree than
+        // the membership path opens, so the keystone producer FAILS CLOSED (the c-list is not the
+        // holder's genuine pre-state). A fabricated post-cap-root is NOT provable.
         let forged_clist = vec![HeapLeaf {
             addr: other_deleg[0],
             value: other_deleg[1],
         }];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
-            siblings: built_deleg.siblings.to_vec(),
-            directions: built_deleg.directions.to_vec(),
+            siblings: mw_deleg.siblings.clone(),
+            directions: mw_deleg.directions.clone(),
             clist_leaves: forged_clist,
-            cap_leaves: Vec::new(),
+            cap_leaves: vec![leaf_cl(&other_deleg)], // anchor MISSING — rebuilds a different root
             cap_tombstones: Vec::new(),
         };
         assert!(
@@ -9368,14 +9637,19 @@ mod tests {
         );
     }
 
-    /// **introduce — genuine prove + verify + forge.** `Introduce { intro_hash }` routes to
-    /// `introduceWriteCapOpenVmDescriptor2R24`; the fresh edge is `intro_hash[0..2]`.
+    /// **introduce — genuine prove + verify + forge (the INSERT keystone deploy).** `Introduce {
+    /// intro_hash }` routes to `introduceWriteCapOpenVmDescriptor2R24` — the INSERT-shaped keystone
+    /// wrapper; the fresh edge is `intro_hash[0..2]`, its conferred mask carrying the INTRODUCE bit
+    /// (the as-is introduction of an INTRODUCE-permitting held cap).
     #[cfg(feature = "prover")]
     #[test]
     fn cap_write_introduce_proves_and_verifies_light_client() {
         const EFFECT_INTRODUCE: u32 = 1 << 13;
-        let fresh = (BabyBear::new(0x1D7E), BabyBear::new(0x07));
-        run_insert_cap_write_prove_verify_forge(
+        let fresh = (
+            BabyBear::new(0x1D7E),
+            BabyBear::new(EFFECT_INTRODUCE | 0x07),
+        );
+        run_insert_after_spine_prove_verify_forge(
             VmEffect::Introduce {
                 intro_hash: [
                     fresh.0,
@@ -9449,25 +9723,39 @@ mod tests {
             .expect("the delegateAtten write wrapper IS in V3_STAGED_REGISTRY_TSV");
         let desc = parse_vm_descriptor2(json).expect("delegateAtten write wrapper parses");
 
-        // The INSERT map_op advances the rotated cap-root limb (BEFORE var 213 → AFTER var 264) — the same
-        // on-the-wire-verifiable sorted-tree write `delegate` proves. EXACTLY ONE op defines var 264.
-        // Phase H-CAP-8: the AFTER cap-root is a native 8-felt group `[lane0=332 (was scalar var 264)
-        // ‖ lanes 1..7 = 358..=364]`. Match the FULL group (no lane-0 squeeze) so the INSERT tooth bites.
-        let after_cap_root_group: Vec<LeanExpr> = std::iter::once(332usize)
-            .chain(358..=364)
-            .map(LeanExpr::Var)
-            .collect();
-        let insert_264 = desc
+        // THE INSERT KEYSTONE SHAPE (`effCapInsertV3`): the arity-2 map-op is GONE (it was
+        // shape-UNSAT against the arity-7 fresh-key splice — the break this deploy closed); the
+        // cap-tree INSERT is carried by the 8 AFTER cap-root WELD gates pinning the cap-open READ's
+        // `capRoot` group to the committed AFTER cap-root block `[lane0=var 332 ‖ lanes 1..7 =
+        // vars 358..=364]` — so the read opens the SPLICED leaf against the REBUILT AFTER tree.
+        let map_ops = desc
             .constraints
             .iter()
-            .filter(|c| matches!(c, VmConstraint2::MapOp(m) if m.new_root == after_cap_root_group))
+            .filter(|c| matches!(c, VmConstraint2::MapOp(_)))
             .count();
         assert_eq!(
-            insert_264, 1,
-            "the delegateAtten AFTER cap-root (rotated limb 8-felt group, lane0=var 332) MUST be defined \
-             by EXACTLY ONE map_op new_root — the genuine sorted INSERT (descriptor: {})",
+            map_ops, 0,
+            "the delegateAtten keystone wrapper carries NO arity-2 map-op (the INSERT rides the \
+             after-root welds) — descriptor: {}",
             desc.name
         );
+        let after_group: Vec<usize> = std::iter::once(332usize).chain(358..=364).collect();
+        for (lane, g) in after_group.iter().enumerate() {
+            let has_weld = desc.constraints.iter().any(|c| {
+                matches!(c,
+                    VmConstraint2::Base(dregg_circuit::lean_descriptor_air::VmConstraint::Gate(
+                        LeanExpr::Add(_, r)))
+                    if matches!(&**r, LeanExpr::Mul(cneg, v)
+                        if matches!(&**cneg, LeanExpr::Const(-1))
+                            && matches!(&**v, LeanExpr::Var(x) if x == g)))
+            });
+            assert!(
+                has_weld,
+                "the delegateAtten keystone wrapper MUST weld the read capRoot lane {lane} to the \
+                 committed AFTER cap-root var {g} (the effCapInsertV3 after-root weld) — descriptor: {}",
+                desc.name
+            );
+        }
 
         // The non-amplification submask lookup (`granted ⊑ held`) — the tooth that distinguishes
         // delegateAtten from plain delegate. It is a CUSTOM subset-table (`SUBMASK_TID`, deployed table
@@ -9608,48 +9896,44 @@ mod tests {
     fn cap_write_delegate_atten_proves_and_verifies_light_client() {
         use dregg_circuit::cap_root::CapLeaf;
         use dregg_circuit::effect_vm::AttenuateWitness;
-        use dregg_circuit::effect_vm::trace_rotated::{
-            CapOpenWitness, FACET_MASK_HI, SIGNATURE_AUTH_TAG,
-        };
+        use dregg_circuit::effect_vm::trace_rotated::{FACET_MASK_HI, SIGNATURE_AUTH_TAG};
         use dregg_circuit::heap_root::HeapLeaf;
         use dregg_turn::rotation_witness as rw;
 
-        // The delegateAtten WRITE wrapper binds the DELEGATION_OPS facet (1<<16). The anchor cap (the
-        // delegator's held authority) permits DELEGATION_OPS; its c-list VALUE (col 72 = HELD_MASK the
-        // submask gate compares against) is the BROAD held mask 0xFF.
+        // The delegateAtten keystone wrapper binds the DELEGATION_OPS facet (1<<16) on the SPLICED
+        // (conferred, narrowed) leaf. The anchor cap (the delegator's held authority) holds the BROAD
+        // mask 0x100FF (= DELEGATION_OPS | 0xFF); the conferred KEEP_MASK 0x10052 STRICTLY narrows it
+        // while keeping the crown bit. The surviving submask lookup compares KEEP (col 73) against
+        // the anchor leaf's held mask (col 72).
         const EFFECT_DELEGATION_OPS: u32 = 1 << 16;
-        let held_mask = BabyBear::new(0xFF); // the anchor's broad held authority (HELD_MASK, col 72)
-        let granted_mask = BabyBear::new(0x52); // the narrowed conferred mask (KEEP_MASK, col 73) — 0x52 ⊑ 0xFF
+        let held_mask = BabyBear::new(EFFECT_DELEGATION_OPS | 0xFF); // the anchor's broad held authority
+        let granted_mask = BabyBear::new(EFFECT_DELEGATION_OPS | 0x52); // the narrowed conferred mask
         let fresh_key = BabyBear::new(0xED57); // distinct from anchor/other keys
-        let anchor: [BabyBear; 7] = [
-            BabyBear::new(0xA0C0), // slot_hash (the anchor key)
-            BabyBear::new(7_777),  // target
-            BabyBear::new(SIGNATURE_AUTH_TAG),
-            BabyBear::new(EFFECT_DELEGATION_OPS), // facet == route eff_bit
-            BabyBear::new(FACET_MASK_HI),
-            BabyBear::new(0x00FF_FFFF),
-            BabyBear::new(99),
-        ];
-        let other: [BabyBear; 7] = [
-            BabyBear::new(0xBEEF),
-            BabyBear::new(123),
-            BabyBear::new(1),
-            BabyBear::new(EFFECT_DELEGATION_OPS),
-            BabyBear::new(0),
-            BabyBear::new(9),
-            BabyBear::new(0),
-        ];
-        let leaf_cl = |l: &[BabyBear; 7]| CapLeaf {
-            slot_hash: l[0],
-            target: l[1],
-            auth_tag: l[2],
-            mask_lo: l[3],
-            mask_hi: l[4],
-            expiry: l[5],
-            breadstuff: l[6],
+        let anchor = CapLeaf {
+            slot_hash: BabyBear::new(0xA0C0), // the anchor key
+            target: BabyBear::new(7_777),
+            auth_tag: BabyBear::new(SIGNATURE_AUTH_TAG),
+            mask_lo: held_mask, // the broad held mask (permits DELEGATION_OPS; the submask RHS)
+            mask_hi: BabyBear::new(FACET_MASK_HI),
+            expiry: BabyBear::new(0x00FF_FFFF),
+            breadstuff: BabyBear::new(99),
         };
-        let built = CapOpenWitness::build_for(&[other, anchor], 1, EFFECT_DELEGATION_OPS)
-            .expect("cap-open membership path builds for the anchor");
+        let other = CapLeaf {
+            slot_hash: BabyBear::new(0xBEEF),
+            target: BabyBear::new(123),
+            auth_tag: BabyBear::new(1),
+            mask_lo: BabyBear::new(EFFECT_DELEGATION_OPS),
+            mask_hi: BabyBear::new(0),
+            expiry: BabyBear::new(9),
+            breadstuff: BabyBear::new(0),
+        };
+        let before_tree = dregg_circuit::cap_root::CanonicalCapTree::new(
+            vec![anchor, other],
+            dregg_circuit::cap_root::CAP_TREE_DEPTH,
+        );
+        let mw = before_tree
+            .membership_witness(anchor.slot_hash)
+            .expect("the anchor is a member of the BEFORE tree");
 
         // The phase-B granter-side witness that DRIVES the routing signal: held mask 0xFF, granted mask
         // 0x52 — a STRICT submask, so `is_attenuated_grant` selects the delegateAtten submask wrapper.
@@ -9677,26 +9961,27 @@ mod tests {
             "the witness (granted 0x52 ⊊ held 0xFF) MUST register as an attenuated grant"
         );
 
-        // The GENUINE c-list: the anchor key present at its BROAD held mask (col 72 source), the fresh
-        // edge key ABSENT and distinct. The conferred grant rides `cap_entry = [fresh_key, granted_mask]`.
-        assert_ne!(fresh_key, anchor[0]);
-        assert_ne!(fresh_key, other[0]);
+        // The GENUINE witness: the anchor present in the CanonicalCapTree at its BROAD held mask; the
+        // fresh edge key ABSENT and distinct. The FULL 7-field c-list is threaded (the INSERT rebuild
+        // witness). The conferred grant rides `cap_entry = [fresh_key, granted_mask]`.
+        assert_ne!(fresh_key, anchor.slot_hash);
+        assert_ne!(fresh_key, other.slot_hash);
         let clist_leaves = vec![
             HeapLeaf {
-                addr: anchor[0],
+                addr: anchor.slot_hash,
                 value: held_mask,
-            }, // anchor → broad held mask (HELD_MASK col 72)
+            },
             HeapLeaf {
-                addr: other[0],
-                value: other[1],
+                addr: other.slot_hash,
+                value: other.target,
             },
         ];
         let cap = CapMembershipWitness {
-            leaf: leaf_cl(&anchor),
-            siblings: built.siblings.to_vec(),
-            directions: built.directions.to_vec(),
-            clist_leaves,
-            cap_leaves: Vec::new(),
+            leaf: anchor,
+            siblings: mw.siblings.clone(),
+            directions: mw.directions.clone(),
+            clist_leaves: clist_leaves.clone(),
+            cap_leaves: vec![anchor, other],
             cap_tombstones: Vec::new(),
         };
 
@@ -9779,35 +10064,43 @@ mod tests {
             )
         });
 
-        // FORGE: a grant EXCEEDING the held authority. The witness still claims attenuation (so the route
-        // selects the submask wrapper), but the REAL anchor held mask in the c-list is only 0x0F while the
-        // conferred KEEP_MASK is 0x52 — `0x52 ⊄ 0x0F`, so the `granted ⊑ held` submask lookup is UNSAT.
-        let narrow_held = BabyBear::new(0x0F); // the anchor's REAL held authority — narrower than the grant
-        let clist_forge = vec![
-            HeapLeaf {
-                addr: anchor[0],
-                value: narrow_held,
-            }, // anchor → NARROW held (col 72)
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            },
-        ];
+        // FORGE: a grant EXCEEDING the held authority. The phase-B witness still claims attenuation
+        // (so the route selects the submask wrapper), but the anchor's REAL committed held mask is
+        // only 0x1000F while the conferred KEEP_MASK is 0x10052 — `0x10052 ⊄ 0x1000F`, so the
+        // `granted ⊑ held` submask lookup is UNSAT (the prover refuses or its self-verify panics —
+        // both fail-closed; a PASSING proof would be the amplification forge).
+        let narrow_anchor = CapLeaf {
+            mask_lo: BabyBear::new(EFFECT_DELEGATION_OPS | 0x0F), // narrower than the grant
+            ..anchor
+        };
+        let forge_tree = dregg_circuit::cap_root::CanonicalCapTree::new(
+            vec![narrow_anchor, other],
+            dregg_circuit::cap_root::CAP_TREE_DEPTH,
+        );
+        let mw_forge = forge_tree
+            .membership_witness(narrow_anchor.slot_hash)
+            .expect("the narrow anchor is a member of the forge tree");
         let cap_forge = CapMembershipWitness {
-            leaf: leaf_cl(&anchor),
-            siblings: built.siblings.to_vec(),
-            directions: built.directions.to_vec(),
-            clist_leaves: clist_forge,
-            cap_leaves: Vec::new(),
+            leaf: narrow_anchor,
+            siblings: mw_forge.siblings.clone(),
+            directions: mw_forge.directions.clone(),
+            clist_leaves,
+            cap_leaves: vec![narrow_anchor, other],
             cap_tombstones: Vec::new(),
         };
-        assert!(
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_effect_vm_cap_open(
-                &initial, &effects, &before_w, &after_w, &cap_forge, &route, None, false
+                &initial, &effects, &before_w, &after_w, &cap_forge, &route, None, false,
             )
-            .is_err(),
-            "a grant EXCEEDING the held authority (conferred 0x52 ⊄ real held 0x0F) MUST fail closed — \
-             the `granted ⊑ held` submask lookup bites (no amplification)"
+            .map(|_| ())
+        }));
+        std::panic::set_hook(prev_hook);
+        assert!(
+            !matches!(outcome, Ok(Ok(()))),
+            "a grant EXCEEDING the held authority (conferred 0x10052 ⊄ real held 0x1000F) MUST fail \
+             closed — the `granted ⊑ held` submask lookup bites (no amplification)"
         );
     }
 
