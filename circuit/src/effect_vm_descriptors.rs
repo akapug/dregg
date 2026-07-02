@@ -1230,7 +1230,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "9af0d2be020db621f59b249784a6edfb348511d0593e849e086a4fd00dcc9f7d";
+    "78ef11440f9eddf9b998f5cac1d1df3a6e4b9c942a4dc513f9385bf80eba0eed";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1969,9 +1969,12 @@ mod tests {
         const V1_WIDTH: usize = EFFECT_VM_WIDTH;
         // chain carriers occupy `[B_CHAIN_BASE, B_SPAN)` (the head digest + one per 3-wide group).
         const B_NUM_CHAIN: usize = B_SPAN - B_CHAIN_BASE; // 37 (v12: 112 limbs)
-        const C_SPAN: usize = 39;
+        // The caveat region grew 39 → 43 with the dsl rc-EMIT: the 4-felt `Witnessed{Dfa}`
+        // route-commitment carrier rides in-region offsets 39..=42 on EVERY rotated member's
+        // layout (`trace_rotated::C_SPAN`); only the PI pins (`withDfaRcPins`) are per-member.
+        const C_SPAN: usize = crate::effect_vm::trace_rotated::C_SPAN; // 43 (v12 + rc)
         const C_COMMIT: usize = cav::MANIFEST_SIZE + cav::NUM_CHAIN; // 29 + 9 = 38
-        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 341 (v12)
+        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 345 (v12 + rc)
 
         let mut n = 0usize;
         for line in V3_STAGED_REGISTRY_TSV.lines() {
@@ -2235,6 +2238,42 @@ mod tests {
                     _ => None,
                 })
                 .collect();
+            // THE UNIFORM DSL rc-EMIT (`withDfaRcPins`): every rotated COHORT member (+ the
+            // fee-in-proof transfer) publishes the 4-felt `Witnessed{Dfa}` route-commitment
+            // carrier (caveat-region offsets 39..=42) as its LAST 4 member PIs. Strip + assert
+            // the quad here so the per-effect branches below keep their pre-rc expectations;
+            // fail-closed on membership (a cohort member MISSING the rc pins, or a tail member
+            // GROWING them, both fail).
+            let rc_col =
+                V1_WIDTH + 2 * B_SPAN + crate::effect_vm::trace_rotated::C_DFA_RC_OFF;
+            let (rc_pins, nullifier_pins): (Vec<(usize, usize)>, Vec<(usize, usize)>) =
+                nullifier_pins
+                    .into_iter()
+                    .partition(|(col, _)| (rc_col..rc_col + 4).contains(col));
+            let has_rc = !rc_pins.is_empty();
+            // NOT rc-wrapped: heapWrite (v3RegistryHeap tail, no v1 prefix), the dedicated
+            // supply-mint (tail `withSelectorGate sel::MINT mintV3` over the BARE body), and the
+            // STAGED escrow-satisfaction weld (no live routing). Everything else here is the
+            // rc-wrapped cohort (+ transferFee).
+            let rc_exempt = is_heap_write
+                || key == "supplyMintVmDescriptor2R24"
+                || key == "settleEscrowSatVmDescriptor2R24";
+            assert_eq!(
+                has_rc, !rc_exempt,
+                "{key}: dsl rc pins present iff the member is the rc-wrapped cohort"
+            );
+            if has_rc {
+                let rc_expected: Vec<(usize, usize)> = (0..4)
+                    .map(|k| (rc_col + k, d.public_input_count - 4 + k))
+                    .collect();
+                assert_eq!(
+                    rc_pins, rc_expected,
+                    "{key}: the 4 rc pins publish the rc carrier (region offsets 39..=42) as the \
+                     LAST 4 member PIs"
+                );
+            }
+            // The member's PRE-rc PI count — what every per-effect branch below pins.
+            let base_pi_count = d.public_input_count - if has_rc { 4 } else { 0 };
             // THE RECORD-FORCING PIN (the deployment-soundness close, `EffectVmEmitRotationV3
             // .rotateV3WithRecordPin`): cellSeal/cellUnseal/cellDestroy AND receiptArchive force the
             // AFTER block's lifecycle limb (col `after_base + B_LIFECYCLE`) — the deployed apply moves
@@ -2272,7 +2311,7 @@ mod tests {
             );
             if key == "noteSpendVmDescriptor2R24" {
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "noteSpend: rotated 46-PI + the appended nullifier slot"
                 );
                 assert_eq!(
@@ -2286,7 +2325,7 @@ mod tests {
                 // `commitmentsInsertOp` map-op forces the commitment set-insert on limb 27
                 // (`EffectVmEmitRotationV3.noteCreateV3`).
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "noteCreate: rotated 46-PI + the appended commitment slot"
                 );
                 assert_eq!(
@@ -2294,18 +2333,38 @@ mod tests {
                     vec![(PARAM_BASE + param::NULLIFIER, pi_base + 4)],
                     "noteCreate: the fifth pin welds the published commitment (param0) to PI[46]"
                 );
+            } else if key == "factoryVmDescriptor2R24" {
+                // STEP-3 factory carriers (`factoryV3Carriers = withAfterOctetPins (withAfterOctetPins
+                // factoryV3 B_CHILD_VK_OCTET) B_CONTRACT_HASH_OCTET`): the new-cell-key grow-gate pin
+                // (param1 CHILD_VK_DERIVED → PI[46]) PLUS the 16 committed carrier-octet pins — the
+                // AFTER-block child_vk8 octet (limbs 88..=95 → PI[47..54]) then the contract_hash8
+                // octet (limbs 96..=103 → PI[55..62]), last-row, the v12 big-bang exposure the
+                // factory/hatchery fold tooths bind.
+                use crate::effect_vm::trace_rotated::{B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET};
+                assert_eq!(
+                    base_pi_count, 63,
+                    "factory: rotated 46-PI + the new-cell-key slot + the 16 carrier-octet pins"
+                );
+                let mut expected =
+                    vec![(PARAM_BASE + param::CHILD_VK_DERIVED, pi_base + 4)];
+                for i in 0..8 {
+                    expected.push((after_base + B_CHILD_VK_OCTET + i, pi_base + 5 + i));
+                }
+                for i in 0..8 {
+                    expected.push((after_base + B_CONTRACT_HASH_OCTET + i, pi_base + 13 + i));
+                }
+                assert_eq!(
+                    nullifier_pins, expected,
+                    "factory: the grow-gate key pin (PI[46]) + the child_vk8 (PI[47..54]) + \
+                     contract_hash8 (PI[55..62]) committed-octet pins"
+                );
             } else if new_cell_key_pin_member {
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "{key}: rotated 46-PI + the appended new-cell-key slot"
                 );
-                // createCell/spawn key on param0 (the new-cell id); factory keys on param1
-                // (CHILD_VK_DERIVED — param0 carries the factory VK).
-                let key_col = if key == "factoryVmDescriptor2R24" {
-                    PARAM_BASE + param::CHILD_VK_DERIVED
-                } else {
-                    PARAM_BASE
-                };
+                // createCell/spawn key on param0 (the new-cell id).
+                let key_col = PARAM_BASE;
                 assert_eq!(
                     nullifier_pins,
                     vec![(key_col, pi_base + 4)],
@@ -2318,7 +2377,7 @@ mod tests {
                 // the 7 headroom limbs (AFTER offsets 12..18) → PI[47..53], so a 31-bit-colliding
                 // wide-open authority forged into ANY limb is UNSAT (the GENTIAN close for movers).
                 assert_eq!(
-                    d.public_input_count, 54,
+                    base_pi_count, 54,
                     "{key}: rotated 46-PI + the 8 authority record-pins (47..53)"
                 );
                 let mut expected = vec![(after_base + B_AUTHORITY_DIGEST, pi_base + 4)];
@@ -2331,7 +2390,7 @@ mod tests {
                 );
             } else if lifecycle_record_pin_member {
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "{key}: rotated 46-PI + the appended record-forcing slot"
                 );
                 assert_eq!(
@@ -2346,7 +2405,7 @@ mod tests {
                 // INSIDE the proven transition (the bal-lo gate forces `after = before − amount − fee`).
                 use crate::effect_vm::columns::{STATE_AFTER_BASE, state};
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "transferFee: rotated 46-PI + the appended fee slot"
                 );
                 assert_eq!(
@@ -2362,7 +2421,7 @@ mod tests {
                 // post-`fields_root` param), so a forged post-`fields_root` is UNSAT in-circuit
                 // (Lean `setFieldDynForcedV3`).
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "setFieldDyn: rotated 46-PI + the appended fields-root weld slot"
                 );
                 assert_eq!(
@@ -2381,7 +2440,7 @@ mod tests {
                 // Refinement proven in `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean`.
                 use crate::effect_vm::columns::PARAM_BASE;
                 assert_eq!(
-                    d.public_input_count, 47,
+                    base_pi_count, 47,
                     "settleEscrowSat: rotated 46-PI + the appended selector slot"
                 );
                 assert_eq!(
@@ -2409,7 +2468,7 @@ mod tests {
                 // (PARAM_BASE+0..3) → PI[50..53], all on the FIRST row (the binding is fold-enforced,
                 // like memOp/umemOp, NOT a row poly). So custom carries 54 PIs (46 + 8 anchors).
                 assert_eq!(
-                    d.public_input_count, 54,
+                    base_pi_count, 54,
                     "custom: rotated 46-PI + the 8 custom fold-binding anchors (46..53)"
                 );
                 let mut expected: Vec<(usize, usize)> = Vec::new();
@@ -2426,7 +2485,7 @@ mod tests {
                 );
             } else {
                 assert_eq!(
-                    d.public_input_count, 46,
+                    base_pi_count, 46,
                     "{key}: non-record-pin cohort carries the rotated 46-PI"
                 );
                 assert!(

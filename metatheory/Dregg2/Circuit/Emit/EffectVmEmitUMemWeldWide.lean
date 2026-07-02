@@ -36,6 +36,7 @@ import Dregg2.Circuit.Emit.CapOpenTurnPins
 import Dregg2.Circuit.Emit.HeapOpenEmit
 import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.Emit.AccumulatorInsertEmit
+import Dregg2.Circuit.Emit.CarrierComposed
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
@@ -173,9 +174,12 @@ fields-write over the full ~124-bit BEFORE/AFTER fields-root blocks
 GENUINE after-spine wide, not the stale record-pin refusal (`v3RegistryCapOpenWide`'s own position-7
 entry is the pre-after-spine refusal; the bare emit + this welded emit both override it). -/
 def refusalAfterSpineWide : EffectVmDescriptor2 :=
-  let rfHost := Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
-    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
-    "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
+  -- rc-EMIT (the bare-probe mirror): the welded host rides `withDfaRcPins` exactly as the bare
+  -- `EmitWideRegistryProbe` row does, so the weld parity (welded == Rust weld of bare) holds.
+  let rfHost := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+    (Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
+      "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen")
   let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend rfHost rfBB (rfBB + 151)
 
@@ -185,37 +189,40 @@ FACE `bb` (the SAME geometry the bare emit + `v3RegistryWideBB` use). The DEPLOY
 FORCES the faithful 8-felt INSERT over the genuine sorted fresh-key insert (`effAccumInsertV3_forces_
 write8`), NEVER the lane-0 squeeze. Key-stable swaps into `crownWideHosts` (positions 3/4/22). -/
 def noteSpendInsertWide : EffectVmDescriptor2 :=
-  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+  let host := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+    (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
     (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
       Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
     (some Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND)
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
-    "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
+    "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen")
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
 def noteCreateInsertWide : EffectVmDescriptor2 :=
-  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+  let host := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+    (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
     (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
       Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
     none
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
-    "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
+    "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen")
   let bb := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
 def createCellInsertWide : EffectVmDescriptor2 :=
-  let host := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+  let host := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+    (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
     none
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
-    "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
+    "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen")
   let bb := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth
   Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend host bb (bb + 151)
 
@@ -231,6 +238,15 @@ def crownWideHosts : List (String × EffectVmDescriptor2) :=
     else if e.1 == "noteSpendVmDescriptor2R24" then (e.1, noteSpendInsertWide)
     else if e.1 == "noteCreateVmDescriptor2R24" then (e.1, noteCreateInsertWide)
     else if e.1 == "createCellVmDescriptor2R24" then (e.1, createCellInsertWide)
+    -- The v12 big-bang teeth-exposing advances (the bare-probe mirror, weld-parity-preserving):
+    -- the transfer crown host is the membership-teeth member (claim PIs 50..51, teeth columns
+    -- past the carriers) and the makeSovereign crown host the KEY_COMMIT-gated member (teeth PIs
+    -- 58..61 + the chip gate's digest appendix at the wide end) — the umem weld appends its 7
+    -- columns PAST each (at the teeth/appendix end), additive as everywhere.
+    else if e.1 == "transferVmDescriptor2R24" then
+      (e.1, Dregg2.Circuit.Emit.CarrierComposed.transferV3MembershipWide)
+    else if e.1 == "makeSovereignVmDescriptor2R24" then
+      (e.1, Dregg2.Circuit.Emit.CarrierComposed.makeSovereignV3DeployedWide)
     else e)
 
 /-- **The Lean-emitted WIDE+UMEM WELDED registry (STAGED).** The welded twin of the wire's WIDE
