@@ -2744,6 +2744,48 @@ fn fill_heap_after_spine(
     }
 }
 
+/// **`fill_cap_after_spine`** — the ARITY-7 cap-tree AFTER-spine appendix, the exact twin of
+/// [`fill_heap_after_spine`] but over the native-8-felt cap tree (`cap_leaf_digest` = arity-7 leaf
+/// absorb, `cap_node` = arity-16 `node8`). Lays, at `base_as` (= `AFTER_SPINE_BASE w = CAP_OPEN_WIDTH`,
+/// the Lean `afterSpineCols`): the in-place-narrowed AFTER `CapLeaf` (7 scalar fields) at `+0..6`, its
+/// 8-felt `cap_leaf_digest` at `+7..14`, then `DEPTH` 8-felt `cap_node` groups at `+15+8·lvl` folded
+/// over the SHARED sibling path (`siblings`/`directions` — reused from the cap-open READ appendix, the
+/// Lean `afterSpineCols.dir = capOpenCols.dir` defeq). NO sib/dir cols (shared with the read) and NO
+/// `capRoot` col in the appendix (the after `capRoot` is the committed AFTER-block cap-root GROUP the
+/// rootPin binds to). Returns the recomposed AFTER `cap_root8` (the top `node8`), which the caller MUST
+/// lay into the AFTER-block cap-root group so `afterSpineCols.rootPin` holds against it. This is the
+/// producer half of `CapOpenEmit.effCapOpenWriteV3_forces_write8` (the arity-7 `writesTo8`, UPDATE-at-key:
+/// same `slot_hash`, `mask_lo := KEEP_MASK`) — the cap-write forced WITHOUT the arity-2 map-op.
+fn fill_cap_after_spine(
+    row: &mut [BabyBear],
+    base_as: usize,
+    after_leaf: &[BabyBear; 7],
+    siblings: &[[BabyBear; CAP_OPEN_DIGEST_W]],
+    directions: &[u8],
+) -> [BabyBear; CAP_OPEN_DIGEST_W] {
+    // 7 scalar after-leaf fields at base_as + 0..6.
+    for (i, &f) in after_leaf.iter().enumerate() {
+        row[base_as + i] = f;
+    }
+    // 8-felt after-leaf digest at base_as + 7..14.
+    let leaf_digest = cap_leaf_digest(after_leaf);
+    for (j, &d) in leaf_digest.iter().enumerate() {
+        row[base_as + 7 + j] = d;
+    }
+    // after-node blocks (8 felts each, NO sib/dir — SHARED with the read) at base_as + 15 + 8·lvl.
+    let mut cur = leaf_digest;
+    for lvl in 0..CAP_OPEN_DEPTH {
+        let (l, r) = cap_mix(cur, siblings[lvl], directions[lvl]);
+        let node = cap_node(l, r);
+        let blk = base_as + 15 + CAP_OPEN_DIGEST_W * lvl;
+        for (j, &n) in node.iter().enumerate() {
+            row[blk + j] = n;
+        }
+        cur = node;
+    }
+    cur
+}
+
 /// Recompute one rotated block's chained `wireCommitR` digests + `state_commit` from the limbs
 /// ALREADY present in the row (cols `base..base+NUM_PRE_LIMBS` + the iroot at `base+B_IROOT`).
 /// Byte-identical to [`fill_block`]'s chain, but reads the limbs in place rather than from a
@@ -2951,6 +2993,94 @@ pub fn append_wide_carriers_cap_open(
         ));
     }
     Ok(append_wide_carriers(trace, base_pis, CAP_OPEN_WIDTH))
+}
+
+/// The cap-root 8-felt GROUP column at lane `lane` for the rotated block based at `block_base` (the
+/// exact mirror of the Lean `EffectVmEmitRotationV3.capRootGroupCol`: lane 0 = the scalar cap-root limb
+/// `B_CAP_ROOT = 25`; lanes 1..7 = the dedicated 8-felt completion limbs `50 + lane` = 51..57). With the
+/// v11 rotated block span (`B_SPAN = 119`), the descriptor block bases (`EFFECT_VM_WIDTH` BEFORE /
+/// `EFFECT_VM_WIDTH + 119` AFTER) coincide EXACTLY with the trace bases (`BEFORE_BASE = V1_WIDTH = 188` /
+/// `AFTER_BASE = V1_WIDTH + B_SPAN = 307`), so this single mapping serves both descriptor and trace — no
+/// column offset. (The `beforeCapRootCols`/`afterCapRootCols` group readers pin these lanes.)
+fn cap_root_group_col(block_base: usize, lane: usize) -> usize {
+    block_base + if lane == 0 { B_CAP_ROOT } else { 50 + lane }
+}
+
+/// **THE ATTENUATE cap-WRITE AFTER-SPINE producer (`attenuateCapOpenEffVmDescriptor2R24` wide member).**
+/// The cap twin of [`generate_rotated_refusal_write_wide`]: given a `CAP_OPEN_WIDTH`-wide cap-open trace
+/// (a rotated attenuate base already passed through [`widen_to_cap_open`], whose READ appendix opened the
+/// held `CapLeaf` against the BEFORE cap-root8), this FORCES the faithful 8-felt in-place UPDATE-AT-KEY
+/// (`effCapOpenWriteV3_forces_write8`) WITHOUT the arity-2 map-op:
+///   * lays the AFTER-spine appendix at `CAP_OPEN_WIDTH` ([`fill_cap_after_spine`]) — the held leaf with
+///     `mask_lo := keep_mask` folded over the SHARED sibling path (`cap_open.siblings`/`directions`) to the
+///     recomposed AFTER `cap_root8`;
+///   * writes the BEFORE `cap_root8` (`cap_open.cap_root`) into the BEFORE-block cap-root GROUP and the
+///     recomposed AFTER `cap_root8` into the AFTER-block cap-root GROUP (lane 0 + the 7 completion limbs),
+///     so the READ appendix's `beforeRootWelds` and the after-spine's `rootPin` both hold;
+///   * fills the submask-lookup param columns (`CAP_KEY @ 71`, `HELD_MASK @ 72`, `KEEP_MASK @ 73`) so the
+///     `granted ⊑ held` non-amplification tooth is well-defined WITHOUT the map-op;
+///   * recomputes the two rotated block commits (the overridden 8-felt groups now bind), then appends the
+///     generic wide carriers at `CAP_OPEN_WIDTH + CAP_OPEN_AFTER_SPINE_SPAN`.
+///
+/// Returns the wide `dpis` (the 16 wide commit PIs re-absorb the SAME overridden cap-root groups, so the
+/// published ~124-bit anchor binds the genuine faithful write — never the lane-0 squeeze). NO map heaps.
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_cap_attenuate_after_spine_wide(
+    trace: &mut Vec<Vec<BabyBear>>,
+    base_pis: Vec<BabyBear>,
+    cap_open: &CapOpenWitness,
+    cap_key: BabyBear,
+    held_value: BabyBear,
+    keep_mask: BabyBear,
+) -> Result<Vec<BabyBear>, String> {
+    use super::columns::PARAM_BASE;
+    if trace.is_empty() {
+        return Err("attenuate after-spine: empty trace".into());
+    }
+    if trace[0].len() != CAP_OPEN_WIDTH {
+        return Err(format!(
+            "attenuate after-spine: trace width {} != CAP_OPEN_WIDTH {CAP_OPEN_WIDTH} \
+             (widen_to_cap_open first)",
+            trace[0].len()
+        ));
+    }
+    // The AFTER leaf: the held `CapLeaf` with `mask_lo` (field 3) rebound to the narrowed KEEP_MASK —
+    // the exact `writesTo8` UPDATE-AT-KEY the deployed after-spine forces (same slot_hash/target/…).
+    let mut after_leaf = cap_open.leaf;
+    after_leaf[3] = keep_mask;
+    let before_root8 = cap_open.cap_root;
+
+    // The submask-lookup param columns (Lean `EffectVmEmitV2.{CAP_KEY=3, HELD_MASK=4, KEEP_MASK=5}`); the
+    // `submaskLookup` reads `[prmCol KEEP_MASK, prmCol HELD_MASK]` = cols 73/72.
+    let cap_key_col = PARAM_BASE + 3; // 71
+    let held_mask_col = PARAM_BASE + 4; // 72
+    let keep_mask_col = PARAM_BASE + 5; // 73
+
+    let after_spine_base = CAP_OPEN_WIDTH;
+    let host_width = CAP_OPEN_WIDTH + CAP_OPEN_AFTER_SPINE_SPAN;
+    for row in trace.iter_mut() {
+        row.resize(host_width, BabyBear::ZERO);
+        let after_root8 = fill_cap_after_spine(
+            row,
+            after_spine_base,
+            &after_leaf,
+            &cap_open.siblings,
+            &cap_open.directions,
+        );
+        // Override the BEFORE/AFTER rotated-block cap-root 8-felt GROUPS with the genuine roots so the
+        // READ `beforeRootWelds` (BEFORE group == membership root8) and the after-spine `rootPin` (AFTER
+        // group == recomposed narrowed root8) hold, and the wide carriers re-absorb the full 8-felt write.
+        for lane in 0..CAP_OPEN_DIGEST_W {
+            row[cap_root_group_col(BEFORE_BASE, lane)] = before_root8[lane];
+            row[cap_root_group_col(AFTER_BASE, lane)] = after_root8[lane];
+        }
+        row[cap_key_col] = cap_key;
+        row[held_mask_col] = held_value;
+        row[keep_mask_col] = keep_mask;
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+    Ok(append_wide_carriers(trace, base_pis, host_width))
 }
 
 /// Fill the two TURN-IDENTITY columns of the TB (turn-bound) cap-open weld on a single row: the

@@ -2851,6 +2851,21 @@ fn build_effect_vm_cap_open_leg(
     // GRANT_CAPABILITY) when the write route is active; else the route's authority-only facet.
     let crown_eff_bit = cap_write.map(|(_, _, eb)| eb).unwrap_or(route.eff_bit);
 
+    // ATTENUATE cap-WRITE on the AFTER-SPINE path (the arity-7 cap-tree `effCapOpenWriteV3_forces_write8`,
+    // the faithful 8-felt in-place UPDATE-AT-KEY), NOT the arity-2 map-op. The map-op was DROPPED from the
+    // Lean `attenuateV3` base; the deployed descriptor now forces the write via the after-spine appendix
+    // alone. This is ATTENUATE ONLY (its unique write key + Update op) — delegate/introduce/delegateAtten
+    // (insert) and revokeDelegation (remove) still ride their map-op wrappers (a separate sub-weld).
+    let attenuate_after_spine = cap_write
+        .map(|(k, op, _)| {
+            k == "attenuateCapOpenEffVmDescriptor2R24"
+                && matches!(
+                    op,
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Update
+                )
+        })
+        .unwrap_or(false);
+
     // WIDE eligibility: the effective key must have a PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV`.
     // EVERY live cap-open key — the authority crown, the §10 WRITE tail, AND the turn-bound
     // `transferCapOpenTB` (its wide twin at `CAP_OPEN_TB_WIDTH + 208 = 1029`, the `wideAppend` at the
@@ -2950,6 +2965,9 @@ fn build_effect_vm_cap_open_leg(
     //     mask) — is the inserted leaf. The anchor MUST be present and the fresh key MUST be absent +
     //     distinct (both fail closed; no fabricated post-root).
     let cap_write_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = match cap_write {
+        // ATTENUATE after-spine: NO map-op, NO map heap. The 8-felt UPDATE-AT-KEY is laid AFTER
+        // `widen_to_cap_open` by the after-spine producer (see the widen block below).
+        Some(_) if attenuate_after_spine => Vec::new(),
         Some((_, op, _)) => {
             use dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp;
             let inserted = match op {
@@ -3032,7 +3050,44 @@ fn build_effect_vm_cap_open_leg(
         widen_to_cap_open(&mut trace, &cap_open).map_err(|e| {
             SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key))
         })?;
-        if go_wide {
+        if attenuate_after_spine {
+            // THE ATTENUATE AFTER-SPINE WIDE LIFT: lay the arity-7 cap-tree UPDATE-AT-KEY after-spine
+            // (`fill_cap_after_spine`) + the genuine BEFORE/AFTER 8-felt cap-root groups + the submask
+            // param columns, then the generic wide carriers at `CAP_OPEN_WIDTH + AFTER_SPINE_SPAN`. The
+            // faithful 8-felt write is FORCED by the deployed after-spine (`effCapOpenWriteV3_forces_write8`),
+            // never the arity-2 map-op (dropped). `keep_mask` = the narrowed KEEP_MASK the effect carries;
+            // `held_value` = the held key's c-list mask (the submask non-amp compares against it).
+            let (_ins_key, keep_mask) = cap_insert_payload_for(effects, cap).ok_or_else(|| {
+                SdkError::InvalidWitness(format!(
+                    "attenuate after-spine ({effective_key}): could not derive the narrowed KEEP_MASK \
+                     from the {:?} effect",
+                    effects.first()
+                ))
+            })?;
+            let held_value = cap
+                .clist_leaves
+                .iter()
+                .find(|l| l.addr == cap.leaf.slot_hash)
+                .map(|l| l.value)
+                .ok_or_else(|| {
+                    SdkError::InvalidWitness(format!(
+                        "attenuate after-spine ({effective_key}): held key {} is NOT in the c-list — \
+                         the held-authority membership witness is missing (no silent forge)",
+                        cap.leaf.slot_hash.as_u32()
+                    ))
+                })?;
+            dregg_circuit::effect_vm::trace_rotated::generate_rotated_cap_attenuate_after_spine_wide(
+                &mut trace,
+                dpis,
+                &cap_open,
+                cap.leaf.slot_hash,
+                held_value,
+                keep_mask,
+            )
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!("attenuate after-spine wide ({effective_key}): {e}"))
+            })?
+        } else if go_wide {
             // THE WIDE LIFT: append the two 13×8 BEFORE/AFTER wide carriers PAST the 210-col cap-open
             // appendix (`append_wide_carriers_cap_open`, the `wideAppend (capOpenHost) bb (bb+51)` twin)
             // and the 16 wide commit PIs. The cap-open host constraints + membership crown carry

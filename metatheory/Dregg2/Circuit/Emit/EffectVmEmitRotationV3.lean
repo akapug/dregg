@@ -1616,8 +1616,7 @@ NARROWED rights onto the rotated AFTER cap-root limb), and the `granted ⊑ held
 `sel.ATTENUATE_CAPABILITY = 48` (the FIRING selector), so var 264 is GENUINELY bound. -/
 def attenuateV3 : EffectVmDescriptor2 :=
   v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (heldReadOpRot sel.ATTENUATE_CAPABILITY),
-     .mapOp (keepWriteOpRot sel.ATTENUATE_CAPABILITY), .lookup submaskLookup]
+    [.lookup submaskLookup]
 
 /-- The rotated REVOKE-CAPABILITY (sel 24) WITH the cap-crown circuit leg, on the ROTATED-limb write path:
 held-membership map read (`heldReadOpRot`) + the ZERO-value REMOVE-write (`removeWriteOpRot` — the slot deleted
@@ -4696,17 +4695,17 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard graduable (rotateV3 EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor)
 #guard graduable (rotateV3 EffectVmEmitCellUnseal.cellUnsealVmDescriptor)
 #guard graduable (rotateV3 EffectVmEmitEmitEvent.emitEventVmDescriptor)
--- The extras ride: attenuate carries its 3 phase-B constraints (held-read + keep-write + submask),
+-- The extras ride: attenuate carries ONLY the submask non-amp lookup (+1; the two scalar map-ops were
+-- DROPPED — the faithful 8-felt cap-write is forced by the cap-open AFTER-SPINE, not an arity-2 map-op),
 -- revoke its 2 cap-crown constraints (held-read + remove-write, no submask), setFieldDyn its 2 mem ops.
--- Both rebased onto the ROTATED-limb cap-write base (`v3OfWithCapWrite` over the tick face — the
--- silent-forge close).
+-- Both rebased onto the ROTATED-limb cap-write base (`v3OfWithCapWrite` over the tick face).
 #guard attenuateV3.constraints.length
-        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 3
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
 #guard revokeCapabilityV3.constraints.length
         == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 2
 #guard (memOpsOf setFieldDynV3).length == 2
 #guard (mapOpsOf setFieldDynV3).length == 0
-#guard (mapOpsOf attenuateV3).length == 2
+#guard (mapOpsOf attenuateV3).length == 0
 #guard (mapOpsOf revokeCapabilityV3).length == 2
 -- The cap-family WRITE close: delegate/grantCap carry held-read + insert-write (2 map ops);
 -- delegateAtten ALSO the submask lookup (+1 constraint, 2 map ops). The post-cap-root WRITE is
@@ -4737,10 +4736,12 @@ no mem ops (both sides are concrete lists; the kernel decides this by reduction)
 theorem memOpsOf_setFieldDynV3 : memOpsOf setFieldDynV3 = memOpsOf setFieldDynVmDescriptor2 :=
   rfl
 
-/-- The rotated attenuate's map ops are the ROTATED-limb read/write pair, FIRING-guarded
-(`sel.ATTENUATE_CAPABILITY`) — the silent-forge close. -/
+/-- The rotated attenuate carries NO map ops: the faithful 8-felt in-place UPDATE-AT-KEY is FORCED by
+the cap-open AFTER-SPINE (`CapOpenEmit.effCapOpenWriteV3_forces_write8`), not the arity-2 scalar map-op
+pair (which left the high felts unbound — the ~31-bit lane-0 squeeze). Only the `submaskLookup`
+(`granted ⊑ held`) survives in the base extras, and a lookup is not a map op. -/
 theorem mapOpsOf_attenuateV3 :
-    mapOpsOf attenuateV3 = [heldReadOpRot sel.ATTENUATE_CAPABILITY, keepWriteOpRot sel.ATTENUATE_CAPABILITY] :=
+    mapOpsOf attenuateV3 = [] :=
   rfl
 
 /-- The rotated dynamic setField's memory log IS the original's (op-for-op): both
@@ -4764,36 +4765,29 @@ theorem setFieldDynV3_readback_genuine (hash : List ℤ → ℤ)
   have := hr rfl
   simpa [MemoryChecking.step] using this
 
-/-- **The rotated cap-crown phase-B leg, on the ROTATED-limb write path (the silent-forge close)** —
-on an active attenuate row of a `Satisfied2` witness of the ROTATED attenuate (the held key
-authenticated against the BEFORE rotated cap-root limb `beforeCapRootCol`, the post rotated cap-root
-limb `afterCapRootCol` the genuine sorted UPDATE-AT-KEY of the narrowed rights, `keep ⊑ held` bitwise).
-The map_op FIRES on the FIRING selector (`sel.ATTENUATE_CAPABILITY`), so the AFTER cap-root (var 264) is
-GENUINELY bound — NOT the never-firing var2-guarded V1-state col 87 (forgeable). -/
+/-- **The rotated cap-crown NON-AMPLIFICATION leg** — on an active attenuate row of a `Satisfied2`
+witness of the ROTATED attenuate, the conferred (narrowed) rights are a bitwise SUBMASK of the held
+rights (`keep ⊑ held`), forced by the surviving `submaskLookup` against the realizable subset table.
+
+The cap-root WRITE itself (the faithful 8-felt in-place UPDATE-AT-KEY) is NO LONGER forced here by an
+arity-2 scalar map-op — that mechanism left the seven high felts of the ~124-bit cap-root unbound (the
+lane-0 squeeze). It is now forced downstream by the cap-open AFTER-SPINE
+(`CapOpenEmit.effCapOpenWriteV3_forces_write8`, over the committed 8-felt `beforeCapRootCols` /
+`afterCapRootCols` groups), which the attenuate CLASS-A refinement trio
+(`RotatedKernelRefinementCapFamily.attenuate_descriptorRefines_sat`) consumes. So this leg keeps only
+the non-amplification (submask) tooth. -/
 theorem attenuateV3_non_amp (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsub : t.tf (.custom SUBMASK_TID) = subsetTable MASK_BITS)
     (hsat : Satisfied2 hash attenuateV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length)
     (hactive : (envAt t i).loc sel.ATTENUATE_CAPABILITY = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) (some ((envAt t i).loc (prmCol HELD_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH))
-    ∧ ∃ a b : Nat, (envAt t i).loc (prmCol KEEP_MASK) = (a : ℤ)
+    ∃ a b : Nat, (envAt t i).loc (prmCol KEEP_MASK) = (a : ℤ)
         ∧ (envAt t i).loc (prmCol HELD_MASK) = (b : ℤ) ∧ a &&& b = a := by
   have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (heldReadOpRot sel.ATTENUATE_CAPABILITY),
-      .mapOp (keepWriteOpRot sel.ATTENUATE_CAPABILITY), .lookup submaskLookup] :
-      List VmConstraint2), c ∈ attenuateV3.constraints :=
+  have hmem : ∀ c ∈ ([.lookup submaskLookup] : List VmConstraint2), c ∈ attenuateV3.constraints :=
     fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (heldReadOpRot sel.ATTENUATE_CAPABILITY)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (keepWriteOpRot sel.ATTENUATE_CAPABILITY)) (hmem _ (by simp))
   have hlook := hrowc (.lookup submaskLookup) (hmem _ (by simp))
-  have hr := hread hactive
-  have hw := hwrite hactive
-  refine ⟨hr.1, hw, ?_⟩
   have hlook' : [(envAt t i).loc (prmCol KEEP_MASK), (envAt t i).loc (prmCol HELD_MASK)]
       ∈ t.tf (.custom SUBMASK_TID) := hlook
   rw [hsub] at hlook'
