@@ -152,10 +152,14 @@ pub enum CarrierWitness {
     /// [`CustomWitnessBundle`]. THE FIRST VARIANT: nothing regresses; the custom fold arm in
     /// `prove_chain_core_rotated` consumes exactly this.
     Custom(CustomWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the bridge carrier's re-provable witness. NB:
-    /// per the carrier-deployment spec, folding the binding-only `bridge_action_air` alone is
-    /// NOT the sound deployed path (a prover-chosen tuple) — the bridge wave re-proves the REAL
-    /// foreign note-spend STARK as a G2 backing leaf and will grow this bundle accordingly.
+    /// FOLD-WIRED (the 7th, LAST carrier): the bridge carrier's re-provable witness — the
+    /// REAL foreign note-spend witness (per the carrier-deployment spec: folding the
+    /// binding-only `bridge_action_air` alone is NOT the sound deployed path — a prover-chosen
+    /// tuple; the G2 backing is the re-proven note-spend STARK,
+    /// `note_spend_leaf_adapter::prove_note_spend_leaf_with_claim`). The fold arm admits a leg
+    /// only when its descriptor pins the felt mint-hash claim slot (`BRIDGE_MINT_HASH_PI` = 46,
+    /// the FIRST-row `prmCol 0` pin — the STEP-3/4 regen tie); otherwise it refuses
+    /// (fail-closed).
     Bridge(BridgeWitnessBundle),
     /// FOLD-WIRED (v12): the sovereign carrier's authority-tuple witness (P1 fills the
     /// KEY_COMMIT teeth from `before_cell.public_key()`). The fold arm admits a leg only when
