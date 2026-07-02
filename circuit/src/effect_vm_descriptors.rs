@@ -1204,7 +1204,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "6ed6ad98f67e6bdec9f2edf7ec1212e5b46cf663b131725332ea42ec2b541ec3";
+    "32b92637ccc529dd6977559fe59afcb10e7d90cff3fd6d70e13631000a910920";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -2471,20 +2471,19 @@ mod tests {
         );
     }
 
-    /// **THE WIDE REGISTRY drift + coverage pin (STAGED-ADDITIVE slice 2).** The 45-member faithful
+    /// **THE WIDE REGISTRY drift + coverage pin (STAGED-ADDITIVE slice 2).** The 57-member faithful
     /// 8-felt wide registry TSV is fingerprint-stable (the Lean `EmitWideRegistryProbe.lean` is the
     /// byte source), parses member-for-member, and is name-stable against the live 1-felt registry
-    /// (the flip is a name-stable repoint). The transfer member (row 0) is byte-identical to the
-    /// single-line `WIDE_TRANSFER_STAGED_TSV`. ADDITIVE: pins the wide path WITHOUT touching the live
-    /// `V3_STAGED_REGISTRY_*`.
+    /// (the flip is a name-stable repoint). The transfer member (row 0) is the v12 TEETH-EXPOSING
+    /// advance (+2 claim PIs / +2 teeth columns) of the single-line `WIDE_TRANSFER_STAGED_TSV`.
+    /// ADDITIVE: pins the wide path WITHOUT touching the live `V3_STAGED_REGISTRY_*`.
     #[test]
     fn wide_registry_parses_and_is_name_stable() {
         use crate::descriptor_ir2::parse_vm_descriptor2;
 
-        // Every wide member parses; the wide geometry is `host + 208` carrier columns + 16 PIs. The
+        // Every wide member parses; the wide geometry is `host + 608` carrier columns + 16 PIs. The
         // keys are NAME-STABLE against the live 1-felt registry, member-for-member (the flip repoint
-        // does not rename). The transfer member (row 0) JSON is byte-identical to the single-line
-        // `WIDE_TRANSFER_STAGED_TSV`.
+        // does not rename).
         let live_keys: Vec<&str> = V3_STAGED_REGISTRY_TSV
             .lines()
             .filter(|l| !l.is_empty())
@@ -2511,15 +2510,21 @@ mod tests {
             );
             let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
             // the wide member is `host + 608` (the v12 pre_limbs re-lay grew the carrier blocks) and
-            // `host.piCount + 16`. The host widths in play are 1131 (custom/setFieldDyn → 1739), 1159
-            // (the rotated cohort GRAD_ROT_WIDTH → 1767), 1617 (the heapWrite after-spine membership
-            // host, OPTION I → 2225), and the faithful 8-felt cap-open family: 1488 (non-write
-            // cap-open → 2096), 1490 (the turn-identity-pinned transferCapOpenTB → 2098) and 1631
-            // (the cap-WRITE members with the after-spine recompute, attenuate + the delegation
-            // writes → 2239): every wide width is `host + 608`.
+            // `host.piCount + 16`. The v12 big-bang host widths in play: 1135 (custom/setFieldDyn →
+            // 1743), 1163 (the rotated cohort → 1771), the cap-open family + the §J′ insert hosts
+            // (→ 2100), the turn-identity-pinned transferCapOpenTB (→ 2102), heapWrite's after-spine
+            // membership host (→ 2229), the refusal fields-write weld + the cap-WRITE after-spine
+            // members (→ 2243) — every wide width is `host + 608` — PLUS the two v12 teeth-exposing
+            // advances: the membership-teeth transfer (1771 + 2 teeth columns past the carriers →
+            // 1773, `CarrierComposed.transferV3MembershipWide`) and the KEY_COMMIT-gated sovereign
+            // (1771 + the 32-column chip-digest appendix → 1803,
+            // `CarrierComposed.makeSovereignV3DeployedWide`).
             assert!(
-                matches!(d.trace_width, 1739 | 1767 | 2096 | 2098 | 2225 | 2239),
-                "{key}: wide width {} is a known wide geometry (1739 / 1767 / 2096 / 2098 / 2225 / 2239)",
+                matches!(
+                    d.trace_width,
+                    1743 | 1771 | 1773 | 1803 | 2100 | 2102 | 2229 | 2243
+                ),
+                "{key}: wide width {} is a known wide geometry (1743 / 1771 / 1773 / 1803 / 2100 / 2102 / 2229 / 2243)",
                 d.trace_width
             );
             // Every wide member carries the 16 wide-commit PIs (the 8-felt ~124-bit before/after
@@ -2534,8 +2539,12 @@ mod tests {
                 d.public_input_count
             );
             if i == 0 {
-                assert_eq!(
-                    json,
+                // v12 big-bang: row 0 is the TEETH-EXPOSING advance of the plain wide transfer
+                // (`CarrierComposed.transferV3MembershipWide` — the 2 `(sender_leaf,
+                // authorized_root)` claim PIs at 50..51 ahead of the anchors, teeth columns past
+                // the carriers). The single-line `WIDE_TRANSFER_STAGED_TSV` stays the PLAIN wide
+                // transfer, so byte-identity is retired for the exact +2/+2 advance relation.
+                let plain = parse_vm_descriptor2(
                     WIDE_TRANSFER_STAGED_TSV
                         .lines()
                         .next()
@@ -2543,7 +2552,17 @@ mod tests {
                         .splitn(3, '\t')
                         .nth(2)
                         .unwrap(),
-                    "wide registry row 0 (transfer) == the single-line WIDE_TRANSFER_STAGED_TSV"
+                )
+                .expect("plain wide transfer parses");
+                assert_eq!(
+                    d.public_input_count,
+                    plain.public_input_count + 2,
+                    "wide registry row 0 (transfer) = the plain wide transfer + 2 membership claim PIs"
+                );
+                assert_eq!(
+                    d.trace_width,
+                    plain.trace_width + 2,
+                    "wide registry row 0 (transfer) = the plain wide transfer + 2 teeth columns"
                 );
             }
         }

@@ -16,6 +16,16 @@
 //! applies — so the teeth prove against the post-regen geometry today, and the regen merely
 //! swaps the source of the descriptor from "twin transform" to "committed registry row".
 //!
+//! ## ⚑ THE SWITCH (v12 big-bang regen — sovereign + membership are NATIVE)
+//!
+//! The big-bang regen LANDED the sovereign + membership exposures into the committed
+//! `WIDE_REGISTRY_STAGED_TSV`: `makeSovereignVmDescriptor2R24` is now
+//! `CarrierComposed.makeSovereignV3DeployedWide` (teeth PIs 58..61 + the in-AIR KEY_COMMIT chip
+//! gate) and `transferVmDescriptor2R24` is `CarrierComposed.transferV3MembershipWide` (claim PIs
+//! 50..51, teeth columns past the carriers). Their tooths fetch the NATIVE rows directly —
+//! `insert_tail_claim_pins` no longer stages them. The twin transform REMAINS for future
+//! carrier staging (the bridge felt-domain mint-identity exposure is the named next rider).
+//!
 //! ## The transform (mirrors `withAfterOctetPins` exactly, lifted over the wide append)
 //!
 //! The Lean pipeline is `wideAppend (withAfterOctetPins g base)`: pins are appended to the

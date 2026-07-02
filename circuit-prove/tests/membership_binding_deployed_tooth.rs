@@ -8,18 +8,18 @@
 //! tuple), folds it through the DEPLOYED chain prover's Membership arm, and verifies through
 //! the light-client verifier.
 //!
-//! ## THE REGEN-RIDER (named)
+//! ## NATIVE (the big-bang regen LANDED — exposure leg)
 //!
-//! The membership third edge (`MembershipAuthRootEdge`, commit `346629d0c` + the executor
-//! `node8` re-align `687601953`) is built PARAMETRICALLY in Lean — the deployed-leg teeth
-//! columns + their PI exposure at fixed slots are the named big-bang regen pieces (the
-//! membership base descriptor is not yet a committed registry member). This tooth stages the
-//! exposure faithfully: the twin widens the deployed wide transfer descriptor by the two teeth
-//! columns (filled with the tuple, exactly the shape `withMembershipPubkeyCompress` +
-//! `effFieldsReadOpenV3` pin) and publishes them at the TAIL-convention claim slots. What THIS
-//! tooth witnesses is the FOLD edge: leg-claimed tuple == re-proven membership leaf, in the
-//! recursion tree a pure light client folds; the in-AIR compress/fields-read gates are the
-//! Lean-proven third edge riding the regen.
+//! The committed wide registry row IS the deployed membership-teeth member
+//! (`CarrierComposed.transferV3MembershipWide`): the two teeth columns at the wide end
+//! (1771..1772) row-0-pinned at the claim PIs 50..51 (Lean keystone
+//! `transferV3MembershipWide_publishes_teeth`). This tooth proves the NATIVE row. HONEST SCOPE
+//! (`CarrierComposed` §5): the row carries the PI-EXPOSURE leg ONLY — what THIS tooth witnesses
+//! is the FOLD edge (leg-claimed tuple == re-proven membership leaf, in the recursion tree a
+//! pure light client folds); the in-AIR compress/fields-read welds stay the named
+//! `MembershipAuthRootEdge` seams (the executor `node8` re-align `687601953` + the ROOT leg
+//! `346629d0c` are built, the deployed weld is not composed — `SenderAuthorized` is OPTIONAL on
+//! a transfer), and `MembershipBackingAttack` §A/§A′ stand as deployed-AIR facts.
 //!
 //! THE TWO POLES: honest tuple == bundle folds + verifies; a forged bundle (a root no leg
 //! teeth back — the `MembershipBackingAttack.§A'` injected-root shape, inverted onto the fold)
@@ -39,10 +39,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::VmRow;
-use dregg_circuit_prove::carrier_pin_twin::{
-    TailClaimPin, insert_tail_claim_pins, splice_pi_values,
-};
+use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, MEMBERSHIP_CLAIM_PI_LO, ir2_leaf_wrap_config, prove_turn_chain_recursive,
     verify_turn_chain_recursive,
@@ -113,31 +110,24 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
     parse_vm_descriptor2(json).expect("deployed wide descriptor parses")
 }
 
-/// The membership-edge twin of the deployed wide transfer descriptor: two NEW teeth columns
-/// (`sender_leaf`, `authorized_root`) appended to the trace, row-0-pinned at the tail claim
-/// PIs (46..47), anchors shifted past them. THE REGEN-RIDER: the committed membership edge
-/// (concrete teeth columns + in-AIR compress/fields-read gates) supersedes this.
+/// **NATIVE since the big-bang regen**: the committed wide transfer row IS the membership-teeth
+/// member (`CarrierComposed.transferV3MembershipWide`) — the two teeth columns (`sender_leaf`,
+/// `authorized_root`) at the wide end (`trace_width - 2` = 1771..1772, PAST the carriers),
+/// row-0-pinned at the tail claim PIs (50..51, post-rc-wrap, ahead of the 16 anchors at 52..67).
+/// The pin TWIN (`insert_tail_claim_pins`) staging is RETIRED for membership — this fetches the
+/// native row and asserts its geometry. (The exposure is the FOLD-edge admission leg only; the
+/// in-AIR compress/fields-read welds stay the named `MembershipAuthRootEdge` seams —
+/// `CarrierComposed` §5 HONEST SCOPE.)
 fn membership_twin() -> (EffectVmDescriptor2, usize, usize) {
     let desc = deployed_wide_descriptor("transferVmDescriptor2R24");
-    let insert_at = desc.public_input_count - 16; // the bare rotated tail (46)
+    let insert_at = MEMBERSHIP_CLAIM_PI_LO;
     assert_eq!(
-        insert_at, MEMBERSHIP_CLAIM_PI_LO,
-        "the bare rotated transfer PI count is the membership claim base (TAIL convention)"
+        desc.public_input_count,
+        insert_at + 2 + 16,
+        "the NATIVE transfer row carries the 2 membership claim PIs (50..51) ahead of the 16 anchors"
     );
-    let teeth_col = desc.trace_width; // the two appended teeth columns
-    let pins = [
-        TailClaimPin {
-            col: teeth_col,
-            row: VmRow::First,
-        },
-        TailClaimPin {
-            col: teeth_col + 1,
-            row: VmRow::First,
-        },
-    ];
-    let mut twin = insert_tail_claim_pins(&desc, insert_at, &pins).expect("membership twin");
-    twin.trace_width += 2;
-    (twin, insert_at, teeth_col)
+    let teeth_col = desc.trace_width - 2; // the two native teeth columns, past the wide carriers
+    (desc, insert_at, teeth_col)
 }
 
 /// Mint the membership-edge wide `Transfer` leg (the rotated generator ticks the AFTER nonce: `before=(b,n)` →

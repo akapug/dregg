@@ -4423,12 +4423,14 @@ pub fn generate_rotated_set_field_dyn_base(
     dpis[V1_PI_COUNT + 1] = trace[last_idx][AFTER_BASE + B_STATE_COMMIT]; // PI 43: NEW commit
 
     // THE FIFTH PIN (col 263 = AFTER_BASE + B_RECORD_DIGEST → PI[46]): SetField has no
-    // `record_pin_offset`, so push the AFTER record-digest limb here (the descriptor pins it last row).
-    dpis.push(trace[last_idx][AFTER_BASE + B_RECORD_DIGEST]); // PI 46
+    // `record_pin_offset`, so INSERT the AFTER record-digest limb at PI 46 (the descriptor pins the
+    // per-effect extra FIRST, the dsl rc tail LAST: fifth@46, rc@47..50 — the base generator already
+    // appended the 4 rc PIs at 46..49, so the insert shifts them to 47..50).
+    dpis.insert(ROT_PI_COUNT, trace[last_idx][AFTER_BASE + B_RECORD_DIGEST]); // PI 46
     debug_assert_eq!(
         dpis.len(),
-        ROT_PI_COUNT + 1,
-        "setFieldDyn carries the rotated 46-PI + PI[46]"
+        ROT_PI_COUNT + 1 + DFA_RC_LEN,
+        "setFieldDyn carries the rotated 46-PI + PI[46] + the 4 dsl rc PIs (47..50)"
     );
 
     // THE BLUM BOUNDARY: ONE declared address (the slot, init value = prev_value, init serial 0). The

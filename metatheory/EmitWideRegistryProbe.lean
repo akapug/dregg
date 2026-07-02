@@ -34,11 +34,13 @@ import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.HeapOpenEmit
 import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.Emit.AccumulatorInsertEmit
+import Dregg2.Circuit.Emit.CarrierComposed
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpenWide v3RegistryCapOpenWriteWide)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (wideAppend)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (withDfaRcPins)
 
 def main : IO Unit := do
   -- positions 0..44: the 45 emit-source wide members (`v3RegistryCapOpenWide`), keyed by the live
@@ -55,9 +57,13 @@ def main : IO Unit := do
   -- fields-root blocks (`fieldsRootGroupCol (EFFECT_VM_WIDTH + 151)`) with the wide AFTER rotated carrier.
   for (key, d) in v3RegistryCapOpenWide do
     if key == "refusalVmDescriptor2R24" then
-      let rfHost := Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
+      -- rc-EMIT FIX: the welded host rides the uniform DSL rc wrap (`withDfaRcPins`, 4 additive
+      -- tail pins — host PIs THEN rc THEN the 16 wide anchors), matching the live cohort member +
+      -- the producer's PI layout (per-effect extras first, rc last-pre-wide). Without the wrap the
+      -- emitted row dropped the 4 rc PIs the producer publishes (70 ≠ the live 74).
+      let rfHost := withDfaRcPins (Dregg2.Circuit.Emit.FieldsOpenEmit.effFieldsWriteV3
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.refusalFieldsWriteV3
-        "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen"
+        "dregg-effectvm-refusal-v1-rot24-v3-write-fieldsopen")
       let rfBB := Dregg2.Circuit.Emit.EffectVmEmitRefusal.refusalVmDescriptor.traceWidth
       let rfWide := wideAppend rfHost rfBB (rfBB + 151)
       IO.println s!"{key}\t{rfWide.name}\t{emitVmJson2 rfWide}"
@@ -73,40 +79,59 @@ def main : IO Unit := do
     -- SAME `bb` `v3RegistryWideBB` uses), aligning the wide AFTER carrier's committed accumulator-root
     -- block with the rotated AFTER block the read appendix welds to.
     else if key == "noteSpendVmDescriptor2R24" then
-      let nsHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+      -- rc-EMIT FIX (all three §J′ inserts): the insert host rides `withDfaRcPins` — the trio's
+      -- committed rows dropped the 4 rc PIs the live members + producer carry (63 ≠ 67).
+      let nsHost := withDfaRcPins (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.nullifierRootGroupCol
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NULLIFIER_PARAM_COL
         (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
           Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.param.NOTE_VALUE_LO)
         (some Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.SEL_NOTE_SPEND)
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteSpendV3
-        "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen"
+        "dregg-effectvm-noteSpend-v1-rot24-v3-insert-heapopen")
       let nsBB := Dregg2.Circuit.Emit.EffectVmEmitNoteSpend.noteSpendVmDescriptor.traceWidth
       let nsWide := wideAppend nsHost nsBB (nsBB + 151)
       IO.println s!"{key}\t{nsWide.name}\t{emitVmJson2 nsWide}"
     else if key == "noteCreateVmDescriptor2R24" then
-      let ncHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+      let ncHost := withDfaRcPins (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.commitmentsRootGroupCol
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.COMMITMENT_KEY_PARAM_COL
         (Dregg2.Circuit.Emit.EffectVmEmit.prmCol
           Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.param.NOTE_VALUE_LO)
         none
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.noteCreateV3
-        "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen"
+        "dregg-effectvm-noteCreate-v1-rot24-v3-insert-heapopen")
       let ncBB := Dregg2.Circuit.Emit.EffectVmEmitNoteCreate.noteCreateVmDescriptor.traceWidth
       let ncWide := wideAppend ncHost ncBB (ncBB + 151)
       IO.println s!"{key}\t{ncWide.name}\t{emitVmJson2 ncWide}"
     else if key == "createCellVmDescriptor2R24" then
-      let ccHost := Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
+      let ccHost := withDfaRcPins (Dregg2.Circuit.Emit.AccumulatorInsertEmit.effAccumInsertV3
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.cellsRootGroupCol
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
         none
         Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
-        "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"
+        "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen")
       let ccBB := Dregg2.Circuit.Emit.EffectVmEmitCreateCell.createCellActorVmDescriptor.traceWidth
       let ccWide := wideAppend ccHost ccBB (ccBB + 151)
       IO.println s!"{key}\t{ccWide.name}\t{emitVmJson2 ccWide}"
+    -- THE v12 BIG-BANG IN-PLACE REPLACEMENTS (the refusal precedent): the sovereign + transfer
+    -- rows advance to the DEPLOYED teeth-exposing members under their LIVE keys (member count
+    -- UNCHANGED at 57; the narrow live TSV / FP / VK untouched — the wide slice is the fold lane).
+    else if key == "makeSovereignVmDescriptor2R24" then
+      -- The DEPLOYED wide sovereign (`CarrierComposed.makeSovereignV3DeployedWide`): rc + the 4
+      -- KEY_COMMIT teeth PI pins (58..61 = `SOVEREIGN_KEY_COMMIT_PI_LO`, cols 113..=116) AHEAD of
+      -- the 16 wide anchors (62..77) + the in-AIR KEY_COMMIT chip gate (digest appendix at the
+      -- wide end, dgBase 1771; width 1803). piCount 74 → 78.
+      let msWide := Dregg2.Circuit.Emit.CarrierComposed.makeSovereignV3DeployedWide
+      IO.println s!"{key}\t{msWide.name}\t{emitVmJson2 msWide}"
+    else if key == "transferVmDescriptor2R24" then
+      -- The DEPLOYED wide membership-teeth transfer (`CarrierComposed.transferV3MembershipWide`):
+      -- rc + the 2 `(sender_leaf, authorized_root)` claim pins (50..51 = `MEMBERSHIP_CLAIM_PI_LO`,
+      -- teeth cols 1771..1772 PAST the carriers) AHEAD of the anchors (52..67); width 1773.
+      -- piCount 66 → 68. PI-EXPOSURE leg only (the FOLD edge binds — CarrierComposed §5).
+      let trWide := Dregg2.Circuit.Emit.CarrierComposed.transferV3MembershipWide
+      IO.println s!"{key}\t{trWide.name}\t{emitVmJson2 trWide}"
     else
       IO.println s!"{key}\t{d.name}\t{emitVmJson2 d}"
   -- position 45: `transferCapOpenTB` made 8-felt-wide. The host is the SAME `effCapOpenV3TB transferV3

@@ -9,18 +9,18 @@
 //! (the re-provable authority tuple), folds it through the DEPLOYED chain prover's Sovereign
 //! arm, and verifies through the light-client verifier.
 //!
-//! ## THE REGEN-RIDER (named, TWO pieces)
+//! ## NATIVE (the big-bang regen LANDED)
 //!
-//! STEP-3 sovereign (`CarrierComposed.makeSovereignV3Keyed`, commit `a40480abe`) binds the
-//! teeth IN-AIR to the committed `B_PUBKEY8` octet via the Poseidon2 chip-compress gate,
-//! `piCount 54` unchanged; the teeth PI-EXPOSURE (the tail pins this tooth twins) + the
-//! producer teeth-fill are the named big-bang regen pieces. This tooth stages BOTH faithfully:
-//! the teeth columns are filled with the REAL executor compress of the cell's pubkey (the same
-//! value the committed pubkey octet carries in 30-bit canonical form), and the twin pins
-//! publish them at the TAIL-convention slots. The chip-compress gate itself (teeth ==
-//! in-AIR-compress(committed octet)) is the Lean-proven third edge riding the regen — what THIS
-//! tooth witnesses is the FOLD edge: leg-claimed teeth == re-proven authority tuple, in the
-//! recursion tree a pure light client folds.
+//! The committed wide registry row IS the deployed keyed member
+//! (`CarrierComposed.makeSovereignV3DeployedWide`): the 4 KEY_COMMIT teeth PI pins (58..61) AND
+//! the in-AIR Poseidon2 chip-compress gate (teeth == `canonical_32_to_felts_4` of the committed
+//! `B_PUBKEY8` octet — the THIRD EDGE, Lean keystone
+//! `makeSovereignV3DeployedWide_publishes_key_commit`). This tooth proves the NATIVE row: the
+//! teeth columns are filled with the REAL executor compress of the cell's pubkey (the value the
+//! committed octet carries in 30-bit canonical form — anything else is UNSAT under the chip
+//! gate), the gate's digest-appendix lane-0 columns are producer-filled, and what the FOLD edge
+//! adds is: leg-claimed teeth == re-proven authority tuple, in the recursion tree a pure light
+//! client folds.
 //!
 //! THE TWO POLES: honest teeth == bundle `key_commit` folds + verifies; a forged bundle
 //! (`key_commit` no leg teeth back) ⇒ in-circuit `connect` conflict ⇒ UNSAT ⇒ REJECTED.
@@ -40,10 +40,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::lean_descriptor_air::VmRow;
-use dregg_circuit_prove::carrier_pin_twin::{
-    TailClaimPin, insert_tail_claim_pins, splice_pi_values,
-};
+use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, SOVEREIGN_KEY_COMMIT_PI_LO, ir2_leaf_wrap_config, prove_turn_chain_recursive,
     verify_turn_chain_recursive,
@@ -117,25 +114,28 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
     parse_vm_descriptor2(json).expect("deployed wide descriptor parses")
 }
 
-/// The STEP-3 KEYED twin of the deployed wide makeSovereign descriptor: the 4 KEY_COMMIT teeth
-/// columns row-0-pinned to the tail claim PIs (58..61, post-rc-wrap), anchors shifted past them. THE
-/// REGEN-RIDER: the committed registry row (+ the in-AIR chip-compress gate) supersedes this.
+/// **NATIVE since the big-bang regen**: the committed wide makeSovereign row IS the keyed member
+/// (`CarrierComposed.makeSovereignV3DeployedWide`) — the 4 KEY_COMMIT teeth columns (113..=116)
+/// row-0-pinned at the tail claim PIs (58..61, post-rc-wrap, ahead of the 16 wide anchors at
+/// 62..77) PLUS the in-AIR KEY_COMMIT chip-compress gate (the third edge: teeth ==
+/// `canonical_32_to_felts_4` of the committed `B_PUBKEY8` octet; 32-column digest appendix at the
+/// wide end, `dg_base = trace_width - 32`). The pin TWIN (`insert_tail_claim_pins`) staging is
+/// RETIRED for sovereign — this fetches the native row and asserts its geometry.
 fn keyed_sovereign_twin() -> (EffectVmDescriptor2, usize) {
     let desc = deployed_wide_descriptor("makeSovereignVmDescriptor2R24");
-    let insert_at = desc.public_input_count - 16; // the narrow PI tail (54), ahead of the anchors
+    let insert_at = SOVEREIGN_KEY_COMMIT_PI_LO;
     assert_eq!(
-        insert_at, SOVEREIGN_KEY_COMMIT_PI_LO,
-        "the narrow sovereign PI count (record-pin8 + the 4 rc, 58) is the teeth claim base"
+        desc.public_input_count,
+        insert_at + KEY_COMMIT_LEN + 16,
+        "the NATIVE sovereign row carries the 4 teeth claim PIs (58..61) ahead of the 16 anchors"
     );
-    let kc_col = AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0;
-    let pins: Vec<TailClaimPin> = (0..KEY_COMMIT_LEN)
-        .map(|k| TailClaimPin {
-            col: kc_col + k,
-            row: VmRow::First,
-        })
-        .collect();
-    let twin = insert_tail_claim_pins(&desc, insert_at, &pins).expect("keyed sovereign twin");
-    (twin, insert_at)
+    // The KEY_COMMIT gate's digest appendix (4 quads × 8 lanes) rides the wide end:
+    // host 1163 + 608 carriers + 32 digest columns (Lean `makeSovereignV3DeployedWide` #guard).
+    assert_eq!(
+        desc.trace_width, 1803,
+        "the native sovereign row carries the 32-column KEY_COMMIT digest appendix at the wide end"
+    );
+    (desc, insert_at)
 }
 
 /// Mint the keyed-wide `MakeSovereign` leg: `before=(b,nonce,Hosted-or-Sovereign)` →
@@ -182,17 +182,24 @@ fn mint_sovereign_leg(
     .expect("deployed makeSovereign wide trace generates");
 
     // THE PRODUCER TEETH-FILL RIDER: the executor KEY_COMMIT teeth (dead-zero at HEAD —
-    // `EffectVmContext::default`) filled with the REAL owner-key compress, every row (the
-    // columns are otherwise unconstrained aux; the P1 producer fill is the deployed twin).
+    // `EffectVmContext::default`) filled with the REAL owner-key compress, every row. NATIVE, the
+    // teeth are no longer free aux: the row's KEY_COMMIT chip gate welds each tooth to lane 0 of
+    // the in-AIR arity-4 compress of the committed `B_PUBKEY8` octet, so the fill must BE that
+    // compress (`owner_key_commit()` is exactly it — the executor verdict) or the leg is UNSAT.
     let kc = owner_key_commit();
     let kc_col = AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0;
+    let (twin, insert_at) = keyed_sovereign_twin();
+    // The gate's digest appendix: lane 0 of each quad's chip absorb is producer-filled (the
+    // prover's `fill_chip_lanes` fills lanes 1..7; out0 is the genuine producer column).
+    let dg_base = twin.trace_width - 32;
     for row in trace.iter_mut() {
+        row.resize(twin.trace_width, dregg_circuit::field::BabyBear::ZERO);
         for (k, v) in kc.iter().enumerate() {
             row[kc_col + k] = *v;
+            row[dg_base + 8 * k] = *v;
         }
     }
 
-    let (twin, insert_at) = keyed_sovereign_twin();
     let twin_dpis = splice_pi_values(&dpis, insert_at, &kc);
     assert_eq!(twin_dpis.len(), twin.public_input_count);
 

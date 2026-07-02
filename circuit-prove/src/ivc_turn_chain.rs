@@ -2838,26 +2838,21 @@ pub const FACTORY_CHILD_VK_PI_LO: usize = 47;
 /// `factoryV3Carriers` descriptor (AFTER-block limbs `B_CONTRACT_HASH_OCTET..+8`, PI 55..62;
 /// the hatchery carrier rides factory's `CreateCellFromFactory` leg). Same regen-rider note.
 pub const HATCHERY_CONTRACT_HASH_PI_LO: usize = 55;
-/// The sovereign leg's `KEY_COMMIT` teeth claim PI base — the STEP-3 sovereign compose
-/// (`CarrierComposed.makeSovereignV3Keyed`, commit `a40480abe`) binds the 4 executor teeth
-/// columns in-AIR to the committed pubkey octet but leaves `piCount = 54`; the teeth
-/// PI-EXPOSURE is the named big-bang regen piece. CONVENTION (the TAIL-append discipline
-/// every carrier cohort follows): the 4 teeth pins land after the narrow sovereign PI count
-/// 54 → PI 54..57. The fold arm admits only a leg whose descriptor genuinely pins these
-/// slots, so a mismatched convention fails closed, never folds wrong. ⚑ NB: the uniform DSL
-/// rc-EMIT wrap (`withDfaRcPins`, +4 tail PIs on EVERY cohort member) LANDED with the big-bang
-/// regen — the committed narrow makeSovereign member is 58 PIs (54 + rc 46..49… i.e. the
-/// record-pin8 54 + the 4 rc), so the teeth exposure composed after it lands at PI 58..61
-/// (the pre-annotated 54 → 58 bump).
+/// The sovereign leg's `KEY_COMMIT` teeth claim PI base — **NATIVE**: the committed wide
+/// registry row (`CarrierComposed.makeSovereignV3DeployedWide`, the v12 big-bang regen) pins
+/// the 4 teeth columns (113..=116) at PI 58..61 (record-pin8 54 + the 4 dsl rc, THEN the
+/// teeth, ahead of the 16 wide anchors 62..77) and welds them in-AIR to the committed
+/// `B_PUBKEY8` octet via the KEY_COMMIT chip gate (Lean keystone
+/// `makeSovereignV3DeployedWide_publishes_key_commit`). The fold arm admits only a leg whose
+/// descriptor genuinely pins these slots, so a mismatched convention fails closed.
 pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 58;
-/// The membership leg's `(sender_leaf, authorized_root)` claim PI base — the membership
-/// third edge (`MembershipAuthRootEdge`, commit `346629d0c`) is built parametrically; the
-/// deployed-leg PI exposure at fixed slots is the named big-bang regen piece. CONVENTION
-/// (TAIL-append after the bare rotated 46 on the caveat-carrying transfer-family leg):
-/// PI 46..47. Same fail-closed admission discipline. ⚑ NB: same `withDfaRcPins` note as
-/// [`SOVEREIGN_KEY_COMMIT_PI_LO`] — the rc wrap LANDED with the big-bang regen, so the
-/// committed narrow transfer member is 50 PIs (46 + the 4 rc) and the membership exposure
-/// composed after it lands at PI 50..51 (the pre-annotated 46 → 50 bump).
+/// The membership leg's `(sender_leaf, authorized_root)` claim PI base — **NATIVE**: the
+/// committed wide transfer row (`CarrierComposed.transferV3MembershipWide`, the v12 big-bang
+/// regen) pins the two teeth columns (past the carriers, 1771..1772) at PI 50..51 (the bare
+/// rotated 46 + the 4 dsl rc, THEN the teeth, ahead of the anchors 52..67 — Lean keystone
+/// `transferV3MembershipWide_publishes_teeth`). PI-EXPOSURE leg only (the FOLD edge binds;
+/// the in-AIR welds stay the named `MembershipAuthRootEdge` seams). Same fail-closed
+/// admission discipline.
 pub const MEMBERSHIP_CLAIM_PI_LO: usize = 50;
 
 /// **THE CARRIER-CLAIM ADMISSION GATE (the fold arms' fail-closed half).** A carrier fold
@@ -3054,8 +3049,18 @@ fn prove_chain_core_rotated(
             }
             // THE TWO REMAINING UNFILLED CARRIER ARMS — FAIL-CLOSED (each wave fills its own
             // arm; until then a leg carrying the witness is REFUSED, never silently folded
-            // without its carrier binding). Bridge additionally awaits its note-spend G2
-            // backing leaf wire (`note_spend_leaf_adapter`); dsl awaits its rc-emit lane.
+            // without its carrier binding). ⚑ BRIDGE (named residual, v12 big-bang pass): the
+            // backing leaf exists (`note_spend_leaf_adapter` — the REAL note-spend STARK
+            // re-proven as a foldable IR2 leaf, exposing the FELT-domain mint identity
+            // `note_spend_mint_hash_felt` recomputed in-AIR), but the LEG side has no sound
+            // claim slot to connect: the deployed BridgeMint row's `mint_hash` (`prmCol 0`) is
+            // the executor's BYTE-domain `hash_to_bb(blake3(...))` (`effect_vm_bridge.rs`) — no
+            // circuit recomputes it, and pinning it would publish a value the felt-domain leaf
+            // can NEVER connect to (a dead-end exposure). The sound emit needs the FELT-domain
+            // identity as leg carrier material (a STEP-2.5-scale executor→witness→producer
+            // thread of the spend tuple, or the executor mint_hash re-align to
+            // `note_spend_mint_hash_felt` — the membership `687601953` precedent). Until that
+            // lands: fail-closed, `Dregg2.Circuit.BridgeBackingAttack` STANDS, no flip.
             Some(CarrierWitness::Bridge(_)) => {
                 return Err(unfilled_carrier_arm(i, "bridge"));
             }
