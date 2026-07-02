@@ -236,7 +236,7 @@ fn mint_custom_leg(
         proof,
         descriptor: desc,
         public_inputs: dpis,
-        custom_witness: None,
+        carrier_witness: None,
     };
     match bundle {
         Some(b) => leg.with_custom_witness(b),

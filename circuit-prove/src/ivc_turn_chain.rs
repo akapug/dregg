@@ -213,7 +213,9 @@ use p3_recursion::{
     build_and_prove_next_layer_with_expose,
 };
 
-use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
+use crate::joint_turn_aggregation::{
+    CarrierWitness, DescriptorParticipant, verify_descriptor_participant,
+};
 use crate::plonky3_recursion_impl::recursive::{
     DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
     recursion_vk_fingerprint, verify_recursive_batch_proof_with_config,
@@ -1531,10 +1533,7 @@ pub fn prove_descriptor_leaf_dual_expose_at(
     claim_pi_lo: usize,
     claim_len: usize,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
-    use dregg_circuit::effect_vm_descriptors::{
-        WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX, WIDE_UMEM_WELD_SUFFIX,
-    };
+    use dregg_circuit::effect_vm::trace_rotated::{V1_PI_COUNT, WIDE_PI_COUNT};
 
     let commit_hi = claim_pi_lo + claim_len;
     if descriptor_pis.len() < commit_hi {
@@ -1546,10 +1545,19 @@ pub fn prove_descriptor_leaf_dual_expose_at(
     }
 
     // FAITHFUL-FLOOR anchor sourcing — identical to `prove_descriptor_leaf_rotated_with_segment`.
+    //
+    // H0 DEPLOYED-WIDE FLIP (the divergence fix): the wide branch is selected STRUCTURALLY
+    // (`n >= WIDE_PI_COUNT`), the exact mirror of the plain segment leaf and of the host
+    // [`leg_is_wide_anchored`]. This function previously kept the SUPERSEDED weld-suffix name
+    // check, which cannot see the BARE wide cohort (its name equals its narrow twin's) — so the
+    // deployed custom-wide dual leaf was misclassified NARROW and its segment anchors broadcast
+    // the RETIRED-to-zero single-felt rotated commit PIs, making every honest custom-bearing
+    // chain UNSAT at the aggregation combine (`connect(0, genuine-anchor)` — the
+    // `WitnessConflict{existing: 0, ..}` both custom-binding honest poles hit). Fail-closed, not
+    // unsound — but a broken deployed wire. The structural check restores byte-identity with the
+    // host root segment.
     let n = descriptor_pis.len();
-    let wide = n >= 2 * SEG_ANCHOR_WIDTH
-        && (desc.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
-            || desc.name.ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX));
+    let wide = n >= WIDE_PI_COUNT;
     let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
     let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
 
@@ -2872,19 +2880,30 @@ fn prove_chain_core_rotated(
     // One rotated descriptor leaf per finalized turn, EACH carrying its ordered segment
     // (first_old/last_new bound to the descriptor's real roots, count=1, acc=H(old,new)).
     //
-    // CUSTOM-BINDING DEPLOYED WIRE: a turn whose leg carries a `custom_witness` bundle (a
-    // `Custom`-effect turn, `customVmDescriptor2R24`) does NOT get the plain segment leaf. Instead
-    // it gets a DUAL-EXPOSE leaf (segment ++ claimed `custom_proof_commitment` PI 46..49) folded
-    // against the RE-PROVEN custom sub-proof leaf through `prove_custom_binding_node_segmented` —
-    // the binding `connect`s the leg's claimed commitment to the sub-proof's genuine in-circuit
-    // commitment IN the recursion tree (so a forged claim with no backing sub-proof is UNSAT) and
-    // re-exposes the SAME segment, so the node folds into `aggregate_tree` like any segment leaf.
-    // This makes the custom binding REAL for a pure light client (the premise of
-    // `CustomBindingFromFold.custom_binding_from_fold` is now TRUE on the deployed path).
+    // THE CARRIER WITNESS SOCKET (Step-2 of the uniform carrier build): the per-turn fold branch
+    // is picked by matching the leg's `carrier_witness`.
+    //
+    // CUSTOM-BINDING DEPLOYED WIRE (the ONE deployed carrier arm): a turn whose leg carries a
+    // `CarrierWitness::Custom` bundle (a `Custom`-effect turn, `customVmDescriptor2R24`) does NOT
+    // get the plain segment leaf. Instead it gets a DUAL-EXPOSE leaf (segment ++ claimed
+    // `custom_proof_commitment` PI 46..49) folded against the RE-PROVEN custom sub-proof leaf
+    // through `prove_custom_binding_node_segmented` — the binding `connect`s the leg's claimed
+    // commitment to the sub-proof's genuine in-circuit commitment IN the recursion tree (so a
+    // forged claim with no backing sub-proof is UNSAT) and re-exposes the SAME segment, so the
+    // node folds into `aggregate_tree` like any segment leaf. This makes the custom binding REAL
+    // for a pure light client (the premise of `CustomBindingFromFold.custom_binding_from_fold` is
+    // now TRUE on the deployed path).
+    //
+    // THE SIX STAGED CARRIER ARMS are explicitly FAIL-CLOSED: an unfilled carrier witness NEVER
+    // silently proves — the prover REFUSES the leg (no artifact) rather than silently degrading
+    // to the re-exec rung with the witness attached. A turn that WANTS the re-exec rung carries
+    // `carrier_witness: None` (the sanctioned path, identical to today's non-custom turns). Each
+    // carrier wave replaces exactly its own arm; there is deliberately NO wildcard arm, so a new
+    // variant is a compile error here (the wave must decide its fold branch).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
-        let wrapped = match &leg.custom_witness {
-            Some(bundle) => {
+        let wrapped = match &leg.carrier_witness {
+            Some(CarrierWitness::Custom(bundle)) => {
                 let dual = prove_descriptor_leaf_dual_expose(
                     &leg.descriptor,
                     &leg.proof,
@@ -2912,6 +2931,27 @@ fn prove_chain_core_rotated(
                     index: i,
                     reason: format!("segmented custom-binding node failed: {e:?}"),
                 })?
+            }
+            // THE SIX UNFILLED CARRIER ARMS — FAIL-CLOSED (each wave fills its own arm; until
+            // then a leg carrying the witness is REFUSED, never silently folded without its
+            // carrier binding).
+            Some(CarrierWitness::Bridge(_)) => {
+                return Err(unfilled_carrier_arm(i, "bridge"));
+            }
+            Some(CarrierWitness::Sovereign(_)) => {
+                return Err(unfilled_carrier_arm(i, "sovereign"));
+            }
+            Some(CarrierWitness::Factory(_)) => {
+                return Err(unfilled_carrier_arm(i, "factory"));
+            }
+            Some(CarrierWitness::Hatchery(_)) => {
+                return Err(unfilled_carrier_arm(i, "hatchery"));
+            }
+            Some(CarrierWitness::Membership(_)) => {
+                return Err(unfilled_carrier_arm(i, "membership"));
+            }
+            Some(CarrierWitness::Dsl(_)) => {
+                return Err(unfilled_carrier_arm(i, "dsl"));
             }
             None => prove_descriptor_leaf_rotated_with_segment(
                 &leg.descriptor,
@@ -2946,6 +2986,26 @@ fn prove_chain_core_rotated(
         chain_digest,
         num_turns: turns.len(),
     })
+}
+
+/// **THE FAIL-CLOSED REFUSAL for an UNFILLED carrier fold arm** (the socket half of the
+/// fail-open law). A [`CarrierWitness`] variant whose fold arm has not landed is a
+/// prover-side programming error, NOT a degradable input: silently minting the plain segment
+/// leaf would produce a verifying artifact that does NOT witness the carrier binding the
+/// attached witness promises (laundered vacuity). So the prover refuses loudly — the caller
+/// either detaches the witness (`carrier_witness: None`, the sanctioned re-exec rung) or lands
+/// the carrier's binding arm. Exercised by
+/// `ivc_turn_chain_rotated::unfilled_carrier_witness_is_refused_fail_closed`.
+fn unfilled_carrier_arm(index: usize, carrier: &'static str) -> TurnChainError {
+    TurnChainError::TurnProofInvalid {
+        index,
+        reason: format!(
+            "carrier witness '{carrier}' is attached but its fold arm is UNFILLED (its carrier \
+             wave has not landed): refusing to fold — an unfilled carrier witness never silently \
+             proves. Detach the witness (carrier_witness: None) to take the re-exec rung, or land \
+             the '{carrier}' binding arm."
+        ),
+    }
 }
 
 /// Host-side continuity check ONLY (the `ChainBreak` tooth), extracted so the rotated fold no

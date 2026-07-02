@@ -443,6 +443,49 @@ fn broken_order_rejected() {
     }
 }
 
+/// **THE UNFILLED-CARRIER FAIL-CLOSED TOOTH (Step-2 witness socket).** The generalized
+/// `CarrierWitness` socket carries six STAGED variants whose fold arms have not landed. The
+/// fail-closed law: an unfilled carrier witness NEVER silently proves — attaching one must make
+/// the chain prover REFUSE (no artifact at all), never silently degrade to the plain segment
+/// leaf (which would yield a verifying artifact that does NOT witness the promised carrier
+/// binding — laundered vacuity). `None` remains the sanctioned re-exec rung.
+///
+/// CHEAP enough to run in CI: it mints 2 chain legs, but the refusal fires in
+/// `prove_chain_core_rotated`'s per-leaf match on turn 0 BEFORE any leaf-wrap recursion proving.
+#[test]
+fn unfilled_carrier_witness_is_refused_fail_closed() {
+    use dregg_circuit::bridge_action_air::BridgeActionWitness;
+    use dregg_circuit_prove::joint_turn_aggregation::{BridgeWitnessBundle, CarrierWitness};
+
+    let (mut turns, _g, _f) = make_chain(1000, 0, 7, 2);
+
+    // Attach a STAGED bridge witness (honest-by-construction stub) to turn 0's leg. The chain is
+    // otherwise fully honest — the ONLY reason to refuse is the unfilled carrier arm.
+    let action = BridgeActionWitness {
+        nullifier: [1u8; 32],
+        recipient: [2u8; 32],
+        destination_federation: [3u8; 32],
+        amount: 42,
+    };
+    turns[0].participant.rotated.carrier_witness = Some(CarrierWitness::Bridge(
+        BridgeWitnessBundle::from_action_witness(&action),
+    ));
+
+    match prove_turn_chain_recursive(&turns) {
+        Err(TurnChainError::TurnProofInvalid { index, reason }) => {
+            assert_eq!(index, 0, "the refusal names the witnessed turn");
+            assert!(
+                reason.contains("'bridge'") && reason.contains("UNFILLED"),
+                "the refusal names the carrier + the unfilled arm; got: {reason}"
+            );
+        }
+        Ok(_) => panic!(
+            "an unfilled carrier witness must NEVER fold to a verifying root (fail-closed law)"
+        ),
+        Err(other) => panic!("expected the unfilled-carrier TurnProofInvalid, got {other:?}"),
+    }
+}
+
 /// **THE LEAF TOOTH (host-gate-skipping prover, forged post-commit).** The claim is
 /// that per-turn execution soundness does NOT rest on the prover having run the
 /// host-side descriptor admission. So: run the UNGATED prover on a chain whose second
@@ -482,7 +525,7 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         mut public_inputs,
-        custom_witness,
+        carrier_witness,
     } = rotated;
     let pi_wide_new = public_inputs.len() - 8; // head lane of the AFTER 8-felt wide commit
     let lie = n1 + BabyBear::ONE;
@@ -491,7 +534,7 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
         proof,
         descriptor,
         public_inputs,
-        custom_witness,
+        carrier_witness,
     };
     let t1_forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let turns = [t0, t1_forged];
