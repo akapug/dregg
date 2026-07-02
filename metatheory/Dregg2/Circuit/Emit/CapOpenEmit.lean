@@ -1298,15 +1298,21 @@ def v3RegistryCapOpen : List (String × EffectVmDescriptor2) :=
        -- debited in-circuit (`new = old − transfer − fee`) and pinned to the published fee PI (39
        -- PIs), so the fee debit is a PROVEN balance constraint — a ledgerless light client needs no
        -- trusted `+ turn.fee` reconstruction.
+       -- Wrapped through the dsl rc-EMIT (`withDfaRcPins`) like every `v3Registry` member: the
+       -- fee'd transfer IS the live sovereign transfer's effect-vm leg, so a `Witnessed{Dfa}`
+       -- caveat on it must expose the 4-felt route-commitment carrier too (rc at PI 47..50,
+       -- after the fee pin at 46).
        , ("transferFeeVmDescriptor2R24",
-          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.transferFeeV3) ]
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+            Dregg2.Circuit.Emit.EffectVmEmitRotationV3.transferFeeV3) ]
 
 /-- The registry-with-cap-open has 45 members (36 cohort + 6 fan-out + 2 live `-eff`
 transfer/attenuate + the fee'd transfer at the tail). The Signature-pinned
 `capOpenAttenuateV3`/`transferCapOpenV3` are DELETED — the apex authority leg refines the LIVE
 `…CapOpenEffV3` descriptors, so nothing is proven about an unwired descriptor. -/
 theorem v3RegistryCapOpen_length : v3RegistryCapOpen.length = 45 := by
-  simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry]
+  simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry,
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3RegistryBare]
 
 -- The cap-open authority members are positions 36..43; the 36 cohort members are unchanged at 0..35;
 -- the fee'd transfer rides the tail at 44.
@@ -1437,7 +1443,8 @@ def v3RegistryCapOpenWide : List (String × EffectVmDescriptor2) :=
 theorem v3RegistryCapOpenWide_length : v3RegistryCapOpenWide.length = 45 := by
   have hcohort : Dregg2.Circuit.Emit.EffectVmEmitRotationWide.v3RegistryWide.length = 36 := by decide
   have hdrop : (v3RegistryCapOpen.drop 36).length = 9 := by
-    simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry]
+    simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry,
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3RegistryBare]
   have hbb : v3RegistryCapOpenWideBB.length = 9 := by decide
   simp only [v3RegistryCapOpenWide, List.length_append, List.length_map, List.length_zip,
     hcohort, hdrop, hbb, Nat.min_self]
@@ -1483,7 +1490,8 @@ theorem v3RegistryCapOpenWide_is_wideAppend :
     have hjlt : j < 9 := by omega
     -- the tail list and its `bb` table both have length 9 and are zipped.
     have hdrop : (v3RegistryCapOpen.drop 36).length = 9 := by
-      simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry]
+      simp [v3RegistryCapOpen, Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry,
+      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3RegistryBare]
     have hbblen : v3RegistryCapOpenWideBB.length = 9 := by decide
     have hzlen : ((v3RegistryCapOpen.drop 36).zip v3RegistryCapOpenWideBB).length = 9 := by
       rw [List.length_zip, hdrop, hbblen]; exact Nat.min_self 9

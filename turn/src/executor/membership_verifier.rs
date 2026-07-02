@@ -499,6 +499,23 @@ impl WitnessedPredicateVerifier for DslCircuitDfaVerifier {
     }
 }
 
+/// Decode a [`WitnessedPredicateKind::Dfa`] proof blob's PUBLIC INPUTS (the `DfaProofWire`
+/// prefix) WITHOUT verifying the STARK — the dsl rc-EMIT thread. The executor's rotated-leg
+/// verifier ([`super::TurnExecutor::turn_dfa_route_commitment`]) folds these through
+/// `dregg_circuit::effect_vm::trace_rotated::dfa_route_commitment` to anchor the published
+/// rc carrier; the STARK itself is verified by [`DslCircuitDfaVerifier`] on the authorize
+/// path as before (this helper only re-reads the SAME wire bytes, so the anchored rc is the
+/// commitment of the inputs the verified proof bound).
+pub fn dfa_wire_public_inputs(proof_bytes: &[u8]) -> Result<Vec<BabyBear>, String> {
+    let wire: DfaProofWire = postcard::from_bytes(proof_bytes)
+        .map_err(|e| format!("Dfa proof wire did not decode (expected DfaProofWire): {e}"))?;
+    Ok(wire
+        .public_inputs
+        .iter()
+        .map(|v| BabyBear::new(*v))
+        .collect())
+}
+
 /// Produce a serialized [`WitnessedPredicateKind::Dfa`] proof for the program
 /// identified by `vk_hash`, given witness column values and the public inputs.
 /// The returned bytes verify under [`DslCircuitDfaVerifier`] when the same

@@ -44,8 +44,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE, state};
 use dregg_circuit::effect_vm::trace_rotated::{
-    AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, C_SPAN, CAVEAT_BASE,
-    GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest,
+    AFTER_BASE, B_COMMITTED_HEIGHT, B_IROOT, B_STATE_COMMIT, BEFORE_BASE, C_CAVEAT_COMMIT,
+    CAVEAT_BASE, GRAD_ROT_WIDTH, ROT_WIDTH, RotatedBlockWitness, empty_caveat_manifest,
     generate_rotated_effect_vm_trace, generate_rotated_refusal_trace_with_fields_tree,
     rotated_descriptor_name_for_effect, transfer_caveat_manifest,
 };
@@ -148,7 +148,10 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         desc.trace_width, GRAD_ROT_WIDTH,
         "graduated rotated width 608"
     );
-    assert_eq!(desc.public_input_count, 46, "42 v1 PIs + 4 appended");
+    assert_eq!(
+        desc.public_input_count, 50,
+        "42 v1 PIs + 4 appended + 4 dsl rc"
+    );
 
     // -- a real transfer: the validated v1 reference witness (transfer-out). --
     let before_balance: i64 = 100_000;
@@ -197,7 +200,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     )
     .expect("live rotated generator must produce a 315-col trace + 46 PIs");
     assert_eq!(trace[0].len(), ROT_WIDTH, "315-col rotated trace");
-    assert_eq!(dpis.len(), 46);
+    assert_eq!(dpis.len(), 50);
 
     // -- (2) THE cell≡circuit ROTATED DIFFERENTIAL: producer limbs == the generated trace's
     //    welded state-block felts (r0↔balance_lo, …, cap_root↔cap_root), on the first row. --
@@ -316,7 +319,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     );
     assert_eq!(
         dpis[45],
-        last[CAVEAT_BASE + C_SPAN - 1],
+        last[CAVEAT_BASE + C_CAVEAT_COMMIT],
         "PI 45 = caveat commit"
     );
 
@@ -422,7 +425,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         desc.trace_width, GRAD_ROT_WIDTH,
         "graduated rotated width 608"
     );
-    assert_eq!(desc.public_input_count, 46);
+    assert_eq!(desc.public_input_count, 50);
 
     // A real burn turn: a 30-unit balance debit (no destination credit).
     let before_balance: i64 = 80_000;
@@ -541,7 +544,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         "graduated rotated width 608"
     );
     assert_eq!(
-        desc.public_input_count, 47,
+        desc.public_input_count, 51,
         "the rotated note-spend carries 46 prefix PIs + the appended nullifier slot"
     );
 
@@ -777,7 +780,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         "graduated rotated width 608"
     );
     assert_eq!(
-        desc.public_input_count, 47,
+        desc.public_input_count, 51,
         "rotated createCell carries 46 prefix PIs + the appended new-cell-key slot"
     );
 
@@ -1107,7 +1110,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             "graduated rotated width 608"
         );
         assert_eq!(
-            desc.public_input_count, 46,
+            desc.public_input_count, 50,
             "setField is a 46-PI cohort member"
         );
 
@@ -1226,7 +1229,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             "graduated rotated width 608"
         );
         assert_eq!(
-            desc.public_input_count, 46,
+            desc.public_input_count, 50,
             "bridgeMint is a 46-PI cohort member"
         );
 
@@ -1367,7 +1370,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         .expect("rotated supply-mint descriptor parses");
     assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width");
     assert_eq!(
-        desc.public_input_count, 46,
+        desc.public_input_count, 50,
         "supply-mint is a 46-PI cohort member (same shape as the bridge member)"
     );
 
@@ -2018,7 +2021,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
         "graduated rotated width 608"
     );
     assert_eq!(
-        desc.public_input_count, 47,
+        desc.public_input_count, 51,
         "cellSeal carries the appended record-forcing pin (47 PIs)"
     );
 
@@ -2173,7 +2176,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
         "graduated rotated width 608"
     );
     assert_eq!(
-        desc.public_input_count, 46,
+        desc.public_input_count, 50,
         "value descriptor keeps the 46-PI shape"
     );
 
@@ -2746,7 +2749,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         "fee'd transfer keeps the graduated rotated width 608"
     );
     assert_eq!(
-        desc.public_input_count, 47,
+        desc.public_input_count, 51,
         "fee'd transfer: 38 rotated PIs + the appended fee PI (slot 38)"
     );
 
@@ -2795,7 +2798,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         fee,
     )
     .expect("fee'd rotated generator produces a 315-col trace + 47 PIs");
-    assert_eq!(dpis.len(), 47, "47 PIs (46 rotated + the fee)");
+    assert_eq!(dpis.len(), 51, "51 PIs (46 rotated + the fee + 4 dsl rc)");
     assert_eq!(
         dpis[46],
         BabyBear::new(fee as u32),

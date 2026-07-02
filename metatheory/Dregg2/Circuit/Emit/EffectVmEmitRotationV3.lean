@@ -195,12 +195,21 @@ def B_COMMITMENTS_ROOT : Nat := 27
 nullifier_root · commitments_root · heap_root · lifecycle · **epoch** · committed_height). The forced
 limb for `revokeDelegation`'s parent-epoch BUMP (the §14.EPOCH write-gate). -/
 def B_EPOCH : Nat := 30
-/-- The caveat region span: 29 manifest felts + 9 chain carriers + 1 commit. -/
-def C_SPAN : Nat := 39
+/-- The caveat region span: 29 manifest felts + 9 chain carriers + 1 commit + the 4-felt
+DFA route-commitment carrier (the dsl rc-EMIT — `C_RC_OFF`). -/
+def C_SPAN : Nat := 43
 /-- caveat-commit offset inside the caveat region. -/
 def C_COMMIT : Nat := 38
-/-- The whole appendix width: two rotated blocks + the caveat region (v12: 2·151 + 39 = 341). -/
-def APPENDIX_SPAN : Nat := 341
+/-- In-region base of the 4-felt DFA ROUTE-COMMITMENT carrier (offsets 39..42, PAST the caveat
+commit at 38 — the `caveatCommit` fold over the 29 manifest felts is untouched). Carries
+`custom_proof_pi_commitment(DfaProofWire.public_inputs)` — the 4-felt fold-bound anchor of a
+`Witnessed{Dfa}` caveat's DSL-circuit STARK (the SAME derivation as the custom carrier's
+`custom_proof_commitment`, term-for-term) — on a Dfa-gated turn, ZERO on every other turn (the
+absent sentinel; the region is producer-filled uniformly on every row). Rust twin
+`trace_rotated::C_DFA_RC_OFF`. Published as 4 TAIL PIs by `withDfaRcPins`. -/
+def C_RC_OFF : Nat := 39
+/-- The whole appendix width: two rotated blocks + the caveat region (v12: 2·151 + 43 = 345). -/
+def APPENDIX_SPAN : Nat := 345
 
 -- The map-root offsets ride past the R=24 probe's named columns (cap_root at probe `capRootCol 24`);
 -- the `commitments_root` limb is the +1 over the bare R=24 register shape.
@@ -216,6 +225,8 @@ def APPENDIX_SPAN : Nat := 341
 #guard B_COMMITTED_HEIGHT == 31      -- last SCALAR pre-iroot limb (disc/perms/vk/mode/fields-root ride past it)
 #guard B_SPAN == B_IROOT + 39        -- 112 pre-iroot + iroot + state_commit + 37 chain carriers = 151 (v12)
 #guard APPENDIX_SPAN == 2 * B_SPAN + C_SPAN
+#guard C_RC_OFF == C_COMMIT + 1      -- the DFA rc carrier rides PAST the caveat commit
+#guard C_SPAN == C_RC_OFF + 4        -- 4 rc felts close the region
 
 /-- The pre-iroot limb list of a block at `base` (v10: 67 limbs, absorption order: cells_root ·
 r0..r23 · cap_root · nullifier_root · commitments_root · heap_root · lifecycle · epoch ·
@@ -4772,6 +4783,113 @@ theorem withAfterOctetPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDesc
 #assert_axioms satisfied2_of_withAfterOctetPins
 #assert_axioms withAfterOctetPins_publishes
 
+/-! ### The DSL rc-EMIT (`withDfaRcPins`) — the `Witnessed{Dfa}` route-commitment PI exposure.
+
+A `Witnessed{Dfa}` caveat (a DSL `CellProgram` predicate — e.g. the relay router
+`dregg-dfa-routing-v1`) is verified OFF-AIR by the executor's `DslCircuitDfaVerifier`; the deployed
+turn descriptor previously emitted NO PI for it, so a pure light client could not connect the
+re-proven DSL leaf (`circuit-prove::dsl_leaf_adapter`) to the deployed leg — the named BIG-BANG
+piece (`dsl_leaf_adapter.rs` module doc; the Lean refutation is `Dregg2.Circuit.DslBackingAttack`).
+
+The emit: the caveat region carries a 4-felt DFA ROUTE-COMMITMENT carrier at `C_RC_OFF` (offsets
+39..42, past the caveat commit at 38 — the `caveatCommit` fold over the 29 manifest felts is
+UNTOUCHED). The producer fills it with `custom_proof_pi_commitment(DfaProofWire.public_inputs)` —
+the SAME derivation the custom carrier's `custom_proof_commitment` binds, term-for-term — on a
+Dfa-gated turn, ZERO otherwise (the absent sentinel: a turn WITHOUT a Dfa caveat publishes zeros
+and still proves — the pins are plain PI bindings, satisfiable at any uniformly-filled value; the
+executor/verifier anchors the published value, real-or-zero, off the turn's own witnessed
+predicates). `withDfaRcPins` publishes the carrier as 4 TAIL PIs (`g.piCount + k`), the Dfa twin of
+`customPiExposure` — applied to EVERY `v3Registry` member (the caveat is a precondition, not an
+effect: any cap-authorized turn can carry it), so the per-turn FOLD can `connect` the DSL sub-proof
+leaf's in-circuit PI-commitment to the deployed leg at these slots (the dual-expose the fold lane
+mints). -/
+
+/-- The rotated CAVEAT-region base offset (past the v1 layout + the two rotated blocks). -/
+def CAVEAT_REGION_OFF : Nat := 2 * B_SPAN
+
+#guard CAVEAT_REGION_OFF == 302
+
+/-- **`withDfaRcPins g`** — APPEND 4 `.piBinding .last` pins publishing the caveat-region DFA
+route-commitment carrier (`EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + C_RC_OFF + k`, `k < 4`) as 4 TAIL
+PIs (`g.piCount + k`), bumping `piCount` by 4. Mirrors `withAfterOctetPins` exactly — additive, no
+site / range / mem-op / map-op touched, so every existing forcing keystone lifts by
+`List.mem_append_left` (the peel below). -/
+def withDfaRcPins (g : EffectVmDescriptor2) : EffectVmDescriptor2 :=
+  { g with
+    piCount := g.piCount + 4
+    constraints := g.constraints ++ (List.range 4).map (fun k =>
+      VmConstraint2.base (.piBinding .last (EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + (C_RC_OFF + k))
+        (g.piCount + k))) }
+
+/-- The 4 rc pins are the ONLY constraints past the inner descriptor's (single `++`) — the
+`strips_to` shape apex re-keys peel through. -/
+theorem withDfaRcPins_constraints (g : EffectVmDescriptor2) :
+    (withDfaRcPins g).constraints
+      = g.constraints ++ (List.range 4).map (fun k =>
+          VmConstraint2.base (.piBinding .last (EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + (C_RC_OFF + k))
+            (g.piCount + k))) := rfl
+
+/-- The rc pins are `.piBinding`s, so they contribute NO mem-op (the mem log is unchanged). -/
+theorem memOpsOf_withDfaRcPins (g : EffectVmDescriptor2) :
+    memOpsOf (withDfaRcPins g) = memOpsOf g := by
+  simp [memOpsOf, withDfaRcPins, List.filterMap_append, List.filterMap_map]
+
+/-- The rc pins contribute NO map-op (the map log is unchanged). -/
+theorem mapOpsOf_withDfaRcPins (g : EffectVmDescriptor2) :
+    mapOpsOf (withDfaRcPins g) = mapOpsOf g := by
+  simp [mapOpsOf, withDfaRcPins, List.filterMap_append, List.filterMap_map]
+
+/-- **THE PEEL — `Satisfied2 (withDfaRcPins g) ⟹ Satisfied2 g`.** The wrap only APPENDS
+`.piBinding` constraints (and bumps `piCount`): the inner constraints stay members
+(`List.mem_append_left`), sites / ranges / mem / map logs are unchanged, so every existing
+per-effect soundness lemma lifts to the wrapped descriptor by peeling the wrap first. Mirrors
+`satisfied2_of_withAfterOctetPins`. -/
+theorem satisfied2_of_withDfaRcPins (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2 hash (withDfaRcPins g) minit mfin maddrs t) :
+    Satisfied2 hash g minit mfin maddrs t := by
+  have hmem : memLog (withDfaRcPins g) t = memLog g t := by
+    simp [memLog, memOpsOf_withDfaRcPins]
+  have hmap : mapLog (withDfaRcPins g) t = mapLog g t := by
+    simp [mapLog, mapOpsOf_withDfaRcPins]
+  exact
+    { rowConstraints := fun i hi c hc => h.rowConstraints i hi c (by
+        rw [withDfaRcPins_constraints]; exact List.mem_append_left _ hc)
+    , rowHashes := h.rowHashes
+    , rowRanges := h.rowRanges
+    , memAddrsNodup := h.memAddrsNodup
+    , memClosed := fun op hop => h.memClosed op (by rw [hmem]; exact hop)
+    , memDisciplined := by rw [← hmem]; exact h.memDisciplined
+    , memBalanced := by rw [← hmem]; exact h.memBalanced
+    , memTableFaithful := by rw [← hmem]; exact h.memTableFaithful
+    , mapTableFaithful := by rw [← hmap]; exact h.mapTableFaithful }
+
+/-- **`withDfaRcPins_publishes` — the `rotV3_publishes`-shape forcing.** On any LAST row of a
+`Satisfied2` witness, each of the 4 published TAIL PIs (`g.piCount + k`) EQUALS its caveat-region
+route-commitment carrier column — so the fold reads the carrier off the PI vector: a leg claiming a
+DIFFERENT rc than the one the trace carries is UNSAT, and the fold's `connect` to the re-proven DSL
+leaf's in-circuit commitment makes an unwitnessed Dfa predicate a LIGHT-CLIENT refusal, not just a
+re-executor one. -/
+theorem withDfaRcPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash (withDfaRcPins g) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
+    ∀ k : Fin 4, (envAt t i).loc (EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + (C_RC_OFF + k.val))
+      = (envAt t i).pub (g.piCount + k.val) := by
+  intro k
+  have hlastt : (i + 1 == t.rows.length) = true := by simp [hlast]
+  have hin : VmConstraint2.base
+      (.piBinding .last (EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + (C_RC_OFF + k.val)) (g.piCount + k.val))
+      ∈ (withDfaRcPins g).constraints := by
+    rw [withDfaRcPins_constraints]
+    exact List.mem_append_right _ (List.mem_map.mpr ⟨k.val, List.mem_range.mpr k.isLt, rfl⟩)
+  have h := hsat.rowConstraints i hi _ hin
+  simp only [VmConstraint2.holdsAt, hlastt, holdsVm_piLast_true] at h
+  exact h
+
+#assert_axioms satisfied2_of_withDfaRcPins
+#assert_axioms withDfaRcPins_publishes
+
 /-- **`factoryV3Carriers`** — the deployed `factoryVmDescriptor2R24` WITH the two direct carrier-octet
 pin cohorts TAIL-appended after PI 46: the `child_vk8` octet (limbs 88..=95, PI 47..54 — factory's
 installed child VK, which the hatchery-INVARIANT carrier also rides) then the `contract_hash8` octet
@@ -4790,10 +4908,10 @@ def factoryV3Carriers : EffectVmDescriptor2 :=
 #guard factoryV3Carriers.traceWidth == factoryV3.traceWidth
 #guard factoryV3Carriers.tables.length == 5
 
-/-- **`v3Registry`** — the full 35-member cohort at the rotated block (the 27 v2-graduated members
-+ the 8 STEP-1-widened; keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver
-`EmitRotationV3.lean`). -/
-def v3Registry : List (String × EffectVmDescriptor2) :=
+/-- **`v3RegistryBare`** — the full cohort at the rotated block BEFORE the uniform DSL rc-EMIT wrap
+(keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver `EmitRotationV3.lean`).
+The deployed registry is `v3Registry = v3RegistryBare.map withDfaRcPins` below. -/
+def v3RegistryBare : List (String × EffectVmDescriptor2) :=
   [ ("transferVmDescriptor2R24", v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor)
   , ("burnVmDescriptor2R24", v3OfFrozen EffectVmEmitBurn.burnVmDescriptor)
   , ("mintVmDescriptor2R24", withSelectorGate EffectVmEmitMint.selM.MINT (v3OfFrozen mintTickFace))
@@ -4835,6 +4953,25 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   ++ (List.finRange 8).map fun slot =>
       (s!"setFieldVmDescriptor2-{slot.val}R24",
         withSelectorGate EffectVmEmitSetField.SEL_SET_FIELD (v3OfFrozen (setFieldTickFace slot)))
+
+/-- **`v3Registry`** — the DEPLOYED full cohort: every `v3RegistryBare` member wrapped OUTERMOST
+through `withDfaRcPins` (the dsl rc-EMIT — a `Witnessed{Dfa}` caveat is a PRECONDITION any
+cap-authorized turn can carry, so the whole cohort exposes the 4-felt route-commitment carrier as
+its LAST 4 member PIs: slots `piCount − 4 .. piCount − 1` per member, riding AFTER every per-effect
+extra pin and BEFORE the 16 wide commit PIs `wideAppend` lands on the wide twin). Downstream
+registries (`v3RegistryCapOpen`, `v3RegistryWide`, the umem weld) inherit by construction. -/
+def v3Registry : List (String × EffectVmDescriptor2) :=
+  v3RegistryBare.map (fun (k, d) => (k, withDfaRcPins d))
+
+-- The rc wrap is uniform: every member gains EXACTLY 4 PIs and NO width/table/site change.
+#guard (v3Registry.zip v3RegistryBare).all fun ((_, w), (_, b)) =>
+  w.piCount == b.piCount + 4 && w.traceWidth == b.traceWidth
+    && w.tables.length == b.tables.length && w.hashSites.length == b.hashSites.length
+-- The deployed transfer publishes rc at slots 46..49 (piCount 46 → 50); the STEP-3 factory
+-- (piCount 63) at 63..66; the custom exposure member (piCount 54) at 54..57.
+#guard (v3Registry.lookup "transferVmDescriptor2R24").any (·.piCount == 50)
+#guard (v3Registry.lookup "factoryVmDescriptor2R24").any (·.piCount == 67)
+#guard (v3Registry.lookup "customVmDescriptor2R24").any (·.piCount == 58)
 
 #guard v3Registry.length == 36
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five

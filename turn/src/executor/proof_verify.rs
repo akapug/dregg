@@ -751,10 +751,23 @@ impl TurnExecutor {
 
         // 5. The caveat manifest the producer used (transfer exercises both domains;
         //    everything else uses the empty manifest).
-        let caveat = match vm_effects {
+        let mut caveat = match vm_effects {
             [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
             _ => empty_caveat_manifest(),
         };
+        // THE DSL rc ANCHOR (the dsl rc-EMIT verifier half). Every deployed cohort descriptor
+        // publishes the caveat-region DFA route-commitment carrier as its LAST 4 member PIs
+        // (`withDfaRcPins`); the generators below read the carrier from THIS manifest, so seeding
+        // it here IS the trusted anchor: the executor independently recomputes
+        // `dfa_route_commitment(DfaProofWire.public_inputs)` from the turn's OWN witnessed Dfa
+        // predicates (the same blobs `authorize`/preconditions verified off-AIR) — never from a
+        // prover-supplied value. A turn with NO Dfa predicate anchors the ZERO sentinel; a proof
+        // whose bound rc columns disagree (a forged / omitted route commitment) diverges the
+        // transcript ⇒ `InvalidPowWitness` ⇒ reject. Fail-closed: >1 distinct Dfa rc refuses the
+        // rotated leg (the carrier holds ONE rc, mirroring the single-nullifier note-spend shape).
+        if let Some(rc) = Self::turn_dfa_route_commitment(turn)? {
+            caveat.dfa_rc = rc;
+        }
 
         // 6. Reconstruct the 38-PI vector. PLACEHOLDER block witnesses reproduce the
         //    witness-INDEPENDENT PIs (0..33 + 37) exactly; the commit/height PIs (34/35/36)
@@ -989,8 +1002,11 @@ impl TurnExecutor {
         // trace with PLACEHOLDER cells (above), so the record-pin PIs MUST be anchored here from the
         // trusted post-cell — for the record-digest movers that means ALL 8 limbs, else the un-anchored
         // headroom PIs stay at placeholder values and the proof's transcript diverges (InvalidPowWitness).
-        let wide_record_pin_count_1 = ROT_PI_COUNT + 1 + 16; // lifecycle / single-limb movers (63)
-        let wide_record_pin_count_8 = ROT_PI_COUNT + 8 + 16; // H1 record-digest movers (70)
+        // (+ the 4 dsl rc PIs every wrapped cohort member carries between its extras and the wide 16.)
+        let wide_record_pin_count_1 =
+            ROT_PI_COUNT + 1 + dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN + 16; // lifecycle movers (67)
+        let wide_record_pin_count_8 =
+            ROT_PI_COUNT + 8 + dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN + 16; // H1 record-digest movers (74)
         if (desc.public_input_count == wide_record_pin_count_1
             || desc.public_input_count == wide_record_pin_count_8)
             && dpis.len() == desc.public_input_count
@@ -1705,6 +1721,91 @@ impl TurnExecutor {
         }
 
         Ok(())
+    }
+
+    /// **The turn's DFA ROUTE COMMITMENT (the dsl rc-EMIT scan).** Walk the call forest for
+    /// action-visible `WitnessedPredicateKind::Dfa` predicates — `Preconditions::witnessed`
+    /// entries and `Authorization::Custom { predicate }` — decode each one's `DfaProofWire`
+    /// blob (`action.witness_blobs[proof_witness_index]`, the SAME bytes the off-AIR
+    /// `DslCircuitDfaVerifier` verified), and fold its public inputs through
+    /// [`dregg_circuit::effect_vm::trace_rotated::dfa_route_commitment`].
+    ///
+    /// * `Ok(None)` — no Dfa predicate on the turn: the rotated leg anchors the ZERO sentinel.
+    /// * `Ok(Some(rc))` — exactly one distinct rc: the rotated leg anchors it (the light-client
+    ///   FOLD can then `connect` the re-proven DSL leaf to the published slots).
+    /// * `Err` — more than one DISTINCT rc, or an unreadable blob: the rotated leg fails closed
+    ///   (the carrier holds ONE rc — the single-nullifier note-spend discipline).
+    ///
+    /// NAMED RESIDUAL (staged): a Dfa predicate riding a `CapabilityCaveat::Witnessed` on an
+    /// exercised cap (resolved from CELL STATE, not the action) and a Dfa candidate inside a
+    /// disjunctive authorization are NOT scanned yet — those turns anchor ZERO exactly as they
+    /// did before the rc emit (the predicate stays executor-verified; the fold just does not
+    /// witness it). Their thread rides the exercise-site plumbing, not this scan.
+    pub(super) fn turn_dfa_route_commitment(
+        turn: &Turn,
+    ) -> Result<Option<[dregg_circuit::field::BabyBear; 4]>, TurnError> {
+        use dregg_cell::WitnessedPredicateKind;
+        use dregg_circuit::effect_vm::trace_rotated::dfa_route_commitment;
+
+        fn scan(
+            tree: &CallTree,
+            found: &mut Vec<[dregg_circuit::field::BabyBear; 4]>,
+        ) -> Result<(), TurnError> {
+            let action = &tree.action;
+            let mut preds: Vec<&dregg_cell::WitnessedPredicate> = action
+                .preconditions
+                .witnessed
+                .iter()
+                .filter(|p| p.kind == WitnessedPredicateKind::Dfa)
+                .collect();
+            if let crate::Authorization::Custom { predicate } = &action.authorization {
+                if predicate.kind == WitnessedPredicateKind::Dfa {
+                    preds.push(predicate);
+                }
+            }
+            for p in preds {
+                let blob = action
+                    .witness_blobs
+                    .get(p.proof_witness_index)
+                    .ok_or_else(|| {
+                        TurnError::InvalidExecutionProof(format!(
+                            "dsl rc anchor: Dfa predicate proof_witness_index {} out of bounds \
+                         ({} witness blobs)",
+                            p.proof_witness_index,
+                            action.witness_blobs.len()
+                        ))
+                    })?;
+                let pis = super::membership_verifier::dfa_wire_public_inputs(&blob.bytes).map_err(
+                    |e| {
+                        TurnError::InvalidExecutionProof(format!(
+                            "dsl rc anchor: Dfa proof blob did not decode: {e}"
+                        ))
+                    },
+                )?;
+                let rc = dfa_route_commitment(&pis);
+                if !found.contains(&rc) {
+                    found.push(rc);
+                }
+            }
+            for child in &tree.children {
+                scan(child, found)?;
+            }
+            Ok(())
+        }
+
+        let mut found = Vec::new();
+        for root in &turn.call_forest.roots {
+            scan(root, &mut found)?;
+        }
+        match found.len() {
+            0 => Ok(None),
+            1 => Ok(Some(found[0])),
+            n => Err(TurnError::InvalidExecutionProof(format!(
+                "dsl rc anchor: the turn carries {n} DISTINCT Dfa route commitments; the rotated \
+                 caveat region carries ONE rc carrier — the rotated leg fails closed (use the v1 \
+                 leg for multi-Dfa turns)"
+            ))),
+        }
     }
 
     /// Collect every Effect in the turn's call_forest in the canonical
