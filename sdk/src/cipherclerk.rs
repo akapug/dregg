@@ -6679,20 +6679,28 @@ impl AgentCipherclerk {
                 }
 
                 // -- Bridge ops (CRITICAL: cross-chain value transfer) ----------
+                // MUST match the executor projector (`effect_vm_bridge.rs`)
+                // byte-for-byte (the differential invariant). FELT-DOMAIN
+                // mint_hash (STEP-1 re-align): `bridge_mint_hash_felt` — the
+                // Poseidon2 `hash_fact` identity over the SAME six compressed
+                // felts the executor's note-spend STARK verify binds, so the
+                // AIR + the recursion note-spend leaf can recompute it.
                 Effect::BridgeMint { portable_proof } => {
-                    let mut hasher = blake3::Hasher::new();
-                    hasher.update(&portable_proof.nullifier);
-                    let root_bytes =
-                        postcard::to_allocvec(&portable_proof.source_root).unwrap_or_default();
-                    hasher.update(&root_bytes);
-                    hasher.update(&portable_proof.destination_federation);
-                    hasher.update(&portable_proof.asset_type.to_le_bytes());
-                    let mint_hash_bytes = hasher.finalize();
+                    let mint_hash = dregg_circuit::dsl::note_spending::bridge_mint_hash_felt(
+                        &portable_proof.nullifier,
+                        &portable_proof
+                            .source_root
+                            .note_tree_root
+                            .unwrap_or([0u8; 32]),
+                        &portable_proof.destination_federation,
+                        portable_proof.value,
+                        portable_proof.asset_type,
+                    );
                     let value_lo =
                         BabyBear::new((portable_proof.value & ((1u64 << 30) - 1)) as u32);
                     vm_effects.push(VmEffect::BridgeMint {
                         value_lo,
-                        mint_hash: hash_to_bb(mint_hash_bytes.as_bytes()),
+                        mint_hash,
                         value_full: portable_proof.value,
                     });
                 }

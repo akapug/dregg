@@ -151,33 +151,21 @@ fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
     LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
 }
 
-/// **THE FELT-DOMAIN MINT IDENTITY** — the in-circuit-recomputable twin of the
-/// deployed byte-domain `mint_hash` (`effect_vm_bridge.rs`'s
-/// `hash_to_bb(blake3(...))`, which no circuit can recompute — the
-/// `lifecycle_payload_felt` precedent applies).
+/// **THE FELT-DOMAIN MINT IDENTITY** — the in-circuit-recomputable bridge-mint
+/// `mint_hash`. The canonical definition now lives beside the verifier it binds
+/// to ([`dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt`] — the
+/// STEP-1 executor re-align moved it there so the executor/SDK projectors and
+/// this leaf share ONE function); re-exported here so the leaf's claim-lane
+/// vocabulary is unchanged.
 ///
 /// `hash_fact(hash_fact(nullifier, [merkle_root, destination_federation,
 /// asset_type]), [value_lo, value_hi])` over the SAME compressed felts the
-/// executor's `verify_note_spend_dsl_full` call binds. Binds the full bridge-mint
-/// identity (which nullifier, from which source root, to which federation, which
-/// asset, and the full u64 amount via both limbs). The leaf recomputes this IN-AIR
-/// from its PI-pinned row-0 columns and exposes it at claim lane
-/// [`NOTE_SPEND_MINT_HASH_PI`]; the `mintV3` descriptor-emit of the same felt is the
-/// named VK-gated seam.
-pub fn note_spend_mint_hash_felt(
-    nullifier: BabyBear,
-    merkle_root: BabyBear,
-    value_lo: BabyBear,
-    asset_type: BabyBear,
-    destination_federation: BabyBear,
-    value_hi: BabyBear,
-) -> BabyBear {
-    let m1 = hash_fact(
-        nullifier,
-        &[merkle_root, destination_federation, asset_type],
-    );
-    hash_fact(m1, &[value_lo, value_hi])
-}
+/// executor's `verify_note_spend_dsl_full` call binds. The leaf recomputes this
+/// IN-AIR from its PI-pinned row-0 columns and exposes it at claim lane
+/// [`NOTE_SPEND_MINT_HASH_PI`]; the deployed `mintV3` row publishes the SAME
+/// felt (the executor-derived `VmEffect::BridgeMint.mint_hash`) at its
+/// mint-hash PI slot.
+pub use dregg_circuit::dsl::note_spending::note_spend_mint_hash_felt;
 
 /// Row-gating selector for a chip site.
 #[derive(Clone, Copy)]
