@@ -117,9 +117,11 @@ standing; flag it as the standing crumb.
 ### 1e. What this UNBLOCKS
 
 Carriers may now anchor their teeth to FAITHFUL 8-felt committed forms (the six roots)
-instead of the 31-bit folds the memory's §BLOCKER forbade. Concretely: FACTORY's child_vk
-(SHALLOW) can now weld to a faithful committed felt instead of the col-69 31-bit fold that
-"was a single linear equation = fake"; the DEEPEST carriers can anchor to faithful roots.
+instead of the 31-bit folds the memory's §BLOCKER forbade. `[@wave-1 7c4257824]`
+CORRECTION for factory: the six ROOTS are faithful, but the cells_root LEAF CONTENTS are
+still 1-felt `(key, key)` and col 69 holds the owner-key fold, NOT child_vk — so factory
+gained no usable anchor from this epoch (see §3 factory row + §5 item 9); the DEEPEST
+carriers can anchor to faithful roots.
 The MerkleHash/node8 primitive the campaign forged (arity-16 node8, `CHIP_RATE 16` —
 `[@bae447985]` the const lives in `circuit/src/descriptor_ir2.rs:279`) is the
 shared hash gadget the hash-heavy carrier family (custom-routing, dsl, membership path,
@@ -246,7 +248,7 @@ design: the campaign refutes its own green first, then repairs.
 | carrier | depth | authority committed today? | third edge (in-AIR teeth==committed) | Step-1 remaining |
 |---|---|---|---|---|
 | **custom** | — | yes (PI 46–49 deployed) | **PRESENT** | none — buff-in-production. (NB: the deeper per-turn `proofBind True→boundAt` in-AIR flip + 4→8-felt lift is a SEPARATE deployed VK epoch, still pending — `docs/reference/lean-circuit.md` §Custom, `CustomApex.lean`. The recursion-tree fold is what's buffed.) |
-| **factory** | SHALLOW | child_vk committed (rotated PI 38, welded to cells_root) but single ~31-bit felt | absent | expose faithful 8-felt child_vk + in-AIR fold8 gate to the FAITHFUL committed felt (NOW possible post-VK-epoch). Do NOT anchor at 31-bit. Derivation (child_vk=Poseidon2(factory_vk‖params)) = named off-AIR. |
+| **factory** | SHALLOW→**BLOCKED-ON-WIDENING** | `[@wave-1 7c4257824]` CORRECTED: child_vk is NOT committed at HEAD in ANY in-AIR form, at any width. Rotated PI 38 carries the born cell's vm KEY = `hash_to_bb(owner_pubkey)` under the MISNOMER `child_vk_derived` (`turn/src/executor/effect_vm_bridge.rs:131-139`); the actual installed authority `effective_vk` (`apply.rs:2376-2421`) never reaches the VmEffect at all; the cells leaf is `(key, key)` with 1-felt contents (`trace_rotated.rs:1167-1189` — 8-felt-ness is in the DIGESTS only, `HeapLeaf` = 1-felt addr + 1-felt value); params carry no vk limbs (factory uses param0/param1 only, both ~31-bit `fold_bytes32_to_bb` folds); the born cell's state block is off-row, bound only via byte-domain blake3 `effects_hash` (Lean `EffectVmEmitCreateCellFromFactory.lean` §RT) | absent | the third edge CANNOT be built until a faithful committed carrier of child_vk EXISTS — a WIDENING epoch first (§5 item 9: three routes + blast radii). Do NOT expose unanchored witness-column teeth (6 free param cols exist — using them = the vacuous connect). Derivation (child_vk=Poseidon2(factory_vk‖params)) = named off-AIR. |
 | **dsl** | SHALLOW | Witnessed{Dfa} `⇒ None` — commits NOTHING (`mod.rs:462`) | absent | Layer A (non-VK): split out of None → tag-20 manifest entry riding caveatCommit→PI 45. Layer B (VK): `dfaPiExposure`. Reduces to Poseidon2-CR. |
 | **membership** | SHALLOW | authorized_root committed as pointer (PI 45) + value (fields_root); sender as OWNER_CELL_ID | absent | expose (sender_leaf, authorized_root) PIs. RECOMMENDED: redefine membership leaf domain to 4-felt OWNER_CELL_ID → sender tie is a plain connect (no in-AIR Poseidon2 re-derive). Merkle path stays off-AIR (named). |
 | **hatchery-invariant** | SHALLOW | invariant_digest === child_program_vk === FACTORY's child_vk | absent | RIDES factory's CreateCellFromFactory leg + one extra connect to a re-proved contract-attestation leaf. SHARES factory teeth. |
@@ -335,6 +337,32 @@ carrier touches only {its bare + wide + welded descriptor} + 3 registry fingerpr
 8. `[@bae447985]` **The whole-image 8-felt STATE_COMMIT digest flag-day** (§1d
    precision) — component roots are faithful; the final 1-felt digest squeeze → 8-felt
    chip-chain cut (`commitment.rs:1219`) is the deliberately-gated separate epoch.
+9. `[@wave-1 7c4257824]` **The factory child_vk COMMITTED-CARRIER widening** — the
+   BANG-WAVE-1 stop-condition finding (supersedes this map's earlier "child_vk committed
+   at PI 38" claim, which was WRONG at HEAD — see the corrected §3 factory row). The
+   faithful anchor does not exist and every widening route is bigger than a per-carrier
+   wave; pick ONE deliberately:
+   - **(a) geometry widening (the true perms/vk pattern):** +8 pre-limbs carrying the
+     born child's vk8 on factory rows (`NUM_PRE_LIMBS` 88→96, `B_SPAN` bump = v12
+     geometry) — ALL rotated descriptors' VKs move, keystone re-grounds, registry-wide
+     regen + Rfix re-pins. The v10→v11-scale campaign; the semantically cleanest anchor
+     (the turn's own commitment binds what it birthed).
+   - **(b) cells-leaf preimage extension:** factory's inserted leaf digests
+     `chip_absorb(addr ‖ value ‖ child_vk[0..8))` instead of arity-2 — descriptor
+     blast radius is factory-family-only, BUT forks the shared `HeapLeaf`/`digest8`
+     (heap_root.rs, all accumulators) + needs a mixed-arity Lean sorted-insert keystone
+     variant + is a cells_root record-SEMANTICS decision (factory-born records bind
+     their birth authority; createCell-born stay `(key,key)`) — an ember-decision.
+   - **(c) caveat-manifest tag entry:** child_vk8 as a tagged manifest entry riding the
+     in-AIR chip-chained caveatCommit→PI 45 — the same pattern as dsl Layer A (wave 3);
+     needs manifest-capacity + verifier-twin grounding; converges the factory lane onto
+     the dsl/membership lane.
+   ALSO under this item: the `child_vk_derived` MISNOMER (`effect_vm_bridge.rs:138`
+   lowers `hash_to_bb(owner_pubkey)`) — whichever route lands must either rename the
+   field to what it is (the born cell's vm key) or make it carry what it says; today it
+   is neither, and the kernel key is `CellId::derive_raw(owner_pubkey, token_id)` (owner
+   AND token) while the vm key folds owner_pubkey alone — a second named divergence.
+   hatchery-invariant (which RIDES the factory teeth) is blocked behind the same item.
 
 ---
 
@@ -349,12 +377,18 @@ template, de-risks the socket before the DEEPEST binds):
    `carrier_witness`, keeping custom as the first variant so nothing regresses.
    Fail-closed `None` off-wire (re-exec rung, never fabricated).
 
-2. **FACTORY third edge first** (SHALLOW, and hatchery-invariant rides it): expose the
-   faithful **8-felt** child_vk + an in-AIR fold8 gate tying it to the FAITHFUL committed
-   felt (now possible post-VK-epoch). ⚑ **Anti-vacuity guidance: DO NOT anchor the tooth
-   at the 31-bit fold** (memory's "factory fold8 gate I almost shipped anchored child_vk to
-   the 31-bit col69 = a single linear equation = fake"). The third edge must gate against
-   the faithful committed form. Add the deployed-path fold tooth (twin of
+2. **FACTORY third edge first** (SHALLOW, and hatchery-invariant rides it):
+   `[@wave-1 7c4257824]` **ATTEMPTED AND STOPPED — the stop-condition fired.** The
+   instruction below assumed child_vk is committed 1-felt at PI 38; grounding showed it
+   is not committed AT ALL (corrected §3 factory row) and every widening route is a
+   bigger epoch (§5 item 9). The factory third edge is BLOCKED behind that widening
+   decision; do not re-run this step until one of the §5-item-9 routes is chosen and
+   landed. The rest of the guidance stands for THAT day: expose the faithful **8-felt**
+   child_vk teeth gated against the landed committed carrier. ⚑ **Anti-vacuity guidance:
+   DO NOT anchor the tooth at the 31-bit fold** (memory's "factory fold8 gate I almost
+   shipped anchored child_vk to the 31-bit col69 = a single linear equation = fake") —
+   and equally DO NOT expose unanchored witness-column teeth. The third edge must gate
+   against the faithful committed form. Add the deployed-path fold tooth (twin of
    `custom_binding_deployed_tooth.rs`) — honest-accept + forged→UNSAT through
    `prove_turn_chain_recursive → verify_turn_chain_recursive` — and flip
    `FactoryBackingAttack.lean → FactoryBindingFromFold.lean`.
