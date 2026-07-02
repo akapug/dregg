@@ -195,8 +195,22 @@ fn attenuate_fixture() -> (
     let mut ledger = dregg_cell::Ledger::new();
     ledger.insert_cell(after_cell.clone()).unwrap();
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-    let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-    let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &receipt_log,
+        &Default::default(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &receipt_log,
+        &Default::default(),
+    );
 
     let proj_pre = project_record_kernel_state(&before_cell);
     let proj_post = project_record_kernel_state(&after_cell);
@@ -365,8 +379,22 @@ fn domain2_plain_cap_weld_is_wire_forbidden() {
 
     let mut ledger = dregg_cell::Ledger::new();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &[]);
-    let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &[]);
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &[],
+        &Default::default(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &[],
+        &Default::default(),
+    );
 
     let proj_pre = project_record_kernel_state(&before_cell);
     let proj_post = project_record_kernel_state(&after_cell);

@@ -178,6 +178,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -185,6 +186,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -341,6 +343,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -348,6 +351,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -525,6 +529,7 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -532,6 +537,7 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();

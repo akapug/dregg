@@ -343,6 +343,7 @@ pub fn produce(
     nullifier_root: &[u8; 32],
     commitments_root: &[u8; 32],
     receipt_hashes: &[[u8; 32]],
+    material: &dregg_cell::commitment::RotationCarrierMaterial,
 ) -> RotationWitness {
     let mut pre_limbs = vec![BabyBear::ZERO; NUM_PRE_LIMBS];
     // limb 0: cells_root (turn-level).
@@ -435,6 +436,34 @@ pub fn produce(
         pre_limbs[fields_lanes[i]] = fields8[1 + i];
     }
 
+    // v12 CARRIER-MATERIAL octets (limbs 88..=111) — the SAT foundation. Byte-identical to the
+    // cell-side twin `commitment::compute_rotated_pre_limbs`; the trace generator (`fill_block`)
+    // carries them by copy. Absent material → ZERO (the vector is ZERO-initialised).
+    use dregg_circuit::effect_vm::trace_rotated::{
+        B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
+    };
+    // 88..=95: child_vk8 iff the block's effect is `CreateCellFromFactory`, else ZERO.
+    if let Some(child_vk) = material.child_vk {
+        let v = dregg_circuit::effect_vm::bytes32_to_8_limbs(&child_vk);
+        for i in 0..8 {
+            pre_limbs[B_CHILD_VK_OCTET + i] = v[i];
+        }
+    }
+    // 96..=103: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
+    if let Some(contract_hash) = material.contract_hash {
+        let v = dregg_circuit::effect_vm::bytes32_to_8_limbs(&contract_hash);
+        for i in 0..8 {
+            pre_limbs[B_CONTRACT_HASH_OCTET + i] = v[i];
+        }
+    }
+    // 104..=111: pubkey8 UNCONDITIONALLY — the operated cell's owner key, the 30-bit canonical form
+    // that matches the executor's KEY_COMMIT teeth (byte-identical to the cell twin's
+    // `canonical_to_babybear_pi`).
+    let pk8 = dregg_commit::typed::canonical_32_to_felts_8(cell.public_key());
+    for i in 0..8 {
+        pre_limbs[B_PUBKEY_OCTET + i] = pk8[i];
+    }
+
     let iroot_val = iroot(receipt_hashes);
     let state_commit = wire_commit(&pre_limbs, iroot_val);
     // The per-cell asset class (the fold of the cell's committed token_id) the
@@ -500,6 +529,9 @@ pub fn mint_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -507,6 +539,9 @@ pub fn mint_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
@@ -567,6 +602,9 @@ pub fn mint_custom_wide_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -574,6 +612,9 @@ pub fn mint_custom_wide_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).map_err(|e| {
@@ -633,6 +674,9 @@ pub fn mint_welded_umem_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -640,6 +684,9 @@ pub fn mint_welded_umem_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
@@ -715,6 +762,9 @@ pub fn mint_welded_wide_umem_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -722,6 +772,9 @@ pub fn mint_welded_wide_umem_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
@@ -794,6 +847,9 @@ pub fn mint_welded_wide_umem_cap_write_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -801,6 +857,9 @@ pub fn mint_welded_wide_umem_cap_write_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
@@ -878,6 +937,9 @@ pub fn mint_welded_wide_umem_multidomain_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = produce(
         after_cell,
@@ -885,6 +947,9 @@ pub fn mint_welded_wide_umem_multidomain_rotated_participant_leg(
         nullifier_root,
         commitments_root,
         receipt_log,
+        // recipe path: no effective_vk / contract_hash in hand (the faithful capture is at the
+        // executor's `effective_vk` / hatchery site) — ZERO carrier material.
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let bridge = |w: &RotationWitness| -> Result<RotatedBlockWitness, String> {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot)
@@ -1355,6 +1420,7 @@ mod tests {
             nullifier_root: [0u8; 32],
             commitments_root: [0u8; 32],
             iroot: BabyBear::new(7),
+            material: Default::default(),
         };
         // a permission flip — folded into the authority-digest limb (r23), a HIGH limb.
         let mut flipped = base.clone();

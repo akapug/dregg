@@ -163,6 +163,7 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -170,6 +171,7 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();

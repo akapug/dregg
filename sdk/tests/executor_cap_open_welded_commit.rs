@@ -260,6 +260,7 @@ fn make_welded_cap_open_attenuate() -> (
         &[0u8; 32],
         &[0u8; 32],
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -267,6 +268,7 @@ fn make_welded_cap_open_attenuate() -> (
         &[0u8; 32],
         &[0u8; 32],
         &receipt_log,
+        &Default::default(),
     );
 
     let proj_pre = project_record_kernel_state(&before_cell);

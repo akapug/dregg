@@ -6508,6 +6508,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -6515,6 +6516,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         // PROVE the cap-open leg (self-verifies internally) and re-verify it through the live
@@ -6652,6 +6654,7 @@ mod tests {
             &[0u8; 32],
             &[0u8; 32],
             &[[3u8; 32], [4u8; 32]],
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -6659,6 +6662,7 @@ mod tests {
             &[0u8; 32],
             &[0u8; 32],
             &[[3u8; 32], [4u8; 32]],
+            &Default::default(),
         );
 
         let route = cap_open_route_for_run(&effects).expect("attenuate is a wired cap-open route");
@@ -6976,6 +6980,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -6983,6 +6988,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         // The revoke route: key `revokeCapOpenVmDescriptor2R24`, eff_bit EFFECT_DELEGATION_OPS,
@@ -7235,8 +7241,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
         let before = RotatedBlockWitness::new(before_w.pre_limbs.clone(), before_w.iroot).unwrap();
         let after = RotatedBlockWitness::new(after_w.pre_limbs.clone(), after_w.iroot).unwrap();
         let caveat = empty_caveat_manifest();
@@ -7451,8 +7471,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         let route = cap_open_route_for_run(&effects).expect("attenuate is a wired cap-open route");
         let effective_key = cap_open_effective_key(&route, &cap);
@@ -7675,6 +7709,7 @@ mod tests {
             &[0u8; 32],
             &[0u8; 32],
             &receipt_log,
+            &Default::default(),
         );
         let after_w = dregg_turn::rotation_witness::produce(
             &after_cell,
@@ -7682,6 +7717,7 @@ mod tests {
             &[0u8; 32],
             &[0u8; 32],
             &receipt_log,
+            &Default::default(),
         );
         let before = dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness::new(
             before_w.pre_limbs.clone(),
@@ -7859,8 +7895,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         // THE RE-POINT IS ON: the revoke route now carries `write: Some((...WriteCapOpen..., Remove))`,
         // and `cap_open_effective_key` selects the WRITE wrapper because the c-list is non-empty.
@@ -7983,8 +8033,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         let route = cap_open_route_for_run(&effects).expect("revoke is a wired cap-open route");
 
@@ -8168,8 +8232,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         // THE RE-POINT IS ON: the revokeCapability route now carries `write: Some((...WriteCapOpen..., Remove))`.
         let route =
@@ -8403,8 +8481,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         // THE RE-POINT IS ON: the refreshDelegation route now carries `write: Some((...WriteCapOpen..., Update))`.
         let route =
@@ -8688,8 +8780,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         let route = cap_open_route_for_run(&effects).expect("a wired cap-open route");
         let effective_key = cap_open_effective_key(&route, &cap);
@@ -8882,8 +8988,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         let route = cap_open_route_for_run(&effects).expect("a wired cap-open route");
         let effective_key = cap_open_effective_key(&route, &cap);
@@ -9171,8 +9291,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         // The grant routes through `grantCapCapOpenVmDescriptor2R24` (authority-only `.key`) PLUS the
         // INSERT write wrapper (`delegateWriteCapOpen`, DELEGATION_OPS). With a genuine c-list the
@@ -9803,8 +9937,22 @@ mod tests {
         let mut ledger = dregg_cell::Ledger::new();
         ledger.insert_cell(after_cell.clone()).unwrap();
         let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32], [4u8; 32]];
-        let before_w = rw::produce(&before_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
-        let after_w = rw::produce(&after_cell, &ledger, &[0u8; 32], &[0u8; 32], &receipt_log);
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &[0u8; 32],
+            &[0u8; 32],
+            &receipt_log,
+            &Default::default(),
+        );
 
         // GENUINE PROVE + LIGHT-CLIENT VERIFY (UNAMBIGUOUS — no catch_unwind): the genuine post-cap-root
         // (sorted INSERT) AND the `granted ⊑ held` submask both hold; a passing proof binds them on the wire.
@@ -9906,6 +10054,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -9913,6 +10062,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         // THE FORGE: prove the cap effect under the PLAIN base descriptor (no cap witness threaded,
@@ -10884,6 +11034,7 @@ mod tests {
                     &[0u8; 32],
                     &[0u8; 32],
                     &[[0x11u8; 32]],
+                    &Default::default(),
                 ),
                 after: dregg_turn::rotation_witness::produce(
                     &dregg_cell::Cell::with_balance([0xE0; 32], [0u8; 32], 1234),
@@ -10891,6 +11042,7 @@ mod tests {
                     &[0u8; 32],
                     &[0u8; 32],
                     &[[0x11u8; 32]],
+                    &Default::default(),
                 ),
                 caveat: dregg_circuit::effect_vm::trace_rotated::empty_caveat_manifest(),
             };
@@ -10930,6 +11082,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             receipt_hashes,
+            &Default::default(),
         );
         let after_w = rw::produce(
             after_cell,
@@ -10937,6 +11090,7 @@ mod tests {
             &nullifier_root,
             &commitments_root,
             receipt_hashes,
+            &Default::default(),
         );
         // The caveat is recomputed per-run inside the chained prover; the manifest stored here is
         // only the single-leg default and is unused by `prove_cohort_run_chain`.

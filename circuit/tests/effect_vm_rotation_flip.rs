@@ -175,6 +175,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -182,6 +183,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // -- (G1) THE LIVE GENERATOR drives the rotated trace + PIs (NOT hand-built). --
@@ -281,6 +283,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     let cell_v9 = compute_canonical_state_commitment_v9_felt(&before_cell, &v9_ctx);
     assert_eq!(
@@ -441,6 +444,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -448,6 +452,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // The burn carries no in-circuit caveat operand → the EMPTY manifest (cohort default).
@@ -468,6 +473,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     let cell_v9 = compute_canonical_state_commitment_v9_felt(&before_cell, &v9_ctx);
     assert_eq!(
@@ -560,6 +566,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -567,6 +574,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -792,6 +800,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -799,6 +808,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -981,6 +991,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -988,6 +999,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         let caveat = empty_caveat_manifest();
@@ -1097,6 +1109,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -1104,6 +1117,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         let caveat = empty_caveat_manifest();
@@ -1236,6 +1250,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -1243,6 +1258,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -1375,6 +1391,7 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
         nullifier_root,
         commitments_root,
         iroot,
+        material: Default::default(),
     };
 
     // -- (a) THE INDEPENDENT RE-FOLD == the deployed PUBLISHED commitment. --
@@ -1723,6 +1740,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -1730,6 +1748,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = transfer_caveat_manifest();
@@ -1770,6 +1789,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     let cell_v9_before = compute_canonical_state_commitment_v9_felt(&before_cell, &v9_ctx_before);
     assert_eq!(
@@ -1795,6 +1815,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         nullifier_root,
         commitments_root,
         iroot: after_w.iroot,
+        material: Default::default(),
     };
     let cell_v9_after = compute_canonical_state_commitment_v9_felt(&after_cell, &v9_ctx_after);
     assert_eq!(
@@ -1880,6 +1901,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -1887,6 +1909,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // The lifecycle limb genuinely MOVED Live -> Sealed (the forgery the pin forbids would freeze it).
@@ -2036,6 +2059,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -2043,6 +2067,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = transfer_caveat_manifest();
@@ -2244,6 +2269,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -2251,6 +2277,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
             &nullifier_root,
             &commitments_root,
             &receipt_log,
+            &Default::default(),
         );
 
         // The pinned limb genuinely MOVED pre→post (the forgery the pin forbids would freeze it):
@@ -2470,6 +2497,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -2477,6 +2505,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -2604,6 +2633,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -2611,6 +2641,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let caveat = transfer_caveat_manifest();
 
@@ -2792,6 +2823,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -2799,6 +2831,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let caveat = transfer_caveat_manifest();
 
@@ -2862,6 +2895,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w_b = rw::produce(
         &after_cell_b,
@@ -2869,6 +2903,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let (_trace_b, dpis_b) = generate_rotated_transfer_wide(
         &st,

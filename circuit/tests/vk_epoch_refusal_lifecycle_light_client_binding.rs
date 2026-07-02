@@ -231,6 +231,7 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &honest_after,
@@ -238,6 +239,7 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     assert_ne!(
@@ -394,6 +396,7 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &honest_after,
@@ -401,6 +404,7 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     assert_ne!(
@@ -559,6 +563,7 @@ fn wide_fields_write_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &honest_after,
@@ -566,6 +571,7 @@ fn wide_fields_write_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let caveat = empty_caveat_manifest();
     let before_leaves = dregg_cell::state::fields_root_leaves(&before_cell.state.fields_map);

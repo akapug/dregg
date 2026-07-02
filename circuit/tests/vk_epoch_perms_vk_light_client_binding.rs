@@ -189,6 +189,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -196,6 +197,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // The perms-digest limb GENUINELY MOVED (anti-vacuity: the bound limb distinguishes A from B).
@@ -268,6 +270,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     // The forged commit absorbs B' (a self-consistent post-cell that differs ONLY in perms).
     assert_ne!(
@@ -368,6 +371,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -375,6 +379,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     assert_ne!(
@@ -427,6 +432,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     assert_ne!(
         forged_after_w.state_commit, after_w.state_commit,

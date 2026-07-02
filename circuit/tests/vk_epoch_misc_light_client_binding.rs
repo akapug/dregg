@@ -205,6 +205,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -212,6 +213,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();
@@ -254,6 +256,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     assert_ne!(
         forged_after_w.state_commit, after_w.state_commit,
@@ -406,6 +409,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -413,6 +417,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
 
     // ANTI-VACUITY: the mode genuinely moves the committed mode + authority-digest limbs and the
@@ -492,6 +497,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     assert_ne!(
         forged_after_w.pre_limbs[B_AUTHORITY_DIGEST], after_w.pre_limbs[B_AUTHORITY_DIGEST],
@@ -616,6 +622,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -623,6 +630,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         &NULL_ROOT,
         &COMMIT_ROOT,
         &receipt_log(),
+        &Default::default(),
     );
     let caveat = empty_caveat_manifest();
     let slot = 4u32;

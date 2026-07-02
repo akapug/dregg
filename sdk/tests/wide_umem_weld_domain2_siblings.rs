@@ -257,6 +257,7 @@ fn mint_wire_commit(
         &[0u8; 32],
         &[0u8; 32],
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -264,6 +265,7 @@ fn mint_wire_commit(
         &[0u8; 32],
         &[0u8; 32],
         &receipt_log,
+        &Default::default(),
     );
 
     let proj_pre = project_record_kernel_state(&before_cell);

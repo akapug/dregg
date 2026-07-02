@@ -132,6 +132,7 @@ fn wide_supply_mint_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -139,6 +140,7 @@ fn wide_supply_mint_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let (desc, trace, dpis, map_heaps, _mb) = generate_rotated_effect_vm_descriptor_and_trace_wide(
@@ -198,6 +200,7 @@ fn wide_heap_write_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -205,6 +208,7 @@ fn wide_heap_write_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // The splice's in-row recomputed address `chip-absorb(coll, key)`; seed the BEFORE heap with a leaf
@@ -285,6 +289,7 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -292,6 +297,7 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // The cap-membership witness: a transfer-conferring leaf (two-axis facet × tier) whose `target` IS

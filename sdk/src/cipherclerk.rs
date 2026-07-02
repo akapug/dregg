@@ -5429,6 +5429,7 @@ impl AgentCipherclerk {
             &nullifier_root,
             &commitments_root,
             &receipt_hashes,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &after_cell,
@@ -5436,6 +5437,7 @@ impl AgentCipherclerk {
             &nullifier_root,
             &commitments_root,
             &receipt_hashes,
+            &Default::default(),
         );
 
         // THE REFUSAL `fields_root` WRITE-GATE CONTEXT (the light-client close's deployed prover wire).
@@ -5761,6 +5763,7 @@ impl AgentCipherclerk {
                     nullifier_root,
                     commitments_root,
                     iroot: before_w.iroot,
+                    material: Default::default(),
                 },
             );
             debug_assert_eq!(
@@ -6024,6 +6027,7 @@ impl AgentCipherclerk {
             &nullifier_root,
             &commitments_root,
             &receipt_hashes,
+            &Default::default(),
         );
         let after_w = rw::produce(
             &full_after_cell,
@@ -6031,6 +6035,7 @@ impl AgentCipherclerk {
             &nullifier_root,
             &commitments_root,
             &receipt_hashes,
+            &Default::default(),
         );
 
         // The circuit pre-state, seeded from the turn's before-cell (the SAME seed the single-leg

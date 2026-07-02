@@ -719,6 +719,27 @@ pub struct V9RotationContext {
     pub commitments_root: [u8; 32],
     /// The receipt-index MMR root, absorbed LAST.
     pub iroot: dregg_circuit::field::BabyBear,
+    /// The v12 per-effect CARRIER MATERIAL for the child-vk / contract-hash octets (limbs 88..103).
+    /// `None`/`None` (the `Default`) on a generic turn — only a `CreateCellFromFactory` turn carries
+    /// `child_vk` (the executor's captured `effective_vk`) and a hatchery mint carries
+    /// `contract_hash`. The pubkey octet (104..111) is cell-derived and needs no material.
+    pub material: RotationCarrierMaterial,
+}
+
+/// The v12 per-effect CARRIER MATERIAL that fills the child-vk (88..95) and contract-hash (96..103)
+/// rotated carrier octets. Both are `Option`s so a generic turn defaults to ZERO-filled octets; the
+/// executor captures the REAL material at its source (`apply.rs`'s `effective_vk` for factory turns,
+/// `HpresProof::Attested{contract_hash}` for hatchery mints) and threads it in so the honest turn's
+/// `state_commit` carries it — the SAT foundation the STEP-3 `CarrierOctetGates` welds ride.
+///
+/// The pubkey octet (104..111) is DERIVED from the cell (`cell.public_key()`), so it needs no
+/// material threading — every producer fills it unconditionally.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RotationCarrierMaterial {
+    /// The REAL installed child VK on a `CreateCellFromFactory` turn (the executor's `effective_vk`).
+    pub child_vk: Option<[u8; 32]>,
+    /// The `HpresProof::Attested` content hash on a hatchery mint.
+    pub contract_hash: Option<[u8; 32]>,
 }
 
 /// The canonical scalar limb of a cell's lifecycle: the discriminant folded with its payload
@@ -1070,6 +1091,35 @@ pub fn compute_rotated_pre_limbs(
     let fields_lanes = [65usize, 66, 19, 20, 21, 22, 23];
     for i in 0..7 {
         pre[fields_lanes[i]] = fields8[1 + i];
+    }
+
+    // v12 CARRIER-MATERIAL octets (limbs 88..=111) — the SAT foundation for the four octet carriers.
+    // Byte-identical to the producer twin `dregg_turn::rotation_witness::produce`; the trace generator
+    // (`fill_block`) carries them by copy. Absent material → ZERO (the vector is ZERO-initialised).
+    use dregg_circuit::effect_vm::trace_rotated::{
+        B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET,
+    };
+    // 88..=95: child_vk8 iff the block's effect is `CreateCellFromFactory` (material carries the
+    // REAL installed child VK), else ZERO.
+    if let Some(child_vk) = ctx.material.child_vk {
+        let v = dregg_circuit::effect_vm::bytes32_to_8_limbs(&child_vk);
+        for i in 0..8 {
+            pre[B_CHILD_VK_OCTET + i] = v[i];
+        }
+    }
+    // 96..=103: contract_hash8 iff the block's effect is the hatchery mint, else ZERO.
+    if let Some(contract_hash) = ctx.material.contract_hash {
+        let v = dregg_circuit::effect_vm::bytes32_to_8_limbs(&contract_hash);
+        for i in 0..8 {
+            pre[B_CONTRACT_HASH_OCTET + i] = v[i];
+        }
+    }
+    // 104..=111: pubkey8 UNCONDITIONALLY — the operated cell's owner key in the 30-bit canonical form
+    // (`canonical_to_babybear_pi`, byte-identical to `dregg_commit::typed::canonical_32_to_felts_8`),
+    // the EXACT match to the executor's KEY_COMMIT teeth.
+    let pk8 = canonical_to_babybear_pi(cell.public_key());
+    for i in 0..8 {
+        pre[B_PUBKEY_OCTET + i] = BabyBear::new(pk8[i]);
     }
     pre
 }
@@ -2064,6 +2114,7 @@ mod tests {
             nullifier_root: [0u8; 32],
             commitments_root: [0u8; 32],
             iroot: BabyBear::new(iroot),
+            material: Default::default(),
         }
     }
 

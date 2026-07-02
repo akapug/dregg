@@ -130,6 +130,7 @@ fn carrier_inputs(due_block: u32) -> (CellState, RotatedBlockWitness, RotatedBlo
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     (initial_state, bridge(&w), bridge(&w))
 }

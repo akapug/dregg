@@ -80,6 +80,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -87,6 +88,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
 
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
@@ -140,12 +142,14 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     let after_ctx = V9RotationContext {
         cells_root: after_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
         iroot: after_w.iroot,
+        material: Default::default(),
     };
     let trusted_before8 = cell_chip_commit8(&before_cell, &before_ctx);
     let trusted_after8 = cell_chip_commit8(&after_cell, &after_ctx);
@@ -190,6 +194,7 @@ fn wide_sovereign_forged_anchor_is_rejected() {
         &nullifier_root,
         &commitments_root,
         &[],
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -197,6 +202,7 @@ fn wide_sovereign_forged_anchor_is_rejected() {
         &nullifier_root,
         &commitments_root,
         &[],
+        &Default::default(),
     );
 
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
@@ -323,6 +329,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -330,6 +337,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
 
     // The refusal moves the AFTER record-digest / fields_root limbs (the genuine write — non-vacuity).
@@ -406,12 +414,14 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     let after_ctx = V9RotationContext {
         cells_root: after_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
         iroot: after_w.iroot,
+        material: Default::default(),
     };
     let trusted_before8 = cell_chip_commit8(&before_cell, &before_ctx);
     let trusted_after8 = cell_chip_commit8(&after_cell, &after_ctx);
@@ -528,6 +538,7 @@ fn flagday_transfer_witness(
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -535,6 +546,7 @@ fn flagday_transfer_witness(
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
 
     let rotation = RotationTurnWitness {

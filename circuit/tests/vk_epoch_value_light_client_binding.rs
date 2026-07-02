@@ -305,6 +305,7 @@ fn build_honest(before_bal: i64, effect: Effect, after_cell: Cell, expect_name: 
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -312,6 +313,7 @@ fn build_honest(before_bal: i64, effect: Effect, after_cell: Cell, expect_name: 
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let caveat = empty_caveat_manifest();

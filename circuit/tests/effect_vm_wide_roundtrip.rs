@@ -175,6 +175,7 @@ fn assert_executor_anchor(
         nullifier_root,
         commitments_root,
         iroot: before_w.iroot,
+        material: Default::default(),
     };
     // The cell's OWN pre_limbs (computed from its RecordKernelState + turn ctx, NOT the producer's
     // — the independent path the executor takes), through the CHIP-FAITHFUL wide chain.
@@ -277,6 +278,7 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -284,6 +286,7 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let (trace, dpis) = generate_rotated_transfer_shape_wide(
@@ -344,6 +347,7 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -351,6 +355,7 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     // slot 3 (the overflow-memory address 0..7), previous value 0 at that address.
@@ -415,6 +420,7 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -422,6 +428,7 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let before_nullifiers = vec![
@@ -476,6 +483,7 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -483,6 +491,7 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let before_commitments = vec![
@@ -535,6 +544,7 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -542,6 +552,7 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
 
     let before_accounts = vec![
@@ -592,6 +603,7 @@ fn birth_witnesses() -> (
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -599,6 +611,7 @@ fn birth_witnesses() -> (
         &nullifier_root,
         &commitments_root,
         &receipt_log,
+        &Default::default(),
     );
     let before_accounts = vec![
         HeapLeaf {

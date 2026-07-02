@@ -162,6 +162,20 @@ pub const B_MODE: usize = 35;
 /// In-block offset of the committed `fields_root` digest limb (limb 36 — the WAVE-3 flag-day overflow
 /// map root, the setFieldDyn / refusal weld limb). Lean `EffectVmEmitRotationV3.B_FIELDS_ROOT`.
 pub const B_FIELDS_ROOT: usize = 36;
+/// In-block base of the v12 CHILD-VK carrier octet (limbs 88..=95). Carries
+/// `bytes32_to_8_limbs(child_vk)` on a `CreateCellFromFactory` block (the REAL installed child VK
+/// captured at the executor's `effective_vk` site), ZERO on every other block. The SAT-foundation
+/// fill; the STEP-3 `CarrierOctetGates` weld binds it to the factory's installed VK.
+pub const B_CHILD_VK_OCTET: usize = 88;
+/// In-block base of the v12 CONTRACT-HASH carrier octet (limbs 96..=103). Carries
+/// `bytes32_to_8_limbs(contract_hash)` on a hatchery-mint block (the `HpresProof::Attested`
+/// content hash), ZERO otherwise.
+pub const B_CONTRACT_HASH_OCTET: usize = 96;
+/// In-block base of the v12 PUBKEY carrier octet (limbs 104..=111). Carries
+/// `canonical_32_to_felts_8(cell.public_key())` UNCONDITIONALLY (every turn — the operated cell's
+/// owner key, the 30-bit canonical form that matches the executor's KEY_COMMIT teeth). This is the
+/// only octet non-zero on a generic turn, so it moves every turn's `state_commit`.
+pub const B_PUBKEY_OCTET: usize = 104;
 /// In-block offset of the iroot carrier (absorbed last, limb 112 in the v12 carrier-material geometry).
 pub const B_IROOT: usize = 112;
 /// In-block offset of the `state_commit` carrier (the chain's final digest, carrier index B_SPAN-1-37).
@@ -1977,6 +1991,14 @@ fn new_cell_key_param_col(lead: Option<&Effect>) -> Option<usize> {
 /// CARRIED limbs (cells_root, the map roots, lifecycle, epoch, committed_height, iroot,
 /// r11..r23) come from the per-turn producer witness `w` (turn-invariant). Then the genuine
 /// chained `wireCommitR` digests are computed on this row's own limbs.
+///
+/// The v12 CARRIER-MATERIAL octets (`B_CHILD_VK_OCTET` 88..=95 · `B_CONTRACT_HASH_OCTET` 96..=103 ·
+/// `B_PUBKEY_OCTET` 104..=111) ride the `pre_limbs` COPY above — the trace is the third producer of
+/// them, and it fills them byte-identically to the two flat-record twins
+/// (`rotation_witness::produce` / `commitment::compute_rotated_pre_limbs`) BY COPY: the octets are
+/// filled in `pre_limbs` at their source, so this generator carries them into the block and the
+/// chained `state_commit` absorbs them (they are `< NUM_PRE_LIMBS`). The 3-way agreement is the
+/// `effect_vm_rotation_flip` differential.
 ///
 /// The chained-absorption logic is byte-identical to `descriptor_ir2::rotation_probe_trace_r`,
 /// the producer's `wire_commit`, and the Lean `wireCommitR`.

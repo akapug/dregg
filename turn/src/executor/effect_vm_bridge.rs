@@ -133,6 +133,14 @@ pub fn convert_turn_effects_to_vm(
                     owner_pubkey,
                     ..
                 } => {
+                    // `child_vk_derived` is a MISNOMER: it carries `hash_to_bb(owner_pubkey)` — the
+                    // owner-pubkey-folded NEW-CELL KEY column the accounts grow-gate + PI[38] pin
+                    // reference (the factory's `param1 = CHILD_VK_DERIVED` new-cell key), a SINGLE
+                    // ~31-bit felt. It is NOT the faithful child VK: the REAL installed child VK is
+                    // the executor's `effective_vk` (`apply.rs`), which now flows FAITHFULLY (all 8
+                    // felts) via the v12 child-vk CARRIER OCTET (limbs 88..=95) captured on the
+                    // rotated block — not through this 1-felt owner-pubkey projection. This column
+                    // stays as the accounts-set new-cell key; the faithful VK binding is the octet.
                     vm_effects.push(VmEffect::CreateCellFromFactory {
                         factory_vk: hash_to_bb(factory_vk),
                         child_vk_derived: hash_to_bb(owner_pubkey),
