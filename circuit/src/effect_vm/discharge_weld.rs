@@ -35,12 +35,16 @@
 //! `p − 2^DUE_BITS ≥ 2^DUE_BITS`, i.e. `2^{DUE_BITS+1} ≤ p`, i.e. `DUE_BITS ≤ 29`. `28` is taken
 //! (a ~268M-block honest window) for comfortable margin (`p − 2^28 ≈ 1.74e9 ≫ 2^28`).
 //!
-//! ## STAGED — built BESIDE the deployed, NOT flipped, NOT yet in a committed VK
+//! ## STAGED — descriptor EMITTED (Lean) + producer EXPORTED; the registry row rides the big-bang
 //!
-//! These constraints are NOT emitted into a committed welded descriptor / VK and NOT routed onto any
-//! live path. They are the constraint polynomials a staged `settleDischargeSatVmDescriptor` would
-//! carry; emitting that descriptor, committing its VK, and flipping the live path through it is the
-//! remaining gated VK epoch (the later descriptor pass owns the emit/registry/drift).
+//! The welded descriptor IS now emitted from Lean (`Dregg2.Deos.DischargeSatDescriptor.
+//! dischargeSatVmDescriptor2R24`, v12 offsets through the canonical constants; exercise fixture
+//! `circuit/tests/fixtures/discharge-sat-v3-staged.json`) and the producer aux-fill is EXPORTED
+//! below ([`fill_discharge_aux`]); `gentian_discharge_vault_prove.rs` proves real STARKs against it
+//! (honest settle proves+verifies; early / cursor-not-advanced / wrong-amount REFUSED). What still
+//! rides the ONE big-bang descriptor regen: the `rotation-v3-staged-registry.tsv` row + the
+//! drift-gate FP pin, the declared-tag-18 routing tie, the PI/manifest-param binding of
+//! `PERIOD_COL`/`AMOUNT_COL`/`CLOCK_COL`, and the welded VK commit + live admission.
 
 use super::carrier_floor_weld::caveat_tag_col;
 use super::columns::rotation::caveat as cav;

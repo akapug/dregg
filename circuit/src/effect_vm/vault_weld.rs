@@ -37,11 +37,17 @@
 //!  (`d = 0`) is UNSAT; combined with the operand range check (`d, m ∈ [0, 2^30)`, which fails closed on
 //!  a field-wrapped NEGATIVE delta) this gives genuine `d, m ∈ [1, 2^30)` strict positivity.
 //!
-//! ## STAGED — built BESIDE the deployed, NOT flipped, NOT yet in a committed VK
+//! ## STAGED — descriptor EMITTED (Lean) + producer EXPORTED; the registry row rides the big-bang
 //!
-//! These constraints are NOT emitted into a committed welded descriptor / VK and NOT routed onto any
-//! live path; the later descriptor pass owns the emit/registry/drift. Until then a pure light client
-//! does not yet witness vault satisfaction in production.
+//! The welded descriptor IS now emitted from Lean (`Dregg2.Deos.VaultSatDescriptor.
+//! vaultSatVmDescriptor2R24`, v12 offsets through the canonical constants; exercise fixture
+//! `circuit/tests/fixtures/vault-sat-v3-staged.json`) and the producer aux-fill is EXPORTED below
+//! ([`fill_vault_aux`]); `gentian_discharge_vault_prove.rs` proves real STARKs against it (honest
+//! fair-mint deposit proves+verifies; zero-mint inflation / over-mint dilution / no-deposit
+//! REFUSED). What still rides the ONE big-bang descriptor regen: the
+//! `rotation-v3-staged-registry.tsv` row + the drift-gate FP pin, the declared-tag-19 routing tie,
+//! and the welded VK commit + live admission. Until the flip a pure light client does not yet
+//! witness vault satisfaction in production.
 
 use super::carrier_floor_weld::caveat_tag_col;
 use super::columns::rotation::caveat as cav;
