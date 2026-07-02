@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "2e90f779ff319f71849aa120fba10cacbc610ce6257d020e5add8fec8d2023e0";
+    "3b431474a6aad03bd0e451f9b341dbbffdbde34e9a87a700090874eebe2983b3";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -1204,7 +1204,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "32b92637ccc529dd6977559fe59afcb10e7d90cff3fd6d70e13631000a910920";
+    "7eacaa9b88c626f7858ea94d6b78ab88658910f181a854c00933340d0338e842";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1230,7 +1230,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "78ef11440f9eddf9b998f5cac1d1df3a6e4b9c942a4dc513f9385bf80eba0eed";
+    "a89f43fd9e561d537acb1658923dc94c8458820b5252fc241c1ff3bc10bb684f";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2244,8 +2244,7 @@ mod tests {
             // the quad here so the per-effect branches below keep their pre-rc expectations;
             // fail-closed on membership (a cohort member MISSING the rc pins, or a tail member
             // GROWING them, both fail).
-            let rc_col =
-                V1_WIDTH + 2 * B_SPAN + crate::effect_vm::trace_rotated::C_DFA_RC_OFF;
+            let rc_col = V1_WIDTH + 2 * B_SPAN + crate::effect_vm::trace_rotated::C_DFA_RC_OFF;
             let (rc_pins, nullifier_pins): (Vec<(usize, usize)>, Vec<(usize, usize)>) =
                 nullifier_pins
                     .into_iter()
@@ -2345,8 +2344,7 @@ mod tests {
                     base_pi_count, 63,
                     "factory: rotated 46-PI + the new-cell-key slot + the 16 carrier-octet pins"
                 );
-                let mut expected =
-                    vec![(PARAM_BASE + param::CHILD_VK_DERIVED, pi_base + 4)];
+                let mut expected = vec![(PARAM_BASE + param::CHILD_VK_DERIVED, pi_base + 4)];
                 for i in 0..8 {
                     expected.push((after_base + B_CHILD_VK_OCTET + i, pi_base + 5 + i));
                 }
