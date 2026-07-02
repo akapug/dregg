@@ -31,6 +31,7 @@ pub mod joint_turn_recursive;
 pub mod lean_lookup_air;
 pub mod membership_leaf_adapter;
 pub mod merge_pool;
+pub mod note_spend_leaf_adapter;
 pub mod plonky3_recursion_impl;
 pub mod recursive_witness_bundle;
 pub mod shielded;
