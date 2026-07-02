@@ -669,11 +669,11 @@ theorem closedLogExtract_makeSovereign_closed
             hash minit mfin maddrs t pre post actor cell)) :
     ClosedLogExtract Slive LH hash Rfix 38 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- rc-EMIT: peel the uniform `withDfaRcPins` wrap (4 additive `.piBinding` pins) to the base.
+  -- v12 big-bang: `Rfix 38 = makeSovereignV3Deployed` (the key-commit member — rc + the 4 teeth PI
+  -- pins + the in-AIR KEY_COMMIT chip gate). FULL PEEL (gate → teeth pins → rc) to the base.
   have hsat' : Satisfied2 hash Dregg2.Circuit.Emit.EffectVmEmitRotationV3.makeSovereignV3
       minit mfin maddrs t :=
-    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withDfaRcPins hash
-      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.makeSovereignV3 hsat
+    Dregg2.Circuit.Emit.CarrierComposed.satisfied2_of_makeSovereignV3Deployed hash hsat
   obtain ⟨actor, cell, permOut, hside, hpub, logNeeds⟩ := readout minit mfin maddrs t pubLogPost pre post hsat
   exact makeSovereign_closedLog_sat hash hside hsat' pre post actor cell pc pubLogPre pubLogPost hdecLog hpub.down logNeeds
 

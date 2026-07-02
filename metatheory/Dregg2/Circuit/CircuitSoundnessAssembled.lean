@@ -93,6 +93,7 @@ import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.Emit.AccumulatorInsertEmit
 import Dregg2.Circuit.Emit.EffectVmEmitNoteSpend
 import Dregg2.Circuit.Emit.EffectVmEmitNoteCreate
+import Dregg2.Circuit.Emit.CarrierComposed
 
 namespace Dregg2.Circuit.CircuitSoundnessAssembled
 
@@ -123,8 +124,9 @@ point at the `v3Registry` entry their effect family rides (introduce for delegat
 revoke, …), so `vkOfRegistry Rfix` ranges over exactly the deployed descriptor set; `heapWrite` (tag 56)
 NOW has its OWN LIVE Class-A descriptor `heapWriteV3` (the heap-root recompute), at `v3RegistryHeap` tail
 position 45 — `Rfix 56 = heapWriteV3` (GAP-2 close). Off-range tags fall back to transfer, so `Rfix` is
-total. The key correspondence — `Rfix 0 = transferV3` — is preserved by `rfl` (position `0`), so
-`closedLogExtract_transfer` lands at its genuine descriptor. -/
+total. The key correspondence — `Rfix 0 = transferV3Membership` (the v12 big-bang teeth-exposing
+transfer, tail position 60; peels to `transferV3`) — holds by `rfl`, so
+`closedLogExtract_transfer` lands at its genuine descriptor via the peel. -/
 
 /-- The transfer descriptor (the fallback for off-range tags; tag `0`). -/
 def transferDescr : EffectVmDescriptor2 :=
@@ -249,9 +251,33 @@ def v3RegistryHeap : List (String × EffectVmDescriptor2) :=
            Dregg2.Circuit.Emit.EffectVmEmitRotationV3.NEW_CELL_KEY_PARAM_COL
            none
            Dregg2.Circuit.Emit.EffectVmEmitRotationV3.createCellV3
-           "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen")]
+           "dregg-effectvm-createCell-v1-rot24-v3-insert-heapopen"),
+        -- The DEPLOYED SOVEREIGN member (position 59, the v12 big-bang): the record-pin base + the
+        -- cohort rc wrap + the 4 KEY_COMMIT teeth PI pins (58..61, the annotated
+        -- `SOVEREIGN_KEY_COMMIT_PI_LO`) + the in-AIR KEY_COMMIT chip-compress gate — the THIRD EDGE:
+        -- a satisfying `Satisfied2` FORCES each published teeth PI == `canonical_32_to_felts_4` of
+        -- the COMMITTED `B_PUBKEY8` octet (`CarrierComposed.makeSovereignV3Deployed_publishes_key_
+        -- commit`), so the fold-bound owner-key claim is welded to the committed authority, not a
+        -- free column. `actionTagToPos 38` re-keys HERE so `Rfix 38` quantifies over the descriptor
+        -- a light client actually verifies; the cohort's `makeSovereignVmDescriptor2R24` [pos 21]
+        -- stays for the bare slot. The full peel (`satisfied2_of_makeSovereignV3Deployed`: gate →
+        -- teeth pins → rc) lifts every base-level rung. Positions 0..58 are UNCHANGED, so every
+        -- prior `Rfix_*` rfl-correspondence is preserved.
+        ("makeSovereignDeployedVmDescriptor2R24",
+         Dregg2.Circuit.Emit.CarrierComposed.makeSovereignV3Deployed),
+        -- The DEPLOYED MEMBERSHIP-TEETH TRANSFER member (position 60, the v12 big-bang): the cohort
+        -- transfer + rc + the two `(sender_leaf, authorized_root)` teeth PI pins (50..51, the
+        -- annotated `MEMBERSHIP_CLAIM_PI_LO`). HONEST SCOPE (CarrierComposed §5, the fail-open law
+        -- named): the PI EXPOSURE leg only — the FOLD edge (the chain prover's Membership arm)
+        -- binds the published tuple to a re-proven `dsl::membership` STARK; the in-AIR sender/root
+        -- welds stay the named `MembershipAuthRootEdge` seams. `actionTagToPos 0` re-keys HERE so
+        -- `Rfix 0` quantifies over the teeth-exposing transfer a light client actually verifies;
+        -- the peel (`satisfied2_of_transferV3Membership`) lifts the transfer rung. Positions 0..59
+        -- are UNCHANGED, so every prior `Rfix_*` rfl-correspondence is preserved.
+        ("transferMembershipVmDescriptor2R24",
+         Dregg2.Circuit.Emit.CarrierComposed.transferV3Membership)]
 
-theorem v3RegistryHeap_length : v3RegistryHeap.length = 59 := by
+theorem v3RegistryHeap_length : v3RegistryHeap.length = 61 := by
   simp [v3RegistryHeap, Dregg2.Circuit.Emit.CapOpenEmit.v3RegistryCapOpen_length]
 
 /-- The heapWrite member lands at tail position 45 — `Rfix 56` resolves THERE. -/
@@ -266,7 +292,11 @@ declaration order (which is NOT `actionTag` order). Effects with no own rotated 
 `v3Registry` entry their family rides; `heapWrite` (tag 56) and off-range tags map past the registry
 (→ the transfer fallback in `Rfix`). -/
 def actionTagToPos : EffectIdx → Nat
-  | 0  => 0    -- transfer        → transferVmDescriptor2R24
+  | 0  => 60   -- transfer        → transferMembershipVmDescriptor2R24 (the v12 big-bang DEPLOYED
+               --                   membership-teeth transfer, `v3RegistryHeap` tail pos 60: the rc
+               --                   cohort transfer + the 2 `(sender_leaf, authorized_root)` teeth
+               --                   PI pins at 50..51 (`MEMBERSHIP_CLAIM_PI_LO`). The bare cohort
+               --                   transfer [pos 0] stays for the live prover route + the fallback.)
   | 1  => 46   -- delegate        → delegateWriteCapOpenVmDescriptor2R24 (FAN-OUT WRITE: the cap-open
                --                   authority appendix over the MOVING `grantCapWriteV3` base, so the
                --                   DEPLOYED descriptor FORCES the cap-tree insert write — guarantee A —
@@ -330,7 +360,12 @@ def actionTagToPos : EffectIdx → Nat
                --                   INSERT host `effAccumInsertV3 commitmentsRootGroupCol …`, `v3RegistryHeap`
                --                   tail pos 57; `Rfix 28` FORCES the faithful 8-felt commitments-insert. The
                --                   bare `noteCreateV3` [pos 4] stays for the live prover route.)
-  | 38 => 21   -- makeSovereign   → makeSovereignVmDescriptor2R24
+  | 38 => 59   -- makeSovereign   → makeSovereignDeployedVmDescriptor2R24 (the v12 big-bang DEPLOYED
+               --                   sovereign, `v3RegistryHeap` tail pos 59: rc + the 4 KEY_COMMIT
+               --                   teeth PI pins at 58..61 (`SOVEREIGN_KEY_COMMIT_PI_LO`) + the
+               --                   in-AIR KEY_COMMIT chip-compress gate welding the published teeth
+               --                   to the committed `B_PUBKEY8` octet. The cohort member [pos 21]
+               --                   stays for the bare slot.)
   | 39 => 55   -- refusal          → refusalFieldsWriteVmDescriptor2R24 (OPTION I: the DEPLOYED after-spine
                --                   fields-write `effFieldsWriteV3 refusalFieldsWriteV3 …`, `v3RegistryHeap`
                --                   tail pos 55; `Rfix 39` FORCES the faithful 8-felt fields-write over the
@@ -356,7 +391,7 @@ def actionTagToPos : EffectIdx → Nat
 LIST POSITION `e` — declaration order ≠ tag order). The lookup goes through `actionTagToPos`; tags with
 no own descriptor (heapWrite, off-range) fall back to the transfer descriptor, so `Rfix` is total. This
 lands each per-effect rung (stated at `actionTag`) at its GENUINE descriptor — in particular
-`Rfix 0 = transferV3` by `rfl`. -/
+`Rfix 0 = transferV3Membership` (the v12 teeth-exposing transfer) by `rfl`. -/
 def Rfix : Registry := fun e =>
   match v3RegistryHeap[actionTagToPos e]? with
   | some (_, d) => d
@@ -367,17 +402,30 @@ def Rfix : Registry := fun e =>
 (`match` is total). -/
 theorem Rfix_total (e : EffectIdx) : ∃ d : EffectVmDescriptor2, Rfix e = d := ⟨Rfix e, rfl⟩
 
-/-- **`Rfix_transfer` — the key correspondence: the transfer tag lands at the transfer descriptor,
-rc-EMIT-wrapped.** `actionTag (.balanceA …) = 0` and `actionTagToPos 0 = 0`, and the DEPLOYED
-`v3Registry`'s position-`0` entry is the transfer descriptor `v3OfFrozen transferVmDescriptor =
-transferV3` wrapped through the uniform DSL rc-EMIT (`withDfaRcPins` — the whole 36-member cohort
-publishes the 4-felt `Witnessed{Dfa}` route-commitment carrier as its LAST 4 member PIs). The wrap
-only APPENDS `.piBinding` pins (`satisfied2_of_withDfaRcPins` peels it), so `Rfix 0` IS the genuine
-transfer descriptor UP TO the additive rc pins — the rung at the transfer tag discharges its
+/-- **`Rfix_transfer` — the key correspondence: the transfer tag lands at the DEPLOYED
+membership-teeth transfer.** `actionTag (.balanceA …) = 0` and `actionTagToPos 0 = 60`, and
+`v3RegistryHeap`'s position-60 entry is `CarrierComposed.transferV3Membership` — the transfer
+descriptor `v3OfFrozen transferVmDescriptor = transferV3` wrapped through the uniform DSL rc-EMIT
+(`withDfaRcPins`, 4 additive pins) THEN the two membership teeth PI pins (`withMembershipTeethPins`,
+the `(sender_leaf, authorized_root)` claim slots 50..51 — `MEMBERSHIP_CLAIM_PI_LO`, the v12
+big-bang exposure). Both wraps only APPEND `.piBinding` pins
+(`CarrierComposed.satisfied2_of_transferV3Membership` peels the chain), so `Rfix 0` IS the genuine
+transfer descriptor UP TO the additive pins — the rung at the transfer tag discharges its
 refinement about the right descriptor via the peel. -/
 theorem Rfix_transfer :
-    Rfix 0 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
-      Dregg2.Circuit.RotatedKernelRefinement.transferV3 := rfl
+    Rfix 0 = Dregg2.Circuit.Emit.CarrierComposed.transferV3Membership := rfl
+
+/-- **`Rfix_makeSovereign` — the v12 big-bang: makeSovereign (tag 38) ranges over its OWN DEPLOYED
+key-commit descriptor.** `actionTagToPos 38 = 59` and `v3RegistryHeap`'s position-59 entry is
+`CarrierComposed.makeSovereignV3Deployed` — the record-pin base + rc + the 4 KEY_COMMIT teeth PI
+pins (58..61, `SOVEREIGN_KEY_COMMIT_PI_LO`) + the in-AIR KEY_COMMIT chip-compress gate. So the
+apex's `StarkSound hash Rfix` quantifies over the descriptor a light client actually verifies —
+whose `Satisfied2` FORCES each published teeth PI == `canonical_32_to_felts_4` of the COMMITTED
+BEFORE `B_PUBKEY8` octet (`CarrierComposed.makeSovereignV3Deployed_publishes_key_commit`): the
+fold-bound owner-key claim is welded in-AIR to the committed authority, never a free column. The
+cohort's bare member [pos 21] stays for the live prover route + the bare slot. -/
+theorem Rfix_makeSovereign :
+    Rfix 38 = Dregg2.Circuit.Emit.CarrierComposed.makeSovereignV3Deployed := rfl
 
 /-- **`Rfix_heapWrite` — GAP-2 + OPTION I: heapWrite (tag 56) ranges over its OWN DEPLOYED descriptor.**
 `actionTagToPos 56 = 45` and `v3RegistryHeap`'s position-45 entry is now the DEPLOYED after-spine
@@ -757,6 +805,7 @@ theorem revokeCapabilityArm_nonvacuous (fcaps : FacetCaps) (provided : AuthProvi
 
 #assert_axioms Rfix_total
 #assert_axioms Rfix_transfer
+#assert_axioms Rfix_makeSovereign
 #assert_axioms Rfix_heapWrite
 #assert_axioms Rfix_noteSpendInsert
 #assert_axioms Rfix_noteCreateInsert

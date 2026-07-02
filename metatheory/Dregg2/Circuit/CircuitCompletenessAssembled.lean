@@ -294,14 +294,15 @@ fixed effect's leaf `Spec` antecedent. (Stated inline per field for the leaf-spe
 carries; the realizability shape is identical across all 21.) -/
 structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
     (compressN : List ℤ → ℤ) : Type 1 where
-  /-- transfer (tag 0) — at the DEPLOYED rc-EMIT-wrapped transfer descriptor (`withDfaRcPins
-  transferV3` = `Rfix 0`): the honest prover also publishes the 4 rc TAIL PIs. -/
+  /-- transfer (tag 0) — at the DEPLOYED membership-teeth transfer descriptor
+  (`CarrierComposed.transferV3Membership` = `Rfix 0`, the v12 big-bang): the honest prover also
+  publishes the 4 rc TAIL PIs AND the two `(sender_leaf, authorized_root)` teeth PIs (50..51 —
+  additive `.piBinding` pins over appended teeth columns, filled by the producer). -/
   bwTransfer : ∀ (pre post : RecChainedState) (tr : Turn) (a : AssetId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.BalanceMovement.BalanceMovementSpec pre tr a post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
       Satisfied2 hash
-        (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
-          Dregg2.Circuit.RotatedKernelRefinement.transferV3) minit mfin maddrs t ∧
+        Dregg2.Circuit.Emit.CarrierComposed.transferV3Membership minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- burn (tag 4) — at the DEPLOYED rc-EMIT-wrapped burn descriptor (`withDfaRcPins burnV3`
   = `Rfix 4`). -/
@@ -497,6 +498,9 @@ theorem descriptorComplete_transfer
   descriptorComplete_of_satFloor _ hash (Rfix 0) (kstepAll 0) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨tr, a, hspec⟩ := dispatchArm_transfer pre post hstep
+    -- v12 big-bang: route the goal to the deployed teeth-exposing member (`Rfix 0 =
+    -- transferV3Membership`), the descriptor `bwTransfer` publishes at.
+    rw [Dregg2.Circuit.CircuitSoundnessAssembled.Rfix_transfer]
     exact bw.bwTransfer pre post tr a turn hspec
 
 /-- burn (tag 4). -/

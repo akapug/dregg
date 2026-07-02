@@ -1635,7 +1635,8 @@ theorem lightclient_unfoolable_closed
 /-! ### §C.1 — `ClosedLogExtract` is NON-VACUOUS: the transfer slot is dischargeable from the §B rung.
 
 `ClosedLogExtract` is not a free assertion: each slot is exactly what its §B `*_closedLog` rung produces
-from the witnessed encode. We demonstrate on the transfer slot (`Rfix 0 = transferV3` definitionally):
+from the witnessed encode. We demonstrate on the transfer slot (`Rfix 0 = transferV3Membership`
+definitionally — the v12 teeth-exposing transfer, peeling to `transferV3`):
 given the per-effect circuit extraction `Satisfied2 transferV3 → (RotTableSide ∧ rotatedEncodes-minus-log
 ∧ published-receipt)` — the genuine `WitnessDecodes`-class residual the ledger-root commitment cannot
 certify, the CIRCUIT supplied by `StarkSound` — `transfer_closedLog` discharges `ClosedLogExtract … 0`.
@@ -1671,14 +1672,14 @@ theorem closedLogExtract_transfer
     ClosedLogExtract
       (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest) LH hash Rfix 0 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- `Rfix 0` is `withDfaRcPins transferV3` definitionally (registry position 0, rc-EMIT-wrapped:
-  -- the uniform DSL rc wrap appends only 4 `.piBinding` pins). PEEL the wrap
-  -- (`satisfied2_of_withDfaRcPins`) down to the base `transferV3` so the base-level
-  -- `transfer_closedLog` rung lifts to the DEPLOYED rc-pinned descriptor the apex quantifies over.
+  -- v12 big-bang: `Rfix 0` is `transferV3Membership` definitionally (the teeth-exposing transfer —
+  -- rc + the two membership teeth PI pins at 50..51, `v3RegistryHeap` tail pos 60; both wraps
+  -- append only `.piBinding` pins). FULL PEEL (`satisfied2_of_transferV3Membership`: teeth → rc)
+  -- down to the base `transferV3` so the base-level `transfer_closedLog` rung lifts to the
+  -- DEPLOYED teeth-pinned descriptor the apex quantifies over.
   have hsat' : Dregg2.Circuit.DescriptorIR2.Satisfied2 hash
       Dregg2.Circuit.RotatedKernelRefinement.transferV3 minit mfin maddrs t :=
-    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withDfaRcPins hash
-      Dregg2.Circuit.RotatedKernelRefinement.transferV3 hsat
+    Dregg2.Circuit.Emit.CarrierComposed.satisfied2_of_transferV3Membership hash hsat
   obtain ⟨tr, a, permOut, hside, hpub, logNeeds⟩ := extract minit mfin maddrs t pubLogPost pre post hsat'
   exact transfer_closedLog hash hside hsat' pre post tr a pc pubLogPre pubLogPost hdecLog
     hpub.down logNeeds
