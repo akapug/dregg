@@ -4268,13 +4268,14 @@ async fn execute_finalized_turn(
                                 }
                                 _ => None,
                             };
-                            // cap-WRITE light-client axis: thread the actor's FULL pre-state c-list
-                            // (the cap-tree write witness) so a write-bearing cap effect (e.g.
-                            // RevokeDelegation) proves the post-cap-root on the wire. Empty when the
-                            // before-cell is unavailable (the authority-only route still proves).
-                            let clist_leaves = full_turn_pre_cell
+                            // cap-WRITE light-client axis: thread the actor's FULL pre-state cap-tree
+                            // write witness bundle (the arity-2 leaf-set + the 7-field c-list +
+                            // tombstones) so a write-bearing cap effect (RevokeDelegation REMOVE /
+                            // delegate-family INSERT) proves the post-cap-root on the wire. Empty when
+                            // the before-cell is unavailable (the authority-only route still proves).
+                            let cap_trees = full_turn_pre_cell
                                 .as_ref()
-                                .map(crate::turn_proving::cap_write_clist_leaves)
+                                .map(crate::turn_proving::cap_write_tree_witness)
                                 .unwrap_or_default();
                             crate::turn_proving::prove_and_verify_finalized_turn_capability(
                                 &signed_turn.turn.agent,
@@ -4288,7 +4289,7 @@ async fn execute_finalized_turn(
                                 spent_nullifier,
                                 &full_turn_previously_spent,
                                 rotation,
-                                clist_leaves,
+                                cap_trees,
                                 // VK EPOCH (umem flip): the DOMAIN-2 welded producer is ARMED. When the
                                 // actor's GENUINE before→after record-kernel projection diff is a
                                 // NON-EMPTY single-domain CAPS change, mint the WIDE+UMEM welded cap-open
@@ -4354,7 +4355,7 @@ async fn execute_finalized_turn(
                                 // BEARER path: the cap-tree write witness is the DELEGATOR's c-list
                                 // (not the actor's) — the bearer write wrapper is the named fan-out
                                 // residual; the authority-only route proves until it lands.
-                                Vec::new(),
+                                Default::default(),
                                 // VK EPOCH (umem flip): DOMAIN-2 welded producer ARMED on the bearer arm
                                 // too — built from the ACTOR's genuine before→after projection diff (the
                                 // producer fails closed to `None` ⇒ bare for any non-single-caps diff).

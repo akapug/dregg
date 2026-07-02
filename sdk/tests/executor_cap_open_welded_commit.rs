@@ -224,6 +224,8 @@ fn make_welded_cap_open_attenuate() -> (
         siblings: open.siblings.to_vec(),
         directions: open.directions.to_vec(),
         clist_leaves,
+        cap_leaves: Vec::new(),
+        cap_tombstones: Vec::new(),
     };
 
     // The producer's circuit pre-state — derived from the before-cell EXACTLY as the executor

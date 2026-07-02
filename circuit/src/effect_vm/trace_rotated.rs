@@ -3083,6 +3083,130 @@ pub fn generate_rotated_cap_attenuate_after_spine_wide(
     Ok(append_wide_carriers(trace, base_pis, host_width))
 }
 
+/// **The CAP-TREE INSERT/REMOVE after-spine OVERRIDE** — the shared column work of the INSERT-shaped
+/// (`effCapInsertV3`: delegate / introduce / delegateAtten) and REMOVE-shaped (`effCapRemoveV3`:
+/// revokeDelegation) keystone deploys. The cap-open READ appendix was already laid by
+/// [`widen_to_cap_open`] from the SHAPE-matched witness (INSERT: the spliced leaf's membership in the
+/// REBUILT AFTER tree, `cap_root.rs::CanonicalCapTree::insert_witness`; REMOVE: the removed leaf's
+/// membership in BEFORE, whose zero-fold is `remove_witness`). This helper:
+///   * overrides the BEFORE/AFTER rotated-block cap-root 8-felt GROUPS with the genuine
+///     `CanonicalCapTree` roots — so the keystone's root welds (INSERT: read `capRoot` == AFTER group;
+///     REMOVE: read `capRoot` == BEFORE group) hold, and the wide carriers re-absorb the full 8-felt
+///     write (never the lane-0 squeeze);
+///   * fills the cap-write param columns (`CAP_KEY @ 71`, `HELD_MASK @ 72`, `KEEP_MASK @ 73`,
+///     `ANCHOR_KEY @ 74`, `ANCHOR_MASK @ 75`) so the surviving base legs (delegateAtten's
+///     `granted ⊑ held` submask lookup over cols 73/72) are well-defined — NO map-op, NO map heap
+///     (the arity-2 scalar pair is DROPPED from the Lean bases);
+///   * recomputes the two rotated block commits (the overridden 8-felt groups now bind).
+///
+/// The trace stays at `CAP_OPEN_WIDTH` (the keystone wraps add NO columns beyond the cap-open
+/// appendix); the caller appends the wide carriers ([`append_wide_carriers_cap_open`]) for the wide leg.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_rotated_cap_write_after_spine(
+    trace: &mut [Vec<BabyBear>],
+    before_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    after_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    cap_key: BabyBear,
+    held_mask: BabyBear,
+    keep_mask: BabyBear,
+    anchor_key: BabyBear,
+    anchor_mask: BabyBear,
+) -> Result<(), String> {
+    use super::columns::PARAM_BASE;
+    if trace.is_empty() {
+        return Err("cap insert/remove after-spine: empty trace".into());
+    }
+    if trace[0].len() != CAP_OPEN_WIDTH {
+        return Err(format!(
+            "cap insert/remove after-spine: trace width {} != CAP_OPEN_WIDTH {CAP_OPEN_WIDTH} \
+             (widen_to_cap_open first)",
+            trace[0].len()
+        ));
+    }
+    let cap_key_col = PARAM_BASE + 3; // 71 (the fresh inserted key / the removed key)
+    let held_mask_col = PARAM_BASE + 4; // 72 (the held/read value — submask RHS)
+    let keep_mask_col = PARAM_BASE + 5; // 73 (the conferred/narrowed value — submask LHS)
+    let anchor_key_col = PARAM_BASE + 6; // 74 (the held-authority anchor key)
+    let anchor_value_col = PARAM_BASE + 7; // 75 (the anchor's committed value)
+    for row in trace.iter_mut() {
+        for lane in 0..CAP_OPEN_DIGEST_W {
+            row[cap_root_group_col(BEFORE_BASE, lane)] = before_root8[lane];
+            row[cap_root_group_col(AFTER_BASE, lane)] = after_root8[lane];
+        }
+        row[cap_key_col] = cap_key;
+        row[held_mask_col] = held_mask;
+        row[keep_mask_col] = keep_mask;
+        row[anchor_key_col] = anchor_key;
+        row[anchor_value_col] = anchor_mask;
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+    Ok(())
+}
+
+/// **THE CAP-TREE INSERT AFTER-SPINE producer (`delegate`/`introduce`/`delegateAttenWriteCapOpen…R24`
+/// wide members).** The insert twin of [`generate_rotated_cap_attenuate_after_spine_wide`]: given a
+/// `CAP_OPEN_WIDTH`-wide cap-open trace whose READ appendix opened the SPLICED (conferred) `CapLeaf`
+/// against the REBUILT AFTER cap-root8 (the `CanonicalCapTree::insert_witness` after-membership path —
+/// [`widen_to_cap_open`] with the spliced witness), this forces the faithful 8-felt fresh-key INSERT
+/// (`CapInsertEmit.effCapInsertV3_forces_write8`) WITHOUT any arity-2 map-op: the BEFORE group carries
+/// the genuine pre-insert root (witness-carried, folding into the committed rotated state-commit), the
+/// AFTER group the rebuilt post-insert root the read's rootPin + the keystone's AFTER welds bind. Then
+/// appends the generic wide carriers at the descriptor's host width (`CAP_OPEN_WIDTH`). NO map heaps. -/
+#[allow(clippy::too_many_arguments)]
+pub fn generate_rotated_cap_insert_after_spine_wide(
+    trace: &mut Vec<Vec<BabyBear>>,
+    base_pis: Vec<BabyBear>,
+    before_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    after_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    inserted_key: BabyBear,
+    inserted_value: BabyBear,
+    held_mask: BabyBear,
+    anchor_key: BabyBear,
+    anchor_mask: BabyBear,
+) -> Result<Vec<BabyBear>, String> {
+    apply_rotated_cap_write_after_spine(
+        trace,
+        before_root8,
+        after_root8,
+        inserted_key,
+        held_mask,
+        inserted_value,
+        anchor_key,
+        anchor_mask,
+    )?;
+    Ok(append_wide_carriers(trace, base_pis, CAP_OPEN_WIDTH))
+}
+
+/// **THE CAP-TREE REMOVE AFTER-SPINE producer (`revokeDelegationWriteCapOpenVmDescriptor2R24` wide
+/// member).** The remove mirror: given a `CAP_OPEN_WIDTH`-wide cap-open trace whose READ appendix
+/// opened the REMOVED `CapLeaf` against the BEFORE cap-root8 (exactly the consumed-cap membership
+/// witness the revoke route already carries), this forces the faithful 8-felt tombstone REMOVE
+/// (`CapRemoveEmit.effCapRemoveV3_forces_write8`): the BEFORE group carries the membership-opened
+/// pre-remove root the keystone's BEFORE welds bind; the AFTER group the deployed tombstone zero-fold
+/// (`CanonicalCapTree::remove_witness` `new_root`). Then appends the wide carriers at the host width.
+/// NO map heaps. The base's §14.EPOCH bump gate rides the base trace's genuine epoch limbs. -/
+pub fn generate_rotated_cap_remove_after_spine_wide(
+    trace: &mut Vec<Vec<BabyBear>>,
+    base_pis: Vec<BabyBear>,
+    before_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    after_root8: [BabyBear; CAP_OPEN_DIGEST_W],
+    removed_key: BabyBear,
+    held_value: BabyBear,
+) -> Result<Vec<BabyBear>, String> {
+    apply_rotated_cap_write_after_spine(
+        trace,
+        before_root8,
+        after_root8,
+        removed_key,
+        held_value,
+        BabyBear::ZERO, // the tombstone writes no conferred value
+        BabyBear::ZERO,
+        BabyBear::ZERO,
+    )?;
+    Ok(append_wide_carriers(trace, base_pis, CAP_OPEN_WIDTH))
+}
+
 /// Fill the two TURN-IDENTITY columns of the TB (turn-bound) cap-open weld on a single row: the
 /// `actor` felt at `CAP_OPEN_TB_ACTOR_COL` (818) and the `dst` felt at `CAP_OPEN_TB_DST_COL` (819).
 /// (The `src` column — `CAP_OPEN_BASE + 57` = 665 — is the EXISTING cap-open `src` column already

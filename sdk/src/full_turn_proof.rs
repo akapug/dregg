@@ -592,6 +592,20 @@ pub struct CapMembershipWitness {
     /// actor cell's pre-state c-list (`from_consumed_with_clist`); the path-only constructors leave
     /// it empty (the non-write legs do not need it).
     pub clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    /// **(cap INSERT after-spine axis)** The holder cell's FULL 7-field c-list — the LIVE
+    /// [`CapLeaf`]s of the arity-7 `CanonicalCapTree` the INSERT-shaped keystone wrappers
+    /// (`delegate`/`introduce`/`delegateAtten`) rebuild to splice the fresh conferred edge
+    /// (`CanonicalCapTree::insert_witness`: the spliced leaf's AFTER-tree membership path the
+    /// deployed `effCapInsertV3` read opens). The membership path above opens ONE leaf; the sorted
+    /// INSERT reorders siblings, so the WHOLE before leaf-set is needed to rebuild the genuine AFTER
+    /// tree. Empty ⇒ the INSERT write wrappers are not provable (fail closed with a named error —
+    /// no fabricated after-root). The node populates this from the actor cell's pre-state c-list
+    /// (`cap_write_cap_leaves`); the path-only constructors leave it empty.
+    pub cap_leaves: Vec<CapLeaf>,
+    /// The tombstoned (revoked) slot keys of the holder's pre-state c-list — the ghost positions
+    /// `CanonicalCapTree::new_with_tombstones` preserves so the rebuilt BEFORE/AFTER roots match the
+    /// cell-side committed roots byte-for-byte. Empty for a cell that never revoked.
+    pub cap_tombstones: Vec<BabyBear>,
 }
 
 impl CapMembershipWitness {
@@ -606,6 +620,26 @@ impl CapMembershipWitness {
             siblings: w.siblings.iter().map(|s| s.map(BabyBear::new)).collect(),
             directions: w.directions.clone(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
+        }
+    }
+
+    /// Build from the Phase-C executor witness PLUS the full write witnesses: the arity-2 openable
+    /// leaf-set (`clist_leaves`, the map-op tree the non-rewired write wrappers open) AND the FULL
+    /// 7-field c-list + tombstones (the arity-7 `CanonicalCapTree` the INSERT-shaped keystone
+    /// wrappers rebuild — `cap_leaves`/`cap_tombstones`).
+    pub fn from_consumed_with_trees(
+        w: &dregg_turn::ConsumedCapWitness,
+        clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+        cap_leaves: Vec<CapLeaf>,
+        cap_tombstones: Vec<BabyBear>,
+    ) -> Self {
+        Self {
+            clist_leaves,
+            cap_leaves,
+            cap_tombstones,
+            ..Self::from_consumed(w)
         }
     }
 
@@ -2854,14 +2888,44 @@ fn build_effect_vm_cap_open_leg(
     // ATTENUATE cap-WRITE on the AFTER-SPINE path (the arity-7 cap-tree `effCapOpenWriteV3_forces_write8`,
     // the faithful 8-felt in-place UPDATE-AT-KEY), NOT the arity-2 map-op. The map-op was DROPPED from the
     // Lean `attenuateV3` base; the deployed descriptor now forces the write via the after-spine appendix
-    // alone. This is ATTENUATE ONLY (its unique write key + Update op) — delegate/introduce/delegateAtten
-    // (insert) and revokeDelegation (remove) still ride their map-op wrappers (a separate sub-weld).
+    // alone.
     let attenuate_after_spine = cap_write
         .map(|(k, op, _)| {
             k == "attenuateCapOpenEffVmDescriptor2R24"
                 && matches!(
                     op,
                     dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Update
+                )
+        })
+        .unwrap_or(false);
+    // The INSERT-shaped keystone deploy (delegate / introduce / delegateAtten): the deployed
+    // `effCapInsertV3` wrap — the cap-open READ opens the SPLICED (conferred) leaf against the
+    // REBUILT AFTER cap-root over the `CanonicalCapTree::insert_witness` after-membership path
+    // (`CapInsertEmit.effCapInsertV3_forces_write8`). The arity-2 map-ops were DROPPED from the Lean
+    // bases (shape-UNSAT against the arity-7 fresh-key splice), so NO map heap.
+    let insert_after_spine = cap_write
+        .map(|(k, op, _)| {
+            matches!(
+                op,
+                dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Insert
+            ) && matches!(
+                k,
+                "delegateWriteCapOpenVmDescriptor2R24"
+                    | "introduceWriteCapOpenVmDescriptor2R24"
+                    | "delegateAttenWriteCapOpenVmDescriptor2R24"
+            )
+        })
+        .unwrap_or(false);
+    // The REMOVE-shaped keystone deploy (revokeDelegation): the deployed `effCapRemoveV3` wrap — the
+    // cap-open READ opens the REMOVED leaf against BEFORE (the consumed-cap membership witness the
+    // revoke route already carries); the AFTER cap-root group carries the deployed tombstone
+    // zero-fold (`CanonicalCapTree::remove_witness` — `CapRemoveEmit.effCapRemoveV3_forces_write8`).
+    let remove_after_spine = cap_write
+        .map(|(k, op, _)| {
+            k == "revokeDelegationWriteCapOpenVmDescriptor2R24"
+                && matches!(
+                    op,
+                    dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp::Remove
                 )
         })
         .unwrap_or(false);
@@ -2965,9 +3029,10 @@ fn build_effect_vm_cap_open_leg(
     //     mask) — is the inserted leaf. The anchor MUST be present and the fresh key MUST be absent +
     //     distinct (both fail closed; no fabricated post-root).
     let cap_write_heaps: Vec<Vec<dregg_circuit::heap_root::HeapLeaf>> = match cap_write {
-        // ATTENUATE after-spine: NO map-op, NO map heap. The 8-felt UPDATE-AT-KEY is laid AFTER
-        // `widen_to_cap_open` by the after-spine producer (see the widen block below).
-        Some(_) if attenuate_after_spine => Vec::new(),
+        // AFTER-SPINE keystone paths (attenuate UPDATE / delegate·introduce·delegateAtten INSERT /
+        // revokeDelegation REMOVE): NO map-op, NO map heap. The 8-felt cap-tree write is laid AFTER
+        // `widen_to_cap_open` by the shape-matched producer (see the widen block below).
+        Some(_) if attenuate_after_spine || insert_after_spine || remove_after_spine => Vec::new(),
         Some((_, op, _)) => {
             use dregg_circuit::effect_vm::trace_rotated::CapTreeWriteOp;
             let inserted = match op {
@@ -3046,11 +3111,172 @@ fn build_effect_vm_cap_open_leg(
         } else {
             tb_pis
         }
+    } else if insert_after_spine {
+        // THE CAP-TREE INSERT AFTER-SPINE LIFT (delegate / introduce / delegateAtten — the keystone
+        // deploy). The deployed `effCapInsertV3` read opens the SPLICED leaf against the REBUILT
+        // AFTER tree, so the appendix is widened with the SPLICED witness (NOT the anchor's): rebuild
+        // the BEFORE `CanonicalCapTree` from the holder's FULL 7-field c-list, splice the fresh
+        // conferred edge (`insert_witness` — refuses a present/sentinel key, computes the
+        // non-membership bracket + the AFTER membership path), and lay the READ appendix from it.
+        // The anchor's own membership + facet were already validated (`cap_open` above — the
+        // producer-side authority guard); the fresh key's non-membership bracket + the BEFORE root
+        // ride the witness carriers exactly as the Lean keystone consumes them.
+        let (ins_key, ins_value) = cap_insert_payload_for(effects, cap).ok_or_else(|| {
+            SdkError::InvalidWitness(format!(
+                "cap insert after-spine ({effective_key}): could not derive the fresh edge \
+                 (key,value) from the {:?} effect",
+                effects.first()
+            ))
+        })?;
+        if cap.cap_leaves.is_empty() {
+            return Err(SdkError::InvalidWitness(format!(
+                "cap insert after-spine ({effective_key}): the holder's FULL 7-field c-list \
+                 (`cap_leaves`) was not supplied — the sorted INSERT reorders siblings, so the \
+                 genuine AFTER tree cannot be rebuilt from the membership path alone (no fabricated \
+                 after-root; thread `cap_write_cap_leaves`)"
+            )));
+        }
+        let before_tree = dregg_circuit::cap_root::CanonicalCapTree::new_with_tombstones(
+            cap.cap_leaves.clone(),
+            &cap.cap_tombstones,
+            dregg_circuit::cap_root::CAP_TREE_DEPTH,
+        );
+        let before_root8 = before_tree.root();
+        if cap_open.cap_root != before_root8 {
+            return Err(SdkError::InvalidWitness(format!(
+                "cap insert after-spine ({effective_key}): the consumed-cap membership path opens \
+                 against a DIFFERENT root than the supplied 7-field c-list rebuilds — the c-list is \
+                 not the holder's genuine pre-state (no silent forge)"
+            )));
+        }
+        // The SPLICED leaf: the conferred edge at the fresh key. The conferred mask is the effect's
+        // payload value (`cap_entry[1]`/`intro_hash[1]`/`narrower_commitment[1]`); target/tier/expiry/
+        // breadstuff inherit the delegator's held (anchor) leaf — a delegation confers an edge over
+        // the SAME target under the delegator's committed tier.
+        let spliced = dregg_circuit::cap_root::CapLeaf {
+            slot_hash: ins_key,
+            target: cap.leaf.target,
+            auth_tag: cap.leaf.auth_tag,
+            mask_lo: ins_value,
+            mask_hi: BabyBear::ZERO,
+            expiry: cap.leaf.expiry,
+            breadstuff: cap.leaf.breadstuff,
+        };
+        let iw = before_tree.insert_witness(spliced).ok_or_else(|| {
+            SdkError::InvalidWitness(format!(
+                "cap insert after-spine ({effective_key}): insert witness for the fresh key {} \
+                 failed (already present, tombstoned, or sentinel-colliding) — the sorted insert \
+                 refuses (fail closed, no fabricated after-root)",
+                ins_key.as_u32()
+            ))
+        })?;
+        // The spliced-leaf READ witness against the AFTER root. `from_membership_for` fail-closes
+        // when the CONFERRED leaf does not permit the crown facet the deployed descriptor binds
+        // (`effBitGateFor`/`selectedBitGate` on the spliced leaf — the honest-producer contract).
+        let spliced_open = CapOpenWitness::from_membership_for(
+            &spliced,
+            &iw.siblings,
+            &iw.directions,
+            crown_eff_bit,
+        )
+        .map_err(|e| {
+            SdkError::InvalidWitness(format!(
+                "cap insert after-spine ({effective_key}): the spliced (conferred) leaf does not \
+                 satisfy the insert crown: {e}"
+            ))
+        })?;
+        debug_assert_eq!(
+            spliced_open.cap_root, iw.new_root,
+            "the spliced witness recomposes the rebuilt AFTER root"
+        );
+        widen_to_cap_open(&mut trace, &spliced_open).map_err(|e| {
+            SdkError::InvalidWitness(format!("cap insert widen ({effective_key}): {e}"))
+        })?;
+        // The submask legs (delegateAtten): KEEP (col 73) = the conferred mask, HELD (col 72) = the
+        // anchor's held mask felt — `granted ⊑ held` rides the surviving base lookup.
+        let held_for_submask = cap.leaf.mask_lo;
+        if go_wide {
+            dregg_circuit::effect_vm::trace_rotated::generate_rotated_cap_insert_after_spine_wide(
+                &mut trace,
+                dpis,
+                before_root8,
+                iw.new_root,
+                ins_key,
+                ins_value,
+                held_for_submask,
+                cap.leaf.slot_hash,
+                cap.leaf.mask_lo,
+            )
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!(
+                    "cap insert after-spine wide ({effective_key}): {e}"
+                ))
+            })?
+        } else {
+            dregg_circuit::effect_vm::trace_rotated::apply_rotated_cap_write_after_spine(
+                &mut trace,
+                before_root8,
+                iw.new_root,
+                ins_key,
+                held_for_submask,
+                ins_value,
+                cap.leaf.slot_hash,
+                cap.leaf.mask_lo,
+            )
+            .map_err(|e| {
+                SdkError::InvalidWitness(format!("cap insert after-spine ({effective_key}): {e}"))
+            })?;
+            dpis
+        }
     } else {
         widen_to_cap_open(&mut trace, &cap_open).map_err(|e| {
             SdkError::InvalidWitness(format!("cap-open widen ({}): {e}", route.key))
         })?;
-        if attenuate_after_spine {
+        if remove_after_spine {
+            // THE CAP-TREE REMOVE AFTER-SPINE LIFT (revokeDelegation — the keystone deploy). The
+            // deployed `effCapRemoveV3` read opens the REMOVED leaf against BEFORE — exactly the
+            // consumed-cap membership witness already widened above. The AFTER cap-root group is the
+            // deployed tombstone zero-fold over the SAME path (`CanonicalCapTree::remove_witness`
+            // semantics — the revoked position collapses to the ZERO digest; positions do not shift,
+            // so every other capability's witness stays valid).
+            let after_root8 = dregg_circuit::cap_root::recompose_membership(
+                dregg_circuit::cap_root::CAP_ZERO8,
+                &cap.siblings,
+                &cap.directions,
+            );
+            if go_wide {
+                dregg_circuit::effect_vm::trace_rotated::generate_rotated_cap_remove_after_spine_wide(
+                    &mut trace,
+                    dpis,
+                    cap_open.cap_root,
+                    after_root8,
+                    cap.leaf.slot_hash,
+                    cap.leaf.mask_lo,
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!(
+                        "cap remove after-spine wide ({effective_key}): {e}"
+                    ))
+                })?
+            } else {
+                dregg_circuit::effect_vm::trace_rotated::apply_rotated_cap_write_after_spine(
+                    &mut trace,
+                    cap_open.cap_root,
+                    after_root8,
+                    cap.leaf.slot_hash,
+                    cap.leaf.mask_lo,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                )
+                .map_err(|e| {
+                    SdkError::InvalidWitness(format!(
+                        "cap remove after-spine ({effective_key}): {e}"
+                    ))
+                })?;
+                dpis
+            }
+        } else if attenuate_after_spine {
             // THE ATTENUATE AFTER-SPINE WIDE LIFT: lay the arity-7 cap-tree UPDATE-AT-KEY after-spine
             // (`fill_cap_after_spine`) + the genuine BEFORE/AFTER 8-felt cap-root groups + the submask
             // param columns, then the generic wide carriers at `CAP_OPEN_WIDTH + AFTER_SPINE_SPAN`. The
@@ -6198,6 +6424,8 @@ mod tests {
             siblings: open.siblings.to_vec(),
             directions: open.directions.to_vec(),
             clist_leaves,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real AttenuateCapability turn + its rotation producer witnesses (mirrors the circuit
@@ -6272,6 +6500,8 @@ mod tests {
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open_attenuate(
@@ -6345,6 +6575,8 @@ mod tests {
             siblings: open.siblings.to_vec(),
             directions: open.directions.to_vec(),
             clist_leaves,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         let before_balance: u64 = 100_000;
@@ -6480,6 +6712,8 @@ mod tests {
             siblings: open.siblings.to_vec(),
             directions: open.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real cross-vat Transfer turn + its rotation producer witnesses. We reuse the SAME
@@ -6516,6 +6750,8 @@ mod tests {
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open_transfer(
@@ -6659,6 +6895,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real RevokeDelegation turn (nonce-tick state passthrough, attenuate-family base).
@@ -6745,6 +6983,8 @@ mod tests {
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -7568,6 +7808,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real RevokeDelegation turn (nonce-tick passthrough base).
@@ -7748,6 +7990,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: forged_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -7775,6 +8019,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert_eq!(
             cap_open_effective_key(&route, &cap_authority_only),
@@ -7881,6 +8127,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real RevokeCapability turn (the cap-crown remove base; nonce-tick passthrough).
@@ -7957,6 +8205,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: forged_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -7982,6 +8232,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert_eq!(
             cap_open_effective_key(&route, &cap_authority_only),
@@ -8095,6 +8347,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real RefreshDelegation turn (the genuine moving face; nonce-tick passthrough, caps frozen).
@@ -8239,6 +8493,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: forged_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -8264,6 +8520,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert_eq!(
             cap_open_effective_key(&route, &cap_authority_only),
@@ -8374,6 +8632,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         // A real granting turn (nonce-tick passthrough base).
@@ -8460,6 +8720,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: forged_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -8493,6 +8755,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: collide_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -8576,6 +8840,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         let before_balance: u64 = 100_000;
@@ -8952,6 +9218,8 @@ mod tests {
             siblings: built_deleg.siblings.to_vec(),
             directions: built_deleg.directions.to_vec(),
             clist_leaves,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         let effective_key = cap_open_effective_key(&route, &cap);
         assert_eq!(
@@ -8995,6 +9263,8 @@ mod tests {
             siblings: built_deleg.siblings.to_vec(),
             directions: built_deleg.directions.to_vec(),
             clist_leaves: forged_clist,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -9024,6 +9294,8 @@ mod tests {
             siblings: cap.siblings.clone(),
             directions: cap.directions.clone(),
             clist_leaves: cap.clist_leaves.clone(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(
@@ -9072,6 +9344,8 @@ mod tests {
             siblings: built_grant.siblings.to_vec(),
             directions: built_grant.directions.to_vec(),
             clist_leaves: Vec::new(),
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert_eq!(
             cap_open_effective_key(&route, &cap_authority_only),
@@ -9422,6 +9696,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
 
         let effect = VmEffect::GrantCapability {
@@ -9522,6 +9798,8 @@ mod tests {
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
             clist_leaves: clist_forge,
+            cap_leaves: Vec::new(),
+            cap_tombstones: Vec::new(),
         };
         assert!(
             prove_effect_vm_cap_open(

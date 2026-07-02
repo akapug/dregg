@@ -189,6 +189,8 @@ fn broad_cap_witness() -> CapMembershipWitness {
         // post-cap-root host-trusted). The anchor leaf (`slot_hash`) must be PRESENT; a second filler
         // leaf makes the sorted c-list non-trivial. INSERT routes graft a fresh edge derived from the
         // effect (distinct + absent); REMOVE/UPDATE routes touch the anchor in place.
+        cap_leaves: Vec::new(),
+        cap_tombstones: Vec::new(),
         clist_leaves: vec![
             HeapLeaf {
                 addr: chosen[0],

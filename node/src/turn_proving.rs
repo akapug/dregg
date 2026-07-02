@@ -977,7 +977,7 @@ pub fn prove_and_verify_finalized_turn_capability(
     spent_nullifier: Option<&[u8; 32]>,
     previously_spent: &[[u8; 32]],
     rotation: Option<dregg_sdk::RotationTurnWitness>,
-    clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    cap_trees: CapWriteTreeWitness,
     umem_witness: Option<dregg_sdk::UmemWeldWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // BREADSTUFF (actor-held) path: the cap's HOLDER is the actor, so the
@@ -999,7 +999,7 @@ pub fn prove_and_verify_finalized_turn_capability(
         spent_nullifier,
         previously_spent,
         rotation,
-        clist_leaves,
+        cap_trees,
         umem_witness,
     )
 }
@@ -1022,6 +1022,38 @@ pub fn cap_write_clist_leaves(cell: &dregg_cell::Cell) -> Vec<dregg_circuit::hea
             }
         })
         .collect()
+}
+
+/// **(cap-WRITE light-client axis, the INSERT/REMOVE keystone deploy)** The FULL cap-tree write
+/// witness bundle for a cell: the arity-2 openable leaf-set (`clist_leaves` — the map-op tree the
+/// non-rewired write wrappers open), the FULL 7-field LIVE c-list (`cap_leaves` — the arity-7
+/// `CanonicalCapTree` the INSERT-shaped keystone wrappers rebuild to splice a fresh conferred edge),
+/// and the tombstoned slot keys (`cap_tombstones` — the ghost positions the rebuilt roots preserve,
+/// cell-side byte-identity). This is the cell's GENUINE pre-state; the prover threads it so a wrong
+/// post-root is unprovable (no fabricated after-root).
+#[derive(Clone, Debug, Default)]
+pub struct CapWriteTreeWitness {
+    pub clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    pub cap_leaves: Vec<dregg_circuit::cap_root::CapLeaf>,
+    pub cap_tombstones: Vec<BabyBear>,
+}
+
+/// Build the [`CapWriteTreeWitness`] from a cell's genuine pre-state (see
+/// [`cap_write_clist_leaves`] for the arity-2 half).
+pub fn cap_write_tree_witness(cell: &dregg_cell::Cell) -> CapWriteTreeWitness {
+    CapWriteTreeWitness {
+        clist_leaves: cap_write_clist_leaves(cell),
+        cap_leaves: cell
+            .capabilities
+            .iter()
+            .map(dregg_cell::cap_ref_to_leaf)
+            .collect(),
+        cap_tombstones: cell
+            .capabilities
+            .tombstoned_slots()
+            .map(dregg_circuit::cap_root::slot_hash)
+            .collect(),
+    }
 }
 
 /// **THE DOMAIN-2 (CAPS) UMEM WELD WITNESS PRODUCER (the umem-flip's node-side seam).** Build the
@@ -1089,7 +1121,7 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
     spent_nullifier: Option<&[u8; 32]>,
     previously_spent: &[[u8; 32]],
     rotation: Option<dregg_sdk::RotationTurnWitness>,
-    clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    cap_trees: CapWriteTreeWitness,
     umem_witness: Option<dregg_sdk::UmemWeldWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // Defence in depth: the receipt witness must be internally consistent AND
@@ -1253,9 +1285,11 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
         // When non-empty AND the effect routes a write wrapper (e.g. RevokeDelegation → the cap-tree
         // REMOVE), the SDK proves the `…WriteCapOpenVmDescriptor2R24` so the post-cap-root is on the
         // wire (light-client-verifiable). Empty ⇒ the authority-only cap-open (current behavior).
-        cap_membership: Some(CapMembershipWitness::from_consumed_with_clist(
+        cap_membership: Some(CapMembershipWitness::from_consumed_with_trees(
             consumed,
-            clist_leaves,
+            cap_trees.clist_leaves,
+            cap_trees.cap_leaves,
+            cap_trees.cap_tombstones,
         )),
         turn_hash,
         rotation,
@@ -2760,7 +2794,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest capability-gated turn must prove + cap-bound-verify");
@@ -2829,7 +2863,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         );
         assert!(
@@ -2854,7 +2888,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest proof");
@@ -2938,7 +2972,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         );
         assert!(
@@ -2963,7 +2997,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest proof");
@@ -3035,7 +3069,7 @@ mod tests {
             None,
             &[],
             None,
-            vec![],
+            Default::default(),
             None,
         );
         assert!(
@@ -3068,7 +3102,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest proof");
@@ -3275,7 +3309,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("the rotated capability-gated turn must prove + cap-bound-verify");
@@ -3379,7 +3413,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         );
         assert!(
@@ -3415,7 +3449,7 @@ mod tests {
             None,
             &[],
             rotation2,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest ROTATED cap proof");
@@ -3779,7 +3813,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest bearer-delegated turn must prove + authority-bound-verify");
@@ -3876,7 +3910,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         );
         assert!(
@@ -3905,7 +3939,7 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest bearer proof (bound to the real delegator root)");
@@ -4101,7 +4135,7 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
             None,
         )
         .expect("honest cross-vat cap-gated transfer must prove + authority-bound-verify");

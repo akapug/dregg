@@ -110,6 +110,8 @@ fn attenuate_fixture() -> (
         siblings: open.siblings.to_vec(),
         directions: open.directions.to_vec(),
         clist_leaves,
+        cap_leaves: Vec::new(),
+        cap_tombstones: Vec::new(),
     };
 
     let before_balance: u64 = 100_000;
