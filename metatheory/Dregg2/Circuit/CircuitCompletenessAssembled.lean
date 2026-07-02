@@ -314,19 +314,20 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
         (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
           Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
-  /-- bridgeMint (tag 20) — at the DEPLOYED gated bridge-mint descriptor (`withSelectorGate
-  selM.MINT mintV3`, the live `mintVmDescriptor2R24` on selector `BRIDGE_MINT = 40`) — `= Rfix 20`.
-  An honest bridge-mint completeness witness publishes a trace satisfying it (active rows set
-  `sel[BRIDGE_MINT]`, pads `sel[NOOP]`). The dedicated supply-mint (tag 3) is `bwSupplyMint`. -/
+  /-- bridgeMint (tag 20) — at the DEPLOYED felt-mint-hash bridge descriptor
+  (`mintV3BridgeHash = withMintHashPin (withSelectorGate selM.MINT mintV3)`, the live
+  `mintVmDescriptor2R24` on selector `BRIDGE_MINT = 40` with the STEP-3 mint-hash pin at PI 46)
+  — `= Rfix 20`. An honest bridge-mint completeness witness publishes a trace satisfying it
+  (active rows set `sel[BRIDGE_MINT]`, pads `sel[NOOP]`; the producer publishes the mint row's
+  `param0` — the felt-domain mint identity — at the appended pin slot, `trace_rotated.rs`'s
+  BridgeMint arm). The dedicated supply-mint (tag 3) is `bwSupplyMint`. -/
   bwMint : ∀ (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.SupplyCreation.MintASpec pre actor cell a amt post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
       Satisfied2 hash
         (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
-          (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
-            Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
-            Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3)) minit mfin maddrs t ∧
+          Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3BridgeHash) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- mint (tag 3) — the DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b). At the deployed
   `supplyMintVmDescriptor2R24` (`withSelectorGate sel.MINT mintV3`, selector `MINT = 14`) — `= Rfix
@@ -455,16 +456,15 @@ theorem Rfix_burn : Rfix 4 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaR
     Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3 := rfl
 -- mint (tag 3) routes to the DEDICATED `supplyMintVmDescriptor2R24` (the bare `mintV3` plus the
 -- appended `selectorGate sel.MINT = 14`, SUPPLY-MODEL.md Stage 2b — its OWN selector). bridgeMint
--- (tag 20) keeps the original `mintVmDescriptor2R24` (`selectorGate selM.MINT = BRIDGE_MINT = 40`).
--- The descriptor BODY is identical (`mintV3`); only the appended selector operand differs, so the
--- two share every proven value/anti-ghost tooth.
+-- (tag 20) keeps the `mintVmDescriptor2R24` slot, now the STEP-3 felt-mint-hash member
+-- (`mintV3BridgeHash = withMintHashPin (withSelectorGate selM.MINT = BRIDGE_MINT = 40)`).
+-- The descriptor BODY is identical (`mintV3`); only the appended selector operand + the additive
+-- mint-hash pin differ, so the two share every proven value/anti-ghost tooth (through the peel).
 theorem Rfix_mint : Rfix 3 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
     Dregg2.Circuit.Emit.EffectVmEmit.sel.MINT
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 := rfl
 theorem Rfix_bridgeMint : Rfix 20 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
-    (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
-      Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
-      Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3) := rfl
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3BridgeHash := rfl
 
 /-! ## §4 — the per-effect VALUE-LEG dischargers (DUAL of `closedLogExtract_<e>_closed`).
 

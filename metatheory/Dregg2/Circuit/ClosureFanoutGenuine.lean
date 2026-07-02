@@ -162,10 +162,13 @@ theorem closedLogExtract_bridgeMint_closed
       BridgeMintTraceReadout (LH := LH) (hash := hash) minit mfin maddrs t pubLogPost pre post) :
     ClosedLogExtract Slive LH hash Rfix 20 := by
   intro _hCR minit mfin maddrs t pc pubLogPre pubLogPost pre post hsat hdecLog
-  -- `Rfix 20` is the DEPLOYED gated mint member (`withSelectorGate selM.MINT mintV3`), rc-EMIT-wrapped;
-  -- peel the uniform `withDfaRcPins` wrap (4 additive `.piBinding` pins), then strip the appended
+  -- `Rfix 20` is the DEPLOYED felt-mint-hash bridge member (`mintV3BridgeHash = withMintHashPin
+  -- (withSelectorGate selM.MINT mintV3)`), rc-EMIT-wrapped; peel the uniform `withDfaRcPins` wrap
+  -- (4 additive `.piBinding` pins), then the additive mint-hash pin, then strip the appended
   -- selector-binding gate to recover the bare-`mintV3` witness the readout/rung consume.
   have hsat := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withDfaRcPins hash
+    Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3BridgeHash hsat
+  have hsat := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.satisfied2_of_withMintHashPin hash
     (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
       Dregg2.Circuit.Emit.EffectVmEmitMint.selM.MINT
       Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3) hsat

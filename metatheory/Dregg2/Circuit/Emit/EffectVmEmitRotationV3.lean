@@ -4908,13 +4908,142 @@ def factoryV3Carriers : EffectVmDescriptor2 :=
 #guard factoryV3Carriers.traceWidth == factoryV3.traceWidth
 #guard factoryV3Carriers.tables.length == 5
 
+/-! ### The BRIDGE-MINT FELT MINT-HASH PIN (`mintV3BridgeHash`) — the bridge carrier's
+deployed-leg exposure (STEP 3 of the felt-domain mint_hash thread).
+
+The BridgeMint row's `mint_hash` (`param0`, col `prmCol 0`) was, until the STEP-1 executor
+re-align, the byte-domain `hash_to_bb(blake3(nullifier ‖ postcard(source_root) ‖ dest ‖ asset))`
+— read by ZERO constraints and recomputable by NO circuit (the 68297080e named residual: pinning
+it would be a dead-end exposure the felt-domain note-spend leaf could never connect). Since the
+re-align it is the FELT-DOMAIN `note_spend_mint_hash_felt` = `hash_fact(hash_fact(nullifier,
+[root, dest_fed, asset]), [value_lo, value_hi])` over the SIX compressed felts the executor's
+`apply_bridge_mint` enforces the real note-spend STARK against (`verify_note_spend_dsl_full`) —
+the SAME identity the recursion note-spend leaf (`circuit-prove::note_spend_leaf_adapter`)
+recomputes IN-AIR and exposes at its claim lane 6.
+
+`withMintHashPin` publishes that column as ONE appended PI (the bridge twin of the noteSpend
+nullifier weld — a FIRST-row pin on `prmCol 0`, the mint row is row 0), so the per-turn FOLD can
+`connect` the deployed leg's published mint identity to the re-proven note-spend leaf's exposed
+lane: a leg claiming a mint identity no verifying note-spend backs is UNSAT at the binding node.
+The THIRD-EDGE tie (teeth == committed-authority): the published PI is the trace's `param0`,
+which `effects_hash` absorbs (PI-bound), and the VERIFIER's reconstruction recomputes it from the
+turn's OWN `PortableNoteProof` via `convert_turn_effects_to_vm` — executor-derived, never a
+prover-chosen free PI. Rust producer twin: `trace_rotated.rs`'s BridgeMint arm (PI 46, pre-rc). -/
+
+/-- The bridge-mint mint-hash parameter column (`param::MINT_HASH = param0`, `prmCol 0`) — the
+mint row's felt-domain mint identity (the STEP-1 re-aligned `note_spend_mint_hash_felt`). -/
+def MINT_HASH_PARAM_COL : Nat := prmCol 0
+
+/-- **`withMintHashPin g`** — APPEND one `.piBinding .first` pin publishing the mint row's
+`mint_hash` param (`prmCol 0`) as ONE TAIL PI (`g.piCount`), bumping `piCount` by 1. Mirrors
+`withAfterOctetPins` exactly — additive, no site / range / mem-op / map-op touched, so every
+existing forcing keystone lifts by `List.mem_append_left` (the peel below). -/
+def withMintHashPin (g : EffectVmDescriptor2) : EffectVmDescriptor2 :=
+  { g with
+    piCount := g.piCount + 1
+    constraints := g.constraints
+      ++ [VmConstraint2.base (.piBinding .first MINT_HASH_PARAM_COL g.piCount)] }
+
+/-- The mint-hash pin is the ONLY constraint past the inner descriptor's (single `++`). -/
+theorem withMintHashPin_constraints (g : EffectVmDescriptor2) :
+    (withMintHashPin g).constraints
+      = g.constraints
+        ++ [VmConstraint2.base (.piBinding .first MINT_HASH_PARAM_COL g.piCount)] := rfl
+
+/-- The pin is a `.piBinding`, so it contributes NO mem-op (the mem log is unchanged). -/
+theorem memOpsOf_withMintHashPin (g : EffectVmDescriptor2) :
+    memOpsOf (withMintHashPin g) = memOpsOf g := by
+  simp [memOpsOf, withMintHashPin, List.filterMap_append]
+
+/-- The pin contributes NO map-op (the map log is unchanged). -/
+theorem mapOpsOf_withMintHashPin (g : EffectVmDescriptor2) :
+    mapOpsOf (withMintHashPin g) = mapOpsOf g := by
+  simp [mapOpsOf, withMintHashPin, List.filterMap_append]
+
+/-- **THE PEEL** — `Satisfied2 (withMintHashPin g) ⟹ Satisfied2 g`. The wrap only APPENDS one
+`.piBinding` constraint (and bumps `piCount`): the inner constraints stay members
+(`List.mem_append_left`), sites / ranges / mem / map logs are unchanged, so every existing
+per-effect soundness lemma lifts to the wrapped descriptor by peeling the wrap first. Mirrors
+`satisfied2_of_withAfterOctetPins`. -/
+theorem satisfied2_of_withMintHashPin (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2 hash (withMintHashPin g) minit mfin maddrs t) :
+    Satisfied2 hash g minit mfin maddrs t := by
+  have hmem : memLog (withMintHashPin g) t = memLog g t := by
+    simp [memLog, memOpsOf_withMintHashPin]
+  have hmap : mapLog (withMintHashPin g) t = mapLog g t := by
+    simp [mapLog, mapOpsOf_withMintHashPin]
+  exact
+    { rowConstraints := fun i hi c hc => h.rowConstraints i hi c (by
+        rw [withMintHashPin_constraints]; exact List.mem_append_left _ hc)
+    , rowHashes := h.rowHashes
+    , rowRanges := h.rowRanges
+    , memAddrsNodup := h.memAddrsNodup
+    , memClosed := fun op hop => h.memClosed op (by rw [hmem]; exact hop)
+    , memDisciplined := by rw [← hmem]; exact h.memDisciplined
+    , memBalanced := by rw [← hmem]; exact h.memBalanced
+    , memTableFaithful := by rw [← hmem]; exact h.memTableFaithful
+    , mapTableFaithful := by rw [← hmap]; exact h.mapTableFaithful }
+
+/-- **`withMintHashPin_publishes` — the `rotV3_publishes`-shape forcing.** On the FIRST row of a
+`Satisfied2` witness, the published TAIL PI (`g.piCount`) EQUALS the mint row's `mint_hash`
+param column — so the fold reads the mint identity off the PI vector: a leg publishing a
+DIFFERENT identity than the one its trace (and `effects_hash`) carries is UNSAT, and the fold's
+`connect` to the re-proven note-spend leaf's in-AIR-recomputed lane 6 makes an unbacked bridge
+mint a LIGHT-CLIENT refusal, not just a re-executor one. -/
+theorem withMintHashPin_publishes (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash (withMintHashPin g) minit mfin maddrs t)
+    (h0 : 0 < t.rows.length) :
+    (envAt t 0).loc MINT_HASH_PARAM_COL = (envAt t 0).pub g.piCount := by
+  have hin : VmConstraint2.base (.piBinding .first MINT_HASH_PARAM_COL g.piCount)
+      ∈ (withMintHashPin g).constraints := by
+    rw [withMintHashPin_constraints]
+    exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+  have h := hsat.rowConstraints 0 h0 _ hin
+  have hfirstt : ((0 : Nat) == 0) = true := rfl
+  simp only [VmConstraint2.holdsAt, hfirstt, holdsVm_piFirst_true] at h
+  exact h
+
+/-- **TOOTH** — a published mint identity that is NOT the trace's mint row `param0` is UNSAT. -/
+theorem withMintHashPin_rejects_forged_pi (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (h0 : 0 < t.rows.length)
+    (hforged : (envAt t 0).loc MINT_HASH_PARAM_COL ≠ (envAt t 0).pub g.piCount) :
+    ¬ Satisfied2 hash (withMintHashPin g) minit mfin maddrs t :=
+  fun hsat => hforged (withMintHashPin_publishes hash g minit mfin maddrs t hsat h0)
+
+#assert_axioms satisfied2_of_withMintHashPin
+#assert_axioms withMintHashPin_publishes
+#assert_axioms withMintHashPin_rejects_forged_pi
+
+/-- **`mintV3BridgeHash`** — the deployed `mintVmDescriptor2R24` WITH the felt mint-hash pin
+TAIL-appended after the 46-PI rotated prefix (PI 46; `piCount 46 → 47`). The inner member is the
+UNCHANGED gated bridge-mint (`withSelectorGate selM.MINT mintV3`); the pin publishes the STEP-1
+felt-domain mint identity the producer fills (`trace_rotated.rs` BridgeMint arm). The
+supply-mint member (`supplyMintV3`, `sel.MINT`) is NOT pinned — its `(target, slot)` mint_hash
+stays a byte-domain fold with no fold-connect consumer. -/
+def mintV3BridgeHash : EffectVmDescriptor2 :=
+  withMintHashPin (withSelectorGate EffectVmEmitMint.selM.MINT mintV3)
+
+-- The pin lands at PI 46 (the first slot past the four rotated commit pins — the SAME arithmetic
+-- as `ROT_NULLIFIER_PI`/`ROT_FEE_PI`; bridge-mint never co-occurs with note-spend/fee on one
+-- descriptor, so sharing the slot index is sound); rc rides 47..50 on the deployed wrap.
+#guard mintV3.piCount == 46
+#guard mintV3BridgeHash.piCount == 47
+-- traceWidth / tables / sites / ops are untouched by the additive pin (registry invariants hold).
+#guard mintV3BridgeHash.traceWidth == mintV3.traceWidth
+#guard mintV3BridgeHash.tables.length == mintV3.tables.length
+#guard (mapOpsOf mintV3BridgeHash).length == (mapOpsOf mintV3).length
+#guard (memOpsOf mintV3BridgeHash).length == (memOpsOf mintV3).length
+
 /-- **`v3RegistryBare`** — the full cohort at the rotated block BEFORE the uniform DSL rc-EMIT wrap
 (keys = the v2 keys suffixed `R24`; wire strings via `emitVmJson2`; driver `EmitRotationV3.lean`).
 The deployed registry is `v3Registry = v3RegistryBare.map withDfaRcPins` below. -/
 def v3RegistryBare : List (String × EffectVmDescriptor2) :=
   [ ("transferVmDescriptor2R24", v3OfFrozen EffectVmEmitTransfer.transferVmDescriptor)
   , ("burnVmDescriptor2R24", v3OfFrozen EffectVmEmitBurn.burnVmDescriptor)
-  , ("mintVmDescriptor2R24", withSelectorGate EffectVmEmitMint.selM.MINT (v3OfFrozen mintTickFace))
+  , ("mintVmDescriptor2R24", mintV3BridgeHash)
   , ("noteSpendVmDescriptor2R24", noteSpendV3)
   , ("noteCreateVmDescriptor2R24", noteCreateV3)
   , ("cellSealVmDescriptor2R24", cellSealV3)
@@ -4968,10 +5097,12 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
   w.piCount == b.piCount + 4 && w.traceWidth == b.traceWidth
     && w.tables.length == b.tables.length && w.hashSites.length == b.hashSites.length
 -- The deployed transfer publishes rc at slots 46..49 (piCount 46 → 50); the STEP-3 factory
--- (piCount 63) at 63..66; the custom exposure member (piCount 54) at 54..57.
+-- (piCount 63) at 63..66; the custom exposure member (piCount 54) at 54..57; the bridge-mint
+-- felt mint-hash member (piCount 47 — the mint-hash pin at 46) at 47..50.
 #guard (v3Registry.lookup "transferVmDescriptor2R24").any (·.piCount == 50)
 #guard (v3Registry.lookup "factoryVmDescriptor2R24").any (·.piCount == 67)
 #guard (v3Registry.lookup "customVmDescriptor2R24").any (·.piCount == 58)
+#guard (v3Registry.lookup "mintVmDescriptor2R24").any (·.piCount == 51)
 
 #guard v3Registry.length == 36
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five
