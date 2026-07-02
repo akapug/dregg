@@ -157,17 +157,25 @@ pub enum CarrierWitness {
     /// NOT the sound deployed path (a prover-chosen tuple) — the bridge wave re-proves the REAL
     /// foreign note-spend STARK as a G2 backing leaf and will grow this bundle accordingly.
     Bridge(BridgeWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the sovereign carrier's authority-tuple witness
-    /// (P1 fills the KEY_COMMIT teeth from `before_cell.public_key()`).
+    /// FOLD-WIRED (v12): the sovereign carrier's authority-tuple witness (P1 fills the
+    /// KEY_COMMIT teeth from `before_cell.public_key()`). The fold arm admits a leg only when
+    /// its descriptor pins the teeth claim slots (`SOVEREIGN_KEY_COMMIT_PI_LO` — the big-bang
+    /// regen tie); otherwise it refuses (fail-closed).
     Sovereign(SovereignWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the factory carrier's creation-backing witness
-    /// (`factory_vk`, `child_vk`, derivation digest).
+    /// FOLD-WIRED (v12): the factory carrier's creation-backing witness (`factory_vk`,
+    /// `child_vk`, derivation digest). The fold arm binds the leg's `child_vk8` octet claim
+    /// (PI 47..54, `factoryV3Carriers`) to the re-proven backing leaf; a leg whose descriptor
+    /// lacks the STEP-3 octet pins is refused (fail-closed, the big-bang regen tie).
     Factory(FactoryWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the hatchery carrier's contract-attestation
-    /// witness (`contract_hash`, `invariant_digest`; the invariant half rides factory's leg).
+    /// FOLD-WIRED (v12): the hatchery carrier's contract-attestation witness
+    /// (`contract_hash`, `invariant_digest`; the invariant half rides factory's leg). The
+    /// fold arm binds the leg's `contract_hash8` octet claim (PI 55..62, `factoryV3Carriers`)
+    /// to the re-proven attestation leaf; pin-less legs are refused (fail-closed).
     Hatchery(HatcheryWitnessBundle),
-    /// STAGED (fold arm unfilled — fail-closed): the membership carrier's sender-membership
-    /// witness (`sender_leaf`, `authorized_root`).
+    /// FOLD-WIRED (v12): the membership carrier's sender-membership witness (`sender_leaf`,
+    /// `authorized_root`). The fold arm binds the leg's claim slots
+    /// (`MEMBERSHIP_CLAIM_PI_LO`) to the re-proven membership leaf; pin-less legs are refused
+    /// (fail-closed, the big-bang regen tie).
     Membership(MembershipWitnessBundle),
     /// STAGED (fold arm unfilled — fail-closed): the DSL/Dfa carrier's re-provable predicate
     /// program witness (structurally the custom shape — the dsl adapter REUSES the custom leaf
@@ -267,8 +275,7 @@ pub struct SovereignWitnessBundle {
 
 impl SovereignWitnessBundle {
     /// Project the honest bundle from the typed authority witness (PIs derived, claim ==
-    /// execution by construction). The sovereign wave's production projection (fail-closed
-    /// `None` off-wire) supersedes this stub.
+    /// execution by construction).
     pub fn from_authority_witness(
         authority: &crate::sovereign_leaf_adapter::SovereignAuthorityWitness,
     ) -> Self {
@@ -276,6 +283,17 @@ impl SovereignWitnessBundle {
             public_inputs: authority.public_inputs(),
             authority: authority.clone(),
         }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the sovereign twin of
+    /// [`CustomWitnessBundle::from_bound_custom_proof`]. The turn-build path RETAINS the
+    /// authority tuple (`key_commit` from `before_cell.public_key()`, sequence, old/new
+    /// anchors); a wire-rehydrated turn retains nothing (`None`) — the re-exec rung,
+    /// FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_authority(
+        retained: Option<&crate::sovereign_leaf_adapter::SovereignAuthorityWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_authority_witness)
     }
 }
 
@@ -294,8 +312,7 @@ pub struct FactoryWitnessBundle {
 
 impl FactoryWitnessBundle {
     /// Project the honest bundle from the typed backing witness (PIs derived, claim ==
-    /// execution by construction). The factory wave's production projection (fail-closed
-    /// `None` off-wire) supersedes this stub.
+    /// execution by construction).
     pub fn from_backing_witness(
         backing: &crate::factory_leaf_adapter::FactoryBackingWitness,
     ) -> Self {
@@ -303,6 +320,19 @@ impl FactoryWitnessBundle {
             public_inputs: backing.public_inputs(),
             backing: backing.clone(),
         }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the factory twin of
+    /// [`CustomWitnessBundle::from_bound_custom_proof`]. The turn-build path RETAINS the
+    /// validated creation-backing witness (the `(factory_vk, child_vk, derivation_digest)`
+    /// tuple `FactoryRegistry::validate_and_record` binds); a turn REHYDRATED from the
+    /// on-wire artifact retains nothing (`None`) — such a turn takes the re-exec rung,
+    /// FAIL-CLOSED rather than fabricated (the fold never invents a backing tuple the
+    /// executor did not validate).
+    pub fn from_retained_backing(
+        retained: Option<&crate::factory_leaf_adapter::FactoryBackingWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_backing_witness)
     }
 }
 
@@ -320,8 +350,7 @@ pub struct HatcheryWitnessBundle {
 
 impl HatcheryWitnessBundle {
     /// Project the honest bundle from the typed attestation witness (PIs derived, claim ==
-    /// execution by construction). The hatchery wave's production projection (fail-closed
-    /// `None` off-wire) supersedes this stub.
+    /// execution by construction).
     pub fn from_attestation_witness(
         attestation: &crate::hatchery_leaf_adapter::HatcheryAttestationWitness,
     ) -> Self {
@@ -329,6 +358,17 @@ impl HatcheryWitnessBundle {
             public_inputs: attestation.public_inputs(),
             attestation: attestation.clone(),
         }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the hatchery twin of
+    /// [`CustomWitnessBundle::from_bound_custom_proof`]. The hatchery-mint path RETAINS the
+    /// `HpresProof::Attested` contract attestation (`contract_hash` + the invariant digest
+    /// riding factory's leg); a wire-rehydrated turn retains nothing (`None`) — the re-exec
+    /// rung, FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_attestation(
+        retained: Option<&crate::hatchery_leaf_adapter::HatcheryAttestationWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_attestation_witness)
     }
 }
 
@@ -346,8 +386,7 @@ pub struct MembershipWitnessBundle {
 
 impl MembershipWitnessBundle {
     /// Project the honest bundle from the typed membership witness (PIs derived, claim ==
-    /// execution by construction). The membership wave's production projection (fail-closed
-    /// `None` off-wire) supersedes this stub.
+    /// execution by construction).
     pub fn from_membership_witness(
         membership: &crate::membership_leaf_adapter::SenderMembershipWitness,
     ) -> Self {
@@ -355,6 +394,16 @@ impl MembershipWitnessBundle {
             public_inputs: membership.public_inputs(),
             membership: *membership,
         }
+    }
+
+    /// **THE PRODUCTION PROJECTION (fail-closed off-wire)** — the membership twin of
+    /// [`CustomWitnessBundle::from_bound_custom_proof`]. The turn-build path RETAINS the
+    /// `(sender_leaf, authorized_root)` tuple its caveat check verified; a wire-rehydrated
+    /// turn retains nothing (`None`) — the re-exec rung, FAIL-CLOSED rather than fabricated.
+    pub fn from_retained_membership(
+        retained: Option<&crate::membership_leaf_adapter::SenderMembershipWitness>,
+    ) -> Option<Self> {
+        retained.map(Self::from_membership_witness)
     }
 }
 

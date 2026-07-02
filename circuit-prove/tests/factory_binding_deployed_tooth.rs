@@ -1,0 +1,394 @@
+//! # THE DEPLOYED FACTORY-BINDING LIGHT-CLIENT TOOTH (the factory twin of
+//! `custom_binding_deployed_tooth.rs`).
+//!
+//! Builds a REAL 2-turn chain whose FIRST turn is a `CreateCellFromFactory` turn carrying the
+//! v12 STEP-3 PINNED wide factory leg (the `factoryV3Carriers` geometry: the committed
+//! `child_vk8` carrier octet — AFTER-block limbs `B_CHILD_VK_OCTET..+8`, STEP-2-filled from the
+//! REAL threaded `RotationCarrierMaterial` — published at IR2 PI 47..54) PLUS the prover-side
+//! `FactoryWitnessBundle` (the re-provable creation-backing tuple), folds it through the
+//! DEPLOYED chain prover (`prove_turn_chain_recursive` → `prove_chain_core_rotated`'s Factory
+//! fold arm), and verifies the whole-chain artifact through the light-client verifier.
+//!
+//! ## THE REGEN-RIDER (named)
+//!
+//! The STEP-3 octet pins are COMMITTED in Lean (`EffectVmEmitRotationV3.factoryV3Carriers`,
+//! registry-swapped at `556970558`) but the EMITTED registry row (`WIDE_REGISTRY_STAGED_TSV`)
+//! rides the big-bang descriptor regen. Until it lands, this tooth builds the pinned descriptor
+//! via `carrier_pin_twin::insert_tail_claim_pins` — the Rust twin of `withAfterOctetPins`
+//! applied to the DEPLOYED wide factory descriptor — so the fold arm is exercised against the
+//! post-regen geometry today; the regen merely swaps the descriptor source to the committed
+//! registry row.
+//!
+//! THE TWO POLES:
+//!   * HONEST — the leg's committed `child_vk8` octet (the STEP-2 producer fill of the real
+//!     material) EQUALS the backing bundle's `child_vk`: the chain folds and the light client
+//!     ACCEPTS.
+//!   * FORGED — the bundle claims a `child_vk` the leg's committed octet does not carry (the
+//!     `FactoryBackingAttack.deployed_admits_forged_child_vk` shape, inverted onto the fold):
+//!     the binding node's in-circuit `connect` conflicts ⇒ UNSAT ⇒ no root ⇒ REJECTED.
+//!
+//! The fold is a real recursion (minutes), so both poles are `#[ignore]`. Run with:
+//!   cargo test -p dregg-circuit-prove --test factory_binding_deployed_tooth -- --ignored --nocapture
+
+use dregg_cell::Ledger;
+use dregg_cell::commitment::RotationCarrierMaterial;
+use dregg_circuit::descriptor_ir2::{
+    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
+    prove_vm_descriptor2_for_config,
+};
+use dregg_circuit::effect_vm::bytes32_to_8_limbs;
+use dregg_circuit::effect_vm::trace_rotated::{
+    AFTER_BASE, B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, RotatedBlockWitness,
+    empty_caveat_manifest, generate_rotated_create_from_factory_wide,
+};
+use dregg_circuit::effect_vm::{CellState, Effect};
+use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
+use dregg_circuit::field::BabyBear;
+use dregg_circuit::heap_root::HeapLeaf;
+use dregg_circuit::lean_descriptor_air::VmRow;
+use dregg_circuit_prove::carrier_pin_twin::{
+    TailClaimPin, insert_tail_claim_pins, splice_pi_values,
+};
+use dregg_circuit_prove::factory_leaf_adapter::FactoryBackingWitness;
+use dregg_circuit_prove::ivc_turn_chain::{
+    FACTORY_CHILD_VK_PI_LO, FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive,
+    verify_turn_chain_recursive,
+};
+use dregg_circuit_prove::joint_turn_aggregation::{
+    CarrierWitness, DescriptorParticipant, FactoryWitnessBundle, RotatedParticipantLeg,
+};
+use dregg_turn::rotation_witness as rw;
+
+// ============================================================================
+// Fixtures
+// ============================================================================
+
+fn open_permissions() -> dregg_cell::Permissions {
+    use dregg_cell::AuthRequired;
+    dregg_cell::Permissions {
+        send: AuthRequired::None,
+        receive: AuthRequired::None,
+        set_state: AuthRequired::None,
+        set_permissions: AuthRequired::None,
+        set_verification_key: AuthRequired::None,
+        increment_nonce: AuthRequired::None,
+        delegate: AuthRequired::None,
+        access: AuthRequired::None,
+    }
+}
+
+fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let mut cell = dregg_cell::Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = open_permissions();
+    for _ in 0..nonce {
+        let _ = cell.state.increment_nonce();
+    }
+    cell
+}
+
+fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
+    RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("pre-iroot limbs")
+}
+
+/// The REAL carrier material an honest factory/hatchery-mint turn threads (STEP 2.5).
+fn material() -> RotationCarrierMaterial {
+    RotationCarrierMaterial {
+        child_vk: Some([0x9Au8; 32]),
+        contract_hash: Some([0xC7u8; 32]),
+    }
+}
+
+/// Fetch the DEPLOYED wide descriptor for `wire` from the committed emitted registry.
+fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
+    let json = WIDE_REGISTRY_STAGED_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(wire) {
+                let _display = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| panic!("{wire} not in WIDE_REGISTRY_STAGED_TSV"));
+    parse_vm_descriptor2(json).expect("deployed wide descriptor parses")
+}
+
+/// The STEP-3 PINNED twin of the deployed wide factory descriptor (`factoryV3Carriers` + wide):
+/// the `child_vk8` octet pins at PI 47..54 and the `contract_hash8` octet pins at PI 55..62,
+/// with the 16 wide anchors shifted past them. THE REGEN-RIDER: the committed registry row
+/// supersedes this transform when the big-bang regen lands.
+fn pinned_factory_twin() -> (EffectVmDescriptor2, usize) {
+    let desc = deployed_wide_descriptor("factoryVmDescriptor2R24");
+    let insert_at = desc.public_input_count - 16; // the narrow PI tail, ahead of the anchors
+    assert_eq!(
+        insert_at, FACTORY_CHILD_VK_PI_LO,
+        "the narrow factory PI count is the STEP-3 child_vk8 pin base (Lean factoryV3Carriers)"
+    );
+    let pins: Vec<TailClaimPin> = (0..8)
+        .map(|k| TailClaimPin {
+            col: AFTER_BASE + B_CHILD_VK_OCTET + k,
+            row: VmRow::Last,
+        })
+        .chain((0..8).map(|k| TailClaimPin {
+            col: AFTER_BASE + B_CONTRACT_HASH_OCTET + k,
+            row: VmRow::Last,
+        }))
+        .collect();
+    let twin = insert_tail_claim_pins(&desc, insert_at, &pins).expect("pinned factory twin");
+    (twin, insert_at)
+}
+
+/// Mint a REAL pinned-wide `CreateCellFromFactory` leg: `before=(b,nonce)` → `after=(b,nonce+1)`
+/// with the carrier `material` threaded per side (STEP-2 producer fill), the deployed factory
+/// wide trace + the STEP-3 pinned twin descriptor, claims spliced from the committed AFTER
+/// octets. Optionally attach the prover-side carrier witness.
+fn mint_factory_leg(
+    balance: i64,
+    nonce: u64,
+    before_material: &RotationCarrierMaterial,
+    after_material: &RotationCarrierMaterial,
+    witness: Option<CarrierWitness>,
+) -> RotatedParticipantLeg {
+    let st = CellState::new(balance as u64, nonce as u32);
+    let effects = vec![Effect::CreateCellFromFactory {
+        factory_vk: BabyBear::new(0xFAC),
+        child_vk_derived: BabyBear::new(0xCE11),
+    }];
+    let before_cell = producer_cell(balance, nonce);
+    let after_cell = producer_cell(balance, nonce + 1);
+
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).expect("ledger seed");
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+        before_material,
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+        after_material,
+    );
+
+    // The accounts-set grow-gate opens against a threaded BEFORE leaf set (test seed).
+    let before_accounts = vec![
+        HeapLeaf {
+            addr: BabyBear::new(0xAA01),
+            value: BabyBear::new(0xAA01),
+        },
+        HeapLeaf {
+            addr: BabyBear::new(0xAA02),
+            value: BabyBear::new(0xAA02),
+        },
+    ];
+
+    let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
+        &before_accounts,
+    )
+    .expect("deployed factory wide trace generates");
+
+    // The STEP-3 pinned twin + the claim values (the committed AFTER carrier octets).
+    let (twin, insert_at) = pinned_factory_twin();
+    let mut claims: Vec<BabyBear> = Vec::with_capacity(16);
+    claims.extend_from_slice(&after_w.pre_limbs[B_CHILD_VK_OCTET..B_CHILD_VK_OCTET + 8]);
+    claims.extend_from_slice(&after_w.pre_limbs[B_CONTRACT_HASH_OCTET..B_CONTRACT_HASH_OCTET + 8]);
+    let twin_dpis = splice_pi_values(&dpis, insert_at, &claims);
+    assert_eq!(twin_dpis.len(), twin.public_input_count);
+
+    let config = ir2_leaf_wrap_config();
+    let proof = prove_vm_descriptor2_for_config(
+        &twin,
+        &trace,
+        &twin_dpis,
+        &MemBoundaryWitness::default(),
+        &map_heaps,
+        &UMemBoundaryWitness::default(),
+        &config,
+    )
+    .expect("the pinned factory wide leg proves under the leaf-wrap config");
+
+    RotatedParticipantLeg {
+        proof,
+        descriptor: twin,
+        public_inputs: twin_dpis,
+        carrier_witness: witness,
+    }
+}
+
+/// The honest creation-backing bundle: `child_vk` == the committed octet material.
+fn backing_bundle(child_vk_bytes: &[u8; 32]) -> FactoryWitnessBundle {
+    FactoryWitnessBundle::from_backing_witness(&FactoryBackingWitness {
+        factory_vk: core::array::from_fn(|i| BabyBear::new(0xFA0 + i as u32)),
+        child_vk: bytes32_to_8_limbs(child_vk_bytes),
+        derivation_digest: core::array::from_fn(|i| BabyBear::new(0xD0 + i as u32)),
+    })
+}
+
+/// Build the 2-turn chain: turn 0 = the witnessed factory turn (bundle attached), turn 1 = a
+/// plain factory turn linking off turn 0's post-state (SAME material on its BEFORE side, so the
+/// rotated commitment chains).
+fn build_chain(bundle: FactoryWitnessBundle) -> Vec<FinalizedTurn> {
+    let balance = 1000i64;
+    let m = material();
+    let t0_leg = mint_factory_leg(
+        balance,
+        0,
+        &RotationCarrierMaterial::default(),
+        &m,
+        Some(CarrierWitness::Factory(bundle)),
+    );
+    let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
+    let t1_leg = mint_factory_leg(balance, 1, &m, &m, None);
+    let t1 = FinalizedTurn::new(DescriptorParticipant::rotated(t1_leg));
+    assert_eq!(
+        t0.new_root(),
+        t1.old_root(),
+        "factory turn 0's post-state must link to turn 1's pre-state"
+    );
+    vec![t0, t1]
+}
+
+// ============================================================================
+// THE TEETH
+// ============================================================================
+
+/// POSITIVE POLE — an honest factory turn (the backing bundle's `child_vk` == the committed
+/// `child_vk8` octet the leg publishes at PI 47..54) folds through the DEPLOYED chain prover's
+/// Factory arm and the LIGHT CLIENT ACCEPTS.
+#[test]
+#[ignore = "SLOW: real deployed factory-binding recursion fold (~minutes); run with --ignored"]
+fn deployed_factory_turn_honest_accepts() {
+    let turns = build_chain(backing_bundle(&[0x9Au8; 32]));
+    let whole = prove_turn_chain_recursive(&turns)
+        .expect("the honest factory-bearing chain must fold through the deployed prover");
+    let vk = whole.root_vk_fingerprint();
+    verify_turn_chain_recursive(&whole, &vk)
+        .expect("the light client must ACCEPT the honest factory-bound whole-chain artifact");
+    eprintln!(
+        "DEPLOYED factory binding: honest factory turn FOLDED + light-client VERIFIED \
+         (child_vk8 bound in the recursion tree)."
+    );
+}
+
+/// THE TOOTH — a FORGED backing: the bundle claims a `child_vk` the leg's committed octet does
+/// not carry. The segmented binding node's in-circuit `connect` conflicts ⇒ UNSAT ⇒ no root ⇒
+/// the light client never receives a verifying artifact.
+#[test]
+#[ignore = "SLOW: real deployed factory-binding recursion fold (~minutes); run with --ignored"]
+fn deployed_factory_turn_forged_child_vk_rejected() {
+    let mut forged_vk = [0x9Au8; 32];
+    forged_vk[0] ^= 0x01;
+    let turns = build_chain(backing_bundle(&forged_vk));
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prove_turn_chain_recursive(&turns)
+    }));
+    match result {
+        Err(_) => {}
+        Ok(Err(_)) => {}
+        Ok(Ok(_)) => panic!(
+            "a FORGED child_vk (no committed octet backs it) folded into a verifying deployed \
+             whole-chain artifact — the deployed factory binding is OPEN"
+        ),
+    }
+    eprintln!("DEPLOYED factory binding: forged child_vk REJECTED by the deployed fold (no root).");
+}
+
+/// FAIL-CLOSED (fast) — a factory witness attached to a leg whose descriptor does NOT carry the
+/// STEP-3 octet pins (the PRE-REGEN deployed shape) is REFUSED by the fold arm's admission gate
+/// (never silently folded, never bound to the anchor lanes).
+#[test]
+fn deployed_factory_witness_on_unpinned_leg_is_refused() {
+    // Mint the leg on the DEPLOYED (unpinned) descriptor: same trace/dpis, no twin.
+    let st = CellState::new(1000, 0);
+    let effects = vec![Effect::CreateCellFromFactory {
+        factory_vk: BabyBear::new(0xFAC),
+        child_vk_derived: BabyBear::new(0xCE11),
+    }];
+    let before_cell = producer_cell(1000, 0);
+    let after_cell = producer_cell(1000, 1);
+    let mut ledger = Ledger::new();
+    ledger.insert_cell(after_cell.clone()).expect("ledger seed");
+    let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
+    let m = material();
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &receipt_log,
+        &RotationCarrierMaterial::default(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &[0u8; 32],
+        &[0u8; 32],
+        &receipt_log,
+        &m,
+    );
+    let before_accounts = vec![HeapLeaf {
+        addr: BabyBear::new(0xAA01),
+        value: BabyBear::new(0xAA01),
+    }];
+    let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
+        &before_accounts,
+    )
+    .expect("deployed factory wide trace generates");
+    let desc = deployed_wide_descriptor("factoryVmDescriptor2R24");
+    let config = ir2_leaf_wrap_config();
+    let proof = prove_vm_descriptor2_for_config(
+        &desc,
+        &trace,
+        &dpis,
+        &MemBoundaryWitness::default(),
+        &map_heaps,
+        &UMemBoundaryWitness::default(),
+        &config,
+    )
+    .expect("the deployed (unpinned) factory wide leg proves");
+    let leg = RotatedParticipantLeg {
+        proof,
+        descriptor: desc,
+        public_inputs: dpis,
+        carrier_witness: Some(CarrierWitness::Factory(backing_bundle(&[0x9Au8; 32]))),
+    };
+    let turns = vec![FinalizedTurn::new(DescriptorParticipant::rotated(leg))];
+    match prove_turn_chain_recursive(&turns) {
+        Err(e) => {
+            let msg = format!("{e:?}");
+            assert!(
+                msg.contains("factory"),
+                "the refusal names the factory carrier: {msg}"
+            );
+            eprintln!("FAIL-CLOSED: unpinned factory leg + witness REFUSED: {msg}");
+        }
+        Ok(_) => panic!(
+            "a factory witness on an UNPINNED deployed leg folded — the admission gate is OPEN \
+             (the claim lanes would alias the wide anchors)"
+        ),
+    }
+}
