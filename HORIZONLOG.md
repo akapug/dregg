@@ -8,6 +8,22 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## NOW-STATE addition (2026-07-02, Fable — DreggNet-native redesign coordination items)
+- DREGGNET DREGG-NATIVE REDESIGN spawned 3 breadstuffs-side asks (spec: `~/dev/DreggNet/docs/DREGGNET-NATIVE-REDESIGN.md`).
+  DreggNet is being rebuilt from "cloud control plane that HTTPs a node" into "a dregg APPLICATION" (state=cells,
+  actions=turns, authority=caps, outcomes=receipts). Most is pure CONSUMPTION of existing proven libs (obligation_standing/
+  Payable/UmemCell/execution-lease/DeosApp+Reactor/lightclient — all LIB at HEAD). Three need a breadstuffs addition:
+  - C1: a FUSED "budget-escrow + meter" lease capacity. Today the lease cell is both obligor AND payer; no single proven
+    capacity holds a prepaid budget in escrow and draws the per-period obligation from it with a conservation proof.
+    escrow_sealed (hold/release) + obligation_standing (recurring draw) exist separately. A `PrepaidLease`/`BudgetEscrow`
+    house-capacity welding them (Lean rung in the house-capacity 5-part shape) is the clean form. NOT DreggNet's to build.
+  - C2: a umem WORKLOAD RUNTIME (not just a durable heap). UmemCell checkpoints/restores/forks state but does not execute
+    code against the heap (the execution-lease `lib.rs:45-58` honest gap). Weld a WASM/OCI engine to the EXEC_COLL image so
+    a checkpoint reflects real computation. Joint build (DreggNet's owned wasmi is the natural engine to weld).
+  - C3: promote SettleEscrow/DischargeObligation/VaultDeposit welds (tags 17/18/19) from STAGED (off-AIR public inputs, VK
+    bytes unchanged) INTO the recursive AIR so the meter/settlement is folded-proof-witnessed, not just re-executor-checked.
+    VK-terminal task; design notes exist (`docs/deos/{SETTLE-ESCROW,DISCHARGE-OBLIGATION,VAULT-DEPOSIT}-WELD-DESIGN.md`).
+
 ## NOW-STATE addition (2026-07-02, Fable — PR #23 coordination note for the VK lane)
 - ALIF'S PR #23 (dregg, `feat/stripe-kernel-attested`) RIDES THE BIG-BANG REGEN — named here so the
   descriptor-regen driver batches it: the mintV3 bridge-tuple PI widening (46→72, `bridgeTuplePiExposure`,
