@@ -4,6 +4,12 @@
 local main ahead by 2). Written 2026-07-01. This is a READ-ONLY census: what is
 built-and-committed vs what is the-emit-not-yet-run, so we weld the RIGHT thing.*
 
+*EXTENDED 2026-07-02 at HEAD `bae447985` (14 commits past `956b8be93`): §1f (the
+CAP-WRITE FAMILY CLOSE — landed since this map was written), plus inline
+`[@bae447985]` corrections where the newer HEAD moved a line or sharpened a claim.
+Everything marked `[@bae447985]` is re-verified against that HEAD; full grounding
+in `docs/reference/faithful-commitment.md`.*
+
 > Reconcile-first note. The two topic memories (`project-carrier-deployment-architecture.md`,
 > `project-universal-fold-buff-lightclient.md`) are dated 2026-06-30/07-01 and their
 > commit hashes are UNRELIABLE against HEAD — e.g. the memory calls `356f55b68` "the
@@ -44,7 +50,7 @@ FAITHFUL committed forms ONLY — never a 31-bit fold." Now the anchors are fait
 | `V9_NUM_PRE_LIMBS` | **88** | `cell/src/commitment.rs:702` |
 | `B_SPAN` | **119** | `circuit/src/effect_vm/trace_rotated.rs:97` |
 | `CAP_OPEN_SPAN` | **329** | `trace_rotated.rs:2273` |
-| `WIDE_WIDTH` | `GRAD_ROT_WIDTH + 480` | `trace_rotated.rs:3074` |
+| `WIDE_WIDTH` | `GRAD_ROT_WIDTH + 480` | `trace_rotated.rs:3341` `[@bae447985]` |
 
 Path: `37 (v9) → 67 (v10, +8-felt state) → 88 (v11, +21 accumulator-8-felt lanes 67..87)`;
 `B_SPAN 51 → 91 → 119`. (Two stale prose comments still say "67" / "37" —
@@ -59,7 +65,7 @@ write/insert (never the lane-0 squeeze):
 
 | Root | After-spine descriptor | Shape | Apex pin |
 |---|---|---|---|
-| cap_root | `effCapOpenWriteV3` (`CapOpenEmit.lean:585`) | update-at-key | `Rfix 12` + pos 46–49 |
+| cap_root | `effCapOpenWriteV3` (`CapOpenEmit.lean:585`) — `[@bae447985]` now ONE of THREE shapes; the full cap-write family (insert/remove/update, all 8 effects) is §1f | update / insert / remove | `Rfix 12` + the §1f family pins |
 | heap_root | `effHeapWriteV3` (`HeapOpenEmit`) | update-at-key | `Rfix 56`, pos 45 |
 | fields_root | `effFieldsWriteV3` (`FieldsOpenEmit`) | update-at-key | `Rfix 39`, pos 55 |
 | nullifier_root | `effAccumInsertV3` (`some SEL_NOTE_SPEND`) | sorted-INSERT | `Rfix 27`, pos 56 |
@@ -91,7 +97,17 @@ createCell pass `none` (byte-identical, no drift). All three insert families PRO
 **One genuine open, explicitly allowlisted (NOT a root):** the flat per-record field limbs
 `fields[0..7]` still fold 32B→1 felt (~31-bit) — `cell/src/commitment.rs:990`,
 `turn/src/rotation_witness.rs:360` (`// ast-grep-ignore … residual`). The pre_limbs 67..87
-are "zero-filled until producer-welded." This is the `fields[0..7]` / flat-mem grind, a
+are "zero-filled until producer-welded." `[@bae447985]` precision: that zero-fill is the
+TWO FLAT-RECORD TWINS ONLY (`cell/src/commitment.rs` `compute_rotated_pre_limbs` +
+`turn/src/rotation_witness.rs`, per the const comments at `commitment.rs:702` /
+`rotation_witness.rs:67`); the CIRCUIT TRACE producers DO fill genuine
+`CanonicalHeapTree8::root8()` into the accumulator lanes (nullifier 26‖67..73
+`trace_rotated.rs:1094-1110`, commitments 27‖74..80 `:1272-1287`, cells 0‖81..87
+`:1192-1207` — commit `cbaf7b05b`). Also `[@bae447985]`: the whole-image STATE_COMMIT
+DIGEST is still the 1-felt squeeze at the live default; the 8-felt chip-chain twin
+`compute_canonical_state_commitment_v9_felt8` (`commitment.rs:1219`) is the staged,
+deliberately-gated flag-day (`:1213-1217`) — the six roots are faithful as committed
+COMPONENTS, the final digest cut is the named separate epoch. This is the `fields[0..7]` / flat-mem grind, a
 named follow-up — it is NOT one of the six Merkle roots and does NOT block the carrier bang
 (carriers anchor to the roots, not the flat field limbs). But it IS a ~31-bit surface still
 standing; flag it as the standing crumb.
@@ -102,9 +118,59 @@ Carriers may now anchor their teeth to FAITHFUL 8-felt committed forms (the six 
 instead of the 31-bit folds the memory's §BLOCKER forbade. Concretely: FACTORY's child_vk
 (SHALLOW) can now weld to a faithful committed felt instead of the col-69 31-bit fold that
 "was a single linear equation = fake"; the DEEPEST carriers can anchor to faithful roots.
-The MerkleHash/node8 primitive the campaign forged (arity-16 node8, `CHIP_RATE 16`) is the
+The MerkleHash/node8 primitive the campaign forged (arity-16 node8, `CHIP_RATE 16` —
+`[@bae447985]` the const lives in `circuit/src/descriptor_ir2.rs:279`) is the
 shared hash gadget the hash-heavy carrier family (custom-routing, dsl, membership path,
 cap-crown Hash3Cap) needs — it now exists.
+
+### 1f. `[@bae447985]` THE CAP-WRITE FAMILY CLOSE — landed since this map was written
+
+Commits `48d981698..bae447985` (the 14 past `956b8be93`). **All 8 cap-writing effects
+now ride SHAPE-MATCHED keystones** — the update-at-key `effCapOpenWriteV3` (§1b) grew an
+INSERT and a REMOVE twin, and every cap-write was rewrapped:
+
+| shape | keystone | effects (wrapper → Rfix pin) |
+|---|---|---|
+| INSERT ×4 | `effCapInsertV3` (`CapOpenEmit.lean:661`; `capInsert_writesTo8` `CapInsertEmit.lean:123` — genuine non-membership bracket + spliced membership) | delegate (`Rfix 1`, pos 46) · introduce (`Rfix 10`, 47) · delegateAtten (`Rfix 11`, 48) · spawn (`Rfix 19`, 52) |
+| REMOVE ×2 | `effCapRemoveV3` (`CapOpenEmit.lean:680`; `capRemove_writesTo8` `CapRemoveEmit.lean:120` — tombstone ZERO-fold) | revoke/revokeDelegation (`Rfix 2`/`Rfix 14`, pos 49) · revokeCapability (deployed route — but see the seam below) |
+| UPDATE ×2 | `effCapOpenWriteV3` (`CapOpenEmit.lean:585`; §11/§12 `:1747-1990`) | attenuate (`Rfix 12`) · refreshDelegation (`Rfix 55`, pos 50) |
+
+**Root cause (why this was a LIVENESS break):** the heap-8-felt migration made the
+witness heaps `CanonicalHeapTree8`, which made every scalar arity-2 cap map-op
+**shape-UNSAT for an HONEST prover** (`sdk/src/full_turn_proof.rs:7111`; commit
+`48d981698` names the shape gap: `writesTo8` was UPDATE-at-key only, but
+delegate/insert/revoke *change the cap key-set* — no shared before/after path). The gap
+sat unexercised while the SDK test suite carried 7 `E0308` compile breaks lagging the
+same migration (`5ea008aab` — "the big-bang `--tests` check was truncated by a
+disk-full moment"). The arity-2 map-op `_forces_write` theorems were deleted as
+shape-UNSAT (`6a7283580`); the registries were regenerated + FP-re-pinned
+(`824c2963e`, `136de6281`, `bae447985`) — registry length stays 59 (the wrappers were
+REWRAPPED in place, not appended).
+
+Rust: `CanonicalCapTree::{insert_witness,remove_witness}` (`circuit/src/cap_root.rs:768`,
+`:818`) + the three-shape router `build_effect_vm_cap_open_leg`
+(`sdk/src/full_turn_proof.rs:2845`: `:2898` update / `:2915` insert / `:2936` remove).
+Teeth: witness unit teeth `cap_root.rs:1015-1556` (`bd5a6e5b5`); prove+verify leg tests
+per effect + the no-silent-forge REMOVE tooth `full_turn_proof.rs:7124` (`c2d9feabd`,
+`bae447985`). Apex: the `Rfix` pins above are `#assert_axioms`-clean
+(`CircuitSoundnessAssembled.lean:761-767`).
+
+**One honest seam:** `Rfix 24` (revokeCapability) still pins the authority-only
+`revokeCapabilityCapOpenV3` (`CircuitSoundnessAssembled.lean:525`), while the deployed
+prover proves the REMOVE write wrapper whenever the node supplies the c-list witness
+(named empty-c-list fallback — `full_turn_proof.rs:2331-2352`, "named, not a silent
+forge"). The Lean write wrapper + `ClosureAll` rung exist
+(`revokeCapabilityWriteCapOpenV3` `CapOpenEmit.lean:716`;
+`revokeCapability_closedLog_capOpenSat` `ClosureAll.lean:971`); moving the `Rfix 24`
+pin is the open apex-registry step.
+
+Also landed in the same span: the portable relative mathlib path restored
+(`metatheory/lakefile.toml:10` → `../../../src/mathlib4`, commit `d3c16c7f1`).
+
+**What this means for the carrier map below:** nothing in §2–§6 regresses; the
+cap-write close is a §1-family (faithful-commitment) completion. The cap-root anchor
+carriers weld to is now written by ALL 8 cap-writes through circuit-forced keystones —
+strictly better anchoring for the third-edge builds.
 
 ---
 
@@ -261,6 +327,12 @@ carrier touches only {its bare + wide + welded descriptor} + 3 registry fingerpr
 6. **Custom's deeper per-turn `proofBind True→boundAt` + 4→8-felt lift** — a separate
    gated VK epoch (`CustomApex.lean`, `docs/reference/lean-circuit.md` §Custom). The
    recursion-tree fold is buffed; this in-AIR per-turn gate is a distinct deployment.
+7. `[@bae447985]` **The revokeCapability `Rfix 24` apex pin** (§1f seam) — the deployed
+   prover rides the REMOVE keystone; the apex registry pin still names the
+   authority-only leg. One re-pin + re-verify, small and named.
+8. `[@bae447985]` **The whole-image 8-felt STATE_COMMIT digest flag-day** (§1d
+   precision) — component roots are faithful; the final 1-felt digest squeeze → 8-felt
+   chip-chain cut (`commitment.rs:1219`) is the deliberately-gated separate epoch.
 
 ---
 
