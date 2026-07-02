@@ -51,7 +51,7 @@ over-budget tick stops the workflow, and the dispatch path maps a refusal
 | node | role | capacity | cost |
 | --- | --- | --- | --- |
 | **persvati** (primary) | home Linux box, runs the bridge agent + owned wasmi sandbox | 24 cores / 83 GiB RAM / ~289 GiB free | ~free at the margin (home power, owned hardware) |
-| **edge** (AWS, `34.224.208.52`) | thin door: stable IP, TLS, headscale mesh control + DERP, orchestration front | one small always-on t3-class box | the only recurring cloud spend; does not grow with load |
+| **edge** (AWS, `<EDGE_IP>`) | thin door: stable IP, TLS, headscale mesh control + DERP, orchestration front | one small always-on t3-class box | the only recurring cloud spend; does not grow with load |
 | **homelab** (later) | additional compute backends — BIG machines | lots of CPU / RAM / disk | ~free at the margin (owned hardware) |
 
 The economic point is that cloud spend is pinned to one small edge box, and

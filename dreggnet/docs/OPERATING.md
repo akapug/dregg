@@ -29,7 +29,7 @@ headscale mesh, and a home compute backend.
 
 | node | host | overlay | role |
 |---|---|---|---|
-| **edge** (node-0) | AWS `34.224.208.52` (t3.medium, EIP, `i-03365e2bcf4ea08b2`, us-east-1c) | `100.64.0.1` | the public door: Caddy (TLS + basic-auth), gateway (Fly-machines API), control (lease dispatch), postgres, headscale + DERP relay, a `dregg-node`, the Discord bot |
+| **edge** (node-0) | AWS `<EDGE_IP>` (t3.medium, EIP, `<EDGE_INSTANCE_ID>`, us-east-1c) | `100.64.0.1` | the public door: Caddy (TLS + basic-auth), gateway (Fly-machines API), control (lease dispatch), postgres, headscale + DERP relay, a `dregg-node`, the Discord bot |
 | **persvati** (node-1) | ember's home Linux box (24c / 83 GiB / Ubuntu) | `100.64.0.2` | the engine room: the owned sandbox compute backend (`:8021/fulfill`), STARK turn proving, a `dregg-node` |
 | homelab ×3 | pug (target) | `100.64.0.x` | additional independent consensus nodes + compute backends → the 5-quorum |
 
@@ -87,7 +87,7 @@ Get a fresh reusable pre-auth key on the edge (the live keys are **not** committ
 to the repo — regenerate, don't paste from history):
 
 ```sh
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_IP>
 cd /opt/dreggnet
 docker compose exec headscale headscale preauthkeys create --user 1 --reusable --expiration 720h
 # (--user wants the numeric id; `headscale users list` shows ember = id 1)
@@ -132,7 +132,7 @@ Deploy from a dev Mac:
 
 ```sh
 cp deploy/staging/.env.example deploy/staging/.env   # fill DREGG_NODE_IMAGE, secrets
-BOX_HOST=34.224.208.52 SSH_KEY=~/.ssh/dreggnet-staging.pem \
+BOX_HOST=<EDGE_IP> SSH_KEY=~/.ssh/dreggnet-staging.pem \
   deploy/staging/deploy.sh        # build (zigbuild) + ship (rsync) + up
 # sub-commands: deploy.sh {build|ship|up|down|logs|build-node}
 ```
@@ -140,7 +140,7 @@ BOX_HOST=34.224.208.52 SSH_KEY=~/.ssh/dreggnet-staging.pem \
 On the box:
 
 ```sh
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_IP>
 cd /opt/dreggnet
 docker compose ps                         # what's running
 docker compose up -d <service>            # (re)start one service
@@ -173,7 +173,7 @@ the public portal). Two faces (`deploy/staging/Caddyfile`):
 
 The lesson baked into the Caddyfile: clients hitting the **raw IP** send no TLS
 SNI, so set `default_sni localhost` and ship an internal-CA fallback cert so
-`https://34.224.208.52/` handshakes *before* the real domain certs land.
+`https://<EDGE_IP>/` handshakes *before* the real domain certs land.
 Automatic Let's Encrypt (HTTP-01 over `:80`) issues once the A-record
 propagates; **after the A-record lands, `docker compose restart caddy`** to clear
 any ACME backoff so the real cert issues promptly. DNS: `dregg.net` stays

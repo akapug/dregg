@@ -145,7 +145,7 @@ Match the polish, beat it on provenance. (`docs/PERMISSIONLESS-CLOUD-PLAN.md` §
 **The gap:** a global anycast edge, hundreds of PoPs, instant cache invalidation,
 mature autoscaling, five-nines operation. DreggNet runs a **2-node devnet heading
 to 5** (`docs/DEVELOPERS.md` §6), serving is single-edge (the recovered
-`34.224.208.52` box), and the live public edge is **not yet operating** — the
+`<EDGE_IP>` box), and the live public edge is **not yet operating** — the
 node's receipt log is empty and submit is operator-locked (`docs/GO-REAL.md`).
 
 **The plan to close:** this is an *operational* gap, not a code gap, and most of it

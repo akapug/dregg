@@ -82,12 +82,12 @@ something — your homelab is how we get there. ٩( ᐛ )و
 
 - **headscale control:** `https://headscale.dreggnet.fg-goose.online` (LIVE, real
   Let's Encrypt cert; `/health` → `{"status":"pass"}`).
-- **edge:** AWS `34.224.208.52` — Caddy (public TLS) + gateway + control + postgres
+- **edge:** AWS `<EDGE_IP>` — Caddy (public TLS) + gateway + control + postgres
   + headscale (embedded DERP relay) + a staging `dregg-node`.
 - **reusable pre-auth key (owner `ember`, reusable, 720h):**
   `<HEADSCALE_AUTHKEY — ask ember / generate fresh on the edge>` (never commit the
   live value; the keys that were once here have been rotated/expired).
   Regenerate on the edge with:
-  `ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52` →
+  `ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_IP>` →
   `cd /opt/dreggnet && docker compose exec headscale headscale preauthkeys create --user 1 --reusable --expiration 720h`
   (the `--user` flag wants the numeric id; `headscale users list` shows `ember` = id 1).

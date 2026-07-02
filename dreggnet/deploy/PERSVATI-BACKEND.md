@@ -11,7 +11,7 @@ the whole DreggNet stack natively — no cross-compile, no zigbuild.**
 
 ## The split — what lives where
 
-| component | edge (AWS, `34.224.208.52`) | persvati (home) |
+| component | edge (AWS, `<EDGE_IP>`) | persvati (home) |
 | --- | --- | --- |
 | Caddy (public TLS + basic-auth) | ✅ the one public door | |
 | gateway (fly-compatible machines API) | ✅ | |
@@ -139,7 +139,7 @@ as fallback). The switch required `--force-reauth` (changing `--login-server`).
 ## End-to-end dispatch — proven vs the remaining seam
 
 - **PROVEN — edge→overlay→persvati, end to end.** From the AWS edge box
-  (`ssh -i dreggnet-staging.pem ubuntu@34.224.208.52`), over the headscale overlay:
+  (`ssh -i dreggnet-staging.pem ubuntu@<EDGE_IP>`), over the headscale overlay:
   `POST http://100.64.0.2:8021/fulfill` runs the real durable metered workload on
   persvati's cores and returns the metered result — verified for both the dogfood
   (`{}` → `step1=42, step2=84, meter_units=2`) and a funded `edge-dispatch` lease.

@@ -92,7 +92,7 @@ no-DNS local testing.
 
 ## `dregg.works` routing — DNS + Caddy (design; deferred to the deploy lane)
 
-The edge box (`34.224.208.52`) runs Caddy as the only public door; it terminates
+The edge box (`<EDGE_IP>`) runs Caddy as the only public door; it terminates
 TLS and reverse-proxies to `gateway:8080` (see `deploy/staging/Caddyfile`). Web
 hosting needs two additions, **to be wired by whoever owns `deploy/`** — this doc
 is the spec, the live `Caddyfile` is intentionally NOT edited here.
@@ -100,8 +100,8 @@ is the spec, the live `Caddyfile` is intentionally NOT edited here.
 ### 1. DNS — a wildcard record
 
 ```
-*.dregg.works.   A   34.224.208.52      ; (or CNAME → the edge name)
-dregg.works.     A   34.224.208.52      ; apex (optional: a landing page)
+*.dregg.works.   A   <EDGE_IP>      ; (or CNAME → the edge name)
+dregg.works.     A   <EDGE_IP>      ; apex (optional: a landing page)
 ```
 
 A wildcard `*.dregg.works` so any published `<name>.dregg.works` reaches the edge
@@ -180,7 +180,7 @@ the **DNS-01** challenge (HTTP-01 cannot satisfy `*.dregg.works`). Two options:
 
 **Deferred — the live `dregg.works` deploy** (owned by the `deploy/` lane):
 
-- The DNS wildcard `*.dregg.works → 34.224.208.52` and the Caddy wildcard host
+- The DNS wildcard `*.dregg.works → <EDGE_IP>` and the Caddy wildcard host
   block + wildcard TLS (DNS-01 cert, or on-demand) specified above. The live
   `Caddyfile` is not edited here.
 - Mounting `SiteHostHandler` in the gateway serving binary's connection loop

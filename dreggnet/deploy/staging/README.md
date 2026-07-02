@@ -103,11 +103,11 @@ stop the instance, `aws ec2 modify-instance-attribute --instance-id <id>
 
 A live t3.medium staging box (us-east-1):
 
-- **Instance:** `i-03365e2bcf4ea08b2` (t3.medium, us-east-1c)
-- **Public IP / DNS:** `3.95.22.43` / `ec2-3-95-22-43.compute-1.amazonaws.com`
-- **AMI:** `ami-0a02a779008fa3b99` (Ubuntu 24.04 LTS amd64)
+- **Instance:** `<EDGE_INSTANCE_ID>` (t3.medium, us-east-1c)
+- **Public IP / DNS:** `<EDGE_IP>` / `ec2-3-95-22-43.compute-1.amazonaws.com`
+- **AMI:** `<UBUNTU_2404_AMI>` (Ubuntu 24.04 LTS amd64)
 - **Key pair:** `dreggnet-staging` → `~/.ssh/dreggnet-staging.pem`
-- **Security group:** `sg-0d76f69da366c1e91` — ingress 22 (ssh), 8080 (gateway),
+- **Security group:** `<EDGE_SECURITY_GROUP_ID>` — ingress 22 (ssh), 8080 (gateway),
   8420 (node API), 9420 (node gossip), all from `0.0.0.0/0`
 - **Root volume:** 20 GB gp3
 - **User-data:** installs Docker CE + compose plugin + rsync; creates `/opt/dreggnet`
@@ -115,13 +115,13 @@ A live t3.medium staging box (us-east-1):
 
 > ⚠ Security: SSH (22) is open to `0.0.0.0/0` for deploy convenience. Tighten to
 > your IP for anything that lives:
-> `aws ec2 authorize-security-group-ingress --group-id sg-0d76f69da366c1e91 --protocol tcp --port 22 --cidr <your-ip>/32`
+> `aws ec2 authorize-security-group-ingress --group-id <EDGE_SECURITY_GROUP_ID> --protocol tcp --port 22 --cidr <your-ip>/32`
 > (and revoke the `0.0.0.0/0` rule).
 
 ### Manage the box
 
 ```sh
-REGION=us-east-1; IID=i-03365e2bcf4ea08b2
+REGION=us-east-1; IID=<EDGE_INSTANCE_ID>
 aws ec2 stop-instances      --region $REGION --instance-ids $IID   # stop billing (keep disk)
 aws ec2 start-instances     --region $REGION --instance-ids $IID   # resume
 aws ec2 describe-instances  --region $REGION --instance-ids $IID \

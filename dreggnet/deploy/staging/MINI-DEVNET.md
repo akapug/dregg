@@ -11,7 +11,7 @@ shipped, the single token-drop that takes it live, and the mini-devnet shape.
 
 ## 1. What is live right now
 
-On the AWS edge box (`i-03365e2bcf4ea08b2`, EIP `34.224.208.52`):
+On the AWS edge box (`<EDGE_INSTANCE_ID>`, EIP `<EDGE_IP>`):
 
 | Piece | State | Reached at |
 |---|---|---|
@@ -72,8 +72,8 @@ docker build -t dregg-discord-bot:staging .
 
 # ship to the edge (save → scp → load):
 docker save dregg-discord-bot:staging | gzip > /tmp/dregg-bot.tgz
-scp -i ~/.ssh/dreggnet-staging.pem /tmp/dregg-bot.tgz ubuntu@34.224.208.52:/tmp/
-ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52 \
+scp -i ~/.ssh/dreggnet-staging.pem /tmp/dregg-bot.tgz ubuntu@<EDGE_IP>:/tmp/
+ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_IP> \
   'gunzip -c /tmp/dregg-bot.tgz | docker load'
 ```
 
@@ -104,7 +104,7 @@ already in place.
 2. On the edge box, fill the secrets in `/opt/dreggnet/.env` (NOT committed):
 
    ```sh
-   ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@34.224.208.52
+   ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_IP>
    sudo -e /opt/dreggnet/.env     # or append with the values:
    #   DISCORD_TOKEN=<the bot token>
    #   DISCORD_APP_ID=<the numeric application id>
@@ -169,7 +169,7 @@ It is reached through Caddy with **defence in depth**:
 # real domain (once DNS + Let's Encrypt are live):
 curl -u ember:<pw> 'https://dreggnet.fg-goose.online/admin?token=<ADMIN_TOKEN>'
 # raw IP / pre-DNS (self-signed):
-curl -k -u ember:<pw> 'https://34.224.208.52/admin?token=<ADMIN_TOKEN>'
+curl -k -u ember:<pw> 'https://<EDGE_IP>/admin?token=<ADMIN_TOKEN>'
 ```
 
 No `ADMIN_TOKEN` set → the portal returns 404 (disabled). Wrong token → 401.

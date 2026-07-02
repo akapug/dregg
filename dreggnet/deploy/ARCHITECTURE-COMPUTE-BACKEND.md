@@ -7,11 +7,11 @@ a home box, the cloud is only the edge, and a self-hosted Tailscale control serv
 ```
                     public internet
                           │
-                 (DNS A: 34.224.208.52)
+                 (DNS A: <EDGE_IP>)
                           │
         ┌─────────────────▼──────────────────┐
-        │   AWS edge box  i-03365e2bcf4ea08b2 │   t3-class, 24/7, cheap
-        │   EIP 34.224.208.52  (stable IP)    │
+        │   AWS edge box  <EDGE_INSTANCE_ID> │   t3-class, 24/7, cheap
+        │   EIP <EDGE_IP>  (stable IP)    │
         │                                     │
         │   Caddy :443  ── TLS + basic-auth   │   the only public door
         │     ├─ dreggnet.fg-goose.online → gateway:8080
@@ -116,7 +116,7 @@ One record, added at the fg-goose.online registrar:
 | --- | --- |
 | type | `A` |
 | host / name | `headscale.dreggnet` (FQDN `headscale.dreggnet.fg-goose.online`) |
-| value | `34.224.208.52` (the edge box EIP) |
+| value | `<EDGE_IP>` (the edge box EIP) |
 | TTL | `300` |
 
 Caddy auto-issues a Let's Encrypt cert for the name once this propagates; at that

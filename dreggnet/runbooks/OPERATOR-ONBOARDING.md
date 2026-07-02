@@ -119,7 +119,7 @@ cat >> ~/.ssh/authorized_keys < their-key.pub
 ```
 
 The edge's own key is `~/.ssh/dreggnet-staging.pem` (the operator reaches the edge
-as `ubuntu@34.224.208.52`); reaching your box happens over the overlay address,
+as `ubuntu@<EDGE_IP>`); reaching your box happens over the overlay address,
 not a public IP. Keep this to keys you trust — these boxes are independently
 operated on purpose (that independence is the security property, FEDERATION.md).
 

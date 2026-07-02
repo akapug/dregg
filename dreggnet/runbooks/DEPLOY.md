@@ -14,10 +14,10 @@ Deeper: `deploy/staging/README.md` (deploy mechanics + provisioning from scratch
 | | |
 |---|---|
 | **Instance** | `<INSTANCE_ID>` (t3.medium, us-east-1c, Ubuntu 24.04 amd64) |
-| **Stable IP (EIP)** | `<EDGE_HOST>` (`eipalloc-0e1bb09c7d49770f9`) — survives stop/start |
+| **Stable IP (EIP)** | `<EDGE_HOST>` (`<EIP_ALLOCATION_ID>`) — survives stop/start |
 | **SSH** | `ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST>` |
 | **Stack dir** | `/opt/dreggnet` |
-| **Security group** | `sg-0d76f69da366c1e91` — ingress 22, 80, 443, 8420, 9420, 3478/udp |
+| **Security group** | `<EDGE_SECURITY_GROUP_ID>` — ingress 22, 80, 443, 8420, 9420, 3478/udp |
 
 Manage the instance (stop when idle — the EIP keeps the address stable so DNS
 doesn't break):

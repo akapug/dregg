@@ -12,7 +12,7 @@ blocks).
 | **URL** | `https://dreggnet.example.com/` (once the A-record below is added) |
 | **Pre-DNS URL** | `https://<EDGE_HOST>/` (self-signed cert until the real cert lands — `curl -k` / click through the browser warning) |
 | **Box** | EC2 `<INSTANCE_ID>` (t3.medium, us-east-1c) |
-| **Stable IP (EIP)** | `<EDGE_HOST>` (`eipalloc-0e1bb09c7d49770f9`) — survives stop/start |
+| **Stable IP (EIP)** | `<EDGE_HOST>` (`<EIP_ALLOCATION_ID>`) — survives stop/start |
 | **SSH** | `ssh -i ~/.ssh/dreggnet-staging.pem ubuntu@<EDGE_HOST>` |
 | **Stack dir on box** | `/opt/dreggnet` |
 
@@ -118,4 +118,4 @@ left allocated but unassociated (so don't release it — keep it on the box).
 - SSH (22) and the node ports (8420/9420) are open to `0.0.0.0/0`. The node
   ports are intentionally open (best-effort semiprivate). Tighten 22 to your IP
   if this box lives long:
-  `aws ec2 authorize-security-group-ingress --group-id sg-0d76f69da366c1e91 --protocol tcp --port 22 --cidr <your-ip>/32` then revoke the `0.0.0.0/0` rule.
+  `aws ec2 authorize-security-group-ingress --group-id <EDGE_SECURITY_GROUP_ID> --protocol tcp --port 22 --cidr <your-ip>/32` then revoke the `0.0.0.0/0` rule.
