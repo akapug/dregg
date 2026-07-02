@@ -122,7 +122,28 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
 /// with the 16 wide anchors shifted past them. THE REGEN-RIDER: the committed registry row
 /// supersedes this transform when the big-bang regen lands.
 fn pinned_factory_twin() -> (EffectVmDescriptor2, usize) {
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
+
     let desc = deployed_wide_descriptor("factoryVmDescriptor2R24");
+    // REGEN AUTO-SWITCH: when the big-bang regen lands the committed `factoryV3Carriers` row,
+    // the octet pins are NATIVE — use the row as-is (the twin transform retires itself).
+    let native_pin = desc.constraints.iter().find_map(|c| match c {
+        VmConstraint2::Base(VmConstraint::PiBinding { col, pi_index, .. })
+            if *col == AFTER_BASE + B_CHILD_VK_OCTET =>
+        {
+            Some(*pi_index)
+        }
+        _ => None,
+    });
+    if let Some(pi) = native_pin {
+        assert_eq!(
+            pi, FACTORY_CHILD_VK_PI_LO,
+            "the committed regen row pins child_vk8 at a different PI base — bump \
+             FACTORY_CHILD_VK_PI_LO (ivc_turn_chain) to match the emitted geometry"
+        );
+        return (desc, pi);
+    }
     let insert_at = desc.public_input_count - 16; // the narrow PI tail, ahead of the anchors
     assert_eq!(
         insert_at, FACTORY_CHILD_VK_PI_LO,
@@ -207,10 +228,17 @@ fn mint_factory_leg(
 
     // The STEP-3 pinned twin + the claim values (the committed AFTER carrier octets).
     let (twin, insert_at) = pinned_factory_twin();
-    let mut claims: Vec<BabyBear> = Vec::with_capacity(16);
-    claims.extend_from_slice(&after_w.pre_limbs[B_CHILD_VK_OCTET..B_CHILD_VK_OCTET + 8]);
-    claims.extend_from_slice(&after_w.pre_limbs[B_CONTRACT_HASH_OCTET..B_CONTRACT_HASH_OCTET + 8]);
-    let twin_dpis = splice_pi_values(&dpis, insert_at, &claims);
+    let twin_dpis = if dpis.len() == twin.public_input_count {
+        // The regen'd generator already publishes the octet claims (the native row) — no splice.
+        dpis
+    } else {
+        let mut claims: Vec<BabyBear> = Vec::with_capacity(16);
+        claims.extend_from_slice(&after_w.pre_limbs[B_CHILD_VK_OCTET..B_CHILD_VK_OCTET + 8]);
+        claims.extend_from_slice(
+            &after_w.pre_limbs[B_CONTRACT_HASH_OCTET..B_CONTRACT_HASH_OCTET + 8],
+        );
+        splice_pi_values(&dpis, insert_at, &claims)
+    };
     assert_eq!(twin_dpis.len(), twin.public_input_count);
 
     let config = ir2_leaf_wrap_config();
@@ -313,82 +341,97 @@ fn deployed_factory_turn_forged_child_vk_rejected() {
 }
 
 /// FAIL-CLOSED (fast) — a factory witness attached to a leg whose descriptor does NOT carry the
-/// STEP-3 octet pins (the PRE-REGEN deployed shape) is REFUSED by the fold arm's admission gate
-/// (never silently folded, never bound to the anchor lanes).
+/// STEP-3 octet pins (the PRE-REGEN deployed shape: 63 PIs, wide anchors directly after the
+/// narrow 47 — the claim slots would ALIAS the anchor lanes) is REFUSED by the fold arm's
+/// admission gate: never silently folded, never bound to the anchor lanes.
+///
+/// Generator-independent (a PiBinding-only stand-in leg at the EXACT deployed PI shape), so it
+/// bites even while the in-flight C_SPAN widening keeps the committed registry rows and the
+/// live generators drifted (the mid-big-bang window); routed through
+/// `prove_turn_chain_recursive_without_host_gate` so the arm itself (not the name-registry
+/// admission) is what refuses.
 #[test]
 fn deployed_factory_witness_on_unpinned_leg_is_refused() {
-    // Mint the leg on the DEPLOYED (unpinned) descriptor: same trace/dpis, no twin.
-    let st = CellState::new(1000, 0);
-    let effects = vec![Effect::CreateCellFromFactory {
-        factory_vk: BabyBear::new(0xFAC),
-        child_vk_derived: BabyBear::new(0xCE11),
-    }];
-    let before_cell = producer_cell(1000, 0);
-    let after_cell = producer_cell(1000, 1);
-    let mut ledger = Ledger::new();
-    ledger.insert_cell(after_cell.clone()).expect("ledger seed");
-    let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
-    let m = material();
-    let before_w = rw::produce(
-        &before_cell,
-        &ledger,
-        &[0u8; 32],
-        &[0u8; 32],
-        &receipt_log,
-        &RotationCarrierMaterial::default(),
-    );
-    let after_w = rw::produce(
-        &after_cell,
-        &ledger,
-        &[0u8; 32],
-        &[0u8; 32],
-        &receipt_log,
-        &m,
-    );
-    let before_accounts = vec![HeapLeaf {
-        addr: BabyBear::new(0xAA01),
-        value: BabyBear::new(0xAA01),
-    }];
-    let (trace, dpis, map_heaps) = generate_rotated_create_from_factory_wide(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&after_w),
-        &empty_caveat_manifest(),
-        &before_accounts,
-    )
-    .expect("deployed factory wide trace generates");
-    let desc = deployed_wide_descriptor("factoryVmDescriptor2R24");
-    let config = ir2_leaf_wrap_config();
-    let proof = prove_vm_descriptor2_for_config(
-        &desc,
-        &trace,
-        &dpis,
-        &MemBoundaryWitness::default(),
-        &map_heaps,
-        &UMemBoundaryWitness::default(),
-        &config,
-    )
-    .expect("the deployed (unpinned) factory wide leg proves");
-    let leg = RotatedParticipantLeg {
-        proof,
-        descriptor: desc,
-        public_inputs: dpis,
-        carrier_witness: Some(CarrierWitness::Factory(backing_bundle(&[0x9Au8; 32]))),
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
+
+    // The deployed pre-regen factory wide PI shape: 47 narrow + 16 anchors = 63 PIs, NO octet
+    // pins. A minimal PiBinding-only descriptor at that shape (pi k <- row0 col k).
+    let n_pis = FACTORY_CHILD_VK_PI_LO + 16; // 63
+    let constraints: Vec<dregg_circuit::descriptor_ir2::VmConstraint2> = (0..n_pis)
+        .map(|k| {
+            dregg_circuit::descriptor_ir2::VmConstraint2::Base(VmConstraint::PiBinding {
+                row: VmRow::First,
+                col: k,
+                pi_index: k,
+            })
+        })
+        .collect();
+    let desc = EffectVmDescriptor2 {
+        name: "factory-unpinned-deployed-shape-standin".to_string(),
+        trace_width: n_pis,
+        public_input_count: n_pis,
+        tables: vec![],
+        constraints,
+        hash_sites: vec![],
+        ranges: vec![],
     };
-    let turns = vec![FinalizedTurn::new(DescriptorParticipant::rotated(leg))];
-    match prove_turn_chain_recursive(&turns) {
+    let config = ir2_leaf_wrap_config();
+    let mint_standin = |row: Vec<BabyBear>, witness: Option<CarrierWitness>| {
+        let trace = vec![row.clone(), row.clone()];
+        let proof = prove_vm_descriptor2_for_config(
+            &desc,
+            &trace,
+            &row,
+            &MemBoundaryWitness::default(),
+            &[],
+            &UMemBoundaryWitness::default(),
+            &config,
+        )
+        .expect("the unpinned deployed-shape stand-in leg proves");
+        FinalizedTurn::new(DescriptorParticipant::rotated(RotatedParticipantLeg {
+            proof,
+            descriptor: desc.clone(),
+            public_inputs: row,
+            carrier_witness: witness,
+        }))
+    };
+    // Two chained stand-in turns (the fold needs >= 2): turn 1's wide OLD anchor (PIs n-16..n-8)
+    // equals turn 0's wide NEW anchor (PIs n-8..n).
+    let row0: Vec<BabyBear> = (0..n_pis).map(|k| BabyBear::new(900 + k as u32)).collect();
+    let mut row1: Vec<BabyBear> = (0..n_pis).map(|k| BabyBear::new(2900 + k as u32)).collect();
+    for k in 0..8 {
+        row1[n_pis - 16 + k] = row0[n_pis - 8 + k];
+    }
+    // Chain the 1-felt rotated roots too (PI 42/43), so the host continuity tooth passes under
+    // EITHER anchor classification (the wide floor is a moving constant mid-big-bang).
+    row1[42] = row0[43];
+    let t0 = mint_standin(
+        row0,
+        Some(CarrierWitness::Factory(backing_bundle(&[0x9Au8; 32]))),
+    );
+    let t1 = mint_standin(row1, None);
+    let turns = vec![t0, t1];
+    match dregg_circuit_prove::ivc_turn_chain::prove_turn_chain_recursive_without_host_gate(
+        &turns,
+        &[0, 0],
+    ) {
         Err(e) => {
             let msg = format!("{e:?}");
             assert!(
                 msg.contains("factory"),
                 "the refusal names the factory carrier: {msg}"
             );
+            assert!(
+                msg.contains("does not publish the carrier claim slots")
+                    || msg.contains("overlaps the")
+                    || msg.contains("not a WIDE"),
+                "the refusal names the missing claim publication (fail-closed, the regen rider): {msg}"
+            );
             eprintln!("FAIL-CLOSED: unpinned factory leg + witness REFUSED: {msg}");
         }
         Ok(_) => panic!(
-            "a factory witness on an UNPINNED deployed leg folded — the admission gate is OPEN \
-             (the claim lanes would alias the wide anchors)"
+            "a factory witness on an UNPINNED deployed-shape leg folded — the admission gate is \
+             OPEN (the claim lanes would alias the wide anchors)"
         ),
     }
 }

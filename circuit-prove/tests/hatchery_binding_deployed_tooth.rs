@@ -193,10 +193,17 @@ fn mint_hatchery_leg(
     .expect("deployed factory wide trace generates");
 
     let (twin, insert_at) = pinned_factory_twin();
-    let mut claims: Vec<BabyBear> = Vec::with_capacity(16);
-    claims.extend_from_slice(&after_w.pre_limbs[B_CHILD_VK_OCTET..B_CHILD_VK_OCTET + 8]);
-    claims.extend_from_slice(&after_w.pre_limbs[B_CONTRACT_HASH_OCTET..B_CONTRACT_HASH_OCTET + 8]);
-    let twin_dpis = splice_pi_values(&dpis, insert_at, &claims);
+    let twin_dpis = if dpis.len() == twin.public_input_count {
+        // The regen'd generator already publishes the octet claims (the native row) — no splice.
+        dpis
+    } else {
+        let mut claims: Vec<BabyBear> = Vec::with_capacity(16);
+        claims.extend_from_slice(&after_w.pre_limbs[B_CHILD_VK_OCTET..B_CHILD_VK_OCTET + 8]);
+        claims.extend_from_slice(
+            &after_w.pre_limbs[B_CONTRACT_HASH_OCTET..B_CONTRACT_HASH_OCTET + 8],
+        );
+        splice_pi_values(&dpis, insert_at, &claims)
+    };
     assert_eq!(twin_dpis.len(), twin.public_input_count);
 
     let config = ir2_leaf_wrap_config();
