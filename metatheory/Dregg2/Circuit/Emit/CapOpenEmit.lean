@@ -630,20 +630,78 @@ theorem effCapOpenWriteV3_strips_to_capOpen (hash : List ℤ → ℤ) (base : Ef
       memTableFaithful := by have := h.memTableFaithful; rwa [hmemLog] at this
       mapTableFaithful := by have := h.mapTableFaithful; rwa [hmapLog] at this }
 
-/-- **`introduceWriteCapOpenV3`** — introduce-via-cap on the WRITE-FORCING base (`introduceWriteV3`): the
-authority READ appendix + the deployed `insertWriteOp` (the cap-tree write FORCED, not frozen off-row). -/
+/-! ### The INSERT/REMOVE-shaped cap-write descriptors (the keystone deploy — the cap-write liveness
+close for delegate / introduce / delegateAtten / revokeDelegation).
+
+The UPDATE-shaped `effCapOpenWriteV3` after-spine CANNOT be satisfied by a cap-tree INSERT (the fresh
+key is ABSENT in BEFORE — inserts reorder siblings, so there is NO shared before/after path for the
+`afterLeafWelds`/`keyBindGate` to ride) nor by the deployed REMOVE (the tombstone leaf is the ZERO
+digest, which no leaf-absorb produces). The SHAPE-matched descriptors below are the ones the keystones
+`CapInsertEmit`/`CapRemoveEmit` prove about (`effCapInsertV3_forces_write8` /
+`effCapRemoveV3_forces_write8`): the reused `effCapOpenV3` membership read welded to the committed
+AFTER (insert) / BEFORE (remove) cap-root group. The defs LIVE here (the keystone files import this
+module); `CapInsertEmit`/`CapRemoveEmit` prove their `Satisfied2`-forcing theorems about THESE defs. -/
+
+/-- The 8 AFTER cap-root weld gates: the reused cap-open read's `capRoot` group equals the committed
+AFTER cap-root block (`capRootGroupCol (EFFECT_VM_WIDTH + 119)`) — so the read opens the spliced leaf
+against AFTER, lane-for-lane over the FULL 8-felt cap-root group. -/
+def afterCapRootWelds (w : Nat) : List VmConstraint2 :=
+  (List.finRange 8).map (fun i =>
+    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i)
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.capRootGroupCol (EFFECT_VM_WIDTH + 119) i))))
+
+/-- **`effCapInsertV3 base name n`** — the INSERT-shaped cap-write descriptor: the reused cap-membership
+read (`effCapOpenV3 base name n`) with its `capRoot` welded to the committed AFTER cap-root block, so
+the read opens the SPLICED cap leaf against the REBUILT after tree (the
+`cap_root.rs::CanonicalCapTree::insert_witness` after-membership path). NO before/after shared path
+(the insert has none). Its `Satisfied2` FORCES `MembersAt8 afterRoot (leafOf …)`
+(`CapInsertEmit.effCapInsertV3_forces_afterMembership`); the fresh-key non-membership bracket in BEFORE
++ the set-recompute ride the realizable `GapOpen`/`SpineCommits` carriers
+(`CapInsertEmit.effCapInsertV3_forces_write8`). The 8 welds add NO columns. -/
+def effCapInsertV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
+  { (effCapOpenV3 base name n) with
+    name        := name
+    constraints := (effCapOpenV3 base name n).constraints ++ afterCapRootWelds base.traceWidth }
+
+/-- The 8 BEFORE cap-root weld gates: the reused cap-open read's `capRoot` group equals the committed
+BEFORE cap-root block (`capRootGroupCol EFFECT_VM_WIDTH`) — so the read opens the removed leaf against
+BEFORE, lane-for-lane over the FULL 8-felt cap-root group. -/
+def beforeCapRootWelds (w : Nat) : List VmConstraint2 :=
+  (List.finRange 8).map (fun i =>
+    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i)
+      (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.capRootGroupCol EFFECT_VM_WIDTH i))))
+
+/-- **`effCapRemoveV3 base name n`** — the REMOVE-shaped cap-write descriptor: the reused cap-membership
+read (`effCapOpenV3 base name n`) with its `capRoot` welded to the committed BEFORE cap-root block —
+the read opens the REMOVED cap leaf against BEFORE (exactly the cap-open READ revokeDelegation must
+exhibit). Its `Satisfied2` FORCES `MembersAt8 beforeRoot (leafOf …)`
+(`CapRemoveEmit.effCapRemoveV3_forces_beforeMembership`); the removed-key non-membership in AFTER + the
+set-recompute ride the realizable carriers (`CapRemoveEmit.effCapRemoveV3_forces_write8`). -/
+def effCapRemoveV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
+  { (effCapOpenV3 base name n) with
+    name        := name
+    constraints := (effCapOpenV3 base name n).constraints ++ beforeCapRootWelds base.traceWidth }
+
+/-- **`introduceWriteCapOpenV3`** — introduce-via-cap on the INSERT-shaped keystone descriptor
+(`effCapInsertV3` over the map-op-free `introduceWriteV3` base): the membership READ opens the spliced
+(conferred) leaf against the committed AFTER cap-root — the cap-tree INSERT the light client witnesses
+(`CapInsertEmit.effCapInsertV3_forces_write8`). The conferred edge (introduced as-is from the
+introducer's held authority) carries the `EFFECT_INTRODUCE` facet the crown binds. -/
 def introduceWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.INTRODUCE
-    (effCapOpenWriteV3 EffectVmEmitRotationV3.introduceWriteV3
-      "dregg-effectvm-introduce-v1-rot24-v3-write-capopen" EFF_INTRODUCE)
+    (effCapInsertV3 EffectVmEmitRotationV3.introduceWriteV3
+      "dregg-effectvm-introduce-v1-rot24-v3-insert-capopen" EFF_INTRODUCE)
 
-/-- **`revokeDelegationWriteCapOpenV3`** — revoke(Delegation)-via-cap on the WRITE-FORCING base
-(`revokeDelegationWriteV3`): the authority READ appendix + the deployed `removeWriteOp` (the cap-tree REMOVE
-FORCED, not frozen off-row). -/
+/-- **`revokeDelegationWriteCapOpenV3`** — revoke(Delegation)-via-cap on the REMOVE-shaped keystone
+descriptor (`effCapRemoveV3` over `revokeDelegationWriteV3` — the base keeps the §14.EPOCH bump gate):
+the membership READ opens the REMOVED leaf against the committed BEFORE cap-root (the revocation read),
+and the committed AFTER cap-root carries the deployed tombstone zero-fold
+(`cap_root.rs::CanonicalCapTree::remove_witness`) — the cap-tree REMOVE the light client witnesses
+(`CapRemoveEmit.effCapRemoveV3_forces_write8`). -/
 def revokeDelegationWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.REVOKE_DELEGATION
-    (effCapOpenWriteV3 EffectVmEmitRotationV3.revokeDelegationWriteV3
-      "dregg-effectvm-revoke-v1-rot24-v3-write-capopen" EFF_DELEGATION_OPS)
+    (effCapRemoveV3 EffectVmEmitRotationV3.revokeDelegationWriteV3
+      "dregg-effectvm-revoke-v1-rot24-v3-remove-capopen" EFF_DELEGATION_OPS)
 
 /-- **`revokeCapabilityWriteCapOpenV3`** — revokeCapability-via-cap on the WRITE-FORCING base
 (`revokeCapabilityV3` = the MOVING `…GenuineNoRecomputeTick` face + `[heldReadOpRot, removeWriteOpRot]`): the
@@ -669,14 +727,17 @@ def refreshDelegationWriteCapOpenV3 : EffectVmDescriptor2 :=
     (effCapOpenWriteV3 EffectVmEmitRotationV3.refreshDelegationWriteV3
       "dregg-effectvm-refresh-v1-rot24-v3-write-capopen" EFF_DELEGATION_OPS)
 
-/-- **`delegateWriteCapOpenV3`** — delegate-via-cap on the WRITE-FORCING base (`grantCapWriteV3` = the moving
-attenuate-A face + `[heldReadOp, insertWriteOp]`): the authority READ appendix + the deployed `insertWriteOp`.
-Unlike `delegateCapOpenV3` (base `grantCapV3`, no write leg, authority-only), THIS carries BOTH the authority
-appendix AND the cap-tree write — the apex (`Rfix 1` re-pointed) wires it for the FULL guarantee A. -/
+/-- **`delegateWriteCapOpenV3`** — delegate-via-cap on the INSERT-shaped keystone descriptor
+(`effCapInsertV3` over the map-op-free `grantCapWriteV3` base): the membership READ opens the spliced
+(conferred) leaf against the committed AFTER cap-root — the cap-tree INSERT the light client witnesses
+(`CapInsertEmit.effCapInsertV3_forces_write8`). A plain (non-attenuating) delegate confers the held
+edge AS-IS, so the spliced leaf carries the delegator's `EFFECT_DELEGATION_OPS`-permitting mask — the
+facet the crown binds. Unlike `delegateCapOpenV3` (base `grantCapV3`, authority-only), THIS witnesses
+the write; the apex (`Rfix 1`) wires it for the FULL guarantee A. -/
 def delegateWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-    (effCapOpenWriteV3 EffectVmEmitRotationV3.grantCapWriteV3
-      "dregg-effectvm-delegate-v1-rot24-v3-write-capopen" EFF_DELEGATION_OPS)
+    (effCapInsertV3 EffectVmEmitRotationV3.grantCapWriteV3
+      "dregg-effectvm-delegate-v1-rot24-v3-insert-capopen" EFF_DELEGATION_OPS)
 
 /-- **`spawnWriteCapOpenV3`** — spawn-via-cap on the WRITE-FORCING base (`spawnWriteV3` = the spawn actor
 face REBASED onto the cap-WRITE rotation + the cells grow-gate INSERT + the cap-tree handoff INSERT). The
@@ -698,26 +759,34 @@ def grantCapWriteCapOpenV3 : EffectVmDescriptor2 :=
     (effCapOpenV3 EffectVmEmitRotationV3.grantCapWriteV3
       "dregg-effectvm-grantCap-v1-rot24-v3-write-capopen" EFF_GRANT_CAPABILITY)
 
-/-- **`delegateAttenWriteCapOpenV3`** — delegateAtten-via-cap on the WRITE-FORCING base (`delegateAttenV3` =
-the moving attenuate-A face + `[heldReadOp, insertWriteOp, submaskLookup]`): authority appendix + the deployed
-`insertWriteOp` + the `granted ⊑ held` submask (non-amplification). The apex (`Rfix 11` re-pointed) wires it.
+/-- **`delegateAttenWriteCapOpenV3`** — delegateAtten-via-cap on the INSERT-shaped keystone descriptor
+(`effCapInsertV3` over `delegateAttenV3` — the base keeps the `granted ⊑ held` submask lookup, the
+non-amplification tooth): the membership READ opens the spliced (narrowed, conferred) leaf against the
+committed AFTER cap-root — the cap-tree INSERT the light client witnesses
+(`CapInsertEmit.effCapInsertV3_forces_write8`) — while the surviving `submaskLookup` over
+`[KEEP_MASK, HELD_MASK]` enforces the narrow. The apex (`Rfix 11`) wires it.
 
-The membership crown binds `EFF_DELEGATION_OPS` (`1 <<< 16`), EXACTLY like plain `delegateWriteCapOpenV3` —
-an attenuated grant is a delegation, so the delegator's HELD anchor cap must permit `EFFECT_DELEGATION_OPS`
-(the broad held authority the conferred mask narrows), NOT `EFFECT_GRANT_CAPABILITY`. The submask lookup over
-`[KEEP_MASK, HELD_MASK]` then enforces `granted ⊑ held` on top of that membership. -/
+The crown binds `EFF_DELEGATION_OPS` (`1 <<< 16`) ON THE SPLICED LEAF: the conferred narrowed edge must
+still permit `EFFECT_DELEGATION_OPS` under this descriptor (the honest-producer contract the SDK route
+enforces at witness build; the delegator's held anchor permitting `EFFECT_DELEGATION_OPS` is checked
+producer-side, `from_membership_for`). -/
 def delegateAttenWriteCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.GRANT_CAP
-    (effCapOpenWriteV3 EffectVmEmitRotationV3.delegateAttenV3
-      "dregg-effectvm-delegateAtten-v1-rot24-v3-write-capopen" EFF_DELEGATION_OPS)
+    (effCapInsertV3 EffectVmEmitRotationV3.delegateAttenV3
+      "dregg-effectvm-delegateAtten-v1-rot24-v3-insert-capopen" EFF_DELEGATION_OPS)
 
--- The write-forcing wrappers add the SAME +71 constraints (70 appendix + selector tooth) over their
--- write base + `CAP_OPEN_SPAN` cols; the write base adds 2 map-ops over the frozen/genuine base.
-#guard introduceWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.introduceWriteV3.traceWidth + CAP_OPEN_SPAN + AFTER_SPINE_SPAN
-#guard revokeDelegationWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.revokeDelegationWriteV3.traceWidth + CAP_OPEN_SPAN + AFTER_SPINE_SPAN
+-- The INSERT/REMOVE-shaped keystone wrappers add the 77-constraint appendix + 8 root welds + the
+-- selector tooth (+86 constraints) and `CAP_OPEN_SPAN` cols (the welds add NO columns) over their
+-- map-op-free write base. revokeCapability keeps its map-op shape (+78, effCapOpenV3-wrapped).
+#guard introduceWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.introduceWriteV3.traceWidth + CAP_OPEN_SPAN
+#guard revokeDelegationWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.revokeDelegationWriteV3.traceWidth + CAP_OPEN_SPAN
+#guard delegateWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.grantCapWriteV3.traceWidth + CAP_OPEN_SPAN
+#guard delegateAttenWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.delegateAttenV3.traceWidth + CAP_OPEN_SPAN
 #guard revokeCapabilityWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth + CAP_OPEN_SPAN
-#guard introduceWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.introduceWriteV3.constraints.length + 78 + 41
-#guard revokeDelegationWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeDelegationWriteV3.constraints.length + 78 + 41
+#guard introduceWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.introduceWriteV3.constraints.length + 78 + 8
+#guard revokeDelegationWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeDelegationWriteV3.constraints.length + 78 + 8
+#guard delegateWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.grantCapWriteV3.constraints.length + 78 + 8
+#guard delegateAttenWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.delegateAttenV3.constraints.length + 78 + 8
 #guard revokeCapabilityWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeCapabilityV3.constraints.length + 78
 #guard spawnWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.spawnWriteV3.traceWidth + CAP_OPEN_SPAN
 #guard spawnWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.spawnWriteV3.constraints.length + 78

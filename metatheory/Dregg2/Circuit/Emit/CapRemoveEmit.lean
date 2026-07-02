@@ -53,7 +53,8 @@ open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (MembersAt8)
 open Dregg2.Circuit.DeployedCapOpen
   (CapOpenCols leafOf groupVal capPermOut SatisfiedEff capOpenEff_membership)
 open Dregg2.Circuit.Emit.CapOpenEmit
-  (capOpenCols eqGate eqGate_eval effCapOpenV3 effCapOpenV3_satisfiedEff)
+  (capOpenCols eqGate eqGate_eval effCapOpenV3 effCapOpenV3_satisfiedEff
+   beforeCapRootWelds effCapRemoveV3)
 open Dregg2.Circuit.SortedTreeNonMembership
   (SpineCommits keysOf GapOpen keyOf nonMembership_sound)
 open Dregg2.Circuit.CapTreeUpdate (sortedRemove capRemove_sound)
@@ -162,23 +163,9 @@ deployed `.remove` node8-AIR map-op (deployed-faithful) and the realizable `GapO
 carriers — the SAME named-realizable status `SpineCommits` carries throughout (a HYPOTHESIS, never an
 axiom; never a fabricated shared path; never lane-0). The inverse of `CapInsertEmit.effCapInsertV3`. -/
 
-/-- The 8 BEFORE cap-root weld gates: the reused cap-open read's `capRoot` group equals the committed
-BEFORE cap-root block (`capRootGroupCol EFFECT_VM_WIDTH`) — so the read opens the removed leaf against
-BEFORE, lane-for-lane over the FULL 8-felt cap-root group. -/
-def beforeCapRootWelds (w : Nat) : List VmConstraint2 :=
-  (List.finRange 8).map (fun i =>
-    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i)
-      (capRootGroupCol EFFECT_VM_WIDTH i))))
-
-/-- **`effCapRemoveV3 base name n`** — the remove-shaped cap-write descriptor: the reused cap-membership
-read (`effCapOpenV3 base name n`) with its `capRoot` welded to the committed BEFORE cap-root block. NO
-before/after shared path (the remove has none; the removed-key non-membership in AFTER is the deployed
-`.remove` map-op, not a second in-row membership). Its `Satisfied2` FORCES
-`MembersAt8 beforeRoot (leafOf …)` (`effCapRemoveV3_forces_beforeMembership`) on the active row. -/
-def effCapRemoveV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
-  { (effCapOpenV3 base name n) with
-    name        := name
-    constraints := (effCapOpenV3 base name n).constraints ++ beforeCapRootWelds base.traceWidth }
+/-! The descriptor defs `beforeCapRootWelds` / `effCapRemoveV3` LIVE in `CapOpenEmit` (the deployed
+wrapper definitions there reference them, and this file imports `CapOpenEmit` — the defs cannot live
+here without a cycle). This section proves the keystone theorems ABOUT them. -/
 
 /-- Every BEFORE-weld constraint is a constraint of the remove descriptor. -/
 theorem effCapRemoveV3_appMem (base : EffectVmDescriptor2) (name : String) (n : Nat)

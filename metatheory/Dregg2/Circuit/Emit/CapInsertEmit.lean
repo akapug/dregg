@@ -55,7 +55,8 @@ open Dregg2.Circuit.DeployedCapTree.Cap8Scheme (MembersAt8)
 open Dregg2.Circuit.DeployedCapOpen
   (CapOpenCols leafOf groupVal capPermOut SatisfiedEff capOpenEff_membership)
 open Dregg2.Circuit.Emit.CapOpenEmit
-  (capOpenCols eqGate eqGate_eval effCapOpenV3 effCapOpenV3_satisfiedEff)
+  (capOpenCols eqGate eqGate_eval effCapOpenV3 effCapOpenV3_satisfiedEff
+   afterCapRootWelds effCapInsertV3)
 open Dregg2.Circuit.SortedTreeNonMembership
   (SpineCommits keysOf GapOpen keyOf nonMembership_sound update_sound sortedInsert)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (capRootGroupCol)
@@ -168,24 +169,9 @@ HYPOTHESIS, never an axiom; never a fabricated shared path; never lane-0 — the
 the BEFORE/AFTER cap-roots are the FULL committed 8-felt groups). The cap twin of
 `AccumulatorInsertEmit.effAccumInsertV3`. -/
 
-/-- The 8 AFTER cap-root weld gates: the reused cap-open read's `capRoot` group equals the committed
-AFTER cap-root block (`capRootGroupCol (EFFECT_VM_WIDTH + 119)`) — so the read opens the spliced leaf
-against AFTER, lane-for-lane over the FULL 8-felt cap-root group. -/
-def afterCapRootWelds (w : Nat) : List VmConstraint2 :=
-  (List.finRange 8).map (fun i =>
-    VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot i)
-      (capRootGroupCol (EFFECT_VM_WIDTH + 119) i))))
-
-/-- **`effCapInsertV3 base name n`** — the insert-shaped cap-write descriptor: the reused cap-membership
-read (`effCapOpenV3 base name n`) with its `capRoot` welded to the committed AFTER cap-root block. NO
-before/after shared path (the insert has none; the fresh-key non-membership is the deployed `.absent`
-map-op, not a second in-row membership). Its `Satisfied2` FORCES `MembersAt8 afterRoot (leafOf …)`
-(`effCapInsertV3_forces_afterMembership`) on the active row. The 8 welds add NO columns (they reference
-the existing cap-open appendix columns + the committed AFTER cap-root columns). -/
-def effCapInsertV3 (base : EffectVmDescriptor2) (name : String) (n : Nat) : EffectVmDescriptor2 :=
-  { (effCapOpenV3 base name n) with
-    name        := name
-    constraints := (effCapOpenV3 base name n).constraints ++ afterCapRootWelds base.traceWidth }
+/-! The descriptor defs `afterCapRootWelds` / `effCapInsertV3` LIVE in `CapOpenEmit` (the deployed
+wrapper definitions there reference them, and this file imports `CapOpenEmit` — the defs cannot live
+here without a cycle). This section proves the keystone theorems ABOUT them. -/
 
 /-- Every AFTER-weld constraint is a constraint of the insert descriptor. -/
 theorem effCapInsertV3_appMem (base : EffectVmDescriptor2) (name : String) (n : Nat)

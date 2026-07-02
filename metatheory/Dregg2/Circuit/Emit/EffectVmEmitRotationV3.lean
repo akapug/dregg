@@ -1627,29 +1627,31 @@ def revokeCapabilityV3 : EffectVmDescriptor2 :=
     [.mapOp (heldReadOpRot sel.REVOKE_CAPABILITY),
      .mapOp (removeWriteOpRot sel.REVOKE_CAPABILITY)]
 
-/-- The rotated DELEGATE (the unattenuated cross-vat grant) WITH the cap-crown circuit leg: the held
-authority membership-read (REUSED `heldReadOp`) + the conferred-grant INSERT-write. The delegate base
-IS the attenuate-A moving face (`delegateVmDescriptor := attenuateVmDescriptor`), whose `gCapMove` lets
-`cap_root` move on-row; `insertWriteOp` FORCES that move to be the genuine sorted insert. NO submask
-lookup — an unattenuated delegate confers the held edge as-is (the recipient's authority is bounded by
-the delegator's held cap, authenticated by the membership read). -/
+/-- The rotated DELEGATE (the unattenuated cross-vat grant), on the ROTATED-limb write path with the
+arity-2 map-ops DROPPED (the INSERT-shaped after-spine deploy): the faithful 8-felt cap-tree INSERT is
+FORCED by the deployed insert-shaped cap-open wrap (`CapInsertEmit.effCapInsertV3_forces_write8` — the
+spliced-leaf membership in the REBUILT AFTER tree over the FULL committed 8-felt cap-root groups), NOT
+the arity-2 scalar `insertWriteOpRot` (which is UNSAT against the deployed arity-7
+`CanonicalCapTree::insert_witness` — the update-at-key `writesTo` shape does not fit a fresh-key splice,
+and its scalar root left the seven high felts unbound). The delegate base IS the attenuate-A moving face
+(`delegateVmDescriptor := attenuateVmDescriptor`). NO submask lookup — an unattenuated delegate confers
+the held edge as-is. -/
 def delegateV3 : EffectVmDescriptor2 :=
-  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (anchorReadOpRot sel.GRANT_CAP), .mapOp (insertWriteOpRot sel.GRANT_CAP)]
+  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick []
 
-/-- The rotated DELEGATE-ATTEN (the attenuated grant) WITH the cap-crown circuit leg: held-membership
-read + the conferred (attenuated) INSERT-write + the submask lookup (`granted ⊑ held` — the
-non-amplification tooth, REUSED from attenuate). Shares the moving attenuate-A face. -/
+/-- The rotated DELEGATE-ATTEN (the attenuated grant): the arity-2 map-ops DROPPED (the INSERT-shaped
+after-spine deploy — see `delegateV3`); ONLY the `granted ⊑ held` submask lookup (the non-amplification
+tooth, REUSED from attenuate) survives. The cap-tree INSERT is FORCED by the deployed
+`effCapInsertV3` wrap. Shares the moving attenuate-A face. -/
 def delegateAttenV3 : EffectVmDescriptor2 :=
   v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (anchorReadOpRot sel.GRANT_CAP), .mapOp (insertWriteOpRot sel.GRANT_CAP),
-     .lookup submaskLookup]
+    [.lookup submaskLookup]
 
-/-- The rotated GRANT-CAP (the bare cap grant) WITH the cap-crown circuit leg: held-membership read +
-the conferred INSERT-write. Shares the moving attenuate-A face (the deployed grantCap base). -/
+/-- The rotated GRANT-CAP (the bare cap grant): the arity-2 map-ops DROPPED (the INSERT-shaped
+after-spine deploy — the cap-tree INSERT rides the deployed `effCapInsertV3` wrap, see `delegateV3`).
+Shares the moving attenuate-A face (the deployed grantCap base). -/
 def grantCapWriteV3 : EffectVmDescriptor2 :=
-  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (anchorReadOpRot sel.GRANT_CAP), .mapOp (insertWriteOpRot sel.GRANT_CAP)]
+  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick []
 
 /-! ### The FROZEN-FACE cap-family WRITE rebase (introduce / revokeDelegation) — guarantee A closed.
 
@@ -1676,10 +1678,13 @@ map-ops-bound write column on the deployed wire — the genuine obstruction repo
 cap-crown circuit leg: the held authority membership-read + the conferred-grant INSERT-write. The genuine
 recompute frees `cap_root` to carry the move; `insertWriteOp` FORCES it to be the genuine sorted insert of
 the conferred rights (`param[KEEP_MASK]`) at the new edge key (`param[CAP_KEY]`). NO submask lookup — an
-introduce grants the held edge as-is (the recipient is bounded by the introducer's membership-read cap). -/
+introduce grants the held edge as-is (the recipient is bounded by the introducer's membership-read cap).
+
+INSERT-shaped after-spine deploy: the arity-2 map-ops are DROPPED (mirroring `delegateV3`) — the
+cap-tree INSERT is FORCED by the deployed `effCapInsertV3` wrap (`CapInsertEmit.effCapInsertV3_forces_write8`),
+not the scalar `insertWriteOpRot` (UNSAT against the deployed arity-7 fresh-key splice). -/
 def introduceWriteV3 : EffectVmDescriptor2 :=
-  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (anchorReadOpRot sel.INTRODUCE), .mapOp (insertWriteOpRot sel.INTRODUCE)]
+  v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick []
 
 /-! ### §14.EPOCH — the revokeDelegation parent-epoch BUMP write-gate (the freshness-forgery close).
 
@@ -1726,14 +1731,19 @@ def afterEpochCol (w : Nat) : Nat := w + 119 + B_EPOCH
 the cap-crown circuit leg: held-membership read + the ZERO-value REMOVE-write (`removeWriteOp`, reused from
 `revokeCapabilityV3` — revoke deletes a slot, NO submask) AND the §14.EPOCH parent-epoch BUMP gate
 (`epochBumpGate` on the rotated `B_EPOCH = 30` limbs). The genuine recompute frees `cap_root`;
-`removeWriteOp` FORCES the post root to the genuine sorted REMOVE (the ZERO sentinel write) at the revoked
-edge key against the membership-opened before root, and `epochBumpGate` FORCES the committed AFTER epoch to
-be the BEFORE epoch + 1 (the freshness tick that stales every child snapshot — the
-`RevokeDelegationEpochResidual` `delegationEpoch += 1` clause, now in-circuit-forced). -/
+`epochBumpGate` FORCES the committed AFTER epoch to be the BEFORE epoch + 1 (the freshness tick that
+stales every child snapshot — the `RevokeDelegationEpochResidual` `delegationEpoch += 1` clause, now
+in-circuit-forced).
+
+REMOVE-shaped after-spine deploy: the arity-2 map-ops are DROPPED (mirroring `delegateV3`'s insert
+drop) — the cap-tree REMOVE is FORCED by the deployed `effCapRemoveV3` wrap
+(`CapRemoveEmit.effCapRemoveV3_forces_write8`: the removed-leaf membership in BEFORE is TRACE-FORCED
+over the FULL committed 8-felt cap-root groups; the AFTER root is the deployed tombstone zero-fold),
+not the scalar `removeWriteOpRot` (whose update-at-key shape cannot express the ZERO-digest tombstone
+leaf and whose scalar root left the seven high felts unbound). Only the §14.EPOCH bump gate survives. -/
 def revokeDelegationWriteV3 : EffectVmDescriptor2 :=
   v3OfWithCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick
-    [.mapOp (heldReadOpRot sel.REVOKE_DELEGATION), .mapOp (removeWriteOpRot sel.REVOKE_DELEGATION),
-     .base (epochBumpGate sel.REVOKE_DELEGATION
+    [.base (epochBumpGate sel.REVOKE_DELEGATION
         (beforeEpochCol EFFECT_VM_WIDTH) (afterEpochCol EFFECT_VM_WIDTH))]
 
 /-! ### The DELEGATIONS-tree WRITE op (refreshDelegation — the `DELEG` system-root move, in-circuit).
@@ -4707,19 +4717,25 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard (mapOpsOf setFieldDynV3).length == 0
 #guard (mapOpsOf attenuateV3).length == 0
 #guard (mapOpsOf revokeCapabilityV3).length == 2
--- The cap-family WRITE close: delegate/grantCap carry held-read + insert-write (2 map ops);
--- delegateAtten ALSO the submask lookup (+1 constraint, 2 map ops). The post-cap-root WRITE is
--- now FORCED on the live wire (guarantee A — Authority — circuit-forced for these slots), on the
--- ROTATED cap-root limb (`v3OfCapWrite` — the cap-root weld dropped, note-spend-shaped).
+-- The cap-family WRITE close (INSERT/REMOVE-shaped after-spine deploy): delegate/grantCap/introduce
+-- carry NO map ops (the arity-2 scalar pair is DROPPED — the faithful 8-felt cap-tree INSERT is
+-- FORCED by the deployed `effCapInsertV3` wrap, never the lane-0 squeeze); delegateAtten keeps ONLY
+-- the submask non-amp lookup (+1); revokeDelegation keeps ONLY the §14.EPOCH bump gate (+1).
 #guard delegateV3.constraints.length
-        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 2
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length
 #guard grantCapWriteV3.constraints.length
-        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 2
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length
+#guard introduceWriteV3.constraints.length
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length
 #guard delegateAttenV3.constraints.length
-        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 3
-#guard (mapOpsOf delegateV3).length == 2
-#guard (mapOpsOf grantCapWriteV3).length == 2
-#guard (mapOpsOf delegateAttenV3).length == 2
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
+#guard revokeDelegationWriteV3.constraints.length
+        == (v3OfCapWrite EffectVmEmitAttenuateA.attenuateVmDescriptorGenuineNoRecomputeTick).constraints.length + 1
+#guard (mapOpsOf delegateV3).length == 0
+#guard (mapOpsOf grantCapWriteV3).length == 0
+#guard (mapOpsOf introduceWriteV3).length == 0
+#guard (mapOpsOf delegateAttenV3).length == 0
+#guard (mapOpsOf revokeDelegationWriteV3).length == 0
 -- The rotated Custom carries EXACTLY its one proof-binding op + the eight `customPiExposure`
 -- PI pins past the rotated passthrough base (no mem/map ops — the recursive-proof binding is
 -- Custom's only NEWLY-EXPRESSIBLE leg; the eight pins publish its bound (commit, vk) columns).
@@ -4794,141 +4810,43 @@ theorem attenuateV3_non_amp (hash : List ℤ → ℤ)
   obtain ⟨a, b, _, _, hab, hx, hy⟩ := (subsetTable_mem_iff MASK_BITS _ _).mp hlook'
   exact ⟨a, b, hx, hy, hab⟩
 
-/-! ### The cap-family WRITE keystones (`<slot>V3_non_amp` / `_forces_write`) — guarantee A closed.
+/-! ### The cap-family WRITE keystones — REBASED onto the INSERT/REMOVE-shaped after-spine deploy.
 
-Mirror of `attenuateV3_non_amp`: on an active cap-graph row of a `Satisfied2` witness of the ROTATED
-cap-family descriptor, (1) the touched capability IS authenticated against the before cap-root (the
-membership READ — a forged held leaf is excluded by `opensTo_functional`), and (2) the post `cap_root`
-is the GENUINE sorted WRITE of the conferred value at the touched key (`writesTo`, FUNCTIONAL under CR via
-`writesTo_functional` — a forged `new_cap_root` is UNSAT). THIS is the close: the cap-tree WRITE the base
-descriptor previously left to an off-row prover-supplied `SpineCommits` hypothesis is now FORCED on the
-deployed wire from `Satisfied2 <slot>V3`. -/
+The former `<slot>V3_forces_write` theorems (delegate / grantCap / introduce / revokeDelegation) forced
+the cap-tree write via the arity-2 scalar map-op pair — a mechanism that (a) left the seven high felts
+of the ~124-bit cap-root unbound (the lane-0 squeeze) and (b) is SHAPE-UNSAT against the deployed
+arity-7 `CanonicalCapTree`: `writesTo` is update-at-key, but a delegate/introduce SPLICES a fresh key
+(no shared before/after path) and a revoke tombstones the leaf to the ZERO digest (no leaf-absorb
+produces it). Those map-ops are DROPPED. The faithful 8-felt cap-tree writes are now forced downstream
+by the deployed INSERT/REMOVE-shaped cap-open wraps
+(`CapInsertEmit.effCapInsertV3_forces_write8` / `CapRemoveEmit.effCapRemoveV3_forces_write8`, over the
+committed 8-felt `beforeCapRootCols`/`afterCapRootCols` groups), which the CLASS-A refinement trios
+(`RotatedKernelRefinementCapFamily.{delegate,grantCap,delegateAtten,introduce,revokeDelegation}_descriptorRefines_sat`)
+consume. What survives HERE: delegateAtten's non-amplification submask tooth and revokeDelegation's
+§14.EPOCH bump gate. -/
 
-/-- **`delegateV3_forces_write` — the delegate cap-tree INSERT is FORCED in-circuit.** On an active
-delegate row of a `Satisfied2 delegateV3` witness: the held authority is membership-read against the
-before cap-root, and the post `cap_root` is the GENUINE sorted insert of the conferred rights
-(`param[KEEP_MASK]`) at the new edge key (`param[CAP_KEY]`). Forced from the deployed `insertWriteOp` —
-NOT the opaque `param.CAP_DIGEST_NEW` move, NOT an off-row decode. -/
-theorem delegateV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash delegateV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.GRANT_CAP = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol ANCHOR_KEY)) (some ((envAt t i).loc (prmCol ANCHOR_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (anchorReadOpRot sel.GRANT_CAP),
-      .mapOp (insertWriteOpRot sel.GRANT_CAP)] : List VmConstraint2),
-      c ∈ delegateV3.constraints := fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (anchorReadOpRot sel.GRANT_CAP)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (insertWriteOpRot sel.GRANT_CAP)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
-
-/-- **`grantCapWriteV3_forces_write` — the bare grant cap-tree INSERT is FORCED in-circuit.** As
-`delegateV3_forces_write`, over `grantCapWriteV3` (the deployed grantCap base + the cap-crown write
-leg). -/
-theorem grantCapWriteV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash grantCapWriteV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.GRANT_CAP = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol ANCHOR_KEY)) (some ((envAt t i).loc (prmCol ANCHOR_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (anchorReadOpRot sel.GRANT_CAP),
-      .mapOp (insertWriteOpRot sel.GRANT_CAP)] : List VmConstraint2),
-      c ∈ grantCapWriteV3.constraints := fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (anchorReadOpRot sel.GRANT_CAP)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (insertWriteOpRot sel.GRANT_CAP)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
-
-/-- **`delegateAttenV3_non_amp` — the delegateAtten cap-tree INSERT is FORCED in-circuit + non-amp.** As
-`delegateV3_forces_write` PLUS the `granted ⊑ held` bitwise submask tooth (the attenuated grant cannot
-amplify): the conferred rights `param[KEEP_MASK] ⊑ param[HELD_MASK]`. The post `cap_root` is the genuine
-sorted insert of the attenuated grant. -/
+/-- **`delegateAttenV3_non_amp` — the delegateAtten NON-AMPLIFICATION leg.** On an active grant row of a
+`Satisfied2 delegateAttenV3` witness, the conferred (narrowed) rights are a bitwise SUBMASK of the held
+rights (`keep ⊑ held`), forced by the surviving `submaskLookup` against the realizable subset table. The
+cap-tree INSERT itself is forced downstream by the deployed `effCapInsertV3` wrap (see the section
+header) — this leg keeps only the non-amplification tooth, exactly as `attenuateV3_non_amp`. -/
 theorem delegateAttenV3_non_amp (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsub : t.tf (.custom SUBMASK_TID) = subsetTable MASK_BITS)
     (hsat : Satisfied2 hash delegateAttenV3 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.GRANT_CAP = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol ANCHOR_KEY)) (some ((envAt t i).loc (prmCol ANCHOR_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH))
-    ∧ ∃ a b : Nat, (envAt t i).loc (prmCol KEEP_MASK) = (a : ℤ)
+    (_hactive : (envAt t i).loc sel.GRANT_CAP = 1) :
+    ∃ a b : Nat, (envAt t i).loc (prmCol KEEP_MASK) = (a : ℤ)
         ∧ (envAt t i).loc (prmCol HELD_MASK) = (b : ℤ) ∧ a &&& b = a := by
   have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (anchorReadOpRot sel.GRANT_CAP),
-      .mapOp (insertWriteOpRot sel.GRANT_CAP), .lookup submaskLookup] :
-      List VmConstraint2), c ∈ delegateAttenV3.constraints :=
-    fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (anchorReadOpRot sel.GRANT_CAP)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (insertWriteOpRot sel.GRANT_CAP)) (hmem _ (by simp))
+  have hmem : ∀ c ∈ ([.lookup submaskLookup] : List VmConstraint2),
+      c ∈ delegateAttenV3.constraints := fun c hc => List.mem_append_right _ hc
   have hlook := hrowc (.lookup submaskLookup) (hmem _ (by simp))
-  refine ⟨(hread hactive).1, hwrite hactive, ?_⟩
   have hlook' : [(envAt t i).loc (prmCol KEEP_MASK), (envAt t i).loc (prmCol HELD_MASK)]
       ∈ t.tf (.custom SUBMASK_TID) := hlook
   rw [hsub] at hlook'
   obtain ⟨a, b, _, _, hab, hx, hy⟩ := (subsetTable_mem_iff MASK_BITS _ _).mp hlook'
   exact ⟨a, b, hx, hy, hab⟩
-
-/-- **`introduceWriteV3_forces_write` — the introduce cap-tree INSERT is FORCED in-circuit (frozen-face
-close).** On an active cap-graph row of a `Satisfied2 introduceWriteV3` witness: the held authority is
-membership-read against the before cap-root, and the post `cap_root` is the GENUINE sorted insert of the
-conferred rights (`param[KEEP_MASK]`) at the new edge key (`param[CAP_KEY]`). Forced from the deployed
-`insertWriteOp` on the MOVING `introduceVmDescriptorGenuine` face — the v1-face `gCapPass` freeze that left
-this OFF-row is GONE. -/
-theorem introduceWriteV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash introduceWriteV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.INTRODUCE = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol ANCHOR_KEY)) (some ((envAt t i).loc (prmCol ANCHOR_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) ((envAt t i).loc (prmCol KEEP_MASK))
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (anchorReadOpRot sel.INTRODUCE),
-      .mapOp (insertWriteOpRot sel.INTRODUCE)] : List VmConstraint2),
-      c ∈ introduceWriteV3.constraints := fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (anchorReadOpRot sel.INTRODUCE)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (insertWriteOpRot sel.INTRODUCE)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
-
-/-- **`revokeDelegationWriteV3_forces_write` — the revokeDelegation cap-tree REMOVE is FORCED in-circuit
-(frozen-face close).** On an active cap-graph row of a `Satisfied2 revokeDelegationWriteV3` witness: the
-held authority is membership-read, and the post `cap_root` is the GENUINE sorted REMOVE (the ZERO sentinel
-write) at the revoked edge key (`param[CAP_KEY]`). Forced from the deployed `removeWriteOp` on the MOVING
-`revokeVmDescriptorGenuine` face — the v1-face `gCapPass` freeze is GONE. NO submask (revoke deletes a slot;
-non-amplification is structural — the ZERO write is below any held mask). -/
-theorem revokeDelegationWriteV3_forces_write (hash : List ℤ → ℤ)
-    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
-    (hsat : Satisfied2 hash revokeDelegationWriteV3 minit mfin maddrs t)
-    (i : Nat) (hi : i < t.rows.length)
-    (hactive : (envAt t i).loc sel.REVOKE_DELEGATION = 1) :
-    opensTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) (some ((envAt t i).loc (prmCol HELD_MASK)))
-    ∧ writesTo hash ((envAt t i).loc (beforeCapRootCol EFFECT_VM_WIDTH))
-        ((envAt t i).loc (prmCol CAP_KEY)) 0
-        ((envAt t i).loc (afterCapRootCol EFFECT_VM_WIDTH)) := by
-  have hrowc := hsat.rowConstraints i hi
-  have hmem : ∀ c ∈ ([.mapOp (heldReadOpRot sel.REVOKE_DELEGATION),
-      .mapOp (removeWriteOpRot sel.REVOKE_DELEGATION),
-      .base (epochBumpGate sel.REVOKE_DELEGATION
-        (beforeEpochCol EFFECT_VM_WIDTH) (afterEpochCol EFFECT_VM_WIDTH))] : List VmConstraint2),
-      c ∈ revokeDelegationWriteV3.constraints := fun c hc => List.mem_append_right _ hc
-  have hread := hrowc (.mapOp (heldReadOpRot sel.REVOKE_DELEGATION)) (hmem _ (by simp))
-  have hwrite := hrowc (.mapOp (removeWriteOpRot sel.REVOKE_DELEGATION)) (hmem _ (by simp))
-  exact ⟨(hread hactive).1, hwrite hactive⟩
 
 /-- **`revokeDelegationWriteV3_forces_epoch_bump` — the §14.EPOCH parent-epoch BUMP is FORCED in-circuit.**
 On an active revoke row (`sel.REVOKE_DELEGATION = 1`, not the last row — pad rows follow) of a `Satisfied2
@@ -5022,11 +4940,7 @@ theorem customV3_binds_proof (hash : List ℤ → ℤ)
 #assert_axioms setFieldDynV3_memLog
 #assert_axioms setFieldDynV3_readback_genuine
 #assert_axioms attenuateV3_non_amp
-#assert_axioms delegateV3_forces_write
-#assert_axioms grantCapWriteV3_forces_write
 #assert_axioms delegateAttenV3_non_amp
-#assert_axioms introduceWriteV3_forces_write
-#assert_axioms revokeDelegationWriteV3_forces_write
 #assert_axioms revokeDelegationWriteV3_forces_epoch_bump
 #assert_axioms revokeDelegationWriteV3_rejects_wrong_epoch
 #assert_axioms epochBumpGate_forces
