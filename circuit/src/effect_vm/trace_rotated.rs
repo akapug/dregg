@@ -1445,11 +1445,10 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
 /// `829 + 329 + 143 = 1301`. A satisfying trace FORCES the faithful 8-felt fields-write over the full
 /// ~124-bit BEFORE/AFTER root blocks (`effFieldsWriteV3_forces_write8`) — never the lane-0 squeeze the
 /// map_op-only host would leave. The wide carrier lands at THIS host width: `1301 + 608 = 1669`.
-pub const REFUSAL_WRITE_HOST_WIDTH: usize = 1455; // v11: wide 1935 − 480
+pub const REFUSAL_WRITE_HOST_WIDTH: usize = 1631; // v12: wide 2239 − 608
 /// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width =
-/// the graduated rotated base `GRAD_ROT_WIDTH`). v11 grew the graduated base by +154 (828→982, the
-/// deployed Lean base is 983), so the READ appendix sits at 983 — `REFUSAL_WRITE_HOST_WIDTH −
-/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1455 − 472 = 983`. (The v10 value 829 laid the
+/// the graduated rotated base `GRAD_ROT_WIDTH`). v12 grew the graduated base by +176 (983→1159), so the READ appendix sits at 1159 — `REFUSAL_WRITE_HOST_WIDTH −
+/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1631 − 472 = 1159`. (The v10 value 829 laid the
 /// membership 154 columns too low, so the deployed after-spine constraints — which reference the
 /// v11 base — read zero-padding and rejected.)
 pub const REFUSAL_WRITE_READ_BASE: usize =
@@ -3605,13 +3604,13 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
 /// the faithful 8-felt heap-write over the full ~124-bit BEFORE/AFTER root blocks
 /// (`effHeapWriteV3_forces_write8`) — never the lane-0 squeeze the map_op-only host would leave. The
 /// wide carriers land at THIS host width: `1287 + 608 = 1655`.
-pub const HEAP_WRITE_HOST_WIDTH: usize = 1441; // v11: wide 1921 − 480
+pub const HEAP_WRITE_HOST_WIDTH: usize = 1617; // v12: wide 2225 − 608
 // NB: the READ appendix base is `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN − AFTER_SPINE_SPAN`
-// (the graduated Class-A heap base, v11 = 969); see [`HEAP_WRITE_READ_BASE`] below.
+// (the graduated Class-A heap base, v12 = 1145); see [`HEAP_WRITE_READ_BASE`] below.
 /// The heap-open READ appendix base column (the splice base `heapWriteV3`'s trace width = the
 /// graduated Class-A heap base). v11 grew the base by +154 (deployed Lean base is 969), so the READ
-/// appendix sits at `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1441 − 472
-/// = 969`. (The v10 value 815 laid the membership 154 columns too low against the deployed after-spine
+/// appendix sits at `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1617 − 472
+/// = 1145`. (The v10 value 815 laid the membership 154 columns too low against the deployed after-spine
 /// constraints.)
 pub const HEAP_WRITE_READ_BASE: usize =
     HEAP_WRITE_HOST_WIDTH - CAP_OPEN_SPAN - CAP_OPEN_AFTER_SPINE_SPAN;
@@ -4196,7 +4195,7 @@ pub fn generate_rotated_refusal_wide(
 /// `ROT_WIDTH + 7·36 = 328 + 252 = 580`… +1 reserved = **581** (the committed
 /// `setFieldDynVmDescriptor2R24.trace_width`, distinct from `GRAD_ROT_WIDTH = 608`). The wide
 /// carriers (the `setFieldDynVmDescriptor2R24Wide` member) land at THIS host width.
-pub const SET_FIELD_DYN_HOST_WIDTH: usize = 955; // v11: wide 1435 − 480
+pub const SET_FIELD_DYN_HOST_WIDTH: usize = 1131; // v12: wide 1739 − 608
 
 /// The slot-index param column the dynamic setField indexes the 8-cell overflow memory by
 /// (`prmCol SLOT = prmCol VALUE = param1`, col 69 — both addr AND value of the Blum write, the
@@ -4361,7 +4360,7 @@ pub fn generate_rotated_set_field_dyn_wide(
 /// V1Face host as setFieldDyn (the carriers ride the identical 8-felt blocks);
 /// the trace SHAPE differs (a Custom row, no Blum-memory boundary), but the wide
 /// geometry is `append_wide_carriers` at 581.
-pub const CUSTOM_HOST_WIDTH: usize = 955; // v11: wide 1435 − 480
+pub const CUSTOM_HOST_WIDTH: usize = 1131; // v12: wide 1739 − 608
 
 /// **THE WIDE custom trace generator (`customVmDescriptor2R24`, 789-wide / 70 PI).**
 ///

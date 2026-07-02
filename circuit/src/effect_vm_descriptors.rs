@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "5ea231f0cc24c4790ba1821658374025c0aab0eb6099a1ebad7b65414e71d5b7";
+    "5754a901c62d5db56985f3b655ff8450f27748b29ca93bec9fabd824e0c4e1bc";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -1204,7 +1204,7 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "f2de76d04a701e462892281b1467dc821aaccbdce2864d7307a8b77d84a79bf1";
+    "4640cd17c237d346518fc997887ea42f1857ab8eae1f2809313a5fbd2f52c574";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1230,7 +1230,7 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "e5343fce10f912cca2a70fc187e68ad7fd2687dde1991f92f9061b969f86083f";
+    "0bffcf27c8fcd429f56ccca412846219df9e2944ce079bdd1815cd4cc22afc1a";
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -1958,9 +1958,9 @@ mod tests {
         use crate::effect_vm::columns::rotation::caveat as cav;
         use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
 
-        // The DEPLOYED rotated geometry (the v10 pre_limbs re-lay: NUM_PRE_LIMBS = 67 — the bare
+        // The DEPLOYED rotated geometry (the v12 pre_limbs re-lay: NUM_PRE_LIMBS = 112 — the bare
         // R=24 registers + cells/cap/nullifier/commitments/heap/lifecycle/epoch/height/disc roots +
-        // the +30 faithful-8-felt completion limbs 37..66). Source-of-truth = the canonical
+        // the 8-felt completion limbs 37..87 + the v12 carrier-material octets 88..111). Source-of-truth = the canonical
         // `trace_rotated` constants (which STEP-1 grew), NOT re-hardcoded literals; mirrors the Lean
         // `EffectVmEmitRotationV3` §1 constants and the caveat region inside it.
         use crate::effect_vm::trace_rotated::{
@@ -1968,10 +1968,10 @@ mod tests {
         };
         const V1_WIDTH: usize = EFFECT_VM_WIDTH;
         // chain carriers occupy `[B_CHAIN_BASE, B_SPAN)` (the head digest + one per 3-wide group).
-        const B_NUM_CHAIN: usize = B_SPAN - B_CHAIN_BASE; // 22 (v10: 67 limbs)
+        const B_NUM_CHAIN: usize = B_SPAN - B_CHAIN_BASE; // 37 (v12: 112 limbs)
         const C_SPAN: usize = 39;
         const C_COMMIT: usize = cav::MANIFEST_SIZE + cav::NUM_CHAIN; // 29 + 9 = 38
-        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 221 (v10)
+        const APPENDIX_SPAN: usize = 2 * B_SPAN + C_SPAN; // 341 (v12)
 
         let mut n = 0usize;
         for line in V3_STAGED_REGISTRY_TSV.lines() {
