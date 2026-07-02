@@ -249,7 +249,7 @@ design: the campaign refutes its own green first, then repairs.
 |---|---|---|---|---|
 | **custom** | — | yes (PI 46–49 deployed) | **PRESENT** | none — buff-in-production. (NB: the deeper per-turn `proofBind True→boundAt` in-AIR flip + 4→8-felt lift is a SEPARATE deployed VK epoch, still pending — `docs/reference/lean-circuit.md` §Custom, `CustomApex.lean`. The recursion-tree fold is what's buffed.) |
 | **factory** | SHALLOW→**BLOCKED-ON-WIDENING** | `[@wave-1 7c4257824]` CORRECTED: child_vk is NOT committed at HEAD in ANY in-AIR form, at any width. Rotated PI 38 carries the born cell's vm KEY = `hash_to_bb(owner_pubkey)` under the MISNOMER `child_vk_derived` (`turn/src/executor/effect_vm_bridge.rs:131-139`); the actual installed authority `effective_vk` (`apply.rs:2376-2421`) never reaches the VmEffect at all; the cells leaf is `(key, key)` with 1-felt contents (`trace_rotated.rs:1167-1189` — 8-felt-ness is in the DIGESTS only, `HeapLeaf` = 1-felt addr + 1-felt value); params carry no vk limbs (factory uses param0/param1 only, both ~31-bit `fold_bytes32_to_bb` folds); the born cell's state block is off-row, bound only via byte-domain blake3 `effects_hash` (Lean `EffectVmEmitCreateCellFromFactory.lean` §RT) | absent | the third edge CANNOT be built until a faithful committed carrier of child_vk EXISTS — a WIDENING epoch first (§5 item 9: three routes + blast radii). Do NOT expose unanchored witness-column teeth (6 free param cols exist — using them = the vacuous connect). Derivation (child_vk=Poseidon2(factory_vk‖params)) = named off-AIR. |
-| **dsl** | SHALLOW | Witnessed{Dfa} `⇒ None` — commits NOTHING (`mod.rs:462`) | absent | Layer A (non-VK): split out of None → tag-20 manifest entry riding caveatCommit→PI 45. Layer B (VK): `dfaPiExposure`. Reduces to Poseidon2-CR. |
+| **dsl** | `[@wave-4]` SHALLOW → **CONFIRMED CLASS-1 (BUILDABLE, not walled)** | Witnessed{Dfa} `⇒ None` — commits NOTHING TODAY (`mod.rs:462`), BUT the anchor `rc` is a SELF-CONTAINED 4-felt proof-commitment (`custom_proof_pi_commitment` over the DfaProofWire PIs — the SAME host fn custom uses), not an external committed-state value → no v12 widening needed | absent today; the recipe is real (see `[@wave-4]` block) | Layer A (non-VK): split out of None → tag-20 manifest entry, `rc[0..4]` into `params[0..4]` (FAITHFUL 4-felt, NOT membership's zeroed params). Step-5: dual-expose the committed manifest `rc` PI + fold-connect to the re-proved Dfa leaf. Reduces to Poseidon2-CR (`DslBackingAttack.dslEngineBinding_of_floor`). |
 | **membership** | `[@wave-3]` SHALLOW→**BLOCKED-ON-WIDENING** | CORRECTED: NEITHER anchor is a faithful AIR-committed felt in the rotated leg. The sender leaf is `poseidon2::hash_many(encode_hash(sender_PUBKEY))` (1-felt) — 0 hits for pubkey/sender/compress in `trace_rotated.rs`; OWNER_CELL_ID commits a DIFFERENT value (`cell_id = BLAKE3(pubkey‖token)`) by a DIFFERENT hash (`canonical_32_to_felts_4`, 4-felt) AND is ZERO-DEFAULTED in the rotated generator (`trace_rotated.rs:372-377 ..Default::default()`). The authorized_root VALUE is uncommitted: the SenderAuthorized manifest entry (tag 11) carries only the slot INDEX with `params=[0;4]` (`executor/mod.rs:341`), the value lives only in the folded `fields_root` digest (limb 36), and `verify.rs:523` DEFERS tag 11. | absent | see `[@wave-3]` block below — the third edge cannot be built non-vacuously at HEAD; the census's "plain connect to OWNER_CELL_ID / root committed as value" was WRONG (both anchors walled). |
 | **hatchery-invariant** | SHALLOW | invariant_digest === child_program_vk === FACTORY's child_vk | absent | RIDES factory's CreateCellFromFactory leg + one extra connect to a re-proved contract-attestation leaf. SHARES factory teeth. |
 | **bridge** | **DEEPEST** | the 26-limb tuple is ENTIRELY uncommitted; mint_hash read in ZERO constraints | absent | ⚑ folding `bridge_action_air` is UNSOUND (prover-chosen tuple, no Merkle/key). SOUND path: re-prove the REAL foreign note_spend STARK as a foldable G2 leaf (`note_spend_leaf_adapter.rs`, new), recompute mint_hash in-circuit, connect to a newly-exposed mint_hash PI on `mintV3`. Double-mint = orthogonal re-exec nullifier guard. |
@@ -382,6 +382,85 @@ Blocked behind an ember-decision on one of two routes, both bigger than a per-ca
     circuit wave.
 
 hatchery-invariant does NOT ride membership; factory/sovereign/bridge are unaffected.
+
+### `[@wave-4]` BANG WAVE (dsl) — VERIFY-FIRST verdict: **BUILDABLE (the last clean class-1)**, NOT a stop
+
+Grounded at HEAD `a64cb90ac`. dsl was the last class-1 candidate; unlike factory/sovereign/
+membership (all three STOPPED on a widening wall), the dsl VERIFY-FIRST verdict is **BUILD** —
+dsl genuinely rides custom's non-vacuous fold-binding. The census did NOT over-promise here.
+
+**Does custom bind via the FOLD, non-vacuously? YES (verified in-source).**
+- `CustomBindingFromFold.lean:147` (`custom_binding_from_fold`) proves a verifying aggregate
+  FORCES, for the effect-vm leg's exposed commitment `c`: ∃ a verifying custom sub-proof `q` with
+  `piCommit q = c` (+ anti-ghost VK determinism). It rests on `{FRI floor via AggAirSound,
+  Poseidon2SpongeCR, the connect}` — `StarkSoundCustom` is GONE; the vacuous deployed
+  `proofBind ⇒ True` gate is NOT the binder. `#assert_axioms`-clean (7 pins).
+- The DEPLOYED wire (`ivc_turn_chain.rs:2906-2934`, `CarrierWitness::Custom` arm): the custom leg
+  gets a DUAL-EXPOSE leaf re-exposing the deployed proof's `custom_proof_commitment` at IR2 PI
+  46..49 (`CUSTOM_COMMIT_PI_LO=46`, `joint_turn_recursive.rs:104`), folded against the RE-PROVEN
+  custom sub-proof leaf through `prove_custom_binding_node_segmented` — the `connect` ties the two
+  4-felt commitments IN the recursion tree; a forged claim with no backing sub-proof is UNSAT.
+  Pinned end-to-end by `tests/custom_binding_deployed_tooth.rs`.
+- ⚑ KEY: custom's PI 46..49 is NOT constrained by the deployed AIR (the proofBind gate is vacuous
+  `True`, `CustomCarrierAttack`). It is bound SOLELY because it is a FRI-bound PI of the deployed
+  proof that the fold re-exposes and connects to a genuine sub-proof. "Committed" here = "a
+  FRI-bound PI", NOT "the deployed AIR constrains it".
+
+**Does dsl ride the SAME mechanism, non-vacuously? YES.** The anchor `rc` (the Dfa route-commitment)
+IS `custom_proof_pi_commitment(DfaProofWire.public_inputs)` — the SAME host function, the SAME 4-felt
+shape (`dsl_leaf_adapter.rs:300-312` pins `exposed == host == off-AIR bound.proof_commitment()`).
+The leaf (`prove_dsl_leaf_with_commitment`, `:112`) and binding node
+(`prove_dsl_binding_node_segmented`, `:141`) REUSE `prove_custom_leaf_with_commitment` /
+`prove_custom_binding_node_segmented` term-for-term. `DslBackingAttack.dslEngineBinding_of_floor`
+(`:163`) already proves the binding reduces to `Poseidon2SpongeCR` ALONE.
+
+**Why dsl is NOT the factory/sovereign/membership wall.** Those three STOPPED because their teeth had
+to MATCH AN EXTERNAL COMMITTED-STATE value (child_vk / owner-pubkey / sender-`compress` / authorized-
+root) that does not exist as a faithful AIR-committed felt → a v12 geometry widening. **dsl's `rc` is
+NOT an external anchor — it is the sub-proof's OWN output (self-referential), bound by the FOLD, not
+by matching committed state.** Concretely: `rc[0..4]` fits FAITHFULLY in a deployed manifest entry's
+`params[0..4]` (4 consecutive felts — the entry shape `[type_tag, slot_index, p0..p3]`,
+`pi.rs:421`), UNLIKE membership's tag-11 which zeroes its params (value only in the folded
+`fields_root`). No widening; the emit is a bounded per-descriptor/manifest change, the SAME kind as
+custom's `customPiExposure`.
+
+**The one census under-specification (a build-design point, NOT a wall).** A Dfa caveat is a
+PRECONDITION with NO effect descriptor of its own (custom has `customVmDescriptor2R24` + PI 46..49;
+dsl has neither). So "emit `rc` at TAIL like custom" needs a concrete site. The sound, bounded site:
+route `rc` into the DEPLOYED off-AIR slot-caveat manifest (`SLOT_CAVEAT_MANIFEST_BASE`, in the base
+PI region) as a tag-20 entry — that makes `rc` a FRI-bound PI of every Dfa-gated turn's deployed
+proof, which is ALL the fold needs (`prove_descriptor_leaf_dual_expose_at(claim_pi_lo = that param
+slot, claim_len = 4)` reads it and connects). This is EXACTLY custom's posture (a FRI-bound-but-
+AIR-unconstrained PI, bound by the fold). The in-AIR caveat-commit chain (`CAVEAT_COMMIT`,
+`V3_STAGED_CAVEAT_DESCRIPTORS`) is STAGED and is only needed for OMISSION-proofness (forcing `rc`'s
+publication when a cell declares a Dfa caveat) — the SAME coverage residual custom carries (its
+deeper `proofBind True→boundAt` epoch, §5 item 6) and the capacity-caveat coverage floor
+(`required_capacity_caveat_tags`, `mod.rs:588`). Not a dsl-specific wall.
+
+**The build (bounded, per the census + the emit-site resolution above):**
+1. **Layer A (non-VK):** `mod.rs:462` split `Witnessed{Dfa} ⇒ None` → `Some(SlotCaveatEntry{
+   type_tag = TAG_DFA (20), slot_index = 0, params = rc[0..4]})`. Non-VK (manifest is off-AIR-
+   reevaluated PI DATA, not AIR constraints) but it CHANGES deployed PI values.
+2. **Step-2:** `from_bound_dsl` projection filling `CarrierWitness::Dsl(DslWitnessBundle)`
+   (`joint_turn_aggregation.rs:366` — the socket + bundle ALREADY EXIST), fail-closed None off-wire.
+3. **Step-5:** fill the `CarrierWitness::Dsl(_)` arm (`ivc_turn_chain.rs:2953`, currently fail-closed)
+   = `dual_expose_at(manifest rc slot, 4)` + `prove_dsl_leaf_with_commitment` +
+   `prove_dsl_binding_node_segmented`; add the deployed-path fold tooth (TWIN of
+   `custom_binding_deployed_tooth.rs`: honest Dfa turn FOLDS + LC-verifies through
+   `prove_turn_chain_recursive → verify_turn_chain_recursive`, a forged `rc` → UNSAT).
+4. **Flip** `DslBackingAttack.lean → DslBindingFromFold.lean` (mirror `CustomBindingFromFold`),
+   `#assert_axioms`-clean — ONLY AFTER the positive tooth bites.
+
+**⚠ ANTI-VACUITY, per the sovereign/membership stops:** Layer A alone is FORBIDDEN as an isolated
+commit — it churns deployed PI values with zero soundness benefit absent Step-5, and flipping the
+refutation on it alone would launder vacuity. The build is all-or-nothing (Layer A + Step-5 fold
+tooth + flip together, one coordinated change, + devnet re-genesis since PI values shift).
+`DslBackingAttack.lean` STANDS at HEAD (correct — the emit is not yet built).
+
+**Status this wave:** VERIFY-FIRST verdict rendered (BUILD, distinct from the 3 walls, recipe +
+emit-site pinned). The coordinated Layer-A+Step-5+flip build was NOT executed this session (a
+correct, non-vacuous fold-tooth-biting build exceeds a safe single pass; a partial commit is
+forbidden). dsl is the ONE confirmed remaining class-1 carrier.
 
 ---
 
@@ -551,9 +630,13 @@ template, de-risks the socket before the DEEPEST binds):
    rotated leg and the authorized-root value is uncommitted (only in the folded fields_root).
    Both anchors are walls; building the connect would launder vacuity. Blocked behind an
    ember-decision (route (a) v12 widening vs (b) AuthorizedSet redefinition). **dsl is
-   unaffected** — its Layer A (non-VK manifest) then Layer B (`dfaPiExposure`) route stands
-   (the Dfa commitment rides the caveatCommit like custom, a different mechanism than the
-   membership endpoint-anchoring problem).
+   unaffected** — `[@wave-4]` VERIFY-FIRST verdict = **BUILD** (§3 dsl row + the `[@wave-4]` block):
+   dsl's `rc` is a SELF-CONTAINED 4-felt `custom_proof_pi_commitment` bound by the fold (custom's
+   exact mechanism), NOT an external committed anchor — it fits FAITHFULLY in a tag-20 manifest
+   entry's `params[0..4]` (unlike membership's zeroed params) with no v12 widening. Bounded build
+   (Layer A manifest split + Step-5 dual-expose/connect/fold-tooth + flip
+   `DslBackingAttack→DslBindingFromFold`), all-or-nothing (Layer A alone is forbidden — it launders
+   vacuity like the sovereign/membership P1). Not yet executed; `DslBackingAttack.lean` STANDS.
 
 4. **sovereign P1 then P2**: `[@wave-2]` **ATTEMPTED AND STOPPED — the stop-condition
    fired** (§3 sovereign row, the `[@wave-2]` block). P1 (non-VK) fills the dead-zero
