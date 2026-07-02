@@ -577,6 +577,27 @@ pub fn generate_rotated_effect_vm_trace(
         debug_assert_eq!(dpis.len(), ROT_NULLIFIER_PI_COUNT);
     }
 
+    // THE FACTORY CARRIER-OCTET PINS (STEP 3 — the direct child_vk8 / contract_hash8 PI exposure).
+    // The deployed `factoryVmDescriptor2R24` is `withAfterOctetPins (withAfterOctetPins factoryV3
+    // B_CHILD_VK_OCTET) B_CONTRACT_HASH_OCTET` (Lean `factoryV3Carriers`, piCount 47 → 63): 16 TAIL
+    // pins publishing the committed AFTER-block carrier octets — child_vk8 (limbs 88..=95,
+    // PI 47..54: the executor's REAL installed child VK, which the hatchery-INVARIANT carrier also
+    // rides) then contract_hash8 (limbs 96..=103, PI 55..62: the hatchery-mint
+    // `HpresProof::Attested` content hash, ZERO on a plain factory turn). The octet columns are the
+    // STEP-2/2.5 committed fills (carrier material absorbed into `state_commit`), so the pins read
+    // the LAST row's AFTER block — exactly the columns the Lean pins bind, and a forged octet
+    // mismatches the committed commitment. They ride AFTER the grow-gate pin (PI 46) and BEFORE
+    // the dsl rc tail (PI 63..66) — per-effect extras first, rc last-pre-wide.
+    if matches!(effects.first(), Some(Effect::CreateCellFromFactory { .. })) {
+        for k in 0..8 {
+            dpis.push(last[AFTER_BASE + B_CHILD_VK_OCTET + k]); // PI 47..54: child_vk8
+        }
+        for k in 0..8 {
+            dpis.push(last[AFTER_BASE + B_CONTRACT_HASH_OCTET + k]); // PI 55..62: contract_hash8
+        }
+        debug_assert_eq!(dpis.len(), ROT_NULLIFIER_PI_COUNT + 16);
+    }
+
     // THE COMMITMENTS-SET GROW-GATE PIN (noteCreate — the deployment-real commitment set-insert
     // close, the `commitments_root` flag-day). The live `noteCreateVmDescriptor2R24` carries a FIFTH
     // pin welding the published note commitment (`param0`, col `PARAM_BASE + 0` — the
