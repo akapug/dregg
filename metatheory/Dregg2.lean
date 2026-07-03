@@ -171,6 +171,7 @@ import Dregg2.Proof.ContendedCrossCell -- contention dichotomy (both poles): con
 import Dregg2.Proof.ContendedForest    -- ForestLTS §11 CLOSED: contended_forest_commutes (N-ary overlapping forests under an adversarial interleaver commute UNCONDITIONALLY — gate-free additive forest half: half_fires_frame + half_commute) + contended_forest_simulates (the abstract LTS survives the hostile schedule); boundary vs the availability-gated coupled impossibility (forest_unconditional_vs_gated_boundary)
 import Dregg2.Crypto.Bridge            -- §8 discharge #6: bridge_bridge (Satisfies ↔ BridgeRelation, both directions; no seam) + bridge_verify_sound (derived) + dial at `selective`
 import Dregg2.Crypto.Pedersen         -- §8 discharge #2: pedersen_conservation_bridge (Satisfies ↔ Conserves, both directions; commit_hom-grounded, range-gadget non-negativity, no seam) + pedersen_verify_sound (derived) + dial at `selective`
+import Dregg2.Crypto.Deco              -- DECO/zkTLS money-in crown: DecoRelation + deco_bridge (Satisfies ↔ DecoRelation) + deco_verify_sound + deco_binds_payment + deco_authenticates_payment + the registry cascade; underpins the Stripe Verify cone
 import Dregg2.Protocol.WorkflowGuard  -- Workflow's authz/order/attest gates as Spec.Guard instances; 3 refinement ↔s + whole-step Guard.all equivalence + exec⇒admits bridge + discriminating #eval
 import Dregg2.DSL                      -- `dregg_program {…}` cell-program eDSL → RecordProgram; counter/escrow elaborate by rfl; #eval admit/reject
 -- ─── Full op-set, eDSL-C, state migration, circuit gadgets to wire, Temporal/Stingray ───
@@ -506,6 +507,12 @@ import Dregg2.Verify.Frames     -- Tier 2: the [Dregg2] aesop rule-set's forest-
 import Dregg2.Verify.Tactics    -- Tier 1: carry_forever (livingCellA_carries plumbing) + exec_frame (executor split; UNIVERSAL stay-put arm; frame/grow commit arm; HONEST hand-back — never fakes a close, proven by logMono_handback_demo); gate reproduces the logMono + revoked-forever crowns via the tactics
 import Dregg2.Verify.Contract   -- Tier 3: first-class CellContract (Inv + step_ob) → forever (livingCellA_carries) + always (the REAL LTL □ via Proof.Temporal.always_of_step_invariant); three concrete contracts discharged through the engine
 import Dregg2.Verify.Catalog    -- Tier 4: declarative shape macros monotone_registry% / conservation% / confinement% / automaton_inv% → real CellContracts (confinement surfaces its control∈U hypothesis; automaton_inv is relational, obs a + obs b)
+import Dregg2.Verify.StripeAttest      -- DECO/Stripe money-in Part A: StripeAttest attestation over DecoRelation (deco-authenticated payment surface)
+import Dregg2.Verify.StripeReserve      -- DECO/Stripe money-in Part A: StripeReserve over Apps.Trustline (reserve-side accounting)
+import Dregg2.Verify.StripeBridge       -- DECO/Stripe money-in Part A: StripeBridge (attest → escrow-factory bridge)
+import Dregg2.Verify.StripeBridgeV2      -- DECO/Stripe money-in Part A: StripeBridgeV2 (attest → intent lifecycle bridge)
+import Dregg2.Verify.StripeMoneyIn       -- DECO/Stripe money-in Part A: StripeMoneyIn (reserve + attest → money-in apex)
+import Dregg2.Verify.StripeKernelRefine  -- DECO/Stripe money-in Part A: StripeKernelRefine (money-in → intent-lifecycle kernel refinement, the 6th Stripe apex)
 import Dregg2.Verify.Regression -- H4 gate: six shipped crowns (identity_revoked_forever / no_double_spend / commitments_persist / …) reproduced via the catalog with both-directions defeq witnesses vs the hand proofs
 import Dregg2.Verify.LivenessBridge   -- production liveness lift: `EventuallyG` + erasure bridge + `transferSchedG`
 import Dregg2.Verify.LivenessContract  -- Hatchery liveness tier: `eventually%` + justness bridge
