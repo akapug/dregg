@@ -488,6 +488,61 @@ fn recv_line<R: BufRead>(reader: &mut R) -> Result<RpcMessage, AcpError> {
     }
 }
 
+// ─────────────── serving an in-process AcpPeer over the Endpoint ─────────────
+
+/// SERVE an in-process [`AcpPeer`] (the SERVER half — e.g. a brain-driven
+/// [`crate::HermesAgentPeer`]) over the confined child's firmament Endpoint.
+///
+/// This is the inverse of [`PdAcpTransport`]: that adapter lets the PARENT drive a
+/// peer that lives over the socket; this loop lets the CHILD run a peer that lives
+/// IN-PROCESS (compiled into the jail) while its wire is the socket. It reads each
+/// client frame off the Endpoint, feeds it to `peer.send` (the peer queues its
+/// replies), then drains `peer.recv` back onto the wire — the exact call pattern
+/// [`crate::AcpClient`] expects, just with the peer on the far side of a real fd.
+///
+/// It is how a REAL brain runs inside the exec-denied jail: the on-box
+/// [`crate::LocalBrain`] is `execve`-free and does no ambient I/O, so it decides
+/// entirely in-process; every tool-call it reaches for crosses this Endpoint as a
+/// `session/request_permission` the PARENT answers through the
+/// [`crate::HermesGateway`] (which stays OUTSIDE the jail, on the verified
+/// executor). The credential/model side of a *live* brain cannot run here — the
+/// jail denies the socket it would need — so the compiled-in brain is the on-box
+/// one; a live provider would ride a granted egress socket (the next slice).
+///
+/// Returns when the brain's turn completes ([`crate::HermesAgentPeer::turn_complete`])
+/// — so the confined body exits promptly without waiting on an EOF the still-open
+/// client would never send — or `Ok(())` if the client hangs up first.
+pub fn serve_acp_peer_over_endpoint<P: AcpPeer>(
+    sock: &mut UnixStream,
+    peer: &mut P,
+    turn_complete: impl Fn(&P) -> bool,
+) -> Result<(), AcpError> {
+    let reader_sock = sock.try_clone()?;
+    let mut reader = BufReader::new(reader_sock);
+    loop {
+        // Block for the next client frame (initialize / session/new /
+        // session/prompt / a permission response). EOF ⇒ the client hung up.
+        let msg = match recv_line(&mut reader) {
+            Ok(m) => m,
+            Err(AcpError::Closed) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        peer.send(&msg)?;
+        // Drain everything the peer queued in response and put it on the wire.
+        loop {
+            match peer.recv() {
+                Ok(out) => send_line(sock, &out)?,
+                Err(AcpError::Closed) => break, // nothing more queued right now.
+                Err(e) => return Err(e),
+            }
+        }
+        // The brain finished the turn and its final response is out — done.
+        if turn_complete(peer) {
+            return Ok(());
+        }
+    }
+}
+
 // ───────────────────── the parent-side ACP transport ────────────────────────
 
 /// The parent-side [`AcpPeer`] over a confined agent's firmament Endpoint — real
