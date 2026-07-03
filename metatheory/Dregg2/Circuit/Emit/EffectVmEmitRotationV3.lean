@@ -2883,17 +2883,17 @@ def permsVKCompletionOffs : List Nat :=
 def permsVKCompletionFreezes (w : Nat) : List VmConstraint :=
   permsVKCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
-/-- **v13: the 7 fields[0..7]-octet COMPLETION-lane offsets of field slot `j`** — `112 + 7·j .. +6`
-(`fields[j]` lanes 1..7 of the faithful `field_limbs8` split, lane 0 riding the welded limb `4 + j`).
-These previously-absent lanes now carry the genuine higher bytes of each 32-byte record field, so the
-deployed state commitment binds ALL 32 bytes of every field (the v13 fields-octet grow closing the LAST
-degraded-felt residual). -/
-def fieldCompletionOffs (j : Nat) : List Nat :=
-  (List.range 7).map (fun L => 112 + 7 * j + L)
-
-/-- **All 56 fields[0..7] completion-lane offsets** (`112..167`) — the eight fields' lanes 1..7. -/
+/-- **All 56 fields[0..7] completion-lane offsets** (`112..167`) — the eight flat fields' lanes 1..7
+of the faithful `field_limbs8` split (`fields[j]` lanes 1..7 → `112 + 7·j .. +6`; lane 0 rides the
+welded limb `4 + j`). These previously-absent lanes now carry the genuine higher bytes of each 32-byte
+record field, so the deployed state commitment binds ALL 32 bytes of every field (the v13 fields-octet
+grow closing the LAST degraded-felt residual). An explicit literal list (like `permsVKCompletionOffs`)
+so the non-vacuity `fin_cases` discharge reduces. -/
 def fieldsCompletionOffs : List Nat :=
-  (List.range 8).flatMap fieldCompletionOffs
+  [112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
+   128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+   144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+   160, 161, 162, 163, 164, 165, 166, 167]
 
 /-- The 56 continuity `colEq` freezes welding each fields[0..7] completion lane BEFORE↔AFTER. For a
 VALUE turn that does NOT write a flat field (transfer/burn/mint/bridgeMint/incrementNonce/emitEvent/
@@ -2904,14 +2904,16 @@ def fieldsCompletionFreezes (w : Nat) : List VmConstraint :=
   fieldsCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
 /-- The fields completion freezes EXCLUDING the written slot `slot`'s 7 lanes — setField[0..7]'s 49
-freezes (the SEVEN OTHER flat fields × 7 completion lanes each). The written slot's lane 0 is FORCED
-by `gFieldWriteP1`; its seven completion lanes 1..7 (`112 + 7·slot .. +6`) are the ONE named residual
-(the setField VALUE8 weld — forcing them to the declared value8 params — is the deliberately-gated
-follow-on). Freezing them here would be UNSOUND: a large-value write (`FieldElement = [u8;32]`) moves
-them off zero, and `colEq (before = after)` would reject the honest write. -/
+freezes (the SEVEN OTHER flat fields × 7 completion lanes each; the written slot's block is `112 + 7·slot
+.. +6`). The written slot's lane 0 is FORCED by `gFieldWriteP1`; its seven completion lanes 1..7 are the
+ONE named residual (the setField VALUE8 weld — forcing them to the declared value8 params — is the
+deliberately-gated follow-on). Freezing them here would be UNSOUND: a large-value write
+(`FieldElement = [u8;32]`) moves them off zero, and `colEq (before = after)` would reject the honest
+write. -/
 def fieldsCompletionFreezesExcept (slot : Fin 8) (w : Nat) : List VmConstraint :=
-  ((List.range 8).filter (fun j => decide (j ≠ slot.val))).flatMap
-    (fun j => (fieldCompletionOffs j).map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off)))
+  (fieldsCompletionOffs.filter
+      (fun off => decide (off < 112 + 7 * slot.val ∨ 112 + 7 * slot.val + 7 ≤ off))).map
+    (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
 /-- The full appended authority-continuity weld list: the six dedicated-sub-limb freezes (r23 ·
 lifecycle · perms · vk · mode · fields-root) PLUS the seven H1 headroom freezes — ONE right-operand of

@@ -419,17 +419,30 @@ theorem base_constraints_hold :
           rw [realRow_zero_of (by decide) (by decide) (by decide) (by decide) (by decide)
             (by decide) (by decide) (by decide) (by decide)]; rfl
   · -- the frozen-authority colEqs (6 dedicated + 7 H1 headroom limbs 12..18 + the 14 v10 perms/vk
-    -- completion limbs 37..50): before vs after, all read 0 columns (record-digest / lifecycle /
-    -- perms / vk / mode / fields-root / headroom / the perms+vk completion felts — none of which the
-    -- natural transfer touches), so `0 = 0`.
-    simp only [frozenAuthorityColEqs, authorityHeadroomFreezes, authorityHeadroomOffs,
-      permsVKCompletionFreezes, permsVKCompletionOffs,
-      List.map_cons, List.map_nil, List.cons_append, List.nil_append,
-      List.mem_cons, List.not_mem_nil, or_false] at hfrozen
-    rcases hfrozen with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
-      | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-      · rw [colEq_holds_iff _ _ _ _ _ rfl]
-        simp only [envReal]
+    -- completion limbs 37..50) PLUS the 56 v13 fields[0..7] completion lanes (112..167): before vs
+    -- after, all read 0 columns (record-digest / lifecycle / perms / vk / mode / fields-root /
+    -- headroom / the perms+vk + fields completion felts — none of which the natural transfer
+    -- touches), so `0 = 0`.
+    rw [List.mem_append] at hfrozen
+    rcases hfrozen with hfroz | hfields
+    · simp only [frozenAuthorityColEqs, authorityHeadroomFreezes, authorityHeadroomOffs,
+        permsVKCompletionFreezes, permsVKCompletionOffs,
+        List.map_cons, List.map_nil, List.cons_append, List.nil_append,
+        List.mem_cons, List.not_mem_nil, or_false] at hfroz
+      rcases hfroz with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+        | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+        · rw [colEq_holds_iff _ _ _ _ _ rfl]
+          simp only [envReal]
+          rw [realRow_zero_of (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide),
+            realRow_zero_of (by decide) (by decide) (by decide) (by decide) (by decide)
+            (by decide) (by decide) (by decide) (by decide)]
+    · -- the 56 v13 fields[0..7] completion freezes: `colEq (tw+off) (tw+227+off)`, both read 0.
+      simp only [fieldsCompletionFreezes, List.mem_map] at hfields
+      obtain ⟨off, hoff, rfl⟩ := hfields
+      rw [colEq_holds_iff _ _ _ _ _ rfl]
+      simp only [envReal]
+      fin_cases hoff <;>
         rw [realRow_zero_of (by decide) (by decide) (by decide) (by decide) (by decide)
           (by decide) (by decide) (by decide) (by decide),
           realRow_zero_of (by decide) (by decide) (by decide) (by decide) (by decide)
@@ -534,14 +547,19 @@ theorem row1_constraints_hold (hash : List ℤ → ℤ) :
         rcases hpins with rfl | rfl | rfl | rfl <;>
           · refine fun _ => ?_
             rfl
-    · -- the frozen-authority colEqs (6 dedicated + 7 H1 headroom + 14 v10 perms/vk completion):
-      -- `.gate`, vacuous on the last row.
-      simp only [frozenAuthorityColEqs, authorityHeadroomFreezes, authorityHeadroomOffs,
-        permsVKCompletionFreezes, permsVKCompletionOffs,
-        List.map_cons, List.map_nil, List.cons_append, List.nil_append,
-        List.mem_cons, List.not_mem_nil, or_false] at hfrozen
-      rcases hfrozen with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
-        | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    · -- the frozen-authority colEqs (6 dedicated + 7 H1 headroom + 14 v10 perms/vk completion + the
+      -- 56 v13 fields completion): all `.gate` (`colEq`), vacuous on the last row.
+      rw [List.mem_append] at hfrozen
+      rcases hfrozen with hfroz | hfields
+      · simp only [frozenAuthorityColEqs, authorityHeadroomFreezes, authorityHeadroomOffs,
+          permsVKCompletionFreezes, permsVKCompletionOffs,
+          List.map_cons, List.map_nil, List.cons_append, List.nil_append,
+          List.mem_cons, List.not_mem_nil, or_false] at hfroz
+        rcases hfroz with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+          | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+          exact trivial
+      · simp only [fieldsCompletionFreezes, List.mem_map] at hfields
+        obtain ⟨off, _, rfl⟩ := hfields
         exact trivial
   · -- a chip lookup: hits the `lastRow` (zero-row) summand of the union table.
     exact lookup_holdsAt_tfOf2_right (graduateV1 (rotateV3FrozenAuthority transferVmDescriptor))
