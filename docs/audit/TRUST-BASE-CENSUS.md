@@ -19,8 +19,19 @@ apex claim · deployed-vs-proven), each grounded independently and cross-checked
 against HEAD, then reconciled below. The dominant, load-bearing finding is that
 dregg's "name every residual" discipline **largely holds** under adversarial
 reading — the labels are mostly accurate — with a small set of genuine
-reducible-opens and one honestly-named-but-understated **live ledgerless
-soundness gap** (the setField VALUE8 written-slot seam, §2 row S1).
+reducible-opens.
+
+> **CORRECTION (2026-07-03, R1 deep-dive).** This census's headline "one
+> honestly-named-but-understated **live ledgerless soundness gap** (the setField
+> VALUE8 written-slot seam, S1/§6 R1)" was **refuted on attack**. It grounded on
+> `v3OfFrozenSetField` / `fieldsCompletionFreezesExcept` — a defined-but-**not-
+> deployed** descriptor. The DEPLOYED setField member (`EffectVmEmitRotationV3.lean:5363`,
+> `v3OfFrozen`) freezes ALL completion lanes including the written slot's; a forge
+> of the high 224 bits is UNSAT (freeze bites), so a ledgerless client is not
+> fooled. The genuine residual is a **completeness** seam (honest large-value writes
+> cannot prove), not a soundness forge. Proof: `circuit/tests/setfield_completion_lane_forge.rs`
+> (3 green teeth). See §6 R1. **Lesson (verify-before-pessimism): ground an audit
+> claim on the DEPLOYED artifact, not a same-named alternate in source.**
 
 ---
 
@@ -76,7 +87,7 @@ Zero `sorry` / `admit` / `sorryAx`. One benign `native_decide` (below).
 | PortalFloor kernels (`SignatureKernel/VerifierKernel/PedersenKernel/Poseidon2Kernel/Blake3Kernel/NullifierKernel/SealKernel/MacKernelE`) | `Crypto/PortalFloor.lean:102,145,…` | §8 `@[extern]` oracle + per-primitive soundness Prop | terminal-by-design | Post-cutover TCB; each `*_floor_sound` takes the carrier as explicit hypothesis. |
 | `Ed25519EufCma` / `SchnorrDLHard` / BLS `SnarkOk`,`BlsAggregateOk` | `Crypto/Ed25519Reduction.lean:18`, `Crypto/SchnorrCurveField.lean`, `Crypto/BlsThreshold.lean:148-150` | EUF-CMA game / DL hardness / pairing+SNARK accept bits | terminal-by-design | Prop carriers whose negation is a concrete solver; two-sided teeth (`forge_not_eufCma`). |
 | `GnarkRefines` / `TranscriptRefines` | `Circuit/FriVerifier.lean:849,861` | gnark circuit computes the SAME Bool / challenger as Lean `verifyAlgo` | terminal **code-trust** (not crypto) | A Rust/Go↔Lean *code refinement*, honestly labeled, fixture-anchored. |
-| **`DeployedRefines`** | `Circuit/FriVerifierBridge.lean:92` | deployed Rust `verify_batch` accept ⟹ spec `verifyAlgo` accept | **ATTACK-SURFACE (assumed, never discharged)** | See §5 row D1 — self-labeled "the SOLE trusted thing about the verifier code," and **no Rust test or proof discharges it** (`rg verifyAlgo --glob '*.rs'` = 0 hits). |
+| **`DeployedRefines`** | `Circuit/FriVerifierBridge.lean:92` | deployed Rust `verify_batch` accept ⟹ spec `verifyAlgo` accept | **CHECKED (terminal code-refinement, battery-backed)** — was ATTACK-SURFACE | Discharged 2026-07-03 by `circuit/tests/deployed_refines_verifier_teeth.rs` (per-tooth tamper battery, green) + a source cross-map (§6 R2): every `verifyAlgo` reject-tooth bites in the deployed `verify_batch`; no modeled check is absent. Residual = the `GnarkRefines`-class Rust↔spec refinement. |
 | **`DeployedFaithful{,Eff,8}`** | `Circuit/DeployedCapTree.lean:305 / 353 / 732` | a conferring member leaf opened in the deployed depth-16 cap-tree IS backed by a real held `FacetCap` (toy-caps ↔ deployed-leaf codec faithfulness) | **reducible-open** | The ONE carrier that is a *dregg-specific representation/codec* property, not a standard crypto primitive. Sits on the authority leg (`deployedCapOpen_implies_authorizedB:327`) + the exercise hold-gate (`Dregg2.lean:652`). Honestly a `structure … : Prop`, not laundered — but provable-in-principle by modeling the leaf codec. |
 
 **`#assert_namespace_axioms except` clauses:** the tactic supports `except`
@@ -153,7 +164,7 @@ companion explicitly declines; bridge omits the highest-value economic attack
 
 | # | Seam | file:line (+doc) | Leaves open | Status @ HEAD | Class | If attack-surface: claim to refute |
 |---|---|---|---|---|---|---|
-| **S1** | **setField written-slot VALUE8 weld** | `EffectVmEmitRotationV3.lean:3106-3163`; `docs/reference/faithful-commitment.md:225`; `docs/FAITHFUL-COMMITMENT-LAW.md:82` | On a setField turn the written field's lane 0 (~30 low bits) is FORCED, but completion lanes 1..7 (the high 28 of 32 bytes) are EXCEPTED from the freeze AND not yet forced to the declared value — the commitment absorbs them **unconstrained**. | OPEN; labeled "deliberately-gated follow-on" | **ATTACK-SURFACE** | "A ledgerless `verify_vm_descriptor2` client accepts a setField proof whose committed field value differs in its high 224 bits from any honest/declared value." Full-node-safe; only a ledgerless LC is fooled. |
+| **S1** | **setField written-slot completion lanes** (CORRECTED — see §6 R1) | deployed: `EffectVmEmitRotationV3.lean:5363` (`v3OfFrozen`, freeze-ALL); the cited `:2913,3164` (`v3OfFrozenSetField`, except) is DEFINED-BUT-NOT-DEPLOYED; tooth `circuit/tests/setfield_completion_lane_forge.rs` | The DEPLOYED descriptor FREEZES the written slot's completion lanes (before==after), binding them to the pre-state. The forge (arbitrary high bits) is UNSAT (freeze bites #93..99). The real residual: an honest LARGE-value write cannot prove (high bytes frozen) — a completeness seam; lane 0 stays the ~31-bit fold (D6). | OPEN as a **completeness** seam (VALUE8 weld is the close; VK-affecting, gated) | reducible-open (completeness, NOT a soundness forge) | REFUTED as a forge: the deployed freeze binds; no ledgerless silent-forge. The close (VALUE8 weld) buys faithful large-value writes, not soundness. |
 | **S2** | committee-restart hole | `node/src/blocklace_sync.rs:4529-4546`, `persist/src/federation.rs:84`; pin `persist/src/tests.rs:137`; `docs/HANDOFF-committee-restart-fix.md` | Full-mode commit persists a `StoredAttestedRoot` with 1 local sig at `threshold=committee-size`; on restart `verify_signatures` needs a quorum → node **fail-CLOSES** after ≥1 finalized height. Blocked by non-deterministic wall-clock preimage + votes binding `block_id`, not `merkle_root`. | OPEN — only *diagnosed* at `29ab74bc1`; Fix A/B NOT landed (domain still `-v4`) | reducible-open (liveness) | Not a safety hole — a single-sig root IS refused (safety preserved). Availability bug; Fix B designed. |
 | **S3** | transferCapOpenTB 1-felt LC fallback | `sdk/src/full_turn_proof.rs:4285-4295`; `docs/reference/faithful-commitment.md:235` | The sole cap-open key with no wide twin; LC falls back to the 1-felt V3 registry → the transfer's `(actor,src,dst)` identity is bound at **~31 bits** (below the ~130-bit FRI floor). | OPEN — "the ONE load-bearing ~31-bit LC surface left"; reject tooth `:4266` bars fallback for any key WITH a wide twin | **ATTACK-SURFACE** | "Grind a 31-bit collision on a transferCapOpenTB identity felt to bind a different `(actor,src,dst)` than proved." Bounded (identity only). Close = wide-twin grind. |
 | **S4** | cross-cell Σδ=0 not live-enforced | `node/src/turn_proving.rs:935,1312` (`conservation: None`); `CrossCellConservation.lean` | AIR+Lean proven & drift-green, but the deployed path proves **per-cell-isolated** transitions; no point collects ≥2 cells' deltas. A Transfer's debit/credit legs are separate proofs. | OPEN — build-half proven, live-enforcement blocked (batch collector NOT landed) | reducible-open | "Publish a turn whose per-cell legs each pass but whose cross-cell asset sum ≠ 0." Full-node ledger catches it; ledgerless LC does not get turn-wide Σδ=0. Needs a block-level batch collector. |
@@ -267,7 +278,7 @@ by (3) failing with `OodEvaluationMismatch`.
 
 | # | Deployed path | file:line | Lean proves | Gated how | Class | Divergence to test |
 |---|---|---|---|---|---|---|
-| **D1** | Rust STARK verifier `verify_batch` vs Lean `verifyAlgo` | `sdk/src/full_turn_proof.rs:4249,4831`; `circuit-prove/src/ivc_turn_chain.rs:3706`; Lean `FriVerifierBridge.lean:92` | apex holds under `DeployedRefines` (Rust accept ≡ spec accept) | **ASSUMED — never discharged.** `rg verifyAlgo\|DeployedRefines --glob '*.rs'` = 0 hits | **ATTACK-SURFACE (highest value)** | Build a differential: run Rust verifier + a Lean `verifyAlgo` reference over the same batches; assert accept-Boolean parity + a tampered-input rejection battery. |
+| **D1** | Rust STARK verifier `verify_batch` vs Lean `verifyAlgo` | `circuit/src/descriptor_ir2.rs:5036` (`verify_vm_descriptor2`→`p3_batch_stark::verify_batch`); Lean `FriVerifierBridge.lean:92` | apex holds under `DeployedRefines` (Rust accept ⟹ spec accept) | **DISCHARGED-BY-TEST** (`circuit/tests/deployed_refines_verifier_teeth.rs`, green): per-tooth tamper battery — every proven `verifyAlgo` reject-tooth bites in the deployed verifier; source cross-map finds no `verifyAlgo` check absent from `verify_batch` | **CHECKED (terminal code-refinement, battery-backed)** | Residual = the same class as `GnarkRefines` (Rust↔spec refinement); the battery shows biting-by-rejection, not Boolean-equivalence-by-proof. |
 | **D2** | Rust wide/rotated trace producer geometry | `circuit/src/effect_vm/trace_rotated.rs` (`AFTER_BASE`, `B_SPAN`, host widths, carrier lanes) | descriptor JSON is Lean-authoritative; producer must satisfy it | **NOT drift-gated** (outside GUARDED set); only prove+verify roundtrip binds it | **DRIFT-RISK (the v13 class, structural)** | Any wide/rotated member without a `*_proves_verifies` roundtrip test, or any producer-const change not exercised by one, diverges silently while the drift gate stays green. Audit roundtrip coverage vs the full registry. |
 | **D3** | Rust executor `TurnExecutor::execute` vs Lean `recKExec` | `turn/src/executor/apply.rs`; harness `exec-lean/tests/rust_lean_parity_gauntlet.rs`, `rejection_parity.rs`; `docs/RUST-LEAN-EXECUTOR-PARITY.md` | only `Exec ⊑ Spec` for the *Lean* executor; **no `execute = recKExec` theorem** | audited + differential, NOT proven; gauntlet **self-skips when `libdregg_lean.a` absent** | ASSUMED-CARRIER / partial-CHECKED | Confirm the gauntlet actually runs in CI (needs the ~150MB linked archive); if only nightly/local, PRs don't gate executor parity. Named safe-direction residuals: `Burn`, `Mint`. |
 | **D4** | Light-client VK / descriptor anchor | `circuit/descriptors/*.json`; `node/src/genesis.rs:365-383` (genesis carries per-app factory VKs, not the recursion/LC VK); `docs/HANDOFF-v13-VK-EPOCH.md §1c` | apex assumes a fixed VK/descriptor set | **No runtime VK pin/attestation** — "VK distribution" = `git push` + client rebuild | ASSUMED-CARRIER | A client built against a divergent descriptor set verifies against the wrong circuit; nothing on-chain attests the recursion/LC VK. |
@@ -278,9 +289,11 @@ by (3) failing with `OodEvaluationMismatch`.
 **Skeptic's bottom line (deployed):** the drift gate is real and CI-enforced, but
 it guards only the Lean↔JSON cache edge. The two edges that actually decide whether
 the *running* system matches the *proven* model — (a) Rust-verifier ≡
-Lean-`verifyAlgo` (`DeployedRefines`, **entirely untested**) and (b)
-Rust-trace-producer ≡ descriptor (**tested only by whatever roundtrip coverage
-happens to exist**) — the drift gate does not touch either.
+Lean-`verifyAlgo` (`DeployedRefines`, **now DISCHARGED-BY-TEST** — a per-tooth
+tamper battery + a source cross-map finding no `verifyAlgo` check absent from the
+deployed `verify_batch`; see §6 R2 / `circuit/tests/deployed_refines_verifier_teeth.rs`)
+and (b) Rust-trace-producer ≡ descriptor (**tested only by whatever roundtrip
+coverage happens to exist**) — the drift gate does not touch either.
 
 ---
 
@@ -289,27 +302,78 @@ happens to exist**) — the drift gate does not touch either.
 Ordered by exploitability × tractability. The first three are the highest-value:
 each is a genuine hole (not a terminal floor) with a concrete refutation to try.
 
-1. **R1 — setField VALUE8 written-slot seam (S1 / D6).** *Reducible-open
-   masquerading as a benign "deliberately-gated follow-on."* The written field's
-   high 224 bits (completion lanes 1..7) are absorbed into the published commitment
-   but constrained by **no transition or value gate** — the freeze explicitly
-   *excepts* them and the VALUE8 weld is unbuilt. **Refutation to run:** build a
-   forge tooth that sets lanes 1..7 off the declared value and confirm a ledgerless
-   `verify_vm_descriptor2` client currently PROVES+VERIFIES it (the forge
-   succeeds). For any app storing a 32-byte value (hash/pointer/commitment) in a
-   flat field, this is a live ledgerless silent-forge of that value. Full-node-safe;
-   the win is closing it with the VALUE8 weld. **(exploitable now on the LC wire;
-   tractable — a bounded weld.)**
+1. **R1 — setField written-slot completion lanes — REFUTED AS A SOUNDNESS FORGE;
+   reclassified as a COMPLETENESS seam (attacked 2026-07-03, tooth
+   `circuit/tests/setfield_completion_lane_forge.rs`).** The original R1 claim (a
+   live ledgerless silent-forge of the written field's high 224 bits) grounded on
+   the **wrong descriptor**. It cited `v3OfFrozenSetField` /
+   `fieldsCompletionFreezesExcept slot` (`EffectVmEmitRotationV3.lean:2913,3164`) —
+   the "except the written slot" variant that IS defined and carries the
+   `setFieldV3_pins_value` keystones, **but is NOT wired into the deployed
+   registry.** The DEPLOYED cohort member (`v3RegistryBare`,
+   `EffectVmEmitRotationV3.lean:5363`) is `withSelectorGate SEL_SET_FIELD (v3OfFrozen
+   (setFieldTickFace slot))` — the freeze-**ALL** variant (`fieldsCompletionFreezes`,
+   all 56 completion lanes BEFORE↔AFTER). The committed
+   `setFieldVmDescriptor2-3R24` (`rotation-v3-staged-registry.tsv`) confirms this:
+   all 56 completion-lane `colEq` freezes are present, **including** the written
+   slot 3's lanes (limbs 133..139). No Lean↔JSON drift — the emit and the TSV agree
+   on freeze-ALL.
 
-2. **R2 — `DeployedRefines` is an untested code-trust equation (D1).** The whole
-   apex-vs-running-system soundness is exactly as strong as "Rust `verify_batch`
-   computes the same accept Boolean as Lean `verifyAlgo`," and **no Rust test or
-   proof discharges it** (0 code references). `FriVerifierBridge` markets itself as
-   taking the verifier out of the TCB, but every tooth rests on this hypothesis.
-   **Refutation lane:** build the Rust↔`verifyAlgo` differential + a
-   tampered-input rejection battery; any accept-Boolean disagreement is a genuine
-   soundness break. **(highest structural value; tractable as a differential
-   harness.)**
+   **Empirical verdict (3 teeth, all green):** (a) the forge — set the written
+   slot's completion lanes 1..7 to arbitrary nonzero (≠ pre-state 0), keep lane 0
+   honest, recompute NEW_COMMIT to absorb them (the wire view) — is **UNSAT through
+   `prove`/`verify_vm_descriptor2` alone** (the freeze bites on the active row,
+   constraints #93..99). A ledgerless client is **not** fooled: the written field's
+   high 224 bits are FROZEN to the pre-state (faithfully bound, the *opposite* of
+   "unconstrained"). (b) An honest SMALL-value setField (high bytes zero) proves +
+   verifies. (c) An honest LARGE-value setField (nonzero high bytes) **fails** the
+   deployed freeze (#94) — this is the **real residual: a completeness seam**, not a
+   soundness hole. The deployed setField can only faithfully write ≤ lane-0 values;
+   the high bytes cannot change (and lane 0 remains the lossy ~31-bit
+   `fold_bytes32_to_bb`, the separate D6/fields-octet concern). **The proper close
+   is the VALUE8 weld** (force the written slot's 7 completion lanes to the declared
+   `value8` params, replacing the freeze) — but it is **VK-affecting and gated**
+   (an ember-decision / v-epoch), and fixes a completeness limitation, NOT a live
+   forge. **(NOT exploitable on the LC wire; the freeze binds. The value8 weld is a
+   completeness/faithfulness improvement, deliberately not fired here.)**
+
+2. **R2 — `DeployedRefines` — DISCHARGED-BY-TEST for the soundness-relevant teeth
+   (attacked 2026-07-03, `circuit/tests/deployed_refines_verifier_teeth.rs`).** The
+   claim (`FriVerifierBridge.lean:92`) is one-directional: `verify_batch accept ⟹
+   verifyAlgo accept`. The dangerous direction is the deployed verifier ACCEPTING
+   what `verifyAlgo`'s proven teeth reject (a check `verifyAlgo` models but
+   `verify_batch` skips → the light client trusts a weaker verifier). Two findings:
+
+   **(a) Cross-map (by reading the deployed source):** every `verifyAlgo` reject-tooth
+   has a PRESENT counterpart in the deployed `p3_batch_stark::verify_batch` (reached
+   via `descriptor_ir2::verify_vm_descriptor2`, `verifier/mod.rs`): `vk.shapeMatches`→
+   InstanceCountMismatch + trace-width checks; degree pin (`tableOk_rejects_wrong_degree`)
+   →`validate_degree_bits` + the `LIMB_BITS` pin (`descriptor_ir2.rs:5080`);
+   `foldConsistent`/`merkleRecompute_binds`→`pcs.verify` opening; quotient identity
+   (`batchTablesCheck_rejects_tampered_quotient`)→`verify_constraints_with_lookups`
+   OOD; bus balance (`batchTablesCheck_rejects_unbalanced_bus`)→`verify_global_sum`;
+   grinding (`queryPowCheck`)→the `query_proof_of_work_bits = 16` FRI gate; publics/
+   segment→transcript absorption of the public values. **No `verifyAlgo` check is
+   absent from `verify_batch`** — no dangerous-direction gap found.
+
+   **(b) Test (green):** an honest transfer proof is minted and tampered at each
+   modeled field; the deployed verifier REJECTS every one. Teeth 1–2 (instance shape,
+   degree pin) reject before `verify_batch` with their own diagnostics. Teeth 3–6
+   (opened trace, opened quotient, bus cumulative sum, forged publics) all reject via
+   the deployed FRI PCS's Fiat-Shamir + 16-bit grinding gate (`InvalidPowWitness`) —
+   because `pcs.verify` absorbs commitments / opened values / publics into the
+   transcript BEFORE the grinding check, so ANY mutation invalidates the honest
+   proof's PoW nonce. That is a POSITIVE fact: the transcript binding + grinding teeth
+   are TOTAL (no opened value floats free of Fiat-Shamir). The deep checks masked by
+   that gate have their own isolated coverage on honest-transcript proofs:
+   `verify_global_sum` by `ir2_denotational_differential.rs` PART K (genuinely
+   unbalanced bus), the constraint/quotient tooth by `effect_vm_ir2_validate.rs`
+   (forged-witness re-prove). **Residual (honestly named): the test discharges
+   `DeployedRefines` at the tamper points via observable REJECTION, not a proof of
+   Boolean equivalence; the irreducible remainder is the same class as
+   `GnarkRefines` — a Rust↔spec code-refinement, now backed by a biting battery
+   rather than 0 references.** Reclassify D1 from ATTACK-SURFACE → **CHECKED
+   (terminal code-refinement, battery-backed).**
 
 3. **R3 — the Rust trace producer is outside the drift gate (D2), the v13 class is
    structural.** The drift gate proves Lean≡JSON; producer≡JSON lives only in
