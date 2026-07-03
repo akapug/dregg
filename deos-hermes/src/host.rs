@@ -63,8 +63,10 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, RwLock};
 
 use crate::agent_peer::HermesAgentPeer;
-use crate::brain::LocalBrain;
-use crate::confined::{ConfinedAgent, can_read_path, launch_confined_with_egress, probe};
+use crate::brain::{LlmBrain, LocalBrain};
+use crate::confined::{
+    ConfinedAgent, can_connect_tcp, can_read_path, launch_confined_with_egress, probe,
+};
 use crate::egress::EgressPolicy;
 use crate::{AcpClient, GrantRegistry, HermesGateway, PermissionOutcome};
 use dregg_firmament::process_kernel::ProcessKernel;
@@ -139,6 +141,13 @@ pub struct HostedAgentReport {
     /// Whether a path OUTSIDE the grant stayed denied (the door is specific, not a
     /// hole).
     pub egress_sibling_denied: bool,
+    /// Whether the GRANTED provider SOCKET door was reachable inside the jail (the
+    /// jailed brain could `connect` to exactly the granted host:port). Only
+    /// meaningful when the policy granted a provider endpoint.
+    pub egress_net_granted_open: bool,
+    /// Whether an outbound connect to a host:port OUTSIDE the grant stayed denied
+    /// (the socket door is to a specific endpoint, not "the network").
+    pub egress_net_sibling_denied: bool,
     /// The confined brain's streamed final text (the agent's own account of its
     /// turn) — proof the brain ran, not a script.
     pub agent_text: String,
@@ -176,6 +185,8 @@ impl HostedAgentReport {
             base_tools_neutralized: verdict & escape::ALL_NEUTRALIZED == escape::ALL_NEUTRALIZED,
             egress_granted_open: verdict & probe::EGRESS_GRANTED_OPEN != 0,
             egress_sibling_denied: verdict & probe::EGRESS_SIBLING_DENIED != 0,
+            egress_net_granted_open: verdict & probe::EGRESS_NET_GRANTED_OPEN != 0,
+            egress_net_sibling_denied: verdict & probe::EGRESS_NET_SIBLING_DENIED != 0,
             agent_text: run.agent_text,
             stop_reason: run.stop_reason,
             tool_verdicts,
@@ -237,6 +248,24 @@ impl DreggHost {
         self
     }
 
+    /// GRANT the jailed agent the structured, revocable SOCKET door to EXACTLY one
+    /// provider `host:port` — the provider-only egress. The next jail this host
+    /// spawns threads exactly this outbound endpoint into its sandbox profile; a
+    /// jailed LIVE brain's model call rides it, and no other host/port opens.
+    /// (Builder form.)
+    pub fn with_egress_provider(mut self, host: impl Into<String>, port: u16) -> DreggHost {
+        self.egress.grant_provider(host, port);
+        self
+    }
+
+    /// GRANT the provider socket door derived from a base URL (e.g.
+    /// `https://api.anthropic.com` → `api.anthropic.com:443`). The exact shape the
+    /// host uses to open a door to where a LIVE brain is configured to call.
+    pub fn with_egress_provider_url(mut self, base_url: &str) -> DreggHost {
+        self.egress.grant_provider_url(base_url);
+        self
+    }
+
     /// SPAWN the agent INTO a dregg jail and drive its BRAIN — the run-by-running
     /// proof of the polarity inversion AND that the mind runs where the scripted
     /// body used to. Uses a DEFAULT host-owned confined gateway (dregg the host
@@ -292,15 +321,120 @@ impl DreggHost {
         granted_egress_probe: Option<&str>,
         ungranted_egress_probe: Option<&str>,
     ) -> std::io::Result<HostedAgentReport> {
+        self.run_brain_confined(
+            kernel,
+            gateway,
+            goal,
+            granted_egress_probe,
+            ungranted_egress_probe,
+            None,
+            None,
+            LocalBrain::new(),
+        )
+    }
+
+    /// As [`DreggHost::run_hosted_agent_with`], but the jailed brain ALSO probes the
+    /// structured SOCKET door: `granted_net`/`ungranted_net` are `(host, port)` the
+    /// body tries to `connect` to from inside the jail. The GRANTED endpoint (the
+    /// one this host opened with [`DreggHost::with_egress_provider`]) must be
+    /// reachable; an UNGRANTED one must stay EPERM'd. Still an on-box
+    /// [`LocalBrain`] — the crisp OS-level proof that the provider-only door opens
+    /// exactly one endpoint (the LIVE brain riding it is
+    /// [`DreggHost::run_hosted_agent_live`]).
+    pub fn run_hosted_agent_net(
+        &self,
+        kernel: &ProcessKernel,
+        gateway: HermesGateway<'_>,
+        goal: &str,
+        granted_net: Option<(&str, u16)>,
+        ungranted_net: Option<(&str, u16)>,
+    ) -> std::io::Result<HostedAgentReport> {
+        self.run_brain_confined(
+            kernel,
+            gateway,
+            goal,
+            None,
+            None,
+            granted_net,
+            ungranted_net,
+            LocalBrain::new(),
+        )
+    }
+
+    /// RUN A LIVE BRAIN IN THE JAIL — the real model drives the confined ACP loop,
+    /// its completion call riding the provider-only egress socket door while
+    /// execve / open / all other network stay denied.
+    ///
+    /// This is the slice past on-box confinement: [`crate::brain::HttpLlm`] (built
+    /// from the env via [`crate::brain::live_brain_from_env`]) runs INSIDE the
+    /// exec-denied PD. Its provider request rides the socket door THIS host must
+    /// have opened ([`DreggHost::with_egress_provider_url`] pointed at the same
+    /// base URL the brain calls); every tool-call the model then reaches for still
+    /// crosses the Endpoint to the gateway (cap-gated, receipted) — the gate is
+    /// unchanged. `granted_net`/`ungranted_net` fold the same crisp socket-door
+    /// teeth as [`DreggHost::run_hosted_agent_net`].
+    ///
+    /// OFF by default: if NO BYO key is configured, there is no live brain, so this
+    /// falls back to the on-box [`LocalBrain`] (the default hosted run — no network
+    /// used even if a door is open). Only a configured key + provider door puts a
+    /// live model on the socket.
+    #[cfg(feature = "live-brain")]
+    pub fn run_hosted_agent_live(
+        &self,
+        kernel: &ProcessKernel,
+        gateway: HermesGateway<'_>,
+        goal: &str,
+        granted_net: Option<(&str, u16)>,
+        ungranted_net: Option<(&str, u16)>,
+    ) -> std::io::Result<HostedAgentReport> {
+        match crate::brain::live_brain_from_env() {
+            Some(brain) => self.run_brain_confined(
+                kernel,
+                gateway,
+                goal,
+                None,
+                None,
+                granted_net,
+                ungranted_net,
+                brain,
+            ),
+            // No key → stay on the on-box brain (off-by-default): the door may be
+            // open but no live model is put on it.
+            None => self.run_hosted_agent_net(kernel, gateway, goal, granted_net, ungranted_net),
+        }
+    }
+
+    /// THE GENERIC CONFINED-BRAIN CORE — launch `brain` into the dregg jail (with
+    /// THIS host's egress policy folded into the sandbox profile), read the
+    /// confinement verdict, drive the brain-turn through `gateway`, reap, and fold
+    /// the report. Generic over the brain so the SAME jail/drive/receipt rail runs
+    /// the on-box [`LocalBrain`] or a live [`crate::brain::HttpLlm`].
+    #[allow(clippy::too_many_arguments)]
+    fn run_brain_confined<B: LlmBrain>(
+        &self,
+        kernel: &ProcessKernel,
+        gateway: HermesGateway<'_>,
+        goal: &str,
+        granted_egress_probe: Option<&str>,
+        ungranted_egress_probe: Option<&str>,
+        granted_net: Option<(&str, u16)>,
+        ungranted_net: Option<(&str, u16)>,
+        brain: B,
+    ) -> std::io::Result<HostedAgentReport> {
         let granted = granted_egress_probe.map(|s| s.to_string());
         let ungranted = ungranted_egress_probe.map(|s| s.to_string());
+        let granted_net = granted_net.map(|(h, p)| (h.to_string(), p));
+        let ungranted_net = ungranted_net.map(|(h, p)| (h.to_string(), p));
         let agent: ConfinedAgent =
             launch_confined_with_egress(kernel, &self.egress, move |sock| {
-                brain_agent_body(
+                brain_body_serving(
                     sock,
                     "sess-hosted",
                     granted.as_deref(),
                     ungranted.as_deref(),
+                    granted_net.as_ref().map(|(h, p)| (h.as_str(), *p)),
+                    ungranted_net.as_ref().map(|(h, p)| (h.as_str(), *p)),
+                    brain,
                 )
             })?;
 
@@ -362,17 +496,26 @@ fn read_jail_verdict_line(sock: &UnixStream) -> Option<i32> {
 }
 
 /// THE JAILED AGENT BODY — runs INSIDE the dregg jail (confinement already applied:
-/// file/net/exec denied, every non-Endpoint fd closed). It (1) proves the jail
-/// neutralizes the leaky base tools + honors the egress door, (2) emits that
-/// confinement verdict as one line, then (3) SERVES A REAL BRAIN — the on-box
-/// [`LocalBrain`] — over the Endpoint, its tool-calls crossing to the parent's
-/// gateway. The brain's DECISION loop runs in-process (the exec-denied jail cannot
-/// spawn a subprocess); only its tool-calls leave, and only through the gate.
-fn brain_agent_body(
+/// file/other-net/exec denied, every non-Endpoint fd closed). It (1) proves the jail
+/// neutralizes the leaky base tools + honors the file AND socket egress doors, (2)
+/// emits that confinement verdict as one line, then (3) SERVES `brain` — the on-box
+/// [`LocalBrain`] OR a live [`crate::brain::HttpLlm`] — over the Endpoint, its
+/// tool-calls crossing to the parent's gateway. The brain's DECISION loop runs
+/// in-process (the exec-denied jail cannot spawn a subprocess); a LIVE brain's
+/// provider call rides the GRANTED socket door and nothing else; only tool-calls
+/// leave, and only through the gate.
+///
+/// `granted_net`/`ungranted_net` are `(host, port)` the body probes with a raw
+/// `connect(2)`: the granted provider endpoint must be reachable (the socket door
+/// is open), an ungranted one must stay EPERM'd (the door is specific).
+fn brain_body_serving<B: LlmBrain>(
     sock: &mut UnixStream,
     session_id: &str,
     granted_egress: Option<&str>,
     ungranted_egress: Option<&str>,
+    granted_net: Option<(&str, u16)>,
+    ungranted_net: Option<(&str, u16)>,
+    brain: B,
 ) -> i32 {
     // (1) The four base jail teeth (file/net denied, one fd — probe BEFORE the serve
     //     loop clones the Endpoint, so exactly one non-std fd is open).
@@ -409,6 +552,21 @@ fn brain_agent_body(
         verdict |= probe::EGRESS_SIBLING_DENIED;
     }
 
+    // (3b) THE STRUCTURED SOCKET EGRESS — the provider-only network door.
+    //   • the GRANTED provider endpoint must be reachable (the socket door is open).
+    if let Some((h, p)) = granted_net
+        && can_connect_tcp(h, p)
+    {
+        verdict |= probe::EGRESS_NET_GRANTED_OPEN;
+    }
+    //   • a host:port OUTSIDE the grant must STILL be denied (specific door, not
+    //     "the network"): the jail EPERMs the connect.
+    if let Some((h, p)) = ungranted_net
+        && !can_connect_tcp(h, p)
+    {
+        verdict |= probe::EGRESS_NET_SIBLING_DENIED;
+    }
+
     // (4) EMIT the full confinement verdict as ONE line the parent reads before it
     //     drives ACP (the line carries the escape/egress teeth the 8-bit exit code
     //     cannot). IPC_WORKS is set optimistically here; the exit code below sets it
@@ -420,7 +578,7 @@ fn brain_agent_body(
     // (5) SERVE THE REAL BRAIN over the Endpoint — the compiled-in on-box brain
     //     decides in-process; every tool-call crosses to the parent's gateway. The
     //     serve returns the instant the brain's turn completes.
-    let mut peer = HermesAgentPeer::new(session_id, LocalBrain::new());
+    let mut peer = HermesAgentPeer::new(session_id, brain);
     let served =
         crate::confined::serve_acp_peer_over_endpoint(sock, &mut peer, |p| p.turn_complete())
             .is_ok();

@@ -116,7 +116,7 @@ pub use brain::{
 };
 pub use bridge::{HermesGateway, ToolMarket};
 #[cfg(unix)]
-pub use egress::{EgressGrant, EgressPolicy};
+pub use egress::{EgressGrant, EgressNetGrant, EgressPolicy, provider_host_port};
 pub use grant_registry::{GrantRegistry, MandateKey};
 #[cfg(unix)]
 pub use host::{DreggHost, HostedAgentReport, HostedToolVerdict};

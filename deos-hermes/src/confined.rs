@@ -92,6 +92,17 @@ pub mod probe {
     /// STILL DENIED inside the PD. Proves the door is to a specific resource, not a
     /// hole: granting one path does not open its neighbours.
     pub const EGRESS_SIBLING_DENIED: i32 = 0x20;
+
+    /// EGRESS SOCKET tooth — the GRANTED provider endpoint (host:port) WAS
+    /// reachable via `connect(2)` from inside the PD (the structured socket door is
+    /// open). Only meaningful for a PD launched with a provider net grant
+    /// ([`super::EgressPolicy::grant_provider`]); the base jail teeth still assert
+    /// the rest of the network stayed denied around it.
+    pub const EGRESS_NET_GRANTED_OPEN: i32 = 0x40;
+    /// EGRESS SOCKET tooth — an outbound connect to a host:port OUTSIDE the grant
+    /// was STILL DENIED inside the PD. Proves the socket door is to a SPECIFIC
+    /// endpoint, not "the network": granting one provider does not open any other.
+    pub const EGRESS_NET_SIBLING_DENIED: i32 = 0x80;
 }
 
 /// A handle on a confined agent PD: the forked, OS-sandboxed child + the
@@ -215,6 +226,56 @@ where
 /// [`probe::EGRESS_SIBLING_DENIED`]).
 pub fn can_read_path(path: &str) -> bool {
     can_open(path)
+}
+
+/// Probe whether an outbound TCP `connect` to `host:port` SUCCEEDS from inside the
+/// confined PD — the socket-egress check. `host` must be an IPv4 literal (the
+/// provider door's precise form; a hostname would need in-jail DNS, denied). Run
+/// INSIDE a confined body: a GRANTED endpoint returns true (the door is open, the
+/// connect completes); an UNGRANTED one returns false (the jail EPERM'd the
+/// `connect`). Public so a confined body can fold the socket-egress verdict bits
+/// ([`probe::EGRESS_NET_GRANTED_OPEN`] / [`probe::EGRESS_NET_SIBLING_DENIED`]).
+///
+/// A refused connection (`ECONNREFUSED` — reached the host, nothing listening) is
+/// treated as reachable (the door let the packet out); a sandbox denial
+/// (`EPERM`/`EACCES`) or no route is NOT. So this bit means "the door let us reach
+/// the endpoint", distinct from whether a server happened to be listening.
+pub fn can_connect_tcp(host: &str, port: u16) -> bool {
+    // Parse the dotted-quad IPv4 literal. A non-literal host is out of scope for
+    // the in-jail probe (DNS is denied), so treat it as unreachable.
+    let octets: Vec<u8> = host
+        .split('.')
+        .filter_map(|o| o.parse::<u8>().ok())
+        .collect();
+    if octets.len() != 4 {
+        return false;
+    }
+    let fd = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return false;
+    }
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = port.to_be();
+    addr.sin_addr.s_addr = u32::from_be_bytes([octets[0], octets[1], octets[2], octets[3]]).to_be();
+    let rc = unsafe {
+        libc::connect(
+            fd,
+            &addr as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    unsafe { libc::close(fd) };
+    if rc == 0 {
+        return true; // connected — the door is open.
+    }
+    // The door let the packet out but nothing was listening ⇒ still "reachable".
+    // A sandbox denial (EPERM/EACCES) or no route ⇒ the door is closed.
+    matches!(
+        errno,
+        libc::ECONNREFUSED | libc::EINPROGRESS | libc::ETIMEDOUT
+    )
 }
 
 /// LAUNCH HERMES (the stand-in ACP agent) into a confined host-PD — the
