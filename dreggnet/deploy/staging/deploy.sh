@@ -92,13 +92,20 @@ build() {
   # be staged so the rsync --delete does not wipe /opt/dreggnet/sites on the box.
   [ -d "$HERE/sites" ] && cp -r "$HERE/sites" "$STAGE_DIR/sites" || mkdir -p "$STAGE_DIR/sites"
   BREADSTUFFS="${BREADSTUFFS:-$HOME/dev/breadstuffs}"
-  if [ -d "$BREADSTUFFS/wasm/pkg" ]; then
+  # The FULL wasm-pack output must ship — dregg_wasm.js imports its ./snippets/…
+  # (the biscuit-auth wasm shim), so a bare dregg_wasm* copy cannot instantiate
+  # in the tab. Build the pkg in breadstuffs first (from the breadstuffs root):
+  #   RUSTFLAGS="-C link-arg=-zstack-size=33554432" \
+  #     wasm-pack build wasm --target web --out-dir pkg --release
+  if [ -s "$BREADSTUFFS/wasm/pkg/dregg_wasm_bg.wasm" ] && [ -d "$BREADSTUFFS/wasm/pkg/snippets" ]; then
     mkdir -p "$STAGE_DIR/portal/pkg"
-    cp "$BREADSTUFFS"/wasm/pkg/dregg_wasm* "$STAGE_DIR/portal/pkg/" 2>/dev/null || true
-    echo "==> portal: copied the wasm light-client bundle from $BREADSTUFFS/wasm/pkg"
+    cp -R "$BREADSTUFFS/wasm/pkg/." "$STAGE_DIR/portal/pkg/"
+    rm -f "$STAGE_DIR/portal/pkg/.gitignore"
+    echo "==> portal: staged the FULL wasm light-client pkg (snippets/ included) from $BREADSTUFFS/wasm/pkg"
   else
-    echo "WARNING: $BREADSTUFFS/wasm/pkg not found — the portal ships WITHOUT the in-tab" >&2
-    echo "         trustless-verify engine (the live network view still works). Set BREADSTUFFS." >&2
+    echo "WARNING: $BREADSTUFFS/wasm/pkg is missing or incomplete (need dregg_wasm_bg.wasm + snippets/) —" >&2
+    echo "         the portal ships WITHOUT the in-tab trustless-verify engine (the live network view" >&2
+    echo "         still works). Build it with the wasm-pack command above, or set BREADSTUFFS." >&2
   fi
   [ -f "$HERE/.env" ] && cp "$HERE/.env" "$STAGE_DIR/.env" || cp "$HERE/.env.example" "$STAGE_DIR/.env"
   echo "==> staged:"; ls -la "$STAGE_DIR" "$STAGE_DIR/bin"
