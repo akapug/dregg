@@ -2883,6 +2883,36 @@ def permsVKCompletionOffs : List Nat :=
 def permsVKCompletionFreezes (w : Nat) : List VmConstraint :=
   permsVKCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
 
+/-- **v13: the 7 fields[0..7]-octet COMPLETION-lane offsets of field slot `j`** — `112 + 7·j .. +6`
+(`fields[j]` lanes 1..7 of the faithful `field_limbs8` split, lane 0 riding the welded limb `4 + j`).
+These previously-absent lanes now carry the genuine higher bytes of each 32-byte record field, so the
+deployed state commitment binds ALL 32 bytes of every field (the v13 fields-octet grow closing the LAST
+degraded-felt residual). -/
+def fieldCompletionOffs (j : Nat) : List Nat :=
+  (List.range 7).map (fun L => 112 + 7 * j + L)
+
+/-- **All 56 fields[0..7] completion-lane offsets** (`112..167`) — the eight fields' lanes 1..7. -/
+def fieldsCompletionOffs : List Nat :=
+  (List.range 8).flatMap fieldCompletionOffs
+
+/-- The 56 continuity `colEq` freezes welding each fields[0..7] completion lane BEFORE↔AFTER. For a
+VALUE turn that does NOT write a flat field (transfer/burn/mint/bridgeMint/incrementNonce/emitEvent/
+noteSpend/…) EVERY flat field is UNCHANGED, so each completion lane is frozen — closing the GENTIAN
+fail-open for the fields halves (no unwelded wide-open completion can smuggle a forged higher-byte
+field into NEW_COMMIT during an innocuous value move). -/
+def fieldsCompletionFreezes (w : Nat) : List VmConstraint :=
+  fieldsCompletionOffs.map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off))
+
+/-- The fields completion freezes EXCLUDING the written slot `slot`'s 7 lanes — setField[0..7]'s 49
+freezes (the SEVEN OTHER flat fields × 7 completion lanes each). The written slot's lane 0 is FORCED
+by `gFieldWriteP1`; its seven completion lanes 1..7 (`112 + 7·slot .. +6`) are the ONE named residual
+(the setField VALUE8 weld — forcing them to the declared value8 params — is the deliberately-gated
+follow-on). Freezing them here would be UNSOUND: a large-value write (`FieldElement = [u8;32]`) moves
+them off zero, and `colEq (before = after)` would reject the honest write. -/
+def fieldsCompletionFreezesExcept (slot : Fin 8) (w : Nat) : List VmConstraint :=
+  ((List.range 8).filter (fun j => decide (j ≠ slot.val))).flatMap
+    (fun j => (fieldCompletionOffs j).map (fun off => colEq (w + off) (w + AFTER_BLOCK_OFF + off)))
+
 /-- The full appended authority-continuity weld list: the six dedicated-sub-limb freezes (r23 ·
 lifecycle · perms · vk · mode · fields-root) PLUS the seven H1 headroom freezes — ONE right-operand of
 the single `++` so the v1 constraints stay the left operand (the keystones compose verbatim). -/
@@ -2919,15 +2949,20 @@ def rotateV3FrozenAuthority (d : EffectVmDescriptor) : EffectVmDescriptor :=
   let r := rotateV3 d
   -- The six dedicated-sub-limb freezes PLUS the seven H1 headroom freezes (all 8 authority limbs
   -- WELDED for a VALUE turn — the GENTIAN law: no unwelded limb can smuggle a 31-bit-colliding
-  -- wide-open authority into NEW_COMMIT). ONE appended right-operand so v1 stays the left operand.
-  { r with constraints := r.constraints ++ frozenAuthorityColEqs d.traceWidth }
+  -- wide-open authority into NEW_COMMIT) PLUS the 56 v13 fields[0..7] completion-lane freezes (every
+  -- flat field UNCHANGED on a non-field-writing value turn — no forged higher-byte field can ride an
+  -- innocuous value move). ONE appended right-operand so v1 stays the left operand.
+  { r with constraints :=
+      r.constraints ++ (frozenAuthorityColEqs d.traceWidth ++ fieldsCompletionFreezes d.traceWidth) }
 
 /-- The continuity welds (r23 · lifecycle · perms · vk · mode · fields-root + the seven H1 headroom
-authority limbs) are the only constraints past `rotateV3`'s — the WAVE-2/3 sub-limb welds + the H1
-8-felt headroom welds so a VALUE turn cannot smuggle an authority-shape change into NEW_COMMIT. -/
+authority limbs + the 56 v13 fields[0..7] completion lanes) are the only constraints past
+`rotateV3`'s — so a VALUE turn cannot smuggle an authority-shape OR a forged field-completion change
+into NEW_COMMIT. -/
 theorem rotateV3FrozenAuthority_constraints (d : EffectVmDescriptor) :
     (rotateV3FrozenAuthority d).constraints
-      = (rotateV3 d).constraints ++ frozenAuthorityColEqs d.traceWidth := rfl
+      = (rotateV3 d).constraints
+          ++ (frozenAuthorityColEqs d.traceWidth ++ fieldsCompletionFreezes d.traceWidth) := rfl
 
 /-- Continuity welds are CONSTRAINTS; `graduable` reads only sites/ranges (`rotateV3`'s verbatim). -/
 theorem graduable_rotateV3FrozenAuthority {d : EffectVmDescriptor}
@@ -2952,12 +2987,12 @@ theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmD
   · have hmem : colEq (d.traceWidth + B_RECORD_DIGEST)
         (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST) ∈ (rotateV3FrozenAuthority d).constraints := by
       rw [rotateV3FrozenAuthority_constraints]
-      exact List.mem_append_right _ (by simp [frozenAuthorityColEqs])
+      exact List.mem_append_right _ (List.mem_append_left _ (by simp [frozenAuthorityColEqs]))
     exact (colEq_holds_iff env isFirst isLast _ _ hlast).mp (hc _ hmem)
   · have hmem : colEq (d.traceWidth + B_LIFECYCLE)
         (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) ∈ (rotateV3FrozenAuthority d).constraints := by
       rw [rotateV3FrozenAuthority_constraints]
-      exact List.mem_append_right _ (by simp [frozenAuthorityColEqs])
+      exact List.mem_append_right _ (List.mem_append_left _ (by simp [frozenAuthorityColEqs]))
     exact (colEq_holds_iff env isFirst isLast _ _ hlast).mp (hc _ hmem)
 
 /-- **(authority drift ⇒ UNSAT)** — the NEGATIVE TOOTH: a row whose AFTER `r23` differs from the BEFORE
@@ -2970,6 +3005,37 @@ theorem rotateV3FrozenAuthority_rejects_drift (hash : List ℤ → ℤ) (d : Eff
         ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)) :
     ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
   fun h => hdrift (rotateV3FrozenAuthority_freezes hash d env isFirst isLast hlast h).1
+
+/-- **The fields[0..7] completion lanes are FROZEN on a satisfying TRANSITION row of the shared value
+wrap.** For any of the 56 fields completion offsets, a row satisfying `rotateV3FrozenAuthority d` (a
+non-field-writing VALUE turn) carries AFTER completion = BEFORE completion — the v13 fields GENTIAN
+weld: no forged higher-byte field can ride an innocuous value move into NEW_COMMIT. -/
+theorem rotateV3FrozenAuthority_freezes_fields (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast)
+    (off : Nat) (hoff : off ∈ fieldsCompletionOffs) :
+    env.loc (d.traceWidth + off) = env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) := by
+  obtain ⟨hc, _, _⟩ := h
+  have hmem : colEq (d.traceWidth + off) (d.traceWidth + AFTER_BLOCK_OFF + off)
+      ∈ (rotateV3FrozenAuthority d).constraints := by
+    rw [rotateV3FrozenAuthority_constraints]
+    exact List.mem_append_right _ (List.mem_append_right _
+      (List.mem_map.mpr ⟨off, hoff, rfl⟩))
+  exact (colEq_holds_iff env isFirst isLast _ _ hlast).mp (hc _ hmem)
+
+/-- **TOOTH (fields-completion forge ⇒ UNSAT)** — a VALUE turn whose AFTER field completion lane
+differs from BEFORE (a forged higher-byte field smuggled into NEW_COMMIT during an innocuous value
+move) does NOT satisfy the shared value wrap. The light-client bite for the fields halves:
+`verify_vm_descriptor2` alone rejects it, no trusted post-cell needed. -/
+theorem rotateV3FrozenAuthority_rejects_fields_forge (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (off : Nat) (hoff : off ∈ fieldsCompletionOffs)
+    (hforge : env.loc (d.traceWidth + off) ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)) :
+    ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
+  fun h => hforge (rotateV3FrozenAuthority_freezes_fields hash d env isFirst isLast hlast h off hoff)
+
+#assert_axioms rotateV3FrozenAuthority_freezes_fields
+#assert_axioms rotateV3FrozenAuthority_rejects_fields_forge
 
 /-- The v1 denotation survives the added continuity welds (the per-effect faithfulness theorems
 compose through, exactly as for the record / nullifier pins). -/
@@ -3029,9 +3095,71 @@ theorem rotV3Frozen_sound_v1 (permOut : List ℤ → List ℤ) (hash : List ℤ 
     (satisfied2Faithful_satisfiedVm permOut hash (rotateV3FrozenAuthority d) minit mfin maddrs t
       (graduable_rotateV3FrozenAuthority hgrad) hf i hi)
 
+/-! ### The setField[0..7] frozen wrap — fields freezes EXCLUDING the written slot.
+
+setField[0..7] WRITES its flat field, so the shared `rotateV3FrozenAuthority` (which freezes all 56
+fields completion lanes) would over-freeze the written slot and reject an honest large-value write
+(`FieldElement = [u8;32]`). This wrap keeps the authority freezes verbatim but swaps the fields
+freezes for `fieldsCompletionFreezesExcept slot` (the OTHER seven flat fields, 49 lanes). The written
+slot's lane 0 is FORCED by `gFieldWriteP1`; its seven completion lanes 1..7 are the ONE named residual
+(the setField VALUE8 weld — forcing them to the declared value8 params — is the deliberately-gated
+follow-on). Structurally identical to `rotateV3FrozenAuthority` (additive over `rotateV3`), so the
+per-effect setField keystones lift verbatim. -/
+def rotateV3FrozenAuthoritySetField (slot : Fin 8) (d : EffectVmDescriptor) : EffectVmDescriptor :=
+  let r := rotateV3 d
+  { r with constraints :=
+      r.constraints
+        ++ (frozenAuthorityColEqs d.traceWidth ++ fieldsCompletionFreezesExcept slot d.traceWidth) }
+
+theorem rotateV3FrozenAuthoritySetField_constraints (slot : Fin 8) (d : EffectVmDescriptor) :
+    (rotateV3FrozenAuthoritySetField slot d).constraints
+      = (rotateV3 d).constraints
+          ++ (frozenAuthorityColEqs d.traceWidth ++ fieldsCompletionFreezesExcept slot d.traceWidth) := rfl
+
+theorem graduable_rotateV3FrozenAuthoritySetField {slot : Fin 8} {d : EffectVmDescriptor}
+    (h : graduable d = true) : graduable (rotateV3FrozenAuthoritySetField slot d) = true := by
+  have hr := graduable_rotateV3 h
+  unfold rotateV3FrozenAuthoritySetField
+  unfold graduable at hr ⊢
+  simpa using hr
+
+/-- The v1 denotation survives the setField continuity welds (the per-effect setField faithfulness
+lifts through, exactly as for the shared authority wrap). -/
+theorem rotateV3FrozenAuthoritySetField_satisfiedVm_v1 (slot : Fin 8) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
+    (h : satisfiedVm hash (rotateV3FrozenAuthoritySetField slot d) env isFirst isLast) :
+    satisfiedVm hash d env isFirst isLast := by
+  apply rotateV3_satisfiedVm_v1 hash d env isFirst isLast
+  obtain ⟨hc, hsites, hr⟩ := h
+  refine ⟨fun c hc' => hc c ?_, hsites, hr⟩
+  rw [rotateV3FrozenAuthoritySetField_constraints]
+  exact List.mem_append_left _ hc'
+
+/-- **`v3OfFrozenSetField slot d`** — the graduated setField[0..7] descriptor (the fields-freeze-except
+variant of `v3OfFrozen`). Same width/piCount/graduability (the freezes are appended `colEq`s, no new
+column), so every setField `#guard` and per-effect value theorem lifts verbatim. -/
+def v3OfFrozenSetField (slot : Fin 8) (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
+  graduateV1 (rotateV3FrozenAuthoritySetField slot d)
+
+/-- A `Satisfied2` witness of the setField frozen graduation yields the full v1 denotation on every
+row (the setField analog of `rotV3Frozen_sound_v1`). -/
+theorem rotV3FrozenSetField_sound_v1 (slot : Fin 8) (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hgrad : graduable d = true)
+    (hf : Satisfied2Faithful permOut hash (v3OfFrozenSetField slot d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
+  intro i hi
+  exact rotateV3FrozenAuthoritySetField_satisfiedVm_v1 slot hash d _ _ _
+    (satisfied2Faithful_satisfiedVm permOut hash (rotateV3FrozenAuthoritySetField slot d) minit mfin maddrs t
+      (graduable_rotateV3FrozenAuthoritySetField hgrad) hf i hi)
+
 /-- **`setFieldV3 slot`** — the rotated tick-faced setField (the registry member). setField[0..7] is a
-VALUE effect, so it carries the authority-frame freeze (`v3OfFrozen`): AFTER-r23 == BEFORE-r23 (+ lifecycle). -/
-def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3OfFrozen (setFieldTickFace slot)
+VALUE effect, so it carries the authority-frame freeze AND the v13 fields completion freezes for the
+seven OTHER flat fields (`v3OfFrozenSetField`); its own written slot's lane 0 is `gFieldWriteP1`-forced
+and its 7 completion lanes are the named VALUE8 residual. -/
+def setFieldV3 (slot : Fin 8) : EffectVmDescriptor2 := v3OfFrozenSetField slot (setFieldTickFace slot)
 
 /-- **The nonce TICK holds on a satisfying non-NoOp setField row.** A row satisfying the rotated
 tick-faced setField, with `s_noop = 0`, carries `after_nonce = before_nonce + 1` (the runtime
