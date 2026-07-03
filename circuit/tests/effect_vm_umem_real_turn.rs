@@ -485,7 +485,7 @@ fn peer_field_heap(peer: &Cell) -> (Vec<HeapLeaf>, [BabyBear; HEAP_DIGEST_W]) {
         }
     }
     let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
-    (leaves, tree.root8())
+    (leaves, tree.root8().limbs())
 }
 
 /// The descriptor for the cross-cell read: one `MapOp::Read` opening the read field against the

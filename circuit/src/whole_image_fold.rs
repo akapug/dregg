@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(published, empty_heap_root_8());
         let w = build_whole_image_fold(&[], published).expect("empty folds");
         let mut expected = empty_heap_root_8().to_vec();
-        expected.extend_from_slice(&empty_heap_root_8());
+        expected.extend_from_slice(&empty_heap_root_8()[..]);
         assert_eq!(w.public_inputs, expected);
     }
 }
