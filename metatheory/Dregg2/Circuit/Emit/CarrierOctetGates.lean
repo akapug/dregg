@@ -107,8 +107,9 @@ set_option autoImplicit false
 /-! ## §0 — the v12 octet geometry, derived from the canonical constants. -/
 
 /-- The base of the three v12 carrier-material octets: the LAST 24 pre-iroot limbs
-(`B_IROOT − 24` — derived, never a literal). -/
-def B_CARRIER_OCTETS : Nat := Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT - 24
+(LITERAL 88 since v13: the fields[0..7] completion lanes 112..167 + pad 168 ride PAST the
+carrier octets, so the octet base no longer tracks `B_IROOT`). -/
+def B_CARRIER_OCTETS : Nat := 88
 
 /-- The factory `child_vk8` octet base (in-block limb offset; M1 of the v12 plan). The
 hatchery-invariant carrier RIDES this same octet (`invariant_digest === child_vk`). -/
@@ -134,7 +135,9 @@ def AFTER_BLOCK_BASE : Nat :=
 #guard B_CHILD_VK8 == 88
 #guard B_CONTRACT_HASH8 == 96
 #guard B_PUBKEY8 == 104
-#guard B_PUBKEY8 + 8 == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
+-- v13: the fields completion lanes (112..167) + pad (168) ride between the carrier octets and
+-- the iroot, so the octets end 57 limbs BEFORE it (104 + 8 + 56 + 1 = 169 = B_IROOT).
+#guard B_PUBKEY8 + 8 + 56 + 1 == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_IROOT
 #guard Dregg2.Circuit.Emit.EffectVmEmitRotationV3.AFTER_BLOCK_OFF
     == Dregg2.Circuit.Emit.EffectVmEmitRotationV3.B_SPAN
 #guard AFTER_BLOCK_BASE == EFFECT_VM_WIDTH + Dregg2.Circuit.Emit.EffectVmEmitRotationV3.AFTER_BLOCK_OFF

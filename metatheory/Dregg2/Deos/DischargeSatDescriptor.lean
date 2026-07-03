@@ -30,7 +30,7 @@ uses. The gates (the Rust `discharge_weld::discharge_satisfaction_gates` twin, b
 
 The rotated BEFORE/AFTER field columns are the escrow module's `beforeFieldCol`/`afterFieldCol`
 (`EFFECT_VM_WIDTH + 4 + k` / `EFFECT_VM_WIDTH + B_SPAN + 4 + k`, `B_SPAN` the CANONICAL
-`EffectVmEmitRotationV3.B_SPAN` — 151 at v12); the range-check aux block is based at
+`EffectVmEmitRotationV3.B_SPAN` — 227 at v13); the range-check aux block is based at
 `GRAD_ROT_WIDTH + 16` where `GRAD_ROT_WIDTH` is COMPUTED as the graduated rotated cohort width
 (`(graduateV1 (rotateV3 base)).traceWidth`), the Lean twin of the Rust
 `trace_rotated::GRAD_ROT_WIDTH`. Nothing here freezes a v11 (or v12) literal: the defs track the
