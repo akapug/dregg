@@ -3902,7 +3902,7 @@ async fn execute_finalized_turn(
             .map(|cell| {
                 (
                     dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities),
-                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities),
+                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities).limbs(),
                 )
             })
             .unwrap_or_else(|| {
@@ -3910,13 +3910,13 @@ async fn execute_finalized_turn(
                     dregg_cell::compute_canonical_capability_root_felt(
                         &dregg_cell::CapabilitySet::new(),
                     ),
-                    dregg_circuit::cap_root::empty_capability_root(),
+                    dregg_circuit::cap_root::empty_capability_root().limbs(),
                 )
             })
     } else {
         (
             dregg_cell::compute_canonical_capability_root_felt(&dregg_cell::CapabilitySet::new()),
-            dregg_circuit::cap_root::empty_capability_root(),
+            dregg_circuit::cap_root::empty_capability_root().limbs(),
         )
     };
 

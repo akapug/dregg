@@ -777,7 +777,7 @@ pub fn delegator_pre_state_cap_roots(
             // cap-membership leg binds), NOT a lane-0 squeeze.
             if let Some((id, cell)) = ledger.iter().find(|(_, c)| c.public_key() == delegator_pk) {
                 out.entry(*id).or_insert_with(|| {
-                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities)
+                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities).limbs()
                 });
             }
         }
