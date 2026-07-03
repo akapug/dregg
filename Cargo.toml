@@ -143,6 +143,21 @@ pr-run-mode = "plan"
 # `p3-circuit-prover`/`p3-poseidon2-circuit-air` at git rev be52a51 (the pushed
 # fork tip == the local `../plonky3-recursion` tree), so all crates resolve the
 # git rev — no path override needed.
+#
+# …EXCEPT (TEMP, 2026-07-02): the DETERMINISM-FIX path patch below. The pinned
+# rev be52a51 builds the recursive-verifier op-list in hashbrown-HashMap
+# iteration order (`verify_p3_batch_proof_circuit`'s global-lookup grouping), so
+# the recursion-VK fingerprint — the light client's distributed trust anchor —
+# was RANDOM per circuit build: two folds of the IDENTICAL chain in one process
+# minted different fingerprints. Fixed in fork commit 993efec ("deterministic
+# verifier op-list", branch update-plonky3-rev). Remove this [patch] block after
+# ember pushes 993efec and the four rev pins are bumped to it. The tooth:
+# circuit-prove/tests/recursion_vk_determinism.rs.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../plonky3-recursion/recursion" }
+p3-circuit = { path = "../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
 # ─────────────────────────────────────────────────────────────────────────────
 [patch.crates-io]
 # ark-serialize fork — the `serde_with` feature `dregg-hints` needs (emberian/algebra).

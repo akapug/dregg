@@ -11359,7 +11359,6 @@ dependencies = [
 [[package]]
 name = "p3-circuit"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=be52a51b87c39e41ade632320697df983751471f#be52a51b87c39e41ade632320697df983751471f"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
@@ -11386,7 +11385,6 @@ dependencies = [
 [[package]]
 name = "p3-circuit-prover"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=be52a51b87c39e41ade632320697df983751471f#be52a51b87c39e41ade632320697df983751471f"
 dependencies = [
  "hashbrown 0.16.1",
  "p3-air",
@@ -11662,7 +11660,6 @@ dependencies = [
 [[package]]
 name = "p3-poseidon1-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=be52a51b87c39e41ade632320697df983751471f#be52a51b87c39e41ade632320697df983751471f"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -11712,7 +11709,6 @@ dependencies = [
 [[package]]
 name = "p3-poseidon2-circuit-air"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=be52a51b87c39e41ade632320697df983751471f#be52a51b87c39e41ade632320697df983751471f"
 dependencies = [
  "itertools 0.14.0",
  "p3-air",
@@ -11736,7 +11732,6 @@ dependencies = [
 [[package]]
 name = "p3-recursion"
 version = "0.1.0"
-source = "git+https://github.com/emberian/plonky3-recursion?rev=be52a51b87c39e41ade632320697df983751471f#be52a51b87c39e41ade632320697df983751471f"
 dependencies = [
  "hashbrown 0.16.1",
  "itertools 0.14.0",
