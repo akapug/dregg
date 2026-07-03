@@ -1604,6 +1604,10 @@ fn generate_wide_descriptor_and_trace(
         // (`prove_effect_vm_cap_open`), never this dispatcher — so no cap-write witness is threaded here
         // (a cap-WRITE lead reaching this route fails closed, as it always has).
         None,
+        // No BEFORE-cell context on this route — the committed transfer row's membership-teeth
+        // tail fills the ZERO pair (the no-caveat sentinel; a caveat-declaring cell's honest pair
+        // rides the leg-mint recipe / the attach lane's `retain_sender_membership`).
+        None,
     )
     .map_err(SdkError::InvalidWitness)
 }
@@ -3038,6 +3042,25 @@ fn build_effect_vm_cap_open_leg(
                 })?;
         (trace, pis, Vec::new())
     };
+
+    // THE CAP-OPEN rc STRIP: the committed cap-open family was NEVER rc-wrapped in the Lean emit —
+    // every `*CapOpen*` registry member carries the UNWRAPPED base (46/47/49 + appendix/wide PIs;
+    // e.g. `attenuateCapOpenEffVmDescriptor2R24` 46 → wide 62), while the dsl rc tail
+    // (`withDfaRcPins`, 4 PIs riding LAST on the base vector) wraps only the PLAIN cohort members.
+    // The base generators append the rc unconditionally, so lift it off here — the route owns the
+    // tail shape (the phase-B patch below is shape-preserving).
+    let mut pis = pis;
+    {
+        use dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN;
+        if pis.len() < DFA_RC_LEN {
+            return Err(SdkError::InvalidWitness(format!(
+                "cap-open base trace ({}): PI vector {} shorter than the dsl rc tail",
+                route.key,
+                pis.len()
+            )));
+        }
+        pis.truncate(pis.len() - DFA_RC_LEN);
+    }
 
     // Attenuate-family bases need the phase-B nonce-FREEZE + cap-root advance wiring; transfer is
     // directly valid (its 38-PI vector is correct as generated). BUT the WRITE-bearing wrappers ALL

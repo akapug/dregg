@@ -208,6 +208,7 @@ fn mint_custom_leg(
         None,
         None,
         None,
+        None,
     )
     .expect("custom wide dispatch");
     assert!(

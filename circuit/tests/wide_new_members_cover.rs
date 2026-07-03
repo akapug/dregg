@@ -152,6 +152,7 @@ fn wide_supply_mint_proves_and_verifies() {
         None,
         None,
         None,
+        None,
     )
     .expect("wide supply-mint dispatch");
     assert_eq!(

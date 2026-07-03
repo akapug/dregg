@@ -502,17 +502,16 @@ pub fn produce(
 /// ## The post-regen registry TAIL (v12 exposure regen)
 ///
 /// The committed wide registry row a member proves against may demand MORE PIs (and trace
-/// columns) than the generic wide producer dispatch emits: the v12 big-bang regen made the
-/// committed transfer row the membership-teeth member (`CarrierComposed.transferV3MembershipWide`
-/// — 2 `(sender_leaf, authorized_root)` claim PIs spliced AHEAD of the 16 wide anchors, 2 teeth
-/// columns past the carriers). This recipe derives that tail FROM THE DESCRIPTOR
-/// (`public_input_count − emitted`, `trace_width − row width` — never a hardcoded count; other
-/// members carry different totals) and fills it producer-honest: the teeth values come from the
+/// columns) than the per-family wide producer emits: the v12 big-bang regen made the committed
+/// transfer row the membership-teeth member (`CarrierComposed.transferV3MembershipWide` — 2
+/// `(sender_leaf, authorized_root)` claim PIs spliced AHEAD of the 16 wide anchors, 2 teeth
+/// columns past the carriers). The tail derivation is SHARED: it lives IN the wide dispatcher
+/// (`generate_rotated_effect_vm_descriptor_and_trace_wide` — derived from the descriptor, never
+/// a hardcoded count, fail-closed on a tail it has no producer fill for), so every route emits
+/// the committed shape. This recipe's contribution is the producer-honest teeth VALUES from the
 /// BEFORE cell (`sender_membership_teeth` — `compress_member` over the cell's owner key + the
-/// declared `SenderAuthorized { PublicRoot }` root slot; a cell declaring no such caveat fills
+/// declared `SenderAuthorized { PublicRoot }` root slot; a cell declaring no such caveat passes
 /// the ZERO form, exactly the no-caveat sentinel the fold's membership arm refuses to bind).
-/// A member whose committed row demands a tail this recipe has no producer fill for FAILS CLOSED
-/// (mint it through its dedicated carrier minter) — never a guessed value.
 ///
 /// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the generator
 /// rejects a non-cohort / empty / heterogeneous slice).
@@ -536,7 +535,6 @@ pub fn mint_rotated_participant_leg(
         RotatedBlockWitness, empty_caveat_manifest,
         generate_rotated_effect_vm_descriptor_and_trace_wide, transfer_caveat_manifest,
     };
-    use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
     use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
 
@@ -582,8 +580,10 @@ pub fn mint_rotated_participant_leg(
     // The SAME full-cohort wide dispatch the live SDK wide prover runs. The value/field/create
     // cohort rides the bare wide producer with NO special witnesses (`None` for the note-spend
     // grow-gate nullifiers / refusal fields / cap-write tree) — an effect that needs one routes
-    // through its dedicated minter and fails closed here.
-    let (desc, mut trace, mut dpis, map_heaps, mem_boundary) =
+    // through its dedicated minter and fails closed here. The dispatcher owns the post-regen
+    // registry TAIL (derived from the committed descriptor, fail-closed on an unknown member);
+    // this recipe threads the producer-honest membership-teeth pair from the BEFORE cell.
+    let (desc, trace, mut dpis, map_heaps, mem_boundary) =
         generate_rotated_effect_vm_descriptor_and_trace_wide(
             initial_state,
             effects,
@@ -593,64 +593,9 @@ pub fn mint_rotated_participant_leg(
             None,
             None,
             None,
+            Some(sender_membership_teeth(before_cell)),
         )
         .map_err(|e| format!("mint_rotated_participant_leg: wide producer dispatch failed: {e}"))?;
-
-    // THE POST-REGEN REGISTRY TAIL: the committed row may carry claim PIs (+ matching teeth
-    // columns) PAST what the generic wide producer emits — derived from the descriptor, never
-    // hardcoded (members differ: the teeth transfer row, the KEY_COMMIT sovereign, the factory
-    // octet pins all carry different totals). The claim PIs sit AHEAD of the 16 wide anchors
-    // (`carrier_pin_twin::insert_tail_claim_pins` geometry), the teeth columns at the wide end.
-    let emitted_pis = dpis.len();
-    let row_width = trace
-        .first()
-        .map(Vec::len)
-        .ok_or_else(|| "mint_rotated_participant_leg: empty wide trace".to_string())?;
-    let pi_tail = desc.public_input_count.checked_sub(emitted_pis).ok_or_else(|| {
-        format!(
-            "mint_rotated_participant_leg: descriptor '{}' PI count {} < the wide producer's {}",
-            desc.name, desc.public_input_count, emitted_pis
-        )
-    })?;
-    let col_tail = desc.trace_width.checked_sub(row_width).ok_or_else(|| {
-        format!(
-            "mint_rotated_participant_leg: descriptor '{}' trace width {} < the wide producer's {}",
-            desc.name, desc.trace_width, row_width
-        )
-    })?;
-    if pi_tail != col_tail {
-        return Err(format!(
-            "mint_rotated_participant_leg: descriptor '{}' tail mismatch — {pi_tail} claim PI(s) \
-             vs {col_tail} teeth column(s) past the wide producer's shape (the exposure regen \
-             pairs them 1:1)",
-            desc.name
-        ));
-    }
-    if pi_tail > 0 {
-        match effects.first() {
-            // The committed transfer row (`CarrierComposed.transferV3MembershipWide`): the
-            // membership-teeth pair `(sender_leaf, authorized_root)` — 2 constant teeth columns
-            // past the carriers (row-0-pinned) + 2 claim PIs ahead of the 16 anchors.
-            Some(dregg_circuit::effect_vm::Effect::Transfer { .. }) if pi_tail == 2 => {
-                let (sender_leaf, authorized_root) = sender_membership_teeth(before_cell);
-                for row in trace.iter_mut() {
-                    row.push(sender_leaf);
-                    row.push(authorized_root);
-                }
-                let insert_at = emitted_pis - 16; // ahead of the 16 wide anchor PIs
-                dpis = splice_pi_values(&dpis, insert_at, &[sender_leaf, authorized_root]);
-            }
-            other => {
-                return Err(format!(
-                    "mint_rotated_participant_leg: committed descriptor '{}' demands {pi_tail} \
-                     tail PI(s) past the generic wide producer's {emitted_pis} for lead {other:?} \
-                     — this recipe has no producer fill for that member's tail (mint it through \
-                     its dedicated carrier minter); refusing to guess",
-                    desc.name
-                ));
-            }
-        }
-    }
     debug_assert_eq!(dpis.len(), desc.public_input_count);
 
     // Optional shared-turn-id override (joint participants). The EffectVm AIRs do not constrain
@@ -702,8 +647,12 @@ pub fn mint_rotated_participant_leg(
 /// named `MembershipAuthRootEdge` seams), and the zero form is the no-caveat sentinel: the fold's
 /// membership arm only binds these PIs when a membership bundle is attached, and a bundle claim
 /// never equals the zero pair for a real member.
-#[cfg(feature = "prover")]
-fn sender_membership_teeth(before_cell: &Cell) -> (BabyBear, BabyBear) {
+///
+/// `pub(crate)` + un-gated: the executor's rotated verifier (`verify_one_cohort_run`) is the
+/// TRUSTED twin — it reconstructs the SAME pair from the trusted before-cell to anchor the two
+/// published teeth PIs, so a proof whose bound teeth columns disagree is UNSAT (executor-derived,
+/// never prover-supplied).
+pub(crate) fn sender_membership_teeth(before_cell: &Cell) -> (BabyBear, BabyBear) {
     use dregg_cell::program::AuthorizedSet;
     use dregg_cell::{CellProgram, StateConstraint};
 

@@ -628,6 +628,10 @@ impl RotatedParticipantLeg {
                 None,
                 None,
                 None,
+                // Pure-circuit core: no BEFORE cell in hand — the committed transfer row's
+                // membership-teeth tail fills the ZERO pair (the no-caveat sentinel). The
+                // `dregg_turn` recipe wrapper threads the cell-derived pair.
+                None,
             )
             .map_err(|e| {
                 format!("mint_rotated_participant_leg: wide producer dispatch failed: {e}")
@@ -874,6 +878,8 @@ impl RotatedParticipantLeg {
                 before_nullifiers,
                 refusal_fields,
                 cap_write,
+                // No BEFORE cell on this pure-circuit route — zero-pair membership-teeth sentinel.
+                None,
             )
             .map_err(|e| format!("mint_welded_wide: wide producer dispatch failed: {e}"))?;
 
@@ -1005,6 +1011,8 @@ impl RotatedParticipantLeg {
                 before_nullifiers,
                 None,
                 None,
+                // No BEFORE cell on this pure-circuit route — zero-pair membership-teeth sentinel.
+                None,
             )
             .map_err(|e| {
                 format!("mint_welded_wide_multidomain: wide producer dispatch failed: {e}")
@@ -1130,6 +1138,8 @@ impl RotatedParticipantLeg {
                 &empty_caveat_manifest(),
                 None,
                 None,
+                None,
+                // Custom lead — the committed custom row carries no membership-teeth tail.
                 None,
             )
             .map_err(|e| format!("mint_custom_wide: wide custom dispatch failed: {e}"))?;

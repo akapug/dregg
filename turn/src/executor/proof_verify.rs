@@ -862,6 +862,33 @@ impl TurnExecutor {
             )
         }
         .map_err(|e| TurnError::InvalidExecutionProof(format!("rotated PI reconstruction: {e}")))?;
+        // THE POST-REGEN REGISTRY TAIL (the VERIFIER half — executor-derived, never
+        // prover-supplied). The committed rows the v12 exposure regen advanced carry claim PIs
+        // PAST the per-family base shape, spliced ahead of the 16 wide anchors; the producer
+        // (the wide dispatcher's registry-tail block / the record-pin KEY_COMMIT rider) fills
+        // them from the committed trace, and HERE the executor reconstructs the SAME values from
+        // the TRUSTED before-cell — so a proof whose bound teeth columns disagree with the
+        // trusted cell makes the anchored PIs diverge ⇒ UNSAT ⇒ reject:
+        //   * the committed transfer row (`transferV3MembershipWide`, 68): the membership-teeth
+        //     pair from `sender_membership_teeth` (the trusted cell's owner-key compress + its
+        //     declared `SenderAuthorized { PublicRoot }` slot felt; ZERO pair when no caveat);
+        //   * the committed makeSovereign row (`makeSovereignV3DeployedWide`, 78): the 4
+        //     KEY_COMMIT teeth = `pubkey_to_witness_key_commit` of the trusted cell's owner key
+        //     (the in-AIR chip gate welds them to the committed pubkey octet — the third edge).
+        // The fee-transfer member (`transferFeeVmDescriptor2R24`, 67) carries no teeth tail.
+        if !is_fee_transfer && matches!(lead, dregg_circuit::effect_vm::Effect::Transfer { .. }) {
+            let (sender_leaf, authorized_root) =
+                crate::rotation_witness::sender_membership_teeth(record_pin_cell);
+            let insert_at = dpis.len() - 16; // ahead of the 16 wide anchor PIs
+            dpis.insert(insert_at, authorized_root);
+            dpis.insert(insert_at, sender_leaf);
+        } else if matches!(lead, dregg_circuit::effect_vm::Effect::MakeSovereign) {
+            let kc = Self::pubkey_to_witness_key_commit(record_pin_cell.public_key());
+            let insert_at = dpis.len() - 16; // the committed SOVEREIGN_KEY_COMMIT_PI_LO (58)
+            for (k, v) in kc.iter().enumerate() {
+                dpis.insert(insert_at + k, *v);
+            }
+        }
         if dpis.len() != desc.public_input_count {
             return Err(TurnError::InvalidExecutionProof(format!(
                 "rotated verify: reconstructed {} PIs but descriptor wants {}",
@@ -1021,8 +1048,14 @@ impl TurnExecutor {
             ROT_PI_COUNT + 1 + dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN + 16; // lifecycle movers (67)
         let wide_record_pin_count_8 =
             ROT_PI_COUNT + 8 + dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN + 16; // H1 record-digest movers (74)
+        // The KEYED sovereign member (`makeSovereignV3DeployedWide`): the record-digest-mover base
+        // PLUS the 4 KEY_COMMIT teeth claim PIs spliced ahead of the 16 wide anchors (78). The
+        // record-pin anchor indices below are BASE-prefix slots (`ROT_PI_COUNT..+8`), untouched by
+        // the tail splice, so the same anchor applies.
+        let wide_record_pin_count_8_keyed = wide_record_pin_count_8 + 4; // makeSovereign (78)
         if (desc.public_input_count == wide_record_pin_count_1
-            || desc.public_input_count == wide_record_pin_count_8)
+            || desc.public_input_count == wide_record_pin_count_8
+            || desc.public_input_count == wide_record_pin_count_8_keyed)
             && dpis.len() == desc.public_input_count
         {
             use dregg_circuit::effect_vm::Effect as VmEffect;

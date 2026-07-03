@@ -3007,7 +3007,14 @@ fn recompute_v1_state_commit(
 /// internally genuine: the v1 BEFORE + AFTER STATE_COMMIT chains (the descriptor's poseidon
 /// lookups), the before-state-commit cross-row continuity carrier, and the rotated BEFORE +
 /// AFTER blocks' welded nonce limb + chained `wireCommitR` state_commit. Then the four rotated
-/// PI carriers are re-read from the rebuilt trace. Returns the corrected 38-PI vector. Widen
+/// PI carriers are re-read from the rebuilt trace.
+///
+/// Returns the corrected PI vector at the INPUT's length — the patch is phase-B WIRING only and
+/// never reshapes the PI vector: any tail PIs past the rotated `ROT_PI_COUNT` (the dsl rc on the
+/// rc-wrapped PLAIN cohort members — e.g. the committed `grantCapVmDescriptor2R24` at 50) ride
+/// through unchanged. The ROUTE owns the tail shape: the cap-open faces were never rc-wrapped in
+/// the Lean emit (every committed `*CapOpen*` member carries the UNWRAPPED 46/47/49 base), so the
+/// cap-open leg builder strips the rc BEFORE patching; the plain wide dispatcher keeps it. Widen
 /// the patched 327-wide trace to the cap-open shape with [`widen_to_cap_open`].
 pub fn patch_attenuate_base_for_cap_open(
     trace: &mut [Vec<BabyBear>],
@@ -3076,7 +3083,7 @@ pub fn patch_attenuate_base_for_cap_open(
     // pin constraints bind: 218 / 261 / 259 / 310).
     let r0 = &trace[0];
     let last = &trace[trace.len() - 1];
-    let mut dpis: Vec<BabyBear> = pis[..ROT_PI_COUNT].to_vec();
+    let mut dpis: Vec<BabyBear> = pis.to_vec();
     // The four rotated commit pins sit at the v1 prefix count `V1_PI_COUNT..+4` (the same slots
     // `rotPins` / `generate_rotated_effect_vm_trace` append them to). Indexing off `V1_PI_COUNT`
     // keeps these aligned when the v1 prefix grows (e.g. Phase C pushed it 34→42).
@@ -3709,6 +3716,89 @@ pub fn generate_rotated_record_pin_wide(
     debug_assert_eq!(trace[0].len(), WIDE_WIDTH);
     debug_assert_eq!(dpis.len(), base_len + 16); // base record-pins + 16 wide commit carriers
     Ok((trace, dpis))
+}
+
+/// The sovereign KEY_COMMIT chip appendix span: 4 quads × 8 digest lanes (Lean
+/// `CarrierOctetGates.KEY_COMMIT_SPAN` — the committed `makeSovereignV3DeployedWide` widens the
+/// wide record-pin host by exactly these 32 columns, `1771 + 32 = 1803`).
+pub const SOVEREIGN_KEY_COMMIT_SPAN: usize = 32;
+
+/// **THE SOVEREIGN KEY_COMMIT PRODUCER RIDER** — lift a wide `MakeSovereign` record-pin trace/PI
+/// pair (from [`generate_rotated_record_pin_wide`], 74 PIs / `WIDE_WIDTH` columns) to the
+/// committed DEPLOYED keyed member (`CarrierComposed.makeSovereignV3DeployedWide`, 78 PIs /
+/// `WIDE_WIDTH + 32` columns):
+///
+///   * the 4 KEY_COMMIT teeth columns (`columns.rs` `aux_off::WITNESS_KEY_COMMIT_0..3`, absolute
+///     cols 113..=116 — dead-zero from `EffectVmContext::default` in the base trace) are filled
+///     with the executor's compress of the committed BEFORE-block pubkey octet, on EVERY row
+///     (the deployed edge holds them constant; the pin reads row 0);
+///   * the 32-column chip-compress digest appendix (`dg_base = WIDE_WIDTH`, 4 quads × 8 lanes)
+///     gets its lane-0 producer columns (`row[dg_base + 8·q] = kc[q]`; the prove wrapper's
+///     `fill_chip_lanes` fills lanes 1..7 from the genuine permutation);
+///   * the 4 teeth claim PIs are SPLICED ahead of the 16 wide anchors (`insert_at =
+///     dpis.len() − 16` = the committed `SOVEREIGN_KEY_COMMIT_PI_LO` 58, post-rc-wrap).
+///
+/// The teeth values are DERIVED FROM THE COMMITTED TRACE, never caller-supplied: `kc[q] =
+/// chip_absorb_all_lanes(4, octet[quadIdx q])[0]` over the BEFORE-block `pubkey8` octet (limbs
+/// `B_IROOT − 8 ..`, filled UNCONDITIONALLY from the operated cell's owner key in the 30-bit
+/// canonical form). This IS `TurnExecutor::pubkey_to_witness_key_commit` /
+/// `dregg_commit::typed::canonical_32_to_felts_4` of the owner key (the Lean executor-compress
+/// verdict: `hash_4_to_1(x) == chip_absorb_all_lanes(4, x)[0]`, interleave quads
+/// `[0,1,2,3]·[4,5,6,7]·[0,4,2,6]·[1,5,3,7]`), so the fill satisfies the in-AIR chip gate AND
+/// matches the executor's check — a producer that committed a forged octet gets teeth the
+/// executor refuses (the third edge stays fail-closed).
+pub fn append_sovereign_key_commit_rider(
+    trace: &mut [Vec<BabyBear>],
+    dpis: &mut Vec<BabyBear>,
+) -> Result<(), String> {
+    use super::columns::{AUX_BASE, aux_off};
+    use crate::descriptor_ir2::chip_absorb_all_lanes;
+
+    let dg_base = trace
+        .first()
+        .map(Vec::len)
+        .ok_or_else(|| "sovereign key-commit rider: empty trace".to_string())?;
+    if dg_base != WIDE_WIDTH {
+        return Err(format!(
+            "sovereign key-commit rider: trace width {dg_base} != the wide record-pin host \
+             {WIDE_WIDTH} (the appendix lands past the wide carriers)"
+        ));
+    }
+    if dpis.len() < 16 {
+        return Err(format!(
+            "sovereign key-commit rider: PI vector {} carries no 16-PI wide anchor tail",
+            dpis.len()
+        ));
+    }
+    // The executor-compress interleave quads (Lean `CarrierOctetGates.quadIdx` — the byte twin of
+    // `canonical_32_to_felts_4`'s four `hash_4_to_1` folds).
+    const QUAD_IDX: [[usize; 4]; 4] = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 4, 2, 6], [1, 5, 3, 7]];
+    // The committed BEFORE-block pubkey octet (`B_PUBKEY8 = B_CARRIER_OCTETS + 16 = B_IROOT − 8`).
+    let b_pubkey8 = B_IROOT - 8;
+    let octet: [BabyBear; 8] = std::array::from_fn(|i| trace[0][BEFORE_BASE + b_pubkey8 + i]);
+    let kc: [BabyBear; 4] = std::array::from_fn(|q| {
+        let inputs: [BabyBear; 4] = std::array::from_fn(|j| octet[QUAD_IDX[q][j]]);
+        chip_absorb_all_lanes(4, &inputs)[0]
+    });
+
+    let kc_col = AUX_BASE + aux_off::WITNESS_KEY_COMMIT_0;
+    for row in trace.iter_mut() {
+        row.resize(dg_base + SOVEREIGN_KEY_COMMIT_SPAN, BabyBear::ZERO);
+        for (k, v) in kc.iter().enumerate() {
+            row[kc_col + k] = *v; // the KEY_COMMIT teeth (constant per row, row-0-pinned)
+            row[dg_base + 8 * k] = *v; // quad k's digest lane 0 (the genuine producer column)
+        }
+    }
+
+    // Splice the 4 teeth claim PIs ahead of the 16 wide anchors (the committed
+    // `SOVEREIGN_KEY_COMMIT_PI_LO` = 58 on the 74-PI wide record-pin vector).
+    let insert_at = dpis.len() - 16;
+    let mut spliced = Vec::with_capacity(dpis.len() + kc.len());
+    spliced.extend_from_slice(&dpis[..insert_at]);
+    spliced.extend_from_slice(&kc);
+    spliced.extend_from_slice(&dpis[insert_at..]);
+    *dpis = spliced;
+    Ok(())
 }
 
 /// **THE WIDE FEE-IN-PROOF trace generator (`transferFeeVmDescriptor2R24Wide`, 816-wide / 55-PI).**
@@ -4693,8 +4783,32 @@ fn cap_write_wide_plan(effect: &Effect) -> Option<(Option<CapTreeWriteOp>, bool)
 /// the refusal `fields_root` write witness (`Some` REQUIRED for a `Refusal` lead — the honest refusal
 /// is UNSAT without it); `cap_write` the cap-tree write witness (`Some` REQUIRED for a cap-WRITE lead
 /// whose base carries an in-circuit cap-tree `map_op` write — attenuate / revokeCapability — the
-/// honest cap-write is UNSAT without it). Fails closed (`Err`) on an empty / heterogeneous /
-/// non-cohort slice.
+/// honest cap-write is UNSAT without it); `membership_teeth` the producer-honest
+/// `(sender_leaf, authorized_root)` pair for the committed transfer row's membership-teeth tail
+/// (`None` = the ZERO no-caveat sentinel — see the registry-tail block below). Fails closed
+/// (`Err`) on an empty / heterogeneous / non-cohort slice.
+///
+/// ## The post-regen registry TAIL (v12 exposure regen — hoisted here from the leg-mint recipe)
+///
+/// The committed wide registry row a member proves against may demand MORE PIs (and trace columns)
+/// than the per-family wide producer emits. This dispatcher derives that tail FROM THE DESCRIPTOR
+/// (`public_input_count − emitted`, `trace_width − row width` — never a hardcoded count; members
+/// differ) and fills it producer-honest, so EVERY route through the shared spine (the live SDK wide
+/// prover, the IVC leg mints, the leg-mint recipe) emits the committed shape:
+///
+///   * the committed transfer row (`CarrierComposed.transferV3MembershipWide`, 68): the
+///     membership-teeth pair `(sender_leaf, authorized_root)` — 2 constant teeth columns past the
+///     carriers (row-0-pinned) + 2 claim PIs spliced ahead of the 16 wide anchors. The values come
+///     from `membership_teeth` (the caller's BEFORE-cell derivation — `compress_member` over the
+///     owner key + the `SenderAuthorized { PublicRoot }` slot felt); `None` fills the ZERO pair,
+///     exactly the no-caveat sentinel the fold's membership arm refuses to bind.
+///   * the committed makeSovereign row (`CarrierComposed.makeSovereignV3DeployedWide`, 78): the 4
+///     KEY_COMMIT teeth + the 32-column chip appendix, filled IN the record-pin arm
+///     ([`append_sovereign_key_commit_rider`] — derived from the committed pubkey octet, so the
+///     generic pairing check below sees a zero tail).
+///
+/// A member whose committed row demands a tail this dispatcher has no producer fill for FAILS
+/// CLOSED (mint it through its dedicated carrier minter) — never a guessed value.
 ///
 /// THE SEPARATELY-ROUTED WIDE MEMBERS (NOT effect-dispatched here): `heapWriteVmDescriptor2R24` (no live
 /// `Effect::HeapWrite` selector — reached by the exercise-inner heap-write path) and
@@ -4716,6 +4830,7 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
     before_nullifiers: Option<&[BabyBear]>,
     refusal_fields: Option<(&[crate::heap_root::HeapLeaf], BabyBear)>,
     cap_write: Option<&CapWriteWideWitness>,
+    membership_teeth: Option<(BabyBear, BabyBear)>,
 ) -> Result<
     (
         crate::descriptor_ir2::EffectVmDescriptor2,
@@ -4806,9 +4921,18 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
             | Effect::ReceiptArchive { .. }
             | Effect::MakeSovereign
     ) {
-        let (t, d) =
+        let (mut t, mut d) =
             generate_rotated_record_pin_wide(initial_state, effects, before, after, caveat)
                 .map_err(|e| format!("wide record-pin generation: {e}"))?;
+        // The committed makeSovereign row is the DEPLOYED KEYED member
+        // (`CarrierComposed.makeSovereignV3DeployedWide`, 78 PIs / +32 chip-appendix columns):
+        // fill the 4 KEY_COMMIT teeth + the digest appendix from the committed pubkey octet and
+        // splice the teeth claim PIs ahead of the 16 wide anchors. The other record-pin members
+        // commit the bare wide record-pin shape (no rider).
+        if matches!(lead, Effect::MakeSovereign) {
+            append_sovereign_key_commit_rider(&mut t, &mut d)
+                .map_err(|e| format!("wide record-pin generation: {e}"))?;
+        }
         (t, d, vec![])
     } else if matches!(lead, Effect::CreateCell { .. }) {
         generate_rotated_create_cell_wide(initial_state, effects, before, after, caveat, &[])
@@ -4913,6 +5037,76 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
     } else {
         MemBoundaryWitness::default()
     };
+
+    // THE POST-REGEN REGISTRY TAIL (hoisted from `rotation_witness::mint_rotated_participant_leg`
+    // so EVERY route through this spine emits the committed shape): the committed row may carry
+    // claim PIs (+ matching teeth columns) PAST what the per-family producer emits — derived from
+    // the descriptor, never hardcoded (members differ: the teeth transfer row, the KEY_COMMIT
+    // sovereign — filled in its arm above — the factory octet pins all carry different totals).
+    // The claim PIs sit AHEAD of the 16 wide anchors (`carrier_pin_twin::insert_tail_claim_pins`
+    // geometry), the teeth columns at the wide end.
+    let emitted_pis = dpis.len();
+    let row_width = trace
+        .first()
+        .map(Vec::len)
+        .ok_or_else(|| "wide rotated prover: empty wide trace".to_string())?;
+    let pi_tail = desc
+        .public_input_count
+        .checked_sub(emitted_pis)
+        .ok_or_else(|| {
+            format!(
+                "wide rotated prover: descriptor '{}' PI count {} < the wide producer's {}",
+                desc.name, desc.public_input_count, emitted_pis
+            )
+        })?;
+    let col_tail = desc.trace_width.checked_sub(row_width).ok_or_else(|| {
+        format!(
+            "wide rotated prover: descriptor '{}' trace width {} < the wide producer's {}",
+            desc.name, desc.trace_width, row_width
+        )
+    })?;
+    if pi_tail != col_tail {
+        return Err(format!(
+            "wide rotated prover: descriptor '{}' tail mismatch — {pi_tail} claim PI(s) vs \
+             {col_tail} teeth column(s) past the wide producer's shape (the exposure regen pairs \
+             them 1:1)",
+            desc.name
+        ));
+    }
+    if pi_tail > 0 {
+        match lead {
+            // The committed transfer row (`CarrierComposed.transferV3MembershipWide`): the
+            // membership-teeth pair `(sender_leaf, authorized_root)` — 2 constant teeth columns
+            // past the carriers (row-0-pinned) + 2 claim PIs ahead of the 16 anchors. `None`
+            // fills the ZERO pair (the no-caveat sentinel the fold's membership arm refuses to
+            // bind — a bundle claim never equals the zero pair for a real member).
+            Effect::Transfer { .. } if pi_tail == 2 => {
+                let (sender_leaf, authorized_root) =
+                    membership_teeth.unwrap_or((BabyBear::ZERO, BabyBear::ZERO));
+                for row in trace.iter_mut() {
+                    row.push(sender_leaf);
+                    row.push(authorized_root);
+                }
+                let insert_at = emitted_pis - 16; // ahead of the 16 wide anchor PIs
+                let mut spliced = Vec::with_capacity(emitted_pis + 2);
+                spliced.extend_from_slice(&dpis[..insert_at]);
+                spliced.push(sender_leaf);
+                spliced.push(authorized_root);
+                spliced.extend_from_slice(&dpis[insert_at..]);
+                dpis = spliced;
+            }
+            other => {
+                return Err(format!(
+                    "wide rotated prover: committed descriptor '{}' demands {pi_tail} tail PI(s) \
+                     past the wide producer's {emitted_pis} for lead {other:?} — this dispatcher \
+                     has no producer fill for that member's tail (mint it through its dedicated \
+                     carrier minter); refusing to guess",
+                    desc.name
+                ));
+            }
+        }
+    }
+    debug_assert_eq!(dpis.len(), desc.public_input_count);
 
     Ok((desc, trace, dpis, map_heaps, mem_boundary))
 }
