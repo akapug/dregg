@@ -1160,8 +1160,34 @@ impl TurnExecutor {
         // proof commits through the executor — its cap-effect verify surface now AGREES with the
         // wire's (both cap-open + the membership crown, both admit the welded twin). STAGED: purely
         // additive descriptor resolution; the deployed default prover (plain) and `umem_witness_enabled`
-        // are untouched. The dpis-length guard (`public_input_count == dpis.len()`) admits only the 62-PI
-        // wide members the reconstructed `dpis` can bind; absent / wrong-width keys are skipped.
+        // are untouched. The dpis-length guard (`public_input_count == cap_open_dpis.len()`) admits only
+        // the wide members the reconstructed cap-open vector can bind; absent / wrong-width keys are
+        // skipped.
+        //
+        // THE CAP-OPEN dpis (post-rc-emit): the cap-open family was NEVER rc-wrapped in the Lean
+        // emit (every committed `*CapOpen*` member carries the UNWRAPPED base — 46/47 + 16; the
+        // producer `build_effect_vm_cap_open_leg` strips the rc), and the cap-open transfer member
+        // carries NO membership-teeth tail. So the cap-open candidates bind the reconstructed
+        // `dpis` MINUS the plain member's tail extras — the rc quad (+ the transfer teeth pair),
+        // which ride contiguously just ahead of the 16 wide anchors.
+        let cap_open_dpis: Vec<BabyBear> = {
+            let extras = dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN
+                + if !is_fee_transfer
+                    && matches!(lead, dregg_circuit::effect_vm::Effect::Transfer { .. })
+                {
+                    2 // the spliced membership-teeth pair (transfer only)
+                } else {
+                    0
+                };
+            if dpis.len() >= 16 + extras {
+                let cut = dpis.len() - 16 - extras;
+                let mut v = dpis[..cut].to_vec();
+                v.extend_from_slice(&dpis[dpis.len() - 16..]);
+                v
+            } else {
+                dpis.clone()
+            }
+        };
         let mut cap_open_descs: Vec<dregg_circuit::descriptor_ir2::EffectVmDescriptor2> =
             Vec::new();
         for key in cap_open_candidate_keys(lead) {
@@ -1177,7 +1203,7 @@ impl TurnExecutor {
                 });
                 if let Some(json) = json {
                     if let Ok(d) = parse_vm_descriptor2(json) {
-                        if d.public_input_count == dpis.len() {
+                        if d.public_input_count == cap_open_dpis.len() {
                             cap_open_descs.push(d);
                         }
                     }
@@ -1201,21 +1227,27 @@ impl TurnExecutor {
         // accept (the anchored after-commit PIs disagree with the trace's after-block STATE_COMMIT
         // carrier). Admitting the cap-open members is STRICTLY STRONGER (more in-circuit constraints),
         // never a widening of the plain path.
-        let mut candidates: Vec<&dregg_circuit::descriptor_ir2::EffectVmDescriptor2> = Vec::new();
+        // Each candidate pairs the descriptor with the PI vector it binds: the plain/welded
+        // members bind the full reconstructed `dpis` (rc + teeth + anchors); the cap-open members
+        // bind the UNWRAPPED `cap_open_dpis` (the cap-open family was never rc-wrapped).
+        let mut candidates: Vec<(
+            &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+            &Vec<BabyBear>,
+        )> = Vec::new();
         if let Some(welded) = welded_desc.as_ref() {
-            candidates.push(welded);
+            candidates.push((welded, &dpis));
         }
         if !require_welded {
-            candidates.push(&desc);
+            candidates.push((&desc, &dpis));
         }
         for d in &cap_open_descs {
-            candidates.push(d);
+            candidates.push((d, &cap_open_dpis));
         }
 
         let mut accepted = 0usize;
         let mut last_err: Option<String> = None;
-        for d in &candidates {
-            match verify_vm_descriptor2(d, ir2_proof, &dpis) {
+        for (d, cand_dpis) in &candidates {
+            match verify_vm_descriptor2(d, ir2_proof, cand_dpis) {
                 Ok(()) => accepted += 1,
                 Err(e) => last_err = Some(format!("{}: {e}", d.name)),
             }

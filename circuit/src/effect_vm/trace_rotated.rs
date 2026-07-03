@@ -5006,6 +5006,17 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
         };
         let d = append_wide_carriers(&mut t, d, GRAD_ROT_WIDTH);
         (t, d, heaps)
+    } else if matches!(lead, Effect::Mint { .. }) {
+        // supplyMint (`sel::MINT` → `supplyMintVmDescriptor2R24`): the committed row is UNWRAPPED
+        // (62 = 46 base + 16 anchors — the Lean `supplyMintV3` was never rc-wrapped, exactly like
+        // the cap-open family), so lift the 4 dsl rc PIs off the transfer-shape emission (they sit
+        // between the base 46 and the 16 wide anchors). The rc COLUMNS stay in the trace (zero /
+        // unpinned on this member).
+        let (t, mut d) =
+            generate_rotated_transfer_shape_wide(initial_state, effects, before, after, caveat)
+                .map_err(|e| format!("wide supply-mint generation: {e}"))?;
+        d.drain(ROT_PI_COUNT..ROT_PI_COUNT + DFA_RC_LEN);
+        (t, d, vec![])
     } else {
         let (t, d) =
             generate_rotated_transfer_shape_wide(initial_state, effects, before, after, caveat)

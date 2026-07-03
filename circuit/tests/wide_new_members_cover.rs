@@ -70,10 +70,14 @@ fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
 /// Every new member carries 16 wide-commit PiBindings (the 8-felt before/after anchors).
 #[test]
 fn new_wide_members_carry_16_commit_pis() {
+    // The committed post-v12-regen shapes (the registry drift pins): the TB host grew with the
+    // graduated base + membership columns (wide 2102), heapWrite carries the OPTION-I after-spine
+    // host (`HEAP_WRITE_HOST_WIDTH` 1621 + 608 carriers = 2229), supplyMint rides the transfer-
+    // shape host (1163 + 608 = 1771) at the UNWRAPPED 62 PIs (never rc-wrapped, like cap-open).
     for (name, want_w, want_pi) in [
-        ("transferCapOpenTBVmDescriptor2R24", 1528usize, 65usize),
-        ("heapWriteVmDescriptor2R24", 1655, 20),
-        ("supplyMintVmDescriptor2R24", 1197, 62),
+        ("transferCapOpenTBVmDescriptor2R24", 2102usize, 65usize),
+        ("heapWriteVmDescriptor2R24", 2229, 20),
+        ("supplyMintVmDescriptor2R24", 1771, 62),
     ] {
         let d = parse_vm_descriptor2(wide_json(name)).unwrap();
         assert_eq!(d.trace_width, want_w, "{name} wide width");
@@ -159,10 +163,13 @@ fn wide_supply_mint_proves_and_verifies() {
         desc.name,
         parse_vm_descriptor2(wide_json(name)).unwrap().name
     );
-    assert_eq!(desc.trace_width, 1197, "supplyMint wide width 1197");
-    assert_eq!(desc.public_input_count, 62, "supplyMint wide 62 PIs");
-    assert_eq!(trace[0].len(), 1197);
-    assert_eq!(dpis.len(), 62);
+    assert_eq!(desc.trace_width, 1771, "supplyMint wide width 1771");
+    assert_eq!(
+        desc.public_input_count, 62,
+        "supplyMint wide 62 PIs (unwrapped — no rc tail)"
+    );
+    assert_eq!(trace[0].len(), desc.trace_width);
+    assert_eq!(dpis.len(), desc.public_input_count);
 
     let mb = MemBoundaryWitness::default();
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mb, &map_heaps)
@@ -247,12 +254,12 @@ fn wide_heap_write_proves_and_verifies() {
 
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
     assert_eq!(
-        desc.trace_width, 1655,
-        "heapWrite wide width 1655 (OPTION I after-spine)"
+        desc.trace_width, 2229,
+        "heapWrite wide width 2229 (OPTION I after-spine, v12+rc host 1621 + 608 carriers)"
     );
     assert_eq!(desc.public_input_count, 20, "heapWrite wide 20 PIs");
-    assert_eq!(trace[0].len(), 1655);
-    assert_eq!(dpis.len(), 20);
+    assert_eq!(trace[0].len(), desc.trace_width);
+    assert_eq!(dpis.len(), desc.public_input_count);
 
     let mb = MemBoundaryWitness::default();
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mb, &map_heaps)
@@ -341,10 +348,10 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
     .expect("wide cap-open-TB generation");
 
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
-    assert_eq!(desc.trace_width, 1029, "transferCapOpenTB wide width 1029");
+    assert_eq!(desc.trace_width, 2102, "transferCapOpenTB wide width 2102");
     assert_eq!(desc.public_input_count, 65, "transferCapOpenTB wide 65 PIs");
-    assert_eq!(trace[0].len(), 1029);
-    assert_eq!(dpis.len(), 65);
+    assert_eq!(trace[0].len(), desc.trace_width);
+    assert_eq!(dpis.len(), desc.public_input_count);
     // The published turn identity rides the three TB PIs.
     assert_eq!(dpis[CAP_OPEN_TB_PI_SRC], src);
     assert_eq!(dpis[CAP_OPEN_TB_PI_ACTOR], actor);
