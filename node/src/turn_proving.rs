@@ -2727,7 +2727,8 @@ mod tests {
         let pre_cap_root = dregg_cell::compute_canonical_capability_root_felt(&agent.capabilities);
         // The FULL native 8-felt openable membership root (the ~124-bit faithful
         // root the cap-membership leg / `CapMembershipExpectation.cap_root` binds).
-        let pre_cap_root_8 = dregg_cell::compute_canonical_capability_root_8(&agent.capabilities);
+        let pre_cap_root_8 =
+            dregg_cell::compute_canonical_capability_root_8(&agent.capabilities).limbs();
         // The REAL before-state cell the commit path holds (real pk + c-list ⇒ faithful r23).
         let before_cell = agent.clone();
 
@@ -3080,7 +3081,8 @@ mod tests {
         // The other cell's FULL native 8-felt root — the holder root the splice
         // attempt binds against (distinct from the agent's, so the witness cannot
         // open to it).
-        let other_root_8 = dregg_cell::compute_canonical_capability_root_8(&other.capabilities);
+        let other_root_8 =
+            dregg_cell::compute_canonical_capability_root_8(&other.capabilities).limbs();
         assert_ne!(
             other_root, pre_cap_root,
             "distinct c-lists ⇒ distinct roots"
@@ -3648,14 +3650,14 @@ mod tests {
         let actor_cap_root =
             dregg_cell::compute_canonical_capability_root_felt(&bearer.capabilities);
         let actor_cap_root_8 =
-            dregg_cell::compute_canonical_capability_root_8(&bearer.capabilities);
+            dregg_cell::compute_canonical_capability_root_8(&bearer.capabilities).limbs();
 
         // The delegator's capability is over the BEARER cell.
         delegator.capabilities.grant(bearer_id, AuthRequired::None);
         let delegator_id = delegator.id();
         // The authority-leg (holder) root is the FULL native 8-felt openable root.
         let delegator_cap_root =
-            dregg_cell::compute_canonical_capability_root_8(&delegator.capabilities);
+            dregg_cell::compute_canonical_capability_root_8(&delegator.capabilities).limbs();
         assert_ne!(
             delegator_cap_root, actor_cap_root_8,
             "the bearer fixture must have distinct delegator/actor cap roots so the \
@@ -3918,7 +3920,8 @@ mod tests {
         impostor
             .capabilities
             .grant(CellId::from_bytes([0x34u8; 32]), AuthRequired::None);
-        let impostor_root = dregg_cell::compute_canonical_capability_root_8(&impostor.capabilities);
+        let impostor_root =
+            dregg_cell::compute_canonical_capability_root_8(&impostor.capabilities).limbs();
         assert_ne!(
             impostor_root, delegator_cap_root,
             "the impostor delegator's root must differ from the real delegator's"
@@ -4076,7 +4079,8 @@ mod tests {
             .find(|c| c.slot == slot)
             .expect("granted cap present")
             .allowed_effects = Some(dregg_cell::facet::EFFECT_TRANSFER);
-        let holder_cap_root = dregg_cell::compute_canonical_capability_root_8(&holder.capabilities);
+        let holder_cap_root =
+            dregg_cell::compute_canonical_capability_root_8(&holder.capabilities).limbs();
 
         // Build the consumed-cap membership witness for the B-targeting leaf against
         // the holder's canonical tree (mirrors `record_consumed_cap_witness`).
