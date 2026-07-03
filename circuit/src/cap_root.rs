@@ -65,6 +65,7 @@
 //! NO in-circuit membership-open / submask / non-amplification gates yet —
 //! those are Phase B.
 
+use crate::faithful8::Faithful8;
 use crate::field::BabyBear;
 use crate::poseidon2::{Poseidon2State, hash_many};
 use std::sync::LazyLock;
@@ -845,8 +846,12 @@ impl CanonicalCapTree {
 /// Compute the canonical capability root over a set of leaves at the canonical
 /// depth ([`CAP_TREE_DEPTH`]). This is THE function `dregg-cell` calls; the
 /// circuit seeds its `cap_root` column from this same value.
-pub fn compute_capability_root(leaves: Vec<CapLeaf>) -> [BabyBear; CAP_DIGEST_W] {
-    CanonicalCapTree::new(leaves, CAP_TREE_DEPTH).root()
+///
+/// Returns [`Faithful8`] — a genuine `node8` tree root, one of the named
+/// faithful constructors of the commitment TYPE WALL
+/// (`docs/FAITHFUL-COMMITMENT-LAW.md`).
+pub fn compute_capability_root(leaves: Vec<CapLeaf>) -> Faithful8 {
+    Faithful8::from_root8(CanonicalCapTree::new(leaves, CAP_TREE_DEPTH).root())
 }
 
 /// Compute the canonical capability root over a set of LIVE leaves plus a set
@@ -859,15 +864,17 @@ pub fn compute_capability_root(leaves: Vec<CapLeaf>) -> [BabyBear; CAP_DIGEST_W]
 pub fn compute_capability_root_with_tombstones(
     leaves: Vec<CapLeaf>,
     tombstone_keys: &[BabyBear],
-) -> [BabyBear; CAP_DIGEST_W] {
-    CanonicalCapTree::new_with_tombstones(leaves, tombstone_keys, CAP_TREE_DEPTH).root()
+) -> Faithful8 {
+    Faithful8::from_root8(
+        CanonicalCapTree::new_with_tombstones(leaves, tombstone_keys, CAP_TREE_DEPTH).root(),
+    )
 }
 
 /// The canonical capability root of the EMPTY c-list (only the two sentinels).
 /// This is the value `CellState::new` seeds `cap_root` with, and the value a
 /// fresh cell's `compute_canonical_capability_root` returns. Deterministic and
 /// cell-independent.
-pub fn empty_capability_root() -> [BabyBear; CAP_DIGEST_W] {
+pub fn empty_capability_root() -> Faithful8 {
     compute_capability_root(Vec::new())
 }
 

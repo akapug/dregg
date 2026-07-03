@@ -1214,15 +1214,14 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
                 .into(),
         );
     }
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     let mut after_leaves = before_nullifiers.to_vec();
     after_leaves.push(HeapLeaf {
         addr: nf_key,
         value: nf_value,
     });
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8: [BabyBear; HEAP_DIGEST_W] =
-        CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
     // Mirror of `EffectVmEmitRotationV3.nullifierRootGroupCol`: lane 0 = limb `B_NULLIFIER_ROOT` (26);
     // the seven DEDICATED completion limbs 67..73 for lanes 1..7.
@@ -1312,15 +1311,14 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
                 .into(),
         );
     }
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     let mut after_leaves = before_accounts.to_vec();
     after_leaves.push(HeapLeaf {
         addr: cell_key,
         value: cell_key, // the born-empty cell rides its own key as its leaf value.
     });
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8: [BabyBear; HEAP_DIGEST_W] =
-        CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
     // Mirror of `EffectVmEmitRotationV3.cellsRootGroupCol`: lane 0 = limb 0 (accounts root); the seven
     // DEDICATED completion limbs 81..87 for lanes 1..7.
@@ -1392,15 +1390,14 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
     // The BEFORE commitments tree and the AFTER tree (= BEFORE + the inserted commitment). NoteCreate
     // is append-only — no `.absent` freshness precondition.
     let before_tree = CanonicalHeapTree8::new(before_commitments.to_vec(), HEAP_TREE_DEPTH);
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     let mut after_leaves = before_commitments.to_vec();
     after_leaves.push(HeapLeaf {
         addr: cm_key,
         value: cm_value,
     });
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8: [BabyBear; HEAP_DIGEST_W] =
-        CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
     // Mirror of `EffectVmEmitRotationV3.commitmentsRootGroupCol`: lane 0 = limb `B_COMMITMENTS_ROOT`
     // (27); the seven DEDICATED completion limbs 74..80 for lanes 1..7.
@@ -1514,7 +1511,7 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
                 .into(),
         );
     }
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     let after_root8: [BabyBear; HEAP_DIGEST_W] = before_tree
         .update_witness(HeapLeaf {
             addr: audit_key,
@@ -1636,7 +1633,7 @@ pub fn generate_rotated_refusal_write_wide(
     );
     let before_leaves = &map_heaps[0];
     let before_tree = CanonicalHeapTree8::new(before_leaves.clone(), HEAP_TREE_DEPTH);
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     let old_value = before_tree
         .sorted_leaves()
         .iter()
@@ -1676,7 +1673,7 @@ pub fn generate_rotated_refusal_write_wide(
             read_leaf,
             &fields_siblings,
             &fields_directions,
-            before_root8,
+            before_root8.limbs(),
         );
         fill_heap_after_spine(
             row,
@@ -3960,7 +3957,7 @@ pub fn generate_rotated_heap_write_wide(
     // after = the update witness's recomposed `new_root`), NOT the lossy 1-felt scalar the GENTIAN tooth
     // refutes.
     let before_tree = CanonicalHeapTree8::new(heap_leaves.to_vec(), HEAP_TREE_DEPTH);
-    let before_root8: [BabyBear; HEAP_DIGEST_W] = before_tree.root8();
+    let before_root8 = before_tree.root8();
     if !before_tree.sorted_leaves().iter().any(|l| l.addr == addr) {
         return Err(format!(
             "heap-write wide: recomputed addr {} is NOT in the BEFORE heap — the splice `.write` opens a \
@@ -4057,7 +4054,7 @@ pub fn generate_rotated_heap_write_wide(
             read_leaf,
             &heap_siblings,
             &heap_directions,
-            before_root8,
+            before_root8.limbs(),
         );
         fill_heap_after_spine(
             row,
