@@ -1208,6 +1208,18 @@ impl AgentCloud {
         self.root.public()
     }
 
+    /// A receipt-chain secret derived from this cloud's (secret) root key, domain
+    /// separated. Because the root secret is never published (only its public half
+    /// rides the credential), the derived receipt seed is unpredictable to a
+    /// report-holder — yet reproducible for a seeded cloud (`from_seed`). Used for a
+    /// one-shot [`run`](AgentCloud::run); a persistent session persists its own
+    /// random secret instead (see [`crate::session::Session`]).
+    fn derived_receipt_secret(&self) -> [u8; 32] {
+        let mut h = BodyHasher::new(b"dregg-agent-receipt-chain-seed-v2");
+        h.field(&self.root.secret_bytes());
+        h.finalize()
+    }
+
     /// **Deploy** an agent: open its replenishing-budget cell and mint its cap
     /// bundle (a `dga1_` credential granting exactly the spec's services + cells).
     pub fn deploy(&self, spec: &AgentSpec) -> Result<AgentHandle, AgentError> {
@@ -1318,8 +1330,11 @@ impl AgentCloud {
         toolkit: Option<&dyn ToolKit>,
     ) -> AgentRunReport {
         // A one-shot run is a session of exactly one goal: a fresh persistent
-        // state, driven once, snapshotted into a report.
-        let mut state = SessionState::new(&handle.id);
+        // state, driven once, snapshotted into a report. Its receipt-chain secret is
+        // derived from THIS cloud's (secret) root key — reproducible under
+        // `AgentCloud::from_seed`, unpredictable under `AgentCloud::new`, and never a
+        // public function of the agent id.
+        let mut state = SessionState::from_secret(self.derived_receipt_secret());
         self.drive_state(handle, brain, toolkit, &mut state);
         self.report_snapshot(handle, &state)
     }
@@ -1634,11 +1649,23 @@ pub struct SessionState {
 }
 
 impl SessionState {
-    /// Fresh persistent state for `agent_id` (the receipt chain seeded from the id,
-    /// so the chain identity is bound to the agent and a run is reproducible).
-    pub fn new(agent_id: &str) -> SessionState {
+    /// Fresh persistent state seeded from an explicit 32-byte **receipt-chain
+    /// secret**. That secret IS the ed25519 signing seed for the whole chain
+    /// ([`ReceiptSigner::from_seed`](crate::receipt::ReceiptSigner::from_seed)), so
+    /// whoever holds it can sign the chain. It MUST therefore be a per-session
+    /// RANDOM secret — and, for a session that must survive detach/re-attach, one
+    /// that is PERSISTED so a resumed session recovers the SAME key (see
+    /// [`crate::session::Session`] / [`crate::session_store::ConsumedStore`]).
+    ///
+    /// It must NEVER be a public function of the agent id: the agent id is printed
+    /// in cleartext in every report (`report.agent`, `receipt.agent`), so a hashed
+    /// id would let ANY holder of a report re-derive the signing key and forge a
+    /// fully self-consistent chain — exactly the third-party-forgery hole this
+    /// closes. The report still exposes only the ed25519 PUBLIC key
+    /// ([`report.signer`](AgentRunReport::signer)); the secret stays host-side.
+    pub fn from_secret(receipt_secret: [u8; 32]) -> SessionState {
         SessionState {
-            chain: ReceiptChain::from_seed(receipt_seed(agent_id)),
+            chain: ReceiptChain::from_seed(receipt_secret),
             cells: BTreeMap::new(),
             receipts: Vec::new(),
             log: Vec::new(),
@@ -1647,6 +1674,14 @@ impl SessionState {
             budget_refused: 0,
             seq: 0,
         }
+    }
+
+    /// Fresh persistent state with a freshly-generated RANDOM receipt-chain secret
+    /// (OS CSPRNG). For an EPHEMERAL run whose chain need not survive re-attach; a
+    /// persistent [`Session`](crate::session::Session) threads a persisted secret
+    /// through [`from_secret`](SessionState::from_secret) instead.
+    pub fn new_random() -> SessionState {
+        SessionState::from_secret(fresh_receipt_secret())
     }
 
     /// The cumulative receipt chain so far (every admitted action across every
@@ -1679,12 +1714,15 @@ impl SessionState {
 /// collide with an in-session per-action draw key (`MeterKey` period `= seq >= 0`).
 const CARRYOVER_PERIOD: i64 = -1;
 
-/// Derive a deterministic 32-byte receipt-chain seed from an agent id, so a run is
-/// reproducible and the chain identity is bound to the agent.
-fn receipt_seed(agent_id: &str) -> [u8; 32] {
-    let mut h = BodyHasher::new(b"dregg-agent-receipt-chain-seed-v1");
-    h.field(agent_id.as_bytes());
-    h.finalize()
+/// Generate a fresh, unpredictable 32-byte receipt-chain secret from OS randomness.
+/// This is the ed25519 signing seed for a chain, so it must be a real CSPRNG draw —
+/// never a function of any public value (the retired `receipt_seed(agent_id)` hashed
+/// the cleartext agent id, which let any report-holder re-derive the key and forge
+/// the chain; see [`SessionState::from_secret`]).
+fn fresh_receipt_secret() -> [u8; 32] {
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).expect("operating-system randomness is available");
+    secret
 }
 
 /// The committed cell root: a domain-separated hash over the heap's `(key, value)`
