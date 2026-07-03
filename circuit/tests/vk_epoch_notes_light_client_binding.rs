@@ -157,8 +157,9 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated noteSpend descriptor parses");
     assert_eq!(
-        desc.public_input_count, 47,
-        "noteSpend carries the appended nullifier-forcing pin (47 PIs)"
+        desc.public_input_count, 51,
+        "noteSpend PIs = ROT_NULLIFIER_PI_COUNT (47 = 46 rotated + 1 nullifier-forcing pin) + \
+         DFA_RC_LEN (4 dsl rc pins) = 51 (committed noteSpendVmDescriptor2R24)"
     );
 
     let st = CellState::new(before_balance as u64, 0);
@@ -322,8 +323,9 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated noteCreate descriptor parses");
     assert_eq!(
-        desc.public_input_count, 47,
-        "noteCreate carries the appended commitment-forcing pin (47 PIs)"
+        desc.public_input_count, 51,
+        "noteCreate PIs = ROT_NULLIFIER_PI_COUNT (47 = 46 rotated + 1 commitment-forcing pin) + \
+         DFA_RC_LEN (4 dsl rc pins) = 51 (committed noteCreateVmDescriptor2R24)"
     );
 
     let st = CellState::new(before_balance as u64, 0);
@@ -487,7 +489,7 @@ fn wide_rotated_descriptor_json(name: &str) -> &'static str {
 /// the bare 46-PI base and ERRORS on the 47-PI commitment-pinned NoteCreate base — fail-closed, the
 /// honest create was UN-PROVABLE through the live wide path.)
 ///
-/// This test exercises the EXACT wide producer the live path calls, at the wide (8-felt-commit, 63-PI)
+/// This test exercises the EXACT wide producer the live path calls, at the wide (8-felt-commit, 67-PI)
 /// geometry a light client verifies: an honest noteCreate proves + verifies through the WIDE
 /// descriptor; a post-state forged to differ in the commitments-root (a root the kernel never grew)
 /// is UNSAT — the in-circuit `.insert` grow-gate bites at the wide geometry too.
@@ -508,8 +510,9 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     let wide_desc = parse_vm_descriptor2(wide_rotated_descriptor_json(name))
         .expect("WIDE noteCreate descriptor parses");
     assert_eq!(
-        wide_desc.public_input_count, 63,
-        "WIDE noteCreate carries the 47-PI base + 16 wide commit PIs"
+        wide_desc.public_input_count, 67,
+        "WIDE noteCreate PIs = narrow 51-PI base (47 + 4 dsl rc) + 16 wide commit PIs = 67 \
+         (committed wide noteCreateVmDescriptor2R24)"
     );
 
     let st = CellState::new(before_balance as u64, 0);
@@ -573,8 +576,8 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     );
     assert_eq!(
         wide_dpis.len(),
-        63,
-        "wide PI vector (47 base + 16 wide commit PIs)"
+        67,
+        "wide PI vector (51 base = 47 + 4 dsl rc, + 16 wide commit PIs)"
     );
 
     // POSITIVE TOOTH (no downgrade): the honest noteCreate proves + verifies through the WIDE

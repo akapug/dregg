@@ -33,8 +33,8 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness, SET_FIELD_DYN_HOST_WIDTH, WIDE_COMMIT_CARRIER,
-    WIDE_NUM_CARRIERS, empty_caveat_manifest, generate_rotated_create_cell_wide,
+    DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness, WIDE_COMMIT_CARRIER, WIDE_NUM_CARRIERS,
+    empty_caveat_manifest, generate_rotated_create_cell_wide,
     generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
     generate_rotated_note_spend_wide, generate_rotated_set_field_dyn_wide,
     generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
@@ -333,8 +333,10 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
     let desc = wide_desc(name);
     assert_eq!(
         desc.trace_width,
-        SET_FIELD_DYN_HOST_WIDTH + 2 * 8 * WIDE_NUM_CARRIERS,
-        "setFieldDyn wide width = host + the 38-carrier appendix (608)"
+        1553 + 2 * 8 * WIDE_NUM_CARRIERS,
+        "setFieldDyn wide width = the committed narrow V1Face host (1553 = GRAD_ROT_WIDTH 1581 − four \
+         chip sites × 7 = 28) + the 2·8·WIDE_NUM_CARRIERS wide-carrier appendix = 2465 \
+         (committed wide setFieldDynVmDescriptor2R24 trace_width)"
     );
     assert_eq!(
         desc.public_input_count,
@@ -404,7 +406,7 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         .unwrap_or_else(|e| panic!("setFieldDyn wide proof must verify: {e}"));
     eprintln!(
         "WIDE setFieldDyn: the DYNAMIC overflow-field write PROVED + VERIFIED at width {} (the Blum \
-         write→read transport over the {SET_FIELD_DYN_HOST_WIDTH}-wide V1Face host geometry — the \
+         write→read transport over the 1553-wide V1Face host geometry — the \
          missing-generator residual is CLOSED).",
         desc.trace_width
     );

@@ -400,11 +400,11 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
     assert_eq!(
         producer_dpis.len(),
         desc.public_input_count,
-        "wide refusal PI count (54 base + 16 wide = 70 — the H1 8-felt record-pin8)"
+        "wide refusal PI count (58 narrow base = 50 + 8 authority + 16 wide = 74 — the H1 8-felt record-pin8)"
     );
     assert_eq!(
-        desc.public_input_count, 70,
-        "refusal wide descriptor carries 70 PIs (all 8 authority record-pins + 16 wide commit PIs)"
+        desc.public_input_count, 74,
+        "refusal wide descriptor carries 74 PIs (all 8 authority record-pins + 4 dsl rc + 16 wide commit PIs)"
     );
 
     // -- EXECUTOR LEG: anchor the 16 wide commit PIs to the TRUSTED before/after cell chip-commits

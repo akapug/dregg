@@ -342,6 +342,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -685,6 +686,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
             dregg_circuit::effect_vm::trace_rotated::recompute_after_blocks_for_test(&mut t);
             p[43] = t[t.len() - 1][AB + BSC];
             prove_vm_descriptor2(&desc, &t, &p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, &p))
         }));
         let rejected = match r {
             Err(_) => true,
@@ -726,6 +728,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -870,6 +873,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>, mh: &Vec<Vec<HeapLeaf>>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, mh)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -1093,6 +1097,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
      -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -1348,6 +1353,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         // violated trace, so catch the unwind — either path means refusal.
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -2134,6 +2140,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -2285,6 +2292,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,
@@ -2539,6 +2547,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                    .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
             }));
             match r {
                 Err(_) => true,
@@ -2730,6 +2739,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
             recompute_after_blocks_for_test(&mut t);
             p[43] = t[t.len() - 1][AFTER_BASE + B_STATE_COMMIT];
             prove_vm_descriptor2(&desc, &t, &p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, &p))
         }));
         let rejected = matches!(r, Err(_)) || matches!(r, Ok(res) if res.is_err());
         assert!(
@@ -2862,6 +2872,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
     let refused = |t: &Vec<Vec<BabyBear>>, p: &Vec<BabyBear>| -> bool {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             prove_vm_descriptor2(&desc, t, p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, p))
         }));
         match r {
             Err(_) => true,

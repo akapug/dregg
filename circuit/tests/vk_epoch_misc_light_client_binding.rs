@@ -127,8 +127,12 @@ fn refused(
     mem_boundary: &MemBoundaryWitness,
     map_heaps: &[Vec<HeapLeaf>],
 ) -> bool {
+    // The light client runs prove AND verify; a PiBinding/record-pin mismatch (the commit-chain
+    // teeth here) is caught at VERIFY (`OodEvaluationMismatch`), not necessarily at prove — so the
+    // tooth must exercise BOTH legs (the docstrings' "UNSAT through verify_vm_descriptor2 ALONE").
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_vm_descriptor2(desc, trace, dpis, mem_boundary, map_heaps)
+        let proof = prove_vm_descriptor2(desc, trace, dpis, mem_boundary, map_heaps)?;
+        verify_vm_descriptor2(desc, &proof, dpis)
     }));
     match r {
         Err(_) => true,
@@ -582,18 +586,19 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         "setFieldDyn descriptor DECLARES the fields-root weld fifth pin + the 4 dsl rc pins \
          (46 rotated + fifth pin at PI 46 + withDfaRcPins rc at PI 47..50 = 51)"
     );
-    // The DISTINCT geometry the generator now produces from scratch: 1135-wide V1Face (the v12-geom
+    // The DISTINCT geometry the generator now produces from scratch: a V1Face (the v13-geom
     // re-lay), NOT the ungraduated rotated trace (the structural reason the standard generator
-    // cannot satisfy it) — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard 1163-wide
-    // graduated host of the same geometry (the trio's registry trace_width).
+    // cannot satisfy it) — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard
+    // GRAD_ROT_WIDTH (1581) graduated host of the same geometry (the trio's registry trace_width).
     assert_eq!(
-        desc.trace_width, 1135,
-        "setFieldDyn is a DISTINCT V1Face geometry: the standard 1163-wide graduated host minus \
-         four chip sites (4 × 7 lanes = 28 cols) = 1135, NOT the ungraduated rotated trace"
+        desc.trace_width, 1553,
+        "setFieldDyn is a DISTINCT V1Face geometry: GRAD_ROT_WIDTH (1581) graduated host minus \
+         four chip sites (4 × 7 lanes = 28 cols) = 1553, NOT the ungraduated rotated trace \
+         (matches committed setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 trace_width)"
     );
     assert_ne!(
         desc.trace_width, ROT_WIDTH,
-        "setFieldDyn's width (955) != the ungraduated rotated width (ROT_WIDTH)"
+        "setFieldDyn's width (1553) != the ungraduated rotated width (ROT_WIDTH = 685)"
     );
 
     // The dynamic SetField (field_idx > 7) routes to the dyn descriptor by name.
