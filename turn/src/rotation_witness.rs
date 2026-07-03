@@ -64,7 +64,7 @@ pub const NUM_REGISTERS: usize = 24;
 /// perms_digest · vk_digest · mode · fields_root). Matches Lean `preLimbsAt_length = 37` at R = 24,
 /// after the WAVE-3 mode/fields-root flag-day widening (NUM_PRE_LIMBS 35→37 — the committed mode byte +
 /// fields_root digest sub-limbs, the NEW LAST pre-iroot limbs).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 75; // v12: 1 + 24 + 4 + 3 + 5 + 75 = 112 (+24 carrier-material octets 88..111 — child_vk8·contract_hash8·pubkey8, zero-filled until gate-welded)
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 75 + 57; // v13: 112 + 57 = 169 (+56 fields[0..7] completion lanes 112..=167 + 1 pad limb 168 — the faithful fields-octet grow)
 
 /// The collection id under which a present-cell existence leaf is keyed in the cells tree.
 const CELLS_COLLECTION: u32 = 0;
@@ -1253,8 +1253,9 @@ mod tests {
         // 1 cells_root + 24 registers + 4 (cap/nullifier/commitments/heap) + 3 (lifecycle/epoch/
         // committed_height) + 5 (disc + perms + vk + mode + fields_root, the WAVE-2/3 flag-days)
         // + 51 accumulator-8-felt completion limbs (37..87, v10+v11 lanes 1..7)
-        // + 24 v12 carrier-material octets (88..111: child_vk8·contract_hash8·pubkey8, ZERO until gate-welded).
-        assert_eq!(NUM_PRE_LIMBS, 112);
+        // + 24 v12 carrier-material octets (88..111: child_vk8·contract_hash8·pubkey8, ZERO until gate-welded)
+        // + 56 v13 fields[0..7] completion lanes (112..167) + 1 pad limb (168).
+        assert_eq!(NUM_PRE_LIMBS, 169);
     }
 
     /// THE iroot NON-OMISSION TOOTH (Lean `mroot_injective`): tamper / truncate / extend /

@@ -113,25 +113,27 @@ pub const C_DFA_RC_OFF: usize = 39;
 /// Width of the DFA route-commitment carrier (4 felts — the same shape as the custom carrier's
 /// `custom_proof_commitment`).
 pub const DFA_RC_LEN: usize = 4;
-/// The appendix: two blocks + the caveat region.
-pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 141
+/// The appendix: two blocks + the caveat region (v13: 2·227 + 43 = 497).
+pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 497
 /// The UN-GRADUATED rotated trace width (the rotated main columns BEFORE Phase B-GATE appends the
-/// per-chip-lookup 7-lane blocks). `187 + 141 = 328`.
-pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 328
+/// per-chip-lookup 7-lane blocks). `188 + 497 = 685`.
+pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 685
 
 /// The number of poseidon2-chip lookup SITES the graduated rotated descriptor
 /// (`*VmDescriptor2R24`, e.g. `attenuateVmDescriptor2R24`) carries — the per-site lane blocks
 /// Phase B-GATE appends at the END of the rotated layout (each chip tuple is now 17-wide:
-/// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). The
-/// committed graduated width is `ROT_WIDTH + 7 * N_ROT_SITES = 464 + 518 = 982`, matching the TSV
-/// `attenuateVmDescriptor2R24.trace_width`. Graduation APPENDS (positions < ROT_WIDTH unchanged).
-pub const N_ROT_SITES: usize = 90;
+/// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). v13: the
+/// fields-octet grow (NUM_PRE_LIMBS 112→169) lifts each block's carrier count 37→56, so the two blocks
+/// contribute 2·56 = 112 sites + the 16 caveat-region sites = 128. The committed graduated width is
+/// `ROT_WIDTH + 7 * N_ROT_SITES = 685 + 896 = 1581`, matching the regen'd `*VmDescriptor2R24`
+/// trace_width. Graduation APPENDS (positions < ROT_WIDTH unchanged).
+pub const N_ROT_SITES: usize = 128;
 
 /// The GRADUATED rotated trace width: the un-graduated rotated columns PLUS the 7×`N_ROT_SITES`
-/// appended chip-lane columns (`328 + 280 = 608` = the committed `attenuateVmDescriptor2R24`
+/// appended chip-lane columns (`685 + 896 = 1581` = the committed `transferVmDescriptor2R24`
 /// trace_width). The honest rotated lane columns (`ROT_WIDTH .. GRAD_ROT_WIDTH`) are filled
 /// automatically by the prove wrapper's `descriptor_ir2::fill_chip_lanes`.
-pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 982 (v11: +154 over v10's 828)
+pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 1581 (v13: fields-octet grow)
 
 /// In-block offset of the AUTHORITY-DIGEST limb (r23, limb 24) — the single felt
 /// folding ALL authority-bearing cell state no other rotated limb carries
@@ -3490,17 +3492,19 @@ pub fn transfer_caveat_manifest() -> RotatedCaveatManifest {
 //     carrier-12 (cols 808..815) on the LAST row.
 // ============================================================================
 
-/// The committed wide trace width (`wideAppend` adds 208 = 2 × 13 × 8 carrier columns to the
-/// 608-wide rotated base): `transferVmDescriptor2R24Wide.trace_width`.
-pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 608; // v11: + 2 × 38 × 8
-/// The base column of the BEFORE 13×8 wide carrier block (`wideBeforeCBase = h.traceWidth = 608`).
-pub const WIDE_BEFORE_CBASE: usize = GRAD_ROT_WIDTH; // 608
-/// The base column of the AFTER 13×8 wide carrier block (`wideAfterCBase = h.traceWidth + 304`).
-pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + 304; // v11: + 38 × 8
-/// The number of 8-felt carriers per wide commitment chain (head + 11 body + final).
-pub const WIDE_NUM_CARRIERS: usize = 38;
-/// The in-block carrier index of the final 8-felt commitment carrier (carrier 12).
-pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 37
+/// The number of 8-felt carriers per wide commitment chain (head + 55 arity-11 body groups + the
+/// final iroot carrier). v13: the fields-octet grow (NUM_PRE_LIMBS 112→169) lifts the body from 36 to
+/// 55 groups, so the wide chain runs 38→57 carriers (`1 + (169-4)/3 + 1 = 57`).
+pub const WIDE_NUM_CARRIERS: usize = 57;
+/// The committed wide trace width (`wideAppend` adds `2 × WIDE_NUM_CARRIERS × 8` carrier columns to the
+/// graduated rotated base): `transferVmDescriptor2R24Wide.trace_width` (v13: 1581 + 912 = 2493).
+pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 2 * WIDE_NUM_CARRIERS * 8;
+/// The base column of the BEFORE wide carrier block (`wideBeforeCBase = h.traceWidth = GRAD_ROT_WIDTH`).
+pub const WIDE_BEFORE_CBASE: usize = GRAD_ROT_WIDTH;
+/// The base column of the AFTER wide carrier block (`wideAfterCBase = h.traceWidth + WIDE_NUM_CARRIERS × 8`).
+pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + WIDE_NUM_CARRIERS * 8;
+/// The in-block carrier index of the final 8-felt commitment carrier (v13: carrier 56).
+pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 56
 /// The committed wide public-input count for the bare transfer-shape member
 /// (`h.piCount + 16`, where `h.piCount = ROT_PI_COUNT + DFA_RC_LEN` — the wide host is the
 /// `withDfaRcPins`-wrapped member, so the 4 dsl rc PIs ride BETWEEN the base 46 and the 16 wide
@@ -3562,7 +3566,7 @@ fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
     row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
     debug_assert_eq!(
         carrier, WIDE_COMMIT_CARRIER,
-        "wide chain must end on carrier 37"
+        "wide chain must end on carrier 56"
     );
 }
 
@@ -3620,8 +3624,8 @@ pub fn append_wide_carriers(
     host_width: usize,
 ) -> Vec<BabyBear> {
     let cb_before = host_width;
-    let cb_after = host_width + 304;
-    let wide_width = host_width + 608;
+    let cb_after = host_width + WIDE_NUM_CARRIERS * 8;
+    let wide_width = host_width + 2 * WIDE_NUM_CARRIERS * 8;
     for row in trace.iter_mut() {
         row.resize(wide_width, BabyBear::ZERO);
         fill_wide_block(row, cb_before, BEFORE_BASE);
@@ -4722,7 +4726,10 @@ pub fn generate_rotated_custom_wide(
     }
     debug_assert_eq!(base_pis.len(), ROT_PI_COUNT + 8 + DFA_RC_LEN); // 46 base + 8 custom + 4 rc = 58
     let dpis = append_wide_carriers(&mut trace, base_pis, CUSTOM_HOST_WIDTH);
-    debug_assert_eq!(trace[0].len(), CUSTOM_HOST_WIDTH + 608);
+    debug_assert_eq!(
+        trace[0].len(),
+        CUSTOM_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
+    );
     debug_assert_eq!(dpis.len(), ROT_PI_COUNT + 8 + DFA_RC_LEN + 16); // 58 + 16 wide = 74
     Ok((trace, dpis))
 }

@@ -49,7 +49,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
     generate_rotated_effect_vm_trace, generate_rotated_refusal_trace_with_fields_tree,
     rotated_descriptor_name_for_effect, transfer_caveat_manifest,
 };
-use dregg_circuit::effect_vm::{CellState, Effect, fold_bytes32_to_bb};
+use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_turn::rotation_witness as rw;
@@ -1868,7 +1868,9 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
     // The non-zero field carried by the cell (and, to keep the v1-welded state block consistent
     // with the cell, by the circuit `CellState` the generator opens over).
     let field0_bytes = [0x07u8; 32];
-    let field0_felt = fold_bytes32_to_bb(&field0_bytes);
+    // v13: the producer folds each flat field via the FAITHFUL field_limbs8 8-lane split; lane 0
+    // (the u64-lane lo32) is the welded limb `4 + i` the v1 state block carries.
+    let field0_felt = dregg_circuit::effect_vm::field_limbs8(&field0_bytes)[0];
     assert_ne!(
         field0_felt,
         BabyBear::ZERO,
