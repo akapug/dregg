@@ -1581,7 +1581,7 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
 /// `829 + 329 + 143 = 1301`. A satisfying trace FORCES the faithful 8-felt fields-write over the full
 /// ~124-bit BEFORE/AFTER root blocks (`effFieldsWriteV3_forces_write8`) — never the lane-0 squeeze the
 /// map_op-only host would leave. The wide carrier lands at THIS host width: `1301 + 608 = 1669`.
-pub const REFUSAL_WRITE_HOST_WIDTH: usize = 1635; // v12+rc: wide 2243 − 608
+pub const REFUSAL_WRITE_HOST_WIDTH: usize = 2053; // v13: wide 2965 − 912 carriers
 /// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width =
 /// the graduated rotated base `GRAD_ROT_WIDTH`). v12 grew the graduated base by +176 (983→1159), so the READ appendix sits at 1159 — `REFUSAL_WRITE_HOST_WIDTH −
 /// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1631 − 472 = 1159`. (The v10 value 829 laid the
@@ -1693,7 +1693,10 @@ pub fn generate_rotated_refusal_write_wide(
     // The generic widener at the deployed host width (retires the two 1-felt commit pins, appends the 16
     // wide commit PIs — the 8-felt ~124-bit before/after anchors). `base_pis` is the 54-PI refusal vector.
     let dpis = append_wide_carriers(&mut trace, base_pis, REFUSAL_WRITE_HOST_WIDTH);
-    debug_assert_eq!(trace[0].len(), REFUSAL_WRITE_HOST_WIDTH + 608); // 1935
+    debug_assert_eq!(
+        trace[0].len(),
+        REFUSAL_WRITE_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
+    ); // 2965
     Ok((trace, dpis, map_heaps))
 }
 
@@ -3884,7 +3887,7 @@ pub fn generate_rotated_bridge_mint_wide(
 /// the faithful 8-felt heap-write over the full ~124-bit BEFORE/AFTER root blocks
 /// (`effHeapWriteV3_forces_write8`) — never the lane-0 squeeze the map_op-only host would leave. The
 /// wide carriers land at THIS host width: `1287 + 608 = 1655`.
-pub const HEAP_WRITE_HOST_WIDTH: usize = 1621; // v12+rc: wide 2229 − 608
+pub const HEAP_WRITE_HOST_WIDTH: usize = 2039; // v13: wide 2951 − 912 carriers
 // NB: the READ appendix base is `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN − AFTER_SPINE_SPAN`
 // (the graduated Class-A heap base, v12 = 1145); see [`HEAP_WRITE_READ_BASE`] below.
 /// The heap-open READ appendix base column (the splice base `heapWriteV3`'s trace width = the
@@ -4086,7 +4089,10 @@ pub fn generate_rotated_heap_write_wide(
         gen_pis[V1_PI_COUNT + 3],
     ];
     let dpis = append_wide_carriers(&mut trace, base_pis, HEAP_WRITE_HOST_WIDTH);
-    debug_assert_eq!(trace[0].len(), HEAP_WRITE_HOST_WIDTH + 608); // 1921 (OPTION I after-spine host)
+    debug_assert_eq!(
+        trace[0].len(),
+        HEAP_WRITE_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
+    ); // 2951 (OPTION I after-spine host)
     debug_assert_eq!(dpis.len(), 20); // 4 base (2 retired) + 16 wide
     Ok((trace, dpis, vec![heap_leaves.to_vec()]))
 }
@@ -4136,7 +4142,10 @@ pub fn generate_rotated_transfer_cap_open_tb_wide(
     let tb_pis = cap_open_tb_dpis(&base_pis, src, actor, dst);
     debug_assert_eq!(tb_pis.len(), CAP_OPEN_TB_PI_BASE + 3); // 49
     let dpis = append_wide_carriers(&mut trace, tb_pis, CAP_OPEN_TB_WIDTH);
-    debug_assert_eq!(trace[0].len(), CAP_OPEN_TB_WIDTH + 608); // 1029
+    debug_assert_eq!(
+        trace[0].len(),
+        CAP_OPEN_TB_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
+    ); // 2824
     debug_assert_eq!(dpis.len(), CAP_OPEN_TB_PI_BASE + 3 + 16); // 65
     Ok((trace, dpis))
 }
@@ -4477,7 +4486,7 @@ pub fn generate_rotated_refusal_wide(
 /// `ROT_WIDTH + 7·36 = 328 + 252 = 580`… +1 reserved = **581** (the committed
 /// `setFieldDynVmDescriptor2R24.trace_width`, distinct from `GRAD_ROT_WIDTH = 608`). The wide
 /// carriers (the `setFieldDynVmDescriptor2R24Wide` member) land at THIS host width.
-pub const SET_FIELD_DYN_HOST_WIDTH: usize = 1135; // v12+rc: wide 1743 − 608
+pub const SET_FIELD_DYN_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // v13: 1581 − 4·7 sites = 1553 (wide 2465 − 912 carriers)
 
 /// The slot-index param column the dynamic setField indexes the 8-cell overflow memory by
 /// (`prmCol SLOT = prmCol VALUE = param1`, col 69 — both addr AND value of the Blum write, the
@@ -4629,7 +4638,10 @@ pub fn generate_rotated_set_field_dyn_wide(
         prev_value,
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, SET_FIELD_DYN_HOST_WIDTH);
-    debug_assert_eq!(trace[0].len(), SET_FIELD_DYN_HOST_WIDTH + 608); // 1435
+    debug_assert_eq!(
+        trace[0].len(),
+        SET_FIELD_DYN_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
+    ); // 2465
     Ok((trace, dpis, mem_boundary))
 }
 
@@ -4644,7 +4656,7 @@ pub fn generate_rotated_set_field_dyn_wide(
 /// V1Face host as setFieldDyn (the carriers ride the identical 8-felt blocks);
 /// the trace SHAPE differs (a Custom row, no Blum-memory boundary), but the wide
 /// geometry is `append_wide_carriers` at 581.
-pub const CUSTOM_HOST_WIDTH: usize = 1135; // v12+rc: wide 1743 − 608
+pub const CUSTOM_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // v13: 1581 − 4·7 sites = 1553 (wide 2465 − 912 carriers)
 
 /// **THE WIDE custom trace generator (`customVmDescriptor2R24`, 789-wide / 70 PI).**
 ///
