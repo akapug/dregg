@@ -499,6 +499,21 @@ pub fn produce(
 /// aggregator's shared-turn-id projection) — pass it for joint-turn participants that must agree
 /// on a shared id; pass `None` for whole-chain turns (the carried hash from the witness stands).
 ///
+/// ## The post-regen registry TAIL (v12 exposure regen)
+///
+/// The committed wide registry row a member proves against may demand MORE PIs (and trace
+/// columns) than the generic wide producer dispatch emits: the v12 big-bang regen made the
+/// committed transfer row the membership-teeth member (`CarrierComposed.transferV3MembershipWide`
+/// — 2 `(sender_leaf, authorized_root)` claim PIs spliced AHEAD of the 16 wide anchors, 2 teeth
+/// columns past the carriers). This recipe derives that tail FROM THE DESCRIPTOR
+/// (`public_input_count − emitted`, `trace_width − row width` — never a hardcoded count; other
+/// members carry different totals) and fills it producer-honest: the teeth values come from the
+/// BEFORE cell (`sender_membership_teeth` — `compress_member` over the cell's owner key + the
+/// declared `SenderAuthorized { PublicRoot }` root slot; a cell declaring no such caveat fills
+/// the ZERO form, exactly the no-caveat sentinel the fold's membership arm refuses to bind).
+/// A member whose committed row demands a tail this recipe has no producer fill for FAILS CLOSED
+/// (mint it through its dedicated carrier minter) — never a guessed value.
+///
 /// Fails closed if the turn's effect is not a single rotated R=24 cohort member (the generator
 /// rejects a non-cohort / empty / heterogeneous slice).
 #[cfg(feature = "prover")]
@@ -513,7 +528,16 @@ pub fn mint_rotated_participant_leg(
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
 ) -> Result<dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg, String> {
-    use dregg_circuit::effect_vm::trace_rotated::RotatedBlockWitness;
+    use dregg_circuit::descriptor_ir2::{
+        UMemBoundaryWitness, prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
+    };
+    use dregg_circuit::effect_vm::pi;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        RotatedBlockWitness, empty_caveat_manifest,
+        generate_rotated_effect_vm_descriptor_and_trace_wide, transfer_caveat_manifest,
+    };
+    use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
+    use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit_prove::joint_turn_aggregation::RotatedParticipantLeg;
 
     // The turn-context ledger snapshot: a single-cell ledger holding the after-cell (the
@@ -548,13 +572,163 @@ pub fn mint_rotated_participant_leg(
             .map_err(|e| format!("mint_rotated_participant_leg: rotated block witness: {e}"))
     };
 
-    RotatedParticipantLeg::mint_from_block_witnesses(
-        initial_state,
-        effects,
-        &bridge(&before_w)?,
-        &bridge(&after_w)?,
-        turn_id,
+    if effects.is_empty() {
+        return Err("mint_rotated_participant_leg: empty effect slice".to_string());
+    }
+    let caveat = match effects {
+        [dregg_circuit::effect_vm::Effect::Transfer { .. }] => transfer_caveat_manifest(),
+        _ => empty_caveat_manifest(),
+    };
+    // The SAME full-cohort wide dispatch the live SDK wide prover runs. The value/field/create
+    // cohort rides the bare wide producer with NO special witnesses (`None` for the note-spend
+    // grow-gate nullifiers / refusal fields / cap-write tree) — an effect that needs one routes
+    // through its dedicated minter and fails closed here.
+    let (desc, mut trace, mut dpis, map_heaps, mem_boundary) =
+        generate_rotated_effect_vm_descriptor_and_trace_wide(
+            initial_state,
+            effects,
+            &bridge(&before_w)?,
+            &bridge(&after_w)?,
+            &caveat,
+            None,
+            None,
+            None,
+        )
+        .map_err(|e| format!("mint_rotated_participant_leg: wide producer dispatch failed: {e}"))?;
+
+    // THE POST-REGEN REGISTRY TAIL: the committed row may carry claim PIs (+ matching teeth
+    // columns) PAST what the generic wide producer emits — derived from the descriptor, never
+    // hardcoded (members differ: the teeth transfer row, the KEY_COMMIT sovereign, the factory
+    // octet pins all carry different totals). The claim PIs sit AHEAD of the 16 wide anchors
+    // (`carrier_pin_twin::insert_tail_claim_pins` geometry), the teeth columns at the wide end.
+    let emitted_pis = dpis.len();
+    let row_width = trace
+        .first()
+        .map(Vec::len)
+        .ok_or_else(|| "mint_rotated_participant_leg: empty wide trace".to_string())?;
+    let pi_tail = desc.public_input_count.checked_sub(emitted_pis).ok_or_else(|| {
+        format!(
+            "mint_rotated_participant_leg: descriptor '{}' PI count {} < the wide producer's {}",
+            desc.name, desc.public_input_count, emitted_pis
+        )
+    })?;
+    let col_tail = desc.trace_width.checked_sub(row_width).ok_or_else(|| {
+        format!(
+            "mint_rotated_participant_leg: descriptor '{}' trace width {} < the wide producer's {}",
+            desc.name, desc.trace_width, row_width
+        )
+    })?;
+    if pi_tail != col_tail {
+        return Err(format!(
+            "mint_rotated_participant_leg: descriptor '{}' tail mismatch — {pi_tail} claim PI(s) \
+             vs {col_tail} teeth column(s) past the wide producer's shape (the exposure regen \
+             pairs them 1:1)",
+            desc.name
+        ));
+    }
+    if pi_tail > 0 {
+        match effects.first() {
+            // The committed transfer row (`CarrierComposed.transferV3MembershipWide`): the
+            // membership-teeth pair `(sender_leaf, authorized_root)` — 2 constant teeth columns
+            // past the carriers (row-0-pinned) + 2 claim PIs ahead of the 16 anchors.
+            Some(dregg_circuit::effect_vm::Effect::Transfer { .. }) if pi_tail == 2 => {
+                let (sender_leaf, authorized_root) = sender_membership_teeth(before_cell);
+                for row in trace.iter_mut() {
+                    row.push(sender_leaf);
+                    row.push(authorized_root);
+                }
+                let insert_at = emitted_pis - 16; // ahead of the 16 wide anchor PIs
+                dpis = splice_pi_values(&dpis, insert_at, &[sender_leaf, authorized_root]);
+            }
+            other => {
+                return Err(format!(
+                    "mint_rotated_participant_leg: committed descriptor '{}' demands {pi_tail} \
+                     tail PI(s) past the generic wide producer's {emitted_pis} for lead {other:?} \
+                     — this recipe has no producer fill for that member's tail (mint it through \
+                     its dedicated carrier minter); refusing to guess",
+                    desc.name
+                ));
+            }
+        }
+    }
+    debug_assert_eq!(dpis.len(), desc.public_input_count);
+
+    // Optional shared-turn-id override (joint participants). The EffectVm AIRs do not constrain
+    // TURN_HASH (it is an executor-trusted shared PI), so overriding the carried prefix slot and
+    // proving against the edited PI yields a still-valid proof binding the chosen id.
+    if let Some(tid) = turn_id {
+        dpis[pi::TURN_HASH_BASE] = tid;
+    }
+
+    let wrap_config = ir2_leaf_wrap_config();
+    let umem_boundary = UMemBoundaryWitness::default();
+    let proof = prove_vm_descriptor2_for_config(
+        &desc,
+        &trace,
+        &dpis,
+        &mem_boundary,
+        &map_heaps,
+        &umem_boundary,
+        &wrap_config,
     )
+    .map_err(|e| format!("mint_rotated_participant_leg: wide IR-v2 batch prove failed: {e}"))?;
+    verify_vm_descriptor2_with_config(&desc, &proof, &dpis, &wrap_config).map_err(|e| {
+        format!("mint_rotated_participant_leg: minted wide proof self-verify failed: {e}")
+    })?;
+
+    Ok(RotatedParticipantLeg {
+        proof,
+        descriptor: desc,
+        public_inputs: dpis,
+        carrier_witness: None,
+    })
+}
+
+/// **THE PRODUCER-SIDE MEMBERSHIP-TEETH FILL** — the honest `(sender_leaf, authorized_root)`
+/// values the committed transfer row's teeth columns carry, derived from the BEFORE cell the leg
+/// mints from (the recipe twin of the SDK attach lane's `retain_sender_membership`, which pins
+/// the SAME pair for the fold's membership bundle):
+///
+/// * `sender_leaf` = [`dregg_commit::typed::compress_member`] over the cell's owner key — the
+///   canonical chip-native membership compress (the in-AIR keystone's leaf domain). The generic
+///   recipe's actor IS the cell owner (the leg is minted from the cell's own turn).
+/// * `authorized_root` = the root felt read from the cell's `fields[set_root_index]` slot in the
+///   executor verifier's canonical form (`membership_verifier::root_felt_from_slot` — the felt's
+///   4-byte little-endian low bytes), where `set_root_index` is the slot the cell's program
+///   declares via `SenderAuthorized { AuthorizedSet::PublicRoot { .. } }`.
+///
+/// A cell whose program declares NO such caveat fills the ZERO pair — the committed row's teeth
+/// columns are producer-filled claim carriers (the in-AIR compress/fields-read welds are the
+/// named `MembershipAuthRootEdge` seams), and the zero form is the no-caveat sentinel: the fold's
+/// membership arm only binds these PIs when a membership bundle is attached, and a bundle claim
+/// never equals the zero pair for a real member.
+#[cfg(feature = "prover")]
+fn sender_membership_teeth(before_cell: &Cell) -> (BabyBear, BabyBear) {
+    use dregg_cell::program::AuthorizedSet;
+    use dregg_cell::{CellProgram, StateConstraint};
+
+    let scan = |cs: &[StateConstraint]| {
+        cs.iter().find_map(|c| match c {
+            StateConstraint::SenderAuthorized {
+                set: AuthorizedSet::PublicRoot { set_root_index },
+            } => Some(*set_root_index),
+            _ => None,
+        })
+    };
+    let slot_index = match &before_cell.program {
+        CellProgram::Predicate(cs) => scan(cs),
+        CellProgram::Cases(cases) => cases.iter().find_map(|case| scan(&case.constraints)),
+        _ => None,
+    };
+    match slot_index.and_then(|i| before_cell.state.fields.get(i as usize)) {
+        Some(slot) => (
+            dregg_commit::typed::compress_member(before_cell.public_key()),
+            // The verifier's `root_felt_from_slot`: the root is ALREADY a felt, published in the
+            // slot as its canonical 4-byte little-endian form — read, don't compress.
+            BabyBear::new(u32::from_le_bytes([slot[0], slot[1], slot[2], slot[3]])),
+        ),
+        None => (BabyBear::ZERO, BabyBear::ZERO),
+    }
 }
 
 /// **THE CUSTOM-WIDE LEG MINTING RECIPE — the production custom-binding fold plug.** Build a

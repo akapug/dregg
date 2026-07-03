@@ -458,13 +458,28 @@ fn broken_order_rejected() {
 #[test]
 fn mismatched_carrier_witness_is_refused_fail_closed() {
     use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+    use dregg_circuit::poseidon2::hash_many;
     use dregg_circuit_prove::joint_turn_aggregation::{BridgeWitnessBundle, CarrierWitness};
 
     let (mut turns, _g, _f) = make_chain(1000, 0, 7, 2);
 
     // Attach an HONEST bridge witness to turn 0's TRANSFER leg. The chain is otherwise fully
     // honest — the ONLY reason to refuse is the claim-pin admission (the leg's descriptor
-    // does not pin the bridge mint-hash claim slot).
+    // does not pin the bridge mint-hash claim slot). The witness rides a REAL depth-2 Merkle
+    // path (the deployed DSL circuit's minimum — `generate_note_spending_trace` asserts
+    // depth ≥ 2, and the bundle projection derives its claim PIs through that generator),
+    // mirroring `note_spend_binding_node_tooth.rs::make_witness`.
+    let depth = 2;
+    let mut siblings = Vec::with_capacity(depth);
+    let mut positions = Vec::with_capacity(depth);
+    for i in 0..depth {
+        siblings.push([
+            hash_many(&[BabyBear::new((i * 3 + 1) as u32), BabyBear::new(0x7B)]),
+            hash_many(&[BabyBear::new((i * 3 + 2) as u32), BabyBear::new(0x7B)]),
+            hash_many(&[BabyBear::new((i * 3 + 3) as u32), BabyBear::new(0x7B)]),
+        ]);
+        positions.push((i % 4) as u8);
+    }
     let note_spend = NoteSpendingWitness::from_note_limbs(
         &[7u8; 32],
         42,
@@ -472,8 +487,8 @@ fn mismatched_carrier_witness_is_refused_fail_closed() {
         &[8u8; 32],
         &[9u8; 32],
         test_spending_key(0x77),
-        vec![],
-        vec![],
+        siblings,
+        positions,
     );
     turns[0].participant.rotated.carrier_witness = Some(CarrierWitness::Bridge(
         BridgeWitnessBundle::from_note_spend_witness(&note_spend),
