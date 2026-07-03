@@ -24,22 +24,18 @@
 //!     into the light-client commitment. THE NAMED RESIDUAL: lift the effects_hash (or the
 //!     emit-event topic/payload PI) into the rotated PI window so the produced output binds on-wire.
 //!
-//!   * **`makeSovereign` — VALUE_PARTIAL with a BROKEN LIVE SEAM (missing weld).** The registry
-//!     descriptor `makeSovereignVmDescriptor2R24` declares 47 PIs (the record-forcing fifth pin),
-//!     but the LIVE generator `generate_rotated_effect_vm_trace` emits only 46 dpis: its
-//!     `record_pin_offset` (`trace_rotated.rs`) does NOT include `MakeSovereign`, so no PI[46] is
-//!     fed. Consequence: an honest makeSovereign turn CANNOT prove through the live path
-//!     (`public input count 46 != descriptor public_input_count 47`). The committed AFTER mode limb
-//!     (`B_MODE = 35`) and authority-digest limb (`B_AUTHORITY_DIGEST = 24`, which folds the mode
-//!     byte) DO move and ARE absorbed into the commit — but the declared record pin is never wired,
-//!     so the makeSovereign rotated path is presently UN-PROVABLE, not merely partially-bound. THE
-//!     NAMED RESIDUAL (shared-code weld, NOT in this disjoint test file): add the `MakeSovereign`
-//!     arm to `record_pin_offset` (→ `Some(B_AUTHORITY_DIGEST)`, or a dedicated `B_MODE` pin) so the
-//!     generator feeds the 47th PI the descriptor declares.
+//!   * **`makeSovereign` — FORCED ON-WIRE (the record-pin weld is WIRED; the once-named residual is
+//!     CLOSED).** `record_pin_offset(MakeSovereign) = Some(B_AUTHORITY_DIGEST)` feeds the H1
+//!     record-pin8 (the AFTER authority-digest limb at PI[46] + the 7 headroom limbs at PI 47..53);
+//!     with the `withDfaRcPins` rc tail at PI 54..57 the registry descriptor declares 58 PIs. The
+//!     Hosted→Sovereign promotion moves the committed mode limb (`B_MODE`), which
+//!     `compute_authority_digest_felt` folds into the r23 authority residue — so the honest
+//!     promotion proves+verifies AND a forged committed authority residue fails the PI[46] weld
+//!     (the negative tooth below).
 //!
 //!   * **`setFieldDyn` — the dynamic overflow write PROVES (the residual is CLOSED).** The dynamic
-//!     `SetField` (`field_idx > 7`) routes to `setFieldDynVmDescriptor2R24`, a DISTINCT 801-wide
-//!     V1Face geometry (v10 pre_limbs) the standard generator could not produce (it panicked on
+//!     `SetField` (`field_idx > 7`) routes to `setFieldDynVmDescriptor2R24`, a DISTINCT V1Face
+//!     geometry (1135-wide at HEAD) the standard generator could not produce (it panicked on
 //!     `field_idx < 8` and laid the 829-wide host). `generate_rotated_set_field_dyn_base` now builds
 //!     it from scratch: the
 //!     Blum write→read pair (`addr = value = col 69`, `prev_value = col 70`, `prev_serial = col 74`,
@@ -174,8 +170,9 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .unwrap_or_else(|e| panic!("rotated {name} descriptor parses: {e}"));
     assert_eq!(
-        desc.public_input_count, 46,
-        "{name}: a no-cell-write passthrough carries the bare 46-PI rotated vector (no fifth pin)"
+        desc.public_input_count, 50,
+        "{name}: a no-cell-write passthrough carries the rotated 46-PI vector + the 4 dsl rc pins \
+         (withDfaRcPins: rc at PI 46..49; no per-effect fifth pin) = 50"
     );
 
     // The rotated descriptor binds NONE of PI[16..20] (the effects_hash): the produced output is
@@ -390,8 +387,9 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated makeSovereign descriptor parses");
     assert_eq!(
-        desc.public_input_count, 54,
-        "makeSovereign descriptor DECLARES all 8 authority record-pins (54 PIs — the H1 record-pin8)"
+        desc.public_input_count, 58,
+        "makeSovereign descriptor DECLARES all 8 authority record-pins + the 4 dsl rc pins \
+         (46 rotated + H1 record-pin8 at PI 46..53 + withDfaRcPins rc at PI 54..57 = 58)"
     );
 
     let st = CellState::new(balance as u64, 0);
@@ -462,8 +460,8 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     assert_eq!(
         dpis.len(),
         desc.public_input_count,
-        "WIRED: the live generator emits 47 dpis (record_pin_offset(MakeSovereign) = \
-         Some(B_AUTHORITY_DIGEST))"
+        "WIRED: the live generator emits 58 dpis (record_pin_offset(MakeSovereign) = \
+         Some(B_AUTHORITY_DIGEST) → record-pin8 at 46..53, then the rc tail at 54..57)"
     );
     assert_eq!(
         dpis[46],
@@ -580,17 +578,18 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     let desc =
         parse_vm_descriptor2(rotated_descriptor_json(name)).expect("setFieldDyn descriptor parses");
     assert_eq!(
-        desc.public_input_count, 47,
-        "setFieldDyn descriptor DECLARES the fields-root weld pin (47 PIs)"
+        desc.public_input_count, 51,
+        "setFieldDyn descriptor DECLARES the fields-root weld fifth pin + the 4 dsl rc pins \
+         (46 rotated + fifth pin at PI 46 + withDfaRcPins rc at PI 47..50 = 51)"
     );
-    // The DISTINCT geometry the generator now produces from scratch: 955-wide V1Face (v11 pre_limbs
-    // re-lay — the accum8 B_SPAN grow to 88 limbs), NOT the ungraduated rotated trace (the structural
-    // reason the standard generator cannot satisfy it) — four fewer chip sites than the standard
-    // graduated host of the same v11 geometry.
+    // The DISTINCT geometry the generator now produces from scratch: 1135-wide V1Face (the v12-geom
+    // re-lay), NOT the ungraduated rotated trace (the structural reason the standard generator
+    // cannot satisfy it) — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard 1163-wide
+    // graduated host of the same geometry (the trio's registry trace_width).
     assert_eq!(
-        desc.trace_width, 955,
-        "setFieldDyn is a DISTINCT V1Face geometry (four fewer chip sites than the standard \
-         graduated host of the same v11 geometry), NOT the ungraduated rotated trace"
+        desc.trace_width, 1135,
+        "setFieldDyn is a DISTINCT V1Face geometry: the standard 1163-wide graduated host minus \
+         four chip sites (4 × 7 lanes = 28 cols) = 1135, NOT the ungraduated rotated trace"
     );
     assert_ne!(
         desc.trace_width, ROT_WIDTH,
@@ -648,14 +647,14 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     assert_eq!(
         dpis.len(),
         desc.public_input_count,
-        "dpis length matches the 47-PI descriptor"
+        "dpis length matches the 51-PI descriptor (fifth pin inserted at 46, rc shifted to 47..50)"
     );
 
     // THE PROVABILITY GATE: the honest dynamic-field write PROVES + light-client VERIFIES against the
-    // DEPLOYED 581-wide descriptor — no catch_unwind. The residual is CLOSED.
+    // DEPLOYED 1135-wide descriptor — no catch_unwind. The residual is CLOSED.
     let proof =
         prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[]).unwrap_or_else(|e| {
-            panic!("setFieldDyn must PROVE against its deployed descriptor (581): {e}")
+            panic!("setFieldDyn must PROVE against its deployed descriptor (1135-wide): {e}")
         });
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .unwrap_or_else(|e| panic!("setFieldDyn proof must light-client VERIFY: {e}"));
@@ -679,7 +678,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
 
     eprintln!(
         "VK-EPOCH setFieldDyn: the DYNAMIC overflow-field write PROVES + light-client VERIFIES against \
-         the deployed 581-wide descriptor (the Blum write→read transport over the V1Face geometry), \
+         the deployed 1135-wide descriptor (the Blum write→read transport over the V1Face geometry), \
          and a forged read-back is REJECTED. The missing-generator residual is CLOSED."
     );
 }
