@@ -697,7 +697,7 @@ pub const V9_NUM_REGISTERS: usize = 24;
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
 /// perms_digest · vk_digest · mode · fields_root). Lean `preLimbsAt_length = 37` at R = 24, after
 /// the WAVE-3 mode/fields-root flag-day widening (35→37).
-pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5 + 75; // 112 (v12: +24 carrier-material octets 88..111 — child_vk8·contract_hash8·pubkey8, zero-filled until gate-welded)
+pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5 + 75 + 57; // 169 (v13: +56 fields[0..7] completion lanes 112..=167 + 1 pad limb 168 — the faithful fields-octet grow)
 
 /// The turn-level context the rotated commitment absorbs that is NOT cell-local: the
 /// boundary `cells_root` (the sorted-Poseidon2 root over present cells), the cell's committed
@@ -986,7 +986,7 @@ pub fn compute_rotated_pre_limbs(
     cell: &Cell,
     ctx: &V9RotationContext,
 ) -> Vec<dregg_circuit::field::BabyBear> {
-    use dregg_circuit::effect_vm::{fold_bytes32_to_bb, split_u64};
+    use dregg_circuit::effect_vm::split_u64;
     use dregg_circuit::field::BabyBear;
     use dregg_circuit::poseidon2::hash_bytes;
 
@@ -999,21 +999,30 @@ pub fn compute_rotated_pre_limbs(
     pre[1] = bal_lo; // r0 ↔ balance_lo
     pre[2] = BabyBear::new((cell.state.nonce() & 0x7FFF_FFFF) as u32); // r1 ↔ nonce
     pre[3] = bal_hi; // r2 ↔ balance_hi
-    // r3..r10 ↔ fields[0..7] (the same Horner packing the v1 state block carries).
-    // FAITHFUL-COMMITMENT-LAW residual: fields[0..7] still fold 32B→1 felt (~31-bit). The
-    // faithful 8-felt grind for these limbs is TODO (parallel to cap/heap/fields_root). The
-    // trailing directive allowlists this KNOWN residual; a NET-NEW fold here fails the gate.
-    // The TYPE WALL names the same residual: the eight ~31-bit folds ride ONE octet through the
-    // greppable `from_lossy_31bit_DANGER` hatch (the v13 burn-down list) into the typed sink.
-    let mut fields_folds = [BabyBear::ZERO; 8];
-    for (i, fold) in fields_folds.iter_mut().enumerate() {
-        *fold = fold_bytes32_to_bb(&cell.state.fields[i]); // ast-grep-ignore: degraded-felt-commitment
+    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 112..=167
+    // (fields[i] lanes 1..7 → `112 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET: each field's
+    // 32 bytes ride a full `field_limbs8` 8-lane split (lane 0 = the u64-lane lo32, the faithful
+    // ~124-bit binding), REPLACING the eight ~31-bit `fold_bytes32_to_bb` Horner folds that rode
+    // one `from_lossy_31bit_DANGER` octet. This CLOSES the last degraded-felt residual: the whole
+    // state commitment is now faithful. The setField value8 weld FORCES the written slot's 8 lanes
+    // to the declared params; the completion freezes pin every non-written field's 7 lanes on a
+    // value turn (the fields GENTIAN law). Byte-identical to the `rotation_witness` producer fill.
+    for i in 0..8 {
+        let base = 112 + 7 * i;
+        dregg_circuit::Faithful8::from_field_limbs8(&cell.state.fields[i]).write_lanes(
+            &mut pre,
+            [
+                4 + i,
+                base,
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+            ],
+        );
     }
-    dregg_circuit::Faithful8::from_lossy_31bit_DANGER(
-        "v13 pending — the named fields[0..7] residual",
-        fields_folds,
-    )
-    .write_octet(&mut pre, 4);
     // r11..r22 (limbs 12..=23): app-register headroom.
     // r23 (limb 24) + r11..r17 (limbs 12..=18): THE FAITHFUL 8-FELT AUTHORITY DIGEST (H1) — the
     // ~124-bit blake3-rooted commitment folding ALL authority-bearing state no other rotated limb
@@ -2099,8 +2108,8 @@ mod tests {
         assert_eq!(pre.len(), V9_NUM_PRE_LIMBS);
         assert_eq!(
             pre.len(),
-            112,
-            "37 base/WAVE-2/3 + 51 faithful-8-felt completion limbs (37..87, v10+v11) + 24 v12 carrier-material octets (88..111)"
+            169,
+            "37 base/WAVE-2/3 + 51 faithful-8-felt completion limbs (37..87, v10+v11) + 24 v12 carrier-material octets (88..111) + 56 v13 fields[0..7] completion lanes (112..167) + 1 pad (168)"
         );
         // cells_root rides limb 0; the welded r0 (balance_lo) is non-zero for a funded cell.
         assert_eq!(pre[0], BabyBear::new(11));

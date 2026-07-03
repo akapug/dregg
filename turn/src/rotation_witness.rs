@@ -51,7 +51,7 @@
 use crate::action::Effect;
 use dregg_cell::commitment::compute_authority_digest_8;
 use dregg_cell::{Cell, Ledger, lifecycle::CellLifecycle};
-use dregg_circuit::effect_vm::{fold_bytes32_to_bb, split_u64};
+use dregg_circuit::effect_vm::split_u64;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::{compute_heap_root_entries, empty_heap_root};
 use dregg_circuit::poseidon2::{hash_bytes, hash_many};
@@ -352,22 +352,30 @@ pub fn produce(
     pre_limbs[1] = balance_lo_felt(cell.state.balance()); // r0
     pre_limbs[2] = nonce_felt(cell.state.nonce()); // r1
     pre_limbs[3] = balance_hi_felt(cell.state.balance()); // r2
-    // r3..r10 ↔ fields[0..7]: the 32-byte record field packed into the field limb the
-    // v1 circuit state block carries (`fold_bytes32_to_bb`, the same Horner packing).
-    // FAITHFUL-COMMITMENT-LAW residual (producer twin of cell::commitment compute_rotated_pre_limbs):
-    // fields[0..7] still fold 32B→1 felt (~31-bit); the 8-felt grind is TODO. Allowlisted; a
-    // NET-NEW degrading fold in this commitment producer fails the gate. The TYPE WALL names the
-    // same residual: the eight folds ride ONE octet through the greppable
-    // `from_lossy_31bit_DANGER` hatch (the v13 burn-down list) into the typed sink.
-    let mut fields_folds = [BabyBear::ZERO; 8];
-    for (i, fold) in fields_folds.iter_mut().enumerate() {
-        *fold = fold_bytes32_to_bb(&cell.state.fields[i]); // ast-grep-ignore: degraded-felt-commitment
+    // r3..r10 ↔ fields[0..7] lane 0 (limbs 4..=11) ‖ the 56 fields COMPLETION lanes 112..=167
+    // (fields[i] lanes 1..7 → `112 + 7·i .. +6`). THE v13 FAITHFUL FIELDS OCTET (producer twin of
+    // `cell::commitment::compute_rotated_pre_limbs`): each field's 32 bytes ride a full
+    // `field_limbs8` 8-lane split (lane 0 = the u64-lane lo32, the faithful ~124-bit binding),
+    // REPLACING the eight ~31-bit `fold_bytes32_to_bb` Horner folds that rode one
+    // `from_lossy_31bit_DANGER` octet. This CLOSES the last degraded-felt residual. The setField
+    // value8 weld FORCES the written slot's 8 lanes to the declared params; the completion freezes
+    // pin every non-written field's 7 lanes on a value turn (the fields GENTIAN law).
+    for i in 0..8 {
+        let base = 112 + 7 * i;
+        dregg_circuit::Faithful8::from_field_limbs8(&cell.state.fields[i]).write_lanes(
+            &mut pre_limbs,
+            [
+                4 + i,
+                base,
+                base + 1,
+                base + 2,
+                base + 3,
+                base + 4,
+                base + 5,
+                base + 6,
+            ],
+        );
     }
-    dregg_circuit::Faithful8::from_lossy_31bit_DANGER(
-        "v13 pending — the named fields[0..7] residual",
-        fields_folds,
-    )
-    .write_octet(&mut pre_limbs, 4);
     // r11..r17 (limbs 12..=18) + r23 (limb 24): THE FAITHFUL 8-FELT AUTHORITY DIGEST (H1) — the
     // ~124-bit blake3-rooted commitment folding ALL authority-bearing cell state that no other
     // rotated limb carries (permissions/VK/delegate/delegation/program/mode/token_id +

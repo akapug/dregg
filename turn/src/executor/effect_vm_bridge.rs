@@ -52,8 +52,14 @@ pub fn convert_turn_effects_to_vm(
             dregg_circuit::effect_vm::fold_bytes32_to_bb(h)
         }
 
+        // v13 FIELDS-OCTET: the SetField value param is lane 0 of the FAITHFUL
+        // `field_limbs8` split (the u64-lane lo32), the SAME lane the rotated
+        // producer writes to the field's welded limb `4 + slot`. So the setField
+        // write gate `gFieldWriteP1 slot` (fields[slot]_after == param VALUE) binds
+        // the genuine faithful lane 0, and the value8 completion weld forces lanes
+        // 1..7 into the state commitment. REPLACES the ~31-bit `fold_bytes32_to_bb`.
         fn field_element_to_bb(value: &[u8; 32]) -> BabyBear {
-            dregg_circuit::effect_vm::fold_bytes32_to_bb(value)
+            dregg_circuit::effect_vm::field_limbs8(value)[0]
         }
 
         // 32-byte widening (effect-vm-hash-widen lane, 2026-05-28): the full

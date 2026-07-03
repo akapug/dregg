@@ -84,17 +84,20 @@ pub const NUM_REGISTERS: usize = 24;
 
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
-/// perms_digest · vk_digest · **mode** · **fields_root**). Lean `preLimbsAt_length = 37` at R = 24,
-/// after the WAVE-3 mode/fields-root flag-day widening (NUM_PRE_LIMBS 35→37 — the committed mode byte +
-/// fields_root digest sub-limbs, the NEW LAST pre-iroot limbs).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 75; // 112 (v12: +24 carrier-material octets 88..111 — child_vk8·contract_hash8·pubkey8, ZERO-filled until gate-welded)
+/// perms_digest · vk_digest · mode · fields_root · v12 carrier-material octets 88..=111 · the v13
+/// fields[0..7] COMPLETION lanes 112..=167 + one zero PAD limb at 168). Lean
+/// `EffectVmEmitRotationV3.preLimbsAt_length = 169`. The v13 fields-octet grow (`112→169`) appends
+/// the 56 fields[0..7] completion lanes so each field's 32 bytes ride a faithful `field_limbs8`
+/// 8-lane split (lane 0 at limb `4 + i`, lanes 1..7 at `112 + 7·i .. +6`), closing the LAST
+/// degraded-felt residual; the pad limb 168 keeps the body `[4..168]` = 165 = fifty-five 3-wide
+/// groups (no arity-2 leftover).
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 75 + 57; // 169 (v13: +56 fields completion lanes 112..=167 + 1 pad limb 168)
 
-/// A rotated block: 37 limbs + iroot + state_commit + 12 chain carriers = 51 columns. The 37-limb
-/// body chains as a 4-wide head (limbs 0..3) + ELEVEN 3-wide groups (limbs 4..36, exactly 33 = 11×3,
-/// NO arity-2 leftover — the WAVE-2 vk singleton is absorbed into the eleventh group) + the iroot
-/// alone, so the chain-carrier count stays 12 over the 35-limb shape (B_SPAN 49→51 — two more limbs,
-/// no new carrier).
-pub const B_SPAN: usize = 151;
+/// A rotated block: 169 pre-iroot limbs + iroot + state_commit + 56 chain carriers = 227 columns.
+/// The 169-limb body chains as a 4-wide head (limbs 0..3) + FIFTY-FIVE 3-wide groups (limbs
+/// 4..168, exactly 165 = 55×3, NO arity-2 leftover — the v13 pad limb 168 restores the clean
+/// grouping) + the iroot absorbed ALONE last, so the chain-carrier count is 56 (1 head + 55 groups).
+pub const B_SPAN: usize = 227;
 /// The widened-caveat region: 29 manifest + 9 chain + 1 commit + the 4-felt DFA route-commitment
 /// carrier = 43 columns. Lean `EffectVmEmitRotationV3.C_SPAN`.
 pub const C_SPAN: usize = 43;
@@ -189,12 +192,12 @@ pub const B_CONTRACT_HASH_OCTET: usize = 96;
 /// owner key, the 30-bit canonical form that matches the executor's KEY_COMMIT teeth). This is the
 /// only octet non-zero on a generic turn, so it moves every turn's `state_commit`.
 pub const B_PUBKEY_OCTET: usize = 104;
-/// In-block offset of the iroot carrier (absorbed last, limb 112 in the v12 carrier-material geometry).
-pub const B_IROOT: usize = 112;
-/// In-block offset of the `state_commit` carrier (the chain's final digest, carrier index B_SPAN-1-37).
-pub const B_STATE_COMMIT: usize = 113;
-/// In-block base of the chained-absorption intermediate carriers (v12: 37 sites at 114..=150).
-pub const B_CHAIN_BASE: usize = 114;
+/// In-block offset of the iroot carrier (absorbed last, limb 169 in the v13 fields-octet geometry).
+pub const B_IROOT: usize = 169;
+/// In-block offset of the `state_commit` carrier (the chain's final digest, `= hash(carrier226, iroot)`).
+pub const B_STATE_COMMIT: usize = 170;
+/// In-block base of the chained-absorption intermediate carriers (v13: 56 sites at 171..=226).
+pub const B_CHAIN_BASE: usize = 171;
 
 /// Absolute base column of the BEFORE rotated block.
 pub const BEFORE_BASE: usize = V1_WIDTH; // 186

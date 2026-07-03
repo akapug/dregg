@@ -6381,8 +6381,12 @@ impl AgentCipherclerk {
         // `protocol-tests/.../effect_vm_differential.rs` asserts this. The
         // full 32-byte value is now bound through the per-effect param column
         // and `PI[EFFECTS_HASH]` (`compute_effects_hash`).
+        // v13 FIELDS-OCTET: lane 0 of the FAITHFUL `field_limbs8` split (the
+        // u64-lane lo32) — byte-identical to the executor projector, the SAME
+        // welded lane the rotated producer writes to limb `4 + slot`. REPLACES the
+        // ~31-bit `fold_bytes32_to_bb`.
         fn field_element_to_bb(value: &[u8; 32]) -> BabyBear {
-            dregg_circuit::effect_vm::fold_bytes32_to_bb(value)
+            dregg_circuit::effect_vm::field_limbs8(value)[0]
         }
 
         fn hash_to_bb(h: &[u8; 32]) -> BabyBear {

@@ -134,6 +134,20 @@ impl Faithful8 {
         Self(limbs)
     }
 
+    /// The v13 FIELDS-OCTET projection ([`crate::effect_vm::field_limbs8`]): the
+    /// faithful ~124-bit 8-lane split of a 32-byte flat-record field value, lane
+    /// 0 = the u64-lane `lo32`, lane 1 = the u64-lane `hi32`, lanes 2..7 = the
+    /// remaining bytes little-endian (see the `field_limbs8` doc for the encoding
+    /// audit). THE constructor for the `fields[0..7]` octets — it REPLACES the
+    /// former eight ~31-bit `fold_bytes32_to_bb` Horner folds that rode one
+    /// `from_lossy_31bit_DANGER` octet (the v13 burn-down, closing the LAST
+    /// degraded-felt residual). Each field's lane 0 rides its existing welded
+    /// limb `4 + i`; lanes 1..7 ride the completion lanes `112 + 7·i .. +6`.
+    #[inline]
+    pub fn from_field_limbs8(b: &[u8; 32]) -> Self {
+        Self(crate::effect_vm::field_limbs8(b))
+    }
+
     /// **THE GREPPABLE ESCAPE HATCH** for the NAMED degraded residuals
     /// (`docs/FAITHFUL-COMMITMENT-LAW.md` — the v13 burn-down list). A call
     /// site of this constructor is an admission: these 8 limbs do NOT each
