@@ -6872,22 +6872,23 @@ mod tests {
                 verify_vm_descriptor2,
             };
             use dregg_circuit::effect_vm::trace_rotated::{
-                RotatedBlockWitness, cap_open_tb_dpis, generate_rotated_effect_vm_trace,
-                transfer_caveat_manifest, widen_to_cap_open_tb,
+                CAP_OPEN_DIGEST_W, RotatedBlockWitness, cap_open_tb_dpis,
+                generate_rotated_effect_vm_trace, transfer_caveat_manifest, widen_to_cap_open_tb,
             };
             let mut wrong_leaf = chosen;
             wrong_leaf[3] = BabyBear::new(EFFECT_GRANT); // mask_lo = grant, not transfer
-            let mut wsib = [BabyBear::ZERO; 16];
-            let mut wdir = [0u8; 16];
-            wsib.copy_from_slice(&open.siblings);
-            wdir.copy_from_slice(&open.directions);
+            // The wide cap-open siblings are the NATIVE 8-felt `[[BabyBear; 8]; 16]` images; copy the
+            // genuine path wholesale (same shape, Copy) so the recompose self-check operates on the
+            // real membership path with only the leaf facet tampered.
+            let wsib = open.siblings;
+            let wdir = open.directions;
             // recompute the root for the tampered leaf so the recompose self-check passes.
             let wrong_w = {
                 let mut w = CapOpenWitness {
                     leaf: wrong_leaf,
                     siblings: wsib,
                     directions: wdir,
-                    cap_root: BabyBear::ZERO,
+                    cap_root: [BabyBear::ZERO; CAP_OPEN_DIGEST_W],
                     src: wrong_leaf[1],
                     eff_bit: WRITE_MASK_LO, // the transfer descriptor pins effBit == EFFECT_TRANSFER
                 };
@@ -7107,21 +7108,20 @@ mod tests {
                 verify_vm_descriptor2,
             };
             use dregg_circuit::effect_vm::trace_rotated::{
-                RotatedBlockWitness, empty_caveat_manifest, generate_rotated_effect_vm_trace,
-                widen_to_cap_open,
+                CAP_OPEN_DIGEST_W, RotatedBlockWitness, empty_caveat_manifest,
+                generate_rotated_effect_vm_trace, widen_to_cap_open,
             };
             let mut wrong_leaf = chosen;
             wrong_leaf[3] = BabyBear::new(EFFECT_TRANSFER); // mask_lo = transfer, not delegation
-            let mut wsib = [BabyBear::ZERO; 16];
-            let mut wdir = [0u8; 16];
-            wsib.copy_from_slice(&built.siblings);
-            wdir.copy_from_slice(&built.directions);
+            // Wide 8-felt sibling images: copy the genuine path wholesale (same shape, Copy).
+            let wsib = built.siblings;
+            let wdir = built.directions;
             let wrong_w = {
                 let mut w = CapOpenWitness {
                     leaf: wrong_leaf,
                     siblings: wsib,
                     directions: wdir,
-                    cap_root: BabyBear::ZERO,
+                    cap_root: [BabyBear::ZERO; CAP_OPEN_DIGEST_W],
                     src: wrong_leaf[1],
                     eff_bit: EFFECT_DELEGATION_OPS, // the revoke descriptor pins effBit == DELEGATION_OPS
                 };
