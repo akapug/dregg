@@ -77,13 +77,53 @@ ABOVE, never after the colon.
   grind. Allowlisted with a reason; **a different / additional degrading fold here
   still fails the gate.**
 
-## The capstone (named future work)
+## The capstone: the `Faithful8` TYPE WALL (built)
 
-This gate is the **ast-grep flavor** of "never introduce a degraded felt again."
-It enforces the law by *pattern* in three known producers. The stronger,
-type-level capstone — a **`Faithful8` newtype** whose only constructor is the
-8-felt encoder, so the *compiler* refuses to place a degraded felt in a committed
-position anywhere — comes **after** the faithful-commitment campaign lands
-cap/heap/fields_root at 8-felt (it needs the commitment limbs to already be
-8-felt before the wall can stand without a sea of escape hatches). Until then,
-this gate holds the line.
+The type-level capstone **exists**: `dregg_circuit::faithful8::Faithful8`
+(`circuit/src/faithful8.rs`, re-exported as `dregg_circuit::Faithful8`) — a
+newtype over `[BabyBear; 8]` with a **private** inner array, so a bare octet
+cannot enter a commitment sink without naming a faithful constructor. A
+degraded felt in a typed commitment position is now a **compile error**
+(`compile_fail` doc-tests in the module are the tripwire).
+
+**Constructors (the only ways in):**
+
+- `Faithful8::from_bytes32` — `bytes32_to_8_limbs`, the canonical 32-byte limb split;
+- the **tree roots** — `cap_root::compute_capability_root{,_with_tombstones}`,
+  `cap_root::empty_capability_root`, `heap_root::compute_canonical_heap_root_8{,_entries}`,
+  `heap_root::empty_heap_root_8`, `CanonicalHeapTree8::root8` all *return* `Faithful8`
+  (internally via the crate-private `from_root8`);
+- the **wire-commit chain** — `from_wire_commit` / `from_wire_commit_chip`;
+- `from_canonical_key` — the 30-bit KEY_COMMIT packing (the `pubkey8` lane);
+- `Faithful8::ZERO` — the absent-material / vk-revoke sentinel;
+- `Faithful8::from_lossy_31bit_DANGER(reason, limbs)` — the **greppable escape
+  hatch** for the named residuals below.
+
+**Typed sinks:** the octet fills of the three commitment producers
+(`cell::commitment::compute_rotated_pre_limbs`, `turn::rotation_witness::produce`,
+and the `trace_rotated` accumulator-lane overrides) go through
+`Faithful8::write_octet` / `write_lanes`; the cell digest producers
+(`compute_authority_digest_8`, `perms_digest_8`, `vk_digest_8`,
+`compute_canonical_capability_root_8`, `state::compute_canonical_{heap,fields}_root_8`,
+`compute_canonical_state_commitment_v9_felt8`, `rotation_witness::wire_commit_8`)
+all return `Faithful8`. Reading out is unrestricted (`Deref` / `.limbs()` /
+`Into<[BabyBear; 8]>`) — the wall polices construction, not inspection, which is
+what stops the consumer cascade at module boundaries. Circuit-internal trace
+math stays bare `BabyBear` by design.
+
+**Gate + wall are complementary:** the ast-grep gate catches the degraded
+*pattern* (`fold_bytes32_to_bb` in a producer file, including sites that never
+touch a typed sink); the wall catches the degraded *value* (any bare octet
+smuggled toward a typed sink, in any file, including ones the gate has never
+heard of). Neither subsumes the other; both stay.
+
+### The `_DANGER` sites = the v13 burn-down list
+
+`grep -rn from_lossy_31bit_DANGER --include='*.rs'` IS the burn-down list.
+Today it is exactly the **`fields[0..7]`** residual pair (the r3..r10 Horner
+folds, reason `"v13 pending — the named fields[0..7] residual"`):
+
+- `cell/src/commitment.rs` (`compute_rotated_pre_limbs`)
+- `turn/src/rotation_witness.rs` (`produce`)
+
+Adding a new `_DANGER` site without listing it here is a review-time violation.
