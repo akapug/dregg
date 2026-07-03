@@ -175,8 +175,10 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
     for row in forged_trace.iter_mut() {
         row[CAVEAT_BASE + C_DFA_RC_OFF] += BabyBear::ONE;
     }
+    // The rc pin-gate mismatch is caught at VERIFY (the light-client op), not necessarily at prove.
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         prove_vm_descriptor2(&desc, &forged_trace, &dpis_dfa, &mem_boundary, &map_heaps)
+            .and_then(|proof| verify_vm_descriptor2(&desc, &proof, &dpis_dfa))
     }));
     assert!(
         match refused {
