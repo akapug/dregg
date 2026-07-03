@@ -17,17 +17,20 @@ Companions: [`circuit.md`](circuit.md) (the prove/verify crates),
 
 | Const | Value | Location |
 |---|---|---|
-| `NUM_PRE_LIMBS` | **88** | `circuit/src/effect_vm/trace_rotated.rs:90` |
-| `V9_NUM_PRE_LIMBS` | **88** (cell-side twin) | `cell/src/commitment.rs:702` |
-| `B_SPAN` | **119** | `circuit/src/effect_vm/trace_rotated.rs:97` |
-| `CAP_OPEN_SPAN` | **329** | `circuit/src/effect_vm/trace_rotated.rs:2273` |
-| `WIDE_WIDTH` | `GRAD_ROT_WIDTH + 480` | `circuit/src/effect_vm/trace_rotated.rs:3341` |
+| `NUM_PRE_LIMBS` | **169** | `circuit/src/effect_vm/trace_rotated.rs` |
+| `V9_NUM_PRE_LIMBS` | **169** (cell-side twin) | `cell/src/commitment.rs` |
+| `B_SPAN` | **227** | `circuit/src/effect_vm/trace_rotated.rs` |
+| `N_ROT_SITES` / `GRAD_ROT_WIDTH` | **128** / **1581** | `circuit/src/effect_vm/trace_rotated.rs` |
+| `WIDE_NUM_CARRIERS` / `WIDE_WIDTH` | **57** / `GRAD_ROT_WIDTH + 912` | `circuit/src/effect_vm/trace_rotated.rs` |
 | `CHIP_RATE` | **16** | `circuit/src/descriptor_ir2.rs:279` |
 | `CHIP_NODE8_ARITY` | **16** | `circuit/src/descriptor_ir2.rs:302` |
 
 The path: `37 (v9) → 67 (v10: +30 faithful completion limbs 37..66 — perms/vk/
-cap/heap/fields lanes 1..7) → 88 (v11: +21 dedicated accumulator completion limbs
-67..87)`; `B_SPAN 51 → 91 → 119`.
+cap/heap/fields-root lanes 1..7) → 88 (v11: +21 dedicated accumulator completion
+limbs 67..87) → 112 (v12: +24 carrier-material octets 88..111) → 169 (v13: +56
+flat-fields[0..7] completion lanes 112..167 + 1 pad limb 168 — the faithful
+`field_limbs8` octet closing the LAST degraded felt)`; `B_SPAN 51 → 91 → 119 →
+151 → 227`.
 
 ## The node8 primitive — ONE hash gadget under all six roots
 
@@ -211,10 +214,17 @@ over the commitment producers with an inline `// ast-grep-ignore` allowlist;
 
 ## Honest residuals (named, none hidden)
 
-1. **`fields[0..7]` flat-record limbs** — still fold 32B → 1 felt (~31-bit):
-   `cell/src/commitment.rs:990` and `turn/src/rotation_witness.rs:360`, both
-   explicitly `// ast-grep-ignore`-allowlisted as the KNOWN residual. Not one of
-   the six roots; the named follow-up grind.
+1. **`fields[0..7]` flat-record limbs — CLOSED (v13 fields-octet epoch).** The
+   two producers (`cell/src/commitment.rs::compute_rotated_pre_limbs`,
+   `turn/src/rotation_witness.rs::produce`) now emit the faithful
+   `Faithful8::from_field_limbs8` 8-lane split (lane 0 at the welded limb `4 + i`,
+   lanes 1..7 at the completion lanes `112 + 7·i .. +6`); the ast-grep allowlist
+   directives are gone and the no-degraded-felt gate passes with zero fields
+   entries. The shared value wrap freezes all 56 completion lanes on a value turn
+   (`rotateV3FrozenAuthority_rejects_fields_forge`, `#assert_axioms`-clean); the
+   ONE remaining in-circuit seam is the setField[0..7] WRITTEN slot's 7 completion
+   lanes (the deliberately-gated **value8 weld** follow-on — the other 49 are
+   frozen via `fieldsCompletionFreezesExcept`).
 2. **The flat pre-limb twins zero-fill lanes 67..87** — the genuine accumulator
    node8 fill exists on the circuit trace-producer path (above), but the two
    flat-record producers (`cell/src/commitment.rs` `compute_rotated_pre_limbs`,
