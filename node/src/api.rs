@@ -1600,6 +1600,8 @@ pub fn router_with_cors(
             get(crate::identity_export::get_identity_export),
         )
         .route("/api/turn/{hash}/proof", get(get_turn_proof))
+        .route("/api/turn/{hash}/receipt", get(get_turn_receipt_full))
+        .route("/api/executor/verifying-key", get(get_executor_verifying_key))
         .route("/api/starbridge/receipts", get(get_starbridge_receipts))
         .route("/api/starbridge/events", get(get_starbridge_events))
         .route("/api/starbridge/turns", get(get_starbridge_turns))
@@ -2293,6 +2295,58 @@ async fn get_receipt_witnesses(
         "witness_artifacts": witness_artifacts,
         "witnessed_receipts": witnessed,
     })))
+}
+
+/// Serve the FULL serialized `TurnReceipt` for a committed turn (by turn hash),
+/// so an out-of-process verifier (e.g. a Mission Control consumer) can obtain
+/// every field bound into `receipt_hash` — including the raw `executor_signature`
+/// and the node8 `consumed_capabilities` witnesses — and INDEPENDENTLY recompute
+/// `receipt_hash()` + verify the v3 executor signature + open the cap-witness
+/// Merkle path. The summary `/api/receipts` view exposes only booleans, which a
+/// non-laundering verifier cannot trust. Turn-keyed to mirror `/api/turn/{hash}/proof`.
+async fn get_turn_receipt_full(
+    AxumPath(hash): AxumPath<String>,
+    State(state): State<NodeState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let bytes = hex_decode(&hash).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let turn_hash: [u8; 32] = bytes.try_into().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let s = state.read().await;
+    let receipt = s
+        .cclerk
+        .receipt_chain()
+        .iter()
+        .find(|r| r.turn_hash == turn_hash)
+        .cloned()
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(serde_json::json!({
+        "turn_hash": hex_encode(&turn_hash),
+        "receipt_hash": hex_encode(&receipt.receipt_hash()),
+        "receipt": receipt,
+    })))
+}
+
+/// Expose the node's executor ed25519 VERIFYING key (the public half of the
+/// gossip signing key the executor signs committed receipts with). A verifier
+/// needs this to check the v3 `canonical_executor_signed_message` signature on a
+/// receipt fetched via `/api/turn/{hash}/receipt`; without it the signature is
+/// unverifiable and a consumer could only trust the node's `executor_signed`
+/// boolean (a laundered verify).
+async fn get_executor_verifying_key(
+    State(state): State<NodeState>,
+) -> Json<serde_json::Value> {
+    let s = state.read().await;
+    // `gossip_signing_key()` is a `dregg_types::SigningKey`; round-trip through
+    // bytes into an ed25519_dalek key to derive the verifying key (the same
+    // pattern the node uses in main.rs for public-key display).
+    let sk_bytes = s.cclerk.gossip_signing_key().to_bytes();
+    let verifying_key = ed25519_dalek::SigningKey::from_bytes(&sk_bytes)
+        .verifying_key()
+        .to_bytes();
+    Json(serde_json::json!({
+        "verifying_key": hex_encode(&verifying_key),
+        "algorithm": "ed25519",
+        "signed_message": "canonical_executor_signed_message (v3, domain executor-receipt-sig-v3:)",
+    }))
 }
 
 /// Serve the persisted full-turn STARK proof for a committed turn so a light
