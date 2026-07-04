@@ -57,8 +57,8 @@ use dregg_cell::capability::CapabilityRef;
 use dregg_cell::state::FieldElement;
 use dregg_cell::{AuthRequired, Cell};
 use dregg_sdk::embed::{DreggEngine, EngineConfig};
-use dregg_turn::TurnReceipt;
 use dregg_turn::builder::{ActionBuilder, TurnBuilder};
+use dregg_turn::TurnReceipt;
 use dregg_types::CellId;
 
 use crate::applet::Slot;
@@ -241,9 +241,9 @@ impl MultiCellAuthor {
     ///   * creates each `scope` card with open permissions; and
     ///   * grants the author cell an access capability to each scope card (a real
     ///     `CapabilitySet` entry — the author's genesis c-list standing).
-    /// `peers` are seeded with DEFAULT (foreign) permissions and NO author c-list entry
-    /// — the author does NOT hold them; a `SetField`/grant-FROM on one is refused by the
-    /// in-band scope tooth BEFORE any turn (and the executor would also refuse it).
+    ///     `peers` are seeded with DEFAULT (foreign) permissions and NO author c-list entry
+    ///     — the author does NOT hold them; a `SetField`/grant-FROM on one is refused by the
+    ///     in-band scope tooth BEFORE any turn (and the executor would also refuse it).
     pub fn mint(
         author_public_key: [u8; 32],
         author_token_id: [u8; 32],

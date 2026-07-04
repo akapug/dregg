@@ -208,10 +208,14 @@ impl NullifierSet {
 
         while current_level.len() > 1 {
             // Pad to even length with a zero hash.
-            if current_level.len() % 2 != 0 {
+            if !current_level.len().is_multiple_of(2) {
                 current_level.push([0u8; 32]);
             }
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
             siblings.push(current_level[sibling_idx]);
 
             // Build next level.
@@ -232,7 +236,7 @@ impl NullifierSet {
         }
         let mut current_level = leaves.to_vec();
         while current_level.len() > 1 {
-            if current_level.len() % 2 != 0 {
+            if !current_level.len().is_multiple_of(2) {
                 current_level.push([0u8; 32]);
             }
             let mut next_level = Vec::with_capacity(current_level.len() / 2);
@@ -249,7 +253,7 @@ impl NullifierSet {
         let mut current = Self::leaf_hash(&proof.element.0);
         let mut idx = proof.index;
         for sibling in &proof.siblings {
-            if idx % 2 == 0 {
+            if idx.is_multiple_of(2) {
                 current = Self::node_hash(&current, sibling);
             } else {
                 current = Self::node_hash(sibling, &current);
@@ -290,15 +294,15 @@ impl NullifierSet {
         }
 
         // Check ordering: left < absent < right.
-        if let Some(left) = &proof.left_neighbor {
-            if left.0 >= proof.absent.0 {
-                return false;
-            }
+        if let Some(left) = &proof.left_neighbor
+            && left.0 >= proof.absent.0
+        {
+            return false;
         }
-        if let Some(right) = &proof.right_neighbor {
-            if right.0 <= proof.absent.0 {
-                return false;
-            }
+        if let Some(right) = &proof.right_neighbor
+            && right.0 <= proof.absent.0
+        {
+            return false;
         }
 
         // Verify the left neighbor's Merkle membership proof.
@@ -334,10 +338,9 @@ impl NullifierSet {
         // Verify adjacency: left and right neighbors must be at consecutive indices.
         if let (Some(left_proof), Some(right_proof)) =
             (&proof.left_membership_proof, &proof.right_membership_proof)
+            && right_proof.index != left_proof.index + 1
         {
-            if right_proof.index != left_proof.index + 1 {
-                return false;
-            }
+            return false;
         }
 
         true

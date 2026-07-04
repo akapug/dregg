@@ -103,6 +103,10 @@
 // receipt event streams, the PIR discovery client, and the wire codec) lives in
 // the `dregg-sdk-net` crate, which depends on this one.
 pub mod beacon_cell;
+// The v12 carrier-witness ATTACH SITES: per-carrier turn-build retention projections
+// (factory backing / hatchery attestation / sovereign authority / sender membership) +
+// the fail-closed leg attach through the fold lane's `from_retained_*` projections.
+pub mod carrier_witness_attach;
 pub mod cipherclerk;
 // The threshold-seal organ (DKG group-key hashed-ElGamal) and the
 // sealed-bid/sealed-ballot orchestration that welds it with the beacon. These
@@ -119,6 +123,10 @@ pub mod sealed_governance;
 // wire-free). It is unconditional in the offline core. The networked
 // `WireCodec` over it lives in `dregg-sdk-net`.
 pub mod embed;
+// The ONE source of truth for the dregg production domains (api / devnet / auth
+// / gateway / hosting / portal). Defaults to the current `*.fg-goose.online`
+// values; overridable via the `DREGG_*_DOMAIN` env vars. See `endpoints.rs`.
+pub mod endpoints;
 pub mod error;
 pub mod explain;
 pub mod factories;
@@ -143,6 +151,12 @@ pub mod receipt;
 // crown to the `AgentRuntime`/`SubAgent` cap-gated executor path. Usable by ANY
 // external loop (a buildr/hermes agent) via `ToolGateway::invoke`.
 pub mod runtime;
+// THE SERVICE-ECONOMY FACADE — buy a service in a few lines, over the verified
+// rail: `runtime.pay()` (the canonical `Payable` transfer), `invoke_service*`
+// (DFA-routed method invocation + optional pay leg), and `ExecutionLease`
+// (open/fund/run a durable, metered execution lease). Thin honest wrappers that
+// desugar to primitives the kernel already conserves.
+pub mod service_economy;
 pub mod tool_gateway;
 pub mod trustline;
 pub mod turns;
@@ -176,6 +190,7 @@ pub mod cclerk {
 
 /// **Noun 1**: proof-of-execution for one committed turn, with the composed
 /// STARK lazily attached. See [`receipt`].
+pub use endpoints::DreggEndpoints;
 pub use receipt::{Receipt, TurnProof};
 
 /// **Noun 2**: the light-client artifact — the verdict from verifying ONE
@@ -201,8 +216,24 @@ pub use runtime::{AgentRuntime, SubAgent};
 // tool-calling agent loop (the proven `delegAdmit` mandate over the cap-gated
 // executor).
 pub use tool_gateway::{
-    CALLS_MADE_SLOT, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult, RoutedStatus,
-    ToolCallError, ToolGateway, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
+    CALLS_MADE_SLOT, Charge, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult,
+    RoutedStatus, ToolCallError, ToolGateway, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
+};
+
+// The `Payable` DSI core the metered tool-gateway charge routes through (one
+// verified `pay` source of truth, shared with the app framework's `Payable::pay`).
+pub use dregg_payable::{
+    AssetId, InvokeAuthority, InvokeRefused, PAY_METHOD, Payable, pay_method_sig,
+    payable_descriptor, resolve_pay,
+};
+
+// THE SERVICE-ECONOMY FACADE surface: the durable execution lease + the
+// payment-leg type for paid service invocation. `runtime.pay()` /
+// `runtime.invoke_service*()` are inherent methods on [`AgentRuntime`] (added by
+// the `service_economy` module); these are the standalone types its API speaks.
+pub use service_economy::{
+    DEFAULT_LEASE_METHOD, ExecutionLease, LEASE_STEP_SLOT, LeaseStep, LeaseTerms, PayLeg,
+    lease_program,
 };
 
 // Receipt-chain verification (the chain the Receipt noun links into).
@@ -276,9 +307,9 @@ pub use embed::{DreggEngine, EmbedError, EngineConfig};
 // [`Receipt::proof`] / [`TurnProof`], not these.)
 pub use full_turn_proof::{
     CapMembershipExpectation, CapMembershipWitness, FullTurnProof, FullTurnVerifyError,
-    FullTurnWitness, NonRevocationWitness, RotationTurnWitness, TurnIdentityFelts, prove_full_turn,
-    prove_turn_self_sovereign, prove_turn_self_sovereign_rotated, verify_full_turn,
-    verify_full_turn_bound,
+    FullTurnWitness, NonRevocationWitness, RotationTurnWitness, TurnIdentityFelts, UmemWeldWitness,
+    prove_full_turn, prove_turn_self_sovereign, prove_turn_self_sovereign_rotated,
+    verify_full_turn, verify_full_turn_bound,
 };
 
 // Receipt-witness artifact codecs (app-framework re-exports these).

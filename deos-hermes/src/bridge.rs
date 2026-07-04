@@ -22,12 +22,85 @@
 
 use std::collections::HashMap;
 
-use dregg_sdk::{AgentRuntime, GatewayRefusal, HeldToken, ToolCallError, ToolGateway, ToolGrant};
-use dregg_turn::Effect;
+use dregg_sdk::{
+    AgentRuntime, CellId, Charge, GatewayRefusal, HeldToken, SubAgent, ToolCallError, ToolGateway,
+    ToolGrant,
+};
+use dregg_turn::{Effect, TurnReceipt};
 
 use crate::acp::{PermissionOutcome, ToolCallRequest, ToolKind};
 use crate::grant_registry::{GrantRegistry, MandateKey};
 use crate::tool_effects;
+
+/// **deos's tool MARKET policy** — the PAID half of the mandate. When a
+/// [`HermesGateway`] carries one, every confined tool-call is not only
+/// cap-checked + rate-metered but CHARGED: a per-call price moves from the
+/// consumer (the confined session's worker cell) to the `provider` cell, riding
+/// the SAME metered turn (a conserving [`Effect::Transfer`], the same one
+/// `Payable::pay` desugars to). This is the "pay to access deos's tools/models"
+/// layer — the confined agent pays for the capabilities it exercises.
+#[derive(Clone, Debug)]
+pub struct ToolMarket {
+    /// The provider cell paid for tool access (deos's tool/model provider cell —
+    /// agent B receives each call's charge).
+    pub provider: CellId,
+    /// The default per-call price (used for a tool with no explicit override).
+    pub default_price: u64,
+    /// The spend budget per mandate (per [`MandateKey`] worker) — the value
+    /// ceiling that, like the rate ceiling, refuses a call in-band once reached.
+    pub budget: u64,
+    /// The SESSION-WIDE spend ceiling, pooled across EVERY worker this session
+    /// admits. Where [`ToolMarket::budget`] bounds spend per [`MandateKey`] worker,
+    /// this bounds the consumer's TOTAL spend across all its tool-calls: once
+    /// cumulative session spend (`HermesGateway::total_spent`) plus the next call's
+    /// price would exceed it, the call is refused in-band even if the per-worker
+    /// budget still has head-room. `None` = no session cap (per-worker only).
+    pub session_budget: Option<u64>,
+    /// Per-tool price overrides, keyed by exact Hermes tool name (a scarcer /
+    /// dearer tool charges more than the default).
+    pub price_overrides: HashMap<String, u64>,
+}
+
+impl ToolMarket {
+    /// A flat market: every tool-call costs `default_price`, paid to `provider`,
+    /// each mandate budgeted at `budget`. No session-wide cap (per-worker only) —
+    /// add one with [`ToolMarket::with_session_budget`].
+    pub fn flat(provider: CellId, default_price: u64, budget: u64) -> ToolMarket {
+        ToolMarket {
+            provider,
+            default_price,
+            budget,
+            session_budget: None,
+            price_overrides: HashMap::new(),
+        }
+    }
+
+    /// Pin a per-tool price override (e.g. `delegate_task` costs more than a
+    /// `web_search`).
+    pub fn with_price(mut self, tool: &str, price: u64) -> ToolMarket {
+        self.price_overrides.insert(tool.to_string(), price);
+        self
+    }
+
+    /// Pin a SESSION-WIDE spend ceiling pooled across every worker this session
+    /// admits — the consumer's TOTAL spend bound (see [`ToolMarket::session_budget`]).
+    pub fn with_session_budget(mut self, session_budget: u64) -> ToolMarket {
+        self.session_budget = Some(session_budget);
+        self
+    }
+
+    /// The per-call price for a resolved [`MandateKey`]: the per-tool override if
+    /// one is pinned, else the default.
+    fn price_for_key(&self, key: &MandateKey) -> u64 {
+        match key {
+            MandateKey::Tool(name) => *self
+                .price_overrides
+                .get(name)
+                .unwrap_or(&self.default_price),
+            MandateKey::Kind(_) => self.default_price,
+        }
+    }
+}
 
 /// The deos-side bridge: one [`ToolGateway`] per [`MandateKey`] (a per-tool
 /// grant where deos pinned one, else the per-kind floor), lazily admitted,
@@ -39,6 +112,10 @@ pub struct HermesGateway<'rt> {
     root_token: HeldToken,
     /// deos's per-tool / per-kind mandate over this Hermes session.
     registry: GrantRegistry,
+    /// deos's tool MARKET policy, if this session is PAID. `None` = a free
+    /// (rate-only) session — the original gateway shape. When `Some`, every
+    /// admitted worker is a PAID worker ([`ToolGateway::admit_priced`]).
+    market: Option<ToolMarket>,
     /// The cap-gated worker per [`MandateKey`], admitted on first use under that
     /// key's grant. (One `ToolGateway` = one delegated worker + one metered
     /// counter.) A per-tool grant is its OWN worker, independent of its kind.
@@ -57,7 +134,66 @@ impl<'rt> HermesGateway<'rt> {
             runtime,
             root_token,
             registry,
+            market: None,
             gateways: HashMap::new(),
+        }
+    }
+
+    /// Open a PAID bridge: as [`HermesGateway::new`], but every confined
+    /// tool-call is also CHARGED under `market` — a per-call price moves from the
+    /// confined session's worker cell to the market's provider cell on the
+    /// metered turn (the "pay to access deos's tools/models" seam). Over-budget /
+    /// insolvent calls are refused in-band exactly as over-rate calls are.
+    pub fn new_paid(
+        runtime: &'rt AgentRuntime,
+        root_token: HeldToken,
+        registry: GrantRegistry,
+        market: ToolMarket,
+    ) -> HermesGateway<'rt> {
+        HermesGateway {
+            runtime,
+            root_token,
+            registry,
+            market: Some(market),
+            gateways: HashMap::new(),
+        }
+    }
+
+    /// The market policy this session charges under (`None` for a free session).
+    pub fn market(&self) -> Option<&ToolMarket> {
+        self.market.as_ref()
+    }
+
+    /// The [`Charge`] for a resolved [`MandateKey`] under the session market
+    /// (`None` for a free session): the key's per-call price, paid to the
+    /// market provider, budgeted at the market budget.
+    fn charge_for_key(&self, key: &MandateKey) -> Option<Charge> {
+        self.market
+            .as_ref()
+            .map(|m| Charge::new(m.price_for_key(key), m.provider, m.budget))
+    }
+
+    /// **The SESSION-WIDE budget check** (GAP 2) — pool spend across EVERY worker.
+    ///
+    /// Returns `Some(reason)` iff this session carries a [`ToolMarket::session_budget`]
+    /// and paying for one more call routed to `key` would push the consumer's TOTAL
+    /// spend across ALL its workers ([`HermesGateway::total_spent`]) past that
+    /// ceiling. This bites even when the per-worker [`ToolMarket::budget`] still has
+    /// head-room — a consumer's whole-session spend is bounded, not just per-worker.
+    /// `None` (admit) for a free session, a session with no cap, or one with
+    /// session head-room.
+    fn session_budget_refusal(&self, key: &MandateKey) -> Option<String> {
+        let market = self.market.as_ref()?;
+        let session_cap = market.session_budget?;
+        let price = market.price_for_key(key);
+        let session_spent = self.total_spent();
+        if session_spent + price > session_cap {
+            Some(format!(
+                "session budget exhausted: {session_spent} spent across the session + {price} \
+                 price exceeds the {session_cap} session allowance"
+            ))
+        } else {
+            None
         }
     }
 
@@ -78,7 +214,11 @@ impl<'rt> HermesGateway<'rt> {
     fn gateway_for(&mut self, key: &MandateKey) -> Result<&mut ToolGateway, ToolCallError> {
         if !self.gateways.contains_key(key) {
             let grant = self.registry.grant_for_key(key).clone();
-            let gw = ToolGateway::admit(self.runtime, &self.root_token, grant)
+            // PAID session → admit a charging worker; free session → admit a
+            // rate-only worker (the original shape). The charge rides every
+            // metered turn this worker commits.
+            let charge = self.charge_for_key(key);
+            let gw = ToolGateway::admit_priced(self.runtime, &self.root_token, grant, charge)
                 .map_err(ToolCallError::Sdk)?;
             self.gateways.insert(key.clone(), gw);
         }
@@ -125,6 +265,17 @@ impl<'rt> HermesGateway<'rt> {
         // the RATE + DEADLINE legs do the live confinement.
         let tool_id = self.registry.tool_id_for_key(&key);
 
+        // GAP 2 — the SESSION-WIDE budget cap, checked BEFORE the per-worker gate:
+        // pool spend across every worker so the consumer's TOTAL spend is bounded.
+        // Refused in-band (no worker touched, no turn, no charge) once the session
+        // cap is hit, even if this worker's per-mandate budget still has head-room.
+        if let Some(reason) = self.session_budget_refusal(&key) {
+            return PermissionOutcome::Reject {
+                tool_call_id: call.tool_call_id.clone(),
+                reason,
+            };
+        }
+
         let gw = match self.gateway_for(&key) {
             Ok(gw) => gw,
             Err(e) => {
@@ -143,6 +294,7 @@ impl<'rt> HermesGateway<'rt> {
                 tool_call_id: call.tool_call_id.clone(),
                 receipt: hex32(&receipt.receipt.turn_hash),
                 remaining: receipt.remaining,
+                paid: receipt.paid,
             },
             Err(ToolCallError::Refused(refusal)) => PermissionOutcome::Reject {
                 tool_call_id: call.tool_call_id.clone(),
@@ -153,6 +305,26 @@ impl<'rt> HermesGateway<'rt> {
                 reason: format!("executor rejected the metered turn: {e}"),
             },
         }
+    }
+
+    /// **Fund a session worker's spend account for real** (GAP 3).
+    ///
+    /// By default a worker cell is born with a fixed balance. This is the path that
+    /// funds it from the consumer's OWN account: it moves `amount` from `funder`'s
+    /// cell into the worker the given `tool_name` routes to (admitting that worker
+    /// if needed), via a conserving [`Effect::Transfer`] the funder authorizes. The
+    /// charges that worker subsequently settles debit value the consumer GENUINELY
+    /// transferred in, not a magic birth-balance. `funder` must hold value in the
+    /// worker's asset (same runtime/domain).
+    pub fn fund_worker(
+        &mut self,
+        tool_name: &str,
+        funder: &SubAgent,
+        amount: u64,
+    ) -> Result<TurnReceipt, ToolCallError> {
+        let key = self.registry.key_for_tool(tool_name);
+        let gw = self.gateway_for(&key)?;
+        gw.fund(funder, amount).map_err(ToolCallError::Sdk)
     }
 
     /// Calls made so far on a kind's mandate (0 if never invoked). Counts only
@@ -174,6 +346,18 @@ impl<'rt> HermesGateway<'rt> {
     /// admitted).
     pub fn calls_made_for_key(&self, key: &MandateKey) -> i64 {
         self.gateways.get(key).map_or(0, |gw| gw.calls_made())
+    }
+
+    /// Value SPENT so far on a specific [`MandateKey`]'s worker (0 if never
+    /// admitted or a free session) — the per-mandate charge tally.
+    pub fn spent_for_key(&self, key: &MandateKey) -> u64 {
+        self.gateways.get(key).map_or(0, |gw| gw.spent())
+    }
+
+    /// Total value spent across every admitted worker this session (the
+    /// session-wide charge tally for the mandate inspector / dock).
+    pub fn total_spent(&self) -> u64 {
+        self.gateways.values().map(|gw| gw.spent()).sum()
     }
 
     /// Every mandate key that has been admitted (a live worker exists), for the
@@ -199,6 +383,13 @@ fn describe_refusal(refusal: &GatewayRefusal) -> String {
             calls_made,
             rate_limit,
         } => format!("rate exhausted: {calls_made} of {rate_limit} calls used this mandate window"),
+        GatewayRefusal::OverBudget {
+            spent,
+            price,
+            budget,
+        } => format!(
+            "budget exhausted: {spent} spent + {price} price exceeds the {budget} allowance this mandate"
+        ),
     }
 }
 

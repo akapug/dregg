@@ -179,7 +179,7 @@ pub fn build_cross_cell_conservation_trace(
     for d in deltas {
         let mag = BabyBear::new(d.magnitude);
         let sign = sign_felt(d.credit);
-        balance = balance + sign * mag;
+        balance += sign * mag;
         let mut row = vec![BabyBear::ZERO; CCC_WIDTH];
         row[CCC_ASSET_COL] = asset;
         row[CCC_MAG_COL] = mag;

@@ -6,7 +6,7 @@
 //!   - `text`   → [`gpui_component::label::Label`]
 //!   - `bind`   → a [`Label`] re-read off the live applet ledger (the signal binding)
 //!   - `button` → [`gpui_component::button::Button`] whose `on_click` fires the
-//!                applet's affordance = a REAL cap-gated verified turn (a `TurnReceipt`)
+//!     applet's affordance = a REAL cap-gated verified turn (a `TurnReceipt`)
 //!   - `input`  → a bordered field showing the ephemeral view-state value
 //!   - `list` / `table` → a `v_flex` of the child nodes
 //!
@@ -43,12 +43,12 @@ use deos_js::applet::Applet;
 use deos_js::signals::{BindingId, BindingRegistry, Slot, SourceEvent};
 use dregg_types::CellId;
 use gpui::{
-    App, ClickEvent, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
-    px,
+    div, px, rgb, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Render, SharedString, Styled, Window,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::label::Label;
-use gpui_component::{ActiveTheme, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme};
 
 use crate::tree::ViewNode;
 
@@ -70,8 +70,54 @@ fn bind_plan(tree: &ViewNode, out: &mut Vec<Slot>) {
                 bind_plan(c, out);
             }
         }
-        // Leaves that hold no bind source.
-        ViewNode::Text(_) | ViewNode::Button { .. } | ViewNode::Input { .. } => {}
+        // The richness-expansion containers recurse their children in declaration order so
+        // the Nth `Bind` stays `BindingId(n)`. `tabs` registers EVERY panel's binds (render
+        // walks all panels too, displaying only the selected one) so the cursor never
+        // desyncs on a tab switch.
+        ViewNode::Section { children, .. } => {
+            for c in children {
+                bind_plan(c, out);
+            }
+        }
+        ViewNode::Tabs { panels, .. } => {
+            for p in panels {
+                bind_plan(p, out);
+            }
+        }
+        // `grid` recurses its children in declaration order (same as the other containers).
+        ViewNode::Grid { children, .. } => {
+            for c in children {
+                bind_plan(c, out);
+            }
+        }
+        // The adept-only wrapper is transparent to the bind cursor — recurse the wrapped node.
+        // (A tree handed to a renderer has usually been `disclose`d, which removes the marker;
+        // an un-disclosed tree still registers the inner node's binds here.)
+        ViewNode::Adept(inner) => bind_plan(inner, out),
+        // A `host`'s resolved hosted subtree is recursed at the host's position so the bind
+        // cursor stays aligned across all renderers; an unresolved host (`view: None`)
+        // consumes no cursor positions (so it can't desync them).
+        ViewNode::Host { view, .. } => {
+            if let Some(v) = view {
+                bind_plan(v, out);
+            }
+        }
+        // Leaves that hold no bind source. The bound batch-2 nodes (`slider`/`toggle`/`gauge`)
+        // read their slot immediate-mode (NOT via the bind cursor), so they register nothing.
+        ViewNode::Text(_)
+        | ViewNode::Button { .. }
+        | ViewNode::Input { .. }
+        | ViewNode::Gauge { .. }
+        | ViewNode::Divider
+        | ViewNode::Breadcrumb { .. }
+        | ViewNode::Progress { .. }
+        | ViewNode::Pill { .. }
+        | ViewNode::Icon { .. }
+        | ViewNode::Menu { .. }
+        | ViewNode::Halo { .. }
+        | ViewNode::Slider { .. }
+        | ViewNode::Toggle { .. }
+        | ViewNode::Tile { .. } => {}
     }
 }
 
@@ -256,7 +302,7 @@ impl AppletView {
             ViewNode::Text(s) => Label::new(s.clone())
                 .text_color(theme_fg)
                 .into_any_element(),
-            ViewNode::Bind { slot, label } => {
+            ViewNode::Bind { slot, label, fmt } => {
                 // THE SIGNAL BINDING — paint out of the fine-grained value CACHE. The
                 // cache fills lazily off the live ledger on first paint (the same
                 // witnessed read the JS closure made), then is updated ONLY for the
@@ -264,10 +310,14 @@ impl AppletView {
                 // clean binding repaints its cached value without re-reading the ledger —
                 // the SolidJS-shaped fine-grained re-render.
                 let value = self.next_bind_value(*slot);
+                // CONSUMER-DELIGHT: an opaque key/hash paints SHORT + friendly (`🦊 swift-fox` /
+                // `0x8bf3…a3d8` / `1,234,567`) instead of a 20-digit decimal; the default keeps
+                // the plain decimal so a counter is unchanged. Identical across all renderers.
+                let shown = crate::fmt::format_value(value, *fmt);
                 let text = if label.is_empty() {
-                    value.to_string()
+                    shown
                 } else {
-                    format!("{label}{value}")
+                    format!("{label}{shown}")
                 };
                 Label::new(text)
                     .font_weight(FontWeight::BOLD)
@@ -294,16 +344,21 @@ impl AppletView {
                     })
                     .into_any_element()
             }
-            ViewNode::Input { bind_view } => {
-                // The ephemeral view-state value (draft text) — NOT cell state, never a
-                // turn. Rendered as a bordered field showing the current draft.
+            ViewNode::Input {
+                bind_view,
+                fire_turn,
+                submit_label,
+            } => {
+                // The ephemeral view-state value (draft text) — NOT cell state. When `fire_turn`
+                // is set, a paired submit button parses the draft into the turn's `arg` and fires
+                // a REAL cap-gated verified turn (input → verified turn).
                 let draft = self
                     .applet
                     .borrow()
                     .get_view(bind_view)
                     .unwrap_or("")
                     .to_string();
-                h_flex()
+                let field = h_flex()
                     .px_2()
                     .py_1()
                     .border_1()
@@ -312,8 +367,41 @@ impl AppletView {
                     .child(Label::new(if draft.is_empty() {
                         format!("‹{bind_view}›")
                     } else {
-                        draft
-                    }))
+                        draft.clone()
+                    }));
+                if fire_turn.is_empty() {
+                    return field.into_any_element();
+                }
+                // The submit affordance: parse the draft as the turn's arg (non-numeric → 0).
+                let applet = self.applet.clone();
+                let turn = fire_turn.clone();
+                let draft_arg = draft.trim().parse::<i64>().unwrap_or(0);
+                let label = if submit_label.is_empty() {
+                    "submit".to_string()
+                } else {
+                    submit_label.clone()
+                };
+                h_flex()
+                    .gap_1()
+                    .items_center()
+                    .child(field)
+                    .child(
+                        Button::new((
+                            "deos-input-submit",
+                            label_hash(&format!("{fire_turn}:{label}")),
+                        ))
+                        .primary()
+                        .label(label)
+                        .on_click(
+                            move |_ev: &ClickEvent, _window, _cx| {
+                                if let Err(e) = applet.borrow_mut().fire(&turn, draft_arg) {
+                                    eprintln!(
+                                        "deos-view: input submit '{turn}' did not commit: {e}"
+                                    );
+                                }
+                            },
+                        ),
+                    )
                     .into_any_element()
             }
             ViewNode::List(items) => {
@@ -330,7 +418,487 @@ impl AppletView {
                 }
                 col.into_any_element()
             }
+
+            // ── The RICHNESS EXPANSION (batch 1) ──────────────────────────────────────────
+            ViewNode::Section {
+                title,
+                tag,
+                children,
+            } => {
+                // A titled, bordered container — the uniform "styled section". `tag=="genuine"`
+                // accents the border (the existing `props.tag` styling convention). Polished
+                // toward a calmer, finished look: rounded corners + a touch more breathing room.
+                let accent = if tag == "genuine" {
+                    theme_fg
+                } else {
+                    cx.theme().border
+                };
+                let mut card = v_flex()
+                    .gap_2()
+                    .p_3()
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(accent);
+                if !title.is_empty() {
+                    // A quiet, slightly-muted header so it reads as a label, not a shout.
+                    card = card.child(
+                        Label::new(title.clone())
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground),
+                    );
+                }
+                for c in children {
+                    card = card.child(self.node(c, _window, cx));
+                }
+                card.into_any_element()
+            }
+            ViewNode::Tabs {
+                tabs,
+                selected_slot,
+                select_turn,
+                panels,
+            } => {
+                // The active tab index lives in a MODEL SLOT (read live), so a tab switch is a
+                // verified turn — reflective + replayable, surviving an agent rewrite.
+                let active = self.applet.borrow().get_u64(*selected_slot) as usize;
+                // The tab strip: one Button per label, the active one `.primary()`; each fires
+                // `select_turn` with `arg = its index` (a REAL cap-gated verified turn).
+                let mut strip = h_flex().gap_1();
+                for (i, label) in tabs.iter().enumerate() {
+                    let applet = self.applet.clone();
+                    let turn = select_turn.clone();
+                    let idx = i as i64;
+                    let mut b =
+                        Button::new(("deos-tab", label_hash(&format!("{select_turn}:{i}"))))
+                            .label(label.clone());
+                    if i == active {
+                        b = b.primary();
+                    }
+                    strip = strip.child(b.on_click(move |_ev: &ClickEvent, _window, _cx| {
+                        if let Err(e) = applet.borrow_mut().fire(&turn, idx) {
+                            eprintln!("deos-view: tab select '{turn}' did not commit: {e}");
+                        }
+                    }));
+                }
+                // Walk ALL panels (advancing the bind cursor in registration order) but keep
+                // only the selected one's element — so a tab switch never desyncs the cursor.
+                let shown = if active < panels.len() { active } else { 0 };
+                let mut body = None;
+                for (i, panel) in panels.iter().enumerate() {
+                    let el = self.node(panel, _window, cx);
+                    if i == shown {
+                        body = Some(el);
+                    }
+                }
+                let mut col = v_flex().gap_2().child(strip);
+                if let Some(el) = body {
+                    col = col.child(el);
+                }
+                col.into_any_element()
+            }
+            ViewNode::Gauge { slot, max, label } => {
+                // A bound progress / balance bar — reads its slot IMMEDIATE-MODE (not the bind
+                // cursor). The fill width is `value / max`, clamped to `[0,1]`.
+                let value = self.applet.borrow().get_u64(*slot);
+                let ratio = if *max == 0 {
+                    0.0
+                } else {
+                    (value as f64 / *max as f64).clamp(0.0, 1.0)
+                };
+                let track_w = 140.0_f32;
+                let fill_w = (track_w as f64 * ratio) as f32;
+                let text = if label.is_empty() {
+                    format!("{value}/{max}")
+                } else {
+                    format!("{label}{value}/{max}")
+                };
+                v_flex()
+                    .gap_1()
+                    .child(Label::new(text).text_color(theme_fg))
+                    .child(
+                        div()
+                            .w(px(track_w))
+                            .h(px(8.))
+                            .rounded(px(4.))
+                            .bg(cx.theme().border)
+                            .child(
+                                div()
+                                    .w(px(fill_w.max(0.0)))
+                                    .h(px(8.))
+                                    .rounded(px(4.))
+                                    .bg(theme_fg),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ViewNode::Divider => div()
+                .h(px(1.))
+                .w_full()
+                .bg(cx.theme().border)
+                .into_any_element(),
+
+            // ── The RICHNESS EXPANSION batch 2 — the actuation crown + the rest of §1 ─────────
+            ViewNode::Grid { cols, children } => {
+                // A wrapping spatial cell field (the Wonder grid / icon field / app tiles). A
+                // flex with wrap; `cols` caps cell width so a row holds at most `cols` cells.
+                let mut grid = div().flex().flex_wrap().gap_2();
+                let max_w = if *cols > 0 {
+                    Some(px(((520.0 / *cols as f32) - 12.0).max(48.0)))
+                } else {
+                    None
+                };
+                for c in children {
+                    let mut cell = div().child(self.node(c, _window, cx));
+                    if let Some(w) = max_w {
+                        cell = cell.max_w(w);
+                    }
+                    grid = grid.child(cell);
+                }
+                grid.into_any_element()
+            }
+            ViewNode::Breadcrumb { items } => {
+                // A navigation path joined by `→`; a crumb with a non-empty `turn` is clickable
+                // (fires a verified turn). Mirrors Time's metastack breadcrumb.
+                let mut row = h_flex().gap_1().items_center();
+                for (i, crumb) in items.iter().enumerate() {
+                    if i > 0 {
+                        row = row.child(Label::new("→").text_color(cx.theme().muted_foreground));
+                    }
+                    if crumb.turn.is_empty() {
+                        row = row.child(Label::new(crumb.label.clone()).text_color(theme_fg));
+                    } else {
+                        let applet = self.applet.clone();
+                        let turn = crumb.turn.clone();
+                        let arg = crumb.arg;
+                        row = row.child(
+                            Button::new((
+                                "deos-crumb",
+                                label_hash(&format!("{}:{}", crumb.turn, i)),
+                            ))
+                            .label(crumb.label.clone())
+                            .on_click(
+                                move |_ev: &ClickEvent, _window, _cx| {
+                                    if let Err(e) = applet.borrow_mut().fire(&turn, arg) {
+                                        eprintln!(
+                                            "deos-view: breadcrumb '{turn}' did not commit: {e}"
+                                        );
+                                    }
+                                },
+                            ),
+                        );
+                    }
+                }
+                row.into_any_element()
+            }
+            ViewNode::Progress { value, max, label } => {
+                // A STATIC (literal-valued) progress bar — same paint as `gauge` with a literal
+                // value instead of a slot.
+                let ratio = if *max == 0 {
+                    0.0
+                } else {
+                    (*value as f64 / *max as f64).clamp(0.0, 1.0)
+                };
+                let track_w = 140.0_f32;
+                let fill_w = (track_w as f64 * ratio) as f32;
+                let text = if label.is_empty() {
+                    format!("{value}/{max}")
+                } else {
+                    format!("{label}{value}/{max}")
+                };
+                v_flex()
+                    .gap_1()
+                    .child(Label::new(text).text_color(theme_fg))
+                    .child(
+                        div()
+                            .w(px(track_w))
+                            .h(px(8.))
+                            .rounded(px(4.))
+                            .bg(cx.theme().border)
+                            .child(
+                                div()
+                                    .w(px(fill_w.max(0.0)))
+                                    .h(px(8.))
+                                    .rounded(px(4.))
+                                    .bg(theme_fg),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ViewNode::Pill {
+                text,
+                tag,
+                slot,
+                cases,
+            } => {
+                // A colored status badge. LIVE variant: when bound to a `slot` with `cases`, read
+                // the slot IMMEDIATE-MODE and map the live value to its word + color (a phase slot
+                // → COMMIT/REVEAL/RESOLVED) — the status pill READS the cell, not a frozen label.
+                let (shown_text, shown_tag) = if let Some(s) = slot {
+                    if cases.is_empty() {
+                        (text.as_str(), tag.as_str())
+                    } else {
+                        let value = self.applet.borrow().get_u64(*s);
+                        crate::tree::pill_display(text, tag, cases, value)
+                    }
+                } else {
+                    (text.as_str(), tag.as_str())
+                };
+                div()
+                    .px_2()
+                    .py_0p5()
+                    .rounded(px(999.))
+                    .bg(tag_color(shown_tag))
+                    .child(Label::new(shown_text.to_string()).text_color(rgb(0xffffff)))
+                    .into_any_element()
+            }
+            ViewNode::Icon { glyph, tag } => {
+                let color = if tag.is_empty() {
+                    theme_fg
+                } else {
+                    tag_color(tag)
+                };
+                Label::new(glyph.clone())
+                    .text_color(color)
+                    .into_any_element()
+            }
+            ViewNode::Menu { items } => {
+                // A right-click / context actuation menu — a column of rows; an enabled row is a
+                // Button firing `{turn, arg}`, a disabled row a dimmed Label (the cap tooth shown).
+                let mut col = v_flex()
+                    .gap_0p5()
+                    .p_1()
+                    .border_1()
+                    .border_color(cx.theme().border);
+                for (i, item) in items.iter().enumerate() {
+                    if item.enabled {
+                        let applet = self.applet.clone();
+                        let turn = item.turn.clone();
+                        let arg = item.arg;
+                        col = col.child(
+                            Button::new(("deos-menu", label_hash(&format!("{}:{}", item.turn, i))))
+                                .label(item.label.clone())
+                                .on_click(move |_ev: &ClickEvent, _window, _cx| {
+                                    if let Err(e) = applet.borrow_mut().fire(&turn, arg) {
+                                        eprintln!("deos-view: menu '{turn}' did not commit: {e}");
+                                    }
+                                }),
+                        );
+                    } else {
+                        col = col.child(
+                            div()
+                                .opacity(0.4)
+                                .child(Label::new(item.label.clone()).text_color(theme_fg)),
+                        );
+                    }
+                }
+                col.into_any_element()
+            }
+            ViewNode::Halo {
+                target_slot: _,
+                handles,
+            } => {
+                // The Pharo handle-ring — each handle is a rounded affordance firing the same
+                // `{turn, arg}` a menu would; a `!enabled` handle is dimmed (cap-refused). The
+                // compass-anchor geometry is renderer layout; here the handles ring in a wrap.
+                let mut ring = div().flex().flex_wrap().gap_1().items_center();
+                for (i, h) in handles.iter().enumerate() {
+                    if h.enabled {
+                        let applet = self.applet.clone();
+                        let turn = h.turn.clone();
+                        let arg = h.arg;
+                        ring = ring.child(
+                            Button::new(("deos-halo", label_hash(&format!("{}:{}", h.turn, i))))
+                                .label(h.glyph.clone())
+                                .on_click(move |_ev: &ClickEvent, _window, _cx| {
+                                    if let Err(e) = applet.borrow_mut().fire(&turn, arg) {
+                                        eprintln!(
+                                            "deos-view: halo handle '{turn}' did not commit: {e}"
+                                        );
+                                    }
+                                }),
+                        );
+                    } else {
+                        ring = ring.child(
+                            div()
+                                .opacity(0.4)
+                                .size(px(24.))
+                                .rounded_full()
+                                .bg(cx.theme().border)
+                                .child(Label::new(h.glyph.clone()).text_color(theme_fg)),
+                        );
+                    }
+                }
+                ring.into_any_element()
+            }
+            ViewNode::Slider {
+                slot,
+                min,
+                max,
+                turn,
+            } => {
+                // A bound scrubber: the thumb sits at the live slot value (read immediate-mode); a
+                // click on a tick seeks — firing `turn` with `arg = that tick's value` (a REAL
+                // verified turn), the same discrete-tick actuation the native Time scrubber uses.
+                let value = self.applet.borrow().get_u64(*slot);
+                let lo = *min;
+                let hi = (*max).max(lo + 1);
+                let span = hi - lo;
+                let n_ticks = span.clamp(1, 20) as usize;
+                let mut track = h_flex().gap_0p5().items_center();
+                for k in 0..=n_ticks {
+                    let tick_val = lo + (span * k as u64) / n_ticks as u64;
+                    let filled = tick_val <= value;
+                    let applet = self.applet.clone();
+                    let turn_s = turn.clone();
+                    let seek = tick_val as i64;
+                    track = track.child(
+                        div()
+                            .id(SharedString::from(format!("deos-slider-{slot}-{k}")))
+                            .w(px(10.))
+                            .h(px(16.))
+                            .rounded(px(2.))
+                            .bg(if filled { theme_fg } else { cx.theme().border })
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_ev, _window, _cx| {
+                                if let Err(e) = applet.borrow_mut().fire(&turn_s, seek) {
+                                    eprintln!(
+                                        "deos-view: slider seek '{turn_s}' did not commit: {e}"
+                                    );
+                                }
+                            }),
+                    );
+                }
+                v_flex()
+                    .gap_1()
+                    .child(Label::new(format!("{lo} ≤ {value} ≤ {hi}")).text_color(theme_fg))
+                    .child(track)
+                    .into_any_element()
+            }
+            ViewNode::Toggle {
+                slot,
+                on_turn,
+                off_turn,
+                glyph_on,
+                glyph_off,
+                label,
+            } => {
+                // An affordance checkbox: the glyph reflects the live slot; a click fires `off_turn`
+                // when currently on, else `on_turn` (a REAL verified turn flipping the boolean).
+                let on = self.applet.borrow().get_u64(*slot) != 0;
+                let glyph = if on {
+                    glyph_on.clone()
+                } else {
+                    glyph_off.clone()
+                };
+                let applet = self.applet.clone();
+                let fire = if on {
+                    off_turn.clone()
+                } else {
+                    on_turn.clone()
+                };
+                let text = format!("{glyph} {label}");
+                Button::new((
+                    "deos-toggle",
+                    label_hash(&format!("{on_turn}:{off_turn}:{slot}")),
+                ))
+                .label(text)
+                .on_click(move |_ev: &ClickEvent, _window, _cx| {
+                    if !fire.is_empty() {
+                        if let Err(e) = applet.borrow_mut().fire(&fire, 0) {
+                            eprintln!("deos-view: toggle '{fire}' did not commit: {e}");
+                        }
+                    }
+                })
+                .into_any_element()
+            }
+            ViewNode::Tile { handle, w, h } => {
+                // The genuine ceiling — a card-referenced native paint region. The card does NOT
+                // carry pixels; native shows a sized placeholder framing the host-resolved handle
+                // (a Servo render, a video) until the host paints into it.
+                let tw = if *w == 0 {
+                    320.0
+                } else {
+                    (*w as f32).min(960.0)
+                };
+                let th = if *h == 0 {
+                    200.0
+                } else {
+                    (*h as f32).min(720.0)
+                };
+                v_flex()
+                    .w(px(tw))
+                    .h(px(th))
+                    .gap_1()
+                    .items_center()
+                    .justify_center()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(px(4.))
+                    .bg(cx.theme().background)
+                    .child(Label::new("▦").text_color(cx.theme().muted_foreground))
+                    .child(
+                        Label::new(format!("‹tile {handle}: host-painted region {w}×{h}›"))
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .into_any_element()
+            }
+
+            // The adept-only wrapper renders its inner node transparently (the disclosure filter,
+            // when applied, removes the marker before paint; an un-filtered tree shows the bones).
+            ViewNode::Adept(inner) => self.node(inner, _window, cx),
+
+            // ── The COMPOSITION KEYSTONE — mount a cell's WHOLE hosted view-tree as a
+            //    subtree (the cell is a component, not a leaf). A bordered frame with a muted
+            //    `⌂ <cell>` header wrapping the hosted subtree; an UNRESOLVED host paints an
+            //    honest placeholder (it has no tree to mount yet).
+            ViewNode::Host { cell, view } => {
+                let head = format!("⌂ {}", short_cell(cell));
+                let mut frame = v_flex()
+                    .gap_1()
+                    .p_2()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Label::new(head)
+                            .text_color(cx.theme().muted_foreground)
+                            .into_any_element(),
+                    );
+                match view {
+                    Some(v) => frame = frame.child(self.node(v, _window, cx)),
+                    None => {
+                        frame = frame.child(
+                            Label::new(format!("‹mount cell {}: unresolved›", short_cell(cell)))
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    }
+                }
+                frame.into_any_element()
+            }
         }
+    }
+}
+
+/// The semantic-tag palette — a `pill`/`icon` tag (`good`/`warn`/`bad`/`accent`/`muted`/…)
+/// maps to a tint. The cockpit's `pill(text, color)` idiom expressed as data: the SAME small
+/// set of statuses, here keyed by the `props.tag` channel. An unknown tag falls back to accent.
+fn tag_color(tag: &str) -> gpui::Hsla {
+    let c = match tag {
+        "good" | "genuine" | "live" => 0x3fb950,
+        "warn" | "pending" => 0xd29922,
+        "bad" | "refusal" | "revoked" => 0xf85149,
+        "muted" => 0x9aa0aa,
+        _ => 0x5b8cff, // accent
+    };
+    rgb(c).into()
+}
+
+/// A short, human prefix of a (hex) cell id for a host frame header. Long ids elide; short
+/// ones (the test labels) show whole.
+fn short_cell(cell: &str) -> String {
+    if cell.len() > 12 {
+        format!("{}…", &cell[..12])
+    } else {
+        cell.to_string()
     }
 }
 

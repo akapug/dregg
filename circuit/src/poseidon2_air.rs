@@ -90,6 +90,8 @@ impl StarkAir for Poseidon2Air {
         false
     }
 
+    // crypto index loops kept verbatim
+    #[allow(clippy::needless_range_loop)]
     fn eval_constraints(
         &self,
         local: &[BabyBear],
@@ -112,12 +114,14 @@ impl StarkAir for Poseidon2Air {
         let mut combined = BabyBear::ZERO;
         let mut alpha_pow = BabyBear::ONE;
         for i in 0..WIDTH {
-            combined = combined + alpha_pow * (claimed_output[i] - ps.state[i]);
-            alpha_pow = alpha_pow * alpha;
+            combined += alpha_pow * (claimed_output[i] - ps.state[i]);
+            alpha_pow *= alpha;
         }
         combined
     }
 
+    // crypto index loops kept verbatim
+    #[allow(clippy::needless_range_loop)]
     fn boundary_constraints(
         &self,
         public_inputs: &[BabyBear],
@@ -281,24 +285,24 @@ impl StarkAir for MerklePoseidon2Air {
             // Within-level: verify round function (only first 8 state cols are in trace)
             let expected = compute_round(&local_state, row_idx);
             for i in 0..8 {
-                combined = combined + alpha_pow * (next_state[i] - expected[i]);
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * (next_state[i] - expected[i]);
+                alpha_pow *= alpha;
             }
         } else if next_level == local_level && next_row_idx == local_row_idx {
             // Padding: identity (only first 8 state cols)
             for i in 0..8 {
-                combined = combined + alpha_pow * (next_state[i] - local_state[i]);
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * (next_state[i] - local_state[i]);
+                alpha_pow *= alpha;
             }
         } else {
             // Level boundary or other: structural constraints
             let level_diff = next_level - local_level;
             let level_constraint = level_diff * (level_diff - BabyBear::ONE);
-            combined = combined + alpha_pow * level_constraint;
-            alpha_pow = alpha_pow * alpha;
+            combined += alpha_pow * level_constraint;
+            alpha_pow *= alpha;
             let row_diff = next_row_idx - local_row_idx;
             let row_constraint = (row_diff - BabyBear::ONE) * next_row_idx;
-            combined = combined + alpha_pow * row_constraint;
+            combined += alpha_pow * row_constraint;
         }
 
         combined

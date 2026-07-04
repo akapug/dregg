@@ -5,8 +5,7 @@
 //! and proposing governance amendments.
 
 use dregg_wire::dfa_router::{
-    GovernanceProof, GovernedRouter, RouteTarget, RouteUpdateError, cell_target, compile_routes,
-    federation_target,
+    GovernanceProof, GovernedRouter, RouteTarget, RouteUpdateError, compile_routes,
 };
 
 /// A simulated governed router attached to a federation.
@@ -105,6 +104,7 @@ mod tests {
     use super::*;
     use dregg_captp::FederationId as GroupId;
     use dregg_types::CellId;
+    use dregg_wire::dfa_router::{cell_target, federation_target};
 
     fn test_cell(n: u8) -> CellId {
         CellId([n; 32])

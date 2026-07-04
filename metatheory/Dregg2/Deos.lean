@@ -56,6 +56,120 @@ surfaces / membranes / rehydration / affordances.
 -/
 import Dregg2.Deos.Surface
 import Dregg2.Deos.Membrane
+import Dregg2.Deos.DerivedCell
+-- The SEALED-ESCROW house-capacity, GROUNDED (`docs/deos/HOUSE-CAPACITY-FRAMEWORK.md`): an atomic
+-- 2-of-2 value swap completes all-or-nothing and ONCE, proven BY REUSE of the committed-heap root
+-- (`Substrate.Heap.root_binds_get`) + the one-shot Consumed discipline. deposit_both_ready (honest
+-- swap) + replay_rejected (the one-shot tooth: a settled leg is a spent nullifier) +
+-- nonconforming_claim_rejected + over_claim_rejected + leg_status_bound_in_root (the anti-ghost). The
+-- Rust escrow_sealed.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.SealedEscrow
+-- The STANDING-OBLIGATION house-capacity, GROUNDED: a recurring duty is discharged once-per-period,
+-- on-schedule, never early or skipped, proven BY REUSE of the committed-heap root + the
+-- StrictMonotonic cursor discipline (the version/supply-slot monotone law). cursor_strict_mono +
+-- replay_rejected (one-shot per period) + early/over/behind-schedule teeth + cursor_bound_in_root.
+-- The Rust obligation_standing.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.StandingObligation
+-- The FUSED budget-escrow ⊗ obligation prepaid lease (P1): one atomic write advances the
+-- StrictMonotonic meter cursor AND draws exactly rent from the escrowed prepaid budget, so
+-- meter/pay drift is UNREPRESENTABLE (metered_equals_drawn + budget_never_overdrawn, both
+-- polarities, bound in the heap root). Rust cell/src/prepaid_lease.rs. #assert_all_clean.
+import Dregg2.Deos.PrepaidLease
+-- The SHARE-VAULT house-capacity, GROUNDED: an ERC-4626-style vault whose minted shares equal the
+-- share-price relation d·S/T, where existing holders are NEVER diluted (deposit_price_non_decreasing)
+-- and the classic first-depositor INFLATION ATTACK is REJECTED (zero_mint_rejected + donation_immunity
+-- via internal committed accounting). Proven BY REUSE of the committed-heap root + the derived-cell
+-- share-price pattern; the Rust vault.rs share-vault is wired via share_vault_matches_lean_rung.
+-- #assert_all_clean. The proven share-price is stronger than ERC-4626's exploit-prone share math.
+import Dregg2.Deos.Vault
+-- The CONSTRAINT-BINDING soundness core for the house-capacity in-circuit welds: a DECLARED capacity
+-- caveat cannot be OMITTED. The §6 weld rungs prove a PRESENT manifest entry forces its invariant;
+-- this rung closes the load-bearing gap that the entry must be present at all. The cell's declared
+-- constraint-set is bound into committed state (compute_authority_digest_felt → record_digest → the
+-- ~124-bit wide commit), so a verifier re-deriving the required tags and DEMANDING coverage cannot be
+-- fooled by omission: omission_caught_under_binding (the soundness core, under the authority-digest CR
+-- floor) + omission_rejected/unsatisfied_rejected + the escrow bridge to SealedEscrow.SettleGate.
+-- #assert_all_clean. docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md.
+import Dregg2.Deos.ConstraintBinding
+-- PIECE 1 of the VK epoch — the CARRIER rung: the capacity manifest is FORCED on the already-deployed
+-- rotated caveat carrier (caveatCommit → PI 45, in every R=24 cohort VK). Upgrades the soundness core
+-- from "verifier HOLDS the committed manifest opening" to a PURE light client (commitments only):
+-- carrier_manifest_forced + carrier_omission_impossible (omission on the bound leg is impossible —
+-- the published manifest IS the committed one, by caveatCommit_binds) + the composed pure-light-client
+-- keystone carrier_omission_caught_pure_lightclient (both bindings: caveat commit + DeclCommitBinds).
+-- NOT VK-affecting (the carrier binding is already deployed; capacity tags are DATA on existing cols).
+-- #assert_all_clean. docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md §6.
+import Dregg2.Deos.CapacityCarrier
+-- PIECE 2 of the VK epoch — the SATISFACTION rung (the genuinely-VK-affecting weld, STAGED): the
+-- capacity gate's slot reads are welded IN-AIR to the rotated BEFORE/AFTER state-block FIELD columns
+-- (r3..r10), so the gate verdict is FORCED by the before/after state commits a PURE light client binds
+-- in the wide commit — not re-evaluated against caller-supplied initial_fields/final_fields. Upgrades
+-- the cap-membership posture (SealedEscrow.settle_gate_root_bound, over the HEAP root the caller held)
+-- to a pure light client over the FIELD columns the wide commit DIRECTLY absorbs: satisfaction_witnessed
+-- (equal state commits ⟹ same gate verdict, REUSE of the Poseidon2SpongeCR field-binding) +
+-- partial/phantom teeth + the composed keystone capacity_witnessed_pure_lightclient (coverage PIECE 1 ∧
+-- satisfaction PIECE 2). The in-AIR constraint itself is STAGED in circuit/src/effect_vm/satisfaction_weld.rs
+-- (NOT yet emitted into a committed welded descriptor/VK, NOT flipped). #assert_all_clean.
+-- docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md §6.
+import Dregg2.Deos.CapacitySatisfaction
+-- The WELDED sealed-escrow satisfaction DESCRIPTOR, made REAL (the prior pass's named-only gap):
+-- settleEscrowSatVmDescriptor2R24 = graduateV1 (rotateV3 settle-base) + the four selector-gated
+-- satisfaction gates over the rotated FIELD columns + the selector PI pin (the deployed fifth-pin
+-- shape). The REFINEMENT rung settleEscrowSatV3_forces_settle_gate proves a satisfying trace FORCES
+-- the sealed-escrow gate (both legs Deposited before / Consumed after) IN-PROOF, with partial/phantom
+-- UNSAT teeth. STAGED beside the deployed cohort (no live routing, no VK committed). #assert_all_clean.
+import Dregg2.Deos.SettleEscrowSatDescriptor
+-- The escrow capacity SELECTOR is bound to the cell's COMMITTED declaration (§6 item-2 soundness
+-- keystone for the flip): HALF A — under DeclCommitBinds the selector demand is un-dodgeable by a
+-- hollow declaration; HALF B — the descriptor's PI pin forces the demanded selector ON, which the
+-- refinement keystone turns into the welded gate over the committed fields. So a forger can dodge the
+-- weld neither by an alternate declaration nor by sel=0. SPEC + soundness of the verifier obligation
+-- the still-unbuilt realization must meet; the weld is NOT yet flipped. #assert_all_clean.
+import Dregg2.Deos.SettleEscrowSelectorBinding
+-- The welded sealed-escrow satisfaction descriptor GRADUATED to a WIDE (8-felt, ~124-bit) member
+-- (§6 BLOCKER 1, sub-gap (1) — the GENTIAN FULCRUM): settleEscrowSatVmDescriptor2R24Wide =
+-- wideAppend (graduateV1 (rotateV3 settle-base)) bb (bb+51) + the four satisfaction gates + the
+-- selector PI pin. The refinement (settleEscrowWide_forces_settle_gate) + partial/phantom UNSAT teeth
+-- carry the V3 proof verbatim over the wide form; the GRADUATION keystone (beforeFieldCol_absorbed /
+-- afterFieldCol_absorbed) proves the satisfaction-gate field columns bb+4+k / bb+51+4+k lie INSIDE the
+-- 37 pre-iroot limbs the wide carriers absorb into the published 8-felt commit, so a PURE light client
+-- binding the wide commit now binds those columns (closing the "1-felt V3, columns not absorbed" gap
+-- at the proof level). STAGED — no producer, no committed VK, no live routing, no flip. The remaining
+-- flip distance: the wide producer + STARK prove, the in-AIR B_AUTHORITY_DIGEST→selector forcing
+-- (§6 item 2, the terminal blocker), and live-path admission. #assert_all_clean.
+import Dregg2.Deos.SettleEscrowSatWideDescriptor
+-- The GENTIAN KEYSTONE — the in-AIR authority-digest→selector forcing gadget (the TERMINAL blocker of
+-- the escrow VK flip, §6 item 2). Three degree-≤2 in-AIR gates (recompute-bind, decode-boolean,
+-- selector-force) on the WIDE welded descriptor FORCE the capacity selector ON from the COMMITTED
+-- authority-digest limb (r23, wide-bound) under the `DeclCommitBinds` collision-resistance floor — so a
+-- PURE light client demands the satisfaction weld with NO off-band verifier discipline, discharging
+-- `SettleEscrowSelectorBinding.escrow_selector_bound_to_declaration`'s `hverifier` obligation in-AIR.
+-- STAGED — a Lean definition; nothing emitted into the deployed VK, nothing routed, no flip. The named
+-- remaining: the literal in-AIR `hash_bytes` recompute over the witnessed declaration + the
+-- required-tag decode (the VK-affecting byte-sponge / felt-domain-limb work). #assert_all_clean.
+import Dregg2.Deos.InAirAuthorityDigestSelector
+-- The GENTIAN KEYSTONE with `hrecompute`/`hdecode` DISCHARGED: Option B realized (the felt-domain
+-- chip-lookup recompute + the in-AIR is-zero/OR-fold decode), so the selector-forcing holds under
+-- ONLY the two CR floors (`ChipTableSound`/`FloorDigestBinds`) — no off-band verifier discipline.
+import Dregg2.Deos.InAirAuthorityDigestGadget
+-- The GENTIAN floor BINDING DISCHARGED (PATH b): the required-tag floor the selector reads is decoded
+-- from the already-coverage-bound caveat-manifest type-tag columns, so the last `hcommitLimb` is
+-- DISCHARGED — the floor is PROVABLY the cell's real declared floor (via the EXISTING `caveatCommit`
+-- carrier, NO new binding VK, NO recompute lookup, NO `FloorDigestBinds`), not a forgeable free limb.
+-- The forged-floor dodge is closed at the binding (`gentian_forged_floor_unsat_carrier`); only the
+-- in-AIR decode + selector-force arithmetic gates remain a (small, staged) VK delta.
+import Dregg2.Deos.CarrierBoundFloorGadget
+-- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
+-- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
+-- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →
+-- ConstraintViolated; the "holds forever" crown is the REUSE of the Hatchery's `Verify.Contract.
+-- CellContract` carry skeleton (Inv + step_ob ⟹ forever). THE KEY BINDING: `HpresProof::Attested` ⟺ a
+-- machine-checked `CellContract` — the `Attested` structure cannot be built without a real contract
+-- (hence a real step_ob), so an attestation is a PROVED forever-crown (attested_enforces_forever), not
+-- a trusted flag; binds_pending_is_false + forged_attestation_rejected are the negative teeth.
+-- Forge-detector: program_missing_invariant_rejected (ProgramMissingInvariant). The Rust
+-- sdk/src/hatchery_mint.rs is wired via invariant_matches_lean_rung. #assert_all_clean.
+import Dregg2.Deos.Hatchery
 import Dregg2.Deos.Rehydration
 import Dregg2.Deos.Affordance
 -- The COMPOSITION / RERENDER / VISIBILITY widening (2026-06-14): the desktop's UI-composition

@@ -46,6 +46,7 @@
 
 pub mod affordance;
 pub mod affordance_endpoint;
+pub mod agent_coordination;
 pub mod auth;
 pub mod authorizer;
 pub mod batch_executor;
@@ -64,6 +65,7 @@ pub mod invoke;
 pub mod middleware;
 pub mod multi_group;
 pub mod optimistic_fire;
+pub mod payable;
 pub mod persistence;
 pub mod queue_endpoint;
 pub mod reactor;
@@ -71,6 +73,7 @@ pub mod rehydration;
 pub mod ring_trade;
 pub mod scaffold;
 pub mod server;
+pub mod service_promise;
 pub mod starbridge;
 pub mod stark_rehydrate;
 pub mod store;
@@ -157,6 +160,16 @@ pub use reactor::{
     plan_reaction, react, react_build, react_to_stream,
 };
 
+// The `Payable` DSI: the dregg standard interface for cross-app VALUE FLOW. A
+// `pay(asset, amount, to)` routes through the shared interface and desugars to a
+// real conserving `Effect::Transfer`, so any two `Payable` apps interoperate by
+// default (`docs/deos/APPS-INTEROP-CENSUS.md` gap #1/#3). No `Effect::Invoke`, no
+// new commitment — value flows through one shared, standardized interface.
+pub use payable::{
+    AssetId, BALANCE_METHOD, PAY_METHOD, Payable, balance_method_sig, pay, pay_effects,
+    pay_method_sig, payable_descriptor,
+};
+
 // Re-export the SDK cipherclerk at the framework root so applications
 // that need to *construct* one (typically in `main`) don't have to add
 // `dregg-sdk` to their Cargo.toml. App code outside `main` should
@@ -190,6 +203,14 @@ pub use dregg_types::FederationId;
 pub use fee_policy::{AcceptedAsset, FeePolicy};
 pub use multi_group::MultiGroupConfig;
 pub use ring_trade::{LegId, RingTradeParticipant};
+
+// The N-party agent-coordination promise-pipeline: N agents do cooperative work,
+// hand each other results as promises ([`EventualRef`] handoffs), compute their
+// parts off-chain in parallel, and settle the whole cooperation ATOMICALLY as one
+// verified conserving fold — a broken promise rolls the round back whole.
+pub use agent_coordination::{
+    CoordinationError, CoordinationLeg, CoordinationReceipt, LegOutput, PromiseFill, coordinate,
+};
 
 // Starbridge mounting point. The canonical surface every
 // starbridge-app receives via `register(ctx)`.

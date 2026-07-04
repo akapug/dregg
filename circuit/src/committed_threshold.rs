@@ -182,7 +182,7 @@ impl StarkAir for CommittedThresholdAir {
         let mut power_of_two = BabyBear::ONE;
         for i in 0..COMMITTED_DIFF_BITS {
             let bit = local[col::diff_bit(i)];
-            recomposed = recomposed + bit * power_of_two;
+            recomposed += bit * power_of_two;
             power_of_two = power_of_two + power_of_two;
         }
         let c5 = recomposed - diff;
@@ -190,7 +190,7 @@ impl StarkAir for CommittedThresholdAir {
         let mut c6 = BabyBear::ZERO;
         for i in 0..COMMITTED_DIFF_BITS {
             let bit = local[col::diff_bit(i)];
-            c6 = c6 + bit * (bit - BabyBear::ONE);
+            c6 += bit * (bit - BabyBear::ONE);
         }
         // C7: high bit is zero
         let c7 = local[col::diff_bit(COMMITTED_DIFF_BITS - 1)];
@@ -198,17 +198,17 @@ impl StarkAir for CommittedThresholdAir {
         // Combine with alpha powers
         let mut combined = c1;
         let mut alpha_pow = alpha;
-        combined = combined + alpha_pow * c2;
-        alpha_pow = alpha_pow * alpha;
-        combined = combined + alpha_pow * c3;
-        alpha_pow = alpha_pow * alpha;
-        combined = combined + alpha_pow * c4;
-        alpha_pow = alpha_pow * alpha;
-        combined = combined + alpha_pow * c5;
-        alpha_pow = alpha_pow * alpha;
-        combined = combined + alpha_pow * c6;
-        alpha_pow = alpha_pow * alpha;
-        combined = combined + alpha_pow * c7;
+        combined += alpha_pow * c2;
+        alpha_pow *= alpha;
+        combined += alpha_pow * c3;
+        alpha_pow *= alpha;
+        combined += alpha_pow * c4;
+        alpha_pow *= alpha;
+        combined += alpha_pow * c5;
+        alpha_pow *= alpha;
+        combined += alpha_pow * c6;
+        alpha_pow *= alpha;
+        combined += alpha_pow * c7;
 
         combined
     }
@@ -287,7 +287,7 @@ impl Air for CommittedThresholdAir {
                     let mut power_of_two = BabyBear::ONE;
                     for i in 0..COMMITTED_DIFF_BITS {
                         let bit = row[col::diff_bit(i)];
-                        recomposed = recomposed + bit * power_of_two;
+                        recomposed += bit * power_of_two;
                         power_of_two = power_of_two + power_of_two;
                     }
                     recomposed - diff
@@ -300,7 +300,7 @@ impl Air for CommittedThresholdAir {
                     let mut result = BabyBear::ZERO;
                     for i in 0..COMMITTED_DIFF_BITS {
                         let bit = row[col::diff_bit(i)];
-                        result = result + bit * (bit - BabyBear::ONE);
+                        result += bit * (bit - BabyBear::ONE);
                     }
                     result
                 }),

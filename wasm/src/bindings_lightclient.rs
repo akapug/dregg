@@ -57,10 +57,10 @@ pub struct AttestedHistoryView {
     /// Whether the aggregate verified (the headline). On a real verify failure
     /// this is the engine REJECTING the proof — no attestation granted.
     pub attested: bool,
-    /// The genesis state root the attested history starts from (decimal felt).
-    pub genesis_root: u32,
-    /// The final state root — the genuine fold of the whole history (decimal felt).
-    pub final_root: u32,
+    /// The 8-felt (~124-bit faithful) genesis state anchor (decimal felts).
+    pub genesis_root: Vec<u32>,
+    /// The 8-felt final state anchor — the genuine fold of the whole history (decimal felts).
+    pub final_root: Vec<u32>,
     /// The multi-felt Poseidon2 digest committing to the ORDERED `(old_root, new_root)`
     /// pairs (decimal felts) — distinct histories with the same endpoints still differ.
     pub chain_digest: Vec<u32>,
@@ -99,8 +99,8 @@ pub fn light_client_demo(k: usize, step: u64) -> Result<JsValue, JsError> {
 
     let view = AttestedHistoryView {
         attested: true,
-        genesis_root: attested.genesis_root.as_u32(),
-        final_root: attested.final_root.as_u32(),
+        genesis_root: attested.genesis_root.iter().map(|d| d.as_u32()).collect(),
+        final_root: attested.final_root.iter().map(|d| d.as_u32()).collect(),
         chain_digest: attested.chain_digest.iter().map(|d| d.as_u32()).collect(),
         num_turns: attested.num_turns,
         engine: "recursive-stark (plonky3 fork) · descriptor-leaf EffectVM".to_string(),
@@ -171,8 +171,8 @@ pub fn verify_history_against_anchor(
         Ok(attested) => {
             let view = AttestedHistoryView {
                 attested: true,
-                genesis_root: attested.genesis_root.as_u32(),
-                final_root: attested.final_root.as_u32(),
+                genesis_root: attested.genesis_root.iter().map(|d| d.as_u32()).collect(),
+                final_root: attested.final_root.iter().map(|d| d.as_u32()).collect(),
                 chain_digest: attested.chain_digest.iter().map(|d| d.as_u32()).collect(),
                 num_turns: attested.num_turns,
                 engine: "recursive-stark (plonky3 fork) · descriptor-leaf EffectVM".to_string(),
@@ -189,8 +189,8 @@ pub fn verify_history_against_anchor(
             // attestation granted). We do not launder a refusal as success.
             let view = AttestedHistoryView {
                 attested: false,
-                genesis_root: 0,
-                final_root: 0,
+                genesis_root: Vec::new(),
+                final_root: Vec::new(),
                 chain_digest: Vec::new(),
                 num_turns: 0,
                 engine: "recursive-stark (plonky3 fork)".to_string(),
@@ -237,14 +237,46 @@ pub struct ExternalHistoryEnvelope {
     /// (nothing to cryptographically check).
     #[serde(default)]
     pub proof_bytes_b64: String,
-    /// Carried public commitment: the genesis state root (decimal felt).
-    pub genesis_root: u32,
-    /// Carried public commitment: the final state root (decimal felt).
-    pub final_root: u32,
+    /// Carried public commitment: the 8-felt genesis state anchor (decimal felts).
+    pub genesis_root: Vec<u32>,
+    /// Carried public commitment: the 8-felt final state anchor (decimal felts).
+    pub final_root: Vec<u32>,
     /// Carried public commitment: the multi-felt ordered-history digest (decimal felts).
     pub chain_digest: Vec<u32>,
     /// Carried public commitment: how many finalized turns the aggregate folds.
     pub num_turns: usize,
+    /// **LC-3 — the finality certificate (artifact side).** The producer's BFT finality cert over
+    /// the head root: the signed ratification votes a quorum cast. `None` for a legacy
+    /// legs-1+2-only envelope (which [`verify_finalized_devnet_history`] then refuses as
+    /// un-finalized). The verifier checks these votes against its OWN configured committee (a
+    /// separate argument, never read from here) — so a fabricated cert by foreign keys is rejected.
+    #[serde(default)]
+    pub finality_cert: Option<FinalityCertJson>,
+}
+
+/// A finality certificate as it rides in the [`ExternalHistoryEnvelope`] (artifact side). The
+/// verifier reconstructs a [`dregg_lightclient::FinalityCert`] from it and checks it against the
+/// client's CONFIG committee — the keys here are the producer's CLAIM, never trusted on their own.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct FinalityCertJson {
+    /// The ratifying votes (each a 64-hex validator key + a 128-hex Ed25519 signature).
+    pub votes: Vec<FinalityVoteJson>,
+    /// The group size the producer claims the supermajority was taken over (diagnostic only — the
+    /// verifier anchors the threshold to its OWN committee size, never this field).
+    pub participant_count: usize,
+    /// The head state root (lane-0 felt, decimal) the cert claims a quorum finalized. Must equal the
+    /// aggregate's proven head for the seam to bind.
+    pub finalized_root: u32,
+}
+
+/// One ratification vote in a [`FinalityCertJson`].
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug)]
+pub struct FinalityVoteJson {
+    /// The validator's Ed25519 verifying key (64 hex chars / 32 bytes).
+    pub validator_hex: String,
+    /// The Ed25519 signature over `finality_signing_message(finalized_root, participant_count)`
+    /// (128 hex chars / 64 bytes).
+    pub signature_hex: String,
 }
 
 /// **VERIFY AN EXTERNAL HISTORY against a config-pinned VK anchor** — the real
@@ -310,8 +342,8 @@ pub fn verify_devnet_history(
     if claimed_bytes != cfg_bytes {
         let view = AttestedHistoryView {
             attested: false,
-            genesis_root: env.genesis_root,
-            final_root: env.final_root,
+            genesis_root: env.genesis_root.clone(),
+            final_root: env.final_root.clone(),
             chain_digest: env.chain_digest.clone(),
             num_turns: env.num_turns,
             engine: "recursive-stark (plonky3 fork)".to_string(),
@@ -329,8 +361,8 @@ pub fn verify_devnet_history(
     if env.proof_bytes_b64.is_empty() {
         let view = AttestedHistoryView {
             attested: false,
-            genesis_root: env.genesis_root,
-            final_root: env.final_root,
+            genesis_root: env.genesis_root.clone(),
+            final_root: env.final_root.clone(),
             chain_digest: env.chain_digest.clone(),
             num_turns: env.num_turns,
             engine: "recursive-stark (plonky3 fork)".to_string(),
@@ -353,8 +385,8 @@ pub fn verify_devnet_history(
         Ok(attested) => {
             let view = AttestedHistoryView {
                 attested: true,
-                genesis_root: attested.genesis_root.as_u32(),
-                final_root: attested.final_root.as_u32(),
+                genesis_root: attested.genesis_root.iter().map(|d| d.as_u32()).collect(),
+                final_root: attested.final_root.iter().map(|d| d.as_u32()).collect(),
                 chain_digest: attested.chain_digest.iter().map(|d| d.as_u32()).collect(),
                 num_turns: attested.num_turns,
                 engine: "recursive-stark (plonky3 fork) · descriptor-leaf EffectVM".to_string(),
@@ -386,6 +418,235 @@ pub fn verify_devnet_history(
     }
 }
 
+/// **LC-3 — THE FINALIZED OVER-WIRE LIGHT-CLIENT CHECK.** The same byte-path verify as
+/// [`verify_devnet_history`] (legs 1+2: the aggregate is genuine, the publics are re-attested),
+/// PLUS the THIRD leg — finality — that the bare wasm client lacked: the head root the aggregate
+/// proves was QUORUM-FINALIZED by the client's TRUSTED committee.
+///
+/// Without this leg a *correct-looking* history is indistinguishable from a *finalized* one: an
+/// equivocating prover can fold a perfectly valid aggregate over a FORK the network never finalized
+/// (legs 1+2 pass). This entry runs the Rust embodiment of
+/// `FinalizedLightClient.light_client_accepts_finalized_history`'s third leg over the wire — the
+/// composition `verify_finalized_history` performs, realized for the byte path where the in-memory
+/// `WholeChainProof` is unavailable (only its publics are, which tooth 2 just re-attested):
+///
+/// 1. byte-verify the aggregate against the CONFIG anchor (legs 1+2, exactly [`verify_devnet_history`]);
+/// 2. the **root seam**: the envelope's finality cert finalizes the SAME head felt the aggregate proves;
+/// 3. the **committee-anchored quorum**: a supermajority of the TRUSTED `committee_hex_csv` (the
+///    client's CONFIG validator set — a separate argument, NEVER read from the envelope) cast a
+///    verifying Ed25519 vote over the head root. The threshold is taken over the committee size, not
+///    the cert-supplied `participant_count` — closing red-team LC-2/LC-3.
+///
+/// `committee_hex_csv` is a comma-separated list of 64-hex validator keys. An empty committee, a
+/// missing finality cert, a seam break, or a sub-quorum (e.g. a fork signed by foreign keys) all
+/// yield `attested: false` with the precise reason — NO finalized attestation is laundered.
+#[wasm_bindgen]
+pub fn verify_finalized_devnet_history(
+    envelope_json: &str,
+    config_anchor_hex: &str,
+    committee_hex_csv: &str,
+) -> Result<JsValue, JsError> {
+    use base64::Engine as _;
+    use dregg_circuit_prove::ivc_turn_chain::RecursionVk;
+    use dregg_lightclient::{LightClientError, verify_history_bytes};
+
+    // (1) Parse + version-check the envelope.
+    let env: ExternalHistoryEnvelope = serde_json::from_str(envelope_json)
+        .map_err(|e| JsError::new(&format!("envelope parse failed: {e}")))?;
+    if env.version != 1 {
+        return Err(JsError::new(&format!(
+            "unsupported envelope version {} (this client speaks v1)",
+            env.version
+        )));
+    }
+
+    // (2) Parse the SEPARATE config anchor + the SEPARATE config committee (both the client's own).
+    let cfg_bytes = parse_hex32(config_anchor_hex)
+        .map_err(|e| JsError::new(&format!("config VK anchor parse failed: {e}")))?;
+    let anchor = RecursionVk(cfg_bytes);
+    let committee = parse_committee_csv(committee_hex_csv)
+        .map_err(|e| JsError::new(&format!("config committee parse failed: {e}")))?;
+
+    // (3) Anchor-discipline pre-check (same as verify_devnet_history): claim vs config.
+    let claimed_bytes = parse_hex32(&env.vk_fingerprint_hex)
+        .map_err(|e| JsError::new(&format!("envelope claimed fingerprint malformed: {e}")))?;
+    if claimed_bytes != cfg_bytes {
+        return finalized_refusal(
+            &env,
+            format!(
+                "REFUSED at the anchor-discipline check: the envelope was built for circuit {} but \
+                 your configured anchor pins {}",
+                env.vk_fingerprint_hex, config_anchor_hex
+            ),
+        );
+    }
+    if env.proof_bytes_b64.is_empty() {
+        return finalized_refusal(
+            &env,
+            "REFUSED: the envelope carries no proof_bytes — nothing to cryptographically verify \
+             (fail-closed)."
+                .to_string(),
+        );
+    }
+    let proof_bytes = base64::engine::general_purpose::STANDARD
+        .decode(env.proof_bytes_b64.as_bytes())
+        .map_err(|e| JsError::new(&format!("proof_bytes_b64 is not valid base64: {e}")))?;
+
+    // (4) Legs 1+2 — the REAL over-wire aggregate verify against the CONFIG anchor.
+    let attested = match verify_history_bytes(&proof_bytes, &anchor) {
+        Ok(a) => a,
+        Err(LightClientError::AggregateInvalid(e)) => {
+            return finalized_refusal(
+                &env,
+                format!("REFUSED at the over-wire recursion verify (legs 1+2): {e}"),
+            );
+        }
+    };
+
+    // (5) Leg 3 — finality. The cert must be present and certify the proven head with a committee
+    // supermajority. The proven head is lane 0 of the byte-verified final anchor.
+    let Some(cert_json) = env.finality_cert.clone() else {
+        return finalized_refusal(
+            &env,
+            "REFUSED: legs 1+2 verified, but the envelope carries NO finality certificate — a \
+             correct-looking history is not a finalized one (it could be an equivocating fork). No \
+             finalized attestation."
+                .to_string(),
+        );
+    };
+    let cert = match reconstruct_finality_cert(&cert_json) {
+        Ok(c) => c,
+        Err(e) => return finalized_refusal(&env, format!("REFUSED: malformed finality cert: {e}")),
+    };
+    let proven_head = attested.final_root[0].as_u32();
+    if let Err(reason) = finality_leg(proven_head, &cert, &committee) {
+        return finalized_refusal(
+            &env,
+            format!("REFUSED at the finality leg (leg 3): {reason}"),
+        );
+    }
+
+    let signers = cert.distinct_committee_signers(&committee);
+    let view = AttestedHistoryView {
+        attested: true,
+        genesis_root: attested.genesis_root.iter().map(|d| d.as_u32()).collect(),
+        final_root: attested.final_root.iter().map(|d| d.as_u32()).collect(),
+        chain_digest: attested.chain_digest.iter().map(|d| d.as_u32()).collect(),
+        num_turns: attested.num_turns,
+        engine: "recursive-stark (plonky3 fork) · descriptor-leaf EffectVM".to_string(),
+        named_floor: format!(
+            "FINALIZED over the wire: legs 1+2 (aggregate + publics) held against your CONFIG \
+             anchor, AND leg 3 — {signers} of your {} trusted committee members ratified the \
+             proven head root. named floor: recursive_sound (FRI engine soundness)",
+            committee.len()
+        ),
+    };
+    serde_wasm_bindgen::to_value(&view).map_err(JsError::from)
+}
+
+/// The pure finality leg (host-testable, no `JsValue`): the root seam + the COMMITTEE-ANCHORED
+/// quorum, mirroring `dregg_lightclient::verify_finalized_history`'s legs 2+3 for the byte path.
+/// `proven_head` is lane 0 of the byte-verified final anchor (what tooth 2 re-attested). Returns the
+/// distinct trusted-committee signer count on success, or a precise refusal reason.
+fn finality_leg(
+    proven_head: u32,
+    cert: &dregg_lightclient::FinalityCert,
+    committee: &[[u8; 32]],
+) -> Result<usize, String> {
+    if committee.is_empty() {
+        return Err(
+            "unanchored — no trusted committee configured (a count-only quorum is never \
+                    accepted)"
+                .to_string(),
+        );
+    }
+    // Root seam: the cert must finalize the SAME head the aggregate proves.
+    let shown = cert.finalized_root.as_u32();
+    if shown != proven_head {
+        return Err(format!(
+            "root seam broke: the cert finalizes head {shown} but the aggregate proved head \
+             {proven_head}"
+        ));
+    }
+    // Committee-anchored quorum — threshold over the TRUSTED committee size, not the cert's count.
+    if !cert.has_committee_quorum(committee) {
+        let threshold = 2 * committee.len() / 3 + 1;
+        return Err(format!(
+            "sub-quorum: only {} of the {} trusted committee members cast a verifying vote ({} \
+             required) — a fork signed by foreign keys does not finalize",
+            cert.distinct_committee_signers(committee),
+            committee.len(),
+            threshold
+        ));
+    }
+    Ok(cert.distinct_committee_signers(committee))
+}
+
+/// Reconstruct a [`dregg_lightclient::FinalityCert`] from its JSON form (hex-decoding each vote).
+fn reconstruct_finality_cert(
+    json: &FinalityCertJson,
+) -> Result<dregg_lightclient::FinalityCert, String> {
+    use dregg_circuit::field::BabyBear;
+    use dregg_lightclient::SignedVote;
+    let mut votes = Vec::with_capacity(json.votes.len());
+    for v in &json.votes {
+        let validator = parse_hex32(&v.validator_hex).map_err(|e| format!("validator key: {e}"))?;
+        let signature = parse_hex64(&v.signature_hex).map_err(|e| format!("signature: {e}"))?;
+        votes.push(SignedVote {
+            validator,
+            signature,
+        });
+    }
+    Ok(dregg_lightclient::FinalityCert {
+        votes,
+        participant_count: json.participant_count,
+        finalized_root: BabyBear::new(json.finalized_root),
+    })
+}
+
+/// Build the `attested: false` finalized-refusal view (carries the envelope's publics for context).
+fn finalized_refusal(env: &ExternalHistoryEnvelope, reason: String) -> Result<JsValue, JsError> {
+    let view = AttestedHistoryView {
+        attested: false,
+        genesis_root: env.genesis_root.clone(),
+        final_root: env.final_root.clone(),
+        chain_digest: env.chain_digest.clone(),
+        num_turns: env.num_turns,
+        engine: "recursive-stark (plonky3 fork)".to_string(),
+        named_floor: reason,
+    };
+    serde_wasm_bindgen::to_value(&view).map_err(JsError::from)
+}
+
+/// Parse a comma-separated list of 64-hex validator keys into a trusted committee. Blank tokens are
+/// skipped; a malformed token is a hard error (a fat-fingered committee is never silently shrunk).
+fn parse_committee_csv(s: &str) -> Result<Vec<[u8; 32]>, String> {
+    s.split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .map(parse_hex32)
+        .collect()
+}
+
+/// Parse a 128-char hex string into a `[u8; 64]` (an Ed25519 signature). Mirrors [`parse_hex32`].
+fn parse_hex64(s: &str) -> Result<[u8; 64], String> {
+    let s = s.trim();
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    if s.len() != 128 {
+        return Err(format!(
+            "expected 128 hex chars (64 bytes), got {}",
+            s.len()
+        ));
+    }
+    let mut out = [0u8; 64];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let hi = hex_nibble(s.as_bytes()[2 * i])?;
+        let lo = hex_nibble(s.as_bytes()[2 * i + 1])?;
+        *byte = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
 /// **THE PRODUCER** — fold a real `k`-turn chain in the tab and emit its
 /// [`ExternalHistoryEnvelope`] as JSON, with `proof_bytes_b64` populated from the
 /// proof's versioned byte envelope. This is the artifact a node/relayer ships and a
@@ -407,13 +668,121 @@ pub fn produce_external_history_envelope(k: usize, step: u64) -> Result<String, 
         version: 1,
         vk_fingerprint_hex: agg.root_vk_fingerprint().to_hex(),
         proof_bytes_b64,
-        genesis_root: agg.genesis_root.as_u32(),
-        final_root: agg.final_root.as_u32(),
+        genesis_root: agg.genesis_root.iter().map(|d| d.as_u32()).collect(),
+        final_root: agg.final_root.iter().map(|d| d.as_u32()).collect(),
         chain_digest: agg.chain_digest.iter().map(|d| d.as_u32()).collect(),
         num_turns: agg.num_turns,
+        // The demo producer holds no validator keys; a finalized envelope is produced by the node
+        // that ran consensus. `verify_finalized_devnet_history` refuses a cert-less envelope as
+        // un-finalized (legs 1+2 only) — exactly the LC-3 boundary.
+        finality_cert: None,
     };
     serde_json::to_string(&env)
         .map_err(|e| JsError::new(&format!("envelope serialize failed: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// THE PER-SLOT HEAP OPENING — close the served-plain seam.
+//
+// `verify_devnet_history` attests that a cell's whole finalized history folds to
+// its committed state anchor (`final_root`), re-witnessing nothing. But the card a
+// trustless portal serves paints per-FIELD values, and those values are the
+// SERVER'S rendering until each is bound, in the tab, to the committed cell state.
+//
+// This is that binding: a per-slot sparse-Merkle OPENING of (slot → value) against
+// the cell's committed umem heap root, verified tab-side. It reproduces EXACTLY the
+// path fold `dregg_circuit::heap_root` commits with (the arity-2 Poseidon2 leaf
+// `hash[heap_addr(coll,key), value]` folded up a depth-`HEAP_TREE_DEPTH` tree by
+// `hash_fact`) — the executable counterpart of Lean's `Heap.root_binds_get` (equal
+// roots ⇒ equal value at every (coll, key)). A correct opening attests the field
+// value; a tampered value, a wrong slot, or a forged path moves the recomputed root
+// off `root` and is REFUSED.
+//
+// HONEST SCOPE: this verifies a field value against the cell's HEAP ROOT. The heap
+// root is one limb of the cell-state commitment that the faithful 8-felt
+// `final_root` folds — so it BINDS to the light-client-verified anchor, but
+// re-deriving `final_root` from the heap root in-tab (recomputing the whole
+// cell-state commitment from its limbs) is a further rung, not done here. What IS
+// closed: each shown field value provably equals the value committed at its slot in
+// the cell heap whose root is the verified opening's `root`.
+// ---------------------------------------------------------------------------
+
+/// **VERIFY A PER-SLOT HEAP OPENING** — prove a rendered field VALUE equals the
+/// value committed at its slot `(coll, key)` in the cell's umem heap, against the
+/// cell's committed `root`, re-witnessing nothing.
+///
+/// Reproduces the canonical heap path fold (`dregg_circuit::heap_root`): the leaf is
+/// the arity-2 Poseidon2 digest `hash[heap_addr(coll, key), value]`; it folds up a
+/// depth-`HEAP_TREE_DEPTH` tree against `siblings_csv` per `directions_csv` (bit `0`
+/// = the running node is the left child → `hash_fact(cur, sib)`; `1` = right →
+/// `hash_fact(sib, cur)`), and the recomputed root must equal `root`.
+///
+/// All field elements are decimal `BabyBear` felts (`< 2^31`): `root`/`value`/each
+/// sibling. `siblings_csv` and `directions_csv` are comma-separated, each of length
+/// exactly `HEAP_TREE_DEPTH` (16) — a wrong length is REFUSED (fail-closed). A
+/// tampered value, a wrong `(coll, key)`, or a forged path recomputes a different
+/// root and returns `false`.
+#[wasm_bindgen]
+pub fn verify_slot_opening(
+    root: u32,
+    coll: u32,
+    key: u32,
+    value: u32,
+    siblings_csv: &str,
+    directions_csv: &str,
+) -> bool {
+    let siblings = parse_felt_csv(siblings_csv);
+    let directions: Vec<u8> = parse_felt_csv(directions_csv)
+        .into_iter()
+        .map(|d| (d & 1) as u8)
+        .collect();
+    verify_slot_opening_core(root, coll, key, value, &siblings, &directions)
+}
+
+/// The pure path-fold verify the `#[wasm_bindgen]` wrapper drives (host-testable: no
+/// `JsValue`). Folds the (coll, key, value) leaf up the depth-`HEAP_TREE_DEPTH` tree
+/// against the opening and compares the recomputed root to `root`. Fails closed on a
+/// wrong-length path.
+fn verify_slot_opening_core(
+    root: u32,
+    coll: u32,
+    key: u32,
+    value: u32,
+    siblings: &[u32],
+    directions: &[u8],
+) -> bool {
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::heap_root::{HEAP_TREE_DEPTH, HeapLeaf, heap_addr};
+    use dregg_circuit::poseidon2::hash_fact;
+
+    if siblings.len() != HEAP_TREE_DEPTH || directions.len() != HEAP_TREE_DEPTH {
+        return false;
+    }
+    let leaf = HeapLeaf {
+        addr: heap_addr(BabyBear::new(coll), BabyBear::new(key)),
+        value: BabyBear::new(value),
+    };
+    let mut cur = leaf.digest();
+    for level in 0..HEAP_TREE_DEPTH {
+        let sib = BabyBear::new(siblings[level]);
+        cur = if directions[level] == 0 {
+            hash_fact(cur, &[sib])
+        } else {
+            hash_fact(sib, &[cur])
+        };
+    }
+    cur.as_u32() == BabyBear::new(root).as_u32()
+}
+
+/// Parse a comma-separated list of decimal `u32` felts. Blank tokens are skipped; a
+/// non-numeric token is dropped (which shortens the list, so the caller's
+/// length-check fails closed — a malformed path is REFUSED, never silently padded).
+fn parse_felt_csv(s: &str) -> Vec<u32> {
+    s.split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .filter_map(|t| t.parse::<u32>().ok())
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -589,22 +958,23 @@ mod tests {
             version: 1,
             vk_fingerprint_hex: "ab".repeat(32),
             proof_bytes_b64: String::new(),
-            genesis_root: 11,
-            final_root: 22,
-            chain_digest: vec![33, 0, 0, 0],
+            genesis_root: vec![11, 0, 0, 0, 0, 0, 0, 0],
+            final_root: vec![22, 0, 0, 0, 0, 0, 0, 0],
+            chain_digest: vec![33, 0, 0, 0, 0, 0, 0, 0],
             num_turns: 4,
+            finality_cert: None,
         };
         let json = serde_json::to_string(&env).unwrap();
         let back: ExternalHistoryEnvelope = serde_json::from_str(&json).unwrap();
         assert_eq!(back.version, 1);
         assert_eq!(back.vk_fingerprint_hex, "ab".repeat(32));
-        assert_eq!(back.genesis_root, 11);
-        assert_eq!(back.final_root, 22);
-        assert_eq!(back.chain_digest, vec![33, 0, 0, 0]);
+        assert_eq!(back.genesis_root, vec![11, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(back.final_root, vec![22, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(back.chain_digest, vec![33, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(back.num_turns, 4);
         // proof_bytes_b64 is `#[serde(default)]` — an envelope omitting it parses.
-        let minimal = r#"{"version":1,"vk_fingerprint_hex":"00","genesis_root":0,
-            "final_root":0,"chain_digest":[0,0,0,0],"num_turns":2}"#;
+        let minimal = r#"{"version":1,"vk_fingerprint_hex":"00","genesis_root":[0,0,0,0,0,0,0,0],
+            "final_root":[0,0,0,0,0,0,0,0],"chain_digest":[0,0,0,0,0,0,0,0],"num_turns":2}"#;
         let m: ExternalHistoryEnvelope = serde_json::from_str(minimal).unwrap();
         assert!(
             m.proof_bytes_b64.is_empty(),
@@ -624,10 +994,11 @@ mod tests {
             version: 1,
             vk_fingerprint_hex: "ab".repeat(32),
             proof_bytes_b64: b64.clone(),
-            genesis_root: 7,
-            final_root: 9,
+            genesis_root: vec![7, 0, 0, 0],
+            final_root: vec![9, 0, 0, 0],
             chain_digest: vec![13, 0, 0, 0],
             num_turns: 3,
+            finality_cert: None,
         };
         let json = serde_json::to_string(&env).unwrap();
         let back: ExternalHistoryEnvelope = serde_json::from_str(&json).unwrap();
@@ -645,6 +1016,76 @@ mod tests {
     }
 
     #[test]
+    fn slot_opening_verifies_and_a_tampered_value_is_refused() {
+        // THE SERVED-PLAIN CLOSURE, at the crypto level: a REAL opening of a slot's
+        // value against the cell's committed heap root verifies; a tampered value (or
+        // wrong slot) recomputes a different root and is REFUSED. The opening is minted
+        // by the SAME `dregg_circuit::heap_root` the executor commits with, so the
+        // tab-side fold here reproduces the committed root bit-for-bit.
+        use dregg_circuit::field::BabyBear;
+        use dregg_circuit::heap_root::{CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf, heap_addr};
+
+        // A small umem heap: three (coll, key) → value entries.
+        let entries: [((u32, u32), u32); 3] = [((1, 1), 10), ((1, 2), 77), ((2, 1), 30)];
+        let leaves: Vec<HeapLeaf> = entries
+            .iter()
+            .map(|((c, k), v)| HeapLeaf {
+                addr: heap_addr(BabyBear::new(*c), BabyBear::new(*k)),
+                value: BabyBear::new(*v),
+            })
+            .collect();
+        let tree = CanonicalHeapTree::new(leaves, HEAP_TREE_DEPTH);
+        let root = tree.root().as_u32();
+
+        // Open slot (1, 2) → 77: a real membership proof off the committed tree.
+        let addr = heap_addr(BabyBear::new(1), BabyBear::new(2));
+        let pos = tree
+            .position_of(addr)
+            .expect("the slot is present in the heap");
+        let (sibs, dirs) = tree.prove_membership(pos).expect("membership proof");
+        let sibs_u32: Vec<u32> = sibs.iter().map(|s| s.as_u32()).collect();
+
+        // A real opening checks; a tampered value fails; a wrong slot fails.
+        assert!(
+            verify_slot_opening_core(root, 1, 2, 77, &sibs_u32, &dirs),
+            "a genuine opening of the committed value verifies"
+        );
+        assert!(
+            !verify_slot_opening_core(root, 1, 2, 78, &sibs_u32, &dirs),
+            "a tampered value recomputes a different root and is refused"
+        );
+        assert!(
+            !verify_slot_opening_core(root, 9, 9, 77, &sibs_u32, &dirs),
+            "the opening is bound to its (coll, key) — a wrong slot is refused"
+        );
+        // A wrong-length path fails closed (no silent pad).
+        assert!(
+            !verify_slot_opening_core(root, 1, 2, 77, &sibs_u32[..3], &dirs),
+            "a short path is refused, never padded"
+        );
+
+        // The CSV `#[wasm_bindgen]` wrapper agrees with the core.
+        let sibs_csv = sibs_u32
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let dirs_csv = dirs
+            .iter()
+            .map(|d| d.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert!(
+            verify_slot_opening(root, 1, 2, 77, &sibs_csv, &dirs_csv),
+            "the CSV wrapper verifies a real opening"
+        );
+        assert!(
+            !verify_slot_opening(root, 1, 2, 78, &sibs_csv, &dirs_csv),
+            "the CSV wrapper refuses a tampered value"
+        );
+    }
+
+    #[test]
     fn anchor_discipline_distinguishes_config_from_envelope_claim() {
         // THE config-not-artifact tooth, at the byte level: the verifier compares
         // the envelope's CLAIMED fingerprint to its OWN configured anchor. An
@@ -657,6 +1098,119 @@ mod tests {
         assert_ne!(
             config, other_claim,
             "a claim for a different circuit is refused — never trusted from the envelope"
+        );
+    }
+
+    /// **LC-3 — THE FINALITY LEG (host tooth for the over-wire finalized check).** Exercises the
+    /// pure `finality_leg` / `reconstruct_finality_cert` helpers that the wasm
+    /// `verify_finalized_devnet_history` composes — no STARK fold — so the leg-3 anchor is validated
+    /// in milliseconds: an UNANCHORED client (empty committee) accepts nothing; a fork signed by
+    /// FOREIGN keys is sub-quorum; a ROOT-SEAM break is refused; and only a real committee quorum
+    /// over the proven head passes. The full byte-path is exercised by the playground at runtime;
+    /// the leg-3 LOGIC is identical to `dregg_lightclient`'s committee-anchored teeth.
+    #[test]
+    fn finality_leg_anchors_to_the_trusted_committee() {
+        use dregg_circuit::field::BabyBear;
+        use dregg_lightclient::{FinalityCert, SignedVote, finality_signing_message};
+        use ed25519_dalek::{Signer, SigningKey};
+
+        // A deterministic committee of 4 (threshold = 2*4/3 + 1 = 3).
+        let n = 4usize;
+        let keys: Vec<SigningKey> = (0..n as u8)
+            .map(|i| {
+                let mut seed = [0u8; 32];
+                seed[0] = i;
+                seed[31] = 0xC3;
+                SigningKey::from_bytes(&seed)
+            })
+            .collect();
+        let committee: Vec<[u8; 32]> = keys.iter().map(|k| k.verifying_key().to_bytes()).collect();
+
+        let root_felt = 555_123u32;
+        let root = BabyBear::new(root_felt);
+        let sign_vote = |k: &SigningKey| -> SignedVote {
+            let msg = finality_signing_message(root, n);
+            SignedVote {
+                validator: k.verifying_key().to_bytes(),
+                signature: k.sign(&msg).to_bytes(),
+            }
+        };
+
+        // (a) LEGIT — a 3-of-4 committee quorum over the proven head passes.
+        let honest = FinalityCert {
+            votes: keys[..3].iter().map(sign_vote).collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert_eq!(
+            finality_leg(root_felt, &honest, &committee),
+            Ok(3),
+            "a genuine committee quorum over the proven head finalizes"
+        );
+
+        // (b) UNANCHORED — no committee configured accepts nothing.
+        assert!(
+            finality_leg(root_felt, &honest, &[])
+                .unwrap_err()
+                .contains("unanchored"),
+            "an unanchored client refuses outright"
+        );
+
+        // (c) FOREIGN KEYS — a fork signed by 3 well-formed keys NOT in the committee is sub-quorum.
+        let foreign_keys: Vec<SigningKey> = (100..103u8)
+            .map(|i| {
+                let mut seed = [0u8; 32];
+                seed[0] = i;
+                seed[31] = 0xC3;
+                SigningKey::from_bytes(&seed)
+            })
+            .collect();
+        let forged = FinalityCert {
+            votes: foreign_keys.iter().map(sign_vote).collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert!(
+            forged
+                .votes
+                .iter()
+                .all(|v| !committee.contains(&v.validator)),
+            "the forged keys are genuinely outside the trusted committee"
+        );
+        assert!(
+            finality_leg(root_felt, &forged, &committee)
+                .unwrap_err()
+                .contains("sub-quorum"),
+            "a fork signed by foreign keys does not finalize"
+        );
+
+        // (d) ROOT-SEAM break — a genuine committee quorum, but over a DIFFERENT head than the
+        // aggregate proved. The seam must break before the quorum even matters.
+        assert!(
+            finality_leg(root_felt + 1, &honest, &committee)
+                .unwrap_err()
+                .contains("root seam"),
+            "a cert finalizing a different head than the proven aggregate is refused"
+        );
+
+        // (e) reconstruct_finality_cert roundtrips the JSON wire form back to a verifying cert.
+        let json = FinalityCertJson {
+            votes: honest
+                .votes
+                .iter()
+                .map(|v| FinalityVoteJson {
+                    validator_hex: v.validator.iter().map(|b| format!("{b:02x}")).collect(),
+                    signature_hex: v.signature.iter().map(|b| format!("{b:02x}")).collect(),
+                })
+                .collect(),
+            participant_count: n,
+            finalized_root: root_felt,
+        };
+        let back = reconstruct_finality_cert(&json).expect("the wire cert reconstructs");
+        assert_eq!(
+            finality_leg(root_felt, &back, &committee),
+            Ok(3),
+            "the reconstructed wire cert verifies identically"
         );
     }
 }

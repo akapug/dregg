@@ -40,6 +40,35 @@
 //! - **settle** — the deal closes: `PAID + REFUNDED == BUDGET`,
 //!   `STATE -> SETTLED`. Provider paid in full ⇒ `PAID == BID,
 //!   REFUNDED == BUDGET - BID`; the budget is split with no mint/burn.
+//!
+//! ## The shared compute FUND ([`ComputeFundVault`]) — the pooled-deposit headline
+//!
+//! A single requester escrows a single job's budget above. The *fund* is the
+//! pooled face: many sponsors pool a common budget asset into ONE vault and each
+//! holds **shares** proportional to its contribution, redeemable for its
+//! proportional slice of the pool at any time. The fund IS the protocol-proven
+//! [`ShareVault`](dregg_cell::vault) house-capacity — a real *witnessed*
+//! committed-counter vault, not hand-rolled slot arithmetic. A deposit of `d`
+//! assets mints `d · total_shares / total_assets` shares (the ERC-4626
+//! share-price relation; `d` shares on the empty bootstrap), and a withdrawal of
+//! `s` shares redeems `s · total_assets / total_shares` assets. Its soundness is
+//! the no-dilution keystone (`Vault.deposit_no_dilution`,
+//! `metatheory/Dregg2/Deos/Vault.lean`): a deposit can NEVER decrease an existing
+//! holder's price-per-share, and the classic ERC-4626 first-depositor
+//! **inflation attack** is structurally defeated — the committed `total_assets`
+//! is an internal counter no raw donation can skew (donation immunity), and a
+//! positive deposit that would mint ZERO shares is REFUSED (the zero-mint tooth).
+//!
+//! What [`ComputeFundVault`] genuinely does — each proven in `tests/compute_fund.rs`:
+//!   1. **Proportional shares** — two sponsors deposit into one fund; shares are
+//!      minted by the committed share-price relation, value held in custody.
+//!   2. **No dilution** — a later deposit never decreases an earlier holder's
+//!      price-per-share; a withdrawal redeems the redeemer's fair slice and no
+//!      more (the remaining holders are not diluted).
+//!   3. **Conservation** — pooled value moves sponsor↔custody, never created.
+//!   4. **The inflation attack defeated** — a raw donation cannot skew the share
+//!      ratio (the committed counter is internal), and a zero-mint deposit is
+//!      refused by the capacity.
 
 use dregg_app_framework::{
     Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
@@ -48,6 +77,244 @@ use dregg_app_framework::{
     StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
     canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
+
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// The CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the compute-job lifecycle.
+pub mod service;
+
+// =============================================================================
+// THE SHARED COMPUTE FUND — the proven `ShareVault` capacity, as a pooled fund.
+// =============================================================================
+
+use dregg_cell::Cell;
+use dregg_cell::vault::{
+    ShareVaultError, ShareVaultState, deposit_shares, is_share_vault, open_share_vault,
+    withdraw_shares,
+};
+use std::collections::HashMap;
+
+/// The public key of the fund custodian cells (the vault host + its budget custody
+/// wallet). A fixed sentinel — the custodian holds the pooled value only and is
+/// never a sponsor with a share claim of its own.
+pub const FUND_CUSTODIAN_PK: [u8; 32] = *b"starbridge-compute-fund-custody!";
+/// The vault host cell's token id (it carries no balance of its own — it hosts the
+/// committed `(total_assets, total_shares)` share-vault counters in its heap).
+pub const FUND_VAULT_TOKEN: [u8; 32] = *b"starbridge-compute-fund-vault!!!";
+/// The pooled budget asset's token id (the custody wallet and every sponsor wallet
+/// hold THIS asset — the fungible value the fund pools).
+pub const FUND_BUDGET_TOKEN: [u8; 32] = *b"starbridge-compute-fund-budget!!";
+
+/// Why a [`ComputeFundVault`] operation could not complete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FundError {
+    /// The share-vault capacity refused (non-positive amount, a forged share
+    /// count, a zero-mint inflation-attack deposit, insufficient supply, …) — the
+    /// forge/inflation-rejecting protocol check bit.
+    Vault(ShareVaultError),
+    /// The depositing sponsor wallet cannot cover the deposit.
+    InsufficientFunds {
+        /// The wallet's balance.
+        have: i64,
+        /// The deposit it must cover.
+        need: i64,
+    },
+    /// The sponsor wallet's asset is not the fund's pooled budget asset.
+    AssetMismatch,
+    /// The sponsor asked to redeem more shares than it holds in this fund.
+    InsufficientShares {
+        /// The shares the sponsor holds.
+        have: i64,
+        /// The shares it asked to redeem.
+        want: i64,
+    },
+}
+
+impl std::fmt::Display for FundError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FundError::Vault(e) => write!(f, "share-vault refused: {e}"),
+            FundError::InsufficientFunds { have, need } => {
+                write!(f, "insufficient funds: have {have}, need {need}")
+            }
+            FundError::AssetMismatch => write!(f, "wallet asset is not the fund's budget asset"),
+            FundError::InsufficientShares { have, want } => {
+                write!(f, "insufficient shares: hold {have}, want to redeem {want}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FundError {}
+
+impl From<ShareVaultError> for FundError {
+    fn from(e: ShareVaultError) -> Self {
+        FundError::Vault(e)
+    }
+}
+
+/// The honest executor move: debit `amount` (`> 0`) from `from`, credit it to
+/// `to`. Returns `false` if `from` cannot cover it (no value is created or
+/// destroyed). The role the app plays around the vault's *authorization* — the
+/// capacity decides *how many shares* a deposit mints (or *how much value* a
+/// redemption draws); the value move itself is an ordinary conserving transfer.
+pub fn move_value(from: &mut Cell, to: &mut Cell, amount: i64) -> bool {
+    if amount <= 0 {
+        return false;
+    }
+    let amt = amount as u64;
+    if !from.state.debit_balance(amt) {
+        return false;
+    }
+    assert!(
+        to.state.credit_balance(amt),
+        "credit must succeed after debit"
+    );
+    true
+}
+
+/// **A shared compute fund, as a self-contained conserving share vault.**
+///
+/// Owns the vault host cell (whose committed heap binds `total_assets` and
+/// `total_shares` — the proven [`ShareVault`](dregg_cell::vault) counters) plus a
+/// custody cell holding the pooled budget value. Many sponsors
+/// [`deposit`](Self::deposit) a common budget asset and receive **shares** minted
+/// by the committed share-price relation; a sponsor [`withdraw`](Self::withdraw)s
+/// by redeeming its shares for the proportional value. The vault commits only the
+/// TOTAL supply; the fund tracks which sponsor owns which slice. Value is
+/// conserved per asset at every step, and the no-dilution / inflation-attack teeth
+/// are the capacity's, imaged by `metatheory/Dregg2/Deos/Vault.lean`.
+#[derive(Clone, Debug)]
+pub struct ComputeFundVault {
+    /// The vault host cell — its committed heap binds `(total_assets,
+    /// total_shares)`; a light client witnesses every counter move.
+    pub vault: Cell,
+    /// Custody of the pooled budget value (held while shares are outstanding).
+    custody: Cell,
+    /// Per-sponsor share holdings. The vault commits only the total supply; this
+    /// maps each sponsor's wallet cell to the share slice it owns of the pool.
+    shares: HashMap<CellId, i64>,
+}
+
+impl ComputeFundVault {
+    /// **Open** a fresh fund: born a vault host cell with empty committed counters
+    /// (`total_assets = total_shares = 0` via [`open_share_vault`]) and an empty
+    /// budget custody cell. The first deposit bootstraps shares 1:1.
+    pub fn open() -> Self {
+        let mut vault = Cell::with_balance(FUND_CUSTODIAN_PK, FUND_VAULT_TOKEN, 0);
+        open_share_vault(&mut vault);
+        ComputeFundVault {
+            vault,
+            custody: Cell::with_balance(FUND_CUSTODIAN_PK, FUND_BUDGET_TOKEN, 0),
+            shares: HashMap::new(),
+        }
+    }
+
+    /// **Deposit** `amount` budget from a sponsor's wallet, minting proportional
+    /// shares. The committed share-price relation (the proven [`ShareVaultState`])
+    /// decides the minted count: `d · S / T` on an established fund, `d` 1:1 on the
+    /// bootstrap. The capacity's forge/inflation gate runs FIRST: a non-positive
+    /// deposit, a positive deposit that would mint ZERO shares (the ERC-4626
+    /// first-depositor inflation attack), or a forged claimed count is refused with
+    /// nothing moved. On success value LEAVES the sponsor's wallet into custody
+    /// (conservation: in transit, never created) and the minted shares are credited
+    /// to the sponsor. Returns the minted share count.
+    pub fn deposit(&mut self, sponsor: &mut Cell, amount: i64) -> Result<i64, FundError> {
+        if sponsor.token_id() != self.custody.token_id() {
+            return Err(FundError::AssetMismatch);
+        }
+        if sponsor.state.balance() < amount {
+            return Err(FundError::InsufficientFunds {
+                have: sponsor.state.balance(),
+                need: amount,
+            });
+        }
+        let sponsor_id = sponsor.id();
+        // The committed counters decide the fair minted count (the share-price
+        // relation); the capacity re-checks it and refuses a zero-mint/forge.
+        let st = ShareVaultState::read(&self.vault)?;
+        let claimed = st.shares_for_deposit(amount);
+        let minted = deposit_shares(&mut self.vault, amount, claimed)?;
+        assert!(
+            move_value(sponsor, &mut self.custody, amount),
+            "the funds check above guarantees the move succeeds"
+        );
+        *self.shares.entry(sponsor_id).or_insert(0) += minted;
+        Ok(minted)
+    }
+
+    /// **Withdraw** by redeeming `shares` the sponsor holds, returning the
+    /// proportional value. The committed share-price relation decides the redeemed
+    /// assets (`s · T / S`); the capacity refuses a non-positive/forged/over-supply
+    /// redemption. The sponsor may never redeem more shares than it holds in this
+    /// fund. On success the redeemed value LEAVES custody back to the sponsor and
+    /// its share slice is debited. Returns the redeemed asset count.
+    pub fn withdraw(&mut self, sponsor: &mut Cell, shares: i64) -> Result<i64, FundError> {
+        if sponsor.token_id() != self.custody.token_id() {
+            return Err(FundError::AssetMismatch);
+        }
+        let sponsor_id = sponsor.id();
+        let held = self.shares.get(&sponsor_id).copied().unwrap_or(0);
+        if shares <= 0 || held < shares {
+            return Err(FundError::InsufficientShares {
+                have: held,
+                want: shares,
+            });
+        }
+        let st = ShareVaultState::read(&self.vault)?;
+        let claimed = st.assets_for_withdraw(shares);
+        let redeemed = withdraw_shares(&mut self.vault, shares, claimed)?;
+        assert!(
+            move_value(&mut self.custody, sponsor, redeemed),
+            "custody holds the pooled value backing every share"
+        );
+        let remaining = held - shares;
+        if remaining == 0 {
+            self.shares.remove(&sponsor_id);
+        } else {
+            self.shares.insert(sponsor_id, remaining);
+        }
+        Ok(redeemed)
+    }
+
+    /// The committed `total_assets` (the internal accounting counter — NOT the raw
+    /// custody balance; a raw donation cannot move this, the donation-immunity that
+    /// closes the ERC-4626 inflation attack).
+    pub fn total_assets(&self) -> i64 {
+        ShareVaultState::read(&self.vault)
+            .map(|s| s.total_assets)
+            .unwrap_or(0)
+    }
+
+    /// The committed `total_shares` supply outstanding across all sponsors.
+    pub fn total_shares(&self) -> i64 {
+        ShareVaultState::read(&self.vault)
+            .map(|s| s.total_shares)
+            .unwrap_or(0)
+    }
+
+    /// The share slice a sponsor wallet holds of this fund.
+    pub fn shares_of(&self, sponsor: CellId) -> i64 {
+        self.shares.get(&sponsor).copied().unwrap_or(0)
+    }
+
+    /// The pooled value held in custody (the raw balance backing the shares).
+    pub fn pooled_value(&self) -> i64 {
+        self.custody.state.balance()
+    }
+
+    /// The vault host cell's canonical commitment — moves when the counters
+    /// advance on a deposit or withdrawal (a light client witnesses every change).
+    pub fn commitment(&self) -> [u8; 32] {
+        self.vault.state_commitment()
+    }
+
+    /// Whether the host cell carries a share-vault binding (it does after [`open`](Self::open)).
+    pub fn is_open(&self) -> bool {
+        is_share_vault(&self.vault)
+    }
+}
 
 // =============================================================================
 // Job-cell state schema

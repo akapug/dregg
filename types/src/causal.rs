@@ -135,7 +135,7 @@ impl CausalDag {
         debug_assert!(
             self.frontier
                 .iter()
-                .all(|h| self.successors.get(h).map_or(true, |s| s.is_empty())),
+                .all(|h| self.successors.get(h).is_none_or(|s| s.is_empty())),
             "frontier invariant violated: a frontier node has successors"
         );
 

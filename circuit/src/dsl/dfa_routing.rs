@@ -348,7 +348,7 @@ pub fn compute_table_commitment(transitions: &[(u32, u32, u32)]) -> BabyBear {
     assert!(!level.is_empty(), "transition table must be non-empty");
     while level.len() > 1 {
         assert!(
-            level.len() % 4 == 0,
+            level.len().is_multiple_of(4),
             "transition-table commitment needs a 4-ary-clean entry count (got {})",
             level.len()
         );
@@ -363,6 +363,12 @@ pub fn compute_table_commitment(transitions: &[(u32, u32, u32)]) -> BabyBear {
 // ============================================================================
 // Trace generation
 // ============================================================================
+
+/// Witness column map (keyed by column name) paired with public inputs.
+type RoutingWitness = (
+    std::collections::HashMap<String, Vec<BabyBear>>,
+    Vec<BabyBear>,
+);
 
 /// Build a routing trace + public inputs from a transition table, a start state,
 /// and an input symbol sequence — the DSL form of `dfa_circuit.rs` `build_dfa_trace`.
@@ -379,10 +385,7 @@ pub fn build_routing_witness(
     transitions: &[(u32, u32, u32)],
     start_state: u32,
     symbols: &[u32],
-) -> Option<(
-    std::collections::HashMap<String, Vec<BabyBear>>,
-    Vec<BabyBear>,
-)> {
+) -> Option<RoutingWitness> {
     assert!(!symbols.is_empty(), "need at least one symbol");
     let step = |s: u32, y: u32| -> Option<u32> {
         transitions

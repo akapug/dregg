@@ -1166,10 +1166,10 @@ pub fn verify_bridge_receipt(receipt: &BridgeReceipt, trusted_keys: &[[u8; 32]])
     let signature = Signature::from_bytes(&receipt.signature);
 
     for key_bytes in trusted_keys {
-        if let Ok(vk) = VerifyingKey::from_bytes(key_bytes) {
-            if vk.verify_strict(&message, &signature).is_ok() {
-                return true;
-            }
+        if let Ok(vk) = VerifyingKey::from_bytes(key_bytes)
+            && vk.verify_strict(&message, &signature).is_ok()
+        {
+            return true;
         }
     }
 
@@ -1591,7 +1591,7 @@ mod tests {
                                        _asset_type: u64,
                                        proof_bytes: &[u8]|
          -> Result<(), String> {
-            if proof_bytes == &[1, 2, 3, 4] {
+            if proof_bytes == [1, 2, 3, 4] {
                 Ok(())
             } else {
                 Err("STARK proof verification failed: commitment mismatch".to_string())

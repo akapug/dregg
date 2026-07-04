@@ -570,7 +570,7 @@ pub fn generate_compound_trace_full(
                 } else {
                     BabyBear::ZERO
                 };
-                prod = prod * ri;
+                prod *= ri;
             }
             prod
         }
@@ -583,7 +583,7 @@ pub fn generate_compound_trace_full(
                 } else {
                     BabyBear::ZERO
                 };
-                prod = prod * (BabyBear::ONE - ri);
+                prod *= BabyBear::ONE - ri;
             }
             prod
         }

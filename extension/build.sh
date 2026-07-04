@@ -17,7 +17,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WASM_CRATE="$PROJECT_ROOT/wasm"
-TARGET_DIR="$PROJECT_ROOT/target"
+# The wasm/ crate is a STANDALONE cargo workspace (its Cargo.toml declares an
+# empty `[workspace]`), so cargo builds it into `wasm/target/`, NOT the repo-root
+# `target/`. Read the artifact from the wasm crate's own target dir.
+TARGET_DIR="$WASM_CRATE/target"
 WASM_OUT="$TARGET_DIR/wasm32-unknown-unknown/release/dregg_wasm.wasm"
 DIST_DIR="$SCRIPT_DIR/dist"
 
@@ -64,15 +67,7 @@ build_wasm() {
   fi
 
   # ----- Optimize the wasm blob ----------------------------------------------
-  # `no-modules` does not run wasm-opt the way `wasm-pack` does, leaving an
-  # ~8MB unoptimized blob. Shrink it (~5MB) if wasm-opt is available.
-  if command -v wasm-opt >/dev/null 2>&1; then
-    echo "  Optimizing dregg_wasm_bg.wasm with wasm-opt -O..."
-    wasm-opt -O "$SCRIPT_DIR/dregg_wasm_bg.wasm" -o "$SCRIPT_DIR/dregg_wasm_bg.wasm.opt" \
-      && mv "$SCRIPT_DIR/dregg_wasm_bg.wasm.opt" "$SCRIPT_DIR/dregg_wasm_bg.wasm"
-  else
-    echo "  (wasm-opt not on PATH — shipping unoptimized blob)"
-  fi
+  optimize_wasm
 
   if [ -f "$SCRIPT_DIR/dregg_wasm_bg.wasm" ] && [ -f "$SCRIPT_DIR/dregg_wasm.js" ]; then
     WASM_SIZE=$(wc -c < "$SCRIPT_DIR/dregg_wasm_bg.wasm" | tr -d ' ')
@@ -83,6 +78,44 @@ build_wasm() {
     echo "ERROR: wasm-bindgen did not produce expected outputs."
     ls -la "$SCRIPT_DIR"/dregg_wasm* 2>/dev/null || true
     exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Shrink the wasm blob with wasm-opt -Oz (MED-2).
+#
+# `no-modules` does not run wasm-opt the way `wasm-pack` does, leaving a large
+# unoptimized blob. `-Oz` optimizes aggressively for size — important for an
+# MV3 extension whose service worker is killed/woken frequently (every wake
+# re-instantiates the wasm) and for store size limits. Installs binaryen via
+# brew if it is missing and brew is available. Idempotent.
+# ---------------------------------------------------------------------------
+
+optimize_wasm() {
+  local wasm="$SCRIPT_DIR/dregg_wasm_bg.wasm"
+  [ -f "$wasm" ] || return 0
+
+  if ! command -v wasm-opt >/dev/null 2>&1; then
+    if command -v brew >/dev/null 2>&1; then
+      echo "  wasm-opt not found — installing binaryen via brew..."
+      brew install binaryen >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if command -v wasm-opt >/dev/null 2>&1; then
+    local before after
+    before=$(wc -c < "$wasm" | tr -d ' ')
+    echo "  Optimizing dregg_wasm_bg.wasm with wasm-opt -Oz (was $before bytes)..."
+    if wasm-opt -Oz "$wasm" -o "$wasm.opt" 2>/dev/null; then
+      mv "$wasm.opt" "$wasm"
+      after=$(wc -c < "$wasm" | tr -d ' ')
+      echo "  wasm-opt -Oz done: $before -> $after bytes."
+    else
+      rm -f "$wasm.opt"
+      echo "  WARNING: wasm-opt failed; shipping the current blob."
+    fi
+  else
+    echo "  WARNING: wasm-opt unavailable (install binaryen) — shipping unoptimized blob."
   fi
 }
 
@@ -150,6 +183,15 @@ validate_manifest() {
 package_extension() {
   echo "[4/4] Packaging extension..."
 
+  # Rebuild the TS bundle so a stale dist/ can never be shipped (LOW finding).
+  if [ -f "$SCRIPT_DIR/package.json" ]; then
+    echo "  Rebuilding TS bundle (npm run build)..."
+    (cd "$SCRIPT_DIR" && npm run build)
+  fi
+
+  # Ensure the shipped wasm is size-optimized (idempotent if already -Oz'd).
+  optimize_wasm
+
   mkdir -p "$DIST_DIR"
 
   # Base files to include in every package.
@@ -177,6 +219,10 @@ package_extension() {
     share-capability.html
     share-capability.js
     bip39_english.txt
+    icons/icon-16.png
+    icons/icon-32.png
+    icons/icon-48.png
+    icons/icon-128.png
   )
 
   # Add WASM files if they exist.
@@ -194,6 +240,9 @@ package_extension() {
       EXISTING_FILES+=("$f")
     fi
   done
+
+  # Remove any prior packages so the zip is rebuilt cleanly (no stale members).
+  rm -f "$DIST_DIR/$CHROME_PACKAGE_NAME" "$DIST_DIR/$FIREFOX_PACKAGE_NAME"
 
   # --- Chrome package (.zip) ---
   local ZIP_NAME="$CHROME_PACKAGE_NAME"
@@ -221,7 +270,9 @@ package_extension() {
   cp "$SCRIPT_DIR/manifest-firefox.json" "$XPI_DIR/manifest.json"
   (cd "$XPI_DIR" && zip -q -r "$DIST_DIR/$XPI_NAME" .)
   rm -rf "$XPI_DIR"
-  echo "  Firefox package: $DIST_DIR/$XPI_NAME ($ZIP_SIZE bytes)"
+  local XPI_SIZE
+  XPI_SIZE=$(wc -c < "$DIST_DIR/$XPI_NAME" | tr -d ' ')
+  echo "  Firefox package: $DIST_DIR/$XPI_NAME ($XPI_SIZE bytes)"
 
   echo ""
   echo "Done. Packages in: $DIST_DIR/"

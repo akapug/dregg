@@ -11,19 +11,19 @@
 use std::path::Path;
 
 use matrix_sdk::{
-    Client, RoomState,
     authentication::matrix::MatrixSession,
     config::SyncSettings,
     ruma::{
-        OwnedRoomId, UserId,
         api::client::filter::RoomEventFilter,
-        events::AnySyncTimelineEvent,
         events::room::message::{MessageType, RoomMessageEventContent},
+        events::AnySyncTimelineEvent,
+        OwnedRoomId, UserId,
     },
+    Client, RoomState,
 };
 
-use crate::membrane::{MEMBRANE_EVENT_KEY, MembraneEnvelope};
-use crate::{Error, Result, session::StoredSession};
+use crate::membrane::{MembraneEnvelope, MEMBRANE_EVENT_KEY};
+use crate::{session::StoredSession, Error, Result};
 
 /// A native deos Matrix client over `matrix-rust-sdk`.
 pub struct MatrixClient {
@@ -306,9 +306,9 @@ impl MatrixClient {
         device_id: &str,
     ) -> Result<(Self, StoredSession)> {
         use matrix_sdk::{
-            SessionMeta,
-            authentication::{SessionTokens, matrix::MatrixSession},
+            authentication::{matrix::MatrixSession, SessionTokens},
             ruma::OwnedDeviceId,
+            SessionMeta,
         };
         let me = Self::build(homeserver_url, store_path, passphrase).await?;
         let session = MatrixSession {

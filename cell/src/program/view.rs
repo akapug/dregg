@@ -150,6 +150,30 @@ pub enum StateConstraintView {
         not_before: Option<u64>,
         not_after: Option<u64>,
     },
+    /// "stayed under k": pre-state counter register `< k`.
+    RateBound {
+        counter_index: u8,
+        k: u64,
+    },
+    /// "only after it cooled": `staged_at + period <= block_height`.
+    CooledSince {
+        staged_at: u64,
+        period: u64,
+    },
+    /// "P until Y": admit while the event register reads 0 (U operator).
+    UntilEvent {
+        flag_index: u8,
+    },
+    /// "since the event": admit once the event register is set (S operator).
+    SinceEvent {
+        flag_index: u8,
+    },
+    /// Optimistic settlement: window elapsed AND no challenge filed.
+    ChallengeWindow {
+        challenge_index: u8,
+        staged_at: u64,
+        period: u64,
+    },
     PreimageGate {
         commitment_index: u8,
         hash_kind: String,
@@ -367,6 +391,32 @@ pub enum StateConstraintView {
         box_index: u8,
         root_index: u8,
         edges: Vec<(String, String)>,
+    },
+    /// The sealed-escrow atomic-swap gate: both leg-status slots must read
+    /// `Deposited` before and `Consumed` after (the Lean `SettleGate`). Surfaces
+    /// the two field-mirrored leg-status slots.
+    SettleEscrow {
+        leg_a_index: u8,
+        leg_b_index: u8,
+    },
+    /// The standing-obligation per-period discharge gate: the discharge must be due
+    /// (height ≥ due slot), the cursor advance by one period, and the total advance
+    /// by the schedule amount (the Lean `DischargeGate`). Surfaces the three
+    /// field-mirrored schedule slots and the period/amount constants.
+    DischargeObligation {
+        cursor_slot: u8,
+        due_slot: u8,
+        amount_slot: u8,
+        period: u32,
+        amount: u32,
+    },
+    /// The share-vault no-dilution deposit gate: across the transition the committed
+    /// `total_assets` must advance by the deposit, the committed `total_shares` by the
+    /// minted count (positive — the inflation tooth), with no existing holder diluted
+    /// (the Lean `VaultDepositGate`). Surfaces the two field-mirrored counter slots.
+    VaultDeposit {
+        assets_slot: u8,
+        shares_slot: u8,
     },
 }
 
@@ -794,6 +844,31 @@ impl StateConstraint {
                 not_before: *not_before,
                 not_after: *not_after,
             },
+            StateConstraint::RateBound { counter_index, k } => StateConstraintView::RateBound {
+                counter_index: *counter_index,
+                k: *k,
+            },
+            StateConstraint::CooledSince { staged_at, period } => {
+                StateConstraintView::CooledSince {
+                    staged_at: *staged_at,
+                    period: *period,
+                }
+            }
+            StateConstraint::UntilEvent { flag_index } => StateConstraintView::UntilEvent {
+                flag_index: *flag_index,
+            },
+            StateConstraint::SinceEvent { flag_index } => StateConstraintView::SinceEvent {
+                flag_index: *flag_index,
+            },
+            StateConstraint::ChallengeWindow {
+                challenge_index,
+                staged_at,
+                period,
+            } => StateConstraintView::ChallengeWindow {
+                challenge_index: *challenge_index,
+                staged_at: *staged_at,
+                period: *period,
+            },
             StateConstraint::PreimageGate {
                 commitment_index,
                 hash_kind,
@@ -1028,6 +1103,33 @@ impl StateConstraint {
                     .iter()
                     .map(|(hi, lo)| (view_hex(hi), view_hex(lo)))
                     .collect(),
+            },
+            StateConstraint::SettleEscrow {
+                leg_a_index,
+                leg_b_index,
+            } => StateConstraintView::SettleEscrow {
+                leg_a_index: *leg_a_index,
+                leg_b_index: *leg_b_index,
+            },
+            StateConstraint::DischargeObligation {
+                cursor_slot,
+                due_slot,
+                amount_slot,
+                period,
+                amount,
+            } => StateConstraintView::DischargeObligation {
+                cursor_slot: *cursor_slot,
+                due_slot: *due_slot,
+                amount_slot: *amount_slot,
+                period: *period,
+                amount: *amount,
+            },
+            StateConstraint::VaultDeposit {
+                assets_slot,
+                shares_slot,
+            } => StateConstraintView::VaultDeposit {
+                assets_slot: *assets_slot,
+                shares_slot: *shares_slot,
             },
         }
     }

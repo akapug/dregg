@@ -1213,10 +1213,10 @@ pub fn resolve_client_ip(
     // leading entries cannot move this rightmost-untrusted boundary.
     if let Some(xff) = forwarded_for {
         for hop in xff.split(',').rev() {
-            if let Ok(ip) = hop.trim().parse::<IpAddr>() {
-                if !trusted.contains(&ip) {
-                    return ip;
-                }
+            if let Ok(ip) = hop.trim().parse::<IpAddr>()
+                && !trusted.contains(&ip)
+            {
+                return ip;
             }
         }
     }
@@ -1583,6 +1583,13 @@ pub fn router_with_cors(
         )
         .route("/api/receipts", get(get_receipts))
         .route("/api/receipts/{hash}/witnesses", get(get_receipt_witnesses))
+        // The attested-query index (dregg-query): the receipt-log MMR root and
+        // certified positional slices. A query answer built over a slice from
+        // `/index/range` carries a non-omission certificate the caller verifies
+        // against the `/index/root` root — proving the answer was computed from
+        // EXACTLY the committed receipt range. Public (read-only over the log).
+        .route("/api/receipts/index/root", get(get_receipt_index_root))
+        .route("/api/receipts/index/range", get(get_receipt_index_range))
         // ORGANS identity rider — the KERI-shaped identity event-log export:
         // a cell's chained / signed / witness-receipted key-event history as
         // a PORTABLE artifact (independently checkable via
@@ -1759,6 +1766,14 @@ pub fn router_with_cors(
         .route("/proofs/compose", post(post_compose_proofs))
         .route("/turns/bearer-auth", post(post_bearer_auth))
         .route("/turns/peer-exchange", post(post_peer_exchange))
+        // LIVE EPOCH TRANSITION (validator-set reconfiguration on a RUNNING
+        // node): propose adding/removing validators. The change only APPLIES
+        // once a quorum of the CURRENT committee ratifies it through finality —
+        // this endpoint only submits the proposal. Auth-protected (operator op).
+        .route(
+            "/epoch/propose-transition",
+            post(post_propose_epoch_transition),
+        )
         // Storage gateway (ORGANS §3): content-addressed put/get/stat/list
         // whose ADMISSION is the StorageGatewayMandate cell (capability +
         // op allowlist + prefix scope + executor-enforced volume debit).
@@ -2165,6 +2180,86 @@ async fn get_tokens(State(state): State<NodeState>) -> Json<Vec<TokenInfo>> {
     Json(tokens)
 }
 
+/// `GET /api/receipts/index/root` → [`dregg_query::client::IndexRootResponse`].
+///
+/// The MMR root over the node's receipt chain: leaf `i` is the 32-byte
+/// `receipt_hash()` of chain entry `i`, bagged per `dregg_query::Blake3Mmr`. The
+/// index is brought current from the chain before the read ([`NodeStateInner::
+/// sync_receipt_index`]) — additive, never gating commit. The verifier trusts
+/// only this root; `len` is served for UX (the verifier re-derives it from the
+/// root-pinned peak heights).
+async fn get_receipt_index_root(
+    State(state): State<NodeState>,
+) -> Json<dregg_query::client::IndexRootResponse> {
+    let mut s = state.write().await;
+    s.sync_receipt_index();
+    Json(dregg_query::client::IndexRootResponse {
+        root: hex_encode(&s.receipt_index.root()),
+        len: s.receipt_index.len(),
+    })
+}
+
+/// `GET /api/receipts/index/range?lo=&hi=` →
+/// [`dregg_query::client::IndexRangeResponse`].
+///
+/// The certified slice: the receipt rows at dense positions `[lo, min(hi,
+/// len-1)]` plus the `RangeOpening` (the honest prover, whose output always
+/// verifies against the root from `/index/root`). Each row carries the typed
+/// [`dregg_query::EffectSummary`] enrichment, joined from the commit event log
+/// by turn hash, so the slice is a complete EDB for transfer/balance/granted
+/// queries. The span is capped like other list endpoints.
+async fn get_receipt_index_range(
+    State(state): State<NodeState>,
+    Query(q): Query<dregg_query::client::RangeParams>,
+) -> Result<Json<dregg_query::client::IndexRangeResponse>, StatusCode> {
+    const MAX_SPAN: u64 = 1024;
+    if q.hi < q.lo || q.hi - q.lo >= MAX_SPAN {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut s = state.write().await;
+    s.sync_receipt_index();
+    let len = s.receipt_index.len();
+    if len == 0 || q.lo >= len {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let hi = q.hi.min(len - 1);
+    let root = s.receipt_index.root();
+    let (_values, opening) = s.receipt_index.open_range(q.lo, hi);
+
+    // Build the enriched receipt rows for [lo, hi]: identity/position from the
+    // chain entry, height + typed effect summaries joined from the commit event
+    // log by turn hash (absent for entries evicted past the event-log window —
+    // those rows still carry their certified identity, just no facts).
+    let chain = s.cclerk.receipt_chain();
+    let mut receipts = Vec::with_capacity((hi - q.lo + 1) as usize);
+    for pos in q.lo..=hi {
+        let r = &chain[pos as usize];
+        let turn_hash = hex_encode(&r.turn_hash);
+        let (height, summaries) = s
+            .event_log
+            .iter()
+            .rev()
+            .find(|e| e.turn_hash == turn_hash)
+            .map(|e| (e.height, e.summaries.clone()))
+            .unwrap_or((0, Vec::new()));
+        receipts.push(dregg_query::ReceiptRecord {
+            chain_index: pos,
+            receipt_hash: hex_encode(&r.receipt_hash()),
+            height,
+            agent: hex_encode(&r.agent.0),
+            effects: summaries,
+        });
+    }
+
+    Ok(Json(dregg_query::client::IndexRangeResponse {
+        receipts,
+        root: hex_encode(&root),
+        lo: q.lo,
+        hi,
+        opening,
+    }))
+}
+
 async fn get_receipts(State(state): State<NodeState>) -> Json<Vec<ReceiptInfo>> {
     let s = state.read().await;
     Json(receipt_infos_from_chain(&s, 50))
@@ -2491,6 +2586,21 @@ fn push_committed_event(
     effects: Vec<String>,
     proof_status: ActivityProofStatus,
 ) {
+    push_committed_event_enriched(s, turn_hash, cell_id, effects, Vec::new(), proof_status)
+}
+
+/// As [`push_committed_event`], but carrying the typed [`dregg_query::EffectSummary`]
+/// enrichment — from/to/asset/amount, grants, and post-state balances — so the
+/// LIVE receipt log yields `transfer`/`balance`/`granted` facts (not just
+/// effect-kind strings) when dregg-query reads `/api/receipts/index/range`.
+fn push_committed_event_enriched(
+    s: &mut crate::state::NodeStateInner,
+    turn_hash: String,
+    cell_id: String,
+    effects: Vec<String>,
+    summaries: Vec<dregg_query::EffectSummary>,
+    proof_status: ActivityProofStatus,
+) {
     let store_height = s
         .store
         .latest_attested_root()
@@ -2525,6 +2635,7 @@ fn push_committed_event(
         turn_hash,
         cell_id,
         effects,
+        summaries,
         timestamp,
     });
 }
@@ -2886,17 +2997,17 @@ async fn post_submit_turn(
 
             // Solo mode: record in nullifier log, mark receipt as Tentative,
             // and advance the solo consensus height.
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    // Record any nullifiers from this turn in the solo nullifier log.
-                    // The turn_hash itself serves as the sequencing entry for ordering.
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                // Record any nullifiers from this turn in the solo nullifier log.
+                // The turn_hash itself serves as the sequencing entry for ordering.
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the authoritative executor ALREADY
@@ -2918,6 +3029,7 @@ async fn post_submit_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             // Gather the rotated attestation material from the REAL before/after
             // actor cells (pre_ledger / the just-committed s.ledger). A build hiccup
@@ -2956,11 +3068,26 @@ async fn post_submit_turn(
             let receipt_artifact = postcard::to_stdvec(&receipt).ok();
             let witness_count = s.witnessed_receipt_count(&receipt_hash);
 
-            push_committed_event(
+            // Typed effect enrichment from the REAL before/after actor ledger —
+            // so this committed turn's receipt yields transfer/balance/granted
+            // facts when dregg-query reads the live index.
+            let summaries = summarize_turn_effects(&turn, &pre_ledger, &s.ledger);
+            let kinds: Vec<String> = turn
+                .call_forest
+                .iter_dfs()
+                .flat_map(|t| t.action.effects.iter().map(effect_kind))
+                .collect();
+            let kinds = if kinds.is_empty() {
+                vec!["turn_committed".to_string()]
+            } else {
+                kinds
+            };
+            push_committed_event_enriched(
                 &mut s,
                 turn_hash.clone(),
                 agent,
-                vec!["turn_committed".to_string()],
+                kinds,
+                summaries,
                 proof_status,
             );
 
@@ -3029,6 +3156,7 @@ async fn post_submit_turn(
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
             Ok(Json(SubmitTurnResponse {
@@ -3122,19 +3250,19 @@ async fn post_submit_signed_turn(
     }
 
     let expected_prev = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
-    if let Some(claimed_prev) = signed.turn.previous_receipt_hash {
-        if Some(claimed_prev) != expected_prev {
-            return Ok(Json(SubmitSignedTurnResponse {
-                accepted: false,
-                turn_hash: Some(turn_hash),
-                signer: Some(signer),
-                action_count,
-                proof_status: ActivityProofStatus::NotCommitted,
-                has_witness: false,
-                witness_count: 0,
-                error: Some("receipt chain mismatch".to_string()),
-            }));
-        }
+    if let Some(claimed_prev) = signed.turn.previous_receipt_hash
+        && Some(claimed_prev) != expected_prev
+    {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(turn_hash),
+            signer: Some(signer),
+            action_count,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("receipt chain mismatch".to_string()),
+        }));
     }
 
     let pre_ledger = s.ledger.clone();
@@ -3159,15 +3287,15 @@ async fn post_submit_signed_turn(
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             crate::metrics::set_ledger_cell_count(s.ledger.len() as f64);
 
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // F-DOS-1 / PATH-PRESERVE Phase 5b: the executor already validated +
@@ -3189,6 +3317,7 @@ async fn post_submit_signed_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
                 &signed.turn,
@@ -3289,6 +3418,7 @@ async fn post_submit_signed_turn(
         }
         dregg_turn::TurnResult::Rejected { reason, .. } => {
             crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
             crate::metrics::record_turn_execution_duration(start.elapsed().as_secs_f64());
             drop(s);
             Ok(Json(SubmitSignedTurnResponse {
@@ -3614,15 +3744,15 @@ async fn post_submit_encrypted_turn(
             // the cleartext path (post_submit_turn). The encrypted path
             // doesn't change consensus semantics — only privacy.
             let turn_hash_bytes = receipt.turn_hash;
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             let turn_hash = hex_encode(&turn_hash_bytes);
@@ -3646,6 +3776,7 @@ async fn post_submit_encrypted_turn(
                     error: Some(format!("receipt chain mismatch: {err}")),
                 }));
             }
+            crate::metrics::set_receipt_chain_length(s.cclerk.receipt_chain_length() as f64);
             let receipt_hash = receipt.receipt_hash();
             let witness_outcome = match prepare_rotatable_turn(
                 &cleartext_turn,
@@ -4310,7 +4441,7 @@ async fn get_starbridge_identity_events(
                 turn_hash: hex_encode(&receipt.turn_hash),
                 cell_id: hex_encode(&event.cell.0),
                 timestamp: receipt.timestamp,
-                topic: Some(serde_json::to_value(&event.topic).unwrap_or(serde_json::Value::Null)),
+                topic: Some(serde_json::to_value(event.topic).unwrap_or(serde_json::Value::Null)),
                 data: Some(serde_json::to_value(&event.data).unwrap_or(serde_json::Value::Null)),
                 effects: Vec::new(),
                 proof_status: receipt_proof_status(receipt),
@@ -4437,15 +4568,46 @@ fn select_committed_events(
     }
 }
 
-/// GET /observability/stream — SSE live feed of dregg-observability events
-/// (Task #30). Currently serves a welcome event (proves the path + remote
-/// consumption). Full broadcast of TurnLifecycle etc. from node turns is
-/// future (would wire Emitter into submit path + shared tx in NodeState).
-async fn observability_stream() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let welcome = Event::default()
-        .event("observability")
-        .data(r#"{"schema_version":1,"schema_name":"dregg-observability-event-stream-v1","event_count":1,"events":[{"kind":"turn_lifecycle","envelope":{"seq":0,"timestamp":"2026-05-25T00:00:00.000Z"},"payload":{"phase":"stream_connected"}}]}"#);
-    let stream = stream::once(async move { Ok::<_, Infallible>(welcome) });
+/// GET /observability/stream — SSE liveness feed for the public portal.
+///
+/// Emits a `hello` frame (the node's spent-proof/nullifier count + the number of
+/// program-bearing "service" cells) then a 15s `ping` heartbeat. These are the
+/// SAME event names (`hello` / `ping`) the discord-bot read surface emits, so the
+/// public `portal.dregg.studio` "live" badge — which `addEventListener`s `hello`
+/// (and reloads the cell list on it) and `ping` — keeps working when its `/api/*`
+/// + `/observability/*` are proxied to the NODE directly rather than to the bot
+/// (the portal-decoupling repoint). Full broadcast of per-turn TurnLifecycle
+/// events from the node's submit path remains future work (would wire an Emitter
+/// + a shared broadcast tx into `NodeState`).
+async fn observability_stream(
+    State(state): State<NodeState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // Counts for the hello frame, read once at connect time (the bot freezes these
+    // the same way): the node's spent-proof (nullifier) set size and the number of
+    // program-bearing service cells in the ledger.
+    let (nullifiers, apps) = {
+        let s = state.read().await;
+        let apps = s
+            .ledger
+            .iter()
+            .filter(|(_, cell)| !matches!(cell.program, dregg_cell::CellProgram::None))
+            .count();
+        (s.used_proof_hashes.len(), apps)
+    };
+    // hello (seq 0) then a 15s ping heartbeat, all from one unfold.
+    let stream = stream::unfold(0u64, move |seq| async move {
+        let event = if seq == 0 {
+            Event::default().event("hello").data(format!(
+                r#"{{"nullifiers":{nullifiers},"apps":{apps},"msg":"dregg-node observability stream live"}}"#
+            ))
+        } else {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            Event::default()
+                .event("ping")
+                .data(format!(r#"{{"seq":{seq},"nullifiers":{nullifiers}}}"#))
+        };
+        Some((Ok::<_, Infallible>(event), seq + 1))
+    });
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
@@ -5014,11 +5176,15 @@ async fn post_fast_path_certificate(
                 error: None,
             }))
         }
-        dregg_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FastPathCertificateResponse {
-            executed: false,
-            turn_hash: Some(hex_encode(&turn_hash_bytes)),
-            error: Some(format!("turn rejected: {reason}")),
-        })),
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
+            Ok(Json(FastPathCertificateResponse {
+                executed: false,
+                turn_hash: Some(hex_encode(&turn_hash_bytes)),
+                error: Some(format!("turn rejected: {reason}")),
+            }))
+        }
         _ => Ok(Json(FastPathCertificateResponse {
             executed: false,
             turn_hash: Some(hex_encode(&turn_hash_bytes)),
@@ -5196,17 +5362,15 @@ async fn post_resolve_conditional(
             match exec_result {
                 dregg_turn::TurnResult::Committed { mut receipt, .. } => {
                     // Solo mode: mark receipt as Tentative and log in nullifier log.
-                    if let Some(ref mut solo) = s.solo_consensus {
-                        if solo.is_solo {
-                            receipt.finality = dregg_turn::Finality::Tentative;
-                            let height = solo.height;
-                            let _ = solo.nullifier_log.insert(
-                                receipt.turn_hash,
-                                receipt.turn_hash,
-                                height,
-                            );
-                            solo.advance_height();
-                        }
+                    if let Some(ref mut solo) = s.solo_consensus
+                        && solo.is_solo
+                    {
+                        receipt.finality = dregg_turn::Finality::Tentative;
+                        let height = solo.height;
+                        let _ =
+                            solo.nullifier_log
+                                .insert(receipt.turn_hash, receipt.turn_hash, height);
+                        solo.advance_height();
                     }
                     let turn_hash = hex_encode(&receipt.turn_hash);
                     s.cclerk.append_receipt(receipt).expect(
@@ -5223,6 +5387,8 @@ async fn post_resolve_conditional(
                     }))
                 }
                 dregg_turn::TurnResult::Rejected { reason, .. } => {
+                    crate::metrics::inc_turns_executed("rejected");
+                    crate::metrics::note_turn_rejected(&reason);
                     Ok(Json(ResolveConditionalResponse {
                         resolved: false,
                         turn_hash: None,
@@ -6177,10 +6343,10 @@ impl FaucetRateLimiter {
     async fn check(&self, recipient: &str) -> bool {
         let mut map = self.state.lock().await;
         let now = Instant::now();
-        if let Some(last) = map.get(recipient) {
-            if now.duration_since(*last).as_secs() < 60 {
-                return false;
-            }
+        if let Some(last) = map.get(recipient)
+            && now.duration_since(*last).as_secs() < 60
+        {
+            return false;
         }
         map.insert(recipient.to_string(), now);
         true
@@ -6409,17 +6575,45 @@ async fn post_faucet(
     // reject ("budget exceeded: limit=0, used=100"); the faucet cell holds the
     // genesis supply, so it covers a real fee. Size the fee to the estimated
     // cost so the gate passes deterministically.
-    let faucet_nonce = s
+    // PIPELINED nonce: the faucet's AUTHORITATIVE nonce only advances when a
+    // faucet turn FINALIZES through consensus (the scratch-clone execution below
+    // deliberately does NOT mutate the authoritative ledger in full mode). Reading
+    // it directly meant a second faucet request submitted before the first
+    // finalized re-used the same nonce and replayed. Reserve the next nonce as
+    // `max(authoritative, reserved)` and bump the reservation, so back-to-back
+    // submissions get fresh consecutive nonces that finalize in order. `max`
+    // reconciles the two sides: once the in-flight turns finalize, the
+    // authoritative nonce catches up and no permanent gap opens.
+    let authoritative_nonce = s
         .ledger
         .get(&faucet_cell_id)
         .map(|c| c.state.nonce())
         .unwrap_or(0);
-    // Link to the receipt-chain head BEFORE execution (same convention as
-    // post_submit_turn). The cipherclerk's `append_receipt` fills a `None`
-    // prev with the chain head, which CHANGES the appended receipt's hash —
-    // a WitnessedReceipt stored under the pre-append hash would then never be
-    // found for the chain's receipt and has_proof would stay false.
-    let faucet_prev_receipt = s.cclerk.receipt_chain().last().map(|r| r.receipt_hash());
+    let faucet_nonce = authoritative_nonce.max(s.faucet_reserved_nonce.unwrap_or(0));
+    s.faucet_reserved_nonce = Some(faucet_nonce + 1);
+    // Receipt-chain head for the turn's verified ChainHead leg.
+    //
+    // SOLO (n=1): submission is authoritative, so bind to the local chain head
+    // (the cipherclerk's `append_receipt` fills a `None` prev with the chain
+    // head, changing the appended receipt's hash; binding it here keeps the
+    // stored WitnessedReceipt findable so has_proof can flip).
+    //
+    // FULL (n>1): the AUTHORITATIVE receipt-chain advance is `execute_finalized_turn`,
+    // which runs identically on EVERY node in tau order and — like the ledger — does
+    // NOT observe the submitter's local submission-time append. The finalized executor
+    // only seeds the LOCAL agent's receipt head, never the faucet's, so the verified
+    // ChainHead leg expects `None` for the faucet agent on every node. Binding to the
+    // local chain head here made every NON-submitter reject the faucet turn after the
+    // first ("receipt chain mismatch: expected None, got Some(..)"), AND made the
+    // submitter reject it (its own head had already advanced at submission) — so a
+    // second faucet turn provisioned its destination but the transfer never funded it
+    // (`found:true, balance:0`), silently breaking sustained faucet finality. `None`
+    // matches the finalized expectation uniformly on all nodes.
+    let faucet_prev_receipt = if is_solo {
+        s.cclerk.receipt_chain().last().map(|r| r.receipt_hash())
+    } else {
+        None
+    };
     let mut faucet_turn = Turn {
         agent: faucet_cell_id,
         nonce: faucet_nonce,
@@ -6494,6 +6688,18 @@ async fn post_faucet(
             &mut scratch,
             &faucet_turn.call_forest,
         );
+        // PIPELINING: this receipt-build runs against a clone of the AUTHORITATIVE
+        // ledger, whose faucet nonce only advances at finalization. For a turn
+        // submitted before the prior finalizes, `faucet_nonce` (the reserved
+        // pipelined nonce) is ahead of that authoritative nonce, so the executor's
+        // exact nonce gate would reject the receipt build. Reflect the reserved
+        // nonce onto the scratch faucet cell so the receipt builds for the turn that
+        // WILL be valid at finalization (turns finalize in submission/tau order, each
+        // advancing the authoritative nonce to meet the next). The authoritative
+        // ledger is untouched; only this throwaway scratch is adjusted.
+        if let Some(cell) = scratch.get_mut(&faucet_cell_id) {
+            cell.state.set_nonce(faucet_nonce);
+        }
         crate::executor_setup::execute_via_producer(
             &executor,
             &faucet_turn,
@@ -6508,15 +6714,15 @@ async fn post_faucet(
 
             // Solo mode: tentative finality + height advance, exactly like the
             // /turn/submit commit path.
-            if let Some(ref mut solo) = s.solo_consensus {
-                if solo.is_solo {
-                    receipt.finality = dregg_turn::Finality::Tentative;
-                    let height = solo.height;
-                    let _ = solo
-                        .nullifier_log
-                        .insert(turn_hash_bytes, turn_hash_bytes, height);
-                    solo.advance_height();
-                }
+            if let Some(ref mut solo) = s.solo_consensus
+                && solo.is_solo
+            {
+                receipt.finality = dregg_turn::Finality::Tentative;
+                let height = solo.height;
+                let _ = solo
+                    .nullifier_log
+                    .insert(turn_hash_bytes, turn_hash_bytes, height);
+                solo.advance_height();
             }
 
             // The faucet turn is a REAL committed turn: append its receipt to
@@ -6621,20 +6827,36 @@ async fn post_faucet(
                 error: None,
             }))
         }
-        dregg_turn::TurnResult::Rejected { reason, .. } => Ok(Json(FaucetResponse {
-            success: false,
-            tx_hash: None,
-            turn_hash: None,
-            amount: 0,
-            error: Some(format!("transfer rejected: {reason}")),
-        })),
-        _ => Ok(Json(FaucetResponse {
-            success: false,
-            tx_hash: None,
-            turn_hash: None,
-            amount: 0,
-            error: Some("faucet transfer did not commit".to_string()),
-        })),
+        dregg_turn::TurnResult::Rejected { reason, .. } => {
+            // The turn we reserved a nonce for is NOT entering consensus, so roll
+            // the reservation back (it is still the value we set — `s` is write-
+            // locked across this whole handler) to avoid a permanent gap that
+            // would replay every subsequent faucet turn.
+            if s.faucet_reserved_nonce == Some(faucet_nonce + 1) {
+                s.faucet_reserved_nonce = Some(faucet_nonce);
+            }
+            crate::metrics::inc_turns_executed("rejected");
+            crate::metrics::note_turn_rejected(&reason);
+            Ok(Json(FaucetResponse {
+                success: false,
+                tx_hash: None,
+                turn_hash: None,
+                amount: 0,
+                error: Some(format!("transfer rejected: {reason}")),
+            }))
+        }
+        _ => {
+            if s.faucet_reserved_nonce == Some(faucet_nonce + 1) {
+                s.faucet_reserved_nonce = Some(faucet_nonce);
+            }
+            Ok(Json(FaucetResponse {
+                success: false,
+                tx_hash: None,
+                turn_hash: None,
+                amount: 0,
+                error: Some("faucet transfer did not commit".to_string()),
+            }))
+        }
     }
 }
 
@@ -7091,6 +7313,112 @@ fn hex_decode_32_result(hex: &str) -> Result<[u8; 32], String> {
     Ok(result)
 }
 
+/// Request to propose a LIVE epoch transition (validator-set reconfiguration)
+/// on a running node. `add` / `remove` are 64-hex Ed25519 validator pubkeys; a
+/// rotation is `remove`(old) + `add`(new). The change only APPLIES once a quorum
+/// of the CURRENT committee ratifies it through finality.
+#[derive(serde::Deserialize)]
+pub struct ProposeEpochTransitionRequest {
+    #[serde(default)]
+    pub add: Vec<String>,
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// Response: the submitted proposal block ids (one per add/remove), plus the
+/// current committee size + threshold for operator visibility.
+#[derive(serde::Serialize)]
+pub struct ProposeEpochTransitionResponse {
+    pub success: bool,
+    pub proposals: Vec<EpochProposalEntry>,
+    pub committee_size: usize,
+    pub threshold: usize,
+    pub error: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct EpochProposalEntry {
+    pub action: String,
+    pub validator: String,
+    pub proposal_block: String,
+}
+
+/// Submit a live epoch-transition proposal. Each validator key is parsed +
+/// validated as a real Ed25519 point, then a `Leave`(remove) / `Join`(add)
+/// membership proposal block is created on the running blocklace and gossiped.
+async fn post_propose_epoch_transition(
+    State(state): State<NodeState>,
+    Json(req): Json<ProposeEpochTransitionRequest>,
+) -> Result<Json<ProposeEpochTransitionResponse>, StatusCode> {
+    // Parse + validate every requested key up front (a bad key fails the whole
+    // request before anything is submitted).
+    let mut removes: Vec<[u8; 32]> = Vec::with_capacity(req.remove.len());
+    for h in &req.remove {
+        removes.push(
+            crate::operator_join::parse_validator_pubkey(h).map_err(|_| StatusCode::BAD_REQUEST)?,
+        );
+    }
+    let mut adds: Vec<[u8; 32]> = Vec::with_capacity(req.add.len());
+    for h in &req.add {
+        adds.push(
+            crate::operator_join::parse_validator_pubkey(h).map_err(|_| StatusCode::BAD_REQUEST)?,
+        );
+    }
+    if removes.is_empty() && adds.is_empty() {
+        return Ok(Json(ProposeEpochTransitionResponse {
+            success: false,
+            proposals: vec![],
+            committee_size: 0,
+            threshold: 0,
+            error: Some("no --add or --remove validators given".to_string()),
+        }));
+    }
+
+    let Some(blocklace) = state.blocklace().await else {
+        return Ok(Json(ProposeEpochTransitionResponse {
+            success: false,
+            proposals: vec![],
+            committee_size: 0,
+            threshold: 0,
+            error: Some(
+                "node is not running blocklace consensus (no committee to reconfigure)".to_string(),
+            ),
+        }));
+    };
+
+    let mut proposals = Vec::new();
+    // Removals first, then additions (a rotation = remove old + add new).
+    for pk in &removes {
+        let block_id = blocklace.propose_membership(&state, *pk, false).await;
+        proposals.push(EpochProposalEntry {
+            action: "remove".to_string(),
+            validator: hex_encode(pk),
+            proposal_block: hex_encode(&block_id.0),
+        });
+    }
+    for pk in &adds {
+        let block_id = blocklace.propose_membership(&state, *pk, true).await;
+        proposals.push(EpochProposalEntry {
+            action: "add".to_string(),
+            validator: hex_encode(pk),
+            proposal_block: hex_encode(&block_id.0),
+        });
+    }
+
+    let (committee_size, threshold) = {
+        let c = blocklace.constitution.read().await;
+        (c.current.participant_count(), c.threshold())
+    };
+
+    Ok(Json(ProposeEpochTransitionResponse {
+        success: true,
+        proposals,
+        committee_size,
+        threshold,
+        error: None,
+    }))
+}
+
 // =============================================================================
 // Helpers
 // =============================================================================
@@ -7327,6 +7655,155 @@ fn classify_starbridge_app(memo: Option<&str>, effect_summaries: &[String]) -> O
     }
 }
 
+/// A stable label for a granted/revoked capability (the `cap` term of the
+/// `granted`/`revoked` facts): the token hash when present, else `target#slot`.
+fn cap_ref_label(cap: &dregg_cell::CapabilityRef) -> String {
+    match cap.breadstuff {
+        Some(h) => hex_encode(&h),
+        None => format!("{}#{}", hex_encode(&cap.target.0), cap.slot),
+    }
+}
+
+/// Build the typed [`dregg_query::EffectSummary`] enrichment for a committed
+/// turn: the decoded per-effect disclosure — transfers / grants / revocations /
+/// burns (supply reductions) / state-field writes / cell births / lifecycle
+/// transitions (seal/unseal/destroy/sovereign) — plus a post-state balance
+/// observation for every cell the turn's transfers/burns touched. Read off the
+/// ALREADY-committed before/after ledger — additive, never gates the commit. The
+/// `asset` of a transfer/balance is the token domain of the cell (pre-state for
+/// the source/burn target, post-state for the destination).
+fn summarize_turn_effects(
+    turn: &Turn,
+    pre: &dregg_cell::Ledger,
+    post: &dregg_cell::Ledger,
+) -> Vec<dregg_query::EffectSummary> {
+    use dregg_query::EffectSummary as ES;
+    use dregg_turn::Effect;
+
+    let asset_of = |id: &CellId, l: &dregg_cell::Ledger| -> String {
+        l.get(id)
+            .map(|c| hex_encode(c.token_id()))
+            .unwrap_or_default()
+    };
+
+    let mut out = Vec::new();
+    let mut touched: Vec<[u8; 32]> = Vec::new();
+    let note = |id: [u8; 32], touched: &mut Vec<[u8; 32]>| {
+        if !touched.contains(&id) {
+            touched.push(id);
+        }
+    };
+
+    for tree in turn.call_forest.iter_dfs() {
+        for effect in &tree.action.effects {
+            match effect {
+                Effect::Transfer { from, to, amount } => {
+                    let asset = {
+                        let a = asset_of(from, pre);
+                        if a.is_empty() { asset_of(to, post) } else { a }
+                    };
+                    out.push(ES::Transfer {
+                        from: hex_encode(&from.0),
+                        to: hex_encode(&to.0),
+                        asset,
+                        amount: *amount,
+                    });
+                    note(from.0, &mut touched);
+                    note(to.0, &mut touched);
+                }
+                Effect::GrantCapability { from, to, cap } => {
+                    out.push(ES::Granted {
+                        from: hex_encode(&from.0),
+                        to: hex_encode(&to.0),
+                        cap: cap_ref_label(cap),
+                    });
+                }
+                Effect::RevokeCapability { cell, slot } => {
+                    out.push(ES::Revoked {
+                        cap: format!("{}#{}", hex_encode(&cell.0), slot),
+                    });
+                }
+                Effect::Burn { target, amount, .. } => {
+                    // A provable supply reduction — no destination credited. The
+                    // asset is the target's token domain (pre-state, since the
+                    // cell may be destroyed/altered after).
+                    out.push(ES::Burned {
+                        cell: hex_encode(&target.0),
+                        asset: asset_of(target, pre),
+                        amount: *amount,
+                    });
+                    note(target.0, &mut touched);
+                }
+                Effect::SetField { cell, index, value } => {
+                    out.push(ES::Field {
+                        cell: hex_encode(&cell.0),
+                        index: *index as u64,
+                        value: hex_encode(value),
+                    });
+                }
+                Effect::CreateCell {
+                    public_key,
+                    token_id,
+                    ..
+                } => {
+                    // The new cell id is derived from (public_key, token_id) —
+                    // the same derivation the executor uses (`Cell::id()`).
+                    let cell = dregg_cell::CellId::derive_raw(public_key, token_id);
+                    out.push(ES::Created {
+                        agent: hex_encode(&tree.action.target.0),
+                        cell: hex_encode(&cell.0),
+                    });
+                }
+                Effect::CreateCellFromFactory {
+                    owner_pubkey,
+                    token_id,
+                    ..
+                } => {
+                    let cell = dregg_cell::CellId::derive_raw(owner_pubkey, token_id);
+                    out.push(ES::Created {
+                        agent: hex_encode(&tree.action.target.0),
+                        cell: hex_encode(&cell.0),
+                    });
+                }
+                Effect::CellSeal { target, .. } => out.push(ES::Lifecycle {
+                    cell: hex_encode(&target.0),
+                    state: "sealed".to_string(),
+                }),
+                Effect::CellUnseal { target } => out.push(ES::Lifecycle {
+                    cell: hex_encode(&target.0),
+                    state: "unsealed".to_string(),
+                }),
+                Effect::CellDestroy { target, .. } => out.push(ES::Lifecycle {
+                    cell: hex_encode(&target.0),
+                    state: "destroyed".to_string(),
+                }),
+                Effect::MakeSovereign { cell } => out.push(ES::Lifecycle {
+                    cell: hex_encode(&cell.0),
+                    state: "sovereign".to_string(),
+                }),
+                _ => {}
+            }
+        }
+    }
+
+    // Post-state balance observations for the cells the transfers touched —
+    // the stamped `balance(cell, asset, amount, height)` facts (clamped to a
+    // non-negative observation; a cell's balance register is bias-encoded).
+    for id in &touched {
+        let cell_id = CellId(*id);
+        if let Some(c) = post.get(&cell_id) {
+            let bal = c.state.balance();
+            out.push(ES::Balance {
+                cell: hex_encode(id),
+                asset: hex_encode(c.token_id()),
+                amount: bal.max(0) as u64,
+            });
+        }
+    }
+
+    out
+}
+
 fn effect_kind(effect: &dregg_turn::Effect) -> String {
     let debug = format!("{effect:?}");
     debug
@@ -7384,7 +7861,7 @@ fn hex_decode(s: &str) -> Result<[u8; 32], ()> {
 
 /// Decode variable-length hex strings into byte vectors.
 fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -7551,15 +8028,18 @@ mod tests {
             turn_hash: format!("turn-{height}"),
             cell_id: format!("cell-{height}"),
             effects: vec![format!("effect-{height}")],
+            summaries: Vec::new(),
             timestamp: height as i64,
         }
     }
 
     fn witnessed_with_marker(marker: u8) -> dregg_turn::WitnessedReceipt {
-        let mut receipt = dregg_turn::TurnReceipt::default();
-        receipt.turn_hash = [marker; 32];
-        receipt.effects_hash = [marker.wrapping_add(1); 32];
-        receipt.agent = CellId([marker.wrapping_add(2); 32]);
+        let receipt = dregg_turn::TurnReceipt {
+            turn_hash: [marker; 32],
+            effects_hash: [marker.wrapping_add(1); 32],
+            agent: CellId([marker.wrapping_add(2); 32]),
+            ..Default::default()
+        };
         dregg_turn::WitnessedReceipt::from_components(
             receipt,
             vec![marker, marker.wrapping_add(1)],
@@ -7697,6 +8177,75 @@ mod tests {
         }
     }
 
+    /// THE PORTAL-DECOUPLING CONTRACT (read path). The public `portal.dregg.studio`
+    /// viewer (`portal/dist/portal.js`) is repointed off the Discord bot onto the
+    /// NODE's `/api/*`. Its `renderCells`/`fillCell` read exactly these fields off
+    /// `/api/cells` and `/api/cell/<id>`; lock the node's structs to that field set so
+    /// the node serves a portal-compatible shape (the bot is no longer load-bearing).
+    #[test]
+    fn portal_read_contract_cell_fields_present() {
+        let entry = serde_json::to_value(CellListEntry {
+            id: "abcd".into(),
+            balance: 7,
+            nonce: 1,
+            capability_count: 2,
+            has_delegate: false,
+            has_program: true,
+            found: true,
+        })
+        .expect("serialize CellListEntry");
+        for field in ["id", "balance", "nonce", "capability_count", "has_program"] {
+            assert!(
+                entry.get(field).is_some(),
+                "/api/cells entry missing portal field `{field}`: {entry}"
+            );
+        }
+    }
+
+    /// The portal's liveness badge (`portal.js`) opens an `EventSource` on
+    /// `/observability/stream` and `addEventListener`s `hello` (reloads the cell list)
+    /// + `ping`. After the bot→node repoint the node must speak that same contract, so
+    /// the FIRST frame is an immediate `hello` (no 15s wait) carrying the node's
+    /// nullifier count — proving the public viewer's live badge works reading the node
+    /// directly, with the bot down.
+    #[tokio::test]
+    async fn portal_observability_stream_opens_with_hello() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/observability/stream")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Read just the first SSE frame (the stream is otherwise an infinite 15s
+        // ping heartbeat, so we must NOT `collect()` it).
+        let mut body = response.into_body();
+        let frame = body
+            .frame()
+            .await
+            .expect("a first SSE frame")
+            .expect("frame ok");
+        let data = frame.into_data().ok().expect("a data frame");
+        let text = String::from_utf8_lossy(&data);
+        assert!(
+            text.contains("hello"),
+            "first frame must be the hello event: {text}"
+        );
+        assert!(
+            text.contains("nullifiers"),
+            "hello carries the nullifier count for the badge: {text}"
+        );
+    }
+
     #[tokio::test]
     async fn receipt_witness_endpoint_exports_dwr1_artifacts() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -7744,6 +8293,322 @@ mod tests {
         let decoded = dregg_turn::WitnessedReceipt::from_artifact_bytes(&artifact_bytes)
             .expect("DWR1 witness artifact decodes");
         assert_eq!(decoded.proof_bytes, vec![0x41, 0x42]);
+    }
+
+    /// The enrichment: a committed turn's decoded Transfer effect + the
+    /// before/after ledger yield a typed `Transfer` summary AND a post-state
+    /// `Balance` observation for the touched cells — the EDB rows dregg-query
+    /// turns into `transfer`/`balance` facts.
+    #[test]
+    fn summarize_turn_effects_yields_typed_transfer_and_balance() {
+        use dregg_query::EffectSummary as ES;
+
+        let agent_pk = [0x11u8; 32];
+        let recipient_pk = [0x22u8; 32];
+        let agent = CellId(dregg_cell::CellId::derive_raw(&agent_pk, &[0u8; 32]).0);
+        let recipient = CellId(dregg_cell::CellId::derive_raw(&recipient_pk, &[0u8; 32]).0);
+
+        let mut pre = dregg_cell::Ledger::new();
+        pre.insert_cell(dregg_cell::Cell::with_balance(agent_pk, [0u8; 32], 1_000))
+            .expect("agent insert");
+        pre.insert_cell(dregg_cell::Cell::with_balance(recipient_pk, [0u8; 32], 0))
+            .expect("recipient insert");
+
+        // Post-state: 250 moved agent -> recipient.
+        let mut post = pre.clone();
+        {
+            let a = post.get(&agent).expect("agent").clone();
+            let mut a = a;
+            a.state.set_balance(a.state.balance() - 250);
+            post.remove(&agent);
+            post.insert_cell(a).expect("reinsert agent");
+            let r = post.get(&recipient).expect("recipient").clone();
+            let mut r = r;
+            r.state.set_balance(r.state.balance() + 250);
+            post.remove(&recipient);
+            post.insert_cell(r).expect("reinsert recipient");
+        }
+
+        let mut forest = CallForest::new();
+        forest.add_root(
+            dregg_turn::ActionBuilder::new_unchecked_for_tests(agent, "transfer", agent)
+                .effect_transfer(agent, recipient, 250)
+                .build(),
+        );
+        let turn = make_min_turn(agent, 0, None, forest);
+
+        let summaries = summarize_turn_effects(&turn, &pre, &post);
+
+        assert!(
+            summaries.iter().any(|e| matches!(
+                e,
+                ES::Transfer { amount: 250, to, .. } if *to == hex_encode(&recipient.0)
+            )),
+            "expected a typed Transfer(250) summary, got {summaries:?}"
+        );
+        assert!(
+            summaries.iter().any(|e| matches!(
+                e,
+                ES::Balance { amount: 250, cell, .. } if *cell == hex_encode(&recipient.0)
+            )),
+            "expected a post-state Balance(250) for the recipient, got {summaries:?}"
+        );
+    }
+
+    /// The richer EDB: a turn carrying a state-field write, a cell birth, and a
+    /// make-sovereign lifecycle transition yields the typed `Field` / `Created`
+    /// / `Lifecycle` summaries dregg-query turns into `field`/`created`/
+    /// `lifecycle` facts.
+    #[test]
+    fn summarize_turn_effects_yields_field_created_lifecycle() {
+        use dregg_query::EffectSummary as ES;
+
+        let agent_pk = [0x33u8; 32];
+        let agent = CellId(dregg_cell::CellId::derive_raw(&agent_pk, &[0u8; 32]).0);
+        let new_pk = [0x44u8; 32];
+        let new_token = [0x55u8; 32];
+        let new_cell = CellId(dregg_cell::CellId::derive_raw(&new_pk, &new_token).0);
+
+        let mut ledger = dregg_cell::Ledger::new();
+        ledger
+            .insert_cell(dregg_cell::Cell::with_balance(agent_pk, [0u8; 32], 0))
+            .expect("agent insert");
+
+        let mut forest = CallForest::new();
+        forest.add_root(
+            dregg_turn::ActionBuilder::new_unchecked_for_tests(agent, "rich", agent)
+                .effect_set_field(agent, 2, [0xABu8; 32])
+                .effect_create_cell(new_pk, new_token, 0)
+                .effect_make_sovereign(agent)
+                .build(),
+        );
+        let turn = make_min_turn(agent, 0, None, forest);
+
+        // The summary is read off the effects + ledger; pre == post is fine for
+        // these families (only Transfer/Burn need a balance delta).
+        let summaries = summarize_turn_effects(&turn, &ledger, &ledger);
+
+        assert!(
+            summaries.iter().any(
+                |e| matches!(e, ES::Field { index: 2, cell, .. } if *cell == hex_encode(&agent.0))
+            ),
+            "expected a typed Field write, got {summaries:?}"
+        );
+        assert!(
+            summaries
+                .iter()
+                .any(|e| matches!(e, ES::Created { cell, .. } if *cell == hex_encode(&new_cell.0))),
+            "expected a Created summary for the derived new-cell id, got {summaries:?}"
+        );
+        assert!(
+            summaries.iter().any(
+                |e| matches!(e, ES::Lifecycle { state, cell } if state == "sovereign" && *cell == hex_encode(&agent.0))
+            ),
+            "expected a sovereign Lifecycle transition, got {summaries:?}"
+        );
+    }
+
+    /// End-to-end over the LIVE log: drive two real transfer turns through the
+    /// node (executor + cipherclerk commit, the same path `/turn/submit` runs),
+    /// then read the two new handlers — `/api/receipts/index/{root,range}` —
+    /// build a dregg-query `AttestedAnswer` over the served slice, and verify it
+    /// against the served root. Then show the non-omission teeth bite: a
+    /// substituted leaf and a dropped position both reject.
+    #[tokio::test]
+    async fn live_receipt_index_serves_verifying_attested_answer_and_teeth_bite() {
+        use dregg_turn::{ComputronCosts, TurnExecutor, TurnResult};
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = NodeState::new(tmp.path(), vec![]).expect("node state");
+
+        let recipient_pk = [0x77u8; 32];
+        let (agent, recipient) = {
+            let s = state.read().await;
+            let agent_pk = s.cclerk.public_key().0;
+            (
+                CellId(dregg_cell::CellId::derive_raw(&agent_pk, &[0u8; 32]).0),
+                CellId(dregg_cell::CellId::derive_raw(&recipient_pk, &[0u8; 32]).0),
+            )
+        };
+
+        // Open permissions so the unsigned test transfer commits (the
+        // executor still enforces the cell's Send permission; the real node
+        // path signs via the cipherclerk instead).
+        let open = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+
+        {
+            let mut s = state.write().await;
+            let cc_pk = s.cclerk.public_key().0;
+            let mut agent_cell = dregg_cell::Cell::with_balance(cc_pk, [0u8; 32], 1_000_000);
+            agent_cell.permissions = open.clone();
+            s.ledger.insert_cell(agent_cell).expect("agent provision");
+            let mut recipient_cell = dregg_cell::Cell::with_balance(recipient_pk, [0u8; 32], 0);
+            recipient_cell.permissions = open.clone();
+            s.ledger
+                .insert_cell(recipient_cell)
+                .expect("recipient provision");
+
+            let executor = TurnExecutor::new(ComputronCosts::default());
+            for nonce in 0u64..2 {
+                let prev = s.cclerk.receipt_head().map(|r| r.receipt_hash());
+                let mut forest = CallForest::new();
+                forest.add_root(
+                    dregg_turn::ActionBuilder::new_unchecked_for_tests(agent, "transfer", agent)
+                        .effect_transfer(agent, recipient, 100)
+                        .build(),
+                );
+                let turn = make_min_turn(agent, nonce, prev, forest);
+                let pre_ledger = s.ledger.clone();
+                let receipt = match executor.execute(&turn, &mut s.ledger) {
+                    TurnResult::Committed { receipt, .. } => receipt,
+                    other => panic!("transfer turn nonce={nonce} must commit: {other:?}"),
+                };
+                s.cclerk.append_receipt(receipt).expect("append receipt");
+                let summaries = summarize_turn_effects(&turn, &pre_ledger, &s.ledger);
+                assert!(
+                    summaries
+                        .iter()
+                        .any(|e| matches!(e, dregg_query::EffectSummary::Transfer { .. })),
+                    "real turn must yield a typed Transfer summary"
+                );
+                push_committed_event_enriched(
+                    &mut s,
+                    hex_encode(&turn.hash()),
+                    hex_encode(&agent.0),
+                    vec!["transfer".to_string()],
+                    summaries,
+                    ActivityProofStatus::NotRequired,
+                );
+            }
+        }
+
+        let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+        let app = router(state, false, recorder.handle());
+
+        // (1) the live MMR root.
+        let root_resp: dregg_query::client::IndexRootResponse = {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/receipts/index/root")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            serde_json::from_slice(&body).expect("root json")
+        };
+        assert_eq!(root_resp.len, 2, "two committed receipts indexed");
+        let trusted_root = hex_decode(&root_resp.root).expect("32-byte root");
+
+        // (2) the certified slice over the whole log.
+        let range_resp: dregg_query::client::IndexRangeResponse = {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/receipts/index/range?lo=0&hi=1")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("body")
+                .to_bytes();
+            serde_json::from_slice(&body).expect("range json")
+        };
+        assert_eq!(range_resp.receipts.len(), 2);
+
+        // (3) the attested answer verifies against the served root.
+        let query = dregg_query::Query::new().atom(
+            dregg_query::Pred::Transfer,
+            vec![
+                dregg_query::Term::var("from"),
+                dregg_query::Term::var("to"),
+                dregg_query::Term::var("asset"),
+                dregg_query::Term::var("amount"),
+                dregg_query::Term::var("h"),
+            ],
+        );
+        let slice = range_resp.clone().into_slice().expect("slice");
+        let answer = dregg_query::answer_whole_log(slice, query).expect("answer");
+        answer
+            .verify(&dregg_query::Blake3Mmr, &trusted_root)
+            .expect("live attested answer must verify against the served root");
+        assert!(
+            !answer.rows.is_empty(),
+            "the transfer query yields rows from the live receipts"
+        );
+
+        // (4a) teeth: a substituted receipt leaf rejects (SlotMismatch).
+        let mut tampered = range_resp.clone().into_slice().expect("slice");
+        tampered.receipts[0].receipt_hash = hex_encode(&[0xEEu8; 32]);
+        assert!(
+            tampered
+                .verify(&dregg_query::Blake3Mmr, &trusted_root)
+                .is_err(),
+            "a substituted leaf must reject"
+        );
+
+        // (4b) teeth: a dropped position rejects (CountMismatch — positions are dense).
+        let mut omitted = range_resp.into_slice().expect("slice");
+        omitted.receipts.pop();
+        assert!(
+            omitted
+                .verify(&dregg_query::Blake3Mmr, &trusted_root)
+                .is_err(),
+            "an omitted position must reject"
+        );
+    }
+
+    /// Build a minimal `Turn` with the given call forest (test helper).
+    fn make_min_turn(
+        agent: CellId,
+        nonce: u64,
+        prev: Option<[u8; 32]>,
+        call_forest: CallForest,
+    ) -> Turn {
+        Turn {
+            agent,
+            nonce,
+            fee: 100_000,
+            memo: None,
+            valid_until: None,
+            call_forest,
+            depends_on: vec![],
+            previous_receipt_hash: prev,
+            conservation_proof: None,
+            sovereign_witnesses: Default::default(),
+            execution_proof: None,
+            execution_proof_cell: None,
+            execution_proof_new_commitment: None,
+            custom_program_proofs: None,
+            effect_binding_proofs: vec![],
+            cross_effect_dependencies: vec![],
+            effect_witness_index_map: vec![],
+        }
     }
 
     #[tokio::test]
@@ -8318,6 +9183,8 @@ mod tests {
     /// coordinator with a "actual gate at execution time" comment that did not
     /// exist.
     #[test]
+    // Intentional compile-constant regression guard (both operands are consts by design).
+    #[allow(clippy::assertions_on_constants)]
     fn audit_f_p2_1_atomic_budget_is_bounded() {
         assert_eq!(
             MAX_ATOMIC_BUDGET, 1_000_000_000,
@@ -8883,6 +9750,8 @@ mod tests {
     /// coarse public liveness signal (`healthy` / `consensus_live` / `dag_height`)
     /// is still present.
     #[tokio::test]
+    // The env-lock guard must span the async request so the env scrub stays in effect throughout.
+    #[allow(clippy::await_holding_lock)]
     async fn f8_status_does_not_leak_private_counts_defended() {
         let _guard = F8_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Ensure the opt-in is OFF for this test regardless of ambient env.
@@ -8937,6 +9806,8 @@ mod tests {
     /// counters reappear — proving the default-off is a real, reversible gate
     /// (the test is non-vacuous: the same code path produces both outcomes).
     #[tokio::test]
+    // The env-lock guard must span the async request so the env opt-in stays in effect throughout.
+    #[allow(clippy::await_holding_lock)]
     async fn f8_opt_in_re_exposes_counts_control() {
         let _guard = F8_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe {

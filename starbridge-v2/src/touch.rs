@@ -38,13 +38,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    ClickEvent, Context, FocusHandle, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window, div, prelude::*, px,
+    div, prelude::*, px, ClickEvent, Context, FocusHandle, IntoElement, ParentElement, Render,
+    SharedString, Styled, Window,
 };
 
-use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::tab::{Tab, TabBar};
+use gpui_component::Sizable;
 
 use dregg_cell::CellId;
 

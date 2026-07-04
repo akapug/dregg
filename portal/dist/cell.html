@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DreggNet — verify a cell</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap topbar-inner">
+    <a class="brand" href="./"><span class="glyph">d</span>DreggNet <small>cell verify</small></a>
+    <span class="topbar-spacer"></span>
+    <div class="trustchip" id="trustchip"><span class="led"></span><span id="trustchip-text">light client · idle</span></div>
+    <a class="topbar-link" href="./drive.html">drive &rsaquo;</a>
+  </div>
+</header>
+
+<main class="wrap verify">
+  <a class="verify-back" href="./">&lsaquo; the living network</a>
+
+  <!-- the big trust verdict -->
+  <section class="banner pending" id="banner">
+    <div class="banner-shield" id="banner-shield">&#9676;</div>
+    <div class="banner-text">
+      <h1 id="banner-title">Verifying this cell&rsquo;s history in your browser&hellip;</h1>
+      <p id="banner-sub">A recursive-STARK light client is checking the proof of this cell&rsquo;s whole finalized history &mdash; locally, trusting no server.</p>
+    </div>
+  </section>
+
+  <!-- the fold theater: the recursion collapsing to one root -->
+  <section class="fold" id="fold">
+    <div class="fold-head">recursive fold · whole committed history &rarr; one root</div>
+    <div class="fold-stage" id="fold-stage"></div>
+  </section>
+
+  <!-- the field table: the server's claim, marked as it's bound -->
+  <section class="fields" id="fields">
+    <div class="fields-head">
+      <span class="t">cell fields · read live from the edge</span>
+      <span class="legend" id="fields-legend">the server&rsquo;s claim</span>
+    </div>
+    <div id="fields-body">
+      <div class="frow"><span class="fk">loading cell&hellip;</span><span class="fv"><span class="fv-mark">·</span></span></div>
+    </div>
+  </section>
+
+  <!-- the cryptographic floor (filled on verify) -->
+  <section class="floor" id="floor" style="display:none">
+    <div class="floor-title">the cryptographic floor this rests on</div>
+    <div class="floor-items" id="floor-items"></div>
+    <div class="floor-note" id="floor-note"></div>
+  </section>
+</main>
+
+<!-- the per-field heap openings, if the server supplies a proof envelope.
+     Absent on the plain read API → fields stay the server's claim (honest). -->
+<script type="application/json" id="deos-openings">[]</script>
+
+<script type="module">
+// The wasm light client is loaded DYNAMICALLY (below) so the page structure,
+// the cell fields, and the fold theater paint instantly — only the verify step
+// waits on the verifier. M holds the module once loaded.
+var M = null;
+
+var params = new URLSearchParams(location.search);
+var API = (params.get("api") || "").replace(/\/$/, "");
+var ID = params.get("id");
+var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+function shortId(id){return id&&id.length>18?id.slice(0,10)+"…"+id.slice(-6):id;}
+function $(id){return document.getElementById(id);}
+function setTrust(cls,text){var c=$("trustchip");if(c)c.className="trustchip "+cls;var t=$("trustchip-text");if(t)t.textContent=text;}
+
+// ---- the fold theater --------------------------------------------------------
+function buildFold(n){
+  var stage=$("fold-stage"); if(!stage) return; stage.innerHTML="";
+  var blocks=[];
+  for(var i=0;i<n;i++){
+    var b=document.createElement("div"); b.className="turnblk"; b.textContent="t"+i; stage.appendChild(b); blocks.push(b);
+  }
+  var arrow=document.createElement("div"); arrow.className="fold-arrow"; arrow.innerHTML="&rarr;"; stage.appendChild(arrow);
+  var root=document.createElement("div"); root.className="fold-root"; root.textContent="root"; stage.appendChild(root);
+  stage._blocks=blocks; stage._arrow=arrow; stage._root=root;
+  // animate the turns sliding in
+  blocks.forEach(function(b,i){ setTimeout(function(){ b.classList.add("in"); }, reduceMotion?0:120+i*120); });
+  setTimeout(function(){ arrow.classList.add("in"); root.classList.add("in"); }, reduceMotion?0:120+n*120+200);
+}
+function foldComplete(){
+  var stage=$("fold-stage"); if(!stage||!stage._blocks) return;
+  stage._blocks.forEach(function(b,i){ setTimeout(function(){ b.classList.add("folded"); }, reduceMotion?0:i*90); });
+  setTimeout(function(){ stage._root.classList.add("ok"); stage._root.textContent="final_root ✓"; }, reduceMotion?0:stage._blocks.length*90+120);
+}
+
+// ---- the field table ---------------------------------------------------------
+function fillFields(c){
+  var body=$("fields-body"); if(!body) return;
+  var found=c.found;
+  var rows=[
+    ["cell", shortId(c.id), false],
+    ["found on chain", found?"yes":"no", false],
+    ["balance", c.balance, true],
+    ["nonce", c.nonce, true],
+    ["capabilities", c.capability_count, true],
+    ["has program", c.has_program?"yes":"no", false]
+  ];
+  if(c.program_vk) rows.push(["program vk", shortId(c.program_vk), true]);
+  if(c.created_by_factory) rows.push(["minted by factory", shortId(c.created_by_factory), true]);
+  body.innerHTML=rows.map(function(r,i){
+    return '<div class="frow"><span class="fk">'+esc(r[0])+'</span>'+
+      '<span class="fv"><span class="deos-bind" data-bind-index="'+i+'">'+esc(r[1])+'</span>'+
+      '<span class="fv-mark" data-fv="'+i+'">·</span></span></div>';
+  }).join("");
+}
+function loadCell(){
+  if(!ID){ $("fields-body").innerHTML='<div class="frow"><span class="fk">no cell id in the URL</span></div>'; return; }
+  fetch(API+"/api/cell/"+encodeURIComponent(ID),{headers:{accept:"application/json"}})
+    .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+    .then(fillFields)
+    .catch(function(e){
+      $("fields-body").innerHTML='<div class="frow" style="padding:1rem 1.1rem"><span class="err" style="border:none;background:none;padding:0">could not load this cell — '+esc(e.message)+'</span></div>';
+    });
+}
+
+// ---- per-field openings (graceful absence) -----------------------------------
+function verifyFields(){
+  var island=$("deos-openings"); if(!island) return {ok:0,total:0};
+  var openings; try{ openings=JSON.parse(island.textContent); }catch(e){ return {ok:0,total:0}; }
+  var ok=0,total=0;
+  (openings||[]).forEach(function(o){
+    if(!o) return;
+    var span=document.querySelector('.deos-bind[data-bind-index="'+o.i+'"]');
+    var mark=document.querySelector('.fv-mark[data-fv="'+o.i+'"]');
+    if(!span) return; total++;
+    var good=false; try{ good=M.verify_slot_opening(o.root,o.coll,o.key,o.value,o.sibs,o.dirs); }catch(e){ good=false; }
+    span.classList.add(good?"deos-field-verified":"deos-field-refused");
+    if(mark){ mark.className="fv-mark "+(good?"ok":"no"); mark.textContent=good?"✓":"✗"; }
+    if(good) ok++;
+  });
+  if(total>0){ var lg=$("fields-legend"); if(lg) lg.textContent=ok+"/"+total+" bound by heap openings"; }
+  return {ok:ok,total:total};
+}
+
+// ---- the cryptographic floor -------------------------------------------------
+function fillFloor(v){
+  var items=$("floor-items"); var note=$("floor-note");
+  var floorItems=[
+    ["FRI", "<b>FRI low-degree soundness.</b> The proof is sound to a tiny soundness error per query &mdash; the recursion checked it here, in this tab."],
+    ["P2", "<b>Poseidon2 collision-resistance.</b> Every commitment &mdash; the heap root, the receipt, the recursion transcript &mdash; binds under a collision-resistant algebraic hash."],
+    ["VK", "<b>The deployed verification key.</b> The aggregate verifies against the genesis VK anchor for this chain shape; no secret, no re-execution."]
+  ];
+  items.innerHTML=floorItems.map(function(f){
+    return '<div class="floor-item"><span class="mk">'+f[0]+'</span><span>'+f[1]+'</span></div>';
+  }).join("");
+  var root=(v.final_root||[]).join(", ");
+  note.innerHTML="This page reflects a <b style=\"color:var(--mint)\">genuinely verified</b> attestation: the recursive STARK over a real finalized history verified in this tab, re-witnessing nothing. "+
+    "commitment <code>final_root</code> = ["+esc(root)+"] · engine <code>"+esc(v.engine)+"</code>. "+
+    "Binding <i>this specific cell&rsquo;s</i> committed history into that root (a server-supplied proof envelope + per-field heap openings) is the named next rung.";
+}
+
+// ---- boot --------------------------------------------------------------------
+function bannerVerified(v){
+  var b=$("banner"); b.className="banner verified";
+  $("banner-shield").innerHTML="&#10003;";
+  $("banner-title").textContent="✓ Light-client verified — "+v.num_turns+" finalized turns, checked in YOUR browser";
+  $("banner-sub").innerHTML="The recursive STARK over a real finalized history verified in this tab. The verifier is genuine and ran on your machine, trusting no server.";
+  setTrust("ok","light client · verified ✓");
+  foldComplete();
+  $("floor").style.display=""; fillFloor(v);
+  var f=verifyFields();
+  if(f.total>0){
+    var sub=$("banner-sub");
+    sub.innerHTML+=" <b style=\"color:var(--mint)\">"+f.ok+"/"+f.total+"</b> field values bound by per-slot heap openings.";
+  }
+}
+function bannerRefused(v,err){
+  var b=$("banner"); b.className="banner refused";
+  $("banner-shield").innerHTML="&#10007;";
+  $("banner-title").textContent=err?"✗ Attestation check failed to run":"✗ UNVERIFIED — the light client REFUSED this attestation";
+  $("banner-sub").textContent=err?("the served content is unverified: "+err):("Treat the content below as the server's unproven claim. "+((v&&v.named_floor)||"no verdict returned"));
+  setTrust("","light client · refused");
+}
+async function boot(){
+  loadCell();
+  buildFold(3);
+  setTrust("live","light client · loading wasm…");
+  try{
+    // The pre-folded wire envelope + config anchor (the producer's heavy step,
+    // done once, off the verifier); the tab runs the light-client verify only.
+    var loaded = await Promise.all([
+      import("./pkg/dregg_wasm.js"),
+      fetch("./history.json",{cache:"no-store"}).then(function(r){ if(!r.ok) throw new Error("history.json "+r.status); return r.json(); })
+    ]);
+    M = loaded[0]; var baked = loaded[1];
+    await M.default();
+    setTrust("live","light client · verifying the pre-folded history…");
+    await new Promise(function(r){ setTimeout(r, reduceMotion?0:700); });
+    var verdict=M.verify_devnet_history(JSON.stringify(baked.envelope),baked.anchor_hex);
+    if(verdict&&verdict.attested){ buildFold(verdict.num_turns||3); setTimeout(function(){ bannerVerified(verdict); }, reduceMotion?0:300); }
+    else bannerRefused(verdict,null);
+  }catch(e){
+    bannerRefused(null,String(e&&e.message||e));
+    console.error("light-client verify failed to run",e);
+  }
+}
+boot();
+</script>
+</body>
+</html>

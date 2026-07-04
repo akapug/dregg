@@ -700,12 +700,10 @@ mod tests {
         let reach = StorageReach::parse("content://media/external/images/media/42").unwrap();
 
         // A read of the granted images collection is fine...
-        assert!(
-            resolver
-                .resolve(&reach, StorageAccess::Read)
-                .decision
-                .granted()
-        );
+        assert!(resolver
+            .resolve(&reach, StorageAccess::Read)
+            .decision
+            .granted());
         // ...but a write against the read-only grant is refused (no amplification).
         let w = resolver.resolve(&reach, StorageAccess::Write);
         assert!(w.decision.refused_read_only());

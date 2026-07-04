@@ -1091,8 +1091,8 @@ mod pg {
     /// initialized LAZILY on the first produce — i.e. in this draining backend,
     /// after the postmaster fork, never in the postmaster.
     #[cfg(feature = "tier-d")]
-    fn lean_drain_engine_resumed_from_turns()
-    -> crate::drainer::Drainer<crate::lean_producer::LeanProducer> {
+    fn lean_drain_engine_resumed_from_turns(
+    ) -> crate::drainer::Drainer<crate::lean_producer::LeanProducer> {
         // The same fixed reserved float source + unit the stand-in used, so the
         // produced post-images line up across a producer switch.
         let source = [0xc0u8; 32];
@@ -1116,8 +1116,8 @@ mod pg {
     /// derives the SAME chaining root (`crate::drainer::fold_chain_root`), so a store
     /// written by any producer chains seamlessly.
     #[cfg(all(feature = "tier-d-rust", not(feature = "tier-d")))]
-    fn rust_drain_engine_resumed_from_turns()
-    -> crate::drainer::Drainer<crate::rust_producer::RustProducer> {
+    fn rust_drain_engine_resumed_from_turns(
+    ) -> crate::drainer::Drainer<crate::rust_producer::RustProducer> {
         // The same fixed reserved float source + unit the stand-in used, so the
         // produced post-images line up across a producer switch.
         let source = [0xc0u8; 32];
@@ -1270,8 +1270,8 @@ mod pg {
     #[pg_extern(stable, parallel_safe, strict)]
     fn dregg_verify_turn(prev_root: &[u8], ledger_root: &[u8], ordinal: i64) -> bool {
         let _ = ledger_root; // recorded by the trigger; the chain gate is on prev_root/ordinal
-        // Read the current head + next-expected ordinal from dregg.turns.
-        // No rows ⇒ genesis (head = None, next = 0).
+                             // Read the current head + next-expected ordinal from dregg.turns.
+                             // No rows ⇒ genesis (head = None, next = 0).
         let head_hex: Option<String> = Spi::get_one(
             "SELECT encode(ledger_root, 'hex') FROM dregg.turns ORDER BY ordinal DESC LIMIT 1",
         )

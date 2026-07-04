@@ -17,12 +17,12 @@
 //! test without a renderer.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{AnyElement, FontWeight, IntoElement, ParentElement, Styled, div, px};
+use gpui::{div, px, AnyElement, FontWeight, IntoElement, ParentElement, Styled};
 
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, NT_TITLE_TEXT, bevel_raised, id_short,
+    bevel_raised, id_short, NT_DIM, NT_FACE_DARK, NT_SELECT, NT_TEXT, NT_TITLE_TEXT,
 };
 
 // ── The candidate model ───────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ pub fn rank(query: &str, candidates: &[SpotterEntry]) -> Vec<SpotterEntry> {
         })
         .collect();
     // Sort by score descending; `sort_by` is stable, so equal scores keep input order.
-    scored.sort_by(|a, b| b.score.cmp(&a.score));
+    scored.sort_by_key(|b| std::cmp::Reverse(b.score));
     scored
 }
 

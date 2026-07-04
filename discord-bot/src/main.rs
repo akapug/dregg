@@ -14,6 +14,18 @@
 //! Discord<->dregg federation linking.
 
 mod activity_feed;
+// DreggNet Cloud — semi-private per-user channels (the visibility plan + name).
+pub mod channels;
+// DreggNet Cloud — drive-your-Hermes-from-your-channel: a channel message becomes
+// a cap-gated, metered, receipted dregg turn through the proven `ToolGateway`,
+// bounded by the user's own cell. The confined per-user agent loop.
+pub mod hermes_channel;
+// BYO-LLM-keys: a user ports in their OWN provider key (Anthropic / OpenAI /
+// OpenRouter / Kimi / DeepSeek). `key_vault` seals it at rest (AEAD, per-user
+// derived key, redacted, zeroized); `llm_provider` is the multi-provider
+// abstraction + policy; `hermes_channel` drives the metered, permissioned brain.
+pub mod key_vault;
+pub mod llm_provider;
 // The bot's surfaces authored ONCE as `deos-view` `ViewNode` cards and rendered through
 // the Discord backend (`deos_view::discord`) — the card-authored-once-renders-everywhere
 // thesis extended to Discord (the FOURTH `ViewNode` backend, alongside native gpui / web
@@ -22,6 +34,11 @@ pub mod captp_client;
 pub mod cards;
 mod cipherclerk;
 mod commands;
+// Two channel-agents cooperate over the promise-pipeline and settle ATOMICALLY:
+// a producer hands a promise (`EventualRef`), the consumer pipelines its payment
+// against it, the round settles all-or-nothing through the verified executor
+// (`dregg_app_framework::agent_coordination`). Discord-independent + proven.
+pub mod coordinate_flow;
 // §4.7 canonical, Discord-independent capability-handoff flow: produces and
 // validates *real* `dregg_captp::handoff::HandoffCertificate` artifacts.
 pub mod handoff_flow;
@@ -85,17 +102,26 @@ use devnet::DevnetClient;
 use discord_caps::{DiscordCapRegistry, EventBridge};
 use presence::{PresenceStatus, PresenceTracker};
 
+// The slash-command surface after the Telegram-style UX redesign (see
+// `discord-bot/UX-REDESIGN.md`). The front door is `/start` (onboard + a button
+// menu) and `/help`; everything common is now a button or just typing in your
+// channel. Fifteen redundant commands were retired from the registered surface
+// (their capability lives on in the `/dregg` dashboard panels): `tip`
+// (duplicate of `send`), `metrics` (folded into `status`/`dashboard`),
+// `credential` (→ Identity panel), the four `gov-*` (→ Governance panel), the
+// three `name-*` (→ Names panel), and the five `queue-*` (→ Subscription panel).
 const REGISTERED_COMMAND_NAMES: &[&str] = &[
+    // ─── front door (the only commands a newcomer must learn) ───────────────
+    "start",
+    "help",
+    // ─── quick reads + wallet (also surfaced as `/start` buttons) ───────────
     "explorer",
     "presence",
     "cipherclerk",
     "send",
-    "tip",
     "gallery",
-    "credential",
     "status",
     "proof",
-    "metrics",
     "faucet",
     "leaderboard",
     "history",
@@ -105,19 +131,7 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "cap-delegate",
     "cap-list",
     "cap-revoke",
-    "queue-create",
-    "queue-publish",
-    "queue-subscribe",
-    "queue-status",
-    "queue-mount",
-    "gov-propose",
-    "gov-vote",
-    "gov-status",
-    "gov-routes",
     "council-status",
-    "name-register",
-    "name-resolve",
-    "name-whois",
     "setup-federation",
     "link-cipherclerk",
     "unlink-cipherclerk",
@@ -137,6 +151,12 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "deos",
     // ─── interactive ViewNode card (buttons fire real verified turns) ───────────
     "card",
+    // ─── two channel-agents coordinate over the promise-pipeline (atomic settle) ─
+    "coordinate",
+    // ─── DreggNet Cloud: claim a semi-private channel to drive your Hermes ───────
+    "channel",
+    // ─── BYO-LLM-keys: port in / rotate / revoke your own provider key ───────────
+    "key",
 ];
 
 #[cfg(test)]
@@ -172,6 +192,12 @@ pub struct BotState {
     /// a real cap-gated verified turn on the pressing user's card and re-renders it
     /// (`viewnode_applet`).
     pub card_applets: viewnode_applet::CardApplets,
+    /// DreggNet Cloud — the per-user confined Hermes sessions, keyed by Discord
+    /// user id. Held here so a user's rate budgets accumulate across the messages
+    /// they post in their channel. Each session is bounded by the user's own cell
+    /// (derived from their custodial seed). See [`hermes_channel`].
+    pub channel_hermes:
+        std::sync::Mutex<std::collections::HashMap<u64, hermes_channel::ChannelHermes>>,
 }
 
 /// The main event handler for Discord gateway events.
@@ -191,17 +217,17 @@ impl EventHandler for Handler {
         // in the post-relocation cleanup; their slash-command names will
         // disappear from Discord once this set is re-registered.
         let commands = vec![
+            // ─── Front door (the only commands a newcomer must learn) ────────
+            commands::start::register(),
+            commands::start::register_help(),
             // ─── Bot core ───────────────────────────────────────────────────
             commands::explorer::register(),
             commands::presence::register(),
             commands::cipherclerk::register(),
             commands::transfer::register_send(),
-            commands::transfer::register_tip(),
             commands::gallery::register(),
-            commands::identity::register(),
             commands::status::register_status(),
             commands::status::register_proof(),
-            commands::status::register_metrics(),
             commands::social::register_faucet(),
             commands::social::register_leaderboard(),
             commands::social::register_history(),
@@ -212,22 +238,9 @@ impl EventHandler for Handler {
             commands::captp::register_delegate(),
             commands::captp::register_list(),
             commands::captp::register_revoke(),
-            // ─── Programmable queue commands ─────────────────────────────────
-            commands::queue::register_create(),
-            commands::queue::register_publish(),
-            commands::queue::register_subscribe(),
-            commands::queue::register_status(),
-            commands::queue::register_mount(),
-            // ─── Governance commands ────────────────────────────────────────
-            commands::governance::register_propose(),
-            commands::governance::register_vote(),
-            commands::governance::register_status(),
-            commands::governance::register_routes(),
+            // ─── Polis governance (the retired gov-* / name-* / queue-*
+            //     families now live in the `/dregg` dashboard panels) ─────────
             commands::polis::register_council_status(),
-            // ─── Name service commands ──────────────────────────────────────
-            commands::names::register_register(),
-            commands::names::register_resolve(),
-            commands::names::register_whois(),
             // ─── Federation setup commands ──────────────────────────────────
             commands::federation::register_setup(),
             commands::federation::register_link(),
@@ -250,6 +263,11 @@ impl EventHandler for Handler {
             commands::deos::register(),
             // ─── interactive ViewNode card ──────────────────────────────────
             commands::card::register(),
+            commands::coordinate::register(),
+            // ─── DreggNet Cloud per-user channel ────────────────────────────
+            commands::channel::register(),
+            // ─── BYO-LLM-keys ───────────────────────────────────────────────
+            commands::key::register(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -273,16 +291,17 @@ impl EventHandler for Handler {
             let name = command.data.name.as_str();
 
             match name {
+                // ─── Front door (onboard + button menu, and the map) ────────
+                "start" => commands::start::handle(&ctx, &command, &self.state).await,
+                "help" => commands::start::handle_help(&ctx, &command, &self.state).await,
                 // ─── Bot core ───────────────────────────────────────────────
                 "explorer" => commands::explorer::handle(&ctx, &command, &self.state).await,
                 "presence" => commands::presence::handle(&ctx, &command, &self.state).await,
                 "cipherclerk" => commands::cipherclerk::handle(&ctx, &command, &self.state).await,
-                "send" | "tip" => commands::transfer::handle(&ctx, &command, &self.state).await,
+                "send" => commands::transfer::handle(&ctx, &command, &self.state).await,
                 "gallery" => commands::gallery::handle(&ctx, &command, &self.state).await,
-                "credential" => commands::identity::handle(&ctx, &command, &self.state).await,
                 "status" => commands::status::handle_status(&ctx, &command, &self.state).await,
                 "proof" => commands::status::handle_proof(&ctx, &command, &self.state).await,
-                "metrics" => commands::status::handle_metrics(&ctx, &command, &self.state).await,
                 "faucet" => commands::social::handle_faucet(&ctx, &command, &self.state).await,
                 "leaderboard" => {
                     commands::social::handle_leaderboard(&ctx, &command, &self.state).await
@@ -297,39 +316,11 @@ impl EventHandler for Handler {
                 }
                 "cap-list" => commands::captp::handle_list(&ctx, &command, &self.state).await,
                 "cap-revoke" => commands::captp::handle_revoke(&ctx, &command, &self.state).await,
-                // ─── Programmable queue commands ─────────────────────────────
-                "queue-create" => commands::queue::handle_create(&ctx, &command, &self.state).await,
-                "queue-publish" => {
-                    commands::queue::handle_publish(&ctx, &command, &self.state).await
-                }
-                "queue-subscribe" => {
-                    commands::queue::handle_subscribe(&ctx, &command, &self.state).await
-                }
-                "queue-status" => commands::queue::handle_status(&ctx, &command, &self.state).await,
-                "queue-mount" => commands::queue::handle_mount(&ctx, &command, &self.state).await,
-                // ─── Governance commands ────────────────────────────────────
-                "gov-propose" => {
-                    commands::governance::handle_propose(&ctx, &command, &self.state).await
-                }
-                "gov-vote" => commands::governance::handle_vote(&ctx, &command, &self.state).await,
-                "gov-status" => {
-                    commands::governance::handle_status(&ctx, &command, &self.state).await
-                }
-                "gov-routes" => {
-                    commands::governance::handle_routes(&ctx, &command, &self.state).await
-                }
-                // ─── Polis governance (starbridge-polis) ─────────────────────
+                // ─── Polis governance (the gov-* / name-* / queue-* families
+                //     are retired to the `/dregg` dashboard panels) ───────────
                 "council-status" => {
                     commands::polis::handle_council_status(&ctx, &command, &self.state).await
                 }
-                // ─── Name service commands ──────────────────────────────────
-                "name-register" => {
-                    commands::names::handle_register(&ctx, &command, &self.state).await
-                }
-                "name-resolve" => {
-                    commands::names::handle_resolve(&ctx, &command, &self.state).await
-                }
-                "name-whois" => commands::names::handle_whois(&ctx, &command, &self.state).await,
                 // ─── Federation setup commands ──────────────────────────────
                 "setup-federation" => {
                     commands::federation::handle_setup(&ctx, &command, &self.state).await
@@ -367,19 +358,26 @@ impl EventHandler for Handler {
                 "bounty" => commands::bounty::handle(&ctx, &command, &self.state).await,
                 "deos" => commands::deos::handle(&ctx, &command, &self.state).await,
                 "card" => commands::card::handle(&ctx, &command, &self.state).await,
+                "coordinate" => commands::coordinate::handle(&ctx, &command, &self.state).await,
+                "channel" => commands::channel::handle(&ctx, &command, &self.state).await,
+                "key" => commands::key::handle(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
             }
         } else if let Interaction::Component(component) = interaction {
             // Route component presses by custom-id prefix:
+            //   `start:<action>` — a `/start` button (onboarding/menu): fire the
+            //     real cap-gated turn or open the relevant modal;
             //   `deosturn:<turn>:<arg>` — a ViewNode card affordance: fire it as a REAL
             //     cap-gated verified turn and re-render the card (the interactive loop);
             //   `deos:<hex8>:<affordance>` — a cap-gated deos-surface button: RE-RUN the
             //     cap gate in the deos handler;
-            //   everything else is the dashboard's.
+            //   everything else is the dashboard's (`dregg:*`).
             let custom_id = &component.data.custom_id;
-            if custom_id.starts_with("deosturn:") {
+            if custom_id.starts_with("start:") {
+                commands::start::handle_component(&ctx, &component, &self.state).await;
+            } else if custom_id.starts_with("deosturn:") {
                 viewnode_applet::handle_deosturn_component(&ctx, &component, &self.state).await;
             } else if custom_id.starts_with("deos:") {
                 commands::deos::handle_component(&ctx, &component, &self.state).await;
@@ -387,13 +385,22 @@ impl EventHandler for Handler {
                 commands::dashboard::handle_component(&ctx, &component, &self.state).await;
             }
         } else if let Interaction::Modal(modal) = interaction {
-            commands::dashboard::handle_modal(&ctx, &modal, &self.state).await;
+            // `start:modal:*` forms (Send / Set key) belong to the `/start` flow;
+            // everything else is the dashboard's.
+            if modal.data.custom_id.starts_with("start:") {
+                commands::start::handle_modal(&ctx, &modal, &self.state).await;
+            } else {
+                commands::dashboard::handle_modal(&ctx, &modal, &self.state).await;
+            }
         }
     }
 
-    async fn message(&self, _ctx: Context, msg: Message) {
+    async fn message(&self, ctx: Context, msg: Message) {
         // Bridge messages to dregg queues if the channel is linked.
         self.state.event_bridge.on_message(&msg).await;
+        // DreggNet Cloud: if this is a per-user channel, the message drives the
+        // owner's confined Hermes (a cap-gated, metered, receipted dregg turn).
+        hermes_channel::on_message(&ctx, &msg, &self.state).await;
     }
 
     async fn presence_update(&self, _ctx: Context, data: Presence) {
@@ -567,6 +574,7 @@ async fn main() {
             federation_id_bytes,
         ))),
         card_applets: viewnode_applet::CardApplets::new(),
+        channel_hermes: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).

@@ -297,6 +297,51 @@ pub fn verify_slot_caveat_manifest(
                     ));
                 }
             }
+            // Register-reading temporal atoms (the proven `TemporalAlgebra`
+            // family). Each reads the PRE-state slot view (`old_v`), the way
+            // the Lean atoms read the committed pre-state record. As with the
+            // other scalar slot caveats, the AIR-teeth view is the 4-byte slot
+            // truncation (`SLOT-CAVEATS-DESIGN.md` §4); the executor does the
+            // full-width check.
+            t if t == pi::SLOT_CAVEAT_TAG_RATE_BOUND => {
+                // rateBound: pre-state counter register `old_v < k` (p0 = k).
+                if !(old_v < p0) {
+                    return Err(format!(
+                        "slot-caveat[{i}] RateBound on slot {slot_idx}: counter {old_v:?} not < k {p0:?}"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_UNTIL_EVENT => {
+                // untilEvent (U): admit WHILE the pre-state flag register reads 0.
+                if old_v != BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] UntilEvent on slot {slot_idx}: flag {old_v:?} already set"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_SINCE_EVENT => {
+                // sinceEvent (S): admit only SINCE the pre-state flag is set (≠ 0).
+                if old_v == BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] SinceEvent on slot {slot_idx}: flag not yet set"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_CHALLENGE_WINDOW => {
+                // challengeWindow: window elapsed (height >= p0 = staged_at +
+                // period) AND no challenge filed (pre-state register reads 0).
+                let boundary = p0.0 as u64;
+                if block_height < boundary {
+                    return Err(format!(
+                        "slot-caveat[{i}] ChallengeWindow on slot {slot_idx}: height {block_height} < boundary {boundary}"
+                    ));
+                }
+                if old_v != BabyBear::ZERO {
+                    return Err(format!(
+                        "slot-caveat[{i}] ChallengeWindow on slot {slot_idx}: challenge filed ({old_v:?})"
+                    ));
+                }
+            }
             t if t == pi::SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS => {
                 // Bounded AIR-teeth lane: singleton transition table.
                 //
@@ -311,6 +356,167 @@ pub fn verify_slot_caveat_manifest(
                 if old_v != p1 || new_v != p2 {
                     return Err(format!(
                         "slot-caveat[{i}] AllowedTransitions on slot {slot_idx}: ({old_v:?}, {new_v:?}) not equal to listed pair ({p1:?}, {p2:?})"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_SETTLE_ESCROW => {
+                // The sealed-escrow atomic-swap weld (the Lean `SettleGate`,
+                // `metatheory/Dregg2/Deos/SealedEscrow.lean` §6). The SINGLE entry
+                // reads BOTH leg-status slots and re-evaluates the atomic
+                // both-or-none transition against the public-input-bound
+                // state_before/state_after slot views: both legs `Deposited`
+                // before AND both `Consumed` after. A forged PARTIAL settle (one
+                // leg flipped, the half-open trade) FAILS this conjunction —
+                // INEXPRESSIBLE — so a light client re-running the manifest
+                // witnesses settlement atomicity (the off-AIR shadow of the Lean
+                // `settle_gate_forces_atomic` / `partial_settle_rejected` /
+                // `phantom_settle_rejected` teeth). Encoding: slot_index = leg A's
+                // status slot (already range-checked above); p0 = leg B's status
+                // slot. The slot views carry the field-mirrored `LegStatus` code
+                // (Empty=0, Deposited=1, Consumed=2).
+                let leg_b = p0.0 as usize;
+                if leg_b >= 8 {
+                    return Err(format!(
+                        "slot-caveat[{i}] SettleEscrow leg-B slot_index {leg_b} out of range (must be < 8)"
+                    ));
+                }
+                let before_a = old_v;
+                let after_a = new_v;
+                let before_b = initial_fields[leg_b];
+                let after_b = final_fields[leg_b];
+                let deposited = BabyBear::new(pi::SETTLE_ESCROW_STATUS_DEPOSITED);
+                let consumed = BabyBear::new(pi::SETTLE_ESCROW_STATUS_CONSUMED);
+                if before_a != deposited || before_b != deposited {
+                    return Err(format!(
+                        "slot-caveat[{i}] SettleEscrow: both legs must be Deposited before \
+                         (leg A slot {slot_idx} = {before_a:?}, leg B slot {leg_b} = {before_b:?})"
+                    ));
+                }
+                if after_a != consumed || after_b != consumed {
+                    return Err(format!(
+                        "slot-caveat[{i}] SettleEscrow: both legs must be Consumed after \
+                         (leg A slot {slot_idx} = {after_a:?}, leg B slot {leg_b} = {after_b:?})"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION => {
+                // The standing-obligation per-period discharge weld (the Lean
+                // `DischargeGate`, `metatheory/Dregg2/Deos/StandingObligation.lean`
+                // §6b). The SINGLE entry reads the committed `next_due` cursor and
+                // discharged-total slots across the public-input-bound
+                // state_before/state_after views and re-evaluates the schedule shape:
+                // the discharge is DUE (block height ≥ the committed due block), the
+                // cursor ADVANCES by exactly one period, and the total advances by
+                // EXACTLY the schedule amount. A forged EARLY discharge, a
+                // WRONG-AMOUNT discharge, or a NON-ADVANCED cursor (a replay that does
+                // not move the one-shot cursor) FAILS this conjunction —
+                // INEXPRESSIBLE — so a light client re-running the manifest witnesses
+                // the per-period discipline (the off-AIR shadow of the Lean
+                // `discharge_gate_forces_due_exact` / `discharge_gate_early_rejected`
+                // / `wrong_amount_rejected` / `cursor_not_advanced_rejected` teeth).
+                // Encoding: slot_index = the cursor slot (range-checked above);
+                // p0 = due-block slot; p1 = total slot; p2 = period; p3 = amount. The
+                // slot views carry the field-mirrored schedule scalars (the 4-byte
+                // slot truncation, `SLOT-CAVEATS-DESIGN.md` §4; the executor does the
+                // full-width check).
+                let due_slot = p0.0 as usize;
+                let amount_slot = p1.0 as usize;
+                if due_slot >= 8 {
+                    return Err(format!(
+                        "slot-caveat[{i}] DischargeObligation due slot_index {due_slot} out of range (must be < 8)"
+                    ));
+                }
+                if amount_slot >= 8 {
+                    return Err(format!(
+                        "slot-caveat[{i}] DischargeObligation total slot_index {amount_slot} out of range (must be < 8)"
+                    ));
+                }
+                let period = p2;
+                let amount = p3;
+                let cursor_before = old_v;
+                let cursor_after = new_v;
+                let due_block = initial_fields[due_slot].0 as u64;
+                let total_before = initial_fields[amount_slot];
+                let total_after = final_fields[amount_slot];
+                // DUE: the schedule clock (block height) has reached the due block.
+                if block_height < due_block {
+                    return Err(format!(
+                        "slot-caveat[{i}] DischargeObligation: not yet due (height {block_height} < due block {due_block})"
+                    ));
+                }
+                // ADVANCED: the one-shot cursor advances by exactly one period.
+                let expected_cursor = cursor_before + period;
+                if cursor_after != expected_cursor {
+                    return Err(format!(
+                        "slot-caveat[{i}] DischargeObligation on slot {slot_idx}: cursor must advance one period \
+                         (expected {expected_cursor:?}, got {cursor_after:?})"
+                    ));
+                }
+                // EXACT: the discharged total advances by exactly the schedule amount.
+                let expected_total = total_before + amount;
+                if total_after != expected_total {
+                    return Err(format!(
+                        "slot-caveat[{i}] DischargeObligation: amount must be exact on slot {amount_slot} \
+                         (expected total {expected_total:?}, got {total_after:?})"
+                    ));
+                }
+            }
+            t if t == pi::SLOT_CAVEAT_TAG_VAULT_DEPOSIT => {
+                // The share-vault no-dilution weld (the Lean `VaultDepositGate`,
+                // `metatheory/Dregg2/Deos/Vault.lean` §6b). The SINGLE entry reads the
+                // committed `total_assets` and `total_shares` counter slots across the
+                // public-input-bound state_before/state_after views and re-evaluates
+                // the no-dilution share-price shape: the deposit is genuine (the assets
+                // advance by `d > 0`), the mint is POSITIVE (the shares advance by
+                // `m > 0` — the zero-mint / inflation-attack tooth), and NO existing
+                // holder is diluted (`before_assets·m ≤ before_shares·d`, the
+                // no-dilution floor). A forged ZERO-MINT deposit (the ERC-4626
+                // first-depositor inflation attack), an over-minting DILUTING deposit,
+                // or a NON-CONSERVING deposit (assets not advancing by exactly the
+                // deposit) FAILS this conjunction — INEXPRESSIBLE — so a light client
+                // re-running the manifest witnesses the no-dilution discipline (the
+                // off-AIR shadow of the Lean `vault_gate_forces_no_dilution` /
+                // `inflation_attack_rejected` / `dilution_rejected` /
+                // `assets_not_conserved_rejected` teeth). Encoding: slot_index = the
+                // total_assets counter slot (range-checked above); p0 = the
+                // total_shares counter slot. The deposit `d` and minted `m` are the
+                // across-transition deltas of those two slots, read in the
+                // verifier-visible 4-byte slot view (`SLOT-CAVEATS-DESIGN.md` §4; the
+                // executor does the full-width check). u128 products avoid overflow.
+                let shares_slot = p0.0 as usize;
+                if shares_slot >= 8 {
+                    return Err(format!(
+                        "slot-caveat[{i}] VaultDeposit shares slot_index {shares_slot} out of range (must be < 8)"
+                    ));
+                }
+                let before_assets = old_v.0 as u64;
+                let after_assets = new_v.0 as u64;
+                let before_shares = initial_fields[shares_slot].0 as u64;
+                let after_shares = final_fields[shares_slot].0 as u64;
+                // CONSERVING + GENUINE DEPOSIT: total_assets advances upward (d > 0).
+                if after_assets <= before_assets {
+                    return Err(format!(
+                        "slot-caveat[{i}] VaultDeposit on slot {slot_idx}: total_assets must advance by a positive deposit \
+                         (before {before_assets}, after {after_assets})"
+                    ));
+                }
+                let d = after_assets - before_assets;
+                // ZERO-MINT / INFLATION TOOTH: total_shares advances upward (m > 0).
+                if after_shares <= before_shares {
+                    return Err(format!(
+                        "slot-caveat[{i}] VaultDeposit on slot {shares_slot}: inflation-attack rejection — a positive deposit must mint positive shares \
+                         (before {before_shares}, after {after_shares})"
+                    ));
+                }
+                let m = after_shares - before_shares;
+                // NO-DILUTION FLOOR: before_assets·m ≤ before_shares·d (the existing
+                // price-per-share never decreases). u128 so the products cannot wrap.
+                if (before_assets as u128) * (m as u128) > (before_shares as u128) * (d as u128) {
+                    return Err(format!(
+                        "slot-caveat[{i}] VaultDeposit: dilution — minting {m} shares for a deposit of {d} dilutes the existing holders \
+                         (before_assets·m = {} > before_shares·d = {})",
+                        before_assets as u128 * m as u128,
+                        before_shares as u128 * d as u128
                     ));
                 }
             }
@@ -335,6 +541,107 @@ pub fn verify_slot_caveat_manifest(
                     "slot-caveat manifest padding entry {i} field {j} is nonzero (smuggle attempt?)"
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+/// **The OMISSION-PROOF coverage check (constraint-binding weld, the soundness
+/// core).** Given the set of capacity caveat tags a cell's COMMITTED declaration
+/// REQUIRES (re-derived by the caller from the cell's declared `state_constraints`,
+/// which are bound into committed state via
+/// `cell::commitment::compute_authority_digest_felt` → `record_digest` → the
+/// `B_AUTHORITY_DIGEST` limb of the ~124-bit wide commit), assert each required tag
+/// is PRESENT in the prover-published manifest. Returns `Ok` iff every required tag
+/// appears in some published entry; otherwise the first missing tag.
+///
+/// This closes the load-bearing gap that [`verify_slot_caveat_manifest`] alone
+/// leaves: that function re-evaluates the entries that ARE present (the SATISFACTION
+/// half), but a forger who simply OMITS a declared capacity entry (publishes
+/// `count = 0`, or a manifest with no tag-N entry) leaves it nothing to check — the
+/// gate is prover-OPTIONAL. Pairing the two — coverage (this function: every
+/// required entry PRESENT) + satisfaction ([`verify_slot_caveat_manifest`]: every
+/// present entry's gate HOLDS) — makes the declared gate omission-proof: a turn on a
+/// capacity cell that drops its declared entry is rejected.
+///
+/// This is the Rust shadow of the Lean
+/// `Dregg2.Deos.ConstraintBinding.omission_caught_under_binding`: the caller's
+/// `required_tags` is the `requiredTags(committed declaration)` re-derivation, and a
+/// forger cannot escape by presenting a hollow declaration because the declaration
+/// is bound in committed state (the Lean `DeclCommitBinds` floor = the authority
+/// digest's collision-resistance). STAGED: the manifest still rides public inputs
+/// and the AIR constraint polynomials (the VK bytes) are UNCHANGED; the binding it
+/// re-derives against already exists in committed state. See
+/// `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`.
+pub fn verify_slot_caveat_coverage(
+    public_inputs: &[BabyBear],
+    required_tags: &[u32],
+) -> Result<(), String> {
+    if required_tags.is_empty() {
+        return Ok(());
+    }
+    if public_inputs.len() < pi::BASE_COUNT {
+        return Err(format!(
+            "PI vector too short for slot-caveat coverage: {} < {}",
+            public_inputs.len(),
+            pi::BASE_COUNT
+        ));
+    }
+    let count = public_inputs[pi::SLOT_CAVEAT_COUNT].0 as usize;
+    if count > pi::MAX_SLOT_CAVEATS {
+        return Err(format!(
+            "SLOT_CAVEAT_COUNT {} exceeds MAX_SLOT_CAVEATS {}",
+            count,
+            pi::MAX_SLOT_CAVEATS
+        ));
+    }
+    for &req in required_tags {
+        let mut present = false;
+        for i in 0..count {
+            let base = pi::SLOT_CAVEAT_MANIFEST_BASE + i * pi::SLOT_CAVEAT_ENTRY_SIZE;
+            if public_inputs[base].0 == req {
+                present = true;
+                break;
+            }
+        }
+        if !present {
+            return Err(format!(
+                "slot-caveat coverage: declared capacity tag {req} is REQUIRED by the committed \
+                 declaration but ABSENT from the manifest (count={count}) — omission rejected"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// **THE ROTATED-LEG COVERAGE CHECK (PIECE 1 of the VK epoch, STAGED).** The bound-leg twin of
+/// [`verify_slot_caveat_coverage`]: assert every required capacity tag is present in the
+/// `RotatedCaveatManifest` carried on the AIR-bound rotated leg (manifest cols chained by
+/// `caveatCommit` to the published caveat-commit PI — `pi_index 45` on every R=24 cohort
+/// descriptor). Returns `Ok` iff every required tag appears; otherwise the first missing tag.
+///
+/// The difference from [`verify_slot_caveat_coverage`] is the LEG: that function scans the off-AIR
+/// full-v1 PI manifest (the `>= pi::BASE_COUNT` leg, NOT what a pure light client binds); this one
+/// runs against the manifest a pure light client DOES bind — the rotated carrier whose
+/// `caveatCommit` is folded into the ~124-bit wide commit. A forger cannot publish a manifest here
+/// that differs from the committed one without moving the bound caveat commit (the Lean
+/// `EffectVmEmitRotationCaveat.caveatCommit_binds`), so omission on this leg is impossible (the Lean
+/// `Dregg2.Deos.CapacityCarrier.carrier_omission_impossible`). The caller reconstructs the
+/// `RotatedCaveatManifest` and verifies its `caveatCommit` equals the bound PI before calling this.
+///
+/// STAGED beside the deployed empty-manifest default; NOT VK-affecting (the carrier binding is
+/// already deployed). See `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6.
+pub fn verify_rotated_caveat_coverage(
+    manifest: &super::trace_rotated::RotatedCaveatManifest,
+    required_tags: &[u32],
+) -> Result<(), String> {
+    for &req in required_tags {
+        if !manifest.covers_tag(req) {
+            return Err(format!(
+                "rotated-leg coverage: declared capacity tag {req} is REQUIRED by the committed \
+                 declaration but ABSENT from the bound rotated caveat manifest — omission rejected \
+                 (fail-closed; the carrier binds the manifest into the wide commit)"
+            ));
         }
     }
     Ok(())

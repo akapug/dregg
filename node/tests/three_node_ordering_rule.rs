@@ -44,6 +44,8 @@ use std::time::{Duration, Instant};
 /// Where the built `dregg-node` binary lives (Cargo sets this for integration tests).
 const NODE_BIN: &str = env!("CARGO_BIN_EXE_dregg-node");
 
+// `http`/`name` document each spawned node; `child` drives Drop. Not all are read in every test.
+#[allow(dead_code)]
 struct NodeProc {
     child: Child,
     http: u16,
@@ -71,7 +73,7 @@ fn http_get(port: u16, path: &str) -> Option<String> {
     let mut buf = String::new();
     stream.read_to_string(&mut buf).ok()?;
     // Split headers from body at the first blank line.
-    let body = buf.splitn(2, "\r\n\r\n").nth(1)?.to_string();
+    let body = buf.split_once("\r\n\r\n")?.1.to_string();
     Some(body)
 }
 

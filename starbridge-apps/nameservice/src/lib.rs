@@ -95,6 +95,11 @@ use dregg_app_framework::{
 /// [`service`] for the second worked citizen after `starbridge-kvstore`.
 pub mod service;
 
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*`
+/// view-tree (pure `serde_json`, no `deos-view` dep). The button `turn` names ARE
+/// the [`service`] method vocabulary — one card, three renderers, one registry.
+pub mod card;
+
 // =============================================================================
 // State schema (per-registry-cell field-slot layout)
 // =============================================================================
@@ -606,6 +611,22 @@ pub const RESOLVER_RIGHTS: AuthRequired = AuthRequired::Signature;
 /// The owner rights tier (root — transfer/renew/revoke/set_target + resolve). See [`RESOLVER_RIGHTS`].
 pub const OWNER_RIGHTS: AuthRequired = AuthRequired::None;
 
+/// **The owner-lifecycle method names on a NAME cell** — the deos affordance
+/// vocabulary [`name_app`] exposes and the `fire_*` helpers route. Held as shared
+/// constants so an affordance's name, its `fire_*` lookup, and the deos-view
+/// CARD's button `turn` payload (`src/card.rs`) can never drift apart.
+///
+/// `register` / `resolve` are the registry-FACE method symbols of the same
+/// registry primitive — see [`service::METHOD_REGISTER`] / [`service::METHOD_RESOLVE`]
+/// (the `resolve` affordance below IS [`service::METHOD_RESOLVE`]).
+pub const METHOD_RENEW: &str = "renew";
+/// The OWNER tombstones the name — the one-way `WriteOnce(REVOKED)` op. See [`METHOD_RENEW`].
+pub const METHOD_REVOKE: &str = "revoke";
+/// The OWNER re-keys [`OWNER_HASH_SLOT`] (a cap-graph re-key). See [`METHOD_RENEW`].
+pub const METHOD_TRANSFER: &str = "transfer";
+/// The OWNER re-points [`RESOLVE_TARGET_SLOT`] at another reacquirable cell. See [`METHOD_RENEW`].
+pub const METHOD_SET_TARGET: &str = "set_target";
+
 /// The **life-of-cell name invariants** the executor re-enforces on every touching turn —
 /// exactly [`name_cell_program`] (`WriteOnce(NAME_HASH)` · `Monotonic(EXPIRY)` ·
 /// `WriteOnce(REVOKED)`), the same program the factory installs on every born name cell
@@ -663,7 +684,7 @@ pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> De
     // exposes at the resolver tier — a peer reacquires the name AND follows it to the cell
     // the target points at.
     let resolve = CellAffordance::new(
-        "resolve",
+        service::METHOD_RESOLVE,
         RESOLVER_RIGHTS,
         Effect::EmitEvent {
             cell,
@@ -676,7 +697,7 @@ pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> De
     // `transfer` — the OWNER re-keys the owner slot. Cap-only (a cap-graph re-key, no gated
     // state-machine step), carrying the real `SetField` on OWNER_HASH_SLOT.
     let transfer = CellAffordance::new(
-        "transfer",
+        METHOD_TRANSFER,
         OWNER_RIGHTS,
         Effect::SetField {
             cell,
@@ -692,7 +713,7 @@ pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> De
     // `Monotonic(EXPIRY)` on — so a REWOUND expiry is REFUSED.
     let renew = GatedAffordance::new(
         CellAffordance::new(
-            "renew",
+            METHOD_RENEW,
             OWNER_RIGHTS,
             Effect::SetField {
                 cell,
@@ -707,7 +728,7 @@ pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> De
     // `WriteOnce(REVOKED)` (a re-revoke / un-revoke is a real refusal).
     let revoke = GatedAffordance::new(
         CellAffordance::new(
-            "revoke",
+            METHOD_REVOKE,
             OWNER_RIGHTS,
             Effect::SetField {
                 cell,
@@ -723,7 +744,7 @@ pub fn name_app(cipherclerk: &AppCipherclerk, executor: &EmbeddedExecutor) -> De
     // precondition darkens it.)
     let set_target = GatedAffordance::new(
         CellAffordance::new(
-            "set_target",
+            METHOD_SET_TARGET,
             OWNER_RIGHTS,
             Effect::SetField {
                 cell,
@@ -801,7 +822,7 @@ pub fn fire_renew(
 ) -> Result<TurnReceipt, FireExecuteError> {
     let cell = &app.cells()[0];
     let name_cell = cell.cell();
-    cell.fire_gated_through_executor_with("renew", held, cipherclerk, executor, |state| {
+    cell.fire_gated_through_executor_with(METHOD_RENEW, held, cipherclerk, executor, |state| {
         // The new expiry advances the LIVE expiry by one rent epoch (Monotonic(EXPIRY) holds).
         let live_expiry = field_to_u64(&state.fields[EXPIRY_SLOT]);
         let new_expiry = live_expiry + DEFAULT_RENT_EPOCH_BLOCKS;
@@ -831,7 +852,7 @@ pub fn fire_revoke(
 ) -> Result<TurnReceipt, FireExecuteError> {
     let cell = &app.cells()[0];
     let name_cell = cell.cell();
-    cell.fire_gated_through_executor_with("revoke", held, cipherclerk, executor, |_state| {
+    cell.fire_gated_through_executor_with(METHOD_REVOKE, held, cipherclerk, executor, |_state| {
         vec![
             Effect::SetField {
                 cell: name_cell,
@@ -861,7 +882,7 @@ pub fn fire_set_target(
     let cell = &app.cells()[0];
     let name_cell = cell.cell();
     cell.fire_gated_through_executor_with(
-        "set_target",
+        METHOD_SET_TARGET,
         held,
         cipherclerk,
         executor,
@@ -952,14 +973,15 @@ fn field_to_u64(f: &FieldElement) -> u64 {
 /// and reach `ctx.cipherclerk()`, `ctx.executor()`, or
 /// `ctx.factory_registry()` uniformly across all starbridge-apps
 /// mounted on the same host.
-/// The canonical web-constants module for this app — the single source of
-/// truth the `pages/constants.generated.js` file is rendered from.
+/// The canonical web-constants module for this app — a single source of truth
+/// for the slot indices, factory-vk, and event topics.
 ///
 /// Every value here is read from this crate's `pub const`s (slot indices,
-/// factory-vk) and `symbol(..)` topic strings, so the generated JS cannot drift
-/// from the executor's slot layout / event vocabulary. The
-/// `constants_generator` example renders this to `pages/constants.generated.js`;
-/// the `constants_js_is_in_sync` test fails if that file is stale.
+/// factory-vk) and `symbol(..)` topic strings, so any consumer cannot drift from
+/// the executor's slot layout / event vocabulary. The `web_constants_slots_match_pub_consts`
+/// test (`tests/constants_js_drift.rs`) pins it to the `pub const`s. (The legacy
+/// `pages/` web bundle has been retired in favour of the deos-view CARD,
+/// `src/card.rs`.)
 pub fn web_constants() -> ConstantsModule {
     ConstantsModule::new("nameservice")
         .slot("NAME_HASH_SLOT", NAME_HASH_SLOT as u64)

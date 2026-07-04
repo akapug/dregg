@@ -126,7 +126,7 @@ pub fn validate_mnemonic(mnemonic: &str) -> Result<[u8; 32], MnemonicError> {
     }
 
     // Verify checksum.
-    let expected_checksum = Sha256::digest(&entropy)[0];
+    let expected_checksum = Sha256::digest(entropy)[0];
     if checksum_byte != expected_checksum {
         return Err(MnemonicError::InvalidChecksum);
     }

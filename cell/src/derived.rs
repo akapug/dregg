@@ -68,16 +68,48 @@
 //! - [`verify_derivation`]: the **forge detector** — recompute the spec over the
 //!   sources and reject any derived cell whose bound claim disagrees.
 //!
-//! # The next slice (named, not built here)
+//! # Formal grounding (the invariant is PROVEN, not just smoke-tested)
 //!
-//! The executor-level check above is the genuine forge-rejection. The remaining
-//! slice is the **in-circuit witness**: a light client verifying a *batch* should
-//! see the derivation constraint enforced by the EffectVM circuit, so the
-//! re-derivation is part of the proven kernel transition rather than an
-//! out-of-band executor check. That requires (a) a `DeriveCell` effect descriptor
-//! whose gate binds `claimed == f(sources)` into the commitment, and (b)
-//! membership proofs for the sources' commitments as circuit witnesses. See
-//! `docs/deos/DERIVED-CELLS.md` §"Next slice: circuit binding".
+//! The derivation invariant enforced here — a derived cell's committed claim
+//! EQUALS the derivation evaluated over its sources, with a forged/stale claim
+//! rejected and the claim BOUND into the committed root — is the EXECUTOR image
+//! of a proven Lean rung: `metatheory/Dregg2/Deos/DerivedCell.lean`. There the
+//! committed-heap binding is the SAME proven sorted-Poseidon2 root
+//! (`Substrate.Heap`, the cap-root machinery generalized to a generic leaf), and
+//!
+//!   * `bind_verifies` — re-deriving (`bind`) produces a cell the same spec+
+//!     sources verify (honest round-trip);
+//!   * `forged_value_rejected` — a committed claim ≠ `f(sources)` does NOT verify
+//!     (the Lean image of [`tests::forged_value_is_rejected`]);
+//!   * `stale_rejected` — a cell bound at old sources, verified against new ones
+//!     whose fold differs, is rejected by the SAME check (the image of
+//!     [`tests::stale_after_source_change_is_rejected`]);
+//!   * `wrong_spec_rejected` — a cell cannot be re-interpreted under a spec it did
+//!     not bind (the image of [`tests::wrong_spec_is_rejected`]);
+//!   * **`claim_bound_in_root`** — equal committed roots ⟹ equal claim: the claim
+//!     rides the committed root, so a forge cannot keep the honest root with a
+//!     lying claim (the image of [`tests::claim_is_bound_into_commitment`]), with
+//!     `forged_claim_moves_root` the anti-ghost,
+//!
+//! all `#assert_all_clean` (kernel-axiom-clean), proven BY REUSE of the heap root
+//! (`Heap.hget_hset_self` / `hget_hset_frame` / `root_binds_get`) — no derived-
+//! cell-local commitment. The test [`tests::invariant_matches_lean_rung`] mirrors
+//! that rung's witnesses (Σ[100,250,50] = 400, forge 999, stale, wrong-spec,
+//! filtered) so the Rust is checked against the proven statement.
+//!
+//! # The next slice (named, the VK-affecting follow-up)
+//!
+//! The Lean rung above grounds the EXECUTOR forge-rejection: a verifier holding
+//! the sources rejects forges and staleness. The remaining slice is the
+//! **in-circuit witness**: a light client verifying a *batch* should see the
+//! derivation constraint enforced by the EffectVM circuit, so the re-derivation
+//! is part of the proven kernel transition rather than an out-of-band executor
+//! check. That requires (a) a `DeriveCell` effect descriptor whose gate binds
+//! `claimed == f(sources)` into the commitment, and (b) membership proofs for the
+//! sources' commitments as circuit witnesses — the VK-affecting weld named in
+//! `metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md` (derived row) and
+//! `docs/deos/DERIVED-CELLS.md` §"Next slice: circuit binding". The value tooth
+//! here is the *executor* tooth; the circuit tooth is its shadow.
 
 use serde::{Deserialize, Serialize};
 
@@ -89,7 +121,7 @@ use crate::state::{CellState, FieldElement};
 /// cell's committed heap (so the binding is folded into the canonical state
 /// commitment). Chosen high to avoid colliding with application heap
 /// collections.
-pub const DERIVATION_COLL: u32 = 0x7DE_71_7E_u32; // a fixed reserved id ("DERIVE")
+pub const DERIVATION_COLL: u32 = 0x07DE_717E_u32; // a fixed reserved id ("DERIVE")
 
 /// Heap key (within [`DERIVATION_COLL`]) holding the 32-byte digest of the
 /// derived cell's [`DerivationSpec`]. Binds *which* derivation this cell claims.
@@ -249,7 +281,7 @@ impl Aggregate {
                 let v = c
                     .state
                     .get_field(*field_index)
-                    .map(|f| field_to_i64(f))
+                    .map(field_to_i64)
                     .unwrap_or(0);
                 acc.saturating_add(v)
             }),
@@ -587,6 +619,95 @@ mod tests {
         assert_eq!(
             verify_derivation(&derived, &spec, resolver_from_pairs(&pairs)),
             Err(DerivationError::MissingSource(s2.id()))
+        );
+    }
+
+    /// The Lean rung: this executor invariant is PROVEN, not just smoke-tested.
+    ///
+    /// Mirror of the witnesses in `metatheory/Dregg2/Deos/DerivedCell.lean`
+    /// (`bind_verifies` / `forged_value_rejected` / `stale_rejected` /
+    /// `wrong_spec_rejected` / `claim_bound_in_root`, all `#assert_all_clean`).
+    /// The Lean binds the claim into the proven sorted-Poseidon2 `Heap.root`;
+    /// here the SAME structure is checked over the deployed [`CellState`] heap, so
+    /// the Rust forge-rejection is checked against the proven statement, not just
+    /// an ad-hoc tampering.
+    ///
+    /// Lean: sources balances [100, 250, 50], Σ = 400; a forged 999 is rejected
+    /// and MOVES the root; a stale claim (a source moves 100 → 600, Σ = 900) is
+    /// rejected; the wrong spec (count vs sum) is rejected; a filtered-sum at
+    /// threshold 60 keeps {100, 250} = 350.
+    #[test]
+    fn invariant_matches_lean_rung() {
+        let s1 = cell_with_balance(1, 100);
+        let s2 = cell_with_balance(2, 250);
+        let s3 = cell_with_balance(3, 50);
+        let spec = DerivationSpec::sum_balance([s1.id(), s2.id(), s3.id()]);
+        let pairs = [(s1.id(), &s1), (s2.id(), &s2), (s3.id(), &s3)];
+
+        // `bind_verifies`: re-deriving binds the fold (Σ = 400) and verifies.
+        let mut honest = cell_with_balance(9, 0);
+        let v = bind_derivation(&mut honest, &spec, resolver_from_pairs(&pairs)).unwrap();
+        assert_eq!(v, 400);
+        assert_eq!(
+            verify_derivation(&honest, &spec, resolver_from_pairs(&pairs)),
+            Ok(400)
+        );
+
+        // `forged_value_rejected` + `forged_claim_moves_root`: a lying 999 does
+        // NOT verify AND moves the committed root (cannot hide under the honest one).
+        let mut forged = honest.clone();
+        write_binding(&mut forged.state, &spec, 999);
+        assert!(matches!(
+            verify_derivation(&forged, &spec, resolver_from_pairs(&pairs)),
+            Err(DerivationError::ValueMismatch {
+                claimed: 999,
+                actual: 400
+            })
+        ));
+        assert_ne!(
+            honest.state_commitment(),
+            forged.state_commitment(),
+            "claim_bound_in_root: a forged claim moves the committed root"
+        );
+
+        // `stale_rejected`: a source moves (100 → 600, Σ = 900); the un-re-derived
+        // cell is rejected against the new sources by the SAME value check.
+        let mut s1b = cell_with_balance(1, 100);
+        s1b.state.apply_balance_change(500);
+        assert_eq!(s1b.state.balance(), 600);
+        let new_pairs = [(s1b.id(), &s1b), (s2.id(), &s2), (s3.id(), &s3)];
+        assert!(matches!(
+            verify_derivation(&honest, &spec, resolver_from_pairs(&new_pairs)),
+            Err(DerivationError::ValueMismatch {
+                claimed: 400,
+                actual: 900
+            })
+        ));
+
+        // `wrong_spec_rejected`: re-interpreting the sum-cell as a count-cell is
+        // rejected at the spec digest.
+        let count_spec = DerivationSpec {
+            sources: vec![s1.id(), s2.id(), s3.id()],
+            aggregate: Aggregate::Count,
+        };
+        assert_eq!(
+            verify_derivation(&honest, &count_spec, resolver_from_pairs(&pairs)),
+            Err(DerivationError::SpecMismatch)
+        );
+
+        // The filtered-sum view (threshold 60 keeps {100, 250}) = 350.
+        let filt_spec = DerivationSpec {
+            sources: vec![s1.id(), s2.id(), s3.id()],
+            aggregate: Aggregate::FilteredSumBalance { threshold: 60 },
+        };
+        let mut filtered = cell_with_balance(9, 0);
+        assert_eq!(
+            bind_derivation(&mut filtered, &filt_spec, resolver_from_pairs(&pairs)).unwrap(),
+            350
+        );
+        assert_eq!(
+            verify_derivation(&filtered, &filt_spec, resolver_from_pairs(&pairs)),
+            Ok(350)
         );
     }
 

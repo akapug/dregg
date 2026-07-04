@@ -39,7 +39,7 @@
 
 use dregg_cell::AuthRequired;
 use dregg_doc::composition::{
-    self, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op, Viewer, content_composed,
+    self, content_composed, AtomContent, ChildRef, EmbedRole, LayoutGraph, MapResolver, Op, Viewer,
 };
 use dregg_doc::{AtomId, Author, BlameLine, PatchId, Provenance, Status};
 
@@ -470,7 +470,7 @@ impl ComposerCard {
         self.apply(&[
             Op::Embed {
                 id,
-                child: ChildRef::live(ChildCellId(self.host.0 ^ 0x_A07_4015_4109)),
+                child: ChildRef::live(ChildCellId(self.host.0 ^ 0x0A07_4015_4109)),
                 after: AtomId::ROOT,
                 role: EmbedRole::Inline,
             },

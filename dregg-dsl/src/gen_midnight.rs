@@ -23,7 +23,9 @@
 /// - IR `Mutate(*t += x)`  → new_t = Add(t_old, x); output new_t
 /// - IR `Mutate(*t = x)`   → constrain new_t == x
 /// - IR `Match`             → CondSelect-based conditional paths
-/// - IR `Membership`        → TransientHash chain (Merkle proof circuit)
+/// - IR `Membership`        → TransientHash + ConstrainEq vs the set root
+/// - IR `MerkleAtPosition`  → depth-N DivModPowerOfTwo + CondSelect +
+///   TransientHash fold, ConstrainEq vs the root
 ///
 /// The generated JSON can be fed to Midnight's proof server or compiled to
 /// a prover key via `zkir-v3`.
@@ -155,7 +157,7 @@ fn build_zkir_json(ir: &ConstraintIr) -> String {
 
     format!(
         r#"{{
-  "version": {{ "major": 3, "minor": 0 }},
+  "version": 0,
   "inputs": [{}],
   "outputs": {},
   "do_communications_commitment": false,
@@ -325,18 +327,84 @@ fn emit_zkir_requirement(
             });
         }
         RequirementKind::MerkleAtPosition {
-            root, leaf, depth, ..
+            root,
+            leaf,
+            position,
+            depth,
+            ..
         } => {
-            // Stub: Midnight TransientHash-based Merkle inclusion would unroll
-            // `depth` layers of hash + cond-select. Emit a placeholder
-            // constrain_eq against the root and a comment marker.
+            // Faithful depth-`depth` Merkle inclusion proof in *real* ZKIR v3
+            // instructions (no placeholder op). The verifier folds the leaf up
+            // to the root one level at a time:
+            //
+            //   * `div_mod_power_of_two(rem, bits=1)` peels the next path bit
+            //     off `position` (and yields the remaining bits as the quotient);
+            //   * the sibling digest at this level is a `private_input` witness —
+            //     ZKIR v3 has no array-index op, so the `siblings` array is bound
+            //     through the private transcript rather than by indexing `%siblings`;
+            //   * two `cond_select`s order the (left, right) pair by the path bit;
+            //   * `transient_hash([left, right])` is Midnight's circuit-friendly
+            //     2-to-1 compression (the role Poseidon2 plays on the dregg side).
+            //
+            // The recomputed root is finally constrained equal to `root`. Every
+            // op emitted here (`div_mod_power_of_two`, `private_input`,
+            // `cond_select`, `transient_hash`, `constrain_eq`) is a real ZKIR v3
+            // `Instruction` (see `~/midnight/midnight-ledger/zkir-v3/src/ir.rs`).
             let root_wire = expr_to_zkir_operand(root);
-            let leaf_wire = expr_to_zkir_operand(leaf);
-            let _ = wires.alloc(); // reserve a wire for parity
+            // `cur` and `rem` are JSON-embeddable operands (already quoted).
+            let mut cur = expr_to_zkir_operand(leaf);
+            let mut rem = expr_to_zkir_operand(position);
+
+            for _level in 0..*depth {
+                // [quotient, bit] = rem `divmod` 2^1  →  bit = rem & 1, q = rem >> 1
+                let q = wires.alloc();
+                let bit = wires.alloc();
+                out.push(ZkirInstr {
+                    json: format!(
+                        r#"{{ "op": "div_mod_power_of_two", "val": {}, "bits": 1, "outputs": ["{}", "{}"] }}"#,
+                        rem, q, bit
+                    ),
+                });
+                // Sibling digest at this level, witnessed privately.
+                let sib = wires.alloc();
+                out.push(ZkirInstr {
+                    json: format!(
+                        r#"{{ "op": "private_input", "guard": null, "type": "Scalar<BLS12-381>", "output": "{}" }}"#,
+                        sib
+                    ),
+                });
+                // Order the pair by the path bit: bit==1 ⇒ `cur` is the right child.
+                let left = wires.alloc();
+                let right = wires.alloc();
+                out.push(ZkirInstr {
+                    json: format!(
+                        r#"{{ "op": "cond_select", "bit": "{}", "a": "{}", "b": {}, "output": "{}" }}"#,
+                        bit, sib, cur, left
+                    ),
+                });
+                out.push(ZkirInstr {
+                    json: format!(
+                        r#"{{ "op": "cond_select", "bit": "{}", "a": {}, "b": "{}", "output": "{}" }}"#,
+                        bit, cur, sib, right
+                    ),
+                });
+                // Fold this level into the parent digest.
+                let parent = wires.alloc();
+                out.push(ZkirInstr {
+                    json: format!(
+                        r#"{{ "op": "transient_hash", "inputs": ["{}", "{}"], "output": "{}" }}"#,
+                        left, right, parent
+                    ),
+                });
+                cur = format!("\"{}\"", parent);
+                rem = format!("\"{}\"", q);
+            }
+
+            // The recomputed root must equal the claimed root.
             out.push(ZkirInstr {
                 json: format!(
-                    r#"{{ "op": "merkle_at_position_stub", "root": {}, "leaf": {}, "depth": {} }}"#,
-                    root_wire, leaf_wire, depth
+                    r#"{{ "op": "constrain_eq", "a": {}, "b": {} }}"#,
+                    cur, root_wire
                 ),
             });
         }
@@ -485,5 +553,169 @@ fn expr_to_zkir_operand(expr: &syn::Expr) -> String {
     } else {
         // Variable reference
         format!("\"%{}\"", clean)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::{ConstraintIr, Param, Requirement};
+
+    fn ident(s: &str) -> syn::Ident {
+        format_ident!("{}", s)
+    }
+
+    fn expr(s: &str) -> syn::Expr {
+        syn::parse_str(s).expect("valid expr")
+    }
+
+    /// The set of `op` strings that are real ZKIR v3 `Instruction` variants
+    /// (snake_case, per `~/midnight/midnight-ledger/zkir-v3/src/ir.rs`).
+    const REAL_ZKIR_OPS: &[&str] = &[
+        "encode",
+        "decode",
+        "assert",
+        "cond_select",
+        "constrain_bits",
+        "constrain_eq",
+        "constrain_to_boolean",
+        "copy",
+        "impact",
+        "ec_mul",
+        "ec_mul_generator",
+        "hash_to_curve",
+        "div_mod_power_of_two",
+        "reconstitute_field",
+        "transient_hash",
+        "persistent_hash",
+        "keccak256",
+        "test_eq",
+        "add",
+        "mul",
+        "neg",
+        "not",
+        "less_than",
+        "public_input",
+        "private_input",
+        "output",
+    ];
+
+    fn assert_only_real_ops(json: &serde_json::Value) {
+        for instr in json["instructions"].as_array().expect("instructions array") {
+            let op = instr["op"]
+                .as_str()
+                .expect("each instruction has a string `op`");
+            assert!(
+                REAL_ZKIR_OPS.contains(&op),
+                "emitted ZKIR op `{op}` is not a real ZKIR v3 instruction"
+            );
+        }
+    }
+
+    #[test]
+    fn version_is_faithful_minor_version_repr() {
+        let ir = ConstraintIr {
+            name: ident("floor_caveat"),
+            params: vec![
+                Param {
+                    name: ident("balance"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("floor"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
+            ],
+            statements: vec![Statement::Require(Requirement {
+                kind: RequirementKind::GreaterEqual {
+                    left: expr("balance"),
+                    right: expr("floor"),
+                },
+            })],
+            is_effect: false,
+            required_permission: None,
+        };
+        let json = build_zkir_json(&ir);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        // `IrSource::version` is an `IrMinorVersion` (serde_repr u8), not a
+        // `{major, minor}` object — emit the faithful numeric form.
+        assert!(
+            v["version"].is_number(),
+            "version must be the numeric minor-version repr"
+        );
+        assert_only_real_ops(&v);
+    }
+
+    #[test]
+    fn merkle_at_position_emits_only_real_zkir_ops() {
+        let depth = 4u32;
+        let ir = ConstraintIr {
+            name: ident("merkle_caveat"),
+            params: vec![
+                Param {
+                    name: ident("root"),
+                    ty: ParamType::ByteArray32,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("leaf"),
+                    ty: ParamType::ByteArray32,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("position"),
+                    ty: ParamType::U64,
+                    mutable: false,
+                },
+                Param {
+                    name: ident("siblings"),
+                    ty: ParamType::ByteMatrix32(depth),
+                    mutable: false,
+                },
+            ],
+            statements: vec![Statement::Require(Requirement {
+                kind: RequirementKind::MerkleAtPosition {
+                    root: expr("root"),
+                    leaf: expr("leaf"),
+                    position: expr("position"),
+                    siblings: expr("siblings"),
+                    depth,
+                },
+            })],
+            is_effect: false,
+            required_permission: None,
+        };
+        let json = build_zkir_json(&ir);
+        let v: serde_json::Value = serde_json::from_str(&json).expect("emitted ZKIR is valid JSON");
+
+        // No placeholder/stub op survives.
+        assert!(
+            !json.contains("_stub"),
+            "MerkleAtPosition must not emit a placeholder op:\n{json}"
+        );
+        // Real ops only, and one fold (transient_hash) per Merkle level.
+        assert_only_real_ops(&v);
+        assert_eq!(
+            json.matches(r#""op": "transient_hash""#).count(),
+            depth as usize,
+            "one TransientHash fold per Merkle level"
+        );
+        assert!(
+            json.contains(r#""op": "div_mod_power_of_two""#),
+            "path-bit extraction"
+        );
+        assert!(
+            json.contains(r#""op": "cond_select""#),
+            "ordered-pair selection"
+        );
+        assert!(
+            json.contains(r#""op": "private_input""#),
+            "witnessed sibling"
+        );
+        // Terminator is `output`.
+        let last = v["instructions"].as_array().unwrap().last().unwrap();
+        assert_eq!(last["op"], "output");
     }
 }

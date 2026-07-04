@@ -52,6 +52,7 @@ const RANGE_CHECK_BITS: usize = 30;
 ///   - a genuine violation has true diff in `(-2^29, 0)`, whose canonical field
 ///     representative is `≥ p - 2^29 + 1 = 1_476_395_010 > 2^30`, so it CANNOT
 ///     fit the 30-bit diff window and is REJECTED.
+///
 /// Picking `left = p - 1` is now UNSATISFIABLE outright: `p - 1` does not fit in
 /// 29 bits, so its operand range-check fails — the wrap-around is dead.
 ///
@@ -237,7 +238,7 @@ fn statement_degree(stmt: &Statement) -> usize {
             let inner_max = arms
                 .iter()
                 .flat_map(|arm| arm.body.iter())
-                .map(|s| statement_degree(s))
+                .map(statement_degree)
                 .max()
                 .unwrap_or(1);
             1 + inner_max

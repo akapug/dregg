@@ -202,13 +202,11 @@ impl RemoteRuntime {
         if let Ok(feds) = self
             .get_json::<Vec<FederationInfoLite>>("/api/federations")
             .await
-        {
-            if let Some(local) = feds
+            && let Some(local) = feds
                 .iter()
                 .find(|f| f.is_local && f.member_count > 0 && f.committee_epoch > 0)
-            {
-                return hex_decode_32(&local.federation_id);
-            }
+        {
+            return hex_decode_32(&local.federation_id);
         }
         // Solo-node derivation: blake3(operator pubkey).
         let identity: NodeIdentityLite = self.get_json("/api/node/identity").await?;

@@ -57,7 +57,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use dregg_cell::CellId;
-use dregg_turn::umem::{UKey, UProjection, UVal, project_cell, project_ledger};
+use dregg_turn::umem::{project_cell, project_ledger, UKey, UProjection, UVal};
 use serde::{Deserialize, Serialize};
 
 use crate::world::World;
@@ -217,7 +217,7 @@ impl UmemBranch {
 /// [`crate::shared_fork::MembraneFrustum`] and
 /// [`crate::distributed_card::CardForkEnvelope`]), carrying the universal-map projection
 /// + the anti-substitution root. The bytes are inert in transit; a recipient opens them
-/// (the root tooth fires fail-closed on a substituted payload) and stitches.
+///   (the root tooth fires fail-closed on a substituted payload) and stitches.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UmemEnvelope {
     /// The carried umem branch (focus, cull, the `UProjection`, the cursor).

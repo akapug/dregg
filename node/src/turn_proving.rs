@@ -406,12 +406,27 @@ fn rotation_witness_for_self_sovereign_impl(
         return None;
     }
 
+    // v12 CARRIER MATERIAL (STEP-2.5, the cipherclerk thread mirrored): a factory turn's AFTER
+    // commitment publishes the installed child VK on octet 88..95 (non-zero); every non-factory
+    // lead keeps the zero `Default` octet. The BEFORE block always keeps the zero octet (the
+    // child is BORN by this turn).
+    let after_material = match effects.first() {
+        Some(dregg_turn::Effect::CreateCellFromFactory { params, .. }) => {
+            dregg_cell::commitment::RotationCarrierMaterial {
+                child_vk: params.program_vk,
+                contract_hash: None,
+            }
+        }
+        _ => dregg_cell::commitment::RotationCarrierMaterial::default(),
+    };
+
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = rw::produce(
         after_cell,
@@ -419,6 +434,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &after_material,
     );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
@@ -531,12 +547,26 @@ fn rotation_witness_for_capability_turn(
     // nonce delta is UNSAT — `setFieldTick_rejects_wrong_nonce_delta` / `mintTick_rejects_wrong_nonce_delta`).
     // No broken-descriptor fallback remains: EVERY cohort effect rotates.
 
+    // v12 CARRIER MATERIAL (STEP-2.5, the cipherclerk thread mirrored — see the self-sovereign
+    // builder above): a factory lead carries the installed child VK on the AFTER octet; every
+    // other lead keeps the zero `Default`.
+    let after_material = match effects.first() {
+        Some(dregg_turn::Effect::CreateCellFromFactory { params, .. }) => {
+            dregg_cell::commitment::RotationCarrierMaterial {
+                child_vk: params.program_vk,
+                contract_hash: None,
+            }
+        }
+        _ => dregg_cell::commitment::RotationCarrierMaterial::default(),
+    };
+
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
     let after_w = rw::produce(
         after_cell,
@@ -544,6 +574,7 @@ fn rotation_witness_for_capability_turn(
         &nullifier_root,
         &commitments_root,
         receipt_hashes,
+        &after_material,
     );
 
     Some(dregg_sdk::RotationTurnWitness::for_effects(
@@ -732,23 +763,22 @@ pub fn bearer_consumed_cap<'a>(
 pub fn delegator_pre_state_cap_roots(
     forest: &dregg_turn::CallForest,
     ledger: &dregg_cell::Ledger,
-) -> std::collections::HashMap<CellId, BabyBear> {
+) -> std::collections::HashMap<CellId, [BabyBear; 8]> {
     use dregg_turn::{Authorization, DelegationProofData};
     let mut out = std::collections::HashMap::new();
     for tree in forest.iter_dfs() {
-        if let Authorization::Bearer(proof) = &tree.action.authorization {
-            if let DelegationProofData::SignedDelegation { delegator_pk, .. } =
+        if let Authorization::Bearer(proof) = &tree.action.authorization
+            && let DelegationProofData::SignedDelegation { delegator_pk, .. } =
                 &proof.delegation_proof
-            {
-                // Resolve the delegator cell by public key (the executor's own
-                // lookup), then snapshot its pre-state canonical cap root.
-                if let Some((id, cell)) =
-                    ledger.iter().find(|(_, c)| c.public_key() == delegator_pk)
-                {
-                    out.entry(*id).or_insert_with(|| {
-                        dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities)
-                    });
-                }
+        {
+            // Resolve the delegator cell by public key (the executor's own
+            // lookup), then snapshot its pre-state canonical cap root — the FULL
+            // native 8-felt openable root (`_8`, the ~124-bit faithful root the
+            // cap-membership leg binds), NOT a lane-0 squeeze.
+            if let Some((id, cell)) = ledger.iter().find(|(_, c)| c.public_key() == delegator_pk) {
+                out.entry(*id).or_insert_with(|| {
+                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities).limbs()
+                });
             }
         }
     }
@@ -908,6 +938,7 @@ pub fn prove_and_verify_finalized_turn_freshness(
         turn_hash,
         rotation,
         cap_turn_identity: None,
+        umem_witness: None,
     };
     let proof = prove_full_turn(&witness).map_err(FullTurnProvingError::Prove)?;
 
@@ -970,31 +1001,37 @@ pub fn prove_and_verify_finalized_turn_capability(
     pre_balance: u64,
     pre_nonce: u64,
     pre_capability_root: BabyBear,
+    actor_cap_root_8: [BabyBear; 8],
     effects: &[dregg_turn::Effect],
     turn_hash: [u8; 32],
     consumed: &dregg_turn::ConsumedCapWitness,
     spent_nullifier: Option<&[u8; 32]>,
     previously_spent: &[[u8; 32]],
     rotation: Option<dregg_sdk::RotationTurnWitness>,
-    clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    cap_trees: CapWriteTreeWitness,
+    umem_witness: Option<dregg_sdk::UmemWeldWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // BREADSTUFF (actor-held) path: the cap's HOLDER is the actor, so the
-    // AUTHORITY leg binds against the ACTOR's own canonical pre-state cap root —
-    // the same root the EffectVm state-transition leg is seeded from. The bearer
-    // generalisation (`..._holder`) takes a distinct holder root.
+    // AUTHORITY leg binds against the ACTOR's own canonical pre-state cap root.
+    // `pre_capability_root` (SCALAR lane-0) seeds the EffectVm state-transition
+    // leg's `cap_root` column; `actor_cap_root_8` (the FULL native 8-felt openable
+    // root) is what the cap-membership leg / `CapMembershipExpectation` binds — on
+    // the actor-held path holder == actor, so it IS the actor's own 8-felt root.
+    // The bearer generalisation (`..._holder`) takes a distinct holder root.
     prove_and_verify_finalized_turn_capability_holder(
         agent,
         pre_balance,
         pre_nonce,
         pre_capability_root,
-        pre_capability_root,
+        actor_cap_root_8,
         effects,
         turn_hash,
         consumed,
         spent_nullifier,
         previously_spent,
         rotation,
-        clist_leaves,
+        cap_trees,
+        umem_witness,
     )
 }
 
@@ -1016,6 +1053,67 @@ pub fn cap_write_clist_leaves(cell: &dregg_cell::Cell) -> Vec<dregg_circuit::hea
             }
         })
         .collect()
+}
+
+/// **(cap-WRITE light-client axis, the INSERT/REMOVE keystone deploy)** The FULL cap-tree write
+/// witness bundle for a cell: the arity-2 openable leaf-set (`clist_leaves` — the map-op tree the
+/// non-rewired write wrappers open), the FULL 7-field LIVE c-list (`cap_leaves` — the arity-7
+/// `CanonicalCapTree` the INSERT-shaped keystone wrappers rebuild to splice a fresh conferred edge),
+/// and the tombstoned slot keys (`cap_tombstones` — the ghost positions the rebuilt roots preserve,
+/// cell-side byte-identity). This is the cell's GENUINE pre-state; the prover threads it so a wrong
+/// post-root is unprovable (no fabricated after-root).
+#[derive(Clone, Debug, Default)]
+pub struct CapWriteTreeWitness {
+    pub clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    pub cap_leaves: Vec<dregg_circuit::cap_root::CapLeaf>,
+    pub cap_tombstones: Vec<BabyBear>,
+}
+
+/// Build the [`CapWriteTreeWitness`] from a cell's genuine pre-state (see
+/// [`cap_write_clist_leaves`] for the arity-2 half).
+pub fn cap_write_tree_witness(cell: &dregg_cell::Cell) -> CapWriteTreeWitness {
+    CapWriteTreeWitness {
+        clist_leaves: cap_write_clist_leaves(cell),
+        cap_leaves: cell
+            .capabilities
+            .iter()
+            .map(dregg_cell::cap_ref_to_leaf)
+            .collect(),
+        cap_tombstones: cell
+            .capabilities
+            .tombstoned_slots()
+            .map(dregg_circuit::cap_root::slot_hash)
+            .collect(),
+    }
+}
+
+/// **THE DOMAIN-2 (CAPS) UMEM WELD WITNESS PRODUCER (the umem-flip's node-side seam).** Build the
+/// per-turn universal-memory weld witness ([`dregg_sdk::UmemWeldWitness`]) from the REAL before/after
+/// actor cells the commit path holds — the GENUINE record-kernel projection diff
+/// (`project_record_kernel_state(before) → project_diff_ops(pre, post)`) — and return it ONLY when the
+/// diff is a NON-EMPTY, single-domain CAPS change (the shape
+/// [`prove_wide_umem_welded_cap_open_staged`] reconciles). A turn whose actor projection diff is empty
+/// (no caps change), heap-domain (a value move, NOT a cap-open weld), or spans multiple domains gets
+/// `None` ⇒ the caller keeps the BARE wide cap-open leg (the deployed default). This is the witness
+/// the loud-probe threads to mint the DOMAIN-2 welded form through the deployed cap path; the deployed
+/// commit site (`blocklace_sync`) passes `None` until the gated VK epoch flips it on.
+pub fn caps_umem_weld_witness(
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+) -> Option<dregg_sdk::UmemWeldWitness> {
+    use dregg_turn::umem::{UDomain, project_diff_ops, project_record_kernel_state};
+    let pre = project_record_kernel_state(before_cell);
+    let post = project_record_kernel_state(after_cell);
+    let ops = project_diff_ops(&pre, &post);
+    if ops.is_empty() {
+        return None;
+    }
+    // Single-domain CAPS discipline (the cap-open weld reconciles domain 2 only — the producer fails
+    // closed otherwise, so we refuse to thread a witness it could not mint from).
+    if ops.iter().any(|op| op.key.domain() != UDomain::Caps) {
+        return None;
+    }
+    Some(dregg_sdk::UmemWeldWitness { pre, ops })
 }
 
 /// Prove a finalized CAPABILITY-GATED turn binding the AUTHORITY (cap-membership)
@@ -1047,14 +1145,15 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
     pre_balance: u64,
     pre_nonce: u64,
     pre_capability_root: BabyBear,
-    holder_cap_root: BabyBear,
+    holder_cap_root: [BabyBear; 8],
     effects: &[dregg_turn::Effect],
     turn_hash: [u8; 32],
     consumed: &dregg_turn::ConsumedCapWitness,
     spent_nullifier: Option<&[u8; 32]>,
     previously_spent: &[[u8; 32]],
     rotation: Option<dregg_sdk::RotationTurnWitness>,
-    clist_leaves: Vec<dregg_circuit::heap_root::HeapLeaf>,
+    cap_trees: CapWriteTreeWitness,
+    umem_witness: Option<dregg_sdk::UmemWeldWitness>,
 ) -> Result<ProvenFinalizedTurn, FullTurnProvingError> {
     // Defence in depth: the receipt witness must be internally consistent AND
     // open to the CANONICAL pre-state capability root the node itself derived for
@@ -1067,13 +1166,15 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
             reason: "membership path does not recompute the witness's own cap_root".into(),
         });
     }
-    if consumed.cap_root != holder_cap_root.as_u32() {
+    // FULL native 8-felt equality (the ~124-bit faithful root, NOT a lane-0
+    // squeeze): lift the witness's recorded `[u32; 8]` cap root per-lane into the
+    // field and compare it against the node-derived `[BabyBear; 8]` holder root.
+    if consumed.cap_root.map(BabyBear::new) != holder_cap_root {
         return Err(FullTurnProvingError::ConsumedCapWitnessInvalid {
             reason: format!(
-                "witness cap_root {} != canonical pre-state holder capability_root {} \
+                "witness cap_root {:?} != canonical pre-state holder capability_root {:?} \
                  (the cap was NOT a member of the holder's authoritative pre-state c-list)",
-                consumed.cap_root,
-                holder_cap_root.as_u32()
+                consumed.cap_root, holder_cap_root
             ),
         });
     }
@@ -1137,20 +1238,32 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
     };
     let (_trace, pi) = generate_effect_vm_trace(&initial_vm_state, &vm_effects);
 
-    // WIDE FLAG-DAY — THE NAMED RESIDUAL (cap-open tail). A capability-gated turn threads
-    // `cap_membership` (below), so `prove_cohort_run_chain` routes the run through the CAP-OPEN
-    // producer (`prove_effect_vm_cap_open`), which still emits the 1-felt V3 cap-open descriptor (the
-    // wide twins of the `…CapOpen…` members are NOT yet in `WIDE_REGISTRY_STAGED_TSV`). The
-    // light-client verifier's V3 fallback accepts that cap-open leg and binds its 1-felt commit
-    // broadcast into slot 0 (`leg_commit`'s narrow branch). So the trusted anchor here is the SAME
-    // 1-felt-in-slot-0 form — the residual ~31-bit waist for cap-gated turns ONLY, until the wide
-    // cap-open descriptors land. (Normal owner-authorized turns are fully wide; see
-    // `prove_and_verify_finalized_turn`.) `pi[NEW_COMMIT]` is the v1-prefix post-commit the cap-open
-    // leg also publishes at `pi::NEW_COMMIT`.
-    let (old_commit, new_commit) = (
-        wide_from_felt(initial_vm_state.state_commitment),
-        wide_from_felt(pi[dregg_circuit::effect_vm::pi::NEW_COMMIT]),
-    );
+    // WIDE FLAG-DAY — THE CAP-OPEN TAIL CLOSED. A capability-gated turn threads `cap_membership`
+    // (below), so `prove_cohort_run_chain` routes the run through the CAP-OPEN producer
+    // (`prove_effect_vm_cap_open`). EVERY live cap-open key — the authority crown, the §10 WRITE tail,
+    // AND the turn-bound `transferCapOpenTB` (the route THIS deployed cap path proves) — now has a
+    // PROVEN wide twin in `WIDE_REGISTRY_STAGED_TSV`, so the cap-open leg publishes the FULL 8-felt
+    // (~124-bit) BEFORE/AFTER commit at its LAST 16 PIs (the wide carriers appended past the membership
+    // crown / turn-identity pins). `verify_full_turn_bound`'s `leg_is_wide` (keyed on the wide-registry
+    // fingerprint the leg's vk_hash pins) binds those 8-felt slices — so the trusted anchor here must be
+    // the GENUINE wide chain endpoints, NOT the 1-felt-in-slot-0 form. We derive them exactly as the
+    // owner-authorized path does (`rotation.wide_commit_anchors`, generate-only, the SAME wide carriers
+    // the producer absorbs), threading the BEFORE nullifier-set leaves for a cap-turn that also spends.
+    // The ~31-bit waist is GONE for cap-gated turns. (Without a rotation witness the retired v1 cap leg
+    // runs and the verifier broadcasts its 1-felt commit into slot 0 — matched by `wide_from_felt`.)
+    let before_nullifiers: Vec<BabyBear> = non_revocation
+        .as_ref()
+        .map(|(tree, _)| tree.revoked_leaves())
+        .unwrap_or_default();
+    let (old_commit, new_commit) = match &rotation {
+        Some(rot) => rot
+            .wide_commit_anchors(&initial_vm_state, &vm_effects, Some(&before_nullifiers))
+            .map_err(FullTurnProvingError::Prove)?,
+        None => (
+            wide_from_felt(initial_vm_state.state_commitment),
+            wide_from_felt(pi[dregg_circuit::effect_vm::pi::NEW_COMMIT]),
+        ),
+    };
 
     // #225 TURN-IDENTITY (cross-vat close): derive the genuine `(actor, src, dst)` single-felt
     // identity from the REAL turn so a cap-gated transfer where the cap HOLDER/actor (`agent`)
@@ -1203,13 +1316,21 @@ pub fn prove_and_verify_finalized_turn_capability_holder(
         // When non-empty AND the effect routes a write wrapper (e.g. RevokeDelegation → the cap-tree
         // REMOVE), the SDK proves the `…WriteCapOpenVmDescriptor2R24` so the post-cap-root is on the
         // wire (light-client-verifiable). Empty ⇒ the authority-only cap-open (current behavior).
-        cap_membership: Some(CapMembershipWitness::from_consumed_with_clist(
+        cap_membership: Some(CapMembershipWitness::from_consumed_with_trees(
             consumed,
-            clist_leaves,
+            cap_trees.clist_leaves,
+            cap_trees.cap_leaves,
+            cap_trees.cap_tombstones,
         )),
         turn_hash,
         rotation,
         cap_turn_identity,
+        // DOMAIN-2 UMEM WELD (the producer seam this closes): when the caller threads the turn's
+        // genuine CAPS-domain projection diff, the cap-open leg mints the WIDE cap-open+umem WELDED
+        // form (the membership crown + the 8-felt anchors + the appended caps `umemOp` leg) that the
+        // deployed executor admits ADDITIVELY. `None` (the deployed default) ⇒ the bare wide cap-open
+        // leg — owner/cap turns that thread no witness are UNAFFECTED, no VK committed.
+        umem_witness,
     };
     let proof = prove_full_turn(&witness).map_err(FullTurnProvingError::Prove)?;
 
@@ -1661,8 +1782,8 @@ mod tests {
     /// maximal homogeneous runs `[Transfer] | [SetField]`, threading the interior boundary state),
     /// and the chained verifier checks endpoints + adjacency. Asserts: the composed proof carries
     /// >= 2 `"effect-vm-rotated"` legs and ZERO `"effect-vm"` (v1) legs, and the verify->accept gate
-    /// passes against the real-cell commitments. This is the live-path evidence the heterogeneous
-    /// shape no longer takes the v1 fallback (unblocking C7).
+    /// > passes against the real-cell commitments. This is the live-path evidence the heterogeneous
+    /// > shape no longer takes the v1 fallback (unblocking C7).
     #[test]
     fn flow_b_heterogeneous_turn_proves_rotated_chain() {
         let bob = CellId::from_bytes([0xB2; 32]);
@@ -1773,6 +1894,7 @@ mod tests {
     ///     (`SubProofInvalid`) — the leg itself is UNSAT against the forged PI;
     ///   * step 4 (chain adjacency): even if a leg's PI/proof stayed self-consistent, the broken
     ///     NEW would fail `leg_1.OLD == leg_0.NEW` (`CommitmentMismatch{chain_adjacency}`).
+    ///
     /// So a spliced/forged middle state cannot launder a fictional intermediate transition onto the
     /// rotated chain.
     #[test]
@@ -1870,6 +1992,8 @@ mod tests {
     /// SECOND (non-lead) rotated leg and assert the rejection lands on THAT leg (not index 0) — so a
     /// forged interior/tail cohort cannot ride a valid lead onto the chain.
     #[test]
+    // NON_LEAD is deliberate emphasis in the test name (the non-lead-leg rejection witness).
+    #[allow(non_snake_case)]
     fn flow_b_heterogeneous_chain_tampered_NON_LEAD_leg_is_rejected() {
         let bob = CellId::from_bytes([0xB2; 32]);
         let pre_balance: u64 = 1_000;
@@ -2564,7 +2688,8 @@ mod tests {
     fn run_self_cap_gated_turn_full() -> (
         dregg_turn::TurnReceipt,
         CellId,
-        BabyBear,
+        BabyBear,      // SCALAR lane-0 pre-state cap root (the EffectVm-seed)
+        [BabyBear; 8], // FULL native 8-felt pre-state cap root (the membership root)
         Vec<dregg_turn::Effect>,
         Cell,
         Cell,
@@ -2600,6 +2725,10 @@ mod tests {
             .allowed_effects = Some(dregg_cell::facet::EFFECT_TRANSFER);
 
         let pre_cap_root = dregg_cell::compute_canonical_capability_root_felt(&agent.capabilities);
+        // The FULL native 8-felt openable membership root (the ~124-bit faithful
+        // root the cap-membership leg / `CapMembershipExpectation.cap_root` binds).
+        let pre_cap_root_8 =
+            dregg_cell::compute_canonical_capability_root_8(&agent.capabilities).limbs();
         // The REAL before-state cell the commit path holds (real pk + c-list ⇒ faithful r23).
         let before_cell = agent.clone();
 
@@ -2636,6 +2765,7 @@ mod tests {
             receipt,
             agent_id,
             pre_cap_root,
+            pre_cap_root_8,
             effects,
             before_cell,
             after_cell,
@@ -2665,7 +2795,7 @@ mod tests {
     fn honest_capability_gated_turn_proves_with_cap_leg() {
         // The SELF-Transfer cap fixture (the shape that ROTATES — the live cap-gated commit path
         // proves through the rotated descriptor under `recursion`, the v1 cap leg being retired).
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .expect("actor-held consumed-cap witness");
@@ -2689,13 +2819,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCAu8; 32],
             consumed,
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest capability-gated turn must prove + cap-bound-verify");
 
@@ -2709,7 +2841,7 @@ mod tests {
         // expectation from the receipt witness + the canonical root.
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
-            cap_root: pre_cap_root,
+            cap_root: pre_cap_root_8,
         };
         verify_full_turn_bound(
             &proven.proof,
@@ -2727,7 +2859,7 @@ mod tests {
     /// a different expected root fails with `CapRootMismatch`.
     #[test]
     fn cap_witness_path_not_reaching_prestate_root_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
@@ -2748,19 +2880,23 @@ mod tests {
         // (a) Tamper a sibling: the path no longer recomputes the witness's
         // own root — the prover refuses (no sound leg exists), even WITH a rotation witness in hand.
         let mut tampered = consumed.clone();
-        tampered.siblings[2] ^= 1;
+        // Tamper the sibling digest (all 8 lanes) so the path no longer recomputes
+        // the witness's own root.
+        tampered.siblings[2] = tampered.siblings[2].map(|x| x ^ 1);
         let result = prove_and_verify_finalized_turn_capability(
             &agent_id,
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCBu8; 32],
             &tampered,
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         );
         assert!(
             matches!(
@@ -2777,16 +2913,20 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCCu8; 32],
             &consumed,
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest proof");
-        let wrong_root = pre_cap_root + BabyBear::new(1);
+        // A genuinely distinct 8-felt root (every lane perturbed) — NOT a lane-0
+        // squeeze — so the in-circuit-bound root mismatches on the full digest.
+        let wrong_root = pre_cap_root_8.map(|f| f + BabyBear::new(1));
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
             cap_root: wrong_root,
@@ -2800,7 +2940,7 @@ mod tests {
         ) {
             Err(FullTurnVerifyError::CapRootMismatch { expected, got }) => {
                 assert_eq!(expected, wrong_root);
-                assert_eq!(got, pre_cap_root);
+                assert_eq!(got, pre_cap_root_8);
             }
             Ok(()) => panic!(
                 "SOUNDNESS (AUTHORITY): a cap-membership proof against one tree was \
@@ -2817,7 +2957,7 @@ mod tests {
     /// canonical root, so the prover refuses it outright.
     #[test]
     fn inflated_mask_leaf_tamper_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
@@ -2857,13 +2997,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCDu8; 32],
             &inflated,
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         );
         assert!(
             matches!(
@@ -2880,13 +3022,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCEu8; 32],
             &consumed,
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest proof");
         let mut inflated_leaf = consumed.cap_leaf();
@@ -2895,7 +3039,7 @@ mod tests {
         inflated_leaf.mask_hi = hi;
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: inflated_leaf,
-            cap_root: pre_cap_root,
+            cap_root: pre_cap_root_8,
         };
         match verify_full_turn_bound(
             &proven.proof,
@@ -2921,7 +3065,7 @@ mod tests {
     /// canonical root fails (prover refusal AND verifier `CapRootMismatch`).
     #[test]
     fn different_cells_cap_root_splice_is_rejected() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
@@ -2934,6 +3078,11 @@ mod tests {
             .capabilities
             .grant(CellId::from_bytes([0x55u8; 32]), AuthRequired::None);
         let other_root = dregg_cell::compute_canonical_capability_root_felt(&other.capabilities);
+        // The other cell's FULL native 8-felt root — the holder root the splice
+        // attempt binds against (distinct from the agent's, so the witness cannot
+        // open to it).
+        let other_root_8 =
+            dregg_cell::compute_canonical_capability_root_8(&other.capabilities).limbs();
         assert_ne!(
             other_root, pre_cap_root,
             "distinct c-lists ⇒ distinct roots"
@@ -2946,13 +3095,15 @@ mod tests {
             1_000,
             0,
             other_root,
+            other_root_8,
             &effects,
             [0xCFu8; 32],
             &consumed,
             None,
             &[],
             None,
-            vec![],
+            Default::default(),
+            None,
         );
         assert!(
             matches!(
@@ -2977,18 +3128,20 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xD0u8; 32],
             &consumed,
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest proof");
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
-            cap_root: other_root,
+            cap_root: other_root_8,
         };
         let result = verify_full_turn_bound(
             &proven.proof,
@@ -3052,7 +3205,7 @@ mod tests {
     /// when verified with the expectation (the leg cannot be stripped).
     #[test]
     fn missing_cap_leg_is_rejected_for_capability_gated_turn() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
@@ -3075,7 +3228,7 @@ mod tests {
                 .expect("legless proof proves");
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
-            cap_root: pre_cap_root,
+            cap_root: pre_cap_root_8,
         };
         let result = verify_full_turn_bound(
             &proven.proof,
@@ -3102,7 +3255,7 @@ mod tests {
     /// fallback discipline; never a zero-pk stub).
     #[test]
     fn capability_rotation_witness_faithful_or_falls_back() {
-        let (_receipt, _agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (_receipt, _agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let receipts = [[0x11u8; 32]];
 
@@ -3127,15 +3280,19 @@ mod tests {
         // the cell's real c-list root, so the gate refuses rather than mint a leg that disagrees
         // with the v1 cap pre-state. This is the discipline that keeps a zero-pk/empty-authority
         // stub from ever being laundered onto the rotated path.
-        let empty_root = dregg_circuit::cap_root::empty_capability_root();
+        let empty_root_8 = dregg_circuit::cap_root::empty_capability_root();
         assert_ne!(
-            empty_root, pre_cap_root,
+            empty_root_8, pre_cap_root_8,
             "the fixture holds a non-empty c-list"
         );
+        // The SCALAR lane-0 empty root the rotation-witness builder (a scalar-seed
+        // API) consumes — disagreeing with the cell's real c-list root.
+        let empty_root_felt =
+            dregg_cell::compute_canonical_capability_root_felt(&dregg_cell::CapabilitySet::new());
         let w_bad = rotation_witness_for_capability(
             1_000,
             0,
-            empty_root,
+            empty_root_felt,
             &before_cell,
             &after_cell,
             &receipts,
@@ -3153,7 +3310,7 @@ mod tests {
     /// commit-path call (`blocklace_sync` builds the witness from `full_turn_pre_cell` exactly so).
     #[test]
     fn flow_b_capability_gated_turn_proves_rotated() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .expect("actor-held consumed-cap witness");
@@ -3178,13 +3335,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xCAu8; 32],
             consumed,
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("the rotated capability-gated turn must prove + cap-bound-verify");
 
@@ -3214,7 +3373,7 @@ mod tests {
         // Independent re-verification with the cap expectation (a light client's path) accepts.
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: consumed.cap_leaf(),
-            cap_root: pre_cap_root,
+            cap_root: pre_cap_root_8,
         };
         verify_full_turn_bound(
             &proven.proof,
@@ -3239,7 +3398,7 @@ mod tests {
     /// This is the evidence the over-grant tooth fires on the rotated path, not only the happy path.
     #[test]
     fn cap_over_grant_refused_on_rotated_leg() {
-        let (receipt, agent_id, pre_cap_root, effects, before_cell, after_cell) =
+        let (receipt, agent_id, pre_cap_root, pre_cap_root_8, effects, before_cell, after_cell) =
             run_self_cap_gated_turn_full();
         let consumed = actor_consumed_cap(&receipt.consumed_capabilities, &agent_id)
             .unwrap()
@@ -3280,13 +3439,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xC1u8; 32],
             &over_granted,
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         );
         assert!(
             matches!(
@@ -3314,13 +3475,15 @@ mod tests {
             1_000,
             0,
             pre_cap_root,
+            pre_cap_root_8,
             &effects,
             [0xC2u8; 32],
             &consumed,
             None,
             &[],
             rotation2,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest ROTATED cap proof");
         // Confirm it really IS the rotated leg carrying the cap tooth.
@@ -3339,7 +3502,7 @@ mod tests {
         inflated_leaf.mask_hi = hi;
         let expectation = dregg_sdk::CapMembershipExpectation {
             leaf: inflated_leaf,
-            cap_root: pre_cap_root,
+            cap_root: pre_cap_root_8,
         };
         match verify_full_turn_bound(
             &proven.proof,
@@ -3452,10 +3615,11 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn run_bearer_delegated_turn() -> (
         dregg_turn::TurnReceipt,
-        CellId,   // actor (bearer) id
-        CellId,   // delegator id
-        BabyBear, // delegator pre-state cap root (the authority-leg root)
-        BabyBear, // actor pre-state cap root (the EffectVm-seed root)
+        CellId,        // actor (bearer) id
+        CellId,        // delegator id
+        [BabyBear; 8], // delegator pre-state cap root (the authority-leg root, 8-felt)
+        BabyBear,      // actor pre-state cap root (the EffectVm-seed root, SCALAR)
+        [BabyBear; 8], // actor pre-state cap root (8-felt, for the distinctness assert)
         Vec<dregg_turn::Effect>,
         Cell, // bearer before-cell
         Cell, // bearer after-cell
@@ -3481,16 +3645,21 @@ mod tests {
             .capabilities
             .grant(CellId::from_bytes([0x99u8; 32]), AuthRequired::None);
         let bearer_id = bearer.id();
+        // The actor's EffectVm-seed root (SCALAR lane-0) AND its FULL native 8-felt
+        // form (used only for the distinctness assert against the delegator root).
         let actor_cap_root =
             dregg_cell::compute_canonical_capability_root_felt(&bearer.capabilities);
+        let actor_cap_root_8 =
+            dregg_cell::compute_canonical_capability_root_8(&bearer.capabilities).limbs();
 
         // The delegator's capability is over the BEARER cell.
         delegator.capabilities.grant(bearer_id, AuthRequired::None);
         let delegator_id = delegator.id();
+        // The authority-leg (holder) root is the FULL native 8-felt openable root.
         let delegator_cap_root =
-            dregg_cell::compute_canonical_capability_root_felt(&delegator.capabilities);
+            dregg_cell::compute_canonical_capability_root_8(&delegator.capabilities).limbs();
         assert_ne!(
-            delegator_cap_root, actor_cap_root,
+            delegator_cap_root, actor_cap_root_8,
             "the bearer fixture must have distinct delegator/actor cap roots so the \
              authority-leg (holder) root genuinely differs from the EffectVm-seed (actor) root"
         );
@@ -3534,6 +3703,7 @@ mod tests {
             delegator_id,
             delegator_cap_root,
             actor_cap_root,
+            actor_cap_root_8,
             effects,
             before_cell,
             after_cell,
@@ -3547,8 +3717,17 @@ mod tests {
     /// routing the commit path depends on to reach the (None, Some(..)) arm.
     #[test]
     fn routing_identifies_bearer_delegated_turn() {
-        let (receipt, bearer_id, delegator_id, delegator_cap_root, _actor_root, _eff, _b, _a) =
-            run_bearer_delegated_turn();
+        let (
+            receipt,
+            bearer_id,
+            delegator_id,
+            delegator_cap_root,
+            _actor_root,
+            _actor_root_8,
+            _eff,
+            _b,
+            _a,
+        ) = run_bearer_delegated_turn();
 
         // The actor holds no consumed cap of its own; the bearer witness is the
         // delegator's.
@@ -3570,9 +3749,11 @@ mod tests {
         // The witness's recorded cap_root is the delegator's pre-state root: the
         // node re-derives the SAME value from its authoritative pre-execution
         // ledger (never trusting the receipt).
+        // FULL native 8-felt equality: lift the witness's `[u32; 8]` cap root
+        // per-lane into the field and compare it to the delegator's 8-felt root.
         assert_eq!(
-            bearer.cap_root,
-            delegator_cap_root.as_u32(),
+            bearer.cap_root.map(BabyBear::new),
+            delegator_cap_root,
             "the witness opens against the delegator's pre-state capability root"
         );
 
@@ -3618,6 +3799,7 @@ mod tests {
             _delegator_id,
             delegator_cap_root,
             actor_cap_root,
+            actor_cap_root_8,
             effects,
             before_cell,
             after_cell,
@@ -3627,9 +3809,9 @@ mod tests {
             .clone();
 
         // The two roots genuinely differ: the actor's EffectVm-seed root vs the
-        // delegator's authority-leg root.
+        // delegator's authority-leg root (compared on the FULL 8-felt digest).
         assert_ne!(
-            actor_cap_root, delegator_cap_root,
+            actor_cap_root_8, delegator_cap_root,
             "the authority leg binds a DIFFERENT root than the actor's EffectVm seed"
         );
 
@@ -3664,7 +3846,8 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest bearer-delegated turn must prove + authority-bound-verify");
 
@@ -3708,6 +3891,7 @@ mod tests {
             _delegator_id,
             delegator_cap_root,
             actor_cap_root,
+            _actor_cap_root_8,
             effects,
             before_cell,
             after_cell,
@@ -3730,13 +3914,14 @@ mod tests {
         // A would-be delegator that NEVER held the cap: a cell with a different
         // c-list ⇒ a different canonical root. (This is what the node would
         // derive for a forged `holder` that lacked the authority — or, in the
-        // commit path, the empty root for an absent delegator.)
+        // commit path, the empty root for an absent delegator.) The FULL native
+        // 8-felt root the (impostor) holder leg would bind against.
         let mut impostor = Cell::with_balance([0x12u8; 32], [0u8; 32], 0);
         impostor
             .capabilities
             .grant(CellId::from_bytes([0x34u8; 32]), AuthRequired::None);
         let impostor_root =
-            dregg_cell::compute_canonical_capability_root_felt(&impostor.capabilities);
+            dregg_cell::compute_canonical_capability_root_8(&impostor.capabilities).limbs();
         assert_ne!(
             impostor_root, delegator_cap_root,
             "the impostor delegator's root must differ from the real delegator's"
@@ -3759,7 +3944,8 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         );
         assert!(
             matches!(
@@ -3787,7 +3973,8 @@ mod tests {
             None,
             &[],
             rotation(),
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest bearer proof (bound to the real delegator root)");
         let expectation = dregg_sdk::CapMembershipExpectation {
@@ -3848,6 +4035,7 @@ mod tests {
             _delegator_id,
             _delegator_cap_root,
             actor_cap_root, // EffectVm-seed root (the ACTOR's)
+            _actor_cap_root_8,
             effects,
             before_cell,
             after_cell,
@@ -3892,7 +4080,7 @@ mod tests {
             .expect("granted cap present")
             .allowed_effects = Some(dregg_cell::facet::EFFECT_TRANSFER);
         let holder_cap_root =
-            dregg_cell::compute_canonical_capability_root_felt(&holder.capabilities);
+            dregg_cell::compute_canonical_capability_root_8(&holder.capabilities).limbs();
 
         // Build the consumed-cap membership witness for the B-targeting leaf against
         // the holder's canonical tree (mirrors `record_consumed_cap_witness`).
@@ -3930,9 +4118,14 @@ mod tests {
             leaf_mask_hi: consumed_leaf.mask_hi.as_u32(),
             leaf_expiry: consumed_leaf.expiry.as_u32(),
             leaf_breadstuff: consumed_leaf.breadstuff.as_u32(),
-            siblings: siblings.into_iter().map(|s| s.as_u32()).collect(),
+            // FULL native 8-felt per-lane encoding (NOT a lane-0 squeeze): each
+            // sibling digest and the tree root carry all 8 lanes into the witness.
+            siblings: siblings
+                .into_iter()
+                .map(|s| s.map(|f| f.as_u32()))
+                .collect(),
             directions,
-            cap_root: tree.root().as_u32(),
+            cap_root: tree.root().map(|f| f.as_u32()),
         };
         assert!(
             consumed.verify(),
@@ -3977,7 +4170,8 @@ mod tests {
             None,
             &[],
             rotation,
-            vec![],
+            Default::default(),
+            None,
         )
         .expect("honest cross-vat cap-gated transfer must prove + authority-bound-verify");
         assert!(
@@ -4030,5 +4224,44 @@ mod tests {
             Some(&expectation),
         )
         .expect("light-client re-verify of the cross-vat proof must accept");
+    }
+
+    /// DOMAIN-2 SOURCING: `caps_umem_weld_witness` builds a CAPS-domain weld witness from a c-list
+    /// change (the shape the deployed cap path threads to the welded cap-open producer), and REFUSES
+    /// (returns `None`) a non-caps (balance / heap) change or a no-op — so the deployed path only
+    /// welds when the genuine actor projection diff is a caps reconciliation.
+    #[test]
+    fn caps_umem_weld_witness_sources_caps_diff_only() {
+        let mut before = Cell::with_balance([0x5Au8; 32], [0u8; 32], 1_000);
+        before.permissions = open_permissions();
+
+        // (a) A CAPS change (grant a slot) ⇒ Some witness whose ops are all CAPS-domain.
+        let mut after_caps = before.clone();
+        after_caps
+            .capabilities
+            .grant(CellId::from_bytes([0x99u8; 32]), AuthRequired::None);
+        let w = caps_umem_weld_witness(&before, &after_caps)
+            .expect("a c-list change yields a CAPS-domain weld witness");
+        assert!(
+            !w.ops.is_empty()
+                && w.ops
+                    .iter()
+                    .all(|op| op.key.domain() == dregg_turn::umem::UDomain::Caps),
+            "the sourced witness reconciles the CAPS domain only"
+        );
+
+        // (b) A NO-OP (identical cells) ⇒ None (empty diff, nothing to weld).
+        assert!(
+            caps_umem_weld_witness(&before, &before).is_none(),
+            "an empty actor projection diff yields no weld witness (stays bare)"
+        );
+
+        // (c) A BALANCE change (heap domain, NOT caps) ⇒ None — a value move is not a cap-open weld.
+        let mut after_bal = before.clone();
+        after_bal.state.set_balance(900);
+        assert!(
+            caps_umem_weld_witness(&before, &after_bal).is_none(),
+            "a heap-domain (balance) change is refused — the cap-open weld reconciles CAPS only"
+        );
     }
 }

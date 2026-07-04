@@ -29,11 +29,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
+    div, px, AnyElement, App, AppContext as _, Context, Entity, FocusHandle, Focusable,
     InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    StatefulInteractiveElement as _, Styled as _, Window,
 };
-use gpui_component::{ActiveTheme as _, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _};
+
+use dregg_doc::Author;
 
 use crate::doc_viewer::DocViewer;
 use crate::editor::Editor;
@@ -131,6 +133,27 @@ impl EditorPaneView {
         });
     }
 
+    /// **The merge/conflict action** — run the in-session co-author conflict
+    /// demonstrator on the open document, then switch to the STRUCTURE face so the
+    /// resulting first-class conflict object is front-and-centre. This is what
+    /// closes the gap that a single-author session never produces a conflict (so
+    /// the structure pane was blame-only): a REAL branch/merge (the pushout,
+    /// `Editor::simulate_coauthor_merge`), surfaced as an object. The co-author
+    /// identity is a DISTINCT author so the conflict object attributes both
+    /// alternatives correctly ("who wrote which" is a fact).
+    pub fn merge_coauthor_take(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let coauthor = {
+            let mine = self.editor.read(cx).author().0;
+            Author(if mine == 2 { 3 } else { 2 })
+        };
+        self.editor.update(cx, |ed, cx| {
+            ed.simulate_coauthor_merge(coauthor, window, cx);
+        });
+        self.mode = ViewMode::Structure;
+        self.refresh_structure(cx);
+        cx.notify();
+    }
+
     /// Switch the shown face; refresh the structure snapshot when entering it.
     pub fn set_mode(&mut self, mode: ViewMode, cx: &mut Context<Self>) {
         if self.mode == mode {
@@ -165,6 +188,31 @@ impl EditorPaneView {
             .child(SharedString::from(mode.label()))
             .on_click(cx.listener(move |this, _ev, _window, cx| {
                 this.set_mode(mode, cx);
+            }))
+    }
+
+    /// The merge/conflict action button (right of the mode tabs): fork two
+    /// divergent co-author takes of the open document and merge them — producing a
+    /// first-class conflict object the structure pane shows. Closes the
+    /// "single-author session can't make a conflict" gap with a real pushout.
+    fn coauthor_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (bg, fg, border) = {
+            let theme = cx.theme();
+            (theme.secondary, theme.foreground, theme.border)
+        };
+        div()
+            .id("editor-merge-coauthor")
+            .px_3()
+            .py_1()
+            .cursor_pointer()
+            .bg(bg)
+            .text_color(fg)
+            .text_xs()
+            .border_1()
+            .border_color(border)
+            .child(SharedString::from("⑃ merge a co-author's take"))
+            .on_click(cx.listener(|this, _ev, window, cx| {
+                this.merge_coauthor_take(window, cx);
             }))
     }
 
@@ -207,7 +255,9 @@ impl Render for EditorPaneView {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(self.mode_tab(ViewMode::Buffer, cx))
-            .child(self.mode_tab(ViewMode::Structure, cx));
+            .child(self.mode_tab(ViewMode::Structure, cx))
+            .child(div().flex_1())
+            .child(self.coauthor_button(cx));
 
         // The right column is the editor buffer or the structure inspector.
         let right: AnyElement = match self.mode {
@@ -284,6 +334,9 @@ impl EditorSurface {
     /// supplies a monotonic counter or a `Tab` discriminant).
     pub fn new(id: u64, fs: Arc<dyn Fs>, root: PathBuf, window: &mut Window, cx: &mut App) -> Self {
         let editor = cx.new(|cx| Editor::new(fs.clone(), window, cx));
+        // `build_pane_view`/`EditorPaneView` hold the tree as `Arc<FileTree>`; the
+        // surface is single-threaded gpui state, so the !Send/!Sync Arc is correct.
+        #[allow(clippy::arc_with_non_send_sync)]
         let tree = Arc::new(FileTree::new(fs, root, cx));
         let view = build_pane_view(editor.clone(), tree, window, cx);
         Self {
@@ -333,6 +386,10 @@ impl EditorSurface {
     /// mounts [`EditorSurface::firmament_over`] instead, handing the spine that
     /// wraps the live World — then the editor edits the SAME ledger the cockpit
     /// inspects.
+    // `firmament_over`/the `firmament` field type the fs as `Arc<FirmamentFs>` (it is
+    // also coerced to `Arc<dyn Fs>`); single-threaded gpui state, so the !Send/!Sync Arc
+    // is intentional and the type cannot become `Rc`.
+    #[allow(clippy::arc_with_non_send_sync)]
     #[cfg(feature = "firmament")]
     pub fn firmament(
         id: u64,
@@ -386,6 +443,8 @@ impl EditorSurface {
             }
             ed
         });
+        // Single-threaded gpui state; `EditorPaneView` holds `Arc<FileTree>`.
+        #[allow(clippy::arc_with_non_send_sync)]
         let tree = Arc::new(FileTree::new(fs, root, cx));
         let view = build_pane_view(editor.clone(), tree, window, cx);
         Ok(Self {
@@ -432,6 +491,8 @@ impl EditorSurface {
             ed.seed_content(name, revisions, window, cx);
             ed
         });
+        // Single-threaded gpui state; `EditorPaneView` holds `Arc<FileTree>`.
+        #[allow(clippy::arc_with_non_send_sync)]
         let tree = Arc::new(FileTree::new(fs, root, cx));
         let view = build_pane_view(editor.clone(), tree, window, cx);
         Self {

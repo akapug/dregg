@@ -25,10 +25,10 @@
 
 use dregg_doc::{BlameLine, ConflictRegion, Regime, Rendered, RopeDoc, Segment};
 use gpui::{
-    App, Context, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Styled as _, Window, div, px,
+    div, px, App, Context, FocusHandle, Focusable, Hsla, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Window,
 };
-use gpui_component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_component::{h_flex, v_flex, ActiveTheme as _, StyledExt as _};
 
 /// A read-only view over a document's provenance + conflicts. Holds a snapshot of
 /// the blame lines and the rendered structure (clean runs + conflict objects), so

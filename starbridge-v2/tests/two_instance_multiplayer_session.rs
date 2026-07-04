@@ -37,20 +37,20 @@ use dregg_turn::umem::{UKey, UVal};
 
 use starbridge_v2::shared_fork::{ForkMembraneHost, MembraneFrustum};
 use starbridge_v2::umem_membrane::{
-    UmemBranch, UmemEnvelope, open_umem_envelope, stitch_umem_forks, umem_event_id,
+    open_umem_envelope, stitch_umem_forks, umem_event_id, UmemBranch, UmemEnvelope,
 };
-use starbridge_v2::world::{World, make_open_cell, set_field};
+use starbridge_v2::world::{make_open_cell, set_field, World};
 
 /// The shared world the two co-inhabitants live in — built with ORDINARY genesis grants
 /// (a principal can only hold what it was granted; nobody self-grants). Returns the role
 /// cells:
 ///   * `room`    — the focus the membrane culls around (reaches both co-inhabitants + the
-///                 board); the cap-bounded co-inhabited surface.
+///     board); the cap-bounded co-inhabited surface.
 ///   * `ada` / `boris` — two DISTINCT principals.
 ///   * `board`   — the shared surface both hold a cap over (the collision candidate).
 ///   * `doc_ada` / `doc_boris` — each co-inhabitant's own doc (the disjoint edits).
 ///   * `offstage`— a cell NO principal in the room subgraph reaches (the confinement foil:
-///                 it must NOT ride the cap-bounded membrane — anti-amplification by omission).
+///     it must NOT ride the cap-bounded membrane — anti-amplification by omission).
 #[allow(clippy::type_complexity)]
 fn shared_world() -> (
     World,

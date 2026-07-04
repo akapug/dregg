@@ -3,7 +3,9 @@
 const wordGrid = document.getElementById('wordGrid');
 const pasteBtn = document.getElementById('pasteBtn');
 const recoverBtn = document.getElementById('recoverBtn');
-const passphraseInput = document.getElementById('passphrase');
+const bip39PassphraseInput = document.getElementById('bip39Passphrase');
+const walletPassphraseInput = document.getElementById('walletPassphrase');
+const walletPassphraseConfirmInput = document.getElementById('walletPassphraseConfirm');
 const resultDiv = document.getElementById('result');
 
 // Create 24 word inputs.
@@ -114,7 +116,26 @@ recoverBtn.addEventListener('click', async () => {
 
   const words = wordInputs.map(input => input.value.trim().toLowerCase());
   const mnemonic = words.join(' ');
-  const passphrase = passphraseInput.value;
+  const bip39Passphrase = bip39PassphraseInput.value;
+  const walletPassphrase = walletPassphraseInput.value;
+  const walletPassphraseConfirm = walletPassphraseConfirmInput.value;
+
+  if (!walletPassphrase || walletPassphrase.length < 8) {
+    resultDiv.textContent = 'Wallet passphrase must be at least 8 characters.';
+    resultDiv.className = 'result error';
+    resultDiv.style.display = 'block';
+    recoverBtn.disabled = false;
+    recoverBtn.textContent = 'Recover Cipherclerk';
+    return;
+  }
+  if (walletPassphrase !== walletPassphraseConfirm) {
+    resultDiv.textContent = 'Wallet passphrases do not match.';
+    resultDiv.className = 'result error';
+    resultDiv.style.display = 'block';
+    recoverBtn.disabled = false;
+    recoverBtn.textContent = 'Recover Cipherclerk';
+    return;
+  }
 
   try {
     const id = `recovery_${Date.now()}`;
@@ -122,7 +143,8 @@ recoverBtn.addEventListener('click', async () => {
       type: 'dregg:recover',
       id,
       mnemonic,
-      passphrase,
+      bip39Passphrase,
+      walletPassphrase,
     });
 
     if (response?.result?.success) {
@@ -131,7 +153,9 @@ recoverBtn.addEventListener('click', async () => {
       resultDiv.style.display = 'block';
       // Clear inputs for security.
       wordInputs.forEach(input => { input.value = ''; });
-      passphraseInput.value = '';
+      bip39PassphraseInput.value = '';
+      walletPassphraseInput.value = '';
+      walletPassphraseConfirmInput.value = '';
     } else {
       const error = response?.result?.error || response?.error || 'Recovery failed';
       resultDiv.textContent = error;

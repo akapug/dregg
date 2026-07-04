@@ -283,7 +283,7 @@ pub fn further_attenuation_delta(
     let mut builder = FoldDeltaBuilder::new(current_state.clone());
 
     // Each new restriction becomes a check.
-    for (_i, fact) in new_restrictions.iter().enumerate() {
+    for fact in new_restrictions.iter() {
         let pred_name = symbols.resolve(fact.predicate).unwrap_or("check");
 
         // SECURITY: Validate the predicate is a known restriction type.
@@ -316,13 +316,6 @@ mod tests {
     use super::*;
     use dregg_commit::verify_fold_chain;
 
-    fn test_key() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        key[0] = 0x42;
-        key[31] = 0xFF;
-        key
-    }
-
     #[test]
     fn test_initial_attenuation_delta() {
         let mut symbols = SymbolTable::new();
@@ -343,7 +336,7 @@ mod tests {
         assert!(delta.apply_and_verify());
 
         // New state should have the check fact.
-        assert!(new_state.len() >= 1);
+        assert!(!new_state.is_empty());
     }
 
     #[test]

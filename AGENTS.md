@@ -78,8 +78,13 @@ cargo nextest list -p <crate>                 # list tests without running (vali
 
 ## Searching: `sg` (ast-grep) for STRUCTURE, grep for text
 
-`ast-grep` 0.40.5 is installed (run it as `sg` or `ast-grep`; no repo ruleset — it's
-ad-hoc CLI). Reach for it whenever you're searching by **code shape**, not a literal
+`ast-grep` 0.40.5 is installed (run it as `sg` or `ast-grep`). The repo carries a
+ruleset (`sgconfig.yml` → `.ast-grep/rules/`): today just the **faithful-commitment
+gate** — `fold_bytes32_to_bb` (a lossy 256→31-bit fold) is a CI error in the
+state-commitment producers (`scripts/check-no-degraded-felt.sh`,
+`docs/FAITHFUL-COMMITMENT-LAW.md`); committed 32-byte components must be 8-felt
+(`bytes32_to_8_limbs`). Beyond that, reach for `sg` whenever you're searching by
+**code shape**, not a literal
 string — it matches the Rust AST, so it never false-positives on comments, doc
 examples, or strings, and it's `$metavariable`-aware. This is the right tool for the
 work we do constantly: finding the real call-sites of a symbol (cutover / grep-zero),
@@ -113,6 +118,29 @@ sg -p 'fn $F($$$) -> Result<$T, SdkError>' -l rust   # shape queries (all fns re
 - Don't add a slow (>60s) test to the default path. If a new test is heavy, route it
   to the `heavy` profile (a name/`package`/`test()` filter in `.config/nextest.toml`),
   don't `#[ignore]` it silently.
+
+## Test-only imports belong inside `#[cfg(test)]`
+
+A `use` at module scope that is only consumed by `#[test]`/`proptest!` code (or by
+`#[cfg(test)] mod tests`) is genuinely unused in the non-test build, so `cargo fix`
+and `cargo clippy --fix` will (correctly!) strip it — silently breaking the test
+target. We are not writing programs that fight clippy; put each import where it is
+actually used:
+
+- A `src/*.rs` with a `#[cfg(test)] mod tests { … }`: put the test-only `use`
+  **inside** that module (or write `#[cfg(test)] use …;`), never at module scope.
+- A whole `src/*.rs` module that is pure test scaffolding (helpers + `#[test]`/
+  `proptest!` only, no production API — e.g. `tests/src/*`, `protocol-tests/
+  src/invariants/*`): gate the **module declaration** with `#[cfg(test)]` so the
+  non-test build skips it entirely; module-scope `use` is then correct.
+- An integration test (`tests/*.rs` — the whole target is test code): module-scope
+  `use` is fine; just don't leave dead ones.
+- A feature-gated symbol: gate the `use` with the same `#[cfg(feature = …)]` as its
+  consumer.
+
+Run `cargo fix` / `cargo clippy --fix` with `--all-targets` if you must, so the test
+build is in scope; and check `cargo test --workspace --no-run --all-targets` before
+trusting an import cleanup.
 
 ## Swarm-safety (if you're a subagent in a fleet)
 

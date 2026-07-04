@@ -337,6 +337,15 @@ impl TurnExecutor {
             intro_lifetime: self.max_introduction_lifetime,
             current_timestamp: self.current_timestamp as u64,
             federation_id: self.local_federation_id,
+            // THE EPOCH §5 fee-distribution targets — the host policy `distribute_fee_shares`
+            // applies (proposer fee/2, treasury fee*3/10, fee_well the remainder). The verified
+            // kernel runs `distributeFee` against fixed PLACEHOLDER cells (`admCtxOfHost`'s
+            // 0xF00/0xF01) + burns the residue, so the producer's reconstituted ledger carries no
+            // real fee-well credit; threading the real targets lets the producer apply the IDENTICAL
+            // distribution to the reconstituted ledger so a fee-bearing turn agrees on `.root()`.
+            proposer_cell: self.proposer_cell,
+            treasury_cell: self.treasury_cell,
+            fee_well_cell: self.fee_well_cell,
         }
     }
 
@@ -388,6 +397,28 @@ impl TurnExecutor {
                 };
             }
         };
+
+        // Gate 3 — agent lifecycle (`cellLifecycleCanAuthor`). A TERMINAL agent
+        // (Destroyed or Migrated) cannot author a turn. Mirrors the verified
+        // `Dregg2.Exec.Admission.admissible` agent-lifecycle leg
+        // (`cellLifecycleCanAuthor`, RecordKernel.lean), whose kernel-align fix
+        // (`9e2c0e70`) admits the NON-terminal states (Live / Sealed / Archived)
+        // — so a Sealed agent still self-unseals — and rejects ONLY the terminal
+        // tombstones. Without this gate the executor admitted a Destroyed/Migrated
+        // agent whose effects on a *non-terminal* target would then commit (the
+        // per-effect liveness gate only guards the TARGET, never the actor): a
+        // safe-direction divergence (Rust admits what the spec refuses). A
+        // Migrated cell is an inert tombstone with no authoring path
+        // (`cell/src/migration.rs`: the destination copy is the unique live home),
+        // so refusing the full `is_terminal()` set has no legitimate-flow cost.
+        if agent_cell.lifecycle.is_terminal() {
+            return TurnResult::Rejected {
+                reason: TurnError::AdmissionRefused {
+                    reason: crate::AdmissionReason::DeadAgent,
+                },
+                at_action: vec![],
+            };
+        }
 
         // Check nonce.
         if agent_cell.state.nonce() != turn.nonce {
@@ -1436,6 +1467,19 @@ impl TurnExecutor {
         let agent_cell = ledger
             .get(&turn.agent)
             .ok_or(TurnError::CellNotFound { id: turn.agent })?;
+
+        // Gate 3 — agent lifecycle (`cellLifecycleCanAuthor`). A TERMINAL agent
+        // (Destroyed or Migrated) cannot author a turn. This mirrors the gate in
+        // `execute_without_shadow` and the verified `Dregg2.Exec.Admission.admissible`
+        // agent-lifecycle leg. Without it, `validate_without_apply` (the
+        // admit-without-applying entry — pre-checks, mempool, fee estimation) admits
+        // a Destroyed/Migrated agent the executor would then reject, a validate↔execute
+        // divergence in the dangerous direction (validate accepts what apply refuses).
+        if agent_cell.lifecycle.is_terminal() {
+            return Err(TurnError::AdmissionRefused {
+                reason: crate::AdmissionReason::DeadAgent,
+            });
+        }
 
         if agent_cell.state.nonce() != turn.nonce {
             return Err(TurnError::NonceReplay {

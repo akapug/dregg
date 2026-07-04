@@ -27,7 +27,12 @@
 //! the router compiles in every feature combination; only the live wire is
 //! feature-gated.
 
-use crate::{Backing, Bounds, HostPdId, Resolution, ResolveError, Rights};
+use crate::{HostPdId, Resolution, ResolveError, Rights};
+// `Backing`/`Bounds` are consumed only by the live-endpoint `invoke`, which is
+// itself `process-pd`-gated; gate the import to match so the fallback build
+// doesn't see them as unused.
+#[cfg(all(feature = "process-pd", unix))]
+use crate::{Backing, Bounds};
 
 #[cfg(all(feature = "process-pd", unix))]
 use std::collections::BTreeMap;
@@ -141,9 +146,7 @@ pub fn surface_write_framed(
 
 /// Read a frame written by [`surface_write_framed`].
 #[cfg(all(feature = "process-pd", unix))]
-pub fn surface_read_framed(
-    s: &mut std::os::unix::net::UnixStream,
-) -> std::io::Result<Vec<u8>> {
+pub fn surface_read_framed(s: &mut std::os::unix::net::UnixStream) -> std::io::Result<Vec<u8>> {
     use std::io::Read;
     let mut len = [0u8; 4];
     s.read_exact(&mut len)?;
@@ -230,11 +233,7 @@ impl HostPdBacking {
     /// a `Capability::host_pd(id, rights)` against it. Only available with the
     /// `process-pd` wire.
     #[cfg(all(feature = "process-pd", unix))]
-    pub fn register(
-        &mut self,
-        sock: std::os::unix::net::UnixStream,
-        rights: Rights,
-    ) -> HostPdId {
+    pub fn register(&mut self, sock: std::os::unix::net::UnixStream, rights: Rights) -> HostPdId {
         let id = HostPdId(self.next_id);
         self.next_id += 1;
         self.entries.insert(
@@ -355,9 +354,9 @@ impl HostPdBacking {
             .surface_sock
             .as_ref()
             .ok_or(ResolveError::TargetNotFound)?;
-        let mut sock = surface.lock().map_err(|_| {
-            ResolveError::BackingRejected("surface Endpoint lock poisoned".into())
-        })?;
+        let mut sock = surface
+            .lock()
+            .map_err(|_| ResolveError::BackingRejected("surface Endpoint lock poisoned".into()))?;
         // THE GLASS-FOLLOWS-THE-CAP ROUND-TRIP: send the event to the confined
         // child, read back the frame it rendered. Holding this socket IS holding
         // the live surface; if the child exited, the read fails and the surface

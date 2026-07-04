@@ -58,13 +58,13 @@
 //!
 //! This is the **reach-and-authority** layer: the gate decides, against the granted organ set
 //! + its grants, whether (and how) a `getSystemService` call may proceed, and records it. The
-//! remaining frontier — interposing the *actual* binder `ServiceManager.getService` /
-//! `transact` transactions inside the confined runtime so the device kernel itself routes only
-//! cap-admitted service calls (the HAL/binder leg the net + intent gates also name), and the
-//! in-circuit constructor proof that a given organ cell IS the device's location/activity
-//! organ — are the same not-yet-claimed depth the sibling gates name. What IS real today: the
-//! reach-resolution algebra + the read/state-change attenuation teeth + the faithful AOSP
-//! method classification + the receipt, testable on any node with no device.
+//!   remaining frontier — interposing the *actual* binder `ServiceManager.getService` /
+//!   `transact` transactions inside the confined runtime so the device kernel itself routes only
+//!   cap-admitted service calls (the HAL/binder leg the net + intent gates also name), and the
+//!   in-circuit constructor proof that a given organ cell IS the device's location/activity
+//!   organ — are the same not-yet-claimed depth the sibling gates name. What IS real today: the
+//!   reach-resolution algebra + the read/state-change attenuation teeth + the faithful AOSP
+//!   method classification + the receipt, testable on any node with no device.
 
 use dregg_firmament::CellId;
 
@@ -772,11 +772,9 @@ mod tests {
         assert_eq!(w.kind, ServiceCallKind::StateChange);
         let receipt = resolver.resolve(&w);
         assert!(receipt.decision.refused_read_only());
-        assert!(
-            receipt
-                .status_line()
-                .contains("does not amplify to a state change")
-        );
+        assert!(receipt
+            .status_line()
+            .contains("does not amplify to a state change"));
         assert_eq!(
             receipt.decision,
             ServiceDecision::RefusedReadOnly {

@@ -246,7 +246,7 @@ pub trait MembraneHost {
     /// program guarantees, a byte-identical receipt. The fork holds NO cap to
     /// mainline, so side effects are structurally confined (nesting IS safety).
     fn drive(&self, fork: &ForkHandle, turn_bytes: &[u8])
-    -> Result<TurnReceiptDigest, Self::Error>;
+        -> Result<TurnReceiptDigest, Self::Error>;
 
     /// Stitch a driven fork back toward mainline. Implementation (roadmap for the
     /// proof, buildable for the mechanism): compute the pushout against the
@@ -387,7 +387,7 @@ impl MockMembraneHost {
         // FNV-1a over (id ‖ value) of every cell, in cell-id order (sorted, so the
         // root is order-independent — mirrors the sorted-Poseidon2 discipline).
         let mut sorted: Vec<&([u8; 32], Vec<u8>)> = cells.iter().collect();
-        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        sorted.sort_by_key(|entry| entry.0);
         let mut out = [0u8; 32];
         for (lane, chunk) in out.chunks_mut(4).enumerate() {
             let mut h: u32 = 2166136261u32.wrapping_add((lane as u32).wrapping_mul(0x01000193));

@@ -221,7 +221,7 @@ pub fn finalize_checkpoint(
 
 /// Check whether a given height is a checkpoint boundary.
 pub fn is_checkpoint_height(height: u64, interval: u64) -> bool {
-    height > 0 && height % interval == 0
+    height > 0 && height.is_multiple_of(interval)
 }
 
 /// Verify a checkpoint and return the height if valid, suitable for deciding

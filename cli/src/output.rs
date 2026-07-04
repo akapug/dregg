@@ -213,7 +213,7 @@ impl Context {
         table.set_header(header_cells);
 
         for row in rows {
-            let cells: Vec<Cell> = row.iter().map(|c| Cell::new(c)).collect();
+            let cells: Vec<Cell> = row.iter().map(Cell::new).collect();
             table.add_row(cells);
         }
 

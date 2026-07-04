@@ -97,6 +97,7 @@ fn create_cell_proves_on_deployed_wide_path() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -104,6 +105,7 @@ fn create_cell_proves_on_deployed_wide_path() {
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
 
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
@@ -193,6 +195,7 @@ fn prove_through_deployed(
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -200,6 +203,7 @@ fn prove_through_deployed(
         &nullifier_root,
         &commitments_root,
         &receipt_hashes,
+        &Default::default(),
     );
     let initial_vm_state = CellState::with_capability_root_and_record_digest(
         balance as u64,
@@ -487,6 +491,10 @@ fn bound_to_wire_and_back(
             .iter()
             .map(|&v| BabyBear::new(v))
             .collect(),
+        // The wire form drops the re-provable witness — a bound proof rebuilt off the wire carries
+        // the off-AIR verify but cannot be re-proven/folded (None), by design.
+        witness_values: None,
+        num_rows: None,
     }
 }
 
@@ -557,7 +565,8 @@ fn probe_wide(
             rw::apply_effect_to_cell(&mut after, &cell_id, &kernel, block_height);
             // The deployed Effect→VmEffect projection (byte-identical to the executor bridge): this is
             // what makes the producer's bound limb EQUAL the verifier's anchored limb.
-            let vm = AgentCipherclerk::convert_effects_to_vm(&cell_id, &[kernel.clone()]);
+            let vm =
+                AgentCipherclerk::convert_effects_to_vm(&cell_id, std::slice::from_ref(&kernel));
             // Refusal also needs the fields-tree write witness.
             let refusal_ctx = if matches!(kernel, dregg_turn::Effect::Refusal { .. }) {
                 let audit_bytes = after
@@ -588,6 +597,7 @@ fn probe_wide(
         &nullifier_root,
         &commitments_root,
         &[],
+        &Default::default(),
     );
     let after_w = rw::produce(
         &after_cell,
@@ -595,6 +605,7 @@ fn probe_wide(
         &nullifier_root,
         &commitments_root,
         &[],
+        &Default::default(),
     );
     let initial = CellState::with_capability_root_and_record_digest(
         100_000u64,

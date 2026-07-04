@@ -47,10 +47,10 @@
 //!   tallies them at close. The base form is roster-bound (one vote per
 //!   registered voter); the unlinkable extension ([`SealedBallot::new_unlinkable`]
 //!   + [`seal_unlinkable_ballot`]) binds an anonymous eligibility nullifier INTO
-//!   the seal plaintext so the OPENED ballot cannot be linked to the voter who
-//!   cast it (vote privacy survives the reveal), AND so the nullifier is
-//!   opened-and-verified at tally — a borrowed valid nullifier cannot ride a
-//!   substituted choice.
+//!     the seal plaintext so the OPENED ballot cannot be linked to the voter who
+//!     cast it (vote privacy survives the reveal), AND so the nullifier is
+//!     opened-and-verified at tally — a borrowed valid nullifier cannot ride a
+//!     substituted choice.
 //!
 //! ## Both-polarity guarantees (the tests at the bottom)
 //!
@@ -391,7 +391,7 @@ impl AuctionOutcome {
     ) -> AuctionOutcome {
         debug_assert!(!bids.is_empty());
         // Stable canonical order first (by id) so the recompute is reproducible.
-        bids.sort_by(|a, b| a.1.cmp(&b.1));
+        bids.sort_by_key(|a| a.1);
 
         let tie_key = |id: &[u8; 32]| -> [u8; 32] {
             let mut k = [0u8; 32];

@@ -11,6 +11,7 @@ description = "SDK-free delegated tool gateway over cap-gated turn acceptors"
 
 [dependencies]
 dregg-cell = { path = "../cell" }
+dregg-payable = { path = "../dregg-payable" }
 dregg-turn = { path = "../turn" }
 
 [lints]

@@ -99,19 +99,19 @@ async fn status(cfg: &Config, ctx: &Context) -> Result<(), Box<dyn std::error::E
     )));
 
     // Add peers from roots if available.
-    if let Some(ref roots_data) = roots {
-        if let Some(root_entries) = roots_data.as_array() {
-            for (i, entry) in root_entries.iter().enumerate().take(10) {
-                let fallback = format!("node-{}", i + 1);
-                let node_label = entry["node_id"].as_str().unwrap_or(&fallback);
-                let wave = entry["wave"].as_u64().unwrap_or(0);
-                participant_children.push(TreeNode::leaf(format!(
-                    "{} {} wave {}",
-                    abbrev_hex(node_label, 8, 4),
-                    console::style("\u{2713}").green(),
-                    wave
-                )));
-            }
+    if let Some(ref roots_data) = roots
+        && let Some(root_entries) = roots_data.as_array()
+    {
+        for (i, entry) in root_entries.iter().enumerate().take(10) {
+            let fallback = format!("node-{}", i + 1);
+            let node_label = entry["node_id"].as_str().unwrap_or(&fallback);
+            let wave = entry["wave"].as_u64().unwrap_or(0);
+            participant_children.push(TreeNode::leaf(format!(
+                "{} {} wave {}",
+                abbrev_hex(node_label, 8, 4),
+                console::style("\u{2713}").green(),
+                wave
+            )));
         }
     }
 

@@ -14,6 +14,8 @@ import { Receipt, TurnProof } from "./receipt";
 import { TurnBuilder } from "./turns";
 import { TrustlineClient } from "./trustline";
 import { ChannelsClient } from "./channels";
+import { ServiceEconomy } from "./service-economy";
+import type { Bytes32, CellId } from "./internal/wire";
 import { blake3 } from "./internal/blake3";
 import { hexDecodeExact, hexEncode } from "./internal/bytes";
 import type { Turn } from "./internal/wire";
@@ -412,6 +414,38 @@ export class AgentRuntime {
   /** The **channels** organ on this runtime's node ([`NodeClient.channels`]). */
   channels(): ChannelsClient {
     return this.node.channels();
+  }
+
+  private serviceEconomy: ServiceEconomy | undefined;
+
+  /**
+   * The **service-economy** surface (`docs/guide/SERVICE-ECONOMY-SDK.md`) — the
+   * TS twin of the Rust SDK facade. `runtime.services.invoke(...)`,
+   * `runtime.execution.lease(...)`, `runtime.pay(...)`.
+   */
+  private econ(): ServiceEconomy {
+    return (this.serviceEconomy ??= new ServiceEconomy(this));
+  }
+
+  /** Find + call a service (`econ.invoke`); `runtime.services.invoke(...)`. */
+  get services(): ServiceEconomy {
+    return this.econ();
+  }
+
+  /** Open a durable, metered execution lease (`econ.lease`);
+   * `runtime.execution.lease(...)`. */
+  get execution(): ServiceEconomy {
+    return this.econ();
+  }
+
+  /**
+   * **`pay`** — move `amount` of `asset` from this runtime's cell to `to`
+   * through the canonical `Payable` `pay` desugar (one conserving
+   * `Effect::Transfer`). The few-lines front door; mirrors Rust
+   * `AgentRuntime::pay`.
+   */
+  pay(to: CellId, amount: number | bigint, asset: Bytes32): Promise<Receipt> {
+    return this.econ().pay(to, amount, asset);
   }
 
   /** The agent cell's current nonce (0 for a never-seen cell). */

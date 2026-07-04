@@ -73,9 +73,10 @@ pub struct AccumulatedProof {
     /// Running Poseidon2 hash chain over all prior states (single-element, for STARK AIR).
     /// This commits to the entire history without storing it.
     pub accumulated_hash: BabyBear,
-    /// Wide accumulated hash (124-bit security) for use in verification.
-    /// The single-element `accumulated_hash` is used in the STARK trace, while this
-    /// wide version prevents birthday attacks (2^15.5 with single element vs 2^62 with 4).
+    /// Wide accumulated hash (8 felts, ~124-bit collision resistance) for use in
+    /// verification. The single-element `accumulated_hash` is used in the STARK
+    /// trace, while this wide version is the soundness-load-bearing anchor that
+    /// resists birthday attacks (~2^15.5 with a single felt vs ~2^124 with 8).
     pub accumulated_hash_wide: AccumulatedHash,
     /// The constraint proof of the most recent fold step.
     /// In real IVC this would be the recursive proof covering all prior steps.
@@ -96,8 +97,8 @@ pub struct IvcProof {
     pub step_count: u32,
     /// The accumulated hash committing to the entire chain history (single element, for STARK AIR).
     pub accumulated_hash: BabyBear,
-    /// Wide accumulated hash (124-bit security) for verification.
-    /// Provides birthday-attack resistance: 2^62 vs 2^15.5 with single element.
+    /// Wide accumulated hash (8 felts, ~124-bit collision resistance) for verification.
+    /// Provides birthday-attack resistance: ~2^124 vs ~2^15.5 with a single element.
     pub accumulated_hash_wide: AccumulatedHash,
     /// The constant-size constraint proof (covers all steps).
     pub proof: ConstraintProof,
@@ -178,44 +179,44 @@ pub const MAX_FOLD_DEPTH: u32 = 16;
 const IVC_DOMAIN_TAG: u32 = 0x49564300; // "IVC0" as ASCII bytes
 
 /// Number of BabyBear elements in the accumulated hash.
-/// 4 elements * 31 bits each = 124 bits of collision resistance,
-/// requiring ~2^62 work for a birthday attack (well beyond practical).
-pub const ACCUMULATED_HASH_WIDTH: usize = 4;
+/// 8 elements * ~31 bits each = ~248 bits of preimage resistance and ~124 bits
+/// of COLLISION/birthday resistance (a birthday attack on a 248-bit digest costs
+/// ~2^124 work, well beyond practical). This is the faithful floor — see
+/// `docs/FAITHFUL-STATE-COMMITMENT.md`. A 4-element digest would be only ~62-bit
+/// collision-resistant despite its ~124-bit width, which is why this is 8, not 4.
+pub const ACCUMULATED_HASH_WIDTH: usize = 8;
 
-/// A multi-element accumulated hash providing 124-bit security.
+/// A multi-element accumulated hash providing ~124-bit COLLISION resistance.
 ///
-/// A single BabyBear element only provides ~31 bits, making birthday attacks
-/// trivial at 2^15.5 (~46K attempts). Using 4 elements raises this to 2^62.
+/// A single BabyBear element only provides ~31 bits of width, making birthday
+/// attacks trivial at ~2^15.5 (~46K attempts). Four elements raise the width to
+/// ~124 bits but only ~62-bit collision resistance. Eight elements give ~248-bit
+/// width / ~124-bit collision resistance — the faithful floor that matches the
+/// rest of the system's soundness target.
 pub type AccumulatedHash = [BabyBear; ACCUMULATED_HASH_WIDTH];
 
 /// Compute the initial accumulated hash from the initial root.
 /// This is the "base case" of the IVC: step 0.
 ///
-/// Returns 4 BabyBear elements (124-bit security).
+/// Returns the single-felt projection used by the STARK trace continuity column.
 pub fn initial_accumulated_hash(initial_root: BabyBear) -> BabyBear {
     initial_accumulated_hash_wide(initial_root)[0]
 }
 
-/// Wide version of initial accumulated hash (124-bit output).
+/// Wide version of the initial accumulated hash (8 felts, ~124-bit collision).
+///
+/// Squeezes 8 GENUINELY distinct Poseidon2 felts via the standard sponge
+/// discipline (absorb → squeeze rate-4 → permute → squeeze rate-4), identical to
+/// [`crate::poseidon2::hash_many_8`]. The absorbed preimage is
+/// `[IVC_DOMAIN_TAG, initial_root, step_count=0]` (length encoded in the capacity
+/// lane, matching the prior single-permutation absorb so the first felt — and
+/// thus [`initial_accumulated_hash`] — is byte-identical to before).
 pub fn initial_accumulated_hash_wide(initial_root: BabyBear) -> AccumulatedHash {
-    use crate::poseidon2::Poseidon2State;
-
-    let mut state = Poseidon2State::new();
-    // Domain separation in capacity
-    state.state[4] = BabyBear::new(3); // input length
-    // Absorb
-    state.state[0] = BabyBear::new(IVC_DOMAIN_TAG);
-    state.state[1] = initial_root;
-    state.state[2] = BabyBear::ZERO; // step_count = 0
-    state.permute();
-
-    // Squeeze 4 elements
-    [
-        state.state[0],
-        state.state[1],
-        state.state[2],
-        state.state[3],
-    ]
+    crate::poseidon2::hash_many_8(&[
+        BabyBear::new(IVC_DOMAIN_TAG),
+        initial_root,
+        BabyBear::ZERO, // step_count = 0
+    ])
 }
 
 /// Extend the accumulated hash by one fold step.
@@ -240,39 +241,33 @@ pub fn extend_accumulated_hash(
     ])
 }
 
-/// Wide version of extend_accumulated_hash (124-bit output).
+/// Wide version of extend_accumulated_hash (8 felts, ~124-bit collision).
 ///
-/// Takes and returns 4-element accumulated hashes. All 4 elements of old_hash
-/// are absorbed, providing 124-bit binding to prior history.
+/// Takes and returns 8-element accumulated hashes. ALL 8 elements of `old_hash`
+/// are absorbed (a genuine ~248-bit-wide carrier — there is NO 31-bit / 4-felt
+/// intermediate to collide), providing ~124-bit collision binding to prior
+/// history. The preimage is
+/// `[IVC_DOMAIN_TAG, old_hash[0..8], new_root, step_count]` (11 felts), absorbed
+/// in rate-4 chunks and squeezed as 8 distinct felts via
+/// [`crate::poseidon2::hash_many_8`] (squeeze rate-4 → permute → squeeze rate-4).
 pub fn extend_accumulated_hash_wide(
     old_hash: &AccumulatedHash,
     new_root: BabyBear,
     step_count: u32,
 ) -> AccumulatedHash {
-    use crate::poseidon2::Poseidon2State;
-
-    let mut state = Poseidon2State::new();
-    // Domain separation: 7 inputs (tag + 4 hash elements + root + step)
-    state.state[4] = BabyBear::new(7);
-    // Absorb
-    state.state[0] = BabyBear::new(IVC_DOMAIN_TAG);
-    state.state[1] = old_hash[0];
-    state.state[2] = old_hash[1];
-    state.state[3] = old_hash[2];
-    state.permute();
-    // Second absorption
-    state.state[0] += old_hash[3];
-    state.state[1] += new_root;
-    state.state[2] += BabyBear::new(step_count);
-    state.permute();
-
-    // Squeeze 4 elements
-    [
-        state.state[0],
-        state.state[1],
-        state.state[2],
-        state.state[3],
-    ]
+    crate::poseidon2::hash_many_8(&[
+        BabyBear::new(IVC_DOMAIN_TAG),
+        old_hash[0],
+        old_hash[1],
+        old_hash[2],
+        old_hash[3],
+        old_hash[4],
+        old_hash[5],
+        old_hash[6],
+        old_hash[7],
+        new_root,
+        BabyBear::new(step_count),
+    ])
 }
 
 /// Recompute the wide accumulated hash from a full chain of roots.
@@ -583,8 +578,9 @@ pub mod st_col {
 /// constraint is the correct sequential chain. Row reordering or skipping would
 /// require finding a Poseidon2 preimage (computationally infeasible).
 ///
-/// The wide accumulated hash (`accumulated_hash_wide: [BabyBear; 4]`) provides
-/// 124-bit birthday-attack resistance, stored alongside the single-element hash
+/// The wide accumulated hash (`accumulated_hash_wide: [BabyBear; 8]`) provides
+/// ~124-bit birthday-attack (collision) resistance and is the soundness-load-bearing
+/// published/verified anchor, stored alongside the single-element continuity hash
 /// used in the STARK trace for efficiency.
 pub struct StateTransitionAir;
 
@@ -1105,10 +1101,10 @@ pub fn verify_ivc(proof: &IvcProof, expected_initial_root: Option<BabyBear>) -> 
     }
 
     // Check initial root if expected
-    if let Some(expected) = expected_initial_root {
-        if proof.initial_root != expected {
-            return IvcVerification::InitialRootMismatch;
-        }
+    if let Some(expected) = expected_initial_root
+        && proof.initial_root != expected
+    {
+        return IvcVerification::InitialRootMismatch;
     }
 
     // If a real STARK proof is present, verify it cryptographically.
@@ -1179,7 +1175,7 @@ pub fn verify_ivc_with_roots(proof: &IvcProof, intermediate_roots: &[BabyBear]) 
         return IvcVerification::AccumulatedHashMismatch;
     }
 
-    // Also verify the wide (124-bit) accumulated hash
+    // Also verify the wide (8-felt, ~124-bit collision) accumulated hash
     let expected_hash_wide =
         recompute_accumulated_hash_wide(proof.initial_root, intermediate_roots);
     if proof.accumulated_hash_wide != expected_hash_wide {
@@ -1205,11 +1201,17 @@ pub struct IvcPresentationProof {
     pub issuer_membership_proof: ConstraintProof,
     /// The federation root of trust.
     pub federation_root: BabyBear,
-    /// The action binding commitment (4 elements for 124-bit security).
+    /// The action binding commitment. Collision-exposed (the attacker chooses both
+    /// `(action, resource)` preimages — `crate::binding::compute_action_binding`),
+    /// so it carries the full 8-felt width (`ActionBinding = [BabyBear; 8]`,
+    /// ~248-bit preimage / ~124-bit birthday-collision resistance). A 4-felt width
+    /// would expose a ~2^62 collision, below the FRI soundness floor.
     pub request_predicate: crate::binding::ActionBinding,
     /// Timestamp for freshness.
     pub timestamp: BabyBear,
-    /// Commitment to selectively revealed facts (zero if fully private, 124-bit).
+    /// Commitment to selectively revealed facts (zero if fully private). The
+    /// adversary controls the hashed preimage, so this is the collision-load-bearing
+    /// 8-felt `WideHash` (~248-bit preimage / ~124-bit birthday-collision resistance).
     pub revealed_facts_commitment: crate::binding::WideHash,
 }
 
@@ -1440,7 +1442,7 @@ pub struct ValidatedIvcProof {
     pub final_root: BabyBear,
     /// The accumulated hash committing to the entire chain (single element, for STARK AIR).
     pub accumulated_hash: BabyBear,
-    /// Wide accumulated hash (124-bit security) for verification.
+    /// Wide accumulated hash (8 felts, ~124-bit collision resistance) for verification.
     pub accumulated_hash_wide: AccumulatedHash,
     /// Number of fold steps.
     pub step_count: u32,
@@ -1573,7 +1575,7 @@ pub fn prove_validated_ivc(
         step_roots.push((witness.old_root, witness.new_root));
     }
 
-    // Compute accumulated hashes (narrow for STARK, wide for 124-bit security).
+    // Compute accumulated hashes (narrow for STARK, wide 8-felt for ~124-bit collision).
     let accumulated_hash = recompute_accumulated_hash(initial_root, &new_roots);
     let accumulated_hash_wide = recompute_accumulated_hash_wide(initial_root, &new_roots);
 
@@ -1673,7 +1675,7 @@ pub fn verify_validated_ivc(proof: &ValidatedIvcProof) -> ValidatedIvcVerificati
         );
     }
 
-    // Step 4: Verify wide (124-bit) accumulated hash consistency.
+    // Step 4: Verify wide (8-felt, ~124-bit collision) accumulated hash consistency.
     let expected_hash_wide = recompute_accumulated_hash_wide(proof.initial_root, &new_roots);
     if expected_hash_wide != proof.accumulated_hash_wide {
         return ValidatedIvcVerification::ChainProofInvalid(
@@ -1794,6 +1796,18 @@ const TURN_ACC_DOMAIN_TAG: u32 = 0x54414343; // "TACC"
 /// independent of the per-token attenuation depth.
 pub const MAX_TURN_CHAIN_LEN: u32 = 64;
 
+/// Width of the per-Turn aggregate outer-PI digests (`turn_hash`,
+/// `previous_receipt_hash`).
+///
+/// This is a SEPARATE object from the IVC attenuation accumulator and is fixed at
+/// 4 felts because it must match the shape published by
+/// `bilateral_aggregation_air::AggregationOuterPi` (`turn_hash: [BabyBear; 4]`,
+/// `previous_receipt_hash: [BabyBear; 4]`). It is intentionally NOT
+/// [`ACCUMULATED_HASH_WIDTH`]: these digests are immediately collapsed to a single
+/// felt via [`digest4`] / projected via slot 0, so their width is pinned by the
+/// aggregate PI it cross-checks, not by the chain accumulator's collision floor.
+pub const AGGREGATE_DIGEST_WIDTH: usize = 4;
+
 /// Per-Turn summary projected from one Turn's bilateral aggregate public outputs.
 ///
 /// This is the unit folded by the multi-Turn IVC. The four-element digests
@@ -1805,7 +1819,7 @@ pub const MAX_TURN_CHAIN_LEN: u32 = 64;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TurnTransitionSummary {
     /// Canonical Turn identity digest (4 felts, from the aggregate's outer PI).
-    pub turn_hash: [BabyBear; ACCUMULATED_HASH_WIDTH],
+    pub turn_hash: [BabyBear; AGGREGATE_DIGEST_WIDTH],
     /// Graph state root the Turn consumed.
     pub pre_state_root: BabyBear,
     /// Graph state root the Turn produced.
@@ -1813,7 +1827,7 @@ pub struct TurnTransitionSummary {
     /// The receipt-chain link this Turn claims to extend, canonically encoded as
     /// `[link, 0, 0, 0]` (see [`TurnTransitionSummary::encode_receipt_link`]).
     /// For the genesis Turn this MUST be all-zero.
-    pub previous_receipt_hash: [BabyBear; ACCUMULATED_HASH_WIDTH],
+    pub previous_receipt_hash: [BabyBear; AGGREGATE_DIGEST_WIDTH],
     /// The per-Turn bilateral-consistency flag (1 = consistent).
     pub bilateral_consistent: BabyBear,
 }
@@ -1840,7 +1854,7 @@ impl TurnTransitionSummary {
     }
 
     /// The canonical 4-felt encoding of a single-felt receipt link.
-    pub fn encode_receipt_link(link: BabyBear) -> [BabyBear; ACCUMULATED_HASH_WIDTH] {
+    pub fn encode_receipt_link(link: BabyBear) -> [BabyBear; AGGREGATE_DIGEST_WIDTH] {
         [link, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO]
     }
 }
@@ -1848,7 +1862,7 @@ impl TurnTransitionSummary {
 const TURN_DIGEST_TAG_TURN_HASH: u32 = 0x54484448; // "THDH"
 
 /// Collapse a 4-element digest to a single felt with domain separation.
-fn digest4(tag: u32, h: &[BabyBear; ACCUMULATED_HASH_WIDTH]) -> BabyBear {
+fn digest4(tag: u32, h: &[BabyBear; AGGREGATE_DIGEST_WIDTH]) -> BabyBear {
     hash_many(&[BabyBear::new(tag), h[0], h[1], h[2], h[3]])
 }
 
@@ -2132,9 +2146,9 @@ pub enum MultiTurnVerification {
 /// Fails (`None`) if the chain is empty, too long, or internally broken
 /// (state-continuity / receipt-link / genesis violations) — the prover refuses
 /// to build a trace that the AIR would reject anyway, surfacing the break early.
-fn build_multi_turn_trace(
-    summaries: &[TurnTransitionSummary],
-) -> Option<(Vec<Vec<BabyBear>>, Vec<BabyBear>, BabyBear, BabyBear)> {
+type MultiTurnTraceBuild = (Vec<Vec<BabyBear>>, Vec<BabyBear>, BabyBear, BabyBear);
+
+fn build_multi_turn_trace(summaries: &[TurnTransitionSummary]) -> Option<MultiTurnTraceBuild> {
     if summaries.is_empty() {
         return None;
     }
@@ -2146,7 +2160,7 @@ fn build_multi_turn_trace(
     let initial_state_root = summaries[0].pre_state_root;
 
     // Genesis must have an all-zero inbound link.
-    if summaries[0].previous_receipt_hash != [BabyBear::ZERO; ACCUMULATED_HASH_WIDTH] {
+    if summaries[0].previous_receipt_hash != [BabyBear::ZERO; AGGREGATE_DIGEST_WIDTH] {
         return None;
     }
 
@@ -2335,10 +2349,10 @@ pub fn verify_multi_turn_ivc(
     if proof.num_turns > MAX_TURN_CHAIN_LEN {
         return MultiTurnVerification::ChainTooLong;
     }
-    if let Some(expected) = expected_initial_state_root {
-        if proof.initial_state_root != expected {
-            return MultiTurnVerification::InitialStateMismatch;
-        }
+    if let Some(expected) = expected_initial_state_root
+        && proof.initial_state_root != expected
+    {
+        return MultiTurnVerification::InitialStateMismatch;
     }
 
     let public_inputs = vec![
@@ -2433,6 +2447,85 @@ pub fn create_test_chain(num_steps: usize) -> (BabyBear, Vec<FoldDelta>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE ANTI-LAUNDERING TOOTH for the 8-felt IVC accumulator: the wide hash must be
+    /// 8 GENUINELY distinct, full-input-dependent felts — not `[0]×8`, not `4 real + 4
+    /// zero-pad`, not a replicated squeeze. Verifies width == 8 and that both the base
+    /// case (`initial_accumulated_hash_wide`) and the chain step
+    /// (`extend_accumulated_hash_wide`) are pairwise-distinct and avalanche over EVERY
+    /// input felt. This is what makes the ~124-bit collision claim true.
+    #[test]
+    fn wide_accumulator_is_eight_distinct_avalanching_felts() {
+        assert_eq!(ACCUMULATED_HASH_WIDTH, 8, "the faithful floor is 8 felts");
+
+        let init_root = BabyBear::new(0xABCD_1234);
+        let base = initial_accumulated_hash_wide(init_root);
+        assert_eq!(base.len(), 8);
+
+        // (a) base case: 8 pairwise-distinct felts, not the degenerate all-zero output.
+        for i in 0..8 {
+            for j in (i + 1)..8 {
+                assert_ne!(
+                    base[i], base[j],
+                    "base felts {i},{j} collide — not 8 distinct"
+                );
+            }
+        }
+        assert!(
+            base.iter().any(|&x| x != BabyBear::ZERO),
+            "base is all-zero"
+        );
+
+        // (b) base case avalanche: flipping the single input felt moves ALL 8 outputs
+        // (each output depends on the whole input — a 4-real+4-pad would leave some fixed).
+        let base2 = initial_accumulated_hash_wide(init_root + BabyBear::new(1));
+        for i in 0..8 {
+            assert_ne!(
+                base[i], base2[i],
+                "base output felt {i} unchanged under input flip"
+            );
+        }
+
+        // (c) chain step: 8 distinct felts and full dependence on the old 8-felt carrier,
+        // the new root, and the step counter — the genuine-8-distinct discipline.
+        let new_root = BabyBear::new(0x0BAD_F00D);
+        let step = 3u32;
+        let ext = extend_accumulated_hash_wide(&base, new_root, step);
+        for i in 0..8 {
+            for j in (i + 1)..8 {
+                assert_ne!(
+                    ext[i], ext[j],
+                    "step felts {i},{j} collide — not 8 distinct"
+                );
+            }
+        }
+
+        // every one of the 8 OLD-carrier felts is load-bearing: flipping any single one
+        // must change all 8 outputs (catches `4 real + 4 zero-pad` — a padded carrier
+        // would leave the padded lanes unbound and some outputs fixed).
+        for k in 0..8 {
+            let mut tampered = base;
+            tampered[k] += BabyBear::new(1);
+            let ext_k = extend_accumulated_hash_wide(&tampered, new_root, step);
+            for i in 0..8 {
+                assert_ne!(
+                    ext[i], ext_k[i],
+                    "flipping old-carrier felt {k} left output felt {i} fixed — carrier lane not bound"
+                );
+            }
+        }
+
+        // new_root and step_count are also fully bound.
+        let ext_root = extend_accumulated_hash_wide(&base, new_root + BabyBear::new(1), step);
+        let ext_step = extend_accumulated_hash_wide(&base, new_root, step + 1);
+        for i in 0..8 {
+            assert_ne!(ext[i], ext_root[i], "new_root not bound at output felt {i}");
+            assert_ne!(
+                ext[i], ext_step[i],
+                "step_count not bound at output felt {i}"
+            );
+        }
+    }
 
     #[test]
     fn ivc_single_step_matches_fold() {
@@ -3066,7 +3159,7 @@ mod tests {
     /// Each step removes one fact from the tree. The tree is rebuilt without that fact
     /// for the next step (giving a genuine new_root).
     fn build_validated_ivc_chain(num_steps: usize) -> (BabyBear, Vec<FoldStepWitness>) {
-        use crate::poseidon2::{hash_4_to_1, hash_fact};
+        use crate::poseidon2::hash_fact;
 
         assert!(num_steps >= 1);
 
@@ -3361,7 +3454,7 @@ mod tests {
         let (initial_root, witnesses) = build_validated_ivc_chain(3);
 
         // Also build FoldDeltas from the same data (for the builder).
-        let deltas: Vec<FoldDelta> = witnesses
+        let _deltas: Vec<FoldDelta> = witnesses
             .iter()
             .map(|w| {
                 let fold = FoldWitness {
@@ -3545,7 +3638,7 @@ mod tests {
             let post = BabyBear::new((i as u32 + 2) * 1_000);
 
             let previous_receipt_hash = if i == 0 {
-                [BabyBear::ZERO; ACCUMULATED_HASH_WIDTH]
+                [BabyBear::ZERO; AGGREGATE_DIGEST_WIDTH]
             } else {
                 TurnTransitionSummary::encode_receipt_link(prev_receipt)
             };

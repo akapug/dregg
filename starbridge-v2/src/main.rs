@@ -41,6 +41,30 @@ use starbridge_v2::{cockpit, login};
 #[cfg(feature = "embedded-executor")]
 use starbridge_v2::{demo, reflect, world};
 
+/// All font blobs the bake/UI text systems load. The UI fonts (Lilex, IBM Plex
+/// Sans) PLUS symbol + emoji fallback fonts (Noto Emoji, Noto Sans Symbols, Noto
+/// Sans Symbols 2) so chrome glyphs — locks, gauges, crosshairs, gears, ballot
+/// checkboxes, 🌐 ⏳ 📄 🔑 — render real glyphs instead of missing-glyph □ boxes.
+/// The headless bake's text system carries no system fonts, so without these the
+/// shaper has nothing to fall back to; cosmic-text picks whichever LOADED font
+/// covers a codepoint, so order is irrelevant to coverage.
+#[allow(dead_code)] // unused in the gpui-free sel4-thin build
+fn bake_font_blobs() -> Vec<std::borrow::Cow<'static, [u8]>> {
+    use std::borrow::Cow as C;
+    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
+    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
+    static EMOJI: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
+    static SYMBOLS: &[u8] = include_bytes!("../assets/fonts/NotoSansSymbols-Regular.ttf");
+    static SYMBOLS2: &[u8] = include_bytes!("../assets/fonts/NotoSansSymbols2-Regular.ttf");
+    vec![
+        C::Borrowed(LILEX),
+        C::Borrowed(IBM_PLEX),
+        C::Borrowed(EMOJI),
+        C::Borrowed(SYMBOLS),
+        C::Borrowed(SYMBOLS2),
+    ]
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let headless = args.iter().any(|a| a == "--headless");
@@ -179,6 +203,120 @@ fn main() {
                 Ok(()) => std::process::exit(0),
                 Err(e) => {
                     eprintln!("render-first-card FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-apps <out>`: THE APP STORE + APPS GOING. Two PNGs of the NEW pre-built
+    // app-launcher capability: `<out>.launcher.png` lists the 19 wired starbridge-apps
+    // (name · what-it-does) the real `RegistryLauncher` exposes — the "app store" shot —
+    // and `<out>.png` LAUNCHES three of them (gallery / bounty-board / sealed-auction)
+    // ONTO a shared live `World` (each launch fires its representative VERIFIED turn
+    // through the real executor) and mounts each app's BESPOKE deos-view card live, bound
+    // to its just-seeded cell — the "apps going" shot. Asserts the ledger height grew and
+    // each launch landed a real receipt. Default 2560x1600 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_apps_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((2560.0, 1600.0));
+            match render_apps_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-apps FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-apps-showcase <out>`: THE VISUAL-KILLER BAKE — launch the three apps
+    // whose deos-view cards carry the richest LIVE gauges (bounty-board · privacy-voting
+    // · governed-namespace) onto ONE shared live `World`, then DRIVE each with real
+    // cap-gated verified turns until its gauges/bars are MEANINGFULLY FILLED (cast a poll
+    // of yes/no/abstain votes so the tally bar-chart rises, gather a quorum of committee
+    // proposals so the quorum bar tops out, advance the bounty state machine so both the
+    // escrowed-reward AND stage gauges fill), and render the three bespoke cards side by
+    // side. ONE high-res PNG written to `<out>` (the r/claudeai hero shot). Asserts the
+    // ledger grew + names every fired turn so the gauges are the running World's real
+    // state. Default 2560x1600 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_apps_showcase_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((2560.0, 1600.0));
+            match render_apps_showcase_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-apps-showcase FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-service-economy <out>`: THE SERVICE-ECONOMY SCENE — the value/service
+    // apps as live windows over ONE shared live `World`: the durable EXECUTION-LEASE
+    // (a metered, payable lease whose periods-paid gauge climbs as its durable cursor
+    // advances), the ESCROW-MARKET (a two-party sealed-escrow swap driven to SETTLED),
+    // and the COMPUTE-EXCHANGE (a compute job driven to SETTLED, the budget split into
+    // paid/refunded). Each app is launched onto the World and DRIVEN with real cap-gated
+    // verified turns so its card's gauges/state are alive, then its bespoke deos-view
+    // card is mounted side by side. ONE high-res PNG written to `<out>`. Asserts the
+    // ledger grew + names every fired turn. Default 2560x1600 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_service_economy_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((2560.0, 1600.0));
+            match render_service_economy_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-service-economy FAILED: {e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
+    // `--render-app-fire <out>`: THE CLICK → VERIFIED TURN close-up. Launches a real app
+    // (gallery) onto a live `World`, mounts its bespoke deos-view card, bakes
+    // `<out>.before.png`, FIRES the card's `submit` button = ONE cap-gated VERIFIED turn
+    // committed through `World::commit_turn` onto the live ledger (filling the next free
+    // sealed-submission slot), then re-renders + bakes `<out>.after.png` (== `<out>.png`,
+    // the card with the turn committed). Asserts the ledger height advanced by ONE and a
+    // real receipt landed. Default 1100x780 (overridable via `--render-size`).
+    #[cfg(all(
+        feature = "render-capture",
+        feature = "gpui-ui",
+        feature = "card-pane",
+        feature = "app-registry",
+        feature = "embedded-executor"
+    ))]
+    {
+        if let Some(out) = render_app_fire_arg(&args) {
+            let (w, h) = render_size_arg(&args).unwrap_or((1100.0, 780.0));
+            match render_app_card_fire_headless(&out, w, h) {
+                Ok(()) => std::process::exit(0),
+                Err(e) => {
+                    eprintln!("render-app-fire FAILED: {e:#}");
                     std::process::exit(1);
                 }
             }
@@ -588,7 +726,6 @@ fn main() {
             // through the embedded executor before the window ever opened.)
             let (world, anchors, seed) = world::demo_genesis();
             run_window(world, anchors, seed, node_url);
-            return;
         }
     }
 
@@ -718,7 +855,7 @@ fn run_window(
     seed: world::DemoSeed,
     node_url: Option<String>,
 ) {
-    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -763,12 +900,7 @@ fn run_window(
         // font) — without this, every panel renders with BLANK text (the chrome lays
         // out, but no glyphs). The headless render paths load these the same way.
         {
-            static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-            static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-            if let Err(e) = cx.text_system().add_fonts(vec![
-                std::borrow::Cow::Borrowed(LILEX),
-                std::borrow::Cow::Borrowed(IBM_PLEX),
-            ]) {
+            if let Err(e) = cx.text_system().add_fonts(bake_font_blobs()) {
                 eprintln!("warning: failed to register embedded UI fonts: {e}");
             }
         }
@@ -840,7 +972,7 @@ fn run_window(
 /// room. NOT gated behind `render-capture`: this is the live windowed entry, `--desktop`.
 #[cfg(all(feature = "embedded-executor", feature = "gpui-ui"))]
 fn run_desktop_window() {
-    use gpui::{App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+    use gpui::{px, size, App, AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions};
     use gpui_platform::application;
     use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout};
     use std::cell::RefCell;
@@ -884,12 +1016,7 @@ fn run_desktop_window() {
         // Register the embedded UI fonts (CoreText lacks "Lilex"/"IBM Plex"); without
         // this every panel lays out but renders BLANK text — same as `run_window`.
         {
-            static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-            static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-            if let Err(e) = cx.text_system().add_fonts(vec![
-                std::borrow::Cow::Borrowed(LILEX),
-                std::borrow::Cow::Borrowed(IBM_PLEX),
-            ]) {
+            if let Err(e) = cx.text_system().add_fonts(bake_font_blobs()) {
                 eprintln!("warning: failed to register embedded UI fonts: {e}");
             }
         }
@@ -946,7 +1073,7 @@ fn run_desktop_window() {
 ///     slate.
 #[cfg(feature = "gpui-ui")]
 fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mut gpui::App) {
-    use gpui::{Hsla, rgb};
+    use gpui::{rgb, Hsla};
     use gpui_component::{Theme, ThemeMode};
 
     let mode = if force_dark {
@@ -977,9 +1104,9 @@ fn apply_deos_theme(window: Option<&mut gpui::Window>, force_dark: bool, cx: &mu
     let muted: Hsla = rgb(0x7d8794).into();
     let accent: Hsla = rgb(0x6cb6ff).into(); // the blue the cockpit accents with
     let on_accent: Hsla = rgb(0x0e1116).into(); // dark text on the bright accent
-    // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
-    // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
-    // matches a hand-rolled status pill exactly.
+                                                // The status hues — the SAME values the cockpit hand-rolls in `views::theme`
+                                                // (good / warn / bad), so a kit `.success()`/`.warning()`/`.danger()` button
+                                                // matches a hand-rolled status pill exactly.
     let good: Hsla = rgb(0x57d977).into();
     let warn: Hsla = rgb(0xe3b341).into();
     let bad: Hsla = rgb(0xe5534b).into();
@@ -1275,16 +1402,12 @@ fn render_doc_collab_arg(args: &[String]) -> Option<String> {
     feature = "embedded-executor"
 ))]
 fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // A hermetic, fresh sidecar so `welcomed = false` → the warm card shows (a fresh
     // image is exactly the newcomer's first run). Start clean.
@@ -1300,11 +1423,11 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let world_for_view = shared.clone();
     let lp = layout_path.clone();
@@ -1504,12 +1627,14 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         );
     }
 
-    // Leave the woven room in frame, every surface present at once: cascade the open
-    // windows so the doc-collab editor, the World-Status board, the Android cap-chrome, and
-    // the agent-composed board are all visible as ONE coherent workbench, with the calm
-    // "type anything" Spotter pill showing (the unifying entry that reached them all).
+    // Leave the woven room in frame, every surface present at once: TILE the open
+    // windows into a grid so the doc-collab editor, the World-Status board, the Android
+    // cap-chrome, and the agent-composed board are each fully visible side by side as ONE
+    // coherent workbench (cascade piled them into the top-left corner; tiling spreads them
+    // across the room), with the calm "type anything" Spotter pill showing (the unifying
+    // entry that reached them all).
     desk.update(&mut cx, |d, _cx| {
-        d.bake_cascade_windows();
+        d.bake_tile_windows();
     });
     cx.run_until_parked();
     cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
@@ -1560,16 +1685,12 @@ fn render_woven_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "embedded-executor"
 ))]
 fn render_doc_collab_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     let layout_path =
         std::env::temp_dir().join(format!("deos-doccollab-bake-{}.json", std::process::id()));
@@ -1581,11 +1702,11 @@ fn render_doc_collab_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let world_for_view = shared.clone();
     let lp = layout_path.clone();
@@ -1755,16 +1876,12 @@ fn hex2(root: &[u8; 32]) -> String {
     feature = "embedded-executor"
 ))]
 fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::deos_desktop::DeosDesktop;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // A hermetic, fresh sidecar so `welcomed = false` → the warm card shows (a fresh
     // image is exactly the newcomer's first run). Start clean.
@@ -1780,11 +1897,11 @@ fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let world_for_view = shared.clone();
     let lp = layout_path.clone();
@@ -1851,23 +1968,19 @@ fn render_welcome_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 ///      sidecar (the #1 missing thing — spatial persistence),
 ///   4. opens a context menu so the right-click ACTUATION surface is visible in the
 ///      shot,
-/// then bakes `<out>.png`. Uses a throwaway sidecar path so the bake is hermetic.
+///      then bakes `<out>.png`. Uses a throwaway sidecar path so the bake is hermetic.
 #[cfg(all(
     feature = "render-capture",
     feature = "gpui-ui",
     feature = "embedded-executor"
 ))]
 fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::deos_desktop::{DeosDesktop, DesktopLayout, WinKindTag, id_hex};
-    use std::borrow::Cow;
+    use starbridge_v2::deos_desktop::{id_hex, DeosDesktop, DesktopLayout};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // A hermetic sidecar for this bake (so the persistence write/read is real but
     // does not clobber a user's layout). Start clean.
@@ -1883,11 +1996,11 @@ fn render_desktop_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let world_for_view = shared.clone();
     let lp = layout_path.clone();
@@ -2493,6 +2606,95 @@ fn render_first_card_arg(args: &[String]) -> Option<String> {
     None
 }
 
+/// Parse the `--render-apps <out>` (or `=<out>`) argument — the output base path for the
+/// APP STORE + APPS GOING bake (`<out>.launcher.png` + `<out>.png`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-apps" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-apps=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-apps-showcase <out>` (or `=<out>`) argument — the output path for
+/// the VISUAL-KILLER hero bake (ONE PNG written to `<out>`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_showcase_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-apps-showcase" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-apps-showcase=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-service-economy <out>` (or `=<out>`) argument — the output path for
+/// the SERVICE-ECONOMY scene bake (ONE PNG written to `<out>`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_service_economy_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-service-economy" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-service-economy=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Parse the `--render-app-fire <out>` (or `=<out>`) argument — the output base path for
+/// the CLICK→VERIFIED-TURN app-card-button bake (`<out>.before.png` / `<out>.after.png` /
+/// `<out>.png`). `None` when absent.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_app_fire_arg(args: &[String]) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--render-app-fire" {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix("--render-app-fire=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// Parse the `--render-webshell-live <out>` (or `=<out>`) argument — the output base
 /// path for THE LIVE WEB-SHELL bake (a real page in the cockpit web-shell pane, then
 /// a scroll input causing a re-render). `<out>.before.png` / `<out>.after.png`.
@@ -2813,9 +3015,8 @@ fn serve_ie6_arg(args: &[String]) -> Option<u16> {
 /// the real verified cockpit — server-side state, a round-trip per click.
 #[cfg(feature = "render-capture")]
 fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -2850,18 +3051,16 @@ fn serve_ie6_headless(port: u16) -> anyhow::Result<()> {
         "replay",
     ];
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
     // gpui-component init (the kit `Button`/widgets the cockpit now uses read the
     // kit `Theme`/global at render; without it they panic). See the same weld in
     // `render_cockpit_headless`.
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     // Force the deos DARK theme for the headless bake (the marketing/atlas shot
     // is always the dark desktop) + tune the kit palette to the cockpit GitHub-dark.
     cx.update(|cx| apply_deos_theme(None, true, cx));
@@ -3054,9 +3253,8 @@ fn html_escape(s: &str) -> String {
 #[cfg(feature = "render-capture")]
 fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     use cockpit::NavAction;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::collections::{HashSet, VecDeque};
     use std::rc::Rc;
@@ -3072,11 +3270,9 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     let states_dir = format!("{outdir}/states");
     std::fs::create_dir_all(&states_dir)?;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
@@ -3085,7 +3281,7 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     // read the kit's `Theme`/global state at render; init it in this headless app
     // (the windowed path does so at boot) or any kit widget panics on the missing
     // global. (See `render_cockpit_headless` for the same weld.)
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     // Force the deos DARK theme for the headless bake (the marketing/atlas shot
     // is always the dark desktop) + tune the kit palette to the cockpit GitHub-dark.
     cx.update(|cx| apply_deos_theme(None, true, cx));
@@ -3103,7 +3299,7 @@ fn explore_ui_headless(outdir: &str) -> anyhow::Result<()> {
     let wh = window.into();
 
     // root at HOME; capture the initial nav state to restore between nodes
-    let initial = window.update(&mut cx, |c, _window, cx| {
+    let initial = window.update(&mut cx, |c, _window, _cx| {
         c.select_tab_named("home");
         c.capture_nav()
     })?;
@@ -3247,9 +3443,8 @@ fn render_cockpit_headless(
     tab: Option<&str>,
     first_run: bool,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -3262,13 +3457,11 @@ fn render_cockpit_headless(
 
     // Vendored OFL fonts (the cockpit uses "Menlo"; unknown families fall back
     // to the system_font_fallback — here Lilex — inside CosmicTextSystem).
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // 1. Real text shaping with no system fonts (deterministic), Lilex fallback.
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     // 2. Headless app over TestPlatform + the Linux offscreen wgpu renderer.
     //    `current_headless_renderer` returns the `WgpuHeadlessRenderer` (lavapipe
@@ -3284,7 +3477,7 @@ fn render_cockpit_headless(
     //     `App` and must do the same, or any kit widget panics on the missing
     //     `gpui_component::theme::Theme` global. This is what makes the seL4
     //     framebuffer bake + the dregg-mcp screenshot render the migrated buttons.
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     // Force the deos DARK theme for the headless bake (the marketing/atlas shot
     // is always the dark desktop) + tune the kit palette to the cockpit GitHub-dark.
     cx.update(|cx| apply_deos_theme(None, true, cx));
@@ -3404,16 +3597,12 @@ fn render_cockpit_headless(
 ///    `<out>.png` — the agent's modified field is on the glass.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "agent-js"))]
 fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
-    use std::borrow::Cow;
+    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // 1. The cockpit's real image — the SAME `World` the windowed cockpit runs.
     let (world, anchors) = world::demo_world();
@@ -3470,7 +3659,7 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
         .and_then(|c| {
             c.state
                 .get_field(AGENT_COUNTER_SLOT)
-                .map(|fe| deos_js::applet::unpack_u64(fe))
+                .map(deos_js::applet::unpack_u64)
         })
         .unwrap_or(0);
 
@@ -3499,11 +3688,11 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
     // 4. Bake the cockpit INSPECTOR over the SAME World (the agent's field is on glass).
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     let shared = rendered_world.clone();
@@ -3553,17 +3742,13 @@ fn render_agent_attach_headless(out: &str, w: f32, h: f32, fork: bool) -> anyhow
 ///      differ (the card tracked a real live turn).
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter, attach_agent};
-    use starbridge_v2::card_pane::{CardPane, build_card_over_live};
-    use std::borrow::Cow;
+    use starbridge_v2::agent_attach::{attach_agent, WorldSinkAdapter, AGENT_COUNTER_SLOT};
+    use starbridge_v2::card_pane::{build_card_over_live, CardPane};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // 1. The cockpit's real image — the SAME `World` the windowed cockpit runs. The card
     //    is backed by the demo `user` cell (the agent's OWN vessel).
@@ -3628,11 +3813,11 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     //    + the gpui-component theme, then open the card pane → bake the BEFORE shot.
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     let card_applet = shared.clone();
@@ -3731,25 +3916,21 @@ fn render_card_pane_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// verified turn on it, and edited it live — using only the onboarding UI flow.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "card-pane"))]
 fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::agent_attach::AGENT_COUNTER_SLOT;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-
     // 1. Headless app + the kit + the dark theme (the cockpit's panels use kit widgets).
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     // The cockpit's real image — the SAME `World` the windowed cockpit runs. The
@@ -3870,6 +4051,1209 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// THE APP-STORE VIEW — a standalone gpui surface listing the real
+/// [`RegistryLauncher`](starbridge_v2::powerbox::RegistryLauncher) rows (the wired
+/// starbridge-apps: id · name · what-it-does), styled in the deos dark palette. The
+/// content is the registry's own truth (the same rows the cockpit's app-launcher renders);
+/// this view bakes it as one crisp "app store" PNG for the site/tweeters.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+struct AppStoreView {
+    rows: Vec<starbridge_v2::powerbox::AppLaunchRow>,
+}
+
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+impl gpui::Render for AppStoreView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{div, px, rgb, FontWeight, ParentElement, Styled};
+        let bg = rgb(0x0e1116);
+        let panel = rgb(0x161b22);
+        let panel_hi = rgb(0x1f2630);
+        let border = rgb(0x2b3340);
+        let text = rgb(0xd7dee8);
+        let muted = rgb(0x7d8794);
+        let accent = rgb(0x6cb6ff);
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mb_4()
+            .child(
+                div()
+                    .text_color(text)
+                    .text_2xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child("deos · app store"),
+            )
+            .child(div().text_color(muted).text_sm().child(format!(
+                "{} pre-built starbridge-apps — launch any onto your LIVE World; each is \
+                 cells × cap-gated affordances that fire REAL verified turns.",
+                self.rows.len()
+            )));
+
+        let mut grid = div().flex().flex_row().flex_wrap().gap_4();
+        for r in &self.rows {
+            grid = grid.child(
+                div()
+                    .w(px(740.))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .justify_between()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_color(text)
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(r.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(accent)
+                                    .text_color(bg)
+                                    .text_xs()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("launch →"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_color(accent)
+                            .text_xs()
+                            .child(format!("({})", r.id)),
+                    )
+                    .child(
+                        div()
+                            .mt_1()
+                            .px_2()
+                            .py_0p5()
+                            .rounded_md()
+                            .bg(panel_hi)
+                            .text_color(muted)
+                            .text_xs()
+                            .child(r.description.clone()),
+                    ),
+            );
+        }
+
+        div()
+            .size_full()
+            .bg(bg)
+            .p_8()
+            .flex()
+            .flex_col()
+            .font_family("IBM Plex Sans")
+            .child(header)
+            .child(grid)
+    }
+}
+
+/// THE APPS-GOING VIEW — a standalone gpui surface hosting several launched
+/// starbridge-apps' BESPOKE [`CardPane`](starbridge_v2::card_pane::CardPane)s side by
+/// side, each bound to its own just-seeded cell on the shared live World (its `bind`s
+/// re-read live ledger state, its buttons fire the app's real verified turns). Bakes the
+/// "apps going" PNG — multiple real apps running inside the live image at once.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+struct AppsRowView {
+    subtitle: String,
+    cards: Vec<gpui::Entity<starbridge_v2::card_pane::CardPane>>,
+}
+
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+impl gpui::Render for AppsRowView {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{div, rgb, FontWeight, ParentElement, Styled};
+        let bg = rgb(0x0e1116);
+        let panel = rgb(0x161b22);
+        let border = rgb(0x2b3340);
+        let text = rgb(0xd7dee8);
+        let muted = rgb(0x7d8794);
+
+        let header = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .mb_4()
+            .child(
+                div()
+                    .text_color(text)
+                    .text_2xl()
+                    .font_weight(FontWeight::BOLD)
+                    .child("apps going · live on your World"),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .text_sm()
+                    .child(self.subtitle.clone()),
+            );
+
+        let mut row = div().flex().flex_row().gap_4().flex_1().min_h_0();
+        for entity in &self.cards {
+            row = row.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .p_3()
+                    .rounded_lg()
+                    .bg(panel)
+                    .border_1()
+                    .border_color(border)
+                    .overflow_hidden()
+                    .child(entity.clone()),
+            );
+        }
+
+        div()
+            .size_full()
+            .bg(bg)
+            .p_8()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .font_family("IBM Plex Sans")
+            .child(header)
+            .child(row)
+    }
+}
+
+/// **THE APP STORE + APPS GOING BAKE.** Two PNGs of the pre-built app-launcher
+/// capability over the REAL registry + executor:
+///   1. `<out>.launcher.png` — the app store: every wired starbridge-app the live
+///      [`RegistryLauncher`](starbridge_v2::powerbox::RegistryLauncher) exposes (name ·
+///      id · what-it-does), the catalog a stranger picks from.
+///   2. `<out>.png` — apps going: LAUNCH three apps (gallery / bounty-board /
+///      sealed-auction) onto ONE shared live [`World`](starbridge_v2::world::World).
+///      Each `launch_on_world` seeds the app's cell + program and commits its
+///      representative affordance as a REAL cap-gated VERIFIED turn through the embedded
+///      executor; we mount each app's bespoke deos-view
+///      [`CardPane`](starbridge_v2::card_pane::CardPane) over its launched cell (the SAME
+///      path the cockpit's full-view-mount uses) and render them side by side.
+///
+/// Asserts the live ledger height GREW and at least one new receipt landed per launch —
+/// the bake's stdout names each launched cell + receipt + the height/receipt deltas, so
+/// the "apps going" frame is the running image's real state, never decorative.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    // The federation the cockpit's launcher births app substrates into (mirrors
+    // `panels_app_launcher::APPS_FEDERATION`).
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(bake_font_blobs())?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    // ── (A) THE APP STORE — the real registry's launch rows ──
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let rows = launcher.rows();
+    let row_count = rows.len();
+    let store_rows = rows.clone();
+    let store = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        cx.new(|_cx| AppStoreView { rows: store_rows })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(store.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let launcher_png = cx.capture_screenshot(store.into())?;
+    let (lw, lh) = (launcher_png.width(), launcher_png.height());
+    launcher_png.save(format!("{out}.launcher.png"))?;
+
+    // ── (B) APPS GOING — launch three real apps onto a shared live World ──
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+
+    struct Pending {
+        name: String,
+        substance: AppCardSubstance,
+        tree: deos_view::ViewNode,
+    }
+    let launch_ids = ["gallery", "bounty-board", "sealed-auction"];
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut launched_summ: Vec<String> = Vec::new();
+    for id in launch_ids {
+        let name = rows
+            .iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| id.to_string());
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let cell = launched.primary_cell();
+        let rh = launched.receipt.receipt_hash();
+        let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+        let tree = deos_view::parse_view_tree(&card.json)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(launched.spine, card.fire);
+        launched_summ.push(format!(
+            "{name} (cell {}, receipt {})",
+            reflect::short_hex(&cell.0),
+            hex::encode(&rh[..6])
+        ));
+        pending.push(Pending {
+            name,
+            substance,
+            tree,
+        });
+    }
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "no verified turns committed on launch ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts >= pre_receipts + launch_ids.len(),
+        "expected at least {} new receipts on launch, got {}",
+        launch_ids.len(),
+        post_receipts.saturating_sub(pre_receipts)
+    );
+
+    let subtitle = format!(
+        "{} pre-built apps launched onto ONE shared live World — each fired its \
+         representative VERIFIED turn (ledger {pre_height}→{post_height}); the cards below \
+         are bound to their just-seeded cells and their buttons fire the apps' real turns.",
+        launch_ids.len()
+    );
+    let apps = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        let cards = pending
+            .into_iter()
+            .map(|p| {
+                let sub: CardSubstanceRef = Rc::new(RefCell::new(p.substance));
+                let title = format!("{} · live app card (deos-view)", p.name);
+                cx.new(|_cx| CardPane::new_substance(sub, p.tree, title))
+            })
+            .collect();
+        cx.new(|_cx| AppsRowView { subtitle, cards })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(apps.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let apps_png = cx.capture_screenshot(apps.into())?;
+    let (aw, ah) = (apps_png.width(), apps_png.height());
+    apps_png.save(format!("{out}.png"))?;
+
+    println!(
+        "OK apps render -> {out}.launcher.png ({lw}x{lh}) + {out}.png ({aw}x{ah}), logical {w}x{h}; \
+         the APP STORE lists {row_count} wired starbridge-apps, and {} were LAUNCHED onto a live \
+         World (each fired its representative VERIFIED turn: ledger height {pre_height}->{post_height}, \
+         receipts {pre_receipts}->{post_receipts}) with their BESPOKE deos-view cards mounted live: {}.",
+        launch_ids.len(),
+        launched_summ.join("; ")
+    );
+    Ok(())
+}
+
+/// Big-endian tail `u64` of a 32-byte field element — the counter idiom every app crate
+/// stores its tallies / meters / vote-counts as (the bake reads them back off the live
+/// World ledger to drive each gauge toward its `max`).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn field_tail_u64_le(fe: &[u8; 32]) -> u64 {
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&fe[24..32]);
+    u64::from_be_bytes(b)
+}
+
+/// privacy-voting card fire — `record_tally` records ONE yes vote onto the live tally (a
+/// SetField increment under `ADMINISTRATOR_RIGHTS`, re-enforced by World's executor): the
+/// SAME accumulating turn the registry's world-drive fires. Any other method is the
+/// later-phase refusal (the card stays honest about what is live-fireable).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn voting_card_fire(
+    spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    use starbridge_privacy_voting as v;
+    use starbridge_v2::app_worldspine::WorldFireError;
+    let cell = spine.app_cell();
+    if method == v::service::METHOD_RECORD_TALLY {
+        let slot = v::tally_slot_for_choice(v::VOTE_YES);
+        spine.commit(
+            "record_tally",
+            &v::ADMINISTRATOR_RIGHTS,
+            &v::ADMINISTRATOR_RIGHTS,
+            |live| {
+                let t = field_tail_u64_le(&live.fields[slot]);
+                vec![dregg_app_framework::Effect::SetField {
+                    cell,
+                    index: slot,
+                    value: dregg_app_framework::field_from_u64(t.saturating_add(1)),
+                }]
+            },
+        )
+    } else {
+        Err(WorldFireError::World {
+            reason: format!(
+                "privacy-voting card: '{method}' is not the live-fireable record_tally affordance from the seeded OPEN poll"
+            ),
+        })
+    }
+}
+
+/// governed-namespace card fire — a committee `propose_table_update`/`vote_on_proposal`
+/// carries a `SenderAuthorized` membership proof the card surface alone cannot mint (the
+/// committee witness is supplied out-of-band by the launcher), so the card button surfaces
+/// that as an honest refusal. The live quorum bar is driven by the bake's authenticated
+/// `commit_as` fires (which DO carry the membership witness).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn governance_card_fire(
+    _spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    Err(starbridge_v2::app_worldspine::WorldFireError::World {
+        reason: format!(
+            "governed-namespace card: '{method}' binds a SenderAuthorized committee membership \
+             proof that the card surface cannot mint — the committee witness is supplied by the \
+             launcher's authenticated commit path"
+        ),
+    })
+}
+
+/// **THE VISUAL-KILLER SHOWCASE BAKE.** Launches the three apps whose deos-view cards carry
+/// the richest LIVE gauges onto ONE shared live [`World`](starbridge_v2::world::World), then
+/// DRIVES each with real cap-gated verified turns until its bars are MEANINGFULLY FILLED:
+///
+///   - **privacy-voting** — casts a poll of yes/no/abstain `record_tally` turns so the
+///     "Tally" section becomes a live bar-chart climbing toward `QUORUM_TARGET`;
+///   - **governed-namespace** — fires a quorum of authenticated committee
+///     `propose_table_update` turns (each carrying the single-member membership witness) so
+///     the quorum gauge tops out at `votes == QUORUM`;
+///   - **bounty-board** — the launch seeds a full escrowed-reward gauge (1000/1000) and
+///     claims the bounty; this advances the state machine CLAIMED → SUBMITTED so the stage
+///     gauge fills too (two filled gauges).
+///
+/// Then mounts each app's bespoke deos-view [`CardPane`](starbridge_v2::card_pane::CardPane)
+/// over its just-driven cell and renders the three side by side. ONE high-res PNG written
+/// to `<out>`. Asserts the live ledger height GREW and names every fired turn + the final
+/// gauge readings, so the hero frame is the running World's real state, never decorative.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_apps_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(bake_font_blobs())?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let rows = launcher.rows();
+    let name_of = |id: &str| -> String {
+        rows.iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+
+    struct Pending {
+        name: String,
+        substance: AppCardSubstance,
+        tree: deos_view::ViewNode,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut summ: Vec<String> = Vec::new();
+    let mut total_fired = 0usize;
+
+    // ── (1) PRIVACY-VOTING — cast a poll so the tally bar-chart is alive ──
+    {
+        let id = "privacy-voting";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine; // own it so we can drive more turns then mount
+        total_fired += 1; // the launch's representative yes vote
+        use starbridge_privacy_voting as v;
+        let cell = spine.app_cell();
+        // Cast a lively poll. The launch already recorded one YES (tally_yes = 1); top it
+        // up to a turnout where the bars are visibly full against QUORUM_TARGET.
+        let plan = [
+            (v::VOTE_YES, 12u64),    // -> 13 total yes
+            (v::VOTE_NO, 5u64),      // -> 5 no
+            (v::VOTE_ABSTAIN, 2u64), // -> 2 abstain
+        ];
+        for (choice, count) in plan {
+            let slot = v::tally_slot_for_choice(choice);
+            for _ in 0..count {
+                spine
+                    .commit(
+                        "record_tally",
+                        &v::ADMINISTRATOR_RIGHTS,
+                        &v::ADMINISTRATOR_RIGHTS,
+                        |st| {
+                            let t = field_tail_u64_le(&st.fields[slot]);
+                            vec![dregg_app_framework::Effect::SetField {
+                                cell,
+                                index: slot,
+                                value: dregg_app_framework::field_from_u64(t.saturating_add(1)),
+                            }]
+                        },
+                    )
+                    .map_err(|e| anyhow::anyhow!("privacy-voting record_tally refused: {e}"))?;
+                total_fired += 1;
+            }
+        }
+        let card = app_card_json_for(id)?;
+        let tree = deos_view::parse_view_tree(&card.0)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(spine, card.1);
+        let yes = substance.get_u64(v::TALLY_YES_SLOT);
+        let no = substance.get_u64(v::TALLY_NO_SLOT);
+        let abstain = substance.get_u64(v::TALLY_ABSTAIN_SLOT);
+        summ.push(format!(
+            "{} (poll tally yes={yes}/no={no}/abstain={abstain} of {} quorum)",
+            name_of(id),
+            v::card::QUORUM_TARGET
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (2) GOVERNED-NAMESPACE — gather a quorum so the quorum bar tops out ──
+    {
+        let id = "governed-namespace";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's representative proposal (pending -> 1)
+        use starbridge_governed_namespace as gn;
+        let board = spine.app_cell();
+        // The committee member IS the agent cell's pubkey; reconstruct the membership
+        // witness over it (the SAME single-member root `launch_on_world` seeded), so the
+        // authenticated `commit_as` clears `SenderAuthorized(committee_root)`.
+        let signer = live
+            .borrow()
+            .ledger()
+            .get(&board)
+            .map(|c| *c.public_key())
+            .ok_or_else(|| anyhow::anyhow!("governed-namespace cell missing on World"))?;
+        // Drive the pending-proposal count up to QUORUM so the quorum gauge fills.
+        let pending_now = live
+            .borrow()
+            .ledger()
+            .get(&board)
+            .map(|c| field_tail_u64_le(&c.state.fields[gn::PENDING_PROPOSAL_ROOT_SLOT as usize]))
+            .unwrap_or(0);
+        let more = gn::card::QUORUM.saturating_sub(pending_now);
+        for _ in 0..more {
+            let witness = dregg_turn::action::WitnessBlob::merkle_path(
+                dregg_turn::executor::single_member_membership_proof(&signer),
+            );
+            spine
+                .commit_as(
+                    signer,
+                    "propose_table_update",
+                    &gn::COMMITTEE_RIGHTS,
+                    &gn::COMMITTEE_RIGHTS,
+                    vec![witness],
+                    |st| {
+                        let p =
+                            field_tail_u64_le(&st.fields[gn::PENDING_PROPOSAL_ROOT_SLOT as usize]);
+                        let np = dregg_app_framework::field_from_u64(p.saturating_add(1));
+                        vec![
+                            dregg_app_framework::Effect::SetField {
+                                cell: board,
+                                index: gn::PENDING_PROPOSAL_ROOT_SLOT as usize,
+                                value: np,
+                            },
+                            dregg_app_framework::Effect::EmitEvent {
+                                cell: board,
+                                event: dregg_app_framework::Event::new(
+                                    dregg_app_framework::symbol("proposal-opened"),
+                                    vec![np],
+                                ),
+                            },
+                        ]
+                    },
+                )
+                .map_err(|e| anyhow::anyhow!("governed-namespace propose refused: {e}"))?;
+            total_fired += 1;
+        }
+        let card = app_card_json_for(id)?;
+        let tree = deos_view::parse_view_tree(&card.0)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(spine, card.1);
+        let votes = substance.get_u64(gn::PENDING_PROPOSAL_ROOT_SLOT as usize);
+        summ.push(format!(
+            "{} (quorum {votes}/{} proposals)",
+            name_of(id),
+            gn::card::QUORUM
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (3) BOUNTY-BOARD — full reward gauge + advance the stage gauge ──
+    {
+        let id = "bounty-board";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's representative claim (OPEN -> CLAIMED)
+        use starbridge_bounty_board as b;
+        let bcell = spine.app_cell();
+        // Advance CLAIMED -> SUBMITTED so the stage gauge climbs past the seeded claim
+        // (the escrowed-reward gauge is already full at the seeded 1000/1000).
+        spine
+            .commit("submit", &b::WORKER_RIGHTS, &b::WORKER_RIGHTS, |_st| {
+                b::submit_effects(bcell, "ipfs://bafy-the-registry-work")
+            })
+            .map_err(|e| anyhow::anyhow!("bounty-board submit refused: {e}"))?;
+        total_fired += 1;
+        let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+        let tree = deos_view::parse_view_tree(&card.json)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(spine, card.fire);
+        let reward = substance.get_u64(b::REWARD_SLOT);
+        let state = substance.get_u64(b::STATE_SLOT);
+        summ.push(format!(
+            "{} (reward {reward}/1000 escrowed · stage {state}/{} SUBMITTED)",
+            name_of(id),
+            b::STATE_PAID
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "no verified turns committed ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts >= pre_receipts + total_fired,
+        "expected at least {total_fired} new receipts, got {}",
+        post_receipts.saturating_sub(pre_receipts)
+    );
+
+    let subtitle = format!(
+        "three apps launched onto ONE shared live World, then DRIVEN with {total_fired} real \
+         cap-gated VERIFIED turns (ledger {pre_height}→{post_height}, receipts \
+         {pre_receipts}→{post_receipts}) until their gauges fill: a poll's yes/no/abstain \
+         tally bar-chart, a committee quorum bar, and a bounty's escrowed-reward + stage \
+         gauges — every bar below is the running World's real state."
+    );
+    let card_count = pending.len();
+    let apps = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        let cards = pending
+            .into_iter()
+            .map(|p| {
+                let sub: CardSubstanceRef = Rc::new(RefCell::new(p.substance));
+                let title = format!("{} · live app card (deos-view)", p.name);
+                cx.new(|_cx| CardPane::new_substance(sub, p.tree, title))
+            })
+            .collect();
+        cx.new(|_cx| AppsRowView { subtitle, cards })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(apps.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let apps_png = cx.capture_screenshot(apps.into())?;
+    let (aw, ah) = (apps_png.width(), apps_png.height());
+    apps_png.save(out)?;
+
+    println!(
+        "OK apps-showcase render -> {out} ({aw}x{ah}), logical {w}x{h}; {card_count} VISUAL-KILLER \
+         app cards mounted on a shared live World, each DRIVEN with real verified turns until its \
+         gauges are FILLED ({total_fired} turns total, ledger {pre_height}->{post_height}, receipts \
+         {pre_receipts}->{post_receipts}): {}.",
+        summ.join("; ")
+    );
+    Ok(())
+}
+
+/// escrow-market card fire — the sealed-escrow lifecycle is COMPLETE in the
+/// service-economy bake (driven to SETTLED), so a card button is a surfaced honest
+/// refusal: there is no further live-fireable affordance on a settled escrow. The card's
+/// LIVE binds (escrowed / state) still re-read the running World state.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn escrow_card_fire(
+    _spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    Err(starbridge_v2::app_worldspine::WorldFireError::World {
+        reason: format!(
+            "escrow-market card: '{method}' is not live-fireable — the sealed escrow has \
+             already SETTLED in this scene (the lifecycle is complete)"
+        ),
+    })
+}
+
+/// compute-exchange card fire — the job is SETTLED in the service-economy bake (the budget
+/// split into paid/refunded), so a card button is a surfaced honest refusal. The card's
+/// LIVE gauges/binds (lifecycle / bid / paid / refunded) still re-read the running World.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn compute_card_fire(
+    _spine: &starbridge_v2::app_worldspine::AppWorldSpine,
+    method: &str,
+    _arg: i64,
+) -> Result<dregg_app_framework::TurnReceipt, starbridge_v2::app_worldspine::WorldFireError> {
+    Err(starbridge_v2::app_worldspine::WorldFireError::World {
+        reason: format!(
+            "compute-exchange card: '{method}' is not live-fireable — the job has already \
+             SETTLED in this scene (the budget was split paid/refunded)"
+        ),
+    })
+}
+
+/// **THE SERVICE-ECONOMY SCENE BAKE.** Launches the value/service apps onto ONE shared
+/// live [`World`](starbridge_v2::world::World) and DRIVES each with real cap-gated verified
+/// turns so its card's state is alive, then mounts each app's bespoke deos-view
+/// [`CardPane`](starbridge_v2::card_pane::CardPane) side by side:
+///
+///   - **execution-lease** — the launch advances the durable cursor (step 0→1); then a run
+///     of metered deliveries climbs the periods-paid gauge AND the durable checkpoint
+///     cursor (each `advance` re-enforced by `Monotonic(STEP)`/`Monotonic(PERIODS_PAID)`);
+///   - **escrow-market** — the launch funds the listed item (LISTED→FUNDED, escrowed); then
+///     `ship` (FUNDED→SHIPPED) + `settle` (SHIPPED→SETTLED) release the escrow IN FULL
+///     (`released + refunded == escrowed`, the FLASHWELL `AffineEq` conservation);
+///   - **compute-exchange** — the launch bids on the job (POSTED→BID); then `settle`
+///     (BID→SETTLED) splits the budget into `paid` (the accepted bid) + `refunded` (the
+///     remainder), the conserving `AffineEq(PAID + REFUNDED == BUDGET)`.
+///
+/// ONE high-res PNG written to `<out>`. Asserts the live ledger height GREW and names every
+/// fired turn + the final gauge readings, so the scene is the running World's real state.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_service_economy_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance, CardFireFn};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(bake_font_blobs())?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let rows = launcher.rows();
+    let name_of = |id: &str| -> String {
+        rows.iter()
+            .find(|r| r.id == id)
+            .map(|r| r.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    };
+
+    struct Pending {
+        name: String,
+        substance: AppCardSubstance,
+        tree: deos_view::ViewNode,
+    }
+    let mut pending: Vec<Pending> = Vec::new();
+    let mut summ: Vec<String> = Vec::new();
+    let mut total_fired = 0usize;
+
+    // ── (1) EXECUTION-LEASE — durable cursor advances + periods-paid gauge climbs ──
+    {
+        let id = "execution-lease";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's representative advance (step 0 -> 1)
+        use starbridge_execution_lease as el;
+        let cell = spine.app_cell();
+        // A run of metered durable deliveries: each `advance` moves the durable checkpoint
+        // cursor forward AND meters one rent period, filling the periods-paid gauge (max
+        // DEMO_LEASE_PERIODS) — `Monotonic(STEP)` + `Monotonic(PERIODS_PAID)` re-enforced.
+        let deliveries = 8u64;
+        for _ in 0..deliveries {
+            spine
+                .commit("advance", &el::AGENT_RIGHTS, &el::AGENT_RIGHTS, |st| {
+                    let step =
+                        field_tail_u64_le(&st.fields[el::STEP_SLOT as usize]).saturating_add(1);
+                    let paid = field_tail_u64_le(&st.fields[el::PERIODS_PAID_SLOT as usize])
+                        .saturating_add(1);
+                    vec![
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::STEP_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(step),
+                        },
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::STATE_DIGEST_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(0xD00D + step),
+                        },
+                        dregg_app_framework::Effect::SetField {
+                            cell,
+                            index: el::PERIODS_PAID_SLOT as usize,
+                            value: dregg_app_framework::field_from_u64(paid),
+                        },
+                        dregg_app_framework::Effect::EmitEvent {
+                            cell,
+                            event: dregg_app_framework::Event::new(
+                                dregg_app_framework::symbol("lease-advanced"),
+                                vec![dregg_app_framework::field_from_u64(step)],
+                            ),
+                        },
+                    ]
+                })
+                .map_err(|e| anyhow::anyhow!("execution-lease advance refused: {e}"))?;
+            total_fired += 1;
+        }
+        let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+        let tree = deos_view::parse_view_tree(&card.json)
+            .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+        let substance = AppCardSubstance::new(spine, card.fire);
+        let step = substance.get_u64(el::STEP_SLOT as usize);
+        let paid = substance.get_u64(el::PERIODS_PAID_SLOT as usize);
+        summ.push(format!(
+            "{} (durable checkpoint step {step} · {paid}/{} rent periods paid)",
+            name_of(id),
+            el::card::DEMO_LEASE_PERIODS
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (2) ESCROW-MARKET — the sealed-escrow swap driven to SETTLED ──
+    {
+        let id = "escrow-market";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's fund (LISTED -> FUNDED, escrowed 500)
+        use starbridge_escrow_market as e;
+        let cell = spine.app_cell();
+        // ship (FUNDED -> SHIPPED): the seller commits the sealed delivery (WriteOnce
+        // DELIVERY_HASH + StrictMonotonic STATE).
+        spine
+            .commit("ship", &e::SELLER_RIGHTS, &e::SELLER_RIGHTS, |_st| {
+                e::ship_effects(cell, &dregg_app_framework::field_from_u64(0x5417))
+            })
+            .map_err(|err| anyhow::anyhow!("escrow-market ship refused: {err}"))?;
+        total_fired += 1;
+        // settle (SHIPPED -> SETTLED): release the escrow IN FULL — the FLASHWELL
+        // AffineEq(RELEASED + REFUNDED == ESCROWED) conservation (released = escrowed).
+        spine
+            .commit("settle", &e::SELLER_RIGHTS, &e::SELLER_RIGHTS, |st| {
+                let escrowed = field_tail_u64_le(&st.fields[e::ESCROWED_SLOT]);
+                e::settle_effects(cell, escrowed, 0)
+            })
+            .map_err(|err| anyhow::anyhow!("escrow-market settle refused: {err}"))?;
+        total_fired += 1;
+        let json = starbridge_escrow_market::card::escrow_card_json();
+        let tree = deos_view::parse_view_tree(&json)
+            .map_err(|err| anyhow::anyhow!("'{id}' card view-tree parse: {err}"))?;
+        let substance = AppCardSubstance::new(spine, escrow_card_fire as CardFireFn);
+        let escrowed = substance.get_u64(e::ESCROWED_SLOT);
+        let state = substance.get_u64(e::STATE_SLOT);
+        summ.push(format!(
+            "{} (escrowed {escrowed} released · state {state}/{} SETTLED)",
+            name_of(id),
+            e::STATE_SETTLED
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    // ── (3) COMPUTE-EXCHANGE — the compute job driven to SETTLED (budget split) ──
+    {
+        let id = "compute-exchange";
+        let launched = launcher
+            .launch_on_world(id, live.clone())
+            .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+            .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+        let spine = launched.spine;
+        total_fired += 1; // the launch's bid (POSTED -> BID, bid 750)
+        use starbridge_compute_exchange as j;
+        let cell = spine.app_cell();
+        // settle (BID -> SETTLED): pay the provider IN FULL + refund the remainder — the
+        // conserving AffineEq(PAID + REFUNDED == BUDGET).
+        spine
+            .commit("settle", &j::REQUESTER_RIGHTS, &j::REQUESTER_RIGHTS, |st| {
+                let budget = field_tail_u64_le(&st.fields[j::BUDGET_SLOT]);
+                let bid = field_tail_u64_le(&st.fields[j::BID_SLOT]);
+                j::settle_effects(cell, bid, budget.saturating_sub(bid))
+            })
+            .map_err(|err| anyhow::anyhow!("compute-exchange settle refused: {err}"))?;
+        total_fired += 1;
+        let json = starbridge_compute_exchange::card::job_card_json();
+        let tree = deos_view::parse_view_tree(&json)
+            .map_err(|err| anyhow::anyhow!("'{id}' card view-tree parse: {err}"))?;
+        let substance = AppCardSubstance::new(spine, compute_card_fire as CardFireFn);
+        let paid = substance.get_u64(j::PAID_SLOT);
+        let refunded = substance.get_u64(j::REFUNDED_SLOT);
+        let state = substance.get_u64(j::STATE_SLOT);
+        summ.push(format!(
+            "{} (paid {paid} · refunded {refunded} · state {state}/{} SETTLED)",
+            name_of(id),
+            j::STATE_SETTLED
+        ));
+        pending.push(Pending {
+            name: name_of(id),
+            substance,
+            tree,
+        });
+    }
+
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height > pre_height,
+        "no verified turns committed ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts >= pre_receipts + total_fired,
+        "expected at least {total_fired} new receipts, got {}",
+        post_receipts.saturating_sub(pre_receipts)
+    );
+
+    let subtitle = format!(
+        "the service-economy value apps launched onto ONE shared live World, then DRIVEN with \
+         {total_fired} real cap-gated VERIFIED turns (ledger {pre_height}→{post_height}, receipts \
+         {pre_receipts}→{post_receipts}): a durable-execution lease's periods-paid gauge climbing \
+         as its checkpoint cursor advances, a sealed escrow released to SETTLED, and a compute job \
+         settled with its budget split paid/refunded — every value below is the running World's \
+         real state."
+    );
+    let card_count = pending.len();
+    let apps = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        let cards = pending
+            .into_iter()
+            .map(|p| {
+                let sub: CardSubstanceRef = Rc::new(RefCell::new(p.substance));
+                let title = format!("{} · live app card (deos-view)", p.name);
+                cx.new(|_cx| CardPane::new_substance(sub, p.tree, title))
+            })
+            .collect();
+        cx.new(|_cx| AppsRowView { subtitle, cards })
+    })?;
+    cx.run_until_parked();
+    cx.update_window(apps.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let apps_png = cx.capture_screenshot(apps.into())?;
+    let (aw, ah) = (apps_png.width(), apps_png.height());
+    apps_png.save(out)?;
+
+    println!(
+        "OK service-economy render -> {out} ({aw}x{ah}), logical {w}x{h}; {card_count} value/service \
+         app cards mounted on a shared live World, each DRIVEN with real verified turns until its \
+         state is alive ({total_fired} turns total, ledger {pre_height}->{post_height}, receipts \
+         {pre_receipts}->{post_receipts}): {}.",
+        summ.join("; ")
+    );
+    Ok(())
+}
+
+/// Resolve a showcase app's bespoke card JSON + its (reuse-layer) card-fire dispatch by
+/// id, for the apps whose cards are NOT in [`app_card`]'s launch-set. The JSON is the app
+/// crate's own glowed-up `*_card_json()`; the fire dispatch routes the card button to the
+/// app's representative live affordance (the SAME recipe the registry's world-drive uses).
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn app_card_json_for(
+    id: &str,
+) -> anyhow::Result<(String, starbridge_v2::app_registry::CardFireFn)> {
+    match id {
+        "privacy-voting" => Ok((
+            starbridge_privacy_voting::card::voting_card_json(),
+            voting_card_fire as starbridge_v2::app_registry::CardFireFn,
+        )),
+        "governed-namespace" => Ok((
+            starbridge_governed_namespace::card::governance_card_json(),
+            governance_card_fire as starbridge_v2::app_registry::CardFireFn,
+        )),
+        other => Err(anyhow::anyhow!("no showcase card json wired for '{other}'")),
+    }
+}
+
+/// **THE CLICK → VERIFIED-TURN BAKE.** Launches the gallery app onto a live
+/// [`World`](starbridge_v2::world::World), mounts its bespoke deos-view
+/// [`CardPane`](starbridge_v2::card_pane::CardPane), bakes `<out>.before.png`, then FIRES
+/// the card's `submit` button — ONE cap-gated VERIFIED turn committed through
+/// `World::commit_turn` onto the live ledger (sealing a submission into the next free
+/// WriteOnce slot) — and bakes `<out>.after.png` (== `<out>.png`). Asserts the ledger
+/// height advanced by EXACTLY one and exactly one new receipt landed; the bake's stdout
+/// names the launched cell + the receipt + the height/receipt deltas. The single
+/// load-bearing truth: a click on the app card committed a real verified turn on the live
+/// World.
+#[cfg(all(
+    feature = "render-capture",
+    feature = "gpui-ui",
+    feature = "card-pane",
+    feature = "app-registry",
+    feature = "embedded-executor"
+))]
+fn render_app_card_fire_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
+    use gpui_wgpu::CosmicTextSystem;
+    use starbridge_v2::app_registry::{app_card, AppCardSubstance};
+    use starbridge_v2::card_pane::{CardPane, CardSubstanceRef};
+    use starbridge_v2::powerbox::RegistryLauncher;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    const APPS_FED: [u8; 32] = [0x5Eu8; 32];
+
+    let text_system: Arc<dyn PlatformTextSystem> =
+        Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
+    text_system.add_fonts(bake_font_blobs())?;
+    let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
+        gpui_platform::current_headless_renderer()
+    });
+    cx.update(gpui_component::init);
+    cx.update(|cx| apply_deos_theme(None, true, cx));
+
+    let (world, _anchors) = world::demo_world();
+    let live = Rc::new(RefCell::new(world));
+    let launcher = RegistryLauncher::standard(APPS_FED);
+    let id = "gallery";
+    let name = launcher
+        .rows()
+        .into_iter()
+        .find(|r| r.id == id)
+        .map(|r| r.name)
+        .unwrap_or_else(|| id.to_string());
+
+    let launched = launcher
+        .launch_on_world(id, live.clone())
+        .ok_or_else(|| anyhow::anyhow!("no wired app '{id}'"))?
+        .map_err(|e| anyhow::anyhow!("launch '{id}' refused: {e}"))?;
+    let cell = launched.primary_cell();
+    let card = app_card(id).ok_or_else(|| anyhow::anyhow!("'{id}' ships no wired card"))?;
+    let tree = deos_view::parse_view_tree(&card.json)
+        .map_err(|e| anyhow::anyhow!("'{id}' card view-tree parse: {e}"))?;
+    let substance = Rc::new(RefCell::new(AppCardSubstance::new(
+        launched.spine,
+        card.fire,
+    )));
+    let sub_dyn: CardSubstanceRef = substance.clone();
+
+    let title = format!("{name} · live app card (deos-view)");
+    let pane_sub = sub_dyn.clone();
+    let window = cx.open_window(size(px(w), px(h)), move |_window, cx| {
+        cx.new(|_cx| CardPane::new_substance(pane_sub, tree, title))
+    })?;
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let before = cx.capture_screenshot(window.into())?;
+    let (bw, bh) = (before.width(), before.height());
+    before.save(format!("{out}.before.png"))?;
+
+    let pre_height = live.borrow().height();
+    let pre_receipts = live.borrow().receipts().len();
+    // FIRE the card's `submit` button — the EXACT cap-gated verified turn the rendered
+    // button's on_click fires (the inherent `AppCardSubstance::fire` returns the receipt).
+    let receipt = substance
+        .borrow()
+        .fire("submit", 0)
+        .map_err(|e| anyhow::anyhow!("the {name} card's submit did not commit: {e}"))?;
+    let post_height = live.borrow().height();
+    let post_receipts = live.borrow().receipts().len();
+    anyhow::ensure!(
+        post_height == pre_height + 1,
+        "the submit did not advance the ledger by ONE ({pre_height} -> {post_height})"
+    );
+    anyhow::ensure!(
+        post_receipts == pre_receipts + 1,
+        "the submit did not land EXACTLY one new receipt ({pre_receipts} -> {post_receipts})"
+    );
+
+    cx.update(|cx| cx.refresh_windows());
+    cx.run_until_parked();
+    cx.update_window(window.into(), |_, window, _cx| window.refresh())?;
+    cx.run_until_parked();
+    let after = cx.capture_screenshot(window.into())?;
+    let (aw, ah) = (after.width(), after.height());
+    after.save(format!("{out}.after.png"))?;
+    after.save(format!("{out}.png"))?;
+
+    let changed = before.as_raw() != after.as_raw();
+    let rh = receipt.receipt_hash();
+    println!(
+        "OK app-fire render -> {out}.before.png ({bw}x{bh}) / {out}.after.png == {out}.png \
+         ({aw}x{ah}), logical {w}x{h}; the {name} app card's SUBMIT button fired a REAL cap-gated \
+         VERIFIED turn on the live World (cell {}, receipt {}): ledger height \
+         {pre_height}->{post_height}, receipts {pre_receipts}->{post_receipts}{}.",
+        reflect::short_hex(&cell.0),
+        hex::encode(&rh[..6]),
+        if changed {
+            " — the bound card frame changed"
+        } else {
+            " — the sealed-phase bind holds steady; the receipt + height advance are the witness"
+        }
+    );
+    Ok(())
+}
+
 /// **THE LIVE WEB-SHELL BAKE — a real page in the cockpit pane, then a scroll input
 /// causing a re-render.** Opens the full `cockpit::Cockpit` on the WEB-SHELL tab,
 /// drives the persistent live `servo::WebView` to load a tall `data:` page (a real
@@ -3884,15 +5268,11 @@ fn render_first_card_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// spike uses, now driven through the cockpit's gpui event bridge.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui", feature = "web-shell"))]
 fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // A page taller than the 460px tile: a 600px red band over a 600px lime band, so
     // scrolling down flips the visible band (an UNMISTAKABLE before/after). `%23` is the
@@ -3907,11 +5287,11 @@ fn render_webshell_live_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()
     //    cockpit bakes through), with the vendored OFL fonts.
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     // 2. The cockpit's real image, on the WEB-SHELL tab. The `Root` wrap is required —
@@ -4072,17 +5452,13 @@ fn bake_inspector_over_world(
     w: f32,
     h: f32,
 ) -> anyhow::Result<(u32, u32)> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
@@ -4142,7 +5518,7 @@ fn render_live_brain_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
         AcpClient, AcpTransport, GrantRegistry, HermesGateway, RunJsTool, ToolCallRequest,
     };
     use dregg_cell::AuthRequired;
-    use starbridge_v2::agent_attach::{AGENT_COUNTER_SLOT, WorldSinkAdapter};
+    use starbridge_v2::agent_attach::{WorldSinkAdapter, AGENT_COUNTER_SLOT};
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::{Arc, RwLock};
@@ -4422,28 +5798,24 @@ fn extract_js_block(text: &str) -> String {
     feature = "dev-surfaces"
 ))]
 fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     // Real text shaping, no system fonts (deterministic), Lilex fallback — the
     // cockpit + every surface asks for "Menlo" and falls back to Lilex.
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
     // The surfaces use real gpui-component widgets (the editor's InputState, the
     // kit Buttons) which read the kit Theme global at render time — init it.
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     // Force the deos DARK theme for the headless bake (the marketing/atlas shot
     // is always the dark desktop) + tune the kit palette to the cockpit GitHub-dark.
     cx.update(|cx| apply_deos_theme(None, true, cx));
@@ -4497,24 +5869,20 @@ fn render_showcase_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
     feature = "app-registry"
 ))]
 fn render_guest_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     // The fully-seeded demo image — the real cell world the wonder strip reads off.
@@ -4606,25 +5974,21 @@ fn render_self_hosting_headless(
     h: f32,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::time::Instant;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
     // The live PTY's child runs on a REAL OS thread and writes the grid
     // asynchronously; allow the test dispatcher to park on that real I/O so
@@ -4767,16 +6131,12 @@ fn render_unified_boot_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::time::Instant;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     let node_url = node_url.ok_or_else(|| {
         anyhow::anyhow!(
@@ -4787,12 +6147,12 @@ fn render_unified_boot_headless(
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
     cx.allow_parking();
 
@@ -4836,7 +6196,8 @@ fn render_unified_boot_headless(
     // (2) Fire a REAL editor save on the LOCAL ledger, then re-read the NODE's
     // receipt count over the wire — the empirical write-back probe.
     let local_before = window.read_with(&cx, |v, _| v.world_receipt_count())?;
-    let new_content = "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
+    let new_content =
+        "// SAVED INSIDE deos (unified boot) — a cap-gated turn on the cockpit's LOCAL ledger.\n\
          fn main() {\n    println!(\"a save is a verified turn on the local World\");\n}\n";
     let local_after = window.update(&mut cx, |v, window, cx| {
         v.fire_save(new_content, window, cx)
@@ -4994,15 +6355,11 @@ fn render_client_signed_turn_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     let node_url = node_url.ok_or_else(|| {
         anyhow::anyhow!(
@@ -5014,12 +6371,12 @@ fn render_client_signed_turn_headless(
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
     cx.allow_parking();
 
@@ -5101,24 +6458,24 @@ fn render_client_signed_turn_headless(
         "  CLIENT-SIGNED COMMIT: node receipts {} -> {} (turn {}).",
         proof.before,
         proof.after,
-        &proof.turn_hash.chars().take(16).collect::<String>(),
+        proof.turn_hash.chars().take(16).collect::<String>(),
     );
     println!(
         "  AGENT IDENTITY (the load-bearing proof): committed receipt agent = {} (the USER's own cell)",
-        &proof.receipt_agent.chars().take(16).collect::<String>(),
+        proof.receipt_agent.chars().take(16).collect::<String>(),
     );
     println!(
         "    · == user cell   {}…  ✓",
-        &proof.user_cell.chars().take(16).collect::<String>(),
+        proof.user_cell.chars().take(16).collect::<String>(),
     );
     println!(
         "    · != operator    {}…  ✓ (the node did NOT impersonate — it validated + ordered \
          a turn the USER signed)",
-        &proof.operator_cell.chars().take(16).collect::<String>(),
+        proof.operator_cell.chars().take(16).collect::<String>(),
     );
     println!(
         "    · node-reported signer = {}…  (the user's pubkey, verified by the node before commit)",
-        &proof.signer.chars().take(16).collect::<String>(),
+        proof.signer.chars().take(16).collect::<String>(),
     );
     println!(
         "  => the logged-in user's OWN cell signed a turn the node committed under the USER's \
@@ -5157,15 +6514,11 @@ fn render_interactive_node_save_headless(
     node_url: Option<String>,
     cmd: Option<(String, Vec<String>)>,
 ) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
-
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 
     let node_url = node_url.ok_or_else(|| {
         anyhow::anyhow!(
@@ -5177,12 +6530,12 @@ fn render_interactive_node_save_headless(
 
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
     cx.allow_parking();
 
@@ -5308,20 +6661,20 @@ fn render_interactive_node_save_headless(
          (proof leg {} -> {}, turn {}).",
         proof.before,
         proof.after,
-        &proof.turn_hash.chars().take(16).collect::<String>(),
+        proof.turn_hash.chars().take(16).collect::<String>(),
     );
     println!(
         "  AGENT IDENTITY (load-bearing): committed receipt agent = {} (the USER's own cell)",
-        &proof.receipt_agent.chars().take(16).collect::<String>(),
+        proof.receipt_agent.chars().take(16).collect::<String>(),
     );
     println!(
         "    · == user cell   {}…  ✓",
-        &proof.user_cell.chars().take(16).collect::<String>(),
+        proof.user_cell.chars().take(16).collect::<String>(),
     );
     println!(
         "    · != operator    {}…  ✓ (the node validated + ordered a turn the USER signed via \
          the EDITOR's own save path)",
-        &proof.operator_cell.chars().take(16).collect::<String>(),
+        proof.operator_cell.chars().take(16).collect::<String>(),
     );
     println!(
         "  => a real interactive editor save in the live --node cockpit landed on the NODE \
@@ -5354,25 +6707,21 @@ fn render_interactive_node_save_headless(
     feature = "embedded-executor"
 ))]
 fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
-
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
 
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
     cx.allow_parking();
 
@@ -5520,22 +6869,19 @@ fn render_self_hosting_full_headless(out: &str, w: f32, h: f32) -> anyhow::Resul
 /// system principal over the demo image's anchors and offers the seed identities.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
 fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     // Force the deos DARK theme for the headless bake (the marketing/atlas shot
     // is always the dark desktop) + tune the kit palette to the cockpit GitHub-dark.
     cx.update(|cx| apply_deos_theme(None, true, cx));
@@ -5582,23 +6928,20 @@ fn render_login_headless(out: &str, w: f32, h: f32) -> anyhow::Result<()> {
 /// actual state, never decorative.
 #[cfg(all(feature = "render-capture", feature = "gpui-ui"))]
 fn render_touch_headless(out: &str, w: f32, h: f32, mode: Option<&str>) -> anyhow::Result<()> {
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use starbridge_v2::touch;
-    use std::borrow::Cow;
     use std::cell::RefCell;
     use std::rc::Rc;
     use std::sync::Arc;
 
-    static LILEX: &[u8] = include_bytes!("../assets/fonts/Lilex-Regular.ttf");
-    static IBM_PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
     let text_system: Arc<dyn PlatformTextSystem> =
         Arc::new(CosmicTextSystem::new_without_system_fonts("Lilex"));
-    text_system.add_fonts(vec![Cow::Borrowed(LILEX), Cow::Borrowed(IBM_PLEX)])?;
+    text_system.add_fonts(bake_font_blobs())?;
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
     cx.update(|cx| apply_deos_theme(None, true, cx));
 
     // The fully-seeded demo image — the SAME `World` the desktop cockpit runs, so the

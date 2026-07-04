@@ -94,7 +94,7 @@ use crate::state::FieldElement;
 /// committed heap (so the whole escrow is folded into the canonical state
 /// commitment). Chosen high to avoid colliding with application heap
 /// collections, in the same spirit as [`crate::derived::DERIVATION_COLL`].
-pub const ESCROW_COLL: u32 = 0x5_E5C_E0_u32; // a fixed reserved id ("ESCRoW")
+pub const ESCROW_COLL: u32 = 0x005E_5CE0_u32; // a fixed reserved id ("ESCRoW")
 
 /// Heap key holding the 32-byte digest of the escrow's [`EscrowTerms`]. Binds
 /// *which* exchange this cell escrows.
@@ -988,5 +988,102 @@ mod tests {
         for v in [0i64, 1, -1, 100, 250, i64::MAX, i64::MIN] {
             assert_eq!(decode_i64(&encode_i64(v)), v);
         }
+    }
+
+    /// **The Lean rung: this executor invariant is PROVEN, not just smoke-tested.**
+    ///
+    /// The atomic-swap invariant enforced here — both legs deposited makes the
+    /// settlement gate ready and binds BOTH leg amounts, a settled leg is one-shot
+    /// (replay refused), a non-conforming own deposit cannot claim, and an
+    /// over-claim is bounded by the locked amount — is the EXECUTOR image of the
+    /// proven Lean rung `metatheory/Dregg2/Deos/SealedEscrow.lean`, grounded BY
+    /// REUSE of the committed-heap root (`Substrate.Heap.root_binds_get`) + the
+    /// one-shot Consumed discipline. This test mirrors that rung's `#guard`
+    /// witnesses (leg A locks 100, leg B locks 250) so the Rust is checked against
+    /// the proven statement:
+    ///
+    ///   * `deposit_both_ready` + `deposit_binds_amounts` — both legs deposited ⇒
+    ///     settlement ready at the committed `(100, 250)`;
+    ///   * `replay_rejected` — a settled (consumed) leg is no longer ready, and the
+    ///     consumption MOVES the committed root (`forged_leg_moves_root`);
+    ///   * `consumed_taken_leg_rejected` — a claim against the now-consumed taken
+    ///     leg is refused;
+    ///   * `over_claim_rejected` — claiming 9999 of a leg locking 100 is refused;
+    ///   * `nonconforming_claim_rejected` — a claimant that never deposited a
+    ///     conforming own leg cannot take the counterparty leg.
+    #[test]
+    fn invariant_matches_lean_rung() {
+        let terms = sample_terms();
+
+        // `deposit_both_ready` + `deposit_binds_amounts`: both legs deposited makes
+        // settlement ready, binding the committed (100, 250).
+        let mut cell = escrow_cell();
+        open_escrow(&mut cell, &terms);
+        deposit_leg(&mut cell, &terms, Side::A, &leg_a()).unwrap();
+        deposit_leg(&mut cell, &terms, Side::B, &leg_b()).unwrap();
+        let ready = EscrowState::read(&cell).unwrap();
+        assert_eq!(ready.status(Side::A), LegStatus::Deposited);
+        assert_eq!(ready.status(Side::B), LegStatus::Deposited);
+        assert_eq!(ready.amount(Side::A), 100);
+        assert_eq!(ready.amount(Side::B), 250);
+        assert_eq!(ready.settlement(&terms), Ok((100, 250)));
+
+        // `honest_claim_accepts`: B takes A's leg presenting its own, claiming
+        // exactly the 100 A locked.
+        let honest = Claim {
+            claimant: cid(2),
+            take: Side::A,
+            own_leg: leg_b(),
+            claimed_value: 100,
+        };
+        assert_eq!(ready.check_claim(&terms, &honest), Ok(100));
+
+        // `over_claim_rejected`: claiming 9999 of a leg locking 100 is refused.
+        let over = Claim {
+            claimed_value: 9_999,
+            ..honest.clone()
+        };
+        assert!(matches!(
+            ready.check_claim(&terms, &over),
+            Err(EscrowError::OverClaim {
+                claimed: 9_999,
+                locked: 100
+            })
+        ));
+
+        // `replay_rejected` + `forged_leg_moves_root`: settling consumes both legs,
+        // the escrow is no longer ready, and the consumption MOVED the root.
+        let before = cell.state_commitment();
+        settle(&mut cell, &terms).unwrap();
+        let after = cell.state_commitment();
+        assert_ne!(
+            before, after,
+            "forged_leg_moves_root: settlement moves the root"
+        );
+        let settled = EscrowState::read(&cell).unwrap();
+        assert_eq!(settled.status(Side::A), LegStatus::Consumed);
+        assert_eq!(
+            settled.settlement(&terms),
+            Err(EscrowError::LegAlreadyConsumed(Side::A))
+        );
+
+        // `consumed_taken_leg_rejected`: a claim after settlement fails the one-shot
+        // tooth — both legs are consumed (the own-leg B check trips first).
+        assert_eq!(
+            settled.check_claim(&terms, &honest),
+            Err(EscrowError::LegAlreadyConsumed(Side::B))
+        );
+
+        // `nonconforming_claim_rejected`: only A deposits; B never locks its leg
+        // yet tries to take A's — refused (B's own leg is not deposited).
+        let mut only_a = escrow_cell();
+        open_escrow(&mut only_a, &terms);
+        deposit_leg(&mut only_a, &terms, Side::A, &leg_a()).unwrap();
+        let view = EscrowState::read(&only_a).unwrap();
+        assert_eq!(view.status(Side::B), LegStatus::Empty);
+        assert_eq!(
+            view.check_claim(&terms, &honest),
+            Err(EscrowError::LegNotDeposited(Side::B))
+        );
     }
 }

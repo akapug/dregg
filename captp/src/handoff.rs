@@ -276,10 +276,10 @@ impl HandoffCertificate {
     /// Note: use-count checking requires external state (a nonce registry);
     /// this only checks the expiration.
     pub fn is_valid(&self, current_height: u64) -> bool {
-        if let Some(exp) = self.expires_at {
-            if current_height > exp {
-                return false;
-            }
+        if let Some(exp) = self.expires_at
+            && current_height > exp
+        {
+            return false;
         }
         true
     }

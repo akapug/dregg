@@ -92,9 +92,16 @@
   </div>
 
   <div class="passphrase-section">
-    <div class="section-title">Passphrase (optional)</div>
-    <input type="password" id="passphrase" class="passphrase-input" placeholder="Enter passphrase (leave blank if none was used)">
-    <div class="hint">If you used a passphrase when creating the cipherclerk, enter it here. This also becomes the unlock passphrase.</div>
+    <div class="section-title">BIP39 passphrase (optional)</div>
+    <input type="password" id="bip39Passphrase" class="passphrase-input" placeholder="Leave blank unless you used a BIP39 passphrase">
+    <div class="hint">Only set this if you added a BIP39 "25th word" passphrase when the wallet was created. It changes which keys are derived. Most wallets leave this blank.</div>
+  </div>
+
+  <div class="passphrase-section">
+    <div class="section-title">Wallet passphrase (required)</div>
+    <input type="password" id="walletPassphrase" class="passphrase-input" placeholder="New passphrase to encrypt this wallet (min 8 chars)">
+    <input type="password" id="walletPassphraseConfirm" class="passphrase-input" placeholder="Confirm wallet passphrase" style="margin-top:8px;">
+    <div class="hint">This encrypts the recovered wallet on this device and is what you type to unlock it. It is NOT the same as the BIP39 passphrase. A passphrase is required — the wallet is never left unencrypted.</div>
   </div>
 
   <button id="recoverBtn" disabled>Recover Cipherclerk</button>

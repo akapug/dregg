@@ -9,7 +9,9 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use dregg_cell::CellId;
+use dregg_cell::interface::MethodSig;
 use dregg_cell::program::{CellProgram, StateConstraint, field_from_u64};
+use dregg_payable::{AssetId, InvokeAuthority, InvokeRefused, Payable};
 use dregg_turn::{
     Action, Authorization, CallForest, CommitmentMode, DelegationMode, Effect, PendingTurnRegistry,
     ResolutionCondition, ResolutionOutcome, TokenKeyRef, Turn, TurnError, TurnReceipt,
@@ -30,6 +32,44 @@ pub struct ToolGrant {
     pub deadline: i64,
     /// The executor method verb the worker credential is scoped to.
     pub tool_method: String,
+}
+
+/// Per-call provider price plus the consumer's cumulative spend allowance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Charge {
+    /// The per-call price moved consumer -> provider.
+    pub price: u64,
+    /// The provider cell receiving the payment.
+    pub provider: CellId,
+    /// The consumer's total spend allowance under this mandate.
+    pub budget: u64,
+}
+
+impl Charge {
+    /// A charge of `price` per call, paid to `provider`, capped at `budget` total.
+    pub fn new(price: u64, provider: CellId, budget: u64) -> Self {
+        Self {
+            price,
+            provider,
+            budget,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ConsumerSpendAccount {
+    cell: CellId,
+    asset: AssetId,
+}
+
+impl Payable for ConsumerSpendAccount {
+    fn payable_cell(&self) -> CellId {
+        self.cell
+    }
+
+    fn payable_asset(&self) -> AssetId {
+        self.asset
+    }
 }
 
 /// Byte-faithful mirror of the Lean `delegAdmit g now tool old new` predicate.
@@ -60,6 +100,15 @@ pub enum GatewayRefusal {
     PastDeadline { now: i64, deadline: i64 },
     /// The rate budget is exhausted.
     OverRate { calls_made: i64, rate_limit: i64 },
+    /// The value budget is exhausted.
+    OverBudget {
+        /// The value already spent under this mandate.
+        spent: u64,
+        /// The per-call price that would be charged.
+        price: u64,
+        /// The consumer's total spend allowance.
+        budget: u64,
+    },
 }
 
 impl fmt::Display for GatewayRefusal {
@@ -79,6 +128,14 @@ impl fmt::Display for GatewayRefusal {
             } => write!(
                 f,
                 "tool call over rate: {calls_made} calls already made, mandate grants {rate_limit}"
+            ),
+            GatewayRefusal::OverBudget {
+                spent,
+                price,
+                budget,
+            } => write!(
+                f,
+                "tool call over budget: {spent} already spent + {price} price exceeds the {budget} allowance"
             ),
         }
     }
@@ -113,6 +170,8 @@ pub struct ToolReceipt {
     pub calls_made: i64,
     /// How many calls remain on the mandate.
     pub remaining: i64,
+    /// The value charged for this call; zero for unpriced mandates.
+    pub paid: u64,
 }
 
 /// A delivery witness for a routed tool call.
@@ -192,6 +251,9 @@ impl<E> std::error::Error for ToolCallError<E> where E: std::error::Error + 'sta
 /// A mandated tool gateway wrapping a cap-gated turn acceptor.
 pub struct ToolGateway<A> {
     grant: ToolGrant,
+    charge: Option<Charge>,
+    spent: u64,
+    consumer_asset: AssetId,
     acceptor: A,
     worker_cell: CellId,
     calls_made: i64,
@@ -205,15 +267,30 @@ struct RoutedWork {
     routed_hash: [u8; 32],
     new_count: i64,
     work: Vec<Effect>,
+    charged: u64,
     enqueued_at: i64,
 }
 
 impl<A: GatewayTurnAcceptor> ToolGateway<A> {
     /// Create a gateway around an already-admitted turn acceptor.
     pub fn new(grant: ToolGrant, acceptor: A) -> Self {
+        Self::new_priced(grant, acceptor, [0u8; 32], None)
+    }
+
+    /// Create a gateway around an already-admitted turn acceptor with an optional
+    /// per-call provider charge.
+    pub fn new_priced(
+        grant: ToolGrant,
+        acceptor: A,
+        consumer_asset: AssetId,
+        charge: Option<Charge>,
+    ) -> Self {
         let worker_cell = acceptor.cell_id();
         Self {
             grant,
+            charge,
+            spent: 0,
+            consumer_asset,
             acceptor,
             worker_cell,
             calls_made: 0,
@@ -248,12 +325,74 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
         self.grant.rate_limit - self.calls_made
     }
 
+    /// The optional provider price and consumer budget for a paid mandate.
+    pub fn charge(&self) -> Option<&Charge> {
+        self.charge.as_ref()
+    }
+
+    /// The cumulative value spent under this mandate.
+    pub fn spent(&self) -> u64 {
+        self.spent
+    }
+
+    /// The value budget remaining on the mandate; `None` for an unpriced mandate.
+    pub fn budget_remaining(&self) -> Option<u64> {
+        self.charge
+            .as_ref()
+            .map(|charge| charge.budget.saturating_sub(self.spent))
+    }
+
+    /// The per-call price of this mandate; zero for an unpriced mandate.
+    pub fn price(&self) -> u64 {
+        self.charge.as_ref().map_or(0, |charge| charge.price)
+    }
+
+    /// Resolve this mandate's per-call charge through the canonical Payable path.
+    pub fn charge_invocation(&self) -> Option<Result<(Action, MethodSig), InvokeRefused>> {
+        let (account, charge) = (self.consumer_account()?, self.charge.as_ref()?);
+        Some(account.pay_resolved(charge.price, charge.provider, InvokeAuthority::Signature))
+    }
+
+    fn budget_refusal(&self) -> Option<GatewayRefusal> {
+        let charge = self.charge.as_ref()?;
+        if self.spent + charge.price > charge.budget {
+            Some(GatewayRefusal::OverBudget {
+                spent: self.spent,
+                price: charge.price,
+                budget: charge.budget,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn consumer_account(&self) -> Option<ConsumerSpendAccount> {
+        self.charge.as_ref().map(|_| ConsumerSpendAccount {
+            cell: self.worker_cell,
+            asset: self.consumer_asset,
+        })
+    }
+
+    fn charged_effects(&self, work: Vec<Effect>) -> Result<Vec<Effect>, ToolCallError<A::Error>> {
+        match self.charge_invocation() {
+            Some(Ok((action, _sig))) => {
+                let mut effects = action.effects;
+                effects.extend(work);
+                Ok(effects)
+            }
+            Some(Err(err)) => Err(ToolCallError::Route(format!(
+                "payable charge route refused: {err}"
+            ))),
+            None => Ok(work),
+        }
+    }
+
     /// Admit and submit one inline tool call.
     pub fn invoke(
         &mut self,
         tool: i64,
         now: i64,
-        mut work: Vec<Effect>,
+        work: Vec<Effect>,
     ) -> Result<ToolReceipt, ToolCallError<A::Error>> {
         let old = self.calls_made;
         let new = old + 1;
@@ -262,24 +401,31 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
                 self.diagnose_refusal(tool, now, old),
             ));
         }
+        if let Some(refusal) = self.budget_refusal() {
+            return Err(ToolCallError::Refused(refusal));
+        }
 
-        let mut effects = Vec::with_capacity(work.len() + 1);
+        let charged = self.charged_effects(work)?;
+        let mut effects = Vec::with_capacity(charged.len() + 1);
         effects.push(Effect::SetField {
             cell: self.worker_cell,
             index: CALLS_MADE_SLOT as usize,
             value: field_from_u64(new as u64),
         });
-        effects.append(&mut work);
+        effects.extend(charged);
 
         let receipt = self
             .acceptor
             .accept_turn(&self.grant.tool_method, effects)
             .map_err(ToolCallError::Execution)?;
         self.calls_made = new;
+        let paid = self.price();
+        self.spent += paid;
         Ok(ToolReceipt {
             receipt,
             calls_made: new,
             remaining: self.remaining(),
+            paid,
         })
     }
 
@@ -297,15 +443,21 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
                 self.diagnose_refusal(tool, now, old),
             ));
         }
+        if let Some(refusal) = self.budget_refusal() {
+            return Err(ToolCallError::Refused(refusal));
+        }
 
+        let charged_work = self.charged_effects(work.clone())?;
         self.calls_made = new;
-        let mut effects = Vec::with_capacity(work.len() + 1);
+        let charged = self.price();
+        self.spent += charged;
+        let mut effects = Vec::with_capacity(charged_work.len() + 1);
         effects.push(Effect::SetField {
             cell: self.worker_cell,
             index: CALLS_MADE_SLOT as usize,
             value: field_from_u64(new as u64),
         });
-        effects.extend(work.iter().cloned());
+        effects.extend(charged_work);
         let routed_turn =
             self.acceptor
                 .build_routed_turn(&self.grant.tool_method, new as u64, effects);
@@ -321,6 +473,7 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
             routed_hash,
             new_count: new,
             work,
+            charged,
             enqueued_at: now,
         });
 
@@ -337,13 +490,33 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
         while let Some(item) = self.inbox.pop_front() {
             drained.push(item.routed_hash);
 
-            let mut effects = Vec::with_capacity(item.work.len() + 1);
+            let charged_work = match self.charged_effects(item.work.clone()) {
+                Ok(charged) => charged,
+                Err(err) => {
+                    if self.calls_made == item.new_count {
+                        self.calls_made = item.new_count - 1;
+                    }
+                    self.spent = self.spent.saturating_sub(item.charged);
+                    let reason = format!("routed charge route refused: {err}");
+                    let _events = self.pending.resolve(
+                        item.routed_hash,
+                        ResolutionOutcome::Broken(BrokenReason::TurnRejected(
+                            TurnError::PreconditionFailed {
+                                description: reason.clone(),
+                            },
+                        )),
+                    );
+                    self.results.insert(item.routed_hash, Err(reason));
+                    continue;
+                }
+            };
+            let mut effects = Vec::with_capacity(charged_work.len() + 1);
             effects.push(Effect::SetField {
                 cell: self.worker_cell,
                 index: CALLS_MADE_SLOT as usize,
                 value: field_from_u64(item.new_count as u64),
             });
-            effects.extend(item.work.iter().cloned());
+            effects.extend(charged_work);
 
             match self.acceptor.accept_turn(&self.grant.tool_method, effects) {
                 Ok(receipt) => {
@@ -351,6 +524,7 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
                         receipt,
                         calls_made: item.new_count,
                         remaining: self.grant.rate_limit - item.new_count,
+                        paid: item.charged,
                     };
                     let delivery = DeliveryReceipt {
                         routed_hash: item.routed_hash,
@@ -374,6 +548,7 @@ impl<A: GatewayTurnAcceptor> ToolGateway<A> {
                     if self.calls_made == item.new_count {
                         self.calls_made = item.new_count - 1;
                     }
+                    self.spent = self.spent.saturating_sub(item.charged);
                     let reason = format!("routed execution rejected: {e}");
                     let _events = self.pending.resolve(
                         item.routed_hash,

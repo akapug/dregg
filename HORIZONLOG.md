@@ -8,7 +8,256 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## NOW-STATE addition (2026-07-02, Fable — DreggNet-native redesign: 3 substrate work-items)
+- DreggNet is being rebuilt into a dregg APPLICATION (spec `~/dev/DreggNet/docs/DREGGNET-NATIVE-REDESIGN.md`).
+  One project, no repo border — most of it is deleting DreggNet shadow and calling existing dregg libs. Three pieces
+  are genuine SUBSTRATE additions in the dregg core (cell/, metatheory/, circuit/); logged here because they're real
+  forward work (do them when the redesign reaches them; only merge-hygiene care re: files a live session is editing):
+  - P1: a FUSED "budget-escrow + meter" lease capacity. The lease cell is today both obligor AND payer; escrow_sealed
+    (hold/release) + obligation_standing (recurring draw) exist separately, no single capacity holds a prepaid budget
+    in escrow and draws the per-period obligation from it with a conservation proof. A PrepaidLease/BudgetEscrow
+    house-capacity welding them (Lean rung, house-capacity 5-part shape) is the clean form.
+  - P2: a umem WORKLOAD RUNTIME — weld DreggNet's owned wasmi engine to the EXEC_COLL heap image so a checkpoint
+    reflects real computation, not a provider digest (execution-lease `lib.rs:45-58` honest gap). NB: this is the
+    WITNESSED-checkpoint half; customer durable-workflow execution stays on duroxide (that layer is the product, keep).
+  - P3: promote SettleEscrow/DischargeObligation/VaultDeposit welds (tags 17/18/19) from STAGED (off-AIR public inputs,
+    VK unchanged) INTO the recursive AIR (VK bump) — re-executor-checked vs folded-proof-witnessed. Overlaps the live
+    circuit/VK session; sequence around it. Design notes: `docs/deos/{SETTLE-ESCROW,DISCHARGE-OBLIGATION,VAULT-DEPOSIT}-WELD-DESIGN.md`.
+
+## NOW-STATE addition (2026-07-02, Fable — PR #23 coordination note for the VK lane)
+- ALIF'S PR #23 (dregg, `feat/stripe-kernel-attested`) RIDES THE BIG-BANG REGEN — named here so the
+  descriptor-regen driver batches it: the mintV3 bridge-tuple PI widening (46→72, `bridgeTuplePiExposure`,
+  `EffectVmEmitRotationV3.lean`) is Lean-widened but registry-UNREGENERATED. Its only merge conflicts vs
+  main are the 4 Lean-EMITTED artifacts (3 staged registry TSVs + `effect_vm_descriptors.rs`) — resolve by
+  REGENERATION after merging the Lean sides (never hand-merge), i.e. fold into the ONE shared universal-fold
+  descriptor regen. Same-landing follow-up: `proof_verify.rs` must reconstruct PI [46..72) from
+  `apply_bridge_mint` (Fiat-Shamir consistency; flagged in the PR body). The DECO/zkTLS Lean modules
+  (`Crypto/Deco.lean` + `Verify/Stripe*`) auto-merge clean + are assert_axioms-clean per the PR. e2e pole:
+  `circuit-prove/tests/bridge_mint_deployed_tooth.rs` (`--ignored`).
+
 ## NOW-STATE (late-2026-06-25 cluster — lanes that landed AFTER the entries below, recorded here for durability)
+- G1 BRIDGE FOREIGN-PROOF BINDING — residual NAMED + scoped (2026-06-29). Catalog `docs/UNDER-WIRED-circuit.md`
+  G1: a pure light client sees a `BridgeMint` balance credit (in the deployed per-turn VK) but NOT the
+  backing — the foreign note-spend STARK verify + nullifier consume-once are EXECUTOR/committed-state-side
+  (the `EffectVmEmitBridgeMint` HONEST BOUNDARY). This pass: (a) the concurrent-relayer DOUBLE-MINT hole is
+  CONFIRMED CLOSED in committed state (`turn/src/executor/bridge_ledger.rs::bridge_mint_against_lock` +
+  committed `lock_nullifier` consume-once; green `bridge/tests/committed_double_mint.rs`, 4 tests); (b) the
+  `BRIDGE-ARCHITECTURE-SOUNDNESS.md:40` overclaim ("IS in-circuit and nullifier-gated") + the stale §3
+  ("can double-mint … separate follow-up") are CORRECTED + a §4 weld plan added. NOT closed (the genuine
+  residual, deliberately NOT force-landed from thin context — it is a VK epoch, cf. memory be-thoughtful):
+  CLOSURE = (1) stage a `bridge_action_air`-style full-fidelity boundary additively beside
+  `mintVmDescriptor2R24` (umem/capacity staging pattern), prove teeth; (2) the gated VK epoch flip
+  (descriptor + Lean `EffectVmEmitBridgeMint`/`mintV3` + wide twin + producer + re-verify
+  `lightclient_unfoolable`) → parameter-binding becomes a pure-LC truth; (3) recursive foreign-spend verify
+  (G2-shaped `proofBind` flip + 4→8-felt lift) for backing-existence + surface the nullifier consume into
+  the per-turn commitment. The binding AIR + 18 green teeth (`circuit/src/bridge_action_air.rs`) + Lean
+  `Crypto/Bridge.lean` (`#assert_axioms`-clean) already exist; only the fold is missing.
+  UPDATE (2026-06-30, G1 refute+assess pass): the vacuity is now LEAN-EXPLICIT —
+  `metatheory/Dregg2/Circuit/BridgeBackingAttack.lean` (`#assert_axioms`-clean, the G1 analog of
+  `CustomCarrierAttack`): `deployed_admits_unbacked_bridge` = a bridge-mint row SATISFYING the deployed
+  descriptor's row intent (credit `value_lo` + frame freeze + nonce tick) whose published `mint_hash`
+  (`prmCol 0`) is backed by NO verifying foreign spend; `deployed_intent_does_not_force_backing` = no
+  uniform "deployed-accepts ⟹ backed"; `deployed_admits_consumed_nullifier` = the consume-once guard is a
+  RE-EXEC tooth, not a light-client one. KEY ASSESSMENT (corrects the naive "expose the raw
+  nullifier/recipient/dest_fed/amount limbs as PIs" framing): the deployed `mintV3` row carries the backing
+  ONLY as the single `mint_hash` digest (param0, binds nullifier/root/dest_fed/asset_type) + `value_lo`
+  (param1) — there are NO raw-limb columns to expose (unlike custom's commit/vk columns). So the
+  parameter-binding is NOT a pure expose-existing-columns move; it is the ADDITIVE full-fidelity boundary
+  (the bridge_action_air 26-PI binding staged beside the deployed mint), exactly as CLOSURE (1) above. A
+  TWO-fold gap blocks a naive `mint_hash`-PI connect: (i) REPRESENTATION — deployed = one digest, leaf
+  (`circuit-prove/src/bridge_leaf_adapter.rs::prove_bridge_leaf`, already built + forged-reject tooth) = 26
+  raw limbs; (ii) TUPLE — `mint_hash` binds {nullifier,root,dest_fed,asset_type}; `bridge_action_air` binds
+  {nullifier,recipient,dest_fed,amount}. Backing-existence SHARES the sibling custom chain-prover restructure
+  (`prove_custom_binding_node` → `prove_chain_core_rotated`, the connect-tooth primitive); the bridge fold is
+  its analog over the bridge leaf. NOT force-landed: a premature `mint_hash`-PI exposure would move the
+  deployed VK (3 registry TSVs + sha256 pins + light-client-binding VK fingerprints + parity) without yet
+  buying a working connect — so the VK move waits for the additive-boundary + fold to land together.
+- LIVE EPOCH TRANSITION WIRED (2026-06-29) — validator add/remove/rotate is now a LIVE on-chain op on the running
+  blocklace consensus, not a genesis re-roll. `node/src/finalization_votes.rs::VoteCollector::reconfigure` +
+  `node/src/blocklace_sync.rs::{apply_passed_proposal→apply_committee_change, propose_membership}` advance the live
+  finalization committee + threshold + gossip-mesh admission when a membership change finalizes through the
+  EXISTING quorum-gated constitution path (gate proven by `MembershipSafety.lean`; spec twin
+  `EpochReconfig.lean::epoch_handoff_no_gap`). CLI `dregg-node propose-epoch-transition --add/--remove/--rotate`
+  + node API `POST /epoch/propose-transition`. Chain (blocklace + cell state) carries across; `federation_id`
+  UNCHANGED (the stable chain root the bot/bridge pin — no re-point). Tests: `finalization_votes` reconfigure unit
+  tests + `node/src/epoch_transition_e2e.rs` (multi-node add/remove/safety, chain continues).
+  NAMED RESIDUALS (the honest tail — each a real seam, not shipped-as-done):
+    (1) RECEIPT/ATTESTED-ROOT committee + `committee_epoch`/`chain_id` separation: `federation_id`/`committee_epoch`/
+        `known_federation_keys` are atomically coupled via the F1 receipt-verify invariant
+        `federation_id == derive(known_keys, committee_epoch)`, and `federation_id` is pinned by discord-bot,
+        Midnight bridge, and the executor signing domain. Advancing the RECEIPT identity live needs a stable
+        `chain_id` (genesis root) that those consumers pin instead — which touches the off-limits bot/bridge lanes.
+        Until then the federation-RECEIPT/attested-root quorum still attests under the GENESIS committee identity
+        (the consensus/finality committee DOES advance live; the receipt-identity does not). Closure: introduce
+        `chain_id` in genesis+state, migrate bot/bridge/executor pins, then let `committee_epoch` advance with the
+        committee. (CONSENSUS layer = done; RECEIPT-IDENTITY layer = this residual.)
+    (2) LIGHT-CLIENT in-circuit membership-evolution witness: a light client following the chain verifies the
+        committee evolution today by replaying the finalized membership blocks (each ratified by the prior
+        committee's quorum — the ARGUS correct-evolution property at the consensus layer). Binding that evolution
+        INTO the EffectVM/VK so a pure light client (not a re-executing validator) witnesses the validator-set
+        sequence is a VK-affecting circuit weld — the named circuit residual (cf. HOUSE-CAPACITIES-WELD-PLAN shape).
+    (3) CONSTITUTION restart-persistence: the evolved committee is reconstructed by blocklace replay of the
+        finalized membership blocks; a node restart rebuilds the constitution from the genesis committee and
+        re-applies via replay only if those membership blocks are re-served (cursor-gated). Pre-existing; verify the
+        membership blocks survive the execution-cursor on restart, else the evolved committee resets to genesis.
+    (4) removed-validator gossip-key deregistration (`apply_committee_change` leaves it registered — harmless:
+        non-participant, votes rejected) — optional tidy.
+- AGENT-COORDINATION LIVE (2026-06-29) — the `/coordinate` promise-pipeline now drives a REAL atomic settle on a live node.
+  `discord-bot/src/coordinate_flow.rs::settle_round_live` translates a round's settled value moves into ONE signed conserving
+  turn (the `/send` rail); `discord-bot/src/commands/coordinate.rs` wires it (real hosted cells, faucet, `fail:true` rollback);
+  `discord-bot/src/bin/coordinate_live.rs` is the reproducible proof (RUN green vs a fresh recovered node: producer received
+  exactly the quoted price, turn landed as chain head, broken-promise variant left the ledger untouched). Doc:
+  `docs/COORDINATE-LIVE-DEMO.md`. NAMED GATE (the one honest remainder): N-party rings where SEVERAL agents each move value need
+  >1 signer in one atomic turn — `settle_round_live` returns `LiveSettleError::MultiPayer` rather than pretend; the live surface
+  is the node's multi-party atomic proposal (`/turn/atomic`), not yet driven. The off-chain coordinator already proves the
+  N-party ring; only the multi-signer on-chain settle is the gate.
+- GENTIAN FULCRUM — escrow welded descriptor GRADUATED to a WIDE member (2026-06-28). `metatheory/Dregg2/Deos/SettleEscrowSatWideDescriptor.lean`
+  (`#assert_all_clean`, 9 keystones, lake green, wired into `Dregg2.Deos`): `settleEscrowSatVmDescriptor2R24Wide = wideAppend (graduateV1
+  (rotateV3 settle-base)) bb (bb+51)` + the four satisfaction gates + the selector PI pin (piCount 63 = 46 rotated + 16 wide anchors +
+  selector at PI 62). The V3 refinement (`settleEscrowWide_forces_settle_gate`) + partial/phantom UNSAT teeth carry verbatim over the
+  wide form; the GRADUATION keystone (`beforeFieldCol_absorbed`/`afterFieldCol_absorbed`) proves the satisfaction-gate field columns
+  `bb+4+k`/`bb+51+4+k` (k≤7) lie INSIDE the 37 pre-iroot limbs the wide carriers absorb into the published 8-felt commit (`bb =
+  EFFECT_VM_WIDTH`, `rfl`) — so via the deployed `rotV3Wide_binds_published` a PURE light client binding the wide commit binds those
+  columns. CLOSES §6 BLOCKER-1 sub-gap (1) ("1-felt V3, columns not absorbed") at the PROOF level. STAGED — no producer, no committed
+  VK, no live routing, FLIP NOT taken. NAMED REMAINING (the precise flip distance): (a) a satisfying WIDE producer + full STARK
+  prove/verify against a committed VK; (b) the IN-AIR `B_AUTHORITY_DIGEST`→selector forcing (§6 item 2) — recompute the authority digest
+  over the witnessed declaration in-AIR + decode the required-tag floor + FORCE sel=1; this is a Poseidon2-preimage-and-decode gadget and
+  is the TERMINAL blocker to a SOUND pure-light-client flip (without it a forger dodges by sel=0 or by routing through the bare wide
+  transfer descriptor — a pure light client has only the commit, not the declaration preimage); (c) commit the welded VK + admit it on
+  the live `verify_effect_vm_rotated_with_cutover` path as the default. Doc: `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6 BLOCKER 1.
+- GENTIAN carrier-bound-floor — the `hcommitLimb` discharge, and the CORRECTED flip distance (2026-06-29, post `cfb66c37f`).
+  `metatheory/Dregg2/Deos/CarrierBoundFloorGadget.lean` (`#assert_all_clean`, 12 keystones, lake green) decodes the required-tag
+  floor from the caveat-manifest TYPE-TAG columns and forces the selector; `gentian_selector_forced_carrier`/`_settle_forced_carrier`
+  hold with `hcommitLimb` DISCHARGED — but the discharge is CONDITIONAL on the HYPOTHESIS `hbind` (caveatCommit(gadgetManifest row) =
+  caveatCommit(committedManifest)), and the rung's `gadgetManifest` reads FREE HEADROOM columns (`CARRIER_BASE = EFFECT_VM_WIDTH+200 =
+  388`, tags 389/396/403/410), NOT the deployed caveat-commit-bound columns 291/298/305/312. The Rust shadow
+  `circuit/src/effect_vm/carrier_floor_weld.rs` (13 gates, eval tests) decodes from the DEPLOYED columns (291/…) — so the Lean emit
+  source and the Rust shadow describe DIFFERENT descriptors; the Rust column choice is the sound one. `caveatCommit_binds` is a
+  pure-fn lever; the actual caveat→PI-45 binding lives as Poseidon CHIP LOOKUPS in the deployed cohort members, NOT as appendable
+  arithmetic gates — and `settleEscrowSatVmDescriptor2R24Wide` carries NO caveat carrier (grep-confirmed). So the emitted
+  `gentianCarrierDescriptor` (= wide settle + 13 gates) decodes from UNBOUND headroom: as-emitted, the forged-floor tooth would NOT
+  bite in a real STARK (a forger fills headroom with a no-escrow tag → floor=0 → selector free → forged settle proves). The "binding
+  gap closed" is true as a CONDITIONAL Lean theorem, NOT as an emit-realized deployed fact. CORRECTED REMAINING (the real flip
+  distance): (a) REALIZE `hbind` in the artifact — base the carrier descriptor on a deployed cohort member (or the NARROW
+  `settleEscrowSatVmDescriptor2R24`, which DOES carry the deployed caveat carrier + a genuine caveatCommit→PI 45 via its real
+  producer `generate_rotated_settle_escrow_trace`) and decode from cols 291/…, so the binding tooth bites via the PI-45 commit; (b)
+  THE BARE-DESCRIPTOR DODGE — there is NO `SettleEscrow` Effect variant; `SettleEscrow` is a `dregg_cell::StateConstraint` checked in
+  `turn/src/executor/mod.rs:371/593`, so escrow settlement rides a NORMAL effect whose honest proof verifies under the BARE wide
+  descriptor. A pure light client (no opt-in) cannot reject a forged settle routed through the bare descriptor UNLESS the decode+force
+  gates live on EVERY deployed normal wide member — a registry-wide VK FLAG-DAY (every fingerprint changes + every producer fills the
+  decode aux + every gauntlet re-proves + Lean apex re-verifies). This is the genuine VK epoch, not a one-descriptor delta. The
+  deployed-staged OPT-IN path `verify_full_turn_bound_with_escrow_weld` (re-derives `required_tags` from the committed declaration) is
+  sound TODAY for verifiers holding the declaration; the PURE-LC upgrade is what (a)+(b) gate. SettleEscrow is NOT a deployed
+  pure-light-client truth; the flip was NOT taken (it would be unsound). EMPIRICAL (2026-06-29, real STARK, `--release`, 4 green tests
+  `circuit/tests/gentian_carrier_floor_prove.rs`): welding `carrier_floor_gates()` onto the NARROW `settleEscrowSatVmDescriptor2R24`
+  the teeth do NOT bite as shaped — a THIRD, deeper blocker (c) ROW-LOCALITY. (i) `satisfaction_weld` makes `ESCROW_SEL_COL`
+  producer-controlled, =1 only on the settle row / =0 on carry-forward padding rows; `carrier_floor_weld`'s selector-force gate is
+  EVERY-ROW and decodes FLOOR from the uniformly-`fill_caveat`'d type-tag columns → forces sel=1 on every row → on a carry-forward
+  padding row (status `Consumed`, continuity `next.before==local.after`) sel=0 makes the carrier bite and sel=1 makes the base
+  satisfaction gate bite → the honest escrow-declared settle is UNSATISFIABLE (no verifying proof; `OodEvaluationMismatch`), so the
+  forged sel=0/partial/phantom teeth have no baseline to bite against. (ii) DECOUPLING: the committed caveat PI 45 is pinned to the
+  LAST row while the decode gates are EVERY-ROW with no cross-row caveat-uniformity gate, so the floor decode is decoupled from the
+  committed caveat (a prover could light the decode on the settle row while committing a no-escrow manifest to PI 45). The only
+  in-proof-SOUND direction confirmed: no-escrow ⇒ selector inert ⇒ proves+verifies (181 KiB BatchProof, the no-false-reject control).
+  No column collision (`GRAD_ROT_WIDTH` is actually 609, stale comment says 608; aux cols 609..619 sit above the chip lanes). The
+  single-row Lean rung (`envAt t i`, a non-last row) never modeled the multi-row carry-forward interaction NOR the last-row PI binding
+  — that is the gap. FIX OPTIONS for a biteable tooth (any one): gate the carrier decode by the settle-row-only capacity selector so
+  it is inert on carry-forward rows; force the caveat manifest uniform across rows in-AIR; or read the decode from the same LAST row
+  PI 45 binds. So the carrier flip distance is now (a) realize `hbind` over bound cols + (b) the bare-descriptor flag-day + (c) fix
+  the row-locality so an escrow-declared settle is satisfiable AND the decode is coupled to the committed caveat.
+- CAPACITY-SATISFACTION tags 18/19 (Piece 2 of the constraint-binding VK epoch) — SATISFACTION SOUNDNESS RUNGS LANDED STAGED,
+  the VK FLIP **NOT** taken (left staged, default unflipped — 2026-06-28). `metatheory/Dregg2/Deos/CapacitySatisfaction.lean` now
+  carries the discharge (tag 18) + vault (tag 19) field-column satisfaction keystones beside escrow's: `discharge_satisfaction_witnessed`
+  / `vault_satisfaction_witnessed` (equal before/after state commits ⟹ same FULL gate verdict, inequalities included; REUSE of
+  `fieldAt_bound_in_commit`) + their teeth (no-early/no-wrong-amount/no-non-advanced; inflation/dilution/no-deposit) +
+  `{discharge,vault}_capacity_witnessed_pure_lightclient` (coverage ∧ satisfaction). `#assert_all_clean`, 16 keystones, lake green.
+  **WHY THE FLIP WAS NOT TAKEN (two independent, VERIFIED blockers — honesty over a green-looking-but-wrong flip):**
+  (1) MACHINERY ABSENT even for the proven escrow template — there is NO welded `EffectVmDescriptor` emit keystone, NO capacity
+  selector column filled by a producer (`satisfaction_weld.rs` uses a placeholder `SEL=320`), NO registry/VK commitment, NO
+  prover dispatch, and NO live capacity-caveat-bearing proving path (no deployed cell declares a capacity caveat). Building +
+  validating this is umem-flip-scale (`da0c47dd6` was "the 13th attempt").
+  (2) tags 18/19 are NOT a mirror of escrow's pure-EQUALITY gate: discharge carries a due-ness INEQUALITY (`due_block ≤ clock`)
+  needing a range-check aux column; vault is ENTIRELY inequalities including a PRODUCT (`Tb·m ≤ Sb·d`) that overflows the ~31-bit
+  BabyBear field (off-AIR uses u128) — needing overflow-safe multi-limb comparison. An equality-only weld would DROP the
+  early-discharge / inflation-attack / dilution disciplines from the light-client witness and ACCEPT FORGERIES if flipped.
+  NAMED REMAINING (the genuinely-VK-affecting tail): build the welded descriptor emit + selector + producer + VK + routing
+  (escrow first, the proven template), THEN the range-checked/product in-AIR gates for 18/19, THEN flip. SATISFACTION is NOT
+  light-client-witnessed in production. Doc: `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6.
+- CAPACITY-CARRIER (Piece 1 of the constraint-binding VK epoch) — LANDED STAGED, NOT VK-affecting (2026-06-27). The capacity
+  manifest (tags 17/18/19) now rides the AIR-bound rotated caveat carrier (`caveatCommit` → PI 45, already in the deployed
+  R=24 cohort VK), not just the unbound off-AIR v1 PI leg. Lean `metatheory/Dregg2/Deos/CapacityCarrier.lean` (`#assert_all_clean`,
+  5 keystones): `carrier_omission_impossible` upgrades the soundness core from "verifier HOLDS the manifest opening" to a PURE
+  light client binding PI 45 (the manifest it checks IS forced, by `caveatCommit_binds`); `carrier_omission_caught_pure_lightclient`
+  composes both bindings (caveat commit + `DeclCommitBinds`). Circuit: `slot_caveats_to_rotated_manifest` (`trace_rotated.rs`) +
+  `verify_rotated_caveat_coverage` (`verify.rs`) + 7 tests (`circuit/tests/capacity_carrier.rs`). HONEST FINDING: the carrier
+  binding was ALREADY deployed → porting the manifest onto it is data-not-VK (corrects the design doc's §4 over-statement).
+  NAMED REMAINING (the genuinely-VK-affecting tail, now narrower): (1) in-AIR gate-satisfaction weld (capacity gate slot reads ↔
+  rotated state blocks); (2) in-AIR coverage-forcing from the r23 `B_AUTHORITY_DIGEST` (removes the caller-asserted `required_tags`);
+  (3) the lockstep flip (route the live verify through the rotated leg). Doc: `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §5–§6.
+- TEMPORAL ALGEBRA NOW WRITABLE (STAGED) — the proven-but-unwired register-reading temporal atoms became deployable caveats
+  (2026-06-26). `StateConstraint::{RateBound, CooledSince, UntilEvent, SinceEvent, ChallengeWindow}` (`cell/src/program/types.rs`)
+  honor the discharged Lean semantics (`temporalStateStepGuarded`/`temporalAtomsAdmit`, `TemporalAlgebra{,2}.lean`): rate < k,
+  P-until-Y (U), since-the-event (S), cooled-since, optimistic challenge window — each reads the committed PRE-state register.
+  Executor-enforced (`cell/src/program/eval.rs` scalar evaluator) + circuit-witnessed (Effect-VM slot-caveat manifest, new tags
+  13–16 in `circuit/src/effect_vm/{pi,verify}.rs`; projection in `turn/src/executor/mod.rs`). Teeth bite both polarities,
+  mirroring the Lean `#guard`s (`cell/src/program/tests.rs`, `circuit/tests/state_constraint_air_teeth.rs`). NAMED FOLLOW-UP =
+  **the temporal-caveat verifier epoch** (the deploy flip): the manifest rides public inputs + an off-AIR verifier re-eval, so
+  the VK bytes are unchanged, but old verifiers reject the new tags as `unknown type_tag` → all verifiers upgrade in lockstep.
+  No existing cell declares the variants, so the deployed default is UNCHANGED (staged, not flipped). Closure = coordinate the
+  lockstep verifier rollout with the other staged VK/verifier epochs. Doc: `docs/deos/TEMPORAL-LOGIC-STATUS.md` §3.
+- FRI-VERIFIER PROOF-ENGINEERING — milestone 1 LANDED (2026-06-26). The deployed batch-STARK FRI verifier gets a LEAN SPEC
+  so the gnark/BN254 ETH-wrap (`chain/gnark/fri_verifier.go`, `docs/deos/ETH-NATIVE-WRAP.md`) becomes a LEAN-DERIVED circuit
+  proven to REFINE it — turning the wrap's load-bearing unknown (bit-exact Fiat-Shamir transcript fidelity / silent soundness
+  break) into a refinement THEOREM. CENSUS finding: the existing apex models the verifier as an OPAQUE verdict
+  (`CircuitSoundness.verifyBatch` + `StarkSound`/`RecursiveAggregation.verify`); NO Lean spec of the verifier ALGORITHM
+  existed — only the soundness carrier. NEW `metatheory/Dregg2/Circuit/FriVerifier.lean` (727 lines, sorry-free, axiom-clean,
+  wired into `Dregg2.lean`) + `docs/deos/FRI-VERIFIER-PROOF-ENGINEERING.md`. LANDED: the `Challenger` transcript model
+  (byte-faithful DuplexChallenger-w16, pinned against p3-challenger's OWN reference vectors via `#guard` — cross-impl
+  fidelity), the CONCRETE FRI query core (`merkleRecompute` + `merkleRecompute_binds` anti-forgery tooth under Poseidon2-CR +
+  `friChainGo` fold-chain + `concreteFriChecks` with TRANSCRIPT-BOUND query positions), the count-binding integration
+  (`deriveQueryIndices_length` + `verifyAlgo_concrete_rejects_wrong_query_count` — numQueries is enforced by the transcript),
+  and the payoff `wrap_sound` (gnark refines verifyAlgo + FRI carrier ⟹ gnark accept ⟹ ∃ genuine transition; axiom-free).
+  NAMED REMAINING (the burn-down): (1) `batchTables`/`queryPow` FriChecks fields — the per-table quotient + logup interaction
+  bus + the four NPO tables (Poseidon2-w16/w24/recompose/expose_claim) + grinding PoW, still explicit record fields to be
+  specified. (2) Poseidon2-w16 round-constant instantiation in Lean for a REAL BabyBear transcript fixture (today's fidelity
+  is the reverse-perm reference vectors). (3) the `verifyAlgo → StarkSound` bridge (compose into the existing light-client
+  apex). (4) the gnark-side discharge (implement the challenger/merkle/fold gadgets, fixture-anchored accept/reject agreement).
+  Closure shape: each is a specify-and-prove lane over the landed skeleton; the FRI low-degree soundness stays a NAMED TERMINAL
+  CARRIER (`FriLowDegreeSound`, like StarkSound) — NOT re-derived.
+- CI-GREEN GRIND (2026-06-26). Drove the workspace toward green after the wide-registry/umem churn. LANDED (committed):
+  (1) `circuit/src/dsl/garbled.rs` — the DSL garbled prover/verifier pushed a 16-felt PI vector (`as_slice()` over the
+  now-8-felt WideHash ×2) while the descriptor reuses the deprecated 4-felt GarbledEvaluationAir columns + expects 8 PIs;
+  the overlap broke the boundary PiBinding on EVERY true proof (`output_only_disclosure_via_proof`). Push only the first 4
+  felts of each hash; the full 8-felt bind stays at the struct-equality level (e8f5016a3 fallout). (2)
+  `sdk/src/full_turn_proof.rs` — 8 cap-WRITE/attenuate `_proves_and_verifies_light_client` tests proved the obsolete narrow
+  1-felt leg (now tooth-rejected because the key has a wide twin); routed them onto the deployed WIDE leg (`go_wide=true` +
+  `cap_open_wide_vk_hash_by_key`), mirroring production. (3) `starbridge-v2/src/cockpit/frame.rs` + `deos-js/src/layout_card.rs`
+  — `Tab::ServiceExplorer` was orphaned (in `Tab::ALL`=31 but no mode's `surfaces()`=30); homed under OPERATE in both the
+  hardcoded map and the mirrored `cockpit_default`, fixing the partition invariants. NAMED RESIDUAL RED (follow-up):
+  • `cap_write_revoke_proves_and_verifies_light_client` — the WIDE `revokeDelegationWriteCapOpen` leg (DELEG-tree REMOVE) is
+  UNSATISFIABLE (failed constraint #70 at row 0), unlike Update-on-deleg (refresh) + Remove-on-cap-tree (revokeCapability)
+  which prove wide; red on BOTH routes (narrow is tooth-rejected) → needs the wide DELEG-REMOVE carrier fix.
+  • `lightclient::vk_anchor_is_circuit_shape_not_history_content` — the documented IVC running-VK 2-step transient (depth-2
+  fold VK still content-varying; fork-gated, see the IVC entry below). • `node::producer_mode_cell_unseal_commits_lean_state_matching_rust`
+  — the Lean executor REJECTS a CellUnseal that Rust commits (Rust↔Lean divergence, lean-gated so it skips when lean is
+  unlinked; WIP swap-migration smoke 13/56, c8539c296) → kernel-equivalence alignment. • TEST-MODE NOTE: the negative
+  soundness arms `cap_open_transfer_leg_*` / `cap_open_fanout_revoke_*` rely on DEBUG-mode panics (catch_unwind over an
+  unsatisfiable prove) → they PASS in debug, FAIL in `--release`; the sdk suite is not blanket-release-runnable.
+  GREEN now: lake (4259), `cargo build --workspace`, wide_registry_parses_and_is_name_stable (the umem-flip gate), turn/cell/
+  app-framework/circuit/circuit-prove/sdk(−1)/node(−1)/android-cell/doc/pg-dregg/starbridge-v2-lib/deos-js-layout.
+- DREGG-QUERY WIRED LIVE (2026-06-26). The mature attested-read engine is now DEPLOYED into the node: the two handlers
+  `/api/receipts/index/{root,range}` (`node/src/api.rs` `get_receipt_index_root`/`get_receipt_index_range`) serve real
+  attested slices over an incrementally-maintained MMR (`NodeStateInner::receipt_index` + `sync_receipt_index`, lazily synced
+  off the read path — ADDITIVE, never gates commit). Effect enrichment: `CommittedEvent` carries typed
+  `dregg_query::EffectSummary` (`node/src/state.rs`), populated at the submit-turn commit path via `summarize_turn_effects`
+  (from/to/asset/amount + post-state balances) so the live log yields `transfer`/`balance`/`granted` facts. Proven green by
+  `live_receipt_index_serves_verifying_attested_answer_and_teeth_bite` (api.rs tests): a real turn → typed fact → AttestedAnswer
+  over the LIVE log verifies, and the non-omission teeth bite (substituted leaf + dropped position both reject).
+  NAMED RESIDUAL — THE TRUST ANCHOR: the served root is blake3 (arity-separated domains), NOT the model's in-circuit Poseidon2.
+  Binding the MMR root into `recStateCommit` as its last sponge limb (`CommitBindsMMR`, `Dregg2/Lightclient/MMR.lean` §6) is
+  THE ROTATION's job — until then the root is an out-of-band trust anchor (the verifier takes it as a parameter, so the swap is
+  caller-side only). Also: enrichment populates only at the main submit-turn path + within the 1000-entry event-log window
+  (`MAX_EVENT_LOG`); receipts beyond it still carry certified identity, just no typed facts.
 - ZED/HERMES INTEGRATION ASSESS + STRUCTURE-PANE LANDED (2026-06-25). Honest assessment: the confined-Hermes seam is
   genuinely tight (ToolGateway-gated, metered, receipted dregg turns on the verified executor; tool side-effects ride the
   turn via `tool_effects`; per-tool/per-kind grants; live mandate inspector; real ndjson ACP transport + live `hermes-acp`
@@ -136,6 +385,36 @@ reason.)*
   memory-reconciliation property — it rides the effect's rotated AIR gates (the weld preserves them), same division
   as single-domain. No deeper wall. STAGED beside the deployed + single-domain registries; the VK epoch is the only
   remaining flip.
+- DOMAIN-2 (capability) WIDE CAP-OPEN+UMEM WELD (STAGED / VK-RISK-FREE) — the 7th flip-refusal's wall CLOSED: the
+  value-cohort weld (`prove_wide_umem_welded_staged`) resolves the PLAIN wide descriptor for a cap effect, which the
+  light-client wire FORBIDS (`is_forbidden_plain_cap_descriptor` — a cap proven without the membership crown launders
+  host-trusted authority). The 7th refusal's `OodEvaluationMismatch` was a SEPARATE witness inconsistency (a spurious
+  Heap-domain nonce op made the projection diff multi-domain). NEW `prove_cap_open_umem_welded_staged` (sdk
+  `full_turn_proof.rs`, sharing the extracted `build_effect_vm_cap_open_leg`) welds the umem CAPS leg (domain 2) onto the
+  WIDE CAP-OPEN descriptor (the membership crown the wire demands) — a real `AttenuateCapability` proves + self-verifies +
+  VERIFIES THROUGH the deployed wire `verify_effect_vm_rotated_with_cutover` under the Lean-emitted welded twin
+  `attenuateCapOpenEffVmDescriptor2R24` (domain 2) in `WIDE_UMEM_WELD_REGISTRY_TSV`. Gauntlet `wide_umem_weld_domain2_gauntlet.rs`
+  4/4 (mint+wire-verify · 8-felt tooth · vk_hash tooth · umem caps anti-forge · caps-domain guard · the plain-cap-weld
+  WIRE-rejection that demonstrates the wall). The 13 sibling domain-2 members share the cap-root-weld shape — the sweep is
+  mechanical (each routes its own cap-open key; the wire-accepted cap-open keys get the welded twin).
+  ✅ EXECUTOR-COMMIT OF DOMAIN-2 — CLOSED (STAGED, VK-RISK-FREE). The deployed executor sovereign path
+  (`verify_one_cohort_run`) now ADDITIVELY resolves the bare cap-open + welded cap-open descriptors (via
+  `cap_open_candidate_keys`, the executor twin of the SDK `cap_open_route_for_run`) BESIDE the plain cap member, and
+  verifies the proof against them with the SAME anchored dpis. KEY: the cap-open WIDE PI vector is PI-COUNT-IDENTICAL (62) to
+  the plain wide cap vector (the membership crown adds TRACE columns, not PIs) and rides the SAME `append_wide_carriers` dpi
+  transform — `append_wide_carriers` ZEROS the retired `V1_PI_COUNT/+1` commit pins (so the c-list never reaches the final
+  dpis) and the executor overrides the 16 wide carriers to stored-OLD/claimed-NEW — so the executor's existing reconstructed
+  dpis bind the cap-open members BYTE-IDENTICALLY (no new witness field, no c-list converter). A welded cap-open
+  `AttenuateCapability` proof now COMMITS through `TurnExecutor::execute` (`sdk/tests/executor_cap_open_welded_commit.rs` —
+  commit + the 8-felt anchor tooth biting a forged NEW). All 3 surfaces (producer · wire · executor) are now welded-complete
+  for domain-2. The deployed plain path is UNTOUCHED (host-trusted authority still commits; 31 `sovereign_rotated_{wide,c1}`
+  tests green); the default prover stays bare and `umem_witness_enabled` is untouched (the gated VK epoch does the flip). To
+  guarantee the producer mints over the EXECUTOR's projection (the SDK `AgentCipherclerk::convert_effects_to_vm` maps attenuate
+  to a RevokeCapability shape — a divergent effect-KIND — while the executor bridge maps it to `VmEffect::AttenuateCapability`),
+  `convert_turn_effects_to_vm` is now `pub`. SWEEP: `cap_open_candidate_keys` covers all 7 domain-2 cap-effect families; the
+  wire-accepted welded twins (attenuate · delegate/grantCap · introduce · refreshDelegation · revokeCapability ·
+  revokeDelegation) resolve from both registries and share the identical mechanism — attenuate is PROVEN end-to-end, the rest
+  are mechanically covered (per-effect proof-tests are a follow-on).
 - FIRMAMENT: the semihost interactive cockpit now runs the REAL verified `DreggEngine` (live-repaint-on-turn,
   `251692b7`) — closes `SEL4-INTERACTIVE-COCKPIT.md §3.5`. NAMED TAIL: §3.6 step 4, the executor-PD's bare-metal
   Lean-ELF runtime link (the real-seL4 WALL; gated on Microkit SDK on PATH, not a semihost blocker).
@@ -170,7 +449,7 @@ carries its closure shape. Pure-Lean ranks are VK-risk-free and can soak before 
   `CommitBindsMMR`) · PI v3 · RESERVED/selector-block death · universal-memory table assembly →
   ONE descriptor regen → differential gauntlets (cell≡circuit per map · per-effect AGREE · the
   memory-argument adversarial suite, `UniversalMemory.lean` §6 as the templates) → VK/commitment
-  bump → succession drill → persvati gauntlet → deploy when ember says deploy.
+  bump → succession drill → the Linux build box gauntlet → deploy when ember says deploy.
 
 ## web-deos DEEPENED: a SERVICE CELL invoked node-less in the browser (2026-06-25)
 - WHAT: the web `ViewNode` path gained a fourth, richer surface — a KV-store SERVICE CELL driven entirely in a
@@ -211,19 +490,6 @@ carries its closure shape. Pure-Lean ranks are VK-risk-free and can soak before 
   exists; mirrors the `set_cell_program` runtime-vs-genesis tension). (b) the live branch editor re-seeds only on creation; a
   programmatic diverge after the widget exists needs a `branch_resync` (mirror of `doc_resync`) — closure = add it if a flow
   edits the branch out-of-band while its editor is open.
-
-## polyana seam WIRED: `polyana-bridge` realizes the sketch against real dregg cores (2026-06-25)
-- WHAT: `docs/deos/polyana-seam-sketch.rs` (was "ILLUSTRATIVE, NOT WIRED") is now the `polyana-bridge` crate
-  (workspace member). Slice 3 = `gate_effect_set`/`gate_auth` over the PROVEN `is_facet_attenuation`/`is_attenuation`;
-  Slice 1 = `witness_receipt` → real chained `dregg_turn::TurnReceipt` (v3 hash binds the chain link); Slice 1's payoff =
-  `attest_whole_log` + `dregg_query` `AttestedAnswer` non-omission certificate. 7 tests green (`polyana-bridge/tests/seam.rs`).
-- NAMED TAILS (closure shape): (a) the EffectMask bit-assignment is the bridge's polyana-vocab intern, NOT dregg protocol
-  bits — extend `POLYANA_EFFECT_BITS` as polyana's vocabulary grows (≤32 tokens, `u32`); promote to a richer set type if it
-  outgrows that. (b) `audit_records` leaves `EffectSummary`s empty — wire polyana's typed effect summaries (fn_name/intent
-  kind → `EffectSummary`) so the attested queries see real facts, not just the receipt-hash MMR. (c) ACTUAL adoption is in
-  polyana's own repo (`~/pug/polyana`, read-only here): a `pa_witness` call site that also emits the bridge receipt + a
-  `cap-bundle` parser → `CapBundle` — an ember/David seam, out-of-tree. (d) Slice 2 (`Target::HostPd` confinement) stays in
-  `sel4/dregg-firmament`, not re-exported.
 
 ## umem Stage A LANDED: the per-cell heap is a first-class umem (additive); live producer is the named seam (2026-06-25)
 - WHAT: `UMEM-PRIMITIVE.md §2/§7` Stage A — the per-cell heap (`CellState.heap_map`) projected as a
@@ -3395,11 +3661,11 @@ balances, cap counts, the issuer well at −supply), the INSPECTOR reflecting th
 receipts/`state_root`/"executor embedded verified (TurnExecutor)"), the BLOCKLACE provenance (the real
 receipt chain), and the HOME/SHELL/AGENT workspace. Rendered at 800×600 by the actual gpui renderer
 (`gpui_wgpu::WgpuRenderer::render_scene_to_image`, the offscreen patch) on lavapipe (`type=Cpu`, no GPU/
-window) on persvati, baked into the `#![no_std]` PD as raw RGBA8 (`src/cockpit_frame.rgba`, 1.92 MiB)
+window) on the Linux build box, baked into the `#![no_std]` PD as raw RGBA8 (`src/cockpit_frame.rgba`, 1.92 MiB)
 and swizzled RGBA→XRGB8888 at blit time. `make -C sel4 capture-image-modes` reproduces it end-to-end
 (boots headless, screendumps image, QMP `send-key TAB`, screendumps the LIVE cockpit). Evidence:
 `docs/desktop-os-research/patches/cockpit-on-sel4-framebuffer-LIVE.png` (the live cockpit scanned out
-of seL4 ramfb) + `cockpit-render-800x600-LIVE.png` (the persvati render).
+of seL4 ramfb) + `cockpit-render-800x600-LIVE.png` (the render-host render).
 
 THE LAST SWAP — CLOSED (was "the one remaining swap"): the blitted Scene used to be a hand-built
 cockpit-*shaped* `gpui::Scene`; it is now the live element tree, resolved the intended way. HOW: a
@@ -3436,7 +3702,7 @@ Groth16** — VALIDATED this session: the full production `dregg-circuit --featu
 
 CLOSURE LANES: (1) finish the (B) loop — host generates the IR-v2 proof (`prove_vm_descriptor2`), zkVM
 wraps to Groth16, `forge script DriveBridge` verifies on anvil + drives attest/lock/unlock/intent (the
-plumbing is built; the Poseidon2 guest+host compile on persvati; run the wrap on a 24-core box). (2) swap
+plumbing is built; the Poseidon2 guest+host compile on the Linux build box; run the wrap on a 24-core box). (2) swap
 the guest's leaf-proof verify for the full `WholeChainProof` root (`verify_history`) — one-line, heavier.
 (3) **THE COST ENDGAME — a Plonky3-native BN254 terminal** (§4.2/§2.4-C): make dregg's own recursion
 (`emberian/plonky3-recursion`, the `WholeChainProof` fold) terminate in a BN254 Groth16 proof instead of
@@ -3484,13 +3750,13 @@ runnable criterion benches (each drives the production PUBLIC API; numbers banke
   seL4-executor-PD hot path) over the GOLDEN firmament-boot turn: **~157 µs** (microseconds, same order
   as the Rust executor — verified-and-cheap admit).
 - (e) `ui_projection` — the deos desktop whole-system measure (gpui-free; the real GPU first-paint is on
-  persvati): per-frame scene/affordance projection is **nanoseconds** (compose_scene 102 ns, paint_list
+  the Linux build box): per-frame scene/affordance projection is **nanoseconds** (compose_scene 102 ns, paint_list
   472 ns, affordance_project 96 ns — never the bottleneck); the first-paint DATA cost is the five embedded
   commits (`demo_world_seed` ~5.8 s) — which is why the cockpit opens on the instant-genesis image and
   seeds turns async.
 
 The full perf crate is clippy-clean; `cargo bench -p dregg-perf --no-run` green. SMOKE is default; FULL
-(`PERF_FULL=1`) is the persvati ladder capture (the fold + cohort FULL ladders already captured + in the
+(`PERF_FULL=1`) is the Linux build box ladder capture (the fold + cohort FULL ladders already captured + in the
 doc). Named: performance pillar LANDED, 2026-06-15.
 
 ## ⚑ TWO PERF FINDINGS surfaced by the harness (closure lanes, named 2026-06-15)
@@ -3618,7 +3884,7 @@ tools), and DELETED outright where dead in both builds (the Silver joint surface
 `CUTOVER_READY_SELECTORS`/`EffectVmShapeAir`/`CrossSideExistenceAir`/`BundleTreeFoldAir`/the V2 bilateral
 all STAY (Bucket D/E). The recursion-leaf is the ROTATED `DescriptorParticipant`/`RotatedParticipantLeg`
 (Bucket F was already landed). **GREP-ZERO = 0 true live-under-recursion v1 refs** (236 literal matches,
-all comments/strings/not(recursion)-fenced). Gates GREEN on persvati: `cargo build --features recursion
+all comments/strings/not(recursion)-fenced). Gates GREEN on the Linux build box: `cargo build --features recursion
 -p dregg-circuit -p dregg-sdk -p dregg-turn -p dregg-node` (Finished, exit 0) + `cargo test --features
 recursion --no-run -p …` (exit 0) + circuit `not(recursion)` floor (exit 0). The executor secondary-verify
 arms (`verify_sovereign_witness_stark`, the atomic-turn/bearer-cap default-AIR, `verify_bundle_with_stark`)
@@ -3653,7 +3919,7 @@ rotated-leaf cutover first), (G) heterogeneous/non-synthetic finalized-turn cove
 only dregg-coherent way — *"build path-preserve for SURE; any other decision wouldn't be dregg"* — so the
 WEAKEN option (commit those turns proof-pending) is OFF the table. The C7 lane is now: **BUILD chained
 multi-cohort + non-synthetic rotated proving so EVERY finalized turn stays proven (ARGUS unfoolability
-intact), THEN bucket-F leaf cutover, THEN the bucket-A/C delete.** Staged persvati-green plan =
+intact), THEN bucket-F leaf cutover, THEN the bucket-A/C delete.** Staged the Linux build box-green plan =
 `docs/PATH-PRESERVE.md`. Each phase lands green; a half-landed prover-without-verifier is RED (forbidden).
 (The interrupted `wf_9a7d5e77-b48` was looping on exactly this G decision — now resolved; `cv`-dug the
 substantive thread, the decision is made.)
@@ -3688,7 +3954,7 @@ spike (`c93293686` — the pg-Tier-D + seL4-executor-PD blocker REFUTED by measu
 manager is lazy; the executor PD already BOOTS; pg full-D = DAYS).
 
 **⚑⚑ LEAD LANE (ember DECIDED 2026-06-14): FINISH THE CUTOVER to grep-zero — and HOLD the devnet redeploy until it lands.**
-The staged ladder, each persvati-green (every finalized turn is ALREADY proven on current main — this is CLEANUP, not a
+The staged ladder, each the Linux build box-green (every finalized turn is ALREADY proven on current main — this is CLEANUP, not a
 soundness gate): PATH-PRESERVE **Phase 3** (non-synthetic-cell witness — RUNNING `a100c225`) → **Phase 4** (the live cutover:
 heterogeneous / non-synthetic turns route to the chain in `node/src/blocklace_sync.rs`, not the v1 fallback) → **bucket F**
 (the 5-file recursion-leaf cutover, drop `EffectVmP3Proof`) → **#103** (executor off `EffectVmAir`) → **C7** (delete v1 +
@@ -3710,7 +3976,7 @@ MMU-process-v1 / real-Microkit) runs the SAME PD source three ways; the composit
 `docs/EMBEDDABLE-LEAN-RUNTIME.md`): the mimalloc-override / worker-thread premise was WRONG (mimalloc is a PRIVATE heap,
 the task manager is LAZY/single-threaded); the only real removal was the libuv thread (`dregg_ffi_init_st()`), and
 `sel4/dregg-pd/executor-{pd,rootserver}/` already boot the Lean executor in a real PD (fresh qemu → status:2 ok:1).
-**pg full Tier-D is now GREEN** (2026-06-14, persvati Linux + pg18.4 via cargo-pgrx): the verified `execFullForestG` RUNS
+**pg full Tier-D is now GREEN** (2026-06-14, the Linux build box Linux + pg18.4 via cargo-pgrx): the verified `execFullForestG` RUNS
 INSIDE a live pg18 backend under the SHARED Lean link (`DREGG_LEAN_LINK=shared`) — `pg_test`s
 `pg_the_verified_executor_runs_inside_the_backend` + `pg_drainer_drains_the_queue_…` + `pg_drainer_runs_execfullforest_in_backend`
 all OK; `runtime_available()`=true (`dregg_ffi_init_st` succeeds POST-FORK), the drainer's PRODUCE gate commits a real
@@ -3763,7 +4029,7 @@ surface/`, 20/0) · sdk pg-native (sdk-py 71/4-skip + sdk-ts 74/0). Open residua
   compile — `CollectionAggregate` was MISSING from the classifier match, RED at HEAD): added its honest executor
   accept/reject pair `collection_aggregate_accept_and_reject` (a seeded `heap_map` collection meeting/failing a
   CountSatGe statistic across a submitted SetField turn) + `CollectionAggregate => true` arm, so the gate is
-  exhaustive and the not-yet list is honest at 9. Green on persvati: `cargo check -p dregg-turn` clean;
+  exhaustive and the not-yet list is honest at 9. Green on the Linux build box: `cargo check -p dregg-turn` clean;
   `coverage_state_constraints` 25/25 + `protocol_coverage_gate` 3/3.
 - **`cargo check --workspace --tests` is broadly RED — pre-existing dregg3-reduction test-corpus rot** (named
   2026-06-14, surfaced by the ObservedFieldEquals convergence gauntlet once the WitnessBundle ripple closed):
@@ -3853,7 +4119,7 @@ circuit/sdk/turn/node = exit 0; no edits made). The four, file:line'd:
    wasm prover gains a `#[cfg(feature="recursion")]` rotated branch (shipped wasm has recursion ON);
    a bare `not(recursion)` fence would DELETE the in-browser prover (a degradation — not acceptable).
 
-SEQUENCING (each persvati-green): (1a) the additive `ir2_descriptor_accepts` checker + test [keystone,
+SEQUENCING (each the Linux build box-green): (1a) the additive `ir2_descriptor_accepts` checker + test [keystone,
 zero-risk] → (3) the `EffectVmP3Proof`→`Ir2BatchProof` alias + drop-v1-leg in aggregation → (1b)+(2)
 node commit-path rotation-witness assembly + rotated-only fail-closed → (4) wasm Option-A → then the
 mechanical DELETE of bucket A (`effect_vm_p3_full_air.rs`, `effect_vm/air.rs` v1 surface,
@@ -3917,7 +4183,7 @@ non-cohort behavior). Everything else is verified-ordinary engineering. A PARTIA
 1/2/3/4) leaves grep>0 in recursion AND ships RED (the v1 prover would be half-disconnected) — the mandate's
 #1 forbidden outcome — so the tree is held GREEN + UNTOUCHED at HEAD (baseline `pbuild hardswap` of
 circuit/sdk/turn/node = exit 0, "Finished `dev` profile") pending ember's call on blocker #2. Once decided,
-the full cutover is a single coherent lane (items 1→3→2→4→delete), each persvati-green.
+the full cutover is a single coherent lane (items 1→3→2→4→delete), each the Linux build box-green.
 
 ⚑ FIX-ROUND-2 (2026-06-14, deepest independent re-trace; one SCOPE-CORRECTION + one DECISION-REFRAME +
 the recommendation INVERTED). Re-verified the four legs at HEAD, then traced two things the prior C7 entries
@@ -4005,7 +4271,7 @@ SEQUENCING (each gated green; the main loop drives): walls A/B/C land + reviewed
 avoid the node/ collision) → **the VK epoch (C5/C6) = THE MAIN LOOP's irreversible act** (v3Registry→default regen
 + re-pin ~58 SHAs/11 guards + #103 sovereign graduation + notify Step-2 felt-batch + FFI reseed + the ONE
 VK/cell-commitment bump; §EXEC.3 recipe) → **C7** delete v1 + grep-zero (a Workflow fan-out) → the **Option-A
-wasm-rotated prover** (LAST — gates C7's full grep-zero, not the native cutover) → persvati gauntlet → held push →
+wasm-rotated prover** (LAST — gates C7's full grep-zero, not the native cutover) → the Linux build box gauntlet → held push →
 **devnet redeploy = EMBER's act** (fresh genesis). Prize: −65.6% proof size (350.5→120.4 KiB), verify 3.4× faster.
 
 --- (original flip-executor inventory, for the record) ---
@@ -4072,7 +4338,7 @@ the backbone v1 path is still UNCONDITIONAL per WALL A above.)
   found+fixed (NOT papered): stored NEW commit must be the trace's PI 35 (welds from the v1
   sub-trace after-state, ≠ `compute_v9(after_cell)`); verifier undoes `execute.rs` PHASE 1 (fee
   debit + nonce++) to reconstruct the producer's pre-state (cross-checked by OLD_COMMIT/PI 34).
-  RE-VERIFIED 2026-06-13 (fresh persvati build, not a self-report): `sovereign_rotated_c1` both
+  RE-VERIFIED 2026-06-13 (fresh the Linux build box build, not a self-report): `sovereign_rotated_c1` both
   tests green under `recursion`; `dregg-turn` compiles green under BOTH `--no-default-features`
   and default. MEASURED win (`effect_vm_ir2_size_measure`): v1 hand-AIR 358900 B (350.5 KiB),
   verify 16.8 ms → rotated IR-v2 123292 B (120.4 KiB), verify 5.0 ms — **0.344 ratio (−65.6 %
@@ -4096,7 +4362,7 @@ the backbone v1 path is still UNCONDITIONAL per WALL A above.)
   trace-fill helpers, `Ir2Traces`, `prove_batch`/`StarkInstance` + prover-only imports,
   `MIN_TABLE_HEIGHT`, test mod) `recursion`-only. `verify_batch` is prover-free + `from_airs_and_
   degrees(..).common` builds only symbolic `Lookups` (the IR-v2 AIRs have empty preprocessed).
-  Verified on persvati: verifier-only lib (zero `descriptor_ir2` warnings) AND default lib both
+  Verified on the Linux build box: verifier-only lib (zero `descriptor_ir2` warnings) AND default lib both
   green. Files: `circuit/Cargo.toml`, `circuit/src/lib.rs`, `circuit/src/descriptor_ir2.rs`.
 - ⚠️ HARD WALL (cutover **C3**, found 2026-06-13 — needs an ember architecture decision before C3
   can proceed): `prove_full_turn`'s effect-vm leg is an `EffectVmP3Proof` that THREE LIVE
@@ -4261,7 +4527,7 @@ the backbone v1 path is still UNCONDITIONAL per WALL A above.)
 - Trustline payment-channel parity: channel close (TL_STATE_CLOSED residual-escrow return) · one-factory collateral parameter · MCP `dregg_extend_trustline` · remote-silo pubkey registration (n=1 collapses it) · multilateral rippling (TRUSTLINES.md §7).
 - Trustline pureCredit HTTP lane: node OpenRequest has no `collateral` field → HTTP open is fullReserve-only; `trustline_service::parse_collateral` is dead (`#[allow(dead_code)]`+TODO(collateral-axis)). Rust semantics+SDK exist; wiring the request field is the lane. → turn/node.
 - Hosted-operator epoch-key custody posture (sovereign-member groups ride the SDK noun client-side; channels residue — partly an ember-decision).
-- Divergence-ledger doc churn: `turn/tests/rust_lean_divergence_finder.rs:684` overwrites the git-tracked `metatheory/docs/rebuild/_RUST-LEAN-DIVERGENCE-LEDGER.md` on every run, dirtying trees + blocking persvati pushes — emit to a build-artifact path (or commit deliberately). One-line fix. → turn/ (off-limits this run; STILL LIVE, tree dirty at HEAD).
+- Divergence-ledger doc churn: `turn/tests/rust_lean_divergence_finder.rs:684` overwrites the git-tracked `metatheory/docs/rebuild/_RUST-LEAN-DIVERGENCE-LEDGER.md` on every run, dirtying trees + blocking the Linux build box pushes — emit to a build-artifact path (or commit deliberately). One-line fix. → turn/ (off-limits this run; STILL LIVE, tree dirty at HEAD).
 - CLI `config init` not path-injectable: `cli/src/config.rs::config_path()` hardcodes `~/.dregg` → `dregg config init` mutates real home, preflight can only gate read-only `config show`. Honor `DREGG_HOME`-style override, then restore a hermetic preflight `cli_config_init` check. → cli/.
 - node recovery overlay first-writer-wins bug (surfaced by the snapshot lane): `node/src/state.rs` recovery uses `insert_cell` (strict insert), so a post-checkpoint write to a cell the checkpoint ALREADY holds is silently dropped; the convergence root-mismatch only LOGS, does not fail closed. Fix = `upsert_cell` (the verified `CrashRecovery.upd` point-update needs remove-then-insert). → node/persist, post-flip.
 - persist snapshot wire half: in-crate `ship_snapshot`/`apply_snapshot`/`apply_snapshot_verified`/`install_snapshot` LANDED green (persist/src/snapshot.rs, 7 tests, shape = CrashRecovery.lean). REMAINS: node-side `GET /snapshot/{from}` serve + joiner consume route so a fresh node bootstraps over the network. → node, post-flip.
@@ -6016,3 +6282,108 @@ whole rotation cutover remains the one VK-epoch flag-day). Note "production-auth
 conflation — production-authority is the §4 MINT flavour of cap-reshape; attenuate is non-amplification only (§4D/§2). Change:
 corrected the stale named residual in RotatedKernelRefinementAttenuate.lean §"The registry cutover" to record
 CLOSED-AS-SUPERSEDED with the superseding rung names (Lean comment only — no proof/VK touched; module rebuilds green, 3033 jobs).
+
+— 2026-06-26 (kernel-align, CellUnseal/Attenuate differential): the Lean↔Rust differential rejected CellUnseal +
+AttenuateCapability ("commit-bit divergence: Rust committed, Lean did not"). VERDICT: neither was a Rust under-enforcement.
+CellUnseal = VERIFIED-SPEC OVER-REJECTION: the admission gate gated the AGENT on `cellLifecycleLive` (Live-ONLY), refusing a
+SEALED agent (`deadAgent`) — but sealing is *reversible* quiescence (`docs/reference/cells.md`: is_terminal = Destroyed-or-
+Migrated; Sealed is NOT terminal), so a Sealed cell MUST author its own unseal (Rust `lifecycle_seal_then_unseal_restores_live`
+proves the intent). Fixed: new `cellLifecycleCanAuthor` (RecordKernel) admits non-terminal agents, rejects only
+Destroyed/Migrated; the per-effect arms keep gating `cellLifecycleLive` on the TARGET so a Sealed agent's ordinary effects
+still fail. Admission keystones re-verify #assert_axioms-clean. AttenuateCapability = wire-faithfulness gap in the harness
+(held-cap target dropped from the id-map → in-bounds leg fail-closed); fixed by the HELD-CAP-TARGET CLOSURE in
+`lean_shadow::build_pre_ledger`. Both now BothAcceptStateAgree, OFF the gauntlet allowlist (enforced). Commit 9e2c0e708.
+FOLLOW-UP (named, untouched — safe-direction, no failing test): the Rust executor (`turn/src/executor/execute.rs`) has NO
+agent-lifecycle admission gate at all, so it admits TERMINAL (Destroyed/Migrated) agents that the verified spec now rejects
+via `cellLifecycleCanAuthor`. Narrow Rust under-enforcement (a terminal cell could author cap/lifecycle effects the per-effect
+arms don't all gate). Mirror the alignment: reject `agent_cell.is_terminal()` at admission (both execute entries ~L382/L1436).
+Not done here to avoid touching untested Migrated-agent flows; out of the CellUnseal/Attenuate authority lane. PRE-EXISTING,
+SEPARATE LANE (not this fix, provably unaffected — Live agents/no caps): speculative_audit.rs (full-ledger-root / slot-6
+"target" field fidelity in the streaming audit) + dregg-lean-ffi direct_vs_json_differential (auth_0 direct-vs-JSON
+marshalling-conformance) still fail; they are state-fidelity/marshalling lanes, NOT the authority lane.
+
+— 2026-06-28 (THE GENTIAN INITIATIVE — the escrow SATISFACTION-weld proving-path machinery, STAGED,
+FLIP NOT taken): closed VK-EPOCH §6 BLOCKER 1's core ("the welded EffectVmDescriptor emit keystone
+is named-only; the SEL=320 selector is a placeholder filled by no producer; no live capacity-caveat
+exerciser"). NOW BUILT + GREEN:
+  * EMIT KEYSTONE (real): `metatheory/Dregg2/Deos/SettleEscrowSatDescriptor.lean` defines
+    `settleEscrowSatVmDescriptor2R24` = graduateV1(rotateV3 settle-base) + the four selector-gated
+    satisfaction gates over the rotated FIELD columns (cols 192/193/243/244 = before/after legs 0/1)
+    + the selector PI pin (col 70 → PI 46). Base = transfer-rotated with the two LEG field-freezes
+    DROPPED (a settle CHANGES the status fields), so the welded gates and the base are mutually
+    satisfiable (a zero-amount settle-carrier). REFINEMENT rung
+    `settleEscrowSatV3_forces_settle_gate`: a satisfying trace on a selector-on non-last row FORCES
+    both legs Deposited-before / Consumed-after (the in-AIR SettleGate); partial_settle_unsat /
+    phantom_settle_unsat are the UNSAT teeth. #assert_all_clean (5 keystones). lake green.
+  * EMITTED into the registry: `EmitRotationV3.lean` emits it; `rotation-v3-staged-registry.tsv`
+    carries it as the 58th member (deployed rows BYTE-IDENTICAL; FP re-pinned). Rust descriptor
+    validation gets its per-key branch (pi_count 47, the selector fifth-pin col 70 → PI 46); the
+    `n==58` cohort assert + the wide-registry parity (the staged escrow member excluded from the
+    wide-cover until its wide+umem mirror lands) + the resolver-cohort completeness (registry-present,
+    resolver-unreached — no live routing) all GREEN.
+  * REAL SELECTOR (no more placeholder): `satisfaction_weld.rs` `ESCROW_SEL_COL = PARAM_BASE+2 = 70`
+    + `ESCROW_SEL_PI = 46` replace `SEL = 320`; a test cross-checks the EMITTED descriptor's four
+    welded gate bodies match the Rust builder byte-for-byte AND bite (honest accept / partial+phantom
+    reject).
+  * EXERCISER: `circuit/tests/settle_escrow_capacity_weld.rs` — a declared escrow caveat (tag 17,
+    legs 0/1) projects onto the bound rotated carrier (COVERAGE, can't be omitted — the deployed
+    carrier tooth) AND the EMITTED welded descriptor's gates accept the honest settle / reject the
+    forged (SATISFACTION) = the full capacity witness, coverage ∧ satisfaction, for a declared turn.
+THE FLIP WAS NOT TAKEN. The teeth bite IN-PROOF at the LEAN refinement level + at the EMITTED
+descriptor's CONSTRAINT-eval level over honest/forged settle rows — NOT yet a full STARK
+prove/verify of the welded descriptor. PRECISE REMAINING to a flippable escrow weld:
+  1. a PRODUCER emitting a SATISFYING rotated trace for the welded descriptor (the field-override +
+     GROUP-4/rotated commit-recompute surgery the fee/nullifier producers do for balance/nullifier
+     limbs, now for the two leg field limbs of a zero-amount settle-carrier) → a full STARK
+     prove/verify (accept honest, reject forged against the committed VK);
+  2. commit the welded VK + bind the selector to the committed declaration's required-tag floor
+     IN-AIR (the `DeclCommitBinds` realization, §6 item 2 — so a forger cannot dodge by setting the
+     selector 0) + route a declared-escrow turn through the welded descriptor;
+  3. THEN the range-check + overflow-safe-product in-AIR gates for tags 18/19 (§6 BLOCKER 2), then
+     the flip. The deployed default is UNCHANGED; SATISFACTION is still NOT light-client-witnessed in
+     production. `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md` §6.
+
+## ═══ THE SERVICE-ECONOMY EPOCH (2026-06-28) ═══
+
+The through-line: dregg grew an **agent service economy** — pay, lease, run a metered workload, settle,
+leave a receipt — all on the verified substrate.
+
+### LANDED (committed)
+- **Service economy (breadstuffs):** Payable DSI (`dregg-payable`), intent-ring + service-promise
+  (pay-on-delivery escrow), metered+paid ToolGateway (pay-per-tool, `sdk/src/tool_gateway.rs`),
+  execution-lease (`starbridge-apps/execution-lease` + `sdk/src/service_economy.rs`). SDKs ts/py/rust
+  service-economy bindings SHIPPED (byte-faithful, tested) — "designed-not-shipped" closed.
+- **Bridges (breadstuffs `bridge/`):** **Solana light-client bridge = TRUSTLESS-COMPLETE modulo the
+  weak-subjectivity anchor** (real Ed25519 votes + 16-ary accounts-hash + stake-table/authorized-voters/
+  StakeHistory/warmup-cooldown-effective-stake all bank-state-derived + epoch rotation; passes 1-4).
+  **Stripe rail** (webhook-HMAC → mint USD-credit → pays a lease, idempotent). **Double-mint CLOSED**
+  (committed mirror-ledger + lock_id-as-note_nullifier, `turn/src/executor/bridge_ledger.rs`, no new verb).
+- **VK Gentian (breadstuffs circuit/metatheory):** escrow weld teeth bite in a REAL STARK proof;
+  WIDE-member fulcrum PROVEN (gate columns absorbed into the ~124-bit commit). FLIP NOT taken.
+- **deos pillars:** cockpit 17/31 surfaces carded + consumer-delight pass; hermes does PAID work in the
+  live World; deos-zed FirmamentFs + capability-secure DirectoryCell namespace (dregg:// paths); the
+  TRUSTLESS WEB PORTAL (a page that runs the recursive-STARK verify in-tab + per-field heap openings).
+- **Docs/share:** `docs/atlas/` (comprehension site, single-file `atlas.html` via build.sh) ·
+  `docs/posters/` (launch + coordination-security + dregg-revealed). `CONSTRUCTIVE-KNOWLEDGE.md` +
+  `DREGG-CALCULUS.md` are the conceptual spine (authority = production-under-non-forgeability; a turn =
+  an attenuable proof-carrying token over conserved state leaving a receipt).
+
+### PERF (measured)
+- Solana verify: ~33µs/vote linear, ~50ms @1500 votes; Option-B O(1) wrapper only when
+  throughput/in-circuit needed.
+
+### OPEN BURN-DOWN (named follow-ups)
+1. **Gentian FLIP — in-AIR authority-digest→selector gadget DISCHARGED, flip BLOCKED on commit-target**
+   (verified 2026-06-28). The gadget keystones (`InAirAuthorityDigestGadget.gentian_*_discharged`) hold
+   under ONLY `ChipTableSound` + `FloorDigestBinds`, `#assert_all_clean`; Rust shadow green (14/14).
+   BLOCKER to the flip: the gadget reads limb 24 (`B_AUTHORITY_DIGEST`) as `hash_many(floor)`, but the
+   deployed commit puts the byte-domain `compute_authority_digest_felt(cell)` there
+   (`rotation_witness.rs:367`) — so an honest escrow turn CANNOT produce a light-client-accepted gentian
+   proof, and overwriting limb 24 is UNSOUND (it is `record_digest` + the SetPerms/SetVK/MakeSovereign/
+   Refusal record-pin target). SOUND fix = a NEW dedicated felt-domain floor-digest limb (perms/vk
+   pattern) + new Lean absorption proof + retarget `gentianAuthDigestCol` off limb 24 — UNBUILT
+   (limbs 24..37 fully packed → width/layout flag-day). FLIP NOT TAKEN; SettleEscrow stays a CONDITIONAL
+   truth (sound under `hcommitLimb`), NOT a deployed pure-light-client truth. `IN-AIR-AUTHORITY-DIGEST-GADGET.md` §7. THE deep one.
+2. **18/19 welds:** range-check (discharge due-ness) + multi-limb-product (vault no-dilution, overflows BabyBear) gadgets — after (1).
+3. **Solana mainnet-real:** geyser/custom-RPC validator plugin for real accounts-hash inclusion proofs
+   (RPC exposes neither real bank hash nor Merkle inclusion → can't have real-vote-sig + real-inclusion both today).

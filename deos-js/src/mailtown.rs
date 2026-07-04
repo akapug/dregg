@@ -22,9 +22,9 @@
 //!
 //! Nothing here is bespoke mail code in the executor. The town *is* cells + caps + turns
 //! + receipts, the same four words the HIG teaches (`docs/deos/HIG.md`). The structure
-//! mirrors the `mud` module: an embedded [`DreggEngine`] whose ledger holds every cell, a
-//! privileged **postmaster** (Postmark's mailman, *Ferry*) holding the broad route-grant
-//! authority, and the in-band cap tooth [`is_attenuation`] at every affordance boundary.
+//!   mirrors the `mud` module: an embedded [`DreggEngine`] whose ledger holds every cell, a
+//!   privileged **postmaster** (Postmark's mailman, *Ferry*) holding the broad route-grant
+//!   authority, and the in-band cap tooth [`is_attenuation`] at every affordance boundary.
 //!
 //! ## The authority model
 //!
@@ -44,10 +44,10 @@
 use std::collections::BTreeMap;
 
 use dregg_cell::state::{FieldElement, STATE_SLOTS};
-use dregg_cell::{AuthRequired, Cell, is_attenuation};
+use dregg_cell::{is_attenuation, AuthRequired, Cell};
 use dregg_sdk::embed::{DreggEngine, EngineConfig};
-use dregg_turn::TurnReceipt;
 use dregg_turn::builder::{ActionBuilder, TurnBuilder};
+use dregg_turn::TurnReceipt;
 use dregg_types::CellId;
 
 use deos_reflect::frustum::Frustum;
@@ -240,7 +240,7 @@ impl MailTown {
         let mut names = BTreeMap::new();
         dir.insert("postmaster".to_string(), (postmaster, Kind::Postmaster));
         names.insert(postmaster, "postmaster".to_string());
-        debug_assert!(STATE_SLOTS >= 4, "mailtown uses slots 0..3");
+        const { assert!(STATE_SLOTS >= 4, "mailtown uses slots 0..3") };
         MailTown {
             engine,
             postmaster,

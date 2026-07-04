@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use quinn::{Connection, Endpoint, RecvStream};
 use rand::seq::IndexedRandom;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, Semaphore, mpsc};
 use tracing::{debug, info, trace, warn};
 
 use dregg_types::{PublicKey, Signature as Ed25519Signature, SigningKey};
@@ -85,6 +85,13 @@ const MAX_ANTI_ENTROPY_RESPONSE_BYTES: usize = 256 * 1024;
 /// Maximum number of concurrent gossip connections.
 const DEFAULT_MAX_GOSSIP_CONNECTIONS: usize = 256;
 
+/// How often a node re-advertises its OWN configured listen address to every
+/// connected peer (the self-forming-mesh substrate). The first `tokio::interval`
+/// tick fires immediately, so a freshly-connected peer learns our reachable
+/// endpoint within one interval — fast enough for a single-bootstrap committee
+/// to mesh transitively in seconds, cheap enough to run forever.
+const SELF_ADVERTISE_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Maximum entries in the message cache. When exceeded, oldest entries are
 /// evicted to prevent unbounded memory growth from message floods.
 const MAX_MESSAGE_CACHE_SIZE: usize = 10_000;
@@ -92,6 +99,79 @@ const MAX_MESSAGE_CACHE_SIZE: usize = 10_000;
 /// Maximum number of concurrent streams per peer connection.
 /// Prevents a single peer from exhausting resources via stream flooding.
 const MAX_STREAMS_PER_PEER: usize = 64;
+
+/// Maximum number of gossip uni-streams we hold OPEN concurrently to a single
+/// connection (outbound backpressure). The original send path opened a fresh
+/// QUIC uni-stream per message with no upper bound: under a catch-up burst the
+/// consensus layer eager-pushes blocks/frontiers/votes FASTER than the peer
+/// drains them, so the receiver's per-connection inbound count blows past
+/// [`MAX_STREAMS_PER_PEER`] (64) and rejects the overflow — which drops exactly
+/// the blocks/votes needed to finalize, so the committee never converges and the
+/// catch-up loop re-pushes harder, a self-sustaining stream storm. Capping the
+/// IN-FLIGHT outbound streams per connection (well under the receiver's 64) makes
+/// the sender track the drain rate instead of out-running it: a node never opens
+/// more streams to a peer than that peer can be reading at once. Kept comfortably
+/// below 64 so that even two coexisting links to the same committee peer
+/// (one dialed, one accepted) stay under the receiver's per-connection limit.
+const MAX_INFLIGHT_OUT_STREAMS_PER_CONN: usize = 32;
+
+/// Upper bound on a single gossip stream write. A peer that has stopped draining
+/// our streams (e.g. it is wedged or going away) would otherwise let a write
+/// block forever on QUIC flow control, holding its outbound budget permit and
+/// permanently wedging that connection's send budget. Bounding the write lets a
+/// stuck stream be reset and its permit reclaimed so the budget keeps flowing.
+const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Upper bound on reading one inbound gossip frame off an accepted uni-stream.
+/// The receiver bounds concurrent stream processing (see [`serve_connection`]) and
+/// backpressures rather than rejecting; this timeout ensures a peer that opens a
+/// stream but never finishes writing it cannot hold one of those bounded slots
+/// forever (a slow-loris that would wedge the connection). Healthy frames read in
+/// well under a millisecond, so this only ever fires on a stalled/hostile stream.
+const INBOUND_STREAM_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Soft cap on the per-connection outbound-budget map before stale entries (for
+/// connections that have since closed) are pruned. Bounds memory across many
+/// reconnect cycles without paying a prune on every send.
+const MAX_SEND_BUDGET_ENTRIES: usize = 256;
+
+/// Process-wide count of inbound gossip streams DROPPED for stalling — a peer
+/// opened a stream but did not deliver a complete frame within
+/// [`INBOUND_STREAM_READ_TIMEOUT`]. Healthy gossip (even a heavy eager-push burst)
+/// never trips this: the receiver backpressures concurrent processing rather than
+/// rejecting, so well-behaved streams are always read to completion. A rising
+/// value is the signature of a stuck/hostile peer (or, historically, an eager-push
+/// stream storm). Exported via [`GossipNetwork::rejected_stream_count`] so a
+/// regression is observable (and asserted in tests) rather than only a log flood.
+static REJECTED_STREAMS: AtomicU64 = AtomicU64::new(0);
+
+/// Record one rejected/dropped inbound gossip stream for observability.
+///
+/// Bumps the process-wide [`REJECTED_STREAMS`] counter (the in-process accessor
+/// [`GossipNetwork::rejected_stream_count`]) AND emits the Prometheus counter
+/// `dregg_gossip_stream_rejected_total{peer,reason}` so an operator sees the edge
+/// gossip storm as a rejection-RATE graph spike, not only a log flood. The
+/// emission lands on the process-global recorder the node installs
+/// (`node/src/metrics.rs::install_recorder`, where the series is pre-registered
+/// at 0 so the panel renders a healthy 0 from boot).
+///
+/// `reason` is a small bounded set (`conn_limit` / `read_timeout` /
+/// `unknown_sender` / `bad_signature` / `decode_failed`). `peer` is the remote
+/// IP (the port is collapsed so a peer's many ephemeral source ports do not blow
+/// up label cardinality, and a committee mesh stays bounded by its member count).
+/// The pre-handshake connection-limit refusal uses the aggregate sentinel `"*"`:
+/// its source address is attacker-controlled and unbounded (QUIC has not yet
+/// validated it), so labeling it per-peer would be a cardinality bomb during the
+/// exact storm we want to observe.
+fn note_gossip_stream_rejected(peer: &str, reason: &'static str) {
+    REJECTED_STREAMS.fetch_add(1, Ordering::Relaxed);
+    metrics::counter!(
+        "dregg_gossip_stream_rejected_total",
+        "peer" => peer.to_string(),
+        "reason" => reason,
+    )
+    .increment(1);
+}
 
 // ─── Dandelion++ constants ─────────────────────────────────────────────────
 
@@ -248,6 +328,13 @@ pub struct GossipNetwork {
     /// Registry of known peer public keys for signature verification.
     /// Maps NodeId -> PublicKey. Populated from federation configuration.
     peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
+    /// Our OWN externally-reachable gossip listen address (`--bind <ip>:<gossip
+    /// -port>`), if configured. The self-advertise loop signs and broadcasts this
+    /// to every connected peer so the committee learns our reachable endpoint from
+    /// a single bootstrap — the self-forming-mesh fix. `None` when the operator did
+    /// not supply a routable bind address (e.g. `0.0.0.0`), in which case we cannot
+    /// advertise a dialable endpoint and the mesh falls back to manual peers.
+    advertise_addr: Arc<RwLock<Option<SocketAddr>>>,
 }
 
 /// A bounded deduplication set with time-based expiry.
@@ -300,10 +387,10 @@ impl BoundedSeenSet {
         }
 
         // Hard cap eviction
-        if self.entries.len() >= self.max_size {
-            if let Some(evicted) = self.entries.pop_front() {
-                self.index.remove(&evicted.hash);
-            }
+        if self.entries.len() >= self.max_size
+            && let Some(evicted) = self.entries.pop_front()
+        {
+            self.index.remove(&evicted.hash);
         }
 
         self.entries.push_back(SeenEntry {
@@ -375,10 +462,10 @@ impl BoundedPendingIhaves {
             return;
         }
 
-        if self.entries.len() >= self.max_size {
-            if let Some((evicted_key, _)) = self.entries.pop_front() {
-                self.index.remove(&evicted_key);
-            }
+        if self.entries.len() >= self.max_size
+            && let Some((evicted_key, _)) = self.entries.pop_front()
+        {
+            self.index.remove(&evicted_key);
         }
 
         self.entries.push_back((key, value));
@@ -458,7 +545,47 @@ struct GossipState {
     /// "the addresses I have personally verified belong to committee member X";
     /// the receiver re-checks X against its OWN committee key set before dialing,
     /// so a wire peer can never inject an address for a non-committee identity.
+    ///
+    /// An entry also lands here when a peer sends an authenticated
+    /// [`GossipEnvelope::SelfAddr`] advertising its OWN listen endpoint: the
+    /// envelope signature proves the sender authored the claim, so binding
+    /// `sender -> claimed addr` is sound (a node may only advertise an endpoint for
+    /// its OWN signed identity, never another's). This is what lets a pure-ACCEPT
+    /// bootstrap node — one everybody dials but which dials no one, so it holds no
+    /// dial-verified bindings — still learn and re-share every member's reachable
+    /// endpoint, meshing the whole committee from a single seed.
     verified_addrs: HashMap<NodeId, SocketAddr>,
+    /// Per-connection OUTBOUND stream budget (keyed by `Connection::stable_id`).
+    /// Each connection gets a [`Semaphore`] of [`MAX_INFLIGHT_OUT_STREAMS_PER_CONN`]
+    /// permits; the send path acquires a permit before opening a gossip uni-stream
+    /// and holds it until the write finishes (or times out). This is the
+    /// backpressure that stops the eager-push storm: when a peer is not draining,
+    /// our permits stay held and we stop opening new streams to it rather than
+    /// piling on until the receiver's per-peer limit rejects the overflow. The map
+    /// is lazily populated on first send to a connection and pruned of stale
+    /// (closed-connection) entries when it grows past [`MAX_SEND_BUDGET_ENTRIES`].
+    send_budgets: HashMap<usize, Arc<Semaphore>>,
+}
+
+impl GossipState {
+    /// Get (or lazily create) the outbound stream-budget semaphore for the
+    /// connection identified by `stable_id`. When the map grows past
+    /// [`MAX_SEND_BUDGET_ENTRIES`], entries for connections no longer present in
+    /// `peers` are pruned first so the map stays bounded across reconnect churn.
+    fn send_budget_for(&mut self, stable_id: usize) -> Arc<Semaphore> {
+        if self.send_budgets.len() > MAX_SEND_BUDGET_ENTRIES {
+            let live: HashSet<usize> = self
+                .peers
+                .values()
+                .flat_map(|links| links.iter().map(|c| c.stable_id()))
+                .collect();
+            self.send_budgets.retain(|id, _| live.contains(id));
+        }
+        self.send_budgets
+            .entry(stable_id)
+            .or_insert_with(|| Arc::new(Semaphore::new(MAX_INFLIGHT_OUT_STREAMS_PER_CONN)))
+            .clone()
+    }
 }
 
 impl GossipState {
@@ -784,6 +911,18 @@ enum GossipEnvelope {
         msg_hash: MessageHash,
         payload: Vec<u8>,
     },
+    /// AUTHENTICATED SELF-ADVERTISEMENT (the self-forming-mesh substrate): the
+    /// envelope signer asserts its OWN reachable listen address. Because the
+    /// carrying [`SignedEnvelope`] is Ed25519-signed with the sender's key, the
+    /// receiver can bind `sender NodeId -> addr` knowing the sender authored the
+    /// claim — a node can advertise an endpoint only for ITS OWN identity, never
+    /// another's. This lets a node that received only an inbound connection (whose
+    /// `remote_address()` is an un-dialable ephemeral source port) still learn the
+    /// peer's real dialable endpoint, and re-share it via the gossip-of-peers
+    /// exchange — so the committee meshes transitively from one bootstrap peer.
+    SelfAddr {
+        addr: SocketAddr,
+    },
 }
 
 /// Serde helper for 64-byte arrays (Ed25519 signatures).
@@ -907,10 +1046,12 @@ impl GossipNetwork {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         }));
 
         let signing_key = Arc::new(signing_key);
         let peer_keys = Arc::new(RwLock::new(peer_keys));
+        let advertise_addr: Arc<RwLock<Option<SocketAddr>>> = Arc::new(RwLock::new(None));
 
         let network = Self {
             node_id,
@@ -920,6 +1061,7 @@ impl GossipNetwork {
             signing_key: signing_key.clone(),
             max_connections,
             peer_keys: peer_keys.clone(),
+            advertise_addr: advertise_addr.clone(),
         };
 
         // Spawn the forwarding task
@@ -988,6 +1130,18 @@ impl GossipNetwork {
             Self::cache_cleanup_loop(cache_state).await;
         });
 
+        // Spawn the self-advertise loop: periodically sign + broadcast our OWN
+        // configured listen address to every connected peer so the committee meshes
+        // transitively from a single bootstrap (the self-forming-mesh fix). A no-op
+        // until `set_advertise_addr` supplies a routable endpoint.
+        let adv_state = state.clone();
+        let adv_addr = advertise_addr.clone();
+        let adv_node_id = node_id;
+        let adv_key = signing_key.clone();
+        tokio::spawn(async move {
+            Self::self_advertise_loop(adv_state, adv_addr, adv_node_id, adv_key).await;
+        });
+
         info!(
             "GossipNetwork started (plumtree): {} (max_connections={})",
             fmt_node_id(&node_id),
@@ -1004,6 +1158,36 @@ impl GossipNetwork {
     pub async fn register_peer_key(&self, node_id: NodeId, public_key: PublicKey) {
         let mut keys = self.peer_keys.write().await;
         keys.insert(node_id, public_key);
+    }
+
+    /// Set our OWN externally-reachable gossip listen address. The self-advertise
+    /// loop signs and broadcasts it to every connected peer (the self-forming-mesh
+    /// substrate): a peer that only ACCEPTED our connection — and therefore knows
+    /// us solely by an un-dialable ephemeral source port — learns our real dialable
+    /// endpoint and re-shares it via gossip-of-peers, so the committee meshes
+    /// transitively from a single bootstrap. An unspecified host or zero port is
+    /// rejected (nothing could dial it); pass the concrete `--bind <ip>:<gossip
+    /// -port>`.
+    pub async fn set_advertise_addr(&self, addr: SocketAddr) {
+        if addr.ip().is_unspecified() || addr.port() == 0 {
+            warn!(
+                "ignoring un-dialable self-advertise address {addr} \
+                 (need a concrete bind IP + non-zero gossip port)"
+            );
+            return;
+        }
+        *self.advertise_addr.write().await = Some(addr);
+        // Advertise immediately so a peer already connected at config time learns
+        // our endpoint without waiting a full interval.
+        self.advertise_self().await;
+    }
+
+    /// Sign and push our configured self-advertisement to every currently-connected
+    /// peer right now. A no-op when no advertise address is set or no peer is live.
+    pub async fn advertise_self(&self) {
+        let addr = { *self.advertise_addr.read().await };
+        let Some(addr) = addr else { return };
+        Self::broadcast_self_addr(&self.state, addr, self.node_id, &self.signing_key).await;
     }
 
     /// Penalize the transport peer at `addr` for relaying a **proven
@@ -1043,6 +1227,15 @@ impl GossipNetwork {
     /// where a block produced before a peer's link is up is never delivered).
     pub async fn connected_peer_count(&self) -> usize {
         self.state.read().await.live_peer_count()
+    }
+
+    /// Process-wide count of inbound gossip streams rejected for hitting the
+    /// per-connection stream limit ([`MAX_STREAMS_PER_PEER`]). 0 in healthy
+    /// operation; a rising value is the signature of an eager-push stream storm
+    /// (a sender opening uni-streams faster than the receiver drains). The
+    /// outbound backpressure budget keeps this at 0 under sustained load.
+    pub fn rejected_stream_count() -> u64 {
+        REJECTED_STREAMS.load(Ordering::Relaxed)
     }
 
     /// Whether we currently hold at least one live QUIC link to `addr`.
@@ -1193,11 +1386,9 @@ impl GossipNetwork {
                 let state = self.state.read().await;
                 state.links_to(&addr).is_empty()
             };
-            if needs_connect {
-                if let Ok(conn) = self.connect_peer_bounded(addr).await {
-                    let mut state = self.state.write().await;
-                    state.add_peer_link(addr, conn);
-                }
+            if needs_connect && let Ok(conn) = self.connect_peer_bounded(addr).await {
+                let mut state = self.state.write().await;
+                state.add_peer_link(addr, conn);
             }
         }
 
@@ -1678,20 +1869,59 @@ impl GossipNetwork {
             }
             let mut delivered_any = false;
             for conn in links {
+                // BACKPRESSURE: acquire one of this connection's bounded outbound
+                // stream permits before opening a uni-stream. If the budget is
+                // momentarily exhausted (the peer is not draining our streams fast
+                // enough), DROP this push rather than open more — best-effort
+                // gossip, re-delivered by the frontier/pull anti-entropy. This is
+                // what keeps the eager-push catch-up burst from out-running the
+                // receiver's per-peer stream limit and stalling finality.
+                let sem = {
+                    let mut s = state.write().await;
+                    s.send_budget_for(conn.stable_id())
+                };
+                let permit = match Arc::clone(&sem).try_acquire_owned() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // A live link exists but its send budget is saturated — the
+                        // peer is alive (do not count it dead), we just skip this
+                        // push to it and let anti-entropy re-deliver.
+                        delivered_any = true;
+                        trace!(
+                            "send budget exhausted for {addr} (conn {:#x}); dropping push (anti-entropy will re-deliver)",
+                            conn.stable_id()
+                        );
+                        continue;
+                    }
+                };
                 match conn.open_uni().await {
                     Ok(mut stream) => {
                         delivered_any = true;
                         let padded = Arc::clone(&padded);
                         tokio::spawn(async move {
-                            // Write outer length prefix (padded frame size) then padded data.
-                            let len = (padded.len() as u32).to_be_bytes();
-                            if stream.write_all(&len).await.is_ok() {
-                                let _ = stream.write_all(&padded).await;
-                                let _ = stream.finish();
+                            // Hold the budget permit for the lifetime of the write;
+                            // released (and the budget freed) on completion/timeout.
+                            let _permit = permit;
+                            let write = async {
+                                // Outer length prefix (padded frame size) then data.
+                                let len = (padded.len() as u32).to_be_bytes();
+                                if stream.write_all(&len).await.is_ok() {
+                                    let _ = stream.write_all(&padded).await;
+                                    let _ = stream.finish();
+                                }
+                            };
+                            // Bound the write so a peer that has stopped reading
+                            // cannot hold this connection's budget permit forever.
+                            if tokio::time::timeout(STREAM_WRITE_TIMEOUT, write)
+                                .await
+                                .is_err()
+                            {
+                                let _ = stream.reset(0u32.into());
                             }
                         });
                     }
                     Err(e) => {
+                        drop(permit);
                         debug!("Failed to open stream to {addr}: {e}");
                     }
                 }
@@ -1774,6 +2004,10 @@ impl GossipNetwork {
                         max_connections,
                         incoming.remote_address()
                     );
+                    // Pre-handshake: the source address is not yet QUIC-validated
+                    // (attacker-controllable / unbounded), so attribute to the
+                    // aggregate sentinel rather than exploding peer cardinality.
+                    note_gossip_stream_rejected("*", "conn_limit");
                     incoming.refuse();
                     continue;
                 }
@@ -1825,41 +2059,58 @@ impl GossipNetwork {
         peer_keys: Arc<RwLock<HashMap<NodeId, PublicKey>>>,
     ) {
         let remote_addr = conn.remote_address();
-        // Per-connection stream counter to prevent stream flooding.
-        let active_streams = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // Per-connection inbound concurrency limiter. We process at most
+        // MAX_STREAMS_PER_PEER gossip streams from this connection at once and
+        // BACKPRESSURE rather than reject: a permit is acquired BEFORE accepting
+        // the next stream, so when all slots are busy we simply stop accepting.
+        // Unaccepted streams sit in QUIC's stream-flow-control window, which
+        // throttles the sender's `open_uni` — end-to-end backpressure that pairs
+        // with the sender's MAX_INFLIGHT_OUT_STREAMS_PER_CONN budget. The old code
+        // accepted unconditionally and REJECTED the overflow, dropping exactly the
+        // blocks/votes a catch-up burst needed to finalize (the stream storm that
+        // stalled sustained finality). Waiting instead of dropping keeps every
+        // accepted stream's payload while still bounding concurrent work.
+        let limiter = Arc::new(Semaphore::new(MAX_STREAMS_PER_PEER));
 
         loop {
+            // Acquire a processing slot first. When the connection is saturated
+            // this awaits a slot instead of accepting-then-rejecting, so no stream
+            // is dropped — the sender is throttled by QUIC flow control instead.
+            let Ok(permit) = Arc::clone(&limiter).acquire_owned().await else {
+                break; // limiter closed (unreachable; defensive)
+            };
             let Ok(mut recv) = conn.accept_uni().await else {
                 break;
             };
-
-            // Enforce per-connection stream limit.
-            let current_streams = active_streams.fetch_add(1, Ordering::SeqCst);
-            if current_streams >= MAX_STREAMS_PER_PEER {
-                active_streams.fetch_sub(1, Ordering::SeqCst);
-                warn!(
-                    "Rejecting stream from {} — at per-peer limit ({})",
-                    remote_addr, MAX_STREAMS_PER_PEER
-                );
-                continue;
-            }
 
             let state = state.clone();
             let outgoing_tx = outgoing_tx.clone();
             let key = signing_key.clone();
             let peer_keys = peer_keys.clone();
             let our_node_id = node_id;
-            let streams_counter = active_streams.clone();
             tokio::spawn(async move {
-                // Decrement stream count when this stream handler completes.
-                struct StreamGuard(Arc<std::sync::atomic::AtomicUsize>);
-                impl Drop for StreamGuard {
-                    fn drop(&mut self) {
-                        self.0.fetch_sub(1, Ordering::SeqCst);
+                // Release the processing slot when this stream handler completes.
+                let _permit = permit;
+                // Bound the read so a peer that opens a stream but never finishes
+                // writing it cannot hold a processing slot forever (a slow-loris
+                // DoS that would otherwise wedge the connection's bounded slots).
+                // A stalled/timed-out read drops the stream and is counted as a
+                // health signal; healthy gossip frames read in microseconds.
+                let read = tokio::time::timeout(
+                    INBOUND_STREAM_READ_TIMEOUT,
+                    read_signed_envelope(&mut recv),
+                )
+                .await;
+                let signed = match read {
+                    Ok(Ok(signed)) => signed,
+                    Ok(Err(_)) => return,
+                    Err(_) => {
+                        note_gossip_stream_rejected(&remote_addr.ip().to_string(), "read_timeout");
+                        let _ = recv.stop(0u32.into());
+                        return;
                     }
-                }
-                let _guard = StreamGuard(streams_counter);
-                if let Ok(signed) = read_signed_envelope(&mut recv).await {
+                };
+                {
                     // Look up the sender's public key from the peer registry.
                     let sender_pk = {
                         let keys = peer_keys.read().await;
@@ -1873,6 +2124,10 @@ impl GossipNetwork {
                                 "Rejecting gossip envelope from {} — unknown sender {:?}",
                                 remote_addr,
                                 &signed.sender[..4]
+                            );
+                            note_gossip_stream_rejected(
+                                &remote_addr.ip().to_string(),
+                                "unknown_sender",
                             );
                             state
                                 .write()
@@ -1889,6 +2144,7 @@ impl GossipNetwork {
                             "Rejecting gossip envelope from {} — invalid Ed25519 signature",
                             remote_addr
                         );
+                        note_gossip_stream_rejected(&remote_addr.ip().to_string(), "bad_signature");
                         state
                             .write()
                             .await
@@ -1902,6 +2158,7 @@ impl GossipNetwork {
                             "Rejecting gossip envelope from {} — decode failed",
                             remote_addr
                         );
+                        note_gossip_stream_rejected(&remote_addr.ip().to_string(), "decode_failed");
                         return;
                     };
 
@@ -1935,6 +2192,7 @@ impl GossipNetwork {
                     Self::handle_envelope(
                         envelope,
                         remote_addr,
+                        signed.sender,
                         &state,
                         &outgoing_tx,
                         &*key,
@@ -1949,6 +2207,7 @@ impl GossipNetwork {
     async fn handle_envelope(
         envelope: GossipEnvelope,
         remote_addr: SocketAddr,
+        sender_id: NodeId,
         state: &Arc<RwLock<GossipState>>,
         outgoing_tx: &mpsc::UnboundedSender<OutgoingGossip>,
         signing_key: &SigningKey,
@@ -2218,14 +2477,14 @@ impl GossipNetwork {
 
                     if is_new {
                         let s = state.read().await;
-                        if let Some(topic_state) = s.topics.get(&topic_id) {
-                            if let Ok(msg) = PeerMessage::decode_raw(&payload) {
-                                for sub in &topic_state.subscribers {
-                                    let _ = sub.send(GossipEvent::Message {
-                                        from: remote_addr,
-                                        message: msg.clone(),
-                                    });
-                                }
+                        if let Some(topic_state) = s.topics.get(&topic_id)
+                            && let Ok(msg) = PeerMessage::decode_raw(&payload)
+                        {
+                            for sub in &topic_state.subscribers {
+                                let _ = sub.send(GossipEvent::Message {
+                                    from: remote_addr,
+                                    message: msg.clone(),
+                                });
                             }
                         }
                     }
@@ -2340,6 +2599,26 @@ impl GossipNetwork {
                     )
                     .await;
                 }
+            }
+
+            // ─── Authenticated self-advertisement (self-forming mesh) ──────────
+            GossipEnvelope::SelfAddr { addr } => {
+                // The carrying envelope's Ed25519 signature already proved
+                // `sender_id` authored this claim, so binding `sender_id -> addr`
+                // is sound: a node may advertise an endpoint ONLY for its OWN
+                // signed identity, never another's (`sender_id` is fixed by the
+                // verified signature, not taken from the payload). Reject an
+                // un-dialable claim (unspecified host / zero port) so we never
+                // propagate a dead hint. Recorded into `verified_addrs` so the
+                // gossip-of-peers exchange re-shares it; the receiver there
+                // re-checks committee membership before dialing.
+                if addr.ip().is_unspecified() || addr.port() == 0 {
+                    debug!("ignoring un-dialable SelfAddr {addr} from {remote_addr}");
+                    return;
+                }
+                let mut s = state.write().await;
+                s.verified_addrs.insert(sender_id, addr);
+                trace!("recorded authenticated self-advertisement: peer -> {addr}");
             }
         }
     }
@@ -2581,6 +2860,56 @@ impl GossipNetwork {
         }
     }
 
+    /// Self-advertise loop: every [`SELF_ADVERTISE_INTERVAL`] (first tick
+    /// immediate), sign our configured listen address and push it to every
+    /// connected peer. A no-op until `set_advertise_addr` supplies a routable
+    /// endpoint or while we hold no live links. This is the SEND half of the
+    /// self-forming-mesh fix; the receive half records the authenticated binding in
+    /// `handle_envelope`'s `SelfAddr` arm.
+    async fn self_advertise_loop(
+        state: Arc<RwLock<GossipState>>,
+        advertise_addr: Arc<RwLock<Option<SocketAddr>>>,
+        node_id: NodeId,
+        signing_key: Arc<SigningKey>,
+    ) {
+        let mut interval = tokio::time::interval(SELF_ADVERTISE_INTERVAL);
+        loop {
+            interval.tick().await;
+            let addr = { *advertise_addr.read().await };
+            let Some(addr) = addr else { continue };
+            Self::broadcast_self_addr(&state, addr, node_id, &signing_key).await;
+        }
+    }
+
+    /// Sign a [`GossipEnvelope::SelfAddr`] for `addr` and send it over every live
+    /// link (including inbound-accepted links keyed by an ephemeral source port, so
+    /// a pure-accept bootstrap peer reaches us back to learn our endpoint).
+    async fn broadcast_self_addr(
+        state: &Arc<RwLock<GossipState>>,
+        addr: SocketAddr,
+        node_id: NodeId,
+        signing_key: &SigningKey,
+    ) {
+        if addr.ip().is_unspecified() || addr.port() == 0 {
+            return;
+        }
+        let targets: Vec<SocketAddr> = {
+            let s = state.read().await;
+            s.peers
+                .iter()
+                .filter(|(_, links)| links.iter().any(|c| c.close_reason().is_none()))
+                .map(|(a, _)| *a)
+                .collect()
+        };
+        if targets.is_empty() {
+            return;
+        }
+        let envelope = GossipEnvelope::SelfAddr { addr };
+        if let Some(bytes) = Self::sign_envelope(&envelope, node_id, signing_key) {
+            Self::send_to_peers(&bytes, &targets, state).await;
+        }
+    }
+
     /// Get our node ID.
     pub fn node_id(&self) -> NodeId {
         self.node_id
@@ -2630,6 +2959,72 @@ pub fn topic_id_from_name(name: &str) -> TopicId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gossip-rejection observability emit: `note_gossip_stream_rejected`
+    /// MUST both advance the in-process accessor (`rejected_stream_count`) AND
+    /// emit `dregg_gossip_stream_rejected_total{peer,reason}` so the edge gossip
+    /// storm is a graph spike, not only a log flood. Captured with a local
+    /// recorder so the global node recorder is untouched.
+    #[test]
+    fn gossip_rejection_emits_labeled_counter_and_advances_accessor() {
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let before = GossipNetwork::rejected_stream_count();
+        metrics::with_local_recorder(&recorder, || {
+            // The post-handshake, count-bounded peer rejections carry the peer IP.
+            note_gossip_stream_rejected("10.0.0.7", "bad_signature");
+            note_gossip_stream_rejected("10.0.0.7", "read_timeout");
+            // The pre-handshake connection-limit refusal uses the aggregate
+            // sentinel so an unbounded attacker source cannot bomb cardinality.
+            note_gossip_stream_rejected("*", "conn_limit");
+        });
+        let after = GossipNetwork::rejected_stream_count();
+        assert_eq!(
+            after - before,
+            3,
+            "the in-process accessor must advance by 3"
+        );
+
+        // The Prometheus counter is emitted, per-reason, with the peer label.
+        let rows = snapshotter.snapshot().into_vec();
+        let mut by_reason: std::collections::HashMap<(String, String), u64> = Default::default();
+        for (ck, _unit, _desc, val) in rows {
+            let key = ck.key();
+            if key.name() != "dregg_gossip_stream_rejected_total" {
+                continue;
+            }
+            let mut peer = String::new();
+            let mut reason = String::new();
+            for l in key.labels() {
+                match l.key() {
+                    "peer" => peer = l.value().to_string(),
+                    "reason" => reason = l.value().to_string(),
+                    _ => {}
+                }
+            }
+            if let DebugValue::Counter(c) = val {
+                by_reason.insert((peer, reason), c);
+            }
+        }
+        assert_eq!(
+            by_reason.get(&("10.0.0.7".into(), "bad_signature".into())),
+            Some(&1),
+            "a bad-signature rejection is attributed to its peer IP"
+        );
+        assert_eq!(
+            by_reason.get(&("10.0.0.7".into(), "read_timeout".into())),
+            Some(&1),
+            "a slow-loris read-timeout rejection is attributed to its peer IP"
+        );
+        assert_eq!(
+            by_reason.get(&("*".into(), "conn_limit".into())),
+            Some(&1),
+            "the pre-handshake conn-limit refusal is the aggregate sentinel"
+        );
+    }
 
     #[test]
     fn topic_id_deterministic() {
@@ -2843,7 +3238,7 @@ mod tests {
         // federation-keyed registry, so it is correctly rejected as unknown.
         let transport_style_sender: NodeId = [0x99; 32];
         assert!(
-            peer_keys.get(&transport_style_sender).is_none(),
+            !peer_keys.contains_key(&transport_style_sender),
             "a non-federation (transport-cert) sender must be unknown"
         );
     }
@@ -3160,7 +3555,7 @@ mod tests {
             }
         }
         assert!(
-            stem_count >= 800 && stem_count <= 980,
+            (800..=980).contains(&stem_count),
             "stem continuation count {stem_count}/1000 outside expected range [800, 980]"
         );
     }
@@ -3210,6 +3605,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
 
         // Add a topic with 5 peers (3 eager, 2 lazy)
@@ -3317,6 +3713,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
 
         // 3 eager + 2 lazy peers
@@ -3537,6 +3934,7 @@ mod tests {
             scoreboard: PeerScoreboard::new(),
             anchors: HashSet::new(),
             verified_addrs: HashMap::new(),
+            send_budgets: HashMap::new(),
         };
         // No links yet: links_to is empty and the address counts as not-connected.
         let addr: SocketAddr = "127.0.0.1:9999".parse().unwrap();
@@ -3635,6 +4033,99 @@ mod tests {
             "A never received B's spontaneous eager push — B->A spontaneous gossip dropped"
         );
         assert_eq!(got_on_a.unwrap(), msg_from_b);
+    }
+
+    /// STREAM-STORM BACKPRESSURE: a rapid eager-push burst must NOT trip the
+    /// receiver's per-connection stream limit. The original send path opened an
+    /// unbounded uni-stream per message; a catch-up burst then out-ran the
+    /// receiver's drain and overflowed [`MAX_STREAMS_PER_PEER`], rejecting exactly
+    /// the blocks/votes needed to finalize (the live-federation "first turn
+    /// finalizes then stalls" storm). With the per-connection outbound budget the
+    /// sender tracks the drain rate, so a large burst is delivered with ZERO
+    /// rejected streams. This pins both properties: the burst is delivered AND the
+    /// reject counter does not move.
+    #[tokio::test]
+    async fn eager_push_burst_does_not_storm_the_stream_limit() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::collections::HashSet;
+        use std::time::Duration;
+
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        let topic_a = gossip_a.join_topic("dregg/burst", &[addr_b]).await.unwrap();
+        let topic_b = gossip_b.join_topic("dregg/burst", &[addr_a]).await.unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        // Let the dial+accept links establish in both directions.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // Baseline the process-wide reject counter (healthy operation never
+        // rejects, so the delta across this burst must be exactly zero).
+        let rejects_before = GossipNetwork::rejected_stream_count();
+
+        // BURST: fire far more messages than MAX_STREAMS_PER_PEER (64), as fast as
+        // the publisher can enqueue them — the shape that overflowed the receiver
+        // under the old unbounded stream-per-message path.
+        const BURST: usize = 400;
+        for i in 0..BURST {
+            let msg = PeerMessage::PublishTurn {
+                turn_hash: [0u8; 32],
+                turn_data: format!("burst-{i}").into_bytes(),
+                causal_deps: vec![],
+            };
+            gossip_a.publish_eager(&topic_a, &msg).await.unwrap();
+        }
+
+        // Collect distinct deliveries on B until the burst drains or we time out.
+        let mut delivered: HashSet<Vec<u8>> = HashSet::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while delivered.len() < BURST && Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(remaining, stream_b.recv()).await {
+                Ok(Some(GossipEvent::Message {
+                    message: PeerMessage::PublishTurn { turn_data, .. },
+                    ..
+                })) => {
+                    delivered.insert(turn_data);
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        let rejects_after = GossipNetwork::rejected_stream_count();
+        assert_eq!(
+            rejects_after,
+            rejects_before,
+            "an eager-push burst tripped the per-connection stream limit \
+             ({} streams rejected) — the storm backpressure is not bounding outbound streams",
+            rejects_after - rejects_before
+        );
+        // The bounded sender delivers the whole burst (best-effort gossip allows a
+        // rare drop under momentary budget pressure, but on loopback the writes
+        // drain far faster than the sequential forward loop opens them, so every
+        // distinct message arrives).
+        assert_eq!(
+            delivered.len(),
+            BURST,
+            "burst delivery collapsed: B received {}/{} distinct messages",
+            delivered.len(),
+            BURST
+        );
     }
 
     /// Drain a subscriber stream until a REMOTE message arrives (skipping the
@@ -3969,5 +4460,326 @@ mod tests {
             saw_bc,
             "B<->C must converge over the discovered link — mesh formed from B's single seed"
         );
+    }
+
+    /// INBOUND-LINK REGISTRATION. The headline self-mesh prerequisite: a node that
+    /// only ACCEPTS a connection (never dials the peer) must still register a usable
+    /// peer link, so connectivity is bidirectional. Here B dials A; A is configured
+    /// with NO bootstrap peers and never dials B. After the accept, A must report a
+    /// live peer and be able to push to B over the accepted (inbound) link.
+    #[tokio::test]
+    async fn inbound_accept_registers_a_usable_peer_link() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_a = node_a.local_addr();
+
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        // A joins with NO bootstrap peers — it will only ever ACCEPT.
+        let topic_a = gossip_a.join_topic("dregg/inbound", &[]).await.unwrap();
+        let mut stream_a = gossip_a.subscribe(&topic_a).await.unwrap();
+        // B dials A.
+        let topic_b = gossip_b
+            .join_topic("dregg/inbound", &[addr_a])
+            .await
+            .unwrap();
+        let mut stream_b = gossip_b.subscribe(&topic_b).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // The accept registered an inbound link: A sees one live peer although it
+        // dialed no one.
+        assert!(
+            gossip_a.connected_peer_count().await > 0,
+            "accepting an inbound connection must register a peer link on A"
+        );
+
+        // And that inbound link is usable in the A->B direction (full-duplex serve).
+        let from_a = PeerMessage::PublishTurn {
+            turn_hash: [0x77; 32],
+            turn_data: b"over-inbound".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_a.publish_eager(&topic_a, &from_a).await.unwrap();
+        let got_on_b = recv_remote_within(&mut stream_b, Duration::from_secs(5)).await;
+        assert_eq!(
+            got_on_b,
+            Some(from_a),
+            "A must be able to push to B over the accepted inbound link"
+        );
+
+        // And B->A still works (sanity: the dialed direction serves too).
+        let from_b = PeerMessage::PublishTurn {
+            turn_hash: [0x88; 32],
+            turn_data: b"reply".to_vec(),
+            causal_deps: vec![],
+        };
+        gossip_b.publish_eager(&topic_b, &from_b).await.unwrap();
+        let got_on_a = recv_remote_within(&mut stream_a, Duration::from_secs(5)).await;
+        assert_eq!(got_on_a, Some(from_b));
+    }
+
+    /// AUTHENTICATED SELF-ADVERTISEMENT from a PURE-ACCEPT bootstrap node — the
+    /// headline self-forming-mesh mechanism. The edge E dials NO ONE; A and B each
+    /// dial only E. With the old code E would hold zero verified bindings (it only
+    /// records addresses it dialed) and could introduce no one. Now A and B sign +
+    /// advertise their OWN listen addresses; E records the authenticated
+    /// `identity -> listen addr` bindings and can re-share them. We assert E ends up
+    /// holding the real DIALABLE listen address for BOTH A and B even though E never
+    /// dialed either — the substrate that lets the whole committee mesh from one
+    /// seed.
+    #[tokio::test]
+    async fn self_advertisement_gives_pure_accept_edge_dialable_bindings() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_e, pk_e) = dregg_types::generate_keypair();
+        let (sk_a, pk_a) = dregg_types::generate_keypair();
+        let (sk_b, pk_b) = dregg_types::generate_keypair();
+        let id_e: NodeId = *blake3::hash(pk_e.as_bytes()).as_bytes();
+        let id_a: NodeId = *blake3::hash(pk_a.as_bytes()).as_bytes();
+        let id_b: NodeId = *blake3::hash(pk_b.as_bytes()).as_bytes();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_e, pk_e);
+        keys.insert(id_a, pk_a);
+        keys.insert(id_b, pk_b);
+
+        let node_e = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_a = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_b = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_e = node_e.local_addr();
+        let addr_a = node_a.local_addr();
+        let addr_b = node_b.local_addr();
+
+        let gossip_e = GossipNetwork::new(node_e.endpoint().clone(), id_e, sk_e, keys.clone());
+        let gossip_a = GossipNetwork::new(node_a.endpoint().clone(), id_a, sk_a, keys.clone());
+        let gossip_b = GossipNetwork::new(node_b.endpoint().clone(), id_b, sk_b, keys.clone());
+
+        const TOPIC: &str = "dregg/self-adv";
+        // E is a PURE-ACCEPT bootstrap: no bootstrap peers, it dials no one.
+        let _topic_e = gossip_e.join_topic(TOPIC, &[]).await.unwrap();
+        // A and B each dial ONLY E.
+        let _topic_a = gossip_a.join_topic(TOPIC, &[addr_e]).await.unwrap();
+        let _topic_b = gossip_b.join_topic(TOPIC, &[addr_e]).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // Each node advertises its OWN reachable listen address (authenticated by
+        // its own signature). E is connected to both A and B (it accepted them), so
+        // their advertisements reach E.
+        gossip_a.set_advertise_addr(addr_a).await;
+        gossip_b.set_advertise_addr(addr_b).await;
+
+        // Give the signed SelfAddr envelopes time to arrive + be recorded.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let b = gossip_e.verified_peer_bindings().await;
+            let has_a = b.iter().any(|(id, addr)| *id == id_a && *addr == addr_a);
+            let has_b = b.iter().any(|(id, addr)| *id == id_b && *addr == addr_b);
+            if has_a && has_b {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "pure-accept edge E must record authenticated self-advertised \
+                     DIALABLE bindings for both A and B; got {b:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// SELF-ADVERTISEMENT IS BOUND TO THE SIGNED IDENTITY (no spoofing hole). A
+    /// committee member can advertise an endpoint only for ITS OWN signed identity,
+    /// never another's: the binding is keyed by the verified envelope signer, not by
+    /// any field a sender controls. Here M (a committee member) advertises a bogus
+    /// address; E records it under M's OWN identity — and crucially holds NO binding
+    /// for the victim V's identity (M cannot fabricate one). Only V, by signing its
+    /// own advertisement, can create V's binding.
+    #[tokio::test]
+    async fn self_advertisement_cannot_spoof_another_identity() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        let (sk_e, pk_e) = dregg_types::generate_keypair();
+        let (sk_m, pk_m) = dregg_types::generate_keypair();
+        let (_sk_v, pk_v) = dregg_types::generate_keypair();
+        let id_e: NodeId = *blake3::hash(pk_e.as_bytes()).as_bytes();
+        let id_m: NodeId = *blake3::hash(pk_m.as_bytes()).as_bytes();
+        let id_v: NodeId = *blake3::hash(pk_v.as_bytes()).as_bytes();
+        // E's committee key set knows all three identities (M and V are members).
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        keys.insert(id_e, pk_e);
+        keys.insert(id_m, pk_m);
+        keys.insert(id_v, pk_v);
+
+        let node_e = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let node_m = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+        let addr_e = node_e.local_addr();
+        // A plausible-looking "victim" listen address M will try to smuggle.
+        let bogus_addr = free_loopback_addr();
+
+        let gossip_e = GossipNetwork::new(node_e.endpoint().clone(), id_e, sk_e, keys.clone());
+        let gossip_m = GossipNetwork::new(node_m.endpoint().clone(), id_m, sk_m, keys.clone());
+
+        const TOPIC: &str = "dregg/spoof";
+        let _topic_e = gossip_e.join_topic(TOPIC, &[]).await.unwrap();
+        let _topic_m = gossip_m.join_topic(TOPIC, &[addr_e]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        // M advertises a bogus address. Because the SelfAddr binds to M's signed
+        // identity, E records id_M -> bogus — M's OWN entry. It can NOT inject an
+        // entry for the victim V.
+        gossip_m.set_advertise_addr(bogus_addr).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+
+        let bindings = gossip_e.verified_peer_bindings().await;
+        // M's claim only ever lands under M's own identity...
+        assert!(
+            bindings
+                .iter()
+                .any(|(id, addr)| *id == id_m && *addr == bogus_addr),
+            "M's self-advertisement must bind under M's OWN identity"
+        );
+        // ...and crucially E holds NO binding for the victim V (M cannot forge one).
+        assert!(
+            !bindings.iter().any(|(id, _)| *id == id_v),
+            "a member must NOT be able to advertise an address for ANOTHER identity \
+             (no V binding may exist — only V can create it)"
+        );
+    }
+
+    /// FULL SELF-FORMING MESH FROM A SINGLE BOOTSTRAP (the headline result). Four
+    /// real gossip networks over loopback QUIC: a PURE-ACCEPT edge E and three
+    /// members A, B, C that each boot knowing ONLY E (`--bootstrap edge`, no
+    /// `--federation-peers`). Driving exactly the loop `blocklace_sync` runs —
+    /// self-advertise, then the introducer re-shares its authenticated bindings and
+    /// each node's reconnect prober dials the learned peers — every node converges
+    /// to peer-count N-1 (a full mesh) without anyone enumerating the others. This
+    /// is the robust homelab onboarding path: just `--bootstrap edge`.
+    #[tokio::test]
+    async fn four_node_self_forming_mesh_from_single_bootstrap() {
+        use crate::node::{PeerNode, PeerNodeConfig};
+        use std::time::Duration;
+
+        // Four committee identities; gossip node_id = blake3(public_key).
+        let mut sks = Vec::new();
+        let mut ids = Vec::new();
+        let mut keys: HashMap<NodeId, PublicKey> = HashMap::new();
+        for _ in 0..4 {
+            let (sk, pk) = dregg_types::generate_keypair();
+            let id: NodeId = *blake3::hash(pk.as_bytes()).as_bytes();
+            keys.insert(id, pk);
+            sks.push(sk);
+            ids.push(id);
+        }
+
+        // Stand up four nodes. Index 0 = the edge E (pure accept).
+        let mut nodes = Vec::new();
+        let mut addrs = Vec::new();
+        for _ in 0..4 {
+            let n = PeerNode::new(PeerNodeConfig::default()).await.unwrap();
+            addrs.push(n.local_addr());
+            nodes.push(n);
+        }
+        let mut gossips = Vec::new();
+        for i in 0..4 {
+            gossips.push(GossipNetwork::new(
+                nodes[i].endpoint().clone(),
+                ids[i],
+                sks[i].clone(),
+                keys.clone(),
+            ));
+        }
+
+        const TOPIC: &str = "dregg/full-mesh";
+        // E (index 0) is a pure-accept bootstrap: no peers configured.
+        let mut topics = Vec::new();
+        topics.push(gossips[0].join_topic(TOPIC, &[]).await.unwrap());
+        // A, B, C each know ONLY the edge E.
+        for i in 1..4 {
+            topics.push(gossips[i].join_topic(TOPIC, &[addrs[0]]).await.unwrap());
+        }
+
+        // Every node advertises its OWN reachable listen address.
+        for i in 0..4 {
+            gossips[i].set_advertise_addr(addrs[i]).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // Drive the discovery+prober loop. Each round: (1) re-advertise so the edge
+        // holds every member's authenticated binding; (2) the edge re-shares those
+        // bindings — replicated here by feeding each node the addresses the edge
+        // knows for the OTHER identities (the node-layer `share_peer_addrs` does this
+        // with the committee-key gate); (3) each node's prober dials its unconnected
+        // learned peers.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            for i in 0..4 {
+                gossips[i].advertise_self().await;
+            }
+            // The edge introduces members to each other from its authenticated
+            // bindings (id -> dialable listen addr).
+            let edge_bindings = gossips[0].verified_peer_bindings().await;
+            for i in 1..4 {
+                for (id, addr) in &edge_bindings {
+                    if *id != ids[i] {
+                        gossips[i].learn_peer(&topics[i], *addr).await;
+                    }
+                }
+            }
+            // Each node's reconnect prober dials its discovered-but-unconnected peers.
+            for i in 0..4 {
+                for addr in gossips[i].unconnected_topic_peers(&topics[i]).await {
+                    gossips[i].reconnect_peer(addr).await;
+                }
+            }
+
+            let mut all_meshed = true;
+            for i in 0..4 {
+                if gossips[i].connected_peer_count().await < 3 {
+                    all_meshed = false;
+                    break;
+                }
+            }
+            if all_meshed {
+                break;
+            }
+            if Instant::now() >= deadline {
+                let counts: Vec<usize> = {
+                    let mut v = Vec::new();
+                    for g in &gossips {
+                        v.push(g.connected_peer_count().await);
+                    }
+                    v
+                };
+                panic!(
+                    "committee failed to self-form a full mesh from a single bootstrap; \
+                     per-node live peer counts (want 3 each): {counts:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Every node reached peer-count N-1 = 3: a full mesh from one bootstrap.
+        for i in 0..4 {
+            assert!(
+                gossips[i].connected_peer_count().await >= 3,
+                "node {i} must reach a full mesh (>= 3 live peers)"
+            );
+        }
     }
 }

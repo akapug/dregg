@@ -8,6 +8,23 @@ import { nodeRequest, nodeRequestRaw, getNodeHeaders } from "./api";
 import { compatSession, extensionPrefix, isExtensionPageUrl } from "./browser-compat";
 import { explainTurn } from "./explain";
 import { createSseParser } from "./sse";
+import { mnemonicConfirmed, walletPassphraseOk } from "./onboarding";
+import { defaultNodeUrl, defaultNodeWssUrl } from "./endpoints";
+import {
+  AUTH_CHALLENGE_PATH,
+  AUTH_LOGIN_PATH,
+  AUTH_LOGOUT_PATH,
+  bytesToHex as loginBytesToHex,
+  challengeRequestBody,
+  cloudBaseUrl,
+  loginRequestBody,
+  parseChallengeResponse,
+  parseLoginResponse,
+  statusFromSession,
+  utf8Bytes,
+  type CapLoginSession,
+  type CapLoginStatus,
+} from "./login";
 import type {
   AuthorizeRequest,
   AuthorizeResult,
@@ -61,9 +78,12 @@ const LEGACY_ENCRYPTED_STATE_KEY = "dregg_wallet_encrypted";
 const STEALTH_KEYS_KEY = "dregg_stealth_keys_encrypted";
 const ALLOWED_ORIGINS_KEY = "dregg_allowed_origins";
 const NODE_CONFIG_KEY = "dregg_node_config";
-const DEFAULT_NODE_URL = "https://devnet.dregg.fg-goose.online";
-const DEFAULT_NODE_WSS_URL = "wss://devnet.dregg.fg-goose.online/ws";
-const DEFAULT_NODE_WS_URL = "ws://localhost:8420/ws";
+// Production-sane defaults: a public install talks to the dregg network over
+// TLS only. Plaintext localhost is NOT a silent default; it is reachable as an
+// explicit developer toggle (optional host permission + a settings override).
+const DEFAULT_NODE_URL = defaultNodeUrl();
+const DEFAULT_NODE_WSS_URL = defaultNodeWssUrl();
+const DEFAULT_NODE_WS_URL = defaultNodeWssUrl();
 const DISCOVERY_URL = "https://emberian.github.io/dregg/discovery.json";
 const DISCOVERY_POLL_INTERVAL = 5 * 60 * 1000;
 const PBKDF2_ITERATIONS = 600000;
@@ -91,6 +111,10 @@ const RECEIPT_STREAM_MAX_BACKOFF_MS = 60_000;
 // profile's mnemonic stays at MNEMONIC_KEY for migration compatibility).
 const PROFILE_MNEMONICS_KEY = "dregg_profile_mnemonics_encrypted";
 const DEFAULT_PROFILE_NAME = "default";
+// Cap-account cloud session (challenge–response login). The bearer session
+// token is kept in memory-only `chrome.storage.session` where available (never
+// persisted to disk), falling back to local storage otherwise.
+const CAP_SESSION_KEY = "dregg_cap_session";
 
 // ---------------------------------------------------------------------------
 // Node configuration
@@ -1017,11 +1041,111 @@ async function loadState(): Promise<InternalCipherclerkState> {
     return state;
   }
 
-  // First run: generate mnemonic and initialize cipherclerk.
-  const mnemonic = await generateMnemonic();
-  const keypair = await deriveKeypairFromMnemonic(mnemonic, "");
+  // First run: NO wallet exists yet. We deliberately do NOT auto-generate a
+  // keypair here. The previous design encrypted a fresh wallet under a random
+  // "internal key" kept in chrome.storage.session, which Chrome clears on
+  // browser restart — orphaning the state AND the recovery phrase (silent fund
+  // loss), and on Firefox sitting in plaintext local storage. Instead we return
+  // an uninitialized state; the popup runs onboarding (set passphrase + back up
+  // the recovery phrase), and only then is a key generated, encrypted under the
+  // user's passphrase (see completeOnboarding). No key ever exists protected
+  // solely by an ephemeral session key.
   state = {
     locked: true,
+    uninitialized: true,
+    publicKey: [],
+    secretKey: null,
+    profiles: [],
+    activeProfile: DEFAULT_PROFILE_NAME,
+    tokens: [],
+    receiptChain: [],
+    log: [],
+    hasMnemonic: false,
+    mnemonicShown: false,
+    needsPassphraseSetup: false,
+    stealthMeta: null,
+    stealthPrivate: null,
+    stealthNotes: [],
+  };
+  return state;
+}
+
+// ---------------------------------------------------------------------------
+// First-run onboarding (MF-1)
+//
+// A two-step flow that guarantees a wallet is only ever created once the user
+// has (a) chosen a real passphrase and (b) backed up + confirmed the recovery
+// phrase. The candidate mnemonic is held in service-worker memory ONLY between
+// the two steps — never persisted — until completeOnboarding encrypts it under
+// the chosen passphrase.
+// ---------------------------------------------------------------------------
+
+let pendingOnboardingMnemonic: string | null = null;
+
+async function walletExists(): Promise<boolean> {
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEY,
+    ENCRYPTED_STATE_KEY,
+    MNEMONIC_KEY,
+    LEGACY_ENCRYPTED_STATE_KEY,
+  ]);
+  return Boolean(
+    stored[STORAGE_KEY] ||
+    stored[ENCRYPTED_STATE_KEY] ||
+    stored[MNEMONIC_KEY] ||
+    stored[LEGACY_ENCRYPTED_STATE_KEY],
+  );
+}
+
+/**
+ * Begin onboarding: generate a fresh candidate recovery phrase and return it
+ * so the popup can display it for the user to write down. The phrase is held in
+ * memory only; nothing is persisted until completeOnboarding. Refuses if a
+ * wallet already exists.
+ */
+async function beginOnboarding(): Promise<{ mnemonic?: string; error?: string }> {
+  if (await walletExists()) {
+    return { error: "A wallet already exists. Recover or unlock it instead." };
+  }
+  try {
+    pendingOnboardingMnemonic = await generateMnemonic();
+  } catch (e: unknown) {
+    return { error: (e as Error).message || "Failed to generate recovery phrase" };
+  }
+  return { mnemonic: pendingOnboardingMnemonic };
+}
+
+/**
+ * Complete onboarding: the user has set a passphrase and re-entered the
+ * recovery phrase to confirm they backed it up. We require BOTH before any key
+ * is written, then derive the keypair and persist the state + mnemonic
+ * encrypted under the user's passphrase (never an internal session key).
+ */
+async function completeOnboarding(
+  passphrase: string,
+  confirmMnemonic: string,
+): Promise<{ success: boolean; publicKey?: number[]; error?: string }> {
+  if (await walletExists()) {
+    return { success: false, error: "A wallet already exists." };
+  }
+  if (!pendingOnboardingMnemonic) {
+    return { success: false, error: "Onboarding not started — generate a recovery phrase first." };
+  }
+  const passCheck = walletPassphraseOk(passphrase);
+  if (!passCheck.ok) {
+    return { success: false, error: passCheck.error };
+  }
+  if (!mnemonicConfirmed(pendingOnboardingMnemonic, confirmMnemonic)) {
+    return { success: false, error: "Recovery phrase confirmation does not match. Check the words you wrote down." };
+  }
+
+  const mnemonic = pendingOnboardingMnemonic;
+  // BIP39 passphrase is empty (the standard dregg derivation); the user's
+  // passphrase is the at-rest encryption secret, kept separate.
+  const keypair = await deriveKeypairFromMnemonic(mnemonic, "");
+  state = {
+    locked: false,
+    uninitialized: false,
     publicKey: Array.from(keypair.publicKey),
     secretKey: Array.from(keypair.secretKey),
     profiles: [{
@@ -1035,31 +1159,21 @@ async function loadState(): Promise<InternalCipherclerkState> {
     receiptChain: [],
     log: [],
     hasMnemonic: true,
-    mnemonicShown: false,
-    needsPassphraseSetup: true,
+    // The user just confirmed the phrase; it is backed up.
+    mnemonicShown: true,
+    needsPassphraseSetup: false,
     stealthMeta: null,
     stealthPrivate: null,
     stealthNotes: [],
   };
-
-  const internalKey = await getInternalEncryptionKey();
-  cclerkPassphrase = internalKey;
-  state.locked = false;
-  // Set BEFORE saveState: the flag rides on the at-rest envelope and is what
-  // lets unlockCipherclerk fall back to the internal key while no user
-  // passphrase exists. Saving first would leave a fresh install permanently
-  // locked (no input could ever decrypt it).
-  state.needsPassphraseSetup = true;
+  cclerkPassphrase = passphrase;
   await saveState();
-
-  const encryptedMnemonic = await encryptWithPassphrase(mnemonic, internalKey);
+  const encryptedMnemonic = await encryptWithPassphrase(mnemonic, passphrase);
   await chrome.storage.local.set({ [MNEMONIC_KEY]: encryptedMnemonic });
-
-  state.locked = true;
-  state.secretKey = null;
-  cclerkPassphrase = null;
-
-  return state;
+  pendingOnboardingMnemonic = null;
+  resetLockTimer();
+  restartReceiptStream();
+  return { success: true, publicKey: state.publicKey };
 }
 
 async function saveState(): Promise<void> {
@@ -1255,15 +1369,25 @@ async function getMnemonic(): Promise<string | null> {
 
 async function recoverFromMnemonic(
   mnemonic: string,
-  passphrase: string,
+  bip39Passphrase: string,
+  walletPassphrase: string,
 ): Promise<{ success: boolean; publicKey?: number[]; error?: string }> {
   const valid = await validateMnemonic(mnemonic);
   if (!valid) {
     return { success: false, error: "Invalid mnemonic (bad checksum or unknown words)" };
   }
-  const keypair = await deriveKeypairFromMnemonic(mnemonic, passphrase);
+  // A wallet-encryption passphrase is REQUIRED: recovering under the ephemeral
+  // internal key would re-create the same restart-orphan footgun MF-1 closes.
+  // The (optional) BIP39 passphrase only affects key derivation and is kept
+  // separate from the at-rest encryption secret.
+  const walletCheck = walletPassphraseOk(walletPassphrase);
+  if (!walletCheck.ok) {
+    return { success: false, error: walletCheck.error };
+  }
+  const keypair = await deriveKeypairFromMnemonic(mnemonic, bip39Passphrase);
   state = {
     locked: false,
+    uninitialized: false,
     publicKey: Array.from(keypair.publicKey),
     secretKey: Array.from(keypair.secretKey),
     profiles: [{
@@ -1278,14 +1402,13 @@ async function recoverFromMnemonic(
     log: [],
     hasMnemonic: true,
     mnemonicShown: true,
-    needsPassphraseSetup: !passphrase,
+    needsPassphraseSetup: false,
     stealthMeta: null,
     stealthPrivate: null,
     stealthNotes: [],
   };
-  const encryptionKey = passphrase || await getInternalEncryptionKey();
-  cclerkPassphrase = encryptionKey;
-  const encryptedMnemonic = await encryptWithPassphrase(mnemonic, encryptionKey);
+  cclerkPassphrase = walletPassphrase;
+  const encryptedMnemonic = await encryptWithPassphrase(mnemonic, walletPassphrase);
   await chrome.storage.local.set({ [MNEMONIC_KEY]: encryptedMnemonic });
   await saveState();
   resetLockTimer();
@@ -1366,6 +1489,130 @@ async function useProfile(name: string): Promise<{ active?: string; error?: stri
 async function listProfiles(): Promise<ProfileInfo[]> {
   const cc = await loadState();
   return profileInfos(cc);
+}
+
+// ---------------------------------------------------------------------------
+// Cap-account login — log the wallet into the live cloud (console / attach)
+//
+// A cap-account is a pseudonymous identity: a key you hold, not a username +
+// password. Login proves possession of the selected profile's Ed25519 key
+// against a server-issued nonce (the SESSION-LOGIN.md §2.1 challenge–response
+// floor), then holds the returned session. The wire-shaping + validation is
+// the pure `src/login.ts` module; here we own the two impure steps — the fetch
+// and the signature. We implement the CLIENT half only; the server (the
+// cap-auth lane's webauth control plane) owns account-id derivation + session
+// minting.
+// ---------------------------------------------------------------------------
+
+/** Memory-only session store where available; disk-backed local otherwise. */
+function capSessionStore(): chrome.storage.StorageArea {
+  const anyChrome = chrome.storage as unknown as { session?: chrome.storage.StorageArea };
+  return anyChrome.session ?? chrome.storage.local;
+}
+
+async function loadCapSession(): Promise<CapLoginSession | null> {
+  const stored = await capSessionStore().get(CAP_SESSION_KEY);
+  return (stored[CAP_SESSION_KEY] as CapLoginSession | undefined) ?? null;
+}
+
+async function saveCapSession(session: CapLoginSession | null): Promise<void> {
+  if (session) {
+    await capSessionStore().set({ [CAP_SESSION_KEY]: session });
+  } else {
+    await capSessionStore().remove(CAP_SESSION_KEY);
+  }
+}
+
+/** The cloud base URL the login handshake targets. */
+function cloudUrlBase(): string {
+  return cloudBaseUrl(nodeConfig.nodeUrl, nodeConfig.cloudUrl ?? null);
+}
+
+/** Public login status for the popup. */
+async function getLoginStatus(): Promise<CapLoginStatus> {
+  const session = await loadCapSession();
+  const status = statusFromSession(session, cloudUrlBase(), Math.floor(Date.now() / 1000));
+  // Drop a stored-but-expired session so we don't present a stale token.
+  if (session && status.expired) await saveCapSession(null);
+  return status;
+}
+
+/**
+ * Log the wallet into the live cloud: fetch a challenge, sign it with the
+ * selected profile's key, exchange the signed challenge for a session.
+ */
+async function capLogin(profileName?: string): Promise<CapLoginStatus | { error: string }> {
+  const cc = await loadState();
+  if (cc.uninitialized) return { error: "Create a wallet before logging in." };
+  if (cc.locked) return { error: "Unlock the wallet before logging in." };
+  requireWasm("capLogin");
+  const w = wasm!;
+
+  const profile = profileName
+    ? cc.profiles.find(p => p.name === profileName)
+    : cc.profiles.find(p => p.name === cc.activeProfile);
+  if (!profile) return { error: `Profile "${profileName ?? cc.activeProfile}" not found.` };
+  if (!profile.secretKey) return { error: "Profile signing key unavailable (locked?)." };
+
+  const pubkeyHex = loginBytesToHex(profile.publicKey);
+  const cloud = cloudUrlBase();
+  const cloudCfg: NodeConfig = { ...nodeConfig, nodeUrl: cloud };
+
+  // 1. Challenge.
+  const chResp = await nodeRequest<Record<string, unknown>>(cloudCfg, AUTH_CHALLENGE_PATH, {
+    method: "POST",
+    body: JSON.stringify(challengeRequestBody(pubkeyHex)),
+  });
+  if (!chResp.ok) return { error: `Could not reach the cloud login: ${chResp.error}` };
+  const challenge = parseChallengeResponse(chResp.data);
+  if ("error" in challenge) return { error: challenge.error };
+
+  // 2. Sign the challenge bytes with the profile's Ed25519 key.
+  let signatureHex: string;
+  try {
+    const sig = w.sign_message(new Uint8Array(profile.secretKey), utf8Bytes(challenge.challenge));
+    signatureHex = loginBytesToHex(sig);
+  } catch (e: unknown) {
+    return { error: `Could not sign the login challenge: ${(e as Error).message}` };
+  }
+
+  // 3. Exchange the signed challenge for a session.
+  const loginResp = await nodeRequest<Record<string, unknown>>(cloudCfg, AUTH_LOGIN_PATH, {
+    method: "POST",
+    body: JSON.stringify(loginRequestBody(pubkeyHex, challenge.challenge, signatureHex, profile.name)),
+  });
+  if (!loginResp.ok) return { error: `Cloud rejected the login: ${loginResp.error}` };
+  const session = parseLoginResponse(loginResp.data, {
+    publicKeyHex: pubkeyHex,
+    cloudUrl: cloud,
+    profile: profile.name,
+    nowMs: Date.now(),
+  });
+  if ("error" in session) return { error: session.error };
+
+  await saveCapSession(session);
+  resetLockTimer();
+  notifySubscribers("login", statusFromSession(session, cloud, Math.floor(Date.now() / 1000)));
+  return statusFromSession(session, cloud, Math.floor(Date.now() / 1000));
+}
+
+/** Log out: best-effort revoke on the server, then discard the local session. */
+async function capLogout(): Promise<CapLoginStatus> {
+  const session = await loadCapSession();
+  if (session) {
+    const cloudCfg: NodeConfig = { ...nodeConfig, nodeUrl: session.cloudUrl };
+    // Best-effort: tell the server to drop the session. A network failure here
+    // must not strand the local session, so ignore the result.
+    await nodeRequest(cloudCfg, AUTH_LOGOUT_PATH, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.token}` },
+      body: "{}",
+    }).catch(() => undefined);
+  }
+  await saveCapSession(null);
+  const status = statusFromSession(null, cloudUrlBase(), Math.floor(Date.now() / 1000));
+  notifySubscribers("login", status);
+  return status;
 }
 
 // ---------------------------------------------------------------------------
@@ -1469,13 +1716,24 @@ function evaluateDatalog(token: CapabilityToken, request: AuthorizeRequest): { a
   };
 }
 
-function generateProof(witness: Uint8Array, mode: string): Uint8Array {
-  requireWasm("generateProof");
+// MED-3: produce the authorization receipt seed with a REAL collision-resistant
+// hash (blake3, from the dregg wasm crypto core) — NOT the
+// `generate_demo_stark_proof` path, whose `MerkleStarkAir` uses a linear hash
+// binding the build itself flags as not collision-resistant (forgeable). The
+// authorization decision is the datalog evaluation (sound); this value only
+// seeds the receipt chain, so it must be a CR commitment, never advertised as a
+// zero-knowledge proof.
+function generateAuthReceiptSeed(witness: Uint8Array, mode: string): Uint8Array {
+  requireWasm("generateAuthReceiptSeed");
   const w = wasm!;
-  const hash = witness.reduce((acc, b, i) => acc ^ (b << ((i % 4) * 8)), 0) >>> 0;
-  const depth = mode === "private" ? 8 : mode === "selective" ? 4 : 2;
-  const result = w.generate_demo_stark_proof(hash, depth);
-  return new TextEncoder().encode(result.proof_json);
+  const witnessHex = Array.from(witness).map(b => b.toString(16).padStart(2, "0")).join("");
+  const digestHex = w.blake3_hash(`${mode}:${witnessHex}`);
+  // Pack the hex digest back to bytes for the receipt-chain seed.
+  const out = new Uint8Array(digestHex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(digestHex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
 }
 
 function resolvePrivateValue(token: CapabilityToken, key: string): number | null {
@@ -1534,7 +1792,7 @@ async function authorize(request: AuthorizeRequest): Promise<AuthorizeResult> {
   const witness = new TextEncoder().encode(
     JSON.stringify({ token: matchingToken.id, action: request.action, resource: request.resource })
   );
-  const proof = generateProof(witness, mode);
+  const proof = generateAuthReceiptSeed(witness, mode);
   const receiptHash = Array.from(proof.slice(0, 16))
     .map(b => b.toString(16).padStart(2, "0"))
     .join("");
@@ -2770,14 +3028,22 @@ function createCapTpDeliveredAuth(
 
 async function getCipherclerkState(): Promise<CipherclerkState> {
   const cc = await loadState();
-  const internalKey = await getInternalEncryptionKey();
+  // Only consult the internal key when a passphrase is actually loaded — never
+  // lazily mint a session-only internal key just to render the popup (and never
+  // for an uninitialized wallet).
+  let hasPassphrase = false;
+  if (cclerkPassphrase !== null) {
+    const internalKey = await getInternalEncryptionKey();
+    hasPassphrase = cclerkPassphrase !== internalKey;
+  }
   return {
     locked: cc.locked,
+    uninitialized: cc.uninitialized || false,
     tokenCount: cc.tokens.length,
     chainLength: cc.receiptChain.length,
     hasMnemonic: cc.hasMnemonic || false,
     mnemonicShown: cc.mnemonicShown || false,
-    hasPassphrase: cclerkPassphrase !== null && cclerkPassphrase !== internalKey,
+    hasPassphrase,
     needsPassphraseSetup: cc.needsPassphraseSetup || false,
     hasStealthKeys: cc.stealthMeta !== null && cc.stealthMeta !== undefined,
     stealthNotesCount: (cc.stealthNotes || []).length,
@@ -2909,6 +3175,7 @@ const POPUP_ONLY_METHODS = new Set<MessageType>([
   "dregg:offerCapability", "dregg:fulfillIntent", "dregg:getFulfillableIntents",
   "dregg:revoke", "dregg:getState", "dregg:getFederation", "dregg:refreshDiscovery",
   "dregg:setPassphrase", "dregg:getMnemonic", "dregg:recover",
+  "dregg:beginOnboarding", "dregg:completeOnboarding",
   "dregg:getDisclosurePrefs", "dregg:clearDisclosurePref",
   "dregg:getOriginPermissions", "dregg:revokeOriginPermission",
   "dregg:getPrivacyState", "dregg:setCommittedTransferMode", "dregg:getStealthNotes",
@@ -2917,6 +3184,7 @@ const POPUP_ONLY_METHODS = new Set<MessageType>([
   "dregg:nodeIdentity", "dregg:faucetFund", "dregg:submitJsonTurn",
   "dregg:listProfiles", "dregg:createProfile", "dregg:useProfile",
   "dregg:getRecentReceipts",
+  "dregg:capLogin", "dregg:capLogout", "dregg:getLoginStatus",
 ]);
 
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
@@ -2999,7 +3267,26 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     case "dregg:recover": {
       if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
-      const result = await recoverFromMnemonic(message.mnemonic as string, (message.passphrase as string) || "");
+      const result = await recoverFromMnemonic(
+        message.mnemonic as string,
+        (message.bip39Passphrase as string) || "",
+        (message.walletPassphrase as string) || (message.passphrase as string) || "",
+      );
+      return { id: message.id, result };
+    }
+
+    case "dregg:beginOnboarding": {
+      if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
+      return { id: message.id, result: await beginOnboarding() };
+    }
+
+    case "dregg:completeOnboarding": {
+      if (!isExtensionPopup(sender)) return { id: message.id, error: "Only available from extension popup." };
+      const result = await completeOnboarding(
+        (message.passphrase as string) || "",
+        (message.confirmMnemonic as string) || "",
+      );
+      if (result.success) notifySubscribers("ready", { locked: false });
       return { id: message.id, result };
     }
 
@@ -3325,7 +3612,11 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       const cc = await loadState();
       if (cc.locked) return { id: message.id, error: "Cipherclerk is locked" };
       const delegatorKeyHex = Array.from(cc.publicKey).map(b => b.toString(16).padStart(2, "0")).join("");
-      const result = w.create_bearer_cap(delegatorKeyHex, message.targetCellHex as string, message.action as string, (message.expiry as number) || 0);
+      // The WASM expiry parameter is a u64 (Unix seconds; 0 = no expiry) and
+      // crosses the wasm-bindgen boundary as a BigInt — a plain JS number throws
+      // "Cannot convert N to a BigInt". Coerce here (the popup can only send a
+      // JSON number over runtime messaging, so the fix belongs at the call site).
+      const result = w.create_bearer_cap(delegatorKeyHex, message.targetCellHex as string, message.action as string, BigInt((message.expiry as number) || 0));
       resetLockTimer();
       return { id: message.id, result };
     }
@@ -3516,14 +3807,16 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
 
     // Proof composition
     case "dregg:composeProofs": {
-      requireWasm("composeProofs");
-      const w = wasm!;
-      const proofsInput = ((message.proofs as Array<Record<string, unknown>>) || []).map(p => ({
-        proof_json: (p.proofJson || p.proof_json || "") as string,
-        public_inputs: (p.publicInputs || p.public_inputs || []) as number[],
-      }));
-      const result = w.compose_proofs(JSON.stringify(proofsInput), (message.mode as string) || "and");
-      return { id: message.id, result };
+      // MED-3: this path composes/verifies STARK membership proofs over
+      // `MerkleStarkAir`, whose linear hash binding is NOT collision-resistant
+      // (forgeable). Rather than ship a forgeable "ZK proof" as a usable
+      // feature, it is gated off until the circuit moves to a
+      // collision-resistant (Poseidon2) Merkle hash. The sound disclosure path
+      // (range predicate proofs over Bulletproofs) is unaffected.
+      return {
+        id: message.id,
+        error: "Proof composition is disabled: the STARK membership hash is not collision-resistant (forgeable) and must not be relied on. Use range predicate proofs for selective disclosure.",
+      };
     }
 
     // Privacy
@@ -3716,6 +4009,18 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
       resetLockTimer();
       return { id: message.id, result };
     }
+
+    // Cap-account login to the live cloud (challenge → sign → session).
+    case "dregg:getLoginStatus":
+      return { id: message.id, result: await getLoginStatus() };
+
+    case "dregg:capLogin": {
+      const result = await capLogin(message.profile ? String(message.profile) : undefined);
+      return { id: message.id, result };
+    }
+
+    case "dregg:capLogout":
+      return { id: message.id, result: await capLogout() };
 
     // Recent receipts from the node's SSE stream; reading clears the badge.
     case "dregg:getRecentReceipts":

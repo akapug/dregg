@@ -75,6 +75,14 @@ pub struct ShieldedInputProof {
 }
 
 impl ShieldedInputProof {
+    /// Serialize this input's hidden note-spend proof for transport inside an
+    /// executor `Effect` payload. The inner `DslZkProof` is `Serialize`; this is
+    /// the canonical postcard encoding the executor reconstructs with
+    /// [`ShieldedTransfer::from_serialized_parts`].
+    pub fn proof_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(&self.proof).expect("DslZkProof postcard serialize")
+    }
+
     /// The public-input vector this input's proof is checked against, pinned to
     /// the shared `merkle_root`. Layout matches the shielded-spend circuit's PI:
     /// `[nullifier, merkle_root, value_binding]`.
@@ -239,6 +247,49 @@ impl ShieldedTransfer {
     }
 }
 
+impl ShieldedTransfer {
+    /// Reconstruct a published shielded transfer from its **serialized wire
+    /// parts** — the executor's `Effect::ShieldedTransfer` payload. Each input's
+    /// hidden note-spend proof arrives as canonical postcard bytes (the encoding
+    /// [`ShieldedInputProof::proof_bytes`] produces) and is deserialized back into
+    /// a `DslZkProof`. Field elements ride as their canonical `u32` (the
+    /// `BabyBear::as_u32` ↔ `BabyBear::new` round-trip).
+    ///
+    /// The reconstructed transfer is then verified exactly as a freshly-proven
+    /// one: [`verify_stark_side`](Self::verify_stark_side) (hidden membership +
+    /// nullifier per input), [`check_range_proof_shape`](Self::check_range_proof_shape),
+    /// and the downstream Pedersen `verify_full_conservation_bytes` over
+    /// [`transfer_message`](Self::transfer_message). This is how a re-executing
+    /// validator and an in-circuit light client meet the *same* object.
+    pub fn from_serialized_parts(
+        merkle_root: u32,
+        inputs: Vec<(u32, u32, Vec<u8>)>,
+        input_legs: Vec<ShieldedValueLeg>,
+        output_legs: Vec<ShieldedValueLeg>,
+        output_range_proofs: Vec<Vec<u8>>,
+    ) -> Result<Self, ShieldedError> {
+        let mut ins = Vec::with_capacity(inputs.len());
+        for (nullifier, value_binding, bytes) in inputs {
+            let proof: DslZkProof =
+                postcard::from_bytes(&bytes).map_err(|e| ShieldedError::ProofDecode {
+                    reason: format!("{e}"),
+                })?;
+            ins.push(ShieldedInputProof {
+                nullifier: BabyBear::new(nullifier),
+                value_binding: BabyBear::new(value_binding),
+                proof,
+            });
+        }
+        Ok(ShieldedTransfer {
+            merkle_root: BabyBear::new(merkle_root),
+            inputs: ins,
+            input_legs,
+            output_legs,
+            output_range_proofs,
+        })
+    }
+}
+
 /// Witness for building one input's hidden note-spend proof: the full note
 /// preimage + spending key + Merkle path (all hidden), plus the published value
 /// commitment leg for it.
@@ -316,6 +367,9 @@ pub enum ShieldedError {
     InputProofRejected { input_index: usize, reason: String },
     /// Two inputs carry the same nullifier (in-transfer double-spend).
     DuplicateNullifier { a: usize, b: usize },
+    /// A serialized input proof (the postcard `DslZkProof` bytes carried in the
+    /// executor `Effect` payload) failed to deserialize.
+    ProofDecode { reason: String },
     /// The number of output range proofs does not equal the number of output
     /// legs — some output would escape the `[0, 2^64)` bound (the negative-value
     /// inflation hole). The shielded transfer is structurally rejected.
@@ -337,6 +391,9 @@ impl core::fmt::Display for ShieldedError {
                 f,
                 "shielded inputs {a} and {b} share a nullifier (double-spend)"
             ),
+            Self::ProofDecode { reason } => {
+                write!(f, "shielded input proof failed to deserialize: {reason}")
+            }
             Self::RangeProofCountMismatch {
                 outputs,
                 range_proofs,

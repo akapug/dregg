@@ -25,8 +25,16 @@
 //! (`cfg(dregg_direct_present)`, set by build.rs). When absent the public entry returns `Err` and the
 //! caller falls back to the JSON path.
 
-use crate::marshal::{Auth, Cap, WForest, WireAuth, WireCaveat, WireHostCtx, WireState, WireValue};
-use crate::{ShadowState, ShadowVerdict, TurnStatus};
+use crate::marshal::{WForest, WireHostCtx, WireState};
+// Auth/Cap/WireAuth/WireCaveat/WireValue are referenced only by the FFI-present
+// marshalling path (the `#[cfg(dregg_direct_present)]` block below) — gate the
+// import to match its consumer, or it reads as unused when the FFI is absent.
+#[cfg(dregg_direct_present)]
+use crate::marshal::{Auth, Cap, WireAuth, WireCaveat, WireValue};
+use crate::ShadowState;
+// ShadowVerdict/TurnStatus are only produced by the FFI-present marshalling path.
+#[cfg(dregg_direct_present)]
+use crate::{ShadowVerdict, TurnStatus};
 
 /// Whether the no-copy direct boundary is available in this build (the archive exported
 /// `dregg_exec_full_forest_auth_direct` AND the Lean runtime initialised). The caller uses this to
@@ -44,6 +52,8 @@ static PROF_EXEC: AtomicU64 = AtomicU64::new(0);
 static PROF_READ: AtomicU64 = AtomicU64::new(0);
 static PROF_N: AtomicU64 = AtomicU64::new(0);
 
+// Called only from the FFI-present `run_direct` path; dead when the FFI is absent.
+#[cfg(dregg_direct_present)]
 fn prof_accum(in_s: f64, exec_s: f64, read_s: f64) {
     PROF_IN.fetch_add((in_s * 1e9) as u64, Ordering::Relaxed);
     PROF_EXEC.fetch_add((exec_s * 1e9) as u64, Ordering::Relaxed);
@@ -219,6 +229,7 @@ mod imp {
         // ---- the READER family (project the result + post-state to scalars) ----
         fn dregg_d_res_status(r: Obj) -> u64;
         fn dregg_d_res_loglen(r: Obj) -> u64;
+        fn dregg_d_res_reason(r: Obj) -> u64;
         fn dregg_d_res_state(r: Obj) -> Obj;
         fn dregg_d_int_mag(i: Obj) -> u64;
         fn dregg_d_int_neg(i: Obj) -> u8;
@@ -971,6 +982,10 @@ mod imp {
                 dregg_rt_inc(res);
                 dregg_d_res_loglen(res)
             };
+            let reason_code = {
+                dregg_rt_inc(res);
+                dregg_d_res_reason(res)
+            };
             let post_o = {
                 dregg_rt_inc(res);
                 dregg_d_res_state(res)
@@ -1000,10 +1015,10 @@ mod imp {
                     committed,
                     loglen,
                     status,
-                    // The no-copy direct ABI returns only a status code, not the
-                    // admission-reason code; the JSON-wire path (`unmarshal_result`)
-                    // carries the legible reason. TODO: extend the direct ABI to return it.
-                    reason: None,
+                    // The no-copy direct ABI now returns the admission-reason code (the same
+                    // `AdmissionReason.reasonCode` the JSON-wire path carries — `dregg_d_res_reason`),
+                    // so the legible refusal "why" is byte-identical across both FFI paths.
+                    reason: crate::AdmissionReason::from_code(reason_code),
                     divergence_note: None,
                 },
                 state: post,
@@ -1079,6 +1094,10 @@ mod imp {
                 dregg_rt_inc(res);
                 dregg_d_res_loglen(res)
             };
+            let reason_code = {
+                dregg_rt_inc(res);
+                dregg_d_res_reason(res)
+            };
             let post_o = {
                 dregg_rt_inc(res);
                 dregg_d_res_state(res)
@@ -1097,10 +1116,10 @@ mod imp {
                     committed,
                     loglen,
                     status,
-                    // The no-copy direct ABI returns only a status code, not the
-                    // admission-reason code; the JSON-wire path (`unmarshal_result`)
-                    // carries the legible reason. TODO: extend the direct ABI to return it.
-                    reason: None,
+                    // The no-copy direct ABI now returns the admission-reason code (the same
+                    // `AdmissionReason.reasonCode` the JSON-wire path carries — `dregg_d_res_reason`),
+                    // so the legible refusal "why" is byte-identical across both FFI paths.
+                    reason: crate::AdmissionReason::from_code(reason_code),
                     divergence_note: None,
                 },
                 state: post,

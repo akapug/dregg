@@ -1218,6 +1218,8 @@ fn add_slot_constraints(
 }
 
 /// Add constraints for Min/Max operations (membership + range proofs).
+// signature kept as-is
+#[allow(clippy::too_many_arguments)]
 fn add_min_max_constraints(
     constraints: &mut Vec<ConstraintExpr>,
     slot_col: usize,
@@ -1317,6 +1319,8 @@ fn add_min_max_constraints(
 ///
 /// Uses the expansion: product(x - a_i) = sum_{S subset of indices} (-1)^|S| * x^(k-|S|) * product(a_j for j in S)
 /// where k = number of indices.
+// crypto index loops kept verbatim
+#[allow(clippy::needless_range_loop)]
 fn expand_product_constraint(slot_col: usize, indices: &[usize]) -> Vec<PolyTerm> {
     let k = indices.len();
     // Generate all subsets of indices (2^k subsets).
@@ -1327,7 +1331,7 @@ fn expand_product_constraint(slot_col: usize, indices: &[usize]) -> Vec<PolyTerm
         let result_power = k - subset_size; // number of `slot_col` factors
 
         // Coefficient: (-1)^subset_size
-        let coeff = if subset_size % 2 == 0 {
+        let coeff = if subset_size.is_multiple_of(2) {
             BabyBear::ONE
         } else {
             BabyBear::new(BABYBEAR_P - 1) // -1
@@ -1368,7 +1372,7 @@ pub fn evaluate_compiled_slots(compiled: &CompiledArith, inputs: &[BabyBear]) ->
             CompiledOp::Sum(indices) => {
                 let mut sum = BabyBear::ZERO;
                 for &i in indices {
-                    sum = sum + inputs[i];
+                    sum += inputs[i];
                 }
                 sum
             }
@@ -1518,10 +1522,10 @@ pub fn generate_full_trace(
         for i in 0..NUM_BITS {
             row[layout.diff_bits_start + i] = BabyBear::new((diff_val >> i) & 1);
         }
-    } else if diff_kind.uses_inverse() {
-        if let Some(inv) = diff.inverse() {
-            row[layout.neq_inverse_col] = inv;
-        }
+    } else if diff_kind.uses_inverse()
+        && let Some(inv) = diff.inverse()
+    {
+        row[layout.neq_inverse_col] = inv;
     }
     // For zero check (EQ), diff should already be zero; no extra columns needed.
 

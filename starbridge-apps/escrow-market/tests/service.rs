@@ -1,61 +1,61 @@
-//! **The CELLS-AS-SERVICE-OBJECTS proof for the escrow-market, end-to-end.**
+//! **The CELLS-AS-SERVICE-OBJECTS proof for the sealed escrow-market.**
 //!
-//! Declares the escrow service cell, drives its lifecycle through the `invoke()`
-//! front door, and submits the desugared turns through the real
-//! [`EmbeddedExecutor`]. The properties pinned here (the third worked citizen of
-//! the pattern, after `starbridge-kvstore` and `starbridge-nameservice`, and the
-//! first NON-TRIVIAL four-organ app):
+//! Publishes the escrow's typed interface (`open`/`deposit`/`settle`/`reclaim` +
+//! `view` with their auth + replayable-vs-serviced semantics), and drives the
+//! swap lifecycle through the PROVEN `SealedEscrow` capacity via [`EscrowService`].
+//! Properties pinned:
 //!
-//! 1. **The escrow publishes a typed interface** (list/fund/ship/settle + view
-//!    with their auth + replayable-vs-serviced semantics), resolvable as a
-//!    Service-Explorer would resolve it (via an [`InterfaceRegistry`]).
-//! 2. **The whole lifecycle commits as real verified turns** — each invoke()-
-//!    desugared `SetField`s land on the per-cell heap, advancing the order
-//!    LISTED → FUNDED → SHIPPED → SETTLED.
-//! 3. **The cap-gate bites at the front door** — an unauthorized `fund`
-//!    (`InvokeAuthority::None` vs the method's `Signature`) is refused before any
-//!    turn is built; nothing is submitted (anti-ghost).
-//! 4. **The four organ caveats re-enforce on invoke()-desugared turns** — an
-//!    over-ceiling `fund` (TRUSTLINE `FieldLteField`) and a replayed `settle`
-//!    (LIFECYCLE `StrictMonotonic`) are EXECUTOR refusals, not userspace checks.
-//! 5. **`view` is the named seam** — it refuses to desugar (its answer rides the
-//!    OFE cross-cell-read = the committed state), and an unknown method does not
-//!    route (fail-closed).
-//! 6. **The interface is witnessably inspectable** — a route-membership witness
+//! 1. **The escrow publishes a resolvable typed interface** — richer than
+//!    derive-from-program (the four mutators are `Signature`-gated, `view` is
+//!    `Serviced`), resolvable through an [`InterfaceRegistry`].
+//! 2. **The whole lifecycle drives the real capacity** — deposit both legs →
+//!    settle atomically, value conserved; a non-conforming deposit and a one-shot
+//!    replay are the capacity's forge-rejections.
+//! 3. **`view` is the named serviced seam** — the committed leg state IS the
+//!    answer (a pure read, not a turn).
+//! 4. **The interface is witnessably inspectable** — a route-membership witness
 //!    proves `settle` is a member of the committed interface.
 
-use dregg_app_framework::{
-    AgentCipherclerk, AppCipherclerk, EmbeddedExecutor, InterfaceRegistry, InvokeAuthority,
-    InvokeRefused, field_from_u64, resolve_against,
-};
+use dregg_app_framework::InterfaceRegistry;
+use dregg_cell::Cell;
 use dregg_cell::interface::{Semantics, method_symbol};
 use dregg_cell::permissions::AuthRequired;
+use dregg_types::CellId;
+
 use starbridge_escrow_market::service::{
-    EscrowError, EscrowService, METHOD_FUND, METHOD_LIST, METHOD_SETTLE, METHOD_SHIP, METHOD_VIEW,
-    escrow_service_program, field_value_u64, interface_descriptor, register_interface,
+    EscrowService, METHOD_DEPOSIT, METHOD_OPEN, METHOD_RECLAIM, METHOD_SETTLE, METHOD_VIEW,
+    interface_descriptor, register_interface,
 };
 use starbridge_escrow_market::{
-    CEILING_SLOT, DELIVERY_HASH_SLOT, ESCROWED_SLOT, RELEASED_SLOT, STATE_FUNDED, STATE_LISTED,
-    STATE_SETTLED, STATE_SHIPPED, STATE_SLOT, sealed_delivery_digest, state_field,
+    EscrowError, EscrowTerms, Leg, LegRequirement, LegStatus, MarketError, SealedEscrowMarket, Side,
 };
 
-/// A cipherclerk + an embedded executor whose agent cell IS the escrow cell,
-/// with the canonical escrow program installed.
-fn deploy_escrow(seed: u8) -> (AppCipherclerk, EmbeddedExecutor, EscrowService) {
-    let cclerk = AppCipherclerk::new(AgentCipherclerk::new(), [seed; 32]);
-    let executor = EmbeddedExecutor::new(&cclerk, "default");
-    let escrow_cell = cclerk.cell_id();
-    executor.install_program(escrow_cell, escrow_service_program());
-    let svc = EscrowService::new(escrow_cell);
-    (cclerk, executor, svc)
+const ASSET_10: [u8; 32] = [10u8; 32];
+const ASSET_20: [u8; 32] = [20u8; 32];
+const ALICE_PK: [u8; 32] = [1u8; 32];
+const BOB_PK: [u8; 32] = [2u8; 32];
+
+fn wallet(pk: [u8; 32], asset: [u8; 32], balance: i64) -> Cell {
+    Cell::with_balance(pk, asset, balance)
+}
+fn party(pk: [u8; 32], asset: [u8; 32]) -> CellId {
+    Cell::with_balance(pk, asset, 0).id()
+}
+fn swap_terms() -> (EscrowTerms, CellId, CellId) {
+    let alice = party(ALICE_PK, ASSET_10);
+    let bob = party(BOB_PK, ASSET_20);
+    let terms = EscrowTerms::swap(
+        LegRequirement::new(alice, CellId::from_bytes(ASSET_10), 100),
+        LegRequirement::new(bob, CellId::from_bytes(ASSET_20), 250),
+    );
+    (terms, alice, bob)
 }
 
 #[test]
 fn the_escrow_publishes_a_resolvable_typed_interface() {
-    let (_cclerk, _executor, svc) = deploy_escrow(0x01);
+    let cell = party(ALICE_PK, ASSET_10);
+    let svc = EscrowService::new(cell);
 
-    // The Service Explorer resolves a cell's interface from an InterfaceRegistry
-    // an app populated — the richer-than-derived descriptor with real auth/seam.
     let mut registry = InterfaceRegistry::new();
     register_interface(&mut registry, svc.cell);
     let resolved = registry
@@ -63,7 +63,7 @@ fn the_escrow_publishes_a_resolvable_typed_interface() {
         .expect("the interface is registered");
 
     assert_eq!(resolved.methods.len(), 5);
-    for m in [METHOD_LIST, METHOD_FUND, METHOD_SHIP, METHOD_SETTLE] {
+    for m in [METHOD_OPEN, METHOD_DEPOSIT, METHOD_SETTLE, METHOD_RECLAIM] {
         assert_eq!(
             resolved.method(&method_symbol(m)).unwrap().auth_required,
             AuthRequired::Signature,
@@ -78,10 +78,10 @@ fn the_escrow_publishes_a_resolvable_typed_interface() {
         Semantics::Serviced,
     );
 
-    // The published descriptor carries richer semantics than derive-from-program
-    // would (which is all-Replayable / all-None): the ids differ.
-    let derived =
-        dregg_cell::interface::InterfaceDescriptor::derive_replayable(&escrow_service_program());
+    // The published descriptor carries richer semantics than derive-from-program.
+    let derived = dregg_cell::interface::InterfaceDescriptor::derive_replayable(
+        &dregg_cell::program::CellProgram::Predicate(vec![]),
+    );
     assert_ne!(
         derived.interface_id, resolved.interface_id,
         "the registered interface carries Signature/Serviced the derived one cannot"
@@ -89,201 +89,83 @@ fn the_escrow_publishes_a_resolvable_typed_interface() {
 }
 
 #[test]
-fn the_whole_lifecycle_commits_as_verified_turns() {
-    let (cclerk, executor, svc) = deploy_escrow(0x02);
+fn the_whole_lifecycle_drives_the_real_capacity() {
+    let (terms, alice, bob) = swap_terms();
+    let mut market = SealedEscrowMarket::open(terms);
+    let svc = EscrowService::new(market.escrow.id());
 
-    // list(ceiling = 1000)
-    let t = svc
-        .list(&cclerk, "acme-corp", 1000, InvokeAuthority::Signature)
-        .expect("a Signature holder may build a list invocation");
-    let receipt = executor
-        .submit_turn(&t)
-        .expect("the desugared list turn commits through the verified executor");
-    assert_ne!(receipt.turn_hash, [0u8; 32], "a real receipt");
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(field_value_u64(&state.fields[CEILING_SLOT]), 1000);
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_LISTED));
+    let mut alice_a10 = wallet(ALICE_PK, ASSET_10, 100);
+    let mut alice_a20 = wallet(ALICE_PK, ASSET_20, 0);
+    let mut bob_b20 = wallet(BOB_PK, ASSET_20, 250);
+    let mut bob_b10 = wallet(BOB_PK, ASSET_10, 0);
 
-    // fund(amount = 800 ≤ 1000)
-    let t = svc
-        .fund(&cclerk, "buyer-bob", 800, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("fund commits");
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(field_value_u64(&state.fields[ESCROWED_SLOT]), 800);
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_FUNDED));
+    // view() — the serviced read: both legs empty at open.
+    let state = svc.view(&market).unwrap();
+    assert_eq!(state.status(Side::A), LegStatus::Empty);
 
-    // ship(delivery)
-    let delivery = sealed_delivery_digest(b"the-goods");
-    let t = svc
-        .ship(&cclerk, delivery, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("ship commits");
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(state.fields[DELIVERY_HASH_SLOT], delivery);
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_SHIPPED));
-
-    // settle(released = 800, refunded = 0) — conserves the escrow.
-    let t = svc
-        .settle(&cclerk, 800, 0, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("conserving settle commits");
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(field_value_u64(&state.fields[RELEASED_SLOT]), 800);
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_SETTLED));
-}
-
-#[test]
-fn an_unauthorized_fund_is_refused_at_the_front_door() {
-    let (cclerk, executor, svc) = deploy_escrow(0x03);
-    svc.list(&cclerk, "acme-corp", 1000, InvokeAuthority::Signature)
-        .and_then(|t| {
-            executor
-                .submit_turn(&t)
-                .map_err(|_| EscrowError::EmptyParty)
-                .map(|_| t)
-        })
-        .expect("list commits");
-
-    // The caller holds NO authority; `fund` requires Signature. Refused before any
-    // turn is built (fail-closed at the userspace front door).
-    let refused = svc
-        .fund(&cclerk, "buyer-bob", 800, InvokeAuthority::None)
-        .expect_err("an unauthorized fund must be refused");
-    assert!(matches!(
-        refused,
-        EscrowError::Refused(InvokeRefused::Unauthorized {
-            required: AuthRequired::Signature,
-            ..
-        })
-    ));
-
-    // Nothing was submitted — the order is still LISTED, escrow untouched (anti-ghost).
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_LISTED));
-    assert_eq!(state.fields[ESCROWED_SLOT], [0u8; 32]);
-}
-
-#[test]
-fn an_over_ceiling_fund_is_refused_by_the_executor_trustline() {
-    let (cclerk, executor, svc) = deploy_escrow(0x04);
-    let t = svc
-        .list(&cclerk, "acme-corp", 1000, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("list commits");
-
-    // A Signature-authorized fund of 1500 against a 1000 ceiling: the front door
-    // passes (auth + routing OK), but the EXECUTOR refuses on the verified TRUSTLINE
-    // FieldLteField(ESCROWED ≤ CEILING) — the protocol layer, not a userspace check.
-    let over = svc
-        .fund(&cclerk, "buyer-bob", 1500, InvokeAuthority::Signature)
-        .expect("the over-ceiling invocation BUILDS (front door passes)");
-    let rejected = executor.submit_turn(&over);
-    assert!(
-        rejected.is_err(),
-        "the executor must refuse an over-ceiling fund"
-    );
-
-    // Anti-ghost: the rejected turn committed nothing — still LISTED, escrow zero.
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_LISTED));
-    assert_eq!(state.fields[ESCROWED_SLOT], [0u8; 32]);
-}
-
-#[test]
-fn a_replayed_settle_is_refused_by_the_executor_lifecycle() {
-    let (cclerk, executor, svc) = deploy_escrow(0x05);
-
-    // Build-then-submit each step in order: each turn binds the prior committed
-    // receipt, so the lifecycle must be driven sequentially (not built up front).
-    let t = svc
-        .list(&cclerk, "acme-corp", 1000, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("list commits");
-    let t = svc
-        .fund(&cclerk, "buyer-bob", 800, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("fund commits");
-    let t = svc
-        .ship(
-            &cclerk,
-            sealed_delivery_digest(b"the-goods"),
-            InvokeAuthority::Signature,
-        )
-        .unwrap();
-    executor.submit_turn(&t).expect("ship commits");
-    let t = svc
-        .settle(&cclerk, 800, 0, InvokeAuthority::Signature)
-        .unwrap();
-    executor.submit_turn(&t).expect("conserving settle commits");
-
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_SETTLED));
-
-    // A Signature-authorized settle REPLAYED on an already-SETTLED order: the front
-    // door passes, but STATE 4 → 4 is not a strict advance — the EXECUTOR refuses on
-    // the verified LIFECYCLE StrictMonotonic(STATE). No double-settle.
-    let replay = svc
-        .settle(&cclerk, 800, 0, InvokeAuthority::Signature)
-        .expect("the replay invocation BUILDS (front door passes)");
-    let rejected = executor.submit_turn(&replay);
-    assert!(
-        rejected.is_err(),
-        "the executor must refuse a settle replay"
-    );
-    let msg = format!("{:?}", rejected.unwrap_err()).to_lowercase();
-    assert!(
-        msg.contains("monotonic")
-            || msg.contains("strict")
-            || msg.contains("program")
-            || msg.contains("writeonce")
-            || msg.contains("field"),
-        "refused on the StrictMonotonic(STATE) caveat, got: {msg}"
-    );
-
-    // Anti-ghost: STATE still SETTLED, never advanced past it.
-    let state = executor.cell_state(svc.cell).unwrap();
-    assert_eq!(state.fields[STATE_SLOT], state_field(STATE_SETTLED));
-}
-
-#[test]
-fn view_is_the_named_serviced_seam_and_unknown_methods_fail_closed() {
-    let (cclerk, _executor, svc) = deploy_escrow(0x06);
-
-    // `view` is Serviced — its answer rides the OFE cross-cell-read (the committed
-    // lifecycle state), not a replay. invoke() refuses to desugar it (the seam).
-    let seam = svc.view(&cclerk).expect_err("view is a serviced seam");
-    assert!(matches!(
-        seam,
-        EscrowError::Refused(InvokeRefused::ServicedSeam { .. })
-    ));
-
-    // An unknown method does not route through the verified DFA — fail-closed.
-    let unknown = resolve_against(
-        svc.cell,
-        &interface_descriptor(),
-        "drain_funds",
-        vec![],
-        vec![],
-        InvokeAuthority::Signature,
+    // deposit(A), deposit(B) — through the service handle.
+    svc.deposit(
+        &mut market,
+        Side::A,
+        &Leg::new(alice, CellId::from_bytes(ASSET_10), 100),
+        &mut alice_a10,
     )
-    .expect_err("an unknown method does not route");
-    assert!(matches!(unknown, InvokeRefused::UnknownMethod { .. }));
+    .expect("Alice deposits her leg");
+    svc.deposit(
+        &mut market,
+        Side::B,
+        &Leg::new(bob, CellId::from_bytes(ASSET_20), 250),
+        &mut bob_b20,
+    )
+    .expect("Bob deposits his leg");
+
+    // settle() — atomic, value conserved across the crossing.
+    let (a, b) = svc
+        .settle(&mut market, &mut alice_a20, &mut bob_b10)
+        .expect("the atomic swap settles");
+    assert_eq!((a, b), (100, 250));
+    assert_eq!(alice_a20.state.balance(), 250);
+    assert_eq!(bob_b10.state.balance(), 100);
+
+    // One-shot: a replayed settle is the capacity's forge-rejection.
+    assert_eq!(
+        svc.settle(&mut market, &mut alice_a20, &mut bob_b10),
+        Err(MarketError::Escrow(EscrowError::LegAlreadyConsumed(
+            Side::A
+        )))
+    );
+}
+
+#[test]
+fn a_nonconforming_deposit_is_refused_through_the_service() {
+    let (terms, _alice, bob) = swap_terms();
+    let mut market = SealedEscrowMarket::open(terms);
+    let svc = EscrowService::new(market.escrow.id());
+    let mut bob_b20 = wallet(BOB_PK, ASSET_20, 250);
+
+    // Bob under-pays (1 < 250): the capacity refuses; nothing moves.
+    assert_eq!(
+        svc.deposit(
+            &mut market,
+            Side::B,
+            &Leg::new(bob, CellId::from_bytes(ASSET_20), 1),
+            &mut bob_b20,
+        ),
+        Err(MarketError::Escrow(EscrowError::LegNonConforming(Side::B)))
+    );
+    assert_eq!(bob_b20.state.balance(), 250);
 }
 
 #[test]
 fn the_interface_is_witnessably_inspectable() {
-    let svc =
-        EscrowService::new(AppCipherclerk::new(AgentCipherclerk::new(), [0x07; 32]).cell_id());
+    let svc = EscrowService::new(party(ALICE_PK, ASSET_10));
     let iface = &svc.descriptor;
 
-    // Every published method routes through the verified DFA router (the same path
-    // the Service Explorer uses to discover invokable methods).
     for m in [
-        METHOD_LIST,
-        METHOD_FUND,
-        METHOD_SHIP,
+        METHOD_OPEN,
+        METHOD_DEPOSIT,
         METHOD_SETTLE,
+        METHOD_RECLAIM,
         METHOD_VIEW,
     ] {
         assert!(
@@ -301,12 +183,15 @@ fn the_interface_is_witnessably_inspectable() {
         .expect("a declared method has a membership witness");
     assert_eq!(root, iface.to_route_table().commitment);
     assert!(iface.verify_route_membership(&settle, &proof));
-    assert!(!iface.verify_route_membership(&method_symbol(METHOD_LIST), &proof));
+    assert!(!iface.verify_route_membership(&method_symbol(METHOD_OPEN), &proof));
 }
 
-/// `field_from_u64` is re-exported through the framework and used above for the
-/// amount encodings; assert the round-trip the service relies on holds.
+/// The published interface matches what the standalone descriptor builds.
 #[test]
-fn amount_encoding_roundtrips() {
-    assert_eq!(field_value_u64(&field_from_u64(800)), 800);
+fn the_service_descriptor_is_the_published_interface() {
+    let svc = EscrowService::new(party(BOB_PK, ASSET_20));
+    assert_eq!(
+        svc.descriptor.interface_id,
+        interface_descriptor().interface_id
+    );
 }

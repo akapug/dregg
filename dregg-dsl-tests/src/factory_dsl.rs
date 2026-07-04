@@ -111,19 +111,19 @@ impl StarkAir for FactoryCreationAir {
         // Random linear combination.
         let mut result = c1;
         let mut alpha_power = alpha;
-        result = result + alpha_power * c2;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c3;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c4;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c5;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c6;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c7;
-        alpha_power = alpha_power * alpha;
-        result = result + alpha_power * c8;
+        result += alpha_power * c2;
+        alpha_power *= alpha;
+        result += alpha_power * c3;
+        alpha_power *= alpha;
+        result += alpha_power * c4;
+        alpha_power *= alpha;
+        result += alpha_power * c5;
+        alpha_power *= alpha;
+        result += alpha_power * c6;
+        alpha_power *= alpha;
+        result += alpha_power * c7;
+        alpha_power *= alpha;
+        result += alpha_power * c8;
 
         result
     }
@@ -366,19 +366,19 @@ impl StarkAir for FactoryVkDerivationAir {
         // Combine with alpha powers.
         let mut result = c1;
         let mut ap = alpha;
-        result = result + ap * c2;
-        ap = ap * alpha;
-        result = result + ap * c3;
-        ap = ap * alpha;
-        result = result + ap * c4;
-        ap = ap * alpha;
-        result = result + ap * c5;
-        ap = ap * alpha;
-        result = result + ap * c6;
-        ap = ap * alpha;
-        result = result + ap * c7;
-        ap = ap * alpha;
-        result = result + ap * c8;
+        result += ap * c2;
+        ap *= alpha;
+        result += ap * c3;
+        ap *= alpha;
+        result += ap * c4;
+        ap *= alpha;
+        result += ap * c5;
+        ap *= alpha;
+        result += ap * c6;
+        ap *= alpha;
+        result += ap * c7;
+        ap *= alpha;
+        result += ap * c8;
 
         result
     }
@@ -588,15 +588,15 @@ impl StarkAir for FactoryVkFromSetAir {
         // Combine with alpha powers.
         let mut result = c1;
         let mut ap = alpha;
-        result = result + ap * c2;
-        ap = ap * alpha;
-        result = result + ap * c3;
-        ap = ap * alpha;
-        result = result + ap * c4;
-        ap = ap * alpha;
-        result = result + ap * c5;
-        ap = ap * alpha;
-        result = result + ap * c6;
+        result += ap * c2;
+        ap *= alpha;
+        result += ap * c3;
+        ap *= alpha;
+        result += ap * c4;
+        ap *= alpha;
+        result += ap * c5;
+        ap *= alpha;
+        result += ap * c6;
 
         result
     }

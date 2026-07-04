@@ -711,10 +711,10 @@ impl<'a> Decoder<'a> {
                     let key = self.value()?;
                     let key_enc = key.encode();
                     // Canonical: keys strictly ascending by encoded bytes.
-                    if let Some(prev) = &prev_key {
-                        if key_enc <= *prev {
-                            return Err(SyrupError::NonCanonicalDict { at: key_at });
-                        }
+                    if let Some(prev) = &prev_key
+                        && key_enc <= *prev
+                    {
+                        return Err(SyrupError::NonCanonicalDict { at: key_at });
                     }
                     let value = self.value()?;
                     prev_key = Some(key_enc.clone());
@@ -744,10 +744,10 @@ impl<'a> Decoder<'a> {
                     let at = self.pos;
                     let m = self.value()?;
                     let enc = m.encode();
-                    if let Some(p) = &prev {
-                        if enc <= *p {
-                            return Err(SyrupError::NonCanonicalSet { at });
-                        }
+                    if let Some(p) = &prev
+                        && enc <= *p
+                    {
+                        return Err(SyrupError::NonCanonicalSet { at });
                     }
                     prev = Some(enc.clone());
                     members.insert(enc, m);

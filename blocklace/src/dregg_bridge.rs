@@ -190,23 +190,23 @@ impl DreggBlocklaceBridge {
         let new_blocks = &ordered[self.processed_cursor..];
 
         for block_id in new_blocks {
-            if let Some(block) = blocklace.get(block_id) {
-                if let Some(data) = match &block.payload {
+            if let Some(block) = blocklace.get(block_id)
+                && let Some(data) = match &block.payload {
                     Payload::Turn(data) => Some(data),
                     Payload::TurnBundle(bundle) => Some(&bundle.signed_turn),
                     _ => None,
-                } {
-                    self.finality_height += 1;
-                    let tier = classify_turn(data, &self.cod);
-                    receipts.push(BlocklaceTurnReceipt {
-                        block_id: *block_id,
-                        submitter: block.creator,
-                        seq: block.seq,
-                        turn_data: data.clone(),
-                        tier,
-                        finality_height: self.finality_height,
-                    });
                 }
+            {
+                self.finality_height += 1;
+                let tier = classify_turn(data, &self.cod);
+                receipts.push(BlocklaceTurnReceipt {
+                    block_id: *block_id,
+                    submitter: block.creator,
+                    seq: block.seq,
+                    turn_data: data.clone(),
+                    tier,
+                    finality_height: self.finality_height,
+                });
             }
         }
 

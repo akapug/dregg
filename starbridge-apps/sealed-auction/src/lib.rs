@@ -78,6 +78,12 @@ use dregg_intent::verified_settle::{
     VerifiedLedger, VerifiedLeg, VerifiedSettleError, settle_ring_verified,
 };
 
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// The CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the auction lifecycle.
+pub mod service;
+
 /// A cell id, restricted to the low byte the verified per-asset ledger indexes by (the Rust view of
 /// the Lean `CellId`). Agents, the seller, and the award slot are all cells.
 pub type CellId = u8;

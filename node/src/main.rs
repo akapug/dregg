@@ -34,15 +34,10 @@ mod mud_client_e2e;
 // THE LIVE SHARED WORLD (`deos-host` feature): two distinct identities co-inhabit ONE
 // hosted world, each seeing the other's turns LIVE via the node's receipt event stream —
 // the first real rung of MULTI-PERSON deos. Headless engine + its co-acting e2e proof.
-#[cfg(feature = "deos-host")]
-mod shared_world;
-#[cfg(all(test, feature = "deos-host"))]
-mod shared_world_e2e;
-// The old `bridge` module is removed. Cross-group communication now happens
-// via multi_group.rs (unified blocklace cross-references + interest-based dissemination).
-// See: `dregg-node run --groups` for multi-group participation.
 #[cfg(test)]
 mod captp_handoff_e2e;
+#[cfg(test)]
+mod epoch_transition_e2e;
 mod equivocation_court_service;
 mod events;
 mod execution_cursor;
@@ -55,14 +50,20 @@ mod identity_export;
 mod mailbox_crank_e2e;
 mod mcp;
 pub mod metrics;
-pub mod multi_group;
 #[cfg(test)]
 mod node_integrator_e2e;
+// The operator onboarding dance (gen-validator-key / join / add-validator) — the
+// slick, reusable path for folding a node + validator into a federation.
+mod operator_join;
 mod pg_mirror;
 mod prove_pool;
 mod relay_service;
 mod routing_table;
 mod self_cell;
+#[cfg(feature = "deos-host")]
+mod shared_world;
+#[cfg(all(test, feature = "deos-host"))]
+mod shared_world_e2e;
 mod starbridge_seed;
 mod state;
 mod storage_service;
@@ -171,7 +172,7 @@ enum Command {
         /// longer emits an empty block per tick. Set 0 to disable the cadence
         /// task entirely (purely quiescent: blocks only on turn submission).
         /// Default 2000ms (bounds turn-drain / reactive-ack latency).
-        #[arg(long, default_value = "2000")]
+        #[arg(long, default_value = "1000")]
         block_cadence_ms: u64,
 
         /// Idle heartbeat interval in milliseconds. When the node has produced
@@ -187,12 +188,22 @@ enum Command {
         /// multi-party (n>1) round-driven path — the quiescent-on-demand rate
         /// cap. The node emits at most one block per this interval: turns are
         /// batched within the window and each consensus wave is closed across a
-        /// few interval-spaced rounds (slower finality is the accepted tradeoff
-        /// for a quiet DAG). Independent of --block-cadence-ms (which is only the
-        /// CHECK interval) and of turn submission. Also configurable via the
-        /// DREGG_MIN_BLOCK_INTERVAL_MS env var (the env var wins when set).
-        /// Default 5000 (≤ one block / 5s, per the devnet quiescence bound).
-        #[arg(long, default_value = "5000")]
+        /// few interval-spaced rounds. Independent of --block-cadence-ms (which is
+        /// only the CHECK interval) and of turn submission. Also configurable via
+        /// the DREGG_MIN_BLOCK_INTERVAL_MS env var (the env var wins when set).
+        ///
+        /// Default 1000 (≤ one block / 1s). The cap is a SPAM floor, not the
+        /// pacer: round advancement is already gated by the cohort rule
+        /// (`plan_round_block` needs a supermajority of distinct creators at the
+        /// current round), so the committee never outruns its slowest honest
+        /// member regardless of this value — the cap only prevents a degenerate
+        /// empty-block burst. The old 5000ms default made finality artificially
+        /// slow: closing one wave took ~5 interval-spaced rounds ≈ 25-30s, so a
+        /// committee under sustained turn load could not finalize turn-after-turn
+        /// inside a reasonable window (the live n=4 stalled on this). At 1000ms a
+        /// wave closes in a few seconds while the idle DAG still stays quiet (the
+        /// 2s idle-heartbeat floor governs quiescence, not this cap).
+        #[arg(long, default_value = "2000")]
         min_block_interval_ms: u64,
 
         /// Enable the faucet endpoint (POST /api/faucet).
@@ -396,6 +407,117 @@ enum Command {
         #[arg(long, default_value = "1000")]
         subscription_fee: u64,
     },
+
+    /// Generate (or read) this box's validator keypair and print its PUBLIC key.
+    ///
+    /// Idempotent — if `node.key` already exists in the data dir, its public key
+    /// is read and printed; otherwise a fresh 32-byte seed is generated (0600).
+    /// Hand the printed PUBLIC key to the federation operator; they admit you
+    /// with `dregg-node add-validator --pubkey <it>` and send back the resulting
+    /// genesis.json for `dregg-node join`.
+    GenValidatorKey {
+        /// Data directory holding (or to hold) `node.key`.
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Emit JSON (`{public_key, key_file, generated}`).
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Join a federation: peer to a bootstrap node, sync the blocklace, run as a
+    /// follower (or, if this node's key is in the committee, a voting validator).
+    ///
+    /// Pre-flights the data dir (auto-generates `node.key` if absent, printing the
+    /// pubkey) and requires a committee `genesis.json` to be present — a node
+    /// cannot verify a federation's blocks without its committee descriptor, so
+    /// `join` refuses rather than trusting nobody. The node then catches up the
+    /// DAG from the bootstrap and, if it is NOT yet a committee member,
+    /// auto-proposes membership (`propose_join_if_needed`) and follows until an
+    /// operator admits it via `add-validator`.
+    Join {
+        /// Bootstrap peer to dial: `host:gossip_port` (e.g. 100.64.0.1:9420).
+        /// One live peer is enough; gossip-of-peers fills in the rest.
+        #[arg(long)]
+        bootstrap: String,
+        /// Data directory (must hold, or will receive, `node.key` + `genesis.json`).
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Localhost/overlay HTTP read-API port.
+        #[arg(long, default_value = "8420")]
+        port: u16,
+        /// Bind address for the read API. Default 127.0.0.1 (loopback-only).
+        /// Bind the OVERLAY ip (e.g. 100.64.0.2) so authorized peers can sync —
+        /// NOT 0.0.0.0 (that exposes every interface, red-team MESH-2).
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        /// Gossip/federation sync port (QUIC, UDP).
+        #[arg(long, default_value = "9420")]
+        gossip_port: u16,
+        /// Prove every finalized turn on the commit path (audit-grade).
+        #[arg(long)]
+        prove_turns: bool,
+        /// Enable the devnet faucet endpoint.
+        #[arg(long)]
+        enable_faucet: bool,
+        /// (Devnet) auto-approve incoming join proposals.
+        #[arg(long)]
+        auto_approve_joins: bool,
+    },
+
+    /// Add one or more validators to this node's committee (the authority op).
+    ///
+    /// Reads `genesis.json` from the data dir, folds the given pubkey(s) into the
+    /// committee, recomputes the `federation_id` + BFT `threshold`
+    /// (`quorum_threshold`), and writes the new committee descriptor back (plus a
+    /// content-named `genesis-<id8>.json` to distribute). Filesystem access to
+    /// the node's data dir IS the authority — there is no remote self-admit (that
+    /// would defeat BFT). The re-roll changes the `federation_id`, so distribute
+    /// the new genesis.json to every committee node and restart into full mode.
+    AddValidator {
+        /// Validator public key(s) to add (64-hex Ed25519). Repeat for several.
+        #[arg(long = "pubkey", required = true)]
+        pubkeys: Vec<String>,
+        /// Data directory holding the committee `genesis.json`.
+        #[arg(long, default_value = "~/.dregg")]
+        data_dir: String,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// LIVE validator-set reconfiguration on a RUNNING node (the chain-continuing
+    /// path — no genesis re-roll, no fresh chain, no federation_id change).
+    ///
+    /// Submits an on-chain membership proposal to a running node's API: `--add`
+    /// proposes a Join, `--remove` proposes a Leave, `--rotate <old> <new>` is a
+    /// remove-then-add. The change only APPLIES once a quorum of the CURRENT
+    /// committee ratifies it through finality — proposing is not authority, the
+    /// committee's votes are. Unlike the offline `add-validator` (which re-rolls
+    /// genesis and requires a coordinated restart), this is a live operation: the
+    /// new validator joins via `join --bootstrap`, syncs, and votes from the new
+    /// epoch while the chain keeps advancing.
+    ProposeEpochTransition {
+        /// Validator pubkey(s) to ADD (64-hex Ed25519). Repeat for several.
+        #[arg(long = "add")]
+        add: Vec<String>,
+        /// Validator pubkey(s) to REMOVE (64-hex Ed25519). Repeat for several.
+        #[arg(long = "remove")]
+        remove: Vec<String>,
+        /// Rotate one validator for another: `--rotate <old_pubkey> <new_pubkey>`
+        /// (desugars to remove(old) + add(new)).
+        #[arg(long = "rotate", num_args = 2, value_names = ["OLD", "NEW"])]
+        rotate: Vec<String>,
+        /// Running node's HTTP API port.
+        #[arg(long, default_value = "8420")]
+        port: u16,
+        /// Bearer token for the node API (if the node has a passphrase set). On a
+        /// loopback devnet node with no passphrase this can be omitted.
+        #[arg(long)]
+        token: Option<String>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -538,6 +660,92 @@ async fn main() {
             )
             .await
         }
+        Command::GenValidatorKey { data_dir, json } => {
+            if let Err(e) = operator_join::gen_validator_key(&data_dir, json) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::AddValidator {
+            pubkeys,
+            data_dir,
+            json,
+        } => {
+            if let Err(e) = operator_join::add_validator(&data_dir, &pubkeys, json) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::ProposeEpochTransition {
+            mut add,
+            mut remove,
+            rotate,
+            port,
+            token,
+            json,
+        } => {
+            // `--rotate OLD NEW` desugars to remove(OLD) + add(NEW).
+            if rotate.len() == 2 {
+                remove.push(rotate[0].clone());
+                add.push(rotate[1].clone());
+            }
+            if let Err(e) =
+                operator_join::propose_epoch_transition(port, token.as_deref(), &add, &remove, json)
+                    .await
+            {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Join {
+            bootstrap,
+            data_dir,
+            port,
+            bind,
+            gossip_port,
+            prove_turns,
+            enable_faucet,
+            auto_approve_joins,
+        } => {
+            // Pre-flight: ensure key + committee descriptor, report membership.
+            let plan = match operator_join::prepare_join(&data_dir, &bootstrap, false) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            operator_join::announce_join(&plan, &data_dir, &bind);
+            // Start the daemon in full (BFT-quorum) mode, peered to the bootstrap.
+            // The blocklace catches up from the peer; a non-member auto-proposes
+            // membership (see `blocklace_sync::propose_join_if_needed`).
+            run_node(
+                port,
+                &bind,
+                vec![plan.bootstrap.clone()],
+                &data_dir,
+                "node.key",
+                gossip_port,
+                0,
+                0,
+                false,
+                prove_turns,
+                1000,
+                100,
+                10000,
+                2000,
+                120000,
+                5000,
+                enable_faucet,
+                "full",
+                "blocklace",
+                Vec::new(),
+                auto_approve_joins,
+                Vec::new(),
+                None,
+            )
+            .await
+        }
     }
 }
 
@@ -578,9 +786,74 @@ async fn run_node(
         std::process::exit(1);
     }
 
+    // devnet *mode* is LIVE: `Genesis` config-gen, `--enable-faucet`, and the `.devnet`
+    // marker below are first-class local-devnet plumbing (NOT the decommissioned hosted
+    // devnet, which is gone). Do not strip this mode thinking it's dead.
     // Check for `.devnet` marker and warn prominently.
     if data_path.join(".devnet").exists() {
         tracing::warn!("Running in DEVNET mode \u{2014} keys are not production-grade");
+    }
+
+    // ── MARSHAL-ONLY STARTUP TRIPWIRE (fail-CLOSED refusal) ───────────────────
+    // A binary linked WITHOUT the verified Lean executor archive (libdregg_lean.a)
+    // runs the UN-verified Rust executor: `dregg_lean_ffi::lean_available()` is false.
+    // Such a build must NEVER deploy silently as if it were the verified node — a
+    // stale or gitignored Lean seed degrades the whole executor to marshal-only with
+    // no other visible signal. Historically this tripwire was LOG-ONLY (an `error!`),
+    // so a *solo* node whose logs were ignored could still serve its API presenting as
+    // verified. It is now fail-CLOSED: any node (solo OR full) REFUSES to start
+    // (`exit(1)`) when the verified executor is not linked, UNLESS the operator
+    // explicitly accepts the un-verified executor with `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1`
+    // (the same escape hatch the verified-consensus hard-check below uses). This makes an
+    // unverified node a DELIBERATE opt-in, never a silent default. (See
+    // docs/BUILD-LEAN-LINKED-NODE.md.)
+    //
+    // The refusal must also be SIDE-EFFECT-FREE, so it runs HERE — before
+    // `NodeState` construction touches the data dir. When it ran after state
+    // construction + devnet seeding, a refused first launch left a partially
+    // initialized data dir: the relaunch (with the opt-in set) took the
+    // recovery path instead of the fresh-boot path and never provisioned the
+    // operator's agent cell. The first `/api/faucet` call without `public_key`
+    // then materialized that cell as a zero-key stub, and every signed turn on
+    // that data dir failed "Ed25519 signature verification failed" forever
+    // (the faucet never rewrites an existing cell's key). Reproduced
+    // end-to-end: clean boot → agent cell present with the operator key;
+    // refused-launch-then-relaunch → agent cell absent.
+    let lean_available = dregg_lean_ffi::lean_available();
+    let allow_unverified = env_allow_unverified(
+        std::env::var("DREGG_ALLOW_UNVERIFIED_CONSENSUS")
+            .ok()
+            .as_deref(),
+    );
+    if !lean_available {
+        if !marshal_only_must_refuse(lean_available, allow_unverified) {
+            tracing::warn!(
+                "MARSHAL-ONLY BUILD OVERRIDDEN: `dregg_lean_ffi::lean_available()` is false — this \
+                 binary was linked WITHOUT the verified Lean executor archive (libdregg_lean.a) and \
+                 is running the UN-VERIFIED Rust executor. DREGG_ALLOW_UNVERIFIED_CONSENSUS is set, \
+                 so the node will proceed on the un-verified executor. Its state transitions are NOT \
+                 shadowed by the proved Lean kernel — do not present this node as verified."
+            );
+        } else {
+            error!(
+                "REFUSING TO START: `dregg_lean_ffi::lean_available()` is false — this binary was \
+                 linked WITHOUT the verified Lean executor archive (libdregg_lean.a) and would run \
+                 the UN-VERIFIED Rust executor. A node (solo OR full) MUST NOT serve as if verified \
+                 while running the un-verified executor. Rebuild against a closure-complete, \
+                 HEAD-matching Lean archive: `./scripts/bootstrap.sh` (and set DREGG_REQUIRE_LEAN=1 \
+                 in CI/distribution builds so a marshal-only degrade fails the build instead of \
+                 shipping silently — a --release build now defaults that gate ON). To deliberately \
+                 run an un-verified node, set DREGG_ALLOW_UNVERIFIED_CONSENSUS=1. A stale or \
+                 gitignored seed silently degrades to marshal-only — see \
+                 docs/BUILD-LEAN-LINKED-NODE.md."
+            );
+            std::process::exit(1);
+        }
+    } else {
+        info!(
+            "verified-executor archive linked: `dregg_lean_ffi::lean_available()` is true — this \
+             node runs the PROVED Lean executor over the C ABI"
+        );
     }
 
     // Initialize node state with configurable key file.
@@ -620,10 +893,10 @@ async fn run_node(
                         if let Some(validators) = genesis["validators"].as_array() {
                             let mut fed_keys = Vec::new();
                             for v in validators {
-                                if let Some(pk_hex) = v["public_key"].as_str() {
-                                    if let Some(pk_bytes) = hex_decode_32(pk_hex) {
-                                        fed_keys.push(dregg_types::PublicKey(pk_bytes));
-                                    }
+                                if let Some(pk_hex) = v["public_key"].as_str()
+                                    && let Some(pk_bytes) = hex_decode_32(pk_hex)
+                                {
+                                    fed_keys.push(dregg_types::PublicKey(pk_bytes));
                                 }
                             }
                             if !fed_keys.is_empty() {
@@ -655,7 +928,15 @@ async fn run_node(
                         if let Some(ci) = genesis["checkpoint_interval"].as_u64() {
                             s.checkpoint_interval = ci;
                         }
-                        let cell_load = materialize_genesis_cells(&genesis, &mut s.ledger);
+                        // Recovery ordering (the issuer-well fix): reconstruct
+                        // the genesis BASELINE first on a fresh ledger (the
+                        // `genesis_moves` replay EXACTLY ONCE over value-empty
+                        // cells), THEN re-apply the recovered commit-log overlay
+                        // so every bot-touched cell's FINALIZED post-state wins.
+                        // The old order (genesis reseed applied OVER the overlay)
+                        // re-credited every move RECIPIENT already in the overlay
+                        // — a double-credit that diverged the reconstructed root.
+                        let cell_load = reseed_genesis_then_overlay(&genesis, &mut s.ledger);
                         if cell_load.total() > 0 {
                             info!(
                                 inserted = cell_load.inserted,
@@ -750,6 +1031,21 @@ async fn run_node(
         }
     }
 
+    // Recovery-convergence verdict (DEFERRED from NodeState construction). The
+    // genesis/baseline cells are now (re)seeded on top of the recovered
+    // commit-log overlay, so the in-memory ledger is the FULL finalized ledger
+    // (genesis ⊕ touched). Verify its canonical root equals the durably recorded
+    // finalized root. A node that finalized turns BELOW the first ledger
+    // checkpoint converges HERE (the genesis baseline restores the untouched
+    // cells the overlay can't carry) — it no longer fail-closes on a clean
+    // restart. A genuinely corrupt/divergent store STILL fails closed: reseeding
+    // is insert-if-absent and cannot paper over a tampered touched cell. FAIL
+    // CLOSED on mismatch — refuse to serve wrong state.
+    if let Err(e) = node_state.verify_recovery_convergence().await {
+        error!("{e}");
+        std::process::exit(1);
+    }
+
     // Load known federations from disk so cross-federation receipt verification
     // can route through the unified registry on startup.
     {
@@ -765,7 +1061,7 @@ async fn run_node(
     // committee-of-one federation; "full" turns BFT quorum on. Per
     // FEDERATION-UNIFICATION-DESIGN.md §5, "solo" is no longer a separate
     // runtime mode — it just configures threshold=1 and skips peer gossip.
-    let is_solo_mode = match federation_mode_str.to_lowercase().as_str() {
+    let mut is_solo_mode = match federation_mode_str.to_lowercase().as_str() {
         "solo" => true,
         "full" => false,
         other => {
@@ -794,14 +1090,86 @@ async fn run_node(
             );
         }
 
+        // AUTO-UPGRADE: a node configured solo but with PEERS present (a peer
+        // list and/or a multi-key federation committee from genesis) should NOT
+        // sit silently solo — that is the "configured solo, never federates"
+        // footgun. Peer-presence drives the mode: detecting >1 committee member
+        // or any configured peer upgrades the node out of solo into full
+        // (BFT-quorum) operation, with a loud warning so the operator sees it.
+        let committee_size = s.known_federation_keys.len();
+        let peers_present = has_peers || committee_size > 1;
+        if solo_should_auto_upgrade(is_solo_mode, has_peers, committee_size) {
+            tracing::warn!(
+                peers = has_peers,
+                committee_size,
+                "configured --federation-mode solo but PEERS are present (peer list and/or a \
+                 multi-member genesis committee) — AUTO-UPGRADING to full (BFT-quorum) mode so \
+                 this node actually federates instead of sitting solo. Pass --federation-mode \
+                 full explicitly to silence this, or run with no peers for a genuine solo node."
+            );
+            is_solo_mode = false;
+        }
+
         // In solo mode, initialize the SoloConsensusState with the node's signing key.
         if is_solo_mode {
             let signing_key = s.cclerk.gossip_signing_key().to_bytes();
             s.solo_consensus = Some(dregg_federation::solo::SoloConsensusState::new(signing_key));
             info!("federation mode: solo (committee of one) — no quorum required");
         } else {
-            info!("federation mode: full — BFT quorum required for finality");
+            info!(
+                peers_present,
+                committee_size, "federation mode: full — BFT quorum required for finality"
+            );
         }
+    }
+
+    // ── VERIFIED-CONSENSUS STARTUP HARD-CHECK (red-team parity #6/#7) ──────────
+    // A node in FULL (multi-party BFT) federation mode is a verified-consensus role:
+    // it finalizes over `BlocklaceFinality.tauOrder`, the order the Lean-exported
+    // `dregg_tau_order` computes. If the verified archive is NOT linked (a
+    // marshal-only / stale build where `tau_order_available()` is false), the node
+    // would SILENTLY degrade to the un-verified Rust `ordering::tau` per poll (a
+    // `warn!` only — see `blocklace_sync`'s fallback). For a node that is SUPPOSED to
+    // be Lean-shadowed that is fail-OPEN: it claims verified production+consensus
+    // while running unverified ordering. Refuse to start instead (fail-CLOSED for
+    // this role). A solo node (committee-of-one, trivial order) and a node that never
+    // federates are unaffected, so the intentional mixed rust/lean network keeps
+    // working — only the verified-role node refuses to run unverified.
+    //
+    // Escape hatch: `DREGG_ALLOW_UNVERIFIED_CONSENSUS=1` lets an operator who
+    // deliberately accepts the un-verified Rust ordering proceed (e.g. a dev box with
+    // a marshal-only archive). It is opt-IN — the default for a full-mode node is to
+    // refuse.
+    if !is_solo_mode && !dregg_lean_ffi::tau_order_available() {
+        // Reuses the `allow_unverified` escape hatch parsed above (the same
+        // DREGG_ALLOW_UNVERIFIED_CONSENSUS variable governs both gates).
+        if allow_unverified {
+            tracing::warn!(
+                "VERIFIED-CONSENSUS HARD-CHECK OVERRIDDEN: this node is in FULL (multi-party BFT) \
+                 mode but the Lean verified-consensus archive is NOT linked (`dregg_tau_order` \
+                 absent). DREGG_ALLOW_UNVERIFIED_CONSENSUS is set, so the node will proceed on the \
+                 UN-VERIFIED Rust `ordering::tau` — its finality is NOT shadowed by the verified \
+                 rule. Do not use this in a federation that expects verified consensus."
+            );
+        } else {
+            error!(
+                "REFUSING TO START: this node is configured for VERIFIED consensus (federation \
+                 mode FULL — multi-party BFT finality), but the Lean verified-consensus archive is \
+                 not linked: `dregg_lean_ffi::tau_order_available()` is false (the build lacks the \
+                 `dregg_tau_order` export, e.g. a marshal-only / stale archive). A verified-role \
+                 node MUST NOT silently fall back to the un-verified Rust ordering. Rebuild the \
+                 node against the closure-complete verified archive (it splices \
+                 Dregg2.Distributed.FinalityGate), run this node in `--federation-mode solo` if it \
+                 is not meant to finalize, or set DREGG_ALLOW_UNVERIFIED_CONSENSUS=1 to explicitly \
+                 accept un-verified ordering."
+            );
+            std::process::exit(1);
+        }
+    } else if !is_solo_mode {
+        info!(
+            "verified-consensus hard-check passed: the Lean `dregg_tau_order` archive is linked — \
+             this full-mode node finalizes over the VERIFIED ordering rule"
+        );
     }
 
     // Phase C: Log multi-group participation if --groups is specified.
@@ -892,6 +1260,16 @@ async fn run_node(
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .unwrap_or(min_block_interval_ms);
+            // SELF-FORMING MESH: derive our advertised gossip endpoint from the
+            // operator-configured `--bind <ip>` and the gossip port. Only a
+            // concrete, routable IP is advertised — an unspecified bind (0.0.0.0/
+            // ::) is not dialable, so self-advertisement stays off there and the
+            // node falls back to manual `--federation-peers`.
+            let advertise_addr: Option<SocketAddr> = bind
+                .parse::<std::net::IpAddr>()
+                .ok()
+                .filter(|ip| !ip.is_unspecified())
+                .map(|ip| SocketAddr::new(ip, gossip_port_copy));
             let blocklace_handle = blocklace_sync::run_blocklace_sync(
                 sync_state,
                 gossip_port_copy,
@@ -901,6 +1279,7 @@ async fn run_node(
                 block_cadence_ms,
                 idle_heartbeat_ms,
                 min_block_interval_ms,
+                advertise_addr,
             )
             .await;
             if let Some(handle) = blocklace_handle {
@@ -1101,10 +1480,10 @@ async fn check_status(port: u16) {
 
 /// Expand `~` in a path string.
 fn expand_path(path: &str) -> PathBuf {
-    if path.starts_with("~/") {
-        if let Some(home) = dirs_home() {
-            return home.join(&path[2..]);
-        }
+    if path.starts_with("~/")
+        && let Some(home) = dirs_home()
+    {
+        return home.join(&path[2..]);
     }
     PathBuf::from(path)
 }
@@ -1417,6 +1796,60 @@ fn materialize_genesis_cells(
     stats
 }
 
+/// Reconstruct the recovered ledger in the SOUND order — genesis BASELINE
+/// first, commit-log overlay SECOND — returning the genesis materialization
+/// stats.
+///
+/// On entry `ledger` holds the recovered commit-log overlay that
+/// `NodeState::new_with_key_file` left in place: `checkpoint ⊕ touched
+/// post-states`. The genesis baseline is the height-0 truth that belongs
+/// UNDER that overlay; the overlay is the later finalized truth that belongs
+/// ON it. So this:
+///
+///   1. lifts the recovered overlay out of the live ledger,
+///   2. materializes the genesis baseline on a FRESH ledger, so the
+///      `genesis_moves` replay EXACTLY ONCE over value-empty cells (the issuer
+///      well goes −supply; each recipient is credited once),
+///   3. re-applies the overlay LAST-WRITER-WINS (remove-then-insert, the
+///      verified `CrashRecovery.upd` point update) so every bot-touched cell's
+///      FINALIZED post-state OVERWRITES its genesis-baseline value.
+///
+/// The result is `genesis_baseline ⊕ overlay` exactly — the state the recorded
+/// finalized root commits.
+///
+/// This replaces the old order (genesis reseed applied OVER the overlay), which
+/// replayed the `genesis_moves` across the WHOLE ledger and so re-credited
+/// every move RECIPIENT already present in the overlay — a double-credit (e.g.
+/// the faucet cell, already carrying its post-bot value) that made the
+/// reconstructed root diverge from the recorded finalized root and fail-closed
+/// a healthy node. An issuer-well genesis (issuer cell funding recipients via
+/// `genesis_moves`) surfaces this; a move-free genesis never did. Reordering
+/// does NOT loosen the integrity verdict: a genuinely divergent overlay STILL
+/// reconstructs a wrong root, and `verify_recovery_convergence` STILL refuses
+/// to start (STORE INTEGRITY EVENT).
+fn reseed_genesis_then_overlay(
+    genesis: &serde_json::Value,
+    ledger: &mut dregg_cell::Ledger,
+) -> GenesisCellLoadStats {
+    // 1. Lift the recovered commit-log overlay (checkpoint ⊕ touched
+    //    post-states) out of the live ledger.
+    let recovered_overlay: Vec<dregg_cell::Cell> = ledger.iter().map(|(_, c)| c.clone()).collect();
+    *ledger = dregg_cell::Ledger::new();
+
+    // 2. Genesis baseline on a FRESH ledger: genesis_moves apply EXACTLY ONCE
+    //    over value-empty cells.
+    let stats = materialize_genesis_cells(genesis, ledger);
+
+    // 3. Re-apply the overlay LAST-WRITER-WINS so every bot-touched cell's
+    //    finalized post-state OVERWRITES its genesis-baseline value.
+    for cell in recovered_overlay {
+        let _ = ledger.remove(&cell.id());
+        let _ = ledger.insert_cell(cell);
+    }
+
+    stats
+}
+
 /// Register a peer federation in this node's `known_federations/`
 /// directory. Reads the descriptor JSON, sanity-checks that
 /// `federation_id == H(sorted_committee_pubkeys || committee_epoch)`,
@@ -1529,10 +1962,151 @@ fn run_register_federation(data_dir: &str, descriptor: &std::path::Path) {
     );
 }
 
-/// P2 Fix 8: Wait for Ctrl-C (SIGINT) to trigger graceful shutdown.
+/// Decide whether a node configured `--federation-mode solo` should AUTO-UPGRADE
+/// to full (BFT-quorum) mode because peers are present. Peer-presence drives the
+/// mode: a configured peer list (`has_peers`) and/or a multi-member genesis
+/// committee (`committee_size > 1`) means the node is meant to federate, not sit
+/// silently solo. Returns true only when the node is currently solo AND peers are
+/// present. A genuine solo node (no peers, committee of one) is left untouched.
+fn solo_should_auto_upgrade(is_solo_mode: bool, has_peers: bool, committee_size: usize) -> bool {
+    is_solo_mode && (has_peers || committee_size > 1)
+}
+
+/// Parse the `DREGG_ALLOW_UNVERIFIED_CONSENSUS` escape hatch (shared by the
+/// marshal-only startup tripwire and the verified-consensus hard-check). Running an
+/// un-verified executor / ordering is a DELIBERATE opt-in — this returns `true` only
+/// when the operator explicitly set the variable to a truthy value.
+fn env_allow_unverified(val: Option<&str>) -> bool {
+    matches!(
+        val,
+        Some("1") | Some("true") | Some("TRUE") | Some("on") | Some("ON")
+    )
+}
+
+/// Whether a node must REFUSE to start because it would run the UN-verified Rust
+/// executor (`lean_available()==false`) without the explicit operator opt-in. Any
+/// node — solo OR full — refuses unless the escape hatch is set, so an unverified
+/// node is never a silent default.
+fn marshal_only_must_refuse(lean_available: bool, allow_unverified: bool) -> bool {
+    !lean_available && !allow_unverified
+}
+
+/// Wait for a shutdown signal to trigger a graceful, checkpoint-then-exit stop.
+///
+/// Handles BOTH SIGINT (Ctrl-C) and SIGTERM. `docker stop` (and systemd) send
+/// SIGTERM, then SIGKILL after a grace period; the previous handler only caught
+/// SIGINT, so `docker stop` mid-checkpoint killed the process before
+/// `persist_on_shutdown` flushed a ledger checkpoint — leaving a sub-checkpoint
+/// divergence that surfaced as a STORE INTEGRITY EVENT on restart. Catching
+/// SIGTERM lets the normal stop path flush a checkpoint cleanly (the caller runs
+/// `persist_on_shutdown` after this returns), removing the cause for graceful
+/// stops. (The recovery side — a real crash / SIGKILL — is handled separately by
+/// the crash-consistent identity-cursor resume.)
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to listen for Ctrl-C");
-    info!("received Ctrl-C, initiating graceful shutdown");
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                info!("received SIGINT (Ctrl-C), initiating graceful checkpoint-then-exit shutdown");
+            }
+            _ = sigterm.recv() => {
+                info!(
+                    "received SIGTERM (docker stop / systemd), initiating graceful \
+                     checkpoint-then-exit shutdown"
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to listen for Ctrl-C");
+        info!("received Ctrl-C, initiating graceful checkpoint-then-exit shutdown");
+    }
+}
+
+#[cfg(test)]
+mod shutdown_and_federation_tests {
+    use super::*;
+
+    // ── BUG 2: federation auto-upgrade out of solo when peers are present ──────
+
+    #[test]
+    fn genuine_solo_node_is_not_upgraded() {
+        // No peer list, committee of one (or none) ⇒ a real solo node, untouched.
+        assert!(!solo_should_auto_upgrade(true, false, 0));
+        assert!(!solo_should_auto_upgrade(true, false, 1));
+    }
+
+    #[test]
+    fn solo_with_peer_list_upgrades() {
+        // Configured solo but a peer list is present ⇒ upgrade.
+        assert!(solo_should_auto_upgrade(true, true, 0));
+        assert!(solo_should_auto_upgrade(true, true, 1));
+    }
+
+    #[test]
+    fn solo_with_multi_member_committee_upgrades() {
+        // Configured solo but a multi-member genesis committee ⇒ upgrade even
+        // with no explicit peer list.
+        assert!(solo_should_auto_upgrade(true, false, 3));
+    }
+
+    #[test]
+    fn full_mode_is_never_force_downgraded_or_re_flagged() {
+        // A node already in full mode is never the subject of this upgrade
+        // (the helper only fires when currently solo).
+        assert!(!solo_should_auto_upgrade(false, true, 5));
+        assert!(!solo_should_auto_upgrade(false, false, 1));
+    }
+
+    // ── MARSHAL-ONLY startup refusal (fail-closed unless explicit opt-in) ──────
+
+    #[test]
+    fn env_allow_unverified_only_on_explicit_truthy() {
+        for v in ["1", "true", "TRUE", "on", "ON"] {
+            assert!(env_allow_unverified(Some(v)), "expected {v:?} to allow");
+        }
+        for v in ["0", "false", "off", "no", "", "yes", "2"] {
+            assert!(!env_allow_unverified(Some(v)), "expected {v:?} to refuse");
+        }
+        // Unset (the default) never allows an un-verified executor.
+        assert!(!env_allow_unverified(None));
+    }
+
+    #[test]
+    fn marshal_only_refuses_unless_escape_set() {
+        // A verified build (lean linked) never refuses, regardless of the escape.
+        assert!(!marshal_only_must_refuse(true, false));
+        assert!(!marshal_only_must_refuse(true, true));
+        // A marshal-only build REFUSES by default (no silent unverified default)…
+        assert!(marshal_only_must_refuse(false, false));
+        // …and only proceeds when the operator explicitly opts in.
+        assert!(!marshal_only_must_refuse(false, true));
+    }
+
+    // ── BUG 4: graceful shutdown wires SIGTERM (docker stop) ───────────────────
+    //
+    // The cause of the restart STORE INTEGRITY EVENT was that `docker stop`
+    // sends SIGTERM, which the old handler (SIGINT-only) ignored — the process
+    // was SIGKILLed before `persist_on_shutdown` flushed a checkpoint. The fix
+    // makes `shutdown_signal` select on a SIGTERM stream too. This test asserts
+    // the exact platform mechanism the fix relies on installs cleanly (a genuine
+    // raise-and-deliver test is avoided here because signal disposition is
+    // process-global and would be flaky under the parallel test harness).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn sigterm_stream_installs() {
+        use tokio::signal::unix::{SignalKind, signal};
+        let s = signal(SignalKind::terminate());
+        assert!(
+            s.is_ok(),
+            "graceful shutdown requires a SIGTERM (terminate) stream to install on unix so \
+             `docker stop` checkpoints-then-exits instead of being SIGKILLed mid-checkpoint"
+        );
+    }
 }

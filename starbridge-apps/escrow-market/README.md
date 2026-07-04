@@ -1,23 +1,61 @@
 # starbridge-escrow-market
 
-**An escrowed-delivery marketplace — one verified cell that composes the guarantees of four
-organs.** This is the app that shows dregg is not a toy: a buyer and seller who don't trust
-each other transact a good with **no escrow agent and no off-chain coordinator**. The escrow
-*is* a factory-born cell whose installed `CellProgram` is the rules, re-checked by the
-verified executor on every turn.
+**A sealed-escrow atomic-swap marketplace — the app's escrow IS the protocol-proven
+`SealedEscrow` capacity.** Two mutually-distrustful parties exchange value with **no trusted
+intermediary**: "I give you X iff you give me Y." Each party locks a conforming *leg* of the
+trade into the escrow cell's committed heap; the swap **settles atomically** only when both
+legs are present; and until then each party may **reclaim** its own leg. No party can ever
+walk away holding the counterparty's leg without a genuine own deposit, and no leg is
+claimable twice. This is a real *witnessed movable asset*, not decorative slot arithmetic.
+
+```
+open(terms) ──depositₐ──┐
+                        ├── settle (atomic 2-of-2) ──▶ A↔B value crossed
+            ──deposit_b──┘
+                        └── reclaim (half-open defence) ──▶ depositor made whole
+```
+
+- **open**    — seal the swap terms into the escrow commitment (who locks what on each side).
+- **deposit** — a party locks its conforming leg; value leaves its wallet into custody, the
+  commitment moves (a light client SEES value enter). A non-conforming leg is refused.
+- **settle**  — the exchange completes atomically: both legs cross to their counterparties in
+  one step (no half-open trade), value conserved per asset.
+- **reclaim** — before settlement, a depositor pulls its own leg back and is made whole; the
+  leg is one-shot (a reclaimed leg can never then be settled, and vice-versa).
+
+The genuine core is `SealedEscrowMarket` (`src/lib.rs`), driving the proven
+`dregg_cell::escrow_sealed` capacity (imaged by the Lean rung
+`metatheory/Dregg2/Deos/SealedEscrow.lean`). The forge-rejecting verification core
+(`EscrowState::check_claim` / `settlement`) refuses every attack: a non-conforming deposit, a
+claim without a conforming own deposit, an over-claim, and a one-shot replay.
+
+```sh
+cargo test -p starbridge-escrow-market   # tests/atomic_swap.rs is the flagship
+```
+
+`tests/atomic_swap.rs` proves: witnessed deposit (commitment moves), atomic settlement,
+per-asset conservation across the whole run, and the half-open-trade attack defeated by
+reclaim. The `EscrowVault` (`Payable`) face receives value and settles it onward through the
+shared interface, so per-asset `Σδ=0` holds across app boundaries (bounty→escrow→payee,
+`tests/cross_app_value_flow.rs`). The `service::EscrowService` publishes the typed
+`open`/`deposit`/`settle`/`reclaim`/`view` interface and drives the capacity; the `card`
+module ships the renderer-independent UI.
+
+---
+
+## Legacy compat surface (RETAINED, demoted)
+
+The constructs below are a **pre-existing slot-caveat "delivery lifecycle"**
+(`list → fund → ship → settle`) RETAINED at the crate root because out-of-scope dependents
+(`starbridge-first-room`, `starbridge-v2`) import them. They are **no longer the app's
+headline escrow** — they model bounded *scalar fields*, not a movable witnessed asset. The
+genuine escrow is the `SealedEscrowMarket` above.
 
 ```
 LISTED ──fund──▶ FUNDED ──ship──▶ SHIPPED ──settle──▶ SETTLED
 ```
 
-- **list**   — the seller opens a listing: writes the escrow `CEILING` and `SELLER_HASH`.
-- **fund**   — the buyer escrows `amount ≤ CEILING`, binds `BUYER_HASH`.
-- **ship**   — the seller commits the **sealed-delivery digest** (the encrypted goods /
-  turn-intent) into `DELIVERY_HASH`.
-- **settle** — the deal closes: funds **release** to the seller and any remainder
-  **refunds** the buyer, atomically and value-neutrally.
-
-## Four organs, one cell program
+### Four organs, one cell program (legacy)
 
 Each guarantee the night's organs provide is composed here as a slot caveat the verified
 executor enforces:

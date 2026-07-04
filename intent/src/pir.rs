@@ -376,7 +376,7 @@ pub fn generate_pir_queries(index: usize, database_rows: usize) -> (PirQuery, Pi
     // Compute e_i - r: standard basis vector minus r.
     let mut q_b_vec: Vec<BabyBear> = r.iter().map(|&ri| BabyBear::ZERO - ri).collect();
     // Add 1 at position i: (e_i - r)[i] = 1 - r[i], others = 0 - r[j] = -r[j].
-    q_b_vec[index] = q_b_vec[index] + BabyBear::ONE;
+    q_b_vec[index] += BabyBear::ONE;
 
     let q_a = PirQuery { query_vector: r };
     let q_b = PirQuery {
@@ -470,7 +470,7 @@ pub fn compute_pir_response(query: &PirQuery, database: &[Vec<BabyBear>]) -> Pir
     for (row_idx, row) in database.iter().enumerate() {
         let qi = query.query_vector[row_idx];
         for (col_idx, &elem) in row.iter().enumerate() {
-            response[col_idx] = response[col_idx] + qi * elem;
+            response[col_idx] += qi * elem;
         }
     }
 
@@ -576,7 +576,7 @@ pub fn generate_single_server_query(
 
     // Query = e_i + blinding (the server cannot distinguish from random).
     let mut query_vector = blinding.clone();
-    query_vector[index] = query_vector[index] + BabyBear::ONE;
+    query_vector[index] += BabyBear::ONE;
 
     // Commitment to the blinding (for the server to log/audit if needed).
     let blinding_bytes: Vec<u8> = blinding
@@ -621,7 +621,7 @@ pub fn compute_single_server_response(
     for (row_idx, row) in database.iter().enumerate() {
         let qi = query.query_vector[row_idx];
         for (col_idx, &elem) in row.iter().enumerate() {
-            response[col_idx] = response[col_idx] + qi * elem;
+            response[col_idx] += qi * elem;
         }
     }
 
@@ -681,7 +681,7 @@ pub fn compute_blinding_contribution(
     for (row_idx, row) in database.iter().enumerate() {
         let bi = blinding[row_idx];
         for (col_idx, &elem) in row.iter().enumerate() {
-            contribution[col_idx] = contribution[col_idx] + bi * elem;
+            contribution[col_idx] += bi * elem;
         }
     }
     contribution
@@ -1279,7 +1279,7 @@ mod tests {
         };
         let intent = Intent::new(IntentKind::Need, spec, CommitmentId([0x11; 32]), 9999, None);
 
-        let index = IntentIndex::build_from_intents(&[intent.clone()]);
+        let index = IntentIndex::build_from_intents(std::slice::from_ref(&intent));
 
         // Should have two tags: "action:read" and "service:docs".
         assert_eq!(index.num_rows(), 2);

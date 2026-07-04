@@ -345,18 +345,18 @@ impl FacetConstraint {
     pub fn check(&self, context: &EffectContext) -> Result<(), FacetViolation> {
         match self {
             FacetConstraint::MaxTransferAmount(max) => {
-                if let Some(amount) = context.transfer_amount {
-                    if amount > *max {
-                        return Err(FacetViolation::TransferAmountExceeded { amount, max: *max });
-                    }
+                if let Some(amount) = context.transfer_amount
+                    && amount > *max
+                {
+                    return Err(FacetViolation::TransferAmountExceeded { amount, max: *max });
                 }
                 Ok(())
             }
             FacetConstraint::AllowedTargets(targets) => {
-                if let Some(target) = &context.target_cell {
-                    if !targets.contains(target) {
-                        return Err(FacetViolation::TargetNotAllowed { target: *target });
-                    }
+                if let Some(target) = &context.target_cell
+                    && !targets.contains(target)
+                {
+                    return Err(FacetViolation::TargetNotAllowed { target: *target });
                 }
                 Ok(())
             }

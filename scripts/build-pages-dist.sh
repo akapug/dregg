@@ -65,8 +65,14 @@ cp "$ROOT/site/root/index.html" "$DIST/index.html"
 cp -R "$ROOT/site/assets" "$DIST/assets"
 cp -R "$ROOT/site/explorer" "$DIST/explorer"
 cp -R "$ROOT/site/light-client" "$DIST/light-client"
+# dregg.works — the trustless-host front door + the injectable verify badge. Shipped
+# under /dregg-works/ on the main site; the same dir is what deploys to the dregg.works
+# apex (where verify-badge.js sits at the root as /verify-badge.js).
+cp -R "$ROOT/site/dregg-works" "$DIST/dregg-works"
 test -f "$DIST/explorer/index.html"
 test -f "$DIST/light-client/index.html"
+test -f "$DIST/dregg-works/index.html"
+test -f "$DIST/dregg-works/verify-badge.js"
 
 # ── 1. THE deos COCKPIT: the WebImage launcher (gpui-free skin), node-less ───────
 echo "=== 1/6 build the WebImage cockpit wasm (starbridge-v2/web, default) ==="
@@ -119,7 +125,9 @@ fi
 # heavy native prover and committed as a data artifact (CI does NOT re-fold it):
 #   cargo run --release -p dregg-lightclient --bin produce_history_envelope --features prover -- 3 7 \
 #     > site/light-client/history.json
-# Regenerate it only if the WholeChainProofBytes wire format version bumps.
+# Regenerate it whenever the circuit/VK or the WholeChainProofBytes wire format moves
+# (e.g. the v12 geometry epoch turned the scalar roots into 8-felt sequences) — the
+# FRESHNESS TOOTH below refuses to assemble a dist whose baked demo the tab would refuse.
 test -s "$ROOT/site/light-client/history.json"
 mkdir -p "$DIST/cards"
 for card in index counter inspector tally kvstore doccollab; do
@@ -128,6 +136,25 @@ for card in index counter inspector tally kvstore doccollab; do
 done
 cp -R "$ROOT/wasm/pkg" "$DIST/cards/pkg"
 test -s "$DIST/cards/pkg/dregg_wasm_bg.wasm"
+
+# FRESHNESS TOOTH (green-or-bust): the committed history.json must ATTEST under the
+# just-built wasm engine. A circuit/VK epoch that obsoletes the baked artifact fails
+# the assembly loudly (regenerate with the produce_history_envelope command above)
+# instead of shipping a demo the visitor's tab will refuse.
+node --input-type=module -e "
+import { readFileSync } from 'node:fs';
+const m = await import('$DIST/cards/pkg/dregg_wasm.js');
+await m.default({ module_or_path: readFileSync('$DIST/cards/pkg/dregg_wasm_bg.wasm') });
+const baked = JSON.parse(readFileSync('$ROOT/site/light-client/history.json', 'utf8'));
+let v;
+try { v = m.verify_devnet_history(JSON.stringify(baked.envelope), baked.anchor_hex); }
+catch (e) { v = { attested: false, named_floor: String(e?.message ?? e) }; }
+if (!v.attested) {
+  console.error('ERROR: site/light-client/history.json does NOT attest under the just-built engine — the circuit/VK moved since the artifact was folded. Regenerate it (see the comment above this tooth). Refusal: ' + v.named_floor);
+  process.exit(1);
+}
+console.log('light-client freshness tooth: the baked aggregate attests (' + v.num_turns + ' turns)');
+"
 
 # ── 4. THE ATLAS (relative paths, works at any subpath) ──────────────────────────
 if [ "$ATLAS" = "1" ] && [ -d "$ROOT/dregg-atlas/site" ]; then

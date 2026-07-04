@@ -436,16 +436,15 @@ impl Blocklace {
         // (3) Sequence monotonicity: the block must extend the creator's chain.
         // (Skipped for a creator already known to equivocate — they have no
         // honest tip to extend, but the evidence is still retained above.)
-        if !self.equivocators.contains(&block.creator) {
-            if let Some(&tip_seq) = self.tip_sequence.get(&block.creator) {
-                if block.sequence <= tip_seq {
-                    return Err(InsertError::SeqRegression {
-                        creator: block.creator,
-                        attempted: block.sequence,
-                        tip_sequence: tip_seq,
-                    });
-                }
-            }
+        if !self.equivocators.contains(&block.creator)
+            && let Some(&tip_seq) = self.tip_sequence.get(&block.creator)
+            && block.sequence <= tip_seq
+        {
+            return Err(InsertError::SeqRegression {
+                creator: block.creator,
+                attempted: block.sequence,
+                tip_sequence: tip_seq,
+            });
         }
 
         // All checks passed: link, record the tip, and store.

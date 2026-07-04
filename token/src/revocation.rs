@@ -338,13 +338,13 @@ impl SortedRevocationTree {
         if self.leaves.is_empty() {
             return [0u8; 32];
         }
-        let hashed_leaves: Vec<[u8; 32]> = self.leaves.iter().map(|l| Self::leaf_hash(l)).collect();
+        let hashed_leaves: Vec<[u8; 32]> = self.leaves.iter().map(Self::leaf_hash).collect();
         Self::merkle_root_from_level(&hashed_leaves)
     }
 
     /// Generate a membership proof for the element at the given index.
     fn prove_membership(&self, index: usize) -> MembershipProof {
-        let hashed_leaves: Vec<[u8; 32]> = self.leaves.iter().map(|l| Self::leaf_hash(l)).collect();
+        let hashed_leaves: Vec<[u8; 32]> = self.leaves.iter().map(Self::leaf_hash).collect();
         let siblings = Self::merkle_path(&hashed_leaves, index);
         MembershipProof {
             leaf_hash: self.leaves[index],
@@ -412,7 +412,7 @@ impl SortedRevocationTree {
         }
         let mut current = level.to_vec();
         while current.len() > 1 {
-            if current.len() % 2 != 0 {
+            if !current.len().is_multiple_of(2) {
                 current.push([0u8; 32]);
             }
             let mut next = Vec::with_capacity(current.len() / 2);
@@ -434,10 +434,14 @@ impl SortedRevocationTree {
         let mut idx = index;
 
         while current_level.len() > 1 {
-            if current_level.len() % 2 != 0 {
+            if !current_level.len().is_multiple_of(2) {
                 current_level.push([0u8; 32]);
             }
-            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+            let sibling_idx = if idx.is_multiple_of(2) {
+                idx + 1
+            } else {
+                idx - 1
+            };
             siblings.push(current_level[sibling_idx]);
 
             let mut next_level = Vec::with_capacity(current_level.len() / 2);
@@ -455,7 +459,7 @@ impl SortedRevocationTree {
         let mut current = Self::leaf_hash(&proof.leaf_hash);
         let mut idx = proof.index;
         for sibling in &proof.siblings {
-            if idx % 2 == 0 {
+            if idx.is_multiple_of(2) {
                 current = Self::node_hash(&current, sibling);
             } else {
                 current = Self::node_hash(sibling, &current);
@@ -472,15 +476,15 @@ impl SortedRevocationTree {
         }
 
         // Check ordering: left < absent < right.
-        if let Some(left) = &proof.left_neighbor {
-            if *left >= proof.absent_hash {
-                return false;
-            }
+        if let Some(left) = &proof.left_neighbor
+            && *left >= proof.absent_hash
+        {
+            return false;
         }
-        if let Some(right) = &proof.right_neighbor {
-            if *right <= proof.absent_hash {
-                return false;
-            }
+        if let Some(right) = &proof.right_neighbor
+            && *right <= proof.absent_hash
+        {
+            return false;
         }
 
         // Verify left neighbor membership proof.
@@ -514,10 +518,10 @@ impl SortedRevocationTree {
         }
 
         // Verify adjacency: left and right must be at consecutive indices.
-        if let (Some(left_proof), Some(right_proof)) = (&proof.left_proof, &proof.right_proof) {
-            if right_proof.index != left_proof.index + 1 {
-                return false;
-            }
+        if let (Some(left_proof), Some(right_proof)) = (&proof.left_proof, &proof.right_proof)
+            && right_proof.index != left_proof.index + 1
+        {
+            return false;
         }
 
         true

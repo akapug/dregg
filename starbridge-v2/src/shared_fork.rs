@@ -44,13 +44,14 @@ use std::collections::HashSet;
 use dregg_cell::{AuthRequired, CapabilityRef, CellId};
 use dregg_cell_crypto::ReadCap;
 use dregg_turn::conditional::{
-    ConditionProof, ConditionalResult, ConditionalTurn, DEFAULT_MAX_ROOT_AGE, ProofCondition,
-    compute_proof_hash, resolve_condition,
+    compute_proof_hash, ConditionProof, ConditionalTurn, ProofCondition,
 };
+#[cfg(test)]
+use dregg_turn::conditional::{resolve_condition, ConditionalResult, DEFAULT_MAX_ROOT_AGE};
 use dregg_turn::turn::{Turn, TurnReceipt};
 
 use crate::powerbox::{Powerbox, PowerboxOutcome};
-use crate::world::{CommitOutcome, World, touched_cells};
+use crate::world::{touched_cells, CommitOutcome, World};
 
 /// **A cap fully granted into the fork — the EMBEDDED tier.**
 ///
@@ -181,7 +182,7 @@ pub enum ConsentOutcome {
     /// witness is the executor's `receipt`), and the pending turn's condition
     /// RESOLVED under it. The boundary fired ONCE (the proof nullifier prevents a
     /// replay).
-    Granted { receipt: TurnReceipt },
+    Granted { receipt: Box<TurnReceipt> },
     /// The owner DENIED / the request did not resolve (an over-amplifying grant
     /// refused, an unheld target, or the pending turn expired). Fail-closed: the
     /// boundary did NOT fire, nothing reached the owner's real world.
@@ -228,7 +229,7 @@ impl ConsentWitness {
             ConsentOutcome::Granted { receipt } => Some(ConsentWitness {
                 boundary,
                 timeout_height,
-                receipt,
+                receipt: *receipt,
             }),
             ConsentOutcome::Denied { .. } => None,
         }
@@ -254,7 +255,7 @@ pub enum GatedCommit {
         /// The boundary target whose exercise was refused.
         target: CellId,
         /// The consent request the owner resolves to open the gate (no-consent case).
-        request: Option<ConsentRequest>,
+        request: Box<Option<ConsentRequest>>,
         /// Why the exercise was refused.
         reason: String,
     },
@@ -399,17 +400,18 @@ impl SharedFork {
     ///
     /// `consent` (if present) is a [`ConsentWitness`] carrying the boundary it opens
     /// + the receipt of the owner's grant of that boundary (produced by
-    /// [`Self::resolve_consent`] → [`ConsentOutcome::Granted`], wrapped by
-    /// [`ConsentWitness::from_outcome`]). `owner` is the principal whose consent mints
-    /// the boundary cap INTO the fork when the gate opens (the consent's hole-fill: a
-    /// real attenuated `Effect::GrantCapability` from owner→guest on the fork, so the
-    /// now-consented turn can commit against the fork's executor). `used_proof_hashes`
-    /// is the fork's persistent nullifier set (the witness fires the boundary once).
-    /// `current_height` is the live height the consent timeout is checked against.
+    ///   [`Self::resolve_consent`] → [`ConsentOutcome::Granted`], wrapped by
+    ///   [`ConsentWitness::from_outcome`]). `owner` is the principal whose consent mints
+    ///   the boundary cap INTO the fork when the gate opens (the consent's hole-fill: a
+    ///   real attenuated `Effect::GrantCapability` from owner→guest on the fork, so the
+    ///   now-consented turn can commit against the fork's executor). `used_proof_hashes`
+    ///   is the fork's persistent nullifier set (the witness fires the boundary once).
+    ///   `current_height` is the live height the consent timeout is checked against.
     ///
     /// The single mandatory entry: the guest drives turns through this method (never
     /// `fork.commit_turn` directly) — the gate is the executor-forcing door. The
     /// existing [`Self::resolve_consent`] produces the witness this gate consumes.
+    #[allow(clippy::too_many_arguments)] // gated commit threads the full turn + consent witness
     pub fn commit_turn_gated(
         &self,
         fork: &mut World,
@@ -454,7 +456,7 @@ impl SharedFork {
             );
             return GatedCommit::Refused {
                 target: boundary.target,
-                request: Some(request),
+                request: Box::new(Some(request)),
                 reason:
                     "networkboundary exercise refused: no consent witness present (fail-closed)"
                         .to_string(),
@@ -466,7 +468,7 @@ impl SharedFork {
         if witness.boundary != boundary.target {
             return GatedCommit::Refused {
                 target: boundary.target,
-                request: None,
+                request: Box::new(None),
                 reason: format!(
                     "consent witness is for a different boundary ({} ≠ {})",
                     crate::reflect::short_hex(&witness.boundary.0),
@@ -480,7 +482,7 @@ impl SharedFork {
         if current_height > witness.timeout_height {
             return GatedCommit::Refused {
                 target: boundary.target,
-                request: None,
+                request: Box::new(None),
                 reason: "consent witness arrived after the boundary turn expired (fail-closed)"
                     .to_string(),
             };
@@ -521,7 +523,7 @@ impl SharedFork {
                     },
                     PowerboxOutcome::Denied { reason } => GatedCommit::Refused {
                         target: boundary.target,
-                        request: None,
+                        request: Box::new(None),
                         reason: format!(
                             "consent valid but the boundary grant did not land on the fork (fail-closed): {reason}"
                         ),
@@ -530,7 +532,7 @@ impl SharedFork {
             }
             Err(reason) => GatedCommit::Refused {
                 target: boundary.target,
-                request: None,
+                request: Box::new(None),
                 reason: format!("networkboundary exercise refused (invalid consent): {reason}"),
             },
         }
@@ -724,8 +726,8 @@ use serde::{Deserialize, Serialize};
 /// has already granted the embedded subgraph + withheld the boundaries on that
 /// fork): we then cull the cells in view of the guest's c-list (the guest cell
 /// + every cell its capabilities reach, to a bounded depth) and snapshot
-/// exactly those. A recipient cannot rehydrate a cell that was culled away —
-/// confinement by omission (the anti-amplification floor).
+///   exactly those. A recipient cannot rehydrate a cell that was culled away —
+///   confinement by omission (the anti-amplification floor).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MembraneFrustum {
     /// The focus cell the cull is centered on (the guest principal whose c-list
@@ -1073,8 +1075,8 @@ mod membrane_host {
             b: &ForkHandle,
         ) -> Result<StitchOutcome, MembraneError> {
             use crate::umem_membrane::{
-                ConferredCap, UmemBranch, dropped_cap_event_id, settle_umem_stitch,
-                settlement_held_at_tip, stitch_projections, umem_event_id,
+                dropped_cap_event_id, settle_umem_stitch, settlement_held_at_tip,
+                stitch_projections, umem_event_id, ConferredCap, UmemBranch,
             };
             let forks = self.forks.lock().unwrap();
             let ea = forks
@@ -1253,7 +1255,7 @@ mod membrane_host {
         }
 
         fn stitch(&self, fork: &ForkHandle) -> Result<StitchOutcome, Self::Error> {
-            use crate::umem_membrane::{UmemBranch, stitch_projections, umem_event_id};
+            use crate::umem_membrane::{stitch_projections, umem_event_id, UmemBranch};
             let forks = self.forks.lock().unwrap();
             let entry = forks
                 .iter()
@@ -1316,7 +1318,7 @@ mod membrane_host {
         #[test]
         fn real_host_mint_serialize_rehydrate_drive_stitch_end_to_end() {
             // A REAL host over a REAL constructed fork — the closure of the mock.
-            let (mut world, owner, guest, docs) = signed_world();
+            let (world, owner, guest, docs) = signed_world();
             let mut fork = world.fork();
             let _sf = SharedFork::construct(
                 &mut fork,
@@ -1391,7 +1393,7 @@ mod membrane_host {
         ///     opaque cell-granular `Atom` merge, now load-bearing in the live host.
         #[test]
         fn the_live_membrane_stitches_umems_field_granular() {
-            use crate::umem_membrane::{UmemBranch, umem_event_id};
+            use crate::umem_membrane::{umem_event_id, UmemBranch};
             use deos_matrix::membrane::ConflictReason;
             use dregg_turn::umem::UKey;
 
@@ -2217,7 +2219,7 @@ mod tests {
     fn construct_grants_embedded_attenuated_and_leaves_boundaries_ungranted() {
         // EMBEDDED: docs granted (attenuated to Signature) into the guest's c-list.
         // NETWORKBOUNDARY: peer is consent-gated → NO cap rides into the guest.
-        let (mut world, owner, guest, docs, peer) = fork_world();
+        let (world, owner, guest, docs, peer) = fork_world();
         let mut fork = world.fork();
 
         let sf = SharedFork::construct(
@@ -2265,7 +2267,7 @@ mod tests {
             world
                 .ledger()
                 .get(&guest)
-                .map_or(true, |c| !c.capabilities.has_access(&docs)),
+                .is_none_or(|c| !c.capabilities.has_access(&docs)),
             "forking + granting mutated ONLY the fork, never the live world"
         );
     }
@@ -2275,7 +2277,7 @@ mod tests {
         // The owner holds only Signature over peer; trying to EMBED peer at the
         // wider None (full authority) is an amplification → the powerbox refuses,
         // and the cap is DROPPED from the fork (never amplified).
-        let (mut world, owner, guest, _docs, peer) = fork_world();
+        let (world, owner, guest, _docs, peer) = fork_world();
         let mut fork = world.fork();
 
         let sf = SharedFork::construct(
@@ -2333,7 +2335,7 @@ mod tests {
         // THE KEYSTONE (shape): a networkboundary exercise is a ConditionalTurn
         // whose ProofCondition is the OWNER's grant (TurnExecuted bound to the grant
         // turn's hash). The pending turn does NOTHING until that condition resolves.
-        let (mut world, _owner, guest, _docs, peer) = fork_world();
+        let (world, _owner, guest, _docs, peer) = fork_world();
 
         // The guest's intended boundary exercise (a stand-in "thing it wants to do
         // over there") wrapped in a pending ConditionalTurn gated on the owner's
@@ -2695,7 +2697,7 @@ mod tests {
         // EMBEDDED: a real cap is granted into the guest's fork c-list; the guest
         // DRIVES a real turn over it (set_field on docs) with NO consent — and it
         // commits against the fork's verified executor.
-        let (mut world, owner, guest, docs, _peer, _seed) = signed_fork_world();
+        let (world, owner, guest, docs, _peer, _seed) = signed_fork_world();
         let mut fork = world.fork();
         let sf = SharedFork::construct(
             &mut fork,
@@ -2706,13 +2708,12 @@ mod tests {
             vec![],
         );
         assert_eq!(sf.embedded.len(), 1, "docs is embedded");
-        assert!(
-            fork.ledger()
-                .get(&guest)
-                .unwrap()
-                .capabilities
-                .has_access(&docs)
-        );
+        assert!(fork
+            .ledger()
+            .get(&guest)
+            .unwrap()
+            .capabilities
+            .has_access(&docs));
 
         // The guest drives a REAL turn over its embedded cap — no consent door.
         let drive = fork.turn(guest, vec![crate::world::set_field(docs, 3, [9u8; 32])]);
@@ -2734,7 +2735,7 @@ mod tests {
         // exposed slot's key (inspect), but holds NO write cap — exercising requires
         // an upgrade REQUEST (routed to the owner). The fork c-list carries no write
         // cap for a studyref target.
-        let (mut world, owner, guest, docs, _peer, _seed) = signed_fork_world();
+        let (world, owner, guest, docs, _peer, _seed) = signed_fork_world();
         let mut fork = world.fork();
         let view_key = dregg_cell_crypto::ViewKey::from_root([7u8; 32]);
         let read_cap = ReadCap::new(docs, dregg_cell_crypto::FieldSet::single(0), view_key);
@@ -2793,7 +2794,7 @@ mod tests {
         CellId,
         [u8; 32],
     ) {
-        let (mut world, owner, guest, docs, peer, _seed) = signed_fork_world();
+        let (world, owner, guest, docs, peer, _seed) = signed_fork_world();
         let exec_pub = world
             .executor_public_key()
             .expect("the world signs receipts");
@@ -3184,7 +3185,7 @@ mod tests {
         use std::collections::BTreeSet;
 
         // A live world: the owner holds docs (embeddable) + peer (networkboundary).
-        let (mut world, owner, guest, docs, peer, _seed) = signed_fork_world();
+        let (world, owner, guest, docs, peer, _seed) = signed_fork_world();
 
         // (1) MINT — frustum-cull the in-view cap subgraph + snapshot. We fork the
         //     live world (the snapshot: a deep clone of the ledger + the genuine
@@ -3233,7 +3234,7 @@ mod tests {
             world
                 .ledger()
                 .get(&guest)
-                .map_or(true, |c| !c.capabilities.has_access(&docs)),
+                .is_none_or(|c| !c.capabilities.has_access(&docs)),
             "the live world is untouched — minting mutated ONLY the fork"
         );
 

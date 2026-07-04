@@ -1040,6 +1040,60 @@ pub enum StateConstraint {
         not_after: Option<u64>,
     },
 
+    // ─── Register-reading temporal atoms (the proven-but-was-unwired
+    //     `TemporalAlgebra` family, now deployable). Each mirrors a
+    //     `#assert_axioms`-clean Lean atom whose soundness is discharged by
+    //     `temporalStateStepGuarded` / `temporalAtomsAdmit`
+    //     (`metatheory/Dregg2/Authority/TemporalAlgebra{,2}.lean`). They read
+    //     the COMMITTED PRE-state register the way the Lean atoms read the
+    //     target cell's pre-state record (absent register ⇒ `FIELD_ZERO` ⇒ 0).
+    //     See `docs/deos/TEMPORAL-LOGIC-STATUS.md` §3. ───
+    /// **"stayed under k":** admit iff the cell's committed PRE-state
+    /// admission COUNTER register `new`/`old[counter_index]` reads `< k`. The
+    /// running-rate gate — at most `k` admissions per window (the program bumps
+    /// the counter on each admission and rotates it at window boundaries, e.g.
+    /// a [`Self::MonotonicSequence`] caveat on the counter slot). Mirrors Lean
+    /// `TemporalAtom.rateBound`. Reads the OLD register (one-cell pre-state
+    /// read; the bound is exact within the cell's serialized history).
+    RateBound { counter_index: u8, k: u64 },
+
+    /// **"only after it cooled":** admit iff `staged_at + period <=
+    /// ctx.block_height` — the staged object (amendment, recovery, parameter
+    /// change) has COOLED for at least `period` since it was staged at
+    /// `staged_at`. THE polis cooling primitive, generalized. Height-only:
+    /// definitionally `afterHeight (staged_at + period)`, lowered to a
+    /// one-sided [`Self::TemporalGate`] for the AIR. Mirrors Lean
+    /// `TemporalAtom.cooledSince` (`cooledSince_eq_afterHeight`).
+    CooledSince { staged_at: u64, period: u64 },
+
+    /// **"P until Y":** admit WHILE the event register `[flag_index]` reads `0`
+    /// (the event has not happened) — the temporal **U** operator over history
+    /// ("bids are admitted UNTIL the auction closes"). Reads the OLD register
+    /// (absent ⇒ 0 ⇒ admits). Exact complement of [`Self::SinceEvent`]. Mirrors
+    /// Lean `EventAtom.untilEvent` (`until_holds_EU_flip`: U is the in-tree lfp
+    /// `EU`).
+    UntilEvent { flag_index: u8 },
+
+    /// **"since the event":** admit only ONCE the event register `[flag_index]`
+    /// is set (`≠ 0`) — the temporal **S** operator ("payout is admitted only
+    /// SINCE the auction closed"). Reads the OLD register (absent ⇒ 0 ⇒
+    /// refuses, fail-closed). Mirrors Lean `EventAtom.sinceEvent`
+    /// (`sinceEvent_iff_AG`: once set, set on every future).
+    SinceEvent { flag_index: u8 },
+
+    /// **The optimistic-rollup / fraud-proof settlement gate:** admit iff the
+    /// challenge window has ELAPSED (`staged_at + period <= ctx.block_height`)
+    /// AND no challenge has been filed (the challenge register `[challenge_index]`
+    /// reads `0`). Anyone may file a challenge during the window (a write
+    /// setting the register non-zero); settlement is admissible only after a
+    /// challenge-free window. Reads the OLD challenge register (absent ⇒ 0).
+    /// Mirrors Lean `TemporalAtom.challengeWindow`.
+    ChallengeWindow {
+        challenge_index: u8,
+        staged_at: u64,
+        period: u64,
+    },
+
     /// The action must reveal a preimage whose hash equals
     /// `slot[commitment_index]`. `hash_kind` selects Poseidon2 vs BLAKE3.
     PreimageGate {
@@ -1686,5 +1740,159 @@ pub enum StateConstraint {
         /// The aggregate predicate over the read-out collection (the same
         /// [`CollPred`] vocabulary [`Self::CollectionAggregate`] uses).
         pred: CollPred,
+    },
+
+    /// **The sealed-escrow atomic-swap gate** (the sealed-escrow house-capacity
+    /// in-circuit weld, `docs/deos/SETTLE-ESCROW-WELD-DESIGN.md`). Forces the
+    /// 2-of-2 swap to settle ALL-OR-NOTHING: BOTH leg-status slots must read
+    /// `Deposited` before the transition AND BOTH read `Consumed` after. A
+    /// forged PARTIAL settle (one leg flipped, the other left `Deposited` — the
+    /// half-open trade) is INEXPRESSIBLE: it fails this single conjunctive
+    /// entry. This is the Lean `SettleGate` (`metatheory/Dregg2/Deos/
+    /// SealedEscrow.lean` §6) lifted to a declared cell-program caveat — a SINGLE
+    /// entry reading BOTH legs, which the per-slot-independent caveats
+    /// (`AllowedTransitions`, `Monotonic`, …) cannot express (two independent
+    /// `Deposited→Consumed` entries do not bind atomicity — a forge would present
+    /// one and omit the other).
+    ///
+    /// The two named slots carry the **field-mirrored leg status** (the
+    /// `LegStatus` code `cell/src/escrow_sealed.rs` writes into the committed
+    /// heap, mirrored into a register slot for the AIR-teeth view — stage (a) of
+    /// the weld design): `Empty = 0`, `Deposited = 1`, `Consumed = 2`. The
+    /// executor evaluator (`evaluate_constraint_full`) enforces the gate over the
+    /// (old, new) field-slot pair; the projection
+    /// (`dregg_turn::executor::project_slot_caveat_manifest`) emits the tag-17
+    /// `SLOT_CAVEAT_TAG_SETTLE_ESCROW` manifest entry, which a light client
+    /// re-evaluates against the public-input-bound `state_before`/`state_after`
+    /// views (`dregg_circuit::effect_vm::verify_slot_caveat_manifest`). The AIR
+    /// constraint polynomials — hence the VK bytes — are UNCHANGED (manifest in
+    /// public inputs + off-AIR re-evaluation, exactly the temporal-caveat
+    /// vehicle): an old verifier rejects tag 17 as `unknown type_tag`, so
+    /// adopting it is a verifier-code epoch, not a proving-key rotation.
+    ///
+    /// STAGED: no deployed cell declares this caveat yet (dead-by-default until a
+    /// cell opts in at the sealed-escrow verifier epoch). Fail-closed: a transition
+    /// with no `old_state` surfaces `TransitionCheckRequiresOldState`; a bad slot
+    /// index is `InvalidFieldIndex`; any non-atomic leg state is
+    /// `ConstraintViolated`. A `StateConstraint` (reads the (old, new) pair, does
+    /// not lift into the post-state-local [`SimpleStateConstraint`] fragment).
+    /// APPEND-ONLY (declared LAST so every existing postcard/serde variant index
+    /// is preserved — factory VKs / content addresses byte-identical, §2).
+    SettleEscrow {
+        /// Register slot mirroring leg A's status code (`Empty`/`Deposited`/
+        /// `Consumed` = 0/1/2).
+        leg_a_index: u8,
+        /// Register slot mirroring leg B's status code.
+        leg_b_index: u8,
+    },
+
+    /// **The standing-obligation per-period discharge gate** (the standing-obligation
+    /// house-capacity in-circuit weld, `docs/deos/DISCHARGE-OBLIGATION-WELD-DESIGN.md`).
+    /// Forces a recurring duty to be discharged ON SCHEDULE: across the (old, new)
+    /// transition the discharge must be DUE (the block height has reached the
+    /// committed due block), the `next_due` cursor must ADVANCE by exactly one
+    /// period, and the discharged total must advance by EXACTLY the schedule amount.
+    /// A forged EARLY discharge (clock below the due block), a WRONG-AMOUNT discharge,
+    /// or a NON-ADVANCED cursor (a replay that leaves the one-shot cursor where it
+    /// was) is INEXPRESSIBLE: it fails this single conjunctive entry. This is the Lean
+    /// `DischargeGate` (`metatheory/Dregg2/Deos/StandingObligation.lean` §6b) lifted to
+    /// a declared cell-program caveat — a SINGLE entry binding the joint
+    /// due ∧ advanced ∧ exact shape, which the per-slot-independent caveats
+    /// (`AllowedTransitions`, `Monotonic`, …) cannot express.
+    ///
+    /// The named slots carry the **field-mirrored schedule scalars** (the
+    /// `next_due` cursor and discharged total `cell/src/obligation_standing.rs` writes
+    /// into the committed heap, mirrored into register slots for the AIR-teeth view —
+    /// stage (a) of the weld design): `cursor_slot` the `next_due` cursor (before/after
+    /// the transition), `due_slot` the current period's due block, `amount_slot` the
+    /// cumulative discharged total (before/after). The executor evaluator
+    /// (`evaluate_constraint_full`) enforces the gate over the (old, new) pair using
+    /// the block height as the schedule clock; the projection
+    /// (`dregg_turn::executor::project_slot_caveat_manifest`) emits the tag-18
+    /// `SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION` manifest entry, which a light client
+    /// re-evaluates against the public-input-bound `state_before`/`state_after` views
+    /// (`dregg_circuit::effect_vm::verify_slot_caveat_manifest`). The AIR constraint
+    /// polynomials — hence the VK bytes — are UNCHANGED (manifest in public inputs +
+    /// off-AIR re-evaluation, exactly the temporal-caveat / sealed-escrow vehicle): an
+    /// old verifier rejects tag 18 as `unknown type_tag`, so adopting it is a
+    /// verifier-code epoch, not a proving-key rotation.
+    ///
+    /// STAGED: no deployed cell declares this caveat yet (dead-by-default until a cell
+    /// opts in at the standing-obligation verifier epoch). Fail-closed: a transition
+    /// with no `old_state` surfaces `TransitionCheckRequiresOldState`; a missing block
+    /// height is `MissingContextField`; a bad slot index is `InvalidFieldIndex`; any
+    /// early/wrong-amount/non-advanced step is `ConstraintViolated`. A `StateConstraint`
+    /// (reads the (old, new) pair, does not lift into the post-state-local
+    /// [`SimpleStateConstraint`] fragment). APPEND-ONLY (declared LAST so every existing
+    /// postcard/serde variant index is preserved — factory VKs / content addresses
+    /// byte-identical).
+    DischargeObligation {
+        /// Register slot mirroring the `next_due` cursor (before/after the
+        /// transition); the gate requires it to advance by exactly `period`.
+        cursor_slot: u8,
+        /// Register slot mirroring the current period's due block; the gate
+        /// requires the block height to have reached it.
+        due_slot: u8,
+        /// Register slot mirroring the cumulative discharged total (before/after);
+        /// the gate requires it to advance by exactly `amount`.
+        amount_slot: u8,
+        /// The schedule period — the exact cursor advance per discharge.
+        period: u32,
+        /// The schedule amount — the exact discharged-total advance per discharge.
+        amount: u32,
+    },
+
+    /// **The share-vault no-dilution deposit gate** (the share-vault house-capacity
+    /// in-circuit weld, `docs/deos/VAULT-DEPOSIT-WELD-DESIGN.md`). Forces an
+    /// ERC-4626-style deposit to honor the share-price relation ACROSS the (old, new)
+    /// transition: the committed `total_assets` counter must advance by the deposit
+    /// `d > 0`, the committed `total_shares` counter must advance by `m > 0` minted
+    /// shares (the zero-mint / inflation-attack tooth), and NO existing holder may be
+    /// diluted (`before_assets·m ≤ before_shares·d`, the no-dilution floor — the
+    /// existing price-per-share never decreases). A forged ZERO-MINT deposit (the
+    /// ERC-4626 first-depositor inflation attack, where a victim's deposit rounds to
+    /// nothing), an over-minting DILUTING deposit, or a NON-CONSERVING deposit (assets
+    /// that do not advance by exactly the deposit) is INEXPRESSIBLE: it fails this
+    /// single conjunctive entry. This is the Lean `VaultDepositGate`
+    /// (`metatheory/Dregg2/Deos/Vault.lean` §6b) lifted to a declared cell-program
+    /// caveat — a SINGLE entry binding the joint deposit ∧ minted ∧ positive ∧
+    /// no-dilution shape, which the per-slot-independent caveats (`Monotonic`,
+    /// `FieldDelta`, …) cannot express.
+    ///
+    /// The named slots carry the **field-mirrored counter scalars** (the
+    /// `total_assets` and `total_shares` counters `cell/src/vault.rs` writes into the
+    /// committed `SHARE_VAULT_COLL` heap, mirrored into register slots for the
+    /// AIR-teeth view — stage (a) of the weld design): `assets_slot` the committed
+    /// `total_assets` (before/after), `shares_slot` the committed `total_shares`
+    /// (before/after). The deposit `d` and minted `m` are read as the across-transition
+    /// deltas of those two slots (no per-deposit constant — a deposit varies per turn,
+    /// unlike the standing obligation's fixed schedule). The executor evaluator
+    /// (`evaluate_constraint_full`) enforces the gate over the (old, new) pair; the
+    /// projection (`dregg_turn::executor::project_slot_caveat_manifest`) emits the
+    /// tag-19 `SLOT_CAVEAT_TAG_VAULT_DEPOSIT` manifest entry, which a light client
+    /// re-evaluates against the public-input-bound `state_before`/`state_after` views
+    /// (`dregg_circuit::effect_vm::verify_slot_caveat_manifest`). The AIR constraint
+    /// polynomials — hence the VK bytes — are UNCHANGED (manifest in public inputs +
+    /// off-AIR re-evaluation, exactly the temporal-caveat / sealed-escrow /
+    /// standing-obligation vehicle): an old verifier rejects tag 19 as `unknown
+    /// type_tag`, so adopting it is a verifier-code epoch, not a proving-key rotation.
+    ///
+    /// STAGED: no deployed cell declares this caveat yet (dead-by-default until a cell
+    /// opts in at the share-vault verifier epoch). Fail-closed: a transition with no
+    /// `old_state` surfaces `TransitionCheckRequiresOldState`; a bad slot index is
+    /// `InvalidFieldIndex`; any zero-mint / diluting / non-conserving step is
+    /// `ConstraintViolated`. A `StateConstraint` (reads the (old, new) pair, does not
+    /// lift into the post-state-local [`SimpleStateConstraint`] fragment). APPEND-ONLY
+    /// (declared LAST so every existing postcard/serde variant index is preserved —
+    /// factory VKs / content addresses byte-identical).
+    VaultDeposit {
+        /// Register slot mirroring the committed `total_assets` counter
+        /// (before/after the transition); the gate requires it to advance by the
+        /// deposit `d > 0`.
+        assets_slot: u8,
+        /// Register slot mirroring the committed `total_shares` counter
+        /// (before/after); the gate requires it to advance by `m > 0` minted shares,
+        /// with no existing holder diluted.
+        shares_slot: u8,
     },
 }

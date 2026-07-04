@@ -2,7 +2,8 @@
 //!
 //! Attributes the per-turn wall-clock cost of `execute_without_shadow` across its
 //! phases so the next perf frontier can be named (now that the commitment `root()`
-//! is cheap, ~2.85µs post cap-root cache). NOT a correctness gate; off the hot path
+//! is cheap — ~2.85µs post cap-root cache, a point-in-time profile reading, not a
+//! committed benchmark). NOT a correctness gate; off the hot path
 //! unless the env var is set — when unset, every `fence`/`accum` call is a no-op
 //! atomic-load-and-branch (the `Instant::now()` calls are still cheap, but the
 //! accumulation is skipped). Mirrors the `DREGG_FFI_PROFILE` outer-phase profiler in
@@ -14,7 +15,7 @@
 //!   * `phase1`     — fee debit + nonce increment.
 //!   * `forest`     — `execute_tree` over every root (the auth+effect-apply walk).
 //!   * `post`       — conservation/excess checks, sovereign post-exec, committed-height
-//!                    advance, fee distribution, rate-limit counters.
+//!     advance, fee distribution, rate-limit counters.
 //!   * `post_root`  — `ledger.root()` for the post-state hash.
 //!   * `receipt`    — effects/turn/forest hashes, delta build, receipt build, sign, record head.
 //!

@@ -1,0 +1,118 @@
+name: Publish dregg (PyPI)
+
+# Publishes the Python SDK (`sdk-py/`, package `dregg`) to PyPI.
+#
+# WHAT SHIPS: the DEFAULT LIGHT wheel — the kernel-free client (Ed25519 +
+# wire-codec + HTTP, the pure-Rust executor at parity with the Lean spec). It
+# needs NO Lean toolchain and is small + pip-friendly. The heavy embedded-kernel
+# wheel (`dregg[kernel]`, built `--no-default-features --features kernel`) is NOT
+# published by this workflow — it needs the Lean toolchain and is a separate
+# artifact.
+#
+# ABI: pyo3 `abi3-py310`, so ONE stable-ABI wheel per platform covers Python
+# 3.10+ (no per-minor-version matrix).
+#
+# TRIGGER: a `sdk-py-v*` tag (e.g. `sdk-py-v0.3.0`) OR a manual workflow_dispatch.
+#
+# CREDENTIAL: two supported paths, in order of preference —
+#   1. PyPI Trusted Publishing (OIDC): configure a trusted publisher for the
+#      `dregg` project on PyPI pointing at this workflow. No token needed; the
+#      `id-token: write` permission below provides the OIDC credential.
+#   2. An API token in the repo secret `PYPI_API_TOKEN`. If trusted publishing is
+#      not configured, the upload step uses it.
+# If neither is present the wheels are still built + verified (uploaded as run
+# artifacts) and the publish step no-ops with a clear message.
+
+on:
+  push:
+    tags:
+      - 'sdk-py-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build light wheels (${{ matrix.platform.target }} on ${{ matrix.platform.runner }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+          - runner: macos-13
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Build the light wheel (maturin, default features = light)
+        uses: PyO3/maturin-action@v1
+        with:
+          # sdk-py is a workspace member; build from its manifest.
+          working-directory: sdk-py
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          # manylinux container only matters for the linux targets.
+          manylinux: auto
+          rust-toolchain: nightly
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: sdk-py/dist/*.whl
+
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: sdk-py
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: sdk-py/dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, sdist]
+    runs-on: ubuntu-latest
+    # Trusted Publishing needs id-token: write.
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all wheels + sdist
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+
+      - name: List what will be published
+        run: ls -la dist
+
+      - name: Publish (Trusted Publishing if configured, else PYPI_API_TOKEN)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # When PYPI_API_TOKEN is unset this is empty and the action falls back
+          # to OIDC trusted publishing; if neither is available it errors loudly
+          # (green-or-bust — we do not silently skip a tagged release).
+          password: ${{ secrets.PYPI_API_TOKEN }}

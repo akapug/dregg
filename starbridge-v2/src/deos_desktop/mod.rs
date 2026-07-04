@@ -125,9 +125,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels,
-    Point, Render, Stateful, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    div, px, AnyElement, AppContext, ClickEvent, Context, Div, Entity, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Stateful, StatefulInteractiveElement, Styled,
+    Subscription, Window,
 };
 
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -136,22 +137,22 @@ use dregg_cell::lifecycle::CellLifecycle;
 use dregg_types::CellId;
 
 use dregg_doc::{
-    Author, Doc, DocGraph, DocHeapCell, Granularity, History, PatchId, Regime, ResolutionChoice,
-    blame, blame_summary, content, resolutions_for, text_from_heap, walk_atoms,
+    blame, blame_summary, content, resolutions_for, text_from_heap, Author, Doc, DocGraph,
+    DocHeapCell, Granularity, PatchId, Regime, ResolutionChoice,
 };
 
-use crate::world::{World, grant_capability, transfer};
+use crate::world::{grant_capability, transfer, World};
 
 // The chrome kit + persistence types are re-exported so existing call sites
 // (`deos_desktop::id_hex`, `deos_desktop::DesktopLayout`, …) keep working.
-pub use android_window::{ANDROID_WINDOW_TITLE, AndroidInputCmd, AndroidWindow};
+pub use android_window::{AndroidInputCmd, AndroidWindow, ANDROID_WINDOW_TITLE};
 pub use chrome::{
-    DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT, DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP,
-    GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W, MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE,
-    NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL, NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE,
-    NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT,
-    NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W, bevel_raised, bevel_sunken, bevel_window,
-    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_hex, id_short, pxf,
+    bevel_raised, bevel_sunken, bevel_window, face_gauge, face_row, face_row_color, face_section,
+    fmt_balance, id_hex, id_short, pxf, DOC_CHUNK_BYTES, DOC_MAX_CHUNKS, DOC_REV_SLOT,
+    DOC_TEXT_BASE, GLYPH_CLOSE, GLYPH_GRIP, GLYPH_MAX, GLYPH_MIN, GLYPH_RESTORE, ICON_H, ICON_W,
+    MENUBAR_H, NT_DESKTOP_BG, NT_DIM, NT_FACE, NT_FACE_DARK, NT_HILIGHT, NT_ICON_LABEL, NT_LABEL,
+    NT_MENU_HILIGHT, NT_OK, NT_PANEL, NT_RULE, NT_SELECT, NT_SHADOW, NT_TEXT, NT_TITLE_ACTIVE,
+    NT_TITLE_INACTIVE, NT_TITLE_INACTIVE_TEXT, NT_TITLE_TEXT, NT_WARN, WIN_MIN_H, WIN_MIN_W,
 };
 pub use layout::{DesktopLayout, DesktopPrefs, DocText, IconPos, WinGeom, WinKindTag};
 
@@ -538,6 +539,10 @@ pub struct DeosDesktop {
     /// view concern). Keyed by the window's anchor cell.
     #[cfg(feature = "android-systemui")]
     systemui_shades: std::collections::HashSet<CellId>,
+    /// The last rendered viewport size (logical px), captured each `render`. Tile /
+    /// cascade read it so they fill the ACTUAL desktop instead of a hardcoded
+    /// 1600×1000 — at higher bake resolutions the windows spread the whole room.
+    last_viewport: (f32, f32),
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -654,12 +659,13 @@ impl DeosDesktop {
             systemui_chromes: HashMap::new(),
             #[cfg(feature = "android-systemui")]
             systemui_shades: std::collections::HashSet::new(),
+            last_viewport: (1600.0, 1000.0),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
         let geoms: Vec<WinGeom> = desk.layout.windows.clone();
         for g in geoms {
-            if let Some(cell) = desk.cells.iter().find(|c| id_hex(&c) == g.cell).copied() {
+            if let Some(cell) = desk.cells.iter().find(|c| id_hex(c) == g.cell).copied() {
                 desk.open_window_at(cell, g.kind, g.x, g.y, g.w, g.h, g.minimized);
             }
         }
@@ -680,7 +686,7 @@ impl DeosDesktop {
 
     fn icon_pos(&self, idx: usize, cell: &CellId) -> Point<Pixels> {
         self.layout
-            .icon_pos(&id_hex(&cell))
+            .icon_pos(&id_hex(cell))
             .unwrap_or_else(|| self.default_icon_pos(idx))
     }
 
@@ -716,10 +722,13 @@ impl DeosDesktop {
             }
             // Other window TYPEs owned by concurrent surfaces fall back to an
             // inspector body until their own arm lands (swarm self-heal).
+            #[allow(unreachable_patterns)]
+            // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => WinKind::Inspector,
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // window placement needs the full spatial + cell context
     fn open_window_at(
         &mut self,
         cell: CellId,
@@ -797,6 +806,8 @@ impl DeosDesktop {
             WinKindTag::ViewNodePane => (420.0, 320.0),
             // A phone-ish portrait window for the android-cell's SystemUI cap-chrome.
             WinKindTag::AndroidCell => (340.0, 520.0),
+            #[allow(unreachable_patterns)]
+            // defensive fallback for variants added by concurrent surfaces / non-default features
             _ => (380.0, 320.0),
         };
         if let Some(g) = self.layout.win_geom(&id_hex(&cell), tag) {
@@ -1307,7 +1318,7 @@ impl DeosDesktop {
                 self.status = format!(
                     "Grant cap {} → {} @{} → {} (height {}).",
                     id_short(&cell),
-                    id_short(&target),
+                    id_short(target),
                     slot,
                     if outcome.is_committed() {
                         "committed"
@@ -1527,7 +1538,7 @@ impl DeosDesktop {
     /// keystroke through [`Self::edit_doc`] into the cell's heap (a receipted patch +
     /// verified revision turn). Idempotent: a second call is a no-op. Needs `window`
     /// + `cx` to build the entity, so it runs from `render_doc_body` (which threads
-    /// them) rather than the `window`-less open paths.
+    ///   them) rather than the `window`-less open paths.
     fn ensure_doc_input(&mut self, cell: CellId, window: &mut Window, cx: &mut Context<Self>) {
         if self.doc_inputs.contains_key(&cell) {
             return;
@@ -2231,15 +2242,18 @@ impl DeosDesktop {
         let n = keys.len().max(1);
         let cols = (n as f32).sqrt().ceil() as usize;
         let rows = n.div_ceil(cols);
-        // Tile across the left ~2/3 of a 1600-wide desktop so the icons + summary
-        // widget on the right stay legible (the desktop is laid out for ~1600×1000),
-        // and RESERVE the chrome margins — below the menu bar, above the taskbar +
-        // status bar (46px) — so no window tucks under the system chrome.
+        // Tile across the room, reserving the left icon column (~232px) and the
+        // top-right World-summary widget (~300px), and the chrome margins — below the
+        // menu bar, above the taskbar + status bar (46px) — so no window tucks under
+        // the system chrome. Sized to the ACTUAL viewport (captured each render) so a
+        // high-res bake fills the whole frame, not a hardcoded 1600×1000 corner.
+        let (vw, vh) = self.last_viewport;
         let gap = 10.0;
         let area_x = 232.0;
         let area_y = MENUBAR_H + gap;
-        let area_w = 1112.0;
-        let area_h = 1000.0 - area_y - 46.0 - gap;
+        let right_reserve = 300.0;
+        let area_w = (vw - area_x - right_reserve - gap).max(WIN_MIN_W);
+        let area_h = (vh - area_y - 46.0 - gap).max(WIN_MIN_H);
         let cw = (area_w / cols as f32).max(WIN_MIN_W);
         let ch = (area_h / rows as f32).max(WIN_MIN_H);
         for (i, key) in keys.iter().enumerate() {
@@ -2420,7 +2434,7 @@ impl DeosDesktop {
     /// Type `text` into `cell`'s document editor — a receipted patch + a verified
     /// SetField revision turn (what the live editor's keystrokes do).
     pub fn bake_edit_doc(&mut self, cell: CellId, text: &str) {
-        if self.windows.get(&(cell, WinKindTag::DocEditor)).is_none() {
+        if !self.windows.contains_key(&(cell, WinKindTag::DocEditor)) {
             self.open_kind(cell, WinKindTag::DocEditor);
         }
         self.edit_doc(cell, text.to_string());
@@ -2663,7 +2677,7 @@ impl DeosDesktop {
     /// proven `CardEditor` machinery (receipted patches, blamed on the agent, cap-toothed),
     /// and (4) SWAP the re-folded tree into the SAME live entity ([`AppletView::set_tree`])
     /// + `notify` — so the real desktop window repaints the agent's rewrite on the next
-    /// frame (a `refresh` button + the `World Status (live)` relabel reach the glass).
+    ///   frame (a `refresh` button + the `World Status (live)` relabel reach the glass).
     ///
     /// Returns the loop's witnesses (reflect counts, receipt count, blame, before/after
     /// button presence) so a bake can assert the agent rewrote a real cockpit surface.
@@ -2745,7 +2759,7 @@ impl DeosDesktop {
         rt: &mut deos_js::JsRuntime,
         cx: &mut Context<Self>,
     ) -> Result<WorldBoardComposition, String> {
-        use crate::agent_attach::{WorldSinkAdapter, attach_agent};
+        use crate::agent_attach::{attach_agent, WorldSinkAdapter};
 
         // (1) READ THE LIVE WORLD (host side) — the real stats the board will surface. The
         //     ledger count is what the agent's crawl will independently report.
@@ -2973,6 +2987,12 @@ impl DeosDesktop {
 
 impl Render for DeosDesktop {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Remember the real desktop size so Tile/Cascade fill the ACTUAL room (a
+        // high-res bake spreads windows over the whole frame, not a 1600×1000 corner).
+        {
+            let vp = window.viewport_size();
+            self.last_viewport = (f32::from(vp.width), f32::from(vp.height));
+        }
         let mut root = div()
             .id("deos-desktop-root")
             .size_full()
@@ -3235,16 +3255,27 @@ impl DeosDesktop {
                 }),
             )
             .child(
-                // The 32x32 glyph tile (a raised NT bevel face).
-                bevel_raised(div())
-                    .w(px(40.0))
-                    .h(px(40.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(22.0))
-                    .when(!held, |d| d.opacity(0.55))
-                    .child(glyph),
+                // The 40x40 glyph tile. A HELD/live cell wears its kind-tinted glow
+                // (the glowing-room warmth — see `bevel_raised_glow`); a quiet cell
+                // keeps the plain raised face, dimmed.
+                {
+                    // Every cell is a glowing thing in the room (the 1999-AOL warmth):
+                    // its kind-tinted halo + colored glyph. A cell the viewer HOLDS burns
+                    // full; one they don't is the same glow, just a touch quieter — alive,
+                    // never washed-out.
+                    let glow = crate::deos_desktop::chrome::kind_glow(kind);
+                    crate::deos_desktop::chrome::bevel_raised_glow(div(), glow)
+                        .when(!held, |d| d.opacity(0.82))
+                        .text_color(gpui::rgb(glow))
+                        .w(px(40.0))
+                        .h(px(40.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(22.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(glyph)
+                },
             )
             .child(
                 div()
@@ -3299,6 +3330,8 @@ impl DeosDesktop {
             WinKindTag::ViewNodePane => self.render_viewnode_body(cell, window, cx),
             #[cfg(feature = "android-systemui")]
             WinKindTag::AndroidCell => self.render_android_systemui_body(cell, cx),
+            #[allow(unreachable_patterns)]
+            // needed when card-pane / android-systemui features are off
             _ => self.render_inspector_body(cell, cx),
         };
 
@@ -4451,6 +4484,8 @@ impl DeosDesktop {
 
         // The revision rows: genesis(0) … tip(n). Clicking sets the scrub cursor.
         let cursor = scrub.unwrap_or(n);
+        // 0..=n runs one past `patches` on purpose: i==n is the synthetic "tip" row.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..=n {
             let is_tip = i == n;
             let selected = i == cursor;
@@ -4611,7 +4646,7 @@ impl DeosDesktop {
         }
         col = col.child(face_section("Contributions (by author)"));
         let mut tally: Vec<_> = summary.into_iter().collect();
-        tally.sort_by(|a, b| b.1.cmp(&a.1));
+        tally.sort_by_key(|b| std::cmp::Reverse(b.1));
         if tally.is_empty() {
             col = col.child(face_row(
                 "(none)",

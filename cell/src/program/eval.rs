@@ -834,21 +834,21 @@ fn evaluate_constraint_full(
             let ctx = ctx.ok_or(ProgramError::MissingContextField {
                 field: "block_height",
             })?;
-            if let Some(nb) = not_before {
-                if ctx.block_height < *nb {
-                    return violated(
-                        constraint,
-                        format!("height {} < not_before {nb}", ctx.block_height),
-                    );
-                }
+            if let Some(nb) = not_before
+                && ctx.block_height < *nb
+            {
+                return violated(
+                    constraint,
+                    format!("height {} < not_before {nb}", ctx.block_height),
+                );
             }
-            if let Some(na) = not_after {
-                if ctx.block_height > *na {
-                    return violated(
-                        constraint,
-                        format!("height {} > not_after {na}", ctx.block_height),
-                    );
-                }
+            if let Some(na) = not_after
+                && ctx.block_height > *na
+            {
+                return violated(
+                    constraint,
+                    format!("height {} > not_after {na}", ctx.block_height),
+                );
             }
             Ok(())
         }
@@ -1054,6 +1054,189 @@ fn evaluate_constraint_full(
                 return violated(
                     constraint,
                     format!("transition on slot[{idx}] is not in the allow-list"),
+                );
+            }
+            Ok(())
+        }
+
+        // The sealed-escrow atomic-swap gate (the Lean `SettleGate`,
+        // `metatheory/Dregg2/Deos/SealedEscrow.lean` §6), evaluated over the
+        // field-mirrored leg-status slots. Both legs must be `Deposited` (1)
+        // before AND `Consumed` (2) after — the atomic both-or-none transition.
+        // A partial/half-open settle (one leg left `Deposited`) fails this
+        // conjunction: there is no accepting witness with only one leg moving.
+        // Status codes mirror `crate::escrow_sealed::LegStatus` (Empty/Deposited/
+        // Consumed = 0/1/2), read off the u64 lane so the slot mirror is the
+        // small status integer.
+        StateConstraint::SettleEscrow {
+            leg_a_index,
+            leg_b_index,
+        } => {
+            const DEPOSITED: u64 = 1;
+            const CONSUMED: u64 = 2;
+            let a = check_index(*leg_a_index)?;
+            let b = check_index(*leg_b_index)?;
+            let Some(old) = old_state else {
+                return Err(ProgramError::TransitionCheckRequiresOldState {
+                    constraint: constraint.clone(),
+                    index: *leg_a_index,
+                });
+            };
+            let before_a = field_to_u64(&old.fields[a]);
+            let before_b = field_to_u64(&old.fields[b]);
+            let after_a = field_to_u64(&new_state.fields[a]);
+            let after_b = field_to_u64(&new_state.fields[b]);
+            if before_a != DEPOSITED || before_b != DEPOSITED {
+                return violated(
+                    constraint,
+                    format!(
+                        "SettleEscrow: both legs must be Deposited before settle \
+                         (leg A slot[{a}]={before_a}, leg B slot[{b}]={before_b})"
+                    ),
+                );
+            }
+            if after_a != CONSUMED || after_b != CONSUMED {
+                return violated(
+                    constraint,
+                    format!(
+                        "SettleEscrow: both legs must be Consumed after settle \
+                         (leg A slot[{a}]={after_a}, leg B slot[{b}]={after_b})"
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        // The standing-obligation per-period discharge gate (the Lean
+        // `DischargeGate`, `metatheory/Dregg2/Deos/StandingObligation.lean` §6b),
+        // evaluated over the field-mirrored schedule slots. Across the (old, new)
+        // transition the discharge must be DUE (block height ≥ the committed due
+        // block), the `next_due` cursor must ADVANCE by exactly one period, and the
+        // discharged total must advance by EXACTLY the schedule amount. An early /
+        // wrong-amount / non-advanced step fails this conjunction: there is no
+        // accepting witness that skips the due block, under/over-pays, or leaves the
+        // one-shot cursor un-advanced.
+        StateConstraint::DischargeObligation {
+            cursor_slot,
+            due_slot,
+            amount_slot,
+            period,
+            amount,
+        } => {
+            let cs = check_index(*cursor_slot)?;
+            let ds = check_index(*due_slot)?;
+            let as_ = check_index(*amount_slot)?;
+            let Some(old) = old_state else {
+                return Err(ProgramError::TransitionCheckRequiresOldState {
+                    constraint: constraint.clone(),
+                    index: *cursor_slot,
+                });
+            };
+            let clock = ctx
+                .ok_or(ProgramError::MissingContextField {
+                    field: "block_height",
+                })?
+                .block_height;
+            let cursor_before = field_to_u64(&old.fields[cs]);
+            let cursor_after = field_to_u64(&new_state.fields[cs]);
+            let due_block = field_to_u64(&old.fields[ds]);
+            let total_before = field_to_u64(&old.fields[as_]);
+            let total_after = field_to_u64(&new_state.fields[as_]);
+            // DUE: the schedule clock has reached the committed due block.
+            if clock < due_block {
+                return violated(
+                    constraint,
+                    format!(
+                        "DischargeObligation: not yet due (clock {clock} < due block {due_block})"
+                    ),
+                );
+            }
+            // ADVANCED: the one-shot cursor advances by exactly one period.
+            let expected_cursor = cursor_before.wrapping_add(u64::from(*period));
+            if cursor_after != expected_cursor {
+                return violated(
+                    constraint,
+                    format!(
+                        "DischargeObligation: cursor must advance one period \
+                         (slot[{cs}] expected {expected_cursor}, got {cursor_after})"
+                    ),
+                );
+            }
+            // EXACT: the discharged total advances by exactly the schedule amount.
+            let expected_total = total_before.wrapping_add(u64::from(*amount));
+            if total_after != expected_total {
+                return violated(
+                    constraint,
+                    format!(
+                        "DischargeObligation: amount must be exact \
+                         (slot[{as_}] expected total {expected_total}, got {total_after})"
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        // The share-vault no-dilution deposit gate (the Lean `VaultDepositGate`,
+        // `metatheory/Dregg2/Deos/Vault.lean` §6b), evaluated over the field-mirrored
+        // `total_assets` / `total_shares` counter slots. Across the (old, new)
+        // transition the committed total_assets must advance by the deposit `d > 0`,
+        // the committed total_shares must advance by `m > 0` minted shares (the
+        // zero-mint / inflation-attack tooth), and NO existing holder may be diluted
+        // (`before_assets·m ≤ before_shares·d`, the no-dilution floor). A zero-mint /
+        // diluting / non-conserving step fails this conjunction: there is no accepting
+        // witness that mints nothing, dilutes the existing holders, or conjures pooled
+        // value. The deposit `d` and minted `m` are the across-transition deltas of the
+        // two slots (no per-deposit constant); products in `u128` so they cannot wrap.
+        StateConstraint::VaultDeposit {
+            assets_slot,
+            shares_slot,
+        } => {
+            let as_ = check_index(*assets_slot)?;
+            let ss = check_index(*shares_slot)?;
+            let Some(old) = old_state else {
+                return Err(ProgramError::TransitionCheckRequiresOldState {
+                    constraint: constraint.clone(),
+                    index: *assets_slot,
+                });
+            };
+            let before_assets = field_to_u64(&old.fields[as_]);
+            let after_assets = field_to_u64(&new_state.fields[as_]);
+            let before_shares = field_to_u64(&old.fields[ss]);
+            let after_shares = field_to_u64(&new_state.fields[ss]);
+            // CONSERVING + GENUINE DEPOSIT: total_assets advances by a positive deposit.
+            if after_assets <= before_assets {
+                return violated(
+                    constraint,
+                    format!(
+                        "VaultDeposit: total_assets must advance by a positive deposit \
+                         (slot[{as_}] before {before_assets}, after {after_assets})"
+                    ),
+                );
+            }
+            let d = after_assets - before_assets;
+            // THE INFLATION-ATTACK TOOTH: a positive deposit must mint positive shares.
+            if after_shares <= before_shares {
+                return violated(
+                    constraint,
+                    format!(
+                        "VaultDeposit: inflation-attack rejection — a positive deposit must mint positive shares \
+                         (slot[{ss}] before {before_shares}, after {after_shares})"
+                    ),
+                );
+            }
+            let m = after_shares - before_shares;
+            // THE NO-DILUTION FLOOR: before_assets·m ≤ before_shares·d (the existing
+            // price-per-share never decreases). u128 so the products cannot overflow.
+            if u128::from(before_assets) * u128::from(m) > u128::from(before_shares) * u128::from(d)
+            {
+                return violated(
+                    constraint,
+                    format!(
+                        "VaultDeposit: dilution — minting {m} shares for a deposit of {d} dilutes the existing holders \
+                         (before_assets·m = {} > before_shares·d = {})",
+                        u128::from(before_assets) * u128::from(m),
+                        u128::from(before_shares) * u128::from(d)
+                    ),
                 );
             }
             Ok(())
@@ -1898,6 +2081,106 @@ fn evaluate_constraint_full(
                     ),
                 )
             }
+        }
+
+        // ─── Register-reading temporal atoms (the proven `TemporalAlgebra`
+        //     family). Each honors the discharged Lean semantics
+        //     (`TemporalAtom.eval` / `EventAtom.eval`,
+        //     `metatheory/Dregg2/Authority/TemporalAlgebra{,2}.lean`): read the
+        //     COMMITTED PRE-state register (`old_state`; absent ⇒ 0 ⇒
+        //     `FIELD_ZERO`), fail closed. ───
+        StateConstraint::RateBound { counter_index, k } => {
+            let idx = check_index(*counter_index)?;
+            // Lean `TemporalAtom.rateBound`: admit iff `fieldOf counter rec < k`
+            // over the committed PRE-state record.
+            let count = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if count >= *k {
+                return violated(
+                    constraint,
+                    format!("rate counter field[{idx}] = {count} not < k = {k}"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::CooledSince { staged_at, period } => {
+            let ctx = ctx.ok_or(ProgramError::MissingContextField {
+                field: "block_height",
+            })?;
+            // Lean `TemporalAtom.cooledSince` ≡ `afterHeight (staged_at + period)`.
+            let boundary = staged_at.saturating_add(*period);
+            if ctx.block_height < boundary {
+                return violated(
+                    constraint,
+                    format!(
+                        "height {} < cooled boundary staged_at({staged_at}) + period({period}) = {boundary}",
+                        ctx.block_height
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::UntilEvent { flag_index } => {
+            let idx = check_index(*flag_index)?;
+            // Lean `EventAtom.untilEvent`: admit WHILE the pre-state flag reads 0.
+            let flag = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if flag != 0 {
+                return violated(
+                    constraint,
+                    format!(
+                        "event flag field[{idx}] already set ({flag} != 0); UntilEvent (U) closed"
+                    ),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::SinceEvent { flag_index } => {
+            let idx = check_index(*flag_index)?;
+            // Lean `EventAtom.sinceEvent`: admit only SINCE the pre-state flag
+            // is set (absent ⇒ 0 ⇒ refuse, fail-closed).
+            let flag = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if flag == 0 {
+                return violated(
+                    constraint,
+                    format!("event flag field[{idx}] not yet set; SinceEvent (S) fails closed"),
+                );
+            }
+            Ok(())
+        }
+
+        StateConstraint::ChallengeWindow {
+            challenge_index,
+            staged_at,
+            period,
+        } => {
+            let idx = check_index(*challenge_index)?;
+            let ctx = ctx.ok_or(ProgramError::MissingContextField {
+                field: "block_height",
+            })?;
+            // Lean `TemporalAtom.challengeWindow`: window elapsed AND no
+            // challenge filed (pre-state challenge register reads 0).
+            let boundary = staged_at.saturating_add(*period);
+            if ctx.block_height < boundary {
+                return violated(
+                    constraint,
+                    format!(
+                        "challenge window not elapsed: height {} < staged_at({staged_at}) + period({period}) = {boundary}",
+                        ctx.block_height
+                    ),
+                );
+            }
+            let challenge = old_state.map(|o| field_to_u64(&o.fields[idx])).unwrap_or(0);
+            if challenge != 0 {
+                return violated(
+                    constraint,
+                    format!(
+                        "challenge filed (field[{idx}] = {challenge} != 0); settlement refused"
+                    ),
+                );
+            }
+            Ok(())
         }
     }
 }

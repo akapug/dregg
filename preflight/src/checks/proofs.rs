@@ -271,7 +271,7 @@ fn check_effect_vm_proof() -> Result<(), String> {
 
     // ANTI-GHOST TOOTH: a forged post-state commitment MUST be rejected.
     let mut forged = dpis.clone();
-    forged[pi::NEW_COMMIT] = forged[pi::NEW_COMMIT] + BabyBear::new(1);
+    forged[pi::NEW_COMMIT] += BabyBear::new(1);
     if verify_vm_descriptor(&desc, &proof, &forged).is_ok() {
         return Err("effect VM descriptor verifier ACCEPTED a forged post-state commitment".into());
     }

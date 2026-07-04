@@ -18,8 +18,8 @@
 //!                   apply_pipelined_send: "unresolved PipelinedSend").
 
 use dregg_cell::{
-    AuthRequired, CapabilityRef, Cell, CellId, CellMode, FactoryCreationParams, FactoryDescriptor,
-    Ledger, NoteCommitment, Permissions, SealPair, ValueCommitment, note_bridge::BridgeReceipt,
+    AuthRequired, Cell, CellId, CellMode, FactoryCreationParams, FactoryDescriptor, Ledger,
+    NoteCommitment, Permissions,
 };
 use dregg_turn::{
     // RETIRED (dregg3): EscrowClaimAuth + the dregg_turn::escrow module

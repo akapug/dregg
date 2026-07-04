@@ -15,16 +15,16 @@
 //! ([`render_world_explorer_body`]).
 
 use gpui::{
-    AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, div, px,
+    div, px, AnyElement, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled,
 };
 
-use dregg_cell::{Cell, lifecycle::CellLifecycle};
+use dregg_cell::{lifecycle::CellLifecycle, Cell};
 use dregg_types::CellId;
 
 use crate::deos_desktop::chrome::{
-    NT_DIM, NT_OK, NT_PANEL, NT_WARN, face_gauge, face_row, face_row_color, face_section,
-    fmt_balance, id_short,
+    face_gauge, face_row, face_row_color, face_section, fmt_balance, id_short, NT_DIM, NT_OK,
+    NT_PANEL, NT_WARN,
 };
 use crate::world::World;
 

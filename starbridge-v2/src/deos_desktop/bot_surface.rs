@@ -47,7 +47,7 @@ use dregg_types::CellId;
 
 use dregg_turn::action::Effect;
 
-use crate::world::{World, set_field};
+use crate::world::{set_field, World};
 
 /// The state slot a presence attestation writes its epoch into (matches the bot's
 /// `deos_drive::PRESENCE_SLOT` — presence as a witnessed, receipted on-ledger state).

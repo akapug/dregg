@@ -46,7 +46,7 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let read_field = |w: &starbridge_v2::world::World| -> u64 {
         w.ledger()
@@ -59,7 +59,7 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
             .unwrap_or(0)
     };
 
-    // Each of the six landed cards, as its mode's surface over the LIVE World.
+    // Each landed card, as its mode's surface over the LIVE World.
     for (n, kind) in [
         ModeCard::Composer,
         ModeCard::Objects,
@@ -67,6 +67,10 @@ fn every_mode_card_mounts_over_the_live_world_and_reshapes_from_within() {
         ModeCard::Dynamics,
         ModeCard::Agent,
         ModeCard::Links,
+        ModeCard::Inspector,
+        // The pure-function survey cards (built from the live World + focus, no threaded state).
+        ModeCard::ServiceExplorer,
+        ModeCard::Powerbox,
     ]
     .into_iter()
     .enumerate()

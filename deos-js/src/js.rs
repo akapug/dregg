@@ -28,7 +28,7 @@ use mozjs::rust::wrappers2::{
     EncodeStringToUTF8, JS_DefineFunction, JS_NewGlobalObject, JS_NewStringCopyN,
 };
 use mozjs::rust::{
-    CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS, evaluate_script,
+    evaluate_script, CompileOptionsWrapper, JSEngine, RealmOptions, Runtime, SIMPLE_GLOBAL_CLASS,
 };
 
 use crate::applet::{Applet, FireError};
@@ -43,7 +43,8 @@ use crate::reflect_binding;
 /// so one set of bindings serves both the embedded spike and the live cockpit.
 pub enum JsTarget {
     /// deos-js's own fresh embedded engine — a private single-cell world.
-    Embedded(Applet),
+    /// Boxed: `Applet` is far larger than `AttachedApplet` (large_enum_variant).
+    Embedded(Box<Applet>),
     /// A provided live World (the cockpit's real ledger, or a fork) — the attach path.
     Attached(AttachedApplet),
 }
@@ -339,7 +340,7 @@ pub fn take_last_compose() -> Option<ComposeOutcome> {
 
 /// Install the embedded applet the native functions drive (deos-js's own engine).
 pub fn set_current_applet(applet: Applet) {
-    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(JsTarget::Embedded(applet)));
+    CURRENT_APPLET.with(|c| *c.borrow_mut() = Some(JsTarget::Embedded(Box::new(applet))));
 }
 
 /// Install an ATTACHED applet — the runtime bound to a PROVIDED live World (the
@@ -362,7 +363,7 @@ pub fn take_current_target() -> Option<JsTarget> {
 /// Preserves the existing `take_current_applet()` shape for the embedded callers.
 pub fn take_current_applet() -> Option<Applet> {
     match CURRENT_APPLET.with(|c| c.borrow_mut().take()) {
-        Some(JsTarget::Embedded(a)) => Some(a),
+        Some(JsTarget::Embedded(a)) => Some(*a),
         other => {
             // Not embedded — put it back so an attached caller can take it.
             if let Some(t) = other {
@@ -443,9 +444,64 @@ const PRELUDE: &str = r#"
                 button: function(label, aff, arg) {
                     return node("button", { label: String(label), onClick: { turn: String(aff), arg: (arg | 0) } });
                 },
-                input:  function(viewKey) { return node("input", { bindView: String(viewKey) }); },
+                // input(viewKey) — an ephemeral draft field. The 2-arg form
+                // input(viewKey, {fireTurn, submitLabel}) EXTENDS it: the submitted draft
+                // becomes the `arg` of `fireTurn` (input → a real verified turn).
+                input:  function(viewKey, opts) {
+                    var p = { bindView: String(viewKey) };
+                    if (opts && opts.fireTurn) { p.fireTurn = String(opts.fireTurn); p.submitLabel = String(opts.submitLabel || "submit"); }
+                    return node("input", p);
+                },
                 list:   function(items) { return node("list", {}, items || []); },
-                table:  function(rows) { return node("table", {}, rows || []); }
+                table:  function(rows) { return node("table", {}, rows || []); },
+                // ── The RICHNESS EXPANSION — the rest of the §1 vocabulary, authorable here so a
+                //    card author (or an agent via run_js) emits the rich nodes the renderers paint.
+                // section(title, ...children) — a titled, bordered container; tag accents it.
+                section: function(title) {
+                    return node("section", { title: String(title || ""), tag: "" }, Array.prototype.slice.call(arguments, 1));
+                },
+                // sectionTagged(title, tag, ...children) — a section with a styling/disclosure tag.
+                sectionTagged: function(title, tag) {
+                    return node("section", { title: String(title || ""), tag: String(tag || "") }, Array.prototype.slice.call(arguments, 2));
+                },
+                // tabs({tabs, selectedSlot, selectTurn}, ...panels) — a stateful tab-strip (a tab
+                // switch is a real verified turn writing selectedSlot).
+                tabs: function(spec) {
+                    spec = spec || {};
+                    return node("tabs", { tabs: spec.tabs || [], selectedSlot: (spec.selectedSlot | 0), selectTurn: String(spec.selectTurn || "") }, Array.prototype.slice.call(arguments, 1));
+                },
+                // grid({cols}, ...children) — a wrapping spatial cell field (Wonder / icon field).
+                grid: function(spec) {
+                    spec = spec || {};
+                    return node("grid", { cols: (spec.cols | 0) }, Array.prototype.slice.call(arguments, 1));
+                },
+                divider: function() { return node("divider", {}); },
+                // breadcrumb([{label, turn?, arg?}, ...]) — a navigation path (clickable crumbs).
+                breadcrumb: function(items) { return node("breadcrumb", { items: items || [] }); },
+                // gauge({slot, max, label}) — a BOUND progress/balance bar (live slot fill).
+                gauge: function(spec) { spec = spec || {}; return node("gauge", { slot: (spec.slot | 0), max: (spec.max | 0), label: String(spec.label || "") }); },
+                // progress({value, max, label}) — a STATIC (literal) progress bar.
+                progress: function(spec) { spec = spec || {}; return node("progress", { value: (spec.value | 0), max: (spec.max | 0), label: String(spec.label || "") }); },
+                // pill(text, tag) — a colored status badge (good/warn/bad/accent/muted).
+                pill: function(text, tag) { return node("pill", { text: String(text), tag: String(tag || "") }); },
+                // icon(glyph, tag) — a tinted glyph indicator.
+                icon: function(glyph, tag) { return node("icon", { glyph: String(glyph), tag: String(tag || "") }); },
+                // menu([{label, turn, arg, enabled?}, ...]) — a context actuation menu.
+                menu: function(items) { return node("menu", { items: items || [] }); },
+                // halo({targetSlot?}, [{glyph, turn, arg, enabled?}, ...]) — the Pharo handle-ring.
+                halo: function(spec, handles) { spec = spec || {}; return node("halo", { targetSlot: (spec.targetSlot | 0), handles: handles || [] }); },
+                // slider({slot, min, max, turn}) — a bound draggable value → seek turn.
+                slider: function(spec) { spec = spec || {}; return node("slider", { slot: (spec.slot | 0), min: (spec.min | 0), max: (spec.max | 0), turn: String(spec.turn || "") }); },
+                // toggle({slot, onTurn, offTurn, glyphOn?, glyphOff?, label?}) — an affordance checkbox.
+                toggle: function(spec) {
+                    spec = spec || {};
+                    var p = { slot: (spec.slot | 0), onTurn: String(spec.onTurn || ""), offTurn: String(spec.offTurn || ""), label: String(spec.label || "") };
+                    if (spec.glyphOn) p.glyphOn = String(spec.glyphOn);
+                    if (spec.glyphOff) p.glyphOff = String(spec.glyphOff);
+                    return node("toggle", p);
+                },
+                // tile({handle, w, h}) — a card-referenced host-painted region (the Servo tile).
+                tile: function(spec) { spec = spec || {}; return node("tile", { handle: String(spec.handle || ""), w: (spec.w | 0), h: (spec.h | 0) }); }
             };
         })(),
         // a reflective handle on ONE cell: its substances · faces · affordances · frustum.
@@ -930,7 +986,7 @@ unsafe fn arg_string(cx: &mut SmContext, raw: mozjs::jsapi::HandleValue) -> Stri
         let s = str::from_utf8(m.to_bytes()).unwrap_or("").to_string();
         SCRATCH.with(|sc| *sc.borrow_mut() = s);
     }
-    EncodeStringToUTF8(cx, rooted_str.handle().into(), cb);
+    EncodeStringToUTF8(cx, rooted_str.handle(), cb);
     // `mem::take` the scratch String out (leaving an empty one behind) rather than
     // cloning it — the value is consumed by the caller, so the clone was pure waste.
     SCRATCH.with(|sc| std::mem::take(&mut *sc.borrow_mut()))

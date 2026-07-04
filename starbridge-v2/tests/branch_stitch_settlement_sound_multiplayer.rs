@@ -47,10 +47,10 @@ use dregg_cell::{AuthRequired, CellId};
 use dregg_turn::umem::{UKey, UVal};
 
 use starbridge_v2::umem_membrane::{
-    ConferredCap, UmemBranch, UmemEnvelope, open_umem_envelope, settle_umem_stitch,
-    settlement_held_at_tip, stitch_umem_forks,
+    open_umem_envelope, settle_umem_stitch, settlement_held_at_tip, stitch_umem_forks,
+    ConferredCap, UmemBranch, UmemEnvelope,
 };
-use starbridge_v2::world::{World, make_open_cell, revoke_capability, set_field};
+use starbridge_v2::world::{make_open_cell, revoke_capability, set_field, World};
 
 /// The shared world the two co-inhabitants live in — ORDINARY genesis grants only. Returns:
 ///   `room`     — the focus the membrane culls around (reaches both + the board).

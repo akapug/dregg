@@ -55,7 +55,7 @@ impl Authority {
         // Build the token state.
         let mut token = TokenState {
             id: token_id,
-            issuer: self.public_key.clone(),
+            issuer: self.public_key,
             facts,
             rules,
             checks: Vec::new(),
@@ -73,7 +73,7 @@ impl Authority {
 
         // Record the minting as the first derivation step.
         token.derivation_trace.push(crate::trace::DerivationStep {
-            authority: self.public_key.clone(),
+            authority: self.public_key,
             input_root: [0u8; 32], // No input for minting.
             output_root: token.state_root,
             signature: token.signature,
@@ -118,7 +118,7 @@ impl VerificationKey {
     /// Create a verification key from an authority (extracts public key only).
     pub fn from_authority(authority: &Authority) -> Self {
         VerificationKey {
-            public_key: authority.public_key.clone(),
+            public_key: authority.public_key,
         }
     }
 

@@ -13,6 +13,22 @@ use super::*;
 use dregg_cell::*;
 use dregg_cell_crypto::PortableNoteProof;
 
+/// Domain-separate a shielded transfer's BabyBear field nullifier into a 32-byte
+/// `note_nullifiers` set key. The shielded nullifier is a field element (the
+/// chain's double-spend tag for that hidden input); hashing it under a dedicated
+/// derive-key keeps shielded nullifiers in a disjoint namespace from cleartext
+/// note nullifiers while preserving injectivity for distinct field elements.
+///
+/// Only the `prover`-enabled executor admits shielded transfers (the hiding
+/// uni-STARK verifier lives in `dregg-circuit-prove`), so this key derivation is
+/// scoped to that build; a verify-only executor fails the effect closed instead.
+#[cfg(feature = "prover")]
+fn shielded_nullifier_key(field_nullifier: u32) -> Nullifier {
+    let mut hasher = blake3::Hasher::new_derive_key("dregg-shielded-nullifier v1");
+    hasher.update(&field_nullifier.to_le_bytes());
+    Nullifier(*hasher.finalize().as_bytes())
+}
+
 impl TurnExecutor {
     /// Apply a single effect to the ledger, recording undo entries in the journal.
     ///
@@ -313,6 +329,9 @@ impl TurnExecutor {
                 resolution_proof,
                 wake,
             } => self.apply_react(path, journal, pending_id, condition, resolution_proof, wake),
+            Effect::ShieldedTransfer { payload } => {
+                self.apply_shielded_transfer(path, journal, payload)
+            }
         }
     }
 
@@ -341,6 +360,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetState,
                 "SetState",
+                dregg_cell::EFFECT_SET_FIELD,
                 path,
             )?;
         }
@@ -409,6 +429,7 @@ impl TurnExecutor {
                 from,
                 dregg_cell::permissions::Action::Send,
                 "Send",
+                dregg_cell::EFFECT_TRANSFER,
                 path,
             )?;
         }
@@ -500,6 +521,7 @@ impl TurnExecutor {
                 from,
                 dregg_cell::permissions::Action::Delegate,
                 "Delegate",
+                dregg_cell::EFFECT_GRANT_CAPABILITY,
                 path,
             )?;
         }
@@ -632,6 +654,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::Delegate,
                 "Delegate",
+                dregg_cell::EFFECT_REVOKE_CAPABILITY,
                 path,
             )?;
         }
@@ -695,6 +718,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::IncrementNonce,
                 "IncrementNonce",
+                dregg_cell::EFFECT_INCREMENT_NONCE,
                 path,
             )?;
         }
@@ -766,6 +790,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetPermissions,
                 "SetPermissions",
+                dregg_cell::EFFECT_SET_PERMISSIONS,
                 path,
             )?;
         }
@@ -808,6 +833,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetVerificationKey,
                 "SetVerificationKey",
+                dregg_cell::EFFECT_SET_VERIFICATION_KEY,
                 path,
             )?;
         }
@@ -891,6 +917,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetVerificationKey,
                 "SetProgram",
+                dregg_cell::EFFECT_SET_PROGRAM,
                 path,
             )?;
         }
@@ -1046,6 +1073,143 @@ impl TurnExecutor {
         }
 
         Ok(())
+    }
+
+    /// Apply a **shielded transfer** (privacy M2-a): the opt-in privacy upgrade of
+    /// the cleartext note path. The cleartext value is never seen; the executor
+    /// admits the transfer on three independent gates, all fail-closed:
+    ///
+    /// 1. **Hidden STARK side** — every input's membership in the commitment tree
+    ///    + correct nullifier derivation, proved through `HidingFriPcs` (owner /
+    ///    key / Merkle path blind). Reconstructed from the wire payload and
+    ///    verified by `ShieldedTransfer::verify_stark_side`, which also rejects an
+    ///    in-transfer duplicate nullifier.
+    /// 2. **Hidden Pedersen side** — `Σ C_in = Σ C_out` (value conserved, blind)
+    ///    AND one in-`[0,2^64)` range proof per output (the negative-value /
+    ///    mod-order-wrap inflation gate), over the SAME Fiat-Shamir transcript that
+    ///    binds the STARK nullifiers + value-bindings (no cross-transfer splice).
+    /// 3. **Cross-transfer double-spend gate** — each revealed nullifier is
+    ///    consumed once in the production `note_nullifiers` set (journaled, so a
+    ///    later-failing turn unwinds the spend), exactly as `NoteSpend`.
+    ///
+    /// NAMED RESIDUAL (honest): (a) the LIGHT-CLIENT witness — this VERIFIES live
+    /// in a re-executing validator, but binding the shielded-proof verification
+    /// into the `effect_vm` descriptor (so a pure light client witnesses it) is the
+    /// VK-affecting follow-up. (b) the leaf↔leg VALUE LINK — the STARK proves a
+    /// hidden leaf value and the Pedersen side conserves the legs, both bound to one
+    /// transcript, but their cryptographic equality is only checkable with the
+    /// secret opening; M2-a relies on the honest prover for it (the `verify_value_link`
+    /// residual named in `circuit-prove/src/shielded/mod.rs`).
+    ///
+    /// Requires a `prover`-enabled build (the hiding uni-STARK verifier lives in
+    /// `dregg-circuit-prove`). A verify-only build fails the effect closed.
+    #[cfg(feature = "prover")]
+    fn apply_shielded_transfer(
+        &self,
+        path: &[usize],
+        journal: &mut LedgerJournal,
+        payload: &crate::action::ShieldedTransferPayload,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        use dregg_circuit_prove::shielded::{ShieldedTransfer, ShieldedValueLeg};
+
+        let invalid = |reason: String| (TurnError::InvalidEffect { reason }, path.to_vec());
+
+        // Reconstruct the published shielded transfer from its wire payload,
+        // deserializing each hidden note-spend proof.
+        let leg = |l: &crate::action::ShieldedLeg| ShieldedValueLeg {
+            asset_type: l.asset_type,
+            commitment_bytes: l.commitment_bytes,
+        };
+        let transfer = ShieldedTransfer::from_serialized_parts(
+            payload.merkle_root,
+            payload
+                .inputs
+                .iter()
+                .map(|i| (i.nullifier, i.value_binding, i.proof.clone()))
+                .collect(),
+            payload.input_legs.iter().map(leg).collect(),
+            payload.output_legs.iter().map(leg).collect(),
+            payload.output_range_proofs.clone(),
+        )
+        .map_err(|e| invalid(format!("shielded transfer payload malformed: {e}")))?;
+
+        // GATE 1: the hidden STARK side — per-input membership + nullifier
+        // derivation (owner/key/path blind), and no in-transfer duplicate.
+        transfer
+            .verify_stark_side()
+            .map_err(|e| invalid(format!("shielded STARK verification failed: {e}")))?;
+        // The structural inflation gate: exactly one range proof per output.
+        transfer
+            .check_range_proof_shape()
+            .map_err(|e| invalid(format!("shielded range-proof shape rejected: {e}")))?;
+
+        // GATE 2: the hidden Pedersen side — conservation (Σ in = Σ out) AND each
+        // output's range proof, over the transfer's binding transcript.
+        let message = transfer.transfer_message();
+        dregg_cell_crypto::value_commitment::verify_full_conservation_bytes(
+            &transfer.input_commitment_bytes(),
+            &transfer.output_commitment_bytes(),
+            &payload.conservation,
+            &transfer.output_range_proofs,
+            &message,
+        )
+        .map_err(|e| invalid(format!("shielded value conservation/range rejected: {e:?}")))?;
+
+        // GATE 3: consume each input nullifier ONCE in the production set. The
+        // shielded nullifier is a BabyBear field element; we domain-separate it to
+        // a 32-byte set key so it never collides with the cleartext note-nullifier
+        // space. Each insert is journaled so a later-failing turn unwinds the spend.
+        let nullifiers: Vec<Nullifier> = transfer
+            .nullifiers()
+            .iter()
+            .map(|nf| shielded_nullifier_key(nf.as_u32()))
+            .collect();
+        {
+            let mut set = self.note_nullifiers.lock().unwrap();
+            // Pre-check all (so a partial spend never lands on a double-spend).
+            for nf in &nullifiers {
+                if set.contains(nf) {
+                    return Err(invalid(
+                        "double-spend: shielded nullifier already in note_nullifiers set".into(),
+                    ));
+                }
+            }
+            for nf in &nullifiers {
+                set.insert(*nf).map_err(|e| {
+                    invalid(match e {
+                        NoteError::DoubleSpend { .. } => {
+                            "double-spend: race on shielded nullifier insert".into()
+                        }
+                        other => format!("shielded nullifier insert failed: {other:?}"),
+                    })
+                })?;
+            }
+        }
+        for nf in &nullifiers {
+            journal.record_note_nullifier_inserted(*nf);
+            journal.record_note_spend(*nf);
+        }
+
+        Ok(())
+    }
+
+    /// Verify-only builds cannot admit a shielded transfer: the hiding uni-STARK
+    /// verifier lives in `dregg-circuit-prove` (the `prover` surface). Fail closed.
+    #[cfg(not(feature = "prover"))]
+    fn apply_shielded_transfer(
+        &self,
+        path: &[usize],
+        _journal: &mut LedgerJournal,
+        _payload: &crate::action::ShieldedTransferPayload,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        Err((
+            TurnError::InvalidEffect {
+                reason: "shielded transfer requires a prover-enabled build (no shielded \
+                         verifier linked in this verify-only executor)"
+                    .into(),
+            },
+            path.to_vec(),
+        ))
     }
 
     // ─── Reactive effects (Track 2): Promise / Notify / React ────────────────
@@ -1709,6 +1873,7 @@ impl TurnExecutor {
                         from,
                         dregg_cell::permissions::Action::Send,
                         "Send (Transfer.from via ExerciseViaCapability)",
+                        dregg_cell::EFFECT_TRANSFER,
                         path,
                     )?;
                     // Handled; skip the generic required_perm_action path below.
@@ -2371,6 +2536,7 @@ impl TurnExecutor {
                 cell,
                 dregg_cell::permissions::Action::SetState,
                 "Refusal",
+                dregg_cell::EFFECT_REFUSAL,
                 path,
             )?;
         }
@@ -2548,7 +2714,7 @@ impl TurnExecutor {
         &self,
         ledger: &mut Ledger,
         path: &[usize],
-        action_target: &CellId,
+        _action_target: &CellId,
         actor: &CellId,
         journal: &mut LedgerJournal,
         target: &CellId,
@@ -2585,6 +2751,7 @@ impl TurnExecutor {
                 target,
                 dregg_cell::permissions::Action::Send,
                 "Burn",
+                dregg_cell::EFFECT_BURN,
                 path,
             )?;
         }
@@ -2762,7 +2929,7 @@ impl TurnExecutor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn apply_mint(
+    pub(super) fn apply_mint(
         &self,
         ledger: &mut Ledger,
         path: &[usize],
@@ -3158,6 +3325,48 @@ impl TurnExecutor {
         false
     }
 
+    /// FACET-aware sibling of [`has_access_including_delegation_at`]: the actor
+    /// must hold a path to `target` whose `allowed_effects` mask ADMITS the
+    /// effect-kind being attempted (`effect_bit`), not merely a path that
+    /// exists. This is the direct cross-cell facet leg the verified kernel's
+    /// `authorizedB` enforces (`metatheory/Dregg2/Exec/Kernel.lean:54` — an
+    /// `.endpoint` cap is authorized only when its `rights` carry the required
+    /// facet). Presence is gated separately by `has_access_including_delegation_at`
+    /// so that "no cap at all" stays a `CapabilityNotHeld` while "cap present but
+    /// faceted away" becomes a `FacetViolation`, matching the
+    /// `ExerciseViaCapability` sibling (`apply.rs:1803`). `CAP-FACET-1`.
+    pub(super) fn permits_effect_including_delegation_at(
+        cell: &Cell,
+        target: &CellId,
+        current_height: u64,
+        effect_bit: dregg_cell::EffectMask,
+    ) -> bool {
+        // A cell implicitly holds the full-facet capability over itself
+        // (`actor == src` in `authorizedB`): no facet restricts an owner.
+        if cell.id() == *target {
+            return true;
+        }
+        // Direct capability, facet-checked.
+        if cell
+            .capabilities
+            .permits_effect_at(target, current_height, effect_bit)
+        {
+            return true;
+        }
+        // Delegated capability (from snapshot), facet-checked. Mirrors the
+        // presence semantics of the delegation branch above (target match,
+        // non-revoked) plus the facet admission.
+        if let Some(ref delegation) = cell.delegation {
+            if delegation.capabilities_for(target).iter().any(|cap| {
+                cap.permissions != dregg_cell::AuthRequired::Impossible
+                    && dregg_cell::is_effect_permitted(cap.allowed_effects, effect_bit)
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Walk the delegation chain from `start_cell` upward (via `cell.delegate`)
     /// looking for an ancestor that holds a capability to `target`.
     ///
@@ -3195,6 +3404,7 @@ impl TurnExecutor {
         target_cell_id: &CellId,
         permission_action: dregg_cell::permissions::Action,
         action_name: &str,
+        effect_bit: dregg_cell::EffectMask,
         path: &[usize],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         if actor != target_cell_id {
@@ -3210,6 +3420,37 @@ impl TurnExecutor {
                     TurnError::CapabilityNotHeld {
                         actor: *actor,
                         target: *target_cell_id,
+                    },
+                    path.to_vec(),
+                ));
+            }
+            // CAP-FACET-1: presence is not authority. The held cap's
+            // `allowed_effects` FACET must ADMIT the effect being attempted on
+            // this direct cross-cell path — matching the `ExerciseViaCapability`
+            // sibling (`apply.rs:1803`, routing through `is_effect_permitted`)
+            // and the verified kernel's `authorizedB` (`Kernel.lean:54`), which
+            // authorizes an `.endpoint` cap only when its rights carry the
+            // required facet. Without this, a SetField-only faceted cap could
+            // drive a `Transfer` against a `None`-permission target (Rust
+            // commits, Lean rejects — a rejection-parity break + cap
+            // amplification).
+            if !Self::permits_effect_including_delegation_at(
+                actor_cell,
+                target_cell_id,
+                self.block_height,
+                effect_bit,
+            ) {
+                return Err((
+                    TurnError::FacetViolation {
+                        actor: *actor,
+                        target: *target_cell_id,
+                        // The direct path resolves authority across the whole
+                        // c-list, not a single exercised slot; report 0.
+                        cap_slot: 0,
+                        attempted_effect: action_name.to_string(),
+                        allowed_mask: actor_cell
+                            .capabilities
+                            .effect_mask_union_for(target_cell_id),
                     },
                     path.to_vec(),
                 ));
@@ -3577,5 +3818,277 @@ fn genuine_resolution_receipt(wake: &Turn) -> TurnReceipt {
         was_encrypted: false,
         was_burn: false,
         consumed_capabilities: vec![],
+    }
+}
+
+// ─── End-to-end shielded transfer through the executor (privacy M2-a) ─────────
+//
+// The bar: a `ShieldedTransfer` effect driven through the real `apply_effect`
+// dispatch is ADMITTED when (and only when) its hidden STARK side, its Pedersen
+// conservation+range side, and the nullifier gate all pass — and is REJECTED on a
+// forged proof, a non-conserving value set, or a re-presented (double-spent)
+// nullifier. Not a stub: each rejection is the genuine refusal from the real
+// `dregg-circuit-prove` verifier / `dregg-cell-crypto` conservation verifier /
+// `NullifierSet::insert`, observed at the executor entry point.
+#[cfg(all(test, feature = "prover"))]
+mod shielded_executor_tests {
+    use super::*;
+    use crate::action::{Effect, ShieldedInputPayload, ShieldedLeg, ShieldedTransferPayload};
+    use dregg_cell_crypto::value_commitment::{
+        BulletproofRangeProof, ValueCommitment, prove_conservation, scalar_from_blinding_bytes,
+    };
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit_prove::shielded::{
+        ShieldedSpendWitness, ShieldedTransfer, ShieldedTransferWitness, ShieldedValueLeg,
+    };
+
+    const ASSET: u64 = 1;
+
+    fn range_proof_bytes(value: u64, blinding: &[u8; 32]) -> Vec<u8> {
+        BulletproofRangeProof::prove_range(value, &scalar_from_blinding_bytes(blinding)).proof_bytes
+    }
+
+    /// A shielded-spend witness with a genuine Poseidon2 Merkle path + its leg.
+    fn make_input(
+        leaf_seed: u32,
+        amount: u32,
+        blinding: [u8; 32],
+        key_seed: u32,
+        depth: usize,
+    ) -> ShieldedTransferWitness {
+        let key = [
+            BabyBear::new(key_seed),
+            BabyBear::new(key_seed.wrapping_add(1)),
+            BabyBear::new(key_seed.wrapping_add(2)),
+            BabyBear::new(key_seed.wrapping_add(3)),
+        ];
+        let mut siblings = Vec::with_capacity(depth);
+        let mut positions = Vec::with_capacity(depth);
+        for i in 0..depth {
+            positions.push((i % 4) as u8);
+            siblings.push([
+                BabyBear::new((i as u32) * 7 + 1 + leaf_seed),
+                BabyBear::new((i as u32) * 7 + 2 + leaf_seed),
+                BabyBear::new((i as u32) * 7 + 3 + leaf_seed),
+            ]);
+        }
+        let spend = ShieldedSpendWitness {
+            value: BabyBear::new(amount),
+            asset_type: BabyBear::new(ASSET as u32),
+            owner: BabyBear::new(0x5EED ^ leaf_seed),
+            randomness: BabyBear::new(0xC0FFEE ^ key_seed),
+            key,
+            siblings,
+            positions,
+        };
+        let commitment =
+            ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&blinding));
+        ShieldedTransferWitness {
+            spend,
+            leg: ShieldedValueLeg {
+                asset_type: ASSET,
+                commitment_bytes: commitment.to_bytes().0,
+            },
+        }
+    }
+
+    /// Serialize a built circuit `ShieldedTransfer` + its conservation proof into
+    /// the executor wire payload — exactly what a client would post.
+    fn to_payload(
+        transfer: &ShieldedTransfer,
+        conservation: dregg_cell_crypto::ConservationProof,
+    ) -> ShieldedTransferPayload {
+        let leg = |l: &ShieldedValueLeg| ShieldedLeg {
+            asset_type: l.asset_type,
+            commitment_bytes: l.commitment_bytes,
+        };
+        ShieldedTransferPayload {
+            merkle_root: transfer.merkle_root.as_u32(),
+            inputs: transfer
+                .inputs
+                .iter()
+                .map(|ip| ShieldedInputPayload {
+                    nullifier: ip.nullifier.as_u32(),
+                    value_binding: ip.value_binding.as_u32(),
+                    proof: ip.proof_bytes(),
+                })
+                .collect(),
+            input_legs: transfer.input_legs.iter().map(leg).collect(),
+            output_legs: transfer.output_legs.iter().map(leg).collect(),
+            output_range_proofs: transfer.output_range_proofs.clone(),
+            conservation,
+        }
+    }
+
+    /// A balanced one-in/one-out shielded transfer + the matching payload.
+    fn balanced_payload(leaf_seed: u32, key_seed: u32) -> ShieldedTransferPayload {
+        let amount = 1_000_000u32;
+        // Independent per-note blinding (derived from the seeds): the source of
+        // value-commitment unlinkability — equal amounts still commit distinctly.
+        let mut in_blinding = [3u8; 32];
+        let mut out_blinding = [7u8; 32];
+        in_blinding[..4].copy_from_slice(&leaf_seed.to_le_bytes());
+        out_blinding[..4].copy_from_slice(&key_seed.to_le_bytes());
+        let w = make_input(leaf_seed, amount, in_blinding, key_seed, 4);
+        let merkle_root = w.spend.merkle_root();
+        let in_c =
+            ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&in_blinding));
+        let out_c =
+            ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&out_blinding));
+        let output_legs = vec![ShieldedValueLeg {
+            asset_type: ASSET,
+            commitment_bytes: out_c.to_bytes().0,
+        }];
+        let output_range_proofs = vec![range_proof_bytes(amount as u64, &out_blinding)];
+        let transfer = dregg_circuit_prove::shielded::transfer_from_witnesses(
+            merkle_root,
+            &[w],
+            output_legs,
+            output_range_proofs,
+        )
+        .expect("prove balanced shielded transfer");
+        let excess =
+            scalar_from_blinding_bytes(&in_blinding) - scalar_from_blinding_bytes(&out_blinding);
+        let msg = transfer.transfer_message();
+        let conservation = prove_conservation(&[in_c], &[out_c], &excess, &msg);
+        to_payload(&transfer, conservation)
+    }
+
+    fn run(
+        executor: &crate::executor::TurnExecutor,
+        payload: ShieldedTransferPayload,
+        path_idx: usize,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        let cell = CellId::from_bytes([0x5A; 32]);
+        let effect = Effect::ShieldedTransfer { payload };
+        let mut ledger = Ledger::new();
+        let mut journal = LedgerJournal::new();
+        executor.apply_effect(
+            &effect,
+            &mut ledger,
+            &[path_idx],
+            &cell,
+            &cell,
+            &mut journal,
+        )
+    }
+
+    // ── ACCEPT: a balanced, in-range, well-formed shielded transfer is admitted,
+    //    and its nullifier is now spent in the production set. ──
+    #[test]
+    fn valid_shielded_transfer_is_admitted_and_spends_its_nullifier() {
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
+        let payload = balanced_payload(11, 0xABCD);
+        let nf = shielded_nullifier_key(payload.inputs[0].nullifier);
+        assert!(!executor.note_nullifiers.lock().unwrap().contains(&nf));
+        run(&executor, payload, 0).expect("a valid shielded transfer must be admitted");
+        assert!(
+            executor.note_nullifiers.lock().unwrap().contains(&nf),
+            "the shielded input's nullifier is now spent in the production set"
+        );
+    }
+
+    // ── REJECT (forged membership): a tampered merkle_root breaks the hidden
+    //    STARK side — no fake membership. ──
+    #[test]
+    fn forged_membership_root_rejects() {
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
+        let mut payload = balanced_payload(12, 0xBEEF);
+        payload.merkle_root = payload.merkle_root.wrapping_add(1);
+        let (err, _) = run(&executor, payload, 0).expect_err("forged root must reject");
+        match err {
+            TurnError::InvalidEffect { reason } => {
+                assert!(reason.contains("STARK"), "got: {reason}")
+            }
+            other => panic!("expected InvalidEffect STARK, got {other:?}"),
+        }
+    }
+
+    // ── REJECT (no double-spend): the SAME shielded transfer presented twice is
+    //    refused by the nullifier gate — the genuine double-spend refusal. ──
+    #[test]
+    fn double_spent_shielded_nullifier_rejects() {
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
+        let payload = balanced_payload(13, 0xF00D);
+        run(&executor, payload.clone(), 0).expect("first shielded transfer admitted");
+        let (err, _) = run(&executor, payload, 1).expect_err("second presentation must reject");
+        match err {
+            TurnError::InvalidEffect { reason } => assert!(
+                reason.contains("double-spend"),
+                "rejection must be the double-spend refusal, got: {reason}"
+            ),
+            other => panic!("expected InvalidEffect double-spend, got {other:?}"),
+        }
+    }
+
+    // ── REJECT (non-conserving): an output committing to MORE than the input
+    //    (hidden inflation) fails the Pedersen conservation gate — even though the
+    //    STARK membership is genuine. Σδ ≠ 0 ⇒ refused. ──
+    #[test]
+    fn inflating_shielded_transfer_rejects_on_conservation() {
+        let executor = crate::executor::TurnExecutor::new(crate::executor::ComputronCosts::zero());
+        let amount = 1_000_000u32;
+        let inflated = 2_000_000u64;
+        let in_blinding = [3u8; 32];
+        let out_blinding = [7u8; 32];
+        let w = make_input(14, amount, in_blinding, 0x1234, 4);
+        let merkle_root = w.spend.merkle_root();
+        let in_c =
+            ValueCommitment::commit(amount as u64, &scalar_from_blinding_bytes(&in_blinding));
+        // The output leg commits to the INFLATED value (a real, in-range value, so
+        // its range proof is valid) — only conservation can catch this.
+        let out_c = ValueCommitment::commit(inflated, &scalar_from_blinding_bytes(&out_blinding));
+        let output_legs = vec![ShieldedValueLeg {
+            asset_type: ASSET,
+            commitment_bytes: out_c.to_bytes().0,
+        }];
+        let output_range_proofs = vec![range_proof_bytes(inflated, &out_blinding)];
+        let transfer = dregg_circuit_prove::shielded::transfer_from_witnesses(
+            merkle_root,
+            &[w],
+            output_legs,
+            output_range_proofs,
+        )
+        .expect("STARK builds even for an inflating transfer (caught at conservation)");
+        // The prover still uses the blinding excess; the value imbalance makes the
+        // excess carry a V-component, so the Schnorr-on-R proof cannot answer.
+        let excess =
+            scalar_from_blinding_bytes(&in_blinding) - scalar_from_blinding_bytes(&out_blinding);
+        let msg = transfer.transfer_message();
+        let conservation = prove_conservation(&[in_c], &[out_c], &excess, &msg);
+        let payload = to_payload(&transfer, conservation);
+        let (err, _) =
+            run(&executor, payload, 0).expect_err("an inflating shielded transfer must reject");
+        match err {
+            TurnError::InvalidEffect { reason } => assert!(
+                reason.contains("conservation") || reason.contains("range"),
+                "rejection must be the value-conservation gate, got: {reason}"
+            ),
+            other => panic!("expected InvalidEffect conservation, got {other:?}"),
+        }
+        // Nothing was spent — the transfer was refused before the nullifier gate
+        // could record (the conservation gate precedes the spend).
+        assert!(executor.note_nullifiers.lock().unwrap().is_empty());
+    }
+
+    // ── UNLINKABILITY: two independent shielded transfers of the SAME amount
+    //    produce DIFFERENT nullifiers / commitments / proofs — an observer cannot
+    //    link sender to receiver by the on-wire payload. ──
+    #[test]
+    fn distinct_transfers_are_unlinkable_on_the_wire() {
+        let a = balanced_payload(21, 0x1111);
+        let b = balanced_payload(22, 0x2222);
+        assert_ne!(
+            a.inputs[0].nullifier, b.inputs[0].nullifier,
+            "distinct shielded inputs must reveal distinct nullifiers"
+        );
+        assert_ne!(
+            a.output_legs[0].commitment_bytes, b.output_legs[0].commitment_bytes,
+            "equal amounts must still commit to distinct (blinded) value commitments"
+        );
+        assert_ne!(
+            a.inputs[0].proof, b.inputs[0].proof,
+            "the hidden proofs reveal nothing linking the two transfers"
+        );
     }
 }

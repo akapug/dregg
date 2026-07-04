@@ -67,7 +67,8 @@ pub fn welcome_tiles() -> Vec<WelcomeTile> {
         WelcomeTile {
             step: "4",
             title: "See the whole world",
-            blurb: "Open the map of everything — every cell, every receipt, balance summing to zero.",
+            blurb:
+                "Open the map of everything — every cell, every receipt, balance summing to zero.",
             action: WelcomeAction::SeeTheWorld,
         },
     ]

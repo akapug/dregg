@@ -153,17 +153,20 @@ hypothesis. The closure layer *discharges* that family from genuine per-effect r
 
 - `Dregg2.Circuit.ClosureAll` holds one `<effect>_closedLog` rung per effect family
   (transfer tag 0 `transfer_closedLog`, `ClosureAll.lean:152`; cellSeal 52, revoke 2,
-  delegate 1, attenuate 12, mint 3, burn 4, noteSpend 27, … — 55 `_closedLog`
+  delegate 1, attenuate 12, mint 3, burn 4, noteSpend 27, … — 56 `_closedLog`
   theorems covering the effect set). Each is a one-liner over the generic combinator
   `closedLog_of_encode` (`:121`): it derives the `.log` advance through
   `logHashInjective` and bridges to `kstepAll` via the effect's landed
   `<effect>_descriptorRefines` rung. The dominant class is **CLASS A** — the
   effect's write is *forced from a deployed `Satisfied2` descriptor* (e.g.
   `cellSeal_closedLog_sat` forces the seal from the deployed `cellSealV3`,
-  `ClosureAll.lean:189`; the cap family from `delegateWriteCapOpenV3`,
-  `revokeCapabilityV3`, `attenuateCapOpenEffV3`, etc., `:983-1198`), not a modelled
-  gate. The earlier per-effect refinement classes (`VALUE_FORCED`,
-  whole-kernel-freeze) appear in `RotatedKernelRefinement*` (e.g.
+  `ClosureAll.lean:189`; the cap family from the shape-matched keystone wrappers
+  `delegateWriteCapOpenV3` (→ `effCapInsertV3`),
+  `revokeDelegationWriteCapOpenV3` (→ `effCapRemoveV3`),
+  `attenuateCapOpenEffV3` (→ `effCapOpenWriteV3`), etc., `:934-1349` — see
+  [`faithful-commitment.md`](faithful-commitment.md) for the cap-write family
+  close), not a modelled gate. The earlier per-effect refinement classes
+  (`VALUE_FORCED`, whole-kernel-freeze) appear in `RotatedKernelRefinement*` (e.g.
   `RotatedKernelRefinementMisc.lean:30,629`).
 
 - `Dregg2.Circuit.ClosureFinal` bundles them into **one** parametric floor.
@@ -187,11 +190,89 @@ hypothesis. The closure layer *discharges* that family from genuine per-effect r
 
 - `Dregg2.Circuit.CircuitSoundnessAssembled` instantiates the apex at the concrete
   `Rfix`/`kstepAll`/`hrefinesAll`: `kstepAll := dispatchArm`
-  (`CircuitSoundnessAssembled.lean:380`), `EffectDecodeBridge` *is*
-  `descriptorRefines … (kstepAll e)` (`:410`), and `hrefinesAll` (`:427`) assembles
+  (`CircuitSoundnessAssembled.lean:546`), `EffectDecodeBridge` *is*
+  `descriptorRefines … (kstepAll e)` (`:576`), and `hrefinesAll` (`:593`) assembles
   the per-effect bridge family into the apex's `∀`.
-  `lightclient_unfoolable_assembled` (`:440`) and
-  `lightclient_turn_unfoolable_forest_assembled` (`:463`) are the capstones.
+  `lightclient_unfoolable_assembled` (`:606`) and
+  `lightclient_turn_unfoolable_forest_assembled` (`:629`) are the capstones. The
+  registry the apex quantifies over is `v3RegistryHeap` (`:139`, 59 entries `:254`)
+  — the DEPLOYED after-spine/insert descriptors: the faithful 8-felt heap/fields
+  writes (`Rfix 56`/`Rfix 39`), the three accumulator sorted-INSERTs over
+  `effAccumInsertV3` (`Rfix 27/28/17`, `:227-253`), and the cap-write family's
+  keystone wrappers (`Rfix 1/2/10/11/14/19/55`, `:498-537`) — grounded in
+  [`faithful-commitment.md`](faithful-commitment.md). `#assert_axioms` pins at
+  `:752-775`.
+
+### `Effect::Custom` — apex-covered IN LEAN under the named recursion carrier (VK-lift remains)
+
+`Effect::Custom` (`circuit/src/effect_vm/effect.rs:281` — custom cell-program
+dispatch) is the deployed AUTHORIZATION MODE (`Authorization::Custom { predicate }`,
+`turn/src/action.rs`), not a kernel state-transition verb: it carries a recursive
+sub-proof and binds it to the row's `custom_proof_commitment` / `custom_program_vk_hash`
+columns. Its in-circuit soundness content is therefore the PROOF-BINDING (the bound
+sub-proof verified, its PI-commitment determines its program VK), not a `FullActionA`
+state move. That content is now **discharged in Lean** by `Dregg2.Circuit.CustomApex`,
+under the named `EngineBinding E` (FRI-recursion) carrier — closing the
+program-correctness gap the deployed STARK leaves:
+
+- **The STAGED in-AIR verifier.** `VmConstraint2.holdsAtStaged` is the deployed row
+  semantics with the ONE flip the VK epoch will carry: the `proofBind` row gate goes
+  from the vacuous `True` (`DescriptorIR2.lean:570`, deployed — UNCHANGED) to the
+  in-AIR recursion check `ProofBind.boundAt E env` (the row commits to a VERIFYING
+  sub-proof). It is the Lean twin of laying `verify_p3_batch_proof_circuit`
+  (`~/dev/plonky3-recursion`) through the Custom columns, mirroring the turn-leaf wrap
+  in `circuit-prove/src/joint_turn_recursive.rs` / `ivc_turn_chain.rs`. STAGED beside
+  the deployed gate — additive, no VK / registry / default touched.
+  `satisfied2Staged_toCustom` PROVES a staged witness IS a `Satisfied2Custom` (the
+  binding leg is CIRCUIT-FORCED, not assumed externally).
+- **The companion apex.** `lightclient_unfoolable_custom` /
+  `lightclient_unfoolable_custom_binds` route the Custom index through
+  `Satisfied2Custom` / `proofBind_bound` / `proofBind_determined` (the §6c keystones,
+  `DescriptorIR2.lean:885,911`; the local Emit lemmas `EffectVmEmitV2.lean:1286`,
+  `EffectVmEmitRotationV3.lean:4307`) under a `StarkSoundCustom` staged-AIR extraction
+  carrier (the exact analog of `StarkSound`). The apex now genuinely CLAIMS, for a
+  verifying Custom batch: a genuine decoded kernel boundary committing to
+  `pi.pre`/`pi.post` AND every active proof-binding row binds to a VERIFYING sub-proof
+  whose attested VK is DETERMINED by its commitment (the anti-ghost — a forged
+  commitment cannot ride). `lightclient_custom_v3_binds` CONSUMES
+  `customV3_binds_proof` at the deployed `customV3` columns
+  (`prmCol CUSTOM_COMMIT`/`CUSTOM_VK`). `#assert_axioms`-clean (carriers
+  `EngineBinding`/`StarkSoundCustom`/`Poseidon2SpongeCR` are HYPOTHESES).
+
+So the custom claim no longer rests on an out-of-circuit Rust trust step: it rests on
+the staged in-AIR verifier + the named recursion carrier. **What remains is the
+deployed VK epoch ONLY** (out of scope here): flipping the deployed `holdsAt`
+`proofBind` gate `True → boundAt` is VK-affecting (re-emit the effect-VM descriptor),
+and the `custom_proof_commitment` column is 4-felt / ~62-bit
+(`custom_proof_bind.rs:61-70`), below the 8-felt / ~124-bit faithful-commitment floor —
+the 4→8-felt lift + column re-pin is the same gated VK epoch (coordinated with the
+parked umem flip). A `FullActionA.customA` executor verb is likewise bundled there (it
+is a deployed-semantics change; the companion apex needs no such constructor). The
+deployed Rust `dregg_circuit_prove::custom_proof_bind::verify_proof_bind`
+(`circuit-prove/src/custom_proof_bind.rs`) is the realization of the staged in-AIR
+verifier the light client / SDK runs until that epoch lands. Full grounding:
+`docs/deos/CUSTOM-VK-AUTHORIZATION.md`; the Lean close is `Dregg2/Circuit/CustomApex.lean`.
+
+### Other trusted-out-of-circuit surfaces — the sovereign off-AIR pair
+
+`Effect::Custom` is not the only check the EffectVM AIR records-but-does-not-force.
+Two sovereign-cell surfaces are also off-AIR (honest, named in the Rust, but the
+bare aggregate STARK does not witness them):
+
+* **Sovereign witness signature + sequence** — the AIR carries only a 4-felt key
+  digest (`SOVEREIGN_WITNESS_KEY_COMMIT`) + a `SOVEREIGN_WITNESS_SEQUENCE`
+  (`pi.rs:223-235`); the actual Ed25519 signature is verified off-AIR
+  (`turn/src/executor/authorize.rs:889 verify_ed25519_signature`) and replay is the
+  off-AIR monotonic chain-walk. By design the signature binds the full 256-bit key
+  off-circuit (`pi.rs:217-222`).
+* **Sovereign inner transition proof (Phase 2)** — `SOVEREIGN_TRANSITION_PROOF_*`
+  (`pi.rs:240-250`) is recursively verified off-AIR (`pi.rs:209-213`;
+  `proof_verify.rs:2485`); the VK binding is **sentinel-zero today** (STAGED — the
+  recursive verifier is a follow-up).
+
+A full op-by-op audit (every AIR op classified genuinely-enforced / fail-closed-bus
+/ trusted-out-of-circuit, plus the re-verdict on "proofBind was the last vacuous
+gate" and `countOpenFronts = 0`) is `docs/deos/EFFECTVM-AIR-VERIFICATION-CENSUS.md`.
 
 ## Whole-history aggregation (the light client over a chain)
 
@@ -239,8 +320,9 @@ The whole apex chain is `#assert_axioms`-clean — its axiom footprint is
 the `CommitSurface`/`StateDecode` faithfulness lemmas (`CircuitSoundness.lean:1047-1064`);
 on `lightclient_unfoolable_one` and `lightclient_unfoolable_circuit_sound`
 (`ClosureFinal.lean:267-270`); on `lightclient_unfoolable_circuit_sound_turn` and the
-non-vacuity teeth (`ClosureForest.lean:280-283`); on `lightclient_unfoolable_assembled`
-and `hrefinesAll` (`CircuitSoundnessAssembled.lean:586-606`); on `settlement_soundness`
+non-vacuity teeth (`ClosureForest.lean:280-283`); on `lightclient_unfoolable_assembled`,
+`hrefinesAll`, and the `Rfix` registry pins (`CircuitSoundnessAssembled.lean:752-775`);
+on `settlement_soundness`
 (`SettlementSoundness.lean:244`,`:282`). The crypto facts (`StarkSound`,
 `Poseidon2SpongeCR`, the CR set, `logHashInjective`) are **typeclass/Prop hypotheses**,
 never axioms.

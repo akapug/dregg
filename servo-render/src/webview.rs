@@ -252,7 +252,7 @@ use starbridge_web_surface::{
 
 use dregg_captp::netlayer::{InProcessFabric, InProcessNetlayer};
 
-use crate::netcap_connector::{ConnectOutcome, NetcapConnector, block_on};
+use crate::netcap_connector::{block_on, ConnectOutcome, NetcapConnector};
 use crate::netcap_http::{CapGatedHttpHandler, SharedHttpHandler};
 use crate::swgl_context::RgbaFrame;
 
@@ -1321,10 +1321,10 @@ fn surface_fetch_allow(surface: &SurfaceCapability) -> Option<Vec<String>> {
 mod tests {
     use super::*;
     use dregg_firmament::emulated_kernel::EmulatedKernel;
-    use dregg_firmament::{CompositorPd, Scene, Surface, cell_seed, label_of};
+    use dregg_firmament::{cell_seed, label_of, CompositorPd, Scene, Surface};
     use starbridge_web_surface::AuthRequired;
 
-    use crate::compositor_seam::{FramePresentation, present_frame};
+    use crate::compositor_seam::{present_frame, FramePresentation};
 
     /// Encode an RGBA8 buffer (`w*h*4` bytes, row-major) to PNG bytes (8-bit,
     /// color-type 6 = RGBA), using only STORED (uncompressed) deflate blocks so it

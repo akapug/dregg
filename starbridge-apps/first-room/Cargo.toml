@@ -21,6 +21,7 @@ starbridge-compartment-workflow-mandate = { path = "../compartment-workflow-mand
 starbridge-escrow-market = { path = "../escrow-market" }
 
 blake3 = "1"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

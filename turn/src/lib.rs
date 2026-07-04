@@ -148,17 +148,19 @@ pub use encrypted::{
     ConflictBucket, EncryptedTurn, EncryptedTurnError, SubmitterAuth, TurnOrdering,
     TurnValidityProof, TurnValidityPublicInputs, order_encrypted_turns,
 };
-pub use error::TurnError;
+pub use error::{RefusalClass, TurnError};
 pub use eventual::{
     CycleError, EventualRef, OutputRef, Pipeline, PipelineBuilder, PipelineError, PipelineResult,
     Target, TurnBatch, TurnOutput,
 };
 pub use execution_path::{ExecutionPath, compute_execution_path};
 pub use executor::{
-    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, CellMigrationManager, ComputronCosts,
-    MigrationCancelReason, MigrationError, MigrationState, MixedAtomicResult, MixedAtomicTurn,
-    ProofVerifier, ResolutionTable, TurnExecutor, execute_pipeline, execute_pipeline_result,
-    resolve_eventual_ref,
+    AtomicProofEntry, AtomicSovereignTurn, AtomicTurnError, BridgeEscrowReceipt,
+    BridgeEscrowRecord, BridgeMintError, BridgeMintReceipt, BridgeMintRequest,
+    CellMigrationManager, ComputronCosts, MigrationCancelReason, MigrationError, MigrationState,
+    MixedAtomicResult, MixedAtomicTurn, ProofVerifier, ResolutionTable, TurnExecutor,
+    escrow_nullifier_for, execute_pipeline, execute_pipeline_result, new_mirror_ledger_cell,
+    read_supply, resolve_eventual_ref,
 };
 pub use fast_path::{
     CellLockEntry, CellLockTable, FastPathConfig, FastPathError, TurnCertificate, TurnSign,

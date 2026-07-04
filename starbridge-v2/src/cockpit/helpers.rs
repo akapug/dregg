@@ -582,7 +582,8 @@ pub(crate) fn rgba_frame_to_image(
 ) -> std::sync::Arc<gpui::RenderImage> {
     // Copy the RGBA8 bytes and swap R<->B in place to land in gpui's BGRA layout.
     let mut bgra = frame.bytes.clone();
-    for px in bgra.chunks_exact_mut(4) {
+    let (pixels, _tail) = bgra.as_chunks_mut::<4>();
+    for px in pixels {
         px.swap(0, 2);
     }
     let buffer = image::RgbaImage::from_raw(frame.width, frame.height, bgra)

@@ -25,9 +25,9 @@ pub(crate) use std::cell::RefCell;
 pub(crate) use std::rc::Rc;
 
 pub(crate) use gpui::{
-    AnyElement, App, Context, Entity, FocusHandle, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ParentElement, Render, ScrollStrategy, SharedString, Styled, UniformListScrollHandle,
-    WeakEntity, Window, div, prelude::*, px, uniform_list,
+    div, prelude::*, px, uniform_list, AnyElement, App, Context, Entity, FocusHandle, Hsla,
+    IntoElement, KeyDownEvent, MouseButton, ParentElement, Render, ScrollStrategy, SharedString,
+    Styled, UniformListScrollHandle, WeakEntity, Window,
 };
 
 pub(crate) use dregg_cell::CellId;
@@ -58,13 +58,13 @@ pub(crate) use starbridge_v2::palette::{Category, CommandId, CommandPalette};
 pub(crate) use starbridge_v2::reflect::{self, Field, FieldValue, Inspectable, ObjectKind};
 pub(crate) use starbridge_v2::shell::{Scene, Shell};
 pub(crate) use starbridge_v2::surface::{SurfaceCapability, SurfaceId};
-pub(crate) use starbridge_v2::time_travel::TimeCockpitModel;
+pub(crate) use starbridge_v2::time_travel::{TimeBranch, TimeCockpitModel};
 pub(crate) use starbridge_v2::ui_snapshot::{Liveness, UiSnapshot};
 pub(crate) use starbridge_v2::world::{self, CommitOutcome, ResumeMode, World};
 // THE ⤳ SHARE surface — the frustum / snapshot editor (cull + pare + verify + share).
 pub(crate) use starbridge_v2::affordance::{AffordanceSurface, CellAffordance};
 pub(crate) use starbridge_v2::snapshot_editor::{
-    PareOutcome, ShareError, SnapshotEditor, recipient_window_cap,
+    recipient_window_cap, PareOutcome, ShareError, SnapshotEditor,
 };
 // The L1 PRESENTATION SPINE + the moldable inspector framework primitives.
 pub(crate) use starbridge_v2::cv_provenance::CvProvenance;
@@ -330,6 +330,18 @@ pub enum Tab {
     /// unauthorized method is refused in-band. See
     /// [`starbridge_v2::service_explorer`].
     ServiceExplorer,
+    /// THE SERVICE DIRECTORY (📇 DIRECTORY) — the WHOLE-IMAGE sibling of the
+    /// per-cell [`Tab::ServiceExplorer`]: it BROWSES the live image for every cell
+    /// that publishes a service interface (each cell's interface derived live via
+    /// [`dregg_cell::interface::InterfaceDescriptor::derive_replayable`]), listing
+    /// each discovered service with its interface-id, method count, kind, and
+    /// whether it has been ANNOUNCED. Selecting a service and pressing "announce"
+    /// publishes its interface as a REAL verified turn (an `Effect::EmitEvent`
+    /// carrying the canonical announce topic, committed through the embedded
+    /// executor), leaving a witnessed receipt the next discover reads back — the
+    /// publish loop closes over the real ledger, not a transient flag. See
+    /// [`starbridge_v2::service_directory`].
+    ServiceDirectory,
     /// THE WORKSPACE — the doIt / printIt / inspectIt evaluator: compose an intent,
     /// evaluate it in a FORKED throwaway world (predict, never mutate), print the
     /// predicted receipt, inspect the predicted post-state as live objects, then
@@ -346,13 +358,13 @@ pub enum Tab {
     Lanes,
     /// THE TEMPORAL COCKPIT (⏳ TIME) — the headline livability surface: time-travel
     /// + suspend + fractal meta-debug as ONE control panel. The REWIND SCRUBBER drags
-    /// over the verified witness history (genesis → head) and re-derives the focused
-    /// views at any past point (root-verified [`crate::replay::History::replay_to`])
-    /// with a live [`Liveness`] badge; the ⏸ SUSPEND button halts the real loop (the
-    /// M5 gate) and stages the continuation, ▶ RESUME drains it; the METASTACK
-    /// navigator climbs a reflective tower over the suspended world (debug the
-    /// debugger). All over the REAL models — see [`starbridge_v2::time_travel`] /
-    /// [`starbridge_v2::replay`] / [`starbridge_v2::meta_debug`].
+    ///   over the verified witness history (genesis → head) and re-derives the focused
+    ///   views at any past point (root-verified [`crate::replay::History::replay_to`])
+    ///   with a live [`Liveness`] badge; the ⏸ SUSPEND button halts the real loop (the
+    ///   M5 gate) and stages the continuation, ▶ RESUME drains it; the METASTACK
+    ///   navigator climbs a reflective tower over the suspended world (debug the
+    ///   debugger). All over the REAL models — see [`starbridge_v2::time_travel`] /
+    ///   [`starbridge_v2::replay`] / [`starbridge_v2::meta_debug`].
     Time,
     /// THE ⤳ SHARE surface (the FRUSTUM / SNAPSHOT EDITOR) — the share-with-
     /// attenuation pre-send editor: take a [`crate::ui_snapshot::UiSnapshot`] of the
@@ -394,7 +406,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    const ALL: [Tab; 31] = [
+    const ALL: [Tab; 32] = [
         Tab::Docs,
         Tab::Trust,
         Tab::Devtools,
@@ -404,6 +416,7 @@ impl Tab {
         Tab::Moldable,
         Tab::InspectAct,
         Tab::ServiceExplorer,
+        Tab::ServiceDirectory,
         Tab::Workspace,
         Tab::Lanes,
         Tab::Shell,
@@ -456,6 +469,7 @@ impl Tab {
             Tab::Moldable => "INSPECTOR",
             Tab::InspectAct => "INSPECT-ACT",
             Tab::ServiceExplorer => "🛰 SERVICES",
+            Tab::ServiceDirectory => "📇 DIRECTORY",
             Tab::Workspace => "WORKSPACE",
             Tab::Wonder => "WONDER",
             Tab::Lanes => "LANES",
@@ -641,6 +655,13 @@ pub struct Cockpit {
     /// it; "suspend & inspect" pushes a level, "descend" pops. Empty until the
     /// operator first suspends + climbs (the live system runs un-reflected).
     meta_stack: MetaStack,
+    /// THE ⑂ DIVERGENT BRANCH — the result of forking the past at the scrubber
+    /// cursor ([`dregg_turn::reversible::ReversibleHistory::fork_at`]) and driving
+    /// a divergent verified turn from it. `None` until the operator clicks "⑂
+    /// BRANCH HERE"; pinned so the TIME tab can paint the divergent future beside
+    /// the (untouched) live line. The temporal dual of the spatial branch-and-stitch
+    /// fork — a verified future grown from the past, the parent timeline immune.
+    time_branch: Option<TimeBranch>,
 
     // --- CIPHERCLERK panel state -------------------------------------------
     /// The HD-derived identity vault (real `AgentCipherclerk`s).
@@ -725,9 +746,9 @@ pub struct Cockpit {
     ///
     /// LAZY (`None` until first needed): booting it builds a metered verified world
     /// + deploys the mint factory, and the demo's turns are the slow proof-bearing
-    /// metered path. It is therefore NOT booted at window-open — it boots on the
-    /// first navigation to the SWARM tab (or the first killer-demo verb), so it
-    /// never sits on the first-paint path. Access it through [`Self::killer_demo`].
+    ///   metered path. It is therefore NOT booted at window-open — it boots on the
+    ///   first navigation to the SWARM tab (or the first killer-demo verb), so it
+    ///   never sits on the first-paint path. Access it through [`Self::killer_demo`].
     killer_demo: Option<HeadlineDemo>,
     /// The render lines the killer demo has emitted so far (one per advanced frame),
     /// shown in the SWARM-tab demo strip. Newest appended last.
@@ -855,6 +876,19 @@ pub struct Cockpit {
     /// currently mediating (`powerbox_app` points at it). Pressing "+ launch confined
     /// app" births a NEW one and routes its request through the existing powerbox.
     launched_apps: Vec<starbridge_v2::powerbox::LaunchedApp>,
+    /// THE PRE-BUILT APP LAUNCHER roster — the wired starbridge-apps (gallery /
+    /// sealed-auction / bounty-board / … / polis) LAUNCHED onto the cockpit's live
+    /// World from the POWERBOX/LAUNCHER surface. Each is a real app cell + program
+    /// seeded onto the live ledger, its representative affordance fired as a real
+    /// verified turn (so the cell + receipt are on `World::ledger()` /
+    /// `World::receipts()`, inspectable). Pressing a "launch" row appends one (a fresh
+    /// app instance). See [`super::panels_app_launcher`].
+    #[cfg(feature = "app-registry")]
+    apps_launched: Vec<panels_app_launcher::LaunchedAppRecord>,
+    /// The last pre-built-app launch outcome banner (the executor's verdict — a real
+    /// committed receipt, or the in-band launch refusal).
+    #[cfg(feature = "app-registry")]
+    apps_outcome: Option<String>,
 
     // --- the WHAT-IF / SIMULATE intent composer (studio-parity) -------------
     /// The intent under composition: the agent + a forest of actions/effects the
@@ -942,6 +976,19 @@ pub struct Cockpit {
     service_explorer_args: String,
     /// The last invoke outcome banner (a REAL committed receipt / an in-band refusal).
     service_explorer_outcome: Option<String>,
+
+    // --- THE SERVICE DIRECTORY (the whole-image discover/announce surface) ---
+    /// The discovered service the directory has SELECTED to announce (its backing
+    /// cell). `None` = none picked yet; a row's "select" sets it, and "announce"
+    /// publishes its interface as a real verified turn. See
+    /// [`super::panels_service_directory`].
+    service_directory_selected: Option<CellId>,
+    /// Whether the directory listing includes the opaque (no-interface) capability
+    /// cells too (the `include_non_services` filter — toggled in the panel).
+    service_directory_include_caps: bool,
+    /// The last announce outcome banner (a REAL committed receipt / an in-band
+    /// refusal — nothing to announce / the executor gated the announcer).
+    service_directory_outcome: Option<String>,
 
     // --- THE WORKSPACE (doIt / printIt / inspectIt) -------------------------
     /// The live workspace evaluator — composes an intent, evaluates it in a forked
@@ -1174,6 +1221,11 @@ pub(crate) struct ModeCardMount {
     pub(crate) entity: Entity<starbridge_v2::card_pane::CardPane>,
     pub(crate) surface: starbridge_v2::dock::card_surface::ModeCardSurface,
     pub(crate) focus: CellId,
+    /// A cheap digest of the cockpit-side [`SurfaceState`] this card was built from (0 for a
+    /// stateless card). [`Cockpit::ensure_mode_card`] rebuilds when it changes, so a stateful
+    /// card (cipherclerk / debugger / replay) never shows stale data after the operator mutates
+    /// the live state (a mint, a scrubber move, a new turn under the lens).
+    pub(crate) state_fp: u64,
 }
 
 /// The cockpit's live inspector-card mount: the [`CardPane`] gpui entity, the shared
@@ -1183,6 +1235,7 @@ pub(crate) struct ModeCardMount {
 #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
 pub(crate) struct InspectorCardMount {
     pub(crate) entity: Entity<starbridge_v2::card_pane::CardPane>,
+    #[allow(dead_code)] // held to keep the live attached applet alive for the mounted card
     pub(crate) applet: starbridge_v2::card_pane::SharedAttached,
     pub(crate) focus: CellId,
 }
@@ -1264,9 +1317,11 @@ mod frame;
 pub use frame::CockpitMode;
 mod live;
 mod nav;
+mod panels_app_launcher;
 mod panels_devtools;
 mod panels_main;
 mod panels_moldable;
+mod panels_service_directory;
 mod panels_web;
 mod panels_webshell;
 mod panels_workspace;

@@ -50,8 +50,8 @@ use dregg_cell::blueprint::{
     self, BridgeTerms, ChannelTerms, EscrowTerms, ObligationTerms, TrustlineTerms,
 };
 use dregg_cell::factory::{
-    CapTarget, CapTemplate, ChildVkStrategy, FactoryCreationParams, FactoryDescriptor,
-    canonical_program_vk,
+    canonical_program_vk, CapTarget, CapTemplate, ChildVkStrategy, FactoryCreationParams,
+    FactoryDescriptor,
 };
 use dregg_cell::program::StateConstraint;
 use dregg_cell::{AuthRequired, CellId, CellMode, CellProgram};
@@ -62,7 +62,7 @@ use crate::presentable::{
     Presentation, PresentationBody, PresentationKind, SmState, SmTransition, StateMachineView,
 };
 use crate::reflect::{self, Field, Inspectable, ObjectKind};
-use crate::world::{CommitOutcome, World, create_cell_from_factory};
+use crate::world::{create_cell_from_factory, CommitOutcome, World};
 
 // ===========================================================================
 // §L10.1 — ReflectedFactory: the deployed-descriptor Presentable face.

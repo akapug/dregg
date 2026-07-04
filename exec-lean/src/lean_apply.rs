@@ -1132,6 +1132,24 @@ pub fn wire_state_to_ledger(
             let _ = ledger.insert_cell(cell.clone());
         }
     }
+    // CACHE-FIDELITY (the streaming-audit root-gap close): each reconstituted cell was built by
+    // CLONING the template and mutating its `state`/`capabilities` through `pub` fields OUTSIDE the
+    // ledger's `&mut`-handoff. `Cell` carries a `leaf_cache` (the cached canonical
+    // `compute_canonical_state_commitment` leaf) that `Ledger::root()` TRUSTS via `hash_cell_cached`;
+    // `Cell::clone` copies that cache, so the `*slot = cell.clone()` overwrite above re-installs the
+    // TEMPLATE's PRE-turn leaf digest (the `get_mut` handoff invalidation is clobbered by the very
+    // assignment). Left stale, `root()` would hash the pre-turn leaf for every reconstituted cell and
+    // DIVERGE from the Rust producer's root (e.g. a SetField on slot 6 leaves the field correct but
+    // the leaf cache pointing at the pre-write commitment). Re-take a `&mut` to each reconstituted
+    // cell so the ledger's `get_mut` invalidates the leaf cache (and `touch_value` keeps the
+    // incremental Merkle correct); the next `root()` recomputes each leaf from the honest post-state
+    // bytes. (The cap-root cache rides the same honesty: it is dirty-or-byte-identical, and a dirty
+    // leaf recompute reads it through `cached_cap_root`, recomputing when dirty — so this single
+    // invalidation closes the gap.) `insert_cell` already invalidates, so a redundant touch there and
+    // a `None` on any sovereign-removed id are both harmless.
+    for id in out_cells.keys() {
+        let _ = ledger.get_mut(id);
+    }
 
     // MAKE-SOVEREIGN STRUCTURAL REPLAY (the root-gap close for the cell-SET move): mirror
     // `apply_make_sovereign` → `Ledger::make_sovereign(cell)` — remove the cell from
@@ -1151,6 +1169,93 @@ pub fn wire_state_to_ledger(
     }
 
     Ok(ledger)
+}
+
+/// THE EPOCH §5 FEE-DISTRIBUTION REPLAY (the host-policy root-gap close).
+///
+/// After a committing turn the Rust executor MOVES the fee onto real ledger cells
+/// (`executor::execute`'s `distribute_fee_shares`): the proposer gets `fee/2`, the treasury
+/// `fee*3/10`, and the remainder goes to the fee well — so the committed value delta is exactly
+/// zero (THE EPOCH §5, "fees as moves"). The VERIFIED kernel ALSO distributes the fee
+/// (`runGatedForestTurnStatus` ∘ `distributeFee`), but against FIXED PLACEHOLDER cells
+/// (`admCtxOfHost`'s `hostProposerCell`/`hostTreasuryCell` = 0xF00/0xF01) with the residue BURNED —
+/// because the real distribution targets are HOST/CONSENSUS config the wire grammar does not carry.
+/// Those placeholder credits land on synthetic cells absent from the deployed ledger, so the
+/// `WireState → Ledger` extractor drops them: the reconstituted ledger carries ONLY the agent's
+/// prologue fee DEBIT (which the `bal` table round-trips), never the real fee-well CREDIT.
+///
+/// So a fee-bearing covered turn (every faucet `Transfer` carries a fee) diverged on `.root()`:
+/// the Rust executor credited the real fee well, the reconstituted Lean ledger did not (the n=5
+/// dogfood faucet bug). The fee distribution is a deterministic function of HOST config (which real
+/// cells) + the turn's `fee` — not kernel-turn-body state — so we close the gap the SAME way
+/// [`apply_cap_ops`]/[`apply_state_ops`] close the wire model's other host/turn-data drops: replay
+/// the EXACT Rust `distribute_fee_shares` mutation onto the reconstituted ledger, gated on the
+/// verified commit bit. Both producers then reflect the identical host fee policy and agree on
+/// `.root()`, WITHOUT changing the verified spec (whose `distributeFee` placeholder accounting is
+/// the host-policy seam, not deployed-cell semantics).
+///
+/// MIRRORS `turn/src/executor/execute.rs::distribute_fee_shares` byte-for-byte: same share split,
+/// same `Int` truncation, same "credited only if the cell exists in the ledger", same
+/// "undelivered remainder (missing proposer/treasury, overflow) falls through to the fee well".
+/// Applied ONLY when the kernel COMMITTED and `fee > 0` — a rejected turn (no state edit) and a
+/// zero-fee turn leave every balance untouched, matching the Rust rollback / no-op.
+///
+/// # The agent fee DEBIT (the other half the reconstitution drops)
+///
+/// The verified kernel debits the fee in its `commitPrologue` — but onto the agent's RECORD scalar
+/// (`setBalance`/`balOf`), while the canonical asset-0 balance the extractor reads is the per-asset
+/// `bal` side-table (`wire_state_to_ledger`'s `asset0_bal`, which a `Transfer` mutates and the
+/// prologue does NOT). So the reconstituted agent balance reflects the body's asset-0 moves but NOT
+/// the prologue's fee debit — exactly as the fee-well credit is missing. The Rust executor instead
+/// folds BOTH into the single cell balance (`balance −= fee` in the prologue, `−= amount` in the
+/// transfer). So we replay the agent's prologue fee debit here too (the kernel computed it; the
+/// extractor's bal-vs-record split dropped it), making the reconstituted agent balance byte-equal to
+/// the Rust producer's. Every snapshotted cell gets a `bal` entry (`ledger_to_wire_state` pushes
+/// `(nat, 0, balance)` for each), so the agent's reconstituted balance always comes from the `bal`
+/// table (never the record fallback) and this debit never double-counts a record-side fee.
+pub(crate) fn apply_fee_distribution(
+    ledger: &mut Ledger,
+    host: &ShadowHostCtx,
+    agent: CellId,
+    fee: u64,
+    committed: bool,
+) {
+    if !committed || fee == 0 {
+        return;
+    }
+    // The prologue fee DEBIT the extractor dropped (it read the `bal` table, not the fee-debited
+    // record): fold it into the agent's canonical asset-0 balance, mirroring the Rust prologue's
+    // `agent.state.debit_balance(fee)` (`execute.rs`). The cell balance is signed `i64`; on a
+    // both-committed turn the agent holds ≥ fee + body moves (Rust's prologue-then-body ordering),
+    // so the fold never underflows. Use the signed `set_balance` arithmetic so the canonical balance
+    // matches Rust's single-balance fold exactly (no `debit_balance` zero-floor refusal to silently
+    // skip the debit and re-introduce a divergence).
+    if let Some(a) = ledger.get_mut(&agent) {
+        let debited = a.state.balance().saturating_sub(fee as i64);
+        a.state.set_balance(debited);
+    }
+    let proposer_share = fee / 2;
+    let treasury_share = fee * 3 / 10;
+    let mut delivered: u64 = 0;
+    if let Some(pid) = host.proposer_cell.as_ref() {
+        if let Some(p) = ledger.get_mut(pid) {
+            if p.state.credit_balance(proposer_share) {
+                delivered += proposer_share;
+            }
+        }
+    }
+    if let Some(tid) = host.treasury_cell.as_ref() {
+        if let Some(t) = ledger.get_mut(tid) {
+            if t.state.credit_balance(treasury_share) {
+                delivered += treasury_share;
+            }
+        }
+    }
+    if let Some(wid) = host.fee_well_cell.as_ref() {
+        if let Some(w) = ledger.get_mut(wid) {
+            let _ = w.state.credit_balance(fee - delivered);
+        }
+    }
 }
 
 /// Drive a turn through the VERIFIED Lean executor and reconstitute the authoritative `Ledger` from
@@ -1198,7 +1303,7 @@ pub fn execute_via_lean(
     // revoke-epoch — the SURVIVOR-effect root-gap close). A `CellSeal` stamps
     // `sealed_at = block_height` (the host clock), matching `apply_cell_seal`.
     let state_ops = collect_state_ops(turn, host.block_height, host.current_timestamp);
-    let ledger = wire_state_to_ledger(
+    let mut ledger = wire_state_to_ledger(
         &shadow_state.state,
         &inv,
         pre_ledger,
@@ -1206,6 +1311,13 @@ pub fn execute_via_lean(
         &state_ops,
         committed,
     )?;
+    // THE EPOCH §5 fee replay: the verified kernel debits the fee onto the agent's RECORD scalar and
+    // distributes to PLACEHOLDER cells + burns the residue (the host fee policy is not on the wire),
+    // so the bal-table extractor drops BOTH the agent fee debit and the real fee-well credit.
+    // Reconstitute the REAL host fee move (`distribute_fee_shares` + the prologue agent debit) onto
+    // the touched cells so a fee-bearing turn agrees with the Rust executor's `.root()`. Gated on the
+    // verified commit bit; no-op when `fee == 0`.
+    apply_fee_distribution(&mut ledger, host, turn.agent, turn.fee, committed);
     if prof {
         let t3 = std::time::Instant::now();
         prof_outer_accum(
@@ -1304,6 +1416,10 @@ pub(crate) fn lean_post_state_root(
         &state_ops,
         committed,
     )?;
+    // THE EPOCH §5 fee replay (same lever as `execute_via_lean`): the denotational differential's
+    // reconstituted root must reflect the host's real fee move (agent debit + distribution), since
+    // the verified kernel debits the record + distributes to placeholder cells the extractor drops.
+    apply_fee_distribution(&mut ledger, host, turn.agent, turn.fee, committed);
     Ok(ledger.root())
 }
 

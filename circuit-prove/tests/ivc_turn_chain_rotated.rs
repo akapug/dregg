@@ -123,9 +123,11 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
         None,
     )
     .expect("rotated transfer leg mints + self-verifies");
-    // Read the ROTATED chain roots off the leg BEFORE it moves into the participant.
-    let old_root = leg.old_root();
-    let new_root = leg.new_root();
+    // H0 DEPLOYED-WIDE: the deployed leg is now WIDE-anchored — the single-felt rotated roots
+    // (PI 42/43) are RETIRED to zero, so the chain anchors are the GENUINE 8-felt (~124-bit) wide
+    // commits. Report their HEAD felt (lane 0) as the scalar root the chain continuity compares.
+    let old_root = leg.wide_old_root8().expect("deployed leg is wide-anchored")[0];
+    let new_root = leg.wide_new_root8().expect("deployed leg is wide-anchored")[0];
     (
         FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
@@ -152,6 +154,8 @@ fn make_chain(
     let mut nonce = start_nonce;
     let mut genesis = BabyBear::ZERO;
     let mut final_root = BabyBear::ZERO;
+    // `nonce`/`balance` are intertwined chain accumulators here; an enumerate rewrite isn't clean.
+    #[allow(clippy::explicit_counter_loop)]
     for i in 0..k {
         let (turn, old_root, new_root) = make_turn(balance, nonce, step);
         if i == 0 {
@@ -191,8 +195,25 @@ fn k_fold_turn_chain_proves_and_verifies() {
     let mut whole: WholeChainProof = prove_turn_chain_recursive(&turns)
         .expect("a continuous 3-turn rotated finalized chain must fold recursively");
     assert_eq!(whole.num_turns, 3);
-    assert_eq!(whole.genesis_root, genesis);
-    assert_eq!(whole.final_root, final_root);
+    // H0 DEPLOYED-WIDE: the carried endpoints are the GENUINE 8-felt wide anchors, NOT a broadcast
+    // of a single rotated commit felt — read them off the first/last legs.
+    let genesis8 = turns[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("first leg is wide-anchored");
+    let final8 = turns[turns.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("last leg is wide-anchored");
+    assert_eq!(whole.genesis_root, genesis8);
+    assert_eq!(whole.final_root, final8);
+    assert_eq!(
+        whole.genesis_root[0], genesis,
+        "the head felt matches make_chain's scalar root"
+    );
+    assert_eq!(whole.final_root[0], final_root);
 
     // The trust anchor an honest setup would distribute.
     let vk = whole.root_vk_fingerprint();
@@ -209,7 +230,7 @@ fn k_fold_turn_chain_proves_and_verifies() {
 
     // REFUSED: relabeled final_root (splicing a foreign endpoint onto the artifact).
     let honest_final = whole.final_root;
-    whole.final_root = honest_final + BabyBear::ONE;
+    whole.final_root[0] = honest_final[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled final_root must be refused; got {other:?}"),
@@ -237,7 +258,7 @@ fn k_fold_turn_chain_proves_and_verifies() {
 
     // REFUSED: relabeled genesis_root.
     let honest_genesis = whole.genesis_root;
-    whole.genesis_root = honest_genesis + BabyBear::ONE;
+    whole.genesis_root[0] = honest_genesis[0] + BabyBear::ONE;
     match verify_turn_chain_recursive(&whole, &vk) {
         Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
         other => panic!("a relabeled genesis_root must be refused; got {other:?}"),
@@ -278,8 +299,22 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         env.version,
         dregg_circuit_prove::ivc_turn_chain::WHOLE_CHAIN_PROOF_ENVELOPE_V1
     );
-    assert_eq!(env.genesis_root, genesis.as_u32());
-    assert_eq!(env.final_root, final_root.as_u32());
+    // H0 DEPLOYED-WIDE: the envelope carries the GENUINE 8-felt wide anchors (u32 lanes), not a
+    // broadcast of a single rotated commit felt.
+    let genesis8 = turns[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("first leg is wide-anchored");
+    let final8 = turns[turns.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("last leg is wide-anchored");
+    assert_eq!(env.genesis_root, genesis8.map(|f| f.as_u32()));
+    assert_eq!(env.final_root, final8.map(|f| f.as_u32()));
+    assert_eq!(env.genesis_root[0], genesis.as_u32());
+    assert_eq!(env.final_root[0], final_root.as_u32());
     assert_eq!(env.num_turns, 3);
     assert_eq!(env.vk_fingerprint_hex, vk.to_hex());
 
@@ -291,8 +326,8 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     verify_turn_chain_recursive_from_blobs(
         &env.root_proof,
         &env.binding_proof,
-        env.genesis_root,
-        env.final_root,
+        &env.genesis_root,
+        &env.final_root,
         &env.chain_digest,
         env.num_turns as usize,
         &vk.0,
@@ -321,7 +356,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
     // The claimed-publics tooth reads the publics against the binding proof.
     {
         let mut bad = env.clone();
-        bad.final_root = bad.final_root.wrapping_add(1);
+        bad.final_root[0] = bad.final_root[0].wrapping_add(1);
         let bad_bytes = bad.to_postcard();
         match verify_whole_chain_proof_bytes(&bad_bytes, &vk) {
             Err(TurnChainError::ClaimedPublicsUnattested { .. }) => {}
@@ -380,7 +415,13 @@ fn broken_order_rejected() {
     // Replace turn 1 with a turn from an UNRELATED chain (different starting balance),
     // so its real rotated old_root does not continue turn 0's new_root.
     let (foreign, foreign_old, _foreign_new) = make_turn(500, 50, 3);
-    let prev_new = turns[0].new_root();
+    // H0 DEPLOYED-WIDE: the chain continuity binds the GENUINE 8-felt wide anchor; compare its head
+    // felt (lane 0), which is what `ChainBreak.expected_old_root`/`found_old_root` also report.
+    let prev_new = turns[0]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("leg is wide-anchored")[0];
     assert_ne!(
         foreign_old, prev_new,
         "the foreign turn must NOT continue the chain (that is the point)"
@@ -399,6 +440,73 @@ fn broken_order_rejected() {
         }
         Ok(_) => panic!("a broken finalized order must not produce a whole-chain proof"),
         Err(other) => panic!("expected ChainBreak, got {other:?}"),
+    }
+}
+
+/// **THE MISMATCHED-CARRIER FAIL-CLOSED TOOTH (Step-2 witness socket, post-bridge-fill).**
+/// Every `CarrierWitness` variant is now fold-wired (custom/factory/hatchery/sovereign/
+/// membership/dsl/bridge), so the fail-closed discipline lives in the claim-pin ADMISSION:
+/// attaching a carrier witness to a leg whose descriptor does NOT genuinely pin that
+/// carrier's claim slots must make the chain prover REFUSE (no artifact at all), never
+/// silently fold a claim over an unpinned/wrong-column slot (laundered vacuity). Here: a
+/// BRIDGE witness on a plain TRANSFER leg — the transfer descriptor's PI 46 is an rc pin
+/// (LAST row, caveat-region column), not the bridge mint-hash pin (FIRST row, `prmCol 0`),
+/// so the admission refuses. `None` remains the sanctioned re-exec rung.
+///
+/// CHEAP enough to run in CI: it mints 2 chain legs, but the refusal fires in
+/// `prove_chain_core_rotated`'s per-leaf match on turn 0 BEFORE any leaf-wrap recursion proving.
+#[test]
+fn mismatched_carrier_witness_is_refused_fail_closed() {
+    use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
+    use dregg_circuit::poseidon2::hash_many;
+    use dregg_circuit_prove::joint_turn_aggregation::{BridgeWitnessBundle, CarrierWitness};
+
+    let (mut turns, _g, _f) = make_chain(1000, 0, 7, 2);
+
+    // Attach an HONEST bridge witness to turn 0's TRANSFER leg. The chain is otherwise fully
+    // honest — the ONLY reason to refuse is the claim-pin admission (the leg's descriptor
+    // does not pin the bridge mint-hash claim slot). The witness rides a REAL depth-2 Merkle
+    // path (the deployed DSL circuit's minimum — `generate_note_spending_trace` asserts
+    // depth ≥ 2, and the bundle projection derives its claim PIs through that generator),
+    // mirroring `note_spend_binding_node_tooth.rs::make_witness`.
+    let depth = 2;
+    let mut siblings = Vec::with_capacity(depth);
+    let mut positions = Vec::with_capacity(depth);
+    for i in 0..depth {
+        siblings.push([
+            hash_many(&[BabyBear::new((i * 3 + 1) as u32), BabyBear::new(0x7B)]),
+            hash_many(&[BabyBear::new((i * 3 + 2) as u32), BabyBear::new(0x7B)]),
+            hash_many(&[BabyBear::new((i * 3 + 3) as u32), BabyBear::new(0x7B)]),
+        ]);
+        positions.push((i % 4) as u8);
+    }
+    let note_spend = NoteSpendingWitness::from_note_limbs(
+        &[7u8; 32],
+        42,
+        3,
+        &[8u8; 32],
+        &[9u8; 32],
+        test_spending_key(0x77),
+        siblings,
+        positions,
+    );
+    turns[0].participant.rotated.carrier_witness = Some(CarrierWitness::Bridge(
+        BridgeWitnessBundle::from_note_spend_witness(&note_spend),
+    ));
+
+    match prove_turn_chain_recursive(&turns) {
+        Err(TurnChainError::TurnProofInvalid { index, reason }) => {
+            assert_eq!(index, 0, "the refusal names the witnessed turn");
+            assert!(
+                reason.contains("'bridge'"),
+                "the refusal names the carrier; got: {reason}"
+            );
+        }
+        Ok(_) => panic!(
+            "a carrier witness on a pin-less leg must NEVER fold to a verifying root \
+             (fail-closed law)"
+        ),
+        Err(other) => panic!("expected the admission TurnProofInvalid, got {other:?}"),
     }
 }
 
@@ -430,24 +538,27 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
     let (t1, o1, n1) = make_turn(993, 1, 7);
     assert_eq!(o1, n0, "honest rotated turns chain by construction");
 
-    // FORGE the rotated NEW commitment (PI 35 = V1_PI_COUNT + 1) on turn 1's leg.
-    // The leg's `proof`/`descriptor`/`public_inputs` are all `pub`, so we destructure
-    // the participant, mutate the PI vector, and rebuild the leg — the proof object is
-    // unchanged (the lie is purely in the claimed PI, which the in-circuit verifier
-    // pins against the proof).
-    const PI_ROTATED_NEW: usize = dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT + 1;
+    // FORGE the rotated NEW commitment on turn 1's leg. H0 DEPLOYED-WIDE: the single-felt rotated
+    // NEW-commit PI is RETIRED to zero; the genuine bound carrier is the 8-felt wide AFTER-commit at
+    // the PI tail `[n-8 .. n)`. Forge its HEAD lane. The leg's `proof`/`descriptor`/`public_inputs`
+    // are all `pub`, so we destructure the participant, mutate the PI vector, and rebuild the leg —
+    // the proof object is unchanged (the lie is purely in the claimed PI, which the in-circuit
+    // verifier pins against the proof).
     let DescriptorParticipant { rotated } = t1.participant;
     let RotatedParticipantLeg {
         proof,
         descriptor,
         mut public_inputs,
+        carrier_witness,
     } = rotated;
+    let pi_wide_new = public_inputs.len() - 8; // head lane of the AFTER 8-felt wide commit
     let lie = n1 + BabyBear::ONE;
-    public_inputs[PI_ROTATED_NEW] = lie;
+    public_inputs[pi_wide_new] = lie;
     let forged_leg = RotatedParticipantLeg {
         proof,
         descriptor,
         public_inputs,
+        carrier_witness,
     };
     let t1_forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let turns = [t0, t1_forged];
@@ -607,7 +718,7 @@ fn carried_binding_proof_unlinked_to_root_is_rejected() {
 
     // History B: a DIFFERENT history (different start balance ⇒ different roots/digest),
     // SAME K=2 transfer shape ⇒ SAME root VK fingerprint.
-    let (turns_b, gb, fb) = make_chain(500, 0, 3, 2);
+    let (turns_b, _gb, _fb) = make_chain(500, 0, 3, 2);
     let whole_b = prove_turn_chain_recursive(&turns_b).expect("chain B folds");
     assert_eq!(
         whole_a.root_vk_fingerprint(),
@@ -625,8 +736,18 @@ fn carried_binding_proof_unlinked_to_root_is_rejected() {
     // publics), and the root is a genuine same-shape root.
     let mut forged = whole_a;
     forged.binding_proof = whole_b.binding_proof;
-    forged.genesis_root = gb;
-    forged.final_root = fb;
+    // H0 DEPLOYED-WIDE: carry B's GENUINE 8-felt wide endpoints (the cross-paired claim), read off
+    // B's first/last legs — not a broadcast of a single rotated commit felt.
+    forged.genesis_root = turns_b[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("B's first leg is wide-anchored");
+    forged.final_root = turns_b[turns_b.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("B's last leg is wide-anchored");
     forged.chain_digest = whole_b.chain_digest;
     forged.num_turns = whole_b.num_turns;
 
@@ -825,8 +946,24 @@ fn two_step_inductive_core_proves_and_verifies() {
     let folded =
         fold_two_turns(&turns[0], &turns[1]).expect("a continuous pair must fold via the core");
     assert_eq!(folded.num_turns, 2);
-    assert_eq!(folded.genesis_root, genesis);
-    assert_eq!(folded.final_root, final_root);
+    // H0 DEPLOYED-WIDE: the genuine 8-felt wide anchors off the first/last legs.
+    let genesis8 = turns[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("first leg is wide-anchored");
+    let final8 = turns[turns.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("last leg is wide-anchored");
+    assert_eq!(folded.genesis_root, genesis8);
+    assert_eq!(folded.final_root, final8);
+    assert_eq!(
+        folded.genesis_root[0], genesis,
+        "the head felt matches make_chain's scalar root"
+    );
+    assert_eq!(folded.final_root[0], final_root);
     let vk = folded.root_vk_fingerprint();
     verify_turn_chain_recursive(&folded, &vk).expect("the 2-step folded proof must verify");
 }
@@ -903,12 +1040,14 @@ fn expose_claim_idx(
 /// B's endpoints into the root.
 #[test]
 #[ignore = "SLOW: a real segment fold (~minutes); run with --ignored — codex re-review #2 CLOSE"]
+// A/B are deliberate emphasis in the test name (root A forging a claim of B's endpoints).
+#[allow(non_snake_case)]
 fn mixed_root_forgery_executes_A_claims_B() {
     use dregg_circuit_prove::ivc_turn_chain::TurnChainBindingAir;
     use dregg_circuit_prove::ivc_turn_chain::{
-        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
-        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
-        verify_turn_chain_recursive_from_parts,
+        SEG_ANCHOR_WIDTH, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD,
+        SEG_LAST_NEW, SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
+        seg_poseidon_commit, verify_turn_chain_recursive_from_parts,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
         DreggRecursionConfig, create_recursion_backend, prove_inner_for_air_with_config,
@@ -937,10 +1076,14 @@ fn mixed_root_forgery_executes_A_claims_B() {
     // (which is no longer a soundness dependency). B's `chain_digest` here is irrelevant to
     // the rejection — the segment tooth fails on B's genesis/final/count already — but we
     // build a real B binding proof so the carried artifact is internally well-formed. -----
-    let b_genesis = turns_b[0].old_root();
-    let b_mid = turns_b[0].new_root();
-    let b_final = turns_b[1].new_root();
-    assert_eq!(b_mid, turns_b[1].old_root(), "B chains by construction");
+    let b_genesis = turns_b[0].participant.rotated.wide_old_root8().unwrap()[0];
+    let b_mid = turns_b[0].participant.rotated.wide_new_root8().unwrap()[0];
+    let b_final = turns_b[1].participant.rotated.wide_new_root8().unwrap()[0];
+    assert_eq!(
+        b_mid,
+        turns_b[1].participant.rotated.wide_old_root8().unwrap()[0],
+        "B chains by construction"
+    );
     assert_eq!(b_genesis, gb);
     assert_eq!(b_final, fb);
     let (b_rows, b_pis) = honest_binding_2row(b_genesis, b_mid, b_final);
@@ -994,9 +1137,9 @@ fn mixed_root_forgery_executes_A_claims_B() {
                 assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
                 // Continuity via direct connect (mirrors the lib `aggregate_tree`): avoids the
                 // `sub`+`assert_zero` backward-add that would clobber the shared `WitnessId(0)`.
-                cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-                let first_old = l[SEG_FIRST_OLD];
-                let last_new = r[SEG_LAST_NEW];
+                for __k in 0..SEG_ANCHOR_WIDTH {
+                    cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+                }
                 let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
                 let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
                 acc_inputs
@@ -1005,8 +1148,8 @@ fn mixed_root_forgery_executes_A_claims_B() {
                     .extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
                 let acc = seg_poseidon_commit(cb, &acc_inputs);
                 let mut parent = Vec::with_capacity(SEG_WIDTH);
-                parent.push(first_old);
-                parent.push(last_new);
+                parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+                parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
                 parent.push(count);
                 parent.extend_from_slice(&acc);
                 cb.expose_as_public_output(&parent);
@@ -1047,8 +1190,8 @@ fn mixed_root_forgery_executes_A_claims_B() {
     let verdict = verify_turn_chain_recursive_from_parts(
         &a_root.0,
         &b_binding_inner,
-        b_genesis_root,
-        b_final_root,
+        [b_genesis_root; 8],
+        [b_final_root; 8],
         b_chain_digest,
         b_num_turns,
         &vk,
@@ -1089,8 +1232,9 @@ fn mixed_root_forgery_executes_A_claims_B() {
 #[ignore = "SLOW: a real segment fold (~minutes); run with --ignored — fork follow-up (a) close"]
 fn pinned_leaf_identity_rejects_foreign_child_in_band() {
     use dregg_circuit_prove::ivc_turn_chain::{
-        SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD, SEG_LAST_NEW, SEG_WIDTH,
-        ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
+        SEG_ANCHOR_WIDTH, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD,
+        SEG_LAST_NEW, SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
+        seg_poseidon_commit,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
         DreggRecursionConfig, create_recursion_backend,
@@ -1146,17 +1290,17 @@ fn pinned_leaf_identity_rejects_foreign_child_in_band() {
             let l = left_apt.get(left_idx).expect("left seg present");
             let r = right_apt.get(right_idx).expect("right seg present");
             assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-            let first_old = l[SEG_FIRST_OLD];
-            let last_new = r[SEG_LAST_NEW];
+            for __k in 0..SEG_ANCHOR_WIDTH {
+                cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+            }
             let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
             let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
             acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             let acc = seg_poseidon_commit(cb, &acc_inputs);
             let mut parent = Vec::with_capacity(SEG_WIDTH);
-            parent.push(first_old);
-            parent.push(last_new);
+            parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+            parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
             parent.push(count);
             parent.extend_from_slice(&acc);
             cb.expose_as_public_output(&parent);
@@ -1196,17 +1340,17 @@ fn pinned_leaf_identity_rejects_foreign_child_in_band() {
             let l = left_apt.get(left_idx).expect("left seg present");
             let r = right_apt.get(right_idx).expect("right seg present");
             assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
-            cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
-            let first_old = l[SEG_FIRST_OLD];
-            let last_new = r[SEG_LAST_NEW];
+            for __k in 0..SEG_ANCHOR_WIDTH {
+                cb.connect(l[SEG_LAST_NEW + __k], r[SEG_FIRST_OLD + __k]);
+            }
             let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
             let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
             acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
             let acc = seg_poseidon_commit(cb, &acc_inputs);
             let mut parent = Vec::with_capacity(SEG_WIDTH);
-            parent.push(first_old);
-            parent.push(last_new);
+            parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+            parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
             parent.push(count);
             parent.extend_from_slice(&acc);
             cb.expose_as_public_output(&parent);

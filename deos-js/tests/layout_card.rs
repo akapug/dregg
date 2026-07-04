@@ -44,13 +44,13 @@ fn the_default_layout_is_the_cockpit_arrangement_as_data() {
     );
 
     // Each mode's surface count matches `CockpitMode::surfaces()`; together they partition the
-    // full 30-surface set (= the cockpit's `Tab::ALL.len()`), no surface in two modes.
+    // full 32-surface set (= the cockpit's `Tab::ALL.len()`), no surface in two modes.
     let counts = [
         ("Inhabit", 4),
         ("Author", 7),
         ("Dev", 6),
         ("Inspect", 8),
-        ("Operate", 5),
+        ("Operate", 7),
     ];
     for (mode, n) in counts {
         assert_eq!(
@@ -60,13 +60,13 @@ fn the_default_layout_is_the_cockpit_arrangement_as_data() {
         );
     }
     let all = layout.all_surfaces();
-    assert_eq!(all.len(), 30, "the modes' surfaces sum to the full set");
+    assert_eq!(all.len(), 32, "the modes' surfaces sum to the full set");
     let mut uniq = all.clone();
     uniq.sort();
     uniq.dedup();
     assert_eq!(
         uniq.len(),
-        30,
+        32,
         "a partition — no surface lives in two modes"
     );
 
@@ -87,7 +87,7 @@ fn the_layout_renders_the_arrangement_with_a_move_affordance_per_surface() {
     assert!(
         tree.walk()
             .iter()
-            .any(|n| n.label() == Some("Cockpit layout · 5 modes · 30 surfaces")),
+            .any(|n| n.label() == Some("Cockpit layout · 5 modes · 32 surfaces")),
         "the header counts the live arrangement"
     );
     // Every mode is a labeled section, and every surface carries a `move` affordance the
@@ -134,11 +134,11 @@ fn moving_a_surface_to_another_mode_is_a_receipted_patch_with_blame() {
 
     // The surface set is CONSERVED across the move.
     let all = card.layout().all_surfaces();
-    assert_eq!(all.len(), 30, "the move conserved the surface count");
+    assert_eq!(all.len(), 32, "the move conserved the surface count");
     let mut uniq = all.clone();
     uniq.sort();
     uniq.dedup();
-    assert_eq!(uniq.len(), 30, "no surface duplicated by the move");
+    assert_eq!(uniq.len(), 32, "no surface duplicated by the move");
 
     // The view reshaped, and the reshape is a RECEIPTED PATCH with BLAME.
     assert_ne!(

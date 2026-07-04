@@ -121,6 +121,7 @@
 //!   apex (`FullForestA`) needs no batch node today.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use dregg_cell::{Cell, CellId, Ledger};
 
@@ -408,6 +409,11 @@ impl Effect {
             // React SPENDS the promise-hole nullifier — exactly NoteSpend's
             // one-shot consume: un-reacting would re-admit the spent hole-id.
             Effect::React { .. } => Inversion::Committed(CommittedReason::NullifierConsumed),
+            // A shielded transfer consumes its inputs' nullifiers one-shot (the
+            // same double-spend gate `NoteSpend` rides) — committed, no inverse.
+            Effect::ShieldedTransfer { .. } => {
+                Inversion::Committed(CommittedReason::NullifierConsumed)
+            }
         }
     }
 }
@@ -644,7 +650,12 @@ impl std::error::Error for ReversibleError {}
 /// executor, and verifies the reconstructed root equals the recorded tooth at
 /// `k` — the **same root tooth, run backward**.
 pub struct ReversibleHistory {
-    steps: Vec<ReversibleStep>,
+    /// The recorded steps, each held behind an [`Arc`] so a [`Self::fork_at`]
+    /// can SHARE the prefix payloads as the config-lattice down-set — an
+    /// `Arc`-handle clone, never a deep copy and never a re-execution. Pushing a
+    /// divergent step appends a fresh `Arc` to this history's own vector and
+    /// leaves the shared prefix payloads untouched, so the parent is immune.
+    steps: Vec<Arc<ReversibleStep>>,
     /// `roots[i]` = canonical [`Ledger::root`] after applying steps `0..i`;
     /// `roots[0]` is the empty-ledger root, `roots[len()]` the head.
     roots: Vec<[u8; 32]>,
@@ -687,8 +698,11 @@ impl ReversibleHistory {
         self.steps.is_empty()
     }
 
-    /// The recorded steps, in order.
-    pub fn steps(&self) -> &[ReversibleStep] {
+    /// The recorded steps, in order. Each is held behind an [`Arc`]; a
+    /// [`Self::fork_at`] shares these handles with the parent (use
+    /// [`Arc::ptr_eq`] to witness that a fork's prefix step IS the parent's, not
+    /// a re-execution).
+    pub fn steps(&self) -> &[Arc<ReversibleStep>] {
         &self.steps
     }
 
@@ -706,7 +720,7 @@ impl ReversibleHistory {
         ledger
             .insert_cell(cell.clone())
             .expect("genesis insert is into a fresh slot");
-        self.steps.push(ReversibleStep::Genesis { cell });
+        self.steps.push(Arc::new(ReversibleStep::Genesis { cell }));
         self.roots.push(ledger.root());
         id
     }
@@ -725,11 +739,11 @@ impl ReversibleHistory {
             TurnResult::Committed { receipt, .. } => {
                 executor.set_last_receipt_hash(receipt.agent, receipt.receipt_hash());
                 let post_root = ledger.root();
-                self.steps.push(ReversibleStep::Committed {
+                self.steps.push(Arc::new(ReversibleStep::Committed {
                     turn,
                     receipt: receipt.clone(),
                     post_root,
-                });
+                }));
                 self.roots.push(post_root);
                 Some(receipt)
             }
@@ -804,7 +818,7 @@ impl ReversibleHistory {
         // Walk steps head-1 .. k (inclusive of k+1, exclusive lower bound k),
         // most-recent-first — the causal cone reversed.
         for idx in (k..head).rev() {
-            let step = &self.steps[idx];
+            let step = self.steps[idx].as_ref();
             let ReversibleStep::Committed { turn, .. } = step else {
                 // A genesis step in the undo window: its inverse is "retire the
                 // freshly-born cell". Genesis installs are at the bottom of
@@ -892,7 +906,7 @@ impl ReversibleHistory {
             return false;
         }
         for idx in k..head {
-            match &self.steps[idx] {
+            match self.steps[idx].as_ref() {
                 ReversibleStep::Genesis { .. } => return false,
                 ReversibleStep::Committed { turn, .. } => {
                     // Reconstruct the pre-state to test invertibility honestly.
@@ -929,7 +943,7 @@ impl ReversibleHistory {
         if idx >= head {
             return false;
         }
-        let ReversibleStep::Committed { turn, .. } = &self.steps[idx] else {
+        let ReversibleStep::Committed { turn, .. } = self.steps[idx].as_ref() else {
             return false;
         };
         // The turn must itself be reversible against its pre-state.
@@ -944,7 +958,7 @@ impl ReversibleHistory {
         // No LATER turn may touch any of them (else it causally depends on this
         // turn's write — undoing in isolation would leave it dangling).
         for later in &self.steps[idx + 1..] {
-            if let ReversibleStep::Committed { turn: lt, .. } = later {
+            if let ReversibleStep::Committed { turn: lt, .. } = later.as_ref() {
                 for c in turn_touched_cells(lt) {
                     if mine.contains(&c) {
                         return false;
@@ -953,6 +967,59 @@ impl ReversibleHistory {
             }
         }
         true
+    }
+
+    // --- fork_at (TEMPORAL fork — the config-lattice down-set, shared) --------
+
+    /// **Fork the past at step `k` — first-class branching, the temporal dual of
+    /// branch-and-stitch's spatial [`World::fork`].**
+    /// (`starbridge-v2/src/branch_stitch_session.rs`).
+    ///
+    /// Returns a NEW [`ReversibleHistory`] whose committed prefix `[0, k]` is the
+    /// event-structure config-lattice DOWN-SET of `self`: the fork's past *is*
+    /// the parent's past up to `k`. The prefix is **shared, not re-executed** —
+    /// each prefix step is an [`Arc`]-handle clone of the parent's (no executor
+    /// runs, no payload is deep-copied), and the fork's `roots[0..=k]` are the
+    /// parent's recorded root teeth copied byte-identically, so the fork lands on
+    /// `roots[k]` exactly WITHOUT replaying the prefix turns. Witness the sharing
+    /// with [`Arc::ptr_eq`] over [`Self::steps`]: `fork.steps()[i]` *is*
+    /// `self.steps()[i]` for every `i < k` — structurally the parent's past, not
+    /// a fresh re-execution.
+    ///
+    /// This REPLACES the demo-synthesized branch (which replayed the public
+    /// `steps()` prefix through the executor — faithful but re-executing,
+    /// `the_named_gap_fork_at_is_replay_of_the_prefix`). `fork_at` is the sound
+    /// optimization that note pointed at: a shared down-set instead of an
+    /// O(k)-executor recomputation.
+    ///
+    /// The fork then records DIVERGENT verified turns from `k` forward via the
+    /// ordinary [`Self::record_commit`] (against a working ledger the caller
+    /// holds — typically the [`Self::replay_to`] / [`Self::undo_to`] result of
+    /// the rewind that motivated the fork). The parent is **untouched**: the
+    /// shared prefix payloads are immutable (`record_commit` only ever *pushes* a
+    /// fresh `Arc`, never mutates an existing one), so a divergent turn on the
+    /// fork cannot perturb the parent's history.
+    ///
+    /// `k` is clamped to [`Self::len`] (forking at the head shares the whole
+    /// history; forking at `0` shares only the empty-ledger root).
+    ///
+    /// Down-set semantics compose: `self.fork_at(k).fork_at(j)` for `j <= k`
+    /// agrees with `self.fork_at(j)` on every shared step (both are the parent's
+    /// down-set truncated to `j`), because a fork shares — never rewrites — the
+    /// prefix it inherits.
+    pub fn fork_at(&self, k: usize) -> ReversibleHistory {
+        let k = k.min(self.steps.len());
+        ReversibleHistory {
+            // The shared down-set: `Arc`-handle clones of the prefix steps. No
+            // executor runs; no step payload is copied. `Arc::ptr_eq` holds
+            // against the parent for every shared step.
+            steps: self.steps[..k].to_vec(),
+            // The recorded root teeth for `0..=k`, copied byte-identically — the
+            // fork lands on `roots[k]` with NO prefix replay.
+            roots: self.roots[..=k].to_vec(),
+            timestamp: self.timestamp,
+            costs: self.costs.clone(),
+        }
     }
 }
 
@@ -1620,5 +1687,175 @@ mod tests {
             !h.window_reversible(1),
             "crossing the commit is not reversible"
         );
+    }
+
+    // --- fork_at: the TEMPORAL fork over the shared config-lattice down-set ---
+
+    /// A small clean history: genesis a,b; t1 a→b 100; t2 a→b 50; t3 b SetField.
+    /// head = 5. Every step is reversible (clean), so the whole window forks.
+    fn build_fork_fixture() -> (ReversibleHistory, CellId, CellId) {
+        let mut h = ReversibleHistory::new(1_700_000_000);
+        let mut l = Ledger::new();
+        let ex = h.fresh_executor();
+        let a = h.record_genesis(&mut l, open_cell(1, 1_000));
+        let b = h.record_genesis(&mut l, open_cell(2, 0));
+        let t1 = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 100,
+            }],
+        );
+        assert!(h.record_commit(&ex, &mut l, t1).is_some());
+        let t2 = turn_with(
+            a,
+            nonce_of(&l, &a),
+            vec![Effect::Transfer {
+                from: a,
+                to: b,
+                amount: 50,
+            }],
+        );
+        assert!(h.record_commit(&ex, &mut l, t2).is_some());
+        let t3 = turn_with(
+            b,
+            nonce_of(&l, &b),
+            vec![Effect::SetField {
+                cell: b,
+                index: 0,
+                value: [7u8; 32],
+            }],
+        );
+        assert!(h.record_commit(&ex, &mut l, t3).is_some());
+        (h, a, b)
+    }
+
+    #[test]
+    fn fork_at_shares_the_downset_without_re_execution() {
+        // fork_at lands on the parent's recorded root tooth at every shared step
+        // — byte-identically and WITHOUT replaying the prefix. The proof of "no
+        // re-execution" is structural: each prefix step IS the parent's step
+        // (same `Arc` allocation, `Arc::ptr_eq`), not a fresh executor run.
+        let (h, _a, _b) = build_fork_fixture();
+        assert_eq!(h.len(), 5);
+        for k in 0..=h.len() {
+            let fork = h.fork_at(k);
+            assert_eq!(fork.len(), k, "fork_at({k}) carries exactly the prefix");
+            for step in 0..=k {
+                assert_eq!(
+                    fork.root_at(step),
+                    h.root_at(step),
+                    "fork_at({k}) shares the root tooth at step {step} byte-identically"
+                );
+            }
+            for i in 0..k {
+                assert!(
+                    std::sync::Arc::ptr_eq(&fork.steps()[i], &h.steps()[i]),
+                    "fork_at({k}) step {i} IS the parent's step (structurally shared, not re-executed)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fork_at_records_a_divergent_future_leaving_the_parent_untouched() {
+        let (h, a, b) = build_fork_fixture();
+        const K: usize = 4; // after t1+t2, before t3's memo
+        let parent_len = h.len();
+        let parent_root_k1 = h.root_at(K + 1);
+        let parent_head_root = h.root_at(h.len());
+
+        // The working ledger at K is the caller's rewind result — fork_at itself
+        // neither produces nor re-executes it.
+        let mut wl = h.replay_to(K).expect("rewind to K verifies");
+        let mut fork = h.fork_at(K);
+        assert_eq!(
+            fork.root_at(K),
+            h.root_at(K),
+            "the fork shares the parent's verified past at K exactly"
+        );
+
+        // A divergent verified turn from K forward (a genuinely different future).
+        let fex = fork.fresh_executor();
+        let n = nonce_of(&wl, &a);
+        assert!(
+            fork.record_commit(
+                &fex,
+                &mut wl,
+                turn_with(
+                    a,
+                    n,
+                    vec![Effect::Transfer {
+                        from: a,
+                        to: b,
+                        amount: 500,
+                    }],
+                ),
+            )
+            .is_some(),
+            "the divergent fork turn commits as a real verified turn"
+        );
+
+        // The fork diverges at K+1 from the parent's step at the same height.
+        assert_eq!(
+            fork.len(),
+            K + 1,
+            "fork = shared prefix + one divergent turn"
+        );
+        assert_ne!(
+            fork.root_at(K + 1),
+            parent_root_k1,
+            "the fork's future differs from the parent's at the same height"
+        );
+
+        // The parent is UNTOUCHED — length, head root, replayability, and the
+        // reversible window all exactly as before (the shared prefix payloads are
+        // immutable; record_commit only ever pushes a fresh Arc).
+        assert_eq!(h.len(), parent_len, "parent length unchanged by the fork");
+        assert_eq!(
+            h.root_at(h.len()),
+            parent_head_root,
+            "parent head root unchanged by the fork"
+        );
+        assert!(h.replay_to(h.len()).is_ok(), "parent still replays cleanly");
+        assert!(
+            h.window_reversible(2),
+            "parent's clean window is still reversible"
+        );
+    }
+
+    #[test]
+    fn fork_at_nested_down_sets_are_consistent() {
+        // fork_at(k) then fork_at(j<=k) agrees with fork_at(j): a fork SHARES —
+        // never rewrites — the prefix it inherits, so the down-set truncations
+        // compose (the config-lattice down-set property).
+        let (h, _a, _b) = build_fork_fixture();
+        const K: usize = 4;
+        const J: usize = 2;
+        let fork_k = h.fork_at(K);
+        let fork_kj = fork_k.fork_at(J);
+        let fork_j = h.fork_at(J);
+        assert_eq!(fork_kj.len(), J);
+        assert_eq!(fork_j.len(), J);
+        for step in 0..=J {
+            assert_eq!(
+                fork_kj.root_at(step),
+                fork_j.root_at(step),
+                "fork_at(K).fork_at(J) agrees with fork_at(J) at step {step}"
+            );
+            assert_eq!(
+                fork_kj.root_at(step),
+                h.root_at(step),
+                "and both equal the parent's down-set at step {step}"
+            );
+        }
+        for i in 0..J {
+            assert!(
+                std::sync::Arc::ptr_eq(&fork_kj.steps()[i], &h.steps()[i]),
+                "a two-deep fork still shares the parent's step {i}"
+            );
+        }
     }
 }

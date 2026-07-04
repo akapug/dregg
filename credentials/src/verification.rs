@@ -231,12 +231,12 @@ fn verify_inner(
     }
 
     // 6. Federation root check.
-    if let Some(expected) = options.expected_federation_root {
-        if expected != proof.federation_root {
-            return Err(VerificationError::FederationRootMismatch {
-                expected_hex: hex_encode(&expected),
-            });
-        }
+    if let Some(expected) = options.expected_federation_root
+        && expected != proof.federation_root
+    {
+        return Err(VerificationError::FederationRootMismatch {
+            expected_hex: hex_encode(&expected),
+        });
     }
 
     // 7. Revocation check — a real non-membership check, not a trusted bool.

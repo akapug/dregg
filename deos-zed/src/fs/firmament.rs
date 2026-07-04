@@ -103,10 +103,12 @@ mod live {
     use anyhow::{anyhow, bail, Context as _, Result};
 
     use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions, STATE_SLOTS};
+    use dregg_rbg::{MemberId, SturdyRef};
     use dregg_turn::{
         ActionBuilder, ComputronCosts, Effect, TurnBuilder, TurnExecutor, TurnReceipt, TurnResult,
     };
 
+    use crate::fs::namespace::{DirNamespace, DEOS_ZED_FEDERATION};
     use crate::fs::{DirEntry, Fs, Metadata};
 
     // --- content <-> field-element encoding -----------------------------------
@@ -345,6 +347,24 @@ mod live {
         /// The most recent save's receipt, if any save has run.
         fn last_receipt(&self) -> Option<TurnReceipt>;
 
+        /// The ordered receipts whose save targeted `file` — that file's
+        /// verifiable save timeline (its FS-layer provenance, the
+        /// receipt-grounded twin of the doc-viewer's patch blame). Each is a
+        /// finalized [`TurnReceipt`] also present in the global log.
+        ///
+        /// Default: `Vec::new()` — a spine that does not attribute saves
+        /// per-file reports no per-file timeline (its global
+        /// [`receipt_count`](LedgerSpine::receipt_count) /
+        /// [`last_receipt`](LedgerSpine::last_receipt) still hold). The
+        /// self-contained [`OwnedSpine`] overrides this with real per-file
+        /// tracking, so the headless / per-editor / in-tab path carries a
+        /// genuine per-file provenance. A host (e.g. starbridge-v2's `World`)
+        /// keeps the default until it opts in — so adding this method does not
+        /// disturb an existing host impl.
+        fn file_history(&self, _file: CellId) -> Vec<TurnReceipt> {
+            Vec::new()
+        }
+
         /// The total balance across all cells on the spine's ledger — the
         /// conservation observable (Σ balance). A content `SetField` save leaves
         /// this INVARIANT (Σδ=0).
@@ -374,6 +394,11 @@ mod live {
         /// Every save's receipt, in commit order — the provenance log (the same
         /// shape `World::receipts`): a save is an attestable, navigable event.
         receipts: Vec<TurnReceipt>,
+        /// Per-FILE receipt timeline: the receipts whose save targeted a given
+        /// file cell, in commit order. This is the FS-layer provenance of a
+        /// single file — the receipt-grounded twin of the doc-viewer's patch
+        /// blame. `receipts` (global) ⊇ the union of these.
+        per_file: BTreeMap<CellId, Vec<TurnReceipt>>,
     }
 
     impl OwnedSpine {
@@ -392,6 +417,7 @@ mod live {
                     chain_head: None,
                     next_seed: 1,
                     receipts: Vec::new(),
+                    per_file: BTreeMap::new(),
                 }),
             }
         }
@@ -511,6 +537,14 @@ mod live {
                         .unwrap_or(nonce + 1);
                     inner.chain_head = Some(receipt.receipt_hash());
                     inner.receipts.push(receipt.clone());
+                    // Attribute the receipt to the file it saved — the per-file
+                    // provenance timeline (a refused save reached neither arm,
+                    // so only genuine commits are recorded here).
+                    inner
+                        .per_file
+                        .entry(file)
+                        .or_default()
+                        .push(receipt.clone());
                     Ok(receipt)
                 }
                 TurnResult::Rejected { reason, .. } => {
@@ -529,6 +563,15 @@ mod live {
             self.inner.borrow().receipts.last().cloned()
         }
 
+        fn file_history(&self, file: CellId) -> Vec<TurnReceipt> {
+            self.inner
+                .borrow()
+                .per_file
+                .get(&file)
+                .cloned()
+                .unwrap_or_default()
+        }
+
         fn total_balance(&self) -> i128 {
             self.inner
                 .borrow()
@@ -540,14 +583,6 @@ mod live {
     }
 
     // --- the namespace --------------------------------------------------------
-
-    /// A path → file-cell entry in the in-memory namespace (the first-slice
-    /// directory: a flat path map, the simpler alternative the seam doc names to
-    /// `rbg`'s richer `DirectoryCell`). Each entry is a leaf file cell whose
-    /// content substance is the editable text.
-    struct Entry {
-        cell: CellId,
-    }
 
     /// The firmament-backed filesystem: file = cell, save = receipted turn.
     ///
@@ -562,8 +597,10 @@ mod live {
     pub struct FirmamentFs {
         /// The verified spine the file-cells live on (owned or host-shared).
         spine: Rc<dyn LedgerSpine>,
-        /// The path → file-cell namespace (single-threaded `RefCell`).
-        entries: RefCell<BTreeMap<PathBuf, Entry>>,
+        /// The path → file-cell namespace: a tree of capability-secure `rbg`
+        /// `DirectoryCell`s (recursive scoping, membership-scoped listing,
+        /// `dregg://` sturdy refs, versioned CAS). Single-threaded `RefCell`.
+        namespace: RefCell<DirNamespace>,
         /// OPTIONAL disk-mirror root (off by default). When `Some(root)`, every
         /// `save` — AFTER the verified turn commits (the cell update is the
         /// durable receipted source of truth) — ALSO writes the decoded content to
@@ -590,9 +627,12 @@ mod live {
         /// install onto the shared ledger). This is how the editor pane edits the
         /// ledger the cockpit inspects rather than a per-editor copy.
         pub fn over(spine: Rc<dyn LedgerSpine>) -> Self {
+            // The editor's directory member id = its cell id bytes; it is a member
+            // of every directory in the tree, so its cap reaches the whole mount.
+            let editor = MemberId(spine.editor_id().0);
             FirmamentFs {
+                namespace: RefCell::new(DirNamespace::new(DEOS_ZED_FEDERATION, editor)),
                 spine,
-                entries: RefCell::new(BTreeMap::new()),
                 mirror_root: RefCell::new(None),
             }
         }
@@ -614,9 +654,46 @@ mod live {
             self.spine.last_receipt()
         }
 
-        /// The file cell backing `path`, if it exists in the namespace.
+        /// The file cell backing `path`, if it resolves in the namespace.
         pub fn cell_for(&self, path: &Path) -> Option<CellId> {
-            self.entries.borrow().get(path).map(|e| e.cell)
+            self.namespace.borrow().resolve_file(path).ok()
+        }
+
+        /// The `dregg://` sturdy ref a file `path` resolves to — the portable,
+        /// cross-federation capability handle (`federation + cell + swiss`) a
+        /// remote node could enliven to reach this same file. The distribution
+        /// payoff of the directory namespace: a path is a portable cap, not a bare
+        /// local id. (The host wires its real federation + swiss; the owned path
+        /// derives an in-process swiss.)
+        pub fn sturdy_ref(&self, path: &Path) -> Result<SturdyRef> {
+            self.namespace.borrow().sturdy_ref(path)
+        }
+
+        /// **The verifiable save timeline for `path`** — the ordered receipts
+        /// whose save targeted this file's cell. Each is a genuine finalized
+        /// [`TurnReceipt`]: the FS-layer provenance of the file (the
+        /// receipt-grounded twin of the doc-viewer's patch blame), distinct from
+        /// the spine-global [`receipt_count`](Self::receipt_count) /
+        /// [`last_receipt`](Self::last_receipt) which fold over EVERY file.
+        ///
+        /// `Ok([])` if the path is in the namespace but has had no committed
+        /// save (a seed is genesis, not a turn — it produces no receipt). `Err`
+        /// only if the path resolves to no cell at all.
+        pub fn history(&self, path: &Path) -> Result<Vec<TurnReceipt>> {
+            let cell = self
+                .cell_for(path)
+                .ok_or_else(|| anyhow!("no cell mounted at {}", path.display()))?;
+            Ok(self.spine.file_history(cell))
+        }
+
+        /// How many receipted saves have targeted `path`'s file cell
+        /// SPECIFICALLY — its per-file save count, distinct from the
+        /// spine-global [`receipt_count`](Self::receipt_count). `0` for a path
+        /// with no cell or no committed save yet.
+        pub fn save_count_for(&self, path: &Path) -> usize {
+            self.cell_for(path)
+                .map(|c| self.spine.file_history(c).len())
+                .unwrap_or(0)
         }
 
         /// The total balance across all cells on the spine's ledger — the
@@ -638,11 +715,13 @@ mod live {
         pub fn seed_file(&self, path: impl Into<PathBuf>, content: &str) -> Result<CellId> {
             let path = path.into();
             let file = self.spine.install_file(content)?;
+            // Bind the path → file cell in the directory tree (creating
+            // intermediate `DirectoryCell`s as needed). A name clash loses the CAS.
+            self.namespace.borrow_mut().bind(&path, file)?;
             // If a disk mirror is configured, lay the seed content onto disk too,
             // so the legacy toolchain sees the genesis file (the cell remains the
             // source of truth; this is the derived read-mirror).
             self.mirror_write(&path, content)?;
-            self.entries.borrow_mut().insert(path, Entry { cell: file });
             Ok(file)
         }
 
@@ -662,13 +741,9 @@ mod live {
                 .with_context(|| format!("creating mirror root {}", root.display()))?;
             *self.mirror_root.borrow_mut() = Some(root);
             // Backfill: mirror every already-seeded file's current content so the
-            // disk view matches the ledger from the first command.
-            let snapshot: Vec<(PathBuf, CellId)> = self
-                .entries
-                .borrow()
-                .iter()
-                .map(|(p, e)| (p.clone(), e.cell))
-                .collect();
+            // disk view matches the ledger from the first command. `all_files`
+            // walks the directory tree to recover every (path, cell) leaf.
+            let snapshot: Vec<(PathBuf, CellId)> = self.namespace.borrow().all_files()?;
             for (path, cell_id) in snapshot {
                 if let Some(cell) = self.spine.cell(&cell_id) {
                     let content = decode_content(&cell)?;
@@ -718,12 +793,7 @@ mod live {
 
     impl Fs for FirmamentFs {
         fn load(&self, path: &Path) -> Result<String> {
-            let cell_id = self
-                .entries
-                .borrow()
-                .get(path)
-                .map(|e| e.cell)
-                .ok_or_else(|| anyhow!("no cell mounted at {}", path.display()))?;
+            let cell_id = self.namespace.borrow().resolve_file(path)?;
             let cell = self
                 .spine
                 .cell(&cell_id)
@@ -735,13 +805,12 @@ mod live {
             // Resolve the path → file cell; if the path is new, install a file cell
             // for it on the fly (a "save as" into the namespace) and grant the
             // editor its cap so this very save commits.
-            let file = match self.entries.borrow().get(path).map(|e| e.cell) {
+            let existing = self.namespace.borrow().resolve_file(path).ok();
+            let file = match existing {
                 Some(c) => c,
                 None => {
                     let file = self.spine.install_file("")?;
-                    self.entries
-                        .borrow_mut()
-                        .insert(path.to_path_buf(), Entry { cell: file });
+                    self.namespace.borrow_mut().bind(path, file)?;
                     file
                 }
             };
@@ -760,40 +829,22 @@ mod live {
         }
 
         fn read_dir(&self, path: &Path) -> Result<Vec<DirEntry>> {
-            let entries = self.entries.borrow();
-            // List the immediate children of `path` in the namespace. The flat
-            // map holds full paths; a child is an entry whose parent is `path`.
-            let mut out = Vec::new();
-            let mut seen_dirs = std::collections::BTreeSet::new();
-            for p in entries.keys() {
-                let Ok(rest) = p.strip_prefix(path) else {
-                    continue;
-                };
-                let mut comps = rest.components();
-                let Some(first) = comps.next() else { continue };
-                let child = path.join(first.as_os_str());
-                if comps.next().is_some() {
-                    // `child` is an intermediate directory (more path remains).
-                    if seen_dirs.insert(child.clone()) {
-                        out.push(DirEntry {
-                            path: child,
-                            is_dir: true,
-                        });
-                    }
-                } else {
-                    // `child` is a leaf file.
-                    out.push(DirEntry {
-                        path: child,
-                        is_dir: false,
-                    });
-                }
-            }
-            Ok(out)
+            // Capability-scoped listing: `DirectoryCell::list(editor)` over the
+            // directory cell at `path`. Holding the directory cap (membership) IS
+            // the authority to enumerate it.
+            let children = self.namespace.borrow().list_children(path)?;
+            Ok(children
+                .into_iter()
+                .map(|(name, is_dir)| DirEntry {
+                    path: path.join(&name),
+                    is_dir,
+                })
+                .collect())
         }
 
         fn metadata(&self, path: &Path) -> Result<Metadata> {
-            let cell_id = self.entries.borrow().get(path).map(|e| e.cell);
-            if let Some(cell_id) = cell_id {
+            let ns = self.namespace.borrow();
+            if let Ok(cell_id) = ns.resolve_file(path) {
                 let cell = self
                     .spine
                     .cell(&cell_id)
@@ -805,13 +856,8 @@ mod live {
                     len,
                 });
             }
-            // A directory iff some entry lives under it.
-            let is_dir = self
-                .entries
-                .borrow()
-                .keys()
-                .any(|p| p.starts_with(path) && p != path);
-            if is_dir {
+            // A directory iff the path resolves to a directory cell in the tree.
+            if ns.is_dir(path) {
                 Ok(Metadata {
                     is_dir: true,
                     is_symlink: false,
@@ -900,9 +946,7 @@ mod live {
             let file = spine.install_uncapped_file("secret");
             let fs = FirmamentFs::over(spine);
             let path = PathBuf::from("/locked.txt");
-            fs.entries
-                .borrow_mut()
-                .insert(path.clone(), Entry { cell: file });
+            fs.namespace.borrow_mut().bind(&path, file).unwrap();
             // NB: no capabilities.grant — the editor lacks the file's cap.
 
             // The read still works (a read is authority-checked at the namespace,
@@ -922,6 +966,56 @@ mod live {
                 "a refused save leaves the cell untouched"
             );
             assert_eq!(fs.receipt_count(), 0, "no receipt for a refused save");
+        }
+
+        #[test]
+        fn per_file_history_is_attributed_and_ordered() {
+            // Each file carries its OWN verifiable save timeline (the FS-layer
+            // provenance), distinct from the spine-global receipt log: a save to
+            // file A must not appear in file B's history, and the global log is
+            // the union of the per-file timelines in commit order.
+            let fs = FirmamentFs::new();
+            let a = PathBuf::from("/proj/a.rs");
+            let b = PathBuf::from("/proj/b.rs");
+            fs.seed_file(&a, "a0").unwrap();
+            fs.seed_file(&b, "b0").unwrap();
+
+            // A seed is genesis, not a turn — no per-file history yet.
+            assert!(fs.history(&a).unwrap().is_empty());
+            assert_eq!(fs.save_count_for(&a), 0);
+
+            // Interleave saves: a, b, a.
+            fs.save(&a, "a1").unwrap();
+            fs.save(&b, "b1").unwrap();
+            fs.save(&a, "a2").unwrap();
+
+            // Per-file counts are attributed, not global.
+            assert_eq!(fs.save_count_for(&a), 2, "file a saw two saves");
+            assert_eq!(fs.save_count_for(&b), 1, "file b saw one save");
+            assert_eq!(
+                fs.receipt_count(),
+                3,
+                "the global log is the union of the per-file timelines"
+            );
+
+            // a's timeline is its two receipts in commit order, each chained
+            // (the second's previous hash is the first's receipt hash) — a's own
+            // verifiable history independent of the b save committed between them.
+            let hist_a = fs.history(&a).unwrap();
+            assert_eq!(hist_a.len(), 2);
+            assert_eq!(
+                hist_a[1].previous_receipt_hash,
+                Some(fs.history(&b).unwrap()[0].receipt_hash()),
+                "the global receipt chain threads through ALL files; a's 2nd save \
+                 chains onto the b save committed between a's two saves"
+            );
+            for r in &hist_a {
+                assert_eq!(r.agent, fs.editor_id(), "the editor authored each save");
+                assert_ne!(r.pre_state_hash, r.post_state_hash, "each save moved state");
+            }
+
+            // A path with no cell errors; a known-but-unsaved-since-seed path is Ok([]).
+            assert!(fs.history(Path::new("/nope.rs")).is_err());
         }
 
         #[test]

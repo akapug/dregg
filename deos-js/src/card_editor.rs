@@ -34,14 +34,14 @@
 //! SpiderMonkey round-trip needed to prove the new button landed. [`ViewTree`] is the
 //! gpui-free mirror; [`CardEditor::view_tree`] is the re-folded shape a renderer paints.
 
-use dregg_cell::AuthRequired;
 use dregg_cell::state::FieldElement;
+use dregg_cell::AuthRequired;
 pub use dregg_doc::Author;
 use dregg_doc::BlameLine;
 use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Applet, Slot};
 use crate::portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 use crate::program_doc::ProgramSource;
 
@@ -82,6 +82,42 @@ pub enum ViewTree {
         #[serde(default)]
         props: ButtonProps,
     },
+    /// A titled, bordered container — the uniform "styled section" the cockpit panels build
+    /// by hand (`section_title` + a bordered box). `tag` selects a styling accent (the
+    /// existing `props.tag` convention: `genuine`/`refusal`/`good`/…). Bridges to
+    /// [`deos_view::ViewNode::Section`] (the renderer already paints it, native + web), so
+    /// authoring a section here is a LOSSLESS card-side expression of a paneled surface.
+    Section {
+        #[serde(default)]
+        props: SectionProps,
+        #[serde(default)]
+        children: Vec<ViewTree>,
+    },
+    /// A colored status badge (a leaf) — the cockpit's ubiquitous `pill(text, color)`
+    /// (authority badges, LIVE/REVOKED chips, kind/lifecycle badges). `tag` selects the
+    /// semantic palette (`good`/`warn`/`bad`/`accent`/`muted`). Bridges to
+    /// [`deos_view::ViewNode::Pill`] (the static-pill case the renderer already paints).
+    Pill {
+        #[serde(default)]
+        props: PillProps,
+    },
+    /// A wrapping spatial **cell field** — the glowing-cell grid, the desktop icon field,
+    /// app tiles. `cols` caps how many children sit per row (0 → free wrap). Bridges to
+    /// [`deos_view::ViewNode::Grid`] (the renderer paints it, native + web), so a spatial
+    /// surface is a LOSSLESS card. Recurses children in declaration order.
+    Grid {
+        #[serde(default)]
+        props: GridProps,
+        #[serde(default)]
+        children: Vec<ViewTree>,
+    },
+    /// A **glyph indicator** (a leaf), tinted by `tag` (the semantic palette
+    /// `good`/`warn`/`bad`/`accent`/`muted`/empty=foreground). The Wonder glow ✦/○, a status
+    /// marker. Bridges to [`deos_view::ViewNode::Icon`].
+    Icon {
+        #[serde(default)]
+        props: IconProps,
+    },
 }
 
 /// `text` props.
@@ -110,6 +146,54 @@ pub struct ButtonProps {
     /// directly renderable.
     #[serde(default, rename = "on_click")]
     pub on_click: OnClick,
+}
+
+/// `section` props — its header title + a styling-accent tag.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SectionProps {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub tag: String,
+    /// **Progressive disclosure (the consumer-delight knob).** An adept-only section (and its
+    /// whole subtree) is the "see the bones" detail a newcomer should NOT meet — raw hashes,
+    /// slot indices, internal fields. `deos-view`'s [`deos_view::disclose`] DROPS it in the
+    /// clean `simple` projection (the default a card mount paints) and REVEALS it in `adept`:
+    /// the "internals" drawer a newcomer never opens, one toggle away for an adept. Serialized
+    /// only when set (via `props.adept`), so existing cards are byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub adept: bool,
+}
+
+/// `grid` props — the column cap (cells per row; 0 → free wrap).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GridProps {
+    #[serde(default)]
+    pub cols: usize,
+}
+
+/// `icon` props — the glyph + a semantic palette tag.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IconProps {
+    #[serde(default)]
+    pub glyph: String,
+    #[serde(default)]
+    pub tag: String,
+}
+
+/// Whether a `bool` is `false` — the `skip_serializing_if` predicate for the optional
+/// consumer-delight flags, so a card that does not set them serializes byte-identically.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// `pill` props — its badge text + a semantic palette tag.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PillProps {
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub tag: String,
 }
 
 /// `onClick = { turn, arg }` — the affordance a button fires.
@@ -142,15 +226,21 @@ impl ViewTree {
     /// The children of this node (empty for leaves).
     pub fn children(&self) -> &[ViewTree] {
         match self {
-            ViewTree::VStack { children } | ViewTree::Row { children } => children,
+            ViewTree::VStack { children }
+            | ViewTree::Row { children }
+            | ViewTree::Section { children, .. }
+            | ViewTree::Grid { children, .. } => children,
             _ => &[],
         }
     }
 
-    /// Push a child onto a container node (vstack/row). A no-op on a leaf.
+    /// Push a child onto a container node (vstack/row/section/grid). A no-op on a leaf.
     fn push_child(&mut self, node: ViewTree) {
         match self {
-            ViewTree::VStack { children } | ViewTree::Row { children } => children.push(node),
+            ViewTree::VStack { children }
+            | ViewTree::Row { children }
+            | ViewTree::Section { children, .. }
+            | ViewTree::Grid { children, .. } => children.push(node),
             _ => {}
         }
     }
@@ -177,6 +267,8 @@ impl ViewTree {
         match self {
             ViewTree::Text { props } => Some(props.text.as_str()),
             ViewTree::Button { props } => Some(props.label.as_str()),
+            ViewTree::Section { props, .. } => Some(props.title.as_str()),
+            ViewTree::Pill { props } => Some(props.text.as_str()),
             _ => None,
         }
     }
@@ -191,7 +283,9 @@ impl ViewTree {
             }
         }
         match self {
-            ViewTree::VStack { children } | ViewTree::Row { children } => {
+            ViewTree::VStack { children }
+            | ViewTree::Row { children }
+            | ViewTree::Section { children, .. } => {
                 for c in children.iter_mut() {
                     if c.relabel_text(from, to) {
                         return true;
@@ -516,4 +610,72 @@ pub type WeldOp = ApplyOp;
 /// Pack a field element for a card field (re-exported convenience).
 pub fn field_value(v: u64) -> FieldElement {
     pack_u64(v)
+}
+
+#[cfg(test)]
+mod viewtree_vocab_tests {
+    //! The authoring-mirror vocabulary extension: `section` + `pill` round-trip through the
+    //! `{kind, props, children}` JSON, walk + relabel recurse a section's children, and the
+    //! emitted JSON carries the exact field names `deos-view`'s `parse_view_tree` consumes
+    //! (so an authored section/pill is LOSSLESS into the renderer).
+    use super::*;
+
+    #[test]
+    fn section_and_pill_round_trip_and_carry_the_renderer_shape() {
+        let tree = ViewTree::VStack {
+            children: vec![
+                ViewTree::Pill {
+                    props: PillProps {
+                        text: "LIVE".into(),
+                        tag: "good".into(),
+                    },
+                },
+                ViewTree::Section {
+                    props: SectionProps {
+                        title: "TRUSTLINES".into(),
+                        tag: "accent".into(),
+                        adept: false,
+                    },
+                    children: vec![ViewTree::Text {
+                        props: TextProps {
+                            text: "⬡ ab12 · line 100".into(),
+                        },
+                    }],
+                },
+            ],
+        };
+        let json = tree.to_json();
+        // The renderer-side field names: a section's `kind`/`title`/`tag`/`children`, a pill's
+        // `text`/`tag`. (deos-view reads `props.title`/`props.tag`/`props.text` + top-level
+        // `children`.)
+        assert!(json.contains("\"kind\": \"section\""));
+        assert!(json.contains("\"title\": \"TRUSTLINES\""));
+        assert!(json.contains("\"kind\": \"pill\""));
+        assert!(json.contains("\"text\": \"LIVE\""));
+        // Round-trips back to the same tree.
+        let back = ViewTree::from_json(&json).expect("section/pill parse");
+        assert_eq!(back, tree, "the new nodes round-trip losslessly");
+    }
+
+    #[test]
+    fn walk_and_relabel_recurse_a_section() {
+        let mut tree = ViewTree::VStack {
+            children: vec![ViewTree::Section {
+                props: SectionProps {
+                    title: "ORGANS".into(),
+                    tag: String::new(),
+                    adept: false,
+                },
+                children: vec![ViewTree::Text {
+                    props: TextProps { text: "old".into() },
+                }],
+            }],
+        };
+        // walk descends INTO the section (the nested text is reachable).
+        assert!(tree.walk().iter().any(|n| n.label() == Some("old")));
+        assert!(tree.walk().iter().any(|n| n.label() == Some("ORGANS")));
+        // relabel finds a text nested inside a section.
+        assert!(tree.relabel_text("old", "new"));
+        assert!(tree.walk().iter().any(|n| n.label() == Some("new")));
+    }
 }

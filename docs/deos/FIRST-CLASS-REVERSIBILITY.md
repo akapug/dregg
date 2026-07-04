@@ -259,10 +259,32 @@ just landed at:
   cannot undo *past* a commit — you can only undo within the reversible window above
   the most recent commit. This is the RCCS islands-of-irreversibility, made an API
   boundary.
+- **`fork_at(k)`: branch the past as the shared down-set — the *temporal* dual of
+  branch-and-stitch's *spatial* `World::fork`.** Where `undo_to(k)` rewinds the
+  live history backward, `fork_at(k)` returns a *new* `ReversibleHistory` whose
+  committed prefix `[0, k]` is the event-structure config-lattice **down-set** of
+  the parent: the fork's past *is* the parent's past up to `k`. The prefix is
+  **shared, not re-executed** — each prefix step is an `Arc`-handle clone of the
+  parent's (no executor runs, no payload is deep-copied), and the fork's
+  `roots[0..=k]` are the parent's recorded teeth copied byte-identically, so the
+  fork lands on `roots[k]` exactly *without replaying the prefix turns*. The
+  sharing is witnessable: `Arc::ptr_eq(parent.steps()[i], fork.steps()[i])` holds
+  for every `i < k` — structurally the parent's past, not a fresh re-execution.
+  The fork then records divergent verified turns from `k` forward via the ordinary
+  `record_commit` (against the working ledger the caller already holds from the
+  rewind), and the parent is **untouched** — the shared prefix payloads are
+  immutable, so `record_commit` only ever *pushes* a fresh step and never perturbs
+  the parent. Down-sets compose: `fork_at(k).fork_at(j<=k)` agrees with
+  `fork_at(j)` on every shared step, because a fork *shares* — never rewrites — the
+  prefix it inherits. This is the structural realization of the branch that the
+  time-travel demo formerly *synthesized* by replaying the `steps()` prefix through
+  the executor (faithful, but an O(k) recomputation): `fork_at` is the sound
+  optimization that synthesis named.
 
-`ReversibleHistory` is `History` + `causal links` + `undo_to`. It is a small weld,
-not a rewrite — the recorder already holds the turns and roots; the new surface is
-the backward walk and the per-step inverse.
+`ReversibleHistory` is `History` + `causal links` + `undo_to` + `fork_at`. It is a
+small weld, not a rewrite — the recorder already holds the turns and roots; the new
+surface is the backward walk, the per-step inverse, and the shared-prefix temporal
+fork.
 
 ### 3.3 Composition: the meta-debug rewind
 

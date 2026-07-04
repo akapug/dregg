@@ -5,6 +5,776 @@ let wasm_bindgen = (function(exports) {
     }
 
     /**
+     * A single deos-js card, driven from the browser tab over its own embedded verified
+     * executor. One `CardWorld` owns one runtime with one card-cell (agent 0); its
+     * affordances are fired as REAL cap-gated verified turns — the wasm realization of
+     * the native [`deos_js::applet::Applet`].
+     */
+    class CardWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            CardWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_cardworld_free(ptr, 0);
+        }
+        /**
+         * The card-cell's id (hex) — the sovereignty boundary, the agent of its turns.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.cardworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **Fire a card affordance** — commit ONE cap-gated verified turn, then return the
+         * re-read bound value (the new `bind` value the browser re-paints).
+         *
+         * This is `Applet::fire` in the tab. `turn` is the affordance name the web
+         * renderer carried as `data-turn`; `arg` is `data-arg`. The counter card's `"inc"`
+         * affordance computes its write as a pure function of the live model
+         * (`count := count + arg`) and commits it through the canonical executor. An
+         * unknown affordance commits nothing and errors (the native `FireError::Unknown`).
+         *
+         * `arg` is an `i32` so wasm-bindgen maps it to a plain JS `number` — the affordance
+         * wire calls `card.fire("inc", parseInt(data-arg))`, NOT `card.fire("inc", 1n)`. (An
+         * `i64` would map to a `BigInt` and the wire's plain number would throw "Cannot
+         * convert N to a BigInt".) It is widened to the canonical `i64` the native
+         * `Applet::fire` carries before being applied to the model.
+         * @param {string} turn
+         * @param {number} arg
+         * @returns {bigint}
+         */
+        fire(turn, arg) {
+            const ptr0 = passStringToWasm0(turn, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.cardworld_fire(this.__wbg_ptr, ptr0, len0, arg);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * Mint a fresh card on its own embedded executor, seeding model `slot` to
+         * `initial`. The card-cell is agent 0 (genesis) — single-custody, the same
+         * posture `Applet::mint` gives the native applet (`AuthRequired::None` holder,
+         * open permissions on its own cell).
+         *
+         * `slot` is which model field the card's `bind` reads (the counter card's
+         * `{ "kind": "bind", "slot": 0 }`).
+         * @param {number} slot
+         * @param {bigint} initial
+         */
+        constructor(slot, initial) {
+            const ret = wasm.cardworld_new(slot, initial);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            CardWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * A witnessed read of the bound slot off the live ledger — the SAME read the
+         * card's `bind` makes (`Applet::get_u64`). The value the web renderer paints
+         * into the `data-slot` span.
+         * @returns {bigint}
+         */
+        read() {
+            const ret = wasm.cardworld_read(this.__wbg_ptr);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * The committed-receipt count — the audit tape length (one per fired turn). A
+         * browser can show it to prove the fire was a real turn, not a local mutation.
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.cardworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+    }
+    if (Symbol.dispose) CardWorld.prototype[Symbol.dispose] = CardWorld.prototype.free;
+    exports.CardWorld = CardWorld;
+
+    /**
+     * The in-tab document-collaboration surface. One `DocCollabWorld` owns one runtime with one
+     * **doc-cell** (agent 0) whose committed umem-heap `heap_root` IS the published document's
+     * commitment. It drives the WHOLE Pijul flow — fork → diverge → stitch → a first-class conflict
+     * → resolve → publish — node-less, every publish a REAL cap-gated verified turn over the
+     * embedded executor leaving a receipt.
+     */
+    class DocCollabWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            DocCollabWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_doccollabworld_free(ptr, 0);
+        }
+        /**
+         * The pending conflict's alternatives as JSON (`[{author, text}]`) — what the ConflictView
+         * attributes side-by-side. Empty when there is no pending conflict.
+         * @returns {string}
+         */
+        alternativesJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_alternativesJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **The invariant: the doc-cell's committed umem boundary EQUALS the canonical projection of
+         * the published document.** When this holds, the document the algebra sees and the boundary
+         * the light client trusts are the same umem (the membership/anti-forge guarantee bites).
+         * @returns {boolean}
+         */
+        boundaryMatchesProjection() {
+            const ret = wasm.doccollabworld_boundaryMatchesProjection(this.__wbg_ptr);
+            return ret !== 0;
+        }
+        /**
+         * The doc-cell's id (hex) — the document's sovereignty boundary, the agent of its turns.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The document's commitment: the doc-cell's committed umem-heap boundary `heap_root` (hex).
+         * After a publish this equals `substrate_commit(published)` — the sorted-Poseidon2 root a
+         * light client trusts. It MOVES on every publish (a new resolved document → a new boundary).
+         * @returns {string}
+         */
+        commitmentHex() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_commitmentHex(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **The affordance wire** — the web renderer fires `data-turn`/`data-arg` here:
+         * - `stitch` — diverge the two authors off the shared tail and merge (the pushout); a
+         *   first-class conflict surfaces, held off-heap.
+         * - `resolve` (`arg` = a [`ResolutionChoice`] index) — collapse the conflict with that
+         *   choice's ready patch and **publish** the merged document to the umem-heap as a real
+         *   verified turn.
+         * Any other affordance errors (the native `FireError::Unknown`).
+         * @param {string} turn
+         * @param {number} arg
+         */
+        fire(turn, arg) {
+            const ptr0 = passStringToWasm0(turn, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.doccollabworld_fire(this.__wbg_ptr, ptr0, len0, arg);
+            if (ret[1]) {
+                throw takeFromExternrefTable0(ret[0]);
+            }
+        }
+        /**
+         * True iff a stitched merge is currently carrying an unresolved conflict (held off-heap).
+         * @returns {boolean}
+         */
+        hasConflict() {
+            const ret = wasm.doccollabworld_hasConflict(this.__wbg_ptr);
+            return ret !== 0;
+        }
+        /**
+         * Mint a fresh doc-cell on its own embedded executor, seed the base document, and
+         * **publish it to the umem-heap** (the fork point). The doc-cell is agent 0 (single-custody,
+         * `AuthRequired::None` holder — the posture a card gets), funded so a metered publish turn
+         * has a source. The base is published via a REAL verified turn, so the genesis boundary
+         * itself leaves a receipt.
+         */
+        constructor() {
+            const ret = wasm.doccollabworld_new();
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            DocCollabWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * The current PUBLISHED document's rendered text (the resolved reading) — the clean content
+         * bound by the umem boundary.
+         * @returns {string}
+         */
+        publishedText() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_publishedText(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The committed-receipt count — the audit tape length (one per published boundary, incl. the
+         * genesis base publish). Proves a publish was a real verified turn, not a local poke.
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.doccollabworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **THE RENDERED HTML FRAGMENT** — `view_tree_json` walked through the SAME gpui-free web
+         * renderer (`deos-view::render_html`) the cockpit's web projection bakes. The live page sets
+         * this as the doc container's `innerHTML`, re-rendering WHOLESALE after every affordance
+         * (the tree SHAPE changes: the ConflictView collapses to the clean published document — a
+         * slot-repaint would not suffice).
+         * @returns {string}
+         */
+        viewHtml() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_viewHtml(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **THE DOCUMENT VIEW-TREE** — the `{kind, props, children}` JSON the web renderer
+         * (`deos-view::parse_view_tree`) consumes. When a conflict is held it is a ConflictView
+         * (the clean prefix, the two alternatives attributed side-by-side, and a resolution `Button`
+         * per [`ResolutionChoice`]); when published it is the clean resolved document plus the umem
+         * boundary readout and a `stitch` affordance.
+         * @returns {string}
+         */
+        viewTreeJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doccollabworld_viewTreeJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+    }
+    if (Symbol.dispose) DocCollabWorld.prototype[Symbol.dispose] = DocCollabWorld.prototype.free;
+    exports.DocCollabWorld = DocCollabWorld;
+
+    /**
+     * The reflective-inspector card, driven from the browser tab over its own embedded verified
+     * executor. One `InspectorWorld` owns one runtime with one focused card-cell (agent 0); its
+     * view-tree is generated from that cell's REAL faces ([`Self::view_tree_json`]) and its
+     * affordances fire as REAL cap-gated verified turns — the wasm realization of the native
+     * [`deos_js::inspector_card`] over a live World.
+     */
+    class InspectorWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            InspectorWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_inspectorworld_free(ptr, 0);
+        }
+        /**
+         * The focused cell's balance (a structural substance the RawFields face shows) — a
+         * witnessed read for the live status strip.
+         * @returns {bigint}
+         */
+        balance() {
+            const ret = wasm.inspectorworld_balance(this.__wbg_ptr);
+            return ret;
+        }
+        /**
+         * The focused card-cell's id (hex) — the sovereignty boundary, the agent of its turns.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.inspectorworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **Fire one of the focused cell's affordances** — commit ONE cap-gated verified turn on
+         * the live World (exactly what a rendered affordance `Button`'s click does), then return
+         * the re-read value of the slot it advanced (the new `Bind` value the browser re-paints).
+         *
+         * `turn` is the affordance name the web renderer carried as `data-turn`; `arg` is
+         * `data-arg`. The inspector card's affordances each advance one bound slot as a pure
+         * function of the live model (so the bound row updates in place) and commit it through the
+         * canonical executor, leaving a real receipt. An unknown affordance commits nothing and
+         * errors (the native `FireError::Unknown`).
+         *
+         * `arg` is an `i32` (maps to a plain JS `number`, not a `BigInt`) — the affordance wire
+         * calls `card.fire("tick", parseInt(data-arg))`. Widened to the canonical `i64` before it
+         * touches the model.
+         * @param {string} turn
+         * @param {number} arg
+         * @returns {bigint}
+         */
+        fire(turn, arg) {
+            const ptr0 = passStringToWasm0(turn, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.inspectorworld_fire(this.__wbg_ptr, ptr0, len0, arg);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * Mint a fresh inspector card on its own embedded executor, focused on a genesis
+         * card-cell with a few seeded scalar state slots (so the RawFields face shows live
+         * `Bind` rows). The cell is agent 0 (single-custody, `AuthRequired::None` holder — the
+         * posture `Applet::mint` gives a card), funded so a metered turn has a source.
+         *
+         * `seeds[i]` seeds [`INSPECTOR_FIELD_SLOTS`]`[i]` (clamped to the available slots); each
+         * seed is committed via a REAL verified turn (no out-of-band poke), so the genesis state
+         * itself leaves receipts. Pass an empty/short array to seed the defaults.
+         * @param {BigUint64Array} seeds
+         */
+        constructor(seeds) {
+            const ptr0 = passArray64ToWasm0(seeds, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.inspectorworld_new(ptr0, len0);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            InspectorWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * The focused cell's nonce (the turn counter — another structural substance). Advances by
+         * one per fired affordance (each turn carries an `IncrementNonce`).
+         * @returns {bigint}
+         */
+        nonce() {
+            const ret = wasm.inspectorworld_nonce(this.__wbg_ptr);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * A witnessed read of model `slot` off the live ledger — the SAME read the inspector's
+         * `Bind` row makes (`Applet::get_u64`). The value the web renderer paints into the
+         * matching `data-slot` span. (Takes a `slot` arg — the inspector binds SEVERAL slots,
+         * unlike the single-slot counter `CardWorld::read`.)
+         * @param {number} slot
+         * @returns {bigint}
+         */
+        read(slot) {
+            const ret = wasm.inspectorworld_read(this.__wbg_ptr, slot);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * The committed-receipt count — the audit tape length (one per fired turn, plus the
+         * genesis seeds). A browser shows it to prove a fire was a real turn, not a local poke.
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.inspectorworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **THE INSPECTOR VIEW-TREE, GENERATED FROM THE LIVE CELL'S FACES.** Reads the focused
+         * cell's RawFields + Affordances faces off the live ledger (via [`deos_reflect`], the
+         * SAME substrate the native `inspector_view_for` reads) and lifts them into the view-tree
+         * JSON the web renderer (`deos-view`) parses: a titled column with a "Cell State" section
+         * (a `Bind` row per revealed scalar slot, a `Text` per structural substance) and an
+         * "Affordances" section (a `Button` per affordance the holder may fire). This is the
+         * inspector card's `view_source` — serve it to the renderer and the focused cell's faces
+         * paint live in a browser. Regenerate after a fire and a newly-non-zero slot appears as a
+         * fresh `Bind` row (the reflective view tracks the live state).
+         * @returns {string}
+         */
+        viewTreeJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.inspectorworld_viewTreeJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+    }
+    if (Symbol.dispose) InspectorWorld.prototype[Symbol.dispose] = InspectorWorld.prototype.free;
+    exports.InspectorWorld = InspectorWorld;
+
+    /**
+     * The KV-store service cell, driven from the browser tab. A `KvStoreWorld` owns one runtime
+     * with a CALLER agent (agent 0, the signer/fee-payer) and a separate STORE cell carrying the
+     * published interface + the verified `CellProgram`. Each `put`/`delete` affordance is ROUTED
+     * through the store's `InterfaceDescriptor` and fired as a REAL cap-gated verified turn
+     * against the store cell — the wasm realization of `starbridge_kvstore` over a live World.
+     */
+    class KvStoreWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            KvStoreWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_kvstoreworld_free(ptr, 0);
+        }
+        /**
+         * The store cell's id (hex) — the service object's sovereignty boundary.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.kvstoreworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **Invoke `delete(reg)`** — clear `reg` to zero and bump the store version, as a REAL
+         * cap-gated verified turn routed through the interface. Returns the re-read value (0).
+         * @param {number} reg
+         * @returns {bigint}
+         */
+        delete(reg) {
+            const ret = wasm.kvstoreworld_delete(this.__wbg_ptr, reg);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * **The affordance wire entry** — the web renderer fires `data-turn`/`data-arg` here.
+         * `put`/`delete` route + commit; any other name errors (the native `FireError::Unknown`).
+         * `arg` is the register index the button carried.
+         * @param {string} turn
+         * @param {number} arg
+         * @returns {bigint}
+         */
+        fire(turn, arg) {
+            const ptr0 = passStringToWasm0(turn, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.kvstoreworld_fire(this.__wbg_ptr, ptr0, len0, arg);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * The published interface as JSON (`[{name, auth, semantics, arity}]`) — what the Service
+         * Explorer resolves. The card shows it so a visitor sees the typed contract the affordances
+         * route through.
+         * @returns {string}
+         */
+        methodsJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.kvstoreworld_methodsJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * Mint a KV-store on its own embedded executor: a caller agent (the signer), a store cell
+         * owned by a distinct synthetic key with the [`app_programs::kvstore_program`] installed
+         * (open permissions; the verified slot-caveat is the enforcement), and a reach capability
+         * granted to the caller. `seeds[i]` seeds register [`app_programs::KV_REG_MIN`]`+ i` via a
+         * REAL `put` invocation (each routes through the interface and bumps the version), so the
+         * genesis store itself leaves receipts. Pass an empty/short array for the defaults.
+         * @param {BigUint64Array} seeds
+         */
+        constructor(seeds) {
+            const ptr0 = passArray64ToWasm0(seeds, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.kvstoreworld_new(ptr0, len0);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            KvStoreWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * **Invoke `put(reg)`** — write `reg := reg + 1` (a single-arg-friendly bump) and bump the
+         * store version by one, as a REAL cap-gated verified turn ROUTED through the published
+         * interface. Returns the re-read register value. `value` (when ≥ 0) overrides the written
+         * value (used by the seed path); a negative `value` means "bump the current register".
+         * @param {number} reg
+         * @param {number} value
+         * @returns {bigint}
+         */
+        put(reg, value) {
+            const ret = wasm.kvstoreworld_put(this.__wbg_ptr, reg, value);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * A witnessed read of store slot `slot` off the live ledger (the canonical felt lane). The
+         * value the web renderer paints into the matching `data-slot` span — slot 0 is the version,
+         * slots `REG_MIN..` the registers.
+         * @param {number} slot
+         * @returns {bigint}
+         */
+        read(slot) {
+            const ret = wasm.kvstoreworld_read(this.__wbg_ptr, slot);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * The committed-receipt count — the audit tape length (one per committed method turn,
+         * including the genesis seed puts).
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.kvstoreworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **Prove `get` is a NAMED SEAM, not a faked write** — route `get(reg)` through the
+         * interface; because it is `Semantics::Serviced` its answer rides the OFE cross-cell-read,
+         * so the router REFUSES to desugar it to a turn. Returns the refusal message (the honest
+         * seam), or — never reached for a correct descriptor — an error if `get` somehow desugared.
+         * @param {number} reg
+         * @returns {string}
+         */
+        tryGet(reg) {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.kvstoreworld_tryGet(this.__wbg_ptr, reg);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **Prove the verified guarantee BITES in the tab** — attempt a `put` that LOWERS the
+         * store version (a replay/rollback), which the store program's `Monotonic` version
+         * constraint must REFUSE on the verified commit path. Returns JSON
+         * `{refused: bool, reason: string}`; `refused: true` is the witnessed enforcement. (Needs
+         * the version already ≥ 1 — seed the store first.)
+         * @param {number} reg
+         * @returns {string}
+         */
+        tryRollback(reg) {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.kvstoreworld_tryRollback(this.__wbg_ptr, reg);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The store's monotone version (slot 0) — bumped by every committed `put`/`delete`, and
+         * (by the verified `Monotonic` constraint) never able to roll back.
+         * @returns {bigint}
+         */
+        version() {
+            const ret = wasm.kvstoreworld_version(this.__wbg_ptr);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * **THE KV-STORE VIEW-TREE** — a titled column with the version row and a `table` of
+         * register rows, each `row(text(label), bind(slot), button("put"), button("del"))`. The
+         * `put`/`del` buttons carry `data-turn=put/delete` and `data-arg=slot` (the register index)
+         * — the SAME `{kind, props, children}` JSON the web renderer (`deos-view`) consumes.
+         * @returns {string}
+         */
+        viewTreeJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.kvstoreworld_viewTreeJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+    }
+    if (Symbol.dispose) KvStoreWorld.prototype[Symbol.dispose] = KvStoreWorld.prototype.free;
+    exports.KvStoreWorld = KvStoreWorld;
+
+    /**
+     * The tally-board card, driven from the browser tab over its own embedded verified executor.
+     * One `TallyWorld` owns one runtime with one tally-cell (agent 0); each tally is a model slot
+     * and each `+1`/`-1` click fires a REAL cap-gated verified turn — the wasm realization of a
+     * multi-row, multi-affordance deos-js card over the full `Row`/`Table` ViewNode vocabulary.
+     */
+    class TallyWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            TallyWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_tallyworld_free(ptr, 0);
+        }
+        /**
+         * The tally-cell's id (hex) — the sovereignty boundary, the agent of its turns.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.tallyworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **Move one tally** — commit ONE cap-gated verified turn: the tally `arg` advances or
+         * retreats by one (`turn` = `"inc"`/`"dec"`), then return the re-read value (the new
+         * `bind` value the browser re-paints). `arg` is the SLOT index the button carried as
+         * `data-arg`. A `dec` saturates at 0; an unknown direction or out-of-range slot commits
+         * nothing and errors (the native `FireError::Unknown`).
+         * @param {string} turn
+         * @param {number} arg
+         * @returns {bigint}
+         */
+        fire(turn, arg) {
+            const ptr0 = passStringToWasm0(turn, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.tallyworld_fire(this.__wbg_ptr, ptr0, len0, arg);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            return BigInt.asUintN(64, ret[0]);
+        }
+        /**
+         * Mint a fresh tally board on its own embedded executor, seeding each tally slot. The
+         * tally-cell is agent 0 (single-custody, `AuthRequired::None` holder — the posture
+         * `Applet::mint` gives a card), funded so a metered turn has a source. `seeds[i]` seeds
+         * tally `i` (defaults to a clearly-distinct `[3, 1, 4]`); each non-zero seed is committed
+         * via a REAL verified turn, so the genesis board itself leaves receipts.
+         * @param {BigUint64Array} seeds
+         */
+        constructor(seeds) {
+            const ptr0 = passArray64ToWasm0(seeds, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.tallyworld_new(ptr0, len0);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            TallyWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * A witnessed read of tally `slot` off the live ledger — the value the web renderer
+         * paints into the matching `data-slot` span (the SAME read each row's `bind` makes).
+         * @param {number} slot
+         * @returns {bigint}
+         */
+        read(slot) {
+            const ret = wasm.tallyworld_read(this.__wbg_ptr, slot);
+            return BigInt.asUintN(64, ret);
+        }
+        /**
+         * The committed-receipt count — the audit tape length (one per fired turn, plus the
+         * genesis seeds). A browser shows it to prove a `+1`/`-1` was a real turn, not a poke.
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.tallyworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **THE TALLY VIEW-TREE** — a `table` of `row`s, one per named tally: each row carries a
+         * `text` label, a live `bind` of that tally's slot, and `+1`/`-1` affordance `button`s.
+         * The SAME `{kind, props, children}` JSON the web renderer (`deos-view::parse_view_tree`)
+         * consumes — serve it and the board paints live in a browser.
+         * @returns {string}
+         */
+        viewTreeJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.tallyworld_viewTreeJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+    }
+    if (Symbol.dispose) TallyWorld.prototype[Symbol.dispose] = TallyWorld.prototype.free;
+    exports.TallyWorld = TallyWorld;
+
+    /**
      * Advance the block height for timeout simulation.
      * @param {number} handle
      * @param {bigint} blocks
@@ -487,6 +1257,64 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.compile_dfa = compile_dfa;
+
+    /**
+     * Verify each input proof for real, then return the boolean composition of
+     * the per-proof verdicts under `mode`.
+     *
+     * This is the honest counterpart to [`compose_proofs`]: where that function
+     * only content-addresses the inputs (and so always reports `valid: false`),
+     * this one actually discharges each proof against its canonical verifier and
+     * reports a `valid` that is the genuine conjunction / disjunction of REAL
+     * verifications — no BLAKE3 stand-in.
+     *
+     * `proofs_json` is a JSON array of tagged verification envelopes. Each entry
+     * carries a `kind` plus exactly the inputs that kind's verifier needs:
+     *
+     * ```json
+     * [
+     *   { "kind": "membership",   "proof_json": "<StarkProof JSON>" },
+     *   { "kind": "range",        "commitment_hex": "<64-hex>", "range_proof_hex": "<hex>" },
+     *   { "kind": "conservation", "input_commitments": ["<64-hex>", ...],
+     *                             "output_commitments": ["<64-hex>", ...],
+     *                             "proof": { "excess_commitment": "...",
+     *                                        "nonce_commitment": "...",
+     *                                        "response": "..." },
+     *                             "message_hex": "<hex>",
+     *                             "output_range_proofs": ["<hex>", ...] }
+     * ]
+     * ```
+     *
+     * `mode`:
+     * - `"and"` — the composition holds iff EVERY proof verifies (the default
+     *   conjunction `O(1)`-verification target).
+     * - `"or"` — holds iff at least ONE proof verifies.
+     * - `"chain"` — sequential: holds iff every proof verifies (and the per-proof
+     *   results report the first break point).
+     * - `"aggregate"` — batch: same verdict as `"and"`, framed as one pass.
+     *
+     * Returns JSON:
+     * ```json
+     * { "composed_proof": "<hex content id>", "mode": "and",
+     *   "input_count": 3, "valid": true,
+     *   "results": [ { "kind": "range", "valid": true, "error": null }, ... ] }
+     * ```
+     * @param {string} proofs_json
+     * @param {string} mode
+     * @returns {any}
+     */
+    function compose_and_verify_proofs(proofs_json, mode) {
+        const ptr0 = passStringToWasm0(proofs_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.compose_and_verify_proofs(ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.compose_and_verify_proofs = compose_and_verify_proofs;
 
     /**
      * Compose multiple proofs using AND/OR/Chain/Aggregate strategies.
@@ -1106,6 +1934,40 @@ let wasm_bindgen = (function(exports) {
     exports.demonstrate_fold = demonstrate_fold;
 
     /**
+     * **`deploy_check(text, ring)`** — parse DreggDL → lower to the real
+     * `CallForest` → run `dregg_userspace_verify::analyze` over the whole declared
+     * authority layout → return the `DeployVerdict` as a JSON string
+     * (`{pass, assurance, factories, cells, turn_count}`).
+     *
+     * This is exactly `dregg-deploy check`. On a parse / lowering error returns a
+     * `JsError` naming the offending row.
+     * @param {string} text
+     * @param {boolean} ring
+     * @returns {string}
+     */
+    function deploy_check(text, ring) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.deploy_check(ptr0, len0, ring);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    exports.deploy_check = deploy_check;
+
+    /**
      * Deploy a factory descriptor into the runtime, returning the
      * `factory_vk` that addresses it. The factory_vk can then be passed to
      * [`create_agent_with_factory`] (or to JS-side `createFromFactory`)
@@ -1128,6 +1990,36 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.deploy_factory_descriptor = deploy_factory_descriptor;
+
+    /**
+     * **`deploy_lower(text)`** — run only the real `Lowered::from_deployment`
+     * lowering (no check) and return `{forest, federation_id, factories, cells}`
+     * as a JSON string, where `forest` is the ordered births → funds → grants
+     * `CallForest` the checker consumes. This is `dregg-deploy lower`.
+     * @param {string} text
+     * @returns {string}
+     */
+    function deploy_lower(text) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.deploy_lower(ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    exports.deploy_lower = deploy_lower;
 
     /**
      * Derive an Ed25519 keypair from a BIP39 mnemonic using the dregg BLAKE3 derivation path.
@@ -1532,6 +2424,44 @@ let wasm_bindgen = (function(exports) {
     exports.generate_sse_tokens = generate_sse_tokens;
 
     /**
+     * Fold a real `k`-turn chain (the same shape [`light_client_demo`] folds) and
+     * return its root-circuit **VK fingerprint** as hex — the CONFIG TRUST ANCHOR a
+     * genesis/checkpoint configuration distributes.
+     *
+     * The fingerprint is a function of the root circuit SHAPE (window size + leaf
+     * trace heights), NOT of the folded history's content — two different `k`-turn
+     * histories of the same shape fingerprint identically (the load-bearing anchor
+     * property, proven in `dregg-lightclient`'s `vk_anchor_is_circuit_shape_not_
+     * history_content`). So this is exactly the value an honest setup mints ONCE and
+     * ships in config; a verifier then holds it SEPARATELY from any artifact and
+     * checks every aggregate of that shape against it.
+     *
+     * `k` is clamped to `[2, 4]` (same as the demo). Returns the 64-char hex anchor.
+     * @param {number} k
+     * @param {bigint} step
+     * @returns {string}
+     */
+    function genesis_vk_anchor(k, step) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.genesis_vk_anchor(k, step);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    exports.genesis_vk_anchor = genesis_vk_anchor;
+
+    /**
      * Get the receipt chain filtered to a single agent.
      *
      * The wasm sim runtime applies turns through one shared `TurnExecutor` and
@@ -1913,6 +2843,9 @@ let wasm_bindgen = (function(exports) {
      *   - `"governed-namespace"` — installs `governance_program`.
      *     `committee_root_hex` seeds slot 2; `threshold` seeds slot 3;
      *     `initial_route_table_root_hex` seeds slot 0.
+     *   - `"escrow"` — installs `escrow_program` (compute-marketplace shape).
+     *     `budget` seeds slot 1 (frozen); `job_hash_hex` seeds slot 3 (frozen);
+     *     phase slot 0 is one-way (settle/dispute drain the real balance once).
      *
      * Permissions are opened so multi-agent turns apply; the slot-caveat
      * cell-program is the load-bearing enforcement (mirrors the apps' executor
@@ -1954,6 +2887,37 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.is_channel_active = is_channel_active;
+
+    /**
+     * **THE IN-TAB LIGHT CLIENT** — fold a real `k`-turn chain in wasm32 and
+     * light-verify it, re-witnessing nothing.
+     *
+     * Each turn debits `step` from a running balance; each leaf is a REAL
+     * Lean-descriptor EffectVM proof (`prove_vm_descriptor`, the audited p3 batch
+     * prover — the same wire artifact the SDK cutover emits) verified in-circuit by
+     * the recursion wrap. The fold is the expensive step (done once); the
+     * light-client verify is the cheap step. SELF-ANCHORS: the VK fingerprint is
+     * minted from the locally produced fold (the honest setup mint).
+     *
+     * `k` is clamped to `[2, 4]` — the recursive chain-binding folds the temporal
+     * `new_root[i] == old_root[i+1]` tooth, so it needs AT LEAST 2 turns; and
+     * recursive proving in a browser is heavy, so a small chain keeps the demo
+     * responsive while exercising the REAL pipeline end-to-end.
+     *
+     * Returns an [`AttestedHistoryView`]. Errors only on an internal substrate bug
+     * (a chain that should fold but doesn't), which the caller surfaces honestly.
+     * @param {number} k
+     * @param {bigint} step
+     * @returns {any}
+     */
+    function light_client_demo(k, step) {
+        const ret = wasm.light_client_demo(k, step);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.light_client_demo = light_client_demo;
 
     /**
      * List every factory deployed in the runtime's executor (read path for
@@ -2139,6 +3103,32 @@ let wasm_bindgen = (function(exports) {
     exports.mint_token = mint_token;
 
     /**
+     * **OPEN-SURFACE** — open the `owner_agent_index` agent's OWN cell as a surface
+     * (a window) at `rights`, and return its live identity (the T2 badge source).
+     *
+     * A surface IS a cell; this confirms the cell exists, hands the owner an
+     * ORIGINAL self-cap over it at `rights` (the Viewport the compositor renders),
+     * and reads off the live identity. Returns the `SurfaceIdentity`
+     * `{ owning_cell_id, lifecycle, source_state_root, balance, accepts_effects }`
+     * drawn FROM THE LEDGER — so the JS compositor draws the badge from the live
+     * cell, never the page.
+     * @param {number} handle
+     * @param {number} owner_agent_index
+     * @param {string} rights
+     * @returns {any}
+     */
+    function open_surface(handle, owner_agent_index, rights) {
+        const ptr0 = passStringToWasm0(rights, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.open_surface(handle, owner_agent_index, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.open_surface = open_surface;
+
+    /**
      * Prepare a peer exchange with STARK proof.
      *
      * This generates the proof payload that accompanies a direct peer-to-peer
@@ -2162,6 +3152,67 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.peer_exchange_with_proof = peer_exchange_with_proof;
+
+    /**
+     * **PRESENT** — does `holder_agent_index` hold draw authority (`required`) over
+     * the surface backed by `surface_owner_agent_index`'s cell?
+     *
+     * Resolves the surface cap against real cell-state requiring `required`
+     * (`required ⊆ held`, the REAL `is_attenuation`). A read-only mirror asking for
+     * a wider authority is refused. Returns a `SurfaceOutcome`
+     * `{ ok, reason, revocation_immediate, commit_synchronous }`; on refusal
+     * `reason` is the teaching string. (For the owner presenting into its own
+     * window, pass the same index for holder and surface owner.)
+     * @param {number} handle
+     * @param {number} holder_agent_index
+     * @param {number} surface_owner_agent_index
+     * @param {string} required
+     * @returns {any}
+     */
+    function present_surface(handle, holder_agent_index, surface_owner_agent_index, required) {
+        const ptr0 = passStringToWasm0(required, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.present_surface(handle, holder_agent_index, surface_owner_agent_index, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.present_surface = present_surface;
+
+    /**
+     * **THE PRODUCER** — fold a real `k`-turn chain in the tab and emit its
+     * [`ExternalHistoryEnvelope`] as JSON, with `proof_bytes_b64` populated from the
+     * proof's versioned byte envelope. This is the artifact a node/relayer ships and a
+     * tab feeds to [`verify_devnet_history`]; producing it in-tab makes the whole
+     * round-trip (fold → serialize → bytes → deserialize → verify) tactile.
+     *
+     * The carried `vk_fingerprint_hex` is the producer's CLAIM (the verifier re-pins
+     * from the bytes regardless). `k` is clamped to `[2, 4]` (recursive proving is
+     * heavy). Returns the JSON string.
+     * @param {number} k
+     * @param {bigint} step
+     * @returns {string}
+     */
+    function produce_external_history_envelope(k, step) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.produce_external_history_envelope(k, step);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    exports.produce_external_history_envelope = produce_external_history_envelope;
 
     /**
      * Submit a batch of revocation events from node 0 and immediately drive
@@ -2288,7 +3339,7 @@ let wasm_bindgen = (function(exports) {
      * Given inputs and outputs (each `{ value, blinding_hex }`) plus a `message_hex`
      * binding context, this builds the real Ristretto `ValueCommitment`s, computes
      * the excess blinding `Σ input_blindings − Σ output_blindings` internally, and
-     * produces the canonical `dregg_cell::ConservationProof` (Schnorr excess
+     * produces the canonical `dregg_cell_crypto::ConservationProof` (Schnorr excess
      * signature). All the curve25519-dalek work happens inside `dregg_cell`
      * (`prove_conservation_bytes`); this binding only marshals bytes.
      *
@@ -2337,11 +3388,11 @@ let wasm_bindgen = (function(exports) {
      * Generate (and cache) a REAL EffectVM STARK proof for a committed turn,
      * identified by its `turn_hash` (hex32).
      *
-     * This drives the canonical Effect VM prove path
-     * (`generate_effect_vm_trace` → `stark::prove` → `stark::verify`), the same
-     * pipeline `circuit/tests/integration_effect_vm_prove_verify.rs` exercises.
-     * The proof is self-verified before being cached, so once this returns Ok the
-     * turn's `get_receipt_chain` entry carries a real `proof_view` (Silver tier).
+     * This drives the canonical ROTATED Effect VM prove path — the rotated
+     * multi-table `Ir2BatchProof` minted over the cohort descriptor
+     * (`mint_rotated_participant_leg`). The proof is self-verified before being
+     * cached, so once this returns Ok the turn's `get_receipt_chain` entry carries
+     * a real `proof_view` (Silver tier).
      *
      * PERFORMANCE: STARK proving is expensive in wasm, so this is NOT run on the
      * commit path or at boot. The `<dregg-proof>` inspector calls it lazily on
@@ -2471,6 +3522,27 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.revoke_capability = revoke_capability;
+
+    /**
+     * **REVOKE-SURFACE** — drop `holder_agent_index`'s cap over the surface backed
+     * by `surface_owner_agent_index`'s cell; the glass goes dark.
+     *
+     * At n=1 (the local tab) this is SYNCHRONOUS — the cap is dead the instant it
+     * returns, and a subsequent `present_surface` finds nothing held. Returns
+     * `true` iff a live surface cap was removed.
+     * @param {number} handle
+     * @param {number} holder_agent_index
+     * @param {number} surface_owner_agent_index
+     * @returns {boolean}
+     */
+    function revoke_surface(handle, holder_agent_index, surface_owner_agent_index) {
+        const ret = wasm.revoke_surface(handle, holder_agent_index, surface_owner_agent_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    exports.revoke_surface = revoke_surface;
 
     /**
      * Canonical route-table commitment for a governed-namespace route table.
@@ -2625,6 +3697,33 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.seal_intent_body = seal_intent_body;
+
+    /**
+     * **SHARE-SURFACE** — hand the window backed by `surface_owner_agent_index`'s
+     * cell from `from_agent_index` to `to_agent_index`, narrowed to `narrower`, as a
+     * GENUINE `Effect::GrantCapability` turn through the real executor.
+     *
+     * The executor enforces `granted ⊆ held`: an attenuating share commits; a
+     * WIDENING share is rejected with `DelegationDenied` (the `⚠ over-share` moment
+     * at the pixel layer). Returns a `SurfaceOutcome` whose `reason` carries the
+     * executor's own reason on refusal.
+     * @param {number} handle
+     * @param {number} from_agent_index
+     * @param {number} to_agent_index
+     * @param {number} surface_owner_agent_index
+     * @param {string} narrower
+     * @returns {any}
+     */
+    function share_surface(handle, from_agent_index, to_agent_index, surface_owner_agent_index, narrower) {
+        const ptr0 = passStringToWasm0(narrower, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.share_surface(handle, from_agent_index, to_agent_index, surface_owner_agent_index, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.share_surface = share_surface;
 
     /**
      * Sign the given canonical message (hex) with `signer_agent_index`'s
@@ -2803,6 +3902,63 @@ let wasm_bindgen = (function(exports) {
     exports.submit_conditional = submit_conditional;
 
     /**
+     * Does `holder_agent_index` hold a surface cap over the surface backed by
+     * `surface_owner_agent_index`'s cell? (Used by the compositor to decide whether
+     * to paint a recipient's pane.)
+     * @param {number} handle
+     * @param {number} holder_agent_index
+     * @param {number} surface_owner_agent_index
+     * @returns {boolean}
+     */
+    function surface_holds_cap(handle, holder_agent_index, surface_owner_agent_index) {
+        const ret = wasm.surface_holds_cap(handle, holder_agent_index, surface_owner_agent_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
+    }
+    exports.surface_holds_cap = surface_holds_cap;
+
+    /**
+     * **SURFACE-IDENTITY** — the anti-spoof T2 badge for the surface backed by
+     * `surface_owner_agent_index`'s cell, read FROM THE LIVE LEDGER.
+     *
+     * Returns `{ owning_cell_id, lifecycle, source_state_root, balance,
+     * accepts_effects }` — each a function of the cell's real state, never the
+     * page's self-description.
+     * @param {number} handle
+     * @param {number} surface_owner_agent_index
+     * @returns {any}
+     */
+    function surface_identity(handle, surface_owner_agent_index) {
+        const ret = wasm.surface_identity(handle, surface_owner_agent_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.surface_identity = surface_identity;
+
+    /**
+     * The rights `holder_agent_index` holds over the surface backed by
+     * `surface_owner_agent_index`'s cell, as a string (e.g. `"Signature"`,
+     * `"None"`), or `null` if none. (The compositor renders the pane's CAN/CAN'T
+     * chrome from this.)
+     * @param {number} handle
+     * @param {number} holder_agent_index
+     * @param {number} surface_owner_agent_index
+     * @returns {any}
+     */
+    function surface_rights_held(handle, holder_agent_index, surface_owner_agent_index) {
+        const ret = wasm.surface_rights_held(handle, holder_agent_index, surface_owner_agent_index);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.surface_rights_held = surface_rights_held;
+
+    /**
      * Demo/playground only. Tamper with a demo STARK proof by flipping bits in
      * the first query's trace values.
      *
@@ -2831,6 +3987,188 @@ let wasm_bindgen = (function(exports) {
         }
     }
     exports.tamper_demo_stark_proof = tamper_demo_stark_proof;
+
+    /**
+     * **AMEND** the source named `name` to `new_content` — advance the SAME `dregg://`
+     * ref to a NEW finalized value at a NEW height (a verified state advance).
+     *
+     * The REAL [`WebOfCells::amend`]: the `dregg://` ref is UNCHANGED (Nelson's
+     * unbreakable link), but it now resolves to the source's NEW committed value, with
+     * a fresh serve-receipt + an advanced federation height. A subsequent LIVE read
+     * follows it; a SNAPSHOT taken before stays pinned. Returns the new height.
+     * @param {number} handle
+     * @param {string} name
+     * @param {string} new_content
+     * @returns {bigint}
+     */
+    function transclusion_amend(handle, name, new_content) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(new_content, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_amend(handle, ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return BigInt.asUintN(64, ret[0]);
+    }
+    exports.transclusion_amend = transclusion_amend;
+
+    /**
+     * **CREATE** a fresh transclusion demo world (a real [`WebOfCells`] with a 3-of-3
+     * quorum) and return its handle. Mirrors `create_runtime`.
+     * @returns {number}
+     */
+    function transclusion_create() {
+        const ret = wasm.transclusion_create();
+        return ret >>> 0;
+    }
+    exports.transclusion_create = transclusion_create;
+
+    /**
+     * **DESTROY** a demo world, freeing it. Returns true iff the handle was live.
+     * @param {number} handle
+     * @returns {boolean}
+     */
+    function transclusion_destroy(handle) {
+        const ret = wasm.transclusion_destroy(handle);
+        return ret !== 0;
+    }
+    exports.transclusion_destroy = transclusion_destroy;
+
+    /**
+     * **FORGE ATTEMPT** (the anti-ghost tooth `transclusion_forge_refused`): fetch the
+     * source named `name`, then TAMPER the served bytes to `forged_content` and run the
+     * genuine client-side verification.
+     *
+     * A lying node that swaps the bytes after the commitment is caught by hop (1) of
+     * [`AttestedResource::verify`] — `blake3(bytes) != content_hash` → REFUSED with
+     * [`FetchError::ContentHashMismatch`]. A forged quote cannot be opened. Returns a
+     * [`ForgeView`] whose `refused` MUST be `true` (the demo asserts the polarity).
+     * @param {number} handle
+     * @param {string} name
+     * @param {string} forged_content
+     * @returns {any}
+     */
+    function transclusion_forge_attempt(handle, name, forged_content) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(forged_content, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_forge_attempt(handle, ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.transclusion_forge_attempt = transclusion_forge_attempt;
+
+    /**
+     * **INCLUDE** (the definitional bridge `transclusion_is_observed_finalized_read`):
+     * transclude the source named `name` — perform the REAL `dregg://` finalized read,
+     * VERIFY its provenance, and return the verified quote.
+     *
+     * This is [`TranscludedField::include`]: the displayed bytes ARE the source's
+     * committed bytes; the citation dates them. A forged/absent/unfinalized source
+     * REFUSES here (the genuine gate). Returns a [`QuoteView`].
+     * @param {number} handle
+     * @param {string} name
+     * @returns {any}
+     */
+    function transclusion_include(handle, name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_include(handle, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.transclusion_include = transclusion_include;
+
+    /**
+     * **PROJECT FOR** a viewer (the no-amplification tooth `transclusion_no_amplify`):
+     * transclude the source named `name`, then project it PER-VIEWER through the REAL
+     * [`Membrane`] at `viewer_rights`, with the source served under `lineage_rights`.
+     *
+     * A quote confers no authority over the source beyond observing the cited value:
+     * the projection meets the viewer's held authority with the lineage through the
+     * genuine `is_attenuation` ([`TranscludedField::project_for`]). A weaker viewer
+     * receives a strictly attenuated surface; the projection CANNOT amplify. Returns a
+     * [`ProjectionView`]. `*_rights` speak the real `AuthRequired` lattice
+     * (`none`/`signature`/`proof`/`either`/`impossible`).
+     * @param {number} handle
+     * @param {string} name
+     * @param {string} viewer_rights
+     * @param {string} lineage_rights
+     * @returns {any}
+     */
+    function transclusion_project_for(handle, name, viewer_rights, lineage_rights) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(viewer_rights, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(lineage_rights, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_project_for(handle, ptr0, len0, ptr1, len1, ptr2, len2);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.transclusion_project_for = transclusion_project_for;
+
+    /**
+     * **PUBLISH** a `dregg://` source document: commit `content`'s hash into a fresh
+     * origin cell's real state + bind a `committed_url`, registering it under `name`.
+     *
+     * The REAL [`WebOfCells::publish`] — a genuine cell-state write of the content
+     * commitment + a 3-of-3 quorum attestation, so the published source is a faithful
+     * finalized read source (a transclusion of it will resolve + verify). Returns a
+     * [`PublishView`] with the `dregg://<cell>` ref the demo renders as the link.
+     * @param {number} handle
+     * @param {string} name
+     * @param {string} content
+     * @param {string} committed_url
+     * @returns {any}
+     */
+    function transclusion_publish(handle, name, content, committed_url) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(content, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(committed_url, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_publish(handle, ptr0, len0, ptr1, len1, ptr2, len2);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.transclusion_publish = transclusion_publish;
+
+    /**
+     * **READ LIVE** the source named `name` — re-resolve to its CURRENT finalized
+     * value (the live quote follows every amend). This is a fresh
+     * [`TranscludedField::include`] each call, so as the source advances the read
+     * shows the new committed value. Returns a [`QuoteView`].
+     *
+     * (The demo distinguishes this from a pinned snapshot taken earlier in JS: the
+     * LIVE read updates after `transclusion_amend`, the snapshot does not.)
+     * @param {number} handle
+     * @param {string} name
+     * @returns {any}
+     */
+    function transclusion_read_live(handle, name) {
+        const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.transclusion_read_live(handle, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.transclusion_read_live = transclusion_read_live;
 
     /**
      * Trip a revocation channel.
@@ -2925,12 +4263,20 @@ let wasm_bindgen = (function(exports) {
     exports.verify_bearer_cap = verify_bearer_cap;
 
     /**
-     * Sig-only verification of a real BearerCapProof (SignedDelegation path).
+     * Cryptographic verification of a real BearerCapProof for the inspector's
+     * paste-and-verify UX. Handles BOTH delegation variants:
+     * - `SignedDelegation`: verifies the delegator's Ed25519 signature over the
+     *   canonical delegation message.
+     * - `StarkDelegation`: verifies the STARK proof's *scope binding* — it
+     *   deserializes the proof and requires its committed public inputs to equal
+     *   the canonical scope vector (root issuer ‖ target ‖ scope-hash of
+     *   federation/permission/expiry). This is the same Ledger-free core the
+     *   in-ledger executor runs (`dregg_turn::action::verify_stark_delegation_binding`).
+     *
      * Does *not* perform the full executor cap-lookup / revocation / amplification
-     * checks (those require a Ledger snapshot); this is the cryptographic piece
-     * for inspector paste-and-verify UX. Accepts the canonical JSON shape of
-     * BearerCapProof (or a minimal subset for the sig fields).
-     * Returns { signature_valid, expired, valid_for_sig }.
+     * checks (those require a Ledger snapshot). Accepts the canonical JSON shape of
+     * BearerCapProof (or a minimal subset for the SignedDelegation sig fields).
+     * Returns { delegation_kind, signature_valid, expired, valid_for_sig, binding_error? }.
      * @param {string} proof_json
      * @param {bigint} current_time
      * @param {string} federation_id_hex
@@ -2976,7 +4322,7 @@ let wasm_bindgen = (function(exports) {
     /**
      * Verify a conservation proof (sum of inputs == sum of outputs) using the
      * canonical Pedersen/Ristretto homomorphic check from
-     * `dregg_cell::value_commitment`.
+     * `dregg_cell_crypto::value_commitment`.
      *
      * This is the SAME primitive the executor uses for committed-value turns
      * (`verify_conservation` — a Schnorr signature proving the excess
@@ -2991,7 +4337,7 @@ let wasm_bindgen = (function(exports) {
      * - `output_commitments_json`: same format, for the created notes.
      * - `proof_json`: JSON object `{ excess_commitment, nonce_commitment,
      *   response }`, each a hex-encoded 32 bytes — the canonical
-     *   `dregg_cell::ConservationProof` (Schnorr excess signature). This is the
+     *   `dregg_cell_crypto::ConservationProof` (Schnorr excess signature). This is the
      *   `conservation` field of the SDK's `FullConservationProof`.
      * - `message_hex`: hex-encoded binding context (e.g. the turn hash). Pass an
      *   empty string for an unbound proof. MUST match the message the prover
@@ -3010,7 +4356,7 @@ let wasm_bindgen = (function(exports) {
      * When `output_range_proofs_json` is provided, this binding verifies the FULL
      * conservation proof: the Schnorr excess relation (value balance) AND a real
      * per-output Bulletproof range proof (`[0, 2^64)`), via
-     * `dregg_cell::value_commitment::verify_full_conservation_bytes`. A `valid:
+     * `dregg_cell_crypto::value_commitment::verify_full_conservation_bytes`. A `valid:
      * true` with `range_proofs_checked: true` therefore rules out the
      * negative-value (mod-order wrap) inflation attack. The Bulletproofs verifier
      * runs natively on wasm32 (bulletproofs v5 over curve25519-dalek).
@@ -3069,6 +4415,88 @@ let wasm_bindgen = (function(exports) {
         return takeFromExternrefTable0(ret[0]);
     }
     exports.verify_demo_stark_proof = verify_demo_stark_proof;
+
+    /**
+     * **VERIFY AN EXTERNAL HISTORY against a config-pinned VK anchor** — the real
+     * remote-verifier shape, over the versioned [`ExternalHistoryEnvelope`].
+     *
+     * In the production shape the aggregate is produced by whoever ran the history
+     * (a node, a relayer), serialized into the envelope, fetched by the tab, and
+     * verified against the client's genesis/checkpoint VK anchor — which arrives as a
+     * SEPARATE argument (`config_anchor_hex`) and is NEVER read off the envelope under
+     * verification (the light-client invariant).
+     *
+     * What this enforces (real, not faked):
+     * 1. parse + version-check the envelope;
+     * 2. parse the SEPARATE `config_anchor_hex` (the client's own configured anchor);
+     * 3. the **anchor-discipline pre-check**: the envelope's claimed fingerprint is
+     *    compared to the configured anchor — a mismatch is REFUSED here (the precise
+     *    "this aggregate was built for a different circuit than your config pins"
+     *    diagnostic), and the claimed value is otherwise discarded, never trusted;
+     * 4. base64-decode `proof_bytes`, decode the inner byte envelope, and run the
+     *    REAL recursion verify (the three teeth) against the config anchor — a
+     *    tampered proof, a foreign circuit, or a relabeled public is refused.
+     *
+     * THE BYTE PATH (closed): `proof_bytes_b64` carries the base64 of the proof's
+     * versioned byte envelope ([`dregg_circuit_prove::ivc_turn_chain::WholeChainProofBytes`]),
+     * produced by [`produce_external_history_envelope`]. The whole [`WholeChainProof`]
+     * is not byte-encodable — its `root.1` (`Rc<CircuitProverData>`) is prover-only —
+     * but the VERIFY-sufficient subset (the root `BatchStarkProof`, the binding
+     * `Proof`, the four publics) IS, and the verifier never reads `root.1`. So this
+     * entry decodes the bytes and runs the REAL recursion verify over the wire via
+     * [`dregg_lightclient::verify_history_bytes`], re-witnessing nothing.
+     * @param {string} envelope_json
+     * @param {string} config_anchor_hex
+     * @returns {any}
+     */
+    function verify_devnet_history(envelope_json, config_anchor_hex) {
+        const ptr0 = passStringToWasm0(envelope_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(config_anchor_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.verify_devnet_history(ptr0, len0, ptr1, len1);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.verify_devnet_history = verify_devnet_history;
+
+    /**
+     * **THE CONFIG-NOT-ARTIFACT TOOTH** — fold a real chain, then run the REAL
+     * [`dregg_lightclient::verify_history`] against a VK anchor SUPPLIED BY THE
+     * CALLER (the config), never self-anchored from the artifact.
+     *
+     * This is the in-tab realization of the light-client invariant: the trust anchor
+     * is genesis/checkpoint CONFIGURATION, read from `anchor_hex` (a separate input
+     * the user controls), and is NEVER taken from `agg.root_vk_fingerprint()`. The
+     * REAL `verify_history` runs its three teeth (the VK pin against `anchor_hex`,
+     * the carried-publics attestation against the binding proof, the root verify) —
+     * re-witnessing nothing.
+     *
+     * - A CORRECT config anchor (e.g. from [`genesis_vk_anchor`] of the same shape)
+     *   → `attested: true`, the genuine whole-history verdict.
+     * - A TAMPERED/wrong anchor → `attested: false` with the genuine
+     *   `VkFingerprintMismatch` reason in `named_floor` (the engine REFUSING to trust
+     *   a proof of a DIFFERENT circuit) — "you did not trust the server, you CHECKED
+     *   it against your own anchor."
+     *
+     * `anchor_hex` must be 64 hex chars (32 bytes). `k` is clamped to `[2, 4]`.
+     * @param {number} k
+     * @param {bigint} step
+     * @param {string} anchor_hex
+     * @returns {any}
+     */
+    function verify_history_against_anchor(k, step, anchor_hex) {
+        const ptr0 = passStringToWasm0(anchor_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.verify_history_against_anchor(k, step, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return takeFromExternrefTable0(ret[0]);
+    }
+    exports.verify_history_against_anchor = verify_history_against_anchor;
 
     /**
      * Postcard-decode a peer transition's bytes and verify it against the
@@ -3170,6 +4598,40 @@ let wasm_bindgen = (function(exports) {
     exports.verify_range_proof = verify_range_proof;
 
     /**
+     * **VERIFY A PER-SLOT HEAP OPENING** — prove a rendered field VALUE equals the
+     * value committed at its slot `(coll, key)` in the cell's umem heap, against the
+     * cell's committed `root`, re-witnessing nothing.
+     *
+     * Reproduces the canonical heap path fold (`dregg_circuit::heap_root`): the leaf is
+     * the arity-2 Poseidon2 digest `hash[heap_addr(coll, key), value]`; it folds up a
+     * depth-`HEAP_TREE_DEPTH` tree against `siblings_csv` per `directions_csv` (bit `0`
+     * = the running node is the left child → `hash_fact(cur, sib)`; `1` = right →
+     * `hash_fact(sib, cur)`), and the recomputed root must equal `root`.
+     *
+     * All field elements are decimal `BabyBear` felts (`< 2^31`): `root`/`value`/each
+     * sibling. `siblings_csv` and `directions_csv` are comma-separated, each of length
+     * exactly `HEAP_TREE_DEPTH` (16) — a wrong length is REFUSED (fail-closed). A
+     * tampered value, a wrong `(coll, key)`, or a forged path recomputes a different
+     * root and returns `false`.
+     * @param {number} root
+     * @param {number} coll
+     * @param {number} key
+     * @param {number} value
+     * @param {string} siblings_csv
+     * @param {string} directions_csv
+     * @returns {boolean}
+     */
+    function verify_slot_opening(root, coll, key, value, siblings_csv, directions_csv) {
+        const ptr0 = passStringToWasm0(siblings_csv, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(directions_csv, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.verify_slot_opening(root, coll, key, value, ptr0, len0, ptr1, len1);
+        return ret !== 0;
+    }
+    exports.verify_slot_opening = verify_slot_opening;
+
+    /**
      * Verify a macaroon token against a request.
      *
      * Returns JSON: { "allowed": bool, "policy": "...", "error": null | "..." }
@@ -3202,11 +4664,11 @@ let wasm_bindgen = (function(exports) {
     function __wbg_get_imports() {
         const import0 = {
             __proto__: null,
-            __wbg_Error_bce6d499ff0a4aff: function(arg0, arg1) {
+            __wbg_Error_fdd633d4bb5dd76a: function(arg0, arg1) {
                 const ret = Error(getStringFromWasm0(arg0, arg1));
                 return ret;
             },
-            __wbg_Number_b7972a139bfbfdf0: function(arg0) {
+            __wbg_Number_c4bdf66bb78f7977: function(arg0) {
                 const ret = Number(arg0);
                 return ret;
             },
@@ -3217,27 +4679,34 @@ let wasm_bindgen = (function(exports) {
                 getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
                 getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
             },
-            __wbg___wbindgen_is_function_5cd60d5cf78b4eef: function(arg0) {
+            __wbg___wbindgen_debug_string_8a447059637473e2: function(arg0, arg1) {
+                const ret = debugString(arg1);
+                const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                const len1 = WASM_VECTOR_LEN;
+                getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+                getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+            },
+            __wbg___wbindgen_is_function_acc5528be2b923f2: function(arg0) {
                 const ret = typeof(arg0) === 'function';
                 return ret;
             },
-            __wbg___wbindgen_is_object_b4593df85baada48: function(arg0) {
+            __wbg___wbindgen_is_object_0beba4a1980d3eea: function(arg0) {
                 const val = arg0;
                 const ret = typeof(val) === 'object' && val !== null;
                 return ret;
             },
-            __wbg___wbindgen_is_string_dde0fd9020db4434: function(arg0) {
+            __wbg___wbindgen_is_string_1fca8072260dd261: function(arg0) {
                 const ret = typeof(arg0) === 'string';
                 return ret;
             },
-            __wbg___wbindgen_is_undefined_35bb9f4c7fd651d5: function(arg0) {
+            __wbg___wbindgen_is_undefined_721f8decd50c87a3: function(arg0) {
                 const ret = arg0 === undefined;
                 return ret;
             },
-            __wbg___wbindgen_throw_9c31b086c2b26051: function(arg0, arg1) {
+            __wbg___wbindgen_throw_ea4887a5f8f9a9db: function(arg0, arg1) {
                 throw new Error(getStringFromWasm0(arg0, arg1));
             },
-            __wbg_call_dfde26266607c996: function() { return handleError(function (arg0, arg1, arg2) {
+            __wbg_call_5575218572ead796: function() { return handleError(function (arg0, arg1, arg2) {
                 const ret = arg0.call(arg1, arg2);
                 return ret;
             }, arguments); },
@@ -3251,7 +4720,7 @@ let wasm_bindgen = (function(exports) {
             __wbg_getRandomValues_c44a50d8cfdaebeb: function() { return handleError(function (arg0, arg1) {
                 arg0.getRandomValues(arg1);
             }, arguments); },
-            __wbg_instanceof_Window_faa5cf994f49cca7: function(arg0) {
+            __wbg_instanceof_Window_0d356b88a2f77c42: function(arg0) {
                 let result;
                 try {
                     result = arg0 instanceof Window;
@@ -3261,7 +4730,7 @@ let wasm_bindgen = (function(exports) {
                 const ret = result;
                 return ret;
             },
-            __wbg_length_56fcd3e2b7e0299d: function(arg0) {
+            __wbg_length_589238bdcf171f0e: function(arg0) {
                 const ret = arg0.length;
                 return ret;
             },
@@ -3269,19 +4738,19 @@ let wasm_bindgen = (function(exports) {
                 const ret = arg0.msCrypto;
                 return ret;
             },
-            __wbg_new_02d162bc6cf02f60: function() {
+            __wbg_new_2e117a478906f062: function() {
                 const ret = new Object();
                 return ret;
             },
-            __wbg_new_070df68d66325372: function() {
+            __wbg_new_3444eb7412549f0b: function() {
                 const ret = new Map();
                 return ret;
             },
-            __wbg_new_310879b66b6e95e1: function() {
+            __wbg_new_36e147a8ced3c6e0: function() {
                 const ret = new Array();
                 return ret;
             },
-            __wbg_new_with_length_99887c91eae4abab: function(arg0) {
+            __wbg_new_with_length_9b650f44b5c44a4e: function(arg0) {
                 const ret = new Uint8Array(arg0 >>> 0);
                 return ret;
             },
@@ -3289,15 +4758,23 @@ let wasm_bindgen = (function(exports) {
                 const ret = arg0.node;
                 return ret;
             },
-            __wbg_now_3cd905700d21a70b: function(arg0) {
+            __wbg_now_0f628e0e435c541b: function(arg0) {
                 const ret = arg0.now();
                 return ret;
             },
-            __wbg_now_81363d44c96dd239: function() {
+            __wbg_now_d2e0afbad4edbe82: function() {
                 const ret = Date.now();
                 return ret;
             },
-            __wbg_performance_ddd4e7eeef6254f3: function(arg0) {
+            __wbg_now_e7c6795a7f81e10f: function(arg0) {
+                const ret = arg0.now();
+                return ret;
+            },
+            __wbg_performance_3fcf6e32a7e1ed0a: function(arg0) {
+                const ret = arg0.performance;
+                return ret;
+            },
+            __wbg_performance_4c23a97261596fec: function(arg0) {
                 const ret = arg0.performance;
                 return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
             },
@@ -3305,7 +4782,7 @@ let wasm_bindgen = (function(exports) {
                 const ret = arg0.process;
                 return ret;
             },
-            __wbg_prototypesetcall_5f9bdc8d75e07276: function(arg0, arg1, arg2) {
+            __wbg_prototypesetcall_d721637c7ca66eb8: function(arg0, arg1, arg2) {
                 Uint8Array.prototype.set.call(getArrayU8FromWasm0(arg0, arg1), arg2);
             },
             __wbg_randomFillSync_6c25eac9869eb53c: function() { return handleError(function (arg0, arg1) {
@@ -3318,30 +4795,30 @@ let wasm_bindgen = (function(exports) {
             __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
                 arg0[arg1] = arg2;
             },
-            __wbg_set_78ea6a19f4818587: function(arg0, arg1, arg2) {
-                arg0[arg1 >>> 0] = arg2;
-            },
-            __wbg_set_facb7a5914e0fa39: function(arg0, arg1, arg2) {
+            __wbg_set_9a1d61e17de7054c: function(arg0, arg1, arg2) {
                 const ret = arg0.set(arg1, arg2);
                 return ret;
             },
-            __wbg_static_accessor_GLOBAL_THIS_02344c9b09eb08a9: function() {
+            __wbg_set_dc601f4a69da0bc2: function(arg0, arg1, arg2) {
+                arg0[arg1 >>> 0] = arg2;
+            },
+            __wbg_static_accessor_GLOBAL_THIS_2fee5048bcca5938: function() {
                 const ret = typeof globalThis === 'undefined' ? null : globalThis;
                 return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
             },
-            __wbg_static_accessor_GLOBAL_ac6d4ac874d5cd54: function() {
+            __wbg_static_accessor_GLOBAL_ce44e66a4935da8c: function() {
                 const ret = typeof global === 'undefined' ? null : global;
                 return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
             },
-            __wbg_static_accessor_SELF_9b2406c23aeb2023: function() {
+            __wbg_static_accessor_SELF_44f6e0cb5e67cdad: function() {
                 const ret = typeof self === 'undefined' ? null : self;
                 return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
             },
-            __wbg_static_accessor_WINDOW_b34d2126934e16ba: function() {
+            __wbg_static_accessor_WINDOW_168f178805d978fe: function() {
                 const ret = typeof window === 'undefined' ? null : window;
                 return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
             },
-            __wbg_subarray_7c6a0da8f3b4a1ba: function(arg0, arg1, arg2) {
+            __wbg_subarray_b0e8ac4ed313fea8: function(arg0, arg1, arg2) {
                 const ret = arg0.subarray(arg1 >>> 0, arg2 >>> 0);
                 return ret;
             },
@@ -3391,15 +4868,104 @@ let wasm_bindgen = (function(exports) {
         };
     }
 
+    const CardWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_cardworld_free(ptr, 1));
+    const DocCollabWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_doccollabworld_free(ptr, 1));
+    const InspectorWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_inspectorworld_free(ptr, 1));
+    const KvStoreWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_kvstoreworld_free(ptr, 1));
+    const TallyWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_tallyworld_free(ptr, 1));
+
     function addToExternrefTable0(obj) {
         const idx = wasm.__externref_table_alloc();
         wasm.__wbindgen_externrefs.set(idx, obj);
         return idx;
     }
 
+    function debugString(val) {
+        // primitive types
+        const type = typeof val;
+        if (type == 'number' || type == 'boolean' || val == null) {
+            return  `${val}`;
+        }
+        if (type == 'string') {
+            return `"${val}"`;
+        }
+        if (type == 'symbol') {
+            const description = val.description;
+            if (description == null) {
+                return 'Symbol';
+            } else {
+                return `Symbol(${description})`;
+            }
+        }
+        if (type == 'function') {
+            const name = val.name;
+            if (typeof name == 'string' && name.length > 0) {
+                return `Function(${name})`;
+            } else {
+                return 'Function';
+            }
+        }
+        // objects
+        if (Array.isArray(val)) {
+            const length = val.length;
+            let debug = '[';
+            if (length > 0) {
+                debug += debugString(val[0]);
+            }
+            for(let i = 1; i < length; i++) {
+                debug += ', ' + debugString(val[i]);
+            }
+            debug += ']';
+            return debug;
+        }
+        // Test for built-in
+        const builtInMatches = /\[object ([^\]]+)\]/.exec(toString.call(val));
+        let className;
+        if (builtInMatches && builtInMatches.length > 1) {
+            className = builtInMatches[1];
+        } else {
+            // Failed to match the standard '[object ClassName]'
+            return toString.call(val);
+        }
+        if (className == 'Object') {
+            // we're a user defined class or Object
+            // JSON.stringify avoids problems with cycles, and is generally much
+            // easier than looping through ownProperties of `val`.
+            try {
+                return 'Object(' + JSON.stringify(val) + ')';
+            } catch (_) {
+                return 'Object';
+            }
+        }
+        // errors
+        if (val instanceof Error) {
+            return `${val.name}: ${val.message}\n${val.stack}`;
+        }
+        // TODO we could test for more things here, like `Set`s and `Map`s.
+        return className;
+    }
+
     function getArrayU8FromWasm0(ptr, len) {
         ptr = ptr >>> 0;
         return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
+    }
+
+    let cachedBigUint64ArrayMemory0 = null;
+    function getBigUint64ArrayMemory0() {
+        if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
+            cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
+        }
+        return cachedBigUint64ArrayMemory0;
     }
 
     let cachedDataViewMemory0 = null;
@@ -3433,6 +4999,13 @@ let wasm_bindgen = (function(exports) {
 
     function isLikeNone(x) {
         return x === undefined || x === null;
+    }
+
+    function passArray64ToWasm0(arg, malloc) {
+        const ptr = malloc(arg.length * 8, 8) >>> 0;
+        getBigUint64ArrayMemory0().set(arg, ptr / 8);
+        WASM_VECTOR_LEN = arg.length;
+        return ptr;
     }
 
     function passArray8ToWasm0(arg, malloc) {
@@ -3511,6 +5084,7 @@ let wasm_bindgen = (function(exports) {
         wasmInstance = instance;
         wasm = instance.exports;
         wasmModule = module;
+        cachedBigUint64ArrayMemory0 = null;
         cachedDataViewMemory0 = null;
         cachedUint8ArrayMemory0 = null;
         wasm.__wbindgen_start();

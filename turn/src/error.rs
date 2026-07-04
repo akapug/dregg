@@ -229,6 +229,22 @@ pub enum TurnError {
     /// The STARK proof verification failed.
     ProofVerificationFailed(String),
 
+    /// A proof-carrying turn carried more `Effect::Custom` sub-proofs in
+    /// `turn.custom_program_proofs` than the cell admits (the DoS cap, FINDING 1
+    /// of `docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`). Each sub-proof is
+    /// a full recursive STARK verify; without this cap a single authorized turn
+    /// could force arbitrarily many verifications (asymmetric resource
+    /// exhaustion). Rejected fail-closed BEFORE any sub-proof is verified.
+    /// `cap` is the cell's `max_custom_effects` (hard-capped at 64).
+    TooManyCustomProofs { got: usize, cap: usize },
+
+    /// The number of `Effect::Custom` sub-proofs on the wire
+    /// (`turn.custom_program_proofs`) does not equal the in-circuit committed
+    /// count `PI[CUSTOM_EFFECT_COUNT]` (FINDING 1). The off-circuit dispatch
+    /// count must equal the in-circuit Custom-row count the proof binds, else the
+    /// wire vec could carry more (or fewer) sub-proofs than the turn commits to.
+    CustomProofCountMismatch { wire: usize, committed: usize },
+
     /// The cell targeted by a proof-carrying turn has no stored sovereign commitment.
     SovereignNotRegistered { cell: CellId },
 
@@ -438,6 +454,67 @@ pub enum TurnError {
     /// keystone `admissionReason_eq_admitted_iff` proves the reason is faithful: it is never
     /// `Admitted` on a refused turn.
     AdmissionRefused { reason: crate::AdmissionReason },
+}
+
+/// Operational classification of a refusal, for the security observability
+/// counters (`dregg_auth_failures_total` / `dregg_cap_refusals_total`). This is
+/// a pure projection of [`TurnError`] — it carries no dependency on any metrics
+/// facade so the type stays where the variants live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalClass {
+    /// A credential / authorization-gate refusal: the presented authorization
+    /// (signature, biscuit/macaroon token, stealth proof, admission) did not
+    /// authorize the action.
+    Auth,
+    /// A capability-gate refusal: a held capability was missing, revoked, stale,
+    /// over-attenuated, or a delegation/facet bound was violated (the CAP path).
+    Capability,
+    /// Any other refusal (balance, nonce/replay, precondition, conservation,
+    /// structural). Not an exploitation signal on its own.
+    Other,
+}
+
+impl TurnError {
+    /// Classify this refusal for the security counters. `Auth` = credential /
+    /// authorization-gate refusals; `Capability` = cap-gate refusals (the CAP
+    /// path). Everything else is `Other`. A spike in the first two — especially
+    /// post red-team — is a live exploitation-attempt signal.
+    pub fn refusal_class(&self) -> RefusalClass {
+        use TurnError::*;
+        match self {
+            // Authorization / credential gate.
+            InvalidAuthorization { .. }
+            | PermissionDenied { .. }
+            | StealthAuthInvalid { .. }
+            | TokenAuthInvalid { .. }
+            | TokenInsufficientCapability { .. }
+            | TokenVerifierNotConfigured
+            | AuthModeNotRegistered { .. }
+            | AdmissionRefused { .. } => RefusalClass::Auth,
+            // Capability gate (CAP path): held-cap missing / revoked / stale /
+            // over-attenuated / delegation / facet / bearer-cap bounds.
+            CapabilityNotHeld { .. }
+            | DelegationDenied { .. }
+            | DelegationModeUnimplemented { .. }
+            | StaleDelegation { .. }
+            | CapabilityRevoked { .. }
+            | CapabilityStale { .. }
+            | CapabilitySlotOverflow { .. }
+            | IntroductionDenied { .. }
+            | FacetViolation { .. }
+            | BreadstuffExpired { .. }
+            | BreadstuffRevoked { .. }
+            | BreadstuffFacetViolation { .. }
+            | BearerCapFacetViolation { .. }
+            | BearerCapFacetAmplification { .. }
+            | BearerCapExpired { .. }
+            | BearerCapRevoked { .. }
+            | BearerCapInvalidProof { .. }
+            | BearerCapAmplification { .. }
+            | BearerCapDelegatorLacksCapability { .. } => RefusalClass::Capability,
+            _ => RefusalClass::Other,
+        }
+    }
 }
 
 impl core::fmt::Display for TurnError {
@@ -698,6 +775,20 @@ impl core::fmt::Display for TurnError {
             TurnError::ProofVerificationFailed(reason) => {
                 write!(f, "execution proof verification failed: {reason}")
             }
+            TurnError::TooManyCustomProofs { got, cap } => {
+                write!(
+                    f,
+                    "turn carries {got} custom-effect sub-proofs but the cell admits at most {cap} \
+                     (max_custom_effects); rejected before verification to bound recursive STARK work"
+                )
+            }
+            TurnError::CustomProofCountMismatch { wire, committed } => {
+                write!(
+                    f,
+                    "custom-effect sub-proof count mismatch: {wire} on the wire but the proof \
+                     commits to {committed} (PI[CUSTOM_EFFECT_COUNT]); rejected fail-closed"
+                )
+            }
             TurnError::SovereignNotRegistered { cell } => {
                 write!(
                     f,
@@ -919,3 +1010,63 @@ impl core::fmt::Display for TurnError {
 }
 
 impl std::error::Error for TurnError {}
+
+#[cfg(test)]
+mod refusal_class_tests {
+    use super::*;
+    use dregg_cell::CellId;
+
+    #[test]
+    fn auth_gate_refusals_classify_as_auth() {
+        assert_eq!(
+            TurnError::InvalidAuthorization {
+                reason: "bad sig".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenAuthInvalid {
+                reason: "expired biscuit".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenVerifierNotConfigured.refusal_class(),
+            RefusalClass::Auth
+        );
+    }
+
+    #[test]
+    fn cap_gate_refusals_classify_as_capability() {
+        assert_eq!(
+            TurnError::CapabilityNotHeld {
+                actor: CellId([1u8; 32]),
+                target: CellId([2u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+        assert_eq!(
+            TurnError::CapabilitySlotOverflow {
+                cell: CellId([3u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+    }
+
+    #[test]
+    fn ordinary_refusals_classify_as_other() {
+        assert_eq!(
+            TurnError::NonceReplay {
+                expected: 1,
+                got: 0
+            }
+            .refusal_class(),
+            RefusalClass::Other
+        );
+        assert_eq!(TurnError::EmptyForest.refusal_class(), RefusalClass::Other);
+    }
+}

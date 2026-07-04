@@ -98,15 +98,15 @@ pub fn verify_token_datalog(
     let mut valid_until_values: Vec<i64> = Vec::new();
     let mut valid_after_values: Vec<i64> = Vec::new();
     for fact in state.all_facts() {
-        if symbols.resolve(fact.predicate) == Some("valid_until") {
-            if let Some(val) = field_element_to_int(&fact.terms[0]) {
-                valid_until_values.push(val);
-            }
+        if symbols.resolve(fact.predicate) == Some("valid_until")
+            && let Some(val) = field_element_to_int(&fact.terms[0])
+        {
+            valid_until_values.push(val);
         }
-        if symbols.resolve(fact.predicate) == Some("valid_after") {
-            if let Some(val) = field_element_to_int(&fact.terms[0]) {
-                valid_after_values.push(val);
-            }
+        if symbols.resolve(fact.predicate) == Some("valid_after")
+            && let Some(val) = field_element_to_int(&fact.terms[0])
+        {
+            valid_after_values.push(val);
         }
     }
 
@@ -873,14 +873,14 @@ fn committed_facts_to_trace(state: &TokenState, symbols: &SymbolTable) -> Vec<Tr
         // SECURITY: Reject facts with reserved predicate names.
         // A malicious token could try to inject `allow()`, `unrestricted(1)`, or
         // `request_app(X)` directly into the fact set to bypass policy evaluation.
-        if let Some(name) = pred_name {
-            if RESERVED_PREDICATES.contains(&name) {
-                // Skip reserved predicates silently -- they are injected by the
-                // engine itself (unrestricted, no_time_bound) or derived by rules
-                // (allow, action_allowed, svc_action_allowed). User-supplied facts
-                // must never use these names.
-                continue;
-            }
+        if let Some(name) = pred_name
+            && RESERVED_PREDICATES.contains(&name)
+        {
+            // Skip reserved predicates silently -- they are injected by the
+            // engine itself (unrestricted, no_time_bound) or derived by rules
+            // (allow, action_allowed, svc_action_allowed). User-supplied facts
+            // must never use these names.
+            continue;
         }
 
         // Expand app facts into per-action facts
@@ -1032,7 +1032,7 @@ fn extract_capabilities(caveat_set: &CaveatSet) -> Vec<Capability> {
     let mut capabilities = Vec::new();
 
     for wc in caveat_set.first_party_caveats() {
-        match dregg_caveats::decode_grant(&wc) {
+        match dregg_caveats::decode_grant(wc) {
             Ok(dregg_caveats::DreggGrant::App { id, actions }) => {
                 capabilities.push(Capability {
                     resource_type: "app".into(),
@@ -1081,7 +1081,7 @@ fn extract_metadata(caveat_set: &CaveatSet) -> (Option<i64>, Option<String>) {
     let mut subject: Option<String> = None;
 
     for wc in caveat_set.first_party_caveats() {
-        match dregg_caveats::decode_grant(&wc) {
+        match dregg_caveats::decode_grant(wc) {
             Ok(dregg_caveats::DreggGrant::ValidityWindow { not_after, .. }) => {
                 if let Some(na) = not_after {
                     expires_at = Some(match expires_at {
@@ -1118,7 +1118,7 @@ fn diagnose_denial(caveat_set: &CaveatSet, request: &AuthRequest) -> String {
     let mut validity_windows: Vec<(Option<i64>, Option<i64>)> = Vec::new();
 
     for wc in caveat_set.first_party_caveats() {
-        match dregg_caveats::decode_grant(&wc) {
+        match dregg_caveats::decode_grant(wc) {
             Ok(dregg_caveats::DreggGrant::App { id, actions }) => apps.push((id, actions)),
             Ok(dregg_caveats::DreggGrant::Service { name, actions }) => {
                 services.push((name, actions))
@@ -1144,15 +1144,15 @@ fn diagnose_denial(caveat_set: &CaveatSet, request: &AuthRequest) -> String {
 
     // Check time first
     for (not_before, not_after) in &validity_windows {
-        if let Some(nb) = not_before {
-            if now < *nb {
-                return format!("token not yet valid (not before {})", nb);
-            }
+        if let Some(nb) = not_before
+            && now < *nb
+        {
+            return format!("token not yet valid (not before {})", nb);
         }
-        if let Some(na) = not_after {
-            if now > *na {
-                return format!("token expired (expired at {})", na);
-            }
+        if let Some(na) = not_after
+            && now > *na
+        {
+            return format!("token expired (expired at {})", na);
         }
     }
 
@@ -1163,13 +1163,13 @@ fn diagnose_denial(caveat_set: &CaveatSet, request: &AuthRequest) -> String {
         }
         if let Some(req_action) = &request.action {
             let req_act = Action::parse(req_action);
-            if let Some((_, allowed)) = apps.iter().find(|(id, _)| id == req_app) {
-                if !allowed.contains(req_act) {
-                    return format!(
-                        "app '{}' grants {}, request needs {}",
-                        req_app, allowed, req_act
-                    );
-                }
+            if let Some((_, allowed)) = apps.iter().find(|(id, _)| id == req_app)
+                && !allowed.contains(req_act)
+            {
+                return format!(
+                    "app '{}' grants {}, request needs {}",
+                    req_app, allowed, req_act
+                );
             }
         }
     }
@@ -1180,30 +1180,32 @@ fn diagnose_denial(caveat_set: &CaveatSet, request: &AuthRequest) -> String {
         }
         if let Some(req_action) = &request.action {
             let req_act = Action::parse(req_action);
-            if let Some((_, allowed)) = services.iter().find(|(name, _)| name == req_svc) {
-                if !allowed.contains(req_act) {
-                    return format!(
-                        "service '{}' grants {}, request needs {}",
-                        req_svc, allowed, req_act
-                    );
-                }
+            if let Some((_, allowed)) = services.iter().find(|(name, _)| name == req_svc)
+                && !allowed.contains(req_act)
+            {
+                return format!(
+                    "service '{}' grants {}, request needs {}",
+                    req_svc, allowed, req_act
+                );
             }
         }
     }
 
-    if let Some(req_user) = &request.user_id {
-        if !confined_users.is_empty() && !confined_users.contains(req_user) {
-            return format!(
-                "token confined to user(s) {:?}, request is for '{}'",
-                confined_users, req_user
-            );
-        }
+    if let Some(req_user) = &request.user_id
+        && !confined_users.is_empty()
+        && !confined_users.contains(req_user)
+    {
+        return format!(
+            "token confined to user(s) {:?}, request is for '{}'",
+            confined_users, req_user
+        );
     }
 
-    if let Some(req_provider) = &request.oauth_provider {
-        if !oauth_providers.is_empty() && !oauth_providers.contains(req_provider) {
-            return format!("token not valid for OAuth provider '{}'", req_provider);
-        }
+    if let Some(req_provider) = &request.oauth_provider
+        && !oauth_providers.is_empty()
+        && !oauth_providers.contains(req_provider)
+    {
+        return format!("token not valid for OAuth provider '{}'", req_provider);
     }
 
     if !request.features.is_empty() && !features.is_empty() {
@@ -1262,7 +1264,7 @@ pub fn pre_evaluation_deny_checks(
     let mut budgets: Vec<(String, u64)> = Vec::new(); // (budget_id, limit)
 
     for wc in caveat_set.first_party_caveats() {
-        match dregg_caveats::decode_grant(&wc) {
+        match dregg_caveats::decode_grant(wc) {
             Ok(dregg_caveats::DreggGrant::ConfineUser(uid)) => confined_users.push(uid),
             Ok(dregg_caveats::DreggGrant::OAuthProvider(p)) => oauth_providers.push(p),
             Ok(dregg_caveats::DreggGrant::OAuthScope(s)) => oauth_scopes.push(s),
@@ -1302,15 +1304,15 @@ pub fn pre_evaluation_deny_checks(
 
     // Time checks (ALL windows must be satisfied)
     for (not_before, not_after) in &validity_windows {
-        if let Some(nb) = not_before {
-            if now < *nb {
-                return Err(TokenError::Expired);
-            }
+        if let Some(nb) = not_before
+            && now < *nb
+        {
+            return Err(TokenError::Expired);
         }
-        if let Some(na) = not_after {
-            if now > *na {
-                return Err(TokenError::Expired);
-            }
+        if let Some(na) = not_after
+            && now > *na
+        {
+            return Err(TokenError::Expired);
         }
     }
 
@@ -1400,13 +1402,13 @@ pub fn pre_evaluation_deny_checks(
         for req_feat in &request.features {
             for (include, exclude) in &feature_globs {
                 for pat in exclude {
-                    if let Ok(matcher) = globset::Glob::new(pat).map(|g| g.compile_matcher()) {
-                        if matcher.is_match(req_feat) {
-                            return Err(TokenError::Denied(format!(
-                                "feature '{}' matches exclusion pattern '{}'",
-                                req_feat, pat
-                            )));
-                        }
+                    if let Ok(matcher) = globset::Glob::new(pat).map(|g| g.compile_matcher())
+                        && matcher.is_match(req_feat)
+                    {
+                        return Err(TokenError::Denied(format!(
+                            "feature '{}' matches exclusion pattern '{}'",
+                            req_feat, pat
+                        )));
                     }
                 }
                 if !include.is_empty() {

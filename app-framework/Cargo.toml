@@ -19,6 +19,12 @@ dregg-circuit = { path = "../circuit" }
 dregg-circuit-prove = { path = "../circuit-prove" }
 dregg-cell = { path = "../cell" }
 dregg-types = { path = "../types" }
+# The Payable DSI + the userspace method-routing core (resolve_against /
+# InvokeAuthority / the canonical `payable_descriptor`). Lives BELOW the SDK so
+# the SDK's metered tool-gateway charge and these app-facing wrappers go through
+# ONE verified `pay` route table. The cipherclerk-bound `invoke` /
+# `invoke_with_descriptor` / free `pay` here delegate to that pure core.
+dregg-payable = { path = "../dregg-payable" }
 dregg-storage = { path = "../storage" }
 dregg-captp = { path = "../captp" }
 

@@ -501,8 +501,45 @@ impl CapabilitySet {
         self.refs.iter().any(|r| {
             &r.target == target
                 && r.permissions != AuthRequired::Impossible
-                && r.expires_at.map_or(true, |exp| current_height <= exp)
+                && r.expires_at.is_none_or(|exp| current_height <= exp)
         })
+    }
+
+    /// Like [`has_access_at`], but additionally requires that some held,
+    /// non-revoked, non-expired capability to `target` admits the given
+    /// effect-kind bit through its `allowed_effects` FACET mask (E-language
+    /// faceting).
+    ///
+    /// A cap with `allowed_effects: None` is the full-facet node cap (every
+    /// effect permitted); `Some(mask)` admits only effects whose bit is set
+    /// (and `Some(0)` admits nothing — the P2-1 deny-all). This is the
+    /// FACET leg the verified kernel's `authorizedB` enforces on the DIRECT
+    /// cross-cell path (an `.endpoint` cap must carry the required facet, not
+    /// merely exist) — `CAP-FACET-1`.
+    pub fn permits_effect_at(
+        &self,
+        target: &CellId,
+        current_height: u64,
+        effect_bit: EffectMask,
+    ) -> bool {
+        self.refs.iter().any(|r| {
+            &r.target == target
+                && r.permissions != AuthRequired::Impossible
+                && r.expires_at.is_none_or(|exp| current_height <= exp)
+                && crate::facet::is_effect_permitted(r.allowed_effects, effect_bit)
+        })
+    }
+
+    /// Diagnostic: the union of `allowed_effects` facets across the held caps
+    /// referencing `target` (a `None`-facet cap contributes [`EFFECT_ALL`]).
+    /// Used only to populate the `allowed_mask` field of a `FacetViolation`.
+    pub fn effect_mask_union_for(&self, target: &CellId) -> EffectMask {
+        self.refs
+            .iter()
+            .filter(|r| &r.target == target && r.permissions != AuthRequired::Impossible)
+            .fold(0u32, |acc, r| {
+                acc | r.allowed_effects.unwrap_or(crate::facet::EFFECT_ALL)
+            })
     }
 
     /// Attenuate a capability: produce a slot-free [`AttenuatedCap`] with narrower permissions.

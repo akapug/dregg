@@ -12,6 +12,7 @@
 //!   * FOLDS a multi-turn same-family history through `fold_wide_welded_umem_turn_chain_staged`
 //!     (8-felt continuity + the ordered-history digest);
 //!   * REFUSES a forged 8-felt AFTER commit (the ~124-bit binding tooth bites per family);
+//!
 //! and the gauntlet asserts a NON-COHORT lead (a cap-WRITE effect whose AFTER cap-root needs the
 //! SEPARATE cap-open path) FAILS CLOSED at the dispatch, never silently mis-proved.
 //!
@@ -186,6 +187,7 @@ fn value_cohort_forged_post_commit_refused_per_family() {
             proof,
             descriptor,
             mut public_inputs,
+            carrier_witness: _,
         } = rotated;
         let last = public_inputs.len() - 1;
         public_inputs[last] = public_inputs[last] + BabyBear::ONE;
@@ -193,6 +195,7 @@ fn value_cohort_forged_post_commit_refused_per_family() {
             proof,
             descriptor,
             public_inputs,
+            carrier_witness: None,
         }));
         let turns = [t0, forged];
         match fold_wide_welded_umem_turn_chain_staged(&turns) {

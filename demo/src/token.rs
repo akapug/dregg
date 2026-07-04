@@ -351,7 +351,7 @@ impl TokenState {
         // Build the attenuated token.
         let mut attenuated = TokenState {
             id: self.id.clone(),
-            issuer: self.issuer.clone(), // Issuer stays the same (original minter).
+            issuer: self.issuer, // Issuer stays the same (original minter).
             facts: new_facts,
             rules: self.rules.clone(),
             checks: new_checks,
@@ -369,7 +369,7 @@ impl TokenState {
 
         // Record the attenuation in the derivation trace.
         attenuated.derivation_trace.push(DerivationStep {
-            authority: attenuator.public_key.clone(),
+            authority: attenuator.public_key,
             input_root,
             output_root: attenuated.state_root,
             signature: attenuation_sig,

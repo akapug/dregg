@@ -97,16 +97,16 @@ async fn verify(
     }
 
     // Show public inputs.
-    if let Some(inputs) = public_inputs.as_array() {
-        if !inputs.is_empty() {
-            ctx.header("Public Inputs");
-            for (i, input) in inputs.iter().enumerate() {
-                let val = match input {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                ctx.kv(&format!("[{}]", i), &val);
-            }
+    if let Some(inputs) = public_inputs.as_array()
+        && !inputs.is_empty()
+    {
+        ctx.header("Public Inputs");
+        for (i, input) in inputs.iter().enumerate() {
+            let val = match input {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            ctx.kv(&format!("[{}]", i), &val);
         }
     }
 
@@ -248,8 +248,7 @@ async fn chain(
     let displayed: Vec<&serde_json::Value> = proofs.iter().take(limit).collect();
     let children: Vec<TreeNode> = displayed
         .iter()
-        .enumerate()
-        .map(|(_i, p)| {
+        .map(|p| {
             let height = p["height"].as_u64().unwrap_or(0);
             let turn_hash = p["turn_hash"].as_str().unwrap_or("?");
             let proof_hash = p["proof_hash"].as_str().unwrap_or("?");

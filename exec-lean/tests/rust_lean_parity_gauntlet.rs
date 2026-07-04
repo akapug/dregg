@@ -344,14 +344,17 @@ fn run_case(case: &Case) -> (Verdict, String) {
 ///                           `asset: 0`, so the verified gate cannot see the held node-cap over the
 ///                           marshalled issuer. Not under-enforcement; the native cap graph is
 ///                           exercised in `dregg-turn::conservation_mint_property`.
-///   * `AttenuateCapability` / `CellUnseal` — cap-/lifecycle-reshape effects whose commit bit
-///                           currently diverges in the SAFE direction (the verified kernel is
-///                           STRICTER on the marshalled wire — the held cap / sealed payload the
-///                           narrowing/unseal reasons over is not faithfully numbered on the wire,
-///                           so the kernel fail-closes). The reconstituted post-state AGREES when
-///                           both commit; only the commit bit diverges. Same wire-faithfulness class
-///                           as `Mint`.
-const SAFE_DIRECTION_RESIDUALS: &[&str] = &["Burn", "Mint", "AttenuateCapability", "CellUnseal"];
+///   * `AttenuateCapability` / `CellUnseal` — ALIGNED (no longer residuals). `CellUnseal`: the verified
+///                           admission gate over-rejected a SEALED agent (`cellLifecycleLive`, Live-only)
+///                           — but sealing is *reversible* quiescence (`docs/reference/cells.md`), so a
+///                           Sealed cell MUST author its own unseal. The gate is now `cellLifecycleCanAuthor`
+///                           (non-terminal: rejects only Destroyed/Migrated), so the self-unseal COMMITS on
+///                           both, byte-identical. `AttenuateCapability`: the held cap's target was dropped
+///                           from the marshalled wire (absent from the turn id-map), failing the verified
+///                           in-bounds leg; the HELD-CAP-TARGET CLOSURE in `lean_shadow::build_pre_ledger`
+///                           now carries the c-list faithfully, so the narrowing COMMITS on both. Both are
+///                           now `BothAcceptStateAgree` — enforced (off the allowlist).
+const SAFE_DIRECTION_RESIDUALS: &[&str] = &["Burn", "Mint"];
 
 fn build_corpus() -> Vec<Case> {
     let mut cases: Vec<Case> = Vec::new();
@@ -635,7 +638,8 @@ fn build_corpus() -> Vec<Case> {
         );
     }
 
-    // CellUnseal (Sealed → Live) — self-cap held for the authority leg. CURRENT RESIDUAL.
+    // CellUnseal (Sealed → Live) — self-cap held for the authority leg. ALIGNED: the admission gate
+    // now admits a Sealed (non-terminal) agent, so the self-unseal COMMITS byte-identical on both.
     {
         let mut a = make_open_cell(1, 100);
         grant_self_cap(&mut a);
@@ -776,7 +780,8 @@ fn build_corpus() -> Vec<Case> {
         );
     }
 
-    // AttenuateCapability — narrow a held cap (None → Signature). CURRENT RESIDUAL (wire cap fidelity).
+    // AttenuateCapability — narrow a held cap (None → Signature). ALIGNED: the held-cap-target closure
+    // carries A's c-list on the wire, so the verified in-bounds narrowing COMMITS byte-identical on both.
     {
         let mut a = make_open_cell(1, 100);
         let b = make_open_cell(2, 5);

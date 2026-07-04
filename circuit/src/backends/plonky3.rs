@@ -305,7 +305,7 @@ impl ProofBackend for Plonky3Backend {
             let public_inputs: Vec<BabyBear> = proof
                 .public_inputs
                 .iter()
-                .map(|b| bytes32_to_babybear(b))
+                .map(bytes32_to_babybear)
                 .collect();
 
             plonky3_prover::verify_plonky3(&p3_proof, &public_inputs)?;
@@ -382,10 +382,7 @@ impl ProofBackend for Plonky3Backend {
 
         // Build public inputs matching the fold AIR's layout.
         use crate::fold_air::compute_root_transition_hash;
-        let fact_hashes: Vec<BabyBear> = removals
-            .iter()
-            .map(|r| bytes32_to_babybear_reduce(r))
-            .collect();
+        let fact_hashes: Vec<BabyBear> = removals.iter().map(bytes32_to_babybear_reduce).collect();
         let transition_hash =
             compute_root_transition_hash(old_root_bb, new_root_bb, &fact_hashes, &WideHash::ZERO);
 
@@ -418,7 +415,7 @@ impl ProofBackend for Plonky3Backend {
         let public_inputs: Vec<BabyBear> = proof
             .public_inputs
             .iter()
-            .map(|b| bytes32_to_babybear(b))
+            .map(bytes32_to_babybear)
             .collect();
 
         crate::fold_air::verify_fold_stark(&stark_proof, &public_inputs)
@@ -526,7 +523,7 @@ impl DerivationBackend for Plonky3Backend {
         let public_inputs: Vec<BabyBear> = proof
             .public_inputs
             .iter()
-            .map(|b| bytes32_to_babybear(b))
+            .map(bytes32_to_babybear)
             .collect();
 
         crate::derivation_air::verify_derivation_stark(&stark_proof, &public_inputs)
@@ -1314,7 +1311,7 @@ impl CrossStateBackend for Plonky3Backend {
         let source_roots: Vec<FieldElement> = proof.public_inputs[2..]
             .iter()
             .take(num_sources)
-            .map(|b| bytes_to_field(b))
+            .map(bytes_to_field)
             .collect();
 
         Ok(CrossStateOutput {

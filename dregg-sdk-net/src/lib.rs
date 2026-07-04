@@ -352,7 +352,7 @@ fn hex_encode_bytes(bytes: &[u8]) -> String {
 
 /// Decode a hex string into bytes.
 fn hex_decode_bytes(s: &str) -> Result<Vec<u8>, ()> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err(());
     }
     (0..s.len())

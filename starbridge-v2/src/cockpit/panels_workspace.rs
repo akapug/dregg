@@ -187,6 +187,15 @@ impl Cockpit {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match tab {
+            // HOME · the landing-portal card AS the surface (the live front door as a card),
+            // the Rust home panel as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Home => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Home,
+                cx,
+                |this, _cx| this.home_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Home => self.home_panel().into_any_element(),
             Tab::Shell => self.shell_panel(cx).into_any_element(),
             // OPERATE · the agent-activity card AS the surface (the mode's main pane is a
@@ -199,6 +208,16 @@ impl Cockpit {
             ),
             #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Agent => self.agent_panel(cx).into_any_element(),
+            // OPERATE · the A2 swarm card AS the surface (the live coordinator + the killer-demo
+            // threaded through `SurfaceState`), the gpui swarm panel (which fires the genuine
+            // emit/drain/transfer turns) as fail-soft fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Swarm => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Swarm,
+                cx,
+                |this, cx| this.swarm_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Swarm => self.swarm_panel(cx).into_any_element(),
             // INHABIT · the ocap-graph card AS the surface (the live cap web as a card).
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
@@ -209,8 +228,34 @@ impl Cockpit {
             ),
             #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Graph => self.graph_panel().into_any_element(),
+            // INHABIT · the organ-survey card AS the surface (live organ cell-state as a card).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Organs => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Organs,
+                cx,
+                |this, _cx| this.organs_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Organs => self.organs_panel().into_any_element(),
+            // INHABIT · the proof-board card AS the surface (live verification status as a card).
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Proofs => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Proofs,
+                cx,
+                |this, _cx| this.proofs_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Proofs => self.proofs_panel().into_any_element(),
+            // AUTHOR/BROWSE · the dregg:// web-of-cells card AS the surface (the addressable
+            // docuverse), the gpui web-of-cells browser as fail-soft fallback + the
+            // card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::WebOfCells => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::WebCells,
+                cx,
+                |this, cx| this.web_of_cells_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::WebOfCells => self.web_of_cells_panel(cx).into_any_element(),
             Tab::WebShell => self.webshell_panel(cx).into_any_element(),
             // AUTHOR · the what-links-here card AS the surface (live backlinks as a card).
@@ -222,16 +267,77 @@ impl Cockpit {
             ),
             #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::LinksHere => self.links_here_panel(cx).into_any_element(),
+            // SERVICES · the powerbox / CapDesk card AS the surface (the focused cell as granter +
+            // its live grantable-target picker), the gpui powerbox (which fires the genuine
+            // attenuated grant turn) as fail-soft fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Powerbox => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Powerbox,
+                cx,
+                |this, cx| this.powerbox_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Powerbox => self.powerbox_panel(cx).into_any_element(),
             Tab::Moldable => self.moldable_panel(cx).into_any_element(),
+            // INSPECT · the focused cell's reflected state + cap-gated affordances AS a
+            // deos-js card over the live World (the inspector view-tree: RawFields → live
+            // `Bind`s, Affordances → cap-gated `Button`s that fire real verified turns).
+            // The hardcoded gpui `inspect_act_panel` is kept as the fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::InspectAct => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Inspector,
+                cx,
+                |this, cx| this.inspect_act_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::InspectAct => self.inspect_act_panel(cx).into_any_element(),
+            // SERVICES · the per-cell service-explorer card AS the surface (the focused cell's
+            // derived interface, cap-annotated for the viewer), the gpui explorer (which fires the
+            // genuine method invoke) as fail-soft fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::ServiceExplorer => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::ServiceExplorer,
+                cx,
+                |this, cx| this.service_explorer_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::ServiceExplorer => self.service_explorer_panel(cx).into_any_element(),
+            // SERVICES · the whole-image directory card AS the surface (services × interfaces),
+            // the gpui directory panel (which fires the genuine announce turn) as fail-soft
+            // fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::ServiceDirectory => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::ServiceDirectory,
+                cx,
+                |this, cx| this.service_directory_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
+            Tab::ServiceDirectory => self.service_directory_panel(cx).into_any_element(),
             Tab::Workspace => self.workspace_panel(cx).into_any_element(),
+            // INHABIT · the glowing-cell room AS the surface (the 1999-AOL wonder front door as
+            // a portable card — every cell a tile in a spatial grid, glow as a live `icon`), the
+            // gpui wonder room (which fires the grab/drop conserving turn) as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Wonder => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Wonder,
+                cx,
+                |this, cx| this.wonder_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Wonder => self.wonder_panel(cx).into_any_element(),
             Tab::Lanes => self.lanes_panel(cx).into_any_element(),
             Tab::Time => self.time_panel(cx).into_any_element(),
             Tab::Share => self.share_panel(cx).into_any_element(),
             Tab::Docs => self.docs_panel(cx).into_any_element(),
+            // TRUST · the human-layer who-i-am + recovery card AS the surface, the gpui
+            // trust panel as fail-soft fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Trust => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Trust,
+                cx,
+                |this, cx| this.trust_tab(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Trust => self.trust_tab(cx).into_any_element(),
             Tab::Devtools => self.devtools_panel(cx).into_any_element(),
             Tab::Buffer => self.buffer_panel(cx).into_any_element(),
@@ -255,8 +361,37 @@ impl Cockpit {
             ),
             #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Objects => self.objects_panel().into_any_element(),
+            // DEV · the step-debugger card AS the surface (the turn under the lens re-executed
+            // live over the cockpit's threaded state), the gpui debugger panel as fail-soft
+            // fallback + the card-pane-off home.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Debugger => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Debugger,
+                cx,
+                |this, _cx| this.debugger_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Debugger => self.debugger_panel().into_any_element(),
+            // DEV · the replay / time-travel card AS the surface (the verified reconstruction at
+            // the cockpit's threaded cursor), the gpui replay panel as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Replay => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Replay,
+                cx,
+                |this, _cx| this.replay_panel().into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Replay => self.replay_panel().into_any_element(),
+            // DEV · the cipherclerk vault card AS the surface (the live HD-identity roster +
+            // tokens + delegations threaded through `SurfaceState`), the gpui clerk panel
+            // (which fires the genuine mint/attenuate/delegate crypto) as fail-soft fallback.
+            #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+            Tab::Cipherclerk => self.mode_card_surface(
+                starbridge_v2::dock::card_surface::ModeCard::Cipherclerk,
+                cx,
+                |this, cx| this.cipherclerk_panel(cx).into_any_element(),
+            ),
+            #[cfg(not(all(feature = "dev-surfaces", feature = "card-pane")))]
             Tab::Cipherclerk => self.cipherclerk_panel(cx).into_any_element(),
             Tab::Editor => self.editor_panel().into_any_element(),
         }
@@ -394,7 +529,7 @@ impl Cockpit {
                     .active_item()
                     .map(|s| Tab::from_index(s.item_id().as_u64() as usize));
                 let is_torn = pane_tab
-                    .and_then(|t| weak.upgrade())
+                    .and_then(|_t| weak.upgrade())
                     .map(|c| c.read(cx).tab_is_torn_off(pane_tab.unwrap()))
                     .unwrap_or(false);
                 row = row.child(
@@ -649,12 +784,12 @@ impl Cockpit {
     /// Open a LIVE CARD pane: a hyperdreggmedia CARD ([`CardSurface`]) grafted as a
     /// split beside the active pane — THE keystone joy-path surface. The card binds
     /// + fires against the cockpit's LIVE `World` (the operator's `user` anchor
-    /// cell): its `bind` re-reads that cell's counter off the live ledger and its
-    /// `+1` button fires ONE cap-gated verified turn through `World::commit_turn` —
-    /// a receipt the cockpit's own cell inspector immediately sees (the SAME ledger
-    /// the editor pane saves onto). A child clicks the +1 and the count rises; the
-    /// turn bottoms out in the verified executor. Built only here (a live window) —
-    /// the headless bake (`render_card_pane_headless`) is the separate PNG path.
+    ///   cell): its `bind` re-reads that cell's counter off the live ledger and its
+    ///   `+1` button fires ONE cap-gated verified turn through `World::commit_turn` —
+    ///   a receipt the cockpit's own cell inspector immediately sees (the SAME ledger
+    ///   the editor pane saves onto). A child clicks the +1 and the count rises; the
+    ///   turn bottoms out in the verified executor. Built only here (a live window) —
+    ///   the headless bake (`render_card_pane_headless`) is the separate PNG path.
     ///
     /// Boots a SpiderMonkey runtime to AUTHOR the view-tree (the engine is a
     /// process-global singleton, so a second open after one already booted fails;
@@ -790,7 +925,7 @@ impl Cockpit {
     /// [`Self::split_pane`]'s `PaneGroup::split` + active-pane + notify). Seeds
     /// the pane group first if the window has not rendered yet.
     #[cfg(feature = "dev-surfaces")]
-    fn graft_dev_pane(
+    pub(crate) fn graft_dev_pane(
         &mut self,
         surface: Box<dyn CockpitSurface>,
         window: &mut Window,
@@ -986,6 +1121,7 @@ impl Cockpit {
     /// see [`Self::tear_off_tab_deferred`]). Driven by the ⌘K command (which holds a
     /// cockpit lease here), so it must NOT open the window inline; it schedules the
     /// unleased open on the next app pass exactly as the pane control does.
+    #[allow(dead_code)] // ⌘K-driven tear-off entry point; kept API alongside the pane control
     pub(crate) fn tear_off_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tear_off_tab_deferred(tab, cx);
     }
@@ -995,11 +1131,11 @@ impl Cockpit {
     /// mirror callback re-enters the cockpit — does not nest inside a cockpit lease
     /// (the crash). It briefly leases the cockpit to take the [`WindowRegistry`] out
     /// + build the render seam, opens the window with the cockpit FREE, then briefly
-    /// re-leases to record the result + persist. Mints a window whose root renders
-    /// `tab`'s body via the host re-entry — the SAME body, over the SAME cell, the
-    /// dock pane showed (identity preserved). Idempotent: a second tear-off of an
-    /// already-torn `tab` re-focuses the existing window. A platform refusal is
-    /// surfaced fail-closed in the outcome banner (nothing is recorded).
+    ///   re-leases to record the result + persist. Mints a window whose root renders
+    ///   `tab`'s body via the host re-entry — the SAME body, over the SAME cell, the
+    ///   dock pane showed (identity preserved). Idempotent: a second tear-off of an
+    ///   already-torn `tab` re-focuses the existing window. A platform refusal is
+    ///   surfaced fail-closed in the outcome banner (nothing is recorded).
     fn tear_off_tab_unleased(weak: WeakEntity<Self>, tab: Tab, app: &mut App) {
         let id = DockSurfaceId(tab.index() as u64);
         let label = tab.label();
@@ -2007,7 +2143,7 @@ impl Cockpit {
     /// working-set move PAST a checkpoint — then ↺ resume recovers the checkpointed
     /// past. The method symbol is what lets a confined agent's turn through the gate.
     pub(crate) fn agent_memory_advance(&mut self, cx: &mut Context<Self>) {
-        use dregg_turn::action::{Action, Authorization, CommitmentMode, DelegationMode, symbol};
+        use dregg_turn::action::{symbol, Action, Authorization, CommitmentMode, DelegationMode};
         let agent = self.agent_surface.agent;
         let outcome = {
             let mut w = self.world.borrow_mut();
@@ -3093,7 +3229,7 @@ impl Cockpit {
 #[cfg(all(test, feature = "render-capture"))]
 mod popout_crash_repro {
     use super::*;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3114,7 +3250,7 @@ mod popout_crash_repro {
         let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
             gpui_platform::current_headless_renderer()
         });
-        cx.update(|cx| gpui_component::init(cx));
+        cx.update(gpui_component::init);
         cx
     }
 
@@ -3221,7 +3357,7 @@ mod popout_crash_repro {
 #[cfg(all(test, feature = "render-capture"))]
 mod agent_memory_cockpit_affordance {
     use super::*;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -3239,7 +3375,7 @@ mod agent_memory_cockpit_affordance {
         let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
             gpui_platform::current_headless_renderer()
         });
-        cx.update(|cx| gpui_component::init(cx));
+        cx.update(gpui_component::init);
         cx
     }
 

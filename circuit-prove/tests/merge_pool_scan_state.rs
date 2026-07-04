@@ -80,8 +80,10 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
         None,
     )
     .expect("rotated transfer leg mints + self-verifies");
-    let old_root = leg.old_root();
-    let new_root = leg.new_root();
+    // H0 DEPLOYED-WIDE: the deployed leg is WIDE-anchored — the single-felt rotated roots are RETIRED
+    // to zero, so report the HEAD felt (lane 0) of the GENUINE 8-felt wide anchors.
+    let old_root = leg.wide_old_root8().expect("deployed leg is wide-anchored")[0];
+    let new_root = leg.wide_new_root8().expect("deployed leg is wide-anchored")[0];
     (
         FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
@@ -100,6 +102,8 @@ fn make_chain(
     let mut nonce = start_nonce;
     let mut genesis = BabyBear::ZERO;
     let mut final_root = BabyBear::ZERO;
+    // `nonce`/`balance` are intertwined chain accumulators here; an enumerate rewrite isn't clean.
+    #[allow(clippy::explicit_counter_loop)]
     for i in 0..k {
         let (turn, old_root, new_root) = make_turn(balance, nonce, step);
         if i == 0 {
@@ -256,8 +260,24 @@ fn scan_state_root_equals_serial_root() {
     let serial: WholeChainProof =
         prove_turn_chain_recursive(&turns).expect("the serial 4-turn chain folds");
     assert_eq!(serial.num_turns, 4);
-    assert_eq!(serial.genesis_root, genesis);
-    assert_eq!(serial.final_root, final_root);
+    // H0 DEPLOYED-WIDE: the genuine 8-felt wide anchors off the first/last legs.
+    let genesis8 = turns[0]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("first leg is wide-anchored");
+    let final8 = turns[turns.len() - 1]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("last leg is wide-anchored");
+    assert_eq!(serial.genesis_root, genesis8);
+    assert_eq!(serial.final_root, final8);
+    assert_eq!(
+        serial.genesis_root[0], genesis,
+        "the head felt matches make_chain's scalar root"
+    );
+    assert_eq!(serial.final_root[0], final_root);
     let serial_vk = serial.root_vk_fingerprint();
     verify_turn_chain_recursive(&serial, &serial_vk).expect("serial root verifies");
     let serial_bytes = WholeChainProofBytes::from_proof(&serial).to_postcard();

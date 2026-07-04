@@ -49,12 +49,12 @@
 //!
 //! This is the **resolution-and-authority** layer: the gate decides, against the held grant
 //! + the granted provider set, whether (and how) a `content://` access may proceed, and
-//! records it. The **cross-domain** variant — a share that crosses a confinement border
-//! becomes a `MembraneEnvelope` (`deos-matrix/src/membrane.rs`'s frustum-culled, cap-bounded
-//! world-fork) rather than an in-graph cap hand — and the in-runtime interposition of the
-//! actual binder `ContentResolver` transaction are the same not-yet-claimed depth the intent
-//! gate names. What IS real today: the authority-resolution algebra + the read/write
-//! attenuation teeth + the receipt, testable on any node with no device.
+//!   records it. The **cross-domain** variant — a share that crosses a confinement border
+//!   becomes a `MembraneEnvelope` (`deos-matrix/src/membrane.rs`'s frustum-culled, cap-bounded
+//!   world-fork) rather than an in-graph cap hand — and the in-runtime interposition of the
+//!   actual binder `ContentResolver` transaction are the same not-yet-claimed depth the intent
+//!   gate names. What IS real today: the authority-resolution algebra + the read/write
+//!   attenuation teeth + the receipt, testable on any node with no device.
 
 use dregg_firmament::CellId;
 
@@ -496,12 +496,10 @@ mod tests {
         let uri = ContentUri::parse("content://com.android.contacts/people/3").unwrap();
 
         // A read is granted...
-        assert!(
-            resolver
-                .resolve(&uri, ContentAccess::Read)
-                .decision
-                .granted()
-        );
+        assert!(resolver
+            .resolve(&uri, ContentAccess::Read)
+            .decision
+            .granted());
         // ...but a write against the read-only grant is refused (no amplification).
         let w = resolver.resolve(&uri, ContentAccess::Write);
         assert!(w.decision.refused_read_only());

@@ -26,17 +26,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, IntoElement, MouseButton, ParentElement, Render,
-    SharedString, Styled, Window, div, prelude::*, px,
+    div, prelude::*, px, App, Context, Entity, FocusHandle, IntoElement, MouseButton,
+    ParentElement, Render, SharedString, Styled, Window,
 };
 
 use crate::cockpit::Cockpit;
 use crate::views::theme;
 use starbridge_v2::reflect;
 use starbridge_v2::session::{
-    DemoIdentity, IdentityKeystore, IdentityKind, LoginManager, LoginOutcome, Session,
     demo_identities, open_session_world, provision_system_principal, session_base_dir,
-    start_fresh_session_world,
+    start_fresh_session_world, DemoIdentity, IdentityKeystore, IdentityKind, LoginManager,
+    LoginOutcome, Session,
 };
 use starbridge_v2::world::{self, World};
 
@@ -47,6 +47,7 @@ use starbridge_v2::world::{self, World};
 /// roster the picker shows. A failed/refused login leaves an in-surface message.
 pub struct LoginSurface {
     world: Rc<RefCell<World>>,
+    #[allow(dead_code)] // carried for cockpit construction on a successful login
     anchors: [dregg_cell::CellId; 3],
     seed: Option<world::DemoSeed>,
     node_url: Option<String>,
@@ -722,11 +723,13 @@ pub struct SessionShell {
     anchors: [dregg_cell::CellId; 3],
     node_url: Option<String>,
     manager: LoginManager,
+    #[allow(dead_code)] // identity roster carried alongside the active session
     identities: Vec<DemoIdentity>,
     session: Session,
     identity: DemoIdentity,
     /// The deos image root dir — where the principal's durable session image lives,
     /// so logout can write the REVOKED record into it (SESSION RESUME).
+    #[allow(dead_code)] // held for the logout-revoke write into the session image
     base_dir: std::path::PathBuf,
     focus: FocusHandle,
 }
@@ -835,18 +838,16 @@ impl SessionShell {
         // THE LIVE-NODE PUMP — drain a connected node's SSE receipt stream off the
         // async executor (no-op + self-stopping for the embedded-only image).
         let pump_cockpit = shell.read(cx).cockpit.downgrade();
-        cx.spawn(async move |cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(120))
-                    .await;
-                let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
-                    Ok(keep) => keep,
-                    Err(_) => break,
-                };
-                if !keep {
-                    break;
-                }
+        cx.spawn(async move |cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let keep = match pump_cockpit.update(cx, |c, c_cx| c.pump_live(c_cx)) {
+                Ok(keep) => keep,
+                Err(_) => break,
+            };
+            if !keep {
+                break;
             }
         })
         .detach();

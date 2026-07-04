@@ -344,8 +344,12 @@ fn foreign_snapshot_does_not_bind() {
 /// live proving path is untouched.
 #[test]
 fn yield_is_gated_by_the_umem_lane() {
-    // umem lane OFF (default), but the yield armed: nothing should be captured.
+    // The VK epoch ARMED the umem witness lane by default; this control explicitly DISARMS it so the
+    // yield armed but the lane OFF captures nothing — the yield is a pure observation OF that lane.
     let executor = TurnExecutor::new(ComputronCosts::zero());
+    executor
+        .umem_witness_enabled
+        .store(false, Ordering::Relaxed);
     executor.set_umem_yield_at(Some(1));
     let mut ledger = Ledger::new();
     let (agent_id, target_id, _slot) = three_effect_turn(&executor, &mut ledger);

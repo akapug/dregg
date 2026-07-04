@@ -1,9 +1,9 @@
 //! SDK adapter for the SDK-free `dregg-tool-gateway` core.
 //!
 //! The extracted core owns the delegated-policy gate, rate meter, routed inbox,
-//! and `TurnReceipt` envelope. This module keeps the previous SDK-facing API:
-//! it admits a real [`SubAgent`] through [`AgentRuntime`], installs the mandate
-//! program on the worker cell, and maps core execution errors back to
+//! paid-call budget, and `TurnReceipt` envelope. This module keeps the SDK-facing
+//! API: it admits a real [`SubAgent`] through [`AgentRuntime`], installs the
+//! mandate program on the worker cell, and maps core execution errors back to
 //! [`SdkError`].
 
 use dregg_cell::CellId;
@@ -16,8 +16,8 @@ use crate::error::SdkError;
 use crate::runtime::{AgentRuntime, SubAgent};
 
 pub use core::{
-    CALLS_MADE_SLOT, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult, RoutedStatus,
-    ToolGrant, ToolReceipt, deleg_admit, mandate_program,
+    CALLS_MADE_SLOT, Charge, DeliveryReceipt, GatewayRefusal, RoutedHandle, RoutedResult,
+    RoutedStatus, ToolGrant, ToolReceipt, deleg_admit, mandate_program,
 };
 
 /// The error surface of [`ToolGateway::invoke`]: either an in-band mandate
@@ -89,7 +89,7 @@ impl core::GatewayTurnAcceptor for SdkTurnAcceptor {
     }
 }
 
-/// THE GATEWAY — a mandated inhabitant wrapping a cap-gated SDK worker.
+/// THE GATEWAY: a mandated inhabitant wrapping a cap-gated SDK worker.
 pub struct ToolGateway {
     inner: core::ToolGateway<SdkTurnAcceptor>,
 }
@@ -101,6 +101,16 @@ impl ToolGateway {
         parent_token: &HeldToken,
         grant: ToolGrant,
     ) -> Result<Self, SdkError> {
+        Self::admit_priced(runtime, parent_token, grant, None)
+    }
+
+    /// Admit a worker under a delegated tool mandate with an optional per-call price.
+    pub fn admit_priced(
+        runtime: &AgentRuntime,
+        parent_token: &HeldToken,
+        grant: ToolGrant,
+        charge: Option<Charge>,
+    ) -> Result<Self, SdkError> {
         let worker = runtime.spawn_sub_agent_scoped(
             &Attenuation::default(),
             parent_token,
@@ -108,18 +118,37 @@ impl ToolGateway {
         )?;
         let worker_cell = worker.cell_id();
 
-        {
+        let consumer_asset = {
             let mut ledger = runtime.ledger().lock().unwrap();
             ledger
                 .update_with(&worker_cell, |cell| {
                     cell.program = mandate_program(grant.rate_limit);
                 })
                 .map_err(|e| SdkError::Rejected(format!("install mandate program: {e}")))?;
-        }
+            ledger
+                .get(&worker_cell)
+                .map(|cell| *cell.token_id())
+                .unwrap_or([0u8; 32])
+        };
 
         Ok(Self {
-            inner: core::ToolGateway::new(grant, SdkTurnAcceptor { worker }),
+            inner: core::ToolGateway::new_priced(
+                grant,
+                SdkTurnAcceptor { worker },
+                consumer_asset,
+                charge,
+            ),
         })
+    }
+
+    /// Fund the consumer's spend account from a real funded source.
+    #[must_use = "dropping the TurnReceipt silently discards proof the funding committed"]
+    pub fn fund(&self, funder: &SubAgent, amount: u64) -> Result<TurnReceipt, SdkError> {
+        funder.execute(vec![Effect::Transfer {
+            from: funder.cell_id(),
+            to: self.worker_cell(),
+            amount,
+        }])
     }
 
     /// The grantor's pinned mandate.
@@ -146,6 +175,33 @@ impl ToolGateway {
     /// The calls remaining on the mandate.
     pub fn remaining(&self) -> i64 {
         self.inner.remaining()
+    }
+
+    /// The optional provider price and consumer budget for a paid mandate.
+    pub fn charge(&self) -> Option<&Charge> {
+        self.inner.charge()
+    }
+
+    /// The cumulative value spent under this mandate.
+    pub fn spent(&self) -> u64 {
+        self.inner.spent()
+    }
+
+    /// The value budget remaining on the mandate; `None` for an unpriced mandate.
+    pub fn budget_remaining(&self) -> Option<u64> {
+        self.inner.budget_remaining()
+    }
+
+    /// Resolve this mandate's per-call charge through the canonical Payable path.
+    pub fn charge_invocation(
+        &self,
+    ) -> Option<
+        Result<
+            (dregg_turn::Action, dregg_cell::interface::MethodSig),
+            dregg_payable::InvokeRefused,
+        >,
+    > {
+        self.inner.charge_invocation()
     }
 
     /// Admit and submit one inline tool call.

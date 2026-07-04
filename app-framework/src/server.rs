@@ -421,13 +421,12 @@ impl AppServer {
         let addr = listener.local_addr()?;
         eprintln!("{} listening on http://{addr}", self.service_name);
 
-        if let Some(reg) = &self.pending_registration {
-            if let Err(e) = crate::discovery::NameserviceClient::from_env()
+        if let Some(reg) = &self.pending_registration
+            && let Err(e) = crate::discovery::NameserviceClient::from_env()
                 .register(reg)
                 .await
-            {
-                eprintln!("[nameservice] registration failed (non-fatal): {e}");
-            }
+        {
+            eprintln!("[nameservice] registration failed (non-fatal): {e}");
         }
 
         axum::serve(listener, self.router).await?;
@@ -445,13 +444,12 @@ impl AppServer {
         let addr = listener.local_addr()?;
         eprintln!("{} listening on http://{addr}", self.service_name);
 
-        if let Some(reg) = &self.pending_registration {
-            if let Err(e) = crate::discovery::NameserviceClient::from_env()
+        if let Some(reg) = &self.pending_registration
+            && let Err(e) = crate::discovery::NameserviceClient::from_env()
                 .register(reg)
                 .await
-            {
-                eprintln!("[nameservice] registration failed (non-fatal): {e}");
-            }
+        {
+            eprintln!("[nameservice] registration failed (non-fatal): {e}");
         }
 
         tokio::spawn(async move {

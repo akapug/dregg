@@ -399,7 +399,7 @@ fn babybear_inverse(a: BabyBear) -> BabyBear {
     let mut exp = BABYBEAR_P - 2;
     while exp > 0 {
         if exp & 1 == 1 {
-            result = result * base;
+            result *= base;
         }
         base = base * base;
         exp >>= 1;

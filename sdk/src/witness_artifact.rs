@@ -31,7 +31,7 @@ pub fn decode_witnessed_receipt_artifact_hex(hex: &str) -> Result<WitnessedRecei
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("hex string has odd length".into());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -48,10 +48,12 @@ mod tests {
     use super::*;
 
     fn sample_witnessed() -> WitnessedReceipt {
-        let mut receipt = dregg_turn::TurnReceipt::default();
-        receipt.turn_hash = [7; 32];
-        receipt.effects_hash = [8; 32];
-        receipt.agent = dregg_types::CellId([9; 32]);
+        let receipt = dregg_turn::TurnReceipt {
+            turn_hash: [7; 32],
+            effects_hash: [8; 32],
+            agent: dregg_types::CellId([9; 32]),
+            ..Default::default()
+        };
         WitnessedReceipt::from_components(receipt, vec![1, 2, 3], vec![4, 5], None)
     }
 

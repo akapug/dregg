@@ -104,6 +104,8 @@ impl ExtElem {
     }
 
     /// Extension field inverse via Gaussian elimination.
+    // crypto index loops kept verbatim
+    #[allow(clippy::needless_range_loop)]
     pub fn inverse(self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -150,7 +152,7 @@ impl ExtElem {
 
             let inv_pivot = mat[c][c].inverse()?;
             for j in 0..5 {
-                mat[c][j] = mat[c][j] * inv_pivot;
+                mat[c][j] *= inv_pivot;
             }
 
             for row in 0..4 {
@@ -159,7 +161,7 @@ impl ExtElem {
                 }
                 let factor = mat[row][c];
                 for j in 0..5 {
-                    mat[row][j] = mat[row][j] - factor * mat[c][j];
+                    mat[row][j] -= factor * mat[c][j];
                 }
             }
         }

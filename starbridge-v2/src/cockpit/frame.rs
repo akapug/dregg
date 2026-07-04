@@ -145,6 +145,8 @@ impl CockpitMode {
                 Tab::Swarm,
                 Tab::Powerbox,
                 Tab::Cipherclerk,
+                Tab::ServiceExplorer,
+                Tab::ServiceDirectory,
                 Tab::Trust,
             ],
         }
@@ -287,6 +289,7 @@ impl Cockpit {
     /// (unauthorized / no-op / no layout cell) is reported to the outcome banner, the
     /// arrangement unchanged.
     #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
+    #[allow(dead_code)] // wired hook for the layout card's `move:<SURFACE>` button
     pub(crate) fn reshape_layout_move(
         &mut self,
         surface: Tab,
@@ -1299,7 +1302,7 @@ mod tests {
 ))]
 mod layout_cell_drives_the_rail {
     use super::*;
-    use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+    use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
     use gpui_wgpu::CosmicTextSystem;
     use std::borrow::Cow;
     use std::cell::RefCell;
@@ -1319,7 +1322,7 @@ mod layout_cell_drives_the_rail {
         let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
             gpui_platform::current_headless_renderer()
         });
-        cx.update(|cx| gpui_component::init(cx));
+        cx.update(gpui_component::init);
         cx
     }
 

@@ -27,6 +27,16 @@ pub struct Config {
     /// Loaded from FEDERATION_ID env (64 hex chars) or defaults to all-zero
     /// (suitable only for single-bot dev; real cliques must set the shared root).
     pub federation_id_bytes: [u8; 32],
+
+    // ─── DreggNet Cloud admin surface ────────────────────────────────────
+    /// The admin (ember) Discord user id. Their per-user channels gain admin
+    /// visibility; they are the recipient of every semi-private channel's
+    /// read access. `None` = no admin pinned (dev/single-user).
+    pub admin_discord_id: Option<u64>,
+    /// Bearer token gating the admin webportal (`/admin`). `None` disables the
+    /// admin surface entirely (it returns 404). In production this sits behind
+    /// Caddy basic-auth on the edge as well — defence in depth.
+    pub admin_token: Option<String>,
 }
 
 impl Config {
@@ -53,8 +63,11 @@ impl Config {
             .try_into()
             .map_err(|_| "BOT_SECRET must be exactly 32 bytes (64 hex chars)".to_string())?;
 
+        // `DEVNET_URL` (explicit, full URL) wins; otherwise fall back to the
+        // central endpoint config — the devnet domain there is itself overridable
+        // via `DREGG_DEVNET_DOMAIN`, so the production domain lives in ONE place.
         let devnet_url = env::var("DEVNET_URL")
-            .unwrap_or_else(|_| "https://devnet.dregg.fg-goose.online".to_string());
+            .unwrap_or_else(|_| dregg_sdk::DreggEndpoints::from_env().devnet_url());
 
         let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:bot.db".to_string());
 
@@ -82,6 +95,18 @@ impl Config {
             );
         }
 
+        // Admin (ember) identity + portal auth. Both optional: unset = no admin
+        // pinned and the admin portal disabled.
+        let admin_discord_id = env::var("ADMIN_DISCORD_ID")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok());
+        let admin_token = env::var("ADMIN_TOKEN").ok().filter(|s| !s.is_empty());
+        if admin_token.is_none() {
+            eprintln!(
+                "warning: ADMIN_TOKEN not set; the admin webportal (/admin) is DISABLED. Set ADMIN_TOKEN=<secret> to enable monitoring (and put Caddy basic-auth in front of it on the edge)."
+            );
+        }
+
         Ok(Self {
             discord_token,
             discord_app_id,
@@ -91,6 +116,8 @@ impl Config {
             http_host,
             http_port,
             federation_id_bytes,
+            admin_discord_id,
+            admin_token,
         })
     }
 }

@@ -747,11 +747,9 @@ mod tests {
                 origin: "https://tracker.evil.com".to_string()
             }
         );
-        assert!(
-            receipt
-                .status_line()
-                .contains("does not authorize the data origin")
-        );
+        assert!(receipt
+            .status_line()
+            .contains("does not authorize the data origin"));
     }
 
     /// The other web half: a cap-authorized origin passes the cap tooth and resolves to
@@ -955,10 +953,9 @@ mod tests {
         assert!(!r.decision.refused_by_cap());
         assert!(!r.decision.refused_no_handler());
         assert!(r.decision.dispatch_failed());
-        assert!(
-            r.status_line()
-                .contains("device dispatch (am start) failed")
-        );
+        assert!(r
+            .status_line()
+            .contains("device dispatch (am start) failed"));
         assert_eq!(
             r.decision_digest,
             IntentReceipt::digest(Some(me), &r.intent, &r.decision)

@@ -162,32 +162,32 @@ pub fn validate_intent(intent: &Intent) -> Result<(), ValidationError> {
 
     // Check action string lengths
     for pattern in &spec.actions {
-        if let Some(ref action) = pattern.action {
-            if action.len() > MAX_STRING_LEN {
-                return Err(ValidationError::ActionStringTooLong {
-                    len: action.len(),
-                    max: MAX_STRING_LEN,
-                });
-            }
+        if let Some(ref action) = pattern.action
+            && action.len() > MAX_STRING_LEN
+        {
+            return Err(ValidationError::ActionStringTooLong {
+                len: action.len(),
+                max: MAX_STRING_LEN,
+            });
         }
-        if let Some(ref resource) = pattern.resource {
-            if resource.len() > MAX_STRING_LEN {
-                return Err(ValidationError::ResourceStringTooLong {
-                    len: resource.len(),
-                    max: MAX_STRING_LEN,
-                });
-            }
+        if let Some(ref resource) = pattern.resource
+            && resource.len() > MAX_STRING_LEN
+        {
+            return Err(ValidationError::ResourceStringTooLong {
+                len: resource.len(),
+                max: MAX_STRING_LEN,
+            });
         }
     }
 
     // Check resource pattern length
-    if let Some(ref pattern) = spec.resource_pattern {
-        if pattern.len() > MAX_RESOURCE_PATTERN_LEN {
-            return Err(ValidationError::ResourcePatternTooLong {
-                len: pattern.len(),
-                max: MAX_RESOURCE_PATTERN_LEN,
-            });
-        }
+    if let Some(ref pattern) = spec.resource_pattern
+        && pattern.len() > MAX_RESOURCE_PATTERN_LEN
+    {
+        return Err(ValidationError::ResourcePatternTooLong {
+            len: pattern.len(),
+            max: MAX_RESOURCE_PATTERN_LEN,
+        });
     }
 
     // Check constraint string lengths

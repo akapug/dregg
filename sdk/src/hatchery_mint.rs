@@ -48,15 +48,43 @@
 //! ([`ForgeRejection::ProgramMissingInvariant`]), even if it waves the kind id
 //! around. Conformance is membership.
 //!
-//! ## The next slice (named, not hand-waved)
+//! ## The Lean rung — the invariant is PROVEN, not just smoke-tested
 //!
-//! The [`HpresProof`] is presently [`HpresProof::Pending`]: the runtime check
-//! (the executor refusing a violating turn) *stands in for* the Lean proof that
-//! the constraint set is a genuine single-step invariant. The next slice binds
-//! [`HpresProof::Attested`] to a concrete `Dregg2.Verify.Contract.CellContract`
-//! by content hash, so a minted kind carries the machine-checked "holds forever"
-//! crown, not merely the structural check. See `MINT.next_slice` in
-//! `docs/deos/HATCHERY-ABSTRACTION-MINT.md`.
+//! The abstraction-mint invariant is grounded in `metatheory/Dregg2/Deos/
+//! Hatchery.lean` (the LAST of the six house capacities — the house COMPLETE):
+//! the per-turn gate IS the declared invariant (`evalStep_admits_iff_*`), an
+//! admitted step preserves it (`step_preserves`, the **hpres**), and the SAME
+//! `Verify.Contract.CellContract` carry skeleton lifts it to the unbounded
+//! trajectory — `invariant_forever`: under EVERY schedule of admitted turns, a
+//! minted cell carries its invariant for life. The Lean binds
+//! [`HpresProof::Attested`] to a machine-checked `CellContract`: its `Attested`
+//! structure cannot be constructed without a real contract (hence a real
+//! `step_ob` proof term), so an attestation is a *proved* forever-crown
+//! (`attested_enforces_forever`), not a trusted flag — and an attestation for a
+//! *different* invariant is rejected by the decidable content-hash check
+//! (`forged_attestation_rejected`). The forge-detector here is the executor
+//! image of that rung; [`tests::invariant_matches_lean_rung`] mirrors the Lean
+//! witnesses so the Rust rejection is tied to the proven statement.
+//!
+//! The DEEPER weld — making the `Attested` forever-crown REAL for a pure light
+//! client (not just a re-executing validator) — is the per-turn FOLD over a
+//! re-proved CONTRACT-ATTESTATION leaf
+//! (`dregg_circuit_prove::hatchery_leaf_adapter::prove_hatchery_leaf`), connected
+//! to the mint leg's claimed `contract_hash` teeth by
+//! `prove_hatchery_binding_node_segmented`. This binds the `(contract_hash,
+//! invariant_digest)` tuple IN the deployed recursion tree the light client folds,
+//! so a mint whose `contract_hash` is backed by no verifying attestation is UNSAT —
+//! the same fold-binding shape the sovereign / custom / membership carriers ride.
+//! The adversarial refutation it answers is
+//! `metatheory/Dregg2/Circuit/HatcheryBackingAttack.lean`
+//! (`deployed_admits_unbacked_hatchery`); the fold tooth bites in
+//! `hatchery_leaf_adapter::tests::forged_contract_hash_is_rejected_by_the_fold`.
+//! Two named seams remain (NOT vacuity): the deployed mint leg must DUAL-EXPOSE its
+//! `contract_hash` teeth (a descriptor PI-exposure change — the VK-affecting
+//! "big-bang" piece this node consumes,
+//! `metatheory/docs/HOUSE-CAPACITIES-WELD-PLAN.md`, hatchery row), and full in-AIR
+//! re-verification that the `contract_hash` resolves to a verifying `CellContract`
+//! proof term stays the named off-AIR digest-of-attestation cost.
 
 use dregg_cell::factory::{FactoryDescriptor, canonical_program_vk};
 use dregg_cell::program::{TransitionCase, TransitionGuard, TransitionMeta};
@@ -138,9 +166,19 @@ pub enum HpresProof {
     /// No Lean crown bound yet. Enforcement is the runtime program gate; the
     /// `livingCellA_carries` "forever" theorem is the named next slice.
     Pending,
-    /// The kind is bound to a proved `CellContract` whose `step_ob` discharges
-    /// this invariant, identified by the content hash of the Lean artifact /
-    /// `#assert_axioms`-pinned theorem name. (Wiring deferred — see module docs.)
+    /// The kind is bound to a proved `Dregg2.Verify.Contract.CellContract` whose
+    /// `step_ob` discharges this invariant, identified by the content hash of the
+    /// Lean artifact / `#assert_axioms`-pinned theorem name. The binding is REAL at
+    /// two layers: (executor/Lean) `metatheory/Dregg2/Deos/Hatchery.lean`'s
+    /// `Attested` cannot be constructed without the contract (hence a real
+    /// `step_ob`), and `attested_enforces_forever` cashes it out into the unbounded
+    /// "holds forever" carry; (light-client) the `contract_hash` is bound into the
+    /// per-turn recursion FOLD a pure light client verifies, by
+    /// `dregg_circuit_prove::hatchery_leaf_adapter` — a `contract_hash` no
+    /// attestation leaf backs is UNSAT in the aggregate (the
+    /// `HatcheryBackingAttack.deployed_admits_unbacked_hatchery` forgery answered).
+    /// An attestation for a *different* invariant is rejected
+    /// (`forged_attestation_rejected`).
     Attested { contract_hash: [u8; 32] },
 }
 
@@ -149,6 +187,17 @@ impl HpresProof {
     /// the runtime gate alone).
     pub fn is_attested(&self) -> bool {
         matches!(self, HpresProof::Attested { .. })
+    }
+
+    /// The attested content hash the v12 rotated CARRIER MATERIAL publishes on the AFTER
+    /// commitment's `contract_hash8` octet (limbs 96..103) at a hatchery-mint proof site —
+    /// `Some` iff a machine-checked forever-crown (`Attested`) is bound, `None` (→ zero octet)
+    /// while the crown is merely `Pending`.
+    pub fn contract_hash(&self) -> Option<[u8; 32]> {
+        match self {
+            HpresProof::Attested { contract_hash } => Some(*contract_hash),
+            HpresProof::Pending => None,
+        }
     }
 }
 
@@ -245,6 +294,19 @@ impl MintedKind {
         self
     }
 
+    /// The v12 rotated CARRIER MATERIAL a hatchery-mint proof site threads into the AFTER
+    /// commitment (STEP-2.5): the `contract_hash8` octet (limbs 96..103) carries this kind's
+    /// Hatchery `Attested` content hash, so the honest mint's `state_commit` is NON-ZERO on that
+    /// octet — the SAT foundation the STEP-3 `contract_hash8` PI pin publishes. A `Pending` crown
+    /// yields the `Default` (zero octet). `child_vk` stays `None` (the factory child-VK octet is a
+    /// separate carrier, filled at the factory proof site).
+    pub fn carrier_material(&self) -> dregg_cell::commitment::RotationCarrierMaterial {
+        dregg_cell::commitment::RotationCarrierMaterial {
+            child_vk: None,
+            contract_hash: self.hpres.contract_hash(),
+        }
+    }
+
     /// Enforce the kind's invariant on a single transition — the GENUINE check.
     ///
     /// This delegates to the very program the executor runs: there is no
@@ -334,7 +396,7 @@ fn program_contains_constraints(program: &CellProgram, needed: &[StateConstraint
         CellProgram::Cases(cases) => cases.iter().flat_map(|c| c.constraints.iter()).collect(),
         CellProgram::None | CellProgram::Circuit { .. } => Vec::new(),
     };
-    needed.iter().all(|n| present.iter().any(|p| *p == n))
+    needed.iter().all(|n| present.contains(&n))
 }
 
 /// Build a [`CellState`] at the given nonce with one slot set — a test/helper
@@ -572,5 +634,125 @@ mod tests {
                 contract_hash: [0xCC; 32]
             }
         );
+    }
+
+    /// STEP-2.5: the hatchery-mint CARRIER MATERIAL — an attested kind threads its forever-crown
+    /// content hash into the rotated `contract_hash8` octet (NON-ZERO), a `Pending` kind threads the
+    /// `Default` (zero octet). The value published is exactly `HpresProof::Attested{contract_hash}`.
+    #[test]
+    fn attested_kind_carries_the_contract_hash_material() {
+        let pending = balance_kind();
+        assert_eq!(pending.hpres, HpresProof::Pending);
+        let pending_mat = pending.carrier_material();
+        assert_eq!(
+            pending_mat.contract_hash, None,
+            "a Pending crown → zero octet"
+        );
+        assert_eq!(pending_mat.child_vk, None);
+
+        let attested = balance_kind().attest_hpres([0xC7; 32]);
+        let mat = attested.carrier_material();
+        assert_eq!(
+            mat.contract_hash,
+            Some([0xC7; 32]),
+            "the attested contract hash rides the carrier material (non-zero octet 96..103)"
+        );
+        assert_eq!(
+            mat.child_vk, None,
+            "the hatchery carrier does not fill the factory child-VK octet"
+        );
+        assert_eq!(attested.hpres.contract_hash(), Some([0xC7; 32]));
+    }
+
+    /// The Lean rung: the abstraction-mint invariant is PROVEN, not just
+    /// smoke-tested.
+    ///
+    /// Mirror of the witnesses in `metatheory/Dregg2/Deos/Hatchery.lean`. The Lean
+    /// proves: the per-turn gate IS the declared invariant
+    /// (`evalStep_admits_iff_*`); an admitted step preserves it (`step_preserves`,
+    /// the hpres); the `Verify.Contract.CellContract` carry skeleton lifts that to
+    /// the unbounded trajectory (`invariant_forever`); a violating turn is refused
+    /// (`violating_*_rejected`); a program omitting the invariant is a forge
+    /// (`program_missing_invariant_rejected`); and `HpresProof::Attested` binds to
+    /// a machine-checked contract, with an attestation for a *different* invariant
+    /// rejected (`forged_attestation_rejected`). Here the SAME shapes are checked
+    /// over the deployed `CellProgram::evaluate_with_meta`, so the Rust enforcement
+    /// is tied to the proven statement, not an ad-hoc tampering.
+    ///
+    /// Lean witnesses: balance kind floor 50, slot 0 — `[100]` conforms, `[10]`
+    /// (below floor) is refused; monotone kind slot 1 — `5 → 9` conforms, `9 → 4`
+    /// (backward) is refused; a wrong/empty program is a forge; an attestation for
+    /// the monotone kind does not bind to the balance kind.
+    #[test]
+    fn invariant_matches_lean_rung() {
+        // Lean `balInv := balanceNeverBelow 0 50`.
+        let bal = MintedKind::mint(
+            Invariant::BalanceNeverBelow {
+                slot: BAL_SLOT,
+                floor: 50,
+            },
+            &AUTHORITY,
+        );
+        // `evalStep_admits_iff_balance` / honest round-trip: slot0 = 100 ≥ 50 → Ok.
+        bal.evaluate_transition(
+            &state_with_slot(2, BAL_SLOT, 100),
+            Some(&state_with_slot(1, BAL_SLOT, 100)),
+        )
+        .expect("Lean: evalStep balInv [100] = ok");
+        // `violating_balance_rejected`: slot0 = 10 < 50 → ConstraintViolated.
+        assert!(matches!(
+            bal.evaluate_transition(
+                &state_with_slot(2, BAL_SLOT, 10),
+                Some(&state_with_slot(1, BAL_SLOT, 100)),
+            ),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // Lean `monInv := monotoneField 1`.
+        let mon = MintedKind::mint(Invariant::MonotoneField { slot: COUNTER_SLOT }, &AUTHORITY);
+        // `evalStep_admits_iff_monotone`: 5 → 9 (forward) → Ok.
+        mon.evaluate_transition(
+            &state_with_slot(2, COUNTER_SLOT, 9),
+            Some(&state_with_slot(1, COUNTER_SLOT, 5)),
+        )
+        .expect("Lean: evalStep monInv [_,9] (some [_,5]) = ok");
+        // `violating_monotone_rejected`: 9 → 4 (backward) → ConstraintViolated.
+        assert!(matches!(
+            mon.evaluate_transition(
+                &state_with_slot(2, COUNTER_SLOT, 4),
+                Some(&state_with_slot(1, COUNTER_SLOT, 9)),
+            ),
+            Err(ProgramError::ConstraintViolated { .. })
+        ));
+
+        // `program_missing_invariant_rejected` / `empty_program_is_forge`: a
+        // program omitting the kind's invariant constraint is a forge; the empty
+        // program is a forge for any invariant-bearing kind.
+        assert!(matches!(
+            bal.attest_membership(&CellProgram::Cases(vec![TransitionCase {
+                guard: TransitionGuard::Always,
+                constraints: vec![StateConstraint::Monotonic { index: BAL_SLOT }],
+            }])),
+            Err(ForgeRejection::ProgramMissingInvariant { .. })
+        ));
+        assert!(matches!(
+            bal.attest_membership(&CellProgram::None),
+            Err(ForgeRejection::ProgramMissingInvariant { .. })
+        ));
+        // `own_program_conforms`: the kind's own program is a member.
+        bal.attest_membership(&bal.child_program)
+            .expect("Lean: own program conforms");
+
+        // `attest_binds` vs `forged_attestation_rejected`: an attestation binds to
+        // its own kind; a kind with a DIFFERENT invariant is a distinct kind — its
+        // child VK (the contract-identity the attestation certifies) does not match,
+        // so it cannot pass as the balance kind's crown. The content-hash binding.
+        assert_ne!(
+            bal.child_vk(),
+            mon.child_vk(),
+            "forged_attestation_rejected: an attestation for monInv != balInv's contract"
+        );
+        let attested = bal.clone().attest_hpres([0xAB; 32]);
+        assert!(attested.hpres.is_attested());
     }
 }

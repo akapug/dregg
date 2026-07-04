@@ -300,8 +300,8 @@ impl StarkAir for EffectActionAir {
         let width = self.schema.width();
         for c in 0..width {
             let diff = next[c] - local[c];
-            combined = combined + alpha_pow * diff;
-            alpha_pow = alpha_pow * alpha;
+            combined += alpha_pow * diff;
+            alpha_pow *= alpha;
         }
 
         // Schema-specific algebraic constraints (operate on row-0 values via
@@ -347,23 +347,23 @@ impl StarkAir for EffectActionAir {
                 // c_lo_balance: old_lo == new_lo + amt_lo - borrow * 2^32
                 //   ⇔  new_lo + amt_lo - borrow*2^32 - old_lo == 0
                 let c_lo = new_lo + amt_lo - borrow * two_pow_32 - old_lo;
-                combined = combined + alpha_pow * c_lo;
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * c_lo;
+                alpha_pow *= alpha;
                 // c_hi_balance: old_hi == new_hi + amt_hi + borrow
                 //   ⇔  new_hi + amt_hi + borrow - old_hi == 0
                 let c_hi = new_hi + amt_hi + borrow - old_hi;
-                combined = combined + alpha_pow * c_hi;
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * c_hi;
+                alpha_pow *= alpha;
                 // Borrow is a boolean: borrow * (borrow - 1) == 0.
                 let c_borrow_bool = borrow * (borrow - BabyBear::ONE);
-                combined = combined + alpha_pow * c_borrow_bool;
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * c_borrow_bool;
+                alpha_pow *= alpha;
                 // was_burn_flag == 1 (lo limb is 1, hi limb is 0).
                 let c_was_burn_lo = was_burn_lo - BabyBear::ONE;
-                combined = combined + alpha_pow * c_was_burn_lo;
-                alpha_pow = alpha_pow * alpha;
+                combined += alpha_pow * c_was_burn_lo;
+                alpha_pow *= alpha;
                 let c_was_burn_hi = was_burn_hi;
-                combined = combined + alpha_pow * c_was_burn_hi;
+                combined += alpha_pow * c_was_burn_hi;
                 //
                 // `old_balance >= amount` enforcement (range-check note):
                 // The four arithmetic constraints above pin the subtraction
@@ -388,6 +388,8 @@ impl StarkAir for EffectActionAir {
         combined
     }
 
+    // crypto index loops kept verbatim
+    #[allow(clippy::needless_range_loop)]
     fn boundary_constraints(
         &self,
         public_inputs: &[BabyBear],

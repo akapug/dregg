@@ -265,6 +265,64 @@ pub fn project_slot_caveat_manifest(
                     BabyBear::ZERO,
                 ],
             }),
+            // Register-reading temporal atoms (the proven `TemporalAlgebra`
+            // family, now AIR-projected). The re-evaluation reads the PRE-state
+            // slot view (`initial_fields[slot]`), matching the executor's
+            // committed-pre-state register read and the Lean atom semantics.
+            dregg_cell::StateConstraint::RateBound { counter_index, k } => {
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_RATE_BOUND,
+                    slot_index: *counter_index,
+                    params: [
+                        BabyBear::new((*k & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
+            // Height-only: lower to the deployed `TemporalGate` AIR teeth
+            // (not_before = staged_at + period; cell-scoped, slot 0).
+            dregg_cell::StateConstraint::CooledSince { staged_at, period } => {
+                let boundary = staged_at.saturating_add(*period);
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_TEMPORAL_GATE,
+                    slot_index: 0,
+                    params: [
+                        BabyBear::new((boundary & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
+            dregg_cell::StateConstraint::UntilEvent { flag_index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_UNTIL_EVENT,
+                slot_index: *flag_index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            dregg_cell::StateConstraint::SinceEvent { flag_index } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_SINCE_EVENT,
+                slot_index: *flag_index,
+                params: [BabyBear::ZERO; 4],
+            }),
+            dregg_cell::StateConstraint::ChallengeWindow {
+                challenge_index,
+                staged_at,
+                period,
+            } => {
+                let boundary = staged_at.saturating_add(*period);
+                Some(SlotCaveatEntry {
+                    type_tag: pi::SLOT_CAVEAT_TAG_CHALLENGE_WINDOW,
+                    slot_index: *challenge_index,
+                    params: [
+                        BabyBear::new((boundary & 0x7FFF_FFFF) as u32),
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                        BabyBear::ZERO,
+                    ],
+                })
+            }
             dregg_cell::StateConstraint::SenderAuthorized { set } => {
                 let slot_index = match set {
                     dregg_cell::program::AuthorizedSet::PublicRoot { set_root_index } => {
@@ -300,6 +358,82 @@ pub fn project_slot_caveat_manifest(
                 })
             }
             dregg_cell::StateConstraint::AllowedTransitions { .. } => None,
+            // The sealed-escrow atomic-swap gate (the Lean `SettleGate`,
+            // `metatheory/Dregg2/Deos/SealedEscrow.lean` §6 — the staged weld,
+            // `docs/deos/SETTLE-ESCROW-WELD-DESIGN.md`). A SINGLE entry reading
+            // BOTH leg slots: slot_index = leg A's status slot, p0 = leg B's
+            // status slot. The verifier re-evaluates the atomic both-or-none
+            // transition (both Deposited before, both Consumed after) off-AIR
+            // against the bound state_before/state_after views — VK UNCHANGED,
+            // exactly like the temporal tags 13–16. Additive + gated by a cell
+            // DECLARING the caveat, so it is dead-by-default until a cell opts in
+            // at the sealed-escrow verifier epoch (no deployed cell declares it).
+            dregg_cell::StateConstraint::SettleEscrow {
+                leg_a_index,
+                leg_b_index,
+            } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_SETTLE_ESCROW,
+                slot_index: *leg_a_index,
+                params: [
+                    BabyBear::new(*leg_b_index as u32),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
+            // The standing-obligation per-period discharge gate (the Lean
+            // `DischargeGate`, `metatheory/Dregg2/Deos/StandingObligation.lean` §6b —
+            // the staged weld, `docs/deos/DISCHARGE-OBLIGATION-WELD-DESIGN.md`). A
+            // SINGLE entry: slot_index = the `next_due` cursor slot, p0 = due-block
+            // slot, p1 = discharged-total slot, p2 = period, p3 = amount. The verifier
+            // re-evaluates the schedule shape (due ∧ cursor advanced one period ∧
+            // total advanced by the exact amount) off-AIR against the bound
+            // state_before/state_after views — VK UNCHANGED, exactly like the temporal
+            // tags 13–16 and the sealed-escrow tag 17. Additive + gated by a cell
+            // DECLARING the caveat, so it is dead-by-default until a cell opts in at
+            // the standing-obligation verifier epoch (no deployed cell declares it).
+            dregg_cell::StateConstraint::DischargeObligation {
+                cursor_slot,
+                due_slot,
+                amount_slot,
+                period,
+                amount,
+            } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION,
+                slot_index: *cursor_slot,
+                params: [
+                    BabyBear::new(*due_slot as u32),
+                    BabyBear::new(*amount_slot as u32),
+                    BabyBear::new(*period),
+                    BabyBear::new(*amount),
+                ],
+            }),
+            // The share-vault no-dilution deposit gate (the Lean `VaultDepositGate`,
+            // `metatheory/Dregg2/Deos/Vault.lean` §6b — the staged weld,
+            // `docs/deos/VAULT-DEPOSIT-WELD-DESIGN.md`). A SINGLE entry: slot_index =
+            // the `total_assets` counter slot, p0 = the `total_shares` counter slot.
+            // The verifier re-evaluates the no-dilution shape (assets advance by a
+            // positive deposit ∧ shares advance by a positive mint ∧ no existing holder
+            // diluted) off-AIR against the bound state_before/state_after views — the
+            // deposit `d` and minted `m` are the across-transition slot deltas, so no
+            // per-deposit constant is needed. VK UNCHANGED, exactly like the temporal
+            // tags 13–16, the sealed-escrow tag 17, and the standing-obligation tag 18.
+            // Additive + gated by a cell DECLARING the caveat, so it is dead-by-default
+            // until a cell opts in at the share-vault verifier epoch (no deployed cell
+            // declares it).
+            dregg_cell::StateConstraint::VaultDeposit {
+                assets_slot,
+                shares_slot,
+            } => Some(SlotCaveatEntry {
+                type_tag: pi::SLOT_CAVEAT_TAG_VAULT_DEPOSIT,
+                slot_index: *assets_slot,
+                params: [
+                    BabyBear::new(*shares_slot as u32),
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                    BabyBear::ZERO,
+                ],
+            }),
             // Deferred — no AIR teeth in Block 3 first wave.
             dregg_cell::StateConstraint::SumEquals { .. }
             | dregg_cell::StateConstraint::FieldLteField { .. }
@@ -430,6 +564,52 @@ pub fn project_slot_caveat_manifest(
     (count as u32, entries)
 }
 
+/// **The REQUIRED-TAG re-derivation (constraint-binding weld, the soundness core).**
+/// The capacity caveat tags a cell's declared constraint-set REQUIRES — the Rust
+/// twin of the Lean `Dregg2.Deos.ConstraintBinding.requiredTags`. A capacity
+/// `StateConstraint` (`SettleEscrow` / `DischargeObligation` / `VaultDeposit`) is a
+/// JOINT invariant whose manifest entry MUST be present for a turn on the cell to be
+/// sound (omitting it would leave the atomicity / on-schedule / no-dilution gate
+/// unchecked). This returns those required tags so a verifier can DEMAND coverage
+/// (`dregg_circuit::effect_vm::verify_slot_caveat_coverage`).
+///
+/// Because a cell's declared `state_constraints` are bound into committed state
+/// (`dregg_cell::commitment::compute_authority_digest_felt` folds `cell.program` —
+/// hence these constraints — into the `B_AUTHORITY_DIGEST` limb of the ~124-bit wide
+/// commit a light client binds), re-deriving the required tags from the COMMITTED
+/// declaration and demanding coverage makes the gate omission-proof: a forger cannot
+/// drop the entry (coverage fails) nor swap in a hollow declaration (it would have to
+/// match the committed authority digest — the Lean `DeclCommitBinds` floor). Only the
+/// JOINT capacity gates are required here; the per-slot caveats are independently
+/// re-evaluated by `verify_slot_caveat_manifest` when present and need no coverage
+/// floor. STAGED: this is the re-derivation a future `verify_full_turn_bound` arm
+/// consumes; no deployed cell declares a capacity caveat yet. See
+/// `docs/deos/VK-EPOCH-CONSTRAINT-BINDING-DESIGN.md`.
+pub fn required_capacity_caveat_tags(constraints: &[dregg_cell::StateConstraint]) -> Vec<u32> {
+    use dregg_circuit::effect_vm::pi;
+    let mut tags = Vec::new();
+    for c in constraints {
+        let tag = match c {
+            dregg_cell::StateConstraint::SettleEscrow { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_SETTLE_ESCROW)
+            }
+            dregg_cell::StateConstraint::DischargeObligation { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION)
+            }
+            dregg_cell::StateConstraint::VaultDeposit { .. } => {
+                Some(pi::SLOT_CAVEAT_TAG_VAULT_DEPOSIT)
+            }
+            _ => None,
+        };
+        if let Some(t) = tag
+            && !tags.contains(&t)
+        {
+            tags.push(t);
+        }
+    }
+    tags
+}
+
 /// Whether note effects in a turn use Pedersen value commitments or cleartext values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NoteCommitmentMode {
@@ -483,7 +663,7 @@ pub use membership_verifier::{
 
 /// The turn executor: applies turns to a ledger atomically.
 mod effect_vm_bridge;
-use effect_vm_bridge::convert_turn_effects_to_vm;
+pub use effect_vm_bridge::convert_turn_effects_to_vm;
 pub struct TurnExecutor {
     /// Cost configuration for computron metering.
     pub costs: ComputronCosts,
@@ -732,8 +912,10 @@ pub struct TurnExecutor {
     /// universal-memory witness lane, recursion-gated like the umem circuit leg): when
     /// set, `execute()` snapshots the universal-map projection (`crate::umem`) around
     /// the forest journal window and emits the turn's Blum op trace into
-    /// [`Self::last_umem_witness`]. OFF by default — the live proving path is
-    /// untouched.
+    /// [`Self::last_umem_witness`]. ON by default (the umem VK EPOCH — G4): the deployed
+    /// executor observes the universal-memory boundary alongside the welded proving path.
+    /// This is the OBSERVATION bridge, distinct from the producer weld toggle
+    /// (`cipherclerk::umem_weld_staged_enabled`) and the executor verify's `require_welded`.
     pub umem_witness_enabled: std::sync::atomic::AtomicBool,
     /// The most recent turn's universal-memory witness (pre/post projections + the
     /// Blum write trace whose fold connects them), or the emitter's refusal. `None`
@@ -812,7 +994,7 @@ impl TurnExecutor {
             witnessed_registry: Some(membership_verifier::registry_with_real_verifiers()),
             custom_effect_registry: None,
             consumed_cap_witnesses: Mutex::new(Vec::new()),
-            umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
+            umem_witness_enabled: std::sync::atomic::AtomicBool::new(true),
             last_umem_witness: Mutex::new(None),
             umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_umem_yield: Mutex::new(None),
@@ -873,7 +1055,7 @@ impl TurnExecutor {
             witnessed_registry: Some(membership_verifier::registry_with_real_verifiers()),
             custom_effect_registry: None,
             consumed_cap_witnesses: Mutex::new(Vec::new()),
-            umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
+            umem_witness_enabled: std::sync::atomic::AtomicBool::new(true),
             last_umem_witness: Mutex::new(None),
             umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_umem_yield: Mutex::new(None),
@@ -916,7 +1098,7 @@ impl TurnExecutor {
             witnessed_registry: Some(membership_verifier::registry_with_real_verifiers()),
             custom_effect_registry: None,
             consumed_cap_witnesses: Mutex::new(Vec::new()),
-            umem_witness_enabled: std::sync::atomic::AtomicBool::new(false),
+            umem_witness_enabled: std::sync::atomic::AtomicBool::new(true),
             last_umem_witness: Mutex::new(None),
             umem_yield_at: std::sync::atomic::AtomicU64::new(u64::MAX),
             last_umem_yield: Mutex::new(None),
@@ -1677,6 +1859,15 @@ mod execute;
 mod execute_tree;
 mod finalize;
 mod proof_verify;
+
+// Concurrency-safe committed bridge mirror-ledger (`bridge_ledger.rs`):
+// `lock_id`-as-nullifier + a committed supply cell, gated inside one atomic
+// mint, closing the multi-relayer double-mint gap.
+pub mod bridge_ledger;
+pub use bridge_ledger::{
+    BridgeEscrowReceipt, BridgeEscrowRecord, BridgeMintError, BridgeMintReceipt, BridgeMintRequest,
+    escrow_nullifier_for, new_mirror_ledger_cell, read_supply,
+};
 
 // MEASUREMENT-ONLY: env-gated (`DREGG_TURN_PROFILE=1`) per-turn phase profiler.
 mod turn_profile;

@@ -19,14 +19,50 @@
 
 use std::time::Instant;
 
-use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit_prove::ivc_turn_chain::FinalizedTurn;
 use dregg_circuit_prove::joint_turn_aggregation::{DescriptorParticipant, RotatedParticipantLeg};
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 
-use dregg_lightclient::{FinalityCert, fold_and_attest, verify_finalized_history, verify_history};
+use dregg_lightclient::{
+    FinalityCert, SignedVote, finality_signing_message, fold_and_attest, verify_finalized_history,
+    verify_history,
+};
+use ed25519_dalek::{Signer, SigningKey};
+
+/// A genuine signed ratification vote for validator `i` over `(root, participant_count)` — the demo's
+/// validators sign the finalized root, so the light client's signature-bound quorum check (the
+/// `CertValid` binding leg) accepts them.
+fn demo_signed_vote(
+    i: u8,
+    root: dregg_circuit::field::BabyBear,
+    participant_count: usize,
+) -> SignedVote {
+    let mut seed = [0u8; 32];
+    seed[0] = i;
+    seed[31] = 0xA5;
+    let sk = SigningKey::from_bytes(&seed);
+    let sig = sk.sign(&finality_signing_message(root, participant_count));
+    SignedVote {
+        validator: sk.verifying_key().to_bytes(),
+        signature: sig.to_bytes(),
+    }
+}
+
+/// The TRUSTED committee for a demo group of `n` validators — the verifying-key bytes of validators
+/// `0..n`, exactly the genesis/epoch-distributed set the light client holds. The committee-anchored
+/// `verify_finalized_history` counts ONLY votes by these keys (red-team LC-2).
+fn demo_committee(n: u8) -> Vec<[u8; 32]> {
+    (0..n)
+        .map(|i| {
+            let mut seed = [0u8; 32];
+            seed[0] = i;
+            seed[31] = 0xA5;
+            SigningKey::from_bytes(&seed).verifying_key().to_bytes()
+        })
+        .collect()
+}
 
 /// OPEN permissions so the rotated producer-witness path admits the actor cell without auth gating
 /// (mirrors `circuit/tests/rotation_batchstark_leaf_smoke.rs`).
@@ -86,9 +122,11 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> (FinalizedTurn, BabyBear,
         None,
     )
     .expect("rotated transfer leg mints + self-verifies");
-    // Read the ROTATED chain roots off the leg BEFORE it moves into the participant.
-    let old_root = leg.old_root();
-    let new_root = leg.new_root();
+    // H0 DEPLOYED-WIDE: the deployed leg is WIDE-anchored — the single-felt rotated roots (PI 42/43)
+    // are RETIRED to zero; the chain genesis/final/continuity bind the GENUINE 8-felt (~124-bit) wide
+    // anchors. Report their HEAD felt (lane 0) as the scalar root the demo prints / chains on.
+    let old_root = leg.wide_old_root8().expect("deployed leg is wide-anchored")[0];
+    let new_root = leg.wide_new_root8().expect("deployed leg is wide-anchored")[0];
     (
         FinalizedTurn::new(DescriptorParticipant::rotated(leg)),
         old_root,
@@ -160,7 +198,11 @@ fn main() {
     println!("  genesis state root : {}", genesis.as_u32());
     print!("  per-turn root chain: {}", genesis.as_u32());
     for t in &turns {
-        print!(" -> {}", t.new_root().as_u32());
+        // H0 DEPLOYED-WIDE: the genuine 8-felt wide AFTER-anchor (head lane); the single felt is 0.
+        print!(
+            " -> {}",
+            t.participant.rotated.wide_new_root8().expect("wide")[0].as_u32()
+        );
     }
     println!();
     println!("  final state root   : {}", final_root.as_u32());
@@ -173,8 +215,16 @@ fn main() {
     let fold_elapsed = fold_t0.elapsed();
     println!("  WholeChainProof folded in {fold_elapsed:?} (the EXPENSIVE step — done ONCE)");
     println!("  aggregate is ONE root recursion proof + 4 public commitments:");
-    println!("    genesis_root : {}", agg.genesis_root.as_u32());
-    println!("    final_root   : {}", agg.final_root.as_u32());
+    let lanes =
+        |a: &[dregg_circuit::field::BabyBear]| a.iter().map(|d| d.as_u32()).collect::<Vec<_>>();
+    println!(
+        "    genesis_root : {:?} (8-felt faithful anchor)",
+        lanes(&agg.genesis_root)
+    );
+    println!(
+        "    final_root   : {:?} (8-felt faithful anchor)",
+        lanes(&agg.final_root)
+    );
     println!(
         "    chain_digest : {:?}",
         agg.chain_digest
@@ -208,12 +258,12 @@ fn main() {
     );
     println!("    * the chain is correctly ordered (no reorder / drop / insert),");
     println!(
-        "    * final_root {} is the genuine fold of the whole history.",
-        attested.final_root.as_u32()
+        "    * final_root {} is the genuine fold of the whole history (head felt; full 8-felt anchor above).",
+        attested.final_root[0].as_u32()
     );
     assert_eq!(attested.num_turns, K);
-    assert_eq!(attested.genesis_root, genesis);
-    assert_eq!(attested.final_root, final_root);
+    assert_eq!(attested.genesis_root[0], genesis);
+    assert_eq!(attested.final_root[0], final_root);
 
     // --- 4. O(1): verify cost is independent of history length -----------------------------------
     rule("4. O(1) — verification cost is INDEPENDENT of history length N");
@@ -243,21 +293,26 @@ fn main() {
     //     ONLY the leaf tooth (host re-verifies the rotated proof against its claimed PI) can catch
     //     it. The forged PI no longer satisfies the rotated descriptor, so host admission REJECTS.
     let (mut forged_chain, _gf, real_final) = make_chain(1_000, 0, 7, 3);
-    const PI_ROTATED_NEW: usize = V1_PI_COUNT + 1; // rotated NEW-commit position (PI 35)
     let last = forged_chain.len() - 1;
     let DescriptorParticipant { rotated } = forged_chain.remove(last).participant;
     let RotatedParticipantLeg {
         proof,
         descriptor,
         mut public_inputs,
+        carrier_witness,
     } = rotated;
-    let lie = public_inputs[PI_ROTATED_NEW] + BabyBear::ONE;
-    public_inputs[PI_ROTATED_NEW] = lie; // claim a post-state the turn never produced
+    // H0 DEPLOYED-WIDE: forge the GENUINE 8-felt wide AFTER-commit (PI tail `[n-8 .. n)`), not the
+    // RETIRED single-felt rotated NEW-commit (PI 43, now zero / unbound). The proof's bound wide
+    // carrier disagrees with the tampered PI ⇒ the leaf re-verify is UNSAT.
+    let pi_wide_new = public_inputs.len() - 8;
+    let lie = public_inputs[pi_wide_new] + BabyBear::ONE;
+    public_inputs[pi_wide_new] = lie; // claim a post-state the turn never produced
     forged_chain.push(FinalizedTurn::new(DescriptorParticipant::rotated(
         RotatedParticipantLeg {
             proof,
             descriptor,
             public_inputs,
+            carrier_witness,
         },
     )));
     assert_ne!(lie, real_final, "the forged final root must differ");
@@ -270,8 +325,17 @@ fn main() {
     //     never notices the gap). Remove turn 1 from a real 3-turn chain: turn 2's old_root no longer
     //     equals turn 0's new_root, so the temporal tooth breaks → ChainBreak. REJECTED.
     let (mut dropped_chain, _gd, _fd) = make_chain(1_000, 0, 7, 3);
-    let prev_new = dropped_chain[0].new_root();
-    let next_old = dropped_chain[2].old_root();
+    // H0 DEPLOYED-WIDE: continuity binds the genuine 8-felt wide anchors (head lane shown).
+    let prev_new = dropped_chain[0]
+        .participant
+        .rotated
+        .wide_new_root8()
+        .expect("wide")[0];
+    let next_old = dropped_chain[2]
+        .participant
+        .rotated
+        .wide_old_root8()
+        .expect("wide")[0];
     assert_ne!(
         next_old, prev_new,
         "after the drop the surviving turns must NOT be continuous (that is the gap)"
@@ -298,20 +362,16 @@ fn main() {
     // --- 6. The THIRD leg — finality (a correct history must also be FINALIZED) ------------------
     rule("6. FINALITY LEG — the trusted root was QUORUM-finalized (three-leg client)");
     // n=4 participants ⇒ supermajority threshold 2*4/3 + 1 = 3. A genuine 3-of-4 quorum.
-    let signers: Vec<[u8; 32]> = (0..3u8)
-        .map(|i| {
-            let mut id = [0u8; 32];
-            id[0] = i;
-            id
-        })
-        .collect();
     let cert = FinalityCert {
-        signers,
+        votes: (0..3u8)
+            .map(|i| demo_signed_vote(i, final_root, 4))
+            .collect(),
         participant_count: 4,
         finalized_root: final_root,
     };
-    let finalized = verify_finalized_history(&agg, &vk_anchor, final_root, &cert)
-        .expect("aggregate + root-seam + 3-of-4 quorum cert all hold");
+    let finalized =
+        verify_finalized_history(&agg, &vk_anchor, final_root, &cert, &demo_committee(4))
+            .expect("aggregate + root-seam + 3-of-4 quorum cert all hold");
     println!(
         "  three legs hold: aggregate verifies, root seam binds, {} of 4 distinct signers ratify.",
         finalized.quorum_signers
@@ -327,11 +387,13 @@ fn main() {
 
     // Sub-quorum is refused (the fork-attack defense).
     let weak = FinalityCert {
-        signers: vec![[1u8; 32], [2u8; 32]], // 2 of 4 — below the threshold of 3
+        votes: (0..2u8)
+            .map(|i| demo_signed_vote(i, final_root, 4))
+            .collect(), // 2 of 4 — below the threshold of 3
         participant_count: 4,
         finalized_root: final_root,
     };
-    match verify_finalized_history(&agg, &vk_anchor, final_root, &weak) {
+    match verify_finalized_history(&agg, &vk_anchor, final_root, &weak, &demo_committee(4)) {
         Ok(_) => panic!("a sub-quorum cert must be refused"),
         Err(e) => println!("  sub-quorum finality cert REFUSED: {e}"),
     }

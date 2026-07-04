@@ -15,7 +15,8 @@
 
 use dregg_turn::action::{Action, Authorization, DelegationMode, Effect, symbol};
 use dregg_turn::forest::CallForest;
-use dregg_turn::turn::Turn;
+use dregg_turn::turn::{Finality, Turn, TurnReceipt};
+use dregg_turn::verify_receipt_chain;
 use dregg_types::CellId;
 
 fn minimal_action(target: CellId, effects: Vec<Effect>) -> Action {
@@ -58,6 +59,31 @@ fn turn_with(effects: Vec<Effect>) -> Turn {
     }
 }
 
+fn receipt(agent: CellId, marker: u8, previous_receipt_hash: Option<[u8; 32]>) -> TurnReceipt {
+    TurnReceipt {
+        turn_hash: [marker; 32],
+        forest_hash: [marker.wrapping_add(1); 32],
+        pre_state_hash: [marker.wrapping_add(2); 32],
+        post_state_hash: [marker.wrapping_add(3); 32],
+        timestamp: marker as i64,
+        effects_hash: [marker.wrapping_add(4); 32],
+        computrons_used: marker as u64,
+        action_count: 1,
+        previous_receipt_hash,
+        agent,
+        federation_id: [0u8; 32],
+        routing_directives: vec![],
+        introduction_exports: vec![],
+        derivation_records: vec![],
+        emitted_events: vec![],
+        executor_signature: None,
+        finality: Finality::Final,
+        was_encrypted: false,
+        was_burn: false,
+        consumed_capabilities: vec![],
+    }
+}
+
 fn assert_roundtrips(turn: &Turn) {
     let bytes = postcard::to_stdvec(turn).expect("postcard serialize");
     let decoded: Turn = postcard::from_bytes(&bytes)
@@ -71,6 +97,45 @@ fn assert_roundtrips(turn: &Turn) {
     assert_eq!(
         turn.call_forest.action_count(),
         decoded.call_forest.action_count()
+    );
+}
+
+#[test]
+fn empty_consumed_capability_receipt_chain_roundtrips_and_verifies() {
+    let agent = CellId::from_bytes([4u8; 32]);
+    let first = receipt(agent, 10, None);
+    let second = receipt(agent, 11, Some(first.receipt_hash()));
+    let chain = vec![first, second];
+
+    verify_receipt_chain(&chain).expect("source chain verifies");
+    assert!(chain.iter().all(|r| r.consumed_capabilities.is_empty()));
+
+    let json = serde_json::to_vec(&chain).expect("receipt chain JSON serializes");
+    let from_json: Vec<TurnReceipt> =
+        serde_json::from_slice(&json).expect("receipt chain JSON deserializes");
+    verify_receipt_chain(&from_json).expect("JSON round-tripped chain verifies");
+    assert!(from_json.iter().all(|r| r.consumed_capabilities.is_empty()));
+    assert_eq!(
+        chain
+            .iter()
+            .map(TurnReceipt::receipt_hash)
+            .collect::<Vec<_>>(),
+        from_json
+            .iter()
+            .map(TurnReceipt::receipt_hash)
+            .collect::<Vec<_>>()
+    );
+
+    let bytes = postcard::to_stdvec(&from_json).expect("receipt chain postcard serializes");
+    let from_postcard: Vec<TurnReceipt> =
+        postcard::from_bytes(&bytes).expect("receipt chain postcard deserializes");
+    let bytes2 = postcard::to_stdvec(&from_postcard).expect("receipt chain postcard reserializes");
+    assert_eq!(bytes, bytes2, "postcard receipt chain bytes are stable");
+    verify_receipt_chain(&from_postcard).expect("postcard round-tripped chain verifies");
+    assert!(
+        from_postcard
+            .iter()
+            .all(|r| r.consumed_capabilities.is_empty())
     );
 }
 

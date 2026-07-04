@@ -20,8 +20,9 @@ pub const MAX_STEPS: usize = 32;
 
 /// Maximum delegation chain depth across all composed proofs.
 ///
-/// Bounds the total proving time for a delegation chain to approximately 50 seconds
-/// at ~500ms per step. Chains deeper than this are rejected at proof generation time
+/// Bounds the total proving time for a delegation chain: at an assumed ~500ms per
+/// step (an order-of-magnitude estimate, not benchmarked) this caps it near ~50
+/// seconds. Chains deeper than this are rejected at proof generation time
 /// to prevent DoS via unbounded recursive proving.
 ///
 /// This limit applies to the total chain from root issuer to final delegate. A single
@@ -53,6 +54,9 @@ pub mod pi {
     pub const POLICY_ROOT: usize = 5;
 }
 
+/// One body Merkle proof: `(leaf, sibling path, position bits)`.
+type BodyMerkleProof = (BabyBear, Vec<[BabyBear; 3]>, Vec<u8>);
+
 /// Witness for a multi-step derivation.
 #[derive(Clone, Debug)]
 pub struct MultiStepWitness {
@@ -61,7 +65,7 @@ pub struct MultiStepWitness {
     pub steps: Vec<DerivationWitness>,
     pub allow_predicate: BabyBear,
     pub policy_root: BabyBear,
-    pub body_merkle_proofs: Option<Vec<(BabyBear, Vec<[BabyBear; 3]>, Vec<u8>)>>,
+    pub body_merkle_proofs: Option<Vec<BodyMerkleProof>>,
 }
 
 impl MultiStepWitness {

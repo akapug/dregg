@@ -81,6 +81,11 @@ impl DslP3Air {
             | ConstraintExpr::Hash2to1 { .. }
             | ConstraintExpr::Hash4to1 { .. }
             | ConstraintExpr::Hash3Cap { .. }
+            // MerkleHash8 (native 8-felt node8) is arithmetized ONLY by the sibling
+            // `dsl_p3_air.rs` (the batch-stark path). This single-row uni-stark surface does
+            // NOT emit its round constraints, so it MUST be guarded here (rejected) — never
+            // vacuously "proved" with a ZERO stand-in.
+            | ConstraintExpr::MerkleHash8 { .. }
             | ConstraintExpr::MerkleHash { .. }
             | ConstraintExpr::ChainedHash2to1 { .. }
             | ConstraintExpr::SeedHash2to1 { .. }
@@ -237,9 +242,9 @@ where
             for term in terms {
                 let mut prod: AB::Expr = AB::Expr::from(AB::F::from_u32(term.coeff.0));
                 for &ci in &term.col_indices {
-                    prod = prod * local_exprs[ci].clone();
+                    prod *= local_exprs[ci].clone();
                 }
-                sum = sum + prod;
+                sum += prod;
             }
             (sum, false)
         }
@@ -280,7 +285,7 @@ where
         ConstraintExpr::AtLeastOne { flag_cols } => {
             let mut product = AB::Expr::ONE;
             for &col in flag_cols {
-                product = product * (AB::Expr::ONE - local_exprs[col].clone());
+                product *= AB::Expr::ONE - local_exprs[col].clone();
             }
             (product, false)
         }
@@ -288,6 +293,10 @@ where
         | ConstraintExpr::Hash2to1 { .. }
         | ConstraintExpr::Hash4to1 { .. }
         | ConstraintExpr::Hash3Cap { .. }
+        // MerkleHash8's round constraints are not emitted on this surface (see
+        // `constraint_uses_hash`, which rejects it up front); ZERO here keeps the match
+        // exhaustive and lockstep with the guard.
+        | ConstraintExpr::MerkleHash8 { .. }
         | ConstraintExpr::MerkleHash { .. } => (AB::Expr::ZERO, false),
         // Cross-row (`ChainedHash2to1`) and PI-seeded (`SeedHash2to1`) running-hash forms
         // span the local/next windows (or bind a public input), and `TableFunction` is a

@@ -35,6 +35,12 @@ export interface NodeConfig {
   wssUrl: string;
   wsUrl: string;
   devnetKey: string;
+  /**
+   * Base URL of the cap-account cloud (the webauth control plane the wallet
+   * logs into). Empty string means "same host as the node" — most deployments
+   * serve `/auth/*` from the node host.
+   */
+  cloudUrl?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +125,10 @@ export type MessageType =
   | "dregg:setPassphrase"
   | "dregg:getMnemonic"
   | "dregg:recover"
+  // First-run onboarding (forces passphrase + recovery-phrase backup before a
+  // key exists — no silent session-key wallet that a restart could orphan).
+  | "dregg:beginOnboarding"
+  | "dregg:completeOnboarding"
   // Intent operations
   | "dregg:postIntent"
   | "dregg:offerCapability"
@@ -154,6 +164,10 @@ export type MessageType =
   | "dregg:listProfiles"
   | "dregg:createProfile"
   | "dregg:useProfile"
+  // Cap-account login to the live cloud (challenge → sign → session)
+  | "dregg:capLogin"
+  | "dregg:capLogout"
+  | "dregg:getLoginStatus"
   // Receipt stream (node SSE /api/events/stream)
   | "dregg:getRecentReceipts"
   // Node configuration
@@ -282,6 +296,13 @@ export interface PredicateProofResult {
 /** Public cipherclerk state (returned to popup). */
 export interface CipherclerkState {
   locked: boolean;
+  /**
+   * True when no wallet exists yet (fresh install / cleared storage). The popup
+   * must run the onboarding flow (set passphrase + back up the recovery phrase)
+   * before any key is generated. No key is ever created under an ephemeral
+   * session-only "internal" key that a browser restart could orphan.
+   */
+  uninitialized: boolean;
   tokenCount: number;
   chainLength: number;
   hasMnemonic: boolean;
@@ -327,6 +348,8 @@ export interface ProfileInfo {
 /** Internal full cipherclerk state (in-memory). */
 export interface InternalCipherclerkState {
   locked: boolean;
+  /** True before the user has completed onboarding (no key material exists). */
+  uninitialized?: boolean;
   /** The ACTIVE profile's keypair (all signing paths read these). */
   publicKey: number[];
   secretKey: number[] | null;
@@ -649,7 +672,9 @@ export interface DreggWasm {
   ): { auth_bytes: Uint8Array; recipient_pk: string; introducer_federation: string };
 
   // Bearer capabilities
-  create_bearer_cap(delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number): { bearerTokenHex: string; targetCell: string; action: string };
+  // `expiry` is a u64 (Unix seconds; 0 = no expiry) and crosses the wasm-bindgen
+  // boundary as a bigint. The mint returns snake_case fields (bearer_token_hex).
+  create_bearer_cap(delegatorKeyHex: string, targetCellHex: string, action: string, expiry: bigint): { bearer_token_hex: string; delegator_pubkey_hex: string; binding_hex: string };
   verify_bearer_cap(tokenHex: string, delegatorKeyHex: string, targetCellHex: string, action: string, expiry: number, currentTime: number): { valid: boolean; expired: boolean };
 
   // Factory operations

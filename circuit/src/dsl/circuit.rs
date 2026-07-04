@@ -150,6 +150,27 @@ pub enum ConstraintExpr {
         left_col: usize,
         right_col: usize,
     },
+    /// **Native 8-felt cap-tree node compression (`cap_root::cap_node8`).** Constrains
+    /// `output_cols[0..8] == cap_node8(left_cols[0..8], right_cols[0..8])` — ALL 8 lanes
+    /// of the arity-16 `node8` Poseidon2 compression `perm(L8 ‖ R8)[0..8]`
+    /// (`descriptor_ir2::chip_absorb_all_lanes(CHIP_NODE8_ARITY, L8‖R8)`). This is the
+    /// MULTI-OUTPUT twin of [`Self::Hash3Cap`]: where `Hash3Cap` squeezes a single lane-0
+    /// digest (the lossy ~31-bit 1-felt form), `MerkleHash8` EQUALITY-binds every one of
+    /// the 8 genuine output lanes, so the per-node collision floor is the full 8-felt
+    /// width (~124-bit), matching the deployed FRI/STARK soundness and the native 8-felt
+    /// cap tree (`CanonicalCapTree` since Phase H-CAP-8). The p3 AIR arithmetizes it via
+    /// `poseidon2_permute_expr_lanes` (the already-committed 8-lane exposure) over ONE
+    /// Poseidon2 aux block; the input state is `L8 ‖ R8` seeded directly into all 16
+    /// permutation lanes (no arity-tag lane — node8 seeds every lane with a genuine input,
+    /// byte-identical to `chip_absorb_all_lanes` at arity 16).
+    MerkleHash8 {
+        /// The 8 columns receiving the parent node's 8-felt digest lanes.
+        output_cols: [usize; 8],
+        /// The 8 columns of the left child's 8-felt digest.
+        left_cols: [usize; 8],
+        /// The 8 columns of the right child's 8-felt digest.
+        right_cols: [usize; 8],
+    },
     /// Constrain output_col == Poseidon2_hash_4_to_1(children) where children are
     /// reconstructed from (current_col, sib_cols[3], position_col) by placing
     /// current at the position index and siblings in the remaining slots.
@@ -328,9 +349,9 @@ impl ConstraintExpr {
                 for term in terms {
                     let mut prod = term.coeff;
                     for &ci in &term.col_indices {
-                        prod = prod * local[ci];
+                        prod *= local[ci];
                     }
-                    sum = sum + prod;
+                    sum += prod;
                 }
                 sum
             }
@@ -373,7 +394,7 @@ impl ConstraintExpr {
                 // (1-f0)*(1-f1)*...*(1-fn) == 0 iff at least one fi=1
                 let mut product = BabyBear::ONE;
                 for &col in flag_cols {
-                    product = product * (BabyBear::ONE - local[col]);
+                    product *= BabyBear::ONE - local[col];
                 }
                 product
             }
@@ -407,6 +428,27 @@ impl ConstraintExpr {
                 // The single in-circuit cap-tree node hash (`cap_chip_absorb([FACT_MARK, l, r])`).
                 let expected = crate::cap_root::cap_node(local[*left_col], local[*right_col]);
                 expected - local[*output_col]
+            }
+            Self::MerkleHash8 {
+                output_cols,
+                left_cols,
+                right_cols,
+            } => {
+                // The native 8-felt cap-tree node compression (`cap_node8`): all 8 output
+                // lanes bound. The p3 AIR (`dsl_p3_air`) binds each lane individually via
+                // `poseidon2_permute_expr_lanes` — THAT is the deployed soundness. This
+                // concrete evaluator is the native satisfaction indicator: it sums the 8
+                // per-lane residuals, which is ZERO on an honest witness (every lane matches
+                // `cap_node8`) and non-zero on a tampered node (a genuine 8-felt collision is
+                // needed to spoof all eight simultaneously — the ~124-bit floor).
+                let left: [BabyBear; 8] = core::array::from_fn(|i| local[left_cols[i]]);
+                let right: [BabyBear; 8] = core::array::from_fn(|i| local[right_cols[i]]);
+                let expected = crate::cap_root::cap_node8(left, right);
+                let mut acc = BabyBear::ZERO;
+                for i in 0..8 {
+                    acc = acc + (expected[i] - local[output_cols[i]]);
+                }
+                acc
             }
             Self::MerkleHash {
                 output_col,
@@ -525,8 +567,8 @@ fn eval_table_function(
                         continue;
                     }
                     let xk_f = BabyBear::new(xk);
-                    num = num * (x - xk_f);
-                    den = den * (xi_f - xk_f);
+                    num *= x - xk_f;
+                    den *= xi_f - xk_f;
                 }
                 // Distinct nodes ⇒ den ≠ 0.
                 num * den.inverse().unwrap_or(BabyBear::ZERO)
@@ -541,7 +583,7 @@ fn eval_table_function(
     for (i, lai) in la.iter().enumerate() {
         for (j, lbj) in lb.iter().enumerate() {
             let out = outputs.get(i * nb + j).copied().unwrap_or(0);
-            acc = acc + (*lai) * (*lbj) * BabyBear::new(out);
+            acc += (*lai) * (*lbj) * BabyBear::new(out);
         }
     }
     acc
@@ -624,8 +666,8 @@ impl StarkAir for DslCircuit {
                 public_inputs,
                 &self.descriptor.lookup_tables,
             );
-            result = result + alpha_power * value;
-            alpha_power = alpha_power * alpha;
+            result += alpha_power * value;
+            alpha_power *= alpha;
         }
         result
     }
@@ -835,6 +877,12 @@ impl ConstraintExpr {
                 // cap_node(l, r) - output: the hash is opaque, constraint is degree 1.
                 1
             }
+            Self::MerkleHash8 { .. } => {
+                // cap_node8(L8, R8) - output8: the 8-lane compression is opaque (bound by
+                // the Poseidon2 aux block, not this polynomial), constraint is degree 1 —
+                // the same posture as every other hash form.
+                1
+            }
             Self::MerkleHash { .. } => {
                 // Position-aware hash_4_to_1(children): opaque hash, constraint is degree 1.
                 1
@@ -920,6 +968,16 @@ impl ConstraintExpr {
                 left_col,
                 right_col,
             } => Some((*output_col).max(*left_col).max(*right_col)),
+            Self::MerkleHash8 {
+                output_cols,
+                left_cols,
+                right_cols,
+            } => output_cols
+                .iter()
+                .chain(left_cols.iter())
+                .chain(right_cols.iter())
+                .copied()
+                .max(),
             Self::MerkleHash {
                 output_col,
                 current_col,
@@ -1026,14 +1084,14 @@ impl CircuitDescriptor {
 
         // Validate column indices, degree, and PiBinding bounds in constraints
         for (i, constraint) in self.constraints.iter().enumerate() {
-            if let Some(max_col) = constraint.max_column_index() {
-                if max_col >= self.trace_width {
-                    return Err(ProgramValidationError::ColumnOutOfBounds {
-                        constraint_index: i,
-                        col: max_col,
-                        trace_width: self.trace_width,
-                    });
-                }
+            if let Some(max_col) = constraint.max_column_index()
+                && max_col >= self.trace_width
+            {
+                return Err(ProgramValidationError::ColumnOutOfBounds {
+                    constraint_index: i,
+                    col: max_col,
+                    trace_width: self.trace_width,
+                });
             }
 
             // Check that the constraint's algebraic degree does not exceed max_degree
@@ -1211,10 +1269,8 @@ impl CellProgram {
         let circuit = DslCircuit {
             descriptor: self.descriptor.clone(),
         };
-        let proof =
-            stark::proof_from_bytes(proof_bytes).map_err(|e| ProgramError::InvalidProof(e))?;
-        stark::verify(&circuit, &proof, public_inputs)
-            .map_err(|e| ProgramError::VerificationFailed(e))
+        let proof = stark::proof_from_bytes(proof_bytes).map_err(ProgramError::InvalidProof)?;
+        stark::verify(&circuit, &proof, public_inputs).map_err(ProgramError::VerificationFailed)
     }
 
     /// Generate an execution trace for this program from provided witness values.

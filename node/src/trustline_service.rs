@@ -343,10 +343,10 @@ pub fn trustline_terms_of(
         TrustlineCollateral::FullReserve,
         TrustlineCollateral::PureCredit,
     ] {
-        if let Ok(program) = trustline_cell_program_collateral(&terms, collateral) {
-            if canonical_program_vk(&program) == installed {
-                return Some((terms, collateral));
-            }
+        if let Ok(program) = trustline_cell_program_collateral(&terms, collateral)
+            && canonical_program_vk(&program) == installed
+        {
+            return Some((terms, collateral));
         }
     }
     None
@@ -504,10 +504,8 @@ pub(crate) fn run_signed_turn(
     turn.fee = fixed_fee.unwrap_or_else(|| executor.estimate_cost(&turn));
     let turn_hash = turn.hash();
 
-    if is_operator_turn {
-        if let Some(head) = previous_receipt_hash {
-            executor.set_last_receipt_hash(agent, head);
-        }
+    if is_operator_turn && let Some(head) = previous_receipt_hash {
+        executor.set_last_receipt_hash(agent, head);
     }
 
     match executor.execute(&turn, &mut s.ledger) {

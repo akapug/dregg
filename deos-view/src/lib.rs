@@ -18,15 +18,21 @@
 //!        vocabulary; `headless` bakes any view to a PNG offscreen (the cockpit's path).
 //!
 //! * **`web`** (feature-gated, gpui-FREE + deos-js-FREE) — the IDENTICAL
-//!     [`tree::ViewNode`] → an HTML/DOM string ([`web::render_card_document`]),
-//!     node-for-node mirroring the gpui vocabulary, into a browser-loadable `.html`. This
-//!     is the web-projection of the reflective cockpit: the SAME card paints in a browser,
-//!     not just the native window. See the `web_render_card` example for the bake.
+//!   [`tree::ViewNode`] → an HTML/DOM string ([`web::render_card_document`]),
+//!   node-for-node mirroring the gpui vocabulary, into a browser-loadable `.html`. This
+//!   is the web-projection of the reflective cockpit: the SAME card paints in a browser,
+//!   not just the native window. See the `web_render_card` example for the bake.
 
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
+pub mod fmt;
 pub mod tree;
-pub use tree::{RawNode, RawProps, ViewNode, parse_view_tree};
+pub use fmt::BindFmt;
+pub use tree::{
+    disclose, parse_view_tree, pill_display, resolve_mounts, Crumb, Disclosure, HaloHandle,
+    MapMountSource, MenuItem, MountSource, PillCase, RawItem, RawNode, RawPillCase, RawProps,
+    ViewNode, MAX_MOUNT_DEPTH,
+};
 
 // ── The NATIVE renderer: `ViewNode` → real gpui-component pixels (the heavy stack
 //    + deos-js live verified turns). Gated on `native` so the `web` build stays tiny. ──
@@ -36,13 +42,21 @@ pub mod bridge;
 pub mod faces;
 #[cfg(feature = "native")]
 pub mod headless;
+// The cell-heap-as-view-source — read a cell's hosted view-tree out of its committed heap
+// (the native half of the composition keystone). Needs dregg-cell, so native-only.
+#[cfg(feature = "native")]
+pub mod mount;
 #[cfg(feature = "native")]
 pub mod render;
 
 #[cfg(feature = "native")]
-pub use bridge::{LiveView, build_live_view, view_tree_key};
+pub use bridge::{build_live_view, view_tree_key, LiveView};
 #[cfg(feature = "native")]
 pub use faces::FacesView;
+#[cfg(feature = "native")]
+pub use mount::{
+    cell_id_from_hex, cell_id_hex, ledger_mount_source, view_tree_from_cell_heap, VIEWTREE_COLL,
+};
 #[cfg(feature = "native")]
 pub use render::{AppletView, SharedApplet};
 
@@ -53,9 +67,10 @@ pub use render::{AppletView, SharedApplet};
 pub mod web;
 #[cfg(feature = "web")]
 pub use web::{
-    GalleryCard, render_card_document, render_card_live_document, render_doccollab_live_document,
+    render_card_document, render_card_live_document, render_doccollab_live_document,
     render_gallery_document, render_html, render_inspector_live_document,
-    render_kvstore_live_document, render_tally_live_document,
+    render_kvstore_live_document, render_tally_live_document, render_trustless_cell_document,
+    GalleryCard, HeapSlotOpening, TrustlessAttestation,
 };
 
 // ── The DISCORD renderer: the SAME `ViewNode` → a serenity `CreateEmbed` + button
@@ -65,5 +80,5 @@ pub use web::{
 pub mod discord;
 #[cfg(feature = "discord")]
 pub use discord::{
-    DiscordCard, TURN_PREFIX, affordance_custom_id, parse_affordance_id, render_card,
+    affordance_custom_id, parse_affordance_id, render_card, DiscordCard, TURN_PREFIX,
 };

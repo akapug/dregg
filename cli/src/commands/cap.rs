@@ -459,10 +459,10 @@ mod bearer {
                     .iter()
                     .find(|f| f["is_local"].as_bool() == Some(true))
                     .or_else(|| feds.first());
-                if let Some(hex_str) = chosen.and_then(|f| f["federation_id"].as_str()) {
-                    if let Ok(id) = decode_cell_id(hex_str) {
-                        return (id, "node");
-                    }
+                if let Some(hex_str) = chosen.and_then(|f| f["federation_id"].as_str())
+                    && let Ok(id) = decode_cell_id(hex_str)
+                {
+                    return (id, "node");
                 }
                 ([0u8; 32], "sim (no local federation reported)")
             }
@@ -622,6 +622,9 @@ mod bearer {
         /// Recomputes the canonical message under `federation_id` and checks the
         /// delegator's Ed25519 signature (the EXACT check the executor runs,
         /// minus ledger cap-lookup). `true` iff the signature is valid.
+        // Exercised by the test suite (the export-tooth roundtrip); the bin itself
+        // never calls it, so it reads as dead outside `cfg(test)`.
+        #[cfg_attr(not(test), allow(dead_code))]
         pub fn verify_signature(&self, federation_id: &[u8; 32]) -> bool {
             let message = compute_delegation_message(
                 &self.target,

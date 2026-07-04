@@ -29,20 +29,19 @@
 //! chrome (the `SystemUiCapChrome` wrapping a real `PermWorld` + executor) is held per
 //! window in [`super::DeosDesktop::systemui_chromes`], minted lazily on first paint.
 
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, div, px,
+    div, px, AnyElement, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    ParentElement, SharedString, StatefulInteractiveElement, Styled,
 };
 
 use android_cell::{AndroidPermission, KernelGrantOutcome};
 use dregg_types::CellId;
 
-use super::DeosDesktop;
 use super::chrome::{
-    NT_DIM, NT_LABEL, NT_OK, NT_PANEL, NT_RULE, NT_TEXT, NT_TITLE_ACTIVE, NT_TITLE_TEXT, NT_WARN,
-    bevel_raised, face_section, id_hex,
+    bevel_raised, face_section, id_hex, NT_DIM, NT_LABEL, NT_OK, NT_PANEL, NT_RULE, NT_TEXT,
+    NT_TITLE_ACTIVE, NT_TITLE_TEXT, NT_WARN,
 };
+use super::DeosDesktop;
 use crate::systemui_caps::SystemUiCapChrome;
 
 impl DeosDesktop {

@@ -10,6 +10,20 @@
 //!
 //! Historical epoch configs are retained so that old-epoch signatures remain
 //! verifiable against the signing key roots that were active at the time.
+//!
+//! # Relationship to the LIVE consensus
+//!
+//! This module is the FORMAL SPEC of validator-set reconfiguration — its
+//! `propose` / `verify` / `apply` semantics are proven no-safety-gap by
+//! `metatheory/Dregg2/Distributed/EpochReconfig.lean::epoch_handoff_no_gap`
+//! (old-epoch quorum attests the successor; epoch advances by exactly one; the
+//! successor is born with the correct supermajority threshold) and pinned to
+//! this Rust by `epoch_diff.rs`. The RUNNING DreggNet node performs the live
+//! reconfiguration on the deployed blocklace consensus through the quorum-gated
+//! constitution path (`dregg_blocklace::constitution` →
+//! `dregg_node::blocklace_sync::apply_committee_change`), which refines this same
+//! semantics: a membership change applies only on a quorum of the CURRENT
+//! committee, and the live finalization committee advances atomically with it.
 
 use serde::{Deserialize, Serialize};
 
@@ -162,7 +176,7 @@ impl std::error::Error for EpochError {}
 /// An epoch boundary occurs at heights that are exact multiples of the epoch length.
 /// Height 0 is NOT a boundary (it is genesis).
 pub fn is_epoch_boundary(height: u64, epoch_length: u64) -> bool {
-    height > 0 && epoch_length > 0 && height % epoch_length == 0
+    height > 0 && epoch_length > 0 && height.is_multiple_of(epoch_length)
 }
 
 /// Compute the epoch number for a given block height.
@@ -330,11 +344,7 @@ pub fn verify_epoch_transition(transition: &EpochTransition, old_config: &EpochC
     // Verify each vote's signature against old-epoch member keys.
     // This prevents forged attestations where votes are merely counted without
     // verifying that the signers are actually members of the old epoch.
-    let member_keys: Vec<PublicKey> = old_config
-        .members
-        .iter()
-        .map(|v| v.public_key.clone())
-        .collect();
+    let member_keys: Vec<PublicKey> = old_config.members.iter().map(|v| v.public_key).collect();
     let vote_message = QuorumCertificate::vote_message(
         &transition.attestation.block_hash,
         transition.attestation.height,
@@ -565,7 +575,7 @@ impl EpochConfig {
 
     /// Extract the public keys of all members (for compatibility with ConsensusConfig).
     pub fn member_public_keys(&self) -> Vec<PublicKey> {
-        self.members.iter().map(|m| m.public_key.clone()).collect()
+        self.members.iter().map(|m| m.public_key).collect()
     }
 
     /// The height at which the current epoch ends (exclusive).
@@ -647,7 +657,7 @@ mod tests {
         assert_eq!(config.threshold, 3); // quorum_threshold(3) = ⌊6/3⌋+1 = 3 (strict supermajority)
 
         // Propose adding v3.
-        let transition = propose_epoch_transition(&config, &[v3.clone()], &[]).unwrap();
+        let transition = propose_epoch_transition(&config, std::slice::from_ref(&v3), &[]).unwrap();
 
         assert_eq!(transition.from_epoch, 0);
         assert_eq!(transition.to_epoch, 1);
@@ -681,7 +691,8 @@ mod tests {
         assert_eq!(config.threshold, 3); // quorum_threshold(4) = 4 - 1 = 3
 
         // Remove v3.
-        let transition = propose_epoch_transition(&config, &[], &[v3.public_key.clone()]).unwrap();
+        let transition =
+            propose_epoch_transition(&config, &[], std::slice::from_ref(&v3.public_key)).unwrap();
 
         assert_eq!(transition.new_threshold, 3); // quorum_threshold(3) = ⌊6/3⌋+1 = 3
 
@@ -722,7 +733,8 @@ mod tests {
 
         let config = EpochConfig::genesis(vec![v0.clone(), v1.clone(), v2.clone()], 100);
 
-        let mut transition = propose_epoch_transition(&config, &[v3.clone()], &[]).unwrap();
+        let mut transition =
+            propose_epoch_transition(&config, std::slice::from_ref(&v3), &[]).unwrap();
 
         // Empty attestation should fail verification.
         assert!(!verify_epoch_transition(&transition, &config));
@@ -834,11 +846,12 @@ mod tests {
         let config = EpochConfig::genesis(vec![v0.clone(), v1.clone()], 100);
 
         // Removing a validator not in the set.
-        let result = propose_epoch_transition(&config, &[], &[v_new.public_key.clone()]);
+        let result =
+            propose_epoch_transition(&config, &[], std::slice::from_ref(&v_new.public_key));
         assert!(matches!(result, Err(EpochError::ValidatorNotFound)));
 
         // Adding a validator already in the set.
-        let result = propose_epoch_transition(&config, &[v0.clone()], &[]);
+        let result = propose_epoch_transition(&config, std::slice::from_ref(&v0), &[]);
         assert!(matches!(result, Err(EpochError::ValidatorAlreadyExists)));
 
         // Removing all validators.

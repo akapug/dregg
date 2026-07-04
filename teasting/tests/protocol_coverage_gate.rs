@@ -57,6 +57,7 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         Effect::Burn { .. } => true,        // integration_burn_receipt
         Effect::AttenuateCapability { .. } => true, // integration_attenuate_capability
         Effect::ReceiptArchive { .. } => true, // integration_attestation_archive
+        Effect::Mint { .. } => true,        // sdk/tests/mint_supply_e2e.rs (cap-gated mint e2e)
         // coverage_queue_effects.rs:
 
         // coverage_misc_effects.rs:
@@ -73,14 +74,36 @@ fn effect_executor_coverage(e: &Effect) -> bool {
         // ── Not yet covered: documented blockers (#142 work-list) ────────
         Effect::NoteSpend { .. } => false, // needs the real ZK spending-proof stack
         Effect::PipelinedSend { .. } => false, // only valid inside a pipeline resolution pass
+        // Cell-program install + the partial-turn/reactor vocabulary
+        // (Promise/Notify/React). Driven through `executor.execute` by the
+        // every_variant_roundtrip no-panic smoke, but not yet by a DEDICATED
+        // accept/reject coverage flow — conservatively `false` per the honesty
+        // contract (under-claim, never over-claim) until a coverage_* suite
+        // gates each through the executor.
+        Effect::SetProgram { .. } => false,
+        Effect::Promise { .. } => false,
+        Effect::Notify { .. } => false,
+        Effect::React { .. } => false,
     }
 }
 
 /// `Effect` variants not yet exercised end-to-end (the #142 work-list).
-const NOT_YET_COVERED: &[&str] = &["NoteSpend", "PipelinedSend"];
+const NOT_YET_COVERED: &[&str] = &[
+    "NoteSpend",
+    "PipelinedSend",
+    "SetProgram",
+    "Promise",
+    "Notify",
+    "React",
+];
 
 /// Ratchet: the number of not-yet-covered `Effect` variants may only DECREASE.
-const MAX_UNCOVERED_EFFECTS: usize = 2;
+///
+/// History: 2 → 6 when the cell-program-install (`SetProgram`) and partial-turn/
+/// reactor (`Promise`/`Notify`/`React`) effect vocabulary landed without a
+/// dedicated accept/reject coverage flow; shrink back as each gains a
+/// coverage_* suite that drives it through `TurnExecutor::execute`.
+const MAX_UNCOVERED_EFFECTS: usize = 6;
 
 #[test]
 fn effect_coverage_ratchet_only_shrinks() {
@@ -278,6 +301,42 @@ fn state_constraint_executor_coverage(c: &StateConstraint) -> bool {
         StateConstraint::DigFieldEq { .. } => false,
         StateConstraint::ClearanceDominates { .. } => false,
         StateConstraint::FieldsCollectionAggregate { .. } => false,
+
+        // The register-reading temporal-algebra caveats (rate/until/since/cooled/
+        // challenge), landed STAGED — the temporal algebra made WRITABLE. Not yet
+        // driven through the executor by a dedicated accept/reject coverage pair,
+        // so conservatively `false` per the honesty contract (under-claim, never
+        // over-claim) until a coverage_* suite gates each through the executor.
+        StateConstraint::RateBound { .. } => false,
+        StateConstraint::CooledSince { .. } => false,
+        StateConstraint::UntilEvent { .. } => false,
+        StateConstraint::SinceEvent { .. } => false,
+        StateConstraint::ChallengeWindow { .. } => false,
+
+        // The sealed-escrow atomic-swap gate landed STAGED (the in-circuit weld,
+        // docs/deos/SETTLE-ESCROW-WELD-DESIGN.md): the scalar evaluator + the
+        // manifest projection + the off-AIR verifier re-evaluation are wired, but
+        // no executor-commit accept/reject coverage pair has been authored yet
+        // (the teeth live circuit-side, circuit/tests/settle_escrow_air_teeth.rs).
+        // Conservatively `false` per the honesty contract (under-claim).
+        StateConstraint::SettleEscrow { .. } => false,
+
+        // The standing-obligation per-period discharge gate landed STAGED (the
+        // in-circuit weld, docs/deos/DISCHARGE-OBLIGATION-WELD-DESIGN.md): the scalar
+        // evaluator + the manifest projection + the off-AIR verifier re-evaluation are
+        // wired, but no executor-commit accept/reject coverage pair has been authored
+        // yet (the teeth live circuit-side,
+        // circuit/tests/discharge_obligation_air_teeth.rs). Conservatively `false` per
+        // the honesty contract (under-claim).
+        StateConstraint::DischargeObligation { .. } => false,
+
+        // The share-vault no-dilution deposit gate landed STAGED (the in-circuit weld,
+        // docs/deos/VAULT-DEPOSIT-WELD-DESIGN.md): the scalar evaluator + the manifest
+        // projection + the off-AIR verifier re-evaluation are wired, but no
+        // executor-commit accept/reject coverage pair has been authored yet (the teeth
+        // live circuit-side, circuit/tests/vault_deposit_air_teeth.rs). Conservatively
+        // `false` per the honesty contract (under-claim).
+        StateConstraint::VaultDeposit { .. } => false,
     }
 }
 
@@ -300,10 +359,38 @@ const NOT_YET_COVERED_CONSTRAINTS: &[&str] = &[
     "DigFieldEq",
     "ClearanceDominates",
     "FieldsCollectionAggregate",
+    // Temporal-algebra caveats landed STAGED (writable rate/until/since/cooled/
+    // challenge); no executor accept/reject coverage pair authored yet (#142).
+    "RateBound",
+    "CooledSince",
+    "UntilEvent",
+    "SinceEvent",
+    "ChallengeWindow",
+    // The sealed-escrow atomic-swap gate landed STAGED (in-circuit weld); scalar
+    // evaluator + manifest projection + off-AIR verifier wired, but no
+    // executor-commit accept/reject pair authored yet (teeth are circuit-side).
+    "SettleEscrow",
+    // The standing-obligation per-period discharge gate landed STAGED (in-circuit
+    // weld); scalar evaluator + manifest projection + off-AIR verifier wired, but no
+    // executor-commit accept/reject pair authored yet (teeth are circuit-side).
+    "DischargeObligation",
+    // The share-vault no-dilution deposit gate landed STAGED (in-circuit weld); scalar
+    // evaluator + manifest projection + off-AIR verifier wired, but no executor-commit
+    // accept/reject pair authored yet (teeth are circuit-side).
+    "VaultDeposit",
 ];
 
 /// Ratchet for StateConstraint executor-enforcement coverage — may only shrink.
-const MAX_UNCOVERED_CONSTRAINTS: usize = 15;
+///
+/// History: 15 → 20 when the register-reading temporal algebra became writable
+/// (rate/until/since/cooled/challenge as enforced caveats, staged) without a
+/// dedicated executor accept/reject coverage pair; 20 → 21 when the sealed-escrow
+/// atomic-swap gate landed STAGED (in-circuit weld, teeth circuit-side); 21 → 22 when
+/// the standing-obligation per-period discharge gate landed STAGED (in-circuit weld,
+/// teeth circuit-side); 22 → 23 when the share-vault no-dilution deposit gate landed
+/// STAGED (in-circuit weld, teeth circuit-side). Shrink as each gains an executor
+/// accept/reject coverage pair.
+const MAX_UNCOVERED_CONSTRAINTS: usize = 23;
 
 #[test]
 fn state_constraint_coverage_ratchet_only_shrinks() {

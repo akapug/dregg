@@ -850,6 +850,42 @@ fn constraint_dissect(
             Some(*actor_label_index),
             vec![*root_index],
         ),
+        // The register-reading temporal-algebra caveats (rate/until/since/cooled/
+        // challenge). Primary slot = the register/counter each reads; the
+        // height-relative `CooledSince` binds no slot (it reads block height).
+        SC::RateBound { counter_index, .. } => ("rate_bound", Some(*counter_index), vec![]),
+        SC::CooledSince { .. } => ("cooled_since", None, vec![]),
+        SC::UntilEvent { flag_index } => ("until_event", Some(*flag_index), vec![]),
+        SC::SinceEvent { flag_index } => ("since_event", Some(*flag_index), vec![]),
+        SC::ChallengeWindow {
+            challenge_index, ..
+        } => ("challenge_window", Some(*challenge_index), vec![]),
+        // The sealed-escrow atomic-swap gate: primary slot = leg A's status slot,
+        // leg B's status slot is the extra (both leg slots are bound jointly).
+        SC::SettleEscrow {
+            leg_a_index,
+            leg_b_index,
+        } => ("settle_escrow", Some(*leg_a_index), vec![*leg_b_index]),
+        // The standing-obligation per-period discharge gate: primary slot = the
+        // `next_due` cursor slot; the due-block and total slots are the extras (the
+        // three schedule slots are bound jointly).
+        SC::DischargeObligation {
+            cursor_slot,
+            due_slot,
+            amount_slot,
+            ..
+        } => (
+            "discharge_obligation",
+            Some(*cursor_slot),
+            vec![*due_slot, *amount_slot],
+        ),
+        // The share-vault no-dilution deposit gate: primary slot = the committed
+        // `total_assets` mirror; the `total_shares` mirror is the extra (both bound
+        // jointly so a minted share can't dilute an existing holder).
+        SC::VaultDeposit {
+            assets_slot,
+            shares_slot,
+        } => ("vault_deposit", Some(*assets_slot), vec![*shares_slot]),
     }
 }
 

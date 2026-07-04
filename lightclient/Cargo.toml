@@ -29,6 +29,12 @@ dregg-cell = { path = "../cell" }
 # binary + lib-test fixtures call it, so it is a normal dependency (its `prover`-gated mint is
 # forwarded below).
 dregg-turn = { path = "../turn" }
+# The finality-certificate leg (`FinalityCert`) verifies each validator's Ed25519 signature OVER the
+# finalized root (the `CertValid` binding leg — `FinalizedLightClient.CertValid`), not merely a count
+# of distinct pubkeys. So the light client depends on the same Ed25519 implementation the node signs
+# blocks with (`node/Cargo.toml`'s `ed25519-dalek = "2"`), counting only signature-bound votes toward
+# the supermajority quorum.
+ed25519-dalek = { version = "2", features = ["std"] }
 
 [features]
 # `prover` forwards to dregg-circuit's prover feature (which is in its default set) and gates

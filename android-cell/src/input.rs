@@ -407,10 +407,9 @@ mod tests {
             "a cap over the surface injects the tap"
         );
         assert_eq!(r.cell, Some(cell));
-        assert!(
-            r.status_line()
-                .contains("injected into the confined runtime")
-        );
+        assert!(r
+            .status_line()
+            .contains("injected into the confined runtime"));
         // The device sink actually saw the event.
         assert_eq!(
             gate.sink_mut().injected,

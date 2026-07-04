@@ -33,16 +33,16 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 
 use dregg_cell::{
-    AuthRequired, Cell, CellId, Ledger, Permissions,
     lifecycle::{DeathCertificate, DeathReason},
+    AuthRequired, Cell, CellId, Ledger, Permissions,
 };
 use dregg_sdk::embed::{DreggEngine, EmbedError, EngineConfig};
 use dregg_turn::{
-    ComputronCosts, TurnExecutor,
     action::{Action, Authorization, DelegationMode, Effect, Event},
-    collapse::{WitnessMode, is_deferred},
+    collapse::{is_deferred, WitnessMode},
     forest::CallForest,
     turn::{Turn, TurnReceipt},
+    ComputronCosts, TurnExecutor,
 };
 
 use crate::dynamics::{Dynamics, WorldEvent};
@@ -59,7 +59,7 @@ use crate::replay::History;
 pub enum CommitOutcome {
     /// The turn committed. The real receipt + the dynamics events it produced.
     Committed {
-        receipt: TurnReceipt,
+        receipt: Box<TurnReceipt>,
         events: Vec<WorldEvent>,
     },
     /// The real executor REJECTED the turn (e.g. unauthorized effect,
@@ -167,6 +167,7 @@ pub struct World {
     /// Every height/receipt advance busts it automatically; the genesis-path
     /// ledger writers (which mutate without a height bump) invalidate it with an
     /// explicit `set(None)`.
+    #[allow(clippy::type_complexity)] // (height, state_root, receipt_root) memo cell
     state_root_memo: StdCell<Option<(u64, [u8; 32], [u8; 32])>>,
     /// THE SUSPEND GATE (meta-debug, `docs/deos/FIRMAMENT-REFLEXIVE-SUBSTRATE.md`
     /// §3.2). When `true`, the live loop is HALTED: [`World::commit_turn`] stages
@@ -202,7 +203,7 @@ pub struct World {
     /// still fully applies (the abstract progress). [`World::collapse`]
     /// re-runs the buffered turns under Full to materialize the real witnesses
     /// + the tape, reproducing exactly what a Full run would have. Admission is
-    /// mode-independent — only the witness is deferred, never the decision.
+    ///   mode-independent — only the witness is deferred, never the decision.
     witness_mode: WitnessMode,
     /// The buffer of turns committed under [`WitnessMode::Symbolic`] whose
     /// witnesses are DEFERRED — recorded here (NOT on the replay tape) so
@@ -1241,7 +1242,10 @@ impl World {
                     self.dynamics.emit(ev.clone());
                 }
                 self.receipts.push(receipt.clone());
-                CommitOutcome::Committed { receipt, events }
+                CommitOutcome::Committed {
+                    receipt: Box::new(receipt),
+                    events,
+                }
             }
             Err(EmbedError::TurnRejected { reason, at_action }) => {
                 self.dynamics.emit(WorldEvent::TurnRejected {
@@ -1659,11 +1663,11 @@ fn collect_effect_events(action: &Action, out: &mut Vec<WorldEvent>) {
                 // topic string, as hashed by `emit_event()`).
                 let topic_hash = event.topic;
                 let data_len = event.data.len() * 32; // each FieldElement is 32 B
-                // `action.target` is the cell acting (the sender); `cell` is the
-                // cell the event is emitted ON (the notify recipient). When the
-                // sender emits to itself, sender == cell (a self-notification,
-                // valid and useful for checkpointing). The swarm coordinator uses
-                // this distinction to route the wake signal to `cell`'s inbox.
+                                                      // `action.target` is the cell acting (the sender); `cell` is the
+                                                      // cell the event is emitted ON (the notify recipient). When the
+                                                      // sender emits to itself, sender == cell (a self-notification,
+                                                      // valid and useful for checkpointing). The swarm coordinator uses
+                                                      // this distinction to route the wake signal to `cell`'s inbox.
                 out.push(WorldEvent::EventEmitted {
                     sender: action.target,
                     cell: *cell,
@@ -2327,7 +2331,7 @@ impl SemihostCockpit {
                     // wire — the wire carries the RECEIPT (the executor-PD's
                     // commit_out), the dynamics live with the world the heart owns.
                     Ok(receipt) => CommitOutcome::Committed {
-                        receipt,
+                        receipt: Box::new(receipt),
                         events: Vec::new(),
                     },
                     Err(e) => CommitOutcome::Rejected {
@@ -2397,14 +2401,12 @@ mod tests {
 
         // Dynamics: the transition was observed (a TurnCommitted + a flow each).
         let evs = w.dynamics().since(0);
-        assert!(
-            evs.iter()
-                .any(|e| matches!(e, WorldEvent::TurnCommitted { .. }))
-        );
-        assert!(
-            evs.iter()
-                .any(|e| matches!(e, WorldEvent::BalanceFlowed { .. }))
-        );
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, WorldEvent::TurnCommitted { .. })));
+        assert!(evs
+            .iter()
+            .any(|e| matches!(e, WorldEvent::BalanceFlowed { .. })));
     }
 
     #[test]
@@ -2684,8 +2686,8 @@ mod tests {
 
     #[test]
     fn deploy_factory_then_birth_a_child_cell() {
-        use dregg_cell::CellMode;
         use dregg_cell::factory::{FactoryCreationParams, FactoryDescriptor};
+        use dregg_cell::CellMode;
 
         let mut w = World::new();
         let agent = w.genesis_cell(1, 0);
@@ -2735,8 +2737,8 @@ mod tests {
 
     #[test]
     fn factory_birth_against_an_unregistered_factory_is_rejected() {
-        use dregg_cell::CellMode;
         use dregg_cell::factory::FactoryCreationParams;
+        use dregg_cell::CellMode;
         let mut w = World::new();
         let agent = w.genesis_cell(1, 0);
         let owner = [0xC2u8; 32];
@@ -2773,13 +2775,12 @@ mod tests {
         assert!(w.ledger().get(&user).unwrap().state.balance() > 0);
         let _ = treasury;
         // The ocap grant landed (service reaches user).
-        assert!(
-            w.ledger()
-                .get(&service)
-                .unwrap()
-                .capabilities
-                .has_access(&user)
-        );
+        assert!(w
+            .ledger()
+            .get(&service)
+            .unwrap()
+            .capabilities
+            .has_access(&user));
     }
 
     #[test]
@@ -2834,13 +2835,12 @@ mod tests {
         assert_eq!(w.receipts().len(), 5);
         assert_eq!(w.ledger().get(&service).unwrap().state.balance(), 251_000);
         assert!(w.ledger().get(&user).unwrap().state.balance() > 0);
-        assert!(
-            w.ledger()
-                .get(&service)
-                .unwrap()
-                .capabilities
-                .has_access(&user)
-        );
+        assert!(w
+            .ledger()
+            .get(&service)
+            .unwrap()
+            .capabilities
+            .has_access(&user));
     }
 
     // ── THE SEMIHOSTED COCKPIT — a turn flowing through the executor-PD over the
@@ -3078,7 +3078,7 @@ mod tests {
         let a = w.genesis_cell(1, 100);
         let b = w.genesis_cell(2, 0);
         let mut cockpit = SemihostCockpit::boot(w);
-        let mut compositor = focused_compositor(cockpit.kernel().clone(), a);
+        let compositor = focused_compositor(cockpit.kernel().clone(), a);
         let fb_before = compositor.framebuffer_snapshot();
 
         let turn = cockpit.world().turn(a, vec![transfer(a, b, 1_000)]); // overspend
@@ -3523,18 +3523,15 @@ mod tests {
         let b = sym.genesis_cell(2, 0);
         let c = sym.genesis_cell(3, 0);
         sym.set_witness_mode(WitnessMode::Symbolic);
-        assert!(
-            sym.commit_turn(sym.turn(a, vec![transfer(a, b, 300)]))
-                .is_committed()
-        );
-        assert!(
-            sym.commit_turn(sym.turn(b, vec![transfer(b, c, 100)]))
-                .is_committed()
-        );
-        assert!(
-            sym.commit_turn(sym.turn(a, vec![transfer(a, c, 50)]))
-                .is_committed()
-        );
+        assert!(sym
+            .commit_turn(sym.turn(a, vec![transfer(a, b, 300)]))
+            .is_committed());
+        assert!(sym
+            .commit_turn(sym.turn(b, vec![transfer(b, c, 100)]))
+            .is_committed());
+        assert!(sym
+            .commit_turn(sym.turn(a, vec![transfer(a, c, 50)]))
+            .is_committed());
         assert_eq!(sym.symbolic_pending(), 3);
 
         // A FULL world: the SAME genesis + the SAME three turns (the ground truth).
@@ -3543,18 +3540,15 @@ mod tests {
         let b2 = full.genesis_cell(2, 0);
         let c2 = full.genesis_cell(3, 0);
         assert_eq!((a, b, c), (a2, b2, c2), "deterministic genesis ids");
-        assert!(
-            full.commit_turn(full.turn(a2, vec![transfer(a2, b2, 300)]))
-                .is_committed()
-        );
-        assert!(
-            full.commit_turn(full.turn(b2, vec![transfer(b2, c2, 100)]))
-                .is_committed()
-        );
-        assert!(
-            full.commit_turn(full.turn(a2, vec![transfer(a2, c2, 50)]))
-                .is_committed()
-        );
+        assert!(full
+            .commit_turn(full.turn(a2, vec![transfer(a2, b2, 300)]))
+            .is_committed());
+        assert!(full
+            .commit_turn(full.turn(b2, vec![transfer(b2, c2, 100)]))
+            .is_committed());
+        assert!(full
+            .commit_turn(full.turn(a2, vec![transfer(a2, c2, 50)]))
+            .is_committed());
 
         // COLLAPSE the symbolic world.
         let n = sym.collapse().expect("collapse must succeed");
@@ -3596,10 +3590,9 @@ mod tests {
         let b = w.genesis_cell(2, 0);
         assert!(!w.is_symbolic(), "Full is the default");
         let tape_before = w.recorded_turns().len();
-        assert!(
-            w.commit_turn(w.turn(a, vec![transfer(a, b, 250)]))
-                .is_committed()
-        );
+        assert!(w
+            .commit_turn(w.turn(a, vec![transfer(a, b, 250)]))
+            .is_committed());
         // The tape grew (eager record) and the receipt carries a REAL witness.
         assert_eq!(w.recorded_turns().len(), tape_before + 1);
         assert_eq!(w.symbolic_pending(), 0);

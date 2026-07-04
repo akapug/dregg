@@ -2,15 +2,20 @@ import {
   AgentRuntime,
   AuthorizedTurn,
   ChannelsClient,
+  DEFAULT_LEASE_METHOD,
   EmptyTurnError,
   Identity,
+  LEASE_STEP_SLOT,
+  Lease,
   MAIN_IDENTITY_PATH,
   NodeClient,
   NodeError,
   NodeEvents,
+  PAY_METHOD,
   Receipt,
   ReceiptFilter,
   ReceiptStream,
+  ServiceEconomy,
   TrustlineClient,
   TurnBuilder,
   TurnProof,
@@ -19,8 +24,9 @@ import {
   explainAction,
   explainEffect,
   explainTurn,
+  leaseProgramConstraints,
   renderTurn
-} from "./chunk-GEUMN22R.mjs";
+} from "./chunk-5P3XAGPU.mjs";
 import {
   DreggPgError,
   KERNEL_ROLE,
@@ -385,6 +391,7 @@ __export(program_exports, {
   fieldFromU64: () => fieldFromU642,
   immutable: () => immutable,
   implies: () => implies,
+  monotonic: () => monotonic,
   preimageGate: () => preimageGate,
   programmedCellDescriptor: () => programmedCellDescriptor,
   senderInSlot: () => senderInSlot,
@@ -422,6 +429,9 @@ function immutable(index) {
 }
 function writeOnce(index) {
   return { kind: "writeOnce", index };
+}
+function monotonic(index) {
+  return { kind: "monotonic", index };
 }
 function fieldEquals(index, value) {
   return { kind: "fieldEquals", index, value: exactBytes(value, 32, "fieldEquals value") };
@@ -556,6 +566,9 @@ function writeConstraint(w, c) {
     case "immutable":
       w.varint(7).u8(c.index);
       break;
+    case "monotonic":
+      w.varint(8).u8(c.index);
+      break;
     case "preimageGate":
       w.varint(21).u8(c.commitmentIndex).varint(hashKindIndex(c.hashKind));
       break;
@@ -667,16 +680,20 @@ export {
   AttestedQuery,
   AuthorizedTurn,
   ChannelsClient,
+  DEFAULT_LEASE_METHOD,
   DeployChecker,
   DreggPgError,
   EmptyTurnError,
   Identity,
   KERNEL_ROLE,
+  LEASE_STEP_SLOT,
+  Lease,
   MAIN_IDENTITY_PATH,
   MailboxClient,
   NodeClient,
   NodeError,
   NodeEvents,
+  PAY_METHOD,
   PROFILE_ENV,
   Pg,
   ProfileError,
@@ -685,6 +702,7 @@ export {
   ReceiptFilter,
   ReceiptStream,
   RelayError,
+  ServiceEconomy,
   TOKEN_GUC,
   TrustlineClient,
   TurnBuilder,
@@ -699,6 +717,7 @@ export {
   fieldFromU64,
   hexDecode,
   hexEncode,
+  leaseProgramConstraints,
   profiles_exports as profiles,
   program_exports as program,
   renderTurn,

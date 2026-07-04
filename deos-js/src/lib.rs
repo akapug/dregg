@@ -33,6 +33,7 @@ pub mod coauthored_card;
 pub mod composer_card;
 pub mod dynamics_card;
 pub mod graph_card;
+pub mod home_card;
 pub mod inspector_card;
 pub mod js;
 pub mod layout_card;
@@ -40,31 +41,36 @@ pub mod links_card;
 pub mod mailtown;
 pub mod multi_cell;
 pub mod objects_card;
+pub mod organs_card;
 pub mod portable;
 pub mod program_doc;
+pub mod proofs_card;
 pub mod reflect_binding;
 pub mod signals;
 
-pub use agent_card::{AGENT_NONCE_SLOT, AgentAction, AgentCard, MandateEdge};
+pub use agent_card::{AgentAction, AgentCard, MandateEdge, AGENT_NONCE_SLOT};
 pub use applet::{Affordance, Applet, CellModel, FireError, TranscludeError, Transclusion};
 pub use attach::{
-    AttachedAffordance, AttachedApplet, AttachedComposer, ComposeError, ComposeStep,
-    LiveComposition, WorldSink, mint_id_of,
+    mint_id_of, AttachedAffordance, AttachedApplet, AttachedComposer, ComposeError, ComposeStep,
+    LiveComposition, WorldSink,
 };
 pub use card_editor::Author;
 pub use card_editor::{CardEditor, EditError, ViewEdit, ViewPatch, ViewTree};
-pub use coauthored_card::{COUNT_SLOT, CardFork, CardStitch, SharedCard};
+pub use coauthored_card::{CardFork, CardStitch, SharedCard, COUNT_SLOT};
 pub use composer_card::{ComposedChild, ComposerCard, ComposerViewEdit, Role as ComposerRole};
-pub use dynamics_card::{DynamicsCard, FEED_LEN_SLOT, FeedEntry};
-pub use graph_card::{GRAPH_AUTHORSHIP_SLOT, GraphCard, GraphRow};
-pub use inspector_card::{INSPECTOR_AUTHORSHIP_SLOT, InspectorCard};
+pub use dynamics_card::{DynamicsCard, FeedEntry, FEED_LEN_SLOT};
+pub use graph_card::{GraphCard, GraphRow, GRAPH_AUTHORSHIP_SLOT};
+pub use home_card::{home_view, HomeLine, HomeSection};
+pub use inspector_card::{InspectorCard, INSPECTOR_AUTHORSHIP_SLOT};
 pub use js::{
-    ComposeOutcome, ComposeRunOutcome, JsRuntime, JsTarget, set_current_composer,
-    set_current_editor, take_current_composer, take_current_editor, take_last_compose,
+    set_current_composer, set_current_editor, take_current_composer, take_current_editor,
+    take_last_compose, ComposeOutcome, ComposeRunOutcome, JsRuntime, JsTarget,
 };
-pub use layout_card::{LAYOUT_AUTHORSHIP_SLOT, LayoutCard, LayoutMode, LayoutModel, LayoutPatch};
-pub use links_card::{BacklinkRow, LINK_COUNT_SLOT, LinksCard};
-pub use objects_card::{OBJECTS_AUTHORSHIP_SLOT, ObjectRow, ObjectsCard};
+pub use layout_card::{LayoutCard, LayoutMode, LayoutModel, LayoutPatch, LAYOUT_AUTHORSHIP_SLOT};
+pub use links_card::{BacklinkRow, LinksCard, LINK_COUNT_SLOT};
+pub use objects_card::{ObjectRow, ObjectsCard, OBJECTS_AUTHORSHIP_SLOT};
+pub use organs_card::{organs_view, OrganCardRow};
 pub use portable::{AffordanceSpec, AppletManifest, ApplyOp, PortableApplet};
 pub use program_doc::{GadgetCite, ProgramSource, TranscludedFragment};
+pub use proofs_card::{proofs_view, ProofCardRow};
 pub use reflect_binding::id_hex;

@@ -278,7 +278,7 @@ fn unhex32(s: &str) -> Result<[u8; 32], String> {
 }
 
 fn unhex_var(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     (0..s.len())
@@ -399,7 +399,7 @@ pub fn events_from_snapshots(
         events.push(IdentityEvent {
             seq: seq as u64,
             event_type,
-            prior_event_digest: prior_digest.as_ref().map(|d| hex32(d)),
+            prior_event_digest: prior_digest.as_ref().map(hex32),
             event_digest: hex32(&digest),
             lifecycle_state: ks.lifecycle_state,
             current_keys_commit: hex32(&ks.current_keys_commit),
@@ -691,10 +691,10 @@ pub fn verify_export(
         if dec.surface.digest() != dec.stated_digest {
             return Err(VerifyError::EventDigestMismatch { seq });
         }
-        if let Some(p) = &prev {
-            if dec.surface.prior != Some(p.stated_digest) {
-                return Err(VerifyError::ChainBroken { seq });
-            }
+        if let Some(p) = &prev
+            && dec.surface.prior != Some(p.stated_digest)
+        {
+            return Err(VerifyError::ChainBroken { seq });
         }
 
         // ── terminal retirement ──

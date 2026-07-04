@@ -39,7 +39,7 @@ use dregg_types::CellId;
 
 use deos_reflect::substance::{lifecycle_label, short_hex};
 
-use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::card_editor::{
     ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
 };

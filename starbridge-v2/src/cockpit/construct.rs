@@ -330,6 +330,7 @@ impl Cockpit {
             replay_fork: None,
             time_cursor,
             meta_stack: MetaStack::new(),
+            time_branch: None,
             clerk,
             clerk_outcome: None,
             editor,
@@ -383,6 +384,13 @@ impl Cockpit {
             // The boot-seeded demo app (above) is the FIRST entry — the launcher
             // appends a fresh confined app per "+ launch" press.
             launched_apps: Vec::new(),
+            // THE PRE-BUILT APP LAUNCHER — empty until the operator launches a wired
+            // starbridge-app from the POWERBOX/LAUNCHER surface (each launch seeds the
+            // app onto the live World + fires its representative verified turn).
+            #[cfg(feature = "app-registry")]
+            apps_launched: Vec::new(),
+            #[cfg(feature = "app-registry")]
+            apps_outcome: None,
             // The SIMULATE composer boots with the treasury as agent, the target
             // picker on the first cell, the effect picker on the first palette
             // entry, and a seeded example action (a small treasury→user transfer)
@@ -430,6 +438,12 @@ impl Cockpit {
             service_explorer_selected: None,
             service_explorer_args: String::new(),
             service_explorer_outcome: None,
+
+            // THE SERVICE DIRECTORY boots showing the service-publishing cells only
+            // (the "services" view), nothing selected, no announce fired yet.
+            service_directory_selected: None,
+            service_directory_include_caps: false,
+            service_directory_outcome: None,
 
             // THE WORKSPACE boots with a seeded conserving transfer draft so the
             // panel opens on a runnable doIt rather than an empty expression.
@@ -506,7 +520,7 @@ impl Cockpit {
             // (`ensure_inspector_card` builds it from the focused cell over the World).
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
             inspector_card: None,
-            // The six landed cards mount lazily as their mode's surface on first paint
+            // The landed cards mount lazily as their mode's surface on first paint
             // (`ensure_mode_card` builds each from the live ledger over the World).
             #[cfg(all(feature = "dev-surfaces", feature = "card-pane"))]
             mode_cards: std::collections::HashMap::new(),

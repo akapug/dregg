@@ -202,6 +202,19 @@ pub struct BlocklaceHandle {
     /// peer while preserving eventual re-request (liveness). See
     /// `dregg_net::peer_score::RequestBackoff`.
     pub pull_backoff: Arc<RwLock<dregg_net::peer_score::RequestBackoff<BlockId>>>,
+    /// TIGHT, NON-ESCALATING backoff for the cohort-completion pull (a peer's
+    /// announced FRONTIER tip we lack — see `handle_frontier`). This pull is
+    /// LIVENESS-CRITICAL: the round-synchronous rule cannot advance until a node
+    /// holds a supermajority of distinct creators' blocks at its round, so a single
+    /// missing tip wedges the whole committee. The general `pull_backoff` escalates
+    /// to a 30s cap (correct for a possibly-withholding peer on a deep history gap),
+    /// but under load — where the eager push AND the pull response are both lossier —
+    /// that let a missing cohort tip go un-retried for tens of seconds, stalling the
+    /// chain for minutes. A committee member's current tip is neither withholding nor
+    /// a deep gap, so retry it briskly (base 500ms, cap 1500ms): recovery within a
+    /// couple seconds even under sustained loss, still bounded (≤ n−1 tips, ≤ one
+    /// frontier/peer/tick).
+    pub tip_pull_backoff: Arc<RwLock<dregg_net::peer_score::RequestBackoff<BlockId>>>,
     /// Instant of the last block WE produced (turn, ack, or heartbeat). The
     /// cadence task measures idleness against this so the low-frequency idle
     /// heartbeat fires only when the node has genuinely produced nothing for a
@@ -477,7 +490,6 @@ impl BlocklaceHandle {
             let c = self.constitution.read().await;
             dregg_blocklace::ordering::supermajority_threshold(c.current.participant_count())
         };
-
         let block = {
             let mut lace = self.lace.write().await;
             let plan = plan_round_block(&lace, lace.self_creator(), supermajority);
@@ -601,7 +613,18 @@ impl BlocklaceHandle {
     pub async fn send_frontier(&self) {
         let frontier_tips: HashMap<[u8; 32], BlockId> = {
             let lace = self.lace.read().await;
-            lace.tips().iter().map(|(k, v)| (*k, *v)).collect()
+            let tips = lace.tips();
+            // DAG structure gauges (emitted under the lace lock, so they reflect a
+            // single consistent view): frontier width = number of per-creator tips;
+            // depth = the maximum round across those tips.
+            crate::metrics::set_blocklace_frontier(tips.len() as f64);
+            let depth = tips
+                .values()
+                .filter_map(|t| lace.round_of(t))
+                .max()
+                .unwrap_or(0);
+            crate::metrics::set_blocklace_depth(depth as f64);
+            tips.iter().map(|(k, v)| (*k, *v)).collect()
         };
         let msg = BlocklaceGossipMessage::Frontier {
             tips: frontier_tips,
@@ -909,7 +932,21 @@ impl BlocklaceHandle {
     /// Returns all actionable finalized blocks (turns, membership votes, checkpoints).
     /// Ack and Data payloads are skipped as they need no consensus-level processing.
     pub async fn poll_finalized_blocks(&self) -> Vec<FinalizedBlock> {
-        let lace = self.lace.read().await;
+        // SNAPSHOT the lace and RELEASE the read lock immediately. The verified-Lean
+        // tau-order FFI (`VerifiedFinality::compute_order`) and the finality-gate FFI
+        // (`VerifiedFinality::compute`) below are O(history) and run on EVERY finality
+        // notification; holding `lace.read()` across them STARVED the block producer's
+        // `lace.write()` as the chain grew — round production halted under sustained
+        // load and `dag_height` froze (the live n=4 stall). Cloning is the same
+        // O(history) cost as the `build_ordering_blocklace` the poll already does, and a
+        // block produced after the snapshot is simply finalized on the NEXT poll
+        // (finality is monotone) — so the producer advances concurrently and the chain
+        // keeps climbing. The `cursor` write lock is likewise deferred (below) until
+        // after the FFI so it does not block the cadence's `wave_open` read.
+        let lace = {
+            let guard = self.lace.read().await;
+            (*guard).clone()
+        };
         let constitution = self.constitution.read().await;
         let raw_participants = constitution.current.participants.clone();
         drop(constitution);
@@ -939,11 +976,15 @@ impl BlocklaceHandle {
             );
         }
 
-        let mut cursor = self.cursor.write().await;
-
         // For solo mode (n=1): every block is immediately finalized in topological
         // order. tau() handles this correctly because with a single participant,
         // every block trivially has supermajority.
+        // `ordered_from_lean` records whether the multi-party order below came from the
+        // verified Lean export (the authoritative path) rather than the Rust fallback. It
+        // lets us SKIP the redundant secondary finality-gate FFI in the common case (the
+        // gate only ever admits the whole Lean order back) — halving the executor's
+        // O(history) Lean work per poll, which is the dominant cost as the chain grows.
+        let mut ordered_from_lean = false;
         let ordered = if participants.len() <= 1 {
             // Solo: all actionable blocks are ordered by sequence.
             let mut all_blocks: Vec<(u64, BlockId)> = lace
@@ -986,11 +1027,38 @@ impl BlocklaceHandle {
                 .collect();
 
             let order_gate_armed = crate::finality_gate::finality_gate_enabled();
-            match if order_gate_armed {
-                crate::finality_gate::VerifiedFinality::compute_order(&lace, &participants)
+            // Run the verified-Lean tau-order FFI on a BLOCKING thread (`spawn_blocking`), never inline
+            // on this tokio worker. The verified ordering is O(history) and — even with the memoized
+            // Lean causal-past (`BlocklaceFinality.tauOrderFast`, the parallel of the Rust `PastCache`)
+            // — a large lace can still take real CPU time; running it inline PINNED the async worker and
+            // STARVED the runtime (gossip/QUIC/`/status` froze) on a cross-linked DAG (the finality
+            // wedge). On a blocking thread the async runtime stays responsive regardless of how long the
+            // ordering takes. The lace snapshot + participants are moved into the closure (owned).
+            let lean_order_opt = if order_gate_armed {
+                let lace_ffi = lace.clone();
+                let participants_ffi = participants.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::finality_gate::VerifiedFinality::compute_order(
+                        &lace_ffi,
+                        &participants_ffi,
+                    )
+                })
+                .await
+                {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "verified tau-order FFI blocking task panicked/cancelled — falling back \
+                             to the Rust `ordering::tau` order for this poll"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
-            } {
+            };
+            match lean_order_opt {
                 Some(lean_order) => {
                     // DIFFERENTIAL: assert the verified Lean order and the Rust `tau` order AGREE.
                     // The two id schemes differ (blake3 vs interned `Nat`), so we compare on the
@@ -1007,13 +1075,22 @@ impl BlocklaceHandle {
                         v
                     };
                     if coord(&lean_order) != coord(&rust_order) {
+                        // MIXED-NETWORK DIFFERENTIAL (intentional): a Lean-shadowed node
+                        // cross-checks every finalization against the Rust `ordering::tau` that
+                        // rust-only consensus members run. A divergence here means the two finality
+                        // implementations DISAGREE — surface it LOUDLY (a warn line) AND to
+                        // monitoring (a Prometheus counter), never a silent drop. The verified Lean
+                        // order wins for this poll; the counter lets operators of a mixed federation
+                        // SEE a real rust↔lean divergence accumulate.
+                        crate::metrics::inc_consensus_differential_divergence();
                         warn!(
                             lean_len = lean_order.len(),
                             rust_len = rust_order.len(),
                             "consensus DIFFERENTIAL DIVERGENCE: the verified Lean `dregg_tau_order` \
                              and the Rust `ordering::tau` finalized DIFFERENT (creator, seq) sets — \
                              the VERIFIED Lean order is AUTHORITATIVE (Rust is the differential \
-                             sibling). This is a Rust-side bug or a stale archive; investigate."
+                             sibling). This is a Rust-side bug or a stale archive; investigate. \
+                             (dregg_consensus_differential_divergence_total incremented.)"
                         );
                     } else {
                         debug!(
@@ -1023,6 +1100,7 @@ impl BlocklaceHandle {
                         );
                     }
                     // The VERIFIED Lean order is the one we finalize over.
+                    ordered_from_lean = true;
                     lean_order
                 }
                 None => {
@@ -1060,9 +1138,36 @@ impl BlocklaceHandle {
         // committed batch BEFORE that block (it is NOT marked executed), so it is re-evaluated on a
         // later poll once the lace has grown enough — preserving liveness (a finalized block stays
         // pending until served; identity tracking makes the retry order-shift-proof).
-        let gate_armed = participants.len() > 1 && crate::finality_gate::finality_gate_enabled();
+        //
+        // PERF: when `ordered` ALREADY came from the verified Lean export (`ordered_from_lean`,
+        // the common path), the gate is provably a no-op — it re-runs the SAME verified projection
+        // and admits the whole Lean order back (`gate_admits_iff_verified_finalizes`). So skip the
+        // second O(history) FFI there and keep the belt ONLY for the Rust fallback (the case it
+        // actually defends, where `ordered` is NOT Lean-verified). Equivalent to the prior behaviour
+        // (verified=None ⇒ fail-open ⇒ admit all) on the Lean path, at half the per-poll Lean cost.
+        let gate_armed = participants.len() > 1
+            && !ordered_from_lean
+            && crate::finality_gate::finality_gate_enabled();
+        // Belt-and-suspenders consistency gate FFI — also on a BLOCKING thread (see the tau-order FFI
+        // above) so it can never starve the async runtime, regardless of lace size.
         let verified = if gate_armed {
-            crate::finality_gate::VerifiedFinality::compute(&lace, &participants)
+            let lace_ffi = lace.clone();
+            let participants_ffi = participants.clone();
+            match tokio::task::spawn_blocking(move || {
+                crate::finality_gate::VerifiedFinality::compute(&lace_ffi, &participants_ffi)
+            })
+            .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        "verified finality-gate FFI blocking task panicked/cancelled — failing open \
+                         (un-gated) for this poll"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -1087,6 +1192,13 @@ impl BlocklaceHandle {
         // prefix shift is then absorbed correctly and surfaced as OBSERVABILITY: `observe_order`
         // diffs the previously computed order against the new one (the conclusion-level mirror of
         // the Lean `stableCheck`) so operators SEE reorgs-by-catchup happen.
+        //
+        // Acquire the cursor write lock HERE — AFTER the O(history) verified-Lean FFI above —
+        // so it is never held across that work (it would otherwise block the cadence's
+        // `wave_open` cursor read, the second half of the producer starvation). Only the
+        // single finality-executor task calls this function, so deferring the acquisition
+        // cannot race a concurrent poll.
+        let mut cursor = self.cursor.write().await;
         let prefix_stable = cursor.observe_order(&ordered);
         if !prefix_stable {
             crate::metrics::inc_tau_prefix_shift();
@@ -1238,6 +1350,95 @@ impl BlocklaceHandle {
 
         self.push_new_blocks().await;
     }
+
+    /// LIVE EPOCH TRANSITION — advance the running consensus committee to a
+    /// newly-finalized validator set.
+    ///
+    /// Called from [`apply_passed_proposal`] once a membership change has been
+    /// ratified by a quorum of the CURRENT committee (the constitution
+    /// `apply_if_passed` gate) AND confirmed by tau finality. Two live pieces
+    /// advance, atomically with respect to consensus:
+    ///
+    /// 1. **The finalization-vote committee** — `self.votes` is reconfigured to
+    ///    the new participant set and the new supermajority threshold, so the
+    ///    added validator's signed finalization votes COUNT from this point and
+    ///    a removed validator's no longer do. Already-attested blocks stay
+    ///    attested (monotone), so the boundary introduces no safety gap.
+    /// 2. **The gossip mesh admission** — each current participant's federation
+    ///    key is (re-)registered in the gossip network's authenticated peer set
+    ///    (keyed by `blake3(public_key)`, the SAME derivation the mesh uses), so
+    ///    a newly-added validator's signed envelopes are accepted live without
+    ///    recreating the transport. (Authentication is by public key, not by
+    ///    `federation_id`, so this survives a committee change.)
+    ///
+    /// The constitution's participant set (which `tau` ordering reads live) was
+    /// already advanced by the caller. What is deliberately NOT touched here is
+    /// the federation/chain identity — see [`apply_passed_proposal`].
+    ///
+    /// A removed validator's gossip key is left registered (harmless: it is no
+    /// longer a `tau` participant and its finalization votes are now rejected by
+    /// the reconfigured collector). HORIZONLOG: optional deregistration on
+    /// removal.
+    pub async fn apply_committee_change(&self, participants: &[[u8; 32]], threshold: usize) {
+        // 1. Advance the finalization-vote committee + quorum threshold.
+        {
+            let mut votes = self.votes.write().await;
+            votes.reconfigure(participants.iter().copied(), threshold);
+        }
+        // 2. Admit every current participant to the authenticated gossip mesh.
+        for pk in participants {
+            let node_id = *blake3::hash(pk).as_bytes();
+            self.gossip
+                .register_peer_key(node_id, dregg_types::PublicKey(*pk))
+                .await;
+        }
+        info!(
+            participants = participants.len(),
+            quorum_threshold = threshold,
+            "live consensus committee advanced (epoch transition applied)"
+        );
+    }
+
+    /// OPERATOR-DRIVEN epoch transition: propose adding or removing a validator
+    /// on a RUNNING node (the live, chain-continuing path — distinct from the
+    /// offline `add-validator` genesis re-roll).
+    ///
+    /// Creates a `MembershipVote` proposal block (`Join` for an add, `Leave` for
+    /// a remove), self-votes it (the proposing validator's authority), persists
+    /// it, and disseminates it. The change only APPLIES once a quorum of the
+    /// CURRENT committee ratifies it through finality — proposing is not
+    /// authority, the current committee's votes are. Returns the proposal block
+    /// id so the caller can report / poll it.
+    ///
+    /// `add = true` proposes `Join(node_id)`; `add = false` proposes
+    /// `Leave(node_id)`. A rotation is two calls: `Leave(old)` then `Join(new)`.
+    pub async fn propose_membership(
+        &self,
+        state: &NodeState,
+        node_id: [u8; 32],
+        add: bool,
+    ) -> BlockId {
+        let action = if add {
+            MembershipAction::Join { node_id }
+        } else {
+            MembershipAction::Leave { node_id }
+        };
+        let block = {
+            let mut lace = self.lace.write().await;
+            lace.add_block(Payload::MembershipVote {
+                action: action.clone(),
+            })
+        };
+        let block_id = block.id();
+        Self::persist_block_to_store(state, &block).await;
+        info!(
+            block_id = %block_id,
+            add,
+            "operator proposed epoch transition (membership change) on running node"
+        );
+        self.push_new_blocks().await;
+        block_id
+    }
 }
 
 /// Build a `dregg_blocklace::Blocklace` (the ordering-compatible type) from
@@ -1308,7 +1509,56 @@ fn build_ordering_blocklace(
 /// `--consensus blocklace` is specified.
 ///
 /// Key property: QUIESCENT operation. No periodic timers for consensus.
+/// Resolve a list of `host:port` peer specs to dialable socket addresses.
+///
+/// Each spec may be an `IP:PORT` literal (e.g. `127.0.0.1:9420`) OR a
+/// `hostname:port` (e.g. a genesis-emitted overlay hostname like `edge:9420`).
+/// Hostnames are resolved via DNS at dial time (`tokio::net::lookup_host`), not
+/// parsed as IP literals — the previous `p.parse::<SocketAddr>()` SILENTLY
+/// DROPPED every hostname peer, so overlay-named nodes never federated at the
+/// blocklace layer (the federation blocker). A spec that does not resolve (or
+/// resolves to zero addresses) is logged LOUDLY at `error` — never silently
+/// dropped — so a misconfigured overlay hostname / DNS failure is visible.
+///
+/// All resolved addresses are returned (a hostname may yield both an IPv4 and an
+/// IPv6 record); the gossip layer dials each, and the one reachable from our
+/// bound endpoint connects.
+async fn resolve_peer_addrs(peers: &[String]) -> Vec<SocketAddr> {
+    let mut resolved: Vec<SocketAddr> = Vec::new();
+    for p in peers {
+        match tokio::net::lookup_host(p.as_str()).await {
+            Ok(addrs) => {
+                let before = resolved.len();
+                for addr in addrs {
+                    resolved.push(addr);
+                }
+                let got = resolved.len() - before;
+                if got == 0 {
+                    error!(
+                        peer = %p,
+                        "peer address resolved to ZERO socket addresses — peer DROPPED; it will \
+                         NOT federate at the blocklace layer. Check the overlay hostname / DNS."
+                    );
+                } else {
+                    debug!(peer = %p, resolved = got, "resolved peer address for blocklace dial");
+                }
+            }
+            Err(e) => {
+                error!(
+                    peer = %p,
+                    error = %e,
+                    "failed to RESOLVE peer address (hostname lookup failed) — peer DROPPED; it \
+                     will NOT federate at the blocklace layer. A `host:port` spec needs a \
+                     resolvable host (an IP literal or an overlay hostname that resolves)."
+                );
+            }
+        }
+    }
+    resolved
+}
+
 /// Activity only when a turn is submitted or blocks arrive from peers.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_blocklace_sync(
     state: NodeState,
     gossip_port: u16,
@@ -1318,6 +1568,12 @@ pub async fn run_blocklace_sync(
     block_cadence_ms: u64,
     idle_heartbeat_ms: u64,
     min_block_interval_ms: u64,
+    // Our OWN externally-reachable gossip endpoint (`--bind <ip>:<gossip-port>`),
+    // if the operator supplied a routable bind IP. Fed to the gossip layer so the
+    // node advertises itself in the authenticated peer exchange and the committee
+    // meshes transitively from a single bootstrap. `None` (e.g. `--bind 0.0.0.0`)
+    // disables self-advertisement and falls back to manual `--federation-peers`.
+    advertise_addr: Option<SocketAddr>,
 ) -> Option<BlocklaceHandle> {
     // Blocklace tuning params (from CLI --blocklace-* or safe defaults in main).
     // This is the core of making blocklace easy to configure/enable/disable/tune
@@ -1521,17 +1777,24 @@ pub async fn run_blocklace_sync(
         peer_keys_map,
     ));
 
-    // Parse peer addresses.
-    let peer_addrs: Vec<SocketAddr> = peers
-        .iter()
-        .filter_map(|p| match p.parse::<SocketAddr>() {
-            Ok(addr) => Some(addr),
-            Err(e) => {
-                warn!(peer = %p, error = %e, "invalid peer address, skipping");
-                None
-            }
-        })
-        .collect();
+    // SELF-FORMING MESH: advertise our own reachable listen endpoint in the
+    // authenticated peer exchange. A node booted with only `--bootstrap <one-peer>`
+    // signs and broadcasts this address to every peer it connects to; the peer
+    // records the authenticated `identity -> addr` binding and re-shares it via
+    // gossip-of-peers, so the whole committee learns every member's endpoint from a
+    // single seed (manual `--federation-peers` becomes an optional override). A
+    // non-routable bind (e.g. `0.0.0.0`) yields `None` and self-advertisement stays
+    // off — the address would not be dialable anyway.
+    if let Some(adv) = advertise_addr {
+        gossip.set_advertise_addr(adv).await;
+        info!(advertise = %adv, "gossip self-advertisement enabled (self-forming mesh)");
+    }
+
+    // Resolve peer addresses. A spec is `host:port` where `host` may be a
+    // HOSTNAME (e.g. a genesis-emitted overlay hostname like `edge:9420`), not
+    // only an `IP:PORT` literal — resolve via DNS at dial time. An unresolvable
+    // peer is logged LOUDLY (an `error`), never silently dropped.
+    let peer_addrs: Vec<SocketAddr> = resolve_peer_addrs(&peers).await;
 
     // Join the blocklace gossip topic.
     let topic = match gossip.join_topic(TOPIC_BLOCKLACE, &peer_addrs).await {
@@ -1646,6 +1909,10 @@ pub async fn run_blocklace_sync(
         pull_backoff: Arc::new(RwLock::new(dregg_net::peer_score::RequestBackoff::new(
             Duration::from_secs(1),
             Duration::from_secs(30),
+        ))),
+        tip_pull_backoff: Arc::new(RwLock::new(dregg_net::peer_score::RequestBackoff::new(
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
         ))),
         last_produced: Arc::new(RwLock::new(std::time::Instant::now())),
         ack_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -2120,9 +2387,17 @@ async fn record_finalization_vote(
         let mut col = handle.votes.write().await;
         col.record(vote)
     };
+    // Per-validator liveness: every recorded (well-formed, member-signed) vote is
+    // a freshness heartbeat from its signer. Bounded label cardinality (one per
+    // committee member).
+    let voter_tag = hex_encode(&vote.voter[..4]);
     match outcome {
         RecordOutcome::ReachedQuorum { distinct_votes } => {
             crate::metrics::inc_consensus_attested();
+            crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
+            // Finality latency: first local vote for this block → quorum reached.
+            crate::metrics::record_finality_latency(&block_id.0);
             info!(
                 block_id = %block_id,
                 votes = distinct_votes,
@@ -2131,13 +2406,22 @@ async fn record_finalization_vote(
             );
         }
         RecordOutcome::Counted { distinct_votes } => {
+            crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
+            // The first recorded vote opens this node's quorum-gathering window.
+            if distinct_votes == 1 {
+                crate::metrics::mark_block_voting_started(block_id.0);
+            }
             debug!(
                 block_id = %block_id,
                 votes = distinct_votes,
                 "recorded finalization vote (below quorum)"
             );
         }
-        RecordOutcome::AlreadyQuorum { .. } => {}
+        RecordOutcome::AlreadyQuorum { .. } => {
+            crate::metrics::set_validator_last_seen(&voter_tag);
+            crate::metrics::inc_validator_votes(&voter_tag);
+        }
         RecordOutcome::Rejected => {
             debug!(
                 block_id = %block_id,
@@ -2320,8 +2604,11 @@ async fn handle_push(
     // same id (after a re-org / GC) should start fresh, not deep in backoff.
     if !outcome.inserted.is_empty() {
         let mut bo = handle.pull_backoff.write().await;
+        let mut tbo = handle.tip_pull_backoff.write().await;
         for b in &outcome.inserted {
-            bo.clear(&b.id());
+            let id = b.id();
+            bo.clear(&id);
+            tbo.clear(&id);
         }
     }
 
@@ -2375,19 +2662,19 @@ async fn handle_pull(handle: &BlocklaceHandle, from: SocketAddr, missing_ids: Ve
         // Include the causal past of the requested block.
         let past = lace.causal_past(block_id);
         for past_id in &past {
-            if !sent_ids.contains(past_id) {
-                if let Some(block) = lace.get(past_id) {
-                    to_send.push(block.clone());
-                    sent_ids.insert(*past_id);
-                }
+            if !sent_ids.contains(past_id)
+                && let Some(block) = lace.get(past_id)
+            {
+                to_send.push(block.clone());
+                sent_ids.insert(*past_id);
             }
         }
         // Include the block itself.
-        if !sent_ids.contains(block_id) {
-            if let Some(block) = lace.get(block_id) {
-                to_send.push(block.clone());
-                sent_ids.insert(*block_id);
-            }
+        if !sent_ids.contains(block_id)
+            && let Some(block) = lace.get(block_id)
+        {
+            to_send.push(block.clone());
+            sent_ids.insert(*block_id);
         }
     }
     drop(lace);
@@ -2432,6 +2719,46 @@ async fn handle_frontier(
     from: SocketAddr,
     their_tips: HashMap<[u8; 32], BlockId>,
 ) {
+    // SELF-HEALING PULL (the other half of reconciliation): a Frontier is push-only
+    // on its own — the receiver computes what the SENDER lacks and pushes it. That
+    // converges a peer that is strictly BEHIND, but NOT the concurrent case where
+    // both sides hold blocks the other is missing. At n>1 the round-synchronous
+    // rule needs a SUPERMAJORITY of distinct creators at a round before any node may
+    // advance (n=3 ⇒ all three), so when the committee advances rounds concurrently
+    // every node ends a round holding its OWN newest block but missing its peers'
+    // newest blocks. The only holder of a peer's tip is that peer; if its one-shot
+    // eager push was lost, nothing ever re-requests it — the orphan-pull path never
+    // fires (the missing tip never arrives to reveal the gap), so the cluster wedges
+    // one block short of the round cohort FOREVER and `dag_height` freezes. Pulling
+    // every announced per-creator tip we do NOT hold closes that gap deterministically:
+    // a Pull response carries the block's full causal past (`handle_pull`), so any
+    // predecessor gap heals atomically. Backoff-gated (shared with the catch-up
+    // pull limiter), so a tip we already requested is not re-hammered and steady
+    // state — every announced tip known — stays quiet.
+    let tips_to_pull: Vec<BlockId> = {
+        let lace = handle.lace.read().await;
+        their_tips
+            .values()
+            .filter(|tip_id| !lace.contains(tip_id))
+            .copied()
+            .collect()
+    };
+    if !tips_to_pull.is_empty() {
+        let due: Vec<BlockId> = {
+            let mut bo = handle.tip_pull_backoff.write().await;
+            tips_to_pull
+                .into_iter()
+                .filter(|id| bo.should_request(*id))
+                .collect()
+        };
+        if !due.is_empty() {
+            debug!(from = %from, tips = due.len(), "frontier: pulling announced tips we lack");
+            handle
+                .broadcast_gossip_message(&BlocklaceGossipMessage::Pull(due))
+                .await;
+        }
+    }
+
     let to_send = {
         let lace = handle.lace.read().await;
 
@@ -2446,8 +2773,7 @@ async fn handle_frontier(
             .values()
             .filter(|tip_id| lace.contains(tip_id))
             .collect();
-        let their_known: std::collections::HashSet<BlockId> =
-            lace.causal_past_union(known_tips.into_iter());
+        let their_known: std::collections::HashSet<BlockId> = lace.causal_past_union(known_tips);
 
         // Collect blocks they don't have, sorted in causal order.
         let mut candidates: Vec<(&BlockId, &Block)> = lace
@@ -2473,32 +2799,19 @@ async fn handle_frontier(
         result
     };
 
-    // VOTE ANTI-ENTROPY REPLY: whenever a peer's Frontier reaches us, reply with
-    // the finalization votes WE hold (a fresh Frontier carrying them). This is
-    // what makes votes reliably cross at small N: the eager spontaneous push is
-    // directionally lossy per boot (a node may receive a peer's BLOCKS — pulled
-    // by id via Frontier/Pull — yet never its peer's spontaneous vote pushes),
-    // but the Frontier request/response demonstrably crosses BOTH ways (it is how
-    // the DAG converges). Answering a frontier with our votes gives them that
-    // same bidirectional guarantee: a peer that requested catch-up also learns
-    // our finalization votes and can cross quorum. Empty when we hold no
-    // re-emittable votes, so steady-state stays quiet.
-    {
-        let votes = handle.frontier_votes().await;
-        if !votes.is_empty() {
-            let reply_tips: HashMap<[u8; 32], BlockId> = {
-                let lace = handle.lace.read().await;
-                lace.tips().iter().map(|(k, v)| (*k, *v)).collect()
-            };
-            handle
-                .broadcast_gossip_message(&BlocklaceGossipMessage::Frontier {
-                    tips: reply_tips,
-                    nonce: frontier_nonce(),
-                    votes,
-                })
-                .await;
-        }
-    }
+    // NOTE: a received Frontier must NOT be answered with another (votes-carrying)
+    // Frontier. Doing so was an UNBOUNDED AMPLIFICATION LOOP: every node that holds
+    // a re-emittable finalization vote (which is every member for the whole
+    // re-emit window after each finalization) replied to each inbound Frontier with
+    // an outbound one, which the peer in turn replied to — a frontier storm
+    // (thousands/sec at n=3) that saturated the gossip receive path and STARVED the
+    // very block/Pull deliveries the round-synchronous rule needs to advance, so the
+    // committee stalled after the first wave even though the transport was healthy.
+    // Vote anti-entropy already has TWO bounded channels that do not self-amplify:
+    // `reemit_pending_votes` (once per cadence tick, budget-capped) and the vote
+    // piggyback on each node's OWN periodic announcement Frontier (`send_frontier` →
+    // `frontier_votes`). A catching-up peer therefore still learns our votes within
+    // a tick — without the reply that turned reconciliation into a storm.
 
     if to_send.is_empty() {
         return;
@@ -2775,10 +3088,37 @@ pub(crate) fn round_cadence_decision(
 async fn wave_open(handle: &BlocklaceHandle) -> bool {
     let cursor = handle.cursor.read().await;
     let lace = handle.lace.read().await;
+
+    // The DAG depth (max round). A turn-bearing block needs the cluster to advance
+    // through its wave's last round and a later wave-leader to super-ratify it — a
+    // bounded number of rounds past where the turn LANDED. Once the tip is that far
+    // ahead, the turn is tau-FINALIZED; whether it has been EXECUTED yet is a
+    // separate, purely-local step the finality executor performs on its own.
+    //
+    // LIVELOCK GUARD: keying "wave open" off `!is_executed` ALONE means that when the
+    // finality executor lags the producer (e.g. under load, its O(history) verified
+    // tau poll falls behind), a turn stays "open" long after it is finalized, so the
+    // cadence keeps advancing EMPTY wave-closing rounds for it — which grows the DAG,
+    // makes the executor's next poll even slower, and drives a runaway (the DAG raced
+    // to dozens of rounds while finality stuck). Bounding "open" to turns within
+    // `2*wavelength` rounds of the tip stops that: a turn the chain has already moved
+    // well past is finalized-pending-execution (NOT a reason to mint more rounds), so
+    // production goes quiescent and lets the executor catch up — no runaway, and the
+    // turn still commits the moment its poll lands.
+    let tip_round = lace.tips().values().filter_map(|t| lace.round_of(t)).max();
+    const FINALITY_DEPTH_ROUNDS: u64 = 2 * 3; // 2 × wavelength (ordering default = 3)
+
     lace.iter().any(|(id, block)| {
-        // A non-`Ack` block (turn / membership / checkpoint / data) that `tau`
-        // has not yet finalized is unfinalized work: a wave is open for it.
-        block.payload != Payload::Ack && !cursor.is_executed(id)
+        if block.payload == Payload::Ack || cursor.is_executed(id) {
+            return false;
+        }
+        // Still needs ROUNDS to super-ratify (within the finality depth of the tip) ⇒
+        // genuinely open. Already finalized-but-unexecuted (the chain is far past it) ⇒
+        // not open: the executor will serve it without more rounds.
+        match (tip_round, lace.round_of(id)) {
+            (Some(tip), Some(r)) => tip.saturating_sub(r) <= FINALITY_DEPTH_ROUNDS,
+            _ => true,
+        }
     })
 }
 
@@ -2945,6 +3285,8 @@ async fn cadence_tick_round_driven(
     // Quiescence inputs (all DAG/queue STATE, so they persist across a held tick —
     // the rate cap can pace an advance but never lose it).
     let queued_turns = handle.pending_payloads.read().await.len();
+    // Mempool depth: turns/payloads queued but not yet drained into a block.
+    crate::metrics::set_mempool_pending(queued_turns as f64);
     let ack_pending = handle
         .ack_pending
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -2952,7 +3294,26 @@ async fn cadence_tick_round_driven(
     let since_last_block = handle.last_produced.read().await.elapsed();
     let idle_for = since_last_block;
 
-    let action = round_cadence_decision(
+    // EXECUTION BACKPRESSURE: is there a non-`Ack` block tau has finalized but the
+    // finality executor has NOT yet executed? (`wave_open` already covers turns still
+    // needing ROUNDS to super-ratify; this is the leftover set — finalized, awaiting
+    // local execution.) When the executor lags the producer under load, minting more
+    // (idle-heartbeat) rounds only grows the DAG, which makes the executor's
+    // O(history) verified poll EVEN slower — a runaway where the chain races dozens of
+    // rounds ahead while a finalized turn never commits. So when finalized work is
+    // pending execution we STOP producing and instead NUDGE the executor to re-poll:
+    // the DAG stops growing, the executor catches up on a now-stable lace, the turn
+    // commits, and only then does normal idle production resume. (Notifying is safe —
+    // the executor recomputes the full finalized set each poll, so it cannot miss the
+    // pending turn, and we do not depend on a fresh block to wake it.)
+    let exec_pending = {
+        let cursor = handle.cursor.read().await;
+        let lace = handle.lace.read().await;
+        lace.iter()
+            .any(|(id, b)| b.payload != Payload::Ack && !cursor.is_executed(id))
+    };
+
+    let mut action = round_cadence_decision(
         queued_turns,
         ack_pending,
         wave_is_open,
@@ -2961,6 +3322,16 @@ async fn cadence_tick_round_driven(
         idle_for,
         idle_heartbeat_ms,
     );
+
+    // EXECUTION BACKPRESSURE (see `exec_pending` above): if the only thing this tick
+    // would do is mint an idle-heartbeat round while a FINALIZED turn is still waiting
+    // to execute, hold off — growing the DAG would only slow the executor's catch-up.
+    // Nudge it to re-poll and produce nothing. (`DrainTurns`/`ReactiveAck`/`AdvanceWave`
+    // are real finalization work and are NOT held — they keep the committee live.)
+    if action == CadenceAction::IdleHeartbeat && exec_pending {
+        handle.finality_notify.notify_one();
+        action = CadenceAction::Nothing;
+    }
 
     // QUIESCENCE: nothing to finalize (or the rate cap is holding) → produce NO
     // block this tick. Rounds stop advancing; the DAG goes quiet. We still
@@ -3148,18 +3519,16 @@ fn spawn_peer_prober(handle: BlocklaceHandle, state: NodeState, interval_ms: u64
             // reconnected, or were graylisted) so memory stays bounded and a
             // later re-drop starts fresh.
             for addr in &unconnected {
-                if backoff.should_request(*addr) {
-                    if handle.gossip.reconnect_peer(*addr).await {
-                        info!(peer = %addr, "peer reconnect prober: (re)established link");
-                        backoff.clear(addr);
-                        crate::metrics::set_federation_peers_connected(
-                            handle.gossip.connected_peer_count().await as f64,
-                        );
-                        // A freshly (re)connected peer wants our frontier so it
-                        // pushes whatever we are missing (and vice-versa) — the
-                        // same catch-up nudge a fresh boot does.
-                        handle.send_frontier().await;
-                    }
+                if backoff.should_request(*addr) && handle.gossip.reconnect_peer(*addr).await {
+                    info!(peer = %addr, "peer reconnect prober: (re)established link");
+                    backoff.clear(addr);
+                    crate::metrics::set_federation_peers_connected(
+                        handle.gossip.connected_peer_count().await as f64,
+                    );
+                    // A freshly (re)connected peer wants our frontier so it
+                    // pushes whatever we are missing (and vice-versa) — the
+                    // same catch-up nudge a fresh boot does.
+                    handle.send_frontier().await;
                 }
             }
             // Bound the backoff map: forget entries for peers no longer in the
@@ -3203,6 +3572,18 @@ fn spawn_finality_executor(state: NodeState, handle: BlocklaceHandle) {
         loop {
             // QUIESCENT: sleep until signaled that new blocks have arrived.
             handle.finality_notify.notified().await;
+
+            // DEBOUNCE/COALESCE: one finality recompute is O(history) — it clones the
+            // lace and runs the verified-Lean tau-order FFI twice — and a notification
+            // fires on EVERY block this node produces OR receives. Under sustained load
+            // that drove back-to-back recomputes that pinned a worker on the FFI and
+            // starved everything else (the round-production crawl). A finalization is
+            // never time-critical to the millisecond (the rate cap is seconds), so wait
+            // a short window and let any notifications that land during it collapse into
+            // THIS single poll — `poll_finalized_blocks` already recomputes the whole
+            // finalized set, so nothing is missed. Cuts recompute frequency by ~an order
+            // of magnitude under load while keeping finality latency well under a round.
+            tokio::time::sleep(Duration::from_millis(150)).await;
 
             // Process all newly finalized blocks (turns, membership, checkpoints).
             let finalized_blocks = handle.poll_finalized_blocks().await;
@@ -3501,18 +3882,42 @@ async fn execute_finalized_turn(
 
     // AUTHORITY path (cap Phase D): capture the actor cell's CANONICAL
     // pre-execution `capability_root` — the sorted-Poseidon2 root over its
-    // c-list (cap Phase A's openable scheme, the same value the Effect-VM
-    // row's cap_root column is seeded from). A capability-gated turn's
-    // cap-membership leg is bound against THIS root, never one from the
-    // receipt/prover. Captured BEFORE execution (effects may mutate the
-    // c-list). A missing cell has the canonical EMPTY root.
-    let full_turn_pre_cap_root: dregg_circuit::field::BabyBear = if s.full_turn_proving_enabled {
+    // c-list (cap Phase A's openable scheme) — in the TWO forms the two legs
+    // consume. `full_turn_pre_cap_root` (SCALAR lane-0, `_felt`) seeds the
+    // Effect-VM row's `cap_root` column (`CellState::capability_root: BabyBear`,
+    // the historical scalar column, with the wide lanes 1..7 carried separately
+    // at the rotated extras). `full_turn_pre_cap_root_8` (FULL native 8-felt,
+    // `_8`) is the openable membership root the cap-membership leg /
+    // `CapMembershipExpectation.cap_root` binds — the ~124-bit faithful root, NOT
+    // a lane-0 squeeze. A capability-gated turn's cap-membership leg is bound
+    // against THIS root, never one from the receipt/prover. Captured BEFORE
+    // execution (effects may mutate the c-list). A missing cell has the canonical
+    // EMPTY root.
+    let (full_turn_pre_cap_root, full_turn_pre_cap_root_8): (
+        dregg_circuit::field::BabyBear,
+        [dregg_circuit::field::BabyBear; 8],
+    ) = if s.full_turn_proving_enabled {
         s.ledger
             .get(&signed_turn.turn.agent)
-            .map(|cell| dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities))
-            .unwrap_or_else(dregg_circuit::cap_root::empty_capability_root)
+            .map(|cell| {
+                (
+                    dregg_cell::compute_canonical_capability_root_felt(&cell.capabilities),
+                    dregg_cell::compute_canonical_capability_root_8(&cell.capabilities).limbs(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    dregg_cell::compute_canonical_capability_root_felt(
+                        &dregg_cell::CapabilitySet::new(),
+                    ),
+                    dregg_circuit::cap_root::empty_capability_root().limbs(),
+                )
+            })
     } else {
-        dregg_circuit::cap_root::empty_capability_root()
+        (
+            dregg_cell::compute_canonical_capability_root_felt(&dregg_cell::CapabilitySet::new()),
+            dregg_circuit::cap_root::empty_capability_root().limbs(),
+        )
     };
 
     // FRESHNESS path: capture the node's CANONICAL spent-nullifier set BEFORE this
@@ -3541,7 +3946,7 @@ async fn execute_finalized_turn(
     // with no bearer authorization yields an empty map (zero cost on the hot path).
     let full_turn_delegator_cap_roots: HashMap<
         dregg_types::CellId,
-        dregg_circuit::field::BabyBear,
+        [dregg_circuit::field::BabyBear; 8],
     > = if s.full_turn_proving_enabled {
         crate::turn_proving::delegator_pre_state_cap_roots(&signed_turn.turn.call_forest, &s.ledger)
     } else {
@@ -3560,19 +3965,117 @@ async fn execute_finalized_turn(
     // `canonical_ledger_root` commits only `cell.state`). The submitter no longer
     // provisions authoritatively at faucet-submission time in multi-party mode
     // (see `api.rs`), so it reaches this same path and provisions identically.
-    provision_transfer_destinations(&mut s.ledger, &signed_turn.turn.call_forest);
-
     // THE SWAP — producer mode (authority inversion), now the DEFAULT — through the ONE
     // shared producer gate every ingress uses (`executor_setup::execute_via_producer`,
     // #171): finalized turns, thin-HTTP turns, and remote signed envelopes all execute
     // on the same authoritative state producer.
     let lean_producer_enabled = s.lean_producer_enabled;
-    let exec_result = crate::executor_setup::execute_via_producer(
-        &executor,
-        &signed_turn.turn,
-        &mut s.ledger,
-        lean_producer_enabled,
-    );
+
+    // ─── A1 FIX — the confirmed n=5 finalization-stall root cause ─────────────
+    // The EXECUTION FFI (`dregg_exec_full_forest_auth`, reached through
+    // `execute_via_producer`) used to run INLINE on the tokio async worker while
+    // this function held the GLOBAL `state.write()` lock (acquired above) for the
+    // FFI's ENTIRE duration. At n=5 that pinned the worker AND held the write lock
+    // across the whole (slow) FFI, starving the producer / round / super-ratify
+    // loop — so `execute_finalized_turn` never completed the promotion and turns
+    // never finalized. (The `24dcd0474` wedge fix moved the ORDERING FFI off the
+    // worker but left THIS execution FFI inline-under-lock.)
+    //
+    // Fix: run the FFI on a `spawn_blocking` thread against a CLONE of the
+    // pre-state (CLONE-IN), releasing the global write lock for the FFI's whole
+    // duration, then re-apply the committed post-state under a BRIEF re-acquired
+    // lock as a per-cell OVERLAY of exactly the cells this turn touched. We do NOT
+    // wholesale-replace `s.ledger` (that would clobber concurrent writers on OTHER
+    // cells — the service inserts / the atomic-coordinator commit). This changes
+    // only WHERE/HOW the verified executor runs; the Lean executor stays
+    // authoritative and its post-state is installed verbatim.
+    let pre_ledger = s.ledger.clone();
+    let mut exec_ledger = s.ledger.clone();
+    // Every value the remainder of this function needs from the pre-state has
+    // already been captured into owned locals above (new_height, now, and the
+    // full_turn_* proving snapshots), so releasing the guard here is sound.
+    drop(s);
+
+    let turn_for_exec = signed_turn.turn.clone();
+    let exec_join = tokio::task::spawn_blocking(move || {
+        // Provision Transfer destinations on the CLONE the FFI executes against
+        // (byte-deterministic — the identical zero-stub every node inserts). The
+        // pre→post diff below classifies each provisioned+credited destination as
+        // a created cell, so the overlay installs it on the authoritative ledger.
+        provision_transfer_destinations(&mut exec_ledger, &turn_for_exec.call_forest);
+        let result = crate::executor_setup::execute_via_producer(
+            &executor,
+            &turn_for_exec,
+            &mut exec_ledger,
+            lean_producer_enabled,
+        );
+        (result, exec_ledger)
+    });
+    let (exec_result, exec_ledger) = match exec_join.await {
+        Ok(v) => v,
+        Err(e) => {
+            error!(
+                block_id = %block_id,
+                turn_hash = %turn_hash_hex,
+                error = %e,
+                "finalized-turn EXECUTION task panicked/cancelled; turn NOT applied"
+            );
+            return;
+        }
+    };
+
+    // The COMPLETE set of cells this turn changed — the full pre→post cell diff.
+    // Unlike the executor's `LedgerDelta` (which omits the heap_root / lifecycle /
+    // program / vk / delegation dimensions — see `compute_delta_from_journal`), a
+    // whole-`Cell` diff captures EVERY committed change, so overlaying it
+    // reproduces the exact post-state a re-executing validator computes. `Cell`'s
+    // `PartialEq` compares content only (the leaf cache is excluded), so there are
+    // no false positives.
+    let touched_ids = ledger_touched_diff(&pre_ledger, &exec_ledger);
+
+    // Re-acquire the global write lock BRIEFLY to install the result.
+    let mut s = state.write().await;
+
+    // CONCURRENCY GUARD (validate-or-reject, never overwrite). The FFI executed
+    // against a snapshot taken while the lock was released. In multi-party mode
+    // the other ingress paths only STAGE during this window (the faucet executes
+    // against a scratch clone — see `api.rs`; `/turn/atomic` stages a proposal;
+    // consensus is the sole authoritative writer), so the touched set is normally
+    // untouched by anyone else. If a concurrent path DID write a cell this turn
+    // also changed, the snapshot is stale and overlaying it would silently clobber
+    // that write — so we DECLINE to install and surface it loudly. The durable
+    // commit is then NOT written, so identity-recovery re-applies this turn
+    // against fresh state (idempotently) rather than corrupting the live root now.
+    let concurrent_conflict = touched_ids
+        .iter()
+        .any(|id| pre_ledger.get(id) != s.ledger.get(id));
+    if concurrent_conflict {
+        error!(
+            block_id = %block_id,
+            turn_hash = %turn_hash_hex,
+            "A1 concurrency guard: a concurrent ledger write landed on a cell this \
+             finalized turn touched during the off-lock exec window — the execution \
+             snapshot is STALE. DECLINING to install (validate-or-reject); the turn \
+             re-applies from the durable cursor on restart"
+        );
+        return;
+    }
+
+    // Install the COMPLETE post-state for exactly the touched cells (overlay, not
+    // replace): remove+insert so an updated cell's full new content lands verbatim,
+    // a created cell is inserted, and a destroyed cell (present pre, absent post)
+    // is removed. Concurrent inserts on OTHER cells are left intact.
+    for id in &touched_ids {
+        match exec_ledger.get(id) {
+            Some(cell) => {
+                let _ = s.ledger.remove(id);
+                let _ = s.ledger.insert_cell(cell.clone());
+            }
+            None => {
+                let _ = s.ledger.remove(id);
+            }
+        }
+    }
 
     match exec_result {
         dregg_turn::TurnResult::Committed {
@@ -3672,6 +4175,14 @@ async fn execute_finalized_turn(
             //    the authority leg PROVES the delegated cap was really held — the
             //    former soundness residual (proving WITHOUT the authority leg) is
             //    CLOSED.
+            // A1 item 4 — the full-turn PROVING FFI below still runs inline under
+            // the (now briefly re-acquired) write lock. It is gated on
+            // `full_turn_proving_enabled`, which is OFF by default and only ON with
+            // `--prove-turns` / `DREGG_PROVE_TURNS=1` (see `main.rs`), so it is OFF
+            // the n=5 finalization hot path this fix targets. When proving IS
+            // enabled it should get the same `spawn_blocking` + off-lock treatment
+            // as the execution FFI above (the named follow-up); a proving validator
+            // otherwise re-introduces a per-turn lock hold for the prover's duration.
             let full_turn_proof_attached: Option<Vec<u8>> =
                 if let Some((pre_balance, pre_nonce)) = full_turn_pre_state {
                     let effects: Vec<dregg_turn::Effect> = signed_turn
@@ -3701,7 +4212,7 @@ async fn execute_finalized_turn(
                     };
                     let bearer_cap_witness: Option<(
                         &dregg_turn::ConsumedCapWitness,
-                        dregg_circuit::field::BabyBear,
+                        [dregg_circuit::field::BabyBear; 8],
                     )> = bearer_cap.and_then(|w| {
                         match full_turn_delegator_cap_roots.get(&w.holder) {
                             Some(root) => Some((w, *root)),
@@ -3757,26 +4268,46 @@ async fn execute_finalized_turn(
                                 }
                                 _ => None,
                             };
-                            // cap-WRITE light-client axis: thread the actor's FULL pre-state c-list
-                            // (the cap-tree write witness) so a write-bearing cap effect (e.g.
-                            // RevokeDelegation) proves the post-cap-root on the wire. Empty when the
-                            // before-cell is unavailable (the authority-only route still proves).
-                            let clist_leaves = full_turn_pre_cell
+                            // cap-WRITE light-client axis: thread the actor's FULL pre-state cap-tree
+                            // write witness bundle (the arity-2 leaf-set + the 7-field c-list +
+                            // tombstones) so a write-bearing cap effect (RevokeDelegation REMOVE /
+                            // delegate-family INSERT) proves the post-cap-root on the wire. Empty when
+                            // the before-cell is unavailable (the authority-only route still proves).
+                            let cap_trees = full_turn_pre_cell
                                 .as_ref()
-                                .map(crate::turn_proving::cap_write_clist_leaves)
+                                .map(crate::turn_proving::cap_write_tree_witness)
                                 .unwrap_or_default();
                             crate::turn_proving::prove_and_verify_finalized_turn_capability(
                                 &signed_turn.turn.agent,
                                 pre_balance,
                                 pre_nonce,
                                 full_turn_pre_cap_root,
+                                full_turn_pre_cap_root_8,
                                 &effects,
                                 computed_hash,
                                 consumed,
                                 spent_nullifier,
                                 &full_turn_previously_spent,
                                 rotation,
-                                clist_leaves,
+                                cap_trees,
+                                // VK EPOCH (umem flip): the DOMAIN-2 welded producer is ARMED. When the
+                                // actor's GENUINE before→after record-kernel projection diff is a
+                                // NON-EMPTY single-domain CAPS change, mint the WIDE+UMEM welded cap-open
+                                // form (the universal-memory leg BESIDE the 8-felt commit, accepted
+                                // ADDITIVELY). An empty / heap-domain / multi-domain diff (incl. the 12
+                                // live-only members) yields `None` ⇒ the byte-identical BARE wide leg.
+                                match (
+                                    full_turn_pre_cell.as_ref(),
+                                    s.ledger.get(&signed_turn.turn.agent),
+                                ) {
+                                    (Some(before_cell), Some(after_cell)) => {
+                                        crate::turn_proving::caps_umem_weld_witness(
+                                            before_cell,
+                                            after_cell,
+                                        )
+                                    }
+                                    _ => None,
+                                },
                             )
                         }
                         (None, Some((consumed, holder_cap_root)), spent_nullifier) => {
@@ -3824,7 +4355,22 @@ async fn execute_finalized_turn(
                                 // BEARER path: the cap-tree write witness is the DELEGATOR's c-list
                                 // (not the actor's) — the bearer write wrapper is the named fan-out
                                 // residual; the authority-only route proves until it lands.
-                                Vec::new(),
+                                Default::default(),
+                                // VK EPOCH (umem flip): DOMAIN-2 welded producer ARMED on the bearer arm
+                                // too — built from the ACTOR's genuine before→after projection diff (the
+                                // producer fails closed to `None` ⇒ bare for any non-single-caps diff).
+                                match (
+                                    full_turn_pre_cell.as_ref(),
+                                    s.ledger.get(&signed_turn.turn.agent),
+                                ) {
+                                    (Some(before_cell), Some(after_cell)) => {
+                                        crate::turn_proving::caps_umem_weld_witness(
+                                            before_cell,
+                                            after_cell,
+                                        )
+                                    }
+                                    _ => None,
+                                },
                             )
                         }
                         (None, None, Some(spent_nullifier)) => {
@@ -3995,13 +4541,51 @@ async fn execute_finalized_turn(
                 receipt_stream_root,
             };
             let signing_msg = attested.signing_message();
-            let local_pk = s.cclerk.public_key().clone();
+            let local_pk = s.cclerk.public_key();
             let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
             let sig = dregg_types::sign(&signing_key, &signing_msg);
             // In solo / single-validator mode our signature alone meets the
-            // threshold (threshold defaults to 1 if the genesis-declared
-            // value is zero). In full mode this is one signature; peer
-            // aggregation occurs in a follow-up commit.
+            // threshold (threshold defaults to 1 if the genesis-declared value
+            // is zero), so the persisted root is a genuine quorum and the node
+            // restarts cleanly.
+            //
+            // ⚠ FULL-MODE COMMITTEE RESTART HOLE (caught by the N3 live run).
+            // In full mode this pushes ONLY the local signature (1 < threshold),
+            // so the persisted `quorum_signatures` do NOT carry a committee
+            // quorum. On restart `verify_signed_anchor_and_rollback` (state.rs)
+            // calls `StoredAttestedRoot::verify_signatures`, which requires
+            // `quorum_signatures.len() >= threshold` valid committee signatures
+            // over THIS root's `signing_message()`. A full-mode committee node
+            // therefore fail-closes after finalizing >=1 height. The recovery
+            // anchor is CORRECT hardening; the persistence under-feeds it.
+            //
+            // This is NOT a plumbing gap (the earlier "peer aggregation occurs
+            // in a follow-up commit" note was wrong). The only cross-node
+            // committee quorum that forms is the `FinalizationVote` set
+            // (finalization_votes.rs), which:
+            //   (a) signs `VOTE_DOMAIN || block_id || level` — NOT this root's
+            //       merkle_root-binding `signing_message()`;
+            //   (b) is collected ASYNC, AFTER this synchronous persist (peer
+            //       votes arrive later over gossip; the local node has not even
+            //       emitted its own vote yet at this point — see the
+            //       `emit_finalization_vote` call after `execute_finalized_turn`);
+            //   (c) is retained by `VoteCollector` as distinct-signer KEY sets
+            //       only — the signature bytes are discarded after counting.
+            // And `signing_message()` binds a wall-clock `timestamp`
+            // (executor_setup sets it via `wall_clock_secs()`), so committee
+            // peers cannot even produce matching signatures over this root.
+            //
+            // Closing this SOUNDLY (without weakening the anchor) requires a
+            // protocol addition: a DETERMINISTIC attested root (drop the
+            // wall-clock timestamp from the signed preimage / derive it from
+            // the finalized block) plus a signed-gossip exchange of committee
+            // signatures over the root, aggregated to >=threshold and threaded
+            // here — OR extending `FinalizationVote` to bind the finalized
+            // merkle_root, retaining those sigs, and persisting the root once
+            // its quorum assembles. Both are consensus-visible and carry an
+            // async-window liveness decision (this synchronous commit cannot
+            // block on network gossip). Diagnosis pinned by
+            // `dregg_persist::tests::full_mode_single_sig_root_is_refused_genuine_quorum_accepted`.
             if federation_keys.is_empty() || federation_keys.contains(&local_pk) {
                 attested.quorum_signatures.push((local_pk, sig));
             }
@@ -4490,7 +5074,7 @@ mod tests {
 
         // A QUIC-transport-style id (random TLS-cert hash) is correctly unknown.
         let transport_style_id: [u8; 32] = [0x7c; 32];
-        assert!(peer_keys.get(&transport_style_id).is_none());
+        assert!(!peer_keys.contains_key(&transport_style_id));
     }
 
     // ── Block-production cadence: mutation-driven, no empty-block spam ──────
@@ -4920,15 +5504,14 @@ mod tests {
         // (committed_height + caveat tags) rides as zeros in this synthetic WR.
         let mut pi_bb = vec![BabyBear::ZERO; p::ACTIVE_BASE_COUNT];
         let (th, eg, _, prev) = dregg_turn::TurnExecutor::compute_turn_identity_pi(turn);
-        for i in 0..p::TURN_HASH_LEN {
-            pi_bb[p::TURN_HASH_BASE + i] = th[i];
-        }
-        for i in 0..p::EFFECTS_HASH_GLOBAL_LEN {
-            pi_bb[p::EFFECTS_HASH_GLOBAL_BASE + i] = eg[i];
-        }
-        for i in 0..p::PREVIOUS_RECEIPT_HASH_LEN {
-            pi_bb[p::PREVIOUS_RECEIPT_HASH_BASE + i] = prev[i];
-        }
+        pi_bb[p::TURN_HASH_BASE..p::TURN_HASH_BASE + p::TURN_HASH_LEN]
+            .copy_from_slice(&th[..p::TURN_HASH_LEN]);
+        pi_bb
+            [p::EFFECTS_HASH_GLOBAL_BASE..p::EFFECTS_HASH_GLOBAL_BASE + p::EFFECTS_HASH_GLOBAL_LEN]
+            .copy_from_slice(&eg[..p::EFFECTS_HASH_GLOBAL_LEN]);
+        pi_bb[p::PREVIOUS_RECEIPT_HASH_BASE
+            ..p::PREVIOUS_RECEIPT_HASH_BASE + p::PREVIOUS_RECEIPT_HASH_LEN]
+            .copy_from_slice(&prev[..p::PREVIOUS_RECEIPT_HASH_LEN]);
         pi_bb[p::ACTOR_NONCE] = BabyBear::new((turn.nonce & 0x7FFF_FFFF) as u32);
         project_into_pi(&mut pi_bb, &counts, &roots);
         pi_bb[p::IS_AGENT_CELL] = if cell_id == &turn.agent {
@@ -5290,6 +5873,236 @@ mod tests {
         }
     }
 
+    // ─── A1 FIX — off-lock finalized execution + concurrency safety ──────────
+    //
+    // The confirmed n=5 finalization-stall root cause: the EXECUTION FFI ran
+    // inline on the tokio worker while `execute_finalized_turn` held the global
+    // write lock for the FFI's whole duration, starving the producer/round loop.
+    // The fix runs the FFI on `spawn_blocking` against a CLONE of the pre-state
+    // (lock released), then re-applies the committed post-state under a brief
+    // re-acquired lock as a per-cell OVERLAY of exactly the cells the turn touched
+    // (never a wholesale ledger replace). These two tests cover the make-or-break
+    // (a real finalized turn advances height 0 -> 1 through `execute_finalized_turn`
+    // with A1) and the install mechanism + concurrency guard in isolation.
+
+    /// THE MAKE-OR-BREAK: a finalized Transfer turn executes through the REAL
+    /// `execute_finalized_turn` (the live commit path, now off-lock) and advances
+    /// the attested height 0 -> 1 — the local confirmation that A1 unblocks
+    /// finalization (the execution completes + promotes, no wedge), and the ledger
+    /// reflects the committed transfer. Forces the deterministic Rust producer path
+    /// so the test does not depend on a Lean-linked archive; the A1 change (WHERE
+    /// the FFI runs + HOW its result is installed) is identical either way.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a1_finalized_turn_advances_height_zero_to_one_off_lock() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = crate::state::NodeState::new(tmp.path(), Vec::new()).expect("node state");
+
+        // Deterministic Rust producer (no Lean-archive dependence).
+        {
+            let mut s = state.write().await;
+            s.lean_producer_enabled = false;
+        }
+
+        // The federation id the node's executor binds (fresh state, not
+        // federation-configured): blake3(node cclerk pubkey). The turn's per-action
+        // signature MUST bind the SAME id or admission rejects.
+        let federation_id = {
+            let s = state.read().await;
+            *blake3::hash(s.cclerk.public_key().as_bytes()).as_bytes()
+        };
+
+        // Fund a sender cell; the destination is fresh (materialized by the path).
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"a1-finalize:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x3Cu8; 32]);
+        {
+            let mut s = state.write().await;
+            s.ledger
+                .insert_cell(dregg_cell::Cell::with_balance(
+                    sender_pk, [0u8; 32], 1_000_000,
+                ))
+                .expect("fund sender");
+        }
+
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+        let turn_data = postcard::to_stdvec(&signed).expect("encode signed turn");
+
+        // A minimal real handle; `execute_finalized_turn` reads only `handle.lace`
+        // for the OPTIONAL finality round (an empty lace yields round None — fine).
+        let self_key = [0x9Au8; 32];
+        let handle = test_handle_with_committee(self_key, vec![self_key]).await;
+        let block_id = BlockId([0x11u8; 32]);
+
+        let height_before = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(height_before, 0, "fresh node starts at attested height 0");
+
+        // With A1 the execution FFI runs off the worker + off the lock, so this
+        // COMPLETES (does not wedge) and promotes.
+        execute_finalized_turn(&state, &handle, block_id, &turn_data, None, 0).await;
+
+        let height_after = {
+            let s = state.read().await;
+            s.store
+                .latest_attested_root()
+                .ok()
+                .flatten()
+                .map(|r| r.height)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            height_after, 1,
+            "a finalized turn MUST advance attested height 0 -> 1 with A1 — the unlock"
+        );
+
+        // The ledger reflects the committed transfer.
+        let s = state.read().await;
+        assert_eq!(
+            s.ledger
+                .get(&dest)
+                .expect("destination materialized by the finalized path")
+                .state
+                .balance(),
+            4_200,
+            "destination holds exactly the transferred amount"
+        );
+        assert_eq!(
+            s.ledger
+                .get(&sender)
+                .expect("sender present")
+                .state
+                .balance(),
+            1_000_000 - 4_200 - signed.turn.fee as i64,
+            "sender debited by amount + burned fee"
+        );
+    }
+
+    /// A1 install mechanism + concurrency guard, in isolation and deterministic.
+    /// Mirrors `execute_finalized_turn`'s new flow: execute the finalized turn
+    /// against a CLONE of the pre-state (the off-lock `spawn_blocking` step), diff
+    /// pre->post for the COMPLETE touched set (`ledger_touched_diff`), then overlay
+    /// exactly those cells onto the authoritative ledger. Proves (a) the overlay
+    /// reproduces the transfer's post-state, (b) a concurrent write to a DISJOINT
+    /// cell during the window is PRESERVED (a wholesale replace would drop it), and
+    /// (c) the guard DETECTS a concurrent SAME-cell write (validate-or-reject,
+    /// never a silent overwrite).
+    #[test]
+    fn a1_overlay_installs_poststate_and_guards_concurrent_writes() {
+        let federation_id = [0u8; 32]; // bare-executor convention (Rust producer path)
+        let sender_cclerk = dregg_sdk::AgentCipherclerk::from_key_bytes(zeroize::Zeroizing::new(
+            *blake3::hash(b"a1-overlay:sender").as_bytes(),
+        ));
+        let sender_pk = sender_cclerk.public_key().0;
+        let sender = dregg_cell::CellId::derive_raw(&sender_pk, &[0u8; 32]);
+        let dest = dregg_cell::CellId([0x7Eu8; 32]);
+        let signed = signed_transfer_turn(&sender_cclerk, sender, dest, 4_200, 0, &federation_id);
+
+        // The authoritative ledger (sender funded, dest absent).
+        let mut authoritative = node_genesis_ledger(sender_pk, 1_000_000);
+
+        // === off-lock exec against a CLONE of the pre-state (spawn_blocking step) ===
+        let pre_ledger = authoritative.clone();
+        let mut exec_ledger = authoritative.clone();
+        provision_transfer_destinations(&mut exec_ledger, &signed.turn.call_forest);
+        let executor = dregg_turn::TurnExecutor::new(dregg_turn::ComputronCosts::default());
+        match crate::executor_setup::execute_via_producer(
+            &executor,
+            &signed.turn,
+            &mut exec_ledger,
+            false,
+        ) {
+            dregg_turn::TurnResult::Committed { .. } => {}
+            other => panic!("finalized transfer must commit, got {other:?}"),
+        }
+        let touched = ledger_touched_diff(&pre_ledger, &exec_ledger);
+        assert!(
+            touched.contains(&sender) && touched.contains(&dest),
+            "the touched set must include the debited sender and the credited destination"
+        );
+
+        // === a CONCURRENT writer touches a DISJOINT cell during the window ===
+        let bystander = dregg_cell::Cell::with_balance([0xABu8; 32], [0u8; 32], 777);
+        let bystander_id = bystander.id();
+        authoritative
+            .insert_cell(bystander)
+            .expect("concurrent disjoint insert");
+
+        // Guard: a DISJOINT concurrent write is NOT a conflict.
+        let conflict = touched
+            .iter()
+            .any(|id| pre_ledger.get(id) != authoritative.get(id));
+        assert!(
+            !conflict,
+            "a concurrent write to a DISJOINT cell must not register as a conflict"
+        );
+
+        // === overlay install (the per-cell, non-replace apply) ===
+        for id in &touched {
+            match exec_ledger.get(id) {
+                Some(cell) => {
+                    let _ = authoritative.remove(id);
+                    authoritative
+                        .insert_cell(cell.clone())
+                        .expect("overlay insert");
+                }
+                None => {
+                    let _ = authoritative.remove(id);
+                }
+            }
+        }
+
+        // (a) the transfer landed.
+        assert_eq!(
+            authoritative.get(&dest).expect("dest").state.balance(),
+            4_200,
+            "destination credited by the overlay"
+        );
+        assert_eq!(
+            authoritative.get(&sender).expect("sender").state.balance(),
+            1_000_000 - 4_200 - signed.turn.fee as i64,
+            "sender debited by amount + burned fee"
+        );
+        // (b) the concurrent disjoint cell is PRESERVED (a wholesale replace drops it).
+        assert_eq!(
+            authoritative
+                .get(&bystander_id)
+                .expect("bystander preserved")
+                .state
+                .balance(),
+            777,
+            "a concurrent write to ANOTHER cell survives the overlay (no wholesale replace)"
+        );
+
+        // === (c) the guard DETECTS a concurrent SAME-cell write ===
+        let mut authoritative2 = node_genesis_ledger(sender_pk, 1_000_000);
+        let pre_ledger2 = authoritative2.clone();
+        // A concurrent path mutates the SENDER (a cell this turn also touches).
+        let mut moved = authoritative2.get(&sender).expect("sender present").clone();
+        moved.state.set_balance(500_000);
+        let _ = authoritative2.remove(&sender);
+        authoritative2
+            .insert_cell(moved)
+            .expect("concurrent same-cell write");
+        let conflict2 = touched
+            .iter()
+            .any(|id| pre_ledger2.get(id) != authoritative2.get(id));
+        assert!(
+            conflict2,
+            "a concurrent SAME-cell write MUST be detected as a conflict (validate-or-reject)"
+        );
+    }
+
     /// `provision_transfer_destinations` is deterministic and idempotent: the
     /// stub it inserts is byte-identical regardless of node, and a second call
     /// (or a destination that already exists) leaves the cell untouched.
@@ -5422,10 +6235,63 @@ mod tests {
                 Duration::from_secs(1),
                 Duration::from_secs(30),
             ))),
+            tip_pull_backoff: Arc::new(RwLock::new(dregg_net::peer_score::RequestBackoff::new(
+                Duration::from_millis(500),
+                Duration::from_millis(1500),
+            ))),
             last_produced: Arc::new(RwLock::new(std::time::Instant::now())),
             ack_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending_payloads: Arc::new(RwLock::new(std::collections::VecDeque::new())),
         }
+    }
+
+    // ─── BUG 1: hostname peer resolution (overlay hostnames federate) ───────────
+
+    /// A `hostname:port` peer (not an `IP:PORT` literal) RESOLVES via DNS and is
+    /// returned for dialing — the case the old `parse::<SocketAddr>()` silently
+    /// dropped, so genesis-emitted overlay hostnames never federated. `localhost`
+    /// is a hostname every host resolves; an IP literal still works too.
+    #[tokio::test]
+    async fn hostname_peer_resolves_and_is_dialed() {
+        // A hostname spec — the previously-dropped case.
+        let resolved = resolve_peer_addrs(&["localhost:9420".to_string()]).await;
+        assert!(
+            !resolved.is_empty(),
+            "a hostname peer (localhost:9420) must RESOLVE and be returned for dialing — the \
+             overlay-hostname federation case the IP-literal parser silently dropped"
+        );
+        assert!(
+            resolved.iter().all(|a| a.port() == 9420),
+            "resolved addresses must carry the spec's port"
+        );
+
+        // An IP literal still resolves (lookup_host accepts it verbatim).
+        let lit = resolve_peer_addrs(&["127.0.0.1:9420".to_string()]).await;
+        assert_eq!(lit, vec!["127.0.0.1:9420".parse::<SocketAddr>().unwrap()]);
+    }
+
+    /// An UNRESOLVABLE peer is dropped VISIBLY (logged loud, returns nothing) —
+    /// never a silent drop. `.invalid` is the RFC-2606 guaranteed-non-resolvable
+    /// TLD, so this is deterministic offline.
+    #[tokio::test]
+    async fn unresolvable_peer_errors_visibly_and_is_omitted() {
+        let resolved = resolve_peer_addrs(&["no-such-host.invalid:9420".to_string()]).await;
+        assert!(
+            resolved.is_empty(),
+            "an unresolvable peer must be omitted (and logged loudly at error), not crash or be \
+             treated as dialable"
+        );
+
+        // A mix: the good hostname survives, the bad one is dropped (visibly).
+        let mixed = resolve_peer_addrs(&[
+            "localhost:9420".to_string(),
+            "no-such-host.invalid:9420".to_string(),
+        ])
+        .await;
+        assert!(
+            !mixed.is_empty() && mixed.iter().all(|a| a.port() == 9420),
+            "a resolvable peer in a mixed list must still be dialed even when a sibling fails"
+        );
     }
 
     /// THE DISCOVERY TRUST GATE: a `PeerAddrs` announcement learns an address ONLY
@@ -6245,7 +7111,7 @@ async fn fetch_checkpoint_http(url: &str) -> Option<Vec<u8>> {
 }
 
 fn hex_decode_var(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -6415,14 +7281,19 @@ async fn execute_finalized_membership(
 
 /// Apply a membership proposal that has reached threshold.
 ///
-/// Amends the constitution and logs the change. The new participant list takes
-/// effect at the NEXT wave boundary (the current wave's ordering uses the old set).
+/// Amends the constitution AND advances the LIVE consensus committee so the
+/// validator-set reconfiguration is an on-chain, chain-continuing operation
+/// rather than a disruptive genesis re-roll. The new participant list takes
+/// effect at the NEXT wave boundary (the current wave's ordering uses the old
+/// set); the finalization-vote committee and the gossip mesh are advanced here.
 async fn apply_passed_proposal(handle: &BlocklaceHandle, proposal_block: &BlockId) {
     let mut constitution = handle.constitution.write().await;
     if constitution.apply_if_passed(proposal_block) {
+        let new_participants: Vec<[u8; 32]> = constitution.current.participants.clone();
         let new_count = constitution.current.participant_count();
         let new_version = constitution.version();
         let new_threshold = constitution.threshold();
+        drop(constitution);
         info!(
             proposal_block = %proposal_block,
             new_participant_count = new_count,
@@ -6430,6 +7301,17 @@ async fn apply_passed_proposal(handle: &BlocklaceHandle, proposal_block: &BlockI
             constitution_version = new_version,
             "constitution amended: membership change applied"
         );
+        // LIVE EPOCH TRANSITION: advance the running consensus committee to the
+        // newly-finalized validator set. The chain (blocklace + cell state) is
+        // carried across; only the committee that gates finality + the gossip
+        // mesh admission advance. The federation/chain identity
+        // (`federation_id` / `committee_epoch` / `known_federation_keys`) is
+        // INTENTIONALLY left unchanged — it is the STABLE chain root the bot /
+        // bridge / light client pin, so a committee change never forces a
+        // re-point (inflexibility #3). See `apply_committee_change`.
+        handle
+            .apply_committee_change(&new_participants, new_threshold)
+            .await;
     }
 }
 
@@ -6555,7 +7437,7 @@ fn build_federation_receipt(
     let signing_key_bytes = state_guard.cclerk.gossip_signing_key().to_bytes();
     let signing_key = dregg_types::SigningKey::from_bytes(&signing_key_bytes);
     let sig = dregg_types::sign(&signing_key, &body_hash);
-    let local_pk = state_guard.cclerk.public_key().clone();
+    let local_pk = state_guard.cclerk.public_key();
 
     Some(FederationReceipt::with_vote_signatures(
         federation_id,
@@ -6597,6 +7479,42 @@ fn touched_cell_ids(delta: &dregg_cell::LedgerDelta) -> Vec<dregg_cell::CellId> 
     ids
 }
 
+/// The COMPLETE set of cell ids whose CONTENT differs between two ledgers — the
+/// A1 off-lock execution path's authoritative touched set.
+///
+/// A finalized turn is executed against a CLONE of the pre-state on a
+/// `spawn_blocking` thread (so the FFI holds neither the async worker nor the
+/// global write lock); this diff of the resulting post-state against the pre-state
+/// is exactly the set the caller overlays onto the authoritative ledger. It is a
+/// whole-`Cell` comparison, so — unlike [`touched_cell_ids`] over the executor's
+/// `LedgerDelta`, which omits the heap_root / lifecycle / program / vk /
+/// delegation dimensions — it captures EVERY committed change and reproduces the
+/// exact post-state a re-executing validator computes. `Cell`'s `PartialEq`
+/// compares content only (the leaf-digest cache is excluded from `PartialEq`), so
+/// two byte-equal cells never register as a spurious change. Order-stable,
+/// deduplicated (a created/updated cell appears once; a removed cell — present
+/// pre, absent post — is included so the overlay can delete it).
+fn ledger_touched_diff(
+    pre: &dregg_cell::Ledger,
+    post: &dregg_cell::Ledger,
+) -> Vec<dregg_cell::CellId> {
+    let mut touched: Vec<dregg_cell::CellId> = Vec::new();
+    // Created or updated: present in post with content differing from pre.
+    for (id, cell) in post.iter() {
+        match pre.get(id) {
+            Some(prev) if prev == cell => {}
+            _ => touched.push(*id),
+        }
+    }
+    // Removed: present in pre, absent in post.
+    for (id, _) in pre.iter() {
+        if post.get(id).is_none() {
+            touched.push(*id);
+        }
+    }
+    touched
+}
+
 /// Provision any missing Transfer destination as a deterministic zero-balance
 /// remote stub BEFORE a finalized turn executes, so the application is identical
 /// on every node.
@@ -6625,11 +7543,11 @@ pub(crate) fn provision_transfer_destinations(
     call_forest: &dregg_turn::CallForest,
 ) {
     for effect in call_forest.total_effects() {
-        if let dregg_turn::Effect::Transfer { to, .. } = effect {
-            if ledger.get(to).is_none() {
-                let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
-                let _ = ledger.insert_cell(stub);
-            }
+        if let dregg_turn::Effect::Transfer { to, .. } = effect
+            && ledger.get(to).is_none()
+        {
+            let stub = dregg_cell::Cell::remote_stub_with_id_and_balance(*to, 0);
+            let _ = ledger.insert_cell(stub);
         }
     }
 }

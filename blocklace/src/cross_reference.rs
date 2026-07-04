@@ -134,14 +134,14 @@ impl Blocklace {
 
         let mut refs = Vec::new();
         for pred_id in &block.predecessors {
-            if let Some(pred_block) = self.get(pred_id) {
-                if !group.is_member(&pred_block.creator) {
-                    refs.push(CrossReference {
-                        external_block: *pred_id,
-                        external_creator: pred_block.creator,
-                        purpose: CrossRefPurpose::CausalDependency,
-                    });
-                }
+            if let Some(pred_block) = self.get(pred_id)
+                && !group.is_member(&pred_block.creator)
+            {
+                refs.push(CrossReference {
+                    external_block: *pred_id,
+                    external_creator: pred_block.creator,
+                    purpose: CrossRefPurpose::CausalDependency,
+                });
             }
         }
         refs
@@ -162,12 +162,11 @@ impl Blocklace {
             }
             let past = self.causal_past(tip_id);
             for bid in past {
-                if visited.insert(bid) {
-                    if let Some(block) = self.get(&bid) {
-                        if !group.is_member(&block.creator) {
-                            external.push(bid);
-                        }
-                    }
+                if visited.insert(bid)
+                    && let Some(block) = self.get(&bid)
+                    && !group.is_member(&block.creator)
+                {
+                    external.push(bid);
                 }
             }
         }
@@ -206,10 +205,10 @@ impl Disseminator {
     ) -> Vec<BlockId> {
         let mut external_blocks = Vec::new();
         for pred_id in &block.predecessors {
-            if let Some(pred_block) = self.blocklace().get(pred_id) {
-                if !group.is_member(&pred_block.creator) {
-                    external_blocks.push(*pred_id);
-                }
+            if let Some(pred_block) = self.blocklace().get(pred_id)
+                && !group.is_member(&pred_block.creator)
+            {
+                external_blocks.push(*pred_id);
             }
         }
         external_blocks

@@ -5,7 +5,7 @@
 //! slot-caveat manifests, and per-effect commitment witnesses.
 
 use crate::field::BabyBear;
-use crate::poseidon2::{hash_2_to_1, hash_4_to_1, hash_fact};
+use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
 
 use super::{
     AUX_BASE, CellState, EFFECT_VM_WIDTH, Effect, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE,
@@ -388,6 +388,8 @@ impl Default for EffectVmContext {
 
 /// Stage 1 trace generator. Same as [`generate_effect_vm_trace`] but accepts
 /// the widened PI inputs ([`EffectVmContext`]).
+// crypto index loops kept verbatim
+#[allow(clippy::needless_range_loop)]
 pub fn generate_effect_vm_trace_ext(
     initial_state: &CellState,
     effects: &[Effect],
@@ -559,7 +561,7 @@ pub fn generate_effect_vm_trace_ext(
 
                 // Store old value at target index in aux[0] for the constraint.
                 let idx = *field_idx as usize;
-                row[AUX_BASE + 0] = current_state.fields[idx.min(7)];
+                row[AUX_BASE] = current_state.fields[idx.min(7)];
 
                 new_state.fields[idx.min(7)] = *value;
                 new_state.nonce += 1;
@@ -609,17 +611,15 @@ pub fn generate_effect_vm_trace_ext(
                     // prove the held leaf WAS in the tree over THIS move. ----
                     Some(w) => {
                         // Recompute the new root over the witnessed sibling path
-                        // with the ZERO/padding leaf at the revoked position.
-                        let mut cur = BabyBear::ZERO;
-                        for level in 0..w.siblings.len() {
-                            let sib = w.siblings[level];
-                            cur = if w.directions[level] == 0 {
-                                hash_fact(cur, &[sib])
-                            } else {
-                                hash_fact(sib, &[cur])
-                            };
-                        }
-                        new_state.capability_root = cur;
+                        // with the ZERO/padding 8-felt leaf at the revoked position
+                        // (Phase H-CAP-8 `cap_node8` fold); the deployed 1-felt
+                        // `cap_root` column carries LANE 0 of the 8-felt top.
+                        let cur = crate::cap_root::recompose_membership(
+                            crate::cap_root::CAP_ZERO8,
+                            &w.siblings,
+                            &w.directions,
+                        );
+                        new_state.capability_root = cur[0];
                     }
                     // ---- Legacy (pre-graduation): opaque 2-of-2 fold. NOT a
                     // genuine sorted-tree deletion and NOT provable through the
@@ -652,22 +652,25 @@ pub fn generate_effect_vm_trace_ext(
                 new_state.nonce += 1;
             }
             Effect::SetPermissions { permissions_hash } => {
-                // 32-byte widening: anchor limb[0] into params[0]; AIR forbids
-                // any state column change; nonce ticks. Full 8 limbs bind via
-                // compute_effects_hash.
-                row[PARAM_BASE + 0] = permissions_hash[0];
+                // v10 perms faithful-8-felt weld: carry ALL 8 declared-hash limbs in the param
+                // columns (params[0..8]) so the rotated `permsVKWeldGate` can force every committed
+                // perms-digest limb (limb-0 at B_PERMS + the 7 completion felts at extras 37..=43) to
+                // the declared param. Byte-identical to the 8 felts `compute_effects_hash` absorbs, so
+                // the effects_hash PI is unchanged. AIR forbids any state column change; nonce ticks.
+                row[PARAM_BASE..PARAM_BASE + 8].copy_from_slice(permissions_hash);
                 new_state.nonce += 1;
             }
             Effect::SetVerificationKey { vk_hash } => {
-                // Same shape as SetPermissions: VK lives off-trace. Anchor limb[0].
-                row[PARAM_BASE + 0] = vk_hash[0];
+                // Same shape as SetPermissions (v10 vk weld): carry all 8 vk-hash limbs in params[0..8]
+                // (None → all-zero) so the vk weld forces the 8 committed vk-digest limbs.
+                row[PARAM_BASE..PARAM_BASE + 8].copy_from_slice(vk_hash);
                 new_state.nonce += 1;
             }
 
             Effect::RefreshDelegation { child_hash, .. } => {
                 // 32-byte widening: anchor the refreshed child key limb[0]; all
                 // 16 limbs (child + snapshot) bind via compute_effects_hash.
-                row[PARAM_BASE + 0] = child_hash[0];
+                row[PARAM_BASE] = child_hash[0];
                 new_state.nonce += 1;
             }
             Effect::IncrementNonce => {
@@ -677,28 +680,28 @@ pub fn generate_effect_vm_trace_ext(
             }
             Effect::RevokeDelegation { child_hash } => {
                 // 32-byte widening: anchor limb[0]; full 8 limbs bind via effects_hash.
-                row[PARAM_BASE + 0] = child_hash[0];
+                row[PARAM_BASE] = child_hash[0];
                 new_state.nonce += 1;
             }
             Effect::CreateCell { create_hash } => {
-                row[PARAM_BASE + 0] = create_hash[0];
+                row[PARAM_BASE] = create_hash[0];
                 new_state.nonce += 1;
             }
             Effect::SpawnWithDelegation { spawn_hash } => {
-                row[PARAM_BASE + 0] = spawn_hash[0];
+                row[PARAM_BASE] = spawn_hash[0];
                 new_state.nonce += 1;
             }
 
             Effect::ExerciseViaCapability { exercise_hash } => {
-                row[PARAM_BASE + 0] = exercise_hash[0];
+                row[PARAM_BASE] = exercise_hash[0];
                 new_state.nonce += 1;
             }
             Effect::Introduce { intro_hash } => {
-                row[PARAM_BASE + 0] = intro_hash[0];
+                row[PARAM_BASE] = intro_hash[0];
                 new_state.nonce += 1;
             }
             Effect::PipelinedSend { send_hash } => {
-                row[PARAM_BASE + 0] = send_hash[0];
+                row[PARAM_BASE] = send_hash[0];
                 new_state.nonce += 1;
             }
 
@@ -708,7 +711,7 @@ pub fn generate_effect_vm_trace_ext(
                 value_full: _,
             } => {
                 // Mirror NoteSpend: balance credit by value_lo.
-                row[PARAM_BASE + 0] = *mint_hash;
+                row[PARAM_BASE] = *mint_hash;
                 row[PARAM_BASE + 1] = *value_lo;
                 let value_u64 = value_lo.as_u32() as u64;
                 new_state.balance = new_state.balance.saturating_add(value_u64);
@@ -725,7 +728,7 @@ pub fn generate_effect_vm_trace_ext(
                 // byte-identical in body to BridgeMint (credit at param1), but
                 // sits on `sel::MINT` (set by `effect_selector`), so it routes
                 // to `supplyMintVmDescriptor2R24` rather than the bridge member.
-                row[PARAM_BASE + 0] = *mint_hash;
+                row[PARAM_BASE] = *mint_hash;
                 row[PARAM_BASE + 1] = *value_lo;
                 let value_u64 = value_lo.as_u32() as u64;
                 new_state.balance = new_state.balance.saturating_add(value_u64);
@@ -855,17 +858,15 @@ pub fn generate_effect_vm_trace_ext(
                     // granted ⊑ held over THIS move. The params[1] narrower
                     // commitment is pinned in-circuit to the granted leaf digest.
                     Some(w) => {
-                        // Recompute the new root over the witnessed sibling path.
-                        let mut cur = w.granted.digest();
-                        for level in 0..w.siblings.len() {
-                            let sib = w.siblings[level];
-                            cur = if w.directions[level] == 0 {
-                                hash_fact(cur, &[sib])
-                            } else {
-                                hash_fact(sib, &[cur])
-                            };
-                        }
-                        new_state.capability_root = cur;
+                        // Recompute the new root over the witnessed sibling path with
+                        // the native 8-felt `cap_node8` compression (Phase H-CAP-8); the
+                        // deployed 1-felt `cap_root` column carries LANE 0 of the 8-felt top.
+                        let cur = crate::cap_root::recompose_membership(
+                            w.granted.digest(),
+                            &w.siblings,
+                            &w.directions,
+                        );
+                        new_state.capability_root = cur[0];
                     }
                     // ---- Legacy (pre-Phase-B): opaque 2-of-2 fold ----
                     // Algebraically distinct from RevokeCapability's single-hash

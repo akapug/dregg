@@ -79,6 +79,7 @@ export type StateConstraint =
   | { kind: "fieldLte"; index: number; value: FieldValue } // 2
   | { kind: "writeOnce"; index: number } // 6
   | { kind: "immutable"; index: number } // 7
+  | { kind: "monotonic"; index: number } // 8
   | { kind: "preimageGate"; commitmentIndex: number; hashKind: HashKind } // 21
   | { kind: "anyOf"; variants: SimpleStateConstraint[] } // 26
   | { kind: "senderIs"; pk: Uint8Array } // 38
@@ -134,6 +135,12 @@ export function immutable(index: number): StateConstraint {
 /** Slot `index` may be written at most once (from zero). */
 export function writeOnce(index: number): StateConstraint {
   return { kind: "writeOnce", index };
+}
+
+/** Slot `index` may only ever increase (or stay equal) — the monotone meter
+ * tooth (a rewind to forge head-room or replay a stale image is refused). */
+export function monotonic(index: number): StateConstraint {
+  return { kind: "monotonic", index };
 }
 
 /** Field at `index` must equal `value` post-turn. */
@@ -287,6 +294,9 @@ function writeConstraint(w: W, c: StateConstraint): void {
       break;
     case "immutable":
       w.varint(7).u8(c.index);
+      break;
+    case "monotonic":
+      w.varint(8).u8(c.index);
       break;
     case "preimageGate":
       w.varint(21).u8(c.commitmentIndex).varint(hashKindIndex(c.hashKind));

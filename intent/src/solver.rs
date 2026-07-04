@@ -225,10 +225,10 @@ impl RingSolver {
                 if i == j {
                     continue;
                 }
-                if let Some(score) = IntentGraph::is_compatible(&intents[i], &intents[j]) {
-                    if score >= self.min_edge_score {
-                        edges[i].push((j, score));
-                    }
+                if let Some(score) = IntentGraph::is_compatible(&intents[i], &intents[j])
+                    && score >= self.min_edge_score
+                {
+                    edges[i].push((j, score));
                 }
             }
         }
@@ -469,10 +469,9 @@ impl RingSolver {
                     continue;
                 }
                 if let Some(&score) = score_cache.get(&(intents[i].intent_id, intents[j].intent_id))
+                    && score >= self.min_edge_score
                 {
-                    if score >= self.min_edge_score {
-                        edges[i].push((j, score));
-                    }
+                    edges[i].push((j, score));
                 }
             }
         }
@@ -1115,7 +1114,7 @@ mod tests {
         //   C sends CC to B (B wants CC)
         //   B sends BB to A (A wants BB)
 
-        let ring_nodes = vec![
+        let ring_nodes = [
             IntentNode {
                 intent_id: [1; 32],
                 exchange: ExchangeSpec {

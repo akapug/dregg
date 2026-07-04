@@ -634,10 +634,10 @@ impl PersistentStore {
             }
             // Parse the hex suffix back to [u8; 32].
             let hex_part = &key[prefix.len()..];
-            if hex_part.len() == 64 {
-                if let Ok(bytes) = hex_decode_bytes(hex_part) {
-                    hashes.insert(bytes);
-                }
+            if hex_part.len() == 64
+                && let Ok(bytes) = hex_decode_bytes(hex_part)
+            {
+                hashes.insert(bytes);
             }
         }
         Ok(hashes)

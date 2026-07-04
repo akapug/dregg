@@ -33,10 +33,10 @@
 //! still resolves.
 
 use dregg_doc::composition::{
-    content_composed, ChildRef, ChildResolution, CellId, DreggUri, EmbedRole, LayoutAtom,
-    LayoutGraph, MapResolver, Op, Pin, Segment, Viewer,
+    CellId, ChildRef, ChildResolution, DreggUri, EmbedRole, LayoutAtom, LayoutGraph, MapResolver,
+    Op, Pin, Segment, Viewer, content_composed,
 };
-use dregg_doc::{Author, AtomId, Provenance, PatchId, Status};
+use dregg_doc::{AtomId, Author, PatchId, Provenance, Status};
 
 fn root() -> AtomId {
     AtomId::ROOT
@@ -57,7 +57,10 @@ fn id_cell(marker: &str, key_commit: u64) -> LayoutGraph {
         id,
         content: dregg_doc::composition::AtomContent::Text(format!("{marker}@k{key_commit}")),
         status: Status::Alive,
-        provenance: Provenance { author: Author(7), patch: PatchId(key_commit as u128) },
+        provenance: Provenance {
+            author: Author(7),
+            patch: PatchId(key_commit as u128),
+        },
     });
     g.connect_pub(AtomId::ROOT, id);
     g
@@ -78,7 +81,10 @@ fn id_cell_with_marker(key_commit: u64) -> (LayoutGraph, CellId) {
             EmbedRole::Inline,
         ),
         status: Status::Alive,
-        provenance: Provenance { author: Author(7), patch: PatchId(key_commit as u128) },
+        provenance: Provenance {
+            author: Author(7),
+            patch: PatchId(key_commit as u128),
+        },
     });
     g.connect_pub(AtomId::ROOT, eid);
     (g, marker_cell)
@@ -159,8 +165,16 @@ fn name_embed_follows_a_rebind_but_a_cell_embed_does_not() {
     // And confirm the rendered MARKER inside the name embed actually came from Y,
     // not a stale X (the binding is transitory, the embed re-resolves live).
     match &r1.segments[0] {
-        Segment::Embedded { child: ChildRef::Name(uri, _), resolved_cell, resolution, .. } => {
-            assert_eq!(uri, &hero, "the embed ref is unchanged — still the NAME 'hero'");
+        Segment::Embedded {
+            child: ChildRef::Name(uri, _),
+            resolved_cell,
+            resolution,
+            ..
+        } => {
+            assert_eq!(
+                uri, &hero,
+                "the embed ref is unchanged — still the NAME 'hero'"
+            );
             assert_eq!(*resolved_cell, Some(y), "the name now resolves to Y");
             assert!(
                 matches!(resolution, ChildResolution::Rendered(_)),
@@ -196,19 +210,30 @@ fn an_unbound_name_is_a_first_class_state_and_a_later_bind_heals_it() {
     let empty = MapResolver::default().with(z, leaf("Z"));
     let r0 = content_composed(&layout, &viewer, &empty);
     match &r0.segments[0] {
-        Segment::Embedded { resolution: ChildResolution::Unbound { namespace, name }, resolved_cell, .. } => {
+        Segment::Embedded {
+            resolution: ChildResolution::Unbound { namespace, name },
+            resolved_cell,
+            ..
+        } => {
             assert_eq!(*namespace, ns);
             assert_eq!(name, "slot");
             assert_eq!(*resolved_cell, None, "an unbound name resolves to no cell");
         }
         other => panic!("expected Unbound, got {other:?}"),
     }
-    assert!(r0.embedded_cells().is_empty(), "an unbound name embeds no cell");
+    assert!(
+        r0.embedded_cells().is_empty(),
+        "an unbound name embeds no cell"
+    );
 
     // POSITIVE: bind slot -> Z; the SAME embed now renders Z (the binding heals it).
     let bound = empty.with_name(ns, "slot", z);
     let r1 = content_composed(&layout, &viewer, &bound);
-    assert_eq!(r1.embedded_cells(), vec![z], "a later bind heals the unbound name");
+    assert_eq!(
+        r1.embedded_cells(),
+        vec![z],
+        "a later bind heals the unbound name"
+    );
 }
 
 // ── (b) EMBED-SURVIVES-ROTATION ──────────────────────────────────────────────
@@ -245,7 +270,11 @@ fn a_cell_embed_survives_the_identity_cells_key_rotation() {
         .with(alice, alice_k1)
         .with(marker_k1, leaf("k1"));
     let r0 = content_composed(&layout, &viewer, &pre);
-    assert_eq!(r0.embedded_cells(), vec![alice], "the embed resolves to alice (pre-rotation)");
+    assert_eq!(
+        r0.embedded_cells(),
+        vec![alice],
+        "the embed resolves to alice (pre-rotation)"
+    );
 
     // ROTATION / RECOVERY: alice rotates her authorized keys. On the substrate this
     // is a SetField on CURRENT_KEYS_COMMIT_SLOT — the cell's STATE advances (here:
@@ -270,13 +299,19 @@ fn a_cell_embed_survives_the_identity_cells_key_rotation() {
     // And it resolved to the ROTATED state (the k2 marker, not k1), confirming the
     // embed tracks the SAME cell's evolving state, not a frozen pre-rotation snapshot.
     match &r1.segments[0] {
-        Segment::Embedded { resolution: ChildResolution::Rendered(inner), .. } => {
+        Segment::Embedded {
+            resolution: ChildResolution::Rendered(inner),
+            ..
+        } => {
             assert_eq!(
                 inner.embedded_cells(),
                 vec![marker_k2],
                 "the live embed tracks alice's ROTATED state (k2 marker), not the pre-rotation k1"
             );
-            assert_ne!(marker_k1, marker_k2, "the rotation genuinely changed the rendered state");
+            assert_ne!(
+                marker_k1, marker_k2,
+                "the rotation genuinely changed the rendered state"
+            );
         }
         other => panic!("expected alice rendered post-rotation, got {other:?}"),
     }
@@ -291,7 +326,10 @@ fn a_cell_embed_survives_the_identity_cells_key_rotation() {
     let broken_world = MapResolver::default().with(alice_if_id_were_keybound, id_cell("alice", 2));
     let r_broken = content_composed(&layout, &viewer, &broken_world);
     match &r_broken.segments[0] {
-        Segment::Embedded { resolution: ChildResolution::Unresolved { cell }, .. } => {
+        Segment::Embedded {
+            resolution: ChildResolution::Unresolved { cell },
+            ..
+        } => {
             assert_eq!(
                 *cell, alice,
                 "WERE the id current-key-bound, the old-id embed would dangle — \
@@ -324,7 +362,11 @@ fn a_pinned_embed_resolves_the_frozen_past_even_after_the_source_is_retired() {
             role: EmbedRole::Citation,
         }],
     );
-    assert_eq!(layout.effective_pin(eid), Some(Pin::At(frozen_receipt)), "the embed is frozen");
+    assert_eq!(
+        layout.effective_pin(eid),
+        Some(Pin::At(frozen_receipt)),
+        "the embed is frozen"
+    );
 
     let viewer = Viewer::able([src]);
 
@@ -342,8 +384,16 @@ fn a_pinned_embed_resolves_the_frozen_past_even_after_the_source_is_retired() {
     );
     // The frozen pin rode through unchanged (it is the parent's commitment, §3.3).
     match &r.segments[0] {
-        Segment::Embedded { child, resolution: ChildResolution::Rendered(_), .. } => {
-            assert_eq!(child.pin(), Pin::At(frozen_receipt), "the cited receipt is unchanged");
+        Segment::Embedded {
+            child,
+            resolution: ChildResolution::Rendered(_),
+            ..
+        } => {
+            assert_eq!(
+                child.pin(),
+                Pin::At(frozen_receipt),
+                "the cited receipt is unchanged"
+            );
         }
         other => panic!("expected the frozen citation to render, got {other:?}"),
     }
@@ -367,8 +417,14 @@ fn a_pinned_embed_resolves_the_frozen_past_even_after_the_source_is_retired() {
     let no_live = MapResolver::default();
     let r_live = content_composed(&live_layout, &viewer, &no_live);
     match &r_live.segments[0] {
-        Segment::Embedded { resolution: ChildResolution::Unresolved { cell }, .. } => {
-            assert_eq!(*cell, src, "a LIVE embed of a retired source dangles — only a frozen pin survives");
+        Segment::Embedded {
+            resolution: ChildResolution::Unresolved { cell },
+            ..
+        } => {
+            assert_eq!(
+                *cell, src,
+                "a LIVE embed of a retired source dangles — only a frozen pin survives"
+            );
         }
         other => panic!("expected the live embed to dangle, got {other:?}"),
     }

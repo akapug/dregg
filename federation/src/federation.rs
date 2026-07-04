@@ -256,18 +256,17 @@ impl Federation {
         self.threshold = new_threshold;
         self.id = FederationId(derive_federation_id_with_epoch(&self.members, self.epoch));
         // Reindex local_seat against the new committee.
-        if let Some(ref mut seat) = self.local_seat {
-            if let Some(idx) = self
+        if let Some(ref mut seat) = self.local_seat
+            && let Some(idx) = self
                 .members
                 .iter()
                 .position(|pk| pk.0 == seat.signing_key.public_key().0)
-            {
-                seat.index = idx;
-            }
-            // If the local member is no longer in the committee, we leave
-            // local_seat in place; callers may want to demote to verifier-only
-            // explicitly via `set_local_seat(None)`.
+        {
+            seat.index = idx;
         }
+        // If the local member is no longer in the committee, we leave
+        // local_seat in place; callers may want to demote to verifier-only
+        // explicitly via `set_local_seat(None)`.
     }
 
     /// Verify a `FederationReceipt` against this federation's committee + epoch.

@@ -125,7 +125,7 @@ impl<AB: AirBuilder> Air<AB> for EffectVmShapeAir {
         let mut sum: AB::Expr = AB::Expr::ZERO;
         for i in 0..NUM_EFFECTS {
             let s: AB::Expr = local[i].into();
-            sum = sum + s;
+            sum += s;
         }
         builder.assert_zero(sum - one.clone());
 
@@ -252,8 +252,6 @@ pub fn build_minimal_shape_trace(n_rows: usize) -> (Vec<Vec<BabyBear>>, Vec<Baby
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dregg_circuit::field::BabyBear;
-    use dregg_circuit::stark::StarkAir;
 
     /// Sanity: the shape AIR reports the same width and PI count as the
     /// real Effect VM AIR's published constants. If this drifts, the

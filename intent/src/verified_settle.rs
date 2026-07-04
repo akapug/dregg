@@ -366,6 +366,167 @@ pub fn settle_fulfillment_verified(
 }
 
 // ---------------------------------------------------------------------------
+// Full-width (32-byte) cell indexing — the collision-free settlement path.
+// ---------------------------------------------------------------------------
+//
+// `VerifiedLeg`/`VerifiedLedger` key accounts by a single `u8` (a cell's low
+// byte). That truncation is LOSSY: two distinct cells/commitments that share a
+// low byte ALIAS to the same ledger account, silently merging their balances (or
+// collapsing a real transfer into a `from == to` self-leg the gate rejects). For
+// a settlement path where the parties are arbitrary 32-byte commitments — the
+// ring coordinator and the service-promise escrow — that is a correctness bug.
+//
+// `WideLeg`/`WideLedger` close it by keying accounts on the FULL 32-byte cell id,
+// so distinct cells NEVER collide. Settlement reduces to the proven `u8` fold
+// (`settle_ring_verified`, FFI-cross-checked leg by leg) over an INJECTIVE dense
+// relabeling of the touched cells: distinct full ids map to distinct indices, so
+// the reduction preserves the verified semantics while removing the collision.
+// Unlike the old low-byte projection, the relabel loses no identity — it is a
+// bijection on the (≤ 256) cells a ring touches, not a truncation.
+
+/// A single value move keyed by the FULL 32-byte cell id / commitment. The
+/// collision-free analog of [`VerifiedLeg`] (whose `u8` index aliases cells that
+/// share a low byte).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WideLeg {
+    /// The sender cell, as its full 32-byte id (`CellId`/`CommitmentId` bytes).
+    pub from: [u8; 32],
+    /// The receiver cell (full id).
+    pub to: [u8; 32],
+    /// The 32-byte asset id (the per-asset ledger's asset column).
+    pub asset: [u8; 32],
+    /// The transferred amount (non-negative for a real settlement).
+    pub amount: i128,
+}
+
+/// The per-asset balance ledger `(cell, asset) -> balance` keyed by the FULL
+/// 32-byte cell id — the collision-free analog of [`VerifiedLedger`].
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct WideLedger {
+    bal: BTreeMap<([u8; 32], [u8; 32]), i128>,
+    accounts: BTreeSet<[u8; 32]>,
+}
+
+impl WideLedger {
+    /// An empty ledger with no live accounts.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Read a cell's balance in `asset` (default `0`).
+    pub fn get(&self, cell: [u8; 32], asset: &[u8; 32]) -> i128 {
+        *self.bal.get(&(cell, *asset)).unwrap_or(&0)
+    }
+
+    /// Overwrite a cell's balance in `asset`.
+    pub fn set(&mut self, cell: [u8; 32], asset: &[u8; 32], v: i128) {
+        self.bal.insert((cell, *asset), v);
+    }
+
+    /// Mark a cell live (an account whose balances are tracked / conserved).
+    pub fn add_account(&mut self, cell: [u8; 32]) {
+        self.accounts.insert(cell);
+    }
+
+    /// Whether `cell` is a live account.
+    pub fn is_live(&self, cell: [u8; 32]) -> bool {
+        self.accounts.contains(&cell)
+    }
+
+    /// The total supply of `asset` across the live accounts.
+    pub fn total_asset(&self, asset: &[u8; 32]) -> i128 {
+        self.accounts.iter().map(|c| self.get(*c, asset)).sum()
+    }
+
+    /// The live accounts (sorted).
+    pub fn accounts(&self) -> impl Iterator<Item = [u8; 32]> + '_ {
+        self.accounts.iter().copied()
+    }
+}
+
+/// Seed a full-width ledger that FUNDS every sender for its leg, with every
+/// touched cell live — the collision-free analog of [`funded_ledger`].
+pub fn funded_wide_ledger(legs: &[WideLeg]) -> WideLedger {
+    let mut k = WideLedger::new();
+    for leg in legs {
+        k.add_account(leg.from);
+        k.add_account(leg.to);
+        let cur = k.get(leg.from, &leg.asset);
+        k.set(leg.from, &leg.asset, cur + leg.amount);
+    }
+    k
+}
+
+/// **The atomic verified fold over FULL 32-byte cell ids.**
+///
+/// Settles `legs` against `k0`, all-or-nothing, with per-asset conservation
+/// asserted — the same contract as [`settle_ring_verified`] but with distinct
+/// cells GUARANTEED never to collide. It reduces to the proven `u8` fold over an
+/// injective dense relabeling of the touched cells (the relabel is a bijection,
+/// so it preserves the verified accept/reject + post-state, leg by leg, including
+/// the real Lean FFI cross-check), then lifts the post-state back to full ids.
+///
+/// The relabel addresses ≤ 256 distinct cells (the `u8` ledger's domain); a ring
+/// touching more is refused fail-closed ([`VerifiedSettleError::FfiUnavailable`]
+/// with a descriptive message) rather than silently truncated.
+pub fn settle_ring_wide_verified(
+    k0: &WideLedger,
+    legs: &[WideLeg],
+) -> Result<WideLedger, VerifiedSettleError> {
+    // (1) Build the injective dense index over every touched cell (the ledger's
+    //     live accounts ∪ each leg's endpoints). DISTINCT full ids → DISTINCT
+    //     indices: this is the bijection that replaces the lossy low-byte cast.
+    let mut order: BTreeSet<[u8; 32]> = k0.accounts().collect();
+    for leg in legs {
+        order.insert(leg.from);
+        order.insert(leg.to);
+    }
+    if order.len() > 256 {
+        return Err(VerifiedSettleError::FfiUnavailable(format!(
+            "ring touches {} distinct cells; the verified ledger indexes at most 256",
+            order.len()
+        )));
+    }
+    let index: BTreeMap<[u8; 32], u8> = order
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (*c, i as u8))
+        .collect();
+    let reverse: Vec<[u8; 32]> = order.iter().copied().collect();
+
+    // (2) Project k0 + legs onto the `u8` ledger under the index.
+    let mut k0_u8 = VerifiedLedger::new();
+    for &cell in &reverse {
+        k0_u8.add_account(index[&cell]);
+    }
+    for ((cell, asset), v) in &k0.bal {
+        k0_u8.set(index[cell], asset, *v);
+    }
+    let legs_u8: Vec<VerifiedLeg> = legs
+        .iter()
+        .map(|l| VerifiedLeg {
+            from: index[&l.from],
+            to: index[&l.to],
+            asset: l.asset,
+            amount: l.amount,
+        })
+        .collect();
+
+    // (3) Settle through the PROVEN fold (FFI-cross-checked leg by leg).
+    let post_u8 = settle_ring_verified(&k0_u8, &legs_u8)?;
+
+    // (4) Lift the verified post-state back to full ids via the bijection.
+    let mut post = WideLedger::new();
+    for cell in post_u8.accounts() {
+        post.add_account(reverse[cell as usize]);
+    }
+    for ((cell, asset), v) in &post_u8.bal {
+        post.set(reverse[*cell as usize], asset, *v);
+    }
+    Ok(post)
+}
+
+// ---------------------------------------------------------------------------
 // The REAL Lean FFI path — route each leg through `dregg_record_kernel_step`.
 // ---------------------------------------------------------------------------
 
@@ -519,7 +680,7 @@ pub mod ffi {
         let out = gate
             .record_kernel_step(&input)
             .map_err(VerifiedSettleError::FfiUnavailable)?;
-        parse_leg_output(&out).map_err(|e| VerifiedSettleError::FfiUnavailable(e))
+        parse_leg_output(&out).map_err(VerifiedSettleError::FfiUnavailable)
     }
 
     /// Cross-check the in-process verified transition `expected` (the post-ledger `rec_exec_asset`
@@ -708,6 +869,60 @@ mod tests {
         for a in touched_assets(&legs) {
             assert_eq!(k1.total_asset(&a), k0.total_asset(&a));
         }
+    }
+
+    fn wide(byte0: u8, byte1: u8) -> [u8; 32] {
+        let mut c = [0u8; 32];
+        c[0] = byte0;
+        c[1] = byte1;
+        c
+    }
+
+    #[test]
+    fn wide_settle_keeps_low_byte_colliding_cells_distinct() {
+        // Three cells that SHARE a low byte (0x07) but differ above it. Under the
+        // old `u8` projection all three alias to cell 7 — the sender's transfer
+        // to the escrow would become a `from == to` self-leg the gate rejects,
+        // and the two endpoints' balances would merge. Full indexing keeps them
+        // distinct, so the transfer settles and conserves.
+        let sender = wide(0x07, 0x01);
+        let escrow = wide(0x07, 0x02);
+        let bystander = wide(0x07, 0x03);
+        assert_eq!(sender[0], escrow[0]);
+        assert_eq!(sender[0], bystander[0]);
+
+        let legs = vec![WideLeg {
+            from: sender,
+            to: escrow,
+            asset: asset(7),
+            amount: 100,
+        }];
+        let mut k0 = funded_wide_ledger(&legs);
+        k0.add_account(bystander); // a third party sharing the same low byte
+
+        let k1 = settle_ring_wide_verified(&k0, &legs)
+            .expect("distinct full ids settle despite the shared low byte");
+        assert_eq!(k1.get(sender, &asset(7)), 0, "sender debited");
+        assert_eq!(k1.get(escrow, &asset(7)), 100, "escrow credited");
+        assert_eq!(k1.get(bystander, &asset(7)), 0, "bystander untouched");
+        assert_eq!(k1.total_asset(&asset(7)), 100, "conserved");
+    }
+
+    #[test]
+    fn wide_settle_aborts_an_underfunded_ring() {
+        // The atomicity contract is inherited from the proven fold.
+        let legs = vec![WideLeg {
+            from: wide(0x07, 0x01),
+            to: wide(0x07, 0x02),
+            asset: asset(7),
+            amount: 100,
+        }];
+        let mut k0 = funded_wide_ledger(&legs);
+        k0.set(wide(0x07, 0x01), &asset(7), 0); // drain the sender
+        assert!(matches!(
+            settle_ring_wide_verified(&k0, &legs),
+            Err(VerifiedSettleError::LegRejected { .. })
+        ));
     }
 
     #[test]

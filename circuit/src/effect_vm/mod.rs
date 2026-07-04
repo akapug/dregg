@@ -169,11 +169,16 @@ pub mod columns;
 pub mod pi;
 
 mod air;
+pub mod authority_digest_weld;
+pub mod carrier_floor_weld;
 mod cell_state;
+pub mod discharge_weld;
 mod effect;
 mod helpers;
+pub mod satisfaction_weld;
 mod trace;
 pub mod trace_rotated;
+pub mod vault_weld;
 mod verify;
 
 // (The v1 per-action proof granularity module + the large v1 hand-AIR test module
@@ -192,8 +197,8 @@ pub use effect::{AttenuateWitness, Effect, RevokeWitness};
 
 // ---- Re-export helpers ----
 pub use helpers::{
-    bytes32_to_8_limbs, compute_effects_hash, compute_effects_hash_4, fold_bytes32_to_bb,
-    refusal_reason_bytes, split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
+    bytes32_to_8_limbs, compute_effects_hash, compute_effects_hash_4, field_limbs8,
+    fold_bytes32_to_bb, refusal_reason_bytes, split_u64, u64_from_4_limbs_16, u64_to_4_limbs_16,
 };
 // Re-export so sibling modules can write `use super::fill_reserved_bits`
 // (mirrors the pre-decomp module-level visibility).
@@ -214,13 +219,19 @@ pub use trace::{
 // ---- Re-export the LIVE rotated (R=24) trace generator (G1, staged-additive) ----
 pub use trace_rotated::{
     ROT_PI_COUNT, ROT_WIDTH, RotatedBlockWitness, RotatedCaveatEntry, RotatedCaveatManifest,
-    empty_caveat_manifest, generate_rotated_effect_vm_trace, rotated_descriptor_name,
+    SETTLE_ESCROW_SAT_DESCRIPTOR_NAME, empty_caveat_manifest, generate_rotated_effect_vm_trace,
+    rotated_descriptor_name, rotated_descriptor_name_for_declared_escrow,
     rotated_descriptor_name_for_effect, rotated_set_field_descriptor_name,
     transfer_caveat_manifest,
 };
 
+// ---- Re-export the STAGED in-AIR capacity-gate satisfaction weld (PIECE 2 of the VK epoch) ----
+pub use satisfaction_weld::{
+    after_field_col, before_field_col, rotated_field_offset, settle_escrow_satisfaction_gates,
+};
+
 // ---- Re-export verify ----
 pub use verify::{
-    verify_balance_limb_pis, verify_balance_limb_ranges, verify_slot_caveat_manifest,
-    verify_state_integrity,
+    verify_balance_limb_pis, verify_balance_limb_ranges, verify_rotated_caveat_coverage,
+    verify_slot_caveat_coverage, verify_slot_caveat_manifest, verify_state_integrity,
 };

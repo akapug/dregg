@@ -48,10 +48,11 @@ use deos_reflect::present::PresentationBody;
 use deos_reflect::substance::FieldValue;
 use deos_reflect::{AffordanceSurface, ReflectedCell};
 
-use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::attach::AttachedApplet;
 use crate::card_editor::{
-    BindProps, ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewPatch, ViewTree,
+    BindProps, ButtonProps, EditError, OnClick, SectionProps, TextProps, ViewEdit, ViewPatch,
+    ViewTree,
 };
 use crate::program_doc::ProgramSource;
 
@@ -90,9 +91,12 @@ pub struct InspectorCard {
 enum FieldRow {
     /// A scalar state slot — a live binding (`label`: `value`), re-read off the live ledger.
     Bound { label: String, slot: usize },
-    /// A structural substance (balance, nonce, caps, lifecycle, an id, a cap edge, …) —
-    /// rendered as a static labeled text row.
+    /// A human-meaningful structural substance (balance, count, a flag, a name) — a static
+    /// labeled text row a newcomer SHOULD see.
     Static { text: String },
+    /// The "see the bones" detail (a raw id, a hash, a cap edge, a committed-slot index) — a
+    /// static text row tucked into the adept drawer, hidden in the clean newcomer view.
+    StaticRaw { text: String },
 }
 
 impl InspectorCard {
@@ -287,8 +291,11 @@ fn push_child(tree: &mut ViewTree, node: ViewTree) -> bool {
     }
 }
 
-/// Relabel the FIRST text node whose current text equals `from` to `to` (depth-first).
-/// Returns whether a node was relabelled.
+/// Relabel the FIRST node whose label equals `from` to `to` (depth-first). Matches a
+/// [`ViewTree::Text`] body OR a [`ViewTree::Section`] heading (the inspector's warm,
+/// disclosable face titles live in `Section.title`, so relabeling one IS the keystone
+/// "rename a face from within"), and recurses through section children. Returns whether a
+/// node was relabelled.
 fn relabel_text(tree: &mut ViewTree, from: &str, to: &str) -> bool {
     if let ViewTree::Text { props } = tree {
         if props.text == from {
@@ -296,8 +303,16 @@ fn relabel_text(tree: &mut ViewTree, from: &str, to: &str) -> bool {
             return true;
         }
     }
+    if let ViewTree::Section { props, .. } = tree {
+        if props.title == from {
+            props.title = to.to_string();
+            return true;
+        }
+    }
     match tree {
-        ViewTree::VStack { children } | ViewTree::Row { children } => {
+        ViewTree::VStack { children }
+        | ViewTree::Row { children }
+        | ViewTree::Section { children, .. } => {
             for c in children.iter_mut() {
                 if relabel_text(c, from, to) {
                     return true;
@@ -354,19 +369,19 @@ pub fn inspector_view_for(
 ) -> ViewTree {
     let mut children: Vec<ViewTree> = Vec::new();
 
-    // Title.
+    // A warm, jargon-free intro (the default face never says "cell"/"capability").
     children.push(ViewTree::Text {
         props: TextProps {
-            text: "Inspector".into(),
+            text: "A closer look. Nothing here can break — poke around.".into(),
         },
     });
 
-    // ── RawFields face ────────────────────────────────────────────────────────────────
-    let mut raw_rows: Vec<ViewTree> = vec![ViewTree::Text {
-        props: TextProps {
-            text: "Cell State".into(),
-        },
-    }];
+    // ── RawFields face ──────────────────────────────────────────────────────────────────
+    // The human-meaningful state up front (balances, counts, flags, live values); the raw
+    // ids / hashes / cap edges / committed-slot indices tucked into an `adept` drawer that the
+    // clean newcomer projection DROPS and an adept REVEALS — one card, two projections.
+    let mut friendly_rows: Vec<ViewTree> = Vec::new();
+    let mut raw_rows: Vec<ViewTree> = Vec::new();
     let rows = ledger.get(&id).map(|cell| {
         let reflected = ReflectedCell {
             id,
@@ -377,23 +392,32 @@ pub fn inspector_view_for(
     if let Some(rows) = rows {
         for row in rows {
             match row {
-                FieldRow::Bound { label, slot } => raw_rows.push(ViewTree::Bind {
+                FieldRow::Bound { label, slot } => friendly_rows.push(ViewTree::Bind {
                     props: BindProps { slot, label },
                 }),
-                FieldRow::Static { text } => raw_rows.push(ViewTree::Text {
+                FieldRow::Static { text } => friendly_rows.push(ViewTree::Text {
+                    props: TextProps { text },
+                }),
+                FieldRow::StaticRaw { text } => raw_rows.push(ViewTree::Text {
                     props: TextProps { text },
                 }),
             }
         }
     }
-    children.push(ViewTree::VStack { children: raw_rows });
+    if friendly_rows.is_empty() && raw_rows.is_empty() {
+        friendly_rows.push(ViewTree::Text {
+            props: TextProps {
+                text: "(this one is quiet — it holds nothing yet)".into(),
+            },
+        });
+    }
+    if !raw_rows.is_empty() {
+        friendly_rows.push(section_adept("the raw details", raw_rows));
+    }
+    children.push(section("What this holds", friendly_rows));
 
     // ── Affordances face ──────────────────────────────────────────────────────────────
-    let mut aff_rows: Vec<ViewTree> = vec![ViewTree::Text {
-        props: TextProps {
-            text: "Affordances".into(),
-        },
-    }];
+    let mut aff_rows: Vec<ViewTree> = Vec::new();
     let mut surface = AffordanceSurface::new(id);
     for (name, required) in affordance_specs {
         surface = surface.declare(deos_reflect::Affordance::new(
@@ -413,9 +437,41 @@ pub fn inspector_view_for(
             },
         });
     }
-    children.push(ViewTree::VStack { children: aff_rows });
+    if aff_rows.is_empty() {
+        aff_rows.push(ViewTree::Text {
+            props: TextProps {
+                text: "(nothing to do here right now)".into(),
+            },
+        });
+    }
+    children.push(section("What you can do", aff_rows));
 
     ViewTree::VStack { children }
+}
+
+/// A titled section the inspector groups rows under (a friendly header, shown in every view).
+fn section(title: &str, children: Vec<ViewTree>) -> ViewTree {
+    ViewTree::Section {
+        props: SectionProps {
+            title: title.to_string(),
+            tag: String::new(),
+            adept: false,
+        },
+        children,
+    }
+}
+
+/// An **adept-only** section — the "see the bones" drawer (`disclose(Simple)` drops it, the
+/// adept projection reveals it). The raw ids/hashes a newcomer never needs.
+fn section_adept(title: &str, children: Vec<ViewTree>) -> ViewTree {
+    ViewTree::Section {
+        props: SectionProps {
+            title: title.to_string(),
+            tag: String::new(),
+            adept: true,
+        },
+        children,
+    }
 }
 
 /// Lift a RawFields presentation body into inspector view rows. A revealed scalar state slot
@@ -449,16 +505,17 @@ fn field_rows(body: &PresentationBody) -> Vec<FieldRow> {
             FieldValue::Text(t) => out.push(FieldRow::Static {
                 text: format!("{}: {}", f.key, t),
             }),
-            FieldValue::Id(id) => out.push(FieldRow::Static {
+            // The raw cryptographic detail — hidden behind the adept drawer by default.
+            FieldValue::Id(id) => out.push(FieldRow::StaticRaw {
                 text: format!("{}: {}", f.key, short_id(id)),
             }),
-            FieldValue::Hash(h) => out.push(FieldRow::Static {
+            FieldValue::Hash(h) => out.push(FieldRow::StaticRaw {
                 text: format!("{}: {}", f.key, short_id(h)),
             }),
-            FieldValue::CapEdge { target, slot } => out.push(FieldRow::Static {
+            FieldValue::CapEdge { target, slot } => out.push(FieldRow::StaticRaw {
                 text: format!("{}: → {} @{}", f.key, short_id(target), slot),
             }),
-            FieldValue::CommittedSlot { index, .. } => out.push(FieldRow::Static {
+            FieldValue::CommittedSlot { index, .. } => out.push(FieldRow::StaticRaw {
                 text: format!("{}: state[{}] ⟨committed⟩", f.key, index),
             }),
         }
@@ -475,4 +532,60 @@ fn short_id(bytes: &[u8; 32]) -> String {
 /// Pack a field element for an inspector model field (re-exported convenience).
 pub fn field_value(v: u64) -> FieldElement {
     pack_u64(v)
+}
+
+#[cfg(test)]
+mod delight_tests {
+    //! THE CONSUMER-DELIGHT PASS — the inspector's default face is friendly (warm sections, no
+    //! jargon), and the raw cryptographic detail (ids, hashes, cap edges) lives in an `adept`
+    //! drawer the clean newcomer projection drops. (deos-view's own tests prove `disclose`
+    //! DROPS an adept section in the simple projection; this proves the inspector PUTS the raw
+    //! detail there — together = the end-to-end guarantee.)
+    use super::*;
+    use crate::applet::Applet;
+
+    fn applet(seed: u8) -> Applet {
+        let mut pk = [0u8; 32];
+        pk[0] = seed;
+        Applet::mint(
+            pk,
+            [0u8; 32],
+            &[(0usize, pack_u64(7))],
+            Vec::new(),
+            AuthRequired::None,
+        )
+    }
+
+    #[test]
+    fn the_default_face_is_friendly_and_the_raw_detail_is_adept_only() {
+        let card = applet(0xAB);
+        let tree = generate_view(&card, &AuthRequired::None);
+
+        // Friendly, warm sections by default — no "Cell State" / "Affordances" jargon.
+        assert!(
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("What this holds")),
+            "the state section reads in human words"
+        );
+        assert!(
+            tree.walk()
+                .iter()
+                .any(|n| n.label() == Some("What you can do")),
+            "the affordances section reads in human words"
+        );
+
+        // The raw cryptographic detail (the cell's id et al.) is an adept-only drawer.
+        let drawer_adept = tree.walk().into_iter().find_map(|n| match n {
+            ViewTree::Section { props, .. } if props.title == "the raw details" => {
+                Some(props.adept)
+            }
+            _ => None,
+        });
+        assert_eq!(
+            drawer_adept,
+            Some(true),
+            "the raw ids/hashes live in an adept drawer hidden in the clean view"
+        );
+    }
 }

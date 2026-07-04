@@ -78,6 +78,43 @@ use dregg_app_framework::{
 pub use dregg_app_framework::field_from_bytes;
 
 // =============================================================================
+// The five-axis starbridge-app template
+// =============================================================================
+//
+// This crate is the full 5-axis starbridge-app, and the PRIME AGENTIC `Reactor`
+// (AX5) exemplar — event-driven on-chain agent orchestration:
+//
+//   - AX1 (factory): [`swarm_factory_descriptor`] + [`coordinator_program`] /
+//     [`swarm_constraints`] — the dispatch-board POLICY (atomic budget + monotone
+//     meters + no-replay epoch + write-once lead/mandate) installed at birth as the
+//     born cell's `CellProgram` and re-checked by the verified executor.
+//   - AX2 (deos): [`board_app`] / [`register_deos`] / [`seed_board`] /
+//     [`fire_dispatch`] / [`fire_open_board`] — the composed `DeosApp` surface.
+//   - AX3 (service): [`service`] — the board as a typed `InterfaceDescriptor` on the
+//     `invoke()` front door (the command face).
+//   - AX4 (card): [`card`] — the UI as a renderer-independent `deos.ui.*` view-tree
+//     (the rich vocabulary: a `DISPATCHING` status pill, the dispatch-lifecycle
+//     breadcrumb, the per-worker spend GAUGES filling toward the shared budget ceiling
+//     — the `AffineLe(spent_a + spent_b <= budget)` gate VISUALIZED — live lead/budget/
+//     meter/epoch binds, and the icon+button Actions section).
+//   - AX5 (reactor): [`reactor`] — the autonomous COORDINATOR agent-loop as a
+//     `Reactor` (the reactive twin of `invoke()`): watch a posted mandate, react by
+//     auto-dispatching the first sub-task within the conserved budget.
+//
+// AX2/AX3/AX5 all install/assume the SAME canonical [`coordinator_program`] the
+// factory (AX1) bakes — no divergent program is invented, so the budget gate +
+// meters + epoch caveats re-enforce identically on every runtime axis.
+
+/// The deos-view CARD: the app's UI as a renderer-independent `deos.ui.*` view-tree.
+pub mod card;
+/// The autonomous COORDINATOR agent-loop as a `Reactor` (the reactive twin of
+/// `invoke()`): watch a posted mandate, react by auto-dispatching a sub-task.
+pub mod reactor;
+/// The CELLS-AS-SERVICE-OBJECTS face: a typed `InterfaceDescriptor` + `invoke()`
+/// method dispatch over the swarm lifecycle.
+pub mod service;
+
+// =============================================================================
 // Slot layout (the coordinator dispatch-board cell) — mirrors the Lean
 // `AgentOrchestrationBudget` field names (`leadF`/`budgetF`/`spentAF`/`spentBF`/`epochF`).
 // =============================================================================

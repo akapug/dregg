@@ -29,7 +29,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{AppContext, HeadlessAppContext, PlatformTextSystem, px, size};
+use gpui::{px, size, AppContext, HeadlessAppContext, PlatformTextSystem};
 use gpui_wgpu::CosmicTextSystem;
 
 use android_cell::AndroidPermission;
@@ -57,7 +57,7 @@ fn the_desktop_renders_a_confined_android_cells_systemui_cap_chrome() {
     let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(()), || {
         gpui_platform::current_headless_renderer()
     });
-    cx.update(|cx| gpui_component::init(cx));
+    cx.update(gpui_component::init);
 
     let world_for_view = shared.clone();
     let lp = layout_path.clone();

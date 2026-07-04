@@ -207,15 +207,15 @@ impl PersistentStore {
         // A shipping node never ships a snapshot it cannot reconstruct to its
         // own recorded finalized root: if we have a recorded head root, the
         // reconstructed root MUST equal it (fail-closed).
-        if let Some(recorded) = self.recovered_ledger_root()? {
-            if recorded != claimed_root {
-                return Err(StoreError::Integrity(format!(
-                    "ship_snapshot: reconstructed root {} != recorded finalized root {} \
+        if let Some(recorded) = self.recovered_ledger_root()?
+            && recorded != claimed_root
+        {
+            return Err(StoreError::Integrity(format!(
+                "ship_snapshot: reconstructed root {} != recorded finalized root {} \
                      (refusing to ship a non-convergent snapshot)",
-                    hex32(&claimed_root),
-                    hex32(&recorded),
-                )));
-            }
+                hex32(&claimed_root),
+                hex32(&recorded),
+            )));
         }
 
         let head = SnapshotHead {

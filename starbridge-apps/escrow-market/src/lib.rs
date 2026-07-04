@@ -1,29 +1,49 @@
-//! # Escrowed-delivery marketplace (Starbridge organ-composition app)
+//! # Sealed-escrow atomic-swap marketplace (Starbridge app)
 //!
-//! A buyer and a seller transact a good they don't trust each other over. The
-//! buyer **escrows** funds against a listing; the seller **commits a sealed
-//! delivery**; the deal **settles atomically** — funds release to the seller
-//! and any remainder refunds to the buyer, all-or-nothing and value-neutral.
-//! No escrow-agent, no off-chain coordinator: the escrow is a single
-//! factory-born cell whose installed `CellProgram` IS the rules, re-checked by
-//! the verified executor on every turn that touches it.
+//! Two mutually-distrustful parties exchange value with **no trusted
+//! intermediary**: "I give you X iff you give me Y." The app's escrow IS the
+//! protocol-proven [`SealedEscrow`](dregg_cell::escrow_sealed) capacity — a real
+//! *witnessed* escrow commitment, not decorative slot arithmetic. Each party
+//! locks one conforming *leg* of the trade into the escrow cell's committed
+//! heap; the exchange completes **atomically** only when both legs are present;
+//! and until completion each party may **reclaim** its own leg. No party can
+//! ever walk away holding the counterparty's leg without a genuine own deposit,
+//! and no leg is claimable twice.
 //!
-//! This app exists to show the system is **not a toy**: it composes — in one
-//! cell's slot-caveat program — the guarantees of four of the night's organs.
+//! [`SealedEscrowMarket`] drives that capacity end-to-end, playing the executor
+//! role: it opens the escrow (sealing the swap terms into the commitment), takes
+//! each party's deposit (moving value into custody, conservation-respecting),
+//! settles atomically (crossing each leg to its counterparty), and supports
+//! reclaim (the depositor made whole on a half-open trade). The forge-rejecting
+//! verification core ([`EscrowState::check_claim`] / [`EscrowState::settlement`])
+//! is the protocol's, imaged by the Lean rung
+//! `metatheory/Dregg2/Deos/SealedEscrow.lean`.
 //!
-//! | Organ      | Guarantee                                | How this cell enforces it |
-//! |------------|------------------------------------------|---------------------------|
-//! | TRUSTLINE  | the draw can never exceed the line       | `FieldLteField { ESCROWED ≤ CEILING }` — the escrow is a bounded credit line |
-//! | MAILBOX    | sealed delivery, bound exactly once      | `WriteOnce(DELIVERY_HASH)` — the seller commits the sealed-goods digest once; tamper-evident |
-//! | FLASHWELL  | atomic, conserving settlement            | `SumEqualsAcross { ESCROWED → RELEASED + REFUNDED }` — the payout splits the escrow with no mint/burn |
-//! | LIFECYCLE  | one-way, no replay, no double-settle      | `StrictMonotonic(STATE)` — `LISTED→FUNDED→SHIPPED→SETTLED` |
+//! What the app genuinely does — each proven in `tests/atomic_swap.rs`:
+//!   1. **Witnessed deposit** — locking a leg moves the escrow cell's canonical
+//!      commitment (a light client SEES value enter).
+//!   2. **Atomic settlement** — both legs cross to their counterparties in one
+//!      step; there is no half-open trade.
+//!   3. **Conservation** — total value per asset is invariant across the run.
+//!   4. **The half-open-trade attack defeated** — a ghosting counterparty cannot
+//!      claim; the depositor reclaims and is made whole.
 //!
-//! Built from dregg primitives only: `FactoryDescriptor`, `Effect::SetField` /
-//! `Effect::EmitEvent`, `Authorization::Signature` from
-//! `AppCipherclerk::make_action`, and Lane-G `StateConstraint` slot caveats.
-//! No domain-specific escrow `Effect`, no `Authorization::Unchecked`, no
-//! `[0u8; 64]` placeholder signatures. Routes through the real verified
-//! executor via `EmbeddedExecutor` / `submit_action`.
+//! ## The value face ([`EscrowVault`], `Payable`)
+//!
+//! The escrow's held value is a conserved credit balance on a vault cell; the
+//! escrow receives value as a real `Effect::Transfer` and settles it onward to
+//! the payee through the shared [`Payable`] interface, so per-asset `Σδ=0` holds
+//! across app boundaries (bounty→escrow→payee).
+//!
+//! ## Legacy compat surface (RETAINED, demoted)
+//!
+//! A pre-existing slot-caveat "delivery lifecycle" (`list → fund → ship →
+//! settle`, the four-organ `CellProgram` below, with its `DeosApp`/`service`/
+//! factory faces) is RETAINED at the crate root because out-of-scope dependents
+//! (`starbridge-first-room`, `starbridge-v2`) import it. It is no longer the
+//! app's headline escrow — the [`SealedEscrowMarket`] above is. The slot caveats
+//! model *bounded scalar fields*, not a movable witnessed asset; for genuine
+//! trustless value exchange, use the sealed capacity.
 //!
 //! ## The order lifecycle
 //!
@@ -42,11 +62,12 @@
 //!   a refund ⇒ `RELEASED == 0, REFUNDED == ESCROWED` (or any conserving split).
 
 use dregg_app_framework::{
-    Action, AppCipherclerk, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId, CellMode,
-    CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect, EmbeddedExecutor,
-    Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance, InspectorDescriptor,
-    StarbridgeAppContext, StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
-    canonical_program_vk, field_from_bytes, field_from_u64, hex_encode_32, symbol,
+    Action, AppCipherclerk, AssetId, AuthRequired, CapTarget, CapTemplate, CellAffordance, CellId,
+    CellMode, CellProgram, ChildVkStrategy, ConstantsModule, DeosApp, DeosCell, Effect,
+    EmbeddedExecutor, Event, FactoryDescriptor, FieldElement, FireExecuteError, GatedAffordance,
+    InspectorDescriptor, InvokeAuthority, InvokeRefused, Payable, StarbridgeAppContext,
+    StateConstraint, TransitionCase, TransitionGuard, Turn, TurnReceipt, canonical_program_vk,
+    field_from_bytes, field_from_u64, hex_encode_32, symbol,
 };
 
 /// The escrow as a SERVICE CELL on the `invoke()` front door (the
@@ -57,6 +78,243 @@ use dregg_app_framework::{
 /// surfaces are untouched. See [`service`] for the third worked citizen after
 /// `starbridge-kvstore` and `starbridge-nameservice`.
 pub mod service;
+
+/// The AX4 card axis — the escrow's UI as a renderer-independent `deos.ui.*`
+/// view-tree ([`card::escrow_card_value`]), pure `serde_json` with no `deos-view`
+/// dependency. The button `turn` names ARE the [`service`] method vocabulary, so
+/// the card and the service cell speak the same lifecycle.
+pub mod card;
+
+// =============================================================================
+// THE REAL ESCROW — the proven `SealedEscrow` capacity, as a marketplace.
+// =============================================================================
+
+use dregg_cell::Cell;
+
+/// The protocol-proven sealed-escrow capacity, re-exported as this app's escrow.
+/// These are the genuine, witnessed primitives (`open` seals terms into the
+/// commitment, `deposit_leg` locks a conforming leg, `settle` completes the
+/// 2-of-2 atomic swap, `reclaim_leg` pulls a leg back before settlement), with
+/// [`EscrowState::check_claim`] / [`EscrowState::settlement`] the forge-rejecting
+/// verification core. See [`dregg_cell::escrow_sealed`].
+pub use dregg_cell::escrow_sealed::{
+    Claim, EscrowError, EscrowState, EscrowTerms, Leg, LegRequirement, LegStatus, Side,
+    deposit_leg, is_escrow, open_escrow, reclaim_leg, settle,
+};
+
+/// The public key of the escrow custodian cells (the escrow host + its per-asset
+/// custody wallets). A fixed sentinel — the custodian holds value only *in
+/// transit* and never as a party to the trade.
+pub const ESCROW_CUSTODIAN_PK: [u8; 32] = *b"starbridge-escrow-market-custody";
+/// The escrow host cell's token id (it carries no balance of its own — it hosts
+/// the escrow heap binding).
+pub const ESCROW_HOST_TOKEN: [u8; 32] = *b"starbridge-escrow-host-token-id!";
+
+/// Why a [`SealedEscrowMarket`] operation could not complete.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MarketError {
+    /// The sealed-escrow capacity refused (non-conforming leg, one-shot replay,
+    /// over-claim, wrong terms, …) — the forge-rejecting protocol check bit.
+    Escrow(EscrowError),
+    /// The depositing wallet cannot cover the leg's amount.
+    InsufficientFunds {
+        /// The wallet's balance.
+        have: i64,
+        /// The leg amount it must cover.
+        need: i64,
+    },
+    /// The wallet's asset does not match the leg's asset.
+    AssetMismatch,
+}
+
+impl std::fmt::Display for MarketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MarketError::Escrow(e) => write!(f, "sealed-escrow refused: {e}"),
+            MarketError::InsufficientFunds { have, need } => {
+                write!(f, "insufficient funds: have {have}, need {need}")
+            }
+            MarketError::AssetMismatch => write!(f, "wallet asset does not match the leg asset"),
+        }
+    }
+}
+
+impl std::error::Error for MarketError {}
+
+impl From<EscrowError> for MarketError {
+    fn from(e: EscrowError) -> Self {
+        MarketError::Escrow(e)
+    }
+}
+
+/// The honest executor move: debit `amount` (`> 0`) from `from`, credit it to
+/// `to`. Returns `false` if `from` cannot cover it (no value is created or
+/// destroyed). This is the role the app plays around the escrow's *authorization*
+/// — the capacity decides *whether* and *how much* value may move; the move
+/// itself is an ordinary conserving balance transfer.
+pub fn move_value(from: &mut Cell, to: &mut Cell, amount: i64) -> bool {
+    if amount <= 0 {
+        return false;
+    }
+    let amt = amount as u64;
+    if !from.state.debit_balance(amt) {
+        return false;
+    }
+    assert!(
+        to.state.credit_balance(amt),
+        "credit must succeed after debit"
+    );
+    true
+}
+
+/// **A sealed-escrow atomic-swap, as a self-contained conserving market.**
+///
+/// Owns the escrow host cell (which carries the witnessed escrow commitment in
+/// its heap) plus two per-asset custody cells holding value *in transit* while
+/// legs are locked. Two mutually-distrustful parties [`deposit`](Self::deposit)
+/// their conforming legs; the market [`settle`](Self::settle)s atomically —
+/// crossing each leg to its counterparty — or, on a half-open trade, a depositor
+/// [`reclaim`](Self::reclaim)s and is made whole. Value is conserved per asset at
+/// every step.
+#[derive(Clone, Debug)]
+pub struct SealedEscrowMarket {
+    /// The escrow host cell — its committed heap binds the swap terms, each leg's
+    /// amount, and each leg's one-shot status.
+    pub escrow: Cell,
+    /// The sealed swap terms (who must lock what on each side).
+    pub terms: EscrowTerms,
+    /// Custody of leg A's asset while it is locked / in transit.
+    custody_a: Cell,
+    /// Custody of leg B's asset while it is locked / in transit.
+    custody_b: Cell,
+}
+
+impl SealedEscrowMarket {
+    /// **Open** a fresh market over `terms`: born an escrow host cell, seal the
+    /// terms' digest into its commitment ([`open_escrow`]), and stand up a custody
+    /// cell per leg's asset (empty). After this the escrow binds the trade but no
+    /// value is locked yet.
+    pub fn open(terms: EscrowTerms) -> Self {
+        let asset_a = *terms.a.asset.as_bytes();
+        let asset_b = *terms.b.asset.as_bytes();
+        let mut escrow = Cell::with_balance(ESCROW_CUSTODIAN_PK, ESCROW_HOST_TOKEN, 0);
+        open_escrow(&mut escrow, &terms);
+        SealedEscrowMarket {
+            escrow,
+            terms,
+            custody_a: Cell::with_balance(ESCROW_CUSTODIAN_PK, asset_a, 0),
+            custody_b: Cell::with_balance(ESCROW_CUSTODIAN_PK, asset_b, 0),
+        }
+    }
+
+    /// **Deposit** a party's conforming leg: the sealed-escrow capacity validates
+    /// the leg against the terms (right party, right asset, `≥` the required
+    /// amount) and locks it into the commitment; the leg's value then LEAVES the
+    /// depositor's wallet into custody. A non-conforming leg is refused by the
+    /// capacity (`MarketError::Escrow`) before any value moves; a wallet that
+    /// cannot cover the leg is refused up front. Conservation holds: value is in
+    /// transit, never created.
+    pub fn deposit(&mut self, side: Side, leg: &Leg, from: &mut Cell) -> Result<(), MarketError> {
+        if from.token_id() != self.custody(side).token_id() {
+            return Err(MarketError::AssetMismatch);
+        }
+        if from.state.balance() < leg.amount {
+            return Err(MarketError::InsufficientFunds {
+                have: from.state.balance(),
+                need: leg.amount,
+            });
+        }
+        // The capacity's forge-rejecting deposit gate runs FIRST: a non-conforming
+        // leg is refused with nothing moved.
+        deposit_leg(&mut self.escrow, &self.terms, side, leg)?;
+        assert!(
+            move_value(from, self.custody_mut(side), leg.amount),
+            "the funds check above guarantees the move succeeds"
+        );
+        Ok(())
+    }
+
+    /// **Settle** the exchange atomically: the capacity verifies BOTH legs are
+    /// present, conforming, and unconsumed ([`settle`]) and consumes them one-shot;
+    /// the market then crosses each leg to its counterparty — leg A's asset to
+    /// party B (`b_receiving`), leg B's asset to party A (`a_receiving`). Returns
+    /// the authorized `(amount_a, amount_b)`. There is no partial settlement: if
+    /// the capacity refuses (a leg missing/consumed), nothing moves.
+    pub fn settle(
+        &mut self,
+        a_receiving: &mut Cell,
+        b_receiving: &mut Cell,
+    ) -> Result<(i64, i64), MarketError> {
+        let (amount_a, amount_b) = settle(&mut self.escrow, &self.terms)?;
+        // Atomic crossing: A's locked leg goes to B, B's to A.
+        assert!(move_value(&mut self.custody_a, b_receiving, amount_a));
+        assert!(move_value(&mut self.custody_b, a_receiving, amount_b));
+        Ok((amount_a, amount_b))
+    }
+
+    /// **Reclaim** a depositor's own leg before settlement (the half-open-trade
+    /// defence): the capacity permits it only to the leg's depositor and only
+    /// while the leg is still live ([`reclaim_leg`]), consuming it one-shot; the
+    /// market then returns the leg's value to `to`. A reclaimed leg can never then
+    /// be settled (and vice-versa).
+    pub fn reclaim(
+        &mut self,
+        side: Side,
+        by: dregg_types::CellId,
+        to: &mut Cell,
+    ) -> Result<i64, MarketError> {
+        let amount = reclaim_leg(&mut self.escrow, &self.terms, side, by)?;
+        assert!(move_value(self.custody_mut(side), to, amount));
+        Ok(amount)
+    }
+
+    /// The escrow's committed state (terms digest, per-leg status + amount), read
+    /// back from the host cell's heap — the serviced read a `view` answers with.
+    pub fn state(&self) -> Result<EscrowState, EscrowError> {
+        EscrowState::read(&self.escrow)
+    }
+
+    /// The escrow host cell's canonical commitment — moves when a leg is locked,
+    /// settled, or reclaimed (a light client witnesses every change).
+    pub fn commitment(&self) -> [u8; 32] {
+        self.escrow.state_commitment()
+    }
+
+    /// Value held in custody for leg A (in transit while the leg is locked).
+    pub fn escrow_custody_a(&self) -> i64 {
+        self.custody_a.state.balance()
+    }
+
+    /// Value held in custody for leg B (in transit while the leg is locked).
+    pub fn escrow_custody_b(&self) -> i64 {
+        self.custody_b.state.balance()
+    }
+
+    fn custody(&self, side: Side) -> &Cell {
+        match side {
+            Side::A => &self.custody_a,
+            Side::B => &self.custody_b,
+        }
+    }
+
+    fn custody_mut(&mut self, side: Side) -> &mut Cell {
+        match side {
+            Side::A => &mut self.custody_a,
+            Side::B => &mut self.custody_b,
+        }
+    }
+}
+
+// =============================================================================
+// LEGACY compat surface — the slot-caveat "delivery lifecycle".
+//
+// RETAINED for out-of-scope dependents (`starbridge-first-room`,
+// `starbridge-v2`) that import these symbols at the crate root. This is NO LONGER
+// the app's headline escrow — see `SealedEscrowMarket` above for the genuine,
+// witnessed, movable-asset escrow. The constructs below model bounded SCALAR
+// FIELDS via slot caveats (`FieldLteField` / `WriteOnce` / `AffineEq` /
+// `StrictMonotonic`), not a conserved movable leg.
+// =============================================================================
 
 // =============================================================================
 // Escrow-cell state schema
@@ -891,7 +1149,254 @@ pub fn register_deos(ctx: &StarbridgeAppContext) -> DeosApp {
 }
 
 // =============================================================================
-// Tests — the cell program in isolation
+// The PAYABLE face — the escrow's holding cell as a `Payable` cell.
+// =============================================================================
+//
+// `docs/deos/APPS-INTEROP-CENSUS.md` §5 (the cleanest first interop win): the
+// escrow's "value" is no longer a scalar `RELEASED`/`REFUNDED` field on the
+// escrow cell — it is a conserved credit balance held on a VAULT cell
+// (`token_id == the shared credit asset`). The escrow RECEIVES value as a real
+// `Effect::Transfer` (e.g. a bounty-board payout) and SETTLES IT ONWARD to the
+// payee through the SAME shared [`Payable`] interface — so the per-asset Σδ=0
+// conservation holds across both app boundaries (bounty→escrow→payee).
+//
+// The lifecycle cell (the four-organ TRUSTLINE/MAILBOX/FLASHWELL/LIFECYCLE state
+// machine above) is UNTOUCHED — `EscrowVault` is the value organ riding alongside
+// it: a deployment advances the order to SETTLED (the existing gated `settle`)
+// and, in the same breath, releases the held credit with [`EscrowVault::release`].
+
+/// **The escrow's holding VAULT, as a [`Payable`] cell.**
+///
+/// Wraps the cell that holds the escrowed credit (a holder of the shared credit
+/// `asset` — its `token_id` is the asset id). The escrow is paid INTO this cell
+/// by another app (a kernel `Transfer`), and `release` pays it ONWARD to the
+/// payee through the standard interface — the SAME `pay` shape bounty-board used
+/// to pay the escrow, so the two apps interoperate through ONE interface.
+#[derive(Clone, Copy, Debug)]
+pub struct EscrowVault {
+    /// The cell that holds (and releases) the escrowed credit.
+    pub vault: CellId,
+    /// The shared credit asset the escrow is denominated in (the vault's
+    /// `token_id`).
+    pub asset: AssetId,
+}
+
+impl EscrowVault {
+    /// A vault handle over `vault`, denominating value in `asset`.
+    pub fn new(vault: CellId, asset: AssetId) -> Self {
+        Self { vault, asset }
+    }
+
+    /// **Settle the escrow ONWARD: release the held credit to `payee`, through the
+    /// `Payable` interface** — the second leg of the cross-app value flow.
+    /// Desugars to a single conserving kernel `Effect::Transfer` (`vault → payee`)
+    /// routed through the shared interface. The returned [`Turn`] is submitted
+    /// through the embedded executor on the shared `World`.
+    pub fn release(
+        &self,
+        cipherclerk: &AppCipherclerk,
+        amount: u64,
+        payee: CellId,
+        authority: InvokeAuthority,
+    ) -> Result<Turn, InvokeRefused> {
+        self.pay(cipherclerk, amount, payee, authority)
+    }
+}
+
+impl Payable for EscrowVault {
+    fn payable_cell(&self) -> CellId {
+        self.vault
+    }
+    fn payable_asset(&self) -> AssetId {
+        self.asset
+    }
+}
+
+// =============================================================================
+// Tests — the REAL sealed-escrow market capacity
+// =============================================================================
+
+#[cfg(test)]
+mod sealed_market_tests {
+    use super::*;
+    use dregg_types::CellId;
+
+    const ASSET_10: [u8; 32] = [10u8; 32];
+    const ASSET_20: [u8; 32] = [20u8; 32];
+    const ALICE_PK: [u8; 32] = [1u8; 32];
+    const BOB_PK: [u8; 32] = [2u8; 32];
+
+    fn wallet(pk: [u8; 32], asset: [u8; 32], balance: i64) -> Cell {
+        Cell::with_balance(pk, asset, balance)
+    }
+    fn party(pk: [u8; 32], asset: [u8; 32]) -> CellId {
+        Cell::with_balance(pk, asset, 0).id()
+    }
+    /// Alice locks 100 of asset-10 for Bob's 250 of asset-20.
+    fn swap_terms() -> (EscrowTerms, CellId, CellId) {
+        let alice = party(ALICE_PK, ASSET_10);
+        let bob = party(BOB_PK, ASSET_20);
+        let terms = EscrowTerms::swap(
+            LegRequirement::new(alice, CellId::from_bytes(ASSET_10), 100),
+            LegRequirement::new(bob, CellId::from_bytes(ASSET_20), 250),
+        );
+        (terms, alice, bob)
+    }
+
+    #[test]
+    fn atomic_swap_completes_and_conserves() {
+        let (terms, alice, bob) = swap_terms();
+        let mut alice_a10 = wallet(ALICE_PK, ASSET_10, 100);
+        let mut alice_a20 = wallet(ALICE_PK, ASSET_20, 0);
+        let mut bob_b20 = wallet(BOB_PK, ASSET_20, 250);
+        let mut bob_b10 = wallet(BOB_PK, ASSET_10, 0);
+
+        let mut market = SealedEscrowMarket::open(terms);
+        assert!(is_escrow(&market.escrow));
+
+        // Witnessed deposit: the commitment moves.
+        let before = market.commitment();
+        market
+            .deposit(
+                Side::A,
+                &Leg::new(alice, CellId::from_bytes(ASSET_10), 100),
+                &mut alice_a10,
+            )
+            .unwrap();
+        assert_ne!(
+            before,
+            market.commitment(),
+            "deposit re-seals the commitment"
+        );
+        assert_eq!(alice_a10.state.balance(), 0, "Alice's leg is locked away");
+
+        // No half-open trade: settle with only A present is refused.
+        assert_eq!(
+            market.settle(&mut alice_a20, &mut bob_b10),
+            Err(MarketError::Escrow(EscrowError::LegNotDeposited(Side::B)))
+        );
+
+        market
+            .deposit(
+                Side::B,
+                &Leg::new(bob, CellId::from_bytes(ASSET_20), 250),
+                &mut bob_b20,
+            )
+            .unwrap();
+
+        // Atomic settle: leg A → Bob, leg B → Alice.
+        let (a, b) = market.settle(&mut alice_a20, &mut bob_b10).unwrap();
+        assert_eq!((a, b), (100, 250));
+        assert_eq!(
+            alice_a20.state.balance(),
+            250,
+            "Alice received Bob's asset-20"
+        );
+        assert_eq!(
+            bob_b10.state.balance(),
+            100,
+            "Bob received Alice's asset-10"
+        );
+
+        // Conservation per asset (wallets + custody).
+        assert_eq!(
+            alice_a10.state.balance()
+                + bob_b10.state.balance()
+                + market.custody(Side::A).state.balance(),
+            100
+        );
+        assert_eq!(
+            alice_a20.state.balance()
+                + bob_b20.state.balance()
+                + market.custody(Side::B).state.balance(),
+            250
+        );
+
+        // One-shot: a settled escrow cannot re-settle.
+        assert_eq!(
+            market.settle(&mut alice_a20, &mut bob_b10),
+            Err(MarketError::Escrow(EscrowError::LegAlreadyConsumed(
+                Side::A
+            )))
+        );
+    }
+
+    #[test]
+    fn half_open_trade_is_defeated_by_reclaim() {
+        let (terms, alice, _bob) = swap_terms();
+        let mut alice_a10 = wallet(ALICE_PK, ASSET_10, 100);
+        let mut market = SealedEscrowMarket::open(terms);
+
+        market
+            .deposit(
+                Side::A,
+                &Leg::new(alice, CellId::from_bytes(ASSET_10), 100),
+                &mut alice_a10,
+            )
+            .unwrap();
+        assert_eq!(alice_a10.state.balance(), 0);
+
+        // Alice reclaims her leg and is made whole.
+        let reclaimed = market.reclaim(Side::A, alice, &mut alice_a10).unwrap();
+        assert_eq!(reclaimed, 100);
+        assert_eq!(alice_a10.state.balance(), 100, "Alice is made whole");
+
+        // One-shot: a reclaimed leg cannot then be settled.
+        let mut sink_a = wallet(ALICE_PK, ASSET_20, 0);
+        let mut sink_b = wallet(BOB_PK, ASSET_10, 0);
+        assert_eq!(
+            market.settle(&mut sink_a, &mut sink_b),
+            Err(MarketError::Escrow(EscrowError::LegAlreadyConsumed(
+                Side::A
+            )))
+        );
+    }
+
+    #[test]
+    fn a_nonconforming_deposit_is_refused_no_value_moves() {
+        let (terms, _alice, bob) = swap_terms();
+        let mut market = SealedEscrowMarket::open(terms);
+        // Bob under-pays his leg (1 < the required 250): refused, nothing moves.
+        let mut bob_b20 = wallet(BOB_PK, ASSET_20, 250);
+        assert_eq!(
+            market.deposit(
+                Side::B,
+                &Leg::new(bob, CellId::from_bytes(ASSET_20), 1),
+                &mut bob_b20,
+            ),
+            Err(MarketError::Escrow(EscrowError::LegNonConforming(Side::B)))
+        );
+        assert_eq!(
+            bob_b20.state.balance(),
+            250,
+            "the refused deposit moved nothing"
+        );
+    }
+
+    #[test]
+    fn insufficient_funds_refused_before_locking() {
+        let (terms, alice, _bob) = swap_terms();
+        let mut market = SealedEscrowMarket::open(terms);
+        // Alice's wallet cannot cover the 100 leg.
+        let mut broke = wallet(ALICE_PK, ASSET_10, 40);
+        assert_eq!(
+            market.deposit(
+                Side::A,
+                &Leg::new(alice, CellId::from_bytes(ASSET_10), 100),
+                &mut broke,
+            ),
+            Err(MarketError::InsufficientFunds {
+                have: 40,
+                need: 100
+            })
+        );
+        // The escrow leg was not locked (the funds check precedes the capacity).
+        assert_eq!(market.state().unwrap().status(Side::A), LegStatus::Empty);
+    }
+}
+
+// =============================================================================
+// Tests — the cell program in isolation (LEGACY slot-caveat lifecycle)
 // =============================================================================
 
 #[cfg(test)]
@@ -938,6 +1443,47 @@ mod tests {
             escrow_factory_descriptor().hash(),
             escrow_factory_descriptor().hash()
         );
+    }
+
+    // ── The PAYABLE face — escrow settle-onward as a cross-app value flow ─
+
+    #[test]
+    fn vault_implements_payable() {
+        let vault = CellId::from_bytes([5u8; 32]);
+        let asset = [0xCDu8; 32];
+        let v = EscrowVault::new(vault, asset);
+        assert_eq!(v.payable_cell(), vault);
+        assert_eq!(v.payable_asset(), asset);
+        // Shares the SAME canonical interface id as every other Payable app.
+        assert_eq!(
+            v.payable_interface().interface_id,
+            dregg_app_framework::payable_descriptor().interface_id
+        );
+    }
+
+    #[test]
+    fn release_routes_one_conserving_transfer_through_payable() {
+        use dregg_app_framework::{AgentCipherclerk, AppCipherclerk};
+        let cclerk = AppCipherclerk::new(AgentCipherclerk::new(), [3u8; 32]);
+        let vault = cclerk.cell_id();
+        let asset = [0xCDu8; 32];
+        let payee = CellId::from_bytes([9u8; 32]);
+        let v = EscrowVault::new(vault, asset);
+
+        let turn = v
+            .release(&cclerk, 500, payee, InvokeAuthority::Signature)
+            .expect("a signed release routes through the Payable interface");
+
+        let effects = &turn.call_forest.roots[0].action.effects;
+        assert_eq!(effects.len(), 1);
+        match effects[0] {
+            Effect::Transfer { from, to, amount } => {
+                assert_eq!(from, vault, "the escrow vault is the payer");
+                assert_eq!(to, payee, "value settles onward to the payee");
+                assert_eq!(amount, 500);
+            }
+            ref other => panic!("release must desugar to Transfer, got {other:?}"),
+        }
     }
 
     #[test]

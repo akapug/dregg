@@ -783,10 +783,10 @@ impl ScopedIntentPool {
     /// Internal pattern matching (simplified — production would use DFA compilation).
     fn pattern_matches(&self, pattern: &MatchPattern, name: &str, entry: &DirectoryEntry) -> bool {
         // Check kind filter
-        if let Some(ref required_kind) = pattern.required_kind {
-            if &entry.kind != required_kind {
-                return false;
-            }
+        if let Some(ref required_kind) = pattern.required_kind
+            && &entry.kind != required_kind
+        {
+            return false;
         }
         // Check tag filter (all required tags must be present)
         if !pattern
@@ -797,10 +797,10 @@ impl ScopedIntentPool {
             return false;
         }
         // Check name prefix
-        if let Some(ref prefix) = pattern.name_prefix {
-            if !name.starts_with(prefix.as_str()) {
-                return false;
-            }
+        if let Some(ref prefix) = pattern.name_prefix
+            && !name.starts_with(prefix.as_str())
+        {
+            return false;
         }
         true
     }

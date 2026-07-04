@@ -34,12 +34,18 @@ to the node's receipt stream so you can see what committed.
   bit); opening the list clears the badge. Reconnects send `Last-Event-ID`
   (the receipt-chain index) so nothing is missed across drops.
 - **Keys at rest** — a BIP39 recovery phrase per profile, Ed25519 derived via
-  WASM, state encrypted with PBKDF2 + AES-256-GCM, auto-lock after
-  inactivity.
+  WASM, state encrypted with PBKDF2 + AES-256-GCM, auto-lock after inactivity.
+  First-run onboarding **requires** setting a passphrase and confirming the
+  recovery-phrase backup before any key is created — a wallet is never held
+  under an ephemeral key that a browser restart could orphan.
 - **Capability tokens** — sites provision tokens (user-confirmed); the
   cipherclerk evaluates authorization against them via a WASM datalog engine.
-- **Privacy** — selective disclosure + ZK predicate (range) proofs, stealth
-  addresses, committed private transfers.
+- **Privacy** — selective disclosure with **ZK range predicate proofs**
+  (Bulletproofs over Ristretto, collision-resistant), stealth addresses, and
+  committed private transfers. STARK Merkle-*membership* proof composition is
+  **disabled**: its current `MerkleStarkAir` hash binding is not
+  collision-resistant (forgeable), so it is not shipped as a usable feature
+  until the circuit moves to a Poseidon2 Merkle hash.
 - **CapTP / directory / storage / federation** — share/accept sturdy refs,
   mount + discover services, content-addressed storage, and federation
   proposals/votes — all routed through the node.
@@ -87,6 +93,19 @@ npm test                 # node --test: explain parity, SSE parser, golden deriv
 `npm run build` is required after any change under `src/`; the committed `dist/`
 must match a fresh build. `./build.sh wasm` is only needed when the Rust `wasm/`
 crate changes.
+
+## Store listing
+
+- **Privacy policy:** [`PRIVACY.md`](./PRIVACY.md) — link this (hosted) as the
+  privacy-policy URL in both the Chrome Web Store and Firefox AMO listings. It
+  states honestly what the code does: keys never leave the device, the only
+  network connection is to your configured dregg node, no telemetry, no PII.
+- **Icons:** `icons/icon-{16,32,48,128}.png` (rendered from `icons/icon.svg`),
+  wired into both manifests' `icons` and `action.default_icon`.
+- **Default endpoint:** the dregg devnet over TLS
+  (`https://devnet.dregg.fg-goose.online`). Plaintext localhost is **not** a
+  default host permission — it is an `optional_host_permissions` developer
+  toggle requested only when you point the wallet at a local node.
 
 ## Load unpacked
 

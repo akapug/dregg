@@ -356,6 +356,8 @@ app-registry = [
     "dep:starbridge-subscription",
     "dep:starbridge-swarm-orchestration",
     "dep:starbridge-tool-access-delegation",
+    # The SERVICE-ECONOMY value app (durable execution leased + metered + paid).
+    "dep:starbridge-execution-lease",
     # The sender-bound wave (affordances that read the turn's sender, via `commit_as`).
     "dep:starbridge-supply-chain-provenance",
     "dep:starbridge-identity",
@@ -473,6 +475,13 @@ render-capture = [
 # It maps to the full `desktop` build (capture is already in `desktop`); for the
 # gpui-free CI bake path use `headless` instead.
 headless-render = ["desktop"]
+
+[lints.rust]
+# `zed-full-pane` is a deliberately-undeclared feature (see src/lib.rs:
+# deos-zed-full's `links = "sqlite3"` collides with the cockpit's
+# matrix-sdk-sqlite, so the dep can't be declared without breaking the build);
+# the gated module still compiles standalone. Declare the cfg so it isn't flagged.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("zed-full-pane"))'] }
 
 [dependencies]
 # --- wire contract (always available: remote-node + sel4-thin + wasm paths) --
@@ -794,6 +803,8 @@ starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gatewa
 starbridge-subscription = { path = "../starbridge-apps/subscription", optional = true }
 starbridge-swarm-orchestration = { path = "../starbridge-apps/swarm-orchestration", optional = true }
 starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation", optional = true }
+# The SERVICE-ECONOMY value app — durable execution leased as a payable resource.
+starbridge-execution-lease = { path = "../starbridge-apps/execution-lease", optional = true }
 starbridge-supply-chain-provenance = { path = "../starbridge-apps/supply-chain-provenance", optional = true }
 starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
 starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace", optional = true }

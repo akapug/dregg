@@ -206,11 +206,28 @@ pub const IS_AGENT_CELL: usize = INTRO_AS_TARGET_ROOT_BASE + INTRO_AS_TARGET_ROO
 // and the boundary holds trivially (the columns and PI both zero).
 // The verifier sets the PI sentinel when not sovereign.
 //
-// Phase 2 (Option B per design §3.2): an additional proof-commitment
-// pair binds an inner transition_proof. The off-AIR verifier reads
-// SOVEREIGN_TRANSITION_PROOF_VK_HASH + SOVEREIGN_TRANSITION_PROOF_COMMITMENT
-// and recursively verifies the inner STARK via Lane Golden-Edge's
-// generalized recursive verifier.
+// Phase 2 (Option B per design §3.2 — RETIRED / REPURPOSED): this pair
+// was specified to bind an inner sovereign `transition_proof` verified by an
+// off-AIR recursive verifier. That verifier is RETIRED (fail-closed,
+// `execute.rs` rejects any v1 `transition_proof`), `populate_sovereign_witness_pi`
+// has no caller, and no AIR constraint reads these columns — they were a DEAD
+// 4-felt sentinel (the adversarial finding;
+// `metatheory/Dregg2/Circuit/SovereignBackingAttack.lean`).
+//
+// DECISION (the sovereign recursion-leaf epoch): the COMMITMENT column carries the
+// sovereign AUTHORITY DIGEST — the 4-felt `key_commit` the re-proved
+// sovereign-authority leaf binds in-circuit
+// (`circuit-prove::sovereign_leaf_adapter::prove_sovereign_leaf_with_key_claim`),
+// connected to the deployed sovereign leg's `SOVEREIGN_WITNESS_KEY_COMMIT` teeth by
+// `joint_turn_recursive::prove_sovereign_binding_node_segmented`. It is NOT an inner
+// transition-proof hash. The queued 4→8 LIFT IS DEAD/SUBSUMED: a key/authority
+// DIGEST needs exactly 4 felts (same reasoning as KEY_COMMIT below — the Ed25519
+// signature binds the full 256-bit key off-AIR; widening adds no soundness). The
+// VK_HASH column is likewise vestigial (the leaf is minted under the fixed
+// `ir2_leaf_wrap_config`, not a per-witness inner VK). Re-pointing these columns'
+// VALUE to the authority digest on the deployed ROTATED leg (a rotated-PI exposure)
+// is the named BIG-BANG DESCRIPTOR piece; the leaf + binding-node mechanism is its
+// consumer and lands here. Const layout UNCHANGED (no BASE_COUNT cascade).
 /// 4-felt Poseidon2 hash of the sovereign cell's owning pubkey (the
 /// key that signed the witness). Zero sentinel when IS_SOVEREIGN_CELL == 0.
 ///
@@ -421,6 +438,74 @@ pub const SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE: u32 = 9;
 pub const SLOT_CAVEAT_TAG_TEMPORAL_GATE: u32 = 10;
 pub const SLOT_CAVEAT_TAG_SENDER_AUTHORIZED: u32 = 11;
 pub const SLOT_CAVEAT_TAG_ALLOWED_TRANSITIONS: u32 = 12;
+// Register-reading temporal atoms (the proven `TemporalAlgebra` family).
+// These re-evaluate against the PRE-state slot view (`initial_fields`), the
+// way the Lean atoms read the target cell's committed pre-state record.
+// `CooledSince` is height-only and lowers to `TEMPORAL_GATE` (no tag here).
+pub const SLOT_CAVEAT_TAG_RATE_BOUND: u32 = 13;
+pub const SLOT_CAVEAT_TAG_UNTIL_EVENT: u32 = 14;
+pub const SLOT_CAVEAT_TAG_SINCE_EVENT: u32 = 15;
+pub const SLOT_CAVEAT_TAG_CHALLENGE_WINDOW: u32 = 16;
+/// The sealed-escrow atomic-swap gate (`docs/deos/SETTLE-ESCROW-WELD-DESIGN.md`,
+/// the Lean `SettleGate` in `metatheory/Dregg2/Deos/SealedEscrow.lean` §6). A
+/// SINGLE manifest entry that reads BOTH leg-status slots and forces the atomic
+/// both-or-none transition: both legs `Deposited` before, both `Consumed` after.
+/// Encoding: `slot_index` = leg A's status slot; `p0` = leg B's status slot. A
+/// partial settle (one leg flipped) FAILS the conjunction — inexpressible — so a
+/// light client re-evaluating this entry witnesses settlement atomicity. STAGED:
+/// the AIR constraint polynomials (the VK bytes) are UNCHANGED (manifest in PI +
+/// off-AIR re-evaluation, exactly the temporal tags 13–16); an old verifier
+/// rejects this tag as `unknown type_tag` (the lockstep sealed-escrow verifier
+/// epoch), NOT a proving-key rotation.
+pub const SLOT_CAVEAT_TAG_SETTLE_ESCROW: u32 = 17;
+/// The field-mirrored `LegStatus::Deposited` code (matches the Lean
+/// `stDeposited` and `cell/src/escrow_sealed.rs::LegStatus`): a leg is locked
+/// and unconsumed before settlement.
+pub const SETTLE_ESCROW_STATUS_DEPOSITED: u32 = 1;
+/// The field-mirrored `LegStatus::Consumed` code (matches the Lean `stConsumed`):
+/// a leg has been consumed (settled) after the atomic transition.
+pub const SETTLE_ESCROW_STATUS_CONSUMED: u32 = 2;
+/// The standing-obligation per-period discharge gate
+/// (`docs/deos/DISCHARGE-OBLIGATION-WELD-DESIGN.md`, the Lean `DischargeGate` in
+/// `metatheory/Dregg2/Deos/StandingObligation.lean` §6b). A SINGLE manifest entry
+/// that reads the committed `next_due` cursor and discharged-total slots across the
+/// (before, after) transition and forces the schedule shape: the discharge is DUE
+/// (block height ≥ the committed due block), the cursor ADVANCES by exactly one
+/// period, and the total advances by EXACTLY the schedule amount. Encoding:
+/// `slot_index` = the `next_due` cursor slot (old_v = before, new_v = after);
+/// `p0` = the due-block slot; `p1` = the discharged-total slot; `p2` = the period
+/// (the cursor advance per discharge); `p3` = the amount (the total advance per
+/// discharge). An EARLY discharge (height below the due block), a WRONG-AMOUNT
+/// discharge, or a NON-ADVANCED cursor (a replay that does not move the one-shot
+/// cursor) FAILS the conjunction — inexpressible — so a light client re-evaluating
+/// this entry witnesses the per-period discipline. STAGED: the AIR constraint
+/// polynomials (the VK bytes) are UNCHANGED (manifest in PI + off-AIR
+/// re-evaluation, exactly the temporal tags 13–16 and the sealed-escrow tag 17);
+/// an old verifier rejects this tag as `unknown type_tag` (the lockstep
+/// standing-obligation verifier epoch), NOT a proving-key rotation.
+pub const SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION: u32 = 18;
+/// The share-vault no-dilution deposit gate
+/// (`docs/deos/VAULT-DEPOSIT-WELD-DESIGN.md`, the Lean `VaultDepositGate` in
+/// `metatheory/Dregg2/Deos/Vault.lean` §6b). A SINGLE manifest entry that reads the
+/// committed `total_assets` and `total_shares` counter slots across the (before,
+/// after) transition and forces the no-dilution share-price shape: the deposit is
+/// genuine (`after_assets > before_assets`, the assets advance by the deposit `d`),
+/// the mint is POSITIVE (`after_shares > before_shares`, the shares advance by `m` —
+/// the zero-mint / inflation-attack tooth), and NO existing holder is diluted
+/// (`before_assets·m ≤ before_shares·d`, the no-dilution floor — the existing
+/// price-per-share never decreases). Encoding: `slot_index` = the `total_assets`
+/// counter slot (old_v = before, new_v = after); `p0` = the `total_shares` counter
+/// slot. The deposit `d` and minted `m` are read as the across-transition deltas of
+/// those two slots (no per-deposit constant). A ZERO-MINT deposit (the ERC-4626
+/// first-depositor inflation attack, a victim's deposit rounding to nothing), an
+/// over-minting DILUTING deposit, or a NON-CONSERVING deposit (assets that do not
+/// advance by exactly the deposit) FAILS the conjunction — inexpressible — so a light
+/// client re-evaluating this entry witnesses the no-dilution discipline. STAGED: the
+/// AIR constraint polynomials (the VK bytes) are UNCHANGED (manifest in PI + off-AIR
+/// re-evaluation, exactly the temporal tags 13–16, the sealed-escrow tag 17, and the
+/// standing-obligation tag 18); an old verifier rejects this tag as `unknown
+/// type_tag` (the lockstep share-vault verifier epoch), NOT a proving-key rotation.
+pub const SLOT_CAVEAT_TAG_VAULT_DEPOSIT: u32 = 19;
 
 // ---- Cross-effect within-turn chain pinning (Proof-to-Action Binding §3.3) ----
 //

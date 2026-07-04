@@ -110,10 +110,10 @@ fn receipt_event_at(s: &NodeStateInner, idx: usize) -> Option<ReceiptEvent> {
 }
 
 fn matches(filter: &StreamFilter, ev: &ReceiptEvent) -> bool {
-    if let Some(cell) = &filter.cell {
-        if !ev.cells.iter().any(|c| c.eq_ignore_ascii_case(cell)) {
-            return false;
-        }
+    if let Some(cell) = &filter.cell
+        && !ev.cells.iter().any(|c| c.eq_ignore_ascii_case(cell))
+    {
+        return false;
     }
     if let Some(kind) = &filter.kind {
         let hit = ev.kinds.iter().any(|k| {

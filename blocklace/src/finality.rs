@@ -415,6 +415,7 @@ impl Block {
 ///
 /// As blocks accumulate acknowledgments from other participants, they progress
 /// through finality levels: Local -> Bilateral -> Ordered -> Attested.
+#[derive(Clone)]
 pub struct FinalityTracker {
     /// How many acks each block has received (counted by unique creators).
     ack_counts: HashMap<BlockId, HashSet<[u8; 32]>>,
@@ -487,6 +488,12 @@ impl FinalityTracker {
 /// Each node maintains its own Blocklace instance. The blocklace grows monotonically
 /// via CRDT union-merge: receiving blocks from peers can only add to the local view,
 /// never remove.
+///
+/// `Clone` is a cheap structural copy (the `self_key` is a 32-byte Ed25519 key) used by
+/// the node's `poll_finalized_blocks` to SNAPSHOT the lace and release the read lock
+/// before the O(history) verified-Lean tau-order FFI, so block production is never
+/// starved (the live-federation round-production halt).
+#[derive(Clone)]
 pub struct Blocklace {
     /// All known blocks.
     pub(crate) blocks: HashMap<BlockId, Block>,
@@ -1249,10 +1256,10 @@ impl Blocklace {
 
         // Derive self_seq from our own (authenticated) tip.
         let self_creator = lace.self_creator();
-        if let Some(tip_id) = lace.tips.get(&self_creator) {
-            if let Some(tip_block) = lace.blocks.get(tip_id) {
-                lace.self_seq = tip_block.seq;
-            }
+        if let Some(tip_id) = lace.tips.get(&self_creator)
+            && let Some(tip_block) = lace.blocks.get(tip_id)
+        {
+            lace.self_seq = tip_block.seq;
         }
 
         Ok(lace)
@@ -1287,10 +1294,10 @@ impl Blocklace {
         lace.finality.ordering.attested = checkpoint.attested_block_ids.iter().copied().collect();
 
         let self_creator = lace.self_creator();
-        if let Some(tip_id) = lace.tips.get(&self_creator) {
-            if let Some(tip_block) = lace.blocks.get(tip_id) {
-                lace.self_seq = tip_block.seq;
-            }
+        if let Some(tip_id) = lace.tips.get(&self_creator)
+            && let Some(tip_block) = lace.blocks.get(tip_id)
+        {
+            lace.self_seq = tip_block.seq;
         }
 
         Ok(lace)

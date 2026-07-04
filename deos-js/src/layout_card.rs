@@ -44,7 +44,7 @@ use dregg_doc::{Author, BlameLine};
 use dregg_turn::TurnReceipt;
 use serde::{Deserialize, Serialize};
 
-use crate::applet::{Affordance, Applet, Slot, pack_u64};
+use crate::applet::{pack_u64, Affordance, Applet, Slot};
 use crate::card_editor::{ButtonProps, EditError, OnClick, TextProps, ViewEdit, ViewTree};
 use crate::program_doc::ProgramSource;
 
@@ -146,6 +146,8 @@ impl LayoutModel {
                         "SWARM".into(),
                         "POWERBOX".into(),
                         "CIPHERCLERK".into(),
+                        "🛰 SERVICES".into(),
+                        "📇 DIRECTORY".into(),
                         "⚷ TRUST".into(),
                     ],
                 },
@@ -572,13 +574,13 @@ mod tests {
         assert_eq!(layout.surfaces_of("Author").len(), 7);
         assert_eq!(layout.surfaces_of("Dev").len(), 6);
         assert_eq!(layout.surfaces_of("Inspect").len(), 8);
-        assert_eq!(layout.surfaces_of("Operate").len(), 5);
+        assert_eq!(layout.surfaces_of("Operate").len(), 7);
 
-        // The surfaces partition: 30 total (= the cockpit's `Tab::ALL.len()`), no duplicates.
+        // The surfaces partition: 32 total (= the cockpit's `Tab::ALL.len()`), no duplicates.
         let all = layout.all_surfaces();
         assert_eq!(
             all.len(),
-            30,
+            32,
             "the five modes' surfaces sum to the full set"
         );
         let mut uniq = all.clone();
@@ -604,7 +606,7 @@ mod tests {
         assert!(
             tree.walk()
                 .iter()
-                .any(|n| n.label() == Some("Cockpit layout · 5 modes · 30 surfaces")),
+                .any(|n| n.label() == Some("Cockpit layout · 5 modes · 32 surfaces")),
             "the header counts the live arrangement"
         );
         // Each mode is a labeled section.
@@ -670,11 +672,11 @@ mod tests {
 
         // The surface set is CONSERVED — a move loses no surface and duplicates none.
         let all = card.layout().all_surfaces();
-        assert_eq!(all.len(), 30, "the move conserved the surface count");
+        assert_eq!(all.len(), 32, "the move conserved the surface count");
         let mut uniq = all.clone();
         uniq.sort();
         uniq.dedup();
-        assert_eq!(uniq.len(), 30, "no surface duplicated by the move");
+        assert_eq!(uniq.len(), 32, "no surface duplicated by the move");
 
         // The view (the rendered chrome) reshaped too.
         assert_ne!(
@@ -728,8 +730,8 @@ mod tests {
         );
         assert_eq!(
             card.layout().surfaces_of("Operate").len(),
-            6,
-            "Operate grew from 5 to 6 surfaces"
+            8,
+            "Operate grew from 7 to 8 surfaces"
         );
 
         // REORDER it to the front of Operate (promote it to the mode's primary).

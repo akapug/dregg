@@ -169,7 +169,7 @@ impl BabyBear {
         let mut result = Self::ONE;
         while exp > 0 {
             if exp & 1 == 1 {
-                result = result * base;
+                result *= base;
             }
             base = base * base;
             exp >>= 1;

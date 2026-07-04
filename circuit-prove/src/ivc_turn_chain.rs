@@ -213,7 +213,9 @@ use p3_recursion::{
     build_and_prove_next_layer_with_expose,
 };
 
-use crate::joint_turn_aggregation::{DescriptorParticipant, verify_descriptor_participant};
+use crate::joint_turn_aggregation::{
+    CarrierWitness, DescriptorParticipant, verify_descriptor_participant,
+};
 use crate::plonky3_recursion_impl::recursive::{
     DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
     recursion_vk_fingerprint, verify_recursive_batch_proof_with_config,
@@ -242,24 +244,36 @@ type RecursionChallenge = <DreggRecursionConfig as p3_uni_stark::StarkGenericCon
 
 /// **The segment digest width** — the multi-felt Poseidon2 commitment carried as the
 /// ordered-history `acc`. Codex re-review #3 replaced the algebraically-broken one-felt
-/// quadratic fold with this genuine collision-resistant commitment. Four BabyBear lanes
-/// ⇒ ~124-bit collision resistance (the host's tooth-4 check compares all four), and the
-/// commitment is a real full-round Poseidon2 permutation — there is no algebraic
-/// shortcut and no degeneracy root (the quadratic fold's weakness).
-pub const SEG_DIGEST_WIDTH: usize = 4;
+/// quadratic fold with a genuine collision-resistant commitment; the FAITHFUL-FLOOR lift
+/// (`docs/FAITHFUL-STATE-COMMITMENT.md`, `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1) widened it
+/// from 4 lanes (~62-bit) to **8** lanes ⇒ ~124-bit collision resistance, MATCHING the
+/// per-turn leg's 8-felt faithful floor. The host's tooth compares all eight; the
+/// commitment is a real full-round Poseidon2 sponge ([`seg_poseidon_commit`] squeezes exactly
+/// `SEG_DIGEST_WIDTH` DISTINCT lanes, no zero-pad) — there is no algebraic shortcut and no
+/// degeneracy root (the quadratic fold's weakness).
+pub const SEG_DIGEST_WIDTH: usize = 8;
 
-/// The number of exposed chain claims: `[first_old, last_new, count, acc_0..acc_{W-1}]`
-/// where `W = SEG_DIGEST_WIDTH`. The host verifier's tooth-4 reads these directly,
-/// comparing against `[genesis_root, final_root, num_turns, chain_digest_0..]`.
+/// The number of exposed chain claims: `[first_old8(8), last_new8(8), count(1),
+/// acc_0..acc_{W-1}(W)]` where `W = SEG_DIGEST_WIDTH`. The host verifier's segment tooth reads
+/// these directly, comparing against `[genesis_root8, final_root8, num_turns, chain_digest_0..]`.
+/// The FAITHFUL-FLOOR lift widened the state endpoints from single felts (~15-bit birthday) to
+/// the 8-felt (~124-bit) anchors the per-turn legs already publish.
 pub const NUM_CHAIN_CLAIMS: usize = SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH;
 
-/// Segment field lanes (the order they are exposed in the `expose_claim` table).
+/// The number of base-field lanes in a state-commit anchor exposed by a segment — the 8-felt
+/// (~124-bit) faithful commit. The state endpoints (`first_old8`/`last_new8`) each occupy this
+/// many lanes; a WIDE / wide-welded leg sources them genuinely, a narrow leg broadcasts its
+/// single rotated commit felt across all eight (no entropy gain, structural type-compat only).
+pub const SEG_ANCHOR_WIDTH: usize = 8;
+
+/// Segment field lanes (the order they are exposed in the `expose_claim` table). The two
+/// 8-felt state anchors come first, then the count, then the multi-felt digest.
 pub const SEG_FIRST_OLD: usize = 0;
-pub const SEG_LAST_NEW: usize = 1;
-pub const SEG_COUNT: usize = 2;
+pub const SEG_LAST_NEW: usize = SEG_ANCHOR_WIDTH;
+pub const SEG_COUNT: usize = 2 * SEG_ANCHOR_WIDTH;
 /// First lane of the multi-felt digest block (`acc_0`); the digest occupies
 /// `[SEG_DIGEST_FIRST .. SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]`.
-pub const SEG_DIGEST_FIRST: usize = 3;
+pub const SEG_DIGEST_FIRST: usize = 2 * SEG_ANCHOR_WIDTH + 1;
 /// A segment is exactly [`NUM_CHAIN_CLAIMS`] base-field lanes.
 pub const SEG_WIDTH: usize = NUM_CHAIN_CLAIMS;
 
@@ -871,41 +885,93 @@ fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
 
 /// The host-side mirror of one descriptor leaf / aggregation node's ORDERED SEGMENT
 /// (the base-field values it exposes through the `expose_claim` table):
-/// `[first_old, last_new, count, acc_0..acc_{W-1}]` (`W = SEG_DIGEST_WIDTH`). The prover
-/// folds these the SAME way the in-circuit combine does so it knows the root segment
-/// (hence the chain claims) to carry.
+/// `[first_old8(8), last_new8(8), count(1), acc_0..acc_{W-1}(W)]` (`W = SEG_DIGEST_WIDTH`). The
+/// prover folds these the SAME way the in-circuit combine does so it knows the root segment
+/// (hence the chain claims) to carry. The FAITHFUL-FLOOR lift widened the state endpoints from
+/// single felts to the 8-felt (~124-bit) anchors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HostSeg {
-    pub first_old: BabyBear,
-    pub last_new: BabyBear,
+    pub first_old8: [BabyBear; SEG_ANCHOR_WIDTH],
+    pub last_new8: [BabyBear; SEG_ANCHOR_WIDTH],
     pub count: BabyBear,
-    /// The multi-felt Poseidon2 ordered-history digest (codex #3).
+    /// The multi-felt Poseidon2 ordered-history digest (codex #3, widened to 8 lanes).
     pub acc: [BabyBear; SEG_DIGEST_WIDTH],
 }
 
-/// The per-turn (descriptor-leaf) segment: `first_old = old_root`, `last_new =
-/// new_root`, `count = 1`, `acc = commit([old_root, new_root])` — the SAME seed
-/// [`seg_poseidon_commit`] computes at the leaf wrap.
-pub(crate) fn leaf_seg(old_root: BabyBear, new_root: BabyBear) -> HostSeg {
+/// The 8-felt state anchors a finalized turn publishes, sourced the SAME way the in-circuit
+/// descriptor leaf binds them (so the host root segment equals what the root proof exposes):
+///   - a WIDE / wide-welded leg (descriptor carries a wide-weld suffix AND a 16-felt PI tail)
+///     sources the GENUINE 8-felt `wide_old_root8`/`wide_new_root8` (~124-bit faithful anchor);
+///   - a narrow leg BROADCASTS its single rotated commit felt (PI 34/35) across all eight lanes
+///     (the back-compat fallback — no entropy gain, structural type-compat only; the in-circuit
+///     leaf replicates the SAME bound PI target across the eight lanes, matching this host value).
+pub(crate) fn turn_anchors8(
+    t: &FinalizedTurn,
+) -> ([BabyBear; SEG_ANCHOR_WIDTH], [BabyBear; SEG_ANCHOR_WIDTH]) {
+    let leg = &t.participant.rotated;
+    if leg_is_wide_anchored(leg) {
+        // Safe: `leg_is_wide_anchored` already confirmed the 16-felt wide tail is present.
+        (
+            leg.wide_old_root8().expect("wide leg carries old8"),
+            leg.wide_new_root8().expect("wide leg carries new8"),
+        )
+    } else {
+        let (o, n) = (leg.old_root(), leg.new_root());
+        ([o; SEG_ANCHOR_WIDTH], [n; SEG_ANCHOR_WIDTH])
+    }
+}
+
+/// Whether a leg genuinely publishes the 8-felt wide anchors at its PI tail (a WIDE / wide-welded
+/// leg), as opposed to a narrow leg whose `[n-16..n]` PIs are NOT the wide commit.
+///
+/// **H0 DEPLOYED-WIDE FLIP:** the discriminator is now STRUCTURAL — a leg is wide-anchored iff its
+/// PI vector carries the full 16-felt wide commit tail past the rotated prefix, i.e.
+/// `len >= WIDE_PI_COUNT` (62). This SUPERSEDES the prior weld-suffix name check, which only
+/// recognized the `-umem*-wide-welded-staged` cohort: the BARE wide registry members
+/// (`generate_rotated_effect_vm_descriptor_and_trace_wide`, the deployed default the
+/// `mint_*` recipes now mint) share the narrow members' NAMES — the wide-ness lives in the trace
+/// geometry + the 16 appended PIs, NOT the name — so a name check cannot see them. The length check
+/// is a strict superset: every wide variant (bare / single-domain-welded / multi-domain-welded /
+/// cap-open-tb) appends the wide tail LAST and lands at `>= 62`, while every narrow leg (rotated
+/// prefix 46, custom 50, cap-open-tb 49, grow-gate 47) stays `<= 50`. It is the SAME predicate the
+/// in-circuit leaf branches on (`prove_descriptor_leaf_rotated_with_segment_config`), so host and
+/// circuit agree lane-for-lane on which legs read the genuine ~124-bit anchors.
+pub(crate) fn leg_is_wide_anchored(
+    leg: &crate::joint_turn_aggregation::RotatedParticipantLeg,
+) -> bool {
+    use dregg_circuit::effect_vm::trace_rotated::WIDE_PI_COUNT;
+    leg.public_inputs.len() >= WIDE_PI_COUNT
+}
+
+/// The per-turn (descriptor-leaf) segment: `first_old8`/`last_new8` are the leg's 8-felt anchors
+/// ([`turn_anchors8`]), `count = 1`, `acc = commit([first_old8 ++ last_new8])` (16 inputs) — the
+/// SAME seed [`seg_poseidon_commit`] computes at the leaf wrap.
+pub(crate) fn leaf_seg(
+    old8: [BabyBear; SEG_ANCHOR_WIDTH],
+    new8: [BabyBear; SEG_ANCHOR_WIDTH],
+) -> HostSeg {
+    let mut inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+    inputs.extend_from_slice(&old8);
+    inputs.extend_from_slice(&new8);
     HostSeg {
-        first_old: old_root,
-        last_new: new_root,
+        first_old8: old8,
+        last_new8: new8,
         count: BabyBear::ONE,
-        acc: seg_poseidon_commit_host(&[old_root, new_root]),
+        acc: seg_poseidon_commit_host(&inputs),
     }
 }
 
 /// Combine two adjacent segments (the host mirror of the aggregation combine):
-/// continuity `l.last_new == r.first_old` (caller-checked upstream as `ChainBreak`),
-/// `first_old = l.first_old`, `last_new = r.last_new`, `count = l.count + r.count`,
+/// continuity `l.last_new8 == r.first_old8` lane-by-lane (caller-checked upstream as `ChainBreak`),
+/// `first_old8 = l.first_old8`, `last_new8 = r.last_new8`, `count = l.count + r.count`,
 /// `acc = commit(l.acc ++ r.acc)` (order-sensitive: l before r).
 pub(crate) fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
     let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
     acc_inputs.extend_from_slice(&l.acc);
     acc_inputs.extend_from_slice(&r.acc);
     HostSeg {
-        first_old: l.first_old,
-        last_new: r.last_new,
+        first_old8: l.first_old8,
+        last_new8: r.last_new8,
         count: l.count + r.count,
         acc: seg_poseidon_commit_host(&acc_inputs),
     }
@@ -913,14 +979,14 @@ pub(crate) fn combine_seg(l: HostSeg, r: HostSeg) -> HostSeg {
 
 /// Fold the per-turn leaf segments into the ROOT segment using the SAME pairwise
 /// left-to-right binary tree (with odd-element carry) that [`aggregate_tree`] runs
-/// in-circuit — so the host-computed root `[first_old, last_new, count, acc]`
+/// in-circuit — so the host-computed root `[first_old8, last_new8, count, acc]`
 /// equals what the root proof exposes.
 fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
     let mut level: Vec<HostSeg> = turns
         .iter()
         .map(|t| {
-            let (o, n) = rotated_roots(t);
-            leaf_seg(o, n)
+            let (o8, n8) = turn_anchors8(t);
+            leaf_seg(o8, n8)
         })
         .collect();
     while level.len() > 1 {
@@ -1190,6 +1256,89 @@ pub fn prove_descriptor_leaf_rotated_with_config(
     .map_err(|e| format!("rotated native-batch leaf-wrap failed: {e:?}"))
 }
 
+/// **RE-EXPOSE A CONTIGUOUS DESCRIPTOR-PI SLICE AS AN `expose_claim` CHANNEL.** Wrap an IR2
+/// descriptor batch in-circuit (exactly like [`prove_descriptor_leaf_rotated_with_config`]) AND
+/// re-expose its descriptor PIs `[pi_lo .. pi_lo+len)` through the `expose_claim` table so a parent
+/// aggregation node can READ + `connect` them.
+///
+/// **Why this is necessary (the fork's PI-threading reality).** A bare leaf wrap does NOT surface
+/// the inner descriptor's public inputs to a grandparent's combine hook: the in-circuit verifier
+/// allocates each child PI as `circuit.public_input()` (`Op::Public`), which lands in the parent's
+/// constraint-free `Public` PRIMITIVE table — and the next layer up threads child publics SOLELY
+/// from each child `non_primitives[].public_values` (primitive-table values are never re-threaded).
+/// So the inner PIs are CONSUMED one layer up and vanish before the combine hook ever runs. The
+/// ONLY host-readable, FRI-bound scalar channel a child surfaces to its parent's
+/// `air_public_targets` is a non-primitive `expose_claim` table's `public_values` — exactly what
+/// [`prove_descriptor_leaf_rotated_with_segment`] uses for the chain segment. This helper does the
+/// same for an arbitrary PI slice.
+///
+/// The deployed effect-VM custom leg (`customVmDescriptor2R24`) publishes its
+/// `custom_proof_commitment` at IR2 PI slots 46..49 (the Lean `customPiExposure`); calling this
+/// with `pi_lo = 46, len = 4` surfaces that claimed commitment as a 4-felt expose_claim the
+/// per-turn fold ties to the custom sub-proof leaf's genuine in-circuit commitment (see
+/// [`crate::joint_turn_recursive::prove_custom_binding_node`]).
+pub fn prove_descriptor_leaf_with_pi_slice_expose(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+    pi_lo: usize,
+    len: usize,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    if descriptor_pis.len() < pi_lo + len {
+        return Err(format!(
+            "PI-slice expose needs >= {} descriptor PIs to carry [{pi_lo}..{}), got {}",
+            pi_lo + len,
+            pi_lo + len,
+            descriptor_pis.len()
+        ));
+    }
+    let (airs, table_public_inputs, common) =
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
+
+    let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend();
+
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let main = apt
+            .first()
+            .expect("descriptor leaf has a main instance carrying the descriptor PIs");
+        debug_assert!(
+            main.len() >= pi_lo + len,
+            "main instance must carry the PI slice being re-exposed"
+        );
+        let claim: Vec<p3_recursion::Target> = (0..len).map(|k| main[pi_lo + k]).collect();
+        cb.expose_as_public_output(&claim);
+    };
+
+    build_and_prove_next_layer_with_expose::<
+        DreggRecursionConfig,
+        dregg_circuit::descriptor_ir2::Ir2Air,
+        _,
+        D,
+    >(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("PI-slice-expose leaf-wrap failed: {e:?}"))
+}
+
 /// **THE SEGMENT-ACCUMULATOR DESCRIPTOR LEAF (the soundness-critical replacement for the
 /// separate binding leaf).** Wrap one rotated finalized-turn descriptor batch in-circuit
 /// AND emit its constant-size ordered SEGMENT through the `expose_claim` table, BOUND
@@ -1213,7 +1362,23 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
     descriptor_pis: &[BabyBear],
     config: &DreggRecursionConfig,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-    use dregg_circuit::effect_vm::trace_rotated::V1_PI_COUNT;
+    use dregg_circuit::effect_vm::trace_rotated::{V1_PI_COUNT, WIDE_PI_COUNT};
+
+    // FAITHFUL-FLOOR: source the two 8-felt state anchors the SAME way [`turn_anchors8`] /
+    // [`leg_is_wide_anchored`] do host-side, so the in-circuit segment is byte-identical to the host
+    // root segment.
+    //   - WIDE / wide-welded leg: the GENUINE 8-felt `wide_old_root8`/`wide_new_root8` ride at the
+    //     PI tail `[n-16..n]`, bound in-circuit (their `PiBinding` makes a tampered anchor UNSAT);
+    //   - narrow leg: BROADCAST the single rotated commit PIs (34/35) across all eight lanes —
+    //     the SAME bound PI target replicated, matching the host broadcast in `turn_anchors8`.
+    //
+    // H0 DEPLOYED-WIDE FLIP: the wide branch is selected STRUCTURALLY (`n >= WIDE_PI_COUNT`), the
+    // exact host mirror of [`leg_is_wide_anchored`] — the bare wide cohort (whose name equals its
+    // narrow twin's) is now recognized by its 16-felt PI tail, not a weld suffix.
+    let n = descriptor_pis.len();
+    let wide = n >= WIDE_PI_COUNT;
+    let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
+    let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
 
     let (airs, table_public_inputs, common) =
         dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
@@ -1233,9 +1398,9 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
 
     let backend = create_recursion_backend();
 
-    // The expose hook: the main instance (instance 0) carries the descriptor PIs, so its
-    // `air_public_targets[V1_PI_COUNT] / [V1_PI_COUNT+1]` are the verified rotated OLD/NEW
-    // commitments. Build the segment over them and expose it.
+    // The expose hook: the main instance (instance 0) carries the descriptor PIs. Build the two
+    // 8-felt anchor blocks (genuine wide tail, or replicated single felt for a narrow leg), the
+    // per-turn digest seed over them, and expose the 8-wide segment.
     let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
                        apt: &[Vec<p3_recursion::Target>]| {
         let main = apt
@@ -1245,15 +1410,34 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
             main.len() > V1_PI_COUNT + 1,
             "descriptor PI vector must carry the rotated OLD/NEW commitments"
         );
-        let first_old = main[V1_PI_COUNT];
-        let last_new = main[V1_PI_COUNT + 1];
+        let (first_old8, last_new8): (Vec<p3_recursion::Target>, Vec<p3_recursion::Target>) =
+            if wide {
+                debug_assert!(
+                    main.len() >= n,
+                    "wide descriptor PI target vector must carry the 8-felt anchors at its tail"
+                );
+                (
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[old_first + k]).collect(),
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[new_first + k]).collect(),
+                )
+            } else {
+                // Narrow: replicate the single bound PI target across all eight lanes (no zero
+                // constants — keeps the sponge off the shared `WitnessId(0)` class entirely).
+                (
+                    vec![main[V1_PI_COUNT]; SEG_ANCHOR_WIDTH],
+                    vec![main[V1_PI_COUNT + 1]; SEG_ANCHOR_WIDTH],
+                )
+            };
         let count = cb.define_const(RecursionChallenge::ONE);
         // The per-turn seed: a genuine multi-felt Poseidon2 commitment over the leaf's
-        // REAL (descriptor-bound) endpoints (codex #3).
-        let acc = seg_poseidon_commit(cb, &[first_old, last_new]);
+        // REAL (descriptor-bound) 8-felt endpoints (16 inputs).
+        let mut acc_inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+        acc_inputs.extend_from_slice(&first_old8);
+        acc_inputs.extend_from_slice(&last_new8);
+        let acc = seg_poseidon_commit(cb, &acc_inputs);
         let mut seg = Vec::with_capacity(SEG_WIDTH);
-        seg.push(first_old);
-        seg.push(last_new);
+        seg.extend_from_slice(&first_old8);
+        seg.extend_from_slice(&last_new8);
         seg.push(count);
         seg.extend_from_slice(&acc);
         debug_assert_eq!(seg.len(), SEG_WIDTH);
@@ -1275,6 +1459,183 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
     .map_err(|e| format!("rotated native-batch segment leaf-wrap failed: {e:?}"))
 }
 
+/// **THE DUAL-EXPOSE CUSTOM LEG LEAF (deployed custom-binding half #1).** Wrap one rotated
+/// `customVmDescriptor2R24` finalized-turn batch in-circuit exactly like
+/// [`prove_descriptor_leaf_rotated_with_segment`] AND expose, through ONE `expose_claim` table,
+/// BOTH:
+///
+///   * the constant-size ordered chain SEGMENT `[first_old8, last_new8, count, acc]` (lanes
+///     `[0 .. SEG_WIDTH)`), bound in-circuit to the descriptor's real rotated roots, and
+///   * the leg's CLAIMED `custom_proof_commitment` at IR2 PI
+///     `[CUSTOM_COMMIT_PI_LO .. CUSTOM_COMMIT_PI_LO+CUSTOM_COMMIT_LEN)` (lanes
+///     `[SEG_WIDTH .. SEG_WIDTH+CUSTOM_COMMIT_LEN)`), read from the same FRI-bound
+///     `air_public_targets` the segment endpoints come from.
+///
+/// The commitment lanes are APPENDED AFTER the segment, so a downstream segment consumer that
+/// reads only `[0 .. SEG_WIDTH)` (the host segment tooth, the plain `aggregate_tree` combine)
+/// sees the identical segment a [`prove_descriptor_leaf_rotated_with_segment`] leaf would expose.
+/// The appended commitment is consumed by exactly one parent —
+/// [`crate::joint_turn_recursive::prove_custom_binding_node_segmented`] — which `connect`s it to
+/// the custom sub-proof leaf's genuine commitment and RE-EXPOSES only the segment, so the binding
+/// node's output is an ordinary segment leaf to `aggregate_tree`. This is the dual-claim leaf the
+/// deployed light-client custom binding needs (the segment keeps the chain, the commitment lane
+/// carries the claim to be bound).
+pub fn prove_descriptor_leaf_dual_expose(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    use crate::joint_turn_recursive::{CUSTOM_COMMIT_LEN, CUSTOM_COMMIT_PI_LO};
+    // The custom carrier is the original instance of the dual-expose: its claim slice is the
+    // `custom_proof_commitment` at IR2 PI [CUSTOM_COMMIT_PI_LO .. +CUSTOM_COMMIT_LEN). The
+    // generalized [`prove_descriptor_leaf_dual_expose_at`] takes any `(pi_lo, len)` so the
+    // FACTORY (`child_vk[8]`) and HATCHERY (`contract_hash[8]`) carriers can dual-expose their own
+    // teeth slices through the SAME segment-preserving wrap; this thin wrapper keeps every existing
+    // custom call working verbatim.
+    prove_descriptor_leaf_dual_expose_at(
+        desc,
+        proof,
+        descriptor_pis,
+        config,
+        CUSTOM_COMMIT_PI_LO,
+        CUSTOM_COMMIT_LEN,
+    )
+}
+
+/// **THE GENERALIZED DUAL-EXPOSE LEG LEAF** — [`prove_descriptor_leaf_dual_expose`] with the
+/// CLAIM slice `[claim_pi_lo .. claim_pi_lo+claim_len)` parameterized instead of pinned to the
+/// custom commitment lanes. It exposes, through ONE `expose_claim` table, BOTH:
+///
+///   * the constant-size ordered chain SEGMENT `[first_old8, last_new8, count, acc]` (lanes
+///     `[0 .. SEG_WIDTH)`), bound in-circuit to the descriptor's real rotated roots, and
+///   * the leg's CLAIMED teeth at IR2 PI `[claim_pi_lo .. claim_pi_lo+claim_len)` (lanes
+///     `[SEG_WIDTH .. SEG_WIDTH+claim_len)`), read from the same FRI-bound `air_public_targets`.
+///
+/// The custom carrier passes `(CUSTOM_COMMIT_PI_LO, CUSTOM_COMMIT_LEN)`; the FACTORY carrier passes
+/// its `child_vk[8]` tail-PI offset; the HATCHERY carrier passes its `contract_hash[8]` tail-PI
+/// offset. The binding nodes (`prove_factory_binding_node_segmented` /
+/// `prove_hatchery_binding_node_segmented` / `prove_custom_binding_node_segmented`) `connect` the
+/// appended teeth to the re-proven backing/attestation leaf and re-expose ONLY the segment, so the
+/// node folds into [`aggregate_tree`] like any segment leaf.
+///
+/// CONSTRAINT (the implementer of the deployed factory/hatchery descriptor must honor): on a WIDE
+/// descriptor the segment anchors are sourced from the LAST `2*SEG_ANCHOR_WIDTH` PIs
+/// (`n - 2*SEG_ANCHOR_WIDTH`), so the teeth tail-PIs MUST sit at a FIXED low offset (ahead of the
+/// wide rotated-commit anchors), exactly as the custom commitment sits at 46..49 ahead of them —
+/// never appended past `n - 2*SEG_ANCHOR_WIDTH`, or the wide-anchor sourcing would read the teeth
+/// as the rotated commits.
+pub fn prove_descriptor_leaf_dual_expose_at(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    proof: &Ir2BatchProof<DreggRecursionConfig>,
+    descriptor_pis: &[BabyBear],
+    config: &DreggRecursionConfig,
+    claim_pi_lo: usize,
+    claim_len: usize,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    use dregg_circuit::effect_vm::trace_rotated::{V1_PI_COUNT, WIDE_PI_COUNT};
+
+    let commit_hi = claim_pi_lo + claim_len;
+    if descriptor_pis.len() < commit_hi {
+        return Err(format!(
+            "dual-expose leg needs >= {commit_hi} descriptor PIs to carry the claim slice at \
+             [{claim_pi_lo}..{commit_hi}), got {}",
+            descriptor_pis.len()
+        ));
+    }
+
+    // FAITHFUL-FLOOR anchor sourcing — identical to `prove_descriptor_leaf_rotated_with_segment`.
+    //
+    // H0 DEPLOYED-WIDE FLIP (the divergence fix): the wide branch is selected STRUCTURALLY
+    // (`n >= WIDE_PI_COUNT`), the exact mirror of the plain segment leaf and of the host
+    // [`leg_is_wide_anchored`]. This function previously kept the SUPERSEDED weld-suffix name
+    // check, which cannot see the BARE wide cohort (its name equals its narrow twin's) — so the
+    // deployed custom-wide dual leaf was misclassified NARROW and its segment anchors broadcast
+    // the RETIRED-to-zero single-felt rotated commit PIs, making every honest custom-bearing
+    // chain UNSAT at the aggregation combine (`connect(0, genuine-anchor)` — the
+    // `WitnessConflict{existing: 0, ..}` both custom-binding honest poles hit). Fail-closed, not
+    // unsound — but a broken deployed wire. The structural check restores byte-identity with the
+    // host root segment.
+    let n = descriptor_pis.len();
+    let wide = n >= WIDE_PI_COUNT;
+    let old_first = n.saturating_sub(2 * SEG_ANCHOR_WIDTH);
+    let new_first = n.saturating_sub(SEG_ANCHOR_WIDTH);
+
+    let (airs, table_public_inputs, common) =
+        dregg_circuit::descriptor_ir2::ir2_airs_and_common_for_config(
+            desc,
+            proof,
+            descriptor_pis,
+            config,
+        )?;
+
+    let input: RecursionInput<'_, DreggRecursionConfig, dregg_circuit::descriptor_ir2::Ir2Air> =
+        RecursionInput::NativeBatchStark {
+            airs: &airs,
+            proof,
+            common_data: &common,
+            table_public_inputs,
+        };
+
+    let backend = create_recursion_backend();
+
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let main = apt
+            .first()
+            .expect("custom descriptor leaf has a main instance with descriptor PIs");
+        debug_assert!(
+            main.len() >= commit_hi.max(V1_PI_COUNT + 2),
+            "descriptor PI vector must carry both the rotated commitments and the claim slice"
+        );
+        // -- The SEGMENT (lanes [0 .. SEG_WIDTH)) — byte-identical to the plain segment leaf.
+        let (first_old8, last_new8): (Vec<p3_recursion::Target>, Vec<p3_recursion::Target>) =
+            if wide {
+                (
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[old_first + k]).collect(),
+                    (0..SEG_ANCHOR_WIDTH).map(|k| main[new_first + k]).collect(),
+                )
+            } else {
+                (
+                    vec![main[V1_PI_COUNT]; SEG_ANCHOR_WIDTH],
+                    vec![main[V1_PI_COUNT + 1]; SEG_ANCHOR_WIDTH],
+                )
+            };
+        let count = cb.define_const(RecursionChallenge::ONE);
+        let mut acc_inputs = Vec::with_capacity(2 * SEG_ANCHOR_WIDTH);
+        acc_inputs.extend_from_slice(&first_old8);
+        acc_inputs.extend_from_slice(&last_new8);
+        let acc = seg_poseidon_commit(cb, &acc_inputs);
+        let mut claim = Vec::with_capacity(SEG_WIDTH + claim_len);
+        claim.extend_from_slice(&first_old8);
+        claim.extend_from_slice(&last_new8);
+        claim.push(count);
+        claim.extend_from_slice(&acc);
+        debug_assert_eq!(claim.len(), SEG_WIDTH);
+        // -- The CLAIMED teeth (lanes [SEG_WIDTH .. SEG_WIDTH+claim_len)), read from the leaf's
+        // own FRI-bound descriptor PIs (not free scalars).
+        for k in 0..claim_len {
+            claim.push(main[claim_pi_lo + k]);
+        }
+        debug_assert_eq!(claim.len(), SEG_WIDTH + claim_len);
+        cb.expose_as_public_output(&claim);
+    };
+
+    build_and_prove_next_layer_with_expose::<
+        DreggRecursionConfig,
+        dregg_circuit::descriptor_ir2::Ir2Air,
+        _,
+        D,
+    >(
+        &input,
+        config,
+        &backend,
+        &ProveNextLayerParams::default(),
+        Some(&expose),
+    )
+    .map_err(|e| format!("rotated dual-expose custom leaf-wrap failed: {e:?}"))
+}
+
 // ============================================================================
 // The whole-chain IVC artifact (K-fold).
 // ============================================================================
@@ -1292,13 +1653,15 @@ pub struct WholeChainProof {
     /// Fiat–Shamir binds `[genesis_root, final_root, num_turns, chain_digest]`
     /// into this proof, so relabeling any of them is refused at verify time.
     pub binding_proof: RecursionCompatibleProof,
-    /// The genesis root the chain starts from.
-    pub genesis_root: BabyBear,
-    /// The final root the chain reaches.
-    pub final_root: BabyBear,
+    /// The 8-felt (~124-bit faithful) genesis state anchor the chain starts from. A WIDE leg
+    /// sources it genuinely; a narrow leg broadcasts its single rotated commit felt across the
+    /// eight lanes (FAITHFUL-FLOOR lift — `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1).
+    pub genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    /// The 8-felt final state anchor the chain reaches.
+    pub final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     /// The multi-felt Poseidon2 digest committing to the ordered (old_root, new_root)
-    /// pairs (codex re-review #3 — a genuine [`SEG_DIGEST_WIDTH`]-felt collision-resistant
-    /// commitment, replacing the algebraically-broken one-felt fold).
+    /// pairs (codex re-review #3, widened to [`SEG_DIGEST_WIDTH`] = 8 lanes ⇒ ~124-bit —
+    /// a genuine collision-resistant commitment, replacing the algebraically-broken one-felt fold).
     pub chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     /// Number of finalized turns folded.
     pub num_turns: usize,
@@ -1368,13 +1731,15 @@ pub struct WholeChainProofBytes {
     /// Postcard bytes of `WholeChainProof.binding_proof` — the chain-binding
     /// uni-STARK `Proof`. Tooth 2 verifies the four publics AS its public inputs.
     pub binding_proof: Vec<u8>,
-    /// The genesis root the chain starts from (canonical `BabyBear` as `u32`).
-    pub genesis_root: u32,
-    /// The final root the chain reaches.
-    pub final_root: u32,
+    /// The 8-felt genesis state anchor ([`SEG_ANCHOR_WIDTH`] canonical `BabyBear` lanes as `u32`).
+    /// FAITHFUL-FLOOR lift: widened from a single felt; the envelope version was bumped to
+    /// fail-close old readers.
+    pub genesis_root: [u32; SEG_ANCHOR_WIDTH],
+    /// The 8-felt final state anchor ([`SEG_ANCHOR_WIDTH`] canonical `BabyBear` lanes as `u32`).
+    pub final_root: [u32; SEG_ANCHOR_WIDTH],
     /// The multi-felt Poseidon2 ordered-history digest over the (old_root, new_root)
-    /// pairs ([`SEG_DIGEST_WIDTH`] canonical `BabyBear` lanes as `u32`). Codex #3 widened
-    /// this from a single felt; the envelope version was bumped to fail-close old readers.
+    /// pairs ([`SEG_DIGEST_WIDTH`] = 8 canonical `BabyBear` lanes as `u32`). Codex #3 widened
+    /// this from a single felt; the FAITHFUL-FLOOR lift widened it again 4→8.
     pub chain_digest: [u32; SEG_DIGEST_WIDTH],
     /// The number of finalized turns folded.
     pub num_turns: u64,
@@ -1385,7 +1750,9 @@ pub struct WholeChainProofBytes {
 ///
 /// **v2** (codex re-review #3): `chain_digest` widened from one `u32` to
 /// `[u32; SEG_DIGEST_WIDTH]` — the multi-felt Poseidon2 commitment.
-pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 2;
+/// **v3** (FAITHFUL-FLOOR lift): the state endpoints `genesis_root`/`final_root` widened from one
+/// `u32` to `[u32; SEG_ANCHOR_WIDTH]` (8-felt anchors), and `SEG_DIGEST_WIDTH` widened 4→8.
+pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 3;
 
 impl WholeChainProofBytes {
     /// Project a [`WholeChainProof`] to its verify-sufficient byte envelope.
@@ -1399,8 +1766,8 @@ impl WholeChainProofBytes {
             vk_fingerprint_hex: proof.root_vk_fingerprint().to_hex(),
             root_proof,
             binding_proof,
-            genesis_root: proof.genesis_root.as_u32(),
-            final_root: proof.final_root.as_u32(),
+            genesis_root: core::array::from_fn(|i| proof.genesis_root[i].as_u32()),
+            final_root: core::array::from_fn(|i| proof.final_root[i].as_u32()),
             chain_digest: core::array::from_fn(|i| proof.chain_digest[i].as_u32()),
             num_turns: proof.num_turns as u64,
         }
@@ -1499,8 +1866,8 @@ pub fn verify_whole_chain_proof_bytes(
     verify_turn_chain_recursive_from_parts(
         &root_proof,
         &binding_proof,
-        BabyBear::new(env.genesis_root),
-        BabyBear::new(env.final_root),
+        core::array::from_fn(|i| BabyBear::new(env.genesis_root[i])),
+        core::array::from_fn(|i| BabyBear::new(env.final_root[i])),
         core::array::from_fn(|i| BabyBear::new(env.chain_digest[i])),
         env.num_turns as usize,
         expected_vk,
@@ -1524,8 +1891,8 @@ pub fn verify_whole_chain_proof_bytes(
 pub fn verify_turn_chain_recursive_from_blobs(
     root_blob: &[u8],
     binding_blob: &[u8],
-    genesis_root: u32,
-    final_root: u32,
+    genesis_root: &[u32],
+    final_root: &[u32],
     chain_digest: &[u32],
     num_turns: usize,
     vk_anchor: &[u8; 32],
@@ -1535,6 +1902,15 @@ pub fn verify_turn_chain_recursive_from_blobs(
             reason: format!(
                 "chain_digest must be {SEG_DIGEST_WIDTH} lanes, got {}",
                 chain_digest.len()
+            ),
+        });
+    }
+    if genesis_root.len() != SEG_ANCHOR_WIDTH || final_root.len() != SEG_ANCHOR_WIDTH {
+        return Err(TurnChainError::EnvelopeDecode {
+            reason: format!(
+                "genesis_root/final_root must be {SEG_ANCHOR_WIDTH} lanes each, got {}/{}",
+                genesis_root.len(),
+                final_root.len()
             ),
         });
     }
@@ -1564,8 +1940,8 @@ pub fn verify_turn_chain_recursive_from_blobs(
     verify_turn_chain_recursive_from_parts(
         &root_proof,
         &binding_proof,
-        BabyBear::new(genesis_root),
-        BabyBear::new(final_root),
+        core::array::from_fn(|i| BabyBear::new(genesis_root[i])),
+        core::array::from_fn(|i| BabyBear::new(final_root[i])),
         core::array::from_fn(|i| BabyBear::new(chain_digest[i])),
         num_turns,
         &RecursionVk(*vk_anchor),
@@ -1671,10 +2047,10 @@ pub fn prove_turn_chain_recursive_rotated(
 /// aggregation runs in-circuit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeldedChainHostSummary {
-    /// The first turn's `old_root` (the chain genesis).
-    pub genesis_root: BabyBear,
-    /// The last turn's `new_root` (the chain head).
-    pub final_root: BabyBear,
+    /// The first turn's 8-felt genesis anchor (broadcast of `old_root` for a narrow leg).
+    pub genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    /// The last turn's 8-felt final anchor (broadcast of `new_root` for a narrow leg).
+    pub final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     /// The number of folded turns.
     pub num_turns: usize,
     /// The multi-felt Poseidon2 ordered-history digest over the `(old_root, new_root)` triples.
@@ -1714,8 +2090,48 @@ fn admit_welded_leg(t: &FinalizedTurn, index: usize) -> Result<(), TurnChainErro
             ),
         });
     }
+    // GROUND THE VERIFIER LEG against the Lean-emitted welded registry. The WIDE single-domain weld
+    // (`-umem-wide-welded-staged`, NOT the multidomain twin) has a committed, Lean-grounded descriptor
+    // set ([`WIDE_UMEM_WELD_REGISTRY_TSV`], the verified `EffectVmEmitUMemWeldWide.weldedWideRegistry`).
+    // For such a leg we REQUIRE the carried descriptor to be byte-equal to a registry member and verify
+    // the proof against THAT member — so a producer cannot carry an off-registry welded descriptor (the
+    // ungrounded gap the missing verifier leg left). The narrow / wide-multidomain weld forms keep
+    // their carried-descriptor admission (separate staged forms, out of this registry's scope).
+    let is_wide_single = leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+        && !leg
+            .descriptor
+            .name
+            .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX);
+    let verify_desc = if is_wide_single {
+        use dregg_circuit::descriptor_ir2::parse_vm_descriptor2;
+        use dregg_circuit::effect_vm_descriptors::WIDE_UMEM_WELD_REGISTRY_TSV;
+        let grounded = WIDE_UMEM_WELD_REGISTRY_TSV.lines().find_map(|line| {
+            let json = line.splitn(3, '\t').nth(2)?;
+            let desc = parse_vm_descriptor2(json).ok()?;
+            if desc == leg.descriptor {
+                Some(desc)
+            } else {
+                None
+            }
+        });
+        match grounded {
+            Some(d) => d,
+            None => {
+                return Err(TurnChainError::TurnProofInvalid {
+                    index,
+                    reason: format!(
+                        "WIDE welded leg descriptor '{}' is NOT a member of the Lean-emitted \
+                         WIDE_UMEM_WELD_REGISTRY (off-registry welded descriptor refused)",
+                        leg.descriptor.name
+                    ),
+                });
+            }
+        }
+    } else {
+        leg.descriptor.clone()
+    };
     verify_vm_descriptor2_with_config(
-        &leg.descriptor,
+        &verify_desc,
         &leg.proof,
         &leg.public_inputs,
         &ir2_leaf_wrap_config(),
@@ -1757,8 +2173,8 @@ pub fn fold_welded_umem_turn_chain_staged(
     // The ordered root segment — the SAME pairwise binary fold the in-circuit aggregation runs.
     let root_seg = compute_root_segment(&refs);
     Ok(WeldedChainHostSummary {
-        genesis_root: root_seg.first_old,
-        final_root: root_seg.last_new,
+        genesis_root: root_seg.first_old8,
+        final_root: root_seg.last_new8,
         num_turns: turns.len(),
         chain_digest: root_seg.acc,
     })
@@ -1873,8 +2289,8 @@ pub fn prove_welded_umem_turn_chain_recursive_staged(
         });
     }
     let root_seg = compute_root_segment(&refs);
-    let genesis_root = root_seg.first_old;
-    let final_root = root_seg.last_new;
+    let genesis_root = root_seg.first_old8;
+    let final_root = root_seg.last_new8;
     let chain_digest = root_seg.acc;
 
     let config = ir2_leaf_wrap_config();
@@ -2405,6 +2821,168 @@ pub fn verify_wide_turn_chain_recursive(
     Ok(())
 }
 
+// ============================================================================
+// THE CARRIER CLAIM PI SLOTS (v12 STEP-3 geometry — the deployed-leg teeth the carrier fold
+// arms dual-expose).
+// ============================================================================
+
+/// The factory leg's `child_vk8` claim PI base — `factoryV3Carriers` TAIL-appends the
+/// child-VK octet pins (AFTER-block limbs `B_CHILD_VK_OCTET..+8`) after the narrow factory
+/// PI count 47 (Lean `EffectVmEmitRotationV3.withAfterOctetPins`, commit `556970558`:
+/// PI 47..54). REGEN-RIDER: the committed `WIDE_REGISTRY_STAGED_TSV` row still carries the
+/// pre-pin shape; the fold arm admits a leg only when its descriptor actually carries these
+/// pins ([`carrier_claim_pins_admitted`]), so until the big-bang descriptor regen lands the
+/// arm stays fail-closed on deployed legs.
+pub const FACTORY_CHILD_VK_PI_LO: usize = 47;
+/// The hatchery leg's `contract_hash8` claim PI base — the SECOND octet cohort on the same
+/// `factoryV3Carriers` descriptor (AFTER-block limbs `B_CONTRACT_HASH_OCTET..+8`, PI 55..62;
+/// the hatchery carrier rides factory's `CreateCellFromFactory` leg). Same regen-rider note.
+pub const HATCHERY_CONTRACT_HASH_PI_LO: usize = 55;
+/// The sovereign leg's `KEY_COMMIT` teeth claim PI base — **NATIVE**: the committed wide
+/// registry row (`CarrierComposed.makeSovereignV3DeployedWide`, the v12 big-bang regen) pins
+/// the 4 teeth columns (113..=116) at PI 58..61 (record-pin8 54 + the 4 dsl rc, THEN the
+/// teeth, ahead of the 16 wide anchors 62..77) and welds them in-AIR to the committed
+/// `B_PUBKEY8` octet via the KEY_COMMIT chip gate (Lean keystone
+/// `makeSovereignV3DeployedWide_publishes_key_commit`). The fold arm admits only a leg whose
+/// descriptor genuinely pins these slots, so a mismatched convention fails closed.
+pub const SOVEREIGN_KEY_COMMIT_PI_LO: usize = 58;
+/// The membership leg's `(sender_leaf, authorized_root)` claim PI base — **NATIVE**: the
+/// committed wide transfer row (`CarrierComposed.transferV3MembershipWide`, the v12 big-bang
+/// regen) pins the two teeth columns (past the carriers, 1771..1772) at PI 50..51 (the bare
+/// rotated 46 + the 4 dsl rc, THEN the teeth, ahead of the anchors 52..67 — Lean keystone
+/// `transferV3MembershipWide_publishes_teeth`). PI-EXPOSURE leg only (the FOLD edge binds;
+/// the in-AIR welds stay the named `MembershipAuthRootEdge` seams). Same fail-closed
+/// admission discipline.
+pub const MEMBERSHIP_CLAIM_PI_LO: usize = 50;
+/// The bridge leg's felt mint-hash claim PI — **NATIVE**: the committed mint row
+/// (`mintV3BridgeHash`, the STEP-3/4 regen) pins the mint row's `param0` (`prmCol 0` — since
+/// the STEP-1 executor re-align, the FELT-domain `note_spend_mint_hash_felt` over the six
+/// compressed felts `apply_bridge_mint` enforces the note-spend STARK against) at PI 46 on
+/// the FIRST row (Lean keystone `withMintHashPin_publishes`; rc rides 47..50, wide anchors
+/// 51..66). ONE lane binds the whole spend tuple: the identity is the leaf's in-AIR
+/// `hash_fact` chain over its own PI-pinned `(nullifier, root, value_lo, asset, dest_fed,
+/// value_hi)`. Same fail-closed admission discipline.
+pub const BRIDGE_MINT_HASH_PI: usize = 46;
+/// The bridge claim length (the single felt mint identity lane).
+pub const BRIDGE_MINT_HASH_CLAIM_LEN: usize = 1;
+
+/// **The DSL/Dfa rc claim PI base — DERIVED PER MEMBER from the committed registry row.**
+///
+/// The dsl rc-EMIT (`withDfaRcPins`, cohort-wide) pins the 4-felt DFA route-commitment
+/// carrier at FIXED trace COLUMNS (`CAVEAT_BASE + C_DFA_RC_OFF + k`, row LAST) but at
+/// PER-MEMBER PI indices: the wrap appended the rc as the LAST 4 member PIs at emit time
+/// (transfer 46..49), and the post-exposure v12 members appended their carrier teeth AFTER it
+/// (membership teeth at 50..51 on the wide transfer; sovereign KEY_COMMIT at 58..61 past its
+/// record-pin8, rc at 54..57) — so unlike factory/hatchery/sovereign/membership there is no
+/// single `*_PI_LO` constant. The sound derivation reads the leg's OWN committed descriptor:
+/// find the `PiBinding` that publishes rc lane 0 (column `CAVEAT_BASE + C_DFA_RC_OFF`, row
+/// LAST) and take its `pi_index`; [`carrier_claim_pins_admitted`] then enforces that all
+/// [`DFA_RC_LEN`](dregg_circuit::effect_vm::trace_rotated::DFA_RC_LEN) slots are contiguous
+/// pins of exactly the rc columns. A descriptor with NO rc pin (the pre-rc corpus) is refused
+/// — the fail-closed law.
+pub fn dsl_rc_claim_pi_lo(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+) -> Result<usize, String> {
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::effect_vm::trace_rotated::{C_DFA_RC_OFF, CAVEAT_BASE};
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+
+    let rc_col0 = CAVEAT_BASE + C_DFA_RC_OFF;
+    desc.constraints
+        .iter()
+        .find_map(|c| match c {
+            VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index })
+                if *row == VmRow::Last && *col == rc_col0 =>
+            {
+                Some(*pi_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            format!(
+                "dsl: leg descriptor carries NO rc pin (no last-row PiBinding at the DFA \
+                 route-commitment carrier column {rc_col0}) — the pre-rc corpus, or a member \
+                 outside the `withDfaRcPins` cohort; refusing to fold (fail-closed)"
+            )
+        })
+}
+
+/// **THE CARRIER-CLAIM ADMISSION GATE (the fold arms' fail-closed half).** A carrier fold
+/// arm may dual-expose the leg's claim slice `[claim_pi_lo .. claim_pi_lo+claim_len)` ONLY
+/// when:
+///
+///   1. the leg is WIDE (`n >= WIDE_PI_COUNT` — the deployed-default 8-felt-anchored leaf),
+///   2. the claim slice sits strictly AHEAD of the 16 wide anchor PIs (`claim_hi +
+///      2*SEG_ANCHOR_WIDTH <= n`) — otherwise the "claim" lanes would alias the rotated
+///      commit anchors (exactly the pre-regen deployed shape, which must REFUSE), and
+///   3. the leg's descriptor CARRIES a `PiBinding` for every claim slot — the slot is
+///      genuinely a published trace tooth, not an unconstrained public value. When
+///      `expected_cols = Some((col_base, row))` (factory/hatchery, whose STEP-3 pin columns
+///      are committed in Lean), the pin must bind exactly `col_base + k` at `row` — the
+///      AFTER-block committed carrier octet — so the fold arm folds ONLY the real third-edge
+///      shape.
+///
+/// A leg failing any tooth is REFUSED (the carrier witness never silently degrades to the
+/// plain segment leaf): pre-regen deployed legs land here, which is the fail-closed law.
+fn carrier_claim_pins_admitted(
+    desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2,
+    leg_pis: &[BabyBear],
+    claim_pi_lo: usize,
+    claim_len: usize,
+    carrier: &'static str,
+    expected_cols: Option<(usize, dregg_circuit::lean_descriptor_air::VmRow)>,
+) -> Result<(), String> {
+    use dregg_circuit::descriptor_ir2::VmConstraint2;
+    use dregg_circuit::effect_vm::trace_rotated::WIDE_PI_COUNT;
+    use dregg_circuit::lean_descriptor_air::VmConstraint;
+
+    let n = leg_pis.len();
+    let claim_hi = claim_pi_lo + claim_len;
+    if n < WIDE_PI_COUNT {
+        return Err(format!(
+            "carrier '{carrier}': leg is not a WIDE (8-felt-anchored) leaf ({n} PIs < \
+             {WIDE_PI_COUNT}) — the carrier fold arms bind wide legs only"
+        ));
+    }
+    if claim_hi + 2 * SEG_ANCHOR_WIDTH > n {
+        return Err(format!(
+            "carrier '{carrier}': the claim slice [{claim_pi_lo}..{claim_hi}) overlaps the \
+             16 wide anchor PIs of the {n}-PI leg — the leg does not publish the carrier \
+             claim slots (the STEP-3 octet-pin descriptor rides the big-bang regen); \
+             refusing to fold (fail-closed)"
+        ));
+    }
+    for k in 0..claim_len {
+        let pi = claim_pi_lo + k;
+        let found = desc.constraints.iter().find_map(|c| match c {
+            VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index })
+                if *pi_index == pi =>
+            {
+                Some((*row, *col))
+            }
+            _ => None,
+        });
+        let (row, col) = found.ok_or_else(|| {
+            format!(
+                "carrier '{carrier}': leg descriptor carries NO PiBinding for claim PI {pi} \
+                 — the slot is not a published trace tooth (the pinned descriptor rides the \
+                 big-bang regen); refusing to fold (fail-closed)"
+            )
+        })?;
+        if let Some((col_base, want_row)) = expected_cols {
+            if col != col_base + k || row != want_row {
+                return Err(format!(
+                    "carrier '{carrier}': claim PI {pi} is pinned to column {col} (row \
+                     {row:?}), not the committed carrier octet column {} (row {want_row:?}) \
+                     — refusing to fold a claim that is not the third-edge octet",
+                    col_base + k
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The rotated fold core: like [`prove_chain_core`] but mints rotated native-batch leaves and
 /// runs the whole tree at [`ir2_leaf_wrap_config`].
 fn prove_chain_core_rotated(
@@ -2422,7 +3000,7 @@ fn prove_chain_core_rotated(
     }
     // Host-side continuity (the `ChainBreak` tooth: `prev.new_root == next.old_root`). This
     // mirrors the in-circuit combine's continuity constraint and fails closed BEFORE any proving.
-    let _ = generate_chain_trace_rotated_continuity(turns)?;
+    generate_chain_trace_rotated_continuity(turns)?;
 
     // CODEX #5 — the count field is a BabyBear (mod p), so `num_turns` must be `< p` for the
     // exposed `count` lane to faithfully equal the real turn count (no modular wrap). A single
@@ -2442,8 +3020,8 @@ fn prove_chain_core_rotated(
     // claims the artifact carries — derived from the REAL descriptor leaves' rotated roots, NOT
     // from a separate (swappable) binding leaf.
     let root_seg = compute_root_segment(turns);
-    let genesis_root = root_seg.first_old;
-    let final_root = root_seg.last_new;
+    let genesis_root = root_seg.first_old8;
+    let final_root = root_seg.last_new8;
     let chain_digest = root_seg.acc;
 
     // The ONE FRI engine the whole rotated tree runs at (inner proof + leaf-wrap +
@@ -2463,15 +3041,360 @@ fn prove_chain_core_rotated(
 
     // One rotated descriptor leaf per finalized turn, EACH carrying its ordered segment
     // (first_old/last_new bound to the descriptor's real roots, count=1, acc=H(old,new)).
+    //
+    // THE CARRIER WITNESS SOCKET (Step-2 of the uniform carrier build): the per-turn fold branch
+    // is picked by matching the leg's `carrier_witness`.
+    //
+    // CUSTOM-BINDING DEPLOYED WIRE (the ONE deployed carrier arm): a turn whose leg carries a
+    // `CarrierWitness::Custom` bundle (a `Custom`-effect turn, `customVmDescriptor2R24`) does NOT
+    // get the plain segment leaf. Instead it gets a DUAL-EXPOSE leaf (segment ++ claimed
+    // `custom_proof_commitment` PI 46..49) folded against the RE-PROVEN custom sub-proof leaf
+    // through `prove_custom_binding_node_segmented` — the binding `connect`s the leg's claimed
+    // commitment to the sub-proof's genuine in-circuit commitment IN the recursion tree (so a
+    // forged claim with no backing sub-proof is UNSAT) and re-exposes the SAME segment, so the
+    // node folds into `aggregate_tree` like any segment leaf. This makes the custom binding REAL
+    // for a pure light client (the premise of `CustomBindingFromFold.custom_binding_from_fold` is
+    // now TRUE on the deployed path).
+    //
+    // THE CARRIER ARMS: ALL SEVEN are FOLD-WIRED — custom + the four v12 carriers (factory /
+    // hatchery / sovereign / membership) + dsl + bridge. Each mints a dual-expose leaf at its
+    // claim PI slots (gated by `carrier_claim_pins_admitted`, which REFUSES a leg whose
+    // descriptor does not carry the STEP-3 claim pins — the big-bang regen tie) and binds the
+    // re-proven carrier leaf under its segment-preserving binding node. A turn that WANTS the
+    // re-exec rung carries `carrier_witness: None` (the sanctioned path, identical to today's
+    // non-carrier turns). There is deliberately NO wildcard arm, so a new variant is a compile
+    // error here (the wave must decide its fold branch).
     for (i, t) in turns.iter().enumerate() {
         let leg = &t.participant.rotated;
-        let wrapped = prove_descriptor_leaf_rotated_with_segment(
-            &leg.descriptor,
-            &leg.proof,
-            &leg.public_inputs,
-            &config,
-        )
-        .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+        let wrapped = match &leg.carrier_witness {
+            Some(CarrierWitness::Custom(bundle)) => {
+                let dual = prove_descriptor_leaf_dual_expose(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let custom_leaf = crate::custom_leaf_adapter::prove_custom_leaf_with_commitment(
+                    &bundle.program,
+                    &bundle.witness_values,
+                    bundle.num_rows,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("custom sub-proof leaf mint failed: {reason}"),
+                })?;
+                crate::joint_turn_recursive::prove_custom_binding_node_segmented(
+                    &dual,
+                    &custom_leaf,
+                    &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented custom-binding node failed: {e:?}"),
+                })?
+            }
+            // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the
+            // felt-domain mint_hash thread: (STEP 1) the executor re-aligned `mint_hash` to
+            // the FELT-domain `note_spend_mint_hash_felt` (the `687601953` precedent — over
+            // the six compressed felts `apply_bridge_mint` enforces the REAL note-spend STARK
+            // against); (STEP 2/3/4) the deployed `mintVmDescriptor2R24` (`mintV3BridgeHash`)
+            // pins the mint row's `param0` at PI 46, producer-filled. The arm mirrors the
+            // factory shape: (1) ADMIT the leg's claim slot (fail-closed on a pin-less or
+            // wrong-column descriptor — the regen tie; the expected pin is the FIRST-row
+            // `prmCol 0`, never a free column), (2) mint the DUAL-EXPOSE leaf (segment ++ the
+            // published mint identity), (3) re-prove the REAL foreign note-spend STARK as the
+            // G2 backing leaf (`prove_note_spend_leaf_with_claim` — spending-key knowledge +
+            // Merkle membership + full-width commitment, with the mint identity recomputed
+            // IN-AIR at lane 6; the binding-only `bridge_action_air` was REFUSED as backing),
+            // (4) fold under the mint-hash binding node — the in-circuit `connect` makes a
+            // published mint identity no verifying note-spend backs UNSAT.
+            Some(CarrierWitness::Bridge(bundle)) => {
+                use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    BRIDGE_MINT_HASH_PI,
+                    BRIDGE_MINT_HASH_CLAIM_LEN,
+                    "bridge",
+                    Some((PARAM_BASE + param::MINT_HASH, VmRow::First)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    BRIDGE_MINT_HASH_PI,
+                    BRIDGE_MINT_HASH_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let backing = crate::note_spend_leaf_adapter::prove_note_spend_leaf_with_claim(
+                    &bundle.note_spend,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("bridge note-spend backing leaf mint failed: {reason}"),
+                })?;
+                crate::note_spend_leaf_adapter::prove_note_spend_mint_binding_node_segmented(
+                    &dual, &backing, &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented bridge mint-hash binding node failed: {e:?}"),
+                })?
+            }
+            // THE DSL/Dfa FOLD ARM (the 6th carrier) — mirrors the Custom arm term-for-term
+            // (the dsl adapter REUSES custom's leaf + binding-node machinery; the claim shape
+            // is the SAME 4-felt PI-commitment). Differences, both fail-closed:
+            //
+            //   * the rc claim slots are DERIVED per member from the leg's committed
+            //     descriptor ([`dsl_rc_claim_pi_lo`] — the `withDfaRcPins` pins ride at fixed
+            //     COLUMNS but per-member PI indices), then admitted through
+            //     `carrier_claim_pins_admitted` with the rc columns as the expected pins;
+            //   * the ZERO SENTINEL is REFUSED: a turn without a Dfa caveat publishes rc = 0
+            //     (`RotatedCaveatManifest::dfa_rc` default) — folding a witness against it
+            //     would bind a vacuous claim no predicate gated. Such a turn takes the
+            //     re-exec rung (`carrier_witness: None`), never a fabricated fold.
+            Some(CarrierWitness::Dsl(bundle)) => {
+                use dregg_circuit::effect_vm::trace_rotated::{
+                    C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN,
+                };
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                let rc_lo = dsl_rc_claim_pi_lo(&leg.descriptor)
+                    .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    rc_lo,
+                    DFA_RC_LEN,
+                    "dsl",
+                    Some((CAVEAT_BASE + C_DFA_RC_OFF, VmRow::Last)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                if leg.public_inputs[rc_lo..rc_lo + DFA_RC_LEN]
+                    .iter()
+                    .all(|f| *f == BabyBear::ZERO)
+                {
+                    return Err(TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!(
+                            "dsl: the leg's published route-commitment at PI {rc_lo}..{} is the \
+                             ZERO sentinel (no Dfa caveat gated this turn) — refusing to fold a \
+                             vacuous claim; detach the witness (carrier_witness: None) to take \
+                             the re-exec rung",
+                            rc_lo + DFA_RC_LEN
+                        ),
+                    });
+                }
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    rc_lo,
+                    DFA_RC_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dsl_leaf = crate::dsl_leaf_adapter::prove_dsl_leaf_with_commitment(
+                    &bundle.program,
+                    &bundle.witness_values,
+                    bundle.num_rows,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("dsl sub-proof leaf mint failed: {reason}"),
+                })?;
+                crate::dsl_leaf_adapter::prove_dsl_binding_node_segmented(&dual, &dsl_leaf, &config)
+                    .map_err(|e| TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!("segmented dsl-binding node failed: {e:?}"),
+                    })?
+            }
+            // THE FOUR v12 CARRIER FOLD ARMS (factory · hatchery · sovereign · membership) —
+            // each mirrors the Custom arm: (1) ADMIT the leg's claim slots through
+            // `carrier_claim_pins_admitted` (fail-closed until the STEP-3 pinned descriptor is
+            // the leg's descriptor — the big-bang regen tie), (2) mint the DUAL-EXPOSE leaf
+            // (segment ++ the leg's claimed carrier teeth) at the carrier's claim PI slots,
+            // (3) re-prove the carrier's backing tuple as its adapter leaf, (4) fold both
+            // under the segment-preserving binding node — the in-circuit `connect` makes a
+            // forged claim (no backing leaf binds it) UNSAT, and the node re-exposes the
+            // chain segment so it folds into `aggregate_tree` like any per-turn leaf.
+            Some(CarrierWitness::Factory(bundle)) => {
+                use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CHILD_VK_OCTET};
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    FACTORY_CHILD_VK_PI_LO,
+                    crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
+                    "factory",
+                    Some((AFTER_BASE + B_CHILD_VK_OCTET, VmRow::Last)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    FACTORY_CHILD_VK_PI_LO,
+                    crate::factory_leaf_adapter::FACTORY_CHILD_VK_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let backing = crate::factory_leaf_adapter::prove_factory_leaf_with_child_vk_claim(
+                    &bundle.backing,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("factory backing leaf mint failed: {reason}"),
+                })?;
+                crate::factory_leaf_adapter::prove_factory_binding_node_segmented(
+                    &dual, &backing, &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented factory-binding node failed: {e:?}"),
+                })?
+            }
+            Some(CarrierWitness::Hatchery(bundle)) => {
+                use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_CONTRACT_HASH_OCTET};
+                use dregg_circuit::lean_descriptor_air::VmRow;
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    HATCHERY_CONTRACT_HASH_PI_LO,
+                    crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
+                    "hatchery",
+                    Some((AFTER_BASE + B_CONTRACT_HASH_OCTET, VmRow::Last)),
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    HATCHERY_CONTRACT_HASH_PI_LO,
+                    crate::hatchery_leaf_adapter::HATCHERY_CONTRACT_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let attestation =
+                    crate::hatchery_leaf_adapter::prove_hatchery_leaf_with_contract_claim(
+                        &bundle.attestation,
+                        &bundle.public_inputs,
+                        &config,
+                    )
+                    .map_err(|reason| TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!("hatchery attestation leaf mint failed: {reason}"),
+                    })?;
+                crate::hatchery_leaf_adapter::prove_hatchery_binding_node_segmented(
+                    &dual,
+                    &attestation,
+                    &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented hatchery-binding node failed: {e:?}"),
+                })?
+            }
+            Some(CarrierWitness::Sovereign(bundle)) => {
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    SOVEREIGN_KEY_COMMIT_PI_LO,
+                    crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
+                    "sovereign",
+                    // The teeth columns are pinned by the regen (the KEY_COMMIT teeth cols;
+                    // `CarrierComposed` keeps them parametric until the emit), so the
+                    // admission requires a genuine PiBinding at every claim slot without
+                    // fixing the column base.
+                    None,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    SOVEREIGN_KEY_COMMIT_PI_LO,
+                    crate::sovereign_leaf_adapter::SOVEREIGN_KEY_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let authority = crate::sovereign_leaf_adapter::prove_sovereign_leaf_with_key_claim(
+                    &bundle.authority,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("sovereign authority leaf mint failed: {reason}"),
+                })?;
+                crate::joint_turn_recursive::prove_sovereign_binding_node_segmented(
+                    &dual, &authority, &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented sovereign-binding node failed: {e:?}"),
+                })?
+            }
+            Some(CarrierWitness::Membership(bundle)) => {
+                carrier_claim_pins_admitted(
+                    &leg.descriptor,
+                    &leg.public_inputs,
+                    MEMBERSHIP_CLAIM_PI_LO,
+                    crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
+                    "membership",
+                    // The (sender_leaf, authorized_root) tooth columns are parametric until
+                    // the regen pins them (`MembershipAuthRootEdge` builds the edge over a
+                    // parametric base) — same column-free admission as sovereign.
+                    None,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let dual = prove_descriptor_leaf_dual_expose_at(
+                    &leg.descriptor,
+                    &leg.proof,
+                    &leg.public_inputs,
+                    &config,
+                    MEMBERSHIP_CLAIM_PI_LO,
+                    crate::membership_leaf_adapter::MEMBERSHIP_CLAIM_LEN,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
+                let membership = crate::membership_leaf_adapter::prove_membership_leaf_with_claim(
+                    &bundle.membership,
+                    &bundle.public_inputs,
+                    &config,
+                )
+                .map_err(|reason| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("membership leaf mint failed: {reason}"),
+                })?;
+                crate::membership_leaf_adapter::prove_membership_binding_node_segmented(
+                    &dual,
+                    &membership,
+                    &config,
+                )
+                .map_err(|e| TurnChainError::TurnProofInvalid {
+                    index: i,
+                    reason: format!("segmented membership-binding node failed: {e:?}"),
+                })?
+            }
+            None => prove_descriptor_leaf_rotated_with_segment(
+                &leg.descriptor,
+                &leg.proof,
+                &leg.public_inputs,
+                &config,
+            )
+            .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?,
+        };
         batch_leaves.push(wrapped);
     }
 
@@ -2499,6 +3422,12 @@ fn prove_chain_core_rotated(
     })
 }
 
+// (The `unfilled_carrier_arm` fail-closed refusal helper is RETIRED: every `CarrierWitness`
+// variant is fold-wired — custom/factory/hatchery/sovereign/membership/dsl/bridge. The
+// fail-closed discipline lives on in `carrier_claim_pins_admitted` (a leg whose descriptor
+// does not genuinely pin the claim slots is refused) and in the no-wildcard match (a NEW
+// variant is a compile error until its wave decides its fold branch).)
+
 /// Host-side continuity check ONLY (the `ChainBreak` tooth), extracted so the rotated fold no
 /// longer needs the full binding-trace generation just to validate ordering. Returns `Ok(())`
 /// when `>= 2` turns and every `prev.new_root == next.old_root`.
@@ -2506,14 +3435,21 @@ fn generate_chain_trace_rotated_continuity(turns: &[&FinalizedTurn]) -> Result<(
     if turns.len() < 2 {
         return Err(TurnChainError::TooFewTurns { count: turns.len() });
     }
+    // H0 DEPLOYED-WIDE: continuity is checked at the GENUINE 8-felt anchor ([`turn_anchors8`]) — the
+    // SAME lane-by-lane endpoints the in-circuit segment combine binds (`L.last_new8 == R.first_old8`,
+    // accumulator.rs). For a WIDE leg these are the ~124-bit faithful anchors (the single-felt rotated
+    // roots PI 42/43 are RETIRED to zero, so the old 1-felt check would be vacuously 0==0); for a
+    // narrow leg they are the single rotated commit felt broadcast across all eight lanes, so the
+    // check degrades exactly to the prior 1-felt continuity. Either way the host pre-check mirrors the
+    // in-circuit tooth and never passes vacuously on a wide chain break.
     for i in 1..turns.len() {
-        let (_, prev_new) = rotated_roots(turns[i - 1]);
-        let (this_old, _) = rotated_roots(turns[i]);
+        let (_, prev_new) = turn_anchors8(turns[i - 1]);
+        let (this_old, _) = turn_anchors8(turns[i]);
         if prev_new != this_old {
             return Err(TurnChainError::ChainBreak {
                 index: i,
-                expected_old_root: prev_new.0,
-                found_old_root: this_old.0,
+                expected_old_root: prev_new[0].0,
+                found_old_root: this_old[0].0,
             });
         }
     }
@@ -2575,21 +3511,22 @@ pub(crate) fn segment_combine_expose(
         .expect("right segment instance present");
     debug_assert!(l.len() >= SEG_WIDTH && r.len() >= SEG_WIDTH);
 
-    // (1) STATE CONTINUITY: L.last_new == R.first_old (the temporal tooth, off the zero slot).
-    cb.connect(l[SEG_LAST_NEW], r[SEG_FIRST_OLD]);
+    // (1) STATE CONTINUITY: L.last_new8 == R.first_old8, lane-by-lane over the 8-felt anchors
+    //     (the temporal tooth, off the zero slot — `connect`, never `sub`+`assert_zero`).
+    for k in 0..SEG_ANCHOR_WIDTH {
+        cb.connect(l[SEG_LAST_NEW + k], r[SEG_FIRST_OLD + k]);
+    }
 
-    // (2) parent segment: span [L.first_old .. R.last_new], count L+R, ordered multi-felt digest
+    // (2) parent segment: span [L.first_old8 .. R.last_new8], count L+R, ordered multi-felt digest
     //     acc = commit(L.acc ++ R.acc).
-    let first_old = l[SEG_FIRST_OLD];
-    let last_new = r[SEG_LAST_NEW];
     let count = cb.add(l[SEG_COUNT], r[SEG_COUNT]);
     let mut acc_inputs = Vec::with_capacity(2 * SEG_DIGEST_WIDTH);
     acc_inputs.extend_from_slice(&l[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
     acc_inputs.extend_from_slice(&r[SEG_DIGEST_FIRST..SEG_DIGEST_FIRST + SEG_DIGEST_WIDTH]);
     let acc = seg_poseidon_commit(cb, &acc_inputs);
     let mut parent = Vec::with_capacity(SEG_WIDTH);
-    parent.push(first_old);
-    parent.push(last_new);
+    parent.extend_from_slice(&l[SEG_FIRST_OLD..SEG_FIRST_OLD + SEG_ANCHOR_WIDTH]);
+    parent.extend_from_slice(&r[SEG_LAST_NEW..SEG_LAST_NEW + SEG_ANCHOR_WIDTH]);
     parent.push(count);
     parent.extend_from_slice(&acc);
     debug_assert_eq!(parent.len(), SEG_WIDTH);
@@ -2805,8 +3742,8 @@ pub fn verify_turn_chain_recursive(
 pub fn verify_turn_chain_recursive_from_parts(
     root_proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
     binding_proof: &RecursionCompatibleProof,
-    genesis_root: BabyBear,
-    final_root: BabyBear,
+    genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
+    final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     num_turns: usize,
     expected_vk: &RecursionVk,
@@ -2851,8 +3788,8 @@ pub fn verify_turn_chain_recursive_from_parts(
         }
     })?;
     let mut expected = Vec::with_capacity(SEG_WIDTH);
-    expected.push(genesis_root);
-    expected.push(final_root);
+    expected.extend_from_slice(&genesis_root);
+    expected.extend_from_slice(&final_root);
     expected.push(BabyBear::new(num_turns as u32));
     expected.extend_from_slice(&chain_digest);
     if exposed != expected {
