@@ -1,0 +1,1841 @@
+{
+  "meta": {
+    "node_count": 50,
+    "edge_count": 70,
+    "node_types": {
+      "effect": 4,
+      "cell": 6,
+      "face": 20,
+      "affordance": 16,
+      "auth-tier": 3,
+      "ocap-edge": 1
+    },
+    "edge_types": {
+      "presents": 20,
+      "understands": 16,
+      "lifts_to": 16,
+      "requires": 16,
+      "grants": 1,
+      "to": 1
+    },
+    "source": "synthesized from survey/inspect/affordances/graph/protocol",
+    "note": "every object is a stable-id typed node; every relation a typed edge \u2014 the hypermedia backbone the site cross-links over. \u00b7 merged with the MCP `map` tool's authoritative graph.",
+    "native_map": true
+  },
+  "nodes": [
+    {
+      "id": "effect:EmitEvent",
+      "type": "effect",
+      "name": "EmitEvent"
+    },
+    {
+      "id": "effect:GrantCapability",
+      "type": "effect",
+      "name": "GrantCapability"
+    },
+    {
+      "id": "effect:IncrementNonce",
+      "type": "effect",
+      "name": "IncrementNonce"
+    },
+    {
+      "id": "effect:SetField(slot 1)",
+      "type": "effect",
+      "name": "SetField(slot 1)"
+    },
+    {
+      "id": "2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+      "type": "cell",
+      "short": "2a6969\u2026ab90",
+      "kind": null,
+      "title": null
+    },
+    {
+      "id": "face:2a6969\u2026ab90/raw-fields",
+      "type": "face",
+      "cell": "2a6969\u2026ab90",
+      "kind": "raw-fields",
+      "label": "Cell State"
+    },
+    {
+      "id": "face:2a6969\u2026ab90/affordances",
+      "type": "face",
+      "cell": "2a6969\u2026ab90",
+      "kind": "affordances",
+      "label": "Messages Understood"
+    },
+    {
+      "id": "face:2a6969\u2026ab90/provenance",
+      "type": "face",
+      "cell": "2a6969\u2026ab90",
+      "kind": "provenance",
+      "label": "Receipt Lineage"
+    },
+    {
+      "id": "face:2a6969\u2026ab90/graph",
+      "type": "face",
+      "cell": "2a6969\u2026ab90",
+      "kind": "graph",
+      "label": "ocap Graph"
+    },
+    {
+      "id": "face:2a6969\u2026ab90/domain-visual",
+      "type": "face",
+      "cell": "2a6969\u2026ab90",
+      "kind": "domain-visual",
+      "label": "Lifecycle"
+    },
+    {
+      "id": "affordance:2a6969\u2026ab90/peek",
+      "type": "affordance",
+      "cell": "2a6969\u2026ab90",
+      "message": "peek",
+      "effect": "EmitEvent",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "auth:Signature",
+      "type": "auth-tier",
+      "tier": "Signature"
+    },
+    {
+      "id": "affordance:2a6969\u2026ab90/touch",
+      "type": "affordance",
+      "cell": "2a6969\u2026ab90",
+      "message": "touch",
+      "effect": "IncrementNonce",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:2a6969\u2026ab90/write",
+      "type": "affordance",
+      "cell": "2a6969\u2026ab90",
+      "message": "write",
+      "effect": "SetField(slot 1)",
+      "required": "Either",
+      "authorized": true
+    },
+    {
+      "id": "auth:Either",
+      "type": "auth-tier",
+      "tier": "Either"
+    },
+    {
+      "id": "affordance:2a6969\u2026ab90/grant",
+      "type": "affordance",
+      "cell": "2a6969\u2026ab90",
+      "message": "grant",
+      "effect": "GrantCapability",
+      "required": "None",
+      "authorized": true
+    },
+    {
+      "id": "auth:None",
+      "type": "auth-tier",
+      "tier": "None"
+    },
+    {
+      "id": "3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+      "type": "cell",
+      "short": "3cc026\u20262fa6",
+      "kind": null,
+      "title": null
+    },
+    {
+      "id": "face:3cc026\u20262fa6/raw-fields",
+      "type": "face",
+      "cell": "3cc026\u20262fa6",
+      "kind": "raw-fields",
+      "label": "Cell State"
+    },
+    {
+      "id": "face:3cc026\u20262fa6/affordances",
+      "type": "face",
+      "cell": "3cc026\u20262fa6",
+      "kind": "affordances",
+      "label": "Messages Understood"
+    },
+    {
+      "id": "face:3cc026\u20262fa6/provenance",
+      "type": "face",
+      "cell": "3cc026\u20262fa6",
+      "kind": "provenance",
+      "label": "Receipt Lineage"
+    },
+    {
+      "id": "face:3cc026\u20262fa6/graph",
+      "type": "face",
+      "cell": "3cc026\u20262fa6",
+      "kind": "graph",
+      "label": "ocap Graph"
+    },
+    {
+      "id": "face:3cc026\u20262fa6/domain-visual",
+      "type": "face",
+      "cell": "3cc026\u20262fa6",
+      "kind": "domain-visual",
+      "label": "Lifecycle"
+    },
+    {
+      "id": "affordance:3cc026\u20262fa6/peek",
+      "type": "affordance",
+      "cell": "3cc026\u20262fa6",
+      "message": "peek",
+      "effect": "EmitEvent",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:3cc026\u20262fa6/touch",
+      "type": "affordance",
+      "cell": "3cc026\u20262fa6",
+      "message": "touch",
+      "effect": "IncrementNonce",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:3cc026\u20262fa6/write",
+      "type": "affordance",
+      "cell": "3cc026\u20262fa6",
+      "message": "write",
+      "effect": "SetField(slot 1)",
+      "required": "Either",
+      "authorized": true
+    },
+    {
+      "id": "affordance:3cc026\u20262fa6/grant",
+      "type": "affordance",
+      "cell": "3cc026\u20262fa6",
+      "message": "grant",
+      "effect": "GrantCapability",
+      "required": "None",
+      "authorized": true
+    },
+    {
+      "id": "ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+      "type": "cell",
+      "short": "ccfc99\u2026899a",
+      "kind": null,
+      "title": null
+    },
+    {
+      "id": "face:ccfc99\u2026899a/raw-fields",
+      "type": "face",
+      "cell": "ccfc99\u2026899a",
+      "kind": "raw-fields",
+      "label": "Cell State"
+    },
+    {
+      "id": "face:ccfc99\u2026899a/affordances",
+      "type": "face",
+      "cell": "ccfc99\u2026899a",
+      "kind": "affordances",
+      "label": "Messages Understood"
+    },
+    {
+      "id": "face:ccfc99\u2026899a/provenance",
+      "type": "face",
+      "cell": "ccfc99\u2026899a",
+      "kind": "provenance",
+      "label": "Receipt Lineage"
+    },
+    {
+      "id": "face:ccfc99\u2026899a/graph",
+      "type": "face",
+      "cell": "ccfc99\u2026899a",
+      "kind": "graph",
+      "label": "ocap Graph"
+    },
+    {
+      "id": "face:ccfc99\u2026899a/domain-visual",
+      "type": "face",
+      "cell": "ccfc99\u2026899a",
+      "kind": "domain-visual",
+      "label": "Lifecycle"
+    },
+    {
+      "id": "affordance:ccfc99\u2026899a/peek",
+      "type": "affordance",
+      "cell": "ccfc99\u2026899a",
+      "message": "peek",
+      "effect": "EmitEvent",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:ccfc99\u2026899a/touch",
+      "type": "affordance",
+      "cell": "ccfc99\u2026899a",
+      "message": "touch",
+      "effect": "IncrementNonce",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:ccfc99\u2026899a/write",
+      "type": "affordance",
+      "cell": "ccfc99\u2026899a",
+      "message": "write",
+      "effect": "SetField(slot 1)",
+      "required": "Either",
+      "authorized": true
+    },
+    {
+      "id": "affordance:ccfc99\u2026899a/grant",
+      "type": "affordance",
+      "cell": "ccfc99\u2026899a",
+      "message": "grant",
+      "effect": "GrantCapability",
+      "required": "None",
+      "authorized": true
+    },
+    {
+      "id": "87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+      "type": "cell",
+      "short": "87a55e\u202656cb",
+      "kind": null,
+      "title": null
+    },
+    {
+      "id": "face:87a55e\u202656cb/raw-fields",
+      "type": "face",
+      "cell": "87a55e\u202656cb",
+      "kind": "raw-fields",
+      "label": "Cell State"
+    },
+    {
+      "id": "face:87a55e\u202656cb/affordances",
+      "type": "face",
+      "cell": "87a55e\u202656cb",
+      "kind": "affordances",
+      "label": "Messages Understood"
+    },
+    {
+      "id": "face:87a55e\u202656cb/provenance",
+      "type": "face",
+      "cell": "87a55e\u202656cb",
+      "kind": "provenance",
+      "label": "Receipt Lineage"
+    },
+    {
+      "id": "face:87a55e\u202656cb/graph",
+      "type": "face",
+      "cell": "87a55e\u202656cb",
+      "kind": "graph",
+      "label": "ocap Graph"
+    },
+    {
+      "id": "face:87a55e\u202656cb/domain-visual",
+      "type": "face",
+      "cell": "87a55e\u202656cb",
+      "kind": "domain-visual",
+      "label": "Lifecycle"
+    },
+    {
+      "id": "affordance:87a55e\u202656cb/peek",
+      "type": "affordance",
+      "cell": "87a55e\u202656cb",
+      "message": "peek",
+      "effect": "EmitEvent",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:87a55e\u202656cb/touch",
+      "type": "affordance",
+      "cell": "87a55e\u202656cb",
+      "message": "touch",
+      "effect": "IncrementNonce",
+      "required": "Signature",
+      "authorized": true
+    },
+    {
+      "id": "affordance:87a55e\u202656cb/write",
+      "type": "affordance",
+      "cell": "87a55e\u202656cb",
+      "message": "write",
+      "effect": "SetField(slot 1)",
+      "required": "Either",
+      "authorized": true
+    },
+    {
+      "id": "affordance:87a55e\u202656cb/grant",
+      "type": "affordance",
+      "cell": "87a55e\u202656cb",
+      "message": "grant",
+      "effect": "GrantCapability",
+      "required": "None",
+      "authorized": true
+    },
+    {
+      "id": "cell:ccfc99\u20268",
+      "type": "cell",
+      "short": "ccfc99\u20268"
+    },
+    {
+      "id": "cell:2a6969\u2026a",
+      "type": "cell",
+      "short": "2a6969\u2026a"
+    },
+    {
+      "id": "ocap-edge:ccfc99\u20268->2a6969\u2026a",
+      "type": "ocap-edge",
+      "holder": "ccfc99\u20268",
+      "target": "2a6969\u2026a",
+      "rights": "None",
+      "slot": 0,
+      "delegated": null,
+      "faceted": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "face:2a6969\u2026ab90/raw-fields",
+      "type": "presents"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "face:2a6969\u2026ab90/affordances",
+      "type": "presents"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "face:2a6969\u2026ab90/provenance",
+      "type": "presents"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "face:2a6969\u2026ab90/graph",
+      "type": "presents"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "face:2a6969\u2026ab90/domain-visual",
+      "type": "presents"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "affordance:2a6969\u2026ab90/peek",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/peek",
+      "to": "effect:EmitEvent",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/peek",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "affordance:2a6969\u2026ab90/touch",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/touch",
+      "to": "effect:IncrementNonce",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/touch",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "affordance:2a6969\u2026ab90/write",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/write",
+      "to": "effect:SetField(slot 1)",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/write",
+      "to": "auth:Either",
+      "type": "requires"
+    },
+    {
+      "from": "cell:2a6969\u2026ab90",
+      "to": "affordance:2a6969\u2026ab90/grant",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/grant",
+      "to": "effect:GrantCapability",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:2a6969\u2026ab90/grant",
+      "to": "auth:None",
+      "type": "requires"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "face:3cc026\u20262fa6/raw-fields",
+      "type": "presents"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "face:3cc026\u20262fa6/affordances",
+      "type": "presents"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "face:3cc026\u20262fa6/provenance",
+      "type": "presents"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "face:3cc026\u20262fa6/graph",
+      "type": "presents"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "face:3cc026\u20262fa6/domain-visual",
+      "type": "presents"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "affordance:3cc026\u20262fa6/peek",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/peek",
+      "to": "effect:EmitEvent",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/peek",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "affordance:3cc026\u20262fa6/touch",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/touch",
+      "to": "effect:IncrementNonce",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/touch",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "affordance:3cc026\u20262fa6/write",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/write",
+      "to": "effect:SetField(slot 1)",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/write",
+      "to": "auth:Either",
+      "type": "requires"
+    },
+    {
+      "from": "cell:3cc026\u20262fa6",
+      "to": "affordance:3cc026\u20262fa6/grant",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/grant",
+      "to": "effect:GrantCapability",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:3cc026\u20262fa6/grant",
+      "to": "auth:None",
+      "type": "requires"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "face:ccfc99\u2026899a/raw-fields",
+      "type": "presents"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "face:ccfc99\u2026899a/affordances",
+      "type": "presents"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "face:ccfc99\u2026899a/provenance",
+      "type": "presents"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "face:ccfc99\u2026899a/graph",
+      "type": "presents"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "face:ccfc99\u2026899a/domain-visual",
+      "type": "presents"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "affordance:ccfc99\u2026899a/peek",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/peek",
+      "to": "effect:EmitEvent",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/peek",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "affordance:ccfc99\u2026899a/touch",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/touch",
+      "to": "effect:IncrementNonce",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/touch",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "affordance:ccfc99\u2026899a/write",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/write",
+      "to": "effect:SetField(slot 1)",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/write",
+      "to": "auth:Either",
+      "type": "requires"
+    },
+    {
+      "from": "cell:ccfc99\u2026899a",
+      "to": "affordance:ccfc99\u2026899a/grant",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/grant",
+      "to": "effect:GrantCapability",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:ccfc99\u2026899a/grant",
+      "to": "auth:None",
+      "type": "requires"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "face:87a55e\u202656cb/raw-fields",
+      "type": "presents"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "face:87a55e\u202656cb/affordances",
+      "type": "presents"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "face:87a55e\u202656cb/provenance",
+      "type": "presents"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "face:87a55e\u202656cb/graph",
+      "type": "presents"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "face:87a55e\u202656cb/domain-visual",
+      "type": "presents"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "affordance:87a55e\u202656cb/peek",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/peek",
+      "to": "effect:EmitEvent",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/peek",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "affordance:87a55e\u202656cb/touch",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/touch",
+      "to": "effect:IncrementNonce",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/touch",
+      "to": "auth:Signature",
+      "type": "requires"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "affordance:87a55e\u202656cb/write",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/write",
+      "to": "effect:SetField(slot 1)",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/write",
+      "to": "auth:Either",
+      "type": "requires"
+    },
+    {
+      "from": "cell:87a55e\u202656cb",
+      "to": "affordance:87a55e\u202656cb/grant",
+      "type": "understands"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/grant",
+      "to": "effect:GrantCapability",
+      "type": "lifts_to"
+    },
+    {
+      "from": "affordance:87a55e\u202656cb/grant",
+      "to": "auth:None",
+      "type": "requires"
+    },
+    {
+      "from": "cell:ccfc99\u20268",
+      "to": "ocap-edge:ccfc99\u20268->2a6969\u2026a",
+      "type": "grants"
+    },
+    {
+      "from": "ocap-edge:ccfc99\u20268->2a6969\u2026a",
+      "to": "cell:2a6969\u2026a",
+      "type": "to"
+    }
+  ],
+  "native_map": {
+    "what": "THE hypermedia backbone: one cross-linked graph over the whole inspectable system \u2014 every object an addressable node, every relation a typed edge",
+    "node_kinds": [
+      "system",
+      "cell",
+      "face",
+      "message",
+      "effect",
+      "data-plane",
+      "federation",
+      "distance-rung"
+    ],
+    "edge_rels": [
+      "contains-cell",
+      "defines-effect",
+      "presents",
+      "affords",
+      "fires",
+      "caps",
+      "surfaces-as",
+      "distance-rung",
+      "has-plane"
+    ],
+    "counts": {
+      "nodes": 78,
+      "edges": 95,
+      "by_kind": {
+        "cell": 4,
+        "effect": 31
+      }
+    },
+    "nodes": [
+      {
+        "id": "sys:root",
+        "kind": "system",
+        "label": "dregg live verified image",
+        "image": "demo",
+        "cell_count": 4,
+        "height": 5,
+        "state_root": "cf6c9d\u20262005"
+      },
+      {
+        "id": "effect:SetField",
+        "kind": "effect",
+        "label": "SetField",
+        "canonical_verb": true,
+        "conservation": "Neutral",
+        "descriptor": "cell, index, value"
+      },
+      {
+        "id": "effect:Transfer",
+        "kind": "effect",
+        "label": "Transfer",
+        "canonical_verb": true,
+        "conservation": "Conservative",
+        "descriptor": "from, to, amount"
+      },
+      {
+        "id": "effect:GrantCapability",
+        "kind": "effect",
+        "label": "GrantCapability",
+        "canonical_verb": true,
+        "conservation": "Generative",
+        "descriptor": "from, to, cap: CapabilityRef"
+      },
+      {
+        "id": "effect:RevokeCapability",
+        "kind": "effect",
+        "label": "RevokeCapability",
+        "canonical_verb": true,
+        "conservation": "Terminal",
+        "descriptor": "cell, slot"
+      },
+      {
+        "id": "effect:EmitEvent",
+        "kind": "effect",
+        "label": "EmitEvent",
+        "canonical_verb": true,
+        "conservation": "Neutral",
+        "descriptor": "cell, event"
+      },
+      {
+        "id": "effect:IncrementNonce",
+        "kind": "effect",
+        "label": "IncrementNonce",
+        "canonical_verb": true,
+        "conservation": "Monotonic",
+        "descriptor": "cell"
+      },
+      {
+        "id": "effect:CreateCell",
+        "kind": "effect",
+        "label": "CreateCell",
+        "canonical_verb": true,
+        "conservation": "Generative",
+        "descriptor": "public_key, token_id, balance"
+      },
+      {
+        "id": "effect:SetPermissions",
+        "kind": "effect",
+        "label": "SetPermissions",
+        "canonical_verb": true,
+        "conservation": "Neutral",
+        "descriptor": "cell, new_permissions"
+      },
+      {
+        "id": "effect:SetVerificationKey",
+        "kind": "effect",
+        "label": "SetVerificationKey",
+        "canonical_verb": false,
+        "conservation": "Neutral",
+        "descriptor": "cell, new_vk"
+      },
+      {
+        "id": "effect:SetProgram",
+        "kind": "effect",
+        "label": "SetProgram",
+        "canonical_verb": false,
+        "conservation": "Neutral",
+        "descriptor": "cell, program: CellProgram"
+      },
+      {
+        "id": "effect:NoteSpend",
+        "kind": "effect",
+        "label": "NoteSpend",
+        "canonical_verb": false,
+        "conservation": "Conservative",
+        "descriptor": "nullifier, note_tree_root, value, asset_type, spending_proof, value_commitment?"
+      },
+      {
+        "id": "effect:NoteCreate",
+        "kind": "effect",
+        "label": "NoteCreate",
+        "canonical_verb": false,
+        "conservation": "Conservative",
+        "descriptor": "commitment, value, asset_type, encrypted_note, value_commitment?, range_proof?"
+      },
+      {
+        "id": "effect:SpawnWithDelegation",
+        "kind": "effect",
+        "label": "SpawnWithDelegation",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "child_public_key, child_token_id, max_staleness"
+      },
+      {
+        "id": "effect:RefreshDelegation",
+        "kind": "effect",
+        "label": "RefreshDelegation",
+        "canonical_verb": false,
+        "conservation": "Neutral",
+        "descriptor": "child, snapshot"
+      },
+      {
+        "id": "effect:RevokeDelegation",
+        "kind": "effect",
+        "label": "RevokeDelegation",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "child"
+      },
+      {
+        "id": "effect:BridgeMint",
+        "kind": "effect",
+        "label": "BridgeMint",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "portable_proof: PortableNoteProof"
+      },
+      {
+        "id": "effect:Introduce",
+        "kind": "effect",
+        "label": "Introduce",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "introducer, recipient, target, permissions"
+      },
+      {
+        "id": "effect:PipelinedSend",
+        "kind": "effect",
+        "label": "PipelinedSend",
+        "canonical_verb": false,
+        "conservation": "Neutral",
+        "descriptor": "target: EventualRef, action"
+      },
+      {
+        "id": "effect:ExerciseViaCapability",
+        "kind": "effect",
+        "label": "ExerciseViaCapability",
+        "canonical_verb": false,
+        "conservation": "Neutral",
+        "descriptor": "cap_slot, inner_effects"
+      },
+      {
+        "id": "effect:MakeSovereign",
+        "kind": "effect",
+        "label": "MakeSovereign",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "cell"
+      },
+      {
+        "id": "effect:CreateCellFromFactory",
+        "kind": "effect",
+        "label": "CreateCellFromFactory",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "factory_vk, owner_pubkey, token_id, params"
+      },
+      {
+        "id": "effect:Refusal",
+        "kind": "effect",
+        "label": "Refusal",
+        "canonical_verb": false,
+        "conservation": "Monotonic",
+        "descriptor": "cell, offered_action_commitment, refusal_reason, proof_witness_index"
+      },
+      {
+        "id": "effect:CellSeal",
+        "kind": "effect",
+        "label": "CellSeal",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "target, reason"
+      },
+      {
+        "id": "effect:CellUnseal",
+        "kind": "effect",
+        "label": "CellUnseal",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "target"
+      },
+      {
+        "id": "effect:CellDestroy",
+        "kind": "effect",
+        "label": "CellDestroy",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "target, certificate: DeathCertificate"
+      },
+      {
+        "id": "effect:Burn",
+        "kind": "effect",
+        "label": "Burn",
+        "canonical_verb": false,
+        "conservation": "Annihilative",
+        "descriptor": "target, slot, amount"
+      },
+      {
+        "id": "effect:AttenuateCapability",
+        "kind": "effect",
+        "label": "AttenuateCapability",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "cell, slot, narrower_permissions, narrower_effects?, narrower_expiry?"
+      },
+      {
+        "id": "effect:ReceiptArchive",
+        "kind": "effect",
+        "label": "ReceiptArchive",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "prefix_end_height, checkpoint: ArchivalAttestation"
+      },
+      {
+        "id": "effect:Promise",
+        "kind": "effect",
+        "label": "Promise",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "cell, resolution_condition, wake, timeout_height"
+      },
+      {
+        "id": "effect:Notify",
+        "kind": "effect",
+        "label": "Notify",
+        "canonical_verb": false,
+        "conservation": "Generative",
+        "descriptor": "from, to, resolution_condition, wake, timeout_height"
+      },
+      {
+        "id": "effect:React",
+        "kind": "effect",
+        "label": "React",
+        "canonical_verb": false,
+        "conservation": "Terminal",
+        "descriptor": "pending_id, condition, resolution_proof, wake"
+      },
+      {
+        "id": "plane:dataplane",
+        "kind": "data-plane",
+        "label": "captp Bus / channel substrate",
+        "tool": "dataplane",
+        "live": "driven in-process; node Bus is a wire seam"
+      },
+      {
+        "id": "plane:federation",
+        "kind": "federation",
+        "label": "committee / epoch / checkpoint / revocation",
+        "tool": "federation",
+        "live": "solo n=1 here; quorum federation is a wire seam"
+      },
+      {
+        "id": "firmament:Local",
+        "kind": "distance-rung",
+        "label": "firmament Local",
+        "axis": "one cap across distance"
+      },
+      {
+        "id": "firmament:Distributed",
+        "kind": "distance-rung",
+        "label": "firmament Distributed",
+        "axis": "one cap across distance"
+      },
+      {
+        "id": "firmament:Surface",
+        "kind": "distance-rung",
+        "label": "firmament Surface",
+        "axis": "one cap across distance"
+      },
+      {
+        "id": "firmament:HostPd",
+        "kind": "distance-rung",
+        "label": "firmament HostPd",
+        "axis": "one cap across distance"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "kind": "cell",
+        "label": "Cell 87a55e\u202656cb",
+        "short": "87a55e\u202656cb",
+        "cell_kind": "Cell",
+        "lifecycle": "Live",
+        "balance": 700000
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:raw-fields",
+        "kind": "face",
+        "label": "Cell State",
+        "face": "raw-fields"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:affordances",
+        "kind": "face",
+        "label": "Messages Understood",
+        "face": "affordances"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:provenance",
+        "kind": "face",
+        "label": "Receipt Lineage",
+        "face": "provenance"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:graph",
+        "kind": "face",
+        "label": "ocap Graph",
+        "face": "graph"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:domain-visual",
+        "kind": "face",
+        "label": "Lifecycle",
+        "face": "domain-visual"
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:peek",
+        "kind": "message",
+        "label": "peek",
+        "effect": "EmitEvent",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:touch",
+        "kind": "message",
+        "label": "touch",
+        "effect": "IncrementNonce",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:write",
+        "kind": "message",
+        "label": "write",
+        "effect": "SetField(slot 1)",
+        "required": "Either",
+        "authorized": true
+      },
+      {
+        "id": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:grant",
+        "kind": "message",
+        "label": "grant",
+        "effect": "GrantCapability",
+        "required": "None",
+        "authorized": true
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "kind": "cell",
+        "label": "Cell 2a6969\u2026ab90",
+        "short": "2a6969\u2026ab90",
+        "cell_kind": "Cell",
+        "lifecycle": "Live",
+        "balance": 54000
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:raw-fields",
+        "kind": "face",
+        "label": "Cell State",
+        "face": "raw-fields"
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:affordances",
+        "kind": "face",
+        "label": "Messages Understood",
+        "face": "affordances"
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:provenance",
+        "kind": "face",
+        "label": "Receipt Lineage",
+        "face": "provenance"
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:graph",
+        "kind": "face",
+        "label": "ocap Graph",
+        "face": "graph"
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:domain-visual",
+        "kind": "face",
+        "label": "Lifecycle",
+        "face": "domain-visual"
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:peek",
+        "kind": "message",
+        "label": "peek",
+        "effect": "EmitEvent",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:touch",
+        "kind": "message",
+        "label": "touch",
+        "effect": "IncrementNonce",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:write",
+        "kind": "message",
+        "label": "write",
+        "effect": "SetField(slot 1)",
+        "required": "Either",
+        "authorized": true
+      },
+      {
+        "id": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:grant",
+        "kind": "message",
+        "label": "grant",
+        "effect": "GrantCapability",
+        "required": "None",
+        "authorized": true
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "kind": "cell",
+        "label": "Cell 3cc026\u20262fa6",
+        "short": "3cc026\u20262fa6",
+        "cell_kind": "Cell",
+        "lifecycle": "Live",
+        "balance": -1000000
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:raw-fields",
+        "kind": "face",
+        "label": "Cell State",
+        "face": "raw-fields"
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:affordances",
+        "kind": "face",
+        "label": "Messages Understood",
+        "face": "affordances"
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:provenance",
+        "kind": "face",
+        "label": "Receipt Lineage",
+        "face": "provenance"
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:graph",
+        "kind": "face",
+        "label": "ocap Graph",
+        "face": "graph"
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:domain-visual",
+        "kind": "face",
+        "label": "Lifecycle",
+        "face": "domain-visual"
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:peek",
+        "kind": "message",
+        "label": "peek",
+        "effect": "EmitEvent",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:touch",
+        "kind": "message",
+        "label": "touch",
+        "effect": "IncrementNonce",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:write",
+        "kind": "message",
+        "label": "write",
+        "effect": "SetField(slot 1)",
+        "required": "Either",
+        "authorized": true
+      },
+      {
+        "id": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:grant",
+        "kind": "message",
+        "label": "grant",
+        "effect": "GrantCapability",
+        "required": "None",
+        "authorized": true
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "kind": "cell",
+        "label": "Cell ccfc99\u2026899a",
+        "short": "ccfc99\u2026899a",
+        "cell_kind": "Cell",
+        "lifecycle": "Live",
+        "balance": 251000
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:raw-fields",
+        "kind": "face",
+        "label": "Cell State",
+        "face": "raw-fields"
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:affordances",
+        "kind": "face",
+        "label": "Messages Understood",
+        "face": "affordances"
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:provenance",
+        "kind": "face",
+        "label": "Receipt Lineage",
+        "face": "provenance"
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:graph",
+        "kind": "face",
+        "label": "ocap Graph",
+        "face": "graph"
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:domain-visual",
+        "kind": "face",
+        "label": "Lifecycle",
+        "face": "domain-visual"
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:peek",
+        "kind": "message",
+        "label": "peek",
+        "effect": "EmitEvent",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:touch",
+        "kind": "message",
+        "label": "touch",
+        "effect": "IncrementNonce",
+        "required": "Signature",
+        "authorized": true
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:write",
+        "kind": "message",
+        "label": "write",
+        "effect": "SetField(slot 1)",
+        "required": "Either",
+        "authorized": true
+      },
+      {
+        "id": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:grant",
+        "kind": "message",
+        "label": "grant",
+        "effect": "GrantCapability",
+        "required": "None",
+        "authorized": true
+      }
+    ],
+    "edges": [
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:SetField"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Transfer"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:GrantCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:RevokeCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:EmitEvent"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:IncrementNonce"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:CreateCell"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:SetPermissions"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:SetVerificationKey"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:SetProgram"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:NoteSpend"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:NoteCreate"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:SpawnWithDelegation"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:RefreshDelegation"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:RevokeDelegation"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:BridgeMint"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Introduce"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:PipelinedSend"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:ExerciseViaCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:MakeSovereign"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:CreateCellFromFactory"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Refusal"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:CellSeal"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:CellUnseal"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:CellDestroy"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Burn"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:AttenuateCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:ReceiptArchive"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Promise"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:Notify"
+      },
+      {
+        "from": "sys:root",
+        "rel": "defines-effect",
+        "to": "effect:React"
+      },
+      {
+        "from": "sys:root",
+        "rel": "distance-rung",
+        "to": "firmament:Local"
+      },
+      {
+        "from": "sys:root",
+        "rel": "distance-rung",
+        "to": "firmament:Distributed"
+      },
+      {
+        "from": "sys:root",
+        "rel": "distance-rung",
+        "to": "firmament:Surface"
+      },
+      {
+        "from": "sys:root",
+        "rel": "distance-rung",
+        "to": "firmament:HostPd"
+      },
+      {
+        "from": "sys:root",
+        "rel": "has-plane",
+        "to": "plane:dataplane"
+      },
+      {
+        "from": "sys:root",
+        "rel": "has-plane",
+        "to": "plane:federation"
+      },
+      {
+        "from": "sys:root",
+        "rel": "contains-cell",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "surfaces-as",
+        "to": "firmament:Surface"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "presents",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:raw-fields"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "presents",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:affordances"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "presents",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:provenance"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "presents",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:graph"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "presents",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/face:domain-visual"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "affords",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:peek"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:peek",
+        "rel": "fires",
+        "to": "effect:EmitEvent"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "affords",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:touch"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:touch",
+        "rel": "fires",
+        "to": "effect:IncrementNonce"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "affords",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:write"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb",
+        "rel": "affords",
+        "to": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:grant"
+      },
+      {
+        "from": "cell:87a55eb57cfd50fb071c495c094cd6f2759886ba1f6f29ef9231fb2d8b2156cb/msg:grant",
+        "rel": "fires",
+        "to": "effect:GrantCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "contains-cell",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "surfaces-as",
+        "to": "firmament:Surface"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "presents",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:raw-fields"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "presents",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:affordances"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "presents",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:provenance"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "presents",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:graph"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "presents",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/face:domain-visual"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "affords",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:peek"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:peek",
+        "rel": "fires",
+        "to": "effect:EmitEvent"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "affords",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:touch"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:touch",
+        "rel": "fires",
+        "to": "effect:IncrementNonce"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "affords",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:write"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "rel": "affords",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:grant"
+      },
+      {
+        "from": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90/msg:grant",
+        "rel": "fires",
+        "to": "effect:GrantCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "contains-cell",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "surfaces-as",
+        "to": "firmament:Surface"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "presents",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:raw-fields"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "presents",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:affordances"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "presents",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:provenance"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "presents",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:graph"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "presents",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/face:domain-visual"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "affords",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:peek"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:peek",
+        "rel": "fires",
+        "to": "effect:EmitEvent"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "affords",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:touch"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:touch",
+        "rel": "fires",
+        "to": "effect:IncrementNonce"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "affords",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:write"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6",
+        "rel": "affords",
+        "to": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:grant"
+      },
+      {
+        "from": "cell:3cc026241cb8123afed80e589a30d1b487514b4fe469484c8387d6e4b89c2fa6/msg:grant",
+        "rel": "fires",
+        "to": "effect:GrantCapability"
+      },
+      {
+        "from": "sys:root",
+        "rel": "contains-cell",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "surfaces-as",
+        "to": "firmament:Surface"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "presents",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:raw-fields"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "presents",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:affordances"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "presents",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:provenance"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "presents",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:graph"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "presents",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/face:domain-visual"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "affords",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:peek"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:peek",
+        "rel": "fires",
+        "to": "effect:EmitEvent"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "affords",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:touch"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:touch",
+        "rel": "fires",
+        "to": "effect:IncrementNonce"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "affords",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:write"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "affords",
+        "to": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:grant"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a/msg:grant",
+        "rel": "fires",
+        "to": "effect:GrantCapability"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "caps",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "slot": 0,
+        "rights": "None"
+      },
+      {
+        "from": "cell:ccfc9955bdc00352d51a0f096caeb339dc534338a076681e048ef4da6ffa899a",
+        "rel": "caps",
+        "to": "cell:2a6969a63df11a7d51aac1f9fcb50dd3c3cbdb78e0e3a945eaaadecb486bab90",
+        "slot": 1,
+        "rights": "None"
+      }
+    ],
+    "hint": "link over `id`; resolve a cell node with inspect, an effect node with effects, a plane node with dataplane/federation"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "id": "privacy-voting",
+  "name": "Privacy Voting",
+  "description": "Dregg-native polls: factory-born poll cells (monotone tallies, write-once question/close) and per-voter ballot cells (one vote per cell via WriteOnce). Voting rules are enforced by slot caveats on the substrate, not app bookkeeping.",
+  "version": "0.1.0",
+  "status": "starbridge",
+  "crate": "starbridge-privacy-voting",
+  "runtime_mode": "starbridge-native",
+  "caddy_prefix": "/voting",
+  "factory_vks": [
+    "737461726272696467652d707269766163792d766f74696e672d706f6c6c2121",
+    "737461726272696467652d707269766163792d766f74696e672d62616c6c6f74"
+  ],
+  "page": null,
+  "inspectors": ["poll", "ballot"],
+  "turn_builders": ["open_poll", "cast_vote", "close_poll"],
+  "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed two-cell DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "voting_app(cipherclerk, executor)",
+    "cells": ["poll", "ballot"],
+    "two_cell": "the POLL cell is the agent's own (cipherclerk.cell_id()); the BALLOT cell is a distinct companion (ballot_cell_id = derive_raw(pk, SEEDED_BALLOT_TOKEN)), birthed into the same embedded ledger via EmbeddedExecutor::ensure_cell + an agent cap so the cast_vote fire reaches its live state. BOTH cells are seeded (seed_poll + seed_ballot) or fires fail-closed.",
+    "discoverable": ["voting", "poll"],
+    "publish": "Signature (the POLL tally-board cell is a dregg:// sturdyref a peer on another federation reacquires)",
+    "affordances": {
+      "view_poll": "cap-only, Signature (a VIEWER reads the public tally board) — on the POLL cell",
+      "cast_vote": "GATED (cap∧state), Either — ballot-unset precondition (VOTE==0); the fire submits the FULL vote (poll_ref + vote), the executor re-enforcing WriteOnce(VOTE) — on the BALLOT cell",
+      "record_tally": "GATED (cap∧state), None/root — poll-open precondition (CLOSED==0); the fire reads the live tally and writes live+1, the executor re-enforcing Monotonic(TALLY_*) — on the POLL cell",
+      "close_poll": "GATED (cap∧state), None/root — poll-open precondition (CLOSED==0); the fire sets CLOSED:=1, the executor re-enforcing WriteOnce(CLOSED) — on the POLL cell"
+    },
+    "seam": "CLOSED — the fires run against the seeded cells carrying the slot caveats, so a DOUBLE VOTE (rewriting the ballot's VOTE, WriteOnce(VOTE)), a TALLY REWIND (Monotonic(TALLY_YES)), and a POLL RE-OPEN (CLOSED 1->0, WriteOnce(CLOSED)) BITE in the deos fire/submission path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/privacy-voting/src/lib.rs",
+    "ported_from": "apps/privacy-voting"
+  }
+}

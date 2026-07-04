@@ -1,0 +1,6 @@
+comment = 'pg-dregg: dregg verified object-capability authorization as a PostgreSQL-native RLS/policy layer'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_dregg'
+relocatable = false
+superuser = true
+trusted = false

@@ -1,0 +1,18 @@
+[package]
+name = "dregg-payable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The Payable DSI + the userspace method-routing core (resolve_against / InvokeAuthority) — the one verified source of truth for cross-cell VALUE FLOW, low enough for both the SDK and the app framework to depend on."
+
+[dependencies]
+dregg-types = { path = "../types" }
+dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
+
+[lints]
+workspace = true

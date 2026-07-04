@@ -1,0 +1,39 @@
+# Cargo config for the render-PD root task that hosts the lavapipe ICD + the
+# gpui-offscreen render path. Mirrors executor-rootserver/.cargo/config.toml (the
+# rust-sel4 musl-root-task build):
+#   * build-std WITH `std` (sel4-root-task-with-std pulls std: malloc/TLS/unwind —
+#     the surface lavapipe's LLVM JIT needs)
+#   * target = aarch64-sel4-roottask-musl (the vendored rust-sel4 target spec:
+#     os=linux, env=musl, static, panic=abort, rust-lld, --no-rosegment so the
+#     root-task image is one combined RWX loadable — the property the JIT W→X
+#     arena relies on)
+#
+# SEL4_PREFIX / SEL4_INCLUDE_DIRS (the kernel.elf + libsel4 headers this PD's
+# `sel4` crate binds against) are supplied at build time by scripts/build-image.sh
+# from ./sel4-prefix (provisioned, reusing executor-rootserver's substrate).
+
+[unstable]
+unstable-options = true
+build-std = ["core", "alloc", "compiler_builtins", "std", "panic_abort"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "aarch64-sel4-roottask-musl"
+rustflags = ["-Zunstable-options"]
+
+[env]
+# The vendored rust-sel4 target specs (aarch64-sel4-roottask-musl.json lives here).
+RUST_TARGET_PATH = { value = "/Users/ember/sel4-sdk/rust-sel4/support/targets", force = true }
+
+# The seL4-musl libc + a dummy libunwind, both provisioned into ./out by
+# scripts/provision-sel4.sh (reused from executor-rootserver). -L makes
+# `-lc`/`-lunwind` from the target's link args resolve to the seL4
+# (sysinfo-routed) musl rather than any host libc. The lavapipe ICD + its static
+# LLVM are added on the link line by build.rs (out/mesa-elf + the C++ runtime).
+[target.aarch64-sel4-roottask-musl]
+rustflags = [
+    "-Zunstable-options",
+    "-L", "/Users/ember/dev/breadstuffs/sel4/render-pd/out/musl-sel4/lib",
+    "-L", "/Users/ember/dev/breadstuffs/sel4/render-pd/out/dummy-libunwind/lib",
+]
+linker = "rust-lld"

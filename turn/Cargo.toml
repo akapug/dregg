@@ -1,0 +1,89 @@
+[package]
+name = "dregg-turn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Call-forest transaction model for atomic agent execution turns"
+
+[dependencies]
+dregg-captp = { path = "../captp" }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-circuit = { path = "../circuit" }
+# The heavy prove crate is needed ONLY by turn's PRODUCER side (rotation_witness →
+# joint-turn aggregation / recursive witness bundle / custom proof-bind), all
+# `#[cfg(feature = "prover")]`. turn's executor VERIFY reconstructs PIs through the
+# `*_wide` generators, which are verify-level in `dregg-circuit` — so a verify-only
+# (`not(prover)`) turn build stays recursion-free (the seL4 verifier-PD floor).
+dregg-circuit-prove = { path = "../circuit-prove", optional = true }
+dregg-commit = { path = "../commit" }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-token = { path = "../token" }
+dregg-types = { path = "../types" }
+blake3 = "1"
+chacha20poly1305 = { workspace = true }
+curve25519-dalek = { version = "4", features = ["alloc"] }
+tracing = { workspace = true }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+getrandom = { workspace = true }
+hex = "0.4"
+postcard = { version = "1", features = ["alloc"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+x25519-dalek = { workspace = true }
+# Threshold-signature verifier backend (the governed-namespace `GOVERNANCE_VK`
+# `Authorization::Custom` discharge). `hints` is the BLS12-381 + KZG weighted
+# threshold-signature crate `dregg-federation`'s `FederationCommittee` /
+# `ThresholdQC` already wrap — we link it DIRECTLY here (federation depends on
+# turn, so turn must not depend on federation; this is the same "weld from the
+# leaf primitive, not the wrapper" move `BridgePredicateStarkVerifier` makes
+# vs. `dregg-bridge`). Gated behind the default `threshold-sig` feature so the
+# wasm/zkvm path (`default-features = false`) does not pull arkworks.
+hints = { path = "../hints", package = "dregg-hints", optional = true }
+ark-serialize = { version = "0.5.0", optional = true }
+ark-ff = { version = "0.5.0", optional = true }
+
+# wasm32 clock for the measurement-only per-turn profiler (`DREGG_TURN_PROFILE`).
+# `std::time::Instant` on `wasm32-unknown-unknown` panics ("time not implemented on
+# this platform"), which would crash a real in-browser turn even though the profiler
+# is OFF — the fences call `Instant::now()` unconditionally. `web-time::Instant` is a
+# drop-in backed by `performance.now()`. Native builds never pull it (the profiler
+# uses `std::time::Instant` there); only the wasm card path needs the shim. Mirrors
+# the wasm clock seam `biscuit-auth`'s `wasm` feature closes in the wasm playground.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1"
+
+[features]
+# The ROTATED sovereign verify leg (`executor::verify_and_commit_proof_rotated`
+# → `dregg-circuit::descriptor_ir2::verify_vm_descriptor2`) is now the SOLE
+# sovereign verify path (the weak v1 hand-AIR floor is RETIRED). `descriptor_ir2`
+# is unconditional in `dregg-circuit` (the verify floor); the PI-reconstruction
+# `*_wide` generators ride `dregg-circuit-prove`, an unconditional dep above. The
+# `prover` feature now gates only turn's own PROVE side (rotation_witness produce,
+# aggregate-bilateral prover); it forwards to `dregg-cell/prover` for the faithful
+# 8-felt commitment.
+default = ["prover", "threshold-sig"]
+prover = ["dep:dregg-circuit-prove", "dregg-cell/prover"]
+# Real BLS12-381 + KZG weighted-threshold-signature verifier for
+# `Authorization::Custom { vk_hash }` discharges (the governed-namespace
+# `commit_table_update` `GOVERNANCE_VK` fire). ON in the default set; the
+# wasm/zkvm path (`default-features = false`) leaves it off so arkworks is not pulled.
+threshold-sig = ["dep:hints", "dep:ark-serialize", "dep:ark-ff"]
+
+[dev-dependencies]
+proptest = { workspace = true }
+sha2 = "0.10"
+# Deterministic test RNG for the threshold-sig verifier's `hints` committee
+# fixtures (`build_committee`). Test-scoped; the verifier itself needs no RNG.
+ark-std = "0.5.0"
+# Arm the `StubVerifier` accept path for plumbing tests only. The feature is
+# fail-closed in production builds; enabling it here scopes the permissive stub
+# behavior to `cargo test`/dev builds of this crate.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
+
+[lints]
+workspace = true

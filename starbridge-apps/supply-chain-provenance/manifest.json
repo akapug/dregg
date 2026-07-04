@@ -1,0 +1,68 @@
+{
+  "id": "supply-chain-provenance",
+  "name": "Supply-Chain Provenance",
+  "description": "Verifiable supply-chain provenance: an ITEM is a factory-born sovereign cell whose installed CellProgram enforces single-custodianship as a CONSERVATION law. A custody HANDOFF is a cap-attenuated transfer that strictly advances a provenance epoch (no replay) and appends a tamper-evident receipt link; the provenance is the on-cell hash chain (link_i = blake3(prev || event)), which a third party PROVES by re-derivation. A FORGED handoff is REFUSED by the verified executor on two teeth: the cap-graph (no custody cap reaching the item) and the actor-bound register (AnyOf[Immutable, SenderInSlot]). Composes existing slot-caveat atoms only; no new Lean module.",
+  "version": "0.1.0",
+  "status": "starbridge",
+  "crate": "starbridge-supply-chain-provenance",
+  "runtime_mode": "starbridge-native",
+  "caddy_prefix": "/provenance",
+  "factory_vks": [
+    "737461726272696467652d737570706c79636861696e2d6974656d2d66616374"
+  ],
+  "page": null,
+  "inspectors": ["supply-chain-item"],
+  "turn_builders": ["mint_item", "handoff_custody"],
+  "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
+  "slot_layout": {
+    "CUSTODIAN_SLOT": 0,
+    "EPOCH_SLOT": 1,
+    "HEAD_SLOT": 2,
+    "TIP_SLOT": 3,
+    "LINK_BASE": 4
+  },
+  "state_constraints": [
+    "AnyOf[Immutable(CUSTODIAN_SLOT), SenderInSlot(CUSTODIAN_SLOT)]",
+    "StrictMonotonic(EPOCH_SLOT)",
+    "Monotonic(HEAD_SLOT)",
+    "WriteOnce(LINK_BASE + i)"
+  ],
+  "service": {
+    "interface": "ProvenanceService (src/service.rs) — a typed InterfaceDescriptor driven through the invoke() front door",
+    "methods": {
+      "mint": "Replayable, Signature — inaugurate the sole custodian (CUSTODIAN=signer, EPOCH 0->1, genesis link)",
+      "handoff": "Replayable, Signature — the incoming holder accepts custody (advance the actor-bound baton to the signer, strict-mono EPOCH, WriteOnce link, append-only HEAD)",
+      "view": "Serviced, None — the named OFE seam: read the committed custody state + provenance chain, never desugared"
+    }
+  },
+  "card": {
+    "source": "card::provenance_card_value (src/card.rs) — a renderer-independent deos.ui.* view-tree (pure serde_json)",
+    "shape": "vstack[ header, bind(EPOCH_SLOT), button(mint), button(handoff), button(view) ]"
+  },
+  "derived": {
+    "summary": "derived::summarize (src/derived.rs) — a provenance summary is a derived view f(events): current custodian, handoff count, epoch, chain tip, conserved",
+    "derived_cell": "derived::bind_shipment_manifest / verify_shipment_manifest — a shipment-manifest derived cell over a roster of item source cells, grounded on dregg_cell::derived (DerivationSpec + Aggregate::Count); a forged (over-counted) or stale (un-re-derived) manifest fails verify_derivation (the Lean rung Dregg2/Deos/DerivedCell.lean)",
+    "attested_query": "derived::attested_custody_log / verify_attested_custody_log — a non-omission completeness certificate over the custody-handoff log, grounded on dregg_query (the receipt-log MMR, the Rust embodiment of Dregg2/Lightclient/MMR.lean's server_cannot_omit_position); a tampered or omitted handoff breaks the certificate"
+  },
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "item_app(cipherclerk, executor)",
+    "cell": "item",
+    "discoverable": ["supply-chain", "provenance"],
+    "publish": "Signature (the VERIFIER tier — the item cell is a dregg:// sturdyref a regulator on another federation reacquires to re-derive the custody chain)",
+    "affordances": {
+      "view_provenance": "cap-only, Signature (a VERIFIER reads + re-derives the chain)",
+      "accept_custody": "GATED (cap and state), Either — minted precondition (EPOCH >= 1); the fire submits the FULL handoff (CUSTODIAN=signer + strict-mono EPOCH + WriteOnce link + append-only HEAD + TIP), the executor re-enforcing the actor-bound AnyOf[Immutable, SenderInSlot]",
+      "mint_item": "GATED (cap and state), None/root — pre-mint precondition (EPOCH == 0); the fire submits the FULL mint, the executor re-enforcing StrictMonotonic(EPOCH) 0->1",
+      "grant_custody": "cap-only, None/root, carries the REAL Effect::GrantCapability (the manufacturer hands the custody cap forward NARROWED — the cap-graph half, derive_no_amplify)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded item cell carrying the FULL custody program, so a stale-epoch handoff (StrictMonotonic), a non-signer baton flip (AnyOf[Immutable, SenderInSlot]), a WriteOnce link overwrite, and a HEAD rewind (Monotonic) all BITE in the deos fire / executor-submission path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "starbridge-native",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/supply-chain-provenance/src/lib.rs"
+  }
+}

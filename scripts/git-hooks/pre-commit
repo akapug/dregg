@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Pre-commit: rustfmt every STAGED .rs file on its way into the commit, so format-drift never lands
+# (keeps CI's Format job green without anyone having to remember `cargo fmt`).
+#
+# - Touches ONLY staged files (not the tree), so it's safe alongside concurrent edits / parallel agents.
+# - Re-stages each formatted file so the commit contains the formatted version.
+# - Formats each file at ITS OWN CRATE'S EDITION — exactly as `cargo fmt`/CI do. rustfmt's macro &
+#   expression layout differs between editions (notably the edition-2021 vs 2024 `assert!`/`use`
+#   shapes), so a single hardcoded `--edition` would format the edition-2021 crates (starbridge-v2,
+#   deos-js, deos-view, deos-zed, deos-matrix, android-cell, servo-render, …) into a shape CI then
+#   rejects at their declared 2021 edition → drift on every commit. We resolve the per-file edition
+#   from the nearest ancestor `[package]` Cargo.toml so the hook and `cargo fmt --all -- --check` AGREE.
+# - SKIPS a file that doesn't parse (mid-edit / macro it can't handle) rather than BLOCKING the commit —
+#   a perf/fmt hook must never wedge a commit. CI's `cargo fmt --check` remains the hard gate.
+#
+# Installed by scripts/install-hooks.sh (symlinked into .git/hooks, leaving git-lfs's hooks intact).
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+# --- secret-scan backstop: BLOCK the commit if a real secret is staged (see docs/PUBLISHING-SAFETY.md) ---
+if [ -x "$repo_root/scripts/git-hooks/secret-scan.sh" ]; then
+  "$repo_root/scripts/git-hooks/secret-scan.sh" staged || exit 1
+fi
+
+command -v rustfmt >/dev/null 2>&1 || exit 0   # no rustfmt on PATH → don't block the commit
+
+# Workspace default edition (root [workspace.package] edition), used for crates that inherit it
+# via `edition.workspace = true`. Falls back to 2024 if the table can't be read.
+ws_edition="$(grep -A12 '^\[workspace\.package\]' "$repo_root/Cargo.toml" 2>/dev/null \
+  | grep -m1 -E '^[[:space:]]*edition[[:space:]]*=[[:space:]]*"[0-9]+"' \
+  | grep -oE '[0-9]+')"
+[ -n "${ws_edition:-}" ] || ws_edition=2024
+
+# Resolve the rustfmt edition for a file: walk up to the nearest Cargo.toml carrying a [package]
+# table and read its `edition`. (No caching/assoc-arrays — keeps this portable to bash 3.2; a commit
+# stages few files so each manifest is grepped at most a handful of times.)
+file_edition() {
+  local f="$1" dir toml ed
+  dir="$(cd "$repo_root" && cd "$(dirname "$f")" 2>/dev/null && pwd)" || { echo "$ws_edition"; return; }
+  while [ -n "$dir" ] && [ "$dir" != "/" ]; do
+    toml="$dir/Cargo.toml"
+    if [ -f "$toml" ] && grep -q '^\[package\]' "$toml"; then
+      ed="$(grep -m1 -E '^[[:space:]]*edition[[:space:]]*=[[:space:]]*"[0-9]+"' "$toml" | grep -oE '[0-9]+')"
+      if [ -z "$ed" ] && grep -qE '^[[:space:]]*edition(\.workspace[[:space:]]*=[[:space:]]*true|[[:space:]]*=[[:space:]]*\{[[:space:]]*workspace[[:space:]]*=[[:space:]]*true)' "$toml"; then
+        ed="$ws_edition"                 # edition.workspace = true  /  edition = { workspace = true }
+      fi
+      [ -n "$ed" ] || ed=2015            # a [package] with no edition → cargo's 2015 default
+      echo "$ed"; return
+    fi
+    dir="$(dirname "$dir")"
+  done
+  echo "$ws_edition"
+}
+
+# Null-delimited so paths with spaces are safe; ACM = Added/Copied/Modified (skip Deleted/Renamed-away).
+while IFS= read -r -d '' f; do
+  [ -f "$f" ] || continue
+  ed="$(file_edition "$f")"
+  if rustfmt --edition "$ed" "$f" 2>/dev/null; then
+    git add -- "$f"
+  else
+    printf 'pre-commit: rustfmt skipped %s (does not parse?) — committing as-is\n' "$f" >&2
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.rs')
+
+exit 0

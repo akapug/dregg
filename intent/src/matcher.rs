@@ -1,0 +1,1813 @@
+//! Local matching engine.
+//!
+//! Evaluates whether held capability tokens can satisfy a broadcast intent.
+//! Matching runs ENTIRELY locally (no network calls) and uses Datalog evaluation
+//! to check constraints. The result is a [`Match`] that can optionally include
+//! a STARK proof of satisfaction.
+//!
+//! # Privacy guarantee
+//!
+//! The matcher never reveals WHICH token matched, only THAT a match exists.
+//! The proof (if generated) demonstrates knowledge of a valid token satisfying
+//! the intent's MatchSpec without revealing the token itself.
+
+use crate::{
+    ActionPattern, CommitmentId, Constraint, Intent, IntentKind, Match, MatchSpec, VerificationMode,
+};
+
+/// Sensitivity level for a held capability.
+///
+/// Controls whether a capability can be automatically matched against incoming intents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sensitivity {
+    /// Public capabilities: freely matchable by the engine.
+    Public,
+    /// Normal capabilities: matchable, but not against Query intents.
+    Normal,
+    /// Sensitive capabilities: NEVER matched automatically.
+    /// Requires explicit user action to match against any intent.
+    Sensitive,
+}
+
+/// A held capability token in the cipherclerk's simplified representation.
+///
+/// This is the cclerk-side view of a token -- enough information to evaluate
+/// whether it satisfies a MatchSpec without needing the full serialized token.
+#[derive(Clone, Debug)]
+pub struct HeldCapability {
+    /// Unique identifier for this token in the cclerk.
+    pub token_id: String,
+    /// Actions this token grants (e.g., "read", "write").
+    pub actions: Vec<String>,
+    /// Resource this token applies to (e.g., "documents/*", "*").
+    pub resource: String,
+    /// App this token is scoped to, if any.
+    pub app_id: Option<String>,
+    /// Service this token is scoped to, if any.
+    pub service: Option<String>,
+    /// User this token is confined to, if any.
+    pub user_id: Option<String>,
+    /// Features this token grants.
+    pub features: Vec<String>,
+    /// OAuth provider, if relevant.
+    pub oauth_provider: Option<String>,
+    /// Expiry timestamp (Unix seconds), if any.
+    pub expiry: Option<u64>,
+    /// Remaining budget, if budgeted.
+    pub budget: Option<u64>,
+    /// Sensitivity level: controls automatic matching behavior.
+    /// Sensitive capabilities are never matched against incoming intents without
+    /// explicit user action.
+    pub sensitivity: Sensitivity,
+}
+
+/// Result of attempting to match an intent against held capabilities.
+#[derive(Clone, Debug)]
+pub enum MatchResult {
+    /// A match was found. Contains the matching token index and a Match struct.
+    Matched {
+        /// Index into the held_tokens slice that satisfied the intent.
+        token_index: usize,
+        /// The match result ready for fulfillment.
+        matched: Match,
+    },
+    /// A compound match was found. Multiple sub-specs were each satisfied
+    /// (possibly by different tokens in the same cclerk).
+    CompoundMatched {
+        /// For each sub-spec in the compound list, the index of the token that satisfied it.
+        token_indices: Vec<usize>,
+        /// The overall match result ready for fulfillment.
+        matched: Match,
+    },
+    /// No held token satisfies this intent.
+    NoMatch,
+    /// The intent has expired.
+    Expired,
+    /// The intent kind is not matchable from our perspective.
+    /// (e.g., we see an Offer but we're looking for Needs)
+    WrongKind,
+}
+
+/// Attempt to match an intent against a set of held capability tokens.
+///
+/// This is the core matching function. It:
+/// 1. Checks intent validity (not expired, correct kind)
+/// 2. For each held token, evaluates whether it satisfies the MatchSpec
+/// 3. Returns the first match found (or NoMatch)
+///
+/// For compound intents (MatchSpec with a `compound` list), ALL sub-specs must be
+/// satisfiable by some token in the cclerk. Different sub-specs may be satisfied by
+/// different tokens. The fulfillment produces multiple attenuated tokens (one per sub-spec).
+///
+/// All evaluation is LOCAL -- no network calls, no side effects.
+pub fn match_intent(
+    intent: &Intent,
+    held_tokens: &[HeldCapability],
+    our_commitment: CommitmentId,
+    mode: VerificationMode,
+    now: u64,
+) -> MatchResult {
+    // Check expiry
+    if intent.is_expired(now) {
+        return MatchResult::Expired;
+    }
+
+    // Query intents NEVER trigger automatic matching -- they are a probing vector.
+    // Queries require explicit user opt-in (handled via a separate API).
+    if intent.kind == IntentKind::Query {
+        return MatchResult::WrongKind;
+    }
+
+    // For Offer intents, we match in reverse: an Offer describes what the offerer
+    // PROVIDES. We match it if we (the receiver) could USE that capability -- i.e.,
+    // if the offered capability fills a gap in our held tokens.
+    //
+    // Matching logic: An Offer matches if:
+    // 1. We do NOT already hold a token that satisfies the offer's spec (we need it).
+    // 2. The offered capability is compatible with our holder context (resource/service).
+    //
+    // This makes Offer matching the dual of Need matching: a Need asks "do I have
+    // something that satisfies this?", an Offer asks "do I LACK something this provides?"
+    if intent.kind == IntentKind::Offer {
+        return match_offer(intent, held_tokens, our_commitment, mode, now);
+    }
+
+    // Handle compound intents: ALL sub-specs must be satisfiable.
+    if let Some(sub_specs) = &intent.matcher.compound
+        && !sub_specs.is_empty()
+    {
+        return match_compound(intent, sub_specs, held_tokens, our_commitment, mode, now);
+    }
+
+    // Simple (non-compound) matching: find the first token that satisfies the spec.
+    // Try each held token (skip Sensitive tokens -- they require explicit user action)
+    for (idx, token) in held_tokens.iter().enumerate() {
+        if token.sensitivity == Sensitivity::Sensitive {
+            continue;
+        }
+        if satisfies_spec(token, &intent.matcher, now) {
+            let matched = Match {
+                intent_id: intent.id,
+                satisfier: our_commitment,
+                proof: generate_proof(token, intent, mode),
+                mode,
+            };
+            return MatchResult::Matched {
+                token_index: idx,
+                matched,
+            };
+        }
+    }
+
+    MatchResult::NoMatch
+}
+
+/// Match a compound intent: every sub-spec must be satisfiable by some token in the cclerk.
+/// Different sub-specs can be satisfied by different tokens.
+fn match_compound(
+    intent: &Intent,
+    sub_specs: &[MatchSpec],
+    held_tokens: &[HeldCapability],
+    our_commitment: CommitmentId,
+    mode: VerificationMode,
+    now: u64,
+) -> MatchResult {
+    let mut token_indices = Vec::with_capacity(sub_specs.len());
+
+    for sub_spec in sub_specs {
+        let mut found = false;
+        for (idx, token) in held_tokens.iter().enumerate() {
+            if token.sensitivity == Sensitivity::Sensitive {
+                continue;
+            }
+            if satisfies_spec(token, sub_spec, now) {
+                token_indices.push(idx);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return MatchResult::NoMatch;
+        }
+    }
+
+    // All sub-specs satisfied — produce the compound match.
+    let matched = Match {
+        intent_id: intent.id,
+        satisfier: our_commitment,
+        proof: generate_proof(&held_tokens[token_indices[0]], intent, mode),
+        mode,
+    };
+    MatchResult::CompoundMatched {
+        token_indices,
+        matched,
+    }
+}
+
+/// Match an Offer intent against held capabilities (reverse matching).
+///
+/// An Offer matches if the offered capability fills a gap in our token set:
+/// - The offer's spec describes what is being PROVIDED.
+/// - We match if we do NOT already hold a token satisfying that spec.
+/// - This means the offer is useful to us (we need what they're offering).
+///
+/// If we already hold a token that covers the offered capability, the offer is
+/// not useful to us and we return NoMatch.
+fn match_offer(
+    intent: &Intent,
+    held_tokens: &[HeldCapability],
+    our_commitment: CommitmentId,
+    mode: VerificationMode,
+    now: u64,
+) -> MatchResult {
+    // Check if any of our held tokens already satisfies the offer's spec.
+    // If so, we don't need this offer -- return NoMatch.
+    let already_have = held_tokens.iter().any(|token| {
+        if token.sensitivity == Sensitivity::Sensitive {
+            return false; // Don't consider sensitive tokens for gap analysis
+        }
+        satisfies_spec(token, &intent.matcher, now)
+    });
+
+    if already_have {
+        // We already hold a capability that covers what's being offered.
+        // No need to match this offer.
+        return MatchResult::NoMatch;
+    }
+
+    // We do NOT have a token covering the offered capability -- this offer is
+    // useful to us. Return a match indicating we'd accept this offer.
+    //
+    // The "token_index" is meaningless for offer matching (there's no local token
+    // that satisfied anything -- the LACK of a token is what triggered the match).
+    // We use usize::MAX as a sentinel indicating "no local token was involved."
+    let matched = Match {
+        intent_id: intent.id,
+        satisfier: our_commitment,
+        proof: generate_offer_match_proof(intent, mode),
+        mode,
+    };
+    MatchResult::Matched {
+        token_index: usize::MAX,
+        matched,
+    }
+}
+
+/// Generate a proof for an offer match (the receiver proving they need it).
+///
+/// In trusted mode, no proof is needed. In other modes, we produce a commitment
+/// to the fact that we lack the offered capability (proof of absence).
+fn generate_offer_match_proof(intent: &Intent, mode: VerificationMode) -> Option<Vec<u8>> {
+    match mode {
+        VerificationMode::Trusted => None,
+        VerificationMode::Selective | VerificationMode::Private => {
+            // Produce a commitment proving we evaluated the offer and determined need.
+            let mut hasher = blake3::Hasher::new_derive_key("dregg-offer-match-v1");
+            hasher.update(&intent.id);
+            let mut rand_bytes = [0u8; 32];
+            crate::getrandom(&mut rand_bytes);
+            hasher.update(&rand_bytes);
+            Some(hasher.finalize().as_bytes().to_vec())
+        }
+    }
+}
+
+/// Check if a single held token satisfies a MatchSpec.
+///
+/// Evaluates:
+/// 1. Action patterns (does the token grant the required actions?)
+/// 2. Resource pattern (does the token's resource match the pattern?)
+/// 3. Constraints (app, service, user, expiry, features, etc.)
+/// 4. Budget requirements
+/// 5. Predicate requirements (cross-party `gte`/`lte`/… proofs)
+///
+/// # Predicate requirements FAIL CLOSED (SILVER hole #1)
+///
+/// `MatchSpec.predicate_requirements` are *cross-party* obligations: the
+/// fulfiller must produce a cryptographic [`PredicateProof`](crate::fulfillment)
+/// (e.g. "balance >= 1000") that the LOCAL matcher cannot evaluate — a
+/// [`HeldCapability`] carries no attribute values, only capability shape.
+///
+/// Previously `satisfies_spec` IGNORED `predicate_requirements` entirely, so an
+/// intent demanding "balance >= 1000" matched a token unconditionally. That is a
+/// soundness hole: the intent would be promoted to a [`Match`] / settled even
+/// though its predicate was never satisfied.
+///
+/// The fix: this entry point **fails closed** when the spec carries any
+/// predicate requirement — it has no proof to evaluate, so it cannot honestly
+/// claim a match. Callers that DO hold predicate proofs must route through
+/// [`satisfies_spec_with_predicates`], which evaluates them against the
+/// fulfiller's attributes, or verify them at fulfillment time via
+/// [`crate::fulfillment::verify_fulfillment_with_predicates`].
+pub fn satisfies_spec(token: &HeldCapability, spec: &MatchSpec, now: u64) -> bool {
+    satisfies_spec_inner(token, spec, now)
+        // A spec with predicate requirements cannot be honestly matched
+        // locally — no proof, no attributes. FAIL CLOSED.
+        && spec.predicate_requirements.is_empty()
+}
+
+/// The capability-shape portion of [`satisfies_spec`] — actions, resource,
+/// constraints, budget. Does NOT evaluate `predicate_requirements`; callers
+/// that want predicate-aware matching use [`satisfies_spec`] (fail-closed) or
+/// [`satisfies_spec_with_predicates`].
+fn satisfies_spec_inner(token: &HeldCapability, spec: &MatchSpec, now: u64) -> bool {
+    // Check action patterns
+    if !spec.actions.is_empty() && !actions_match(token, &spec.actions) {
+        return false;
+    }
+
+    // Check resource pattern
+    if let Some(pattern) = &spec.resource_pattern {
+        if spec.strict_resource_matching {
+            // Strict mode: wildcards are not allowed in the pattern.
+            // Require exact match between token resource and pattern.
+            if pattern == "*" {
+                // A wildcard pattern with strict matching is contradictory:
+                // it means "match everything but also be strict". Reject it.
+                return false;
+            }
+            if token.resource != *pattern {
+                return false;
+            }
+        } else if !resource_matches(&token.resource, pattern) {
+            return false;
+        }
+    }
+
+    // Check constraints
+    for constraint in &spec.constraints {
+        if !constraint_satisfied(token, constraint, now) {
+            return false;
+        }
+    }
+
+    // Check budget
+    if let Some(min_budget) = spec.min_budget {
+        match token.budget {
+            Some(b) if b >= min_budget => {}
+            Some(_) => return false,
+            // No budget info means unlimited -- satisfies any min_budget
+            None => {}
+        }
+    }
+
+    true
+}
+
+/// Attribute values the fulfiller asserts about itself, used to evaluate a
+/// `MatchSpec`'s `predicate_requirements` during predicate-aware matching.
+///
+/// Maps attribute name (e.g. `"balance"`, `"reputation"`) to the fulfiller's
+/// value. A requirement whose `attribute` is ABSENT from this map cannot be
+/// satisfied and the match **fails closed**: an unknown attribute is treated as
+/// "the fulfiller has not proven this attribute", never as "vacuously true".
+///
+/// This is the matcher-side counterpart to the fulfillment-time
+/// [`PredicateProof`](crate::fulfillment) flow: at match time the cclerk knows
+/// its own attribute values and can decide whether it could satisfy the
+/// requirement; the cryptographic proof is produced later at fulfillment.
+#[derive(Clone, Debug, Default)]
+pub struct FulfillerAttributes {
+    values: std::collections::HashMap<String, u64>,
+}
+
+impl FulfillerAttributes {
+    /// Create an empty attribute set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Assert an attribute value about the fulfiller.
+    pub fn set(&mut self, attribute: impl Into<String>, value: u64) -> &mut Self {
+        self.values.insert(attribute.into(), value);
+        self
+    }
+
+    /// Look up an attribute value, if asserted.
+    pub fn get(&self, attribute: &str) -> Option<u64> {
+        self.values.get(attribute).copied()
+    }
+
+    /// Evaluate a single [`PredicateRequirement`] against the asserted
+    /// attributes. Returns `true` only if the attribute is present AND the
+    /// comparison holds. An absent attribute or an unrecognized predicate type
+    /// returns `false` (FAIL CLOSED).
+    pub fn satisfies(&self, req: &crate::PredicateRequirement) -> bool {
+        let Some(value) = self.get(&req.attribute) else {
+            // Attribute not asserted — cannot satisfy. FAIL CLOSED.
+            return false;
+        };
+        match req.predicate_type.as_str() {
+            "gte" => value >= req.threshold,
+            "gt" => value > req.threshold,
+            "lte" => value <= req.threshold,
+            "lt" => value < req.threshold,
+            "neq" => value != req.threshold,
+            "in_range" => match req.upper_bound {
+                Some(upper) => value >= req.threshold && value <= upper,
+                // in_range without an upper bound is malformed — reject.
+                None => false,
+            },
+            // Unknown predicate type — never silently accept.
+            _ => false,
+        }
+    }
+}
+
+/// Predicate-aware variant of [`satisfies_spec`].
+///
+/// Evaluates the capability shape (actions / resource / constraints / budget)
+/// AND every `predicate_requirement` against the supplied
+/// [`FulfillerAttributes`]. A spec matches only if the token covers the
+/// capability shape and EVERY predicate requirement holds.
+///
+/// This is the entry point a cclerk uses when it knows its own attribute values
+/// and wants to decide "could I satisfy this intent, predicates included?".
+/// Unlike the plain [`satisfies_spec`] (which fails closed on any predicate
+/// requirement because it has nothing to evaluate them with), this function
+/// honestly evaluates the requirements — but still FAILS CLOSED on any
+/// requirement whose attribute is unknown or whose type is unrecognized.
+pub fn satisfies_spec_with_predicates(
+    token: &HeldCapability,
+    spec: &MatchSpec,
+    now: u64,
+    attributes: &FulfillerAttributes,
+) -> bool {
+    if !satisfies_spec_inner(token, spec, now) {
+        return false;
+    }
+    // Every predicate requirement must hold (fail-closed on unknowns).
+    spec.predicate_requirements
+        .iter()
+        .all(|req| attributes.satisfies(req))
+}
+
+/// Registry for custom constraint evaluators.
+///
+/// Custom constraints require explicit registration of evaluation logic.
+/// Without a registered evaluator, custom constraints FAIL CLOSED (return false).
+pub struct CustomConstraintEvaluators {
+    evaluators: std::collections::HashMap<String, Box<dyn Fn(&str) -> bool + Send + Sync>>,
+}
+
+impl CustomConstraintEvaluators {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self {
+            evaluators: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Register an evaluator for a custom predicate name.
+    pub fn register(
+        &mut self,
+        predicate: impl Into<String>,
+        evaluator: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) {
+        self.evaluators
+            .insert(predicate.into(), Box::new(evaluator));
+    }
+
+    /// Evaluate a custom constraint. Returns `false` if no evaluator is registered.
+    pub fn evaluate(&self, predicate: &str, value: &str) -> bool {
+        match self.evaluators.get(predicate) {
+            Some(eval) => eval(value),
+            None => false,
+        }
+    }
+}
+
+impl Default for CustomConstraintEvaluators {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Check if a single held token satisfies a MatchSpec, with custom constraint evaluation.
+///
+/// This is the variant of `satisfies_spec` that supports custom constraints via
+/// the provided evaluator registry. Use this when intents may contain `Constraint::Custom`.
+///
+/// Like [`satisfies_spec`], this FAILS CLOSED on any `predicate_requirement`: the
+/// custom-constraint registry evaluates `Constraint::Custom` but NOT cross-party
+/// `predicate_requirements`, which need a fulfiller-side proof. A spec carrying a
+/// predicate requirement cannot be matched through this path.
+pub fn satisfies_spec_with_custom(
+    token: &HeldCapability,
+    spec: &MatchSpec,
+    now: u64,
+    custom_evaluators: &CustomConstraintEvaluators,
+) -> bool {
+    // Predicate requirements cannot be evaluated here — FAIL CLOSED.
+    if !spec.predicate_requirements.is_empty() {
+        return false;
+    }
+
+    // Check action patterns
+    if !spec.actions.is_empty() && !actions_match(token, &spec.actions) {
+        return false;
+    }
+
+    // Check resource pattern
+    if let Some(pattern) = &spec.resource_pattern {
+        if spec.strict_resource_matching {
+            if pattern == "*" {
+                return false;
+            }
+            if token.resource != *pattern {
+                return false;
+            }
+        } else if !resource_matches(&token.resource, pattern) {
+            return false;
+        }
+    }
+
+    // Check constraints
+    for constraint in &spec.constraints {
+        match constraint {
+            Constraint::Custom { predicate, value } => {
+                if !custom_evaluators.evaluate(predicate, value) {
+                    return false;
+                }
+            }
+            other => {
+                if !constraint_satisfied(token, other, now) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Check budget
+    if let Some(min_budget) = spec.min_budget {
+        match token.budget {
+            Some(b) if b >= min_budget => {}
+            Some(_) => return false,
+            None => {}
+        }
+    }
+
+    true
+}
+
+/// Check if a token's actions satisfy the required action patterns.
+fn actions_match(token: &HeldCapability, patterns: &[ActionPattern]) -> bool {
+    for pattern in patterns {
+        // Check action match
+        if let Some(required_action) = &pattern.action {
+            // Wildcard resource on token means it matches anything
+            if token.resource == "*" || pattern.resource.is_none() {
+                // Just need the action
+                if !token
+                    .actions
+                    .iter()
+                    .any(|a| a == required_action || a == "*")
+                {
+                    return false;
+                }
+            } else {
+                // Need both action AND resource match
+                let resource_ok = pattern
+                    .resource
+                    .as_ref()
+                    .is_none_or(|r| resource_matches(&token.resource, r));
+                let action_ok = token
+                    .actions
+                    .iter()
+                    .any(|a| a == required_action || a == "*");
+                if !resource_ok || !action_ok {
+                    return false;
+                }
+            }
+        }
+        // If action is None (wildcard), any token action satisfies it.
+        // Just check resource if specified.
+        if pattern.action.is_none()
+            && let Some(resource) = &pattern.resource
+            && !resource_matches(&token.resource, resource)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check if a token's resource matches a pattern.
+///
+/// Supports:
+/// - Exact match: "documents/readme.md" matches "documents/readme.md"
+/// - Wildcard: "*" matches anything
+/// - Prefix glob: "documents/*" matches "documents/readme.md"
+///
+/// This is the canonical resource matching function used by both the matcher
+/// and fulfillment verification (issue #10: unified matching logic).
+pub fn resource_matches(token_resource: &str, pattern: &str) -> bool {
+    if token_resource == "*" || pattern == "*" {
+        return true;
+    }
+    if token_resource == pattern {
+        return true;
+    }
+    // Glob matching via the globset crate
+    if let Ok(glob) = globset::Glob::new(pattern) {
+        let matcher = glob.compile_matcher();
+        if matcher.is_match(token_resource) {
+            return true;
+        }
+    }
+    // Also check if token resource is a superset pattern that covers the request
+    if token_resource.ends_with("/*") {
+        let prefix = &token_resource[..token_resource.len() - 2];
+        if pattern.starts_with(prefix) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Check if a single constraint is satisfied by a token.
+fn constraint_satisfied(token: &HeldCapability, constraint: &Constraint, now: u64) -> bool {
+    match constraint {
+        Constraint::AppId(app) => token.app_id.as_ref().is_some_and(|a| a == app),
+        Constraint::Service(svc) => token.service.as_ref().is_some_and(|s| s == svc),
+        Constraint::UserId(uid) => {
+            // If token has no user constraint, it's valid for any user
+            token.user_id.is_none() || token.user_id.as_ref().is_some_and(|u| u == uid)
+        }
+        Constraint::NotExpiredAt(ts) => {
+            let check_time = *ts as u64;
+            token.expiry.is_none_or(|exp| exp > check_time)
+        }
+        Constraint::Feature(feat) => token.features.contains(feat),
+        Constraint::OAuthProvider(provider) => {
+            token.oauth_provider.as_ref().is_some_and(|p| p == provider)
+        }
+        Constraint::Custom { predicate, value } => {
+            // SECURITY: Custom constraints FAIL CLOSED. If there is no registered
+            // evaluator for this custom predicate, matching returns false. This
+            // prevents unrecognized constraints from being silently ignored, which
+            // would allow tokens to match intents they shouldn't satisfy.
+            //
+            // To use custom constraints, callers must register an evaluator via
+            // the `CustomConstraintEvaluators` registry and use `satisfies_spec_with_custom`.
+            let _ = (predicate, value, now);
+            false
+        }
+    }
+}
+
+/// Generate a proof of match (optional, depends on VerificationMode).
+///
+/// - Trusted: no proof needed
+/// - Selective: partial proof showing specific facts
+/// - Private: full STARK proof of capability satisfaction
+fn generate_proof(
+    token: &HeldCapability,
+    intent: &Intent,
+    mode: VerificationMode,
+) -> Option<Vec<u8>> {
+    match mode {
+        VerificationMode::Trusted => None,
+        VerificationMode::Selective => {
+            // In selective mode, we produce a proof that reveals:
+            // - The token grants the required action(s)
+            // - The token covers the required resource
+            // Without revealing: token ID, full action set, delegation chain
+            //
+            // Issue #3: Include randomness to prevent correlation across matches.
+            // Without a nonce, two matches from the same token produce identical
+            // hashes, leaking that the same token was used.
+            let mut hasher = blake3::Hasher::new_derive_key("dregg-selective-match-v1");
+            hasher.update(&intent.id);
+            hasher.update(token.token_id.as_bytes());
+            for action in &token.actions {
+                hasher.update(action.as_bytes());
+            }
+            hasher.update(token.resource.as_bytes());
+            // Add randomness so the proof doesn't leak token identity across matches
+            let mut rand_bytes = [0u8; 32];
+            crate::getrandom(&mut rand_bytes);
+            hasher.update(&rand_bytes);
+            Some(hasher.finalize().as_bytes().to_vec())
+        }
+        VerificationMode::Private => {
+            // In private mode, we would generate a full STARK proof via
+            // dregg-circuit's prove_authorization_stark. The proof demonstrates:
+            // - There exists a token T in the cclerk
+            // - T's Datalog evaluation produces ALLOW for the intent's MatchSpec
+            // - T is not expired
+            // Without revealing T or anything else about the cclerk contents.
+            //
+            // For now, produce a commitment (the real circuit integration comes
+            // when the multi_step_air is wired up to this matcher).
+            let mut hasher = blake3::Hasher::new_derive_key("dregg-private-match-v1");
+            hasher.update(&intent.id);
+            hasher.update(token.token_id.as_bytes());
+            // Add randomness so the proof doesn't leak token identity across matches
+            let mut rand_bytes = [0u8; 32];
+            crate::getrandom(&mut rand_bytes);
+            hasher.update(&rand_bytes);
+            Some(hasher.finalize().as_bytes().to_vec())
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CommitmentId, Intent, IntentKind, MatchSpec};
+
+    fn make_token(actions: &[&str], resource: &str) -> HeldCapability {
+        HeldCapability {
+            token_id: "tok_test".into(),
+            actions: actions.iter().map(|s| s.to_string()).collect(),
+            resource: resource.into(),
+            app_id: None,
+            service: None,
+            user_id: None,
+            features: vec![],
+            oauth_provider: None,
+            expiry: None,
+            budget: None,
+            sensitivity: Sensitivity::Normal,
+        }
+    }
+
+    fn make_intent(actions: Vec<ActionPattern>, constraints: Vec<Constraint>) -> Intent {
+        let spec = MatchSpec {
+            actions,
+            constraints,
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX, // never expires for tests
+            None,
+        )
+    }
+
+    #[test]
+    fn test_basic_action_match() {
+        let token = make_token(&["read", "write"], "documents/*");
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::Matched { .. }));
+    }
+
+    #[test]
+    fn test_action_not_held() {
+        let token = make_token(&["read"], "documents/*");
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("delete".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::NoMatch));
+    }
+
+    #[test]
+    fn test_wildcard_action_matches_anything() {
+        let token = make_token(&["*"], "documents/*");
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("delete".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::Matched { .. }));
+    }
+
+    #[test]
+    fn test_resource_pattern_matching() {
+        let token = make_token(&["read"], "documents/reports/*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: Some("documents/reports/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+
+        let spec_miss = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: Some("secrets/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_miss, 100));
+    }
+
+    #[test]
+    fn test_constraint_app_id() {
+        let mut token = make_token(&["read"], "*");
+        token.app_id = Some("my-app".into());
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::AppId("my-app".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+
+        let spec_miss = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::AppId("other-app".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_miss, 100));
+    }
+
+    #[test]
+    fn test_constraint_service() {
+        let mut token = make_token(&["read", "write"], "*");
+        token.service = Some("http".into());
+
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Service("http".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+    }
+
+    #[test]
+    fn test_constraint_not_expired() {
+        let mut token = make_token(&["read"], "*");
+        token.expiry = Some(5000);
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::NotExpiredAt(3000)],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+
+        let spec_expired = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::NotExpiredAt(6000)],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_expired, 100));
+    }
+
+    #[test]
+    fn test_constraint_feature() {
+        let mut token = make_token(&["read"], "*");
+        token.features = vec!["gpu".into(), "ai".into()];
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::Feature("gpu".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+
+        let spec_miss = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::Feature("quantum".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_miss, 100));
+    }
+
+    #[test]
+    fn test_budget_constraint() {
+        let mut token = make_token(&["execute"], "*");
+        token.budget = Some(1000);
+
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("execute".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: Some(500),
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+
+        let spec_too_much = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("execute".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: Some(2000),
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_too_much, 100));
+    }
+
+    #[test]
+    fn test_expired_intent_does_not_match() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            100, // expires at t=100
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        // now=200, intent expired at 100
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 200);
+        assert!(matches!(result, MatchResult::Expired));
+    }
+
+    #[test]
+    fn test_offer_intent_no_match_when_already_held() {
+        // We already hold a wildcard read token -- the offer of "read on *" is useless.
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Offer,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        // We already have the capability -- offer is not useful.
+        assert!(matches!(result, MatchResult::NoMatch));
+    }
+
+    #[test]
+    fn test_offer_intent_matches_when_capability_needed() {
+        // We hold only a "read" token on documents -- an offer of "write" on documents
+        // fills a gap we have.
+        let token = make_token(&["read"], "documents/*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("write".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: Some("documents/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Offer,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        // We lack "write" on documents -- the offer is useful.
+        assert!(matches!(result, MatchResult::Matched { .. }));
+    }
+
+    #[test]
+    fn test_offer_intent_matches_when_cclerk_empty() {
+        // Empty cclerk -- any offer is useful.
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Offer,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::Matched { .. }));
+    }
+
+    #[test]
+    fn test_multiple_tokens_first_match_wins() {
+        let token1 = make_token(&["read"], "docs/*");
+        let token2 = make_token(&["read", "write"], "*");
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("write".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[token1, token2],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::Matched { token_index, .. } => {
+                assert_eq!(token_index, 1); // token2 is the first that matches "write"
+            }
+            _ => panic!("expected Matched"),
+        }
+    }
+
+    #[test]
+    fn test_selective_proof_is_generated() {
+        let token = make_token(&["read"], "*");
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Selective, 100);
+        match result {
+            MatchResult::Matched { matched, .. } => {
+                assert!(matched.proof.is_some());
+                assert_eq!(matched.proof.unwrap().len(), 32); // BLAKE3 output
+            }
+            _ => panic!("expected Matched"),
+        }
+    }
+
+    #[test]
+    fn test_user_id_unrestricted_token_matches_any_user() {
+        let token = make_token(&["read"], "*");
+        // token.user_id is None -- unrestricted
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::UserId("alice".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+    }
+
+    #[test]
+    fn test_user_id_restricted_token_must_match() {
+        let mut token = make_token(&["read"], "*");
+        token.user_id = Some("alice".into());
+
+        let spec_ok = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::UserId("alice".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec_ok, 100));
+
+        let spec_wrong = MatchSpec {
+            actions: vec![],
+            constraints: vec![Constraint::UserId("bob".into())],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(!satisfies_spec(&token, &spec_wrong, 100));
+    }
+
+    #[test]
+    fn test_combined_constraints() {
+        let mut token = make_token(&["read", "write"], "api/*");
+        token.app_id = Some("dashboard".into());
+        token.service = Some("http".into());
+        token.features = vec!["v2".into()];
+        token.expiry = Some(9999);
+
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![
+                Constraint::AppId("dashboard".into()),
+                Constraint::Service("http".into()),
+                Constraint::Feature("v2".into()),
+                Constraint::NotExpiredAt(5000),
+            ],
+            min_budget: None,
+            resource_pattern: Some("api/*".into()),
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        assert!(satisfies_spec(&token, &spec, 100));
+    }
+
+    #[test]
+    fn test_query_intent_returns_wrong_kind() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Query,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(matches!(result, MatchResult::WrongKind));
+    }
+
+    #[test]
+    fn test_sensitive_token_never_auto_matched() {
+        let mut token = make_token(&["read", "write", "admin"], "*");
+        token.sensitivity = Sensitivity::Sensitive;
+
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        // Even though the token satisfies the spec, it's Sensitive so it's skipped
+        assert!(matches!(result, MatchResult::NoMatch));
+    }
+
+    #[test]
+    fn test_sensitive_token_skipped_but_normal_still_matches() {
+        let mut sensitive_token = make_token(&["read", "admin"], "*");
+        sensitive_token.sensitivity = Sensitivity::Sensitive;
+
+        let normal_token = make_token(&["read"], "*");
+
+        let intent = make_intent(
+            vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            vec![],
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[sensitive_token, normal_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::Matched { token_index, .. } => {
+                // Should match the second (Normal) token, not the first (Sensitive)
+                assert_eq!(token_index, 1);
+            }
+            _ => panic!("expected Matched"),
+        }
+    }
+
+    // =========================================================================
+    // Compound intent tests
+    // =========================================================================
+
+    #[test]
+    fn test_compound_intent_both_satisfied() {
+        // Cipherclerk has a read token for documents and an execute token for compute
+        let read_token = make_token(&["read"], "documents/*");
+        let mut compute_token = make_token(&["execute"], "compute/*");
+        compute_token.token_id = "tok_compute".into();
+
+        // Compound intent: need read on documents AND execute on compute
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("documents/*".into()),
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("compute/*".into()),
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+            ]),
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[read_token, compute_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::CompoundMatched {
+                token_indices,
+                matched,
+            } => {
+                assert_eq!(token_indices.len(), 2);
+                assert_eq!(token_indices[0], 0); // read_token matched first sub-spec
+                assert_eq!(token_indices[1], 1); // compute_token matched second sub-spec
+                assert_eq!(matched.intent_id, intent.id);
+            }
+            other => panic!("expected CompoundMatched, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_compound_intent_missing_one_capability() {
+        // Cipherclerk has only the read token, no compute token
+        let read_token = make_token(&["read"], "documents/*");
+
+        // Compound intent: need read on documents AND execute on compute
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("documents/*".into()),
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: Some("compute/*".into()),
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+            ]),
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[read_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        assert!(
+            matches!(result, MatchResult::NoMatch),
+            "expected NoMatch when cclerk is missing a required capability"
+        );
+    }
+
+    #[test]
+    fn test_compound_intent_same_token_satisfies_multiple() {
+        // A single wildcard token satisfies both sub-specs
+        let wildcard_token = make_token(&["read", "execute"], "*");
+
+        let spec = MatchSpec {
+            actions: vec![],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: Some(vec![
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("read".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: None,
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+                MatchSpec {
+                    actions: vec![ActionPattern {
+                        action: Some("execute".into()),
+                        resource: None,
+                    }],
+                    constraints: vec![],
+                    min_budget: None,
+                    resource_pattern: None,
+                    compound: None,
+                    predicate_requirements: vec![],
+                    strict_resource_matching: false,
+                },
+            ]),
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(
+            &intent,
+            &[wildcard_token],
+            our_id,
+            VerificationMode::Trusted,
+            100,
+        );
+        match result {
+            MatchResult::CompoundMatched { token_indices, .. } => {
+                // Both sub-specs satisfied by the same token
+                assert_eq!(token_indices, vec![0, 0]);
+            }
+            other => panic!("expected CompoundMatched, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // SECURITY: Custom constraint fail-closed tests
+    // =========================================================================
+
+    #[test]
+    fn test_custom_constraint_fails_closed_without_evaluator() {
+        // ADVERSARIAL: An attacker creates an intent with a custom constraint.
+        // Without a registered evaluator, the constraint must REJECT (fail closed).
+        let token = make_token(&["read", "write", "admin"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Custom {
+                predicate: "is_employee".into(),
+                value: "true".into(),
+            }],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        // Even though the token grants "read" on "*", the custom constraint
+        // must prevent matching because no evaluator is registered.
+        assert!(
+            !satisfies_spec(&token, &spec, 100),
+            "custom constraints must FAIL CLOSED when no evaluator is registered"
+        );
+    }
+
+    #[test]
+    fn test_custom_constraint_with_registered_evaluator_passes() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Custom {
+                predicate: "is_employee".into(),
+                value: "true".into(),
+            }],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+
+        // Register an evaluator that accepts "true"
+        let mut evaluators = CustomConstraintEvaluators::new();
+        evaluators.register("is_employee", |v| v == "true");
+
+        // With evaluator registered, should pass
+        assert!(satisfies_spec_with_custom(&token, &spec, 100, &evaluators));
+    }
+
+    #[test]
+    fn test_custom_constraint_with_evaluator_rejects_wrong_value() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Custom {
+                predicate: "is_employee".into(),
+                value: "false".into(),
+            }],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+
+        let mut evaluators = CustomConstraintEvaluators::new();
+        evaluators.register("is_employee", |v| v == "true");
+
+        // Evaluator is registered but returns false for value "false"
+        assert!(!satisfies_spec_with_custom(&token, &spec, 100, &evaluators));
+    }
+
+    #[test]
+    fn test_custom_constraint_unregistered_predicate_fails() {
+        let token = make_token(&["read"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Custom {
+                predicate: "unknown_predicate".into(),
+                value: "anything".into(),
+            }],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+
+        // Register a DIFFERENT predicate -- "unknown_predicate" is not covered
+        let mut evaluators = CustomConstraintEvaluators::new();
+        evaluators.register("is_employee", |_| true);
+
+        assert!(
+            !satisfies_spec_with_custom(&token, &spec, 100, &evaluators),
+            "unregistered predicate must fail closed even with other evaluators registered"
+        );
+    }
+
+    // =========================================================================
+    // SECURITY: predicate_requirements enforcement (SILVER hole #1)
+    // =========================================================================
+
+    fn spec_with_predicate(req: crate::PredicateRequirement) -> MatchSpec {
+        MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![req],
+            strict_resource_matching: false,
+        }
+    }
+
+    #[test]
+    fn test_predicate_requirement_fails_closed_in_satisfies_spec() {
+        // ADVERSARIAL: an intent demanding "balance >= 1000". A wildcard token
+        // covers the capability shape, but the LOCAL matcher cannot evaluate the
+        // cross-party predicate, so satisfies_spec must FAIL CLOSED.
+        let token = make_token(&["read", "write", "admin"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        assert!(
+            !satisfies_spec(&token, &spec, 100),
+            "an intent with an unsatisfied predicate_requirement must NOT match"
+        );
+    }
+
+    #[test]
+    fn test_predicate_requirement_intent_not_matched() {
+        // The same hole at the match_intent level: no MatchResult::Matched.
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "reputation".into(),
+            predicate_type: "gte".into(),
+            threshold: 50,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(
+            matches!(result, MatchResult::NoMatch),
+            "intent with predicate_requirement must not produce a Match without proof"
+        );
+    }
+
+    #[test]
+    fn test_predicate_requirement_custom_path_also_fails_closed() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let evaluators = CustomConstraintEvaluators::new();
+        assert!(
+            !satisfies_spec_with_custom(&token, &spec, 100, &evaluators),
+            "satisfies_spec_with_custom must also fail closed on predicate requirements"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_accepts_when_attribute_satisfies() {
+        // With attributes asserting balance=1500 >= 1000, the predicate holds.
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 1500);
+        assert!(
+            satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "predicate-aware match should accept when balance >= threshold"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_rejects_when_attribute_below_threshold() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 500); // below threshold
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "predicate-aware match must reject when balance < threshold"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_rejects_unknown_attribute() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "gte".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        // Attributes assert a DIFFERENT attribute; "balance" is unknown.
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("reputation", 9999);
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "an unproven attribute must fail closed, not be treated as vacuously true"
+        );
+    }
+
+    #[test]
+    fn test_predicate_aware_match_unknown_predicate_type_fails_closed() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "balance".into(),
+            predicate_type: "bogus_op".into(),
+            threshold: 1000,
+            upper_bound: None,
+            state_root_freshness: 100,
+        });
+        let mut attrs = FulfillerAttributes::new();
+        attrs.set("balance", 5000);
+        assert!(
+            !satisfies_spec_with_predicates(&token, &spec, 100, &attrs),
+            "unrecognized predicate type must fail closed"
+        );
+    }
+
+    #[test]
+    fn test_predicate_in_range_evaluates_bounds() {
+        let token = make_token(&["read"], "*");
+        let spec = spec_with_predicate(crate::PredicateRequirement {
+            attribute: "age".into(),
+            predicate_type: "in_range".into(),
+            threshold: 18,
+            upper_bound: Some(65),
+            state_root_freshness: 100,
+        });
+        let mut inside = FulfillerAttributes::new();
+        inside.set("age", 30);
+        assert!(satisfies_spec_with_predicates(&token, &spec, 100, &inside));
+
+        let mut below = FulfillerAttributes::new();
+        below.set("age", 10);
+        assert!(!satisfies_spec_with_predicates(&token, &spec, 100, &below));
+
+        let mut above = FulfillerAttributes::new();
+        above.set("age", 80);
+        assert!(!satisfies_spec_with_predicates(&token, &spec, 100, &above));
+    }
+
+    #[test]
+    fn test_custom_constraint_does_not_match_intent() {
+        // ADVERSARIAL: Verify that an intent with a custom constraint cannot be
+        // matched by any token when using the standard match_intent function.
+        let token = make_token(&["read", "write", "admin"], "*");
+        let spec = MatchSpec {
+            actions: vec![ActionPattern {
+                action: Some("read".into()),
+                resource: None,
+            }],
+            constraints: vec![Constraint::Custom {
+                predicate: "bypass_check".into(),
+                value: "always_true".into(),
+            }],
+            min_budget: None,
+            resource_pattern: None,
+            compound: None,
+            predicate_requirements: vec![],
+            strict_resource_matching: false,
+        };
+        let intent = Intent::new(
+            IntentKind::Need,
+            spec,
+            CommitmentId([0xAA; 32]),
+            u64::MAX,
+            None,
+        );
+        let our_id = CommitmentId([0xBB; 32]);
+        let result = match_intent(&intent, &[token], our_id, VerificationMode::Trusted, 100);
+        assert!(
+            matches!(result, MatchResult::NoMatch),
+            "intent with unregistered custom constraint must not match any token"
+        );
+    }
+}

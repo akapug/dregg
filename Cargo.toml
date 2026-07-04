@@ -1,0 +1,356 @@
+[workspace]
+resolver = "3"
+# wasm is EXCLUDED from the workspace: its `no-lean-link` platform-gate
+# enables would otherwise feature-unify onto dregg-turn/sdk/etc in any
+# whole-workspace build (cargo test --workspace), deleting the Lean paths
+# on native. It builds standalone via wasm-pack (scripts/build-web-artifacts.sh,
+# pages.yml), which uses its manifest path directly.
+# members += the 12 absorbed deos/starbridge elephant crates (formerly standalone
+# workspaces) so they share ONE target dir + one resolve (the disk + CI win).
+# `discord-bot` is NOT a member: it (+ deos-zed-full) pull sqlx/sqlez →
+# libsqlite3-sys 0.30, whose `links = "sqlite3"` conflicts with deos-matrix's
+# rusqlite-0.35 (matrix-sdk-sqlite). Cargo allows ONE `links="sqlite3"` per
+# workspace, so those two stay separate workspaces (discord-bot excluded below,
+# deos-zed-full still excluded). `default-members` (below) is the light protocol/
+# circuit/app set so bare `cargo build`/`cargo test` stays gpui/mozjs/servo-free.
+members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "circuit-prove", "audit", "bridge", "wire", "persist", "cell", "cell-crypto", "turn", "exec-lean", "coord", "tests", "types", "sdk", "dregg-sdk-net", "node", "intent", "net", "discharge-gateway", "teasting", "app-framework", "dregg-payable", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "dfa-federation", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "starbridge-apps/polis", "starbridge-apps/escrow-market", "starbridge-apps/first-room", "starbridge-apps/compute-exchange", "starbridge-apps/gallery", "starbridge-apps/swarm-orchestration", "starbridge-apps/supply-chain-provenance", "starbridge-apps/agent-orchestration", "starbridge-apps/tussle", "starbridge-apps/kvstore", "starbridge-apps/branch-stitch-multiplayer", "starbridge-apps/execution-lease", "starbridge-apps/org", "starbridge-apps/vat", "starbridge-apps/billing", "dregg-sandbox", "starbridge-apps/guard", "starbridge-apps/domains", "starbridge-apps/edge-mandate", "dregg-umem", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient", "redteam", "perf", "dregg-auth", "dregg-query", "dregg-merge", "dregg-userspace-verify", "dregg-deploy", "dregg-analyzer", "deos-reflect", "starbridge-v2", "starbridge-v2/web", "deos-js", "deos-js-runtime", "deos-view", "deos-zed", "deos-matrix", "deos-hermes", "deos-terminal", "servo-render", "deos-web-cells", "starbridge-web-surface", "deos-leptos", "android-cell", "mobile/deos-core-smoke", "dregg-agent", "grain-turn", "hosted-lease", "grain-verify", "grain-verify-wasm", "grain-fork", "sandstorm-bridge", "hosted-durable", "grain-commons", "http-serve", "agent-platform"]
+
+
+# default-members = the LIGHT protocol/circuit/app crates (members minus the 12
+# gpui/mozjs/servo elephants). A bare `cargo build`/`cargo test` (no `--workspace`,
+# no `-p <elephant>`) operates on THESE only, so the default dev loop never pulls
+# gpui/mozjs/servo. Build an elephant explicitly with `-p starbridge-v2` etc.
+default-members = ["macaroon", "secrets", "token", "tokenizer", "hints", "commit", "trace", "demo", "demo-agent", "demo/sdk-consensus", "federation", "circuit", "circuit-prove", "audit", "bridge", "wire", "persist", "cell", "cell-crypto", "turn", "exec-lean", "coord", "tests", "types", "sdk", "dregg-sdk-net", "node", "intent", "net", "discharge-gateway", "teasting", "app-framework", "dregg-payable", "dregg-dsl", "dregg-dsl-runtime", "dregg-dsl-tests", "dregg-dsl-differential", "blocklace", "captp", "cli", "verifier", "protocol-tests", "observability", "storage", "starbridge-apps/nameservice", "dfa", "dfa-federation", "rbg", "credentials", "directory", "starbridge-apps/identity", "starbridge-apps/subscription", "starbridge-apps/governed-namespace", "starbridge-apps/compartment-workflow-mandate", "starbridge-apps/storage-gateway-mandate", "starbridge-apps/privacy-voting", "starbridge-apps/bounty-board", "starbridge-apps/agent-provenance", "starbridge-apps/tool-access-delegation", "starbridge-apps/sealed-auction", "starbridge-apps/polis", "starbridge-apps/escrow-market", "starbridge-apps/first-room", "starbridge-apps/compute-exchange", "starbridge-apps/gallery", "starbridge-apps/swarm-orchestration", "starbridge-apps/supply-chain-provenance", "starbridge-apps/agent-orchestration", "starbridge-apps/tussle", "starbridge-apps/kvstore", "starbridge-apps/branch-stitch-multiplayer", "starbridge-apps/execution-lease", "starbridge-apps/org", "starbridge-apps/vat", "starbridge-apps/billing", "dregg-sandbox", "starbridge-apps/guard", "starbridge-apps/domains", "starbridge-apps/edge-mandate", "dregg-umem", "dregg-storage-templates", "preflight", "dregg-lean-ffi", "lightclient", "redteam", "perf", "dregg-auth", "dregg-query", "dregg-merge", "dregg-userspace-verify", "dregg-deploy", "dregg-analyzer", "deos-reflect", "dregg-agent", "hosted-lease", "grain-verify", "sandstorm-bridge", "hosted-durable", "grain-commons", "http-serve", "agent-platform"]
+
+# chain/ and chain/program/ are standalone workspaces with their own root Cargo.toml.
+# chain has a known dep conflict (sp1-core-machine pins generic-array =1.1.0,
+# nova-snark needs >=1.2.0). chain/program is the SP1 guest, edition 2021,
+# riscv32im-succinct-zkvm-elf target, built by sp1-build.
+# rbg/ (the `dregg-rbg` package) hosts the Robigalia-inspired userspace
+# primitives — `DirectoryCell`, `ScopedIntentPool`, `MetaDirectory`,
+# `DirectoryFactory`, and the userspace `Volume`/`Blob`/`Directory`
+# VFS triple — composed atop `dregg-types::CellId` /
+# `dregg-types::FederationId` and (for the directory factory
+# descriptor) `dregg-cell::factory::FactoryDescriptor`. The DFA routing
+# module that used to live in rbg has been promoted into `dregg-dfa`
+# per `DFA-RATIONALIZATION-DESIGN.md`; rbg/ no longer ships its own
+# routing engine.
+# `discord-bot` + `deos-zed-full` are EXCLUDED (separate workspaces): both pull
+# sqlx/sqlez → libsqlite3-sys 0.30, whose `links = "sqlite3"` conflicts with
+# deos-matrix's rusqlite-0.35 (one `links="sqlite3"` per workspace). discord-bot
+# carries its own `[workspace]`/`[workspace.dependencies]`/`[patch]` + a
+# `rust-toolchain.toml` so it still builds standalone.
+# `dregg-tui` is EXCLUDED (its own workspace) for a VERSION-PIN reason: it is the
+# only `ratatui` user, and ratatui 0.29 pins `unicode-width =0.2.0` EXACTLY, which
+# is incompatible with `merman` (pulled by the full-Zed editor surface via
+# `starbridge-v2` → `deos-zed-full` → editor → markdown), which needs
+# `unicode-width ^0.2.2`. Keeping `dregg-tui` in the root workspace forces both
+# constraints into one resolution graph and breaks it. Excluded, it carries its
+# own `[workspace]` + `[patch]` (ark-serialize fork) + `rust-toolchain.toml` so it
+# still builds standalone (`cd dregg-tui && cargo build`); its path-deps
+# (dregg-sdk/turn/circuit/verifier) are root-workspace members so THEIR
+# `workspace = true` deps resolve against the root.
+exclude = ["chain", "chain/program", "wasm", "sdk-py", "pg-dregg", "sel4/dregg-firmament", "deos-zed-full", "dregg-doc", "discord-bot", "dregg-tui", "dreggnet"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+authors = ["Dregg Contributors"]
+license = "AGPL-3.0-or-later"
+homepage = "https://dregg.fg-goose.online"
+repository = "https://github.com/emberian/dregg"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RELEASE MANAGEMENT — `dist` (formerly cargo-dist), config pinned to 0.31.0.
+#
+# This block governs the SHIPPABLE BINARIES of the dregg workspace. dist ships a
+# package's binaries only when that package opts in; we set the workspace DEFAULT
+# to `dist = false` and opt the two shippable crates IN at the package level
+# (`cli/Cargo.toml` → bin `dregg`, `node/Cargo.toml` → bin `dregg-node`). Every
+# other workspace member (demos, test harnesses, the discord bot, …) stays
+# un-shipped. There is NO workspace-level package allowlist in dist 0.31 — the
+# per-package `[package.metadata.dist] dist = true` is the only selector, and
+# `repository` must resolve on each shipped package (cli adds
+# `repository.workspace = true` for this; node already inherits it).
+#
+# `starbridge-v2` (the gpui native master interface) is now a workspace MEMBER
+# (absorbed into the root workspace for the shared target dir), but dist still
+# does NOT ship it: the workspace default is `dist = false` and starbridge-v2
+# does NOT opt in (`[package.metadata.dist] dist = true` is the only selector, and
+# it carries none), so dist reaches it via metadata yet emits no installer for it.
+# It is gpui/Metal host-sensitive; its installers are packed by the bespoke
+# `.github/workflows/starbridge-v2-installers.yml` (a separate lane), not by dist.
+#
+# TARGETS: the workspace target list is the CLI's broad set (macOS + Linux,
+# x86_64 + aarch64, plus Windows-msvc). `dregg-node` LINKS THE VERIFIED LEAN
+# ARCHIVE (libdregg_lean.a, a host-native static lib produced by the Lean
+# compiler) and so CANNOT cross-compile; it overrides `targets` at the package
+# level down to the two x86_64 host-native targets where a native CI runner +
+# the Lean toolchain are available (aarch64 / Windows node builds are blocked on
+# the Lean link — see node/Cargo.toml's per-package note).
+#
+# TOOLCHAIN: no `rust-toolchain-version` here (it is deprecated in 0.31). The
+# generated `release.yml` carries no explicit `rustup default`, so CI honours the
+# repo's root `rust-toolchain.toml` (nightly-2026-01-01) automatically. NOTE: the
+# generated workflow installs Rust only; the `dregg-node` job additionally needs
+# the Lean toolchain (elan/lake + warm mathlib) provisioned on the runner for its
+# build.rs to splice libdregg_lean.a — a follow-up the bespoke starbridge
+# workflow already models. The CLI job needs nothing beyond Rust.
+#
+# VERSION SCHEME: a dev pre-release tag is `v0.0.0-dev` (or `v0.0.0-dev.1`);
+# `~` (as in the informal "v0.0.0~dev") is ILLEGAL SemVer and cargo/dist reject
+# it. A `-dev`-suffixed tag is auto-marked a GitHub *prerelease* by dist. No crate
+# version is bumped here — this only establishes the scheme; the crates remain
+# at 0.1.0 until ember cuts a tag.
+[workspace.metadata.dist]
+# The preferred dist version to use in CI (`dist init` will fail to mismatch).
+cargo-dist-version = "0.31.0"
+# CI backend.
+ci = "github"
+# Installers to generate. shell + homebrew cover macOS/Linux cleanly. Windows is
+# NOT given a native installer: `msi` requires per-package WiX GUIDs
+# (upgrade-guid/path-guid) + bundle config that isn't clean yet, and `powershell`
+# only activates with a Windows-installer story — so both are omitted honestly.
+# The Windows CLI TARGET still builds (it produces a `.zip` artifact users can
+# fetch directly); only the native Windows *installer* is deferred. Add `msi`
+# back (with `dist init` to mint the GUIDs) when a clean Windows installer is
+# wanted.
+installers = ["shell", "homebrew"]
+# Workspace target list = the CLI's broad set. Per-package `targets` narrows node.
+targets = [
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
+# Default: do NOT ship a package's binaries unless it opts in per-package.
+dist = false
+# Publish prereleases (e.g. a `v0.0.0-dev` tag) as GitHub prereleases.
+pr-run-mode = "plan"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# [patch] — UNIONED across the workspace (the 12 absorbed deos/starbridge crates
+# each carried their own standalone-workspace [patch] tables before absorption;
+# every relative `path` here is rewritten relative to THIS repo root).
+#
+# There are NO patch conflicts: every crate patched a given crate to the SAME
+# source — the only differences were relative-depth artifacts pointing at one
+# canonical location.
+#
+# The plonky3-recursion path-patch the 12 crates carried is DROPPED on purpose:
+# the workspace.dependencies below pin `p3-recursion`/`p3-circuit`/
+# `p3-circuit-prover`/`p3-poseidon2-circuit-air` at git rev be52a51 (the pushed
+# fork tip == the local `../plonky3-recursion` tree), so all crates resolve the
+# git rev — no path override needed.
+#
+# …EXCEPT (TEMP, 2026-07-02): the DETERMINISM-FIX path patch below. The pinned
+# rev be52a51 builds the recursive-verifier op-list in hashbrown-HashMap
+# iteration order (`verify_p3_batch_proof_circuit`'s global-lookup grouping), so
+# the recursion-VK fingerprint — the light client's distributed trust anchor —
+# was RANDOM per circuit build: two folds of the IDENTICAL chain in one process
+# minted different fingerprints. Fixed in fork commit 993efec ("deterministic
+# verifier op-list", branch update-plonky3-rev). Remove this [patch] block after
+# ember pushes 993efec and the four rev pins are bumped to it. The tooth:
+# circuit-prove/tests/recursion_vk_determinism.rs.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../plonky3-recursion/recursion" }
+p3-circuit = { path = "../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../plonky3-recursion/poseidon2-circuit-air" }
+# ─────────────────────────────────────────────────────────────────────────────
+[patch.crates-io]
+# ark-serialize fork — the `serde_with` feature `dregg-hints` needs (emberian/algebra).
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+# The two zed-forked async-* crates the gpui dep tree's `[patch.crates-io]` pins
+# (gpui's vendored `util` calls `smol::process::Child::adopt_raw_pid`, present only
+# on these forks). Inert when the gpui-bearing crates are not in the build graph.
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+# Vendored pathfinder_simd 0.5.6 (gpui → font-kit → pathfinder): scalar-path build
+# (the nightly portable-SIMD intrinsics were removed from current toolchains). The
+# one canonical vendored copy lives under starbridge-v2.
+pathfinder_simd = { path = "starbridge-v2/vendor/pathfinder_simd" }
+# stylo `ToCss`-derive fork (emberian/stylo@ember-nightly-fix) — pins the `?`
+# residual error type to `core::fmt::Error`, defeating the serde_fmt ambiguity in
+# the full cockpit graph (web-shell → servo → stylo). Inert outside that graph.
+stylo_derive = { git = "https://github.com/emberian/stylo", rev = "abc53ac61" }
+# servo-paint SWGL fork (servo-render's libservo path): WebRenderOptions
+# `clear_caches_with_quads: false` so SWGL's DepthFunc assert does not SIGABRT.
+servo-paint = { path = "servo-render/vendor/servo-paint" }
+# servo-net forbidden-schemes fork (servo-render's libservo path): allow an
+# embedder ProtocolHandler for http/https (the cap-gated byte socket).
+servo-net = { path = "servo-render/vendor/servo-net" }
+
+# The gpui fork (emberian/zed) resolves directly from git at the rev pinned in
+# starbridge-v2/Cargo.toml (the offscreen/headless wgpu renderer the render-capture
+# bakes need is on that pushed rev) — no local-path [patch] override.
+
+
+[workspace.dependencies]
+## Local
+dregg-macaroon = { path = "macaroon", default-features = false }
+dregg-types = { path = "types" }
+
+## Plonky3 core (rev 82cfad73 — the version dregg proofs were validated against)
+p3-air = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-batch-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-challenger = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-commit = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-fri = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-lookup = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-mds = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-merkle-tree = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-monty-31 = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-poseidon2 = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-symmetric = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-uni-stark = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-util = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+
+## Plonky3-recursion fork — rev fc12f23 (`update-plonky3-rev` tip: the IVC FIXED-POINT —
+## child-VK identity pinned in-band + table_public_inputs threaded = the constant-VK perpetual
+## fold; validated end-to-end by incremental_accumulate_verifies_whole_history). PURE git deps,
+## no `[patch]`, no sibling checkout — a fresh clone and CI resolve this identically.
+p3-recursion = { git = "https://github.com/emberian/plonky3-recursion", rev = "be52a51b87c39e41ade632320697df983751471f" }
+p3-circuit = { git = "https://github.com/emberian/plonky3-recursion", rev = "be52a51b87c39e41ade632320697df983751471f" }
+p3-circuit-prover = { git = "https://github.com/emberian/plonky3-recursion", rev = "be52a51b87c39e41ade632320697df983751471f" }
+p3-poseidon2-circuit-air = { git = "https://github.com/emberian/plonky3-recursion", rev = "be52a51b87c39e41ade632320697df983751471f" }
+
+## Crates.io
+## --- TEMP LOCAL DSU-FIX ITERATION PATCH (REMOVE before CI-correct rev bump) ---
+ark-serialize = { version = "0.5", features = ["derive"] }
+# NOTE: RC needed for aead 0.6 trait unification with chacha20poly1305 0.10;
+# stable aes-gcm 0.10 uses aead 0.5 which conflicts. Revisit when 0.11 stable ships.
+aes-gcm = { version = "0.11.0-rc.3" }
+base64 = { version = "0.22" }
+chacha20poly1305 = { version = "0.10" }
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = { version = "1" }
+directories = { version = "6" }
+getrandom = { version = "0.3" }
+globset = { version = "0.4" }
+hmac = { version = "0.12" }
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+rmp-serde = { version = "1.3.1" }
+scalable_cuckoo_filter = { version = "0.5", features = ["serde_support"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1" }
+sha2 = { version = "0.10" }
+subtle = { version = "2" }
+tempfile = { version = "3" }
+thiserror = { version = "2" }
+tracing = { version = "0.1" }
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+zeroize = { version = "1", features = ["std", "derive"] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+assign_op_pattern = "allow"
+# Stylistic `chunks_exact(N)` -> `as_chunks::<N>()` nudge; a fresh clippy flags it
+# but it's a readability preference, not a correctness lint — allowed like the rest.
+chunks_exact_to_as_chunks = "allow"
+collapsible_if = "allow"
+collapsible_match = "allow"
+derivable_impls = "allow"
+explicit_auto_deref = "allow"
+for_kv_map = "allow"
+get_first = "allow"
+if_same_then_else = "allow"
+int_plus_one = "allow"
+iter_overeager_cloned = "allow"
+manual_is_multiple_of = "allow"
+mem_replace_with_default = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+needless_range_loop = "allow"
+new_without_default = "allow"
+ptr_arg = "allow"
+question_mark = "allow"
+redundant_closure = "allow"
+should_implement_trait = "allow"
+single_match = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unnecessary_cast = "allow"
+unnecessary_map_or = "allow"
+unwrap_or_default = "allow"
+useless_conversion = "allow"
+useless_format = "allow"
+vec_init_then_push = "allow"
+wrong_self_convention = "allow"
+identity_op = "allow"
+manual_strip = "allow"
+result_large_err = "allow"
+doc_nested_refdefs = "allow"
+large_enum_variant = "allow"
+clone_on_copy = "allow"
+extend_with_drain = "allow"
+redundant_pattern_matching = "allow"
+while_let_loop = "allow"
+io_other_error = "allow"
+manual_unwrap_or_default = "allow"
+manual_unwrap_or = "allow"
+manual_flatten = "allow"
+print_literal = "allow"
+manual_saturating_arithmetic = "allow"
+large_const_arrays = "allow"
+unused_enumerate_index = "allow"
+
+[workspace.lints.rust]
+unexpected_cfgs = "allow"
+
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# Incremental compilation is OFF for dev/test. The default-on incremental
+# partitioner interacts badly with the opt-level asymmetry below: the
+# `dregg-circuit` lib is opt-level 3 (rustc disables `share-generics` export at
+# opt>=2, so the rlib does NOT emit shared generic monomorphizations), while the
+# integration-test binaries are opt-level 0 (`share-generics` import ON, so they
+# emit only *references* to those upstream instantiations). Under incremental,
+# rustc's stale-CGU reuse drops the object that would define a referenced p3
+# generic (e.g. `BinomialExtensionField::from_ext_basis_coefficients`,
+# `p3_uni_stark::verifier::recompose_quotient_from_chunks`,
+# `p3_batch_stark::symbolic::get_max_constraint_degree`) while keeping the
+# reference in a sibling `.rcgu.o` — yielding undefined-symbol link failures on
+# the prover-feature test umbrella (`anon.*`/`.llvm.<hash>` dangling locals).
+# Disabling incremental forces a clean per-build partition so every monomorph is
+# emitted. Cheap here: all packages + deps already compile at opt-level 3 below,
+# so incremental's reuse buys little, and a green link is the floor everything
+# rides on. (Witness: `CARGO_INCREMENTAL=0 cargo build … --tests` links clean.)
+[profile.dev]
+incremental = false
+
+# Fast dev/test builds with FAST crypto: keep our own crates cheap to compile
+# (opt-level 0, quick iteration) but build all DEPENDENCIES optimized so the
+# crypto primitives (plonky3 p3-*, poseidon2, BLS12-381, FRI) don't run
+# unoptimized in debug — a debug-build STARK verify/prove pins a core for ages
+# otherwise (e.g. dregg-lightclient tests). opt-level 3 deps + opt-level 0 ours
+# = the best of both. Applies to the `test` profile too (it inherits `dev`).
+[profile.dev.package."*"]
+opt-level = 3
+
+# The crypto-heavy WORKSPACE crates also get optimized in dev/test (they hold
+# hot proving/verifying loops that the `*` glob above does not cover for
+# workspace members). Compile cost is amortized by caching; runtime is night/day.
+[profile.dev.package.dregg-circuit]
+opt-level = 3
+[profile.dev.package.dregg-lightclient]
+opt-level = 3
+# `dregg-circuit-prove` holds the recursion proving + AGGREGATION hot path —
+# `aggregate_tree`/`merge_two_segment_proofs`, the in-circuit `seg_poseidon_commit`
+# sponge + `segment_combine_expose`, the descriptor-leaf AIR construction. At
+# opt-level 0 a single whole-chain fold pins a core for tens of minutes (the debug
+# `-p dregg-lightclient` / `ivc_turn_chain` recursion tests never finish); at
+# opt-level 3 it is the usual minutes. ALWAYS optimize it.
+[profile.dev.package.dregg-circuit-prove]
+opt-level = 3
+

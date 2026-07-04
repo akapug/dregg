@@ -1,0 +1,22 @@
+//! Derivation trace format and reference evaluator for the dregg ZK token system.
+//!
+//! This crate provides:
+//! - Data structures for representing Datalog derivation traces
+//! - A bottom-up Datalog evaluator that records proof traces
+//! - A standalone trace verifier
+//! - Standard policy rules for the dregg authorization model
+
+pub mod check;
+pub mod eval;
+pub mod policy;
+pub mod types;
+pub mod verify;
+
+pub use check::eval_check;
+pub use eval::Evaluator;
+pub use policy::{secure_policy, standard_policy};
+pub use types::*;
+pub use verify::{verify_trace, verify_trace_with_request};
+
+#[cfg(test)]
+mod tests;

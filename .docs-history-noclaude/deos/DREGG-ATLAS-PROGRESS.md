@@ -1,0 +1,127 @@
+# THE DREGG ATLAS — progress (overnight build)
+
+*Running log so any relaunch reorients instantly. Goal spec: `DREGG-ATLAS-GOAL.md`.*
+
+## State (2026-06-21) — FIRST FULL ATLAS RENDERS
+
+**Milestone: the atlas opens and is explorable** (verified via Chrome headless).
+Game Tree (225 states / 1008 transitions, 567 committed / 441 refused; depth 4),
+Ocap Web (4 cells + cap edges), UI Atlas (28 surface screenshots + explainers),
+Protocol reference, Anomalies, About — all cross-linked, offline (`site/index.html`).
+The KEY unblock: MCP `snapshot`/`restore` (fork-based, 0.000s) replaced the 3s
+`rewind` reboot — depth-4 crawl now runs in ~2min (was timing out).
+
+## (earlier) State (2026-06-21, in progress)
+
+**Foundation — DONE.** The `dregg-mcp` harness drives the real verified executor
+(`starbridge-v2/src/bin/dregg_mcp.rs`, committed `586d15a22`). Crawl primitives
+landed: `rewind` (game-tree backtracking), `export` (full dump), `protocol`,
+plus `screenshot` at any size/tab. The 4-vs-8 census is resolved (cockpit adds
+reflexive UI cells via `with_node`; the 4-cell `demo_world` is the protocol
+substrate). HORIZONLOG carries the findings.
+
+**The atlas pipeline — built, running.** Under `dregg-atlas/`:
+- `mcp_client.py` — JSON-RPC stdio client for dregg-mcp (verified working).
+- `crawl.py` — walks the reachable state-space (BFS, dedup by post-state digest,
+  bounded by depth + node/edge caps, every bound logged). Emits
+  `data/{protocol,cells,gametree}.json`. Optimized to only reboot after a
+  committed move (refused moves don't mutate). Depth-1 verified (10 states / 16
+  transitions); depth-3 crawl running.
+- `shoot.py` — screenshots all 28 cockpit surfaces at 1280×832 via the gpui bake;
+  emits `data/surfaces.json`. Running.
+- `build.py` — the site-builder: ingests the data + screenshots + explainers,
+  emits the SPA (`site/index.html` + `app.js`, vendored cytoscape.js + dagre,
+  offline) AND cross-linked static pages (`site/pages/`).
+- `tmpl/{index.html,app.js,atlas.css}` — the SPA: Game Tree + Ocap Web as live
+  cytoscape graphs with detail panels, a screenshot gallery, the protocol
+  reference, and the anomalies list.
+
+## Next (deepen toward exhaustive)
+
+1. Land the first full build (gametree + screenshots + site renders) and
+   screenshot-verify it opens.
+2. Deepen the game tree (depth 4–5; add an `undo`-based DFS to the MCP so it
+   stops rebooting per move — the current perf ceiling).
+3. Per-cell + per-surface + per-effect static pages, all cross-linked.
+4. Author the full explainer set (every surface, every face, every effect, every
+   refusal class) grounded in code (file:line).
+5. Expand the crawl to richer start states (create cells, transfers, grants,
+   attenuate/revoke) so the game tree shows the whole verb vocabulary.
+6. Anomalies page from every inconsistency the crawl surfaces.
+
+## Anomalies found so far (also in HORIZONLOG)
+- `AuthRequired::None` cap-badge inversion (a None-required affordance reports
+  unauthorized for all non-None holders).
+- Cell census 4-vs-8 (resolved: reflexive UI cells).
+
+## (2026-06-21) — ATLAS COMPLETE (all three pillars deep, explorable)
+
+The site (`dregg-atlas/site/index.html`, offline) is genuinely explorable, verified
+by headless Chrome end-to-end including interaction (`?select=<state>` deep-links a
+game-tree state; clicking a state highlights its reachable subtree and shows its cell
+snapshot + every committed/refused turn).
+
+- GAME TREE — 700 world-states / 2464 turns (1584 committed, 880 refused), radial
+  starburst, depth 5/4. Move set = every self-affordance per cell + a cross-cell
+  transfer per ordered pair, so value flow + conservation are visible (an overspend is
+  refused InsufficientBalance; the issuer well can't initiate). Honestly node-capped.
+- OCAP WEB — cells + capability edges; click → faces.
+- UI ATLAS — 28 cockpit surfaces, each a high-res screenshot + a deep code-grounded
+  (file:line) explainer, with per-surface static pages.
+- PROTOCOL — deep reference (thesis/verbs/substances/auth-lattice/refusal/receipts),
+  rendered inline + standalone pages.
+- ANOMALIES — 3 findings (None cap-badge inversion; cell census resolved; issuer-well
+  fee gating).
+- README + fully regenerable: `crawl.py && shoot.py && build.py`.
+
+Commits: 586d15a22 (harness) · 7ea0c5438 (first atlas) · 34ce6539e (explainers + radial)
+· fb84d91ed (raw effects). Findings in HORIZONLOG.
+
+### Remaining deepening (optional, if the night continues)
+- undo-based DFS in the MCP (currently snapshot/restore — already fast) for depth 6+.
+- per-effect and per-state-class static pages.
+- richer verb coverage (grant/create wired into the crawl move set).
+
+## (2026-06-22) — THE UI TREE pillar added (exploring inside the surfaces)
+
+ember's morning ask: a DAG of exploring INSIDE and THROUGH the UI, not just
+surface screenshots. Delivered:
+- `Cockpit` nav API (`cockpit.rs`): `NavAction` / `CockpitNavState` +
+  `capture_nav`/`restore_nav`/`available_nav`/`apply_nav`/`nav_key` — drives the
+  REAL interaction handlers (cycle focus/lens, toggles, scrubbers, navigations).
+- `--explore-ui <dir>` (`main.rs`): a headless BFS driver that walks the UI
+  state-space, screenshots each distinct rendered state, records interaction edges.
+- Atlas "UI Tree" view: a radial DAG (HOME → 28 surfaces → each surface's internal
+  states); click a state → its screenshot + interactions out. 260 states / 857
+  edges, ZERO render panics.
+- Finding: 4 live tabs (Wonder/Swarm/Agent/Time) stall headless stepping (logged).
+Commit: 6e64cdcd5.
+
+## (2026-06-22) — THE WAVE: web cockpit + macro + oracle + None fix + IE6 floor
+
+A full wave of the discussed work, landed in waves/workflows:
+- **WEB COCKPIT (Path C, realized):** the gpui-free model compiles to wasm32 (port
+  agent, `a0b6284e0`); `starbridge-v2/web/` (cdylib) exposes it over wasm-bindgen
+  (`23324b470`); `web/cockpit.html` is a live interactive cockpit in the browser
+  (`410a7379b`) + an ocap-web view (`657d4d2cf`). The verified executor runs in a
+  browser tab, no server. `now_unix` uses js_sys on wasm. Build: `wasm-pack build web
+  --target web --out-dir pkg` (pkg gitignored). One model, native + web + seL4.
+- **MACRO (the lean form, no RunScript effect):** `turn/src/script.rs` — a `Script`
+  over the proven Pipeline carrier, content-addressed, replayed via execute_pipeline
+  (`e957ffb52`, 4 tests); the cockpit ⏺⏹▶ surface records turns → a Script → replays
+  on a fork (`06a6e28c4`); atlas explainer + the Custom-VK design (`docs/deos/
+  MACRO-AS-CUSTOM-VK.md`).
+- **ORACLE:** `dregg-atlas/verify.py` — conservation proven across all 700 states
+  (Σ=5000), no unbacked overspend, edge well-formedness; green-or-bust (`...verify.py`).
+- **None cap-badge fix:** `affordance.rs::authorized_for` special-cases None-required →
+  always-authorized; verified native (dregg-mcp + 7 inspect_act tests, `750d0d07c`) AND
+  in the live web cockpit (grant now ▶send). Finding closed.
+- **IE6 FLOOR (Path B):** `dregg-atlas/ie6.py` — a pure-HTML-4.01, server-less,
+  script-less view (img + <map>/<area> image-maps) for any user-agent back to 1996
+  (`c20e9e969`); wired into build.py, linked from the atlas About.
+- **DECLINED (with reason):** headless-mode full UI-tree coverage. The 4 live tabs
+  (Wonder/Swarm/Agent/Time) stall the persistent stepping loop via DIFFUSE perpetual
+  work (animations/demo-boots, not a few gateable cx.spawn). They are already in the UI
+  atlas (one-shot bake) and have minimal internal nav, so the gain is the 4 base nodes
+  only — poor cost/value. Left as the logged HORIZONLOG finding for a future bounded-
+  run-until-parked approach.

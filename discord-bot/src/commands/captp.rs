@@ -1,0 +1,602 @@
+//! CapTP slash commands: `/cap-share`, `/cap-accept`, `/cap-delegate`, `/cap-list`, `/cap-revoke`.
+//!
+//! The bot acts as a capability peer — it can export, enliven, delegate, and revoke
+//! sturdy references on behalf of Discord users.
+
+use serenity::all::{
+    CommandDataOptionValue, CommandInteraction, CommandOptionType, Context, CreateCommand,
+    CreateCommandOption, CreateInteractionResponse, CreateInteractionResponseMessage,
+    EditInteractionResponse,
+};
+
+use crate::BotState;
+use crate::db::IdentityMode;
+use crate::embeds;
+
+// ─── Registration ───────────────────────────────────────────────────────────
+
+/// Register `/cap-share <cell-id>`.
+pub fn register_share() -> CreateCommand {
+    CreateCommand::new("cap-share")
+        .description("Export a sturdy ref and share it as an embed")
+        .add_option(
+            CreateCommandOption::new(CommandOptionType::String, "cell-id", "Cell ID to export")
+                .required(true),
+        )
+}
+
+/// Register `/cap-accept <dregg-uri>`.
+pub fn register_accept() -> CreateCommand {
+    CreateCommand::new("cap-accept")
+        .description("Enliven a shared dregg URI or redeem a handoff token")
+        .add_option(
+            CreateCommandOption::new(
+                CommandOptionType::String,
+                "uri",
+                "dregg:// URI or dregg-handoff-* token",
+            )
+            .required(true),
+        )
+}
+
+/// Register `/cap-delegate <cell> <@user>`.
+pub fn register_delegate() -> CreateCommand {
+    CreateCommand::new("cap-delegate")
+        .description("Create a handoff cert for a Discord user")
+        .add_option(
+            CreateCommandOption::new(CommandOptionType::String, "cell-id", "Cell ID to delegate")
+                .required(true),
+        )
+        .add_option(
+            CreateCommandOption::new(CommandOptionType::User, "user", "User to delegate to")
+                .required(true),
+        )
+}
+
+/// Register `/cap-list`.
+pub fn register_list() -> CreateCommand {
+    CreateCommand::new("cap-list").description("Show the bot's held capabilities")
+}
+
+/// Register `/cap-revoke <cell-id>`.
+pub fn register_revoke() -> CreateCommand {
+    CreateCommand::new("cap-revoke")
+        .description("Revoke a previously shared capability")
+        .add_option(
+            CreateCommandOption::new(CommandOptionType::String, "cell-id", "Cell ID to revoke")
+                .required(true),
+        )
+}
+
+/// Register `/cap-peer` — show the bot's CapTP peer identity + held/exported tallies.
+pub fn register_peer() -> CreateCommand {
+    CreateCommand::new("cap-peer")
+        .description("Show the bot's CapTP peer identity and capability tallies")
+}
+
+// ─── Handlers ───────────────────────────────────────────────────────────────
+
+/// Handle `/cap-share`.
+pub async fn handle_share(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let cell_id = command
+        .data
+        .options
+        .first()
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    defer_ephemeral(ctx, command).await;
+
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    match state.captp.export_cap(&state.db, &cell_id).await {
+        Ok(uri) => {
+            let uri_str = uri.to_string();
+            let short_cell = if cell_id.len() > 16 {
+                format!("{}...", &cell_id[..16])
+            } else {
+                cell_id.clone()
+            };
+
+            let embed = embeds::success_embed("Capability Shared")
+                .description("Sturdy ref recorded in the bot's local CapTP table.")
+                .field("Cell", format!("`{short_cell}`"), true)
+                .field("URI", format!("```\n{uri_str}\n```"), false);
+
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Export Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+/// Handle `/cap-accept`.
+pub async fn handle_accept(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let uri_or_token = command
+        .data
+        .options
+        .first()
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    defer_ephemeral(ctx, command).await;
+
+    if uri_or_token.starts_with("dregg-handoff-") {
+        handle_handoff_redeem(ctx, command, state, &uri_or_token).await;
+        return;
+    }
+
+    match state.captp.accept_cap(&state.db, &uri_or_token).await {
+        Ok(cap) => {
+            let cell_id = hex::encode(cap.uri.cell_id);
+            let short = if cell_id.len() > 16 {
+                format!("{}...", &cell_id[..16])
+            } else {
+                cell_id.clone()
+            };
+
+            let embed = embeds::success_embed("Capability Accepted")
+                .description("The bot now holds this live reference.")
+                .field("Cell", format!("`{short}`"), true)
+                .field("Status", "Live", true);
+
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Accept Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+/// Handle `/cap-delegate`.
+pub async fn handle_delegate(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let cell_id = command
+        .data
+        .options
+        .iter()
+        .find(|o| o.name == "cell-id")
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    let target_user_id = command
+        .data
+        .options
+        .iter()
+        .find(|o| o.name == "user")
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::User(uid) => Some(uid.get()),
+            _ => None,
+        });
+
+    defer_ephemeral(ctx, command).await;
+
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    let target_id = match target_user_id {
+        Some(id) => id,
+        None => {
+            let embed = embeds::error_embed("Invalid Arguments", "Please specify a target user.");
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    // Look up the target user's dregg key.
+    let target_discord = target_id.to_string();
+    let recipient_key = match state.db.get_user_identity(&target_discord).await {
+        Ok(Some(identity)) if identity.mode != IdentityMode::ExternalPending => identity.cell_id,
+        Ok(Some(_)) => {
+            let embed = embeds::warning_embed(
+                "Target Link Pending",
+                &format!(
+                    "<@{target_id}> has a pending external identity link. They need to prove ownership before receiving delegated capabilities."
+                ),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "Target Has No Cipherclerk",
+                &format!("<@{target_id}> does not have a linked dregg identity."),
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    match state
+        .captp
+        .delegate_cap(&state.db, &cell_id, &recipient_key)
+        .await
+    {
+        Ok(record) => {
+            let short_token = if record.token.len() > 72 {
+                format!("{}...", &record.token[..72])
+            } else {
+                record.token.clone()
+            };
+            let short_sig = truncate(&record.local_signature, 32);
+
+            let embed = embeds::success_embed("Capability Delegated")
+                .description(format!(
+                    "Local CapTP handoff created for <@{target_id}>. They can redeem it with `/cap-accept`."
+                ))
+                .field("Cell", format!("`{}`", truncate(&record.cell_id, 16)), true)
+                .field("Status", record.status.as_str(), true)
+                .field("Token", format!("```\n{short_token}\n```"), false)
+                .field("Local Signature", format!("`{short_sig}`"), false);
+
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Delegation Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+/// Handle `/cap-list`.
+pub async fn handle_list(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let held = match state.captp.list_held(&state.db).await {
+        Ok(held) => held,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let exports = match state.captp.list_exports(&state.db).await {
+        Ok(exports) => exports,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+    let handoffs = match state.captp.list_handoffs(&state.db).await {
+        Ok(handoffs) => handoffs,
+        Err(e) => {
+            let embed = embeds::error_embed("List Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    if held.is_empty() && exports.is_empty() && handoffs.is_empty() {
+        let embed = embeds::dregg_embed("Bot Capabilities")
+            .description("No capabilities currently held or exported.");
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    let mut desc = String::new();
+
+    if !held.is_empty() {
+        desc.push_str("**Held (live refs):**\n");
+        for (cell_id, cap) in &held {
+            let short = if cell_id.len() > 16 {
+                format!("{}...", &cell_id[..16])
+            } else {
+                cell_id.clone()
+            };
+            let label = cap.label.as_deref().unwrap_or("unlabeled");
+            let status = if cap.live { "live" } else { "stale" };
+            desc.push_str(&format!("- `{short}` ({label}) [{status}]\n"));
+        }
+        desc.push('\n');
+    }
+
+    if !exports.is_empty() {
+        desc.push_str("**Exported (shared):**\n");
+        for (cell_id, export) in &exports {
+            let short = if cell_id.len() > 16 {
+                format!("{}...", &cell_id[..16])
+            } else {
+                cell_id.clone()
+            };
+            let status = if export.revoked { "revoked" } else { "active" };
+            desc.push_str(&format!("- `{short}` [{status}]\n"));
+        }
+    }
+
+    if !handoffs.is_empty() {
+        if !desc.is_empty() {
+            desc.push('\n');
+        }
+        desc.push_str("**Handoffs:**\n");
+        for handoff in &handoffs {
+            desc.push_str(&format!(
+                "- `{}` -> `{}` [{}]\n",
+                truncate(&handoff.cell_id, 16),
+                truncate(&handoff.recipient_key, 16),
+                handoff.status.as_str()
+            ));
+        }
+    }
+
+    let embed = embeds::dregg_embed("Bot Capabilities")
+        .description(desc)
+        .field("Held", held.len().to_string(), true)
+        .field("Exported", exports.len().to_string(), true)
+        .field("Handoffs", handoffs.len().to_string(), true);
+
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
+}
+
+/// Handle `/cap-revoke`.
+pub async fn handle_revoke(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let cell_id = command
+        .data
+        .options
+        .first()
+        .and_then(|o| match &o.value {
+            CommandDataOptionValue::String(s) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    defer_ephemeral(ctx, command).await;
+
+    if let Err(embed) = ensure_user_can_manage_cell(command, state, &cell_id).await {
+        let _ = command
+            .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+            .await;
+        return;
+    }
+
+    match state.captp.revoke_cap(&state.db, &cell_id).await {
+        Ok(()) => {
+            let embed = embeds::success_embed("Capability Revoked").description(format!(
+                "Cell `{}` has been revoked. The local sturdy ref is no longer accepted by the bot.",
+                cell_id
+            ));
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Revoke Failed", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+/// Handle `/cap-peer` — the bot-as-capability-peer story: its federation root,
+/// its own cell id, the node it speaks to, and what it currently holds/exports.
+pub async fn handle_peer(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    defer_ephemeral(ctx, command).await;
+
+    let fed_id = hex::encode(state.captp.federation_id.0);
+    let bot_cell = state.captp.bot_cell_id.clone();
+    let node = state.captp.node_url.clone();
+
+    let held = state
+        .captp
+        .list_held(&state.db)
+        .await
+        .map(|h| h.len())
+        .unwrap_or(0);
+    let exports = state
+        .captp
+        .list_exports(&state.db)
+        .await
+        .map(|e| e.len())
+        .unwrap_or(0);
+    let handoffs = state
+        .captp
+        .list_handoffs(&state.db)
+        .await
+        .map(|h| h.len())
+        .unwrap_or(0);
+    let swiss = state.handoff_broker.lock().await.swiss_len();
+
+    let embed = embeds::dregg_embed("CapTP Peer")
+        .description(
+            "This bot is a first-class dregg capability peer. It exports sturdy refs, enlivens \
+             shared `dregg://` URIs, mints/redeems canonical handoff certificates, and routes \
+             through the live node — alongside node and sdk peers.",
+        )
+        .field(
+            "Federation Root",
+            format!("`{}...`", truncate(&fed_id, 24)),
+            false,
+        )
+        .field(
+            "Bot Cell",
+            format!("`{}...`", truncate(&bot_cell, 24)),
+            false,
+        )
+        .field("Node", format!("`{node}`"), false)
+        .field("Held (live refs)", held.to_string(), true)
+        .field("Exported", exports.to_string(), true)
+        .field("Local Handoffs", handoffs.to_string(), true)
+        .field("Live Swiss Entries", swiss.to_string(), true);
+    let _ = command
+        .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+        .await;
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+async fn handle_handoff_redeem(
+    ctx: &Context,
+    command: &CommandInteraction,
+    state: &BotState,
+    token: &str,
+) {
+    let discord_id = command.user.id.get().to_string();
+    let recipient_key = match state.db.get_user_identity(&discord_id).await {
+        Ok(Some(identity)) if identity.mode != IdentityMode::ExternalPending => identity.cell_id,
+        Ok(Some(_)) => {
+            let embed = embeds::warning_embed(
+                "Identity Pending",
+                "Your external identity link is pending ownership proof and cannot redeem handoffs yet.",
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Ok(None) => {
+            let embed = embeds::warning_embed(
+                "No Cipherclerk",
+                "Create or link a dregg identity before redeeming a handoff.",
+            );
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+        Err(e) => {
+            let embed = embeds::error_embed("Database Error", &e.to_string());
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+            return;
+        }
+    };
+
+    match state
+        .captp
+        .redeem_handoff(&state.db, token, &recipient_key)
+        .await
+    {
+        Ok(record) => {
+            let embed = embeds::success_embed("Handoff Redeemed")
+                .description("The bot accepted the handoff token and now holds the delegated live reference.")
+                .field("Cell", format!("`{}`", truncate(&record.cell_id, 16)), true)
+                .field("Status", record.status.as_str(), true)
+                .field("URI", format!("```\n{}\n```", record.uri), false);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+        Err(e) => {
+            let status = state.captp.handoff_status(&state.db, token).await;
+            let detail = match status {
+                Some(record) => format!("{}\nCurrent status: `{}`", e, record.status.as_str()),
+                None => e.to_string(),
+            };
+            let embed = embeds::error_embed("Redeem Failed", &detail);
+            let _ = command
+                .edit_response(&ctx.http, EditInteractionResponse::new().embed(embed))
+                .await;
+        }
+    }
+}
+
+async fn defer_ephemeral(ctx: &Context, command: &CommandInteraction) {
+    let _ = command
+        .create_response(
+            &ctx.http,
+            CreateInteractionResponse::Defer(
+                CreateInteractionResponseMessage::new().ephemeral(true),
+            ),
+        )
+        .await;
+}
+
+async fn ensure_user_can_manage_cell(
+    command: &CommandInteraction,
+    state: &BotState,
+    cell_id: &str,
+) -> Result<(), serenity::all::CreateEmbed> {
+    if cell_id.len() != 64 || hex::decode(cell_id).is_err() {
+        return Err(embeds::error_embed(
+            "Invalid Cell ID",
+            "Cell IDs must be 64 hex characters.",
+        ));
+    }
+
+    let discord_id = command.user.id.get().to_string();
+    match state.db.get_user_identity(&discord_id).await {
+        Ok(Some(identity))
+            if identity.mode == IdentityMode::Hosted && identity.cell_id == cell_id =>
+        {
+            Ok(())
+        }
+        Ok(Some(identity)) if identity.cell_id == cell_id => Err(embeds::warning_embed(
+            "External Identity Pending",
+            "The bot cannot export, delegate, or revoke capabilities for an external identity until holder proof is implemented and verified.",
+        )),
+        Ok(Some(_)) => Err(embeds::error_embed(
+            "Capability Not Held",
+            "You can only manage capabilities for your own hosted cipherclerk cell.",
+        )),
+        Ok(None) => Err(embeds::warning_embed(
+            "No Cipherclerk",
+            "Create a hosted cipherclerk with `/cipherclerk create` before managing capabilities.",
+        )),
+        Err(e) => Err(embeds::error_embed("Database Error", &e.to_string())),
+    }
+}
+
+fn truncate(value: &str, max: usize) -> String {
+    if value.len() > max {
+        format!("{}...", &value[..max])
+    } else {
+        value.to_string()
+    }
+}

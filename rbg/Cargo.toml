@@ -1,0 +1,13 @@
+[package]
+name = "dregg-rbg"
+version.workspace = true
+edition.workspace = true
+description = "Robigalia-inspired directory / scoped-intent / VFS userspace primitives for dregg's capability-secure distributed runtime"
+
+[dependencies]
+blake3 = "1"
+dregg-types = { workspace = true }
+dregg-cell = { path = "../cell", default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+# Cargo config for the REAL executor Microkit PD (the assembly's `executor` seat).
+#
+# Like the other dregg-pd PDs this builds no_std for `aarch64-sel4-microkit` (the
+# vendored Microkit target spec). UNLIKE them it links a large C archive set: the
+# verified Lean closure + the ELF Lean runtime + real GMP + the real crypto floor
+# + the seL4 musl libc (all provisioned by ../executor-rootserver's
+# relink-roottask.sh into out/exec-sel4, and the seL4 musl into out/musl-sel4 by
+# provision-sel4.sh). build.rs emits the rustc-link-* lines; the -L below makes
+# the libc the runtime archives call resolve to the seL4 (sysinfo-routed) musl.
+#
+# A Microkit PD is no_std, so build-std is core/alloc/compiler_builtins only (NOT
+# std — the Lean runtime's libc comes from the linked musl libc.a, not Rust std).
+
+[unstable]
+unstable-options = true
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "../targets/aarch64-sel4-microkit.json"
+rustflags = ["-Zunstable-options"]
+
+[env]
+RUST_TARGET_PATH = { value = "../targets", relative = true }
+
+# The seL4-musl libc (provisioned into ../executor-rootserver/out/musl-sel4/lib).
+# -L makes the `-lc` the build.rs emits resolve to the seL4 (sysinfo-routed) musl
+# rather than any host libc; the runtime archives bind their malloc/write/... to
+# it at link time (routing every syscall through __sysinfo, populated by the
+# .preinit_array hook ahead of the C++ ctors).
+[target.'cfg(target_os = "none")']
+linker = "rust-lld"
+rustflags = [
+    "-Zunstable-options",
+    "-L", "/Users/ember/dev/breadstuffs/sel4/dregg-pd/executor-rootserver/out/musl-sel4/lib",
+    # Align the PT_LOAD segments to 2 MiB so the microkit tool maps the ~280-MiB
+    # verified-Lean text with 2 MiB pages (Page(2 MiB)) instead of 4 KiB frames.
+    # WITHOUT this the executor PD's image needs ~84,000 individual 4 KiB frame
+    # caps in the initial-task root CNode (ROOT_CNODE_SIZE_BITS=17 → 131,072
+    # slots); the CapDL initializer exhausts them ("OutOfSlots") before the PD
+    # ever runs. At 2 MiB granularity the same image needs ~170 frame caps, which
+    # fits — this is what lets the 5-PD microkit image BOOT to the verified turn.
+    "-C", "link-arg=-z", "-C", "link-arg=max-page-size=0x200000",
+]

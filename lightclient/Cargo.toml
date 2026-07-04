@@ -1,0 +1,43 @@
+[package]
+name = "dregg-lightclient"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Whole-history light client: verify ONE succinct IVC aggregate (WholeChainProof) and obtain the AggregateAttests verdict — re-witnessing nothing. The Rust embodiment of Dregg2.Circuit.RecursiveAggregation.light_client_verifies_whole_history."
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+# The whole-history light client verifies the recursive IVC aggregate, whose
+# verify (`ivc_turn_chain::verify_turn_chain_recursive`) needs the recursion
+# tower — so it depends on the heavy prove crate (gated by this crate's `prover`).
+dregg-circuit-prove = { path = "../circuit-prove" }
+# The REAL supermajority threshold (`2n/3 + 1`) the node's finality rule uses
+# (`ordering::supermajority_threshold`) — so the finality-cert quorum leg counts against the SAME
+# threshold the blocklace super-ratification rule does, not a copied constant.
+dregg-blocklace = { path = "../blocklace" }
+# The rotated finalized-turn fixtures (`make_turn` in the lib tests AND the `whole_history_demo`
+# binary) mint a rotated participant leg from before/after actor `Cell`s (Bucket-F), so they
+# construct `dregg_cell::Cell`s. Needed by the binary (not test-only), hence a normal dependency.
+dregg-cell = { path = "../cell" }
+# Bucket-F (PATH-PRESERVE Phase 5a): the rotated-leg MINTING recipe
+# (`rotation_witness::mint_rotated_participant_leg`) lives in `dregg-turn` (it drives
+# `rotation_witness::produce` over `Cell`s — `dregg-circuit` cannot host it, the cycle). The demo
+# binary + lib-test fixtures call it, so it is a normal dependency (its `prover`-gated mint is
+# forwarded below).
+dregg-turn = { path = "../turn" }
+# The finality-certificate leg (`FinalityCert`) verifies each validator's Ed25519 signature OVER the
+# finalized root (the `CertValid` binding leg — `FinalizedLightClient.CertValid`), not merely a count
+# of distinct pubkeys. So the light client depends on the same Ed25519 implementation the node signs
+# blocks with (`node/Cargo.toml`'s `ed25519-dalek = "2"`), counting only signature-bound votes toward
+# the supermajority quorum.
+ed25519-dalek = { version = "2", features = ["std"] }
+
+[features]
+# `prover` forwards to dregg-circuit's prover feature (which is in its default set) and gates
+# the whole-history light client. On by default so `cargo build -p dregg-lightclient` carries it.
+default = ["prover"]
+prover = ["dregg-turn/prover"]

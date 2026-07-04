@@ -1,0 +1,40 @@
+{
+  "id": "swarm-orchestration",
+  "name": "Verifiable Agent-Orchestration Swarm",
+  "description": "Multi-agent task coordination where the coordination is cap-secured, receipted, and verifiable. A factory-born COORDINATOR (dispatch-board) cell holds a conserved budget + a mandate and dispatches sub-tasks to WORKER agent cells via cap-attenuated grants (an over-grant is REFUSED by the verified executor's no-amplification gate); workers coordinate via the async NOTIFY edge (EmitEvent -> the recipient DRAINS in its OWN receipted turn, causality visible and independence proven by two distinct receipt hashes); the shared budget is CONSERVED (spent_a + spent_b <= budget, the affine gate) and a breach is REFUSED BEFORE it runs (fail-closed, no commit); every action leaves a receipt (narration-vs-truth). The dispatch board's installed CellProgram IS the swarm policy, re-checked by the verified executor on every turn (immutable mandate, monotone meters, strict-monotone epoch for no-replay). Rust mirror of metatheory/Dregg2/Apps/AgentOrchestrationBudget.lean (the dispatch-board POLICY, the integrator wedge) + AgentOrchestration.lean (the kernel-executor swarm with attenuated, non-amplifying delegation). Pre-submission assurance via dregg-userspace-verify::analyze (conservation + non-amplification + well-formedness).",
+  "version": "0.1.0",
+  "status": "starbridge",
+  "crate": "starbridge-swarm-orchestration",
+  "runtime_mode": "starbridge-native",
+  "caddy_prefix": "/swarm",
+  "factory_vks": [
+    "737461726272696467652d737761726d2d6f726368657374722d666163747279"
+  ],
+  "page": null,
+  "inspectors": ["swarm-board"],
+  "turn_builders": ["open_board", "dispatch", "drain_dispatch"],
+  "required_apis": ["/turn/submit", "/cells/create-from-factory", "/api/cell/{id}"],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "board_app(cipherclerk, executor)",
+    "cell": "board",
+    "discoverable": ["orchestration", "swarm"],
+    "publish": "Signature (the board cell is a dregg:// sturdyref a federated peer reacquires)",
+    "affordances": {
+      "view_board": "cap-only, Signature (an OBSERVER audits)",
+      "ack_dispatch": "cap-only, Either (a WORKER drains a wake in its own receipted turn)",
+      "grant_worker": "cap-only, None/root, Effect::GrantCapability (the lead hands a worker an ATTENUATED slice — derive_no_amplify)",
+      "dispatch": "GATED (cap∧state), None/root — opened precondition (EPOCH>=1); the fire submits the FULL dispatch (meter + epoch + async wake), the executor re-enforcing AffineLe(spent_a+spent_b<=budget) + StrictMonotonic(epoch) + Monotonic(meters)",
+      "open_board": "GATED (cap∧state), None/root — pre-open precondition (EPOCH==0); the fire submits the FULL open, the executor re-enforcing WriteOnce(BUDGET) + StrictMonotonic(epoch)"
+    },
+    "seam": "CLOSED — the fire runs against the FACTORY-BORN/seeded coordinator cell carrying coordinator_program() (= swarm_constraints()), so the AffineLe budget gate, WriteOnce mandate/lead, and StrictMonotonic epoch BITE in the deos fire path (tests/deos_seam.rs)"
+  },
+  "lean_module": "Dregg2.Apps.AgentOrchestrationBudget",
+  "manifest_health": {
+    "status": "starbridge-native",
+    "verified_policy": "AgentOrchestrationBudget.dispatchConstraints (affineLe budget + immutable mandate + strictMono epoch)",
+    "verified_delegation": "AgentOrchestration.worker_authority_subset_orchestrator (derive_no_amplify)",
+    "pre_submission_assurance": "dregg-userspace-verify::analyze (conservation + non-amplification + well-formedness)"
+  }
+}

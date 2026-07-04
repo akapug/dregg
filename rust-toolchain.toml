@@ -1,0 +1,10 @@
+[toolchain]
+# Rolling `nightly` (>= 2026-02-14): the workspace-unification needs ONE toolchain for ALL
+# crates including the gpui elephants (zed fork), which require `std::hint::cold_path`
+# (stabilized after 2026-01-01). starbridge-v2/deos-* already pin rolling `nightly` for this;
+# unifying makes it the repo-wide pin. binius (`--features binius`, NOT a default dep) still
+# builds — array_try_map/array_try_from_fn remain available on nightly.
+channel = "nightly"
+profile = "default"
+
+components = ["cargo", "clippy", "rust-analyzer", "rustc", "rustfmt"]

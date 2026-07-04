@@ -1,0 +1,237 @@
+[package]
+name = "dregg-perf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+# Performance harnesses for the dregg PRODUCTION turn-proof path.
+#
+# This crate exists to put real, reproducible numbers on the question the
+# product/polis assessment asks: how long does a real turn take to prove and
+# verify, and how big is the proof? It benchmarks `prove_effect_vm_p3` /
+# `verify_effect_vm_p3` — the AUDITED Plonky3 prover the SDK's
+# `full_turn_proof` routes a turn's Effect-VM state transition through — over
+# honest Effect-VM traces produced by the same `generate_effect_vm_trace`
+# generator the executor witness path uses. No estimates; we time the code that
+# actually runs.
+
+[features]
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of which
+# default to it) and forwards to `dregg-circuit/prover`, so this crate's own
+# `#[cfg(feature = "prover")]` gates ALIGN with the circuit's prover state. Under `prover`
+# (default) the live EffectVM commit path is the rotated IR-v2 tower, so the perf harnesses measure
+# `prove_turn_self_sovereign` (the real node turn) + the descriptor-interpreter (`prove_vm_descriptor`),
+# NOT the v1 hand-AIR `prove_effect_vm_p3` (which is the `not(prover)` wasm floor, retired here).
+default = ["prover"]
+prover = ["dregg-sdk/prover", "dregg-turn/prover"]
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+# perf measures the recursion-prove surface (effect_vm_p3_air etc.).
+dregg-circuit-prove = { path = "../circuit-prove" }
+dregg-sdk = { path = "../sdk" }
+dregg-intent = { path = "../intent" }
+dregg-token = { path = "../token" }
+dregg-turn = { path = "../turn" }
+dregg-cell = { path = "../cell" }
+# The data plane (DP-2) — the cap-gated, receipted message `Bus` a deos app uses
+# to MOVE work (`captp::data_plane`). The `data_plane` bench times its enqueue /
+# drain / publish throughput. `dregg-types` for the relay's `FederationId`/keypair.
+dregg-captp = { path = "../captp" }
+dregg-types = { path = "../types" }
+# The verified Lean kernel FFI — the EMBEDDED executor the node + the seL4
+# `executor` PD drive (`shadow_exec_full_forest_auth` = `@[export]
+# dregg_exec_full_forest_auth`). Already linked transitively via `dregg-turn`'s
+# default Lean link; named here directly so the embedded-commit bench can call it.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# The verified-Lean state PRODUCER cluster — `execute_via_lean` / `produce_via_lean` (the full
+# Rust-JSON-encode → C bridge → Lean parse/exec/encode → Rust-parse round-trip). The lean_ffi_turn
+# bench measures this path's per-turn overhead vs the bare Rust `TurnExecutor::execute`.
+dregg-exec-lean = { path = "../exec-lean" }
+# The deos desktop — pulled with ONLY its `embedded-executor` feature (NO gpui),
+# so the UI-projection bench measures the real `World`/`Shell`/affordance
+# projection the cockpit paints WITHOUT dragging gpui's native GPU/window tree.
+# This feature shares the exact dep tree perf already pulls (dregg-sdk / -turn /
+# -cell / -circuit), so it adds the `starbridge-v2` lib crate itself, not a new
+# heavy subtree. The gpui FIRST-PAINT (a real GPU scan-out) needs lavapipe and is
+# measured on persvati — see docs/PERFORMANCE.md §UI.
+starbridge-v2 = { path = "../starbridge-v2", default-features = false, features = ["embedded-executor"] }
+postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Domain-separated token/turn-hash seeds for the rotated full-turn witness builder.
+blake3 = "1"
+# The blocklace gossip/sync substrate — the `federation_gossip` bench measures the
+# real per-turn (= per-block) cross-node legs: Ed25519 block sign/verify, the
+# strand-integrity `Blocklace::insert`, and quorum finality. Light deps (blake3 +
+# ed25519-dalek), already in the workspace lock — adding this edge churns nothing.
+dregg-blocklace = { path = "../blocklace" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+# Ed25519 signing keys for the federation_gossip bench (blocklace block signing).
+# Already in the workspace lock via blocklace/federation; a zero-churn edge.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
+# ---------------------------------------------------------------------------
+# Criterion benches. Each is a real, compiling benchmark over the PUBLIC API of
+# the crate under test. Every bench is parameterized SMOKE-vs-FULL:
+#   * SMOKE (default)   — tiny input; cheap `--no-run`, seconds-scale smoke run.
+#   * FULL (PERF_FULL=1) — realistic input; the persvati capture run.
+# See `perf/src/lib.rs::perf_full()` and `docs/PERF.md`.
+# ---------------------------------------------------------------------------
+
+# The original turn-proof bench (prove + verify of the EffectVM transition).
+[[bench]]
+name = "turn_proof"
+harness = false
+
+# Transfer PROVE: hand-AIR EffectVM prover + the verified descriptor-interpreter
+# prover (`prove_vm_descriptor`) over the same transition.
+[[bench]]
+name = "prove"
+harness = false
+
+# Proof VERIFY: the audited p3 verifier on a pre-built proof (verify is the
+# light side; the future light-client cost lives here).
+[[bench]]
+name = "verify"
+harness = false
+
+# Executor TURN: the live Rust `TurnExecutor::execute` (the executor entry the
+# node drives), measured over a real Transfer turn against a `Ledger`.
+[[bench]]
+name = "executor_turn"
+harness = false
+
+# TRACE-GEN: `generate_effect_vm_trace` (witness generation) + the Poseidon2-aux
+# extension, the witness surface every EffectVM proof consumes.
+[[bench]]
+name = "trace_gen"
+harness = false
+
+# COMMITMENT: the canonical cell state commitment (`compute_canonical_state_commitment`)
+# and the v9 rotated-limbs commitment (the rotation long pole).
+[[bench]]
+name = "commitment"
+harness = false
+
+# POSEIDON2: one BabyBear width-16 permutation + the 2->1 / many sponge hashes —
+# the in-circuit hash primitive that dominates aux witness-gen.
+[[bench]]
+name = "poseidon2"
+harness = false
+
+# WITNESS-ONLY vs FULL-PROVING: the headline contrast — the executor admit path
+# (no SNARK) and the full self-sovereign turn prover, side by side in one group,
+# so the proving multiplier reads off directly. Gap (a).
+[[bench]]
+name = "turn_witness_vs_proving"
+harness = false
+
+# COHORT CIRCUIT: the rotated IR-v2 multi-table batch STARK (prove + verify) per
+# effect-cohort table shape (transfer / map-write / umem / absent). Gap (b).
+[[bench]]
+name = "cohort_circuit"
+harness = false
+
+# RECURSION FOLD: the bundle-tree aggregation fold (prove + verify) over the
+# N-leaf compress chain — the recursive aggregation cost. Gap (c).
+[[bench]]
+name = "recursion_fold"
+harness = false
+
+# LEAN FFI TURN: the FULL Lean-FFI state-producer round-trip per turn
+# (`execute_via_lean` = Rust JSON-encode → C bridge → Lean parse/exec/encode → Rust parse)
+# vs the bare Rust `TurnExecutor::execute` on the SAME turn. The delta is the FFI tax.
+# (Stage 0 of the FFI-optimization campaign.)
+[[bench]]
+name = "lean_ffi_turn"
+harness = false
+
+# EMBEDDED COMMIT: the verified Lean kernel commit_turn throughput
+# (`shadow_exec_full_forest_auth`) — the starbridge-v2 / node / seL4-executor-PD
+# hot path. Gap (d).
+[[bench]]
+name = "embedded_commit"
+harness = false
+
+# UI PROJECTION: the deos desktop's first-paint DATA cost (`demo_world` = the five
+# real embedded `commit_turn`s the cockpit paints) + the compositor scene
+# composition + the per-viewer affordance projection — the whole-system UI measure
+# (gpui-free; the GPU first-paint is on persvati). Gap (e).
+[[bench]]
+name = "ui_projection"
+harness = false
+
+# SYMBOLIC vs FULL + COLLAPSE: THE HEADLINE INTERACTIVITY NUMBER — a batch of N
+# real transfer turns through the embedded `World` in WitnessMode::Symbolic (no
+# per-turn `Ledger::root()`) vs Full, then `World::collapse(N)`. The per-turn
+# symbolic speedup + the amortized deferred-witness collapse cost, one group.
+[[bench]]
+name = "symbolic_collapse"
+harness = false
+
+# MEMBRANE: the shared-fork "invite someone to my computer" round-trip —
+# `World::fork` (the snapshot/rehydrate substrate) + `SharedFork::construct` (mint
+# the embedded cap) + `commit_turn_gated` (drive an embedded turn through the
+# fail-closed gate) + `Stitch::settle` (the merge-back), plus the end-to-end roundtrip.
+[[bench]]
+name = "membrane"
+harness = false
+
+# DATA PLANE (DP-2): the cap-gated, receipted message `Bus` throughput
+# (`captp::data_plane`) — enqueue (gate + relay + Ed25519 custody receipt), drain
+# (witnessed delivery), the enqueue+drain unit, and the publish/sub fan-out.
+[[bench]]
+name = "data_plane"
+harness = false
+
+# WIDE SCALING: the horizontal-scaling story — the nullifier set + ledger
+# commitment cost vs the population N (1k → 1M). Shows the O(log N) membership /
+# incremental-value-touch hot paths vs the O(N) full-rebuild legs (nullifier
+# `root`/`prove_non_membership`, ledger structural insert). The degradation point.
+[[bench]]
+name = "wide_scaling"
+harness = false
+
+# FEDERATION GOSSIP: the cross-node per-turn (= per-block) blocklace legs —
+# Ed25519 block sign/verify, the strand-integrity `Blocklace::insert` vs lace
+# depth M, and quorum finality vs Q. The measured primitives the N-node
+# federation model multiplies by topology (the bridge itself is modeled).
+[[bench]]
+name = "federation_gossip"
+harness = false
+
+[[bin]]
+name = "perf-summary"
+path = "src/bin/perf_summary.rs"
+
+# Proof-SIZE microbench: the wire-byte numbers the docs cite (descriptor ~120
+# KiB, rotated full-turn ~144 KiB), emitted as text or `--json` for regression
+# tracking against a committed baseline.
+[[bin]]
+name = "proof-sizes"
+path = "src/bin/proof_sizes.rs"
+
+# Full-system performance report: every prove/verify primitive on the real
+# commit path, the descriptor-interpreter vs hand-AIR cost, the silver/gold
+# aggregation, and a witness-gen-vs-prove split, with proof sizes. The numbers
+# the product/polis usability assessment is grounded on.
+[[bin]]
+name = "perf-report"
+path = "src/bin/perf_report.rs"
+
+# End-to-end multi-agent ORCHESTRATION demo + measurement. Runs the polis loop
+# the product assessment only ASSERTED was unit-tested: a parent agent embodies
+# in a cell, spawns a worker under an attenuated, executor-enforced mandate, the
+# worker's in-scope turn commits and its over-scope turn is REJECTED by the
+# executor itself, a provenance chain links the worker's receipts, and two
+# workers' outputs settle atomically + conservingly through the verified
+# per-asset executor (`settle_ring_verified`). Every leg is wall-clock timed.
+[[bin]]
+name = "orchestration-demo"
+path = "src/bin/orchestration_demo.rs"

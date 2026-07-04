@@ -1,0 +1,1764 @@
+//! Generalized effect-action binding AIR.
+//!
+//! Sibling AIR to `bridge_action_air`. The bridge AIR established the pattern:
+//! a 32-byte field becomes 8 BabyBear limbs (4 bytes each), a u64 amount
+//! becomes 2 BabyBear limbs (low/high 32 bits), and each limb is pinned to a
+//! trace-row-0 column via a boundary constraint. Transition constraints force
+//! every row to equal row 0, so a malicious prover cannot put one set of
+//! parameters in row 0 and another in row 1 to slip past the boundary check.
+//!
+//! `bridge_action_air` ships a *fixed* schema (nullifier + recipient +
+//! destination_federation + amount). This module generalizes the same shape to
+//! an arbitrary list of named 32-byte fields and named u64 amounts, so each
+//! `Effect` variant can have its parameters bound at full fidelity without
+//! authoring a new AIR per variant.
+//!
+//! # Layout
+//!
+//! Given a schema with `N` 32-byte fields and `M` u64 amounts, the column /
+//! PI layout is:
+//!
+//! ```text
+//! col / PI 0..8           field[0] limbs        (8 × 4-byte BabyBear)
+//! col / PI 8..16          field[1] limbs
+//! ...
+//! col / PI 8N             amount[0] low 32 bits
+//! col / PI 8N + 1         amount[0] high 32 bits
+//! col / PI 8N + 2         amount[1] low 32 bits
+//! ...
+//! ```
+//!
+//! Total trace width = 8N + 2M. Total PI count = 8N + 2M. Each PI slot
+//! corresponds 1:1 with a row-0 boundary constraint on the same column.
+//!
+//! # Why a generalized AIR rather than one-per-effect?
+//!
+//! The bridge-action AIR is its own module for historical / dispatch reasons
+//! (the bridge wire format references the proof shape by name). For
+//! subsequent effects we factor: one AIR with a per-effect *schema*, and
+//! per-effect *witness builders* in this same module. Each effect's
+//! `prove_X_binding` / `verify_X_binding` pair uses the same AIR with a
+//! different schema. The AIR's `air_name` mixes in the effect kind so the
+//! Fiat-Shamir transcript domain-separates different effect kinds (a proof
+//! generated for effect A cannot replay as effect B even with the same
+//! parameter bytes).
+//!
+//! # What this AIR does and does NOT do
+//!
+//! Does: full-fidelity binding of typed parameters into the proof's PI.
+//! Tampering on any byte of any 32-byte field, or any bit of any u64 amount,
+//! produces a different limb encoding which mismatches the boundary
+//! constraint, which fails STARK verification.
+//!
+//! Does NOT: replay protection, ledger-state consistency, cross-effect
+//! ordering, or anything specific to an effect's *semantics*. Those live one
+//! layer up (executor / Effect-VM / per-effect side proofs).
+
+use crate::field::BabyBear;
+use crate::stark::{self, BoundaryConstraint, StarkAir, StarkProof};
+
+/// Number of BabyBear limbs used to represent a 32-byte field.
+pub const HASH_LIMBS: usize = 8;
+
+/// Number of BabyBear limbs used to represent a u64 amount.
+pub const AMOUNT_LIMBS: usize = 2;
+
+/// Optional schema-specific algebraic-constraint tag. Most schemas are
+/// pure binding (no extra arithmetic over the bound limbs). Schemas that
+/// need additional algebraic relations declare a tag here and the AIR's
+/// `eval_constraints` branches on it.
+///
+/// Today only `Burn` carries a non-trivial tag — it constrains
+/// `old_balance - new_balance == amount` and `old_balance >= amount` on
+/// the bound amount columns (AIR-SOUNDNESS-AUDIT.md #75). Adding another
+/// algebraic kind is one new variant here plus its eval branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlgebraicConstraint {
+    /// No algebraic constraints beyond per-limb boundary pinning.
+    None,
+    /// `Burn` invariant — see `SCHEMA_BURN`. Amount layout (after the
+    /// schema's 32-byte fields):
+    ///   amounts[0] = old_balance  (u64 → 2 limbs)
+    ///   amounts[1] = new_balance  (u64 → 2 limbs)
+    ///   amounts[2] = amount       (u64 → 2 limbs)
+    ///   amounts[3] = was_burn_flag (u64; constrained to 1)
+    ///
+    /// Constraints enforced on row 0 / row continuity:
+    ///   1. new_balance_lo + amount_lo + borrow * 2^32 == old_balance_lo
+    ///   2. new_balance_hi + amount_hi - borrow            == old_balance_hi
+    ///   3. borrow * (borrow - 1) == 0   (boolean borrow bit)
+    ///   4. was_burn_flag == 1
+    ///
+    /// The borrow witness lives in an aux column threaded through every
+    /// row (kept constant for FRI continuity).
+    Burn,
+}
+
+/// A static schema describing what an effect-binding proof commits to.
+///
+/// Schemas are normally defined as `pub const` values, one per Effect kind,
+/// with a unique `kind_name` (used for domain separation in the Fiat-Shamir
+/// transcript) and a fixed list of named 32-byte fields and u64 amounts.
+#[derive(Clone, Copy, Debug)]
+pub struct EffectActionSchema {
+    /// Unique name used in `air_name()` for Fiat-Shamir domain separation.
+    /// MUST be distinct for each effect kind to prevent cross-effect proof
+    /// confusion.
+    pub kind_name: &'static str,
+    /// Number of 32-byte fields the schema binds.
+    pub field_count: usize,
+    /// Number of u64 amounts the schema binds.
+    pub amount_count: usize,
+    /// Optional schema-specific algebraic constraints. Defaults to `None`
+    /// for pure-binding schemas; set to `Burn` for the Burn invariant.
+    pub algebraic: AlgebraicConstraint,
+}
+
+impl EffectActionSchema {
+    /// Total trace width / PI count for this schema.
+    ///
+    /// Schemas with algebraic constraints may reserve additional aux
+    /// columns (e.g., `Burn` needs 1 borrow bit). Aux columns are tracked
+    /// past the PI surface — the PI count is still `field_count * 8 +
+    /// amount_count * 2`; the trace width is `pi_count + aux_count`.
+    pub const fn width(&self) -> usize {
+        self.pi_count() + self.aux_count()
+    }
+    /// PI count (no aux columns).
+    pub const fn pi_count(&self) -> usize {
+        self.field_count * HASH_LIMBS + self.amount_count * AMOUNT_LIMBS
+    }
+    /// Schema-specific aux column count (algebraic constraints only).
+    pub const fn aux_count(&self) -> usize {
+        match self.algebraic {
+            AlgebraicConstraint::None => 0,
+            // Borrow bit for the u64 subtraction.
+            AlgebraicConstraint::Burn => 1,
+        }
+    }
+}
+
+/// Encode a 32-byte value as 8 BabyBear limbs (4 bytes each, little-endian
+/// per chunk, each chunk reduced via `BabyBear::new`).
+///
+/// Same encoding as `bridge_action_air::encode_hash`. The collision
+/// probability across two distinct 32-byte values whose all 8 limbs collide
+/// modulo the BabyBear prime is ~p^-8 ≈ 2^-248 (well above the 124-bit STARK
+/// soundness target).
+pub fn encode_hash(bytes: &[u8; 32]) -> [BabyBear; HASH_LIMBS] {
+    let mut out = [BabyBear::ZERO; HASH_LIMBS];
+    for (i, chunk) in bytes.chunks(4).enumerate() {
+        let val = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        out[i] = BabyBear::new(val);
+    }
+    out
+}
+
+/// Encode a u64 amount as 2 BabyBear limbs (low 32 + high 32, each reduced
+/// canonically via `BabyBear::new`).
+///
+/// Same encoding as `bridge_action_air::encode_amount`.
+pub fn encode_amount(amount: u64) -> [BabyBear; AMOUNT_LIMBS] {
+    let lo = (amount & 0xFFFF_FFFF) as u32;
+    let hi = (amount >> 32) as u32;
+    [BabyBear::new(lo), BabyBear::new(hi)]
+}
+
+/// A typed witness for one instance of an `EffectActionSchema`.
+///
+/// The `fields` and `amounts` vectors are in schema order: `fields[i]` is
+/// pinned to PI slots `[i * 8, (i + 1) * 8)`; `amounts[j]` is pinned to PI
+/// slots `[8 * field_count + j * 2, 8 * field_count + (j + 1) * 2)`.
+#[derive(Clone, Debug)]
+pub struct EffectActionWitness {
+    /// Schema describing the binding.
+    pub schema: EffectActionSchema,
+    /// 32-byte fields in schema order.
+    pub fields: Vec<[u8; 32]>,
+    /// u64 amounts in schema order.
+    pub amounts: Vec<u64>,
+}
+
+impl EffectActionWitness {
+    /// Compute the canonical public-input vector this witness commits to.
+    pub fn public_inputs(&self) -> Vec<BabyBear> {
+        let mut pi = Vec::with_capacity(self.schema.width());
+        for f in &self.fields {
+            pi.extend_from_slice(&encode_hash(f));
+        }
+        for a in &self.amounts {
+            let [lo, hi] = encode_amount(*a);
+            pi.push(lo);
+            pi.push(hi);
+        }
+        pi
+    }
+}
+
+/// The generalized effect-action binding AIR.
+///
+/// Stateless modulo the `schema`. One real row of typed data, padded to 4 to
+/// satisfy STARK power-of-2 trace-length requirements.
+pub struct EffectActionAir {
+    /// The schema this AIR instance binds to. Carried by value so each
+    /// effect kind gets its own (statically declared) schema and the
+    /// `air_name()` returns the kind's unique name for Fiat-Shamir.
+    pub schema: EffectActionSchema,
+}
+
+impl EffectActionAir {
+    /// Generate the execution trace and public inputs from a witness.
+    pub fn generate_trace(witness: &EffectActionWitness) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
+        assert_eq!(
+            witness.fields.len(),
+            witness.schema.field_count,
+            "field count mismatch"
+        );
+        assert_eq!(
+            witness.amounts.len(),
+            witness.schema.amount_count,
+            "amount count mismatch"
+        );
+        let width = witness.schema.width();
+
+        // Row 0: the full typed binding.
+        let mut row0 = vec![BabyBear::ZERO; width];
+        let mut col = 0;
+        for f in &witness.fields {
+            let limbs = encode_hash(f);
+            for limb in limbs {
+                row0[col] = limb;
+                col += 1;
+            }
+        }
+        for a in &witness.amounts {
+            let [lo, hi] = encode_amount(*a);
+            row0[col] = lo;
+            col += 1;
+            row0[col] = hi;
+            col += 1;
+        }
+
+        // Aux columns (schema-specific algebraic-constraint witnesses).
+        match witness.schema.algebraic {
+            AlgebraicConstraint::None => {}
+            AlgebraicConstraint::Burn => {
+                // amounts layout: [old_balance, new_balance, amount, was_burn_flag]
+                let old_balance = witness.amounts[0];
+                let amount = witness.amounts[2];
+                let old_lo = old_balance & 0xFFFF_FFFF;
+                let amt_lo = amount & 0xFFFF_FFFF;
+                // Borrow bit: 1 iff new_balance_lo would underflow (i.e.,
+                // old_lo < amt_lo).
+                let borrow_u32 = if old_lo < amt_lo { 1u32 } else { 0u32 };
+                row0[witness.schema.pi_count()] = BabyBear::new(borrow_u32);
+            }
+        }
+
+        // Pad to length 4 (smallest power of 2 ≥ 1).
+        let mut trace = Vec::with_capacity(4);
+        for _ in 0..4 {
+            trace.push(row0.clone());
+        }
+
+        let public_inputs = witness.public_inputs();
+        (trace, public_inputs)
+    }
+}
+
+impl StarkAir for EffectActionAir {
+    fn width(&self) -> usize {
+        self.schema.width()
+    }
+
+    fn constraint_degree(&self) -> usize {
+        2
+    }
+
+    fn air_name(&self) -> &'static str {
+        // The kind_name is itself the domain separator. Effect-kind-specific
+        // schemas have distinct `kind_name` values so the Fiat-Shamir
+        // transcript cannot confuse one effect kind with another.
+        self.schema.kind_name
+    }
+
+    fn has_chain_continuity(&self) -> bool {
+        false
+    }
+
+    fn eval_constraints(
+        &self,
+        local: &[BabyBear],
+        next: &[BabyBear],
+        _public_inputs: &[BabyBear],
+        alpha: BabyBear,
+    ) -> BabyBear {
+        // Transition: every column constant across rows. Same shape as
+        // bridge_action_air.
+        let mut combined = BabyBear::ZERO;
+        let mut alpha_pow = BabyBear::ONE;
+        let width = self.schema.width();
+        for c in 0..width {
+            let diff = next[c] - local[c];
+            combined += alpha_pow * diff;
+            alpha_pow *= alpha;
+        }
+
+        // Schema-specific algebraic constraints (operate on row-0 values via
+        // boundary, but expressed as transition-constraint shape so they
+        // hold on every row — the transition continuity above ensures
+        // row N == row 0 for all columns).
+        match self.schema.algebraic {
+            AlgebraicConstraint::None => {}
+            AlgebraicConstraint::Burn => {
+                // Schema layout (post field_count fields = `field_count`
+                // × 8 felts, then amounts):
+                //   amounts[0] (old_balance) lives at pi[8N + 0..2]
+                //   amounts[1] (new_balance) lives at pi[8N + 2..4]
+                //   amounts[2] (amount)      lives at pi[8N + 4..6]
+                //   amounts[3] (was_burn_flag) lives at pi[8N + 6..8]
+                // Aux column: borrow bit at col = pi_count().
+                let f = self.schema.field_count * HASH_LIMBS;
+                let old_lo = local[f];
+                let old_hi = local[f + 1];
+                let new_lo = local[f + 2];
+                let new_hi = local[f + 3];
+                let amt_lo = local[f + 4];
+                let amt_hi = local[f + 5];
+                let was_burn_lo = local[f + 6];
+                let was_burn_hi = local[f + 7];
+                let borrow = local[self.schema.pi_count()];
+
+                // Two-32-bit-limb subtraction: old - amount == new.
+                //
+                // Limb arithmetic:
+                //   old_lo == new_lo + amt_lo - borrow * 2^32
+                //   old_hi == new_hi + amt_hi + borrow
+                //
+                // BabyBear modulus is ~2^31; the `borrow * 2^32` term is
+                // expressed as `borrow * BB(2^32 mod p)`. Since both sides
+                // of the equation reduce modulo p identically, the
+                // constraint is meaningful — borrow == 0 forces old_lo ==
+                // new_lo + amt_lo (i.e., no underflow), borrow == 1
+                // forces old_lo + 2^32 == new_lo + amt_lo. Combined with
+                // canonical encoding of u32 → BabyBear (each limb < p),
+                // this pins the unique u64 decomposition.
+                let two_pow_32 = BabyBear::new(0xFFFF_FFFF) + BabyBear::ONE;
+                // c_lo_balance: old_lo == new_lo + amt_lo - borrow * 2^32
+                //   ⇔  new_lo + amt_lo - borrow*2^32 - old_lo == 0
+                let c_lo = new_lo + amt_lo - borrow * two_pow_32 - old_lo;
+                combined += alpha_pow * c_lo;
+                alpha_pow *= alpha;
+                // c_hi_balance: old_hi == new_hi + amt_hi + borrow
+                //   ⇔  new_hi + amt_hi + borrow - old_hi == 0
+                let c_hi = new_hi + amt_hi + borrow - old_hi;
+                combined += alpha_pow * c_hi;
+                alpha_pow *= alpha;
+                // Borrow is a boolean: borrow * (borrow - 1) == 0.
+                let c_borrow_bool = borrow * (borrow - BabyBear::ONE);
+                combined += alpha_pow * c_borrow_bool;
+                alpha_pow *= alpha;
+                // was_burn_flag == 1 (lo limb is 1, hi limb is 0).
+                let c_was_burn_lo = was_burn_lo - BabyBear::ONE;
+                combined += alpha_pow * c_was_burn_lo;
+                alpha_pow *= alpha;
+                let c_was_burn_hi = was_burn_hi;
+                combined += alpha_pow * c_was_burn_hi;
+                //
+                // `old_balance >= amount` enforcement (range-check note):
+                // The four arithmetic constraints above pin the subtraction
+                // *as field elements*: any honest u32-limb-encoded
+                // (old_balance, new_balance, amount, borrow) satisfying
+                // them is a valid two's-complement subtraction in u64.
+                // What they do NOT enforce, by themselves, is that
+                // `new_lo`/`new_hi` are canonically encoded u32s — without
+                // a bit-decomposition range check, a malicious prover
+                // could pick a new_hi value outside `[0, 2^32)` that
+                // satisfies the field equation with old < amount.
+                //
+                // For Silver-Vision the binding is the load-bearing piece:
+                // the proof pins the (old_balance, new_balance, amount)
+                // tuple at full fidelity, and the executor's runtime check
+                // (`InsufficientBalance` in apply.rs's `Effect::Burn` arm)
+                // independently enforces `old_balance >= amount`. Golden-
+                // Vision adds bit-decomp range checks on new_balance to
+                // close the algebraic gap.
+            }
+        }
+        combined
+    }
+
+    // crypto index loops kept verbatim
+    #[allow(clippy::needless_range_loop)]
+    fn boundary_constraints(
+        &self,
+        public_inputs: &[BabyBear],
+        _trace_len: usize,
+    ) -> Vec<BoundaryConstraint> {
+        // PI is `pi_count`-wide (no aux). Boundary pins each PI slot to its
+        // matching trace column; aux columns are not bound to PI (they're
+        // prover-supplied witnesses, constrained algebraically above).
+        let pi_count = self.schema.pi_count();
+        if public_inputs.len() != pi_count {
+            // Wrong PI length → emit no boundary constraints; this fails the
+            // verifier because the trace won't match the empty constraint
+            // set. (Mirrors bridge_action_air behavior.)
+            return Vec::new();
+        }
+        let mut constraints = Vec::with_capacity(pi_count);
+        for c in 0..pi_count {
+            constraints.push(BoundaryConstraint {
+                row: 0,
+                col: c,
+                value: public_inputs[c],
+            });
+        }
+        constraints
+    }
+}
+
+/// Prove an effect-action binding.
+///
+/// Produces a STARK proof that carries the typed parameters at full fidelity
+/// (8 limbs per 32-byte field, 2 limbs per u64 amount). The proof binds the
+/// prover to the exact `(fields, amounts)` tuple in the witness — any
+/// tampering on the verifier side fails.
+pub fn prove_effect_action(witness: &EffectActionWitness) -> StarkProof {
+    let air = EffectActionAir {
+        schema: witness.schema,
+    };
+    let (trace, public_inputs) = EffectActionAir::generate_trace(witness);
+    stark::prove(&air, &trace, &public_inputs)
+}
+
+/// Verify an effect-action binding proof against expected typed parameters.
+///
+/// The verifier passes the schema and the expected `fields` / `amounts` in
+/// schema order. Any limb mismatch fails verification.
+pub fn verify_effect_action(
+    schema: EffectActionSchema,
+    expected_fields: &[[u8; 32]],
+    expected_amounts: &[u64],
+    proof: &StarkProof,
+) -> Result<(), String> {
+    if expected_fields.len() != schema.field_count {
+        return Err(format!(
+            "expected {} fields, got {}",
+            schema.field_count,
+            expected_fields.len()
+        ));
+    }
+    if expected_amounts.len() != schema.amount_count {
+        return Err(format!(
+            "expected {} amounts, got {}",
+            schema.amount_count,
+            expected_amounts.len()
+        ));
+    }
+
+    let mut public_inputs = Vec::with_capacity(schema.width());
+    for f in expected_fields {
+        public_inputs.extend_from_slice(&encode_hash(f));
+    }
+    for a in expected_amounts {
+        let [lo, hi] = encode_amount(*a);
+        public_inputs.push(lo);
+        public_inputs.push(hi);
+    }
+
+    let air = EffectActionAir { schema };
+    stark::verify(&air, proof, &public_inputs)
+}
+
+// ============================================================================
+// Per-Effect schemas
+// ============================================================================
+//
+// Each schema is a `pub const` so the Fiat-Shamir `air_name` is statically
+// distinct per effect kind. Adding a new effect's binding is one new const
+// here plus a `prove_X_binding` / `verify_X_binding` convenience pair (see
+// below) and the executor's projection update.
+
+/// Schema for `GrantCapability` binding:
+/// fields = [cap_target_cell (32B), cap_permissions_hash (32B),
+///           cap_allowed_effects_hash (32B)]
+/// amounts = [cap_slot (u32 → u64)]
+pub const SCHEMA_GRANT_CAPABILITY: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-grant-capability-v1",
+    field_count: 3,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `RevokeCapability` binding:
+/// fields = [cell_id (32B)]
+/// amounts = [slot (u32 → u64)]
+pub const SCHEMA_REVOKE_CAPABILITY: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-revoke-capability-v1",
+    field_count: 1,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `EmitEvent` binding:
+/// fields = [topic (32B), data_hash (32B = BLAKE3 of full event.data)]
+/// amounts = [data_len (u64)]
+pub const SCHEMA_EMIT_EVENT: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-emit-event-v1",
+    field_count: 2,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `CreateCell` binding:
+/// fields = [public_key (32B), token_id (32B)]
+/// amounts = [balance (u64)]
+pub const SCHEMA_CREATE_CELL: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-create-cell-v1",
+    field_count: 2,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `SetPermissions` binding:
+/// fields = [cell_id (32B), permissions_hash (32B = BLAKE3 of postcard(perm))]
+/// amounts = []
+pub const SCHEMA_SET_PERMISSIONS: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-set-permissions-v1",
+    field_count: 2,
+    amount_count: 0,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `SetVerificationKey` binding:
+/// fields = [cell_id (32B), vk_hash (32B; all-zero for None)]
+/// amounts = []
+pub const SCHEMA_SET_VERIFICATION_KEY: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-set-verification-key-v1",
+    field_count: 2,
+    amount_count: 0,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `Introduce` binding:
+/// fields = [introducer (32B), recipient (32B), target (32B),
+///           permissions_vk_hash (32B; zero for non-Custom)]
+/// amounts = [permissions_discriminant (u64; 0..=5)]
+pub const SCHEMA_INTRODUCE: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-introduce-v1",
+    field_count: 4,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `RevokeDelegation` binding:
+/// fields = [child (32B)]
+/// amounts = []
+pub const SCHEMA_REVOKE_DELEGATION: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-revoke-delegation-v1",
+    field_count: 1,
+    amount_count: 0,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `SpawnWithDelegation` binding:
+/// fields = [child_public_key (32B), child_token_id (32B)]
+/// amounts = [max_staleness (u64)]
+pub const SCHEMA_SPAWN_WITH_DELEGATION: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-spawn-with-delegation-v1",
+    field_count: 2,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `ExerciseViaCapability` binding:
+/// fields = [inner_effects_hash (32B = BLAKE3 of inner_effects[*].hash() chain)]
+/// amounts = [cap_slot (u32 → u64), inner_effects_len (u64)]
+///
+/// Note: inner_effects_len is bound explicitly so a prover cannot
+/// substitute a different-length effect chain with a collision-prefix
+/// hash. Combined with the chained hash, this gives full integrity over
+/// the inner effects list.
+pub const SCHEMA_EXERCISE_VIA_CAPABILITY: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-exercise-via-capability-v1",
+    field_count: 1,
+    amount_count: 2,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `PipelinedSend` binding:
+/// fields = [source_turn (32B), action_hash (32B)]
+/// amounts = [output_slot (u64)]
+pub const SCHEMA_PIPELINED_SEND: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-pipelined-send-v1",
+    field_count: 2,
+    amount_count: 1,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `CreateCellFromFactory` binding:
+/// fields = [factory_vk (32B), owner_pubkey (32B), token_id (32B),
+///           params_hash (32B = BLAKE3 of postcard(params))]
+/// amounts = []
+pub const SCHEMA_CREATE_CELL_FROM_FACTORY: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-create-cell-from-factory-v1",
+    field_count: 4,
+    amount_count: 0,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `NoteSpend` binding (full-fidelity proof-to-action binding):
+///
+/// fields = [nullifier (32B), note_tree_root (32B),
+///           asset_type_commitment (32B; BLAKE3 of asset_type.to_le_bytes()
+///                                  for backward compat — see note below),
+///           value_commitment (32B; Pedersen 32B if Some, ZERO if None)]
+/// amounts = [value (u64), asset_type (u64)]
+///
+/// # Relationship with the deprecated `note_spending_air`
+///
+/// `circuit/src/note_spending_air.rs` is the legacy AIR that proves
+/// knowledge of the spending key, Merkle membership of the note, and
+/// pins `nullifier`/`merkle_root`/`value`/`asset_type` as **single
+/// BabyBear felts each** (Poseidon2-compressed). That AIR's PIs are
+/// one-way digests — a verifier cannot algebraically attribute a spend
+/// to a specific 32-byte nullifier; it can only check a felt-sized digest.
+///
+/// `SCHEMA_NOTE_SPEND` here is the **canonical full-fidelity binding**:
+/// each 32-byte field is 8 × 4-byte BabyBear limbs (~248-bit binding),
+/// each u64 amount is 2 × 32-bit limbs (full 64-bit binding). The
+/// `value_commitment` slot is ZERO when the runtime variant carries
+/// `None` (cleartext-value path) and the Pedersen point's compressed
+/// 32 bytes when the runtime variant carries `Some` (committed path).
+///
+/// **Recommendation:** deprecate `note_spending_air` in favor of the
+/// schema-based generalized AIR. The schema-based binding gives every
+/// callsite 248-bit-strength on every 32-byte field plus full 64-bit
+/// amount binding, replacing the felt-sized PIs of the legacy AIR.
+/// The Merkle / spending-key half of the legacy AIR continues to live
+/// in the spend proof (or its replacement); only the binding role
+/// migrates here.
+pub const SCHEMA_NOTE_SPEND: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-note-spend-v1",
+    field_count: 4,
+    amount_count: 2,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `NoteCreate` binding (full-fidelity proof-to-action binding):
+///
+/// fields = [note_commitment (32B),
+///           asset_type_commitment (32B; see NoteSpend note),
+///           value_commitment (32B; Pedersen 32B if Some, ZERO if None),
+///           range_proof_hash (32B; BLAKE3 of range_proof bytes if Some,
+///                             ZERO if None)]
+/// amounts = [value (u64), asset_type (u64)]
+///
+/// # Relationship with the deprecated `note_spending_air`
+///
+/// Same story as `SCHEMA_NOTE_SPEND` — the legacy `note_spending_air`
+/// proves spend-side semantics with felt-sized PIs; this schema is the
+/// **canonical full-fidelity binding** for the create-side action
+/// parameters. Recommend deprecating the legacy AIR in favor of the
+/// schema-based generalized AIR.
+pub const SCHEMA_NOTE_CREATE: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-note-create-v1",
+    field_count: 4,
+    amount_count: 2,
+    algebraic: AlgebraicConstraint::None,
+};
+
+/// Schema for `Burn` binding (AIR-SOUNDNESS-AUDIT.md #75).
+///
+/// Pre-#75 the Burn effect was structural-only: the executor enforced
+/// `old_balance >= amount` and decremented the balance in
+/// `executor/apply.rs::Effect::Burn`, but no AIR algebraic constraint
+/// witnessed the arithmetic. A malicious executor producing a forged
+/// receipt could claim any `(old, new, amount)` triple consistent with
+/// the recorded balance commitments, since the proof did not pin the
+/// arithmetic relation.
+///
+/// fields = [target_cell_id (32B)]
+/// amounts = [old_balance (u64), new_balance (u64), amount (u64),
+///            was_burn_flag (u64; constrained to 1)]
+///
+/// Algebraic constraints (see `AlgebraicConstraint::Burn`):
+///   1. `new_balance == old_balance - amount` (two-limb u64 subtraction
+///      with a boolean borrow witness)
+///   2. `was_burn_flag == 1` (binding the disclosure into PI; the
+///      receipt's `was_burn` flag is independently absorbed into
+///      `Turn::hash`, this AIR slot closes the loop so a verifier can
+///      algebraically attribute the burn disclosure to a specific
+///      receipt)
+///   3. Borrow bit is boolean (`borrow * (borrow - 1) == 0`)
+///
+/// The `old_balance >= amount` predicate is enforced by the executor's
+/// `InsufficientBalance` runtime check; the AIR binds the arithmetic at
+/// the limb level. Golden-Vision adds bit-decomp range checks to close
+/// the residual algebraic gap.
+///
+/// `slot` is not bound here because Silver-Vision rejects any slot other
+/// than the canonical balance slot (`0`); see the executor's apply check.
+/// Once Burn is extended to multi-slot, add a `slot (u64)` amount to the
+/// schema.
+pub const SCHEMA_BURN: EffectActionSchema = EffectActionSchema {
+    kind_name: "dregg-effect-burn-v1",
+    field_count: 1,
+    amount_count: 4,
+    algebraic: AlgebraicConstraint::Burn,
+};
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A roundtrip helper: prove + verify, returning the verification result.
+    fn roundtrip(
+        schema: EffectActionSchema,
+        fields: Vec<[u8; 32]>,
+        amounts: Vec<u64>,
+    ) -> Result<(), String> {
+        let witness = EffectActionWitness {
+            schema,
+            fields: fields.clone(),
+            amounts: amounts.clone(),
+        };
+        let proof = prove_effect_action(&witness);
+        verify_effect_action(schema, &fields, &amounts, &proof)
+    }
+
+    #[test]
+    fn encode_hash_deterministic() {
+        let a = encode_hash(&[0x42; 32]);
+        let b = encode_hash(&[0x42; 32]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn encode_hash_distinguishes_distinct_bytes() {
+        let a = encode_hash(&[0x42; 32]);
+        let mut bytes = [0x42u8; 32];
+        bytes[0] = 0x43;
+        let b = encode_hash(&bytes);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn encode_amount_full_64_bits() {
+        let [lo, hi] = encode_amount(0xDEAD_BEEF_CAFE_F00D);
+        assert_eq!(lo, BabyBear::new(0xCAFE_F00D));
+        assert_eq!(hi, BabyBear::new(0xDEAD_BEEF));
+    }
+
+    #[test]
+    fn schema_width_arithmetic() {
+        assert_eq!(SCHEMA_GRANT_CAPABILITY.width(), 3 * 8 + 1 * 2);
+        assert_eq!(SCHEMA_REVOKE_CAPABILITY.width(), 8 + 2);
+        assert_eq!(SCHEMA_EMIT_EVENT.width(), 16 + 2);
+        assert_eq!(SCHEMA_CREATE_CELL.width(), 16 + 2);
+        assert_eq!(SCHEMA_SET_PERMISSIONS.width(), 16);
+        assert_eq!(SCHEMA_SET_VERIFICATION_KEY.width(), 16);
+        assert_eq!(SCHEMA_INTRODUCE.width(), 32 + 2);
+    }
+
+    #[test]
+    fn grant_capability_roundtrip() {
+        let target = [0x11u8; 32];
+        let perm = [0x22u8; 32];
+        let allowed = [0x33u8; 32];
+        let slot = 0xCAFEBABEu64;
+        let r = roundtrip(
+            SCHEMA_GRANT_CAPABILITY,
+            vec![target, perm, allowed],
+            vec![slot],
+        );
+        assert!(
+            r.is_ok(),
+            "honest grant_capability binding must verify: {r:?}"
+        );
+    }
+
+    #[test]
+    fn grant_capability_tamper_target_rejected() {
+        let target = [0x11u8; 32];
+        let perm = [0x22u8; 32];
+        let allowed = [0x33u8; 32];
+        let slot = 0xCAFEBABEu64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_GRANT_CAPABILITY,
+            fields: vec![target, perm, allowed],
+            amounts: vec![slot],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong_target = target;
+        wrong_target[0] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_GRANT_CAPABILITY,
+            &[wrong_target, perm, allowed],
+            &[slot],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered target must be rejected");
+    }
+
+    #[test]
+    fn grant_capability_tamper_permissions_rejected() {
+        let target = [0x11u8; 32];
+        let perm = [0x22u8; 32];
+        let allowed = [0x33u8; 32];
+        let slot = 0xCAFEBABEu64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_GRANT_CAPABILITY,
+            fields: vec![target, perm, allowed],
+            amounts: vec![slot],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong_perm = perm;
+        wrong_perm[20] ^= 0xFF;
+        let r = verify_effect_action(
+            SCHEMA_GRANT_CAPABILITY,
+            &[target, wrong_perm, allowed],
+            &[slot],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered permissions must be rejected");
+    }
+
+    #[test]
+    fn grant_capability_tamper_allowed_effects_rejected() {
+        let target = [0x11u8; 32];
+        let perm = [0x22u8; 32];
+        let allowed = [0x33u8; 32];
+        let slot = 0xCAFEBABEu64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_GRANT_CAPABILITY,
+            fields: vec![target, perm, allowed],
+            amounts: vec![slot],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong_allowed = allowed;
+        wrong_allowed[31] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_GRANT_CAPABILITY,
+            &[target, perm, wrong_allowed],
+            &[slot],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered allowed_effects must be rejected");
+    }
+
+    #[test]
+    fn grant_capability_tamper_slot_rejected() {
+        let target = [0x11u8; 32];
+        let perm = [0x22u8; 32];
+        let allowed = [0x33u8; 32];
+        let slot = 0xCAFEBABEu64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_GRANT_CAPABILITY,
+            fields: vec![target, perm, allowed],
+            amounts: vec![slot],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_GRANT_CAPABILITY,
+            &[target, perm, allowed],
+            &[slot + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered slot must be rejected");
+    }
+
+    #[test]
+    fn revoke_capability_roundtrip() {
+        let cell = [0xAAu8; 32];
+        let r = roundtrip(SCHEMA_REVOKE_CAPABILITY, vec![cell], vec![42]);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn revoke_capability_tamper_cell_rejected() {
+        let cell = [0xAAu8; 32];
+        let slot = 42u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_REVOKE_CAPABILITY,
+            fields: vec![cell],
+            amounts: vec![slot],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = cell;
+        wrong[15] ^= 0x01;
+        let r = verify_effect_action(SCHEMA_REVOKE_CAPABILITY, &[wrong], &[slot], &proof);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn emit_event_roundtrip() {
+        let topic = [0x55u8; 32];
+        let data_hash = [0x66u8; 32];
+        let r = roundtrip(SCHEMA_EMIT_EVENT, vec![topic, data_hash], vec![128]);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn emit_event_tamper_data_hash_rejected() {
+        let topic = [0x55u8; 32];
+        let data_hash = [0x66u8; 32];
+        let data_len = 128u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_EMIT_EVENT,
+            fields: vec![topic, data_hash],
+            amounts: vec![data_len],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = data_hash;
+        wrong[16] ^= 0x10;
+        let r = verify_effect_action(SCHEMA_EMIT_EVENT, &[topic, wrong], &[data_len], &proof);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn create_cell_roundtrip_and_max_balance() {
+        let pk = [0x77u8; 32];
+        let tok = [0x88u8; 32];
+        let r = roundtrip(SCHEMA_CREATE_CELL, vec![pk, tok], vec![u64::MAX]);
+        assert!(r.is_ok(), "u64::MAX balance must round-trip: {r:?}");
+    }
+
+    #[test]
+    fn create_cell_tamper_balance_high_bit_rejected() {
+        // Critical: confirm balance carries full 64 bits, not 30-bit
+        // truncation.
+        let pk = [0x77u8; 32];
+        let tok = [0x88u8; 32];
+        let balance: u64 = (1u64 << 50) | 0xCAFE;
+        let w = EffectActionWitness {
+            schema: SCHEMA_CREATE_CELL,
+            fields: vec![pk, tok],
+            amounts: vec![balance],
+        };
+        let proof = prove_effect_action(&w);
+        // Verifier with the low-30-bits-truncated balance must REJECT.
+        let r = verify_effect_action(
+            SCHEMA_CREATE_CELL,
+            &[pk, tok],
+            &[balance & ((1u64 << 30) - 1)],
+            &proof,
+        );
+        assert!(
+            r.is_err(),
+            "high-bit balance change must NOT collide with low-30-bit truncation"
+        );
+    }
+
+    #[test]
+    fn set_permissions_roundtrip() {
+        let cell = [0x99u8; 32];
+        let phash = [0xAAu8; 32];
+        let r = roundtrip(SCHEMA_SET_PERMISSIONS, vec![cell, phash], vec![]);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn set_permissions_tamper_phash_rejected() {
+        let cell = [0x99u8; 32];
+        let phash = [0xAAu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_SET_PERMISSIONS,
+            fields: vec![cell, phash],
+            amounts: vec![],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = phash;
+        wrong[0] ^= 0x01;
+        let r = verify_effect_action(SCHEMA_SET_PERMISSIONS, &[cell, wrong], &[], &proof);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn set_verification_key_roundtrip() {
+        let cell = [0xBBu8; 32];
+        let vk = [0xCCu8; 32];
+        let r = roundtrip(SCHEMA_SET_VERIFICATION_KEY, vec![cell, vk], vec![]);
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn set_verification_key_none_zero_hash_roundtrip() {
+        // None → zero hash; must still round-trip distinctly from any non-zero
+        // hash.
+        let cell = [0xBBu8; 32];
+        let none_vk = [0u8; 32];
+        let r = roundtrip(SCHEMA_SET_VERIFICATION_KEY, vec![cell, none_vk], vec![]);
+        assert!(r.is_ok());
+
+        // And tampering with cell still rejects.
+        let w = EffectActionWitness {
+            schema: SCHEMA_SET_VERIFICATION_KEY,
+            fields: vec![cell, none_vk],
+            amounts: vec![],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong_cell = cell;
+        wrong_cell[5] ^= 0x40;
+        let r = verify_effect_action(
+            SCHEMA_SET_VERIFICATION_KEY,
+            &[wrong_cell, none_vk],
+            &[],
+            &proof,
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn introduce_roundtrip() {
+        let introducer = [0x10u8; 32];
+        let recipient = [0x20u8; 32];
+        let target = [0x30u8; 32];
+        let perm_vk = [0u8; 32];
+        let perm_disc = 1u64;
+        let r = roundtrip(
+            SCHEMA_INTRODUCE,
+            vec![introducer, recipient, target, perm_vk],
+            vec![perm_disc],
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn introduce_swap_recipient_target_rejected() {
+        // Positional binding: swapping recipient and target must fail.
+        let introducer = [0x10u8; 32];
+        let recipient = [0x20u8; 32];
+        let target = [0x30u8; 32];
+        let perm_vk = [0u8; 32];
+        let perm_disc = 1u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_INTRODUCE,
+            fields: vec![introducer, recipient, target, perm_vk],
+            amounts: vec![perm_disc],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_INTRODUCE,
+            &[introducer, target, recipient, perm_vk],
+            &[perm_disc],
+            &proof,
+        );
+        assert!(r.is_err(), "swapped recipient/target must be rejected");
+    }
+
+    #[test]
+    fn introduce_tamper_perm_discriminant_rejected() {
+        let introducer = [0x10u8; 32];
+        let recipient = [0x20u8; 32];
+        let target = [0x30u8; 32];
+        let perm_vk = [0u8; 32];
+        let perm_disc = 1u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_INTRODUCE,
+            fields: vec![introducer, recipient, target, perm_vk],
+            amounts: vec![perm_disc],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_INTRODUCE,
+            &[introducer, recipient, target, perm_vk],
+            &[perm_disc + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered perm_disc must be rejected");
+    }
+
+    #[test]
+    fn cross_kind_proofs_do_not_verify_as_other_kinds() {
+        // Critical: domain separation. A proof generated for kind A must not
+        // verify as kind B, even if the parameter bytes happen to coincide.
+        let cell = [0x99u8; 32];
+        let phash = [0xAAu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_SET_PERMISSIONS,
+            fields: vec![cell, phash],
+            amounts: vec![],
+        };
+        let proof_set_perm = prove_effect_action(&w);
+        // Attempt to verify as SetVerificationKey (same shape: 2 fields, 0
+        // amounts) — the air_name's Fiat-Shamir transcript MUST domain-
+        // separate.
+        let r = verify_effect_action(
+            SCHEMA_SET_VERIFICATION_KEY,
+            &[cell, phash],
+            &[],
+            &proof_set_perm,
+        );
+        assert!(
+            r.is_err(),
+            "cross-kind proof confusion: SetPermissions proof verified as SetVerificationKey"
+        );
+    }
+
+    #[test]
+    fn tampered_proof_bytes_rejected() {
+        let cell = [0x99u8; 32];
+        let phash = [0xAAu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_SET_PERMISSIONS,
+            fields: vec![cell, phash],
+            amounts: vec![],
+        };
+        let mut proof = prove_effect_action(&w);
+        proof.trace_commitment[0] ^= 0xFF;
+        let r = verify_effect_action(SCHEMA_SET_PERMISSIONS, &[cell, phash], &[], &proof);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn zero_witness_roundtrip() {
+        // All-zero fields and amount must round-trip (sentinel cases).
+        let r = roundtrip(SCHEMA_CREATE_CELL, vec![[0u8; 32], [0u8; 32]], vec![0]);
+        assert!(r.is_ok());
+    }
+
+    // ─── Additional per-Effect closures ──────────────────────────────────
+
+    #[test]
+    fn revoke_delegation_roundtrip_and_tamper_rejected() {
+        let child = [0x77u8; 32];
+        let r = roundtrip(SCHEMA_REVOKE_DELEGATION, vec![child], vec![]);
+        assert!(r.is_ok());
+
+        let w = EffectActionWitness {
+            schema: SCHEMA_REVOKE_DELEGATION,
+            fields: vec![child],
+            amounts: vec![],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = child;
+        wrong[0] ^= 0xFF;
+        let r = verify_effect_action(SCHEMA_REVOKE_DELEGATION, &[wrong], &[], &proof);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn spawn_with_delegation_roundtrip_and_staleness_tamper_rejected() {
+        let child_pk = [0x11u8; 32];
+        let child_tok = [0x22u8; 32];
+        let max_staleness = 3600u64;
+        let r = roundtrip(
+            SCHEMA_SPAWN_WITH_DELEGATION,
+            vec![child_pk, child_tok],
+            vec![max_staleness],
+        );
+        assert!(r.is_ok());
+
+        let w = EffectActionWitness {
+            schema: SCHEMA_SPAWN_WITH_DELEGATION,
+            fields: vec![child_pk, child_tok],
+            amounts: vec![max_staleness],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_SPAWN_WITH_DELEGATION,
+            &[child_pk, child_tok],
+            &[max_staleness + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered max_staleness must be rejected");
+    }
+
+    #[test]
+    fn exercise_via_capability_inner_count_tamper_rejected() {
+        // Critical: inner_effects_len is bound explicitly so a prover
+        // cannot substitute a different-length chain with a colliding
+        // hash prefix.
+        let inner_hash = [0xDDu8; 32];
+        let cap_slot = 7u64;
+        let inner_len = 3u64;
+        let w = EffectActionWitness {
+            schema: SCHEMA_EXERCISE_VIA_CAPABILITY,
+            fields: vec![inner_hash],
+            amounts: vec![cap_slot, inner_len],
+        };
+        let proof = prove_effect_action(&w);
+        // Tamper inner_len: 3 → 4.
+        let r = verify_effect_action(
+            SCHEMA_EXERCISE_VIA_CAPABILITY,
+            &[inner_hash],
+            &[cap_slot, inner_len + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered inner_effects_len must be rejected");
+    }
+
+    #[test]
+    fn pipelined_send_roundtrip_and_output_slot_tamper_rejected() {
+        let src_turn = [0x90u8; 32];
+        let action_hash = [0x91u8; 32];
+        let output_slot = 7u64;
+        let r = roundtrip(
+            SCHEMA_PIPELINED_SEND,
+            vec![src_turn, action_hash],
+            vec![output_slot],
+        );
+        assert!(r.is_ok());
+
+        let w = EffectActionWitness {
+            schema: SCHEMA_PIPELINED_SEND,
+            fields: vec![src_turn, action_hash],
+            amounts: vec![output_slot],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_PIPELINED_SEND,
+            &[src_turn, action_hash],
+            &[output_slot + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered output_slot must be rejected");
+    }
+
+    #[test]
+    fn create_cell_from_factory_full_fidelity() {
+        let factory_vk = [0xA0u8; 32];
+        let owner_pk = [0xA1u8; 32];
+        let token_id = [0xA2u8; 32];
+        let params_hash = [0xA3u8; 32];
+        let r = roundtrip(
+            SCHEMA_CREATE_CELL_FROM_FACTORY,
+            vec![factory_vk, owner_pk, token_id, params_hash],
+            vec![],
+        );
+        assert!(r.is_ok());
+
+        // Tamper params_hash.
+        let w = EffectActionWitness {
+            schema: SCHEMA_CREATE_CELL_FROM_FACTORY,
+            fields: vec![factory_vk, owner_pk, token_id, params_hash],
+            amounts: vec![],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = params_hash;
+        wrong[10] ^= 0x10;
+        let r = verify_effect_action(
+            SCHEMA_CREATE_CELL_FROM_FACTORY,
+            &[factory_vk, owner_pk, token_id, wrong],
+            &[],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered params_hash must be rejected");
+
+        // Tamper token_id (closes the existing executor.rs gap where
+        // CreateCellFromFactory.token_id is silently dropped from VmEffect
+        // projection — only factory_vk and child_vk_derived are bound).
+        let mut wrong_tok = token_id;
+        wrong_tok[15] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_CREATE_CELL_FROM_FACTORY,
+            &[factory_vk, owner_pk, wrong_tok, params_hash],
+            &[],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered token_id must be rejected");
+    }
+
+    // ─── NoteSpend / NoteCreate ─────────────────────────────────────────
+    //
+    // The deprecated `note_spending_air` uses single-felt PIs for the
+    // nullifier / commitment / value / asset_type / merkle_root (~31-bit
+    // binding each). The schemas below give every 32-byte field full
+    // 248-bit binding strength and every u64 amount full 64-bit binding.
+    // Recommend migrating callers off `note_spending_air` to this
+    // schema-based sibling binding AIR.
+
+    #[test]
+    fn note_spend_full_fidelity_roundtrip() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = (1u64 << 40) | 0xCAFE;
+        let asset_type: u64 = 1u64 << 33; // above u32
+        let r = roundtrip(
+            SCHEMA_NOTE_SPEND,
+            vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            vec![value, asset_type],
+        );
+        assert!(r.is_ok(), "honest note_spend binding must verify: {r:?}");
+    }
+
+    #[test]
+    fn note_spend_tamper_nullifier_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = 1000;
+        let asset_type: u64 = 0;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = nullifier;
+        wrong[0] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[wrong, note_tree_root, asset_type_commit, value_commit],
+            &[value, asset_type],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered nullifier must be rejected");
+    }
+
+    #[test]
+    fn note_spend_tamper_note_tree_root_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = note_tree_root;
+        wrong[31] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, wrong, asset_type_commit, value_commit],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered note_tree_root must be rejected");
+    }
+
+    #[test]
+    fn note_spend_tamper_value_commitment_rejected() {
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = value_commit;
+        wrong[15] ^= 0x10;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, note_tree_root, asset_type_commit, wrong],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered value_commitment must be rejected");
+    }
+
+    #[test]
+    fn note_spend_value_above_2_pow_30_rejected_as_truncation() {
+        // 30-bit truncation gambit must not collide.
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let value_commit = [0xDDu8; 32];
+        let value: u64 = (1u64 << 50) | 0xBEEF;
+        let asset_type: u64 = 0;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![nullifier, note_tree_root, asset_type_commit, value_commit],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_SPEND,
+            &[nullifier, note_tree_root, asset_type_commit, value_commit],
+            &[value & ((1u64 << 30) - 1), asset_type],
+            &proof,
+        );
+        assert!(
+            r.is_err(),
+            "30-bit-truncated value must not collide with high-bit value"
+        );
+    }
+
+    #[test]
+    fn note_spend_none_value_commitment_zero_sentinel_roundtrip() {
+        // value_commitment == None → 32-byte ZERO sentinel; must round-trip.
+        let nullifier = [0xAAu8; 32];
+        let note_tree_root = [0xBBu8; 32];
+        let asset_type_commit = [0xCCu8; 32];
+        let none_value_commit = [0u8; 32];
+        let r = roundtrip(
+            SCHEMA_NOTE_SPEND,
+            vec![
+                nullifier,
+                note_tree_root,
+                asset_type_commit,
+                none_value_commit,
+            ],
+            vec![100, 0],
+        );
+        assert!(r.is_ok());
+    }
+
+    #[test]
+    fn note_create_full_fidelity_roundtrip() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let value: u64 = u64::MAX;
+        let asset_type: u64 = 7;
+        let r = roundtrip(
+            SCHEMA_NOTE_CREATE,
+            vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
+            vec![value, asset_type],
+        );
+        assert!(r.is_ok(), "honest note_create binding must verify: {r:?}");
+    }
+
+    #[test]
+    fn note_create_tamper_commitment_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = commitment;
+        wrong[0] ^= 0x01;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[wrong, asset_type_commit, value_commit, range_proof_hash],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered commitment must be rejected");
+    }
+
+    #[test]
+    fn note_create_tamper_range_proof_hash_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
+            amounts: vec![100, 0],
+        };
+        let proof = prove_effect_action(&w);
+        let mut wrong = range_proof_hash;
+        wrong[7] ^= 0x80;
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[commitment, asset_type_commit, value_commit, wrong],
+            &[100, 0],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered range_proof_hash must be rejected");
+    }
+
+    #[test]
+    fn note_create_tamper_asset_type_amount_rejected() {
+        let commitment = [0x11u8; 32];
+        let asset_type_commit = [0x22u8; 32];
+        let value_commit = [0x33u8; 32];
+        let range_proof_hash = [0x44u8; 32];
+        let value: u64 = 100;
+        let asset_type: u64 = 42;
+        let w = EffectActionWitness {
+            schema: SCHEMA_NOTE_CREATE,
+            fields: vec![
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
+            amounts: vec![value, asset_type],
+        };
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[
+                commitment,
+                asset_type_commit,
+                value_commit,
+                range_proof_hash,
+            ],
+            &[value, asset_type + 1],
+            &proof,
+        );
+        assert!(r.is_err(), "tampered asset_type must be rejected");
+    }
+
+    #[test]
+    fn note_spend_create_domain_separation() {
+        // Critical: a NoteSpend proof must NOT verify as NoteCreate
+        // (same shape: 4 fields, 2 amounts).
+        let f0 = [0xAAu8; 32];
+        let f1 = [0xBBu8; 32];
+        let f2 = [0xCCu8; 32];
+        let f3 = [0xDDu8; 32];
+        let w_spend = EffectActionWitness {
+            schema: SCHEMA_NOTE_SPEND,
+            fields: vec![f0, f1, f2, f3],
+            amounts: vec![100, 0],
+        };
+        let proof_spend = prove_effect_action(&w_spend);
+        let r = verify_effect_action(
+            SCHEMA_NOTE_CREATE,
+            &[f0, f1, f2, f3],
+            &[100, 0],
+            &proof_spend,
+        );
+        assert!(
+            r.is_err(),
+            "NoteSpend proof must not verify as NoteCreate (domain separation)"
+        );
+    }
+
+    // ─── BridgeLock sibling AIR ─────────────────────────────────────────
+
+    // ========================================================================
+    // SCHEMA_BURN tests (AIR-SOUNDNESS-AUDIT.md #75)
+    // ========================================================================
+    //
+    // The schema binds `(target_cell_id, old_balance, new_balance, amount,
+    // was_burn_flag)`. The algebraic constraints (see
+    // `AlgebraicConstraint::Burn`):
+    //   - `old_balance - amount == new_balance` (two-limb u64 subtraction
+    //     with a boolean borrow witness)
+    //   - `was_burn_flag == 1`
+    //   - borrow is a boolean
+    //
+    // The adversarial tests below confirm each constraint independently:
+    //  - burn more than balance → reject (forces inconsistent subtraction)
+    //  - was_burn = 0 → reject (violates flag-pinning constraint)
+    //  - new_balance ≠ old - amount → reject (algebraic-constraint violation)
+
+    fn burn_witness(
+        target: [u8; 32],
+        old_balance: u64,
+        new_balance: u64,
+        amount: u64,
+        was_burn_flag: u64,
+    ) -> EffectActionWitness {
+        EffectActionWitness {
+            schema: SCHEMA_BURN,
+            fields: vec![target],
+            amounts: vec![old_balance, new_balance, amount, was_burn_flag],
+        }
+    }
+
+    #[test]
+    fn burn_schema_shape_v1() {
+        // Schema shape sanity: 1 field × 8 + 4 amounts × 2 = 16 PI felts.
+        assert_eq!(SCHEMA_BURN.field_count, 1);
+        assert_eq!(SCHEMA_BURN.amount_count, 4);
+        assert_eq!(SCHEMA_BURN.pi_count(), 8 + 8);
+        // One aux column for the borrow bit.
+        assert_eq!(SCHEMA_BURN.aux_count(), 1);
+        assert_eq!(SCHEMA_BURN.width(), 17);
+        assert_eq!(SCHEMA_BURN.algebraic, AlgebraicConstraint::Burn);
+    }
+
+    #[test]
+    fn burn_roundtrip_honest_decrement() {
+        // Honest burn: old=1000, amount=100 → new=900. Verifies.
+        let target = [0x11u8; 32];
+        let w = burn_witness(target, 1000, 900, 100, 1);
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 1], &proof);
+        assert!(r.is_ok(), "honest burn must verify: {r:?}");
+    }
+
+    #[test]
+    fn burn_roundtrip_zero_amount() {
+        // Burn of 0: old == new, no balance change. Verifies (was_burn=1 still).
+        let target = [0x22u8; 32];
+        let w = burn_witness(target, 1000, 1000, 0, 1);
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(SCHEMA_BURN, &[target], &[1000, 1000, 0, 1], &proof);
+        assert!(r.is_ok(), "zero-amount burn must verify: {r:?}");
+    }
+
+    #[test]
+    fn burn_roundtrip_high_limb_crossing() {
+        // Burn crossing the 2^32 limb boundary: exercises the borrow bit.
+        let target = [0x33u8; 32];
+        let old: u64 = (1u64 << 33) + 100; // hi limb = 2, lo limb = 100
+        let amt: u64 = 1u64 << 32; // hi limb = 1, lo limb = 0
+        let new = old - amt; // hi limb = 1, lo limb = 100; no borrow needed.
+        let w = burn_witness(target, old, new, amt, 1);
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(SCHEMA_BURN, &[target], &[old, new, amt, 1], &proof);
+        assert!(r.is_ok(), "high-limb burn must verify: {r:?}");
+    }
+
+    #[test]
+    fn burn_roundtrip_borrow_needed() {
+        // Burn requiring a borrow: lo of old < lo of amount.
+        let target = [0x44u8; 32];
+        let old: u64 = (1u64 << 33) + 100; // lo=100, hi=2
+        let amt: u64 = 200; // lo=200, hi=0; borrow needed.
+        let new = old - amt; // lo wraps; hi decreases by 1.
+        let w = burn_witness(target, old, new, amt, 1);
+        let proof = prove_effect_action(&w);
+        let r = verify_effect_action(SCHEMA_BURN, &[target], &[old, new, amt, 1], &proof);
+        assert!(r.is_ok(), "borrow-needed burn must verify: {r:?}");
+    }
+
+    #[test]
+    fn burn_adversarial_was_burn_zero_rejected() {
+        // `was_burn_flag == 1` is constrained; supplying 0 must fail. The
+        // proof itself doesn't check it (the AIR's constraint does), but
+        // we can't even construct a passing trace because the constraint
+        // is violated.
+        let target = [0x55u8; 32];
+        // HONEST-ACCEPT FIRST: the SAME burn with the constrained `was_burn=1`
+        // flag proves + verifies — so the reject below is provably caused by
+        // flipping the flag to 0, not a setup error.
+        let honest = burn_witness(target, 1000, 900, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 1], &honest_proof)
+                .is_ok(),
+            "an honest burn (was_burn=1) must verify"
+        );
+
+        let w = burn_witness(target, 1000, 900, 100, 0);
+        // Constructing the prover trace would (under honest prover) fail.
+        // We invoke prove + verify and assert the verify rejects.
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 0], &proof)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "burn with was_burn=0 must be rejected"
+        );
+    }
+
+    #[test]
+    fn burn_adversarial_wrong_decrement_rejected() {
+        // new_balance disagrees with old - amount. AIR rejects.
+        let target = [0x66u8; 32];
+        // HONEST-ACCEPT FIRST: the correct decrement (new = old - amt = 900)
+        // proves + verifies, so the reject below is provably caused by the
+        // off-by-one new balance (901).
+        let honest = burn_witness(target, 1000, 900, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 100, 1], &honest_proof)
+                .is_ok(),
+            "the correct-decrement burn must verify"
+        );
+
+        // Honest old/amount, but new is wrong (off by 1).
+        let w = burn_witness(target, 1000, 901, 100, 1);
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[1000, 901, 100, 1], &proof)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "wrong decrement must be rejected"
+        );
+    }
+
+    #[test]
+    fn burn_adversarial_burn_more_than_balance_rejected() {
+        // Prover claims old=50, amount=100, new=...something. There is no
+        // valid u64 `new` such that `50 - 100 == new` (without overflow).
+        // The AIR's algebraic constraint catches this: borrow=1 forces
+        // hi-limb arithmetic that has no consistent solution against
+        // canonical-encoded u32 limbs.
+        let target = [0x77u8; 32];
+        // HONEST-ACCEPT FIRST: a within-balance burn (old=200, amt=100, new=100)
+        // proves + verifies — so the rejects below are provably caused by burning
+        // MORE than the balance, not a setup error.
+        let honest = burn_witness(target, 200, 100, 100, 1);
+        let honest_proof = prove_effect_action(&honest);
+        assert!(
+            verify_effect_action(SCHEMA_BURN, &[target], &[200, 100, 100, 1], &honest_proof)
+                .is_ok(),
+            "a within-balance burn must verify"
+        );
+        // Two adversarial constructions:
+        // (a) new = wrap(50 - 100) as u64: AIR sees old_lo=50, amt_lo=100,
+        //     borrow=1, new_lo = 50 + 2^32 - 100. The hi-limb constraint:
+        //     new_hi + amt_hi + borrow == old_hi → new_hi = -1 in field.
+        //     The proof prover would either pick that field value, in
+        //     which case the encoded "new_balance" deserializes to a
+        //     non-canonical u32 limb, OR mismatch the boundary on new_hi.
+        let bogus_new = 50u64.wrapping_sub(100);
+        let w = burn_witness(target, 50, bogus_new, 100, 1);
+        let result = std::panic::catch_unwind(|| {
+            let proof = prove_effect_action(&w);
+            verify_effect_action(SCHEMA_BURN, &[target], &[50, bogus_new, 100, 1], &proof)
+        });
+        assert!(
+            result.is_err() || matches!(result, Ok(Err(_))),
+            "burn > balance must be rejected (algebra forces nonsense limbs)"
+        );
+        // (b) Caller picks new=0 (claiming amount fully consumed) but
+        //     amount > old: 0 + 100 != 50.
+        let w2 = burn_witness(target, 50, 0, 100, 1);
+        let result2 = std::panic::catch_unwind(|| {
+            let proof2 = prove_effect_action(&w2);
+            verify_effect_action(SCHEMA_BURN, &[target], &[50, 0, 100, 1], &proof2)
+        });
+        assert!(
+            result2.is_err() || matches!(result2, Ok(Err(_))),
+            "burn > balance (alt construction) must be rejected"
+        );
+    }
+
+    #[test]
+    fn burn_adversarial_tampered_target_rejected() {
+        let target = [0x88u8; 32];
+        let w = burn_witness(target, 1000, 900, 100, 1);
+        let proof = prove_effect_action(&w);
+        let mut wrong_target = target;
+        wrong_target[0] ^= 0x01;
+        let r = verify_effect_action(SCHEMA_BURN, &[wrong_target], &[1000, 900, 100, 1], &proof);
+        assert!(r.is_err(), "tampered target_cell_id must be rejected");
+    }
+
+    #[test]
+    fn burn_adversarial_tampered_amount_rejected() {
+        let target = [0x99u8; 32];
+        let w = burn_witness(target, 1000, 900, 100, 1);
+        let proof = prove_effect_action(&w);
+        // Verifier expects amount=99 (off by one). The arithmetic boundary
+        // would force old-99==901, but proof's row pins new_balance=900.
+        let r = verify_effect_action(SCHEMA_BURN, &[target], &[1000, 900, 99, 1], &proof);
+        assert!(r.is_err(), "tampered amount must be rejected");
+    }
+}

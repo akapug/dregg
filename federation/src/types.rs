@@ -1,0 +1,686 @@
+//! Core types for the dregg federation consensus system.
+//!
+//! Cryptographic primitives (`PublicKey`, `Signature`, `SigningKey`) and helpers
+//! (`generate_keypair`, `sign`, `verify`, `hex_encode`) are re-exported from the
+//! canonical `dregg-types` crate. Federation-specific consensus types (blocks,
+//! votes, QCs, attested roots, messages) are defined here.
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+// Re-export canonical cryptographic primitives and AttestedRoot from dregg-types.
+pub use dregg_types::{
+    AttestedRoot, PublicKey, Signature, SigningKey, generate_keypair, hex_encode, sign, verify,
+};
+
+// =============================================================================
+// Node Identity
+// =============================================================================
+
+/// Identity of a federation node.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NodeIdentity {
+    /// Human-readable name (e.g., "alpha.org").
+    pub name: String,
+    /// Numeric index in the federation.
+    pub id: usize,
+    /// The node's public key.
+    pub public_key: PublicKey,
+}
+
+impl fmt::Display for NodeIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+// =============================================================================
+// Revocation Events
+// =============================================================================
+
+/// A revocation event submitted to consensus.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RevocationEvent {
+    /// The token ID being revoked.
+    pub token_id: String,
+    /// The authority that issued the revocation.
+    pub authority_id: usize,
+    /// Signature over the token_id by the revoking authority.
+    pub signature: Signature,
+}
+
+// =============================================================================
+// Consensus Types
+// =============================================================================
+
+/// A block of revocations that has been proposed for consensus.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RevocationBlock {
+    /// The block height (monotonically increasing).
+    pub height: u64,
+    /// The view number in which this block was proposed.
+    pub view: u64,
+    /// The proposer's node ID.
+    pub proposer: usize,
+    /// The revocation events in this block.
+    pub events: Vec<RevocationEvent>,
+    /// Hash of the previous block (chain integrity).
+    pub prev_hash: [u8; 32],
+    /// Hash of this block's content.
+    pub block_hash: [u8; 32],
+    /// Signature over `block_hash` by the proposer (proves identity).
+    /// If `None`, the block is unsigned (legacy/test mode).
+    #[serde(default)]
+    pub proposer_signature: Option<Signature>,
+    /// Merkle root of the ledger state BEFORE applying this block's events.
+    /// Used for divergence detection: validators check that the proposer's
+    /// pre_state_root matches their own local state before voting.
+    #[serde(default)]
+    pub pre_state_root: [u8; 32],
+    /// Merkle root of the ledger state AFTER applying this block's events.
+    /// Light clients can verify state transitions using this commitment.
+    #[serde(default)]
+    pub post_state_root: [u8; 32],
+    /// Note tree root after this block's events have been applied.
+    #[serde(default)]
+    pub note_tree_root: [u8; 32],
+    /// Nullifier set root after this block's events have been applied.
+    #[serde(default)]
+    pub nullifier_set_root: [u8; 32],
+    /// Serialized STARK proof of the state transition for this block.
+    ///
+    /// Proves: "applying this block's events to `pre_state_root` yields `post_state_root`."
+    /// Enables succinct history verification: a new node can verify state transitions
+    /// without replaying all historical events.
+    #[serde(default)]
+    pub transition_proof: Option<Vec<u8>>,
+}
+
+impl RevocationBlock {
+    /// Compute the block hash from its contents.
+    ///
+    /// State root fields are included in the hash when non-zero (i.e., when
+    /// the block was produced by a state-root-aware proposer). This maintains
+    /// backward compatibility: blocks produced by older code with zeroed state
+    /// roots hash identically to before.
+    pub fn compute_hash(
+        height: u64,
+        view: u64,
+        proposer: usize,
+        events: &[RevocationEvent],
+        prev_hash: &[u8; 32],
+    ) -> [u8; 32] {
+        Self::compute_hash_with_state_roots(
+            height, view, proposer, events, prev_hash, &[0u8; 32], &[0u8; 32], &[0u8; 32],
+            &[0u8; 32],
+        )
+    }
+
+    /// Compute the block hash including state root commitments.
+    pub fn compute_hash_with_state_roots(
+        height: u64,
+        view: u64,
+        proposer: usize,
+        events: &[RevocationEvent],
+        prev_hash: &[u8; 32],
+        pre_state_root: &[u8; 32],
+        post_state_root: &[u8; 32],
+        note_tree_root: &[u8; 32],
+        nullifier_set_root: &[u8; 32],
+    ) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-federation block v1");
+        hasher.update(&height.to_le_bytes());
+        hasher.update(&view.to_le_bytes());
+        hasher.update(&(proposer as u64).to_le_bytes());
+        hasher.update(prev_hash);
+        for event in events {
+            hasher.update(event.token_id.as_bytes());
+            hasher.update(&(event.authority_id as u64).to_le_bytes());
+            hasher.update(&event.signature.0);
+        }
+        // Include state roots in hash only when they are non-zero.
+        // This ensures backward compatibility with blocks produced before
+        // state root commitments were introduced.
+        let zero = [0u8; 32];
+        if pre_state_root != &zero
+            || post_state_root != &zero
+            || note_tree_root != &zero
+            || nullifier_set_root != &zero
+        {
+            hasher.update(b"state-roots-v1");
+            hasher.update(pre_state_root);
+            hasher.update(post_state_root);
+            hasher.update(note_tree_root);
+            hasher.update(nullifier_set_root);
+        }
+        *hasher.finalize().as_bytes()
+    }
+}
+
+/// A vote from a node for a specific block.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Vote {
+    /// The block being voted on.
+    pub block_hash: [u8; 32],
+    /// The block height being voted on.
+    pub height: u64,
+    /// The view in which this vote was cast.
+    pub view: u64,
+    /// The voter's node ID.
+    pub voter: usize,
+    /// Signature over the vote message.
+    pub signature: Signature,
+}
+
+/// A quorum certificate: proof that threshold nodes voted for a block.
+///
+/// Supports two modes:
+/// - **Threshold QC** (preferred): A single constant-size BLS aggregate signature.
+/// - **Individual votes** (legacy): N individual Ed25519 (voter_id, signature) pairs.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QuorumCertificate {
+    /// The block hash that was certified.
+    pub block_hash: [u8; 32],
+    /// The block height.
+    pub height: u64,
+    /// The view number.
+    pub view: u64,
+    /// The threshold aggregate QC (constant-size, preferred).
+    pub aggregate_qc: Option<crate::threshold::ThresholdQC>,
+    /// The collected votes (voter_id, signature) pairs (legacy).
+    pub votes: Vec<(usize, Signature)>,
+    /// The threshold required.
+    pub threshold: usize,
+}
+
+impl QuorumCertificate {
+    /// Whether this QC has enough votes and all signatures are valid.
+    ///
+    /// If a threshold aggregate QC is present, it must be verified via
+    /// `verify_with_committee()` — this method falls through to vote-based
+    /// verification. An aggregate QC does NOT short-circuit this check.
+    pub fn is_valid_with_keys(&self, nodes: &[NodeIdentity]) -> bool {
+        // If an aggregate QC is present, require committee-based verification
+        // (via verify_with_committee). Do NOT short-circuit here.
+        if self.aggregate_qc.is_some() {
+            // Fall through to vote-based verification as a sanity check.
+            // Callers with a committee should use verify_with_committee() instead.
+        }
+        if self.votes.len() < self.threshold {
+            return false;
+        }
+        // Build the vote message that was signed.
+        let vote_message = Self::vote_message(&self.block_hash, self.height, self.view);
+        // Count only DISTINCT valid voters toward the threshold. The signed
+        // message is identical for every vote on a block, so without deduping a
+        // single committee key could submit duplicate votes and forge a quorum.
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for (voter_id, sig) in &self.votes {
+            // Reject any QC that carries the same voter more than once.
+            if !seen.insert(*voter_id) {
+                return false;
+            }
+            match nodes.get(*voter_id) {
+                Some(node) => {
+                    if !node.public_key.verify(&vote_message, sig) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        // With duplicates rejected, distinct voter count == votes.len() >= threshold.
+        true
+    }
+
+    /// Verify this QC using the threshold committee.
+    ///
+    /// This is the preferred verification path: checks the constant-size
+    /// aggregate BLS signature against the committee's verifier key.
+    pub fn verify_with_committee(&self, committee: &crate::threshold::FederationCommittee) -> bool {
+        match &self.aggregate_qc {
+            Some(qc) => {
+                let message = Self::vote_message(&self.block_hash, self.height, self.view);
+                committee.verify(qc, &message).is_ok()
+            }
+            None => false,
+        }
+    }
+
+    /// Check vote count only (does NOT verify signatures).
+    ///
+    /// If an aggregate QC is present, requires proper BLS verification via
+    /// `verify_with_committee()`. This method only validates vote counts.
+    ///
+    /// For full verification (count AND signatures), use
+    /// [`is_valid_with_keys`](Self::is_valid_with_keys) or
+    /// [`verify_with_committee`](Self::verify_with_committee).
+    pub fn has_quorum_count(&self) -> bool {
+        if self.aggregate_qc.is_some() {
+            // An aggregate QC requires proper BLS verification.
+            // Do NOT short-circuit — fall through to vote count check.
+        }
+        self.votes.len() >= self.threshold
+    }
+
+    /// Deprecated alias for [`has_quorum_count`](Self::has_quorum_count).
+    #[deprecated(
+        note = "Use has_quorum_count() (count-only) or is_valid_with_keys()/verify_with_committee() for full verification"
+    )]
+    pub fn is_valid(&self) -> bool {
+        self.has_quorum_count()
+    }
+
+    /// Full verification: checks vote count AND verifies all signatures against the committee.
+    ///
+    /// This is the preferred method when you have access to the committee public keys
+    /// as a slice (as opposed to `NodeIdentity` structs). For the `NodeIdentity`-based
+    /// API, use [`is_valid_with_keys`](Self::is_valid_with_keys).
+    pub fn verify_with_keys(&self, committee: &[PublicKey]) -> bool {
+        if self.votes.len() < self.threshold {
+            return false;
+        }
+        let vote_message = Self::vote_message(&self.block_hash, self.height, self.view);
+        // Count only DISTINCT valid voters toward the threshold; reject a QC that
+        // repeats a voter (one key cannot forge a quorum via duplicate votes).
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for (voter_id, sig) in &self.votes {
+            if !seen.insert(*voter_id) {
+                return false;
+            }
+            match committee.get(*voter_id) {
+                Some(pk) => {
+                    if !pk.verify(&vote_message, sig) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
+    }
+
+    /// Build the canonical vote message for signature verification.
+    pub fn vote_message(block_hash: &[u8; 32], height: u64, view: u64) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"dregg-federation-vote-v1");
+        msg.extend_from_slice(block_hash);
+        msg.extend_from_slice(&height.to_le_bytes());
+        msg.extend_from_slice(&view.to_le_bytes());
+        msg
+    }
+
+    /// Extract (PublicKey, Signature) pairs given a node identity table.
+    pub fn quorum_signatures(&self, nodes: &[NodeIdentity]) -> Vec<(PublicKey, Signature)> {
+        self.votes
+            .iter()
+            .filter_map(|(voter_id, sig)| nodes.get(*voter_id).map(|node| (node.public_key, *sig)))
+            .collect()
+    }
+}
+
+// =============================================================================
+// Attested Root (re-exported from dregg-types, with federation-specific helpers)
+// =============================================================================
+
+/// Verify an attested root using the threshold committee.
+///
+/// This is the preferred verification path: checks the constant-size
+/// aggregate BLS signature against the committee's verifier key.
+///
+/// Deserializes the opaque `ThresholdQC` bytes stored in the `AttestedRoot`
+/// into the federation's rich `ThresholdQC` type for BLS verification.
+pub fn verify_attested_root_with_committee(
+    root: &AttestedRoot,
+    committee: &crate::threshold::FederationCommittee,
+) -> bool {
+    match &root.threshold_qc {
+        Some(opaque_qc) => {
+            // Deserialize the opaque bytes into the federation ThresholdQC.
+            match crate::threshold::ThresholdQC::from_bytes(&opaque_qc.0) {
+                Some(qc) => {
+                    let message = root.signing_message();
+                    committee.verify(&qc, &message).is_ok()
+                }
+                None => false,
+            }
+        }
+        None => false,
+    }
+}
+
+/// Verify an agent's state using a receipt chain as an alternative to
+/// Merkle membership proof.
+///
+/// This is the "federation exit" path: an agent with a valid receipt chain
+/// can prove their state without the federation vouching for it. The chain
+/// proves that the state was produced by a sequence of valid, executor-checked
+/// turns from genesis.
+///
+/// # Arguments
+///
+/// * `receipts` - The agent's full receipt chain from genesis.
+/// * `expected_post_state` - The state commitment the chain should prove.
+///
+/// # Returns
+///
+/// `Ok(())` if the receipt chain is valid and its head matches the expected
+/// state commitment. This is equivalent to a Merkle membership proof for the
+/// purposes of state verification.
+pub fn verify_via_receipt_chain(
+    receipts: &[dregg_turn::TurnReceipt],
+    expected_post_state: Option<[u8; 32]>,
+) -> Result<(), dregg_turn::VerifyError> {
+    let head_state = dregg_turn::verify_receipt_chain_head(receipts)?;
+    if let Some(expected) = expected_post_state
+        && head_state != expected
+    {
+        return Err(dregg_turn::VerifyError::StateChainBreak {
+            index: receipts.len() - 1,
+            expected_pre_state: expected,
+            actual_pre_state: head_state,
+        });
+    }
+    Ok(())
+}
+
+// =============================================================================
+// Revocation Proof (for verifiers)
+// =============================================================================
+
+/// A proof that a token is NOT revoked, anchored to an attested root.
+///
+/// A verifier checks:
+/// 1. The attested root has sufficient quorum signatures from trusted authorities.
+/// 2. The non-membership proof is valid against the attested Merkle root.
+/// 3. The attested root's timestamp is recent enough.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RevocationProof {
+    /// The token ID being proved non-revoked.
+    pub token_id: String,
+    /// The attested root this proof is relative to.
+    pub attested_root: AttestedRoot,
+    /// The non-membership proof from the Merkle tree.
+    pub non_membership: dregg_commit::NonMembershipProof,
+}
+
+// =============================================================================
+// Light Client Proof
+// =============================================================================
+
+/// A proof that enables external parties to verify "the federation attests state
+/// root X at height H" without running a full node.
+///
+/// Contains the block hash, the attested post-state root, and the quorum
+/// certificate proving that a supermajority of federation nodes agreed on this
+/// state transition.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LightClientProof {
+    /// The hash of the block whose state transition is attested.
+    pub block_hash: [u8; 32],
+    /// The post-state root attested by the federation at this block.
+    pub post_state_root: [u8; 32],
+    /// The note tree root at this block height.
+    pub note_tree_root: [u8; 32],
+    /// The nullifier set root at this block height.
+    pub nullifier_set_root: [u8; 32],
+    /// The block height.
+    pub height: u64,
+    /// The quorum certificate proving supermajority agreement.
+    pub qc: QuorumCertificate,
+}
+
+impl LightClientProof {
+    /// Construct a light client proof from a finalized block and its QC.
+    pub fn from_block(block: &RevocationBlock, qc: &QuorumCertificate) -> Self {
+        Self {
+            block_hash: block.block_hash,
+            post_state_root: block.post_state_root,
+            note_tree_root: block.note_tree_root,
+            nullifier_set_root: block.nullifier_set_root,
+            height: block.height,
+            qc: qc.clone(),
+        }
+    }
+
+    /// Verify this proof against a set of known federation node identities.
+    ///
+    /// Checks that the QC contains enough valid signatures to meet the
+    /// threshold requirement.
+    pub fn verify(&self, nodes: &[NodeIdentity]) -> bool {
+        // QC must reference the same block hash.
+        if self.qc.block_hash != self.block_hash {
+            return false;
+        }
+        // QC must be at the same height.
+        if self.qc.height != self.height {
+            return false;
+        }
+        // Verify the quorum signatures.
+        self.qc.is_valid_with_keys(nodes)
+    }
+}
+
+// =============================================================================
+// Network Messages
+// =============================================================================
+
+/// A signed view-change message indicating a node wants to advance the view.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ViewChangeMessage {
+    /// The new view being requested.
+    pub new_view: u64,
+    /// The current block height.
+    pub height: u64,
+    /// The voter's node ID.
+    pub voter: usize,
+    /// Signature over the view-change content by the voter.
+    pub signature: Signature,
+}
+
+impl ViewChangeMessage {
+    /// Compute the canonical message that is signed for a view-change.
+    pub fn signing_message(new_view: u64, height: u64) -> Vec<u8> {
+        let mut msg = Vec::new();
+        msg.extend_from_slice(b"dregg-view-change-v1");
+        msg.extend_from_slice(&new_view.to_le_bytes());
+        msg.extend_from_slice(&height.to_le_bytes());
+        msg
+    }
+}
+
+/// Messages exchanged between federation nodes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ConsensusMessage {
+    /// A proposal for a new block of revocations.
+    Propose(RevocationBlock),
+    /// A vote for a proposed block.
+    VoteMsg(Vote),
+    /// A finalized quorum certificate.
+    Finalize(QuorumCertificate, RevocationBlock),
+    /// A revocation request from a client.
+    RevokeRequest(RevocationEvent),
+    /// Request for the current attested root.
+    GetAttestedRoot,
+    /// Response with the current attested root.
+    AttestedRootResponse(AttestedRoot),
+    /// A view-change request (leader timeout).
+    ViewChange(ViewChangeMessage),
+}
+
+/// An addressed message (source, destination, payload).
+#[derive(Clone, Debug)]
+pub struct AddressedMessage {
+    /// Source node ID.
+    pub from: usize,
+    /// Destination node ID (or usize::MAX for broadcast).
+    pub to: usize,
+    /// The consensus message.
+    pub message: ConsensusMessage,
+}
+
+impl AddressedMessage {
+    /// Create a broadcast message (to all nodes).
+    pub fn broadcast(from: usize, message: ConsensusMessage) -> Self {
+        Self {
+            from,
+            to: usize::MAX,
+            message,
+        }
+    }
+
+    /// Create a directed message to a specific node.
+    pub fn directed(from: usize, to: usize, message: ConsensusMessage) -> Self {
+        Self { from, to, message }
+    }
+
+    /// Whether this is a broadcast message.
+    pub fn is_broadcast(&self) -> bool {
+        self.to == usize::MAX
+    }
+}
+
+// =============================================================================
+// Token (simplified for the federation demo)
+// =============================================================================
+
+/// A simplified token representation for the federation demo.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Token {
+    /// Unique token identifier.
+    pub id: String,
+    /// Human-readable description of the token holder.
+    pub holder: String,
+    /// The issuing authority's node ID.
+    pub issuer_id: usize,
+    /// Issuing authority's public key.
+    pub issuer_key: PublicKey,
+    /// Signature over the token ID by the issuer.
+    pub signature: Signature,
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Get current timestamp in seconds (simplified, uses a counter for determinism in demo).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn current_timestamp() -> i64 {
+    // In production, this would be real wall-clock time.
+    // For the demo, we use an incrementing value based on block height.
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(1700000000)
+}
+
+/// Wasm fallback: `SystemTime::now()` panics on wasm32-unknown-unknown
+/// (no host wall-clock). Callers in the browser drive deterministic time
+/// via `Federation` ticks instead; this function returns a fixed sentinel
+/// so wasm-side construction of an `AttestedRoot` is at least sensible.
+#[cfg(target_arch = "wasm32")]
+pub fn current_timestamp() -> i64 {
+    1_700_000_000
+}
+
+#[cfg(test)]
+mod qc_dedup_tests {
+    use super::*;
+
+    /// Build a committee of `n` (SigningKey, NodeIdentity) entries.
+    fn committee(n: usize) -> (Vec<SigningKey>, Vec<NodeIdentity>) {
+        let mut sks = Vec::new();
+        let mut nodes = Vec::new();
+        for id in 0..n {
+            let (sk, pk) = generate_keypair();
+            nodes.push(NodeIdentity {
+                name: format!("node-{id}"),
+                id,
+                public_key: pk,
+            });
+            sks.push(sk);
+        }
+        (sks, nodes)
+    }
+
+    /// F1 regression: a QC whose votes repeat a single voter must be REJECTED,
+    /// even though `votes.len() >= threshold` and every signature is valid.
+    #[test]
+    fn duplicate_voter_qc_is_rejected() {
+        let (sks, nodes) = committee(3);
+        let block_hash = [7u8; 32];
+        let (height, view) = (1u64, 0u64);
+        let msg = QuorumCertificate::vote_message(&block_hash, height, view);
+        // Voter 0 signs the (identical) vote message three times.
+        let sig0 = sign(&sks[0], &msg);
+        let qc = QuorumCertificate {
+            block_hash,
+            height,
+            view,
+            aggregate_qc: None,
+            votes: vec![(0, sig0), (0, sig0), (0, sig0)],
+            threshold: 3,
+        };
+        // One key must NOT be able to forge a 3-of-3 quorum via duplicates.
+        assert!(
+            !qc.is_valid_with_keys(&nodes),
+            "duplicate-voter QC must be rejected (is_valid_with_keys)"
+        );
+        let keys: Vec<PublicKey> = nodes.iter().map(|n| n.public_key).collect();
+        assert!(
+            !qc.verify_with_keys(&keys),
+            "duplicate-voter QC must be rejected (verify_with_keys)"
+        );
+    }
+
+    /// A genuine QC with `threshold` DISTINCT valid voters still verifies.
+    #[test]
+    fn genuine_distinct_voter_qc_is_accepted() {
+        let (sks, nodes) = committee(3);
+        let block_hash = [9u8; 32];
+        let (height, view) = (2u64, 1u64);
+        let msg = QuorumCertificate::vote_message(&block_hash, height, view);
+        let votes: Vec<(usize, Signature)> = (0..3).map(|id| (id, sign(&sks[id], &msg))).collect();
+        let qc = QuorumCertificate {
+            block_hash,
+            height,
+            view,
+            aggregate_qc: None,
+            votes,
+            threshold: 3,
+        };
+        assert!(
+            qc.is_valid_with_keys(&nodes),
+            "genuine 3-distinct-voter QC must verify (is_valid_with_keys)"
+        );
+        let keys: Vec<PublicKey> = nodes.iter().map(|n| n.public_key).collect();
+        assert!(
+            qc.verify_with_keys(&keys),
+            "genuine 3-distinct-voter QC must verify (verify_with_keys)"
+        );
+    }
+
+    /// A QC padded with duplicates to reach threshold (2 distinct + 1 dup) is rejected.
+    #[test]
+    fn padded_duplicate_does_not_reach_threshold() {
+        let (sks, nodes) = committee(3);
+        let block_hash = [11u8; 32];
+        let (height, view) = (3u64, 0u64);
+        let msg = QuorumCertificate::vote_message(&block_hash, height, view);
+        let sig0 = sign(&sks[0], &msg);
+        let sig1 = sign(&sks[1], &msg);
+        // 2 distinct voters padded to length-3 with a duplicate of voter 0.
+        let qc = QuorumCertificate {
+            block_hash,
+            height,
+            view,
+            aggregate_qc: None,
+            votes: vec![(0, sig0), (1, sig1), (0, sig0)],
+            threshold: 3,
+        };
+        assert!(
+            !qc.is_valid_with_keys(&nodes),
+            "padding to threshold with a duplicate must be rejected"
+        );
+    }
+}

@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Light client — verify a whole history in one proof · dregg</title>
+  <meta name="description" content="A producer folds a finalized multi-turn history into one succinct recursive proof; your browser tab verifies that proof — re-executing nothing. Check it against a config anchor you control; a tampered anchor is refused.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    main.wrap { padding-top: var(--s7); padding-bottom: var(--s9); max-width: 880px; }
+    .lc-eyebrow { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: var(--s3); }
+    .lc-lede { max-width: 64ch; margin: var(--s3) 0 var(--s5); color: var(--fg-dim); line-height: 1.6; }
+    .panel { background: var(--bg-raised); border: 1px solid var(--line); border-radius: var(--r3);
+      padding: var(--s5) var(--s6); margin-bottom: var(--s5); }
+    .panel h2 { font-family: var(--font-display); font-size: 1.2rem; margin-bottom: var(--s2); }
+    .panel p.hint { color: var(--fg-muted); font-size: 0.86rem; line-height: 1.55; margin-bottom: var(--s4); }
+    .controls { display: flex; flex-wrap: wrap; gap: var(--s4); align-items: flex-end; margin-bottom: var(--s4); }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-family: var(--font-mono); font-size: 0.68rem; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--fg-muted); }
+    .field input { font-family: var(--font-mono); font-size: 0.9rem; background: var(--bg-inset);
+      color: var(--fg); border: 1px solid var(--line-strong); border-radius: var(--r2); padding: 8px 10px; }
+    .field input.wide { min-width: 30rem; max-width: 100%; flex: 1; }
+    .field input:focus { outline: none; border-color: var(--accent); }
+    .readout { font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.7; background: var(--bg-inset);
+      border: 1px solid var(--line); border-radius: var(--r2); padding: var(--s4) var(--s5); margin-top: var(--s4);
+      white-space: pre-wrap; word-break: break-word; min-height: 2.5em; color: var(--fg-dim); }
+    .readout .k { color: var(--accent); }
+    .readout .v { color: var(--chalk); }
+    .verdict { font-family: var(--font-mono); font-weight: 700; }
+    .verdict.ok { color: var(--accent-bright); }
+    .verdict.no { color: var(--danger); }
+    .floor { color: var(--warm); font-size: 0.8rem; }
+    .busy { color: var(--warm); }
+    .lc-back { font-family: var(--font-mono); font-size: 0.8rem; }
+    .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s4); margin: var(--s5) 0; }
+    .step { padding: var(--s5); border-radius: var(--r3); border: 1px solid var(--line);
+      border-left: 3px solid var(--accent); background: var(--bg-raised); }
+    .step__n { font-family: var(--font-mono); font-size: 0.7rem; color: var(--accent); margin-bottom: var(--s2); }
+    .step__t { font-family: var(--font-display); font-size: 1.05rem; color: var(--chalk); margin-bottom: var(--s2); }
+    .step__d { font-size: 0.84rem; color: var(--fg-muted); line-height: 1.55; }
+    /* the dramatic verdict + verifying shimmer */
+    .verdict { font-family: var(--font-mono); font-weight: 700; }
+    .verdict.ok { color: var(--accent-bright); }
+    .verdict.no { color: var(--danger); }
+    .bigverdict { font-family: var(--font-display); font-size: clamp(1.5rem, 4vw, 2.4rem);
+      letter-spacing: -0.01em; display: block; margin-bottom: var(--s3); }
+    .bigverdict.ok { color: var(--accent-bright); }
+    .bigverdict.no { color: var(--danger); }
+    @media (prefers-reduced-motion: no-preference) {
+      .bigverdict { animation: vpop 0.4s var(--ease) both; }
+      @keyframes vpop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: none; } }
+      .busy { position: relative; }
+      .busy::after { content: ' ▍'; animation: blink 1s steps(2) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+    }
+    .lc-hero { padding-top: var(--s4); }
+    .lc-hero h1 { font-size: clamp(2rem, 5vw, 3rem); max-width: 18ch; }
+  </style>
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name"><a href="../" style="color:var(--chalk)"><code>dregg</code> / deos</a></span>
+  <span class="nav__tag">light client &middot; verify a whole history</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../">Home</a>
+    <a class="nav__link" href="../dregg-works/">dregg.works</a>
+    <a class="nav__link" href="../cards/">Cards</a>
+    <a class="nav__link" href="https://github.com/emberian/dregg">Source</a>
+  </div>
+</nav>
+
+<main class="wrap">
+ <div class="lc-hero">
+  <p class="lc-eyebrow">light client · in your tab</p>
+  <h1>Verify a whole history in one proof</h1>
+ </div>
+  <p class="lc-lede">
+    A finalized history is a chain of turns: each turn's after-state is the next turn's before-state.
+    Instead of re-executing every turn to trust the result, a <strong>producer</strong> (a node or relayer
+    that ran the history) folds the whole chain into <strong>one succinct recursive proof</strong>. A
+    <strong>light client</strong> — your browser tab, here — then verifies that single proof, re-witnessing
+    nothing: no re-execution, no re-hashing, no walk of the chain. If it verifies, every folded turn
+    executed correctly, in order, from genesis to the final root.
+  </p>
+
+  <div class="stage">
+    <div class="stage__rows" aria-hidden="true">
+      <div class="stage__turn"><span class="dot"></span> turn 1 · transfer <span class="root">root a3f1…</span></div>
+      <div class="stage__turn"><span class="dot"></span> turn 2 · set-field <span class="root">root 7b09…</span></div>
+      <div class="stage__turn"><span class="dot"></span> turn 3 · mint <span class="root">root e4c2…</span></div>
+      <div class="stage__turn"><span class="dot"></span> … k turns, in order <span class="root">final root c1d4…</span></div>
+    </div>
+    <div class="stage__fold">▼ folded once, natively, off the verifier ▼</div>
+    <div class="stage__proof">
+      <div class="glyph">π ✓</div>
+      <div class="cap">one recursive STARK — what your tab verifies below, re-witnessing nothing</div>
+    </div>
+    <p class="stage__floor">
+      the verification carries the recursion engine's FRI soundness. The verification <em>is</em> the trust.
+    </p>
+  </div>
+
+  <div class="steps">
+    <div class="step"><div class="step__n">produce · off the verifier</div><div class="step__t">Fold once</div>
+      <div class="step__d">The real <code>k</code>-turn aggregate below was folded natively by the producer — the expensive step, done once. Each leaf is a real EffectVM proof verified in-circuit; the recursion binds the chain.</div></div>
+    <div class="step"><div class="step__n">verify · in your tab</div><div class="step__t">Check cheaply</div>
+      <div class="step__d">Your tab runs the real recursion verify over the wire proof — independent of how many turns the history holds. Verification is the light step, and it runs client-side in WebAssembly.</div></div>
+    <div class="step"><div class="step__n">anchor · your config</div><div class="step__t">Trust nothing but your anchor</div>
+      <div class="step__d">The trust anchor is configuration you hold separately — never read off the proof under verification. A proof built for a different circuit cannot pass your anchor.</div></div>
+  </div>
+
+  <!-- Panel 1: verify the real baked aggregate in-tab -->
+  <section class="panel">
+    <h2>1 · Verify a real history in your tab</h2>
+    <p class="hint">
+      The aggregate below is a real, pre-folded whole-history proof (shipped as a wire envelope). Click
+      <em>Verify</em> and your tab runs the genuine recursion verify against the config anchor — re-witnessing
+      nothing. The carried public commitments (genesis/final root, the ordered-history digest, the turn count)
+      are re-attested against the binding proof.
+    </p>
+    <div class="readout" id="meta">loading the in-tab verifier and the baked aggregate…</div>
+    <div class="controls" style="margin-top:var(--s4)">
+      <button class="btn btn--primary" id="run1" disabled>Verify this history in my tab</button>
+    </div>
+    <div class="readout" id="out1">—</div>
+  </section>
+
+  <!-- Panel 2: config-not-artifact anchor tooth -->
+  <section class="panel">
+    <h2>2 · Check it against your own anchor</h2>
+    <p class="hint">
+      The anchor is <em>your</em> config — a separate input, never taken from the artifact. Verify against the
+      correct anchor and it attests; tamper one hex digit and it is refused outright. "You did not trust the
+      producer, you checked it against your own anchor."
+    </p>
+    <div class="controls">
+      <div class="field wide"><label for="anchor2">config VK anchor (64 hex chars)</label>
+        <input id="anchor2" class="wide" type="text" spellcheck="false" placeholder="loads the correct anchor…"></div>
+    </div>
+    <div class="controls">
+      <button class="btn btn--primary" id="run2" disabled>Verify against this anchor</button>
+      <button class="btn btn--secondary" id="tamper2" disabled>Tamper one digit</button>
+      <button class="btn btn--secondary" id="reset2" disabled>Reset to correct</button>
+    </div>
+    <div class="readout" id="out2">—</div>
+  </section>
+
+  <p class="lc-lede" style="font-size:0.84rem;color:var(--fg-muted)">
+    Named floor: the verification carries the recursion engine's FRI soundness. The verification <em>is</em> the
+    trust — if the aggregate verifies under a sound engine, the whole history is attested. This is the executable
+    counterpart of the Lean theorem <code>light_client_verifies_whole_history</code>.
+  </p>
+
+  <p class="lc-back"><a href="../">&larr; back to dregg / deos</a></p>
+</main>
+
+<script type="module">
+  import init, { verify_devnet_history } from '../cards/pkg/dregg_wasm.js';
+  const $ = s => document.querySelector(s);
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  let baked = null, correctAnchor = null;
+
+  function renderAttested(view) {
+    const ok = view.attested;
+    return `<span class="bigverdict ${ok ? 'ok' : 'no'}">${ok ? '✓ whole history attested' : '✕ refused'}</span>` +
+      `<span class="k">turns folded</span> <span class="v">${view.num_turns}</span>\n` +
+      `<span class="k">genesis root</span> <span class="v">[${[].concat(view.genesis_root).join(', ')}]</span>\n` +
+      `<span class="k">final root</span> <span class="v">[${[].concat(view.final_root).join(', ')}]</span>\n` +
+      `<span class="k">chain digest</span> <span class="v">[${(view.chain_digest || []).join(', ')}]</span>\n` +
+      `<span class="k">engine</span> <span class="v">${esc(view.engine)}</span>\n` +
+      `<span class="floor">${esc(view.named_floor)}</span>`;
+  }
+
+  async function boot() {
+    try {
+      await init();
+      const res = await fetch('./history.json', { cache: 'no-store' });
+      baked = await res.json();
+      correctAnchor = baked.anchor_hex;
+      const e = baked.envelope;
+      $('#meta').innerHTML =
+        `<span class="k">baked aggregate</span> <span class="v">real ${e.num_turns}-turn whole-history proof</span>\n` +
+        `<span class="k">genesis root</span> <span class="v">[${[].concat(e.genesis_root).join(', ')}]</span>  ` +
+        `<span class="k">final root</span> <span class="v">[${[].concat(e.final_root).join(', ')}]</span>\n` +
+        `<span class="k">chain digest</span> <span class="v">[${e.chain_digest.join(', ')}]</span>\n` +
+        `<span class="k">config anchor</span> <span class="v">${esc(correctAnchor)}</span>\n` +
+        `<span class="k">proof bytes</span> <span class="v">${e.proof_bytes_b64.length} base64 chars (the wire envelope)</span>`;
+      $('#out1').innerHTML = 'ready — click Verify to run the real recursion verify in your tab.';
+      $('#anchor2').value = correctAnchor;
+      $('#out2').innerHTML = 'ready — verify against the correct anchor, or tamper a digit.';
+      for (const id of ['#run1', '#run2', '#tamper2', '#reset2']) $(id).disabled = false;
+    } catch (err) {
+      $('#meta').innerHTML = '<span class="verdict no">failed to load the verifier / baked aggregate:</span>\n' + esc(String(err));
+    }
+  }
+
+  function verify(envelope, anchor, outEl) {
+    outEl.innerHTML = '<span class="busy">running the real recursion verify in your tab (re-witnessing nothing)…</span>';
+    return new Promise(r => setTimeout(r, 20)).then(() => {
+      try {
+        const view = verify_devnet_history(JSON.stringify(envelope), anchor);
+        outEl.innerHTML = renderAttested(view);
+      } catch (e) {
+        outEl.innerHTML = '<span class="verdict no">error:</span> ' + esc(String(e));
+      }
+    });
+  }
+
+  $('#run1').addEventListener('click', () => verify(baked.envelope, correctAnchor, $('#out1')));
+  $('#run2').addEventListener('click', () => verify(baked.envelope, ($('#anchor2').value || '').trim(), $('#out2')));
+  $('#tamper2').addEventListener('click', () => {
+    let a = ($('#anchor2').value || correctAnchor).trim().split('');
+    const flip = { '0': '1', '1': '0' };
+    a[0] = flip[a[0]] || (a[0] === 'a' ? 'b' : 'a');
+    $('#anchor2').value = a.join('');
+    $('#out2').innerHTML = 'anchor tampered (one digit flipped) — now click Verify; it must be refused.';
+  });
+  $('#reset2').addEventListener('click', () => {
+    $('#anchor2').value = correctAnchor;
+    $('#out2').innerHTML = 'anchor reset to the correct config value.';
+  });
+
+  boot();
+</script>
+</body>
+</html>

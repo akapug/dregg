@@ -1,0 +1,15 @@
+{
+  "name": "@dregg/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Dregg network",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit"
+  },
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "typescript": "^5.4.0"
+  }
+}

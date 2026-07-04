@@ -1,0 +1,117 @@
+# dregg-firmament — the cap-gradation bridge (the fluid reach-out, in CODE).
+#
+# This is a STANDALONE Cargo workspace, deliberately NOT a member of the
+# repo-root workspace and NOT a member of the sel4/dregg-pd Microkit workspace:
+#
+#   * It path-depends on the REAL dregg crates (`dregg-cell`, `dregg-turn`,
+#     `dregg-types`) so the cap-gradation bridge uses the GENUINE attenuation
+#     semantics (`is_attenuation`, `AuthRequired::is_narrower_or_equal`), the
+#     GENUINE `CapabilityRef`/`CapabilitySet`/`CellId`, and a GENUINE
+#     `TurnExecutor::execute` turn for the distributed leg. It never reinvents
+#     `granted ⊆ held`.
+#
+#   * It builds into its OWN target dir (`CARGO_TARGET_DIR` set by the runner,
+#     see ./run-test.sh), so it never touches the repo-root `./target` that a
+#     node lane owns. Path-depending on a member of another workspace from
+#     outside that workspace is fine: cargo resolves the depended crate within
+#     ITS own workspace and links it into THIS crate's local target.
+#
+# `docs/FIRMAMENT.md §3` ("The transparent local↔distributed capability
+# gradation" + "The fluid reach-out") DESIGNS this bridge; this crate is the
+# design turned into code: ONE `(target, rights)` handle an app invokes /
+# attenuates / delegates uniformly, with a router that dispatches a LOCAL
+# target to the seL4 kernel path and a DISTRIBUTED target to the
+# executor→net path. The `n = 1` collapse is the firmament's headline.
+
+# Empty [workspace] table → this crate is its OWN workspace root, NOT a member
+# of the repo-root workspace (whose ./target a node lane owns). It still
+# path-depends on the real dregg crates; cargo resolves those within the root
+# workspace and links them into THIS crate's local target.
+[workspace]
+
+# THE FORK SEAM (replicated from the breadstuffs-root `Cargo.toml`). Because this
+# crate is its OWN workspace root, the repo-root `[patch]` does NOT apply here —
+# so the transitive `dregg-circuit` (via `dregg-turn`) would resolve `p3-recursion`
+# from the PINNED git rev, which lacks the `RecursionInput::NativeBatchStark`
+# variant `dregg-circuit` now calls (the C3 native-batch leaf-wrap WIP). Without
+# this block the build fails with `no variant named NativeBatchStark found for
+# enum p3_recursion::RecursionInput`. We point the patch at the SAME local fork
+# checkout the root does (`/Users/ember/dev/plonky3-recursion`), adjusted for this
+# crate's depth (`../../../` = dregg-firmament → sel4 → breadstuffs → dev). Keep in
+# sync with the root block; both revert to the git rev once the fork is pushed.
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../../plonky3-recursion/poseidon2-circuit-air" }
+
+# THE FORK SEAM (cont.) — replicated from the breadstuffs-root `Cargo.toml`
+# `[patch.crates-io]`. Because this crate is its OWN workspace root, the root
+# patch does NOT apply here — so the transitive `dregg-hints` (via `dregg-turn`)
+# would resolve the upstream crates.io `ark-serialize 0.5`, which lacks the
+# `serde_with` feature `dregg-hints` requests. The root redirects `ark-serialize`
+# to the `emberian/algebra` fork (`serde-integration` branch) that ADDS that
+# feature; we replicate it so this workspace resolves identically. Keep in sync
+# with the root block.
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[package]
+name = "dregg-firmament"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The local↔distributed cap-gradation bridge — one (target, rights) handle, two backings (seL4 syscall / real dregg turn), the fluid reach-out in code."
+
+[features]
+# `process-pd` selects the v1 PROCESS-backed PD substrate (the MMU-enforced
+# isolation upgrade, `docs/DREGG-DESKTOP-OS.md §3`): PDs become forked host
+# PROCESSES (so the host MMU enforces address-space separation — a PD cannot
+# read another PD's memory), shared regions become `shm_open`/`mmap` segments,
+# and a kernel-side epoch-tagged cap-handle validity table refuses raw-bytes cap
+# forgery. It is OFF by default so the fast `cargo test` keeps the v0 thread
+# backing (one address space, in-process, no fork) for quick iteration; the
+# real-isolation path is opt-in (`--features process-pd`) and Unix-only. This
+# EXTENDS the EmulatedKernel with a cfg-selected backing — it does NOT fork a
+# parallel mock; the v0 thread kernel stays the default.
+process-pd = ["dep:libc"]
+
+# `process-pd-sandbox` adds the cross-platform OS-SANDBOXED confinement on top of
+# `process-pd` (Phase-0 of the sandboxed firmament, `docs/DREGG-DESKTOP-OS.md
+# §3`): a forked child PD, right after `fork()` and BEFORE its body runs, closes
+# every non-granted fd and drops ambient OS authority — macOS via a `(deny
+# default)` Seatbelt/`sandbox_init` profile (enforced + smoke-tested), Linux via
+# `unshare` namespaces + `prctl(NO_NEW_PRIVS)` + a default-deny seccomp-bpf
+# allow-list + Landlock (cfg-gated; compiles on macOS as a stub, runs on Linux).
+# It implies `process-pd`. OFF by default (the fast `cargo test` keeps the plain
+# thread/process backings). The Linux crates are pulled in ONLY on Linux via the
+# target-specific dependency table, so a macOS build never sees them.
+process-pd-sandbox = ["process-pd", "dep:seccompiler", "dep:landlock"]
+
+[dependencies]
+# The REAL dregg capability + attenuation semantics. Not reinvented.
+dregg-cell  = { path = "../../cell" }
+dregg-turn  = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+# `libc` (fork / shm_open / mmap / socketpair / waitpid) backs the v1
+# process-backed PD substrate. Optional + pulled in ONLY under `process-pd`, so
+# the default thread-backed build gains no new dependency. It is ALREADY a
+# transitive dependency of the real dregg crates (no new lockfile surface).
+libc = { version = "0.2", optional = true }
+
+# The Linux confinement backend (`process-pd-sandbox`): a default-deny
+# seccomp-bpf allow-list + Landlock path-rules. Pulled in ONLY on Linux (the
+# target table), so a macOS build never resolves them; the macOS backend uses
+# the system `sandbox_init` FFI and needs no extra crate. These are optional and
+# gated on the `process-pd-sandbox` feature so a plain build adds nothing.
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = { version = "0.4", optional = true }
+landlock = { version = "0.4", optional = true }
+
+[dev-dependencies]
+# (tests live inline + in tests/)
+
+[profile.release]
+opt-level = "s"

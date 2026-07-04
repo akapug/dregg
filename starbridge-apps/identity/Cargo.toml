@@ -1,0 +1,42 @@
+[package]
+name = "starbridge-identity"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace identity app — composes dregg-credentials for issuance, presentation, and verification of verifiable credentials."
+
+# Greenfield identity app composed on top of `dregg-credentials` (G31).
+# The original `apps/identity/` invented `Credential { ..., /* no signature */ }`
+# and 'verified: bool' as the verification surface — both correctly called
+# out as P0s in the apps audit. This starbridge-app uses the
+# `dregg-credentials` primitive (which wraps `bridge::present` correctly)
+# and exposes turn-builders for the credential lifecycle without
+# inventing new effect variants.
+
+[dependencies]
+dregg-credentials = { path = "../../credentials" }
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-circuit = { path = "../../circuit", default-features = false }
+dregg-types = { path = "../../types" }
+dregg-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+# The deos `issue`/`revoke` fires attach a Merkle-membership witness so the now-real
+# `SenderAuthorized(PublicRoot)` verifier admits the authorized signer on the green path.
+# `WitnessBlob` and the `single_member_authorized_root` / `single_member_membership_proof`
+# convenience pair live in `dregg-turn` (the executor's membership verifier); the
+# app-framework re-exports the action/turn types but not these, so we depend directly.
+dregg-turn = { path = "../../turn" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The deos re-expression tests (`reexpress_deos_app.rs`) drive the composed
+# `DeosApp`'s axum surface (per-viewer projection, /surface.js, /manifest) and the
+# web-of-cells publish through a tokio runtime.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true

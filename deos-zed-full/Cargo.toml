@@ -1,0 +1,328 @@
+# deos-zed-full — RECON SPIKE: mount the REAL Zed `editor`/`workspace`/`project`
+# stack over a cell-ledger Fs (FirmamentZedFs). Its OWN workspace (like deos-zed),
+# pinned at the SAME zed fork rev our gpui comes from so the patch table + gpui
+# version unify across the graph.
+[package]
+name = "deos-zed-full"
+version = "0.1.0"
+edition = "2021"
+description = "The REAL Zed editor (editor/workspace/project crates) mounted over a FirmamentFs cell-ledger — files are cells, save is a verified turn."
+publish = false
+license = "AGPL-3.0-or-later"
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[lib]
+name = "deos_zed_full"
+
+[features]
+# `full-zed` pulls the real Zed editor stack. OFF by default so a bare
+# `cargo build` stays light (the FirmamentZedFs adapter still compiles — it only
+# needs the `fs` crate, the seam).
+default = []
+full-zed = [
+    "dep:editor",
+    "dep:workspace",
+    "dep:project",
+    "dep:language",
+    # The Workspace shell + its real panels (stage 2/3 of the embed): the
+    # project panel, outline panel, integrated terminal panel, command palette,
+    # and project search — all of Zed's own crates, mounted over the cell-fs.
+    "dep:project_panel",
+    "dep:outline_panel",
+    "dep:terminal_view",
+    "dep:command_palette",
+    "dep:search",
+    "dep:theme",
+    "dep:theme_settings",
+    "dep:settings",
+    # The FULL Zed workspace CHROME (stage 3/3): the title bar, the status-bar
+    # items (search button, diagnostics, active-file-name, activity indicator,
+    # encoding/language/cursor/line-ending selectors), the pane toolbar
+    # (breadcrumbs + buffer/project search bars), and the git panel + indicator.
+    # `boot::wire_full_workspace_ui` registers the SAME `observe_new(Workspace)` +
+    # per-crate `init` mechanism `crates/zed/src/zed.rs::initialize_workspace`
+    # uses, for the HEADLESS-SAFE subset (no AI/collab/debugger/LSP/edit-pred/vim/
+    # toolchain — those need services the headless AppState does not provide).
+    "dep:title_bar",
+    "dep:diagnostics",
+    "dep:activity_indicator",
+    "dep:go_to_line",
+    "dep:encoding_selector",
+    "dep:language_selector",
+    "dep:line_ending_selector",
+    "dep:breadcrumbs",
+    "dep:git_ui",
+    # `call` is pulled directly so `wire_full_workspace_ui` can run `call::init`
+    # (sets the `ActiveCall` global). `title_bar`'s `TitleBar::new` reads
+    # `ActiveCall::global(cx)` during render — without the global it panics. The
+    # call entity is headless-safe (no network until a call is actually joined).
+    "dep:call",
+    # The confined-Hermes AGENT PANEL. Pull deos-hermes with its gpui
+    # `cockpit-surface` (the live `AgentDockView` + `HermesSession` over a real,
+    # verified-executor-backed `HermesGateway`). `src/hermes_panel.rs` wraps that
+    # view in a `workspace::Panel` and docks it ALONGSIDE the project/outline/
+    # terminal panels — so the embedded IDE gets a live, receipted, cap-confined
+    # agent dev-loop. Gated here (only the full Workspace embed needs it; a bare
+    # `cargo build` stays free of the heavy Lean-linked SDK + gpui graph).
+    "dep:deos-hermes",
+    "deos-hermes/cockpit-surface",
+    # `ui` is needed to name `ui::IconName` in the agent panel's `Panel::icon`.
+    "dep:ui",
+    # THE LIVE-COCKPIT `AppState` BUILDER (`boot::build_live_app_state`). A real
+    # `workspace::AppState` for the deos cockpit — a real `client::Client` (real
+    # `clock::RealSystemClock` + an `HttpClientWithUrl` over a `BlockedHttpClient`,
+    # no network needed to edit cells), a `session::Session` over the real
+    # `db::AppDatabase`, a `client::UserStore` + `workspace::WorkspaceStore`, a
+    # `language::LanguageRegistry`, and a `node_runtime::NodeRuntime::unavailable`
+    # (editing cells needs no node) — built once and `AppState::set_global`'d. This
+    # is the SAME shape as `AppState::test`, minus the fakes, so the cockpit mounts
+    # a genuine `Entity<Workspace>` (the named mount seam, now closed).
+    "dep:client",
+    "dep:session",
+    "dep:node_runtime",
+    "dep:http_client",
+    "dep:clock",
+    "dep:db",
+]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+# `boot::build_live_app_state` mints a fresh session id (the same `Uuid::new_v4`
+# the standalone Zed binary uses for its session). v4 only; same major the zed
+# graph already pulls so it unifies.
+uuid = { version = "1", features = ["v4"] }
+
+# THE CELL BACKING — deos-zed's gpui-free `FirmamentFs` (a file IS a cell, a save
+# IS a receipted turn over an in-process Ledger + TurnExecutor). We pull it
+# `default-features = false, features = ["firmament"]` so we get ONLY the
+# cell-ledger Fs core (no gpui graph). FirmamentZedFs (src/firmament_zed_fs.rs)
+# wraps this and adapts its synchronous cell ops to Zed's async `fs::Fs` trait.
+deos-zed = { path = "../deos-zed", default-features = false, features = ["firmament"] }
+
+# `SyncCellFs` (the `Send + Sync` cell-fs over deos-zed's verified `OwnedSpine`)
+# names `dregg_cell::CellId` — the same id type deos-zed's `LedgerSpine` trait
+# returns. ALWAYS pulled (the FirmamentZedFs adapter that rides every build holds
+# a SyncCellFs), matching deos-zed's own native `dregg-cell` (default features).
+dregg-cell = { path = "../cell" }
+
+# THE DOCUMENT-VCS CORE — dregg-doc's Pijul-shaped patch theory. A per-path `Doc`
+# history is the cell-ledger's change history at LINE granularity: each edit is a
+# patch (a "commit"), `blame()` attributes each line to its authoring patch
+# (stable across moves), and `rope_diff`/`History::replay_to` derive a two-patch
+# diff + time-travel. This is the real substrate the cell-ledger git surface
+# (`src/cell_git.rs`) renders into Zed's `git::GitRepository` types — NOT a host
+# `.git`. dregg-doc is its OWN workspace (a standalone path dep, like
+# servo-render/pg-dregg), pulled with the `rope` feature OFF (we bridge to Zed's
+# `rope::Rope` via `.to_string()` at the trait boundary, so dregg-doc's String
+# core suffices — no `ropey` version pin to unify).
+dregg-doc = { path = "../dregg-doc" }
+
+# THE SEAM: Zed's `fs::Fs` trait — pulled at the SAME zed fork rev gpui comes
+# from. FirmamentZedFs implements this trait over the cell-ledger.
+fs = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+git = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+rope = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+text = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+util = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+futures = "0.3"
+# Match the zed `git` crate's `async-channel`/`smallvec` (its `GitRepository`
+# trait names `async_channel::Sender` in `initial_graph_data`/`search_commits`
+# and `smallvec::SmallVec` in `InitialGraphCommitData::parents`). Same versions
+# the zed workspace pins, so the types unify with the git crate's.
+async-channel = "2.5.0"
+smallvec = { version = "1.6", features = ["union", "const_new"] }
+smol = "2"
+async-tar = "0.5.1"
+collections = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+
+# THE REAL ZED EDITOR STACK (gated on full-zed — the heavy graph).
+editor = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+workspace = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+project = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+language = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+# THE WORKSPACE SHELL + ITS REAL PANELS (gated on full-zed). These sit on the
+# editor/workspace/project base already in the graph — little NEW transitive
+# weight. `boot.rs` loads project_panel/outline_panel/terminal_view into a real
+# Workspace; command_palette + search register their actions on it. `theme` is
+# pulled directly so `boot::install_workspace_globals` can run `theme::init`.
+project_panel = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+outline_panel = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+terminal_view = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+command_palette = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+search = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+theme = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+theme_settings = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+settings = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+# THE FULL WORKSPACE CHROME crates (gated on full-zed). These are the same crates
+# `crates/zed/src/zed.rs::initialize_workspace` pulls to install the title bar,
+# the status-bar items, the pane toolbar, and the git panel. All sit on the
+# editor/workspace/project base already in the graph. `boot::wire_full_workspace_ui`
+# registers their `init`/`observe_new` hooks + adds the headless-safe items.
+title_bar = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+diagnostics = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+activity_indicator = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+go_to_line = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+encoding_selector = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+language_selector = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+line_ending_selector = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+breadcrumbs = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+git_ui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+call = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+# THE CONFINED-HERMES AGENT (gated on full-zed via `cockpit-surface`). Its
+# `cockpit_surface::AgentDockView` is a live gpui view over a real
+# `HermesSession` (a persistent `HermesGateway` on the verified Lean executor):
+# every tool-call a cap-gated, metered, RECEIPTED dregg turn. We pull it at the
+# SAME zed-fork gpui rev this crate uses, so the `Entity`/`Window`/`Render` types
+# are byte-identical — the view drops straight into our Workspace dock. deos-hermes
+# is its OWN standalone workspace (it embeds `dregg-sdk` defaults = the real
+# `libdregg_lean.a`), but as a PATH DEP it resolves under THIS workspace's
+# `[patch]` tables (the ark-serialize + plonky3-recursion forks below already
+# cover its proof dep-tree, identical to deos-hermes's own replicated set).
+deos-hermes = { path = "../deos-hermes", default-features = false, optional = true }
+
+# Zed's `ui` crate — only to name `ui::IconName` in the agent panel's
+# `Panel::icon` (the trait method returns `Option<ui::IconName>`). Same zed-fork
+# rev as the rest of the graph.
+ui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+# THE LIVE-COCKPIT `AppState` BUILDER's REAL deps (gated on full-zed). These are
+# the non-test crates the production Zed binary builds `AppState` from — pulled
+# here so `boot::build_live_app_state` constructs a genuine `workspace::AppState`
+# for the cockpit (a real `Client`/`Session`/`UserStore`/`WorkspaceStore`/
+# `LanguageRegistry`/`NodeRuntime`), NOT `AppState::test`. All already in the
+# graph transitively via `workspace`/`project`; named directly so the builder can
+# call their plain (non-test-support) constructors. Same zed-fork rev as the rest.
+client = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+session = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+node_runtime = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+http_client = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+clock = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+db = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+
+# Replicate the zed fork's [patch.crates-io] table (the subset our graph pulls),
+# same as deos-zed/Cargo.toml carries for gpui. Plus the proof-dep overrides the
+# `firmament` cell backing pulls (deos-zed carries the identical set — see its
+# manifest): the ark-serialize serde-integration fork + the local
+# plonky3-recursion fork. (No effect on the `fs`/`gpui` half of the graph.)
+# The `project_over_cells` integration test (gated by the `full-zed` feature it
+# `cfg`s on) builds a REAL Zed `Project` over `FirmamentZedFs` and opens a
+# seeded file-cell as a real Zed `Buffer`. That needs the `test-support` shims of
+# the project layer (`Project::test`, `LanguageRegistry::test`, the fake clock /
+# http client / node runtime) plus a `#[gpui::test]` harness.
+[dev-dependencies]
+# `postage::stream::Stream` provides `.recv().await` on the worktree scanner's
+# completion barrier (`refresh_entries_for_paths` returns a `postage::barrier::Receiver`)
+# — the exact crate + trait zed's own worktree integration tests use to await a
+# lazy directory expansion. Pinned to the same 0.5 the zed graph already carries.
+postage = { version = "0.5", features = ["futures-traits"] }
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+project = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+language = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+settings = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+# `project/test-support` turns on `remote/test-support` graph-wide, which makes
+# `RemoteConnectionIdentity::Mock` appear. The `workspace` crate (pulled by
+# `editor`) only matches that variant under ITS OWN `test-support` — an upstream
+# feature-unification gap in the zed fork at this rev. Enabling `workspace`'s
+# test-support here turns the matching arm on, so the unified graph compiles.
+workspace = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+# Same feature-unification gap one layer deeper, surfaced by the panel crates'
+# test-support: `project/test-support` turns on `remote/test-support` graph-wide
+# (so `RemoteConnectionOptions::Mock` appears), but `remote_connection`'s OWN
+# `Mock` match arm is gated on ITS test-support. The panel `*::load` paths pull
+# `remote_connection`, so enable its test-support here to turn the arm on.
+remote_connection = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+# Same feature-unification gap, surfaced by the FULL-CHROME crates: `title_bar`
+# pulls `recent_projects`, whose `remote_connections.rs` `match connection_options`
+# has a `RemoteConnectionOptions::Mock` arm gated on ITS OWN `test-support`. The
+# graph-wide `project/test-support` (from the dev-deps above) makes the `Mock`
+# variant appear, so enable `recent_projects`'s test-support here to turn the
+# matching arm on, matching the `workspace`/`remote_connection` gaps above.
+recent_projects = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+# `title_bar` itself has the SAME gated `RemoteConnectionOptions::Mock` match arm
+# (its `title_bar.rs` renders a remote-connection nickname/icon); its `test-support`
+# turns the arm on. Enabled here so the unified test graph compiles the title bar.
+title_bar = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support"] }
+
+# THE HEADLESS RENDER PATH for the unified-Workspace PNG bake
+# (`tests/unified_workspace_png_bake.rs`). `gpui_platform::current_headless_renderer`
+# (the offscreen GPU renderer that makes `capture_screenshot` resolve to real
+# pixels) and `gpui::HeadlessAppContext` are both `test-support`-gated — so the
+# bake rides as a `#[test]`, where these dev-deps' test-support is on. `gpui_wgpu`
+# carries the `CosmicTextSystem` (real text shaping); `image` is `RgbaImage::save`
+# (the captured screenshot → PNG). Same zed-fork rev as `gpui`, so the
+# renderer/text types unify with the rest of the graph.
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["test-support", "font-kit"] }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524" }
+image = { version = "0.25" }
+
+# The `project_over_cells` test only compiles under `--features full-zed` (it
+# `cfg`s its body on it); declared here so cargo knows it exists.
+[[test]]
+name = "project_over_cells"
+path = "tests/project_over_cells.rs"
+
+# The full-Workspace proof — instantiates a real `workspace::Workspace` with its
+# real panels (project_panel / outline_panel / terminal_view) over the cell-fs,
+# and saves a cell from the workspace as a verified turn. `cfg`-gated on full-zed.
+[[test]]
+name = "full_workspace_over_cells"
+path = "tests/full_workspace_over_cells.rs"
+
+# THE WHOLE ZED WORKSPACE AS ONE RUNNING THING — a single `workspace::Workspace`
+# over the cell-fs carrying EVERY surface at once: project / outline / terminal /
+# Hermes-agent panels docked + resolvable, git auto-discovered, search deployed,
+# the command palette toggled, a real PTY running, and a save-is-a-turn. The
+# unification of the per-panel proofs. `cfg`-gated on full-zed.
+[[test]]
+name = "unified_workspace_one_running_thing"
+path = "tests/unified_workspace_one_running_thing.rs"
+
+# THE PNG BAKE of the whole unified Workspace — mounts the same one Workspace over
+# the cell-ledger through the REAL headless GPU renderer (offscreen) and writes the
+# resolved gpui Scene to a PNG. A `#[test]` (not `#[gpui::test]`) so the
+# `gpui`/`gpui_platform` `test-support` headless+capture path is on. `cfg`-gated on
+# full-zed. Writes to `$DEOS_UNIFIED_WORKSPACE_PNG` (default a target-dir path).
+[[test]]
+name = "unified_workspace_png_bake"
+path = "tests/unified_workspace_png_bake.rs"
+
+# THE LIVE-`AppState` BAKE — the same one Workspace, but mounted from the
+# PRODUCTION `AppState` (`boot::build_live_app_state`, NOT `AppState::test`) the
+# live cockpit's `ZedWindow::open` uses. The proof of the mount seam. `cfg`-gated
+# on full-zed. Writes to `$DEOS_LIVE_APPSTATE_WORKSPACE_PNG`.
+[[test]]
+name = "live_app_state_workspace_png_bake"
+path = "tests/live_app_state_workspace_png_bake.rs"
+
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
+pathfinder_simd = { path = "../starbridge-v2/vendor/pathfinder_simd" }
+# THE LIVEKIT/WEBRTC PATCHES the zed fork's own root `Cargo.toml` carries
+# (`[patch.crates-io]` lines 900-904 at rev adb9026524). Pulling `title_bar`
+# (for the full workspace title bar) drags in `call -> audio -> libwebrtc`, and
+# `audio`'s `echo_canceller` calls `libwebrtc::native::apm::AudioProcessingModule::
+# from_flags` — a method that only exists in the livekit-rust-sdks git rev, NOT
+# the crates.io `libwebrtc 0.3.x`. Without these patches cargo resolves the
+# crates.io version and the `audio` crate fails to build. Same three revs as the
+# fork, so the webrtc API unifies graph-wide.
+livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
+libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
+webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "c3a55bbc207008f1ca3474b6037fdd3c443cad0f" }
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }

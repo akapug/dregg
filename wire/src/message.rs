@@ -1,0 +1,1079 @@
+//! Wire protocol message types for cross-silo token presentation and federation sync.
+//!
+//! All messages are serialized with postcard (compact binary, serde-compatible) and
+//! transmitted over TCP with length-prefixed framing.
+
+use serde::{Deserialize, Serialize};
+
+pub use dregg_types::{
+    AttestedRoot as TypesAttestedRoot, PublicKey, RevocationEvent as TypesRevocationEvent,
+    Signature, ThresholdQC,
+};
+
+// =============================================================================
+// Authorization Request
+// =============================================================================
+
+/// An authorization request that accompanies a token presentation.
+///
+/// Describes what action is being requested so the verifying silo can check
+/// whether the presented proof actually authorizes the specific action.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorizationRequest {
+    /// The resource being accessed (e.g., "api/v1/users").
+    pub resource: String,
+    /// The action being performed (e.g., "read", "write", "admin").
+    pub action: String,
+    /// The requesting principal identifier.
+    pub principal: String,
+    /// Optional scope constraints (e.g., ["org:acme", "team:platform"]).
+    pub scopes: Vec<String>,
+    /// Unix timestamp when the request was made.
+    pub timestamp: i64,
+    /// A nonce to prevent replay attacks.
+    pub nonce: [u8; 16],
+}
+
+impl AuthorizationRequest {
+    /// Create a new authorization request with a random nonce.
+    pub fn new(
+        resource: impl Into<String>,
+        action: impl Into<String>,
+        principal: impl Into<String>,
+    ) -> Self {
+        let mut nonce = [0u8; 16];
+        getrandom_fill(&mut nonce);
+        Self {
+            resource: resource.into(),
+            action: action.into(),
+            principal: principal.into(),
+            scopes: Vec::new(),
+            timestamp: current_timestamp(),
+            nonce,
+        }
+    }
+
+    /// Add scopes to this request.
+    pub fn with_scopes(mut self, scopes: Vec<String>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// Compute a BLAKE3 hash of this request for signing/binding.
+    ///
+    /// Uses length-prefixed encoding to avoid ambiguity when field values contain
+    /// arbitrary bytes (a null-byte separator would be collision-prone).
+    pub fn digest(&self) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_derive_key("dregg-wire authorization-request v1");
+        // Length-prefixed encoding: each variable-length field is preceded by its
+        // byte length as a u32 LE value. This eliminates collision ambiguity
+        // regardless of field contents (e.g., fields containing null bytes).
+        hasher.update(&(self.resource.len() as u32).to_le_bytes());
+        hasher.update(self.resource.as_bytes());
+        hasher.update(&(self.action.len() as u32).to_le_bytes());
+        hasher.update(self.action.as_bytes());
+        hasher.update(&(self.principal.len() as u32).to_le_bytes());
+        hasher.update(self.principal.as_bytes());
+        // Scope count + length-prefixed scope values
+        hasher.update(&(self.scopes.len() as u32).to_le_bytes());
+        for scope in &self.scopes {
+            hasher.update(&(scope.len() as u32).to_le_bytes());
+            hasher.update(scope.as_bytes());
+        }
+        hasher.update(&self.timestamp.to_le_bytes());
+        hasher.update(&self.nonce);
+        *hasher.finalize().as_bytes()
+    }
+}
+
+// =============================================================================
+// Wire Messages
+// =============================================================================
+
+/// The body of a [`WireMessage::ReceiptResponse`]: either the receipt
+/// payload, or a structured reason it is not available locally.
+///
+/// `Present` and the two `Unavailable` variants are *categorically
+/// distinct*. A verifier MUST distinguish "I no longer retain this,
+/// here is the attestation covering it" from "this never existed";
+/// conflating them is the bug houyhnhnm §3.1 (and `HOUYHNHNM-
+/// COMPARISON.md` §5.1) sharpens into a design rule.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReceiptBody {
+    /// The receipt is available; carries the serialized
+    /// `dregg_turn::witnessed_receipt::WitnessedReceipt` (postcard).
+    Present { receipt_bytes: Vec<u8> },
+    /// The receipt is not served locally; the variant explains *why*.
+    Unavailable(ReceiptUnavailable),
+}
+
+/// Why a queried receipt could not be served, in a verifiable shape.
+///
+/// Each variant pins down *what kind of nothing* the responder is
+/// returning. A generic "404" is forbidden by the persistence-as-policy
+/// design: the operator must be able to *prove* the absence is one of
+/// these structured kinds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReceiptUnavailable {
+    /// The operator's [`dregg_node::config::RetentionPolicy`] pruned
+    /// this receipt; the named [`dregg_cell::lifecycle::ArchivalAttestation`]
+    /// (via its `checkpoint_hash`) covers the height-range that
+    /// includes the requested receipt.
+    ///
+    /// Verifiers should fetch the archive blob from off-chain storage
+    /// using `attestation_checkpoint_hash` and validate it locally.
+    CoveredByAttestedRoot {
+        /// The archival attestation's
+        /// [`dregg_cell::lifecycle::ArchivalAttestation::checkpoint_hash`].
+        attestation_checkpoint_hash: [u8; 32],
+        /// The inclusive low-end of the archived range.
+        archive_start_height: u64,
+        /// The inclusive high-end of the archived range.
+        /// `archive_start_height ≤ height ≤ archive_end_height` MUST
+        /// hold for the requested receipt to be considered covered.
+        archive_end_height: u64,
+        /// `archive_terminal_receipt_hash` from the attestation; the
+        /// live chain's `previous_receipt_hash` at
+        /// `archive_end_height + 1` matches this.
+        archive_terminal_receipt_hash: [u8; 32],
+    },
+
+    /// The receipt never existed: the requested `height` is greater
+    /// than the current tip of the cell's chain, or no such cell exists
+    /// in this federation's view.
+    ///
+    /// Carries the responder's current view of the cell's tip for
+    /// debugging — `None` means the cell is unknown to this operator
+    /// entirely.
+    NeverExisted {
+        /// The responder's current tip height for the cell, if any.
+        current_tip: Option<u64>,
+    },
+}
+
+/// The top-level wire protocol message enum.
+///
+/// Each variant represents a distinct message type that can be exchanged between
+/// silos over TCP. Messages are serialized with postcard and framed with a
+/// 4-byte little-endian length prefix.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WireMessage {
+    // -------------------------------------------------------------------------
+    // Token Presentation
+    // -------------------------------------------------------------------------
+    /// Present a token proof to a remote silo for authorization.
+    ///
+    /// The proof is the serialized STARK presentation proof (~24 KiB) generated
+    /// by the circuit crate. The federation_root anchors the proof to the
+    /// current attested revocation tree.
+    PresentToken {
+        /// The serialized presentation proof (STARK).
+        proof: Vec<u8>,
+        /// The authorization request being made.
+        request: AuthorizationRequest,
+        /// The federation root the proof was generated against.
+        federation_root: [u8; 32],
+    },
+
+    /// Result of a token presentation verification.
+    PresentationResult {
+        /// Whether the presentation was accepted.
+        accepted: bool,
+        /// Human-readable reason (especially useful for rejections).
+        reason: Option<String>,
+        /// The request digest this result corresponds to.
+        request_digest: [u8; 32],
+    },
+
+    // -------------------------------------------------------------------------
+    // Federation Sync
+    // -------------------------------------------------------------------------
+    /// Request the current attested revocation root from a peer.
+    RequestAttestedRoot,
+
+    /// Response containing the current attested revocation root.
+    ///
+    /// Signatures are FULL 64-byte Ed25519 signatures (not truncated).
+    AttestedRoot {
+        /// The Merkle root of the revocation tree.
+        root: [u8; 32],
+        /// The block height at which this root was finalized.
+        height: u64,
+        /// Unix timestamp when finalized.
+        timestamp: i64,
+        /// Quorum signatures: (public_key, signature) pairs.
+        /// Public keys are 32 bytes, signatures are 64 bytes (Ed25519).
+        signatures: Vec<(PublicKey, Signature)>,
+        /// Optional threshold aggregate QC (constant-size BLS).
+        threshold_qc: Option<ThresholdQC>,
+    },
+
+    /// Proactive push of the sender's attested root to a peer federation.
+    ///
+    /// Unlike `AttestedRoot` (which is the *response* to a pull request), this
+    /// is unsolicited and originates from the federation owning the root. It
+    /// is sent periodically (e.g., on every commit) to peers in the local
+    /// `KnownFederations` registry so cross-federation verifiers do not have
+    /// to poll. Closes Silver Vision §3.2 ("no wire route for proactive
+    /// AttestedRoot push").
+    ///
+    /// Receivers SHOULD verify the quorum signatures (or threshold QC) under
+    /// the sender's known committee before applying the root locally. The
+    /// `sender_federation` field anchors the push to a specific federation so
+    /// a verifier can look the committee up in `KnownFederations`.
+    AttestedRootPush {
+        /// The federation pushing the root (anchors the verifier's committee
+        /// lookup).
+        sender_federation: [u8; 32],
+        /// The Merkle root of the revocation tree at the pushed height.
+        root: [u8; 32],
+        /// The block height at which this root was finalized.
+        height: u64,
+        /// Unix timestamp when finalized.
+        timestamp: i64,
+        /// Quorum signatures: (public_key, signature) pairs.
+        signatures: Vec<(PublicKey, Signature)>,
+        /// Optional threshold aggregate QC (constant-size BLS).
+        threshold_qc: Option<ThresholdQC>,
+    },
+
+    // -------------------------------------------------------------------------
+    // Revocation
+    // -------------------------------------------------------------------------
+    /// Submit a revocation to a peer silo for propagation.
+    SubmitRevocation {
+        /// The token ID being revoked.
+        token_id: String,
+        /// The revoking authority's public key.
+        authority: PublicKey,
+        /// Signature from the revoking authority (64 bytes, Ed25519).
+        authority_sig: Signature,
+        /// Unique nonce to prevent replay attacks on revocation submissions.
+        nonce: [u8; 16],
+        /// Unix timestamp when the revocation was submitted.
+        timestamp: i64,
+    },
+
+    /// Acknowledgment of a revocation submission.
+    RevocationAck {
+        /// The new Merkle root after incorporating the revocation.
+        new_root: [u8; 32],
+        /// The new block height.
+        height: u64,
+    },
+
+    // -------------------------------------------------------------------------
+    // Non-membership proofs
+    // -------------------------------------------------------------------------
+    /// Request a non-membership proof for a token ID.
+    ///
+    /// Used to verify that a token has NOT been revoked. The response includes
+    /// a Merkle non-membership proof anchored to the current attested root.
+    RequestNonMembership {
+        /// The token ID to check.
+        token_id: String,
+    },
+
+    /// Response containing a non-membership proof (or None if revoked).
+    NonMembershipResponse {
+        /// The token ID this response is for.
+        token_id: String,
+        /// The non-membership proof, or None if the token IS revoked.
+        proof: Option<Vec<u8>>,
+        /// The attested root this proof is anchored to.
+        root: [u8; 32],
+        /// Height of the root.
+        height: u64,
+    },
+
+    // -------------------------------------------------------------------------
+    // Receipt fetch (persistence-as-policy, per `HOUYHNHNM-COMPARISON.md` §5.1)
+    // -------------------------------------------------------------------------
+    /// Request a single witnessed receipt by cell + height.
+    ///
+    /// The receipt chain is the canonical persistence layer
+    /// (`turn/src/turn.rs` doc header). An operator's
+    /// [`dregg_node::config::RetentionPolicy`] may have pruned the
+    /// hot copy locally; the response will still be *structured* —
+    /// either the receipt bytes, or [`ReceiptUnavailable`] naming the
+    /// attestation that covers the pruned range, or a clean
+    /// not-found marker if the receipt never existed.
+    RequestReceipt {
+        /// The cell whose chain is being queried.
+        cell_id: [u8; 32],
+        /// The receipt-chain height being requested.
+        height: u64,
+    },
+
+    /// Response to a [`WireMessage::RequestReceipt`].
+    ///
+    /// **This is not a 404.** When the operator has pruned the receipt
+    /// per their [`dregg_node::config::RetentionPolicy`], the response
+    /// is [`ReceiptUnavailable::CoveredByAttestedRoot`], which names the
+    /// attested root / archival attestation that covers the requested
+    /// range. The verifier can then go fetch the archive blob from a
+    /// long-term store and validate it against the named commitment.
+    ///
+    /// When the receipt never existed (the chain has not progressed to
+    /// `height`, or the cell does not exist), the response is
+    /// [`ReceiptUnavailable::NeverExisted`] — a categorically different
+    /// shape. Conflating "I had it and I dropped it" with "it never
+    /// happened" is the bug dregg refuses to commit.
+    ReceiptResponse {
+        /// Echo of the requested cell.
+        cell_id: [u8; 32],
+        /// Echo of the requested height.
+        height: u64,
+        /// Either the receipt body, or a structured unavailable reason.
+        body: ReceiptBody,
+    },
+
+    // -------------------------------------------------------------------------
+    // Federation Discovery / Handshake
+    // -------------------------------------------------------------------------
+    /// Initial handshake message sent when connecting to a peer.
+    Hello {
+        /// This node's public key / identity.
+        node_id: [u8; 32],
+        /// Human-readable node name.
+        node_name: String,
+        /// Protocol version.
+        protocol_version: u32,
+        /// Capabilities advertised by this node.
+        capabilities: Vec<String>,
+    },
+
+    /// Response to a Hello, welcoming the peer into the federation view.
+    Welcome {
+        /// The current federation root.
+        federation_root: [u8; 32],
+        /// Number of members in the federation.
+        member_count: u32,
+        /// The responder's node identity.
+        node_id: [u8; 32],
+        /// Human-readable node name.
+        node_name: String,
+    },
+
+    // -------------------------------------------------------------------------
+    // CapTP Session Management
+    // -------------------------------------------------------------------------
+    /// Establish a CapTP session with the peer, exporting initial swiss entries.
+    ///
+    /// Sent after the Hello/Welcome handshake to begin a capability session.
+    /// The `group_id` identifies the sender's group (formerly `federation_id`);
+    /// `initial_exports` lists cells the sender is making available to this peer.
+    CapHello {
+        /// The sender's group identity (renamed from `federation_id` in protocol v2).
+        ///
+        /// Accepts `federation_id` from legacy senders via serde alias for
+        /// backward compatibility.
+        #[serde(alias = "federation_id")]
+        group_id: [u8; 32],
+        /// Cell IDs that the sender is initially exporting to this peer.
+        initial_exports: Vec<[u8; 32]>,
+    },
+
+    /// Tear down a CapTP session, releasing all held references.
+    ///
+    /// All exports and imports for this session are invalidated. The peer should
+    /// drop all references acquired during this session.
+    CapGoodbye {
+        /// The group terminating the session (renamed from `federation_id` in protocol v2).
+        #[serde(alias = "federation_id")]
+        group_id: [u8; 32],
+        /// Human-readable reason for disconnection (optional).
+        reason: Option<String>,
+    },
+
+    /// Present a `dregg://` URI to enliven a sturdy reference.
+    ///
+    /// The peer validates the swiss number and (if valid) responds with an
+    /// `EnlivenResponse` containing the granted cell reference.
+    EnlivenSturdyRef {
+        /// The full serialized DreggUri (federation_id + cell_id + swiss).
+        uri_bytes: Vec<u8>,
+        /// The current federation height known to the requester.
+        requester_height: u64,
+    },
+
+    /// Response to an `EnlivenSturdyRef` request.
+    EnlivenResponse {
+        /// Whether the enliven succeeded.
+        success: bool,
+        /// On success: the cell ID that was enlivened.
+        cell_id: Option<[u8; 32]>,
+        /// On success: the permissions granted.
+        permissions_tag: u8,
+        /// On failure: the error reason.
+        error: Option<String>,
+    },
+
+    /// Distributed GC: the remote peer dropped a reference to one of our exports.
+    ///
+    /// The receiver should decrement the reference count for the specified cell
+    /// from the specified strand/group. If the count reaches zero, the export can
+    /// be cleaned up.
+    DropRemoteRef {
+        /// The strand (or group, for legacy) that is dropping the reference.
+        ///
+        /// Renamed from `from_federation` in protocol v2. Accepts `from_federation`
+        /// from legacy senders via serde alias for backward compatibility.
+        #[serde(alias = "from_federation")]
+        from_strand: [u8; 32],
+        /// The cell ID being dropped.
+        cell_id: [u8; 32],
+        /// The session epoch under which this drop was issued.
+        /// Must match the current session epoch; stale-epoch drops are rejected.
+        /// Defaults to 0 for backward compatibility with legacy senders.
+        #[serde(default)]
+        session_epoch: u64,
+    },
+
+    /// A pipelined message targeting an unresolved promise on the receiver.
+    ///
+    /// The receiver queues this message until the target promise resolves,
+    /// then delivers it. This enables cross-federation promise pipelining
+    /// (eliminating round-trip latency).
+    PipelinedMsg {
+        /// The promise ID on the RECEIVER's side.
+        target_promise_id: u64,
+        /// The method to invoke once the promise resolves.
+        method: String,
+        /// Serialized action arguments.
+        args: Vec<u8>,
+        /// Serialized authorization.
+        authorization: Vec<u8>,
+        /// Where to send the result (a promise on the SENDER's side).
+        result_promise_id: Option<u64>,
+        /// The federation sending this pipelined message.
+        sender_federation: [u8; 32],
+        /// The session epoch under which this message was sent.
+        /// Must match the current session epoch; stale-epoch messages are rejected.
+        /// Defaults to 0 for backward compatibility with legacy senders.
+        #[serde(default)]
+        session_epoch: u64,
+    },
+
+    /// Notification that a previously-issued promise has broken.
+    ///
+    /// Sent by a federation that was supposed to resolve `promise_id` but
+    /// can no longer do so (peer disconnected mid-resolution, target cell
+    /// revoked, executor rejected the resolving turn, etc.). The receiver
+    /// MUST cascade the breakage to any downstream promises in its own
+    /// pipeline registry.
+    ///
+    /// Closes audit GAP-5 (no transport-side broken-promise propagation).
+    PromiseBroken {
+        /// The promise ID on the RECEIVER's side that has broken.
+        ///
+        /// Matches `result_promise_id` from a previously-sent `PipelinedMsg`.
+        promise_id: u64,
+        /// Human-readable reason for the breakage (propagated into
+        /// cascading notifications on the receiver's side).
+        reason: String,
+        /// The federation sending this notification (the one that owned
+        /// the broken promise on its end).
+        sender_federation: [u8; 32],
+        /// The session epoch this notification was issued under.
+        /// Stale-epoch breakage notifications are ignored.
+        #[serde(default)]
+        session_epoch: u64,
+    },
+
+    /// Present a handoff certificate to the target federation.
+    ///
+    /// The recipient proves they own the recipient_pk named in the certificate
+    /// by including a signature. The target validates the introducer's signature,
+    /// checks the swiss number, and (if valid) responds with `HandoffAccepted`.
+    PresentHandoff {
+        /// The serialized `HandoffPresentation` (certificate + recipient signature).
+        presentation_bytes: Vec<u8>,
+        /// The introducer's public key (for signature verification).
+        introducer_pk: [u8; 32],
+        /// Seam 3 keystone: recipient's signature over the canonical CapTP-delivery
+        /// signing message (see `dregg_turn::action::Authorization::captp_delivered_signing_message`).
+        /// Binds this PresentHandoff to a specific Turn (cert.nonce ↔ target_cell ↔
+        /// ValidateHandoff effect). The target federation puts this signature into the
+        /// constructed Turn's `Authorization::CapTpDelivered`, closing the receipt-mirror loop.
+        ///
+        /// Backward compat: legacy senders may omit this; the target then falls back
+        /// to building the Turn with `Authorization::Unchecked` (executor rejection,
+        /// but the federation mirror still mutates as before).
+        #[serde(default)]
+        delivery_signature: Option<Signature>,
+    },
+
+    /// Response to a successful handoff presentation.
+    HandoffAccepted {
+        /// A routing token the recipient can use for subsequent access.
+        routing_token: [u8; 32],
+        /// The cell the recipient now has access to.
+        cell_id: [u8; 32],
+        /// The permissions granted (encoded as a tag byte).
+        permissions_tag: u8,
+    },
+
+    // -------------------------------------------------------------------------
+    // Peer Authentication (Federation Boundary Enforcement)
+    // -------------------------------------------------------------------------
+    /// Challenge sent by the server to authenticate a connecting peer.
+    ///
+    /// After Hello/Welcome, the server sends this challenge. The peer must
+    /// respond with a `PeerAuthResponse` signing the nonce to prove they
+    /// hold a key listed in the federation's constitution.
+    PeerChallenge {
+        /// Random nonce (32 bytes). The peer must sign this.
+        nonce: [u8; 32],
+        /// The server's node identity (included in the signed message to
+        /// prevent cross-node replay).
+        server_node_id: [u8; 32],
+    },
+
+    /// Response to a `PeerChallenge`, proving the peer holds a constitution key.
+    PeerAuthResponse {
+        /// The participant's Ed25519 public key (must be in the constitution).
+        participant_key: [u8; 32],
+        /// Signature over blake3("dregg-wire peer-auth v1" || nonce || server_node_id).
+        signature: Signature,
+        /// The constitution version the peer believes is current.
+        claimed_constitution_version: u64,
+    },
+
+    /// Server's confirmation of the peer's authenticated role.
+    PeerAuthenticated {
+        /// The role assigned to this peer.
+        role_tag: u8,
+        /// For Member role: the participant key that was authenticated.
+        /// For other roles: zeroed.
+        authenticated_key: [u8; 32],
+    },
+
+    // -------------------------------------------------------------------------
+    // Keepalive / Diagnostics
+    // -------------------------------------------------------------------------
+    /// Periodic heartbeat to keep connections alive.
+    Ping {
+        /// Sequence number for round-trip measurement.
+        seq: u64,
+        /// Timestamp when the ping was sent.
+        timestamp: i64,
+    },
+
+    /// Response to a Ping.
+    Pong {
+        /// The sequence number from the corresponding Ping.
+        seq: u64,
+        /// Timestamp when the pong was sent.
+        timestamp: i64,
+    },
+
+    /// Protocol error — sent when a message cannot be processed.
+    Error {
+        /// Error code.
+        code: u32,
+        /// Human-readable error message.
+        message: String,
+    },
+}
+
+impl WireMessage {
+    /// Return a human-readable name for the message variant.
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Self::PresentToken { .. } => "PresentToken",
+            Self::PresentationResult { .. } => "PresentationResult",
+            Self::RequestAttestedRoot => "RequestAttestedRoot",
+            Self::AttestedRoot { .. } => "AttestedRoot",
+            Self::AttestedRootPush { .. } => "AttestedRootPush",
+            Self::SubmitRevocation { .. } => "SubmitRevocation",
+            Self::RevocationAck { .. } => "RevocationAck",
+            Self::RequestNonMembership { .. } => "RequestNonMembership",
+            Self::NonMembershipResponse { .. } => "NonMembershipResponse",
+            Self::RequestReceipt { .. } => "RequestReceipt",
+            Self::ReceiptResponse { .. } => "ReceiptResponse",
+            Self::Hello { .. } => "Hello",
+            Self::Welcome { .. } => "Welcome",
+            Self::CapHello { .. } => "CapHello",
+            Self::CapGoodbye { .. } => "CapGoodbye",
+            Self::EnlivenSturdyRef { .. } => "EnlivenSturdyRef",
+            Self::EnlivenResponse { .. } => "EnlivenResponse",
+            Self::DropRemoteRef { .. } => "DropRemoteRef",
+            Self::PipelinedMsg { .. } => "PipelinedMsg",
+            Self::PromiseBroken { .. } => "PromiseBroken",
+            Self::PresentHandoff { .. } => "PresentHandoff",
+            Self::HandoffAccepted { .. } => "HandoffAccepted",
+            Self::PeerChallenge { .. } => "PeerChallenge",
+            Self::PeerAuthResponse { .. } => "PeerAuthResponse",
+            Self::PeerAuthenticated { .. } => "PeerAuthenticated",
+            Self::Ping { .. } => "Ping",
+            Self::Pong { .. } => "Pong",
+            Self::Error { .. } => "Error",
+        }
+    }
+
+    /// Estimate the wire size of this message (useful for logging).
+    pub fn estimated_size(&self) -> usize {
+        // Use postcard to get the actual serialized size
+        postcard::to_stdvec(self).map(|v| v.len()).unwrap_or(0)
+    }
+
+    /// Format size in human-readable form.
+    pub fn size_display(&self) -> String {
+        let bytes = self.estimated_size();
+        if bytes < 1024 {
+            format!("{bytes} B")
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1} KiB", bytes as f64 / 1024.0)
+        } else {
+            format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+        }
+    }
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Fill a buffer with cryptographically secure random bytes.
+fn getrandom_fill(buf: &mut [u8]) {
+    getrandom::fill(buf).expect("getrandom failed to provide random bytes");
+}
+
+/// Get the current Unix timestamp in seconds.
+fn current_timestamp() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// =============================================================================
+// Error Codes
+// =============================================================================
+
+/// Well-known wire protocol error codes.
+pub mod error_codes {
+    /// The message could not be deserialized.
+    pub const MALFORMED_MESSAGE: u32 = 1;
+    /// The protocol version is not supported.
+    pub const UNSUPPORTED_VERSION: u32 = 2;
+    /// The federation root is unknown/stale.
+    pub const UNKNOWN_FEDERATION_ROOT: u32 = 3;
+    /// The proof verification failed.
+    pub const PROOF_VERIFICATION_FAILED: u32 = 4;
+    /// The token has been revoked.
+    pub const TOKEN_REVOKED: u32 = 5;
+    /// The request has expired (timestamp too old).
+    pub const REQUEST_EXPIRED: u32 = 6;
+    /// A cryptographic signature failed verification.
+    pub const INVALID_SIGNATURE: u32 = 7;
+    /// A Hello handshake is required before sending other messages.
+    pub const HANDSHAKE_REQUIRED: u32 = 8;
+    /// The server is at connection capacity.
+    pub const CONNECTION_LIMIT: u32 = 9;
+    /// Internal server error.
+    pub const INTERNAL_ERROR: u32 = 100;
+    /// No CapTP session established (CapHello required).
+    pub const CAPTP_SESSION_REQUIRED: u32 = 10;
+    /// The sturdy reference could not be enlivened (not found, expired, or exhausted).
+    pub const ENLIVEN_FAILED: u32 = 11;
+    /// Handoff validation failed.
+    pub const HANDOFF_FAILED: u32 = 12;
+    /// The GC drop was invalid (unknown federation or cell).
+    pub const INVALID_DROP: u32 = 13;
+    /// The message carries a stale session epoch (from a terminated session).
+    pub const STALE_EPOCH: u32 = 14;
+    /// The peer has not authenticated and the requested operation requires
+    /// a higher privilege level (Member or CapTpPeer).
+    pub const PEER_AUTH_REQUIRED: u32 = 15;
+    /// The peer's authentication challenge-response failed (bad signature,
+    /// key not in constitution, etc.).
+    pub const PEER_AUTH_FAILED: u32 = 16;
+}
+
+/// The current protocol version.
+///
+/// v2 — THE VERB LOCKSTEP: the 25 factory-dissolved `Effect` variants (escrow ×6,
+/// obligation ×3, bridge lock/finalize/cancel ×3, queue ×6, caps-in-slots ×7) were
+/// DELETED from the enum, which shifts the postcard variant tags of every later
+/// surviving variant — a v1 peer's encoded turns do not decode as v2 and vice versa.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Maximum age (in seconds) for a request timestamp to be considered fresh.
+/// Requests older than this are rejected as stale (anti-replay).
+pub const MAX_REQUEST_AGE_SECS: i64 = 300; // 5 minutes
+
+/// Maximum number of nonces to track for replay prevention.
+/// Once this limit is reached, the oldest entries are evicted.
+pub const MAX_NONCE_CACHE_SIZE: usize = 100_000;
+
+// =============================================================================
+// Wire Envelope (version-tagged wrapper)
+// =============================================================================
+
+/// A version-tagged envelope that wraps every wire message.
+///
+/// All messages on the wire MUST be wrapped in an `Envelope`. The receiver
+/// checks the version field and rejects messages with unsupported protocol
+/// versions before attempting to interpret the payload.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Envelope {
+    /// Protocol version of the sender.
+    pub version: u32,
+    /// The actual wire message payload.
+    pub message: WireMessage,
+}
+
+impl Envelope {
+    /// Wrap a message in an envelope with the current protocol version.
+    pub fn wrap(message: WireMessage) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            message,
+        }
+    }
+
+    /// Check whether this envelope's version is supported.
+    pub fn is_version_supported(&self) -> bool {
+        self.version == PROTOCOL_VERSION
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn roundtrip_hello() {
+        let msg = WireMessage::Hello {
+            node_id: [0xab; 32],
+            node_name: "test-node".to_string(),
+            protocol_version: PROTOCOL_VERSION,
+            capabilities: vec!["present".to_string(), "revoke".to_string()],
+        };
+        let bytes = postcard::to_stdvec(&msg).unwrap();
+        let decoded: WireMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn roundtrip_present_token() {
+        let proof = vec![0u8; 24_000]; // ~24 KiB proof
+        let request = AuthorizationRequest::new("api/users", "read", "alice@acme.corp");
+        let msg = WireMessage::PresentToken {
+            proof,
+            request,
+            federation_root: [0x42; 32],
+        };
+        let bytes = postcard::to_stdvec(&msg).unwrap();
+        let decoded: WireMessage = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn roundtrip_all_variants() {
+        let messages = vec![
+            WireMessage::RequestAttestedRoot,
+            WireMessage::AttestedRoot {
+                root: [1; 32],
+                height: 42,
+                timestamp: 1700000000,
+                signatures: vec![(PublicKey([2; 32]), Signature([3; 64]))],
+                threshold_qc: None,
+            },
+            WireMessage::SubmitRevocation {
+                token_id: "tok-123".to_string(),
+                authority: PublicKey([4; 32]),
+                authority_sig: Signature([4; 64]),
+                nonce: [0x05; 16],
+                timestamp: 1700000000,
+            },
+            WireMessage::RevocationAck {
+                new_root: [5; 32],
+                height: 43,
+            },
+            WireMessage::RequestNonMembership {
+                token_id: "tok-456".to_string(),
+            },
+            WireMessage::NonMembershipResponse {
+                token_id: "tok-456".to_string(),
+                proof: Some(vec![6; 128]),
+                root: [7; 32],
+                height: 44,
+            },
+            WireMessage::Welcome {
+                federation_root: [8; 32],
+                member_count: 5,
+                node_id: [9; 32],
+                node_name: "responder".to_string(),
+            },
+            WireMessage::Ping {
+                seq: 1,
+                timestamp: 100,
+            },
+            WireMessage::Pong {
+                seq: 1,
+                timestamp: 101,
+            },
+            WireMessage::PresentationResult {
+                accepted: true,
+                reason: None,
+                request_digest: [10; 32],
+            },
+            WireMessage::Error {
+                code: error_codes::MALFORMED_MESSAGE,
+                message: "bad frame".to_string(),
+            },
+            // CapTP variants
+            WireMessage::CapHello {
+                group_id: [0xF0; 32],
+                initial_exports: vec![[0xF1; 32], [0xF2; 32]],
+            },
+            WireMessage::CapGoodbye {
+                group_id: [0xF0; 32],
+                reason: Some("shutting down".to_string()),
+            },
+            WireMessage::EnlivenSturdyRef {
+                uri_bytes: vec![0xAA; 96],
+                requester_height: 500,
+            },
+            WireMessage::EnlivenResponse {
+                success: true,
+                cell_id: Some([0xBB; 32]),
+                permissions_tag: 1,
+                error: None,
+            },
+            WireMessage::DropRemoteRef {
+                from_strand: [0xCC; 32],
+                cell_id: [0xDD; 32],
+                session_epoch: 5,
+            },
+            WireMessage::PipelinedMsg {
+                target_promise_id: 42,
+                method: "transfer".to_string(),
+                args: vec![1, 2, 3],
+                authorization: vec![0xDE, 0xAD],
+                result_promise_id: Some(99),
+                sender_federation: [0xEE; 32],
+                session_epoch: 7,
+            },
+            WireMessage::PromiseBroken {
+                promise_id: 99,
+                reason: "peer disconnected".to_string(),
+                sender_federation: [0xEE; 32],
+                session_epoch: 7,
+            },
+            WireMessage::AttestedRootPush {
+                sender_federation: [0xFA; 32],
+                root: [0xAB; 32],
+                height: 17,
+                timestamp: 1700000017,
+                signatures: vec![(PublicKey([0xCC; 32]), Signature([0xBB; 64]))],
+                threshold_qc: None,
+            },
+            WireMessage::PresentHandoff {
+                presentation_bytes: vec![0x11; 200],
+                introducer_pk: [0x22; 32],
+                delivery_signature: Some(Signature([0x33; 64])),
+            },
+            WireMessage::HandoffAccepted {
+                routing_token: [0x33; 32],
+                cell_id: [0x44; 32],
+                permissions_tag: 2,
+            },
+            // Peer authentication variants
+            WireMessage::PeerChallenge {
+                nonce: [0x55; 32],
+                server_node_id: [0x66; 32],
+            },
+            WireMessage::PeerAuthResponse {
+                participant_key: [0x77; 32],
+                signature: Signature([0x88; 64]),
+                claimed_constitution_version: 42,
+            },
+            WireMessage::PeerAuthenticated {
+                role_tag: 1,
+                authenticated_key: [0x99; 32],
+            },
+            WireMessage::RequestReceipt {
+                cell_id: [0xAA; 32],
+                height: 17,
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 17,
+                body: ReceiptBody::Present {
+                    receipt_bytes: vec![0xBE, 0xEF],
+                },
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 4,
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                    attestation_checkpoint_hash: [0xCA; 32],
+                    archive_start_height: 0,
+                    archive_end_height: 10,
+                    archive_terminal_receipt_hash: [0xCB; 32],
+                }),
+            },
+            WireMessage::ReceiptResponse {
+                cell_id: [0xAA; 32],
+                height: 999,
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted {
+                    current_tip: Some(100),
+                }),
+            },
+        ];
+
+        for msg in messages {
+            let bytes = postcard::to_stdvec(&msg).unwrap();
+            let decoded: WireMessage = postcard::from_bytes(&bytes).unwrap();
+            assert_eq!(
+                msg,
+                decoded,
+                "roundtrip failed for {:?}",
+                msg.variant_name()
+            );
+        }
+    }
+
+    #[test]
+    fn authorization_request_digest_deterministic() {
+        let mut req = AuthorizationRequest::new("res", "act", "princ");
+        req.nonce = [0; 16]; // fix nonce for determinism
+        req.timestamp = 12345;
+
+        let d1 = req.digest();
+        let d2 = req.digest();
+        assert_eq!(d1, d2);
+    }
+
+    #[test]
+    fn authorization_request_digest_varies_on_input() {
+        let mut req1 = AuthorizationRequest::new("res1", "act", "princ");
+        req1.nonce = [0; 16];
+        req1.timestamp = 12345;
+
+        let mut req2 = AuthorizationRequest::new("res2", "act", "princ");
+        req2.nonce = [0; 16];
+        req2.timestamp = 12345;
+
+        assert_ne!(req1.digest(), req2.digest());
+    }
+
+    // -------------------------------------------------------------------------
+    // Adversarial tests: persistence-as-policy responses must be structurally
+    // distinguishable and verifiable. The houyhnhnm comparison (§5.1) names
+    // this property; conflating "I pruned it" with "it never happened" is the
+    // bug dregg refuses to commit.
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn archived_and_never_existed_are_structurally_distinct() {
+        // A pruned-but-archived receipt MUST be a categorically different
+        // response shape from a never-existed one. A naive "404" would conflate
+        // them; the protocol requires the structured `Unavailable` variants.
+        let pruned = WireMessage::ReceiptResponse {
+            cell_id: [0xAA; 32],
+            height: 4,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                attestation_checkpoint_hash: [0xCA; 32],
+                archive_start_height: 0,
+                archive_end_height: 10,
+                archive_terminal_receipt_hash: [0xCB; 32],
+            }),
+        };
+        let never = WireMessage::ReceiptResponse {
+            cell_id: [0xAA; 32],
+            height: 4,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted {
+                current_tip: Some(0),
+            }),
+        };
+        // Different bytes on the wire — the verifier can branch on it.
+        let pruned_bytes = postcard::to_stdvec(&pruned).unwrap();
+        let never_bytes = postcard::to_stdvec(&never).unwrap();
+        assert_ne!(pruned_bytes, never_bytes);
+
+        // And after the roundtrip, the structured discriminant survives.
+        let decoded_pruned: WireMessage = postcard::from_bytes(&pruned_bytes).unwrap();
+        let decoded_never: WireMessage = postcard::from_bytes(&never_bytes).unwrap();
+        match decoded_pruned {
+            WireMessage::ReceiptResponse {
+                body:
+                    ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                        archive_end_height,
+                        ..
+                    }),
+                ..
+            } => assert_eq!(archive_end_height, 10),
+            other => panic!("expected CoveredByAttestedRoot, got {other:?}"),
+        }
+        match decoded_never {
+            WireMessage::ReceiptResponse {
+                body: ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted { current_tip }),
+                ..
+            } => assert_eq!(current_tip, Some(0)),
+            other => panic!("expected NeverExisted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn covered_by_attested_root_carries_verifiable_anchor() {
+        // The "I no longer serve this" response MUST carry the attestation
+        // commitment that covers the pruned range — otherwise a verifier
+        // cannot reconstruct the chain. This test checks the commitment
+        // round-trips intact and the range is well-formed.
+        let pruned = WireMessage::ReceiptResponse {
+            cell_id: [0x11; 32],
+            height: 50,
+            body: ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                attestation_checkpoint_hash: [0x42; 32],
+                archive_start_height: 0,
+                archive_end_height: 99,
+                archive_terminal_receipt_hash: [0x43; 32],
+            }),
+        };
+        let bytes = postcard::to_stdvec(&pruned).unwrap();
+        let decoded: WireMessage = postcard::from_bytes(&bytes).unwrap();
+        match decoded {
+            WireMessage::ReceiptResponse {
+                height,
+                body:
+                    ReceiptBody::Unavailable(ReceiptUnavailable::CoveredByAttestedRoot {
+                        attestation_checkpoint_hash,
+                        archive_start_height,
+                        archive_end_height,
+                        archive_terminal_receipt_hash,
+                    }),
+                ..
+            } => {
+                // The queried height MUST be inside the covered range; the
+                // verifier checks this before trusting the attestation.
+                assert!(archive_start_height <= height && height <= archive_end_height);
+                // The commitment is preserved; the verifier can look up the
+                // archive blob by this hash.
+                assert_eq!(attestation_checkpoint_hash, [0x42; 32]);
+                assert_eq!(archive_terminal_receipt_hash, [0x43; 32]);
+            }
+            other => panic!("expected CoveredByAttestedRoot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn present_and_unavailable_dispatch_differently() {
+        // A `Present` receipt cannot deserialize as an `Unavailable`, and
+        // vice versa — the verifier's match arm catches the distinction.
+        let present = ReceiptBody::Present {
+            receipt_bytes: vec![1, 2, 3],
+        };
+        let unavailable =
+            ReceiptBody::Unavailable(ReceiptUnavailable::NeverExisted { current_tip: None });
+
+        // Tag bytes differ — the postcard discriminant is the first byte.
+        let p_bytes = postcard::to_stdvec(&present).unwrap();
+        let u_bytes = postcard::to_stdvec(&unavailable).unwrap();
+        assert_ne!(p_bytes[0], u_bytes[0]);
+    }
+}

@@ -1,0 +1,84 @@
+{
+  "id": "subscription",
+  "name": "Subscription",
+  "description": "Pub/sub topic and capability subscription starbridge-app.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d737562736372697074696f6e2d666163746f727921"
+  ],
+  "page": null,
+  "inspectors": [
+    "subscription",
+    "subscription-publish-form",
+    "subscription-feed"
+  ],
+  "host_inspectors": [
+    { "id": "topic", "label": "Topic", "tag": "dregg-subscription", "uri_attribute": "uri" },
+    { "id": "publish", "label": "Publish", "tag": "dregg-subscription-publish-form", "uri_attribute": "uri" },
+    { "id": "feed", "label": "Feed", "tag": "dregg-subscription-feed", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_topic", "label": "Inspect topic", "uri": "dregg://cell/subscription-default", "kind": "inspect" },
+    { "id": "publish", "label": "Publish message", "builder": "publish", "kind": "turn" },
+    { "id": "consume", "label": "Consume message", "builder": "consume", "kind": "turn" },
+    { "id": "grant_publisher", "label": "Grant publisher", "builder": "grant_publisher", "kind": "turn" },
+    { "id": "grant_consumer", "label": "Grant consumer", "builder": "grant_consumer", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "topic_uri", "label": "Topic URI", "type": "uri", "default": "dregg://cell/subscription-default" },
+    { "id": "capacity", "label": "Capacity slot", "type": "slot", "slot": 4 }
+  ],
+  "turn_builders": [
+    "publish",
+    "consume",
+    "grant_publisher",
+    "grant_consumer"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.subscription"
+  ],
+  "slot_layout": {
+    "SEQ_HEAD_SLOT": 0,
+    "SEQ_TAIL_SLOT": 1,
+    "CAPACITY_SLOT": 2,
+    "PUBLISHERS_ROOT_SLOT": 3,
+    "CONSUMERS_ROOT_SLOT": 4,
+    "OWNER_PK_HASH_SLOT": 5,
+    "MESSAGE_ROOT_SLOT": 6,
+    "LATEST_PAYLOAD_SLOT": 7
+  },
+  "state_constraints": [
+    "WriteOnce(CAPACITY_SLOT)",
+    "WriteOnce(OWNER_PK_HASH_SLOT)",
+    "FieldLteField(SEQ_TAIL_SLOT, SEQ_HEAD_SLOT)",
+    "Monotonic(SEQ_HEAD_SLOT)",
+    "Monotonic(SEQ_TAIL_SLOT)",
+    "MethodIs(publish) => MonotonicSequence(SEQ_HEAD_SLOT)",
+    "MethodIs(consume) => MonotonicSequence(SEQ_TAIL_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "subscription_deos_app(cipherclerk, executor)",
+    "cell": "feed",
+    "discoverable": ["pubsub", "feed"],
+    "publish": "Signature (the feed cell is a dregg:// sturdyref a peer on another federation reacquires)",
+    "affordances": {
+      "view_feed": "cap-only, Signature (a CONSUMER reads the head-of-queue)",
+      "grant_publisher": "cap-only, None/root (the OWNER admits a publisher)",
+      "grant_consumer": "cap-only, None/root (the OWNER admits a consumer)",
+      "publish": "GATED (cap∧state), Either — configured precondition (CAPACITY>=1); the fire submits the FULL delivery (head + message_root + latest_payload), the executor re-enforcing Monotonic(SEQ_HEAD)",
+      "consume": "GATED (cap∧state), Signature — pending precondition (tail<head); the fire submits the FULL draw, the executor re-enforcing FieldLteField(tail<=head)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded feed cell carrying the queue invariants (WriteOnce capacity/owner + Monotonic head/tail + FieldLteField(tail<=head)), so a STALE delivery (head not advancing) and an OVER-DRAW (tail past head) BITE in the deos fire path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/subscription/src/lib.rs"
+  }
+}

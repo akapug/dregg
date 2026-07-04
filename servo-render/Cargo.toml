@@ -1,0 +1,198 @@
+[package]
+name = "servo-render"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The host SWGL render path that IS deos's compositor render pass — a CPU-only software-GL RenderingContext rendering a page into a caller-owned RGBA8 Vec<u8>, hashed to the compositor-PD's content_digest. Stage A of SERVO-ON-SEL4."
+
+[features]
+# DEFAULT: the de-risking core — SWGL + gleam only, no libservo. Proves the C++
+# rasterizer compiles and produces real RGBA8 without the mozjs build.
+default = ["swgl-standalone"]
+swgl-standalone = ["dep:swgl", "dep:gleam"]
+# OPT-IN: the full real-WebView path (pulls servo → script → mozjs, the elephant).
+# `url` is the `Url` type the real `WebViewBuilder::url(..)` + the delegate's
+# navigation/resource callbacks take (the SAME `url 2.5` servo resolves).
+libservo = [
+    "swgl-standalone",
+    "dep:servo",
+    "dep:servo-paint-api",
+    "dep:url",
+    # The transitive-of-servo crates `webview.rs` names DIRECTLY (the real trait's
+    # `DeviceIntRect` / `PhysicalSize` / `RgbaImage` / `glow::Context` types). They
+    # must be DIRECT deps to `use` them, AND pinned to the EXACT versions servo
+    # 0.1.x resolves so they UNIFY with servo's copies (a second `webrender_api`
+    # would make our `RenderingContext` impl a different trait than servo's).
+    "dep:webrender_api",
+    "dep:dpi",
+    "dep:image",
+    "dep:glow",
+    # The `http` crate the cap-gated http protocol handler builds its response
+    # `Content-Type` header with (`http::header::HeaderValue` / `CONTENT_TYPE` into
+    # servo's `Response.headers: HeaderMap`). The SAME `http 1.4` servo-net pins, so
+    # the `HeaderMap` types UNIFY (a second `http` would make our header a different
+    # type than servo's `Response.headers`). See `src/netcap_http.rs`.
+    "dep:http",
+    # ── THE TLS LEG of the cap-gated byte socket (`https://`). ──────────────────────
+    # `rustls` is ALREADY in servo-net's graph (via `hyper-rustls`/`tokio-rustls`),
+    # built with the `aws_lc_rs` crypto provider — so this adds NO new heavy dep and
+    # NO version conflict: we pin the EXACT in-graph versions so a single `rustls`
+    # (and its `aws-lc-rs` provider) is shared. After the cap gate admits an `https`
+    # origin and the real `TcpStream` connects, `netcap_http` wraps it in a rustls
+    # `ClientConnection` keyed on the SNI host and does the HTTP/1.1 GET over the
+    # encrypted `StreamOwned`. `webpki-roots` supplies the production trust anchors;
+    # `rustls-pki-types` is the shared `ServerName`/`CertificateDer` vocabulary.
+    "dep:rustls",
+    "dep:rustls-pki-types",
+    "dep:webpki-roots",
+    # The `euclid` geometry backing `webrender_api`'s `DeviceIntRect`
+    # (`Box2D<i32, DevicePixel>`) + the surfman `Size2D<i32>` — the GPU context
+    # (`src/gpu_context.rs`) constructs the readback rect and the surface size from
+    # them. Pinned to the SAME version webrender_api/servo resolve (`euclid 0.22`)
+    # so `DeviceIntRect` UNIFIES with servo's copy.
+    "dep:euclid",
+    # The `surfman::Connection` the real `RenderingContext::connection()` returns.
+    # servo-paint's `register_rendering_context` (`paint.rs:236`) UNCONDITIONALLY
+    # calls `rendering_context.connection().expect("Failed to get connection")` then
+    # `create_adapter()` to seed its per-painter WebGL `SwapChains<_, surfman::Device>`
+    # bookkeeping — so a SWGL context that returns the trait-default `None` panics
+    # BEFORE any page paints. We hand back a real surfman software `Connection`
+    # (`Connection::new()` → CGL/EGL default display, NO window/GPU surface created)
+    # so registration succeeds; the connection is touched ONLY when a page allocates a
+    # WebGL canvas surface (none of our test pages do), while SWGL still does ALL the
+    # actual page rasterization through `gleam_gl_api()`. Pinned to the EXACT version
+    # servo 0.1.x resolves so the `Connection` type UNIFIES with servo-paint's copy.
+    "dep:surfman",
+]
+
+[dependencies]
+# WebRender's SWGL — the self-contained CPU-only software GL. `impl Gl for
+# swgl::Context` (swgl_fns.rs:504) means the context IS a `gleam::gl::Gl`. Its
+# `init_default_framebuffer(x,y,w,h,stride,buf)` (swgl_fns.rs:354) renders FBO 0
+# directly into a caller-owned buffer; `read_pixels`/`get_color_buffer` hand the
+# RGBA8 back. The build needs clang C++17 + the `glsl-to-cxx` / `webrender_build`
+# codegen crates (all on the panamax mirror at 0.68.0).
+swgl = { version = "0.68", optional = true }
+
+# The `gleam::gl::Gl` trait SWGL implements + that servo's `RenderingContext`
+# hands to WebRender. The SAME `gleam 0.15.1` servo 0.1.0-rc2 pins.
+gleam = { version = "0.15", optional = true }
+
+# The REAL compositor-PD `present()` seam: the genuine `Present`/`Refusal`/`Scene`
+# (T1 non-overlap / T2 label-binding / T3 focus-exclusivity) teeth, the
+# `is_attenuation` rights lattice, the framebuffer the compositor SOLELY holds. We
+# feed our SWGL frame's digest into THIS unchanged gate — never reinvent it. (This
+# is the same standalone-workspace path-dep `starbridge-web-surface` uses.)
+dregg-firmament = { path = "../sel4/dregg-firmament" }
+
+# Content-addressing: `content_digest = blake3(rgba8_bytes)` — the bind from real
+# pixels to the compositor's promised digest. The SAME blake3 the cell/types
+# crates use. Also `origin_to_peer = blake3(origin)[..32]` (the netcap connector's
+# origin → federation-peer derivation).
+blake3 = "1"
+
+# Base58 for the net-cap connector's status line (the dialed-peer short id) — the
+# SAME `bs58 0.5` `dregg-captp` renders peer ids with, so the surfaced id matches the
+# federation's `ocapn://<id>` form.
+bs58 = "0.5"
+
+# The REAL cap-gate (the OTHER half of Stage A): `starbridge-web-surface` ships the
+# `WebSurfaceDelegate`/`CapGatedDelegate` (libservo's `WebViewDelegate`, shaped
+# one-to-one) and the `SurfaceCapability` (a genuine firmament `Capability{ target:
+# Surface(cell), rights }` + web caveats). `src/cap_gated_pipeline.rs` wires THAT
+# delegate's mediated fetch/navigation in FRONT of this crate's SWGL render →
+# compositor-`present()` path, so a frame only reaches the glass through a held cap.
+# It path-depends on the SAME `../sel4/dregg-firmament` this crate does, so `CellId`
+# / `Capability` / `AuthRequired` UNIFY across the two crates — the wiring is the
+# genuine cap model, never a parallel re-mock. (`docs/desktop-os-research/SERVO-ON-SEL4.md`
+# Stage-A steps 4+5 are joined here: the cap gate gates the render that reaches the
+# compositor.)
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
+# THE NET-CAP TRANSPORT (the AUDIT-named "open wire", now wired): `dregg-captp`
+# ships the OCapN `Netlayer` / `NetConnection` traits + `Netlayer::dial` — the SAME
+# audited byte-frame transport the federation dials over (InProcess + Relay
+# instances; no ambient OS socket). `src/netcap_connector.rs` binds a page's
+# outbound connection to THIS: an origin the held `SurfaceCapability` does not
+# authorize is refused AT the connector (the `dial` never happens — the socket is
+# never opened), an authorized origin connects through `Netlayer::dial`. Path-deps
+# resolve `version.workspace`/lints against the repo-root workspace the same way the
+# `dregg-firmament` / `dregg-cell` path-deps above already do (they path-resolve
+# their own nearest workspace root — verified: `starbridge-web-surface`, itself a
+# standalone workspace, path-deps these identically and builds green).
+dregg-captp = { path = "../captp" }
+
+# ── the libservo (real WebView) path — opt-in, pulls the mozjs elephant ──────────
+# The real libservo: `WebView` + `WebViewBuilder` + the `RenderingContext` trait
+# (re-exported from `paint_api`). Published to crates.io as `servo 0.1.0-rc2`
+# (edition 2024) — so the engine is a normal dependency, not a git checkout.
+servo = { version = "0.1.0-rc2", optional = true }
+# The crate that DEFINES `RenderingContext` (so we impl the genuine trait, not the
+# mirror) + `SoftwareRenderingContext` (the surfman-based path SWGL replaces).
+servo-paint-api = { version = "0.1.0-rc2", optional = true }
+# The `Url` type the real `WebView` API (builder + delegate callbacks) speaks. The
+# same `url` servo pins; only linked on the libservo path.
+url = { version = "2.5", optional = true }
+
+# ── transitive-of-servo crates `webview.rs` names directly (see the `libservo`
+#    feature). Pinned to the versions servo 0.1.x resolves so they UNIFY with
+#    servo's own copies (verified via `cargo metadata --features libservo`):
+#    webrender_api 0.68 · dpi 0.1 · image 0.25 · glow 0.16. ──
+# `DeviceIntRect` — the read-back rect the real `RenderingContext::read_to_image`
+# takes; the SAME `webrender_api 0.68` servo's webrender uses.
+webrender_api = { version = "0.68", optional = true }
+# `PhysicalSize` — the size type the real trait's `size`/`resize` speak.
+dpi = { version = "0.1", optional = true }
+# `RgbaImage` — the real `read_to_image` return type (we build it from our RGBA8
+# `Vec<u8>` via `from_raw`). The SAME `image 0.25` servo re-exports.
+image = { version = "0.25", optional = true }
+# `glow::Context` — the real trait's `glow_gl_api` return type (SWGL does not
+# implement glow; our impl stubs it to the offscreen-blit path a DRAW-compositor
+# context never takes — see `src/webview.rs`). Pinned to servo's `glow 0.16`.
+glow = { version = "0.16", optional = true }
+# `surfman::Connection` — the type the real `RenderingContext::connection()` returns
+# (re-exported by `servo-paint-api` as `surfman::Connection`). servo-paint's
+# `register_rendering_context` `.expect()`s it (the surfman ceiling, see the
+# `libservo` feature note + `webview.rs::ServoSwglContext::connection`). Pinned to
+# the EXACT version servo 0.1.x resolves (`surfman 0.11`) so our `Connection` IS the
+# same type servo-paint stores in its `PainterSurfmanDetails`.
+surfman = { version = "0.11", optional = true }
+# `euclid` geometry for the GPU context's `DeviceIntRect` readback rect + surfman
+# `Size2D<i32>` surface size. Pinned to the version webrender_api/servo resolve
+# (`euclid 0.22`) so `DeviceIntRect` (= `euclid::Box2D<i32, DevicePixel>`) unifies
+# with servo's copy. Only linked on libservo.
+euclid = { version = "0.22", optional = true }
+# The `http` crate for the cap-gated http handler's response `Content-Type` header
+# (`HeaderValue` / `CONTENT_TYPE`). Pinned to servo-net's `http 1.4` so the
+# `HeaderMap` unifies with servo's `Response.headers`. Only linked on libservo.
+http = { version = "1.4", optional = true }
+
+# ── THE TLS LEG (https over the cap-gated socket). ───────────────────────────────
+# `rustls` ALREADY resolves in servo-net's graph at 0.23.x (via hyper-rustls /
+# tokio-rustls), built with the `aws_lc_rs` crypto provider. We depend on the SAME
+# version + the SAME `aws_lc_rs`/`tls12` features so cargo unifies to ONE `rustls`
+# (and ONE `aws-lc-rs`) — no second TLS stack, no version conflict. `default-features
+# = false` + explicit features keeps us from silently flipping servo's selection;
+# `aws_lc_rs` matches what hyper-rustls already turns on. The handler wraps the
+# cap-admitted `TcpStream` in a `rustls::ClientConnection` + `StreamOwned` and does
+# the HTTP/1.1 GET over it for `https://`. Only linked on libservo.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12", "logging"], optional = true }
+# The shared `ServerName` / `CertificateDer` / `UnixTime` vocabulary (rustls re-exports
+# `pki_types`); pinned to servo-net's `1.14` so the types unify with rustls's copy.
+rustls-pki-types = { version = "1.14", optional = true }
+# The Mozilla CA trust anchors for the PRODUCTION https verifier (a cap-admitted
+# public https origin is verified against these real roots — no danger-accept in the
+# default path). The SAME `webpki-roots 1.0` already in servo-net's graph.
+webpki-roots = { version = "1.0", optional = true }
+
+[dev-dependencies]
+# (tests live inline + in tests/)
+
+# THE FORK SEAM (replicated from dregg-firmament's Cargo.toml, adjusted for this
+# crate's depth). Because this crate is its OWN workspace root, the repo-root
+# `[patch]` does NOT apply, so the transitive `dregg-circuit` (via `dregg-turn` via
+# `dregg-firmament`) would resolve `p3-recursion` from the PINNED git rev, which
+# lacks the `RecursionInput::NativeBatchStark` variant. Point at the SAME local
+# fork checkout. `../` = servo-render → breadstuffs → dev. Keep in sync with the
+# root/firmament blocks; all revert to the git rev once the fork is pushed.
+

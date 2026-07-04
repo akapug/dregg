@@ -1,0 +1,88 @@
+{
+  "federation_id": "a17b9247c69e5a116b9dfaa29f71623a4890a16bb2ac60cb49a580c7f5db2593",
+  "committee_epoch": 0,
+  "epoch_length": 100,
+  "checkpoint_interval": 10,
+  "validators": [
+    {
+      "name": "node-0",
+      "public_key": "322357f7b914705168787aeb2ab3eb439877ea73dfdfda5105a0795c06d417d0",
+      "xmss_root": "d55ac1c085d4cadd36c608f9f7700dddf6d39ce94f656d587b334a6bd3350946"
+    },
+    {
+      "name": "node-1",
+      "public_key": "b7bd9b6d76f667c075f2fd06d8bdbc8c51cc732cb0796bb6e393bfe9ec41e16c",
+      "xmss_root": "9198e50f731fe312ad9f87f9de95bca01f9ca35993df705477e35b8cf0300cf0"
+    },
+    {
+      "name": "node-2",
+      "public_key": "31d4e75ce65bfb4c99f32a0bc54a0f582acc35b7711d55fdc19ed45532188ec6",
+      "xmss_root": "ff25fc2e56d84f1fd17ec51e278f375d983707a747f52cc1f76a0344c283d9ce"
+    }
+  ],
+  "threshold": 2,
+  "initial_cells": [
+    {
+      "id": "4a8882bb17c23b3e2486da9f8d4cc43bb6651c2adf8e1d90536d25741a981e47",
+      "public_key": "2e79278aa1a5ac24eaff80a0b0fa088b1f0c4ed186a416771a70d68ce765cb31",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 1000000
+    },
+    {
+      "id": "7e457e690075008b66baff6f81cd7ef28fa6c724be80e1d5aecc04e6d2eadcbf",
+      "public_key": "53de5a1a606e7a465b3790f436ad22ae0c5b16a628bd2f0c1e64d3788b1d5f4f",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 50000
+    },
+    {
+      "id": "7daed10067be96b545719b913d76060844a70c2e2873a189c05d0bac7aa5b02f",
+      "public_key": "9d5eeaf25483068826a1cf1638b97f0ae2fe51a0cf70e112805a6044c424fd2b",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 25000
+    },
+    {
+      "id": "b66570a6f06df77d51c0fc1ba5940341713e47f1ba379a1b209d2eed4ef66d61",
+      "public_key": "8f2e8f4e5822c8f7cbc06024c9ac76227c02365a5ecf356b08cb045868148373",
+      "token_id": "0000000000000000000000000000000000000000000000000000000000000000",
+      "balance": 10000
+    }
+  ],
+  "starbridge_cells": [
+    {
+      "label": "nameservice-registry",
+      "factory_vk_hex": "737461726272696467652d6e616d65736572766963652d666163746f72792121",
+      "owner_agent": "alice",
+      "uri_hint": "registry-default"
+    },
+    {
+      "label": "identity-issuer",
+      "factory_vk_hex": "737461726272696467652d6964656e746974792d6973737565722d6661637421",
+      "owner_agent": "alice",
+      "uri_hint": "issuer-default"
+    },
+    {
+      "label": "subscription-topic",
+      "factory_vk_hex": "737461726272696467652d737562736372697074696f6e2d666163746f727921",
+      "owner_agent": "alice",
+      "uri_hint": "topic-default"
+    },
+    {
+      "label": "governed-namespace-root",
+      "factory_vk_hex": "737461726272696467652d676f7665726e65642d6e616d6573706163652d6661",
+      "owner_agent": "alice",
+      "uri_hint": "namespace-default"
+    },
+    {
+      "label": "cwm-mandate",
+      "factory_vk_hex": "737461726272696467652d63776d2d6d616e646174652d666163746f72792121",
+      "owner_agent": "alice",
+      "uri_hint": "mandate-default"
+    },
+    {
+      "label": "sgm-gateway",
+      "factory_vk_hex": "737461726272696467652d73676d2d6d616e646174652d666163746f72792121",
+      "owner_agent": "alice",
+      "uri_hint": "gateway-default"
+    }
+  ]
+}

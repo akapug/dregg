@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dregg-orchestration"
+version = "0.1.0"
+description = "A verified, attenuable mandate gate for any Python agent loop (hermes-agent native) — every tool call provably authorized + budgeted, the swarm auditable without trusting the loop. The Python mirror of the canonical Rust starbridge-apps/agent-orchestration."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-or-later" }
+# blake3 is OPTIONAL: when present the content-address matches the Rust side byte-for-byte; absent, the
+# package falls back to a domain-tagged sha256 (the differential test pins whichever is active).
+dependencies = []
+
+[project.optional-dependencies]
+blake3 = ["blake3>=0.4"]
+dev = ["pytest>=7", "blake3>=0.4"]
+
+[tool.setuptools]
+packages = ["dregg_orchestration"]
+
+[tool.setuptools.package-dir]
+"" = "."

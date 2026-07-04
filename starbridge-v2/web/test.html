@@ -1,0 +1,23 @@
+<!doctype html><meta charset=utf-8><body style="background:#0d1117;color:#c9d1d9;font:13px monospace">
+<pre id=out>loading wasm…</pre>
+<script type=module>
+import init, { WebImage } from './pkg/starbridge_web.js';
+(async () => {
+  try {
+    await init();
+    const img = new WebImage();
+    const survey = JSON.parse(img.survey());
+    let log = `SURVEY: ${survey.cell_count} cells (anchors user=${survey.anchors.user})\n`;
+    for (const c of survey.cells) log += `  ${c.short}  bal=${c.balance}  ${c.cap_edges} caps\n`;
+    const aff = JSON.parse(img.affordances('user'));
+    log += `\nAFFORDANCES(user): ` + aff.messages.map(m=>`${m.authorized?'✓':'✗'}${m.name}`).join(' ') + '\n';
+    const t = JSON.parse(img.act('user','touch'));
+    log += `\nACT user touch → ${t.outcome}` + (t.receipt?` (post ${t.receipt.post_state}, ${t.receipt.computrons} computrons)`:` (${(t.reason||'').slice(0,50)})`) + '\n';
+    const g = JSON.parse(img.act('user','grant'));
+    log += `ACT user grant → ${g.outcome}` + (g.outcome==='refused'?` by_executor=${g.by_executor}: ${(g.reason||'').slice(0,55)}`:'') + '\n';
+    const insp = JSON.parse(img.inspect('user'));
+    log += `\nINSPECT(user): ${insp.faces.length} faces — ${insp.faces.map(f=>f.kind).join(', ')}\n`;
+    document.getElementById('out').textContent = '✓ THE DREGG EXECUTOR IS RUNNING IN THE BROWSER\n\n' + log;
+  } catch (e) { document.getElementById('out').textContent = 'ERR: ' + e + '\n' + (e.stack||''); }
+})();
+</script></body>

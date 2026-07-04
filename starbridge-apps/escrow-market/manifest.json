@@ -1,0 +1,95 @@
+{
+  "id": "escrow-market",
+  "name": "Escrow Market",
+  "description": "Sealed-escrow atomic-swap marketplace: the app's escrow IS the protocol-proven dregg_cell::escrow_sealed SealedEscrow capacity (SealedEscrowMarket — open/deposit/settle/reclaim), a real witnessed escrow commitment. Two mutually-distrustful parties exchange value with no intermediary: each locks a conforming leg, the swap settles atomically (all-or-none), value is conserved per asset, and the half-open-trade attack is defeated by reclaim (the depositor made whole). A legacy slot-caveat delivery lifecycle (list/fund/ship/settle, the TRUSTLINE/MAILBOX/FLASHWELL/LIFECYCLE CellProgram + its DeosApp/service/factory faces below) is RETAINED for out-of-scope dependents (first-room, starbridge-v2).",
+  "sealed_escrow": {
+    "capacity": "dregg_cell::escrow_sealed (the proven SealedEscrow; Lean rung metatheory/Dregg2/Deos/SealedEscrow.lean)",
+    "driver": "SealedEscrowMarket (src/lib.rs) — open/deposit/settle/reclaim, conserving value moves",
+    "proven": "tests/atomic_swap.rs — witnessed deposit, atomic settle, conservation, half-open defeated by reclaim, over-claim refused",
+    "service": "service::EscrowService publishes the typed open/deposit/settle/reclaim/view interface and drives the capacity",
+    "value_face": "EscrowVault (Payable) — receives + settles value onward through the shared Payable interface (per-asset Sigma-delta=0)"
+  },
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d657363726f772d6d61726b65742d666163746f7279"
+  ],
+  "inspectors": [
+    "escrow"
+  ],
+  "host_inspectors": [
+    { "id": "escrow", "label": "Escrow", "tag": "dregg-escrow", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "list", "label": "List (open order)", "builder": "list", "kind": "turn" },
+    { "id": "fund", "label": "Fund (escrow)", "builder": "fund", "kind": "turn" },
+    { "id": "ship", "label": "Ship (sealed delivery)", "builder": "ship", "kind": "turn" },
+    { "id": "settle", "label": "Settle (split escrow)", "builder": "settle", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "escrow_uri", "label": "Escrow URI", "type": "uri", "default": "dregg://cell/escrow-default" },
+    { "id": "ceiling", "label": "Ceiling slot", "type": "slot", "slot": 4 }
+  ],
+  "turn_builders": [
+    "list",
+    "fund",
+    "ship",
+    "settle"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.escrow"
+  ],
+  "slot_layout": {
+    "SELLER_HASH_SLOT": 2,
+    "BUYER_HASH_SLOT": 3,
+    "CEILING_SLOT": 4,
+    "ESCROWED_SLOT": 5,
+    "DELIVERY_HASH_SLOT": 6,
+    "RELEASED_SLOT": 7,
+    "REFUNDED_SLOT": 8,
+    "STATE_SLOT": 9
+  },
+  "state_codes": {
+    "LISTED": 1,
+    "FUNDED": 2,
+    "SHIPPED": 3,
+    "SETTLED": 4
+  },
+  "state_constraints": [
+    "WriteOnce(SELLER_HASH_SLOT)",
+    "WriteOnce(BUYER_HASH_SLOT)",
+    "WriteOnce(CEILING_SLOT)",
+    "FieldLteField(ESCROWED_SLOT, CEILING_SLOT)",
+    "WriteOnce(ESCROWED_SLOT)",
+    "WriteOnce(DELIVERY_HASH_SLOT)",
+    "WriteOnce(RELEASED_SLOT)",
+    "WriteOnce(REFUNDED_SLOT)",
+    "AffineLe(RELEASED + REFUNDED - ESCROWED <= 0)",
+    "StrictMonotonic(STATE_SLOT)",
+    "MethodIs(settle) => AffineEq(RELEASED + REFUNDED - ESCROWED == 0)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "escrow_app(cipherclerk, executor)",
+    "cell": "escrow",
+    "discoverable": ["escrow", "marketplace"],
+    "publish": "Signature (the escrow cell is a dregg:// sturdyref an auditor on another federation reacquires)",
+    "affordances": {
+      "view_escrow": "cap-only, Signature (an OBSERVER reads the order state)",
+      "fund": "GATED (cap∧state), Either — listed precondition (STATE == LISTED); the fire submits the FULL fund (buyer + escrowed + state->FUNDED), the executor re-enforcing TRUSTLINE FieldLteField(ESCROWED <= CEILING)",
+      "ship": "GATED (cap∧state), None/root — funded precondition (STATE == FUNDED); the fire submits the FULL ship (delivery + state->SHIPPED), the executor re-enforcing MAILBOX WriteOnce(DELIVERY_HASH)",
+      "settle": "GATED (cap∧state), None/root — shipped precondition (STATE == SHIPPED); the fire reads live ESCROWED and releases it in full (state->SETTLED), the executor re-enforcing FLASHWELL AffineEq(RELEASED + REFUNDED == ESCROWED)"
+    },
+    "rights_ladder": "Signature ⊂ Either ⊂ None IS the observer ⊂ buyer ⊂ seller ladder",
+    "seam": "CLOSED — the fire runs against the seeded escrow cell carrying the full escrow program (TRUSTLINE + MAILBOX + FLASHWELL + LIFECYCLE), so an OVER-CEILING fund (FieldLteField), a VALUE-CONJURING settle (AffineEq/AffineLe), and a NON-ADVANCING state (StrictMonotonic, strict) all BITE in the deos fire path (tests/deos_seam.rs — the three headline teeth)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/escrow-market/src/lib.rs"
+  }
+}

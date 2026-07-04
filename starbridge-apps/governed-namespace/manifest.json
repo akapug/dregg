@@ -1,0 +1,83 @@
+{
+  "id": "governed-namespace",
+  "name": "Governed Namespace",
+  "description": "Governance and table-driven namespace starbridge-app.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d676f7665726e65642d6e616d6573706163652d6661"
+  ],
+  "page": "/starbridge-apps/governed-namespace/pages/index.html",
+  "inspectors": [
+    "namespace",
+    "namespace-route-table",
+    "namespace-proposal",
+    "namespace-dispatch"
+  ],
+  "host_inspectors": [
+    { "id": "namespace", "label": "Namespace", "tag": "dregg-namespace", "uri_attribute": "uri" },
+    { "id": "routes", "label": "Routes", "tag": "dregg-namespace-route-table", "uri_attribute": "uri" },
+    { "id": "proposal", "label": "Proposal", "tag": "dregg-namespace-proposal", "uri_attribute": "proposal-uri" },
+    { "id": "dispatch", "label": "Dispatch", "tag": "dregg-namespace-dispatch", "uri_attribute": "namespace-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_namespace", "label": "Inspect namespace", "uri": "dregg://cell/governed-namespace-default", "kind": "inspect" },
+    { "id": "propose_table_update", "label": "Propose table update", "builder": "propose_table_update", "kind": "turn" },
+    { "id": "vote_on_proposal", "label": "Vote on proposal", "builder": "vote_on_proposal", "kind": "turn" },
+    { "id": "commit_table_update", "label": "Commit table update", "builder": "commit_table_update", "kind": "turn" },
+    { "id": "register_service", "label": "Register service", "builder": "register_service", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "namespace_uri", "label": "Namespace URI", "type": "uri", "default": "dregg://cell/governed-namespace-default" },
+    { "id": "proposal_phase", "label": "Proposal phase", "type": "select", "options": ["draft", "voting", "commit"], "default": "draft" }
+  ],
+  "turn_builders": [
+    "propose_table_update",
+    "vote_on_proposal",
+    "commit_table_update",
+    "register_service"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.governedNamespace"
+  ],
+  "slot_layout": {
+    "ROUTE_TABLE_ROOT_SLOT": 2,
+    "VERSION_SLOT": 3,
+    "GOVERNANCE_COMMITTEE_ROOT_SLOT": 4,
+    "THRESHOLD_SLOT": 5,
+    "DISPUTE_WINDOW_HEIGHT_SLOT": 6,
+    "PENDING_PROPOSAL_ROOT_SLOT": 7
+  },
+  "state_constraints": [
+    "Immutable(GOVERNANCE_COMMITTEE_ROOT_SLOT)",
+    "Immutable(THRESHOLD_SLOT)",
+    "Monotonic(VERSION_SLOT)",
+    "Monotonic(DISPUTE_WINDOW_HEIGHT_SLOT)",
+    "MethodIs(commit_table_update) => MonotonicSequence(VERSION_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "governance_app(cipherclerk, executor)",
+    "cell": "governance",
+    "discoverable": ["governance", "namespace"],
+    "publish": "Signature (the governance cell is a dregg:// sturdyref an auditor on another federation reacquires)",
+    "affordances": {
+      "view_table": "cap-only, Signature (a VIEWER reads the live route table + version)",
+      "register_service": "cap-only, Either (a committee member publishes a service mount; the floor's register_service case freezes every governance slot — purely event-bearing)",
+      "commit_table_update": "cap-only, None/root — CAP-AUTHORIZATION-ONLY (carries the existing commit decisive effect as its surface representative); see the seam note",
+      "propose_table_update": "GATED (cap∧state), Either — no-pending precondition (pending_proposal_root==0); the fire submits the FULL propose turn, the executor re-enforcing Monotonic(pending_proposal_root) + frozen route_table_root/version",
+      "vote_on_proposal": "GATED (cap∧state), Either — proposal-exists precondition (pending_proposal_root>=1); the fire submits the FULL vote turn, the executor re-enforcing Immutable(route_table_root, version, dispute_window_height)"
+    },
+    "seam_gateable": "CLOSED — the propose/vote fires run against the seeded governance cell carrying the full governance program (Cases), so a PENDING-root rewind (propose, Monotonic) and a frozen-slot violation (a vote that swaps route_table_root, Immutable) BITE in the deos fire path (tests/deos_seam.rs)",
+    "seam_commit_witnessed_verifier": "NAMED, NOT FAKED — commit_table_update rides Authorization::Custom + WitnessedPredicate{Custom{vk_hash: GOVERNANCE_VK}} (the constitutional threshold-sig). The EmbeddedExecutor wires WitnessedPredicateRegistry::default_builtins(), whose witnessed verifiers are the FAIL-CLOSED NotYetWiredVerifier — so a commit turn CANNOT have a happy-path green fire through the embedded executor today. commit_table_update is therefore exposed as a CAP-AUTHORIZATION-ONLY affordance: the deos seam asserts the cap gate clears for root (NOT 403) and does NOT assert a green executor commit. Full executor acceptance is gated on the WitnessedPredicateRegistry-into-executor lane."
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/governed-namespace/src/lib.rs"
+  }
+}

@@ -1,0 +1,61 @@
+[package]
+name = "starbridge-governed-namespace"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace governed-namespace — DFA-routed governance app. Composes dregg-dfa (GovernedRouter, RouteTableBuilder, AIR-attestable accept/reject) with dregg-directory (named-cell registry) and per-slot caveats to land governance-bound atomic table swaps as a starbridge-app."
+
+# Greenfield rebuild of `apps/governed-namespace/` following
+# STARBRIDGE-APPS-PLAN.md §3.3. The legacy crate ran a `RoutingTable`
+# behind an axum HTTP service and a `GovernanceEngine` that mutated
+# its own in-process state. This crate inverts that: a
+# governed-namespace cell is a sovereign cell whose state slots commit
+# to the live route-table root, version, governance committee, and
+# threshold. Updates require a constitutional threshold-signature
+# carrier via `WitnessedPredicate { kind: Custom { vk_hash: GOVERNANCE_VK } }`
+# under `Authorization::Custom`, and the table swap is atomic
+# (route_table_root := new_root, version += 1) in a single executor
+# turn — exactly the shape `dregg_dfa::GovernedRouter::update_routes`
+# already enforces in memory.
+#
+# Companion docs:
+#   - STARBRIDGE-APPS-PLAN.md §3.3 (per-app design sketch).
+#   - DFA-RATIONALIZATION-DESIGN.md §2.2 (governance atomic table swap).
+#   - STORAGE-AS-CELL-PROGRAMS.md (the cell-program pattern this app
+#     mirrors for the storage-as-cell-program proof).
+#   - AUTHORIZATION-CUSTOM-DESIGN.md (the `Authorization::Custom` shape
+#     the `commit_table_update` builder constructs).
+#   - SLOT-CAVEATS-DESIGN.md (the `StateConstraint` vocabulary the
+#     factory descriptor + cell-program draw from).
+
+[lib]
+name = "starbridge_governed_namespace"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-dfa = { path = "../../dfa" }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The deos-seam tests drive the composed `DeosApp` over its axum surface (per-viewer
+# projection, the gated propose/vote fires, /surface.js + /manifest) — mirror the
+# subscription / supply-chain-provenance deos test dev-deps.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+# The `commit_table_update` `GOVERNANCE_VK` enforced-fire test builds a real
+# k-of-n BLS threshold-signing committee and produces aggregate QCs. We reuse
+# `dregg-federation`'s `FederationCommittee` wrapper (it sets up the `hints`
+# universe, signs shares, aggregates, and exposes the `hints::Verifier` the
+# `ThresholdSigVerifier` policy needs) and `dregg-hints` for the raw QC bytes.
+# This is dev-only — the app crate itself stays free of the federation edge.
+dregg-federation = { path = "../../federation" }
+hints = { path = "../../hints", package = "dregg-hints" }
+
+[lints]
+workspace = true

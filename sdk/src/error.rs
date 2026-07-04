@@ -1,0 +1,146 @@
+//! Error types for the dregg SDK.
+
+use dregg_bridge::AuthError;
+use dregg_dsl_runtime::ProgramError;
+use dregg_token::TokenError;
+use dregg_turn::TurnError;
+
+/// Unified error type for SDK operations.
+#[derive(Debug, thiserror::Error)]
+pub enum SdkError {
+    /// A token operation failed (minting, attenuation, verification).
+    #[error("token error: {0}")]
+    Token(#[from] TokenError),
+
+    /// A turn execution failed (precondition, authorization, budget).
+    #[error("turn error: {0}")]
+    Turn(#[from] TurnError),
+
+    /// Authorization or proof generation failed.
+    #[error("auth/proof error: {0}")]
+    Auth(#[from] AuthError),
+
+    /// A wire protocol operation failed.
+    #[error("wire error: {0}")]
+    Wire(String),
+
+    /// A CapTP operation was attempted before a CapTP client was configured.
+    ///
+    /// Configure the networked CapTP client via `dregg-sdk-net` (`NetClerk`)
+    /// before using the CapTP convenience methods.
+    #[error("CapTP client not configured; configure the dregg-sdk-net CapTP client first")]
+    CapTpNotConfigured,
+
+    /// The cipherclerk has no token matching the requested operation.
+    #[error("no such token: {0}")]
+    TokenNotFound(String),
+
+    /// The cipherclerk does not have the required key material.
+    #[error("missing key material: {0}")]
+    MissingKey(String),
+
+    /// A delegation or attenuation was invalid.
+    #[error("invalid delegation: {0}")]
+    InvalidDelegation(String),
+
+    /// A duplicate receipt was detected (same turn_hash already in chain).
+    #[error("duplicate receipt: turn_hash already exists in receipt chain")]
+    DuplicateReceipt {
+        /// The turn_hash of the duplicate receipt.
+        turn_hash: [u8; 32],
+    },
+
+    /// Attenuation does not narrow the original token's permissions.
+    #[error("attenuation does not narrow: {0}")]
+    AttenuationNotNarrowing(String),
+
+    /// The remote silo rejected the operation.
+    #[error("silo rejected: {0}")]
+    Rejected(String),
+
+    /// The response digest does not match the expected request digest (MITM detected).
+    #[error("digest mismatch: response bound to different request than sent")]
+    DigestMismatch,
+
+    /// The federation root from the remote silo does not match the expected pinned root.
+    #[error("federation root mismatch: remote root does not match pinned value")]
+    FederationRootMismatch,
+
+    /// A non-membership proof failed cryptographic verification.
+    #[error("non-membership proof verification failed: {0}")]
+    NonMembershipVerificationFailed(String),
+
+    /// A witness construction failed (e.g., unground variable in predicate proof).
+    #[error("invalid witness: {0}")]
+    InvalidWitness(String),
+
+    /// A witnessed receipt artifact could not be encoded or decoded.
+    #[error("witness artifact error: {0}")]
+    WitnessArtifact(String),
+
+    /// The caveat chain hash does not match the decoded token's caveats.
+    ///
+    /// This indicates the encoded token's caveats were mutated after delegation.
+    /// A delegate holding the proof_key attempted to alter authorization facts.
+    #[error("caveat integrity violation: token caveats do not match delegator's commitment")]
+    CaveatIntegrityViolation,
+
+    /// A cell program operation failed (deployment, proof generation, or verification).
+    #[error("program error: {0}")]
+    Program(#[from] ProgramError),
+
+    /// The cell is not in sovereign mode (required for IVC compression).
+    #[error("cell is not sovereign: {0}")]
+    NotSovereign(String),
+
+    /// An IVC proof operation failed.
+    #[error("IVC proof error: {0}")]
+    IvcError(String),
+
+    /// A proof carried an AIR name that does not resolve to any registered
+    /// circuit descriptor. Verification REFUSES rather than falling back to a
+    /// default circuit: an unknown AIR means the verifier has no pinned
+    /// constraint semantics for the proof, so accepting it (or verifying it
+    /// against a guessed circuit) would let the prover choose the semantics.
+    #[error("unknown AIR '{air_name}': no registered circuit descriptor — refusing to verify")]
+    UnknownAir {
+        /// The unrecognized AIR name carried by the proof.
+        air_name: String,
+    },
+
+    /// The cipherclerk's receipt chain head and the receipt's claimed
+    /// predecessor disagree. This is a fork-detection signal — the
+    /// cipherclerk and the executor that produced the receipt have
+    /// diverging views of the agent's chain. See
+    /// [`crate::cipherclerk::ChainAppendError::ReceiptChainMismatch`].
+    #[error("receipt chain mismatch: expected = {expected:?}, got = {got:?}")]
+    ReceiptChainMismatch {
+        /// Cipherclerk's current chain head hash.
+        expected: Option<[u8; 32]>,
+        /// What the receipt's `previous_receipt_hash` claimed.
+        got: Option<[u8; 32]>,
+    },
+}
+
+impl SdkError {
+    /// The theorem-backed admission reason, if this error is a verified-executor refusal at
+    /// admission ([`TurnError::AdmissionRefused`]). `None` for every other error. Lets a caller
+    /// branch on the structured reason (e.g. retry on `NonceMismatch`, top up on `Underfunded`)
+    /// rather than parsing the `Display` string.
+    pub fn admission_reason(&self) -> Option<dregg_turn::AdmissionReason> {
+        match self {
+            SdkError::Turn(TurnError::AdmissionRefused { reason }) => Some(*reason),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::cipherclerk::ChainAppendError> for SdkError {
+    fn from(value: crate::cipherclerk::ChainAppendError) -> Self {
+        match value {
+            crate::cipherclerk::ChainAppendError::ReceiptChainMismatch { expected, got } => {
+                SdkError::ReceiptChainMismatch { expected, got }
+            }
+        }
+    }
+}

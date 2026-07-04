@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>dregg - Confirm Intent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 100%;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+    }
+    h1 {
+      font-size: 18px;
+      margin-bottom: 8px;
+      color: #a78bfa;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #9ca3af;
+      margin-bottom: 24px;
+    }
+    .details {
+      background: #16213e;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+      flex: 1;
+    }
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      padding: 8px 0;
+      border-bottom: 1px solid #2a2a4a;
+    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #9ca3af;
+      min-width: 80px;
+    }
+    .detail-value {
+      font-size: 13px;
+      color: #e0e0e0;
+      text-align: right;
+      word-break: break-all;
+    }
+    .buttons {
+      display: flex;
+      gap: 12px;
+    }
+    button {
+      flex: 1;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #acceptBtn {
+      background: #4ade80;
+      color: #1a1a2e;
+    }
+    #acceptBtn:hover { background: #22c55e; }
+    #rejectBtn {
+      background: #374151;
+      color: #e0e0e0;
+    }
+    #rejectBtn:hover { background: #4b5563; }
+    .explanation {
+      display: none;
+      background: #0f172a;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #e0e0e0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .unknown-warning {
+      display: none;
+      background: #451a03;
+      border: 1px solid #92400e;
+      border-radius: 6px;
+      color: #fbbf24;
+      font-size: 12px;
+      padding: 8px 12px;
+      margin-bottom: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1 id="title">Confirm Intent</h1>
+  <p class="subtitle" id="subtitle">A page wants to broadcast an intent on your behalf.</p>
+
+  <div class="details" id="details">
+    <div class="detail-row">
+      <span class="detail-label">Origin</span>
+      <span class="detail-value" id="origin" style="color:#fbbf24;font-weight:600;">--</span>
+    </div>
+    <div class="detail-row">
+      <span class="detail-label">Action</span>
+      <span class="detail-value" id="action">--</span>
+    </div>
+    <div class="detail-row" id="specRow">
+      <span class="detail-label">Spec</span>
+      <span class="detail-value" id="spec">--</span>
+    </div>
+    <div class="detail-row" id="optionsRow">
+      <span class="detail-label">Options</span>
+      <span class="detail-value" id="options">--</span>
+    </div>
+  </div>
+
+  <!-- The cipherclerk's faithful reading of a turn about to be signed
+       (src/explain.ts — the same human terms sdk/src/explain.rs renders,
+       bound to the canonical [turn <hash>] the node verifies). -->
+  <div class="unknown-warning" id="unknownWarning">
+    This turn contains parts this cipherclerk version cannot read.
+    Accepting would be signing blind &mdash; reject unless you are certain.
+  </div>
+  <pre class="explanation" id="explanation"></pre>
+
+  <div class="buttons">
+    <button id="rejectBtn">Reject</button>
+    <button id="acceptBtn">Accept</button>
+  </div>
+
+  <script src="confirm-intent-script.js"></script>
+</body>
+</html>

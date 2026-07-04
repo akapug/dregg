@@ -1,0 +1,66 @@
+[package]
+name = "dregg-app-framework"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Production application framework for dregg apps — server infra, admin auth, persistence, proof middleware, content stores, escrow lifecycle"
+
+[dependencies]
+dregg-sdk = { path = "../sdk" }
+dregg-turn = { path = "../turn" }
+dregg-intent = { path = "../intent" }
+dregg-circuit = { path = "../circuit" }
+# `stark_rehydrate` verifies the recursive IVC aggregate (the recursion tower),
+# so it depends on the heavy prove crate.
+dregg-circuit-prove = { path = "../circuit-prove" }
+dregg-cell = { path = "../cell" }
+dregg-types = { path = "../types" }
+# The Payable DSI + the userspace method-routing core (resolve_against /
+# InvokeAuthority / the canonical `payable_descriptor`). Lives BELOW the SDK so
+# the SDK's metered tool-gateway charge and these app-facing wrappers go through
+# ONE verified `pay` route table. The cipherclerk-bound `invoke` /
+# `invoke_with_descriptor` / free `pay` here delegate to that pure core.
+dregg-payable = { path = "../dregg-payable" }
+dregg-storage = { path = "../storage" }
+dregg-captp = { path = "../captp" }
+
+# The REAL transclusion primitive (`starbridge_web_surface::transclusion`): the
+# verified cross-cell finalized read (`TranscludedField`/`Provenance`/`Backlinks`),
+# the per-viewer `Membrane`, and `SurfaceCapability`/`WebOfCells`. The deos-app
+# transclusion affordance (`src/transclude_affordance.rs`) is the NAMED consumer of
+# these — it surfaces a transcluded peer field as a first-class framework affordance,
+# reinventing neither the attested-read nor the cap model.
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
+axum = "0.8"
+http = "1"
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["full"] }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+blake3 = "1"
+ed25519-dalek = { version = "2", features = ["std"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[dev-dependencies]
+tower = "0.5"
+
+[features]
+default = []
+dev = ["dregg-sdk/dev"]
+# PLATFORM gate passthrough (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the verified
+# Lean producer is UNCONDITIONAL on native (the sdk compiles it in by default; runtime-gated
+# by `DREGG_LEAN_PRODUCER` / `EmbeddedExecutor::set_lean_producer`). Only wasm32/zkvm builds
+# set `no-lean-link`, which compiles the legacy Rust-producer path instead.
+no-lean-link = [
+    "dregg-sdk/no-lean-link",
+]
+
+[lints]
+workspace = true

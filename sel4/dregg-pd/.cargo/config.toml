@@ -1,0 +1,24 @@
+# Cargo config for the dregg-pd seL4 protection-domain workspace.
+#
+# rust-sel4's runtime needs -Zunstable-options (json target specs, build-std)
+# and a custom target-spec search path. The Microkit board headers are located
+# via $SEL4_INCLUDE_DIRS (set by ../Makefile / ../setup.sh to the SDK board's
+# libsel4 include dir). Build with the pinned nightly in rust-toolchain.toml.
+
+[unstable]
+unstable-options = true
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+# Default target: aarch64 seL4 Microkit. Override with --target for riscv64
+# (see ../Makefile `run-riscv`).
+target = "targets/aarch64-sel4-microkit.json"
+rustflags = ["-Zunstable-options"]
+
+[env]
+# rust-sel4's target specs use rust-lld; this is the bare-metal linker.
+RUST_TARGET_PATH = { value = "targets", relative = true }
+
+[target.'cfg(target_os = "none")']
+linker = "rust-lld"

@@ -1,0 +1,31 @@
+# verifier — M1 of the boot ladder: the dregg proof-verifier PD.
+#
+# This is the seL4-native form of sel4/verifier-pd/ (the committed scaffold):
+# a no_std Microkit protection domain that implements the dregg.system
+# shared-memory contract — read a bundle from the `proof_in` page, run the
+# verify step, write a verdict byte + reason into `verdict_out`, signal the
+# scheduler over the channel. The PD holds caps to exactly two pages
+# (proof_in R, verdict_out RW) and one notification: the seL4-enforced form of
+# the verifier's "separate process, no shared mutable state, no callback into a
+# prover" guarantee.
+#
+# The verify STEP here is the no_std byte-level structural verification of the
+# bundle wire form (framing / entry-count / commitment consistency). The full
+# plonky3-STARK proof check is the deep dependency port: dregg-verifier's
+# closure (dregg-circuit + dregg-turn/captp/federation, ~66 circuit files, 10
+# std-using) must be carried to no_std — Plonky3 itself is already #![no_std]
+# (p3-field etc.), so the port is mechanical-but-large, not blocked. See
+# ../README.md and docs/SEL4-EMBEDDING.md §5.
+
+[package]
+name = "dregg-verifier-pd"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-verifier-pd"
+path = "src/main.rs"
+
+[dependencies]
+sel4-microkit = { workspace = true, features = ["alloc"] }

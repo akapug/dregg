@@ -1,0 +1,41 @@
+[package]
+name = "dregg-deploy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "DreggDL: a CapDL-inspired declarative deployment description. Write a dregg capability layout once (TOML/JSON), lower it to a dregg_turn::CallForest, and check the whole declared authority layout with dregg-userspace-verify before spending gas."
+
+[dependencies]
+# The schema is a friendly skin over the existing serialized core types:
+# FactoryDescriptor / FactoryCreationParams / CapTemplate / CapGrant (cell),
+# Effect / Action / CallForest (turn), CellId / FederationId (types). No new
+# on-chain types are invented.
+dregg-turn = { path = "../turn" }
+dregg-cell = { path = "../cell" }
+dregg-types = { path = "../types" }
+# The checker: a lowered DreggDL forest is exactly what `analyze()` consumes.
+dregg-userspace-verify = { path = "../dregg-userspace-verify" }
+# The verified Lean flow-refinement decision (`@[export] dregg_decide_refines` over the PROVED
+# `FlowRefine.decideRefines`): the refine gate (`src/refine.rs`) routes its `A ≤ᶠ B` decision through
+# this FFI when the archive exports it, so the deploy gate runs the proven procedure (not a Rust
+# mirror). Marshal-only on targets that cannot link libdregg_lean.a (the FFI crate's own platform gate
+# handles that); the gate then falls back to the in-process σ-free mirror.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+toml = "0.8"
+thiserror = { workspace = true }
+# Deterministic name → content-address derivation (same primitive the core
+# types content-address with).
+blake3 = "1"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "dregg-deploy"
+path = "src/bin/dregg-deploy.rs"

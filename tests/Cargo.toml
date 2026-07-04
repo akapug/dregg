@@ -1,0 +1,52 @@
+[package]
+name = "dregg-tests"
+version.workspace = true
+edition.workspace = true
+autobins = false
+
+[lib]
+name = "dregg_tests"
+path = "src/main.rs"
+
+[features]
+# `dregg-bridge` consumption is gated to the legacy/WIP test modules.
+# When those features are enabled, the dependency is required; the default
+# build skips it so the workspace stays buildable while bridge undergoes
+# token-vocabulary changes.
+#
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`/`dregg-verifier`,
+# all of which default to it) and forwards to `dregg-circuit/prover`, so this crate's own
+# `#[cfg(feature = "prover")]` gates ALIGN with the circuit's prover state. Without this
+# forward, a bare `cfg(feature = "prover")` here is ALWAYS false (the crate has no such feature)
+# while `dregg-circuit/prover` is unified ON by the sdk/turn deps — so the v1-hand-AIR test
+# modules (gated `not(prover)` in C7) would never compile out yet `EffectVmAir` would be absent.
+# The `not(prover)` v1-floor test modules (service_mesh_e2e, the `EffectVmAir` legs of
+# every_variant_roundtrip / executor_honesty_threats) are the wasm floor; under `prover` (default)
+# they compile out and the rotated stack is the live one.
+default = ["prover"]
+prover = []
+__legacy_tests = ["dep:dregg-bridge"]
+__wip_tests = ["dep:dregg-bridge"]
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+dregg-commit = { path = "../commit" }
+dregg-turn = { path = "../turn" }
+# This is the workspace's dedicated test-harness crate, so it arms the
+# fail-closed `StubVerifier` accept path via `test-stubs` for its plumbing
+# tests. Production crates never enable this feature.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-sdk = { path = "../sdk" }
+dregg-types = { path = "../types" }
+dregg-verifier = { path = "../verifier" }
+dregg-bridge = { path = "../bridge", optional = true }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+blake3 = "1"
+getrandom = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

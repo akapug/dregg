@@ -1,0 +1,62 @@
+{
+  "id": "agent-provenance",
+  "name": "Agent Provenance",
+  "description": "Proof-carrying agent provenance / verifiable memory — a capability-gated, append-only, tamper-evident provenance log (a verifiable agent scratchpad). Each entry is a WriteOnce slot in a blake3 hash chain; the HEAD cursor is Monotonic (append-only). Any party can recompute and VERIFY the chain.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "73746172627269646765d2d6167656e742d70726f76656e616e63652d766b3031"
+  ],
+  "page": "/starbridge-apps/agent-provenance/pages/index.html",
+  "inspectors": [
+    "provenance"
+  ],
+  "host_inspectors": [
+    { "id": "log", "label": "Provenance log", "tag": "dregg-provenance", "uri_attribute": "uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_log", "label": "Inspect log", "uri": "dregg://cell/agent-provenance-default", "kind": "inspect" },
+    { "id": "append_provenance", "label": "Append entry", "builder": "append_provenance", "kind": "turn" },
+    { "id": "advance_head", "label": "Advance head", "builder": "advance_head", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "log_uri", "label": "Log URI", "type": "uri", "default": "dregg://cell/agent-provenance-default" },
+    { "id": "head", "label": "HEAD slot", "type": "slot", "slot": 2 }
+  ],
+  "turn_builders": [
+    "append_provenance",
+    "advance_head"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField"
+  ],
+  "slot_layout": {
+    "HEAD_SLOT": 2,
+    "TIP_SLOT": 3,
+    "ENTRY_BASE": 4
+  },
+  "state_constraints": [
+    "Monotonic(HEAD_SLOT)",
+    "WriteOnce(ENTRY_BASE + i)  // each entry slot frozen forever (tamper-evidence)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router. register(ctx) calls register_deos(ctx) so the same mount serves the floor factory AND the deos surface.",
+    "src_factory": "provenance_app(cipherclerk, executor)",
+    "cell": "log",
+    "discoverable": ["provenance", "audit"],
+    "publish": "Signature (the log cell is a dregg:// sturdyref a third-party auditor on another federation reacquires)",
+    "affordances": {
+      "view_provenance": "cap-only, Signature (a VERIFIER reads + re-derives the chain — verify_chain's deos home)",
+      "append_entry": "GATED (cap∧state), Either — log_initialized precondition (HEAD>=0); the fire reads live HEAD+TIP and submits the FULL append (new entry WriteOnce slot + HEAD advance + TIP + event), the executor re-enforcing Monotonic(HEAD) + WriteOnce(entry). Accumulating: each fire writes the NEXT entry."
+    },
+    "seam": "CLOSED — the fire runs against the seeded log cell carrying the provenance program (Monotonic(HEAD) + WriteOnce(entries)), so a REWOUND head (Monotonic) and an OVERWRITE of a sealed entry (WriteOnce) BITE in the deos fire path as REAL executor refusals (tests/deos_seam.rs). Monotonic is >= so a no-op (1->1) is allowed; the refusal tooth is a REWIND."
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/agent-provenance/src/lib.rs"
+  }
+}

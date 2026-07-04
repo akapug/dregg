@@ -1,0 +1,180 @@
+[package]
+name = "dregg-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Federation node daemon — hosts an agent cipherclerk, participates in consensus, and serves a localhost API"
+
+[dependencies]
+dregg-types = { path = "../types" }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+# Lean is UNCONDITIONAL on native (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the
+# shadow/gate executor, the F-4 admission gate, verified settle, and the captp/coord gates are
+# all compiled in by default — no per-crate enables needed here anymore.
+dregg-turn = { path = "../turn" }
+# The verified-Lean executor cluster (the shadow differential + strict-veto gate + the
+# authoritative `produce_via_lean` state producer). This native crate links `libdregg_lean.a`;
+# the node injects its `LeanShadowObserver` into every executor and calls `produce_via_lean` for
+# producer mode. (`dregg-turn` itself is now FFI-free — the link comes through here.)
+dregg-exec-lean = { path = "../exec-lean" }
+# The verified FINALITY GATE (`finality_gate.rs`) calls the Lean-exported `dregg_blocklace_finalize`
+# directly.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "biscuit", "rand-deps"] }
+dregg-persist = { path = "../persist" }
+dregg-federation = { path = "../federation" }
+dregg-sdk = { path = "../sdk" }
+dregg-sdk-net = { path = "../dregg-sdk-net" }
+dregg-intent = { path = "../intent" }
+# The attested-query index (dregg-query): the receipt-log MMR (non-omission
+# certificate) + the typed EffectSummary EDB. The node maintains the MMR over
+# its receipt chain and serves `/api/receipts/index/{root,range}`; this leaf
+# crate is HTTP-free and pulls only serde + blake3 (already in the graph).
+dregg-query = { path = "../dregg-query" }
+dregg-circuit = { path = "../circuit" }
+dregg-commit = { path = "../commit" }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-coord = { path = "../coord" }
+dregg-net = { path = "../net" }
+dregg-blocklace = { path = "../blocklace" }
+dregg-storage = { path = "../storage" }
+dregg-storage-templates = { path = "../dregg-storage-templates" }
+dregg-captp = { path = "../captp" }
+dregg-app-framework = { path = "../app-framework" }
+dregg-credentials = { path = "../credentials" }
+# The gpui-free reflective substrate (deos-reflect): `reflect_cell` over any
+# `Ledger`. The node uses the SAME reflector deos-js's crawl calls to surface its
+# OWN runtime state AS A CELL (`self_cell.rs` — the reflexive-image Hearth step).
+# This is the lean, starbridge-free, SpiderMonkey-free crate the design factors
+# out (deos-js depends on it; the node does too — neither pulls the other).
+deos-reflect = { path = "../deos-reflect" }
+# THE DEOS-HOST (optional, `deos-host` feature): the node hosts a headless userspace
+# deos-js "private server" program. deos-js links SpiderMonkey (mozjs), so it is OFF by
+# default — a bare `cargo build -p dregg-node` stays mozjs-free (deos-js is a workspace
+# member but NOT a default-member; nothing in the default node graph references it).
+deos-js = { path = "../deos-js", optional = true }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-subscription = { path = "../starbridge-apps/subscription" }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
+starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartment-workflow-mandate" }
+starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gateway-mandate" }
+starbridge-privacy-voting = { path = "../starbridge-apps/privacy-voting" }
+starbridge-bounty-board = { path = "../starbridge-apps/bounty-board" }
+# The pg-dregg MIRROR core (pg-dregg/src/mirror.rs): MirrorBatch / CellRow / TurnRow /
+# CapRow / MemCell / RootChain. pg-dregg is a STANDALONE workspace whose DEFAULT feature
+# set is EMPTY (no pgrx, no postgres) — this path dep links ONLY its `lib` (the mirror's
+# row types + the anti-substitution RootChain), staying circuit- and postgres-free. The
+# node's pg_mirror sink owns the `dregg_cell::Cell -> CellRow` decode (this crate cannot
+# see dregg-cell by design) and calls MirrorBatch::from_parts + RootChain to ship verified
+# turns. (docs/PG-DREGG.md §8; node/src/pg_mirror.rs.)
+pg-dregg = { path = "../pg-dregg", default-features = false }
+dregg-macaroon = { workspace = true, features = ["crypto"] }
+ark-serialize = { workspace = true }
+ark-std = "0.5.0"
+
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+# Pulled only by the `deos-host` feature (the playable `mud-client` reads world cells off
+# the node over HTTP via `GET /api/cell/{id}`). Already in the graph via `dregg-sdk-net`, so
+# this adds no new crate — just names it directly for the deos-host module.
+reqwest = { version = "0.12", features = ["json"], optional = true }
+# Pulled only by the `deos-host` feature: the `mud_client` / `shared_world` boot harnesses
+# stand up an in-process node on a temp dir. These are non-`cfg(test)` modules (the playable
+# REPL + the shared-world engine), so the temp-dir crate must be a normal dep under the
+# feature, not a bare dev-dependency (a dev-dep is absent in the plain `--bin` build).
+tempfile = { version = "3", optional = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+getrandom = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+ed25519-dalek = { version = "2", features = ["std"] }
+quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+blake3 = "1"
+argon2 = "0.5"
+subtle = { workspace = true }
+base64 = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+zeroize = { workspace = true }
+x25519-dalek = { workspace = true }
+chacha20poly1305 = { workspace = true }
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+# The LIVE postgres client for the pg-mirror sink — OPTIONAL, pulled only by the
+# `pg-mirror-live` feature. The mirror's load-bearing half (MirrorBatch construction
+# from CommitRecords + the RootChain anti-substitution gate) is feature-INDEPENDENT and
+# always compiled/tested; only the network shipping to a live pg18 needs this client. The
+# node runs unchanged with the feature off (and even on, the sink is opt-in via
+# DREGG_PG_MIRROR_URL). `with-serde_json-1` makes a `serde_json::Value` bind as the
+# postgres `jsonb` type (the cell's fields_json column), so the kernel writer sends
+# real jsonb, not a text-cast string. (node/src/pg_mirror.rs.)
+tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1"] }
+
+[features]
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-sdk`/`dregg-turn`, all of
+# which default to it): native builds compile the ROTATED stack, so the v1 hand-AIR (`EffectVmAir`)
+# is absent. It forwards to the deps' `prover` so node's own `#[cfg(feature = "prover")]`
+# gates (the mcp.rs v1-demo-tool fences) align with the circuit's prover state. A `not(prover)`
+# node build keeps the v1 floor (the MCP standalone-effect-VM demo tools).
+default = ["prover"]
+prover = ["dregg-sdk/prover", "dregg-turn/prover", "dregg-cell/prover"]
+
+# THE DEOS-HOST: the node hosts a headless userspace deos-js "private server" program
+# (`--deos-program <path.js>`), running fully without gpui. Pulls in `mozjs` via deos-js,
+# so it is opt-in (NOT in `default`). With it OFF, the deos-host module is absent and the
+# node graph carries no SpiderMonkey.
+deos-host = ["dep:deos-js", "dep:reqwest", "dep:tempfile"]
+
+# Off by default: the node ships verified-turn MirrorBatches to a live pg18 ONLY when
+# this is on AND DREGG_PG_MIRROR_URL is set. With it off, the pg-mirror module still
+# compiles its construction + RootChain core and its in-memory sink (the tested,
+# load-bearing path); the live postgres writer is simply absent.
+pg-mirror-live = ["dep:tokio-postgres"]
+
+# Dev-deps for future router-level adversarial tests (Stage 0c followup once
+# dregg-turn/dregg-cell rebuild lands from Stages 0a/0b). Currently the
+# unit-style tests in api.rs / relay_service.rs do not need them, but keeping
+# them declared keeps the followup PR trivial.
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
+http-body-util = "0.1"
+x25519-dalek = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+dregg-verifier = { path = "../verifier" }
+# `dregg-lean-ffi` is now a regular dependency above (the verified finality gate calls it from
+# production code); tests that need it (`lean_producer_mode.rs`, the finality-gate differential)
+# inherit it from there — no separate dev-dependency entry required.
+
+[[bin]]
+name = "dregg-node"
+path = "src/main.rs"
+
+# `dist` opt-in (release management; see root Cargo.toml [workspace.metadata.dist]).
+# The workspace default is `dist = false`; this ships the `dregg-node` daemon.
+#
+# TARGETS ARE NARROWED to the two x86_64 host-native targets. `dregg-node` links
+# the verified Lean archive (libdregg_lean.a) UNCONDITIONALLY on native (via
+# dregg-turn → dregg-lean-ffi), and that archive is host-native objects produced
+# by the Lean compiler — it CANNOT be cross-compiled. dist builds each target on
+# a native runner, so x86_64 macOS + Linux are buildable WHERE THE RUNNER ALSO
+# HAS THE LEAN TOOLCHAIN (elan/lake + warm mathlib) for build.rs to splice the
+# archive. aarch64 (no historical native runner + no aarch64 Lean archive build
+# here) and Windows (Lean link unproven) are BLOCKED for node; the CLI carries
+# those platforms instead.
+[package.metadata.dist]
+dist = true
+targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+
+[lints]
+workspace = true

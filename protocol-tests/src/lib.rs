@@ -1,0 +1,67 @@
+//! # dregg-protocol-tests
+//!
+//! Protocol-invariant property tests for dregg.
+//!
+//! The thesis (from `dev-philosophy/02-testing.md`): dregg has thousands of
+//! unit and integration tests, but the audit-discovered bugs were
+//! *protocol-level* — invariants that hold across the input space, not in
+//! the specific scenarios someone happened to write tests for.
+//!
+//! This crate fills that gap. Each module under `invariants/` picks one
+//! claimed protocol property (e.g. "balance conservation: sum of
+//! balance_change across a turn equals zero net of fee") and uses
+//! [`proptest`] strategies from `generators/` to drive the executor against
+//! it across many randomized inputs.
+//!
+//! ## Layout
+//!
+//! - [`generators`] — `proptest::Strategy` impls that emit *valid-shaped*
+//!   inputs the executor will accept. Hard part: a turn that parses cleanly
+//!   and has internally-consistent authorization/preconditions, not garbage
+//!   that exercises rejection paths.
+//! - [`invariants`] — one module per invariant. Each module hosts a
+//!   `proptest!` block that consumes the generators, drives the executor,
+//!   and asserts the property holds.
+//! - [`Invariant`] — a tiny trait so future scaffolding can enumerate /
+//!   document invariants. The actual tests still live in module-scope so
+//!   `cargo test` picks them up.
+//!
+//! ## Status
+//!
+//! - `balance_conservation`                      — IMPLEMENTED
+//! - `nonce_monotonicity`                        — IMPLEMENTED
+//! - `receipt_chain`                             — IMPLEMENTED
+//! - `capability_attenuation`                    — STUB (next session)
+//! - `facet_attenuation`                         — STUB (next session)
+//! - `sealed_field_integrity`                    — STUB (next session; compile_fail tests)
+//! - `permission_enforcement`                    — STUB (next session)
+//! - `state_constraint_conjunction`              — IMPLEMENTED (substrate-correctness mandate)
+//! - `any_of_disjunction`                        — IMPLEMENTED
+//! - `sentinel_variants_reject`                  — IMPLEMENTED (CAVEAT-LAYER-COVERAGE.md §6.1)
+//! - `gamma2_id_injectivity`                     — IMPLEMENTED (STAGE-7-GAMMA-2-PI-DESIGN.md §3)
+//! - `authorization_hash_domain_separation`      — IMPLEMENTED (EXECUTOR-HONESTY-AUDIT.md T1/T2/T15 floor)
+
+#![allow(dead_code)]
+
+pub mod generators;
+// The invariant modules are pure proptest harnesses: every `use` they carry is
+// consumed inside `proptest!`/`#[test]` bodies, which only exist under
+// `cfg(test)`. Gating the whole subtree on `cfg(test)` keeps those imports where
+// they belong — so a non-test `cargo build`/`clippy`/`cargo fix` never sees them
+// as unused and strips them out from under the test build.
+#[cfg(test)]
+pub mod invariants;
+
+/// Marker trait for a protocol invariant. The implementer is a unit struct
+/// describing the property — actual proptest cases live in module-scope
+/// `#[test]` functions so `cargo test` discovers them.
+///
+/// Future tooling could enumerate `Invariant::all()` to produce a coverage
+/// matrix; for now the trait exists mainly as documentation of intent.
+pub trait Invariant {
+    /// A short human-readable name (`"balance_conservation"`).
+    const NAME: &'static str;
+
+    /// One-sentence description suitable for failure reports.
+    const DESCRIPTION: &'static str;
+}

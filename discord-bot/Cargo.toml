@@ -1,0 +1,131 @@
+# discord-bot is a STANDALONE workspace (EXCLUDED from the root workspace): it
+# pulls sqlx → libsqlite3-sys 0.30, whose `links = "sqlite3"` conflicts with
+# deos-matrix's rusqlite-0.35 inside the root workspace (one `links="sqlite3"`
+# per workspace). So it declares its own `[workspace]` here and replicates the
+# bits of the root workspace its members consume.
+#
+# `[workspace.dependencies]` below carries ONLY the keys THIS manifest references
+# via `workspace = true` (base64/serde/serde_json/zeroize). Its path-deps
+# (dregg-sdk/turn/circuit/…) are members of the ROOT workspace, so THEIR
+# `workspace = true` deps (p3-*, dregg-* locals, etc.) resolve against the root
+# manifest they live under — not this one.
+#
+# `[patch]` replicates only the root patch THIS graph consumes: the `ark-serialize`
+# `serde_with` fork (pulled by the proof tree via dregg-circuit/dregg-sdk). The
+# root's gpui/servo/stylo/pathfinder path-patches are intentionally NOT copied —
+# none of those crates are in discord-bot's dependency graph (it has no gpui/servo
+# surface), so the patches would be inert. The plonky3-recursion deps are direct
+# git deps in the root `[workspace.dependencies]` (no patch), and resolve via the
+# path-dep'd circuit crate's root-workspace membership.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.dependencies]
+base64 = { version = "0.22" }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1" }
+zeroize = { version = "1", features = ["std", "derive"] }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.lints.rust]
+unexpected_cfgs = "allow"
+
+[patch.crates-io]
+# ark-serialize fork — the `serde_with` feature the proof tree (dregg-hints via
+# dregg-circuit/dregg-sdk) needs. Matches the root workspace patch so the locked
+# proof deps resolve identically.
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[package]
+name = "dregg-discord-bot"
+version = "0.1.0"
+edition = "2024"
+description = "Discord bot for the dregg devnet — custodial AppCipherclerk handles, gallery, identity, presence attestation, CapTP, queues, governance, names"
+
+[dependencies]
+blake3 = "1"
+base64 = { workspace = true }
+hex = "0.4"
+postcard = { version = "1", features = ["use-std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serenity = { version = "0.12", default-features = false, features = [
+    "client",
+    "gateway",
+    "model",
+    "rustls_backend",
+    "cache",
+] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP read surface for Starbridge RemoteRuntime + /observability/stream SSE.
+# axum 0.8 to match node/api.rs patterns (sse via axum::response::sse submodule;
+# no "sse" feature flag to avoid the pre-existing workspace resolution conflict in
+# dregg-node's Cargo.toml). Production middlewares via tower-http.
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "limit"] }
+futures-util = { version = "0.3" }
+
+# Canonical dregg surface — the bot is a peer of node/sdk, not a
+# parallel implementation. AppCipherclerk (from app-framework) wraps the
+# SDK's AgentCipherclerk and gives us federation-bound action signing.
+dregg-app-framework = { path = "../app-framework" }
+dregg-sdk = { path = "../sdk" }
+dregg-turn = { path = "../turn" }
+# The predicate-proof primitives for REAL selective disclosure: `PredicateType`
+# (the comparator) + `BabyBear` (the threshold field element), the inputs to the
+# SDK's `AgentCipherclerk::prove_predicate_unlinkable` (`sdk/src/privacy.rs`).
+# Already in the build graph via dregg-sdk / dregg-app-framework; named directly
+# so `/credential verify` emits a genuine STARK proof, not a null placeholder.
+dregg-circuit = { path = "../circuit" }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-bounty-board = { path = "../starbridge-apps/bounty-board" }
+dregg-dfa = { path = "../dfa" }
+# CapTP integration — the bot is a dregg capability peer.
+dregg-captp = { path = "../captp" }
+dregg-storage = { path = "../storage" }
+# Canonical types/cell surface — needed to build *real* signed CapTP
+# HandoffCertificates (SigningKey, CellId, AuthRequired/EffectMask) rather
+# than bot-local placeholder BLAKE3-MAC records.
+dregg-types = { path = "../types" }
+dregg-cell = { path = "../cell" }
+# The deos web-forward primitives — the `dregg://` web-of-cells verified-attested
+# fetch, transclusion (the REAL `TranscludedField`), the per-viewer `Membrane`,
+# the cap-gated `AffordanceSurface`, and `Backlinks` (what-links-here). Already
+# resolved in the root lock via `dregg-app-framework` (which path-depends on it),
+# so this names the genuine primitives directly without adding anything new to the
+# build graph. The bot surfaces them as Discord buttons/embeds/links
+# (`src/deos_surface.rs`).
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+# The deos-view view-tree IR + its DISCORD backend — the FOURTH `ViewNode` renderer
+# (alongside native gpui / web HTML / seL4 framebuffer). `default-features = false` with
+# only `discord` keeps deos-view gpui-FREE + deos-js-FREE here (serde + serenity's
+# builder/model), so the bot pulls NONE of the gpui/mozjs elephants — just the embed/
+# component mapping. The bot authors its surfaces as `ViewNode` cards and renders them
+# through `deos_view::discord::render_card` (`src/cards.rs`): the SAME card the desktop
+# renders, posted as a Discord embed (the card-authored-once-renders-everywhere thesis).
+deos-view = { path = "../deos-view", default-features = false, features = ["discord"] }
+bs58 = "0.5"
+zeroize = { workspace = true }
+# AEAD for the BYO-LLM-key vault: XChaCha20-Poly1305 seals each user's provider
+# key at rest under a per-user derived key (`src/key_vault.rs`). Already in the
+# build graph transitively, so this adds nothing to the closure.
+chacha20poly1305 = "0.10"
+
+[dev-dependencies]
+# `ServiceExt::oneshot` drives the admin webportal router in tests without
+# binding a socket (already in the lockfile transitively via tower-http).
+tower = { version = "0.5", features = ["util"] }
+
+[lints]
+workspace = true

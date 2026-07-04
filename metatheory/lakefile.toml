@@ -1,0 +1,41 @@
+name = "Dregg2"
+defaultTargets = ["Dregg2", "Metatheory", "Polis"]
+
+# Pin mathlib to the revision matching ~/src/mathlib4 @ v4.30.0
+# (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). Using a local `path`
+# require avoids re-downloading the registry; switch to a `git`+`rev`
+# require if building on a machine without the local checkout.
+[[require]]
+name = "mathlib"
+path = "../../../src/mathlib4"
+
+[[lean_lib]]
+name = "Dregg2"
+
+# The Metatheory/* epistemic+categorical tree. Globbed (no `Metatheory.lean`
+# root needed) so the WHOLE subtree — Categorical, Disputation, and every
+# Open/* front — lands in the default `lake build` target and CI covers it.
+# Previously only EpistemicConsensus/EpistemicDial were reachable (via Dregg2's
+# Crypto imports); Categorical/Open.* were verified only via `lake env lean`.
+[[lean_lib]]
+name = "Metatheory"
+globs = ["Metatheory.+"]
+
+# The Polis/* polisware-constitution theory — split out of `Metatheory/` so the
+# core categorical/dynamics/settlement spec stays uncrowded. Files keep their
+# `Metatheory.*` namespaces (qualified names resolve unchanged); only the MODULE
+# path moved (`Metatheory.PolisX` → `Polis.PolisX`). The two libs interleave at
+# the module level (core game files import Polis theory; some Polis files import
+# core game/dynamics files) — Lake resolves this fine, no module-import cycle.
+[[lean_lib]]
+name = "Polis"
+globs = ["Polis.+"]
+
+# A CALLABLE GOVERNOR: the verified `Metatheory.PolisSandbox.govStep` as a
+# stdin/stdout service. Reads `<d0> <d1> <actor> <action> [victim]` per line,
+# applies the SAME envelope `sandbox_governed_safe` proves keeps the floor, and
+# prints ADMIT/REFUSE + the resulting world. (Root module: PolisGovernor,
+# file ./PolisGovernor.lean.)
+[[lean_exe]]
+name = "polis_governor"
+root = "PolisGovernor"

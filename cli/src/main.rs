@@ -1,0 +1,377 @@
+//! `dregg` -- the user-facing CLI for interacting with dregg federation nodes.
+//!
+//! This tool provides ergonomic commands for inspecting cells, building turns,
+//! managing capabilities, and monitoring federation health. It communicates with
+//! a running dregg-node over HTTP.
+
+mod commands;
+mod config;
+mod output;
+
+use clap::{Parser, Subcommand};
+use clap_complete::Shell;
+
+use commands::{
+    bounty, cap, cell, cipherclerk, demo, deploy, directory, doctor, federation, id, name,
+    namespace, node, polis, proof, route, storage, turn, voting,
+};
+
+/// Dragon's Egg -- sovereign cell-based compute substrate.
+///
+/// Interact with cells, turns, capabilities, and federation nodes.
+///
+/// This is the primary user-facing client / SDK surface for a live node.
+/// It has parity with many wasm runtime + SDK operations (cells, caps,
+/// federation, receipts, blocklace checkpoints, etc.).
+///
+/// Examples:
+///   dregg --node-url http://localhost:8420 cell create --label demo
+///   dregg cipherclerk transfer <recipient-cell> 1000 --memo "pay"
+///   dregg cap export <cell-id>
+///   dregg doctor
+///   dregg node blocklace-checkpoint
+///   dregg turn build   # interactive effectful turn
+#[derive(Parser)]
+#[command(
+    name = "dregg",
+    version,
+    about = "Dragon's Egg CLI -- manage cells, turns, capabilities, and federation nodes (full SDK client)",
+    long_about = "Dragon's Egg CLI (dregg-cli crate) -- hardened, expanded client with better errors, confirms for dangerous ops, blocklace support, doctor diagnostics, and parity targets from wasm bindings (federation, receipts, observability).\n\nSee subcommand --help for details. All POST shapes now match current node/api.rs handlers (no more 422 skews on cell/cipherclerk/cap).",
+    propagate_version = true,
+    arg_required_else_help = true
+)]
+struct Cli {
+    /// Node URL to connect to (overrides config).
+    #[arg(long, global = true, env = "DREGG_NODE_URL")]
+    node_url: Option<String>,
+
+    /// Output format: color, plain, json.
+    #[arg(long, global = true, env = "DREGG_OUTPUT")]
+    output: Option<String>,
+
+    /// Bearer token for the node's protected endpoints (turn submit, cap ops).
+    /// Get it from `POST /cipherclerk/unlock` (the `bearer_token` field).
+    #[arg(long, global = true, env = "DREGG_API_TOKEN")]
+    token: Option<String>,
+
+    /// Path to config file (default: ~/.dregg/config.toml).
+    #[arg(long, global = true, env = "DREGG_CONFIG")]
+    config: Option<String>,
+
+    /// Enable verbose output (show HTTP request/response details).
+    #[arg(long, short, global = true, env = "DREGG_VERBOSE")]
+    verbose: bool,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Named identity profiles (create, list, use).
+    ///
+    /// An identity is a name you chose, not a hex key you pasted. Profiles
+    /// live in `~/.dregg/profiles/` (key material, mode 0600) and the SDK
+    /// picks the active one up automatically
+    /// (`AgentCipherclerk::from_active_profile`). `DREGG_PROFILE` overrides
+    /// the persistent default per-shell.
+    Id {
+        #[command(subcommand)]
+        command: id::IdCommand,
+    },
+
+    /// Cell inspection and manipulation.
+    Cell {
+        #[command(subcommand)]
+        command: cell::CellCommand,
+    },
+
+    /// Turn building and submission.
+    Turn {
+        #[command(subcommand)]
+        command: turn::TurnCommand,
+    },
+
+    /// Nameservice: register / resolve / renew / transfer / revoke names.
+    ///
+    /// The demoable starbridge-app flow — drives the nameservice state machine
+    /// through the verified commit path. See `dregg name <cmd> --help`.
+    Name {
+        #[command(subcommand)]
+        command: name::NameCommand,
+    },
+
+    /// Polis governance: inspect council proposal cells (read-only).
+    ///
+    /// Decodes the `starbridge-polis` council machine straight from the
+    /// node's public cell read: state, staged proposal hash, approvals,
+    /// certified-threshold flag. See `dregg polis council --help`.
+    Polis {
+        #[command(subcommand)]
+        command: polis::PolisCommand,
+    },
+
+    /// Privacy-voting: open / tally / close / show factory-born poll cells.
+    ///
+    /// The demoable starbridge-app flow — drives a factory-born poll cell whose
+    /// slot caveats (question WriteOnce, tallies Monotonic, closed WriteOnce)
+    /// are enforced by the substrate. See `dregg voting <cmd> --help`.
+    Voting {
+        #[command(subcommand)]
+        command: voting::VotingCommand,
+    },
+
+    /// Bounty-board: post / claim / submit / payout / show factory-born bounty
+    /// cells.
+    ///
+    /// The demoable starbridge-app flow — drives a factory-born bounty cell
+    /// whose lifecycle (OPEN → CLAIMED → SUBMITTED → PAID) is a substrate-
+    /// enforced state machine (state StrictMonotonic, claimant WriteOnce →
+    /// first-claimer-wins). See `dregg bounty <cmd> --help`.
+    Bounty {
+        #[command(subcommand)]
+        command: bounty::BountyCommand,
+    },
+
+    /// Guided quickstart: run a full nameservice lifecycle against a live node.
+    ///
+    /// Unlocks, faucets the operator cell, then registers → resolves →
+    /// transfers → revokes a name, narrating each verified turn. A newcomer's
+    /// first "do something cool" command.
+    ///
+    ///   dregg demo --passphrase <pass>
+    Demo {
+        /// Name to use for the demo (default: alice.dregg).
+        #[arg(long)]
+        name: Option<String>,
+        /// Cipherclerk passphrase (unlocks turn signing; sets it on a fresh node).
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Faucet amount to fund the operator cell with.
+        #[arg(long, default_value_t = 5000)]
+        faucet: u64,
+    },
+
+    /// Capability management (export, enliven, handoff).
+    Cap {
+        #[command(subcommand)]
+        command: cap::CapCommand,
+    },
+
+    /// DreggDL — check / apply a declarative deployment spec (a checkable
+    /// capability layout, audited off one file before any gas).
+    ///
+    /// `dregg deploy check <spec.dregg.toml>` runs the four static assurance
+    /// checks (conservation, non-amplification, well-formedness) over the WHOLE
+    /// declared authority layout; `dregg deploy apply` then emits the gated
+    /// per-root turn sequence. An over-grant is refused (exit 2) with the exact
+    /// offending edge named.
+    Deploy {
+        #[command(subcommand)]
+        command: deploy::DeployCommand,
+    },
+
+    /// Cipherclerk operations (balance, transfer, delegate).
+    Cipherclerk {
+        #[command(subcommand)]
+        command: cipherclerk::CipherclerkCommand,
+    },
+
+    /// Node operations (status, connect, sync).
+    Node {
+        #[command(subcommand)]
+        command: node::NodeCommand,
+    },
+
+    /// Federation info (constitution, participants, routes).
+    Federation {
+        #[command(subcommand)]
+        command: federation::FederationCommand,
+    },
+
+    /// Service mesh (mount, discover, resolve).
+    Namespace {
+        #[command(subcommand)]
+        command: namespace::NamespaceCommand,
+    },
+
+    /// Content-addressed storage (read, write, splice, quota).
+    Storage {
+        #[command(subcommand)]
+        command: storage::StorageCommand,
+    },
+
+    /// Directory service (structured name resolution, mount/unmount).
+    Directory {
+        #[command(subcommand)]
+        command: directory::DirectoryCommand,
+    },
+
+    /// Proof management (verify, inspect, export, IVC chain).
+    Proof {
+        #[command(subcommand)]
+        command: proof::ProofCommand,
+    },
+
+    /// DFA route table inspection and amendment.
+    Route {
+        #[command(subcommand)]
+        command: route::RouteCommand,
+    },
+
+    /// Check system health (node, cclerk, federation, storage).
+    Doctor,
+
+    /// Print version information.
+    Version,
+
+    /// Generate shell completions.
+    Completions {
+        /// Shell to generate completions for.
+        shell: Shell,
+    },
+
+    /// Configuration management.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Initialize ~/.dregg/config.toml with defaults.
+    Init,
+    /// Show current configuration.
+    Show,
+    /// Set a configuration value.
+    Set {
+        /// Key (dotted path, e.g. "node.url").
+        key: String,
+        /// Value to set.
+        value: String,
+    },
+}
+
+#[tokio::main]
+async fn main() {
+    let cli = Cli::parse();
+
+    // Load config, applying CLI overrides.
+    let mut cfg = config::Config::load(cli.config.as_deref());
+    if let Some(url) = &cli.node_url {
+        cfg.node.url = url.clone();
+    }
+    if let Some(fmt) = &cli.output {
+        cfg.output.format = fmt.clone();
+    }
+    if let Some(tok) = &cli.token {
+        cfg.node.token = Some(tok.clone());
+    }
+
+    let ctx = output::Context::new(&cfg);
+
+    if cli.verbose {
+        eprintln!(
+            "{} verbose mode enabled (node: {})",
+            console::style("[debug]").dim(),
+            cfg.node.url
+        );
+    }
+
+    let result = match cli.command {
+        Commands::Id { command } => id::run(command, &cfg, &ctx).await,
+        Commands::Cell { command } => cell::run(command, &cfg, &ctx).await,
+        Commands::Turn { command } => turn::run(command, &cfg, &ctx).await,
+        Commands::Name { command } => name::run(command, &cfg, &ctx).await,
+        Commands::Polis { command } => polis::run(command, &cfg, &ctx).await,
+        Commands::Voting { command } => voting::run(command, &cfg, &ctx).await,
+        Commands::Bounty { command } => bounty::run(command, &cfg, &ctx).await,
+        Commands::Demo {
+            name,
+            passphrase,
+            faucet,
+        } => demo::run(&cfg, &ctx, name, passphrase, faucet).await,
+        Commands::Cap { command } => cap::run(command, &cfg, &ctx).await,
+        Commands::Deploy { command } => deploy::run(command, &cfg, &ctx).await,
+        Commands::Cipherclerk { command } => cipherclerk::run(command, &cfg, &ctx).await,
+        Commands::Node { command } => node::run(command, &cfg, &ctx).await,
+        Commands::Federation { command } => federation::run(command, &cfg, &ctx).await,
+        Commands::Namespace { command } => namespace::run(command, &cfg, &ctx).await,
+        Commands::Storage { command } => storage::run(command, &cfg, &ctx).await,
+        Commands::Directory { command } => directory::run(command, &cfg, &ctx).await,
+        Commands::Proof { command } => proof::run(command, &cfg, &ctx).await,
+        Commands::Route { command } => route::run(command, &cfg, &ctx).await,
+        Commands::Doctor => doctor::run(&cfg, &ctx).await,
+        Commands::Version => {
+            print_version(&ctx);
+            Ok(())
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            clap_complete::generate(shell, &mut cmd, "dregg", &mut std::io::stdout());
+            Ok(())
+        }
+        Commands::Config { command } => run_config(command, &cfg, &ctx),
+    };
+
+    if let Err(e) = result {
+        ctx.error(&e.to_string());
+        std::process::exit(1);
+    }
+}
+
+fn print_version(ctx: &output::Context) {
+    let version = env!("CARGO_PKG_VERSION");
+    if ctx.mode == output::Mode::Json {
+        let j = serde_json::json!({
+            "name": "dregg",
+            "version": version,
+        });
+        ctx.json_stdout(&j);
+    } else {
+        eprintln!("dregg {}", version);
+        eprintln!("  Sovereign cell-based compute substrate CLI");
+    }
+}
+
+fn run_config(
+    cmd: ConfigCommand,
+    cfg: &config::Config,
+    ctx: &output::Context,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match cmd {
+        ConfigCommand::Init => {
+            let path = config::config_path();
+            if path.exists() {
+                ctx.warn(&format!("Config already exists: {}", path.display()));
+                ctx.info("Use `dregg config show` to view, or `dregg config set` to modify.");
+                return Ok(());
+            }
+            config::Config::write_default(&path)?;
+            ctx.success(&format!("Initialized config at {}", path.display()));
+            Ok(())
+        }
+        ConfigCommand::Show => {
+            let path = config::config_path();
+            ctx.header("Configuration");
+            ctx.kv("Path", &path.display().to_string());
+            ctx.kv("Node URL", &cfg.node.url);
+            ctx.kv(
+                "Bearer token",
+                if cfg.node.token.as_deref().unwrap_or("").is_empty() {
+                    "(none — public reads only)"
+                } else {
+                    "(set)"
+                },
+            );
+            ctx.kv("Output format", &cfg.output.format);
+            Ok(())
+        }
+        ConfigCommand::Set { key, value } => {
+            config::set_value(&key, &value)?;
+            ctx.success(&format!("Set {key} = {value}"));
+            Ok(())
+        }
+    }
+}

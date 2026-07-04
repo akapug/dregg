@@ -1,0 +1,36 @@
+# sel4/dregg-pd — the dregg Robigalia v0 protection domains, as a STANDALONE
+# Cargo workspace (deliberately NOT a member of the repo-root workspace: these
+# crates cross-compile to the bare-metal seL4 Microkit target
+# `aarch64-sel4-microkit` with their own no_std/panic=abort runtime story, and
+# pulling them into the host workspace would force the whole tree onto that
+# target).
+#
+# This workspace builds the Rust protection-domain ELFs that the Microkit tool
+# (`microkit`) links into a bootable seL4 image (see ../Makefile). Each binary
+# in src/bin/ is one PD on the boot ladder of docs/SEL4-EMBEDDING.md §5:
+#
+#   m0_hello   — M0: a minimal Rust PD that prints "dregg robigalia v0".
+#   verifier   — M1: the dregg proof verifier (Lean-free) as a PD.
+#   rbg_dir    — M2: an rbg-heritage DirectoryCell/DirectoryFactory PD (the
+#                Robigalia-personality heart; the slot-caveat → retype mapping).
+#
+# Boots proven natively on macOS aarch64 with the Microkit SDK 2.2.0 +
+# rust-sel4 (pinned commit below). See ../README.md and ../setup.sh.
+
+[workspace]
+resolver = "2"
+members = ["m0-hello", "verifier", "rbg-dir", "verifier-stark", "net", "net-client", "executor-stub", "persist-stub", "compositor-fb", "deos-tutorial", "deos-image"]
+
+[workspace.dependencies]
+# The seL4 Microkit Rust runtime (rust-sel4). Pinned to the commit that matches
+# Microkit SDK 2.2.0. Git dep (these crates are not published to crates.io) so
+# the build is reproducible from a clean checkout with only network access — no
+# absolute home paths. setup.sh also vendors a local checkout for offline use.
+sel4-microkit = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608", default-features = false }
+sel4-microkit-alloc = { git = "https://github.com/seL4/rust-sel4", rev = "efef73cc0bbebc8dd477dde5073d10b1fcfbc608" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

@@ -1,0 +1,48 @@
+{
+  "scenario": "cross_fed_handoff",
+  "summary": "Alice on F1 creates a real bearer cap (via dregg_create_bearer_cap MCP) targeting Bob on F2; OOB URI delivery (cp of dregg+bearer shim); F2 performs bilateral transfer (dregg_bilateral_action) producing real WitnessedReceipts with STARK proofs; CrossFedReceiptBundle v1 assembled from recipient_chain + attested roots (from /federation/roots) + HandoffCertificate built from delegation_chain; dregg-verifier verify-cross-fed-bundle accepts the bundle (exit 0 + overall_verified=true) and rejects a tampered version (introducer flipped). All core assertions drive real dregg-node MCP and the verifier binary.",
+  "actors": ["alice@F1 (node-1)", "bob@F2 (node-1)", "F1 committee (3 validators)", "F2 committee (3 validators)", "dregg-verifier (charlie)"],
+
+  "must_pass": [
+    "both_federations_responding",
+    "F1_exposes_federation_roots",
+    "F2_exposes_federation_roots",
+    "alice_cell_created_on_F1",
+    "bob_cell_created_on_F2",
+    "bearer_cap_issued_on_F1",
+    "bilateral_transfer_on_F2",
+    "cross_fed_bundle_written",
+    "verifier_accepts_bundle",
+    "verifier_rejects_tampered_bundle"
+  ],
+
+  "scaffold_only": [],
+
+  "scaffold_only_explanation": "Old bash-theater assertions (alice_uri_produced_on_F1, uri_delivered_to_F2_inbox, handoff_replay_artifact_constructed, handoff_tampered_artifact_distinguishable) removed. They only tested heredoc writes, cp, and jq diff on synthetic JSON. All assertions now exercise the real MCP tools on dregg-node and the verify-cross-fed-bundle path in dregg-verifier.",
+
+  "must_not_pass": [],
+
+  "must_not_pass_explanation": {},
+
+  "blocked_on": [
+    "SILVER-VISION §5.2.3: validate_handoff registry-lookup hardening + SwissTable wiring (scenario bypasses via direct bilateral_action)",
+    "Full CapTP delivery lane (dregg_captp_deliver + PresentHandoff + HandoffPresentation); scenario manually assembles the bundle and uses unchecked bilateral for receipt production",
+    "AttestedRoot export with real quorum signatures (current /federation/roots only returns height+merkle_root+count; bundle synthesizes roots with empty sigs — is_valid may pass in devnet single-node posture)",
+    "Real compact dregg-handoff: URI (still using dregg+bearer:<json> shim per two-ai-handoff blocker-2)",
+    "Receipt federation_id + executor_signature binding for cross-fed receipts (devnet bilateral turns are local and use Authorization::Unchecked)",
+    "bundle serde (#108 fixed 2026-05-25): hex_to_ints() now converts all [u8;32]/[u8;64] hex fields (merkle_root, federation_id, nonce, swiss, recipient_pk, introducer_signature, target_cell) to integer arrays before writing the bundle JSON, matching AttestedRoot + HandoffCertificate serde expectations"
+  ],
+
+  "documented_gaps": [
+    "When devnet is not running (http://127.0.0.1:7811/status and :7821/status fail), the MCP and verifier assertions are recorded false. The result.json is still produced and the expected comparison is deterministic.",
+    "The cross_fed_cert inside the bundle is constructed in the scenario script from the delegation_chain + federation IDs + fresh nonce/swiss. A production cross-fed handoff would emit a node-produced HandoffCertificate carrying the real CapTpDelivered authorization.",
+    "The two committees are extracted from the genesis.json files at scenario time (validators stripped of xmss_root). This matches what register-federation writes."
+  ],
+
+  "synthetic_warnings_schema": {
+    "_description": "Informational only. result.json carries a 'synthetic_warnings' array populated at runtime by synthetic_warn() calls in the scenario. CI can detect synthetic-true paths via `jq '.synthetic_warnings | length > 0'` or `jq '.synthetic_warnings[]'`. These entries do not affect must_pass / must_not_pass evaluation.",
+    "known_synthetic_assertions": []
+  },
+
+  "improve_dont_degrade": "All previous infrastructure assertions (both_federations_responding, F*_exposes_federation_roots) are retained in must_pass. The eight new real assertions (MCP cells + cap + bilateral + bundle + two verifier outcomes) are in must_pass. No assertion was weakened or moved to scaffold_only/must_not_pass. When the blocked lanes land, add 'captp_deliver_used_on_F2', 'real_signed_attested_roots_in_bundle', 'handoff_cert_produced_by_node' etc. to must_pass and tighten the tampered case to a specific error code or sub-flag in the verdict."
+}

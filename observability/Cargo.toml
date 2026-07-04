@@ -1,0 +1,31 @@
+[package]
+name = "dregg-observability"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Studio-shape trace event emitter for the dregg turn substrate"
+
+[dependencies]
+dregg-cell = { path = "../cell" }
+dregg-circuit = { path = "../circuit", default-features = false }
+dregg-turn = { path = "../turn" }
+dregg-captp = { path = "../captp" }
+dregg-federation = { path = "../federation", default-features = false }
+dregg-types = { path = "../types" }
+hex = "0.4"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+blake3 = "1"
+
+[lib]
+name = "dregg_observability"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dregg-observability"
+path = "src/main.rs"
+
+[lints]
+workspace = true

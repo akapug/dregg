@@ -1,0 +1,33 @@
+[package]
+name = "dregg-captp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+getrandom = { workspace = true }
+bs58 = "0.5"
+postcard = { version = "1", features = ["use-std"] }
+dregg-types = { path = "../types" }
+dregg-cell = { path = "../cell" }
+# Real vetted AEAD stack for store-and-forward end-to-end encryption.
+# X25519 ECDH (x25519-dalek) -> HKDF-SHA256 (hkdf+sha2) -> ChaCha20-Poly1305 (chacha20poly1305).
+chacha20poly1305 = { workspace = true }
+x25519-dalek = { workspace = true }
+hkdf = "0.12"
+sha2 = { workspace = true }
+zeroize = { workspace = true }
+
+# FFI-FREE BY CONSTRUCTION: the §6 non-amplification verdict of `validate_handoff`, the
+# process-drop GC verdict, and the pipeline FIFO resolve route through the `verified_gate` SEAM
+# (`CaptpVerifiedGate`), never `dregg-lean-ffi` directly. A native node installs the Lean-backed
+# gate (from `dregg-exec-lean`) once at startup; an FFI-free target (wasm / verifier-PD / pg) never
+# registers one and the native Rust lattice / FIFO sibling decides. The deleted `no-lean-link`
+# feature is now a dependency choice, not a flag.
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

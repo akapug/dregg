@@ -1,0 +1,56 @@
+[package]
+name = "dregg-demo"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# `prover` is in the DEFAULT set (matching `dregg-circuit`/`dregg-turn`/`dregg-verifier`, all of
+# which default to it) and forwards to `dregg-circuit/prover`, so this crate's own
+# `#[cfg(feature = "prover")]` gates ALIGN with the circuit's prover state. The two
+# `silver-helper` subcommands that mint a v1 hand-AIR (`EffectVmAir`) NoOp STARK
+# (`make-captp-delivered-chain`, `make-recursive-witness`) are the wasm/v1 floor; under `prover`
+# the v1 hand-AIR is retired (the rotated `"effect-vm-rotated"` IR-v2 leg is live), so those two
+# subcommands compile out and report the retirement honestly. Every other silver-helper subcommand
+# (handoff, sovereign-witness, slot-caveats, bilateral-bundle, …) is unaffected.
+default = ["prover"]
+prover = []
+
+[dependencies]
+blake3 = "1"
+ed25519-dalek = { version = "2", features = ["std"] }
+getrandom = { workspace = true }
+hex = "0.4"
+postcard = { version = "1", features = ["use-std"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+dregg-captp = { path = "../captp" }
+dregg-cell = { path = "../cell" }
+dregg-circuit = { path = "../circuit" }
+dregg-commit = { path = "../commit" }
+dregg-federation = { path = "../federation" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
+dregg-verifier = { path = "../verifier" }
+# Cross-app demo helper — drives the four anchor starbridge-apps through
+# `EmbeddedExecutor` to produce real `TurnReceipt`s per step.
+dregg-app-framework = { path = "../app-framework" }
+dregg-credentials = { path = "../credentials" }
+starbridge-identity = { path = "../starbridge-apps/identity" }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice" }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace" }
+starbridge-subscription = { path = "../starbridge-apps/subscription" }
+
+[[bin]]
+name = "dregg-demo"
+path = "src/main.rs"
+
+[[bin]]
+name = "silver-helper"
+path = "two-ai-handoff/silver_helper.rs"
+
+[[bin]]
+name = "cross-app-helper"
+path = "cross-app-e2e/cross_app_helper.rs"
+
+[lints]
+workspace = true

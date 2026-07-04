@@ -1,0 +1,90 @@
+{
+  "//": "Post-conditions the run.sh harness asserts after the canonical handoff flow.",
+  "//": "The demo now demonstrates the Silver-Vision substrate pieces: CapTpDelivered,",
+  "//": "SovereignCellWitness, slot caveats (WriteOnce), and γ.2 bilateral binding.",
+  "//": "Each entry below is a boolean post-condition; arrays group related checks.",
+
+  "//": "Interaction-matrix lane additions: slot_caveat_suite (5 StateConstraint variants),",
+  "//": "credential_set_auth (AuthorizedSet::CredentialSet primitive used by cross-app),",
+  "//": "introduce_bilateral (Effect::Introduce + γ.2 three-cell bundle). See DEMO-INTERACTION-MATRIX.md.",
+
+  "scenario": "alice grants bob a bearer cap; bob exercises via CapTP-delivered turn; charlie verifies (Silver-shape demo)",
+  "transfer_amount": 100,
+
+  "must_pass": [
+    "step_2_alice_and_bob_cells_created",
+    "step_3_grant_turn_committed_with_effect_vm_proof",
+    "step_5_bearer_cap_handoff_uri_dropped",
+    "step_7_exercise_turn_committed",
+
+    "captp_delivered_turn_assembled",
+    "captp_delivered_introducer_sig_verifies",
+    "captp_delivered_sender_sig_verifies",
+    "captp_delivered_sender_pk_matches_cert_recipient",
+    "captp_delivered_introducer_pk_matches_cert_introducer",
+
+    "sovereign_witness_signed_by_alice",
+    "sovereign_witness_self_verifies",
+    "sovereign_witness_signing_message_matches_canonical_layout",
+
+    "slot_caveat_first_write_accepted",
+    "slot_caveat_renewal_accepted",
+
+    "bilateral_bundle_verifies_for_alice_and_bob",
+    "bilateral_bundle_transfer_count_eq_1",
+    "bilateral_bundle_is_agent_cell_alice",
+
+    "slot_caveat_suite_immutable_positive_ok",
+    "slot_caveat_suite_strict_monotonic_positive_ok",
+    "slot_caveat_suite_bounded_by_positive_ok",
+    "slot_caveat_suite_field_delta_positive_ok",
+    "slot_caveat_suite_field_delta_in_range_positive_ok",
+
+    "credential_set_commitment_reproducible",
+    "credential_set_distinct_schemas_distinct_commitments",
+    "credential_set_distinct_issuers_distinct_commitments",
+
+    "introduce_schedule_has_one_introduce",
+    "introduce_bilateral_bundle_verifies",
+
+    "recursive_compression_attached",
+    "strict_recursive_built",
+    "recursive_scope_chain_verified",
+
+    "charlie_grant_proof_verified",
+    "charlie_exercise_proof_verified",
+    "charlie_replay_chain_verified",
+
+    "transfer_credited_bob_100",
+    "transfer_debited_alice_stub_100",
+    "alice_receipt_chain_contains_grant",
+    "bob_receipt_chain_contains_exercise"
+  ],
+
+  "must_not_pass": [
+    "captp_delivered_tampered_signature_accepted",
+    "sovereign_witness_tampered_commitment_accepted",
+    "slot_caveat_rewrite_rejected",
+    "bilateral_tampered_bundle_accepted",
+    "captp_delivered_bearer_cap_reused",
+    "slot_caveat_suite_immutable_negative_accepted",
+    "slot_caveat_suite_strict_monotonic_negative_accepted",
+    "slot_caveat_suite_bounded_by_negative_accepted",
+    "slot_caveat_suite_field_delta_negative_accepted",
+    "slot_caveat_suite_field_delta_in_range_negative_accepted",
+    "introduce_bilateral_tampered_bundle_accepted",
+    "recursive_scope_tampered_vk_hash_accepted"
+  ],
+
+  "verifier_independence": {
+    "different_pid": true,
+    "different_binary": true
+  },
+
+  "documented_gaps": [
+    "MCP_dregg_exercise_bearer_cap_emits_Authorization::Bearer_not_CapTpDelivered",
+    "MCP_does_not_expose_dregg_submit_sovereign_turn_for_witness-carrying_turns",
+    "MCP_does_not_expose_dregg_install_cell_program_for_slot_caveats",
+    "MCP_exercise_tool_does_not_emit_per-cell_WitnessedReceipts_for_bilateral_bundle"
+  ]
+}

@@ -1,0 +1,156 @@
+name: "Federation Node 1"
+
+on:
+  schedule:
+    # Every 5 hours: 0:00, 5:00, 10:00, 15:00, 20:00
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: federation-node-1
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  NODE_ID: "1"
+  STATE_DIR: /tmp/dregg-state
+  GATEWAY_PEER: "dregg.commonquant.com:9420"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  run-node:
+    name: "Node 1 — Federation"
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Load state from federation-state branch
+        run: |
+          git fetch origin federation-state || true
+          mkdir -p "$STATE_DIR"
+          if git show origin/federation-state:nodes/node-1.json > "$STATE_DIR/state.json" 2>/dev/null; then
+            echo "Loaded previous state from federation-state branch"
+          else
+            echo "{}" > "$STATE_DIR/state.json"
+            echo "No previous state, starting fresh"
+          fi
+
+      - name: Load discovery from federation-state branch
+        run: |
+          mkdir -p /tmp/discovery
+          if git show origin/federation-state:discovery.json > /tmp/discovery/discovery.json 2>/dev/null; then
+            echo "Loaded discovery file"
+          else
+            echo '{"federation":[],"intent_service":null}' > /tmp/discovery/discovery.json
+            echo "No discovery file found, using empty"
+          fi
+
+      - name: Install Rust (nightly)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Build dregg-node
+        run: cargo build --release -p dregg-node
+
+      - name: Load node identity
+        run: |
+          mkdir -p "$STATE_DIR"
+          echo -n "${{ secrets.DREGG_NODE_1_KEY }}" | xxd -r -p > "$STATE_DIR/node.key"
+          echo "Node 1 identity loaded"
+
+      - name: Resolve peers
+        id: peers
+        run: |
+          PEERS=""
+          if [ -f /tmp/discovery/discovery.json ]; then
+            PEERS=$(jq -r '.federation[] | select(.role != "node-1") | .addr' /tmp/discovery/discovery.json 2>/dev/null | paste -sd, -)
+          fi
+          echo "peer_list=$PEERS" >> "$GITHUB_OUTPUT"
+          echo "Resolved peers: $PEERS"
+
+      - name: Run federation node
+        env:
+          DREGG_ROOT_KEY: ${{ secrets.DREGG_ROOT_KEY }}
+          DREGG_NODE_KEY: ${{ secrets.DREGG_NODE_1_KEY }}
+          RUST_LOG: info
+        run: |
+          # Start the node in background
+          ./target/release/dregg-node run \
+            --data-dir "$STATE_DIR" \
+            --port 8420 \
+            --federation-peers "$GATEWAY_PEER,${{ steps.peers.outputs.peer_list }}" &
+          NODE_PID=$!
+
+          echo "Node started with PID $NODE_PID"
+
+          # Periodic state snapshots every 5 minutes
+          ELAPSED=0
+          INTERVAL=300
+          MAX_RUNTIME=20700  # 5h45m in seconds
+
+          while [ $ELAPSED -lt $MAX_RUNTIME ]; do
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+
+            # Check if node is still running
+            if ! kill -0 $NODE_PID 2>/dev/null; then
+              echo "Node process exited unexpectedly at ${ELAPSED}s"
+              break
+            fi
+
+            # Signal the node to snapshot (USR1)
+            kill -USR1 $NODE_PID 2>/dev/null || true
+            echo "Snapshot triggered at ${ELAPSED}s ($(date -u +%H:%M:%S))"
+          done
+
+          # Graceful shutdown
+          echo "Sending SIGTERM for graceful shutdown..."
+          kill -TERM $NODE_PID 2>/dev/null || true
+          wait $NODE_PID 2>/dev/null || true
+          echo "Node shutdown complete"
+
+      - name: Publish state to federation-state branch
+        if: always()
+        run: |
+          git fetch origin federation-state || true
+          git worktree add /tmp/fed-state federation-state 2>/dev/null || {
+            git worktree add --detach /tmp/fed-state
+            cd /tmp/fed-state
+            git checkout --orphan federation-state
+            git rm -rf . 2>/dev/null || true
+            mkdir -p nodes
+            echo '{}' > nodes/.gitkeep
+            git add .
+            git commit -m "Initialize federation-state branch"
+          }
+          cd /tmp/fed-state
+          mkdir -p nodes
+          cp "$STATE_DIR/state.json" nodes/node-1.json 2>/dev/null || echo '{}' > nodes/node-1.json
+          git add nodes/node-1.json
+          git diff --cached --quiet || {
+            git config user.name "dregg-federation[bot]"
+            git config user.email "federation@dregg.fg-goose.online"
+            git commit -m "node-1 state update [skip ci]"
+            git push origin federation-state
+          }
+
+      - name: Notify discovery service
+        if: always()
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          event-type: node-state-updated
+          client-payload: '{"node": "1", "role": "node-1"}'
+        continue-on-error: true

@@ -1,0 +1,108 @@
+# starbridge-web-surface — the embedded web surface as a cap-confined dregg
+# cell, and the `dregg://` web-of-cells fetch as a verified, attested cross-cell
+# read.
+#
+# This crate is the WEB-SPECIFIC layer over the firmament's already-real surface
+# cap model. It builds NOTHING the protocol already has:
+#
+#   * `docs/EMBEDDED-WEB-SURFACE.md` — a Servo `WebView` is a dregg
+#     `Capability{ target: Surface(cell), rights }` cell; every web authority
+#     (navigate / fetch / new-window / permission / HTTP-auth) is a
+#     `WebViewDelegate` callback, and the embedder's impl of that delegate IS the
+#     cap gate. THIS crate ships that delegate trait (`WebSurfaceDelegate`,
+#     shaped like libservo's real `WebViewDelegate`) and a real in-crate cap-
+#     enforcing impl (`CapGatedDelegate`) over a `MockSurface` standing in for
+#     the libservo `WebView` (the LIBSERVO SEAM — see `src/delegate.rs`).
+#
+#   * `docs/desktop-os-research/DISTRIBUTED-SERVO-FACETS.md` Facet 1 — a
+#     `dregg://<cell>` link is a sturdy ref into a cell; "fetching" it is a
+#     verified cross-cell read returning ATTESTED content (a receipt + a
+#     quorum-signed `AttestedRoot`), and the trusted-path origin chrome is drawn
+#     from the LEDGER (the cell's authority lineage), never the fetched page.
+#     THIS crate ships that resolver (`src/web_of_cells.rs`).
+#
+# It is a STANDALONE Cargo workspace, deliberately NOT a member of the repo-root
+# workspace (its empty `[workspace]` table below makes it its own root) — exactly
+# the `sel4/dregg-firmament` + `pg-dregg` pattern. So `cd starbridge-web-surface
+# && cargo test` builds and runs WITHOUT touching the repo-root `./target` a node
+# lane owns. It path-depends on the REAL dregg crates so the cap discipline is the
+# GENUINE one (`is_attenuation`, `AuthRequired`, `CellId`, the real
+# `TurnExecutor` via `dregg-firmament::SurfaceBacking`) — never a parallel model.
+
+[package]
+name = "starbridge-web-surface"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The embedded web surface as a cap-confined dregg cell + the dregg:// web-of-cells verified-attested fetch. The WebViewDelegate IS the cap gate; a link is a capability; a fetch is a verified turn returning attested content."
+
+[dependencies]
+# The REAL cap-gradation bridge: the `Capability{ target: Surface(cell), rights }`
+# handle, the `SurfaceBacking` (real `Ledger` + `TurnExecutor`, the five surface
+# verbs gating on the genuine `is_attenuation`), and the re-exported real rights
+# lattice + `CellId`. The whole surface authority model rides this; we never
+# reinvent `granted ⊆ held`.
+dregg-firmament = { path = "../sel4/dregg-firmament" }
+
+# The REAL cell types: `AuthRequired`/`is_attenuation` (the rights lattice),
+# `CapabilityRef`/`CapabilitySet` (the c-list), `Cell`/`Ledger`/`Permissions`.
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+
+# The REAL attestation primitives: `AttestedRoot` (the quorum-signed,
+# blocklace-bound root) + `merkle_root_of_receipt_hashes` (the receipt-stream
+# Merkle verifier) + `CellId`. The `dregg://` fetch's attested-content envelope is
+# built from these — never a bespoke attestation.
+dregg-types = { path = "../types" }
+
+# The REAL turn `Effect` enum — the genuine thing the `TurnExecutor` runs (the
+# same `dregg_turn::Effect` `dregg-firmament`'s surface backing drives). The
+# cell-affordances layer (`src/affordance.rs`) carries a real `Effect` as each
+# affordance's effect-TEMPLATE — the htmx-on-crack "button" IS the verified turn
+# the executor would fire, never a stub. We name the GENUINE effect, not a
+# parallel one. (This is already linked transitively via `dregg-firmament`; we
+# name it directly so the template is the real type. NB: the rotation HARDSWAP is
+# rewriting `turn/` — this is the boundary the crate touches it at; see
+# `src/affordance.rs` `## What is real vs. the seam`.)
+dregg-turn = { path = "../turn" }
+
+# Content-addressing (the `content_hash = blake3(bytes)` half of the attested
+# resource) + the receipt-leaf commitment. The SAME `blake3 = "1"` the cell /
+# types crates already pull in (the receipt-tree hash family in
+# `dregg_types::merkle_root_of_receipt_hashes` is blake3) — no new lockfile
+# surface, just naming it directly.
+blake3 = "1"
+
+# The REAL receipt-row wire shape the node's `/api/events/stream` serves. The
+# `ReceiptStream` primitive (`src/receipt_stream.rs`) consumes EXACTLY
+# `dregg_query::client::ReceiptEventRow` — the crate's already-canonical,
+# transport-agnostic mirror of `node/src/events.rs::ReceiptEvent` (chain_index +
+# receipt_hash + height + cells + kinds). We NAME that receipt-row shape, never
+# reinvent a parallel one; this leaf crate carries no HTTP/async dep itself
+# (exactly the discipline this stream mirrors).
+dregg-query = { path = "../dregg-query" }
+
+# Parse the SSE frame's JSON `data:` payload (the full `ReceiptEvent` envelope,
+# whose `receipt` field is the canonical `dregg_turn::TurnReceipt` the
+# forge-detection re-hashes). The SAME `serde` / `serde_json` `dregg-query`
+# already pulls — no new lockfile surface.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The async `Stream` trait — `futures_core` ONLY (the tiny, runtime-agnostic
+# trait crate, already in the root workspace lock; NOT tokio, NOT an executor).
+# Gated behind the default `stream` feature so the cockpit's gpui async-executor
+# can `.await` a `ReceiptStream` (driving `Stream::poll_next`), while the pure
+# `ingest` verification state machine stays executor-free + always testable. This
+# leaf crate stays transport-and-runtime-agnostic, exactly like `dregg-query`.
+futures-core = { version = "0.3", optional = true }
+
+[features]
+default = ["stream"]
+# The `futures_core::Stream` impl over the receipt feed (the cockpit-async edge).
+# Off → the pure pull `ReceiptStream::ingest` / `next_ready` state machine only.
+stream = ["dep:futures-core"]
+
+[dev-dependencies]
+# (tests live inline in each module + in `tests/`)
+

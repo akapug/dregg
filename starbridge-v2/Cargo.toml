@@ -1,0 +1,905 @@
+# Starbridge v2 — the NATIVE dregg master interface.
+#
+# STANDALONE WORKSPACE (this file declares its own `[workspace]`). It is
+# deliberately EXCLUDED from the main `/Users/ember/dev/breadstuffs/Cargo.toml`
+# members for two reasons:
+#   1. gpui drags a very heavy native dep tree (windowing/font/GPU: metal,
+#      harfbuzz/cosmic-text, objc on macOS, a winit-class event loop).
+#   2. THE EMBEDDED EXECUTOR links the verified Lean archive (`libdregg_lean.a`,
+#      multi-MB) via `dregg-turn`/`dregg-cell`. That is exactly what we WANT for
+#      a native desktop master interface — but it is the link the `no-lean-link`
+#      crates (wasm/, verifier/) exist to AVOID, so unifying it onto the main
+#      workspace would be a feature-unification footgun.
+#
+# Build FROM INSIDE this directory (never at the repo root):
+#   cd starbridge-v2 && cargo build                                  # native-full (default)
+#   cd starbridge-v2 && cargo build --no-default-features --features sel4-thin
+#
+# `cd` IN FIRST — do NOT use `--manifest-path` from the repo root. `rust-toolchain.toml`
+# resolution is DIRECTORY-scoped: this crate pins the ROLLING `nightly` (see
+# rust-toolchain.toml — gpui needs `std::hint::cold_path`, stabilized after the
+# repo root's `nightly-2026-01-01`). Running `cargo --manifest-path starbridge-v2/...`
+# from the repo root picks up the ROOT's `nightly-2026-01-01` toolchain, which is
+# too old and fails to compile gpui's `profiler.rs` with E0658 (`cold_path` unstable).
+# If the rolling `nightly` is itself stale, `rustup update nightly` refreshes it
+# (this affects ONLY this crate — the root + every other lane pin a dated nightly).
+#
+# =============================================================================
+# TWO BUILDS, ONE CODEBASE  (mirrors the verifier/ `no-lean-link` pattern)
+# =============================================================================
+#
+# * `native-full` (DEFAULT) — the master interface. EMBEDS THE REAL VERIFIED
+#   EXECUTOR (`dregg_turn::executor::TurnExecutor` over a `dregg_cell::Ledger`)
+#   and runs a live local dregg world NATIVELY. Links the Lean archive. This is
+#   the "smalltalk-surpassing" cockpit: a live, inspectable, capability-secured,
+#   verified, provenance-carrying image. Renders via gpui.
+#
+# * `sel4-thin` (feature-gated, Lean-free) — the thin HTTP client / verifier-
+#   only path for the eventual seL4 protection-domain component
+#   (docs/SEL4-EMBEDDING.md, owned by another lane — do NOT edit it). Compiles
+#   WITHOUT the embedded executor and WITHOUT gpui's heavy stack; it speaks the
+#   node's HTTP+SSE wire contract (`src/client.rs` + `src/model.rs`). The
+#   `NodeClient::{Mock,Http}` surface stays available in BOTH builds so the
+#   master interface can ALSO connect to remote nodes/federations.
+
+[package]
+name = "starbridge-v2"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.0"
+authors = ["Dregg Contributors"]
+license = "AGPL-3.0-or-later"
+homepage = "https://dregg.fg-goose.online"
+repository = "https://github.com/emberian/dregg"
+description = "Starbridge v2 — the native dregg master interface: a live, verified, ocap world (someday an seL4 component)"
+
+[lib]
+name = "starbridge_v2"
+path = "src/lib.rs"
+
+[[bin]]
+name = "starbridge-v2"
+path = "src/main.rs"
+
+# dregg-mcp — the MCP server that drives the live verified image (inspect / act /
+# map / screenshot). gpui-free: build it under `embedded-executor` alone (it
+# shells out to the headless-render `starbridge-v2` binary for screenshots).
+#   cargo build --release --no-default-features --features embedded-executor --bin dregg-mcp
+[[bin]]
+name = "dregg-mcp"
+path = "src/bin/dregg_mcp.rs"
+required-features = ["embedded-executor"]
+
+# systemui-cap-bake — the graphideOS SystemUI cap-chrome bake (GRAPHIDEOS.md §1/§2
+# stage 4). Builds a REAL `permgate::PermWorld` for a confined maps android-cell, renders
+# the deos-cockpit-as-android-SystemUI (status bar + quick-settings shade + hand-over
+# sheet), then drives a real `Effect::GrantCapability` hand-over and re-renders — so the
+# bake artifact SHOWS the phone's permission UI being the deos cap surface (a dim badge
+# flips lit via a verified kernel turn). gpui-free:
+#   cargo run --no-default-features --features android-systemui --bin systemui-cap-bake
+[[bin]]
+name = "systemui-cap-bake"
+path = "src/bin/systemui_cap_bake.rs"
+required-features = ["android-systemui"]
+
+# A deos document persists to the REAL committed cell heap (`fields_map` via
+# `Effect::SetField`), not a sidecar — drives the encode/commit/read-back path
+# through the real World/executor. gpui-free: needs only the embedded executor.
+[[test]]
+name = "deos_doc_persists_to_cell_heap"
+path = "tests/deos_doc_persists_to_cell_heap.rs"
+required-features = ["embedded-executor"]
+
+[features]
+# =============================================================================
+# TWO USER-FACING DIALS — `desktop` (the whole cockpit) and `headless` (CI bake).
+# =============================================================================
+# Everything below `desktop`/`headless`/`gpui-web`/`sel4-thin` is an INTERNAL
+# building block (the `#[cfg(feature = …)]` gate vocabulary). A USER never
+# combines them by hand — they pick ONE of:
+#   * `desktop`   (the DEFAULT)  — the full native cockpit, every surface ON.
+#   * `headless`  — the gpui-free / window-free CI + seL4-frame bake path.
+#   * `gpui-web`  — the wasm32 in-browser cockpit (consumed by `starbridge-v2/web`).
+#   * `sel4-thin` — the Lean-free thin HTTP/SSE verifier client.
+# The internal knobs (`gpui-ui`/`dev-surfaces`/`card-pane`/`web-shell`/…) are
+# folded INTO `desktop` and are no longer separate user-facing dials.
+
+# DEFAULT = the whole desktop: the master interface, every surface ON.
+default = ["desktop"]
+
+# `desktop` — THE ONE DIAL for the full native cockpit. Embedded verified
+# executor + the app registry + the gpui window + the live-node link + every
+# surface: the self-hosting editor/terminal/chat dock (`dev-surfaces` → the FULL
+# Zed via `zed-full`), the agent's hands on the glass (`agent-js`), a card as a
+# live pane (`card-pane`), the real libservo web shell (`web-shell` → `servo`),
+# and the output-buffer capture (`render-capture`, intrinsic — the MCP shot, the
+# seL4 blit, the atlas crawl). This is the headline build; `cargo build` (no
+# flags) gets all of it. The only things OUTSIDE it are deliberately-heavy opt-in
+# lanes (`live-brain` = a Claude subprocess loop; `process-pd` = OS-sandboxed
+# child PDs) and the other-target dials (`gpui-web`/`sel4-thin`).
+desktop = [
+    "embedded-executor",
+    "app-registry",
+    "gpui-ui",
+    "live-node",
+    "render-capture",
+    "dev-surfaces",
+    "web-shell",
+    "agent-js",
+    "card-pane",
+    "android-systemui",
+]
+
+# `android-systemui` — the graphideOS SystemUI / cockpit-chrome half (GRAPHIDEOS.md
+# §1 SystemUI row · §2 stage 4): the deos cockpit AS the android system UI. It pulls
+# the `android-cell` crate so the cockpit can hold a REAL `permgate::PermWorld` (a live
+# ledger + the verified `TurnExecutor`) and render its live cap-badge set as a
+# status-bar / quick-settings cap-chrome, handing over a dangerous cap through the REAL
+# `Effect::GrantCapability` — the phone's permission UI IS the deos cap surface. Pure,
+# gpui-free flow model (`src/systemui_caps.rs`, like `powerbox`/`web_cells`),
+# `cargo test`-able; folded into `desktop`. `android-cell` reuses exactly the path-deps
+# `embedded-executor` + `servo` already pull (firmament / web-surface / captp / cell /
+# turn / servo-render), so this adds the thin cap-chrome crate, not a new dep tree.
+android-systemui = ["embedded-executor", "dep:android-cell"]
+
+# `desktop-zed-full` — the INTENDED full-Zed-default build (`desktop` PLUS
+# `zed-full`). It stays UNDECLARED for the same reason `zed-full`/`zed-full-pane`
+# and the `deos-zed-full` dep are undeclared: the native `links="sqlite3"` clash
+# (BLOCKER 1, see the `zed-full` note below + the commented `deos-zed-full` dep).
+# The unicode-width blocker (BLOCKER 2) that previously also gated this is RESOLVED
+# (`dregg-tui` is now its own root-excluded workspace). To LAND: bump Zed's `sqlez`
+# to `libsqlite3-sys 0.35` in the emberian/zed fork (the one-line `links="sqlite3"`
+# unification), then declare `deos-zed-full` + the `zed-full`/`zed-full-pane`/
+# `desktop-zed-full` features and fold `zed-full` into `desktop`.
+
+# `headless` — the WINDOW-free build for CI + the seL4 frame bake. The embedded
+# verified executor + the app registry + the gpui cockpit element tree (`gpui-ui`)
+# + the offscreen output-buffer capture (`render-capture`, gpui's `test-support`
+# offscreen wgpu path) — exactly what `--render-cockpit` needs to bake the 800x600
+# RGBA the seL4 deos-image PD blits, with NO window ever opened. It is NOT
+# gpui-FREE (the cockpit IS a gpui element tree — "headless" means no window, the
+# offscreen renderer paints it), but it deliberately DROPS the heavy windowed
+# surfaces: no `dev-surfaces` (deos-zed/terminal/chat), no `card-pane`/`agent-js`/
+# `web-shell` (their multi-GB mozjs + servo). For a build with NO gpui at all, use
+# `--no-default-features --features embedded-executor` (the gpui-free `--lib` lane)
+# or `sel4-thin` (the Lean-free thin client).
+headless = ["embedded-executor", "app-registry", "gpui-ui", "render-capture"]
+
+# BACK-COMPAT ALIASES — existing `--features native-full` / `--features
+# headless-render` invocations + CI lanes still work. `native-full` IS `desktop`
+# now (the rename); `headless-render` IS `desktop` (the old bake alias — the
+# capture path is already in `desktop`). New invocations should say `desktop`.
+native-full = ["desktop"]
+
+# dev-surfaces — mount the real editor + terminal as dock panes (the self-hosting
+# dev loop: edit deos's own repos in deos-zed, run cargo/git in deos-terminal,
+# all INSIDE deos). Pulls the deos-zed + deos-terminal crates (own workspaces,
+# same gpui fork @407a6ff so one gpui resolves). gpui-ui-gated via dock/mod.rs.
+# Enables `firmament` so the editor pane edits sovereign cells (saves = receipted
+# turns), not disk — the cockpit editor is firmament-backed by default.
+dev-surfaces = ["dep:deos-zed", "dep:deos-terminal", "dep:deos-hermes", "dep:deos-matrix", "firmament"]
+
+# zed-full / zed-full-pane — READY TO DECLARE (the cockpit-side code is written +
+# verified). `zed-full-pane` pulls `deos-zed-full` (Zed's real editor/workspace/
+# project + all panels over the cell-ledger) and is the cfg-gate `lib.rs` +
+# `src/zed_full_pane.rs` read. `zed-full` rides `dev-surfaces` (the dock that hosts
+# it). LEFT COMMENTED for the SAME reason the `deos-zed-full` dep below is: merely
+# declaring it injects Zed's `sqlez` → `libsqlite3-sys 0.30` into the root lock
+# graph, clashing (`links="sqlite3"`) with `deos-matrix` → `libsqlite3-sys 0.35`
+# (EMPIRICALLY re-confirmed this session). UNCOMMENT — and fold `zed-full` into
+# `desktop` — the instant the emberian/zed fork rev carrying the one-line `sqlez`
+# → `libsqlite3-sys 0.35` bump is pinned across breadstuffs.
+# zed-full = ["dev-surfaces", "zed-full-pane"]
+# zed-full-pane = ["dep:deos-zed-full"]
+
+# zed-full (legacy note) — mount the WHOLE Zed `workspace::Workspace` (the real editor /
+# workspace / project crates + every panel, over a FirmamentFs cell-ledger) as the
+# Dev editor surface (`src/zed_full_pane.rs`'s `ZedFullPane`, a `CockpitSurface`
+# hosting the live `Entity<Workspace>`). Pulls `deos-zed-full` with `full-zed`.
+# Rides `dev-surfaces` (the dock that hosts it). Intended for the default `desktop`.
+#
+# BLOCKER 2 — the root-workspace `unicode-width` VERSION conflict — RESOLVED.
+# `deos-zed-full` → `editor` → `markdown` → `mermaid_render` → `merman` needs
+# `unicode-width ^0.2.2`; the former root member `dregg-tui` → `ratatui 0.29`
+# pinned `unicode-width =0.2.0` (an exact upstream pin). The fix: `dregg-tui` (the
+# only ratatui user) is now its OWN root-EXCLUDED workspace (root Cargo.toml
+# `exclude` + dregg-tui's own `[workspace]`/`[patch]`/`rust-toolchain.toml`), so
+# its `=0.2.0` pin is out of the root resolution graph and merman's `^0.2.2`
+# resolves. `dregg-tui` still builds standalone (`cd dregg-tui && cargo build`).
+#
+# BLOCKER 1 — the native `links="sqlite3"` collision — STILL OPEN (the reason
+# `zed-full`/`zed-full-pane` + the `deos-zed-full` dep are LEFT UNDECLARED). `sqlez`
+# (Zed's `workspace` → `sqlez`) links `libsqlite3-sys 0.30`. The root member
+# `deos-matrix` (pulled into the cockpit via `dev-surfaces`) cannot share a binary
+# with it: cargo's links-unifier pulls `matrix-sdk-sqlite` → `libsqlite3-sys 0.35`
+# whenever `sqlez` is co-present (EVEN with `deos-matrix`'s on-disk `live-matrix`
+# store OFF — the prior "in-memory store resolves it" note was incomplete), and
+# `web-shell`'s libservo (→ `servo-storage` → `rusqlite 0.37` → `libsqlite3-sys
+# 0.35`) is the same clash a second way. Two `links="sqlite3"` packages in one
+# binary is forbidden. Declaring `deos-zed-full` (even feature-off) injects `sqlez`
+# into the WHOLE-workspace lock graph and breaks resolution for the entire root
+# workspace — exactly the "merely declaring breaks resolution" class the
+# unicode-width pin used to cause. The clean ONE-LINE close: bump Zed's `sqlez` to
+# `libsqlite3-sys 0.35` in the emberian/zed fork's workspace `Cargo.toml`, so
+# `sqlez` + `servo-storage` + `matrix-sdk-sqlite` all resolve to ONE
+# `links="sqlite3"` package. To LAND once that fork bump is in, add back:
+#     zed-full      = ["dev-surfaces", "zed-full-pane"]
+#     zed-full-pane = ["dep:deos-zed-full"]          # the cfg-gate name lib.rs reads
+#     deos-zed-full = { path = "../deos-zed-full", features = ["full-zed"], optional = true }
+# then fold `zed-full` into `desktop` and retire `desktop-zed-full`.
+# `src/zed_full_pane.rs` is written + ready; it compiles under `--features
+# zed-full-pane` once declared (the `deos-zed-full[full-zed]` + `servo` swgl graph
+# resolves clean in isolation — only the `libsqlite3-sys` unification gates it).
+
+# agent-js — THE AGENT'S HANDS ON THE REAL GLASS. Binds the confined agent's
+# `run_js` (deos-js, real SpiderMonkey via mozjs) to the cockpit's LIVE `World`:
+# the agent crawls + drives the operator's ACTUAL cells (or a `world.fork()`),
+# every JS-driven turn a real verified turn on the live ledger, receipted +
+# bounded by the agent's `held` (the cap tooth in deos-js, mounted under the
+# attenuated cap, never root). `src/agent_attach.rs` is the cockpit-side
+# `deos_js::WorldSink` weld; `--render-agent-attach` (main.rs, render-capture)
+# bakes a PNG of the cockpit inspector showing the cell the agent's JS modified.
+# Pulls deos-js's multi-GB mozjs, so it is OFF by default (opt-in for the bake +
+# the attach test). Implies `embedded-executor` (it drives a `World`).
+agent-js = ["embedded-executor", "dep:deos-js"]
+
+# card-pane — A HYPERDREGGMEDIA CARD AS A LIVE COCKPIT SURFACE. Mounts a deos-js
+# applet's view-tree (the `deos.ui.*` element-tree) as a real gpui-component pane
+# (`src/card_pane.rs`'s `CardPane`), backed by the cockpit's LIVE `World` through the
+# `agent_attach` `WorldSinkAdapter::live` weld: a `bind` re-reads the operator's real
+# cell off the live ledger, and a button's onClick fires ONE cap-gated verified turn
+# committed onto that live ledger. Pulls `deos-view` (the gpui renderer crate, its
+# OWN standalone workspace pinning the SAME gpui fork @407a6ff) + `agent-js` (deos-js
+# + the live World). Off the default build (multi-GB mozjs). The `--render-card-pane`
+# bake (main.rs, render-capture) bakes a PNG of the card pane after a live fire.
+# Also enables deos-view's `web` renderer (gpui-free, additive) so the desktop's
+# content-IR pane (`deos_desktop::viewnode_pane`) can render the IDENTICAL portable
+# `ViewNode` to HTML beside the live native pane — the renderer-independence proof.
+card-pane = ["agent-js", "gpui-ui", "render-capture", "dep:deos-view", "deos-view/web"]
+
+# live-brain — THE HEADLINE: a LIVE Hermes brain (a real Claude over the
+# `hermes-acp` ACP subprocess) drives `run_js` against the cockpit's LIVE `World`.
+# The model is given a short task, DECIDES the JS itself, and that JS runs on the
+# live ledger (real crawl + real receipted turns), every fire bounded by the
+# agent's `held` (the cap tooth). Pulls `deos-hermes` with `js-agent` (its
+# `LiveJsHands` + `AcpClient::with_run_js_hook` wiring), which shares the SAME
+# `../deos-js` mozjs `agent-js` pulls — one engine across the graph. The
+# `--render-live-brain` bake (main.rs) drives the loop + bakes the cockpit
+# before/after. Off the default build (subprocess + multi-GB mozjs).
+live-brain = ["agent-js", "dep:deos-hermes", "deos-hermes/js-agent"]
+
+# firmament — the cockpit editor pane edits SOVEREIGN CELLS over an in-process
+# `Ledger` + `TurnExecutor`, and every save is a real cap-gated `SetField` turn
+# leaving a verifiable `TurnReceipt` (NOT a disk write). Forwards to deos-zed's
+# `firmament` feature (the live `FirmamentFs` impl over the same verified spine
+# `World` wraps). `dock/editor_surface.rs`'s `EditorPane::new` routes to the
+# firmament-backed mount when this is on. Rides `dev-surfaces` so the default
+# cockpit build carries it; turning it off gives the disk (RealFs) editor pane.
+firmament = ["deos-zed/firmament"]
+
+# process-pd — the LIVE-TRANSPORT re-home of `migrate` (`docs/deos/SURFACE-MIGRATION.md`
+# §2(b)). Forwards to `dregg-firmament`'s `process-pd` + `process-pd-sandbox`: a
+# surface can migrate to a CONFINED child PD (a forked, OS-sandboxed process whose
+# only channels are its firmament Endpoints — file/network/exec denied), and the
+# surface's present/route_input re-home onto that child's SURFACE Endpoint so the
+# GLASS follows the cap. Unix-only (fork/socketpair/seatbelt-or-LSM); OFF by default
+# (the fast `cargo test` keeps the in-process compositor). `dock/migrate.rs`'s
+# `PresentTransport` is gated on this. Requires `embedded-executor` for the
+# `dregg-firmament` dep + `crate::surface::SurfaceCapability`.
+process-pd = ["embedded-executor", "dregg-firmament/process-pd", "dregg-firmament/process-pd-sandbox"]
+
+# The LIVE-NODE connection — the real HTTP+SSE link to a running dregg node
+# (`NodeClient::Http` + the `/api/events/stream` reader). Pulls `reqwest` (its
+# blocking client runs its own internal runtime on a private thread, so it needs
+# NO tokio runtime from the caller — clean to add to the otherwise-async-free
+# embedded build). The PURE layer of `live_node` (the SSE parser + reflection +
+# the receipt-feed cursor) compiles WITHOUT this feature and is `cargo test`-able;
+# only the byte-pull (`LiveNode::sync` + the SSE reader) is gated here. Both
+# `native-full` and `sel4-thin` enable it (the wire contract is shared).
+live-node = ["dep:reqwest"]
+
+# The embedded verified executor + live local world. Links libdregg_lean.a.
+# Headless-usable (the `World` engine + dynamics + reflection are gpui-free and
+# `cargo test`-able under just this feature).
+#
+# `dregg-sdk` rides the SAME Lean link (it pulls dregg-lean-ffi unconditionally,
+# exactly as dregg-turn does) — so the cipherclerk panel surfaces the REAL
+# `dregg_sdk::AgentCipherclerk`, never a parallel toy. We take it
+# `default-features = false` to keep the heavy networking/captp (tokio/quinn,
+# async) deps out of this headless, `cargo test`-able build: the cipherclerk +
+# token surface we surface (identities, mint/attenuate/delegate, cell_id) is in
+# the SDK's un-gated core.
+# NOTE: `app-registry` (the pre-built starbridge-apps wired into the cockpit) is
+# NOT pulled here — the app crates (`dregg-app-framework`/`starbridge-*`) are
+# declared ONLY in the non-wasm dependency table (they don't build on wasm32), so
+# pulling `app-registry` from the shared `embedded-executor` would make the wasm
+# web bundle (`gpui-web`) fail to resolve `dep:starbridge-gallery` &c. Native
+# builds get the registry via `native-full` (or pass `--features app-registry`
+# alongside `embedded-executor` for the gpui-free native test path); the wasm
+# build omits it cleanly.
+embedded-executor = ["dep:dregg-turn", "dep:dregg-cell", "dep:dregg-cell-crypto", "dep:dregg-types", "dep:dregg-sdk", "dep:dregg-coord", "dep:dregg-token", "dep:dregg-userspace-verify", "dep:dregg-deploy", "dep:dregg-firmament", "dep:starbridge-web-surface", "dep:deos-web-cells", "dep:dregg-persist", "dep:dregg-doc", "dep:dregg-captp", "dep:dregg-secrets"]
+
+# THE APP REGISTRY — wire `dregg-app-framework` + a STARTER SET of pre-built
+# starbridge-apps (gallery / tussle / sealed-auction / bounty-board) into the
+# cockpit so a real pre-built deos app launches into a live app-substrate World
+# and fires REAL verified turns (`src/app_registry.rs`). The apps depend only on
+# `dregg-app-framework`, which path-deps the SAME `../sdk`/`../turn`/`../cell`
+# this crate already pulls under `embedded-executor` — so cargo resolves IDENTICAL
+# `AppCipherclerk`/`EmbeddedExecutor`/`DeosApp`/`Effect`/`TurnReceipt` instances
+# (the registry's executor ledger IS an app-framework ledger; a launched app's
+# cell + state is visible to a second reader of that same executor — the
+# inspector seam). The framework drags its server tree (axum/tokio/tower-http)
+# which is fine for the native desktop build; this is gpui-free + `cargo test`-able.
+#
+# `app-registry` IMPLIES `embedded-executor` (it uses the same `dregg-sdk`/`-cell`/
+# `-types` surface `app_registry.rs` reaches for, and `app_worldspine.rs` bridges the
+# launched app onto `crate::world::World`). It is NOT the other way round: the shared
+# `embedded-executor` does NOT pull `app-registry`, so the wasm web bundle (`gpui-web`
+# → `embedded-executor`) never tries to resolve the non-wasm app crates. Native builds
+# turn it on via `native-full` (or `--features app-registry` for the gpui-free test path).
+app-registry = [
+    "embedded-executor",
+    "dep:dregg-app-framework",
+    "dep:starbridge-gallery",
+    "dep:starbridge-tussle",
+    "dep:starbridge-sealed-auction",
+    "dep:starbridge-bounty-board",
+    # The second wave (gallery-shape apps wired onto the live World ledger).
+    "dep:starbridge-agent-orchestration",
+    "dep:starbridge-agent-provenance",
+    "dep:starbridge-compartment-workflow-mandate",
+    "dep:starbridge-compute-exchange",
+    "dep:starbridge-escrow-market",
+    "dep:starbridge-nameservice",
+    "dep:starbridge-privacy-voting",
+    "dep:starbridge-storage-gateway-mandate",
+    "dep:starbridge-subscription",
+    "dep:starbridge-swarm-orchestration",
+    "dep:starbridge-tool-access-delegation",
+    # The SERVICE-ECONOMY value app (durable execution leased + metered + paid).
+    "dep:starbridge-execution-lease",
+    # The sender-bound wave (affordances that read the turn's sender, via `commit_as`).
+    "dep:starbridge-supply-chain-provenance",
+    "dep:starbridge-identity",
+    "dep:starbridge-governed-namespace",
+    # The polis governance layer (a PROGRAM entry — installs a polis `CellProgram`
+    # onto World + fires a council `propose`; not a `DeosApp`).
+    "dep:starbridge-polis",
+]
+
+# OPT-IN real-content rendering. `servo` pulls `servo-render` (the SWGL software
+# rasterizer + the cap-gated `render_dregg_page` content-tile entry) so the
+# web-of-cells tab can paint a real `dregg://` page. Kept OFF the default
+# `embedded-executor` build so the cockpit stays lean (no C++ swgl build) unless
+# real-content rendering is deliberately turned on. The heavy `libservo`/mozjs
+# WebView upgrade is a further feature INSIDE servo-render, not here. The tile
+# wiring (web_cells.rs populate + cockpit.rs `img()`) is LIVE: the opened cell's
+# attested page rasterizes to a cap-gated `RgbaFrame` (web_cells) which the cockpit
+# paints with a gpui `img()`. That paint builds a `gpui::RenderImage` from raw
+# RGBA8, which requires the `image` crate (gpui's `RenderImage`/`Frame` are
+# `image`-typed and not re-exported) — so `servo` pulls `dep:image` (the SAME
+# `image 0.25` gpui + servo-render already resolve; the default build is unchanged,
+# `image` is still pulled only when `servo` or `headless-render` is on).
+servo = ["embedded-executor", "dep:servo-render", "dep:image"]
+
+# THE WEB SHELL — real libservo (the full `WebView` HTML-layout engine) as the deos
+# app's web-content render path, ALWAYS-ON in the windowed build. `web-shell`
+# enables `servo-render/libservo` (the real `ServoBuilder → WebViewBuilder → SWGL
+# context → read_to_image` flow in `servo-render/src/webview.rs`) ON TOP OF the
+# `servo` content-tile wiring, so a web-shell surface calls `render_url_to_frame`
+# into the SAME cap-gated `RgbaFrame → present_frame` path the `dregg://` tile
+# already uses. It is pulled by `native-full` so the DEOS app gets the real engine
+# by default; it is NOT on `embedded-executor` (the gpui-free `cargo test --lib`
+# headless lane), which stays on `servo-render`'s default `swgl-standalone` — so the
+# verification economy (the root workspace + dregg-doc + the lean/headless test
+# lanes) never grinds mozjs. The de-risk path is preserved automatically:
+# `libservo` INCLUDES `swgl-standalone`, so the standalone RGBA8 proof still builds.
+web-shell = ["servo", "servo-render/libservo"]
+
+# The gpui renderer. `runtime_shaders` is LOAD-BEARING on macOS: it makes gpui
+# compile its Metal shaders AT RUNTIME (via `MTLDevice::newLibraryWithSource`,
+# using the system Metal framework) instead of at BUILD time (via `xcrun metal`,
+# which needs the offline Metal Toolchain component). On a host whose
+# MetalToolchain download is blocked/damaged, this is the difference between a
+# window that opens and a build that fails. See docs/STARBRIDGE-V2.md §Window.
+# `gpui_platform/{x11,wayland}` light up the wgpu/Vulkan X11 + Wayland windowing
+# backends for the LINUX build. They are enabled UNCONDITIONALLY here (rather than
+# via a `[target.cfg(linux)].dependencies` re-declaration of the optional
+# `gpui_platform`) because that target-block re-declaration TRIPPED A CARGO
+# RESOLVER PATHOLOGY: on macOS it made the package resolve with ONLY its optional
+# gpui deps and DROP every crates.io + path dependency (the lib's rustc carried the
+# feature flags but ZERO `--extern` for serde/postcard/blake3/dregg-*, so
+# `world.rs`'s `use dregg_cell::…` failed "unlinked crate"). Enabling the features
+# here instead is INERT on macOS — `gpui_platform`'s `x11`/`wayland` features
+# forward to `gpui_linux`, which is itself ONLY a `cfg(any(linux,freebsd))`
+# dependency of `gpui_platform`, so on macOS it is not in the graph and the
+# features activate nothing — while on Linux they enable x11+wayland exactly as the
+# old target block did.
+gpui-ui = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "gpui_platform/runtime_shaders", "gpui_platform/x11", "gpui_platform/wayland"]
+
+# WEB DEOS — the gpui cockpit IN THE BROWSER (wasm32 + WebGPU canvas).
+#
+# Pulls `gpui` + `gpui_platform` for the SAME element-tree rendering the native
+# cockpit uses, but on wasm32 `gpui_platform` forwards to the `gpui_web` backend
+# (a full Platform: dispatcher/display/events/keyboard/window over WgpuRenderer →
+# WebGPU; see ~/.cargo/git/checkouts/zed-.../crates/gpui_web). It does NOT pull
+# the native-only sub-features (`runtime_shaders` = macOS Metal, `x11`/`wayland`
+# = Linux windowing — all inert on wasm but kept out of the web feature for
+# clarity) and does NOT pull web-shell (servo/libservo — native-only), dev-surfaces
+# (alacritty PTY / RealFs — native-only), or render-capture (gpui test-support
+# offscreen wgpu — native bake). The in-browser executor (`embedded-executor`,
+# already wasm-clean per starbridge-v2/web) is the data plane; gpui_web is the
+# presentation plane. This is THE FULL COCKPIT PATH, not a lesser skin — the first
+# slice (starbridge-v2/web `gpui-web` feature) proves gpui renders to a canvas
+# driving the live `World`. See docs/deos/WEB-DEOS.md.
+gpui-web = ["embedded-executor", "dep:gpui", "dep:gpui_platform", "dep:gpui-component"]
+
+# The Lean-free thin-client / verifier path for the seL4 component end-state.
+# Mutually exclusive with native-full at the linker level (no executor, no
+# gpui); selected with `--no-default-features --features sel4-thin`. It speaks the
+# same HTTP+SSE wire contract (`live-node`) the embedded build's remote panel uses.
+sel4-thin = ["live-node"]
+
+# THE HEADLESS COCKPIT BAKE (`--render-cockpit <out>`, `src/main.rs`) — render
+# the REAL `cockpit::Cockpit` element tree to an 800x600 RGBA8 frame with NO GPU
+# and NO window, the byte image the seL4 deos-image PD blits onto its ramfb
+# (sel4/dregg-pd/deos-image/src/cockpit_frame.rgba). Pulls the full native-full
+# build (embedded executor + gpui) PLUS gpui's headless capture path: gpui +
+# gpui_platform `test-support` light up `HeadlessAppContext` + the offscreen
+# wgpu renderer (`WgpuHeadlessRenderer`) + `Window::render_to_image`; gpui_wgpu
+# gives the `CosmicTextSystem` text system; `image` re-encodes the PNG check.
+# Run where software Vulkan (lavapipe) exists, e.g. persvati:
+#   ZED_OFFSCREEN_PREFER_CPU=1 VK_ICD_FILENAMES=…/lvp_icd.json \
+#     cargo run --release --features headless-render -- --render-cockpit OUT
+# RENDER-CAPTURE — the offscreen output-buffer capture (Window::render_to_image +
+# the wgpu offscreen renderer). This is INTRINSIC to the default build: the cockpit
+# must ALWAYS be able to bake its own output buffer to a frame (the MCP screenshot,
+# the seL4 framebuffer blit, the atlas/UI-tree crawl). It is NOT an opt-in toggle —
+# `native-full` (the default) pulls it. (gpui exposes the offscreen path under its
+# `test-support` flag; the name is gpui's, the capability is first-class for us.)
+render-capture = [
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    # `runtime_shaders` is LOAD-BEARING on macOS even for the OFFSCREEN bake: it
+    # makes gpui_macos compile its Metal shaders AT RUNTIME (via the system Metal
+    # framework) instead of at BUILD time (`xcrun metal`, which needs the offline
+    # Metal Toolchain component). `gpui-ui` already carries it for the windowed
+    # build; render-capture carries it too so the gpui-free `headless` bake lane
+    # (which does NOT enable `gpui-ui`) still builds on a Metal-Toolchain-less host.
+    "gpui_platform/runtime_shaders",
+    "dep:gpui_wgpu",
+    "gpui_wgpu/test-support",
+    "dep:image",
+]
+# Back-compat alias: existing `--features headless-render` invocations still work.
+# It maps to the full `desktop` build (capture is already in `desktop`); for the
+# gpui-free CI bake path use `headless` instead.
+headless-render = ["desktop"]
+
+[lints.rust]
+# `zed-full-pane` is a deliberately-undeclared feature (see src/lib.rs:
+# deos-zed-full's `links = "sqlite3"` collides with the cockpit's
+# matrix-sdk-sqlite, so the dep can't be declared without breaking the build);
+# the gated module still compiles standalone. Declare the cfg so it isn't flagged.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("zed-full-pane"))'] }
+
+[dependencies]
+# --- wire contract (always available: remote-node + sel4-thin + wasm paths) --
+# Target-AGNOSTIC deps (the model + wire contract). `reqwest`/`image` are
+# `optional` and gated on the `live-node`/`headless-render` features, which the
+# wasm `embedded-executor` build never enables — so cargo never pulls them on
+# wasm32. `serde`/`blake3`/`postcard` are all wasm32-safe and used by the model.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# HTTP client against the node's routes — needed by the thin path and by the
+# master interface's optional remote-federation connection. Gated on `live-node`.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "blocking"], optional = true }
+hex = "0.4"
+anyhow = "1"
+# Derives `std::error::Error` for the membrane error enum in `shared_fork.rs`
+# (same major as the workspace's other crates, e.g. deos-matrix).
+thiserror = "2"
+# Used by the embedded `World` for the image-commitment root + cell snapshots.
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
+# THE SELF-DESCRIBING VESSEL carrier codec (`src/source_vessel.rs`): the bundled
+# dregg source ships as a `dregg-src.tar.zst` tarball (scripts/pack-dregg-src.sh)
+# inside the AppImage; `SourceVessel` decodes it at runtime to read the source it
+# inhabits. Both already resolve in this workspace's graph (gpui/servo transitive),
+# so naming them directly pulls NO new crate — just makes the dep explicit. The
+# `tar` reader is pure-Rust; `zstd` is the same codec the carrier was packed with.
+zstd = "0.13"
+tar = "0.4"
+# The headless cockpit bake re-encodes the captured RGBA to a PNG visual check
+# (the raw `.rgba` the seL4 PD bakes is written directly). Gated on
+# `headless-render`. 0.25 matches gpui_wgpu's `image` (one resolved version).
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+# --- gpui (gated on `gpui-ui`) ----------------------------------------------
+# DREGG-OWNED FORK: `emberian/zed@dregg-offscreen` is `zed-industries/zed`'s
+# `fca2ccd` (the previously-pinned rev — gpui/gpui_platform are byte-identical to
+# `fca2ccd` there; the one commit between them touches only editor/agent_ui) PLUS
+# the offscreen/headless wgpu renderer the `headless-render` bake needs (the
+# `gpui_wgpu` surfaceless `render_scene_to_image` + `WgpuHeadlessRenderer:
+# PlatformHeadlessRenderer`, wired into `current_headless_renderer` on Linux).
+# Patch source of record: docs/desktop-os-research/patches/gpui-offscreen.patch
+# (+ this session's headless wiring). The windowed `run_window` path is unchanged.
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+# `font-kit` is LOAD-BEARING: gpui_platform's default features are empty, so without
+# this gpui_macos's MacPlatform falls back to `NoopTextSystem` (`platform.rs:197`,
+# `#[cfg(not(feature = "font-kit"))]`) — the windowed cockpit renders BLANK TEXT.
+# Enabling it forwards to `gpui_macos/font-kit` → the real CoreText `MacTextSystem`.
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true, features = ["font-kit"] }
+# The wgpu renderer leaf, pulled DIRECTLY only for the headless bake (the
+# `CosmicTextSystem` platform text system + the offscreen renderer). Gated on
+# `headless-render`; absent from the windowed build. Same fork rev as gpui above
+# so cargo resolves ONE gpui instance across the graph.
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+
+# --- gpui-component: the real widget library (gated on `gpui-ui`) ------------
+# VENDORED fork `emberian/gpui-component@dregg-repoint` (upstream
+# longbridge/gpui-component, Apache-2.0). Upstream pins zed-industries/zed@1d217ee
+# whose gpui/src is BYTE-IDENTICAL to our fork emberian/zed@407a6ff (our fork only
+# patches gpui_linux/platform/wgpu — the offscreen renderer — not the gpui API); the
+# fork re-points every zed-derived dep at the SAME rev pinned above, so cargo
+# resolves ONE gpui instance across the cockpit + widget graph. This crate is the
+# `crates/ui` member (gpui-component); it gives the cockpit a real text `Input`
+# (which dregg had NONE of), Button, and the full shadcn-style widget set.
+#
+# Default features OFF: the `ui` crate has no `default`, and its heavy bits
+# (tree-sitter syntax grammars for the CodeEditor/Markdown) are all opt-IN — none
+# are enabled here, keeping the cockpit lean. Add a `tree-sitter-*` feature later
+# only if the CodeEditor is wanted. Provenance + license: LICENSE-APACHE +
+# NOTICE-gpui-component at the repo root (AGPL hygiene for vendored Apache-2.0).
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
+
+# --- LINUX display backend for gpui ------------------------------------------
+# The x11/wayland windowing backends gpui needs on Linux are enabled via the
+# `gpui-ui` feature above (`gpui_platform/{x11,wayland}`), NOT a
+# `[target.cfg(linux)].dependencies` re-declaration of the optional
+# `gpui_platform`. The target-block form (which this REPLACES) re-declared the
+# same optional dep and TRIPPED a cargo resolver pathology that dropped every
+# crates.io + path dependency on macOS (the lib compiled with feature flags but
+# zero `--extern`). The feature-list form is inert on macOS (gpui_linux is not in
+# the macOS graph) and lights up x11+wayland on Linux identically — without the
+# resolver hazard. On Linux without these, only `gpui_linux`'s "Headless" arm
+# compiles and a real DISPLAY/WAYLAND_DISPLAY session hits `_ => unreachable!()`
+# (gpui_linux/src/linux.rs) — the window panics the instant it opens.
+
+# --- the embedded verified executor (gated on `embedded-executor`) ----------
+# These link libdregg_lean.a on native. `default-features = true` keeps the
+# Lean shadow/gate path compiled in (the verified producer).
+#
+# TARGET-SPLIT (wasm cockpit, the in-browser skin): these NATIVE declarations are
+# Lean-linked (the verified producer); the wasm32 re-declarations live in a mirror
+# `[target.'cfg(target_arch = "wasm32")'.dependencies]` block at the END of this
+# file (`default-features = false` + `no-lean-link`, mirroring `wasm/Cargo.toml`),
+# so wasm32 compiles the Rust fallback paths — a statement about wasm32's linker
+# (it cannot link libdregg_lean.a), never about which guarantees native has.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The self-hosting dev-loop surfaces (pulled by `dev-surfaces`). Own workspaces,
+# same gpui fork @407a6ff → one gpui resolves across the graph. deos-zed rides
+# gpui-component (vendored); deos-terminal rides alacritty_terminal.
+deos-zed = { path = "../deos-zed", default-features = false, features = ["cockpit-surface", "highlight-common"], optional = true }
+deos-terminal = { path = "../deos-terminal", features = ["cockpit-surface"], optional = true }
+# THE WHOLE-WORKSPACE PANE — mounting deos-zed-full (Zed's real
+# `editor`/`workspace`/`project` + all panels over the cell-ledger) as the Dev
+# editor surface (`src/zed_full_pane.rs`). Blocker status:
+#   BLOCKER 2 (root-workspace `unicode-width` version conflict) — RESOLVED. The
+#     conflict was `deos-zed-full` → editor → markdown → merman (`unicode-width
+#     ^0.2.2`) vs the former root member `dregg-tui` → `ratatui 0.29` (`=0.2.0`
+#     exact). `dregg-tui` (the ONLY ratatui user) is now its OWN root-EXCLUDED
+#     workspace (root Cargo.toml `exclude` + dregg-tui's own `[workspace]`/`[patch]`/
+#     `rust-toolchain.toml`), so its `=0.2.0` pin is out of the root resolution graph
+#     and merman's `^0.2.2` resolves.
+#   BLOCKER 1 (native `links="sqlite3"` clash) — STILL OPEN, and it is why this dep
+#     CANNOT yet be DECLARED on this root member (declaring it — even feature-off —
+#     puts Zed's `sqlez` → `libsqlite3-sys 0.30` into the WHOLE-workspace lock graph,
+#     which cargo cannot reconcile with the root member `deos-matrix`: when `sqlez`
+#     is co-present, cargo's links-unifier pulls `matrix-sdk-sqlite` →
+#     `libsqlite3-sys 0.35`, a SECOND `links="sqlite3"` package, which cargo forbids
+#     in one binary — even with `deos-matrix`'s on-disk `live-matrix` store OFF). The
+#     `web-shell` libservo lane (→ `servo-storage` → `rusqlite 0.37` →
+#     `libsqlite3-sys 0.35`) is a second instance of the SAME clash. The clean,
+#     ONE-LINE close: bump Zed's `sqlez` to `libsqlite3-sys 0.35` in the emberian/zed
+#     fork's workspace `Cargo.toml` (so `sqlez` + `servo-storage` + `matrix-sdk-sqlite`
+#     all share ONE `links="sqlite3"` package), THEN uncomment this dep + declare the
+#     `zed-full`/`zed-full-pane` features above + fold `zed-full` into `desktop`.
+# `src/zed_full_pane.rs` (the `CockpitSurface` hosting the live `Entity<Workspace>`,
+# now with `ZedWindow::open` + the live-`AppState` builder
+# `deos_zed_full::boot::build_live_app_state`) is written + ready and VERIFIED in
+# `deos-zed-full`'s own resolvable workspace; the `deos-zed-full[full-zed]` +
+# `servo`(swgl) graph resolves clean in isolation — only the sqlez↔matrix/servo
+# `libsqlite3-sys` unification (the fork-rev bump) gates the in-root declaration.
+# UNCOMMENT (+ the `zed-full-pane` feature, + fold `zed-full` into `desktop`) the
+# instant the bumped emberian/zed rev is pinned across breadstuffs.
+# deos-zed-full = { path = "../deos-zed-full", features = ["full-zed"], optional = true }
+# THE AGENT'S HANDS (deos-js) bound to the LIVE cockpit World — `agent-js`. Real
+# SpiderMonkey via mozjs; the `WorldSink` weld in `src/agent_attach.rs` runs the
+# agent's JS over a provided `World` (the cockpit's, or a fork). Its OWN workspace
+# (excluded from the root members like deos-hermes), pulling the multi-GB mozjs —
+# so it is OPTIONAL + off the default build. Non-wasm32 (mozjs is native-only).
+deos-js = { path = "../deos-js", optional = true }
+# THE CARD RENDERER (deos-view) — turns a deos-js applet's `deos.ui.*` view-tree into
+# real gpui-component widgets. Its OWN standalone workspace (root-excluded like deos-js),
+# pinning the SAME gpui fork @407a6ff so ONE gpui resolves across the cockpit + the card
+# renderer. Pulls deos-js (the view-tree model + verified-turn firing) too. Optional —
+# only the `card-pane` feature (the `--render-card-pane` bake) pulls it.
+deos-view = { path = "../deos-view", optional = true }
+# The CONFINED HERMES AGENT as a dock pane (the ADOS dev-loop made visible): a
+# chat pane + the tool-call ledger (each tool-call a cap-gated RECEIPTED turn or
+# an in-band refusal) + the live mandate inspector. Own workspace, same gpui fork
+# @407a6ff → one gpui resolves across the graph. Its `cockpit-surface` feature
+# links gpui; the gpui-free SDK core (HermesGateway/Mandate) seeds the demo model.
+deos-hermes = { path = "../deos-hermes", features = ["cockpit-surface"], optional = true }
+# The deos-pilled MATRIX CHAT as a dock pane — the MEMBRANE star: a chat message
+# can carry a cap-bounded fork of the world (a rehydratable membrane). Own
+# workspace, same gpui fork @407a6ff → one gpui resolves. `cockpit-surface`
+# pulls gpui; the `MockSource::seeded` recorded sync makes the pane real offline
+# (the showcase bake seeds it), the live MatrixHandle drops in unchanged.
+deos-matrix = { path = "../deos-matrix", default-features = false, features = ["cockpit-surface"], optional = true }
+# Signing for the consent-resolution / shared-fork signing domain (world.rs signs
+# a grant receipt the ConditionProof checks). A regular (not dev-only) dep since
+# world.rs lib code uses it, not just tests.
+ed25519-dalek = { version = "2" }
+dregg-turn = { path = "../turn", optional = true }
+dregg-cell = { path = "../cell", optional = true }
+dregg-cell-crypto = { path = "../cell-crypto", optional = true }
+dregg-types = { path = "../types", optional = true }
+# The wallet-grade clerk itself (`dregg_sdk::AgentCipherclerk`) + the REAL
+# embedded engine (`dregg_sdk::embed::DreggEngine`, the executor+ledger+token
+# core our `World` wraps). `default-features = false` drops the SDK's
+# networking/captp stack (tokio/quinn/async); `embed-core` pulls the wire-free
+# engine core (the cipherclerk + macaroon-token + DreggEngine surface we use is
+# all in the SDK's always-compiled / embed-core core, NOT the network stack).
+#
+# `prover` is LOAD-BEARING here (the C7 GREP-ZERO drive): `dregg-circuit`'s
+# default features include `prover` (circuit/Cargo.toml), and `dregg-turn`
+# (this crate's dep, default-features-on) forwards `prover = ["dregg-circuit/
+# prover"]` — so cargo feature-unifies `dregg-circuit` with `prover` ON
+# across this workspace. Under `prover`, `dregg-circuit::effect_vm_p3_full_air`
+# is `#[cfg(not(feature = "prover"))]`-DELETED (the v1 hand-AIR is retired);
+# `dregg-sdk`'s `use` of it (`sdk/src/full_turn_proof.rs`) is itself
+# `not(prover)`-fenced, so sdk MUST also see `prover` ON or its fence
+# misaligns with the prover-on circuit (E0432: cannot find
+# `effect_vm_p3_full_air`). We enable `prover` on the SDK to keep the fences
+# aligned — `embed-core` (wire-free engine) and `prover` (rotated IR-v2
+# verify) coexist; this pulls NO networking. Without it the embedded build fails
+# to compile against the post-C7 circuit.
+dregg-sdk = { path = "../sdk", optional = true, default-features = false, features = ["embed-core", "prover"] }
+# THE VERIFIED SHARED-BUDGET PRIMITIVE — `dregg_coord::StingrayCounter` (the
+# bounded conserved counter, `coord/src/budget.rs`). The swarm's N9 shared budget
+# IS this counter (the conservation bound "the swarm spent at most B"); the over-
+# draw is refused by its gate, never faked. A clean, wire-free dep (coord pulls
+# only dregg-cell + blake3 + ed25519 + serde — no networking; its platform
+# feature is off by default).
+dregg-coord = { path = "../coord", optional = true }
+# The macaroon token vocabulary (`Attenuation` etc.) the clerk speaks — re-exported
+# by dregg-sdk, but we name it directly for the panel's caveat projection.
+dregg-token = { path = "../token", optional = true }
+# THE DREGGVERSE DOCUMENT LANGUAGE patch-core (`dregg-doc`, `docs/deos/DOCUMENT-LANGUAGE.md`)
+# pulled with its `substrate` feature — so a document IS a real `dregg_cell::Cell`
+# and an edit IS a cap-gated turn through the genuine `dregg_turn::TurnExecutor`
+# (`ExecutorDrivenDoc`), with conflicts-as-`ConflictRegion`-states and provenance =
+# the real `TurnReceipt`. `dregg-doc` is its OWN (empty) workspace and path-deps the
+# SAME `../cell`/`../turn` this crate already pulls under `embedded-executor`, so
+# cargo resolves IDENTICAL `Cell`/`Effect`/`TurnReceipt` instances (its document
+# cell IS our cell). The DOCS-tab editor (`src/doc_editor.rs`) reuses its
+# `ExecutorDrivenDoc`/`Doc`/`content`/`merge`/`resolve` patch algebra — never a
+# parallel re-expression. Gated on `embedded-executor` (the gpui-free, test-able
+# surface). The plonky3-recursion `[patch]` above is replicated here so the
+# transitive `dregg-circuit` (via `dregg-turn`'s `substrate`) resolves identically.
+dregg-doc = { path = "../dregg-doc", features = ["substrate"], optional = true }
+# The static, userspace, pre-submission assurance toolkit (`analyze`) — the
+# REAL `check_conservation`/`check_no_amplification`/`check_wellformed` the live
+# editor's validate() rail delegates to (never a parallel re-expression).
+dregg-userspace-verify = { path = "../dregg-userspace-verify", optional = true }
+# THE WORKFLOW-COMPOSER + FLOW-REFINEMENT machinery (`dregg_deploy::refine`): the
+# REAL `Proc` flow algebra (sequence `⋆` / choice `⊔` / emit), the proven online
+# simulation-game decision `decide_refines` (`A ≤ᶠ B` — routes through the verified
+# Lean `@[export] dregg_decide_refines`, falling back to the σ-free mirror), and the
+# `FlowSpec`/`IntentEffect` intent envelope. The workflow-composer desktop surface
+# (`src/deos_desktop/workflow.rs`) composes `dregg_turn::Effect`s into a `Proc`
+# workflow and asks the REAL refinement gate "does workflow A refine B?". `dregg-deploy`
+# path-deps the SAME `../turn`/`../cell`/`../dregg-lean-ffi` already in this tree (via
+# dregg-sdk), so it adds no new heavy link and reuses the SAME Lean archive.
+dregg-deploy = { path = "../dregg-deploy", optional = true }
+# THE FIRMAMENT cap-gradation bridge (sel4/dregg-firmament): the REAL
+# `Capability{ target: Surface(cell), rights }` + `SurfaceBacking` (a genuine
+# dregg_cell::Ledger + dregg_turn::TurnExecutor) the cap-first shell rides — so a
+# window IS a firmament surface cap, checked through the SAME `granted ⊆ held`
+# gate and delegated through the SAME real executor as every other dregg cap
+# (docs/DREGG-DESKTOP-OS.md §7 — the one latent divergence, closed). Path-dep
+# from this standalone workspace into firmament's standalone workspace is fine:
+# cargo resolves firmament + the real dregg crates it depends on and links them
+# here. Gated on `embedded-executor` (the gpui-free surface/shell test path).
+dregg-firmament = { path = "../sel4/dregg-firmament", optional = true }
+# THE WEB-OF-CELLS crate — the `dregg://` attested-fetch docuverse the cockpit
+# browses NATIVELY: the real `WebOfCells` addressing + attested cross-cell read,
+# the `AffordanceSurface::project_for` per-viewer attenuation, the `OriginChrome`
+# trusted-path chrome, the `Rehydration` liveness-type. It path-depends on the
+# SAME real dregg crates this crate pulls under `embedded-executor`
+# (`dregg-firmament`/`dregg-cell`/`dregg-types`/`dregg-turn`) and replicates the
+# SAME plonky3-recursion fork `[patch]` (above), so cargo resolves IDENTICAL
+# crate instances — its `Effect` IS our `Effect`, its `Capability` IS our window
+# cap. The web-of-cells browser panel (`src/web_cells.rs`) browses it and fires
+# affordances through THIS crate's embedded executor (the seam the web crate could
+# only model is closed here). Gated on `embedded-executor` (the gpui-free,
+# `cargo test`-able surface).
+starbridge-web-surface = { path = "../starbridge-web-surface", optional = true }
+# THE DREGGVERSE-DOCUMENT crate — Xanadu's EDL made honest on the verified
+# substrate: a `DreggverseDocument` is an ordered list of `Span`s (OWN content
+# interleaved with TRANSCLUDED byte-ranges of peer cells), resolved PER-VIEWER
+# through the REAL `Membrane` (`DreggverseDocument::resolve_for`) — a span the
+# viewer's projected fetch-allowlist cannot reach DARKENS (its provenance
+# survives, its bytes withheld; never forged). It is a thin layer over the SAME
+# `starbridge-web-surface` (`TranscludedField`/`Membrane`/`SurfaceCapability`)
+# this crate already pulls — so its `DreggUri`/`WebOfCells`/`Provenance` ARE our
+# web-surface's (cargo resolves IDENTICAL instances: same path-dep, same
+# plonky3-recursion `[patch]`). The web-of-cells browser panel
+# (`src/web_cells.rs`) renders a multi-span document beside the whole-field
+# transclusion — the rich EDL span model welded into the cockpit's docuverse.
+# Gated on `embedded-executor` (the gpui-free, `cargo test`-able surface).
+deos-web-cells = { path = "../deos-web-cells", optional = true }
+# THE NODE'S DURABLE STORE (M4 native World persistence — the durable image).
+# `dregg-persist` is the SAME redb commit log + checkpoint⊕overlay recovery spine
+# the node uses (`node/src/state.rs`): wiring it onto the World's single
+# `commit_turn` seam makes the image durable + rewindable by REUSE — never a
+# parallel persistence — so the World inherits `CrashRecovery.lean::recover_eq_replay`.
+# A pure-Rust embedded ACID store (redb + serde + postcard); no networking, no
+# Lean link, no async. Gated on `embedded-executor` (the gpui-free, test-able
+# surface). It path-deps the SAME `../cell`/`../types`/`../circuit` this crate
+# already pulls, so cargo resolves IDENTICAL crate instances (its `Cell` IS our
+# `Cell`, its `CommitRecord.touched_cells` ARE our ledger cells).
+dregg-persist = { path = "../persist", optional = true }
+# IDENTITY KEY CUSTODY — the durable half of the real login key ceremony. A new
+# user's signing seed is persisted (AES-256-GCM, encrypted at rest) and loaded back
+# on return (`session::IdentityKeystore`). `default-features = false` drops the OS
+# keychain (keyring) backend so headless CI has no Secret Service dependency; the
+# portable encrypted-file store is the default custody. (A deployment re-enables
+# `keychain` to front it with the OS credential manager.)
+dregg-secrets = { path = "../secrets", optional = true, default-features = false }
+# THE CapTP NETLAYER — the REAL wire the reflexive distributed image (n>1) dials.
+# `dregg-captp`'s `netlayer::{InProcessNetlayer, NetConnection, NetSession}` (the
+# OCapN/Goblins transport abstraction + its in-process instance) is what
+# `src/netlayer_image.rs` resolves a `RemoteImage` over: a `MirrorFrame` request/
+# response (FetchCell/CellSnapshot) carried on `NetConnection::send`/`recv`, served
+# by an `ImageResponder` at the inbound mirror-cap's authorized depth (never
+# amplifying). captp path-deps the SAME `../types`/`../cell` this crate already
+# pulls (its `CellId`/`PeerId` UNIFY with ours) and is wire-free (no tokio/quinn;
+# blake3 + x25519 + dregg-lean-ffi, the SAME Lean link `dregg-sdk` already brings).
+# Gated on `embedded-executor` (the gpui-free, `cargo test`-able surface).
+dregg-captp = { path = "../captp", optional = true }
+# THE APP FRAMEWORK + a STARTER SET of pre-built starbridge-apps (gated on the
+# `app-registry` feature, pulled by `embedded-executor`). `dregg-app-framework`
+# is the `DeosApp` builder + the `AppCipherclerk`/`EmbeddedExecutor` SDK surface
+# every app fires through; the apps below each expose a `*_app(cipherclerk,
+# executor) -> DeosApp` ctor + a `seed_*` + `fire_*` set. They path-dep the SAME
+# `../sdk`/`../turn`/`../cell` this crate already pulls, so cargo resolves
+# IDENTICAL crate instances — a launched app's verified turn lands on an
+# app-framework ledger the cockpit's app-substrate inspector reads. The framework
+# drags its server tree (axum/tokio/tower-http/reqwest); acceptable for the native
+# desktop build (it already links Lean + servo). `src/app_registry.rs` is the seam.
+dregg-app-framework = { path = "../app-framework", optional = true }
+starbridge-gallery = { path = "../starbridge-apps/gallery", optional = true }
+starbridge-tussle = { path = "../starbridge-apps/tussle", optional = true }
+starbridge-sealed-auction = { path = "../starbridge-apps/sealed-auction", optional = true }
+starbridge-bounty-board = { path = "../starbridge-apps/bounty-board", optional = true }
+# The SECOND WAVE of pre-built starbridge-apps wired onto the cockpit's LIVE
+# `World` ledger (`src/app_registry.rs`). Each path-deps the SAME `../sdk`/
+# `../turn`/`../cell` (so cargo resolves IDENTICAL `Effect`/`CellProgram`/
+# `TurnReceipt` instances) and exposes the gallery-shape ctor + `*_program()` +
+# `*_effects()`/seed surface the World bridge re-expresses. NON-WASM ONLY (these
+# crates don't build on wasm32; the wasm `gpui-web` bundle must never resolve
+# them — they are absent from the `cfg(target_arch = "wasm32")` mirror below).
+starbridge-agent-orchestration = { path = "../starbridge-apps/agent-orchestration", optional = true }
+starbridge-agent-provenance = { path = "../starbridge-apps/agent-provenance", optional = true }
+starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartment-workflow-mandate", optional = true }
+starbridge-compute-exchange = { path = "../starbridge-apps/compute-exchange", optional = true }
+starbridge-escrow-market = { path = "../starbridge-apps/escrow-market", optional = true }
+starbridge-nameservice = { path = "../starbridge-apps/nameservice", optional = true }
+starbridge-privacy-voting = { path = "../starbridge-apps/privacy-voting", optional = true }
+starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gateway-mandate", optional = true }
+starbridge-subscription = { path = "../starbridge-apps/subscription", optional = true }
+starbridge-swarm-orchestration = { path = "../starbridge-apps/swarm-orchestration", optional = true }
+starbridge-tool-access-delegation = { path = "../starbridge-apps/tool-access-delegation", optional = true }
+# The SERVICE-ECONOMY value app — durable execution leased as a payable resource.
+starbridge-execution-lease = { path = "../starbridge-apps/execution-lease", optional = true }
+starbridge-supply-chain-provenance = { path = "../starbridge-apps/supply-chain-provenance", optional = true }
+starbridge-identity = { path = "../starbridge-apps/identity", optional = true }
+starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace", optional = true }
+# THE POLIS GOVERNANCE LAYER — unlike the apps above, `starbridge-polis` is NOT a
+# `DeosApp`: its pure library ships per-charter content-addressed `CellProgram`s
+# directly (`council::council_cell_program(charter)` &c.). The registry's polis
+# entry is therefore a PROGRAM entry (`AppEntry::program`): it installs a
+# governance cell carrying a polis `CellProgram` onto the cockpit `World` via
+# `AppWorldSpine::seed` and fires ONE representative governance affordance (a
+# council `propose`) through `AppWorldSpine::commit` — the SAME World machinery the
+# 18 framework apps use, only the program source is polis's pure library, not a
+# composed app. The pure library path-deps ONLY `../cell` (default-features off),
+# so it pulls NO new heavy tree. NON-WASM ONLY (kept out of the wasm32 mirror).
+starbridge-polis = { path = "../starbridge-apps/polis", optional = true }
+# THE SERVO RENDER LANE — the HOST SWGL render path that IS deos's compositor
+# render pass (Stage A of docs/desktop-os-research/SERVO-ON-SEL4.md). Default
+# `swgl-standalone` features ONLY (swgl's CPU-only C++ rasterizer + gleam + the real
+# cap gate + the real compositor seam) — NOT the `libservo` feature, so this does
+# NOT pull the mozjs/SpiderMonkey elephant into the cockpit build. It gives the
+# web-of-cells tab (`src/web_cells.rs`) its FIRST real rendered `dregg://` content:
+# `servo_render::render_dregg_page(surface, origin, attested_bytes, w, h)` runs the
+# page's fetch through the REAL `CapGatedDelegate` (the SAME `granted ⊆ held` gate
+# the panel's affordance projection already uses) and rasterizes the attested page
+# bytes into a real, content-distinct RGBA8 `RgbaFrame` the cockpit can paint with a
+# gpui `img()`. It path-depends on the SAME `../starbridge-web-surface` +
+# `../sel4/dregg-firmament` this crate already pulls (so `SurfaceCapability` /
+# `CellId` / `Capability` UNIFY — the cap that gates the affordance surface IS the
+# cap that gates the render). Gated on `embedded-executor` (the gpui-free,
+# `cargo test`-able web-of-cells surface). The `libservo`/mozjs WebView upgrade
+# (full HTML layout into the SAME frame, behind the SAME gate) is a feature flip in
+# servo-render, NOT a new seam here.
+servo-render = { path = "../servo-render", optional = true }
+
+# THE GRAPHIDEOS SYSTEMUI CAP-CHROME crate (`android-systemui` feature). `android-cell`
+# is the confined-foreign-app portal; its `permgate::PermWorld` owns a live
+# `dregg_cell::Ledger` + the verified `dregg_turn::executor::TurnExecutor` and renders an
+# android-cell's held permissions as a lit/dim `CapBadgeSet`, handing over a dangerous
+# permission through a REAL `Effect::GrantCapability`. `src/systemui_caps.rs` wraps that
+# into the cockpit's SystemUI chrome (status bar + quick settings + the powerbox hand-over
+# sheet) — the deos cockpit AS the android system UI (GRAPHIDEOS.md §1/§2 stage 4). It
+# path-depends (via servo-render) into the workspace-excluded `sel4/dregg-firmament`,
+# exactly as `servo-render` above does, so `android-cell` itself stays out of
+# `default-members`; pulled here only under `android-systemui` (in `desktop`).
+android-cell = { path = "../android-cell", optional = true }
+
+# THE WASM COCKPIT MIRROR — the in-browser skin (one model, three skins). These
+# re-declare the SAME executor crates the native block above pulls, but
+# `default-features = false` + `no-lean-link` (the platform gate: wasm32 cannot
+# link libdregg_lean.a, so the Rust fallback paths compile). Features mirror
+# `wasm/Cargo.toml`'s exact per-crate set. EXCLUDED from this mirror:
+#   * `dregg-persist` — pulls `redb` (native-only embedded store); the browser
+#     image is always ephemeral (`src/persistence_wasm.rs` stub supplies the
+#     `WorldPersist`/`OpenError`/`RecoveredImage`/`canonical_ledger_root` surface
+#     `world.rs` imports).
+#   * `servo-render` — the C++ SWGL rasterizer (non-wasm32).
+# The `getrandom` shims below are the wasm32 entropy backend (mirrors wasm/).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+dregg-turn = { path = "../turn", optional = true, default-features = false }
+dregg-cell = { path = "../cell", optional = true, default-features = false }
+dregg-cell-crypto = { path = "../cell-crypto", optional = true }
+dregg-types = { path = "../types", optional = true }
+dregg-sdk = { path = "../sdk", optional = true, default-features = false, features = ["no-lean-link", "embed-core", "prover"] }
+dregg-coord = { path = "../coord", optional = true, default-features = false }
+dregg-token = { path = "../token", optional = true, default-features = false, features = ["macaroon", "rand-deps"] }
+dregg-doc = { path = "../dregg-doc", optional = true, features = ["substrate"] }
+dregg-userspace-verify = { path = "../dregg-userspace-verify", optional = true }
+dregg-firmament = { path = "../sel4/dregg-firmament", optional = true }
+starbridge-web-surface = { path = "../starbridge-web-surface", optional = true, default-features = false }
+deos-web-cells = { path = "../deos-web-cells", optional = true }
+dregg-captp = { path = "../captp", optional = true, default-features = false }
+# wasm32 entropy backend (mirrors wasm/Cargo.toml lines 18-20): the three
+# getrandom majors the dep tree pulls, each forced onto its js/wasm_js backend.
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# The browser clock for `world::now_unix` (wasm32 has no `SystemTime::now()`).
+js-sys = "0.3"
+# ed25519 signing — `world.rs` (grant-receipt signing) + `shared_fork.rs` (the
+# consent-resolution ConditionProof) call `ed25519_dalek::` UNCONDITIONALLY, so
+# the wasm lib build needs it here too (the native copy is under the
+# `cfg(not(wasm32))` block above). `default-features = false` drops `rand_core`'s
+# OS-rng pull (the wasm build only uses `from_bytes` / verify, never `generate`);
+# `alloc` keeps `to_bytes`. Without this the wasm lib fails E0433 "unlinked crate
+# ed25519_dalek" — which broke the existing atlas skin's wasm build too.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+# THE THREE WASM-UNIFICATION FORCINGS (mirrors wasm/Cargo.toml lines 119-131) —
+# indirect deps the executor tree pulls that need a wasm32-specific feature flip,
+# forced here so cargo feature-unification applies it to the transitive copy:
+#   * `clear_on_drop` (via bulletproofs/cell crypto) — default build invokes a C
+#     compiler (cc → clang --target=wasm32) with no working wasm32 toolchain; the
+#     `no_cc` feature switches to a pure-Rust impl.
+clear_on_drop = { version = "0.2", features = ["no_cc"] }
+#   * `lockstitch` (via federation → hints) — uses x86_64/aarch64 AES intrinsics
+#     unless `portable` is on; wasm32 has neither.
+lockstitch = { version = "0.29", features = ["portable"] }
+#   * `biscuit-auth` (via dregg-token's `biscuit` feature) — its wasm32 `Instant`
+#     shim + `TryInto` are gated behind the crate's own `wasm` feature.
+biscuit-auth = { version = "6.0.0", features = ["wasm"] }

@@ -1,0 +1,56 @@
+[package]
+name = "starbridge-agent-provenance"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace agent-provenance app — a capability-gated, append-only, tamper-evident provenance log (verifiable agent scratchpad / verifiable memory). Each entry is a WriteOnce slot in a blake3 hash chain; the head cursor is Monotonic (append-only). Any party can recompute and VERIFY the provenance chain."
+
+# Usecase #3: PROOF-CARRYING AGENT PROVENANCE / VERIFIABLE MEMORY.
+#
+# An AI agent posts claims/outputs to a capability-gated, append-only,
+# tamper-evident cell (a verifiable agent scratchpad / provenance log):
+#   - write-access is capability-gated (the turn carries the owner's signature;
+#     the executor admits only an authorized write),
+#   - entries are append-only — each `entry_i` slot is `WriteOnce` (once a
+#     provenance record is committed it can NEVER be silently overwritten:
+#     tamper-evidence), and the `HEAD` cursor is `Monotonic` (the log index
+#     only ever grows: no re-order / no rewind),
+#   - the entries form a blake3 HASH CHAIN (`entry_i = blake3(prev_digest ||
+#     claim)`), so any party can recompute the chain from the claims and the
+#     committed predecessor and VERIFY it link-for-link — a single tampered or
+#     dropped entry breaks the recomputation.
+#
+# Composes dregg primitives only (FactoryDescriptor + Effect::SetField +
+# Effect::EmitEvent + StateConstraint slot caveats). No domain-specific
+# provenance Effect, no Authorization::Unchecked, no placeholder signatures.
+# Routes through the REAL verified executor via EmbeddedExecutor / submit_action.
+#
+# The Lean companion (Dregg2/Apps/AgentProvenanceGated.lean) proves the same
+# invariants on the verified gated executor (execFullForestG): append-only
+# (WriteOnce no-overwrite), Monotonic-no-rewind, faithful read-back, the
+# receipt-log audit trail, the verifiable hash chain, and balance-conservation.
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+# The attested-query face (the `src/derived.rs` showcase): the conjunctive-query
+# surface + the non-omission certificate (the receipt-log MMR
+# `server_cannot_omit_position`). Used to certify the COMPLETENESS of the log's
+# committed provenance entries to a light client ("these are ALL the entries").
+dregg-query = { path = "../../dregg-query" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The deos-app re-expression proof (`tests/reexpress_deos_app.rs`) + the
+# fire→full-CellProgram seam proof (`tests/deos_seam.rs`). Both drive the mounted axum
+# surface (per-viewer projection + cap-gated fires) end-to-end.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true

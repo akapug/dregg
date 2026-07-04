@@ -1,0 +1,21 @@
+[package]
+name = "dregg-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Canonical shared types for the dregg federation: PublicKey, Signature, AttestedRoot, etc."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+blake3 = "1"
+ed25519-dalek = { version = "2", features = ["std", "zeroize"] }
+getrandom = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+postcard = { version = "1", features = ["use-std"] }
+
+[lints]
+workspace = true

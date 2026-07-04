@@ -1,0 +1,821 @@
+//! Merkle queue: content-addressed append-only queue.
+//!
+//! Each state of the queue has a unique root hash (blake3 Merkle tree of entries).
+//! Enqueue = append leaf. Dequeue = advance head pointer.
+//! The queue root IS the content address of the queue state.
+
+use std::path::PathBuf;
+
+use crate::wal::{WalEntry, WriteAheadLog};
+
+/// A content-addressed append-only queue.
+/// Each state of the queue has a unique root hash (Merkle tree of entries).
+/// Enqueue = append leaf. Dequeue = advance head pointer.
+/// The queue root IS the content address of the queue state.
+#[derive(Debug)]
+pub struct MerkleQueue {
+    /// Current entries (linear buffer with head pointer).
+    entries: Vec<QueueEntry>,
+    /// Cached leaf commitments, one per entry, index-aligned with `entries`.
+    /// `leaf_hashes[i] == hash_entry(&entries[i])`. A leaf never changes once
+    /// computed (entries are immutable post-enqueue), so this is computed once
+    /// at enqueue and reused for every `recompute_root` / `pending_leaves`
+    /// instead of re-hashing the whole pending window each time.
+    leaf_hashes: Vec<[u8; 32]>,
+    /// Head pointer (first un-dequeued entry index into `entries`).
+    head: usize,
+    /// Maximum capacity (bounded by quota).
+    capacity: usize,
+    /// Current root hash (blake3 of all entries from head to tail).
+    root: [u8; 32],
+    /// Optional WAL for durable mode.
+    wal: Option<Box<WalState>>,
+}
+
+/// Internal WAL state.
+#[derive(Debug)]
+struct WalState {
+    wal: WriteAheadLog,
+    queue_id: [u8; 32],
+}
+
+impl Clone for MerkleQueue {
+    fn clone(&self) -> Self {
+        // Cloning produces an in-memory-only copy (WAL is not cloned).
+        Self {
+            entries: self.entries.clone(),
+            leaf_hashes: self.leaf_hashes.clone(),
+            head: self.head,
+            capacity: self.capacity,
+            root: self.root,
+            wal: None,
+        }
+    }
+}
+
+/// A single entry in the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueEntry {
+    /// Content hash of the enqueued data.
+    pub content_hash: [u8; 32],
+    /// Who enqueued this (for deposit refund tracking).
+    pub sender: [u8; 32],
+    /// Deposit paid by sender (computrons).
+    pub deposit: u64,
+    /// When this was enqueued (block height).
+    pub enqueued_at: u64,
+    /// Size in bytes.
+    pub size: usize,
+}
+
+/// Proof that an entry was dequeued (for deposit refund).
+///
+/// A dequeue proof witnesses the transition `old_root → new_root` removing
+/// exactly `entry` from the HEAD of the queue:
+///
+/// * `old_root  == merkle_root([hash_entry(entry)] ++ remaining_leaves)`
+/// * `new_root  == merkle_root(remaining_leaves)`
+///
+/// `remaining_leaves` are the leaf commitments of the pending entries that
+/// FOLLOW the head, in FIFO order — the full witness needed because the queue
+/// root commits only to the pending window (head..tail) and removing the head
+/// shifts every leaf (no succinct sibling-path proof exists for this shape).
+///
+/// `position` (the absolute head index since queue creation) is NOT bound by
+/// the roots — the commitment covers only the pending window. It is carried
+/// as metadata; do not trust it cryptographically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DequeueProof {
+    pub entry: QueueEntry,
+    pub old_root: [u8; 32],
+    pub new_root: [u8; 32],
+    pub position: usize,
+    /// Leaf hashes (`hash_entry`) of the pending entries remaining AFTER the
+    /// dequeued head, in FIFO order. Empty iff the dequeue emptied the queue.
+    pub remaining_leaves: Vec<[u8; 32]>,
+}
+
+/// Errors from queue operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueError {
+    /// Queue is full (at capacity).
+    Full { capacity: usize },
+    /// Queue is empty (nothing to dequeue).
+    Empty,
+}
+
+impl MerkleQueue {
+    /// Create a new empty queue with the given capacity (in-memory only).
+    pub fn new(capacity: usize) -> Self {
+        let mut q = Self {
+            entries: Vec::new(),
+            leaf_hashes: Vec::new(),
+            head: 0,
+            capacity,
+            root: [0u8; 32],
+            wal: None,
+        };
+        q.recompute_root();
+        q
+    }
+
+    /// Create a queue with WAL-backed durability.
+    pub fn with_wal(capacity: usize, wal_path: PathBuf) -> std::io::Result<Self> {
+        let queue_id = *blake3::hash(wal_path.to_string_lossy().as_bytes()).as_bytes();
+        let mut wal = WriteAheadLog::open(wal_path)?;
+
+        // Log the queue creation.
+        let seq = wal.next_sequence();
+        let entry = WalEntry::CreateQueue {
+            queue_id,
+            capacity,
+            sequence: seq,
+        };
+        wal.append(&entry)?;
+        wal.sync()?;
+
+        let mut q = Self {
+            entries: Vec::new(),
+            leaf_hashes: Vec::new(),
+            head: 0,
+            capacity,
+            root: [0u8; 32],
+            wal: Some(Box::new(WalState { wal, queue_id })),
+        };
+        q.recompute_root();
+        Ok(q)
+    }
+
+    /// Enqueue with WAL (logged before applied, fsync'd).
+    pub fn enqueue_durable(&mut self, entry: QueueEntry) -> std::io::Result<[u8; 32]> {
+        if self.is_full() {
+            return Err(std::io::Error::other(format!(
+                "queue full (capacity {})",
+                self.capacity
+            )));
+        }
+
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        // Serialize entry data for the WAL.
+        let entry_data = serialize_queue_entry(&entry);
+        let entry_hash = entry.content_hash;
+
+        let seq = wal_state.wal.next_sequence();
+        let wal_entry = WalEntry::Enqueue {
+            queue_id: wal_state.queue_id,
+            entry_hash,
+            data: entry_data,
+            sequence: seq,
+        };
+
+        // Log BEFORE applying.
+        wal_state.wal.append(&wal_entry)?;
+        wal_state.wal.sync()?;
+
+        // Now apply in memory.
+        self.leaf_hashes.push(hash_entry(&entry));
+        self.entries.push(entry);
+        self.recompute_root();
+        Ok(self.root)
+    }
+
+    /// Dequeue with WAL.
+    pub fn dequeue_durable(&mut self) -> std::io::Result<Option<(QueueEntry, DequeueProof)>> {
+        if self.head >= self.entries.len() {
+            return Ok(None);
+        }
+
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        let position = self.head;
+        let seq = wal_state.wal.next_sequence();
+        let wal_entry = WalEntry::Dequeue {
+            queue_id: wal_state.queue_id,
+            position,
+            sequence: seq,
+        };
+
+        // Log BEFORE applying.
+        wal_state.wal.append(&wal_entry)?;
+        wal_state.wal.sync()?;
+
+        // Apply in memory.
+        let old_root = self.root;
+        let entry = self.entries[self.head].clone();
+        self.head += 1;
+        self.recompute_root();
+
+        let proof = DequeueProof {
+            entry: entry.clone(),
+            old_root,
+            new_root: self.root,
+            position,
+            remaining_leaves: self.pending_leaves(),
+        };
+
+        Ok(Some((entry, proof)))
+    }
+
+    /// Recover state from WAL after crash.
+    /// Replays all WAL entries to reconstruct the queue state.
+    pub fn recover_from_wal(wal_path: PathBuf) -> std::io::Result<Self> {
+        let queue_id = *blake3::hash(wal_path.to_string_lossy().as_bytes()).as_bytes();
+        let wal = WriteAheadLog::open(wal_path)?;
+        let entries = wal.replay()?;
+
+        let mut capacity = 0usize;
+        let mut queue_entries: Vec<QueueEntry> = Vec::new();
+        let mut head: usize = 0;
+
+        for entry in &entries {
+            match entry {
+                WalEntry::CreateQueue {
+                    capacity: cap,
+                    queue_id: qid,
+                    ..
+                } if *qid == queue_id => {
+                    capacity = *cap;
+                    queue_entries.clear();
+                    head = 0;
+                }
+                WalEntry::Enqueue {
+                    data,
+                    queue_id: qid,
+                    ..
+                } if *qid == queue_id => {
+                    if let Some(qe) = deserialize_queue_entry(data) {
+                        queue_entries.push(qe);
+                    }
+                }
+                WalEntry::Dequeue { queue_id: qid, .. } if *qid == queue_id => {
+                    head += 1;
+                }
+                WalEntry::Checkpoint { queue_id: qid, .. } if *qid == queue_id => {
+                    // After a checkpoint, earlier entries were truncated.
+                    // The queue state at this point is what we have.
+                }
+                _ => {}
+            }
+        }
+
+        let leaf_hashes: Vec<[u8; 32]> = queue_entries.iter().map(hash_entry).collect();
+        let mut q = Self {
+            entries: queue_entries,
+            leaf_hashes,
+            head,
+            capacity,
+            root: [0u8; 32],
+            wal: Some(Box::new(WalState { wal, queue_id })),
+        };
+        q.recompute_root();
+        Ok(q)
+    }
+
+    /// Checkpoint: truncate WAL up to current state (called periodically).
+    pub fn checkpoint(&mut self) -> std::io::Result<()> {
+        let wal_state = self
+            .wal
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("no WAL attached"))?;
+
+        let seq = wal_state.wal.checkpoint(&wal_state.queue_id, &self.root)?;
+        // Truncate all entries before the checkpoint.
+        wal_state.wal.truncate_before(seq)?;
+        Ok(())
+    }
+
+    /// Enqueue an entry. Returns the new root hash on success.
+    pub fn enqueue(&mut self, entry: QueueEntry) -> Result<[u8; 32], QueueError> {
+        if self.is_full() {
+            return Err(QueueError::Full {
+                capacity: self.capacity,
+            });
+        }
+        self.leaf_hashes.push(hash_entry(&entry));
+        self.entries.push(entry);
+        self.recompute_root();
+        Ok(self.root)
+    }
+
+    /// Dequeue the next entry (FIFO). Returns the entry and a dequeue proof.
+    pub fn dequeue(&mut self) -> Result<(QueueEntry, DequeueProof), QueueError> {
+        if self.head >= self.entries.len() {
+            return Err(QueueError::Empty);
+        }
+
+        let old_root = self.root;
+        let position = self.head;
+        let entry = self.entries[self.head].clone();
+        self.head += 1;
+        self.recompute_root();
+
+        let proof = DequeueProof {
+            entry: entry.clone(),
+            old_root,
+            new_root: self.root,
+            position,
+            remaining_leaves: self.pending_leaves(),
+        };
+
+        Ok((entry, proof))
+    }
+
+    /// Peek at the next entry without consuming it.
+    pub fn peek(&self) -> Option<&QueueEntry> {
+        if self.head < self.entries.len() {
+            Some(&self.entries[self.head])
+        } else {
+            None
+        }
+    }
+
+    /// Number of pending (un-dequeued) entries.
+    pub fn len(&self) -> usize {
+        self.entries.len() - self.head
+    }
+
+    /// Whether the queue has no pending entries.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether the queue is at capacity.
+    pub fn is_full(&self) -> bool {
+        self.len() >= self.capacity
+    }
+
+    /// Maximum number of pending entries this queue can hold (the bound set
+    /// at construction).
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// How many more entries can be enqueued before [`is_full`] holds.
+    ///
+    /// Equal to `capacity - len`, saturating at 0 (a queue can never report
+    /// negative headroom even if it were somehow over-filled).
+    ///
+    /// [`is_full`]: MerkleQueue::is_full
+    pub fn remaining_capacity(&self) -> usize {
+        self.capacity.saturating_sub(self.len())
+    }
+
+    /// Current Merkle root hash.
+    pub fn root(&self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Total entries ever enqueued (tail index).
+    pub fn tail(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Current head position.
+    pub fn head_position(&self) -> usize {
+        self.head
+    }
+
+    /// Peek at an entry by relative position from head.
+    /// Returns None if the index is out of bounds.
+    pub fn peek_relative(&self, relative_index: usize) -> Option<&QueueEntry> {
+        let absolute = self.head + relative_index;
+        if absolute < self.entries.len() {
+            Some(&self.entries[absolute])
+        } else {
+            None
+        }
+    }
+
+    /// Recompute the Merkle root from all pending entries (head..tail).
+    ///
+    /// Per Stage-10 migration (STORAGE-POSEIDON2-AUDIT.md), leaves and the
+    /// root now route through the typed Commitment<T> / MerkleRoot<T>
+    /// framework with proper domain separation. The BLAKE3 wire form is
+    /// preserved as `self.root` for back-compat; a Poseidon2 form is
+    /// available via the typed `MerkleRoot<QueueEntrySetMarker>`.
+    ///
+    /// For an empty queue, the root is `MerkleRoot::empty().blake3_root`
+    /// (the all-zeros sentinel) — NOT the legacy `blake3(b"empty_queue")`.
+    fn recompute_root(&mut self) {
+        // Reuse the cached, index-aligned leaf commitments for the pending
+        // window (head..tail) — byte-identical to re-hashing each entry via
+        // `hash_entry`, since `leaf_hashes[i] == hash_entry(&entries[i])`.
+        let pending = &self.leaf_hashes[self.head..];
+        if pending.is_empty() {
+            self.root = empty_queue_root();
+            return;
+        }
+        self.root = merkle_root(pending);
+    }
+
+    /// Leaf hashes of the current pending window (head..tail), in FIFO order.
+    fn pending_leaves(&self) -> Vec<[u8; 32]> {
+        self.leaf_hashes[self.head..].to_vec()
+    }
+}
+
+/// The canonical empty-queue root (typed framework's empty MerkleRoot).
+///
+/// Equal to `[0u8; 32]`. Used wherever an empty `MerkleQueue` is checked
+/// for. Tests that previously asserted `blake3(b"empty_queue")` have been
+/// updated to use this helper.
+pub fn empty_queue_root() -> [u8; 32] {
+    crate::commitment::MerkleRoot::<crate::commitment::QueueEntrySetMarker>::empty().blake3_root
+}
+
+/// Hash a queue entry to produce its dual-form leaf commitment. The
+/// canonical preimage is `content_hash || sender || deposit_le ||
+/// enqueued_at_le || size_le`. Returns the BLAKE3 form of the typed
+/// `QueueEntryCommitment` (the Poseidon2 form is computed but currently
+/// dropped at this boundary — future in-circuit queue programs can call
+/// `hash_entry_dual` to keep the typed form).
+fn hash_entry(entry: &QueueEntry) -> [u8; 32] {
+    hash_entry_dual(entry).blake3
+}
+
+/// Dual-form leaf commitment for a queue entry.
+pub fn hash_entry_dual(entry: &QueueEntry) -> crate::commitment::QueueEntryCommitment {
+    let mut canonical = Vec::with_capacity(32 + 32 + 8 + 8 + 8);
+    canonical.extend_from_slice(&entry.content_hash);
+    canonical.extend_from_slice(&entry.sender);
+    canonical.extend_from_slice(&entry.deposit.to_le_bytes());
+    canonical.extend_from_slice(&entry.enqueued_at.to_le_bytes());
+    canonical.extend_from_slice(&(entry.size as u64).to_le_bytes());
+    crate::commitment::Commitment::seal(&canonical[..])
+}
+
+/// Compute the Merkle root of a set of leaf hashes via the typed framework.
+///
+/// Internally uses `commitment::blake3_binary_root` (the same shape the
+/// upstream typed framework uses). For an empty leaf set, returns the
+/// typed `MerkleRoot::empty()` sentinel.
+fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return empty_queue_root();
+    }
+    crate::commitment::blake3_binary_root(leaves)
+}
+
+/// Verify a dequeue proof STRUCTURALLY: the transition `old_root → new_root`
+/// removes exactly `proof.entry` from the HEAD of the committed queue.
+///
+/// Recomputes both roots against the same commitment scheme `enqueue`/
+/// `recompute_root` use (domain-tagged `hash_entry` leaves under
+/// `commitment::blake3_binary_root`, empty = the typed empty sentinel):
+///
+/// 1. `hash_entry(proof.entry)` must be the FIRST leaf under `old_root`,
+///    with `proof.remaining_leaves` as the rest of the pending window.
+/// 2. `new_root` must be the root of exactly `proof.remaining_leaves` —
+///    the queue with that head removed and nothing else changed.
+///
+/// Fail-closed: any mismatch (wrong head entry, tampered roots, added/
+/// dropped/reordered remaining leaves) returns `false`.
+///
+/// NOTE: structural validity proves the TRANSITION is a well-formed head
+/// dequeue; it does NOT prove `old_root` was ever the live queue root. To
+/// also refuse replayed/stale proofs, verify against the known live root
+/// with [`verify_dequeue_proof_against`].
+pub fn verify_dequeue_proof(proof: &DequeueProof) -> bool {
+    // Zero leaves never occur as real entry commitments (hash_entry is a
+    // domain-tagged BLAKE3 digest) but DO alias the pow2 zero-padding:
+    // merkle_root([a,b,c]) == merkle_root([a,b,c,0]). A claimed zero leaf
+    // would let check (1) pass via the alias while check (2) admits a
+    // non-canonical post-root, diverging a tracked root from the live
+    // queue. (Lean: QueueRoot.verifyDequeueStrict / strict_dequeue_proof_pins.)
+    if proof.remaining_leaves.iter().any(|l| l == &[0u8; 32]) {
+        return false;
+    }
+    // (1) old_root commits to [head leaf, remaining...].
+    let head_leaf = hash_entry(&proof.entry);
+    let mut old_leaves = Vec::with_capacity(1 + proof.remaining_leaves.len());
+    old_leaves.push(head_leaf);
+    old_leaves.extend_from_slice(&proof.remaining_leaves);
+    if merkle_root(&old_leaves) != proof.old_root {
+        return false;
+    }
+    // (2) new_root is exactly the queue with the head removed.
+    // (merkle_root([]) == empty_queue_root(), so emptying dequeues check too.)
+    merkle_root(&proof.remaining_leaves) == proof.new_root
+}
+
+/// Verify a dequeue proof AGAINST a known pre-state root (e.g. the live
+/// queue root the verifier tracked). Refuses replayed/stale proofs whose
+/// `old_root` no longer matches, in addition to the full structural check
+/// of [`verify_dequeue_proof`]. On success the verifier should advance its
+/// tracked root to `proof.new_root`.
+pub fn verify_dequeue_proof_against(proof: &DequeueProof, expected_pre_root: &[u8; 32]) -> bool {
+    proof.old_root == *expected_pre_root && verify_dequeue_proof(proof)
+}
+
+/// Serialize a QueueEntry to bytes for WAL storage.
+pub fn serialize_queue_entry(entry: &QueueEntry) -> Vec<u8> {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&entry.content_hash);
+    buf.extend_from_slice(&entry.sender);
+    buf.extend_from_slice(&entry.deposit.to_le_bytes());
+    buf.extend_from_slice(&entry.enqueued_at.to_le_bytes());
+    buf.extend_from_slice(&(entry.size as u64).to_le_bytes());
+    buf
+}
+
+/// Deserialize a QueueEntry from bytes (WAL replay).
+pub fn deserialize_queue_entry(data: &[u8]) -> Option<QueueEntry> {
+    // content_hash(32) + sender(32) + deposit(8) + enqueued_at(8) + size(8) = 88 bytes
+    if data.len() < 88 {
+        return None;
+    }
+    let mut content_hash = [0u8; 32];
+    content_hash.copy_from_slice(&data[0..32]);
+    let mut sender = [0u8; 32];
+    sender.copy_from_slice(&data[32..64]);
+    let deposit = u64::from_le_bytes(data[64..72].try_into().ok()?);
+    let enqueued_at = u64::from_le_bytes(data[72..80].try_into().ok()?);
+    let size = u64::from_le_bytes(data[80..88].try_into().ok()?) as usize;
+    Some(QueueEntry {
+        content_hash,
+        sender,
+        deposit,
+        enqueued_at,
+        size,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_entry(content: &[u8], sender: [u8; 32], deposit: u64) -> QueueEntry {
+        QueueEntry {
+            content_hash: *blake3::hash(content).as_bytes(),
+            sender,
+            deposit,
+            enqueued_at: 100,
+            size: content.len(),
+        }
+    }
+
+    #[test]
+    fn enqueue_dequeue_roundtrip() {
+        let mut q = MerkleQueue::new(10);
+        let entry = make_entry(b"hello", [1u8; 32], 500);
+
+        let root_after_enqueue = q.enqueue(entry.clone()).unwrap();
+        assert_ne!(root_after_enqueue, empty_queue_root());
+        assert_eq!(q.len(), 1);
+
+        let (dequeued, proof) = q.dequeue().unwrap();
+        assert_eq!(dequeued, entry);
+        assert_eq!(proof.old_root, root_after_enqueue);
+        assert_eq!(proof.position, 0);
+        assert_eq!(q.len(), 0);
+    }
+
+    #[test]
+    fn root_changes_on_mutation() {
+        let mut q = MerkleQueue::new(10);
+        let root_empty = q.root();
+
+        let entry1 = make_entry(b"first", [1u8; 32], 100);
+        q.enqueue(entry1).unwrap();
+        let root_one = q.root();
+        assert_ne!(root_empty, root_one);
+
+        let entry2 = make_entry(b"second", [2u8; 32], 200);
+        q.enqueue(entry2).unwrap();
+        let root_two = q.root();
+        assert_ne!(root_one, root_two);
+
+        q.dequeue().unwrap();
+        let root_after_dequeue = q.root();
+        assert_ne!(root_two, root_after_dequeue);
+    }
+
+    #[test]
+    fn full_queue_rejects() {
+        let mut q = MerkleQueue::new(2);
+        let e1 = make_entry(b"a", [1u8; 32], 10);
+        let e2 = make_entry(b"b", [2u8; 32], 20);
+        let e3 = make_entry(b"c", [3u8; 32], 30);
+
+        q.enqueue(e1).unwrap();
+        q.enqueue(e2).unwrap();
+        let result = q.enqueue(e3);
+        assert_eq!(result, Err(QueueError::Full { capacity: 2 }));
+    }
+
+    #[test]
+    fn empty_queue_dequeue_error() {
+        let mut q = MerkleQueue::new(10);
+        let result = q.dequeue();
+        assert_eq!(result, Err(QueueError::Empty));
+    }
+
+    #[test]
+    fn root_is_deterministic() {
+        // Same entries in same order produce same root.
+        let mut q1 = MerkleQueue::new(10);
+        let mut q2 = MerkleQueue::new(10);
+
+        let e1 = make_entry(b"alpha", [0xAA; 32], 100);
+        let e2 = make_entry(b"beta", [0xBB; 32], 200);
+
+        q1.enqueue(e1.clone()).unwrap();
+        q1.enqueue(e2.clone()).unwrap();
+
+        q2.enqueue(e1).unwrap();
+        q2.enqueue(e2).unwrap();
+
+        assert_eq!(q1.root(), q2.root());
+    }
+
+    #[test]
+    fn dequeue_proof_is_verifiable() {
+        let mut q = MerkleQueue::new(10);
+        let e1 = make_entry(b"msg1", [1u8; 32], 50);
+        let e2 = make_entry(b"msg2", [2u8; 32], 75);
+
+        q.enqueue(e1).unwrap();
+        q.enqueue(e2).unwrap();
+
+        let (_, proof) = q.dequeue().unwrap();
+        assert!(verify_dequeue_proof(&proof));
+        assert_ne!(proof.old_root, proof.new_root);
+
+        // Second dequeue produces empty queue.
+        let (_, proof2) = q.dequeue().unwrap();
+        assert!(verify_dequeue_proof(&proof2));
+        assert_eq!(proof2.new_root, empty_queue_root());
+    }
+
+    #[test]
+    fn peek_does_not_consume() {
+        let mut q = MerkleQueue::new(10);
+        let entry = make_entry(b"peek_me", [5u8; 32], 300);
+        q.enqueue(entry.clone()).unwrap();
+
+        let peeked = q.peek().unwrap();
+        assert_eq!(peeked, &entry);
+        assert_eq!(q.len(), 1);
+
+        // Peek again — still there.
+        let peeked2 = q.peek().unwrap();
+        assert_eq!(peeked2, &entry);
+    }
+
+    #[test]
+    fn fifo_order() {
+        let mut q = MerkleQueue::new(10);
+        let entries: Vec<QueueEntry> = (0..5)
+            .map(|i| make_entry(format!("msg{i}").as_bytes(), [i as u8; 32], i as u64 * 10))
+            .collect();
+
+        for e in &entries {
+            q.enqueue(e.clone()).unwrap();
+        }
+
+        for expected in &entries {
+            let (got, _) = q.dequeue().unwrap();
+            assert_eq!(&got, expected);
+        }
+    }
+
+    #[test]
+    fn remaining_capacity_reports_real_headroom() {
+        let mut q = MerkleQueue::new(3);
+        // Empty: full headroom.
+        assert_eq!(q.capacity(), 3);
+        assert_eq!(q.remaining_capacity(), 3);
+
+        q.enqueue(make_entry(b"a", [1u8; 32], 10)).unwrap();
+        assert_eq!(q.remaining_capacity(), 2);
+
+        // Near-full (2 of 3): the correct small count, not a placeholder.
+        q.enqueue(make_entry(b"b", [2u8; 32], 20)).unwrap();
+        assert!(!q.is_full());
+        assert_eq!(q.remaining_capacity(), 1);
+
+        // Full: exactly zero, consistent with is_full.
+        q.enqueue(make_entry(b"c", [3u8; 32], 30)).unwrap();
+        assert!(q.is_full());
+        assert_eq!(q.remaining_capacity(), 0);
+
+        // Dequeue reopens headroom by one.
+        q.dequeue().unwrap();
+        assert_eq!(q.remaining_capacity(), 1);
+        // capacity() is the construction bound, invariant under fill.
+        assert_eq!(q.capacity(), 3);
+    }
+
+    /// Byte-identity differential: the cached-leaf root and proofs must be
+    /// IDENTICAL to a from-scratch full rebuild over a long, varied random
+    /// enqueue/dequeue sequence. Guards the #3 incremental-Merkle rewrite —
+    /// any divergence from re-hashing every pending entry is a Merkle-root
+    /// regression (a tracked root would fork from the live queue).
+    #[test]
+    fn cached_leaves_byte_identical_to_full_rebuild() {
+        // From-scratch reference root: re-hash every pending entry, exactly
+        // the pre-cache `recompute_root` behaviour.
+        fn rebuild_root(entries: &[QueueEntry], head: usize) -> [u8; 32] {
+            let pending = &entries[head..];
+            if pending.is_empty() {
+                return empty_queue_root();
+            }
+            let leaves: Vec<[u8; 32]> = pending.iter().map(hash_entry).collect();
+            merkle_root(&leaves)
+        }
+        fn rebuild_pending_leaves(entries: &[QueueEntry], head: usize) -> Vec<[u8; 32]> {
+            entries[head..].iter().map(hash_entry).collect()
+        }
+
+        // Deterministic xorshift PRNG (no external dep), seeded for repeatability.
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let cap = 64;
+        let mut q = MerkleQueue::new(cap);
+        // Shadow of the full entry log + head, for the reference rebuild.
+        let mut all_entries: Vec<QueueEntry> = Vec::new();
+        let mut ref_head: usize = 0;
+
+        for round in 0..2000u64 {
+            // Bias toward enqueue early, dequeue later, but mix throughout.
+            let do_enqueue = (next() % 3 != 0) && !q.is_full();
+            if do_enqueue {
+                let payload = format!("entry-{round}-{}", next());
+                let mut sender = [0u8; 32];
+                sender[0] = (next() % 251) as u8;
+                let entry = QueueEntry {
+                    content_hash: *blake3::hash(payload.as_bytes()).as_bytes(),
+                    sender,
+                    deposit: next() % 1000,
+                    enqueued_at: round,
+                    size: payload.len(),
+                };
+                let root = q.enqueue(entry.clone()).unwrap();
+                all_entries.push(entry);
+                assert_eq!(
+                    root,
+                    rebuild_root(&all_entries, ref_head),
+                    "enqueue root diverged at round {round}"
+                );
+            } else if !q.is_empty() {
+                let pre = q.root();
+                let (_, proof) = q.dequeue().unwrap();
+                // Proof internal consistency: old_root is the pre-state root.
+                assert_eq!(proof.old_root, pre);
+                ref_head += 1;
+                // Root + remaining-leaf witness match the full rebuild exactly.
+                assert_eq!(
+                    proof.new_root,
+                    rebuild_root(&all_entries, ref_head),
+                    "dequeue new_root diverged at round {round}"
+                );
+                assert_eq!(
+                    proof.remaining_leaves,
+                    rebuild_pending_leaves(&all_entries, ref_head),
+                    "remaining_leaves diverged at round {round}"
+                );
+                // The emitted proof must still structurally verify.
+                assert!(
+                    verify_dequeue_proof(&proof),
+                    "proof unverifiable at round {round}"
+                );
+            }
+            // Live root tracks the reference at every step.
+            assert_eq!(q.root(), rebuild_root(&all_entries, ref_head));
+        }
+    }
+
+    #[test]
+    fn capacity_freed_after_dequeue() {
+        let mut q = MerkleQueue::new(2);
+        let e1 = make_entry(b"x", [1u8; 32], 10);
+        let e2 = make_entry(b"y", [2u8; 32], 20);
+
+        q.enqueue(e1).unwrap();
+        q.enqueue(e2).unwrap();
+        assert!(q.is_full());
+
+        // Dequeue one — now there's room.
+        q.dequeue().unwrap();
+        assert!(!q.is_full());
+        assert_eq!(q.len(), 1);
+
+        // Can enqueue again.
+        let e3 = make_entry(b"z", [3u8; 32], 30);
+        q.enqueue(e3).unwrap();
+        assert_eq!(q.len(), 2);
+    }
+}

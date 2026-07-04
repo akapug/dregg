@@ -1,0 +1,48 @@
+[package]
+name = "dregg-intent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Distributed intent engine for privacy-preserving capability discovery and matching"
+
+[dependencies]
+blake3 = "1"
+chacha20poly1305 = { workspace = true }
+curve25519-dalek = { version = "4", features = ["alloc"] }
+getrandom = { workspace = true }
+postcard = { version = "1", features = ["alloc"] }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-circuit = { path = "../circuit" }
+dregg-commit = { path = "../commit" }
+dregg-dfa = { path = "../dfa" }
+dregg-federation = { path = "../federation", default-features = false }  # pure threshold_decrypt; no tokio
+dregg-trace = { path = "../trace" }
+dregg-turn = { path = "../turn" }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+globset = { workspace = true }
+x25519-dalek = { workspace = true }
+# FFI-FREE BY CONSTRUCTION: LIVE ring settlement routes the per-leg verified-executor cross-check
+# through the `verified_gate` SEAM (`IntentVerifiedGate`), never `dregg-lean-ffi` directly. A native
+# node installs the Lean-backed gate (from `dregg-exec-lean`) once at startup; an FFI-free target
+# (wasm / verifier-PD / pg) never registers one and the cross-check is skipped (the in-process
+# verified transition stands). The LIVE-FFI fulfillment test lives in `dregg-exec-lean/tests`. The
+# deleted `no-lean-link` feature is now a dependency choice, not a flag.
+
+[features]
+default = []
+
+[dev-dependencies]
+# Arm the `StubVerifier` accept path for plumbing tests only. The feature is
+# fail-closed in production builds; enabling it here scopes the permissive stub
+# behavior to `cargo test`/dev builds of this crate.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
+
+[lints]
+workspace = true

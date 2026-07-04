@@ -1,0 +1,44 @@
+[package]
+name = "dregg-auth"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+repository = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+description = "Scoped, time-boxed, delegatable, revocable, OFFLINE-verifiable agent permissions — the friendly face of dregg's token layer, pointed at agents. No node, no wallet, no blockchain."
+
+# The adoption-quotient commitment (DREGG3-MARATHON W4): L1 is STANDALONE.
+# Offline verification, no node/turn/circuit. The dependency set is deliberately
+# TIGHT — `dregg-token` is brought in with JUST the `biscuit` feature: no
+# macaroon HMAC stack, no `rand-deps` revocation registry, and crucially NO
+# `dregg-commit` (which would drag in `dregg-circuit`/plonky3). The biscuit
+# `eb2_` wire codec's `base64` dep now lives under `biscuit` itself, so the
+# `to_encoded`/`from_encoded` path links without any heavy feature. The result:
+# `cargo tree -i dregg-circuit -p dregg-auth` shows NO path — the wedge is
+# genuinely lightweight (key types + Datalog offline verify, nothing else).
+[dependencies]
+dregg-token = { path = "../token", default-features = false, features = ["biscuit"] }
+biscuit-auth = { version = "6.0.0" }
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The proven credential core (`credential` module): types + ed25519 + blake3
+# (+ postcard/base64 for the wire form, getrandom for key generation) — no
+# cell/turn/node/circuit edge, ever.
+ed25519-dalek = { version = "2", features = ["std"] }
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
+base64 = { workspace = true }
+getrandom = "0.2"
+
+[lib]
+name = "dregg_auth"
+
+[[bin]]
+name = "dregg-auth"
+path = "src/bin/dregg-auth.rs"
+
+[lints]
+workspace = true

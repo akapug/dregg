@@ -1,0 +1,90 @@
+{
+  "name": "@dregg/sdk",
+  "version": "0.3.0",
+  "description": "TypeScript SDK for dregg — authorization-first turns, receipts, the organ nouns (trustline, channels, mailbox), attested-query light-client reads, profiles, events, and the cell-program constraint language",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./raw": {
+      "types": "./dist/raw.d.ts",
+      "import": "./dist/raw.mjs",
+      "require": "./dist/raw.js"
+    },
+    "./pg": {
+      "types": "./dist/pg.d.ts",
+      "import": "./dist/pg.mjs",
+      "require": "./dist/pg.js"
+    },
+    "./wasm": {
+      "types": "./dist/wasm.d.ts",
+      "import": "./dist/wasm.mjs",
+      "require": "./dist/wasm.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.mjs",
+      "require": "./dist/browser.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/browser.ts src/raw.ts src/wasm.ts src/pg.ts --format cjs,esm --dts --clean && npm run build:browser-esm",
+    "build:browser-esm": "tsup src/browser.ts --format esm --no-splitting --platform browser --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "npm run build && node --test 'test/*.test.mjs'",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "dregg",
+    "authorization",
+    "capability",
+    "trustline",
+    "channels",
+    "mailbox",
+    "stark",
+    "receipt",
+    "ed25519",
+    "blake3"
+  ],
+  "license": "AGPL-3.0-or-later",
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "dregg-wasm": ">=0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "dregg-wasm": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "dregg-wasm": "file:../wasm/pkg",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/emberian/dregg.git",
+    "directory": "sdk-ts"
+  },
+  "dependencies": {
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0"
+  }
+}

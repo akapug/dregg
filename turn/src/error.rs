@@ -1,0 +1,1072 @@
+//! Error types for turn execution failures.
+//!
+//! TurnError covers all the ways a turn can fail: authorization issues,
+//! precondition violations, resource limits, and structural problems.
+
+use dregg_cell::{AuthRequired, CellId, ChannelId};
+use serde::{Deserialize, Serialize};
+
+/// All possible failure modes when executing a turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TurnError {
+    /// The source cell doesn't have enough computrons for a transfer.
+    /// `available` is SIGNED (THE EPOCH §5): an issuer well legitimately
+    /// reads negative; ordinary verbs refuse to take any cell below zero.
+    InsufficientBalance {
+        cell: CellId,
+        required: u64,
+        available: i64,
+    },
+
+    /// The provided authorization doesn't satisfy the cell's permission requirements.
+    PermissionDenied {
+        cell: CellId,
+        action: String,
+        required: AuthRequired,
+    },
+
+    /// A precondition check failed.
+    PreconditionFailed { description: String },
+
+    /// The authorization was structurally invalid (e.g., bad signature format).
+    InvalidAuthorization { reason: String },
+
+    /// The target cell doesn't exist in the ledger.
+    CellNotFound { id: CellId },
+
+    /// An action tried to act on a cell it has no capability to reach.
+    CapabilityNotHeld { actor: CellId, target: CellId },
+
+    /// The turn's nonce doesn't match the expected nonce for the agent cell.
+    NonceReplay { expected: u64, got: u64 },
+
+    /// The turn's valid_until timestamp has passed.
+    Expired { valid_until: i64, now: i64 },
+
+    /// The turn exceeded its computron budget.
+    BudgetExceeded { limit: u64, used: u64 },
+
+    /// A child action tried to use delegation but the parent disallowed it.
+    /// (`DelegationMode::None` — the parent confers no cross-cell authority.)
+    DelegationDenied {
+        parent: CellId,
+        child_target: CellId,
+    },
+
+    /// A child action requested a delegation mode that is *typed but not yet
+    /// implemented* in the executor (`DelegationMode::ParentsOwn` /
+    /// `DelegationMode::Inherit`) while targeting a cell other than its parent.
+    ///
+    /// This is FAIL-CLOSED and deliberately DISTINCT from
+    /// [`TurnError::DelegationDenied`] and [`TurnError::CapabilityNotHeld`]: it
+    /// tells the caller the denial is because the requested mode confers nothing
+    /// (a no-op), not because authority was actually evaluated and found wanting.
+    /// The implemented cross-cell delegation paths are `DelegationMode::SnapshotRefresh`
+    /// and `Effect::Introduce` / bearer capabilities.
+    DelegationModeUnimplemented {
+        mode: crate::action::DelegationMode,
+        parent: CellId,
+        child_target: CellId,
+    },
+
+    /// State field index out of bounds.
+    InvalidFieldIndex { cell: CellId, index: usize },
+
+    /// A `Effect::Refusal`'s `proof_witness_index` does not resolve to a witness
+    /// blob carried by the action. The non-action attestation MUST point at a
+    /// real witness so a downstream verifier can re-execute the refusal check;
+    /// an out-of-range (fabricated/empty) index is rejected fail-closed.
+    InvalidWitnessIndex {
+        cell: CellId,
+        index: u32,
+        available: usize,
+    },
+
+    /// A cell that was supposed to be created already exists.
+    CellAlreadyExists { id: CellId },
+
+    /// The call forest is empty (no actions to execute).
+    EmptyForest,
+
+    /// THE SWAP strict mode (`DREGG_LEAN_SHADOW_STRICT=1`): the verified Lean executor REJECTED a
+    /// turn the Rust executor committed. The verified kernel is the authoritative rejection gate —
+    /// it can only TIGHTEN the decision (never launder a Rust rejection to a commit) — so its veto
+    /// rolls the commit back. A turn carrying this reason was accepted by the legacy Rust executor
+    /// but the verified kernel refused it (e.g. an under-authorised burn / delegate).
+    LeanShadowVeto,
+
+    /// Transfer destination cell not found.
+    TransferDestNotFound { id: CellId },
+
+    /// Balance overflow on receiving cell.
+    BalanceOverflow { cell: CellId },
+
+    /// CreateCell was called with a non-zero initial balance.
+    CreateCellNonZeroBalance { cell: CellId, balance: u64 },
+
+    /// The sum of all balance_change deltas in the turn is not zero.
+    /// This violates the conservation law: withdrawals must be matched by deposits.
+    ExcessNotZero { excess: i64 },
+
+    /// A balance_change would underflow the target cell's balance (withdrawal exceeds holdings).
+    BalanceChangeUnderflow {
+        cell: CellId,
+        /// SIGNED (THE EPOCH §5).
+        current: i64,
+        delta: i64,
+    },
+
+    /// The cell's program rejected the state transition.
+    ProgramViolation { cell: CellId, reason: String },
+
+    /// Note conservation law violated: for a given asset type, the total value
+    /// of spent notes does not equal the total value of created notes.
+    NoteConservationViolation {
+        asset_type: u64,
+        inputs: u64,
+        outputs: u64,
+    },
+    /// Three-party introduction denied.
+    IntroductionDenied {
+        introducer: CellId,
+        recipient: CellId,
+        target: CellId,
+        reason: String,
+    },
+
+    /// The silo's budget slice is exhausted (Stingray bounded counter).
+    /// The turn was rejected before execution because the BudgetGate's
+    /// local slice cannot cover the requested fee.
+    BudgetExhausted {
+        silo_id: u32,
+        requested: u64,
+        remaining: u64,
+    },
+
+    /// A conditional turn's condition was not satisfied by the presented proof.
+    ConditionNotMet(String),
+
+    /// The fee provided for a conditional turn is less than the required reservation deposit.
+    /// Deposit = BASE_CONDITIONAL_DEPOSIT + PER_BLOCK_DEPOSIT * blocks_until_timeout.
+    InsufficientConditionalDeposit { required: u64, provided: u64 },
+
+    /// A BridgeMint effect failed verification (untrusted root, invalid proof,
+    /// or double-bridge attempt).
+    BridgeMintFailed { reason: String },
+
+    /// A BridgeLock effect failed (note already locked, etc.).
+    BridgeLockFailed { reason: String },
+
+    /// A BridgeFinalize effect failed (invalid receipt, bridge not found, etc.).
+    BridgeFinalizeFailed { reason: String },
+
+    /// A BridgeCancel effect failed (timeout not reached, bridge not found, etc.).
+    BridgeCancelFailed { reason: String },
+
+    /// A delegated capability snapshot is stale (exceeded max_staleness).
+    /// The delegation must be refreshed before it can be exercised.
+    StaleDelegation {
+        actor: CellId,
+        source: CellId,
+        refreshed_at: u64,
+        max_staleness: u64,
+        now: u64,
+    },
+
+    /// A delegated capability has been revoked via its revocation channel.
+    /// The channel was tripped, meaning the capability is no longer valid.
+    CapabilityRevoked {
+        actor: CellId,
+        channel_id: ChannelId,
+        tripped_at: u64,
+    },
+
+    /// R7 (epoch-at-retrieval): a STORED capability failed the freshness
+    /// re-check — its captured epoch (`stored_epoch` on a c-list entry /
+    /// `seal_epoch` on a sealed box) is older than the grantor's current
+    /// `delegation_epoch`. A cap stored before a revocation must not
+    /// survive it: storage (slots, seal-boxes) must not launder freshness.
+    CapabilityStale {
+        actor: CellId,
+        /// The cell whose `delegation_epoch` advanced past the stamp (the
+        /// authority grantor: the cap's target, or the box's sealer).
+        grantor: CellId,
+        /// The epoch captured at store/seal time.
+        stored_epoch: u64,
+        /// The grantor's current delegation epoch.
+        current_epoch: u64,
+    },
+
+    /// The capability slot counter overflowed (2^32 grants exhausted).
+    CapabilitySlotOverflow { cell: CellId },
+
+    /// An effect was structurally invalid (malformed data, null identifiers, etc.).
+    InvalidEffect { reason: String },
+
+    /// Committed (Pedersen) conservation check failed: the Schnorr proof over the
+    /// excess commitment is invalid, indicating value is not conserved.
+    CommittedConservationFailed { reason: String },
+
+    /// A turn targets a sovereign cell but no witness was provided.
+    SovereignWitnessRequired { cell: CellId },
+
+    /// The sovereign cell witness commitment does not match the stored commitment.
+    SovereignCommitmentMismatch {
+        cell: CellId,
+        expected: [u8; 32],
+        got: [u8; 32],
+    },
+
+    /// A proof-carrying turn targets a cell that is not sovereign.
+    ProofCarryingRequiresSovereign { cell: CellId },
+
+    /// The execution proof bytes could not be deserialized into a valid STARK proof.
+    InvalidExecutionProof(String),
+
+    /// The effects hash in the proof's public inputs does not match the turn's actual effects.
+    EffectsHashMismatch { expected: [u8; 32], got: [u8; 32] },
+
+    /// The STARK proof verification failed.
+    ProofVerificationFailed(String),
+
+    /// A proof-carrying turn carried more `Effect::Custom` sub-proofs in
+    /// `turn.custom_program_proofs` than the cell admits (the DoS cap, FINDING 1
+    /// of `docs/deos/AIR-COMPOSITION-AND-PROOF-COUNT-AUDIT.md`). Each sub-proof is
+    /// a full recursive STARK verify; without this cap a single authorized turn
+    /// could force arbitrarily many verifications (asymmetric resource
+    /// exhaustion). Rejected fail-closed BEFORE any sub-proof is verified.
+    /// `cap` is the cell's `max_custom_effects` (hard-capped at 64).
+    TooManyCustomProofs { got: usize, cap: usize },
+
+    /// The number of `Effect::Custom` sub-proofs on the wire
+    /// (`turn.custom_program_proofs`) does not equal the in-circuit committed
+    /// count `PI[CUSTOM_EFFECT_COUNT]` (FINDING 1). The off-circuit dispatch
+    /// count must equal the in-circuit Custom-row count the proof binds, else the
+    /// wire vec could carry more (or fewer) sub-proofs than the turn commits to.
+    CustomProofCountMismatch { wire: usize, committed: usize },
+
+    /// The cell targeted by a proof-carrying turn has no stored sovereign commitment.
+    SovereignNotRegistered { cell: CellId },
+
+    /// A faceted capability was exercised with an effect type not permitted by its mask.
+    ///
+    /// In E-language terms, this is a facet violation: the capability holder tried to
+    /// invoke a method not exposed by the faceted view of the target object.
+    FacetViolation {
+        actor: CellId,
+        target: CellId,
+        cap_slot: u32,
+        attempted_effect: String,
+        allowed_mask: u32,
+    },
+
+    /// A breadstuff (capability token) has expired.
+    BreadstuffExpired {
+        actor: CellId,
+        target: CellId,
+        expires_at: u64,
+        current_height: u64,
+    },
+
+    /// A breadstuff (capability token) has been revoked via its revocation channel.
+    BreadstuffRevoked {
+        actor: CellId,
+        target: CellId,
+        channel_id: ChannelId,
+    },
+
+    /// A breadstuff (capability token) was exercised with an effect not permitted by its facet.
+    BreadstuffFacetViolation {
+        actor: CellId,
+        target: CellId,
+        attempted_effects_mask: u32,
+        allowed_mask: u32,
+    },
+
+    /// A bearer capability was exercised with effects not permitted by its facet mask.
+    BearerCapFacetViolation {
+        target: CellId,
+        attempted_effects_mask: u32,
+        allowed_mask: u32,
+    },
+
+    /// A bearer capability's facet exceeds the delegator's facet (amplification).
+    BearerCapFacetAmplification {
+        target: CellId,
+        delegator_mask: u32,
+        bearer_mask: u32,
+    },
+
+    /// A bearer capability proof has expired.
+    BearerCapExpired {
+        target: CellId,
+        expires_at: u64,
+        current_height: u64,
+    },
+
+    /// A bearer capability's revocation channel has been tripped.
+    BearerCapRevoked {
+        target: CellId,
+        channel_id: ChannelId,
+    },
+
+    /// A bearer capability's delegation proof is invalid (bad signature, bad STARK proof, etc.).
+    BearerCapInvalidProof { target: CellId, reason: String },
+
+    /// A bearer capability attempts to amplify permissions beyond what the delegator holds.
+    BearerCapAmplification {
+        target: CellId,
+        delegator_permissions: AuthRequired,
+        bearer_permissions: AuthRequired,
+    },
+
+    /// A bearer capability references a delegator who does not hold the required capability.
+    BearerCapDelegatorLacksCapability { delegator: CellId, target: CellId },
+
+    /// A custom proof commitment in the Effect VM's public inputs does not match
+    /// the hash of the provided custom proof bytes.
+    CustomProofCommitmentMismatch {
+        index: usize,
+        expected: [u8; 16],
+        got: [u8; 16],
+    },
+
+    /// A custom program referenced by VK hash in a Custom effect is not deployed.
+    CustomProgramNotFound { index: usize, vk_hash: [u8; 32] },
+
+    /// A custom program's proof verification failed.
+    CustomProgramVerificationFailed {
+        index: usize,
+        program_vk: [u8; 32],
+        reason: String,
+    },
+
+    /// The cell is frozen for migration to another federation.
+    ///
+    /// Turns may not execute against cells in `MigrationState::Frozen` or
+    /// `AwaitingReceipt`. Migrations are a two-phase protocol; while a cell is
+    /// in a migrating state the source federation must not mutate it (otherwise
+    /// the destination's snapshot diverges).
+    CellFrozen { cell: CellId },
+
+    /// The agent's `previous_receipt_hash` does not match the prior receipt
+    /// the executor has on file for this agent. Either:
+    /// - `expected: Some(h)`, `got: Some(other)` -- chain branch / replay
+    /// - `expected: Some(h)`, `got: None` -- agent has a history but submitted
+    ///   as if genesis
+    /// - `expected: None`, `got: Some(_)` -- agent claims a prior receipt but
+    ///   the executor has none on file
+    ///
+    /// This is the executor-side enforcement of "self-bound history" (the
+    /// receipt-chain property documented on `TurnReceipt`). Prior to this
+    /// check, the property was only enforced off-chain by verifiers in
+    /// possession of the full chain.
+    ReceiptChainMismatch {
+        expected: Option<[u8; 32]>,
+        got: Option<[u8; 32]>,
+    },
+
+    /// `Authorization::Custom` named a `WitnessedPredicateKind` (built-in
+    /// discriminant or `Custom { vk_hash }`) that the executor's
+    /// `WitnessedPredicateRegistry` does not have a verifier for.
+    ///
+    /// Per AUTHORIZATION-CUSTOM-DESIGN §2 step 3 ("Registry lookup …
+    /// No silent fallback. The mode must be on the federation's
+    /// allowlist") and §8.6 (T18 — verifier version drift): turns that
+    /// reference an unregistered auth mode are rejected closed.
+    AuthModeNotRegistered {
+        /// Human-readable discriminant name for built-ins, or
+        /// `"Custom"` for `WitnessedPredicateKind::Custom`.
+        kind: String,
+        /// 32-byte verifier-key hash, set for `Custom` kinds; zeroed for
+        /// built-ins (the built-in identity is in `kind`).
+        vk_hash: [u8; 32],
+    },
+
+    /// An action carries `Effect::Refusal { cell, .. }` alongside another
+    /// state-mutating effect (`SetField`, `SetPermissions`,
+    /// `SetVerificationKey`, `Transfer`, `GrantCapability`,
+    /// `RevokeCapability`) on the *same* cell.
+    ///
+    /// `Refusal` is the categorical "evidence of non-action"
+    /// (CROSS-CELL-CATEGORICAL-ANALYSIS.md §3.3) — a structural
+    /// attestation that the prover did NOT act. Co-occurring it with a
+    /// real mutation on the same target collapses the semantics: was
+    /// the action refused, or taken? The executor rejects the action
+    /// closed rather than silently picking an order.
+    ///
+    /// Per task-1 of the 2026-05-25 lane-honesty sweep.
+    RefusalConflictsWithMutation {
+        /// The cell whose refusal collides with a co-occurring
+        /// state-mutating effect.
+        cell: CellId,
+        /// Human-readable name of the conflicting effect for triage.
+        conflicting_effect: String,
+    },
+
+    /// The cell's nonce overflowed u64::MAX.
+    ///
+    /// Per audit P2-2: wrapping a nonce would re-enable replay of historical
+    /// actions. The turn is rejected rather than allowing the wrap.
+    NonceOverflow { cell: CellId },
+
+    /// A stealth (one-time) authorization failed verification.
+    ///
+    /// Stealth invocation (anonymity-of-actor goal 1) authorizes a call with a
+    /// per-call one-time Ed25519 key derived from the actor's persistent spend
+    /// key plus a fresh ephemeral secret (see `cell::stealth`). The on-chain
+    /// turn carries only the one-time public key + ephemeral public key + a
+    /// signature; the persistent caller key never appears, and two calls are
+    /// unlinkable. This error is returned when the one-time signature does not
+    /// verify, the ephemeral/one-time keys are not valid Ed25519 points, or
+    /// the (executor-recomputed) binding does not match.
+    StealthAuthInvalid { reason: String },
+
+    /// A first-class `Authorization::Token` (biscuit / macaroon credential)
+    /// failed verification (goal 3 / `TOKEN-CAPABILITY-UNIFICATION.md`).
+    ///
+    /// Covers: undecodable token, format/key-ref mismatch, cryptographic
+    /// verification failure, caveat/Datalog rejection when bound to THIS
+    /// call's `AuthRequest`, an untrusted granting authority, or an expired
+    /// (by block height) token.
+    TokenAuthInvalid { reason: String },
+
+    /// The token verified cryptographically but its granted authority does not
+    /// cover what the cell requires for this action (capability-cover check,
+    /// `TOKEN-CAPABILITY-UNIFICATION.md` step 5). Fail-closed.
+    TokenInsufficientCapability {
+        cell: CellId,
+        action: String,
+        reason: String,
+    },
+
+    /// The action carried `Authorization::Token` but the executor has no
+    /// `TokenAuthorityVerifier` configured (fail-closed, mirrors the
+    /// no-proof-verifier posture).
+    TokenVerifierNotConfigured,
+
+    /// The VERIFIED executor refused the turn at admission, WITH its theorem-backed reason.
+    ///
+    /// The verified `Dregg2.Exec.Admission.admissible` predicate is a fold of eight named gates;
+    /// the FIRST failing gate is the [`AdmissionReason`](crate::AdmissionReason) this carries
+    /// (`reasonCode`, decoded from the verified executor's wire). This is the legible "why" of a
+    /// refusal — the dregg thesis's "refused WITH a reason" — replacing a bare `false`. The Lean
+    /// keystone `admissionReason_eq_admitted_iff` proves the reason is faithful: it is never
+    /// `Admitted` on a refused turn.
+    AdmissionRefused { reason: crate::AdmissionReason },
+}
+
+/// Operational classification of a refusal, for the security observability
+/// counters (`dregg_auth_failures_total` / `dregg_cap_refusals_total`). This is
+/// a pure projection of [`TurnError`] — it carries no dependency on any metrics
+/// facade so the type stays where the variants live.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalClass {
+    /// A credential / authorization-gate refusal: the presented authorization
+    /// (signature, biscuit/macaroon token, stealth proof, admission) did not
+    /// authorize the action.
+    Auth,
+    /// A capability-gate refusal: a held capability was missing, revoked, stale,
+    /// over-attenuated, or a delegation/facet bound was violated (the CAP path).
+    Capability,
+    /// Any other refusal (balance, nonce/replay, precondition, conservation,
+    /// structural). Not an exploitation signal on its own.
+    Other,
+}
+
+impl TurnError {
+    /// Classify this refusal for the security counters. `Auth` = credential /
+    /// authorization-gate refusals; `Capability` = cap-gate refusals (the CAP
+    /// path). Everything else is `Other`. A spike in the first two — especially
+    /// post red-team — is a live exploitation-attempt signal.
+    pub fn refusal_class(&self) -> RefusalClass {
+        use TurnError::*;
+        match self {
+            // Authorization / credential gate.
+            InvalidAuthorization { .. }
+            | PermissionDenied { .. }
+            | StealthAuthInvalid { .. }
+            | TokenAuthInvalid { .. }
+            | TokenInsufficientCapability { .. }
+            | TokenVerifierNotConfigured
+            | AuthModeNotRegistered { .. }
+            | AdmissionRefused { .. } => RefusalClass::Auth,
+            // Capability gate (CAP path): held-cap missing / revoked / stale /
+            // over-attenuated / delegation / facet / bearer-cap bounds.
+            CapabilityNotHeld { .. }
+            | DelegationDenied { .. }
+            | DelegationModeUnimplemented { .. }
+            | StaleDelegation { .. }
+            | CapabilityRevoked { .. }
+            | CapabilityStale { .. }
+            | CapabilitySlotOverflow { .. }
+            | IntroductionDenied { .. }
+            | FacetViolation { .. }
+            | BreadstuffExpired { .. }
+            | BreadstuffRevoked { .. }
+            | BreadstuffFacetViolation { .. }
+            | BearerCapFacetViolation { .. }
+            | BearerCapFacetAmplification { .. }
+            | BearerCapExpired { .. }
+            | BearerCapRevoked { .. }
+            | BearerCapInvalidProof { .. }
+            | BearerCapAmplification { .. }
+            | BearerCapDelegatorLacksCapability { .. } => RefusalClass::Capability,
+            _ => RefusalClass::Other,
+        }
+    }
+}
+
+impl core::fmt::Display for TurnError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TurnError::InsufficientBalance {
+                cell,
+                required,
+                available,
+            } => {
+                write!(
+                    f,
+                    "insufficient balance on cell {cell}: need {required}, have {available}"
+                )
+            }
+            TurnError::PermissionDenied {
+                cell,
+                action,
+                required,
+            } => {
+                write!(
+                    f,
+                    "permission denied on cell {cell} for action '{action}': requires {required:?}"
+                )
+            }
+            TurnError::PreconditionFailed { description } => {
+                write!(f, "precondition failed: {description}")
+            }
+            TurnError::InvalidAuthorization { reason } => {
+                write!(f, "invalid authorization: {reason}")
+            }
+            TurnError::CellNotFound { id } => {
+                write!(f, "cell not found: {id}")
+            }
+            TurnError::CapabilityNotHeld { actor, target } => {
+                write!(f, "cell {actor} has no capability to reach cell {target}")
+            }
+            TurnError::NonceReplay { expected, got } => {
+                write!(f, "nonce replay: expected {expected}, got {got}")
+            }
+            TurnError::Expired { valid_until, now } => {
+                write!(f, "turn expired: valid_until={valid_until}, now={now}")
+            }
+            TurnError::BudgetExceeded { limit, used } => {
+                write!(f, "computron budget exceeded: limit={limit}, used={used}")
+            }
+            TurnError::DelegationDenied {
+                parent,
+                child_target,
+            } => {
+                write!(
+                    f,
+                    "delegation denied: parent {parent} does not delegate to child targeting {child_target}"
+                )
+            }
+            TurnError::DelegationModeUnimplemented {
+                mode,
+                parent,
+                child_target,
+            } => {
+                write!(
+                    f,
+                    "delegation mode {mode:?} is typed but not implemented: parent {parent} \
+                     cannot delegate to child targeting {child_target} via this mode \
+                     (use SnapshotRefresh or Effect::Introduce)"
+                )
+            }
+            TurnError::InvalidFieldIndex { cell, index } => {
+                write!(f, "invalid field index {index} for cell {cell}")
+            }
+            TurnError::InvalidWitnessIndex {
+                cell,
+                index,
+                available,
+            } => {
+                write!(
+                    f,
+                    "refusal on cell {cell} references witness index {index} but the action \
+                     carries only {available} witness blob(s)"
+                )
+            }
+            TurnError::CellAlreadyExists { id } => {
+                write!(f, "cell already exists: {id}")
+            }
+            TurnError::EmptyForest => {
+                write!(f, "call forest is empty")
+            }
+            TurnError::LeanShadowVeto => {
+                write!(
+                    f,
+                    "verified Lean executor vetoed the commit (THE SWAP strict mode): the legacy \
+                     Rust executor accepted this turn but the verified kernel rejected it"
+                )
+            }
+            TurnError::TransferDestNotFound { id } => {
+                write!(f, "transfer destination not found: {id}")
+            }
+            TurnError::BalanceOverflow { cell } => {
+                write!(f, "balance overflow on cell {cell}")
+            }
+            TurnError::CreateCellNonZeroBalance { cell, balance } => {
+                write!(
+                    f,
+                    "CreateCell requires zero initial balance, got {balance} for cell {cell}"
+                )
+            }
+            TurnError::ExcessNotZero { excess } => {
+                write!(
+                    f,
+                    "excess not zero at turn end: {excess} (conservation law violated)"
+                )
+            }
+            TurnError::BalanceChangeUnderflow {
+                cell,
+                current,
+                delta,
+            } => {
+                write!(
+                    f,
+                    "balance_change underflow on cell {cell}: balance={current}, delta={delta}"
+                )
+            }
+            TurnError::ProgramViolation { cell, reason } => {
+                write!(f, "program violation on cell {cell}: {reason}")
+            }
+            TurnError::NoteConservationViolation {
+                asset_type,
+                inputs,
+                outputs,
+            } => {
+                write!(
+                    f,
+                    "note conservation violated for asset {asset_type}: inputs={inputs}, outputs={outputs}"
+                )
+            }
+            TurnError::IntroductionDenied {
+                introducer,
+                recipient,
+                target,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "introduction denied: {introducer} cannot introduce {recipient} to {target}: {reason}"
+                )
+            }
+            TurnError::BudgetExhausted {
+                silo_id,
+                requested,
+                remaining,
+            } => {
+                write!(
+                    f,
+                    "budget exhausted on silo {silo_id}: requested {requested}, remaining {remaining}"
+                )
+            }
+            TurnError::ConditionNotMet(reason) => {
+                write!(f, "conditional turn condition not met: {reason}")
+            }
+            TurnError::InsufficientConditionalDeposit { required, provided } => {
+                write!(
+                    f,
+                    "insufficient conditional deposit: required {required}, provided {provided}"
+                )
+            }
+            TurnError::BridgeMintFailed { reason } => {
+                write!(f, "bridge mint failed: {reason}")
+            }
+            TurnError::BridgeLockFailed { reason } => {
+                write!(f, "bridge lock failed: {reason}")
+            }
+            TurnError::BridgeFinalizeFailed { reason } => {
+                write!(f, "bridge finalize failed: {reason}")
+            }
+            TurnError::BridgeCancelFailed { reason } => {
+                write!(f, "bridge cancel failed: {reason}")
+            }
+            TurnError::StaleDelegation {
+                actor,
+                source,
+                refreshed_at,
+                max_staleness,
+                now,
+            } => {
+                write!(
+                    f,
+                    "stale delegation: actor {actor}'s delegation from {source} expired \
+                     (refreshed_at={refreshed_at}, max_staleness={max_staleness}, now={now})"
+                )
+            }
+            TurnError::CapabilityRevoked {
+                actor,
+                channel_id,
+                tripped_at,
+            } => {
+                write!(
+                    f,
+                    "capability revoked: actor {actor}'s delegation revoked via channel \
+                     {:02x}{:02x}... (tripped_at={tripped_at})",
+                    channel_id[0], channel_id[1]
+                )
+            }
+            TurnError::CapabilityStale {
+                actor,
+                grantor,
+                stored_epoch,
+                current_epoch,
+            } => {
+                write!(
+                    f,
+                    "stale stored capability: actor {actor}'s cap was stored at grantor \
+                     {grantor}'s delegation epoch {stored_epoch}, but the grantor has since \
+                     revoked (current epoch {current_epoch}); refresh the capability"
+                )
+            }
+            TurnError::CapabilitySlotOverflow { cell } => {
+                write!(
+                    f,
+                    "capability slot counter overflow on cell {cell} (2^32 grants exhausted)"
+                )
+            }
+            TurnError::InvalidEffect { reason } => {
+                write!(f, "invalid effect: {reason}")
+            }
+            TurnError::CommittedConservationFailed { reason } => {
+                write!(f, "committed conservation failed: {reason}")
+            }
+            TurnError::SovereignWitnessRequired { cell } => {
+                write!(
+                    f,
+                    "sovereign cell {cell} targeted but no witness provided in turn"
+                )
+            }
+            TurnError::SovereignCommitmentMismatch {
+                cell,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "sovereign commitment mismatch for cell {cell}: expected {:02x}{:02x}..., got {:02x}{:02x}...",
+                    expected[0], expected[1], got[0], got[1]
+                )
+            }
+            TurnError::ProofCarryingRequiresSovereign { cell } => {
+                write!(f, "proof-carrying turn targets non-sovereign cell {cell}")
+            }
+            TurnError::InvalidExecutionProof(reason) => {
+                write!(f, "invalid execution proof: {reason}")
+            }
+            TurnError::EffectsHashMismatch { expected, got } => {
+                write!(
+                    f,
+                    "effects hash mismatch: expected {:02x}{:02x}..., got {:02x}{:02x}...",
+                    expected[0], expected[1], got[0], got[1]
+                )
+            }
+            TurnError::ProofVerificationFailed(reason) => {
+                write!(f, "execution proof verification failed: {reason}")
+            }
+            TurnError::TooManyCustomProofs { got, cap } => {
+                write!(
+                    f,
+                    "turn carries {got} custom-effect sub-proofs but the cell admits at most {cap} \
+                     (max_custom_effects); rejected before verification to bound recursive STARK work"
+                )
+            }
+            TurnError::CustomProofCountMismatch { wire, committed } => {
+                write!(
+                    f,
+                    "custom-effect sub-proof count mismatch: {wire} on the wire but the proof \
+                     commits to {committed} (PI[CUSTOM_EFFECT_COUNT]); rejected fail-closed"
+                )
+            }
+            TurnError::SovereignNotRegistered { cell } => {
+                write!(
+                    f,
+                    "sovereign cell {cell} not registered (no stored commitment)"
+                )
+            }
+            TurnError::FacetViolation {
+                actor,
+                target,
+                cap_slot,
+                attempted_effect,
+                allowed_mask,
+            } => {
+                write!(
+                    f,
+                    "facet violation: actor {actor} tried {attempted_effect} on target {target} \
+                     via cap slot {cap_slot}, but capability mask 0x{allowed_mask:08x} does not permit it"
+                )
+            }
+            TurnError::BreadstuffExpired {
+                actor,
+                target,
+                expires_at,
+                current_height,
+            } => {
+                write!(
+                    f,
+                    "breadstuff expired: actor {actor} -> target {target}, \
+                     expires_at={expires_at}, current_height={current_height}"
+                )
+            }
+            TurnError::BreadstuffRevoked {
+                actor,
+                target,
+                channel_id,
+            } => {
+                write!(
+                    f,
+                    "breadstuff revoked: actor {actor} -> target {target}, \
+                     channel {:02x}{:02x}...",
+                    channel_id[0], channel_id[1]
+                )
+            }
+            TurnError::BreadstuffFacetViolation {
+                actor,
+                target,
+                attempted_effects_mask,
+                allowed_mask,
+            } => {
+                write!(
+                    f,
+                    "breadstuff facet violation: actor {actor} -> target {target}, \
+                     attempted 0x{attempted_effects_mask:08x} but allowed 0x{allowed_mask:08x}"
+                )
+            }
+            TurnError::BearerCapFacetViolation {
+                target,
+                attempted_effects_mask,
+                allowed_mask,
+            } => {
+                write!(
+                    f,
+                    "bearer cap facet violation: target {target}, \
+                     attempted 0x{attempted_effects_mask:08x} but allowed 0x{allowed_mask:08x}"
+                )
+            }
+            TurnError::BearerCapFacetAmplification {
+                target,
+                delegator_mask,
+                bearer_mask,
+            } => {
+                write!(
+                    f,
+                    "bearer cap facet amplification: target {target}, \
+                     bearer mask 0x{bearer_mask:08x} exceeds delegator mask 0x{delegator_mask:08x}"
+                )
+            }
+            TurnError::BearerCapExpired {
+                target,
+                expires_at,
+                current_height,
+            } => {
+                write!(
+                    f,
+                    "bearer cap expired: target {target}, expires_at={expires_at}, current_height={current_height}"
+                )
+            }
+            TurnError::BearerCapRevoked { target, channel_id } => {
+                write!(
+                    f,
+                    "bearer cap revoked: target {target}, channel {:02x}{:02x}...",
+                    channel_id[0], channel_id[1]
+                )
+            }
+            TurnError::BearerCapInvalidProof { target, reason } => {
+                write!(f, "bearer cap invalid proof for target {target}: {reason}")
+            }
+            TurnError::BearerCapAmplification {
+                target,
+                delegator_permissions,
+                bearer_permissions,
+            } => {
+                write!(
+                    f,
+                    "bearer cap amplification on target {target}: bearer has {bearer_permissions:?} \
+                     but delegator only holds {delegator_permissions:?}"
+                )
+            }
+            TurnError::BearerCapDelegatorLacksCapability { delegator, target } => {
+                write!(
+                    f,
+                    "bearer cap delegator {delegator} does not hold capability to target {target}"
+                )
+            }
+            TurnError::CustomProofCommitmentMismatch {
+                index,
+                expected,
+                got,
+            } => {
+                write!(
+                    f,
+                    "custom proof commitment mismatch at index {index}: expected {expected:02x?}, got {got:02x?}"
+                )
+            }
+            TurnError::CustomProgramNotFound { index, vk_hash } => {
+                write!(
+                    f,
+                    "custom program not found at index {index}: vk_hash {:02x}{:02x}...",
+                    vk_hash[0], vk_hash[1]
+                )
+            }
+            TurnError::CustomProgramVerificationFailed {
+                index,
+                program_vk,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "custom program verification failed at index {index} (vk {:02x}{:02x}...): {reason}",
+                    program_vk[0], program_vk[1]
+                )
+            }
+            TurnError::CellFrozen { cell } => {
+                write!(
+                    f,
+                    "cell {cell} is frozen for migration; no turns may execute against it"
+                )
+            }
+            TurnError::AuthModeNotRegistered { kind, vk_hash } => {
+                write!(
+                    f,
+                    "authorization mode not registered: kind={kind}, vk_hash={:02x}{:02x}...",
+                    vk_hash[0], vk_hash[1]
+                )
+            }
+            TurnError::ReceiptChainMismatch { expected, got } => {
+                fn fmt_hash(o: &Option<[u8; 32]>) -> String {
+                    match o {
+                        Some(h) => format!("Some({:02x}{:02x}...)", h[0], h[1]),
+                        None => "None".to_string(),
+                    }
+                }
+                write!(
+                    f,
+                    "receipt chain mismatch: expected {}, got {}",
+                    fmt_hash(expected),
+                    fmt_hash(got)
+                )
+            }
+            TurnError::RefusalConflictsWithMutation {
+                cell,
+                conflicting_effect,
+            } => {
+                write!(
+                    f,
+                    "Effect::Refusal on cell {cell} conflicts with co-occurring \
+                     state-mutating effect '{conflicting_effect}' on the same cell: \
+                     refusal is evidence-of-non-action and cannot coexist with a \
+                     real mutation in the same action"
+                )
+            }
+            TurnError::NonceOverflow { cell } => {
+                write!(
+                    f,
+                    "nonce overflow on cell {cell}: u64::MAX exceeded; \
+                     turn rejected to prevent P2-2 replay window"
+                )
+            }
+            TurnError::StealthAuthInvalid { reason } => {
+                write!(f, "stealth (one-time) authorization invalid: {reason}")
+            }
+            TurnError::TokenAuthInvalid { reason } => {
+                write!(f, "token authorization invalid: {reason}")
+            }
+            TurnError::TokenInsufficientCapability {
+                cell,
+                action,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "token does not cover required capability on cell {cell} for action \
+                     '{action}': {reason}"
+                )
+            }
+            TurnError::TokenVerifierNotConfigured => {
+                write!(
+                    f,
+                    "Authorization::Token presented but no TokenAuthorityVerifier configured \
+                     (fail-closed)"
+                )
+            }
+            TurnError::AdmissionRefused { reason } => {
+                // The reason renders its own stranger-facing "refused: …" explanation.
+                write!(f, "{reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TurnError {}
+
+#[cfg(test)]
+mod refusal_class_tests {
+    use super::*;
+    use dregg_cell::CellId;
+
+    #[test]
+    fn auth_gate_refusals_classify_as_auth() {
+        assert_eq!(
+            TurnError::InvalidAuthorization {
+                reason: "bad sig".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenAuthInvalid {
+                reason: "expired biscuit".into()
+            }
+            .refusal_class(),
+            RefusalClass::Auth
+        );
+        assert_eq!(
+            TurnError::TokenVerifierNotConfigured.refusal_class(),
+            RefusalClass::Auth
+        );
+    }
+
+    #[test]
+    fn cap_gate_refusals_classify_as_capability() {
+        assert_eq!(
+            TurnError::CapabilityNotHeld {
+                actor: CellId([1u8; 32]),
+                target: CellId([2u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+        assert_eq!(
+            TurnError::CapabilitySlotOverflow {
+                cell: CellId([3u8; 32]),
+            }
+            .refusal_class(),
+            RefusalClass::Capability
+        );
+    }
+
+    #[test]
+    fn ordinary_refusals_classify_as_other() {
+        assert_eq!(
+            TurnError::NonceReplay {
+                expected: 1,
+                got: 0
+            }
+            .refusal_class(),
+            RefusalClass::Other
+        );
+        assert_eq!(TurnError::EmptyForest.refusal_class(), RefusalClass::Other);
+    }
+}

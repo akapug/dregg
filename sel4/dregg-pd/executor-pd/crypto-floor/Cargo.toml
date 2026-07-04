@@ -1,0 +1,67 @@
+# dregg-crypto-floor — the REAL §8 crypto-floor primitives for the executor PD,
+# replacing the panic-if-reached crypto-stub.c with the SAME carried crypto the
+# verifier-stark PD runs on seL4 (Plonky3-conformant Poseidon2 over BabyBear +
+# BLAKE3). A `no_std` staticlib (crate-type = staticlib) cross-built for
+# aarch64-unknown-linux-musl — the same hosted-musl ABI the executor closure links
+# (executor-pd/scripts/link-probe.sh) and that sel4-musl emulates in the PD. The C
+# ABI shim (executor-pd/scripts/crypto-floor.c) owns the Lean Nat/Int/List
+# marshalling and calls these plain-value `dreggcf_*` entry points.
+#
+# Standalone workspace (empty [workspace] table) — like the parent executor-pd
+# crate — so it builds with its own target dir, swarm-safely, NOT a member of the
+# sel4/dregg-pd workspace.
+[workspace]
+
+[package]
+name = "dregg-crypto-floor"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "dregg_crypto_floor"
+crate-type = ["staticlib"]
+
+[dependencies]
+# The Merkle/transcript hash — the EXACT dep + features verifier-stark/Cargo.toml
+# uses: no_std (default-features off), `pure` forces the portable Rust backend (no
+# C/NEON SIMD path, which needs libc headers absent on the bare cross target).
+blake3 = { version = "1", default-features = false, features = ["pure"] }
+
+# serde: the carried StarkProof structs derive Serialize/Deserialize (the proof
+# BYTES use hand-rolled little-endian framing, but the derives must still compile).
+# Same dep + features the verifier-stark PD uses: no_std via default-features off
+# + derive + alloc. Backs the REAL §2 byte-channel STARK verify (stark_core/).
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+
+# §1 ed25519 strict verify — the SAME crate + `hazmat` the executor auth path and
+# the net-client turn gate use (`turn/src/executor/authorize.rs`,
+# `net-client/src/turn_gate.rs`). no_std: default-features off + alloc + hazmat
+# (its curve25519-dalek backend is the portable serial backend on this target).
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "hazmat"] }
+
+# §3 Pedersen value commitment over Ristretto255 — the SAME group + generators
+# `cell/src/value_commitment.rs` commits on (the bytes the executor's conservation
+# check consumes and the circuit binds). no_std: default-features off + alloc.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
+
+# §7 ChaCha20-Poly1305 AEAD — the SAME crate the committed-note ECIES box seals/
+# opens with (`cell/src/note_encryption.rs`). no_std: default-features off + alloc.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+
+# The RustCrypto AEAD trait (`Aead`/`KeyInit`) — pulled directly so the floor's
+# seal/open call sites name `aead::{Aead, KeyInit}`. no_std: default off + alloc.
+aead = { version = "0.5", default-features = false, features = ["alloc"] }
+
+# A no_std staticlib still needs a panic handler + (with panic=abort) no unwinder.
+# The load-bearing CROSS artifact (the seL4-musl staticlib, link-probe.sh) is ALWAYS
+# built `--release`, so the release profile keeps `panic = "abort"`. The dev profile
+# does NOT set panic=abort: the host KAT harness (`cargo test`, run on the host with
+# std) needs the std test runner's unwinding — a dev-profile `panic=abort` collides
+# the `blake3` no_std deps' `core` with the test crate's unwinding `core` (duplicate
+# lang item). The cross build never uses dev, so this does not affect the PD artifact.
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

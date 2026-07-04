@@ -1,0 +1,8 @@
+data/_export_raw.json
+data/gametree_d5.json
+ui-explore/
+*.rgba
+__pycache__/
+# the SOURCE bakes (pre-copy into site/) are not committed; the downscaled,
+# served copies under site/screenshots/ ARE (anchored so site/ is not ignored).
+/screenshots/

@@ -1,0 +1,20 @@
+[package]
+name = "dregg-trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Derivation trace format and reference evaluator for the dregg ZK token system"
+
+[dependencies]
+blake3 = "1"
+serde = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

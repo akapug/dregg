@@ -1,0 +1,229 @@
+//! Integration test: Proof-carrying sovereign turns (Phase 2).
+//!
+//! Tests the full pipeline:
+//!   1. Cipherclerk generates a STARK proof of valid state transition
+//!   2. Turn carries the proof (no sovereign_witnesses needed)
+//!   3. Executor verifies the proof and updates commitment (no re-execution)
+
+use dregg_cell::{Cell, CellId, CellMode, Ledger};
+use dregg_sdk::AgentCipherclerk;
+use dregg_turn::{ComputronCosts, Effect, TurnExecutor, TurnResult};
+
+/// Create a sovereign cell in a ledger and return the cell + ledger.
+///
+/// The executor requires the agent cell (= sovereign cell) to exist in the hosted
+/// table for nonce/fee checks. For proof-carrying turns, the cell is registered as
+/// both sovereign (commitment) AND hosted (balance/nonce). The proof replaces
+/// re-execution, but the executor still needs balance/nonce for basic validation.
+fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
+    let cclerk = AgentCipherclerk::new();
+    let pub_key = cclerk.public_key().0;
+    let token_id = *blake3::hash(b"test-domain").as_bytes();
+
+    let mut cell = Cell::with_balance(
+        pub_key,
+        token_id,
+        i64::try_from(balance).expect("balance fits i64"),
+    );
+    cell.mode = CellMode::Sovereign;
+    let cell_id = cell.id();
+
+    // THE ROTATION (cutover C1): the proof-carrying sovereign path now mints the
+    // rotated R=24 `Ir2BatchProof` and carries the v9 felt commitment. Register the
+    // sovereign cell with the SAME v9 commitment the matched producer
+    // (`execute_sovereign_turn_with_proof`) derives for the before-state: a single-cell
+    // `cells_root` over this cell, the empty nullifier root, and an `iroot` MMR over the
+    // (empty) receipt chain. The executor verifier reads this back as OLD_COMMIT (PI 34).
+    let nullifier_root = [0u8; 32];
+    let commitments_root = [0u8; 32];
+    let mut ctx_ledger = Ledger::new();
+    let _ = ctx_ledger.insert_cell(cell.clone());
+    let cells_root = dregg_turn::rotation_witness::cells_root(&ctx_ledger);
+    let iroot = dregg_turn::rotation_witness::iroot(&[]); // empty receipt chain
+    let v9_ctx = dregg_cell::commitment::V9RotationContext {
+        cells_root,
+        nullifier_root,
+        commitments_root,
+        iroot,
+    };
+    // THE FLIP (faithful 8-felt): register the 8-felt commit (`_v9_8`, `felt8_to_bytes32` of the
+    // chip-faithful chain) so the executor reads it back via `bytes32_to_felt8` as the 8 wide BEFORE
+    // commit PIs (the deployed ~124-bit binding; the retired 1-felt `_v9` left 28 bytes zero).
+    let commitment =
+        dregg_cell::commitment::compute_canonical_state_commitment_v9_8(&cell, &v9_ctx);
+
+    // Store the cell state in the cclerk.
+    let mut cclerk = cclerk;
+    cclerk.store_sovereign_state(cell.clone());
+
+    // Create a ledger with both:
+    // 1. Sovereign commitment registration (for proof verification)
+    // 2. Hosted cell entry (for nonce/fee checks by executor)
+    let mut ledger = Ledger::new();
+    ledger.register_sovereign_cell(cell_id, commitment).unwrap();
+    let _ = ledger.insert_cell(cell);
+
+    (cclerk, cell_id, ledger)
+}
+
+#[test]
+fn test_proof_carrying_sovereign_turn_accepted() {
+    let (mut cclerk, cell_id, mut ledger) = setup_sovereign_cell(1000);
+
+    // Create a destination cell for the transfer.
+    let dest_key = [42u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id();
+    let _ = ledger.insert_cell(dest_cell);
+
+    // Generate a proof-carrying turn: transfer 100 from our sovereign cell.
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 100,
+    }];
+
+    let turn = cclerk
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 0)
+        .expect("should generate proof-carrying turn");
+
+    // Verify the turn has an execution_proof.
+    assert!(turn.execution_proof.is_some());
+    assert_eq!(turn.execution_proof_cell, Some(cell_id));
+    assert!(turn.execution_proof_new_commitment.is_some());
+    assert!(turn.sovereign_witnesses.is_empty());
+
+    // Execute with the TurnExecutor.
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    match result {
+        TurnResult::Committed {
+            computrons_used, ..
+        } => {
+            // Proof-carrying turns use zero computrons (just verification).
+            assert_eq!(computrons_used, 0);
+        }
+        TurnResult::Rejected { reason, .. } => {
+            panic!("Turn was rejected: {:?}", reason);
+        }
+        other => panic!("Unexpected result: {:?}", other),
+    }
+
+    // Verify the sovereign commitment was updated.
+    let new_commitment = ledger.get_sovereign_commitment(&cell_id);
+    assert!(new_commitment.is_some());
+    assert_eq!(
+        *new_commitment.unwrap(),
+        turn.execution_proof_new_commitment.unwrap()
+    );
+}
+
+#[test]
+fn test_proof_carrying_turn_tampered_commitment_rejected() {
+    let (mut cclerk, cell_id, mut ledger) = setup_sovereign_cell(1000);
+
+    let dest_key = [43u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id();
+    let _ = ledger.insert_cell(dest_cell);
+
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 50,
+    }];
+
+    let mut turn = cclerk
+        .execute_sovereign_turn_with_proof(&cell_id, effects, 500, 0)
+        .expect("should generate proof-carrying turn");
+
+    // Tamper with the new commitment (simulates attacker trying to claim wrong state).
+    turn.execution_proof_new_commitment = Some([0xFFu8; 32]);
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    // Should be rejected because the proof's public inputs won't match the tampered commitment.
+    match result {
+        TurnResult::Rejected { reason, .. } => {
+            // Expected: the proof verification should fail because the public inputs
+            // don't match what's embedded in the STARK proof.
+            let reason_str = format!("{:?}", reason);
+            assert!(
+                reason_str.contains("new_commitment")
+                    || reason_str.contains("ProofVerificationFailed")
+                    || reason_str.contains("mismatch"),
+                "Expected commitment mismatch error, got: {}",
+                reason_str
+            );
+        }
+        TurnResult::Committed { .. } => {
+            panic!("Tampered turn should have been rejected!");
+        }
+        other => panic!("Unexpected result: {:?}", other),
+    }
+}
+
+#[test]
+fn test_backward_compat_witness_path_still_works() {
+    // Verify that turns WITHOUT execution_proof still work (Phase 1 witness path).
+    let cclerk = AgentCipherclerk::new();
+    let pub_key = cclerk.public_key().0;
+    let token_id = *blake3::hash(b"test-domain").as_bytes();
+
+    let mut cell = Cell::with_balance(pub_key, token_id, 5000);
+    cell.mode = CellMode::Sovereign;
+    // Set permissive send permission — this test verifies the witness injection
+    // mechanism, not authorization. Default permissions require Signature which
+    // would need a separate authorization test path.
+    cell.permissions.send = dregg_cell::AuthRequired::None;
+    let cell_id = cell.id();
+    let commitment = cell.state_commitment();
+
+    let mut cclerk = cclerk;
+    cclerk.store_sovereign_state(cell.clone());
+
+    let mut ledger = Ledger::new();
+    ledger.register_sovereign_cell(cell_id, commitment).unwrap();
+    // Insert the sovereign cell into the hosted table too (executor needs it for
+    // nonce/fee lookup since turn.agent == cell_id). The witness injection will
+    // replace it with the witnessed state.
+    let _ = ledger.insert_cell(cell.clone());
+
+    let dest_key = [44u8; 32];
+    let dest_token_id = *blake3::hash(b"test-domain").as_bytes();
+    let dest_cell = Cell::with_balance(dest_key, dest_token_id, 0);
+    let dest_id = dest_cell.id();
+    let _ = ledger.insert_cell(dest_cell);
+
+    // Use the Phase 1 witness path (no proof, sovereign_witnesses populated).
+    let effects = vec![Effect::Transfer {
+        from: cell_id,
+        to: dest_id,
+        amount: 200,
+    }];
+
+    let turn = cclerk
+        .execute_sovereign_turn(&cell_id, effects, 500)
+        .expect("should build witness-based turn");
+
+    // Verify it has witnesses but NO execution proof.
+    assert!(turn.execution_proof.is_none());
+    assert!(!turn.sovereign_witnesses.is_empty());
+
+    let executor = TurnExecutor::new(ComputronCosts::zero());
+    let result = executor.execute(&turn, &mut ledger);
+
+    match result {
+        TurnResult::Committed { .. } => {
+            // Phase 1 path still works.
+        }
+        TurnResult::Rejected { reason, .. } => {
+            panic!("Witness-based turn should succeed: {:?}", reason);
+        }
+        other => panic!("Unexpected: {:?}", other),
+    }
+}

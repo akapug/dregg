@@ -1,0 +1,23 @@
+# Cargo config for the STANDALONE executor-pd crate. Mirrors the dregg-pd
+# workspace config (../.cargo/config.toml) but points the target spec + search
+# path at the shared ../targets dir (via absolute RUST_TARGET_PATH) so this crate
+# builds standalone — its own workspace, its own target dir — without duplicating
+# the JSON target specs or editing the shared workspace.
+
+[unstable]
+unstable-options = true
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[build]
+target = "aarch64-sel4-microkit"
+rustflags = ["-Zunstable-options"]
+
+[env]
+# Absolute path to the shared target specs (this crate has no local targets/).
+# Table form (force = true) so it overrides the parent dregg-pd config's
+# relative-path RUST_TARGET_PATH during cargo's up-the-tree config merge.
+RUST_TARGET_PATH = { value = "/Users/ember/dev/breadstuffs/sel4/dregg-pd/targets", force = true }
+
+[target.'cfg(target_os = "none")']
+linker = "rust-lld"

@@ -1,0 +1,12 @@
+[package]
+name = "dregg-audit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dregg-commit = { path = "../commit" }
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

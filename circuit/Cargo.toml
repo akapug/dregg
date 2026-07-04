@@ -1,0 +1,107 @@
+[package]
+name = "dregg-circuit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Zero-knowledge proof circuits for dregg authorization token chains"
+
+[dependencies]
+# Plonky3 core (workspace-pinned). THE VERIFY FLOOR (split policy 2): these are
+# the prover-FREE batch-STARK VERIFY surface deps + the recursion-free batch
+# prover (`p3-batch-stark`'s `prove_batch`/`verify_batch`, `p3-uni-stark`). They
+# are ALWAYS-ON — `dregg-circuit` is the verify-level floor. The three
+# RECURSION-ONLY crates (`p3-recursion` / `p3-circuit` / `p3-circuit-prover`) are
+# NOT here; they moved with the recursion tower to `dregg-circuit-prove`, which
+# keeps `cargo tree -p dregg-circuit` free of the recursion prover.
+p3-field = { workspace = true }
+p3-baby-bear = { workspace = true }
+p3-air = { workspace = true }
+p3-matrix = { workspace = true }
+p3-uni-stark = { workspace = true }
+p3-challenger = { workspace = true }
+p3-commit = { workspace = true }
+p3-fri = { workspace = true }
+p3-symmetric = { workspace = true }
+p3-dft = { workspace = true }
+p3-poseidon2 = { workspace = true }
+p3-mds = { workspace = true }
+p3-monty-31 = { workspace = true }
+p3-merkle-tree = { workspace = true }
+p3-util = { workspace = true }
+p3-batch-stark = { workspace = true }
+p3-lookup = { workspace = true }
+p3-poseidon2-circuit-air = { workspace = true }
+
+# Dregg DSL proc-macro — the temporal_predicate_dsl module is the manually-expanded
+# equivalent of the #[dregg_circuit] macro output (the macro cannot self-reference
+# within its own crate, so we expand it manually).
+dregg-dsl = { path = "../dregg-dsl" }
+
+postcard = { version = "1", features = ["alloc"] }
+
+blake3 = "1"
+getrandom = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+tracing = { version = "0.1" }
+itertools = { version = "0.14" }
+rand = { version = "0.10" }
+rmp-serde = { version = "1.2" }
+
+# THE VERIFY-LEVEL FLOOR (split policy 2). `dregg-circuit` is unconditionally the
+# prover-FREE batch-STARK VERIFY surface PLUS the recursion-free `prove_batch`
+# provers; all its p3 deps are non-optional. The recursion prover
+# (`p3-recursion`/`p3-circuit`/`p3-circuit-prover`) lives in `dregg-circuit-prove`.
+#
+# `plonky3` is RETAINED as an always-on no-op feature (default-on) so the existing
+# `#[cfg(feature = "plonky3")]` sites resolve true on the floor. The old `verifier`
+# and `prover` features are GONE (their items are now unconditional or moved); a
+# consumer that wants the prove surface depends on `dregg-circuit-prove`.
+[features]
+default = ["plonky3"]
+plonky3 = []
+
+[dev-dependencies]
+criterion = { workspace = true }
+dregg-bridge = { path = "../bridge", features = ["test-utils"] }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+# Test-layer ONLY: the shielded both-polarity tests construct a wrapped-negative
+# value commitment to exercise the per-output range-proof inflation gate. The
+# circuit crate stays upstream of the curve stack (value commitments ride as
+# opaque bytes); this dep is confined to integration tests at the cell/test seam.
+curve25519-dalek = { version = "4", features = ["alloc"] }
+dregg-trace = { path = "../trace" }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+dregg-turn = { path = "../turn" }
+# Used by benches (proof_benchmarks, practical_benchmarks). dregg-dsl-runtime is a
+# thin re-export over dregg-circuit::dsl; this is a dev-dep cycle that Cargo permits
+# (dev-deps are not used when building dregg-circuit as a library dependency).
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+getrandom = { workspace = true }
+# DeployedRefines differential (tests/deployed_refines_verifier_teeth.rs): mutate an
+# honest p3 BatchProof's opened `Challenge` (EF) values to witness that each verifyAlgo
+# tooth bites in the deployed `verify_batch`. Needs the extension-field element type.
+p3-field = { workspace = true }
+p3-baby-bear = { workspace = true }
+blake3 = "1"
+rmp-serde = { workspace = true }
+# proof-economics measurements (tests/proof_economics.rs): structural walk of
+# serialized proofs to count commitment-path digests for the pickles-bridge estimate.
+serde_json = { workspace = true }
+
+[[bench]]
+name = "stark_bench"
+harness = false
+
+[[bench]]
+name = "proof_benchmarks"
+harness = false
+
+[[bench]]
+name = "practical_benchmarks"
+harness = false
+
+[lints]
+workspace = true

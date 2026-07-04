@@ -1,0 +1,26 @@
+[package]
+name = "dregg-sdk-consensus-demo"
+version.workspace = true
+edition.workspace = true
+description = "SDK-level end-to-end demo that bypasses MCP: federation consensus, attested roots, CapTP wire, direct turn execution, and HandoffCertificate-based cross-cell capability transfer."
+
+[dependencies]
+dregg-sdk = { path = "../../sdk" }
+dregg-turn = { path = "../../turn" }
+dregg-cell = { path = "../../cell" }
+dregg-captp = { path = "../../captp" }
+dregg-wire = { path = "../../wire" }
+dregg-federation = { path = "../../federation" }
+dregg-blocklace = { path = "../../blocklace" }
+dregg-types = { path = "../../types" }
+dregg-token = { path = "../../token", default-features = false, features = ["macaroon", "rand-deps"] }
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
+ed25519-dalek = { version = "2", features = ["std"] }
+
+[[bin]]
+name = "dregg-sdk-consensus-demo"
+path = "src/main.rs"
+
+[lints]
+workspace = true

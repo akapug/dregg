@@ -1,0 +1,71 @@
+[package]
+name = "dregg-cell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Agent cell model — capability-secure isolated execution contexts"
+
+[features]
+default = []
+# `dregg-circuit` is now an always-present dependency (the canonical
+# capability-root scheme `dregg_circuit::cap_root` is load-bearing in the
+# always-on `compute_canonical_state_commitment`, so it must not be
+# feature-gated). `zkvm` additionally pulls in the proof-carrying helpers
+# (`dregg-commit` / `dregg-dsl-runtime`).
+zkvm = ["dep:dregg-commit", "dep:dregg-dsl-runtime"]
+# `prover` is RETAINED as a no-op (the faithful 8-felt commitment
+# `compute_canonical_state_commitment_v9_felt8` now unconditionally uses the
+# CHIP-faithful chain `wire_commit_8_chip`, which is verify-level in
+# `dregg-circuit`). Kept so downstream `dregg-cell/prover` forwards remain valid.
+prover = []
+# SOUNDNESS GATE — DO NOT ENABLE IN PRODUCTION.
+#
+# `test-stubs` arms the *accept* path of `StubVerifier` (predicate.rs), which
+# otherwise FAILS CLOSED on every proof. Without this feature (and outside
+# `#[cfg(test)]`), `WitnessedPredicateRegistry::with_stubs()` installs verifiers
+# that reject every proof — so a misconfigured host that selects the stub
+# registry can never authorize a forged witness. Downstream *test* crates that
+# rely on the permissive stub behavior enable `dregg-cell/test-stubs` in their
+# `[dev-dependencies]`; production builds never set it.
+test-stubs = []
+
+[dependencies]
+blake3 = "1"
+postcard = { version = "1", features = ["alloc"] }
+# Required (always present) for the canonical capability-root scheme in
+# `compute_canonical_capability_root` (`dregg_circuit::cap_root`). Default
+# features, matching every other workspace consumer of circuit (node/sdk/turn,
+# and wasm via `dregg-commit`) — Cargo feature unification already builds
+# circuit full-featured everywhere, so this adds no new feature surface.
+# NOTE: circuit's dependency on cell is dev-only, so this (cell → circuit)
+# direction is acyclic.
+dregg-circuit = { path = "../circuit" }
+# Real `WitnessedPredicateKind::Dfa` verifier: the out-of-circuit re-check of a
+# serialized `AirTrace` (`dregg_dfa::verify_acceptance`). Default features only
+# (the `federation-verifier` feature is NOT pulled), so this is acyclic —
+# dregg-dfa's default deps are blake3/serde/postcard, none of which reach cell.
+dregg-dfa = { path = "../dfa" }
+dregg-commit = { path = "../commit", optional = true }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime", optional = true }
+dregg-types = { path = "../types" }
+serde = { version = "1", features = ["derive", "std"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Integration tests under `cell/tests/` compile the crate as a normal
+# dependency (so `cfg(test)` is NOT set for the library), so they arm the
+# fail-closed `StubVerifier` accept path via the `test-stubs` feature. This is
+# scoped to dev/test builds and is never enabled in production.
+dregg-cell = { path = ".", features = ["test-stubs"] }
+
+[lints]
+workspace = true
+
+[[example]]
+name = "predicate_language"
+path = "examples/predicate_language.rs"

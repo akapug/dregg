@@ -1,0 +1,66 @@
+# Local dev reverse proxy for the dregg devnet stack.
+# Accessible at http://localhost:8400
+
+:8400 {
+    # Proxy health (does not hit backend services)
+    handle /health {
+        respond "ok" 200
+    }
+
+    # Federation node API (round-robin across all 3 nodes)
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy node-0:8420 node-1:8420 node-2:8420
+    }
+
+    # Gallery backend
+    handle /gallery/* {
+        uri strip_prefix /gallery
+        reverse_proxy gallery:3040
+    }
+
+    # Discharge gateway
+    handle /discharge/* {
+        uri strip_prefix /discharge
+        reverse_proxy discharge-gateway:8080
+    }
+
+    # Site static assets + Starbridge apps
+    handle /starbridge-apps/* {
+        reverse_proxy site:8080
+    }
+
+    handle /_includes/* {
+        reverse_proxy site:8080
+    }
+
+    handle /assets/* {
+        reverse_proxy site:8080
+    }
+
+    handle /pkg/* {
+        reverse_proxy site:8080
+    }
+
+    handle /starbridge {
+        reverse_proxy site:8080
+    }
+
+    handle /studio {
+        reverse_proxy site:8080
+    }
+
+    @learn path /learn /learn/*
+    handle @learn {
+        reverse_proxy site:8080
+    }
+
+    handle /apps {
+        reverse_proxy site:8080
+    }
+
+    # Default: site index and other static pages
+    handle {
+        reverse_proxy site:8080
+    }
+}

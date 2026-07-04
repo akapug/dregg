@@ -1,0 +1,19 @@
+# crypto-floor builds a hosted-musl staticlib (aarch64-unknown-linux-musl) — the
+# SAME ABI the executor closure links (link-probe.sh) and that sel4-musl emulates
+# in the PD. This config OVERRIDES the parent executor-pd/.cargo/config.toml, whose
+# `build.target = aarch64-sel4-microkit` + `build-std` would otherwise leak in via
+# cargo's up-the-tree config merge.
+#
+# aarch64-unknown-linux-musl is a tier-2 target with prebuilt `std`, so NO
+# build-std / RUST_TARGET_PATH is needed (unlike the bare-metal microkit target).
+# We deliberately re-declare these keys to shadow the parent's values.
+
+[build]
+target = "aarch64-unknown-linux-musl"
+rustflags = []
+
+[unstable]
+# (intentionally empty — shadow the parent's build-std unstable options)
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-unknown-linux-musl-gcc"

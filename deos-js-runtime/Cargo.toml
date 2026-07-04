@@ -1,0 +1,47 @@
+# deos-js-runtime — the NATIVE deos-js engine: cell-attached JavaScript driven by a
+# pure-Rust JS runtime (`boa`), with NO servo and NO SpiderMonkey/mozjs.
+#
+# THE GAP THIS CLOSES: `deos-js` runs cell-JS on real SpiderMonkey (`mozjs`) — the
+# multi-GB C++ engine that is the servo/web elephant. The cockpit (gpui native
+# desktop) cannot embed that. This crate runs the SAME cell-JS surface on a
+# pure-Rust engine that builds anywhere (gpui-native AND wasm/web), so a cell's
+# attached JS runs in the cockpit, not just the web shell. See
+# `docs/deos/JS-ON-CELLS.md`.
+#
+# It binds the SUBSTRATE crates directly (`dregg-sdk`/`cell`/`turn`/`types`) — the
+# SAME crates `deos-js::applet` binds — proving the substance binding (the verified
+# turn path + the `is_attenuation` cap tooth) is genuinely engine-independent. No
+# dependency on `deos-js` itself (that would drag mozjs in). The shared-substance
+# crate (`deos-js-core`) that both engines would depend on is the named follow-up.
+[package]
+name = "deos-js-runtime"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "The native (pure-Rust, no-servo) deos-js engine: cell-attached JS over cap-gated verified turns, via boa."
+
+[dependencies]
+# THE ENGINE — boa, a pure-Rust ECMAScript engine. No C, no servo, no native-link
+# elephant; cross-compiles to wasm32 with no emscripten. A fresh `Context` has NO
+# host bindings (no fetch/fs/process) — the sandbox is the absence of ambient
+# functions; the host installs only the cap-bounded surface it chooses.
+boa_engine = "0.20"
+
+# THE SUBSTANCE — the embedded verified executor + cells + turns. The SAME crates
+# `deos-js::applet` binds, so the verified-turn path is shared, not re-implemented.
+dregg-sdk = { path = "../sdk" }     # DreggEngine: execute_turn -> real TurnReceipt.
+dregg-cell = { path = "../cell" }   # Cell / AuthRequired / is_attenuation (the cap tooth).
+dregg-turn = { path = "../turn" }   # TurnBuilder / ActionBuilder / Effect / TurnReceipt.
+dregg-types = { path = "../types" } # CellId.
+
+# The view-tree node shape a `viewPatch` self-edit appends + serializes into the
+# cell's committed heap (the SAME {kind,props,children} JSON `deos-view` chunks), plus the
+# `JSON.stringify`'d compound-turn spec the `batch` host fn deserializes (serde derive).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The COMMIT-REVEAL seal — the same BLAKE3 derive-key construction the real
+# `starbridge-apps/sealed-auction` `Bid::seal` uses, so the runtime-owned `seal()` host fn
+# and the in-band reveal-binding check rest on a genuine collision-resistant hash (the
+# binding tooth: a sealed commitment opens to EXACTLY its bid — no peeking-then-switching).
+blake3 = "1"

@@ -1,0 +1,41 @@
+[package]
+name = "dregg-net"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+dregg-types = { workspace = true }
+quinn = { version = "0.11", features = ["runtime-tokio", "rustls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = { version = "0.14", features = ["ring"] }
+tokio = { version = "1", features = ["full"] }
+postcard = { version = "1", features = ["use-std"] }
+serde = { workspace = true }
+blake3 = "1"
+bytes = "1"
+ring = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.9"
+# Observability facade. The gossip layer emits the
+# `dregg_gossip_stream_rejected_total{peer,reason}` counter at the inbound
+# stream-rejection sites (the edge-storm path) so a rejection RATE is a graph
+# spike, not only a log flood. Emissions land on the process-global recorder the
+# node installs (`node/src/metrics.rs::install_recorder`); MUST stay the same
+# semver as the node's `metrics` dep so they share one recorder.
+metrics = "0.24"
+
+[dev-dependencies]
+# A capturing recorder for the gossip-rejection emission test (asserts the
+# Prometheus counter + its peer/reason labels are emitted at the reject sites).
+metrics-util = "0.19"
+
+[[bin]]
+name = "dregg-p2p-demo"
+path = "src/bin/demo.rs"
+
+[lints]
+workspace = true

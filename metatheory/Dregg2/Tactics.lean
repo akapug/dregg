@@ -1,0 +1,258 @@
+/-
+# Dregg2.Tactics — shared proof automation for the dregg2 metatheory.
+
+Small helpers shared across modules and executable protocols. These close routine
+goals (reflexivity, definitional simp, injection cleanup, linear arithmetic) — not a way
+to make a real obligation look discharged. If a helper does not close a goal, the goal is
+real: prove it properly or leave it as an explicit open obligation with a one-line reason.
+(Never `admit`, never a fresh `axiom`, never `native_decide` on a non-decidable prop.)
+-/
+import Mathlib.Tactic.Tauto
+import Mathlib.Tactic.Ring
+import Lean
+
+/-! ## Axiom-hygiene tripwire — the faked-green regression guard.
+
+`#assert_axioms` elaborates to an error if the named declaration's axiom set escapes
+`{propext, Classical.choice, Quot.sound}` (notably: any faked-green axiom). It can only reject,
+never close a goal. Pin it under each proved keystone.
+
+Defined at top level (outside the namespace) so the command token parses in every
+importing module without needing `open`.
+
+(Honest note on §8 oracles: `CryptoKernel`/`World`/`Verifiable` obligations enter as
+typeclass parameters/hypotheses, NOT `axiom`-keyword declarations, so they do not appear
+in `collectAxioms` and do not trip this guard. A genuine `axiom`-keyword oracle, were one
+ever added, would need to be allow-listed by name with a comment — by design.) -/
+
+/-- The kernel-clean triple. ONE source of truth for what "axiom-clean" means; every
+checker below (`#assert_axioms`, `#assert_clean`, `#assert_all_clean`,
+`#assert_namespace_axioms`) consults this list, so the discipline cannot drift per-command. -/
+def Dregg2.cleanAxioms : List Lean.Name := [``propext, ``Classical.choice, ``Quot.sound]
+
+open Lean Elab Command in
+/-- The shared one-name checker the verbose, terse, and batch commands all call. Runs
+`collectAxioms name` and throws on the first axiom outside `Dregg2.cleanAxioms` (notably
+a faked-green axiom ⇒ a silent faked-green leak). Pure rejector — never closes a goal. Returns `()` on
+clean. Centralizing here means the terse/batch forms are *exactly* as strict as the verbose
+one (same allow-list, same error), by construction. -/
+def Dregg2.assertNameClean (name : Lean.Name) : Lean.Elab.Command.CommandElabM Unit := do
+  let axs ← Lean.collectAxioms name
+  let bad := axs.filter (fun a => !Dregg2.cleanAxioms.contains a)
+  unless bad.isEmpty do
+    throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
+      (a faked-green axiom here means a silent faked-green leak into a 'PROVED' keystone)"
+
+open Lean Elab Command in
+/-- `#assert_axioms foo` errors unless every axiom `foo` depends on is one of the three
+standard kernel axioms (`propext`, `Classical.choice`, `Quot.sound`). In particular it
+FAILS on a faked-green axiom, catching a silent faked-green inheritance at build time. -/
+elab "#assert_axioms" id:ident : command => do
+  let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  Dregg2.assertNameClean name
+
+open Lean Elab Command in
+/-- `#assert_clean foo` — terse synonym for `#assert_axioms foo` (identical strength: same
+allow-list, same loud failure on the first non-clean axiom). The short token to pin a single
+keystone without the noun-heavy `#assert_axioms`. -/
+elab "#assert_clean" id:ident : command => do
+  let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+  Dregg2.assertNameClean name
+
+open Lean Elab Command in
+/-- `#assert_all_clean [a, b, c]` — pin a comma-separated LIST of keystones kernel-clean in
+ONE command, replacing N verbose `#assert_axioms` lines. Each name is checked by the same
+`Dregg2.assertNameClean` the per-theorem form uses, so it is exactly as strict; the FIRST
+non-clean name throws (with its offending axiom). A typo'd name is an `unknownConstant` error
+— the list cannot silently drop a pin. Logs the count pinned. -/
+elab "#assert_all_clean" "[" ids:ident,* "]" : command => do
+  let idArr := ids.getElems
+  let mut n : Nat := 0
+  for id in idArr do
+    let name ← liftCoreM <| realizeGlobalConstNoOverloadWithInfo id
+    Dregg2.assertNameClean name
+    n := n + 1
+  logInfo m!"#assert_all_clean: {n} keystones pinned kernel-clean"
+
+/-! ## `@[gate_projection]` — the gate-EXTRACT marker (NOT an authority guarantee).
+
+A `@[gate_projection]` theorem has the shape `<step> = some _ → <the step def's OWN gate>` and is proved
+by `unfold <step>; exact h.1` (a `by_cases` on the gate conjunction, projecting the held conjunct out of
+the commit). It RE-LISTS the executor's own `if`-guard: it reds on any gate edit (so it pins the gate's
+SHAPE), but in ISOLATION it constrains nothing — proving "the committed step satisfies its own gate" is a
+tautology-in-spirit, not an independent authority fact.
+
+The GENUINE authority binding for an effect is the iff/triangle over an INDEPENDENT spec — e.g.
+`Circuit.Spec.SupplyCreation.mintA_authorized`, derived through `execMintA_iff_spec` over the
+linter-PASS `MintASpec` (`Verify.LoadBearingLint`). A `@[gate_projection]`-tagged lemma is fine as a
+LOCAL helper (handler-floor `auth_gated`, fail-closed plumbing); it must NEVER be cited as a top-level
+authority GUARANTEE. The tag is a documentation marker (no proof power) so a reader/auditor cannot
+mistake a gate-extract for the real binding. -/
+
+/-- The `@[gate_projection]` tag — marks a `<step> = some _ → <own-gate>` gate-EXTRACT (proved
+`unfold; exact h.1`). A documentation marker ONLY: it carries no proof power and gates nothing. Its job
+is to STOP a gate-extract from reading as an authority guarantee — the genuine binding is the
+executor⟺independent-spec iff (see the module note above). -/
+initialize gateProjectionAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `gate_projection
+    "marks a gate-EXTRACT (`step = some _ → its own gate`, `unfold; exact h.1`) — NOT an authority \
+     guarantee; the genuine binding is the executor⟺independent-spec iff"
+
+/-! ## `@[linter_calibration]` — the DELIBERATE-linter-fixture marker.
+
+A `@[linter_calibration]` declaration is a fixture that exists SOLELY to exercise (calibrate) a
+rejector — it is constructed to be the kind of thing a checker MUST reject, so that a checker which
+fails to reject it is provably toothless. It is NOT spec debt: it is a negative test masquerading, by
+shape, as the thing being tested. Two such fixtures calibrate `Verify.LoadBearingLint`:
+
+  * `Dregg2.Verify.LoadBearingAuditKey.gateCopyBurnSpec` — a "spec" that calls the executor STEP gate
+    `recCBurnAsset` directly. It calibrates the linter's BOUNDARY check (#1): the linter MUST FAIL it.
+  * `Dregg2.Spec.execGraph` — a graph reconstructed VERBATIM as the executor's `.any confersEdgeTo`
+    lookup gate, so it is `isDefEq` to that gate (`execGraph_eq_any := rfl`). It calibrates the
+    linter's DEFEQ check (#2): the linter MUST FAIL it. Its GENUINE counterpart — the independent
+    authority-connectivity spec the C-c1 legs actually attest against — is `Spec.authConnects`
+    (linter-PASS, grounded in `Metatheory.AuthorizedProduction`). `execGraph` survives only as (a) this
+    calibration fixture and (b) the executor-side gate-relation that TRANSPORTS onto `authConnects`
+    (`execGraph_iff_authConnects` / `execGraph_has_iff_authConnects_has`).
+
+The two together are the linter's INTENDED NEGATIVE-CALIBRATION PAIR: every `#load_bearing_audit*`
+sweep is expected to produce exactly these two FAILs, and the calibration is ASSERTED (not left a
+silent FAIL count) by `#load_bearing_calibration_expect_fail` in the audit modules. The tag is a
+documentation marker only — it carries no proof power and gates nothing; its job is to STOP an auditor
+reading a deliberate gate-copy as a real-but-broken authority spec. -/
+
+/-- The `@[linter_calibration]` tag — marks a DELIBERATE checker-calibration fixture (a gate-copy /
+boundary-violator built to be REJECTED, so the rejector is proven non-toothless). A documentation
+marker ONLY: no proof power, gates nothing. Its job is to STOP a deliberate gate-copy from reading as
+real spec debt — see the module note above. The genuine counterpart of the `execGraph` calibration is
+the independent `Spec.authConnects`. -/
+initialize linterCalibrationAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `linter_calibration
+    "marks a DELIBERATE linter-calibration fixture (a gate-copy / boundary-violator built to be \
+     REJECTED) — NOT spec debt; carries no proof power"
+
+/-! ## `#assert_namespace_axioms` — module-wide axiom-hygiene pinning.
+
+`#assert_namespace_axioms` pins every theorem under a namespace to the three standard
+kernel axioms in one line: it walks `getEnv`, finds every theorem under the prefix, runs
+`collectAxioms`, and throws if any depends on an axiom outside
+`{propext, Classical.choice, Quot.sound}` (notably a faked-green axiom). Pure rejector — it can only
+error, never close a goal.
+
+**The `except` list (honesty caveat).** A name in the `except` clause is skipped (and
+reported). Use this for keystones that legitimately rest on a §8 oracle or a Law-1
+open primitive — each skip must be justified by a comment, preserving the discipline
+that a keystone resting on a primitive is not pinned.
+
+(Like `#assert_axioms`, this only sees `axiom`-keyword declarations; §8 oracles that enter
+as typeclass parameters / hypotheses do not appear in `collectAxioms`. By design.) -/
+
+/-- `#assert_namespace_axioms NS (except a b …)?` — pin EVERY theorem under namespace `NS` to the
+three standard kernel axioms, erroring on the first one that escapes (a faked-green axiom ⇒ a silent
+faked-green leak). Names listed in `except` are skipped (they legitimately rest on a §8/Law-1
+primitive — justify each with a comment). Logs the count pinned. Pure rejector. -/
+syntax (name := assertNamespaceAxioms)
+  "#assert_namespace_axioms" ident (" except " ident+)? : command
+
+open Lean Elab Command in
+elab_rules : command
+  | `(command| #assert_namespace_axioms $ns:ident $[ except $excIds:ident*]?) => do
+  let env ← getEnv
+  let prefixName := ns.getId
+  let allowed : List Name := Dregg2.cleanAxioms
+  -- Resolve the `except` names to fully-qualified constants (a typo is an `unknownConstant`
+  -- error here, so the allow-out list cannot silently drift — same discipline as a bad pin).
+  let exceptIdents : Array Ident := match excIds with
+    | some arr => arr
+    | none => #[]
+  let exceptNames ← exceptIdents.toList.mapM fun id =>
+    liftCoreM <| realizeGlobalConstNoOverloadWithInfo id.raw
+  let mut checked : Nat := 0
+  let mut skipped : Nat := 0
+  let mut seenExcept : List Name := []
+  -- Walk the whole environment; `env.constants` is an `SMap Name ConstantInfo`.
+  for (name, info) in env.constants.toList do
+    -- direct or nested members of the namespace (`Dregg2.Spec.Guard.admits_all` etc.)
+    unless prefixName.isPrefixOf name && prefixName != name do continue
+    -- theorems only — skip defs, inductives, constructors, recursors, axioms themselves
+    unless info.isThm do continue
+    -- skip compiler-internal names (`_proof_`, `.match_`, equation lemmas, …)
+    if name.isInternalDetail then continue
+    if exceptNames.contains name then
+      skipped := skipped + 1
+      seenExcept := name :: seenExcept
+      continue
+    let axs ← collectAxioms name
+    let bad := axs.filter (fun a => !allowed.contains a)
+    unless bad.isEmpty do
+      throwError "axiom-hygiene FAIL: {name} depends on non-kernel axioms {bad.toList} \
+        (a faked-green axiom here means a silent faked-green leak into a 'PROVED' keystone). \
+        If this keystone legitimately rests on a §8/Law-1 primitive, add it to the \
+        `except` clause with a justifying comment — do NOT weaken the theorem to pass."
+    checked := checked + 1
+  -- An `except` name that matched nothing in the namespace is dead allow-listing — surface it
+  -- (a renamed/retired keystone left in the allow-out list is itself a drift to catch).
+  for e in exceptNames do
+    unless seenExcept.contains e do
+      logWarning m!"#assert_namespace_axioms {prefixName}: `except` name {e} matched no \
+        pinned theorem in this namespace (retired/renamed? remove it from the allow-out list)"
+  logInfo m!"#assert_namespace_axioms {prefixName}: {checked} theorems pinned kernel-clean\
+    {if skipped > 0 then m!", {skipped} skipped via `except`" else m!""}"
+
+namespace Dregg2.Tactics
+
+/-- `dregg_auto` — best-effort closer for *routine* obligations only: reflexivity,
+`trivial`, definitional/hypothesis `simp`, linear arithmetic, propositional tautology.
+Use it as the last step of a proof; if it fails, the goal carries real content. -/
+macro "dregg_auto" : tactic =>
+  `(tactic| first
+    | rfl
+    | trivial
+    | (intros; first | rfl | trivial | simp_all | omega | tauto)
+    | simp_all
+    | omega
+    | tauto)
+
+/-- `option_inj at h` — collapse `some x = some y` (and any nested `(·,·) = (·,·)`) in `h`
+to its component equalities; the standard first move when reading back a protocol step
+that returned `some (newState…)`. -/
+macro "option_inj" "at" h:ident : tactic =>
+  `(tactic| simp only [Option.some.injEq, Prod.mk.injEq] at $h:ident)
+
+/-! ## Effect-arm combinators (per-effect dispatch-proof helpers).
+
+The `cases fa with` dispatch proofs over `FullActionA` repeat a small vocabulary of moves
+per arm: reject the `none` (fail-closed) branch, substitute the committed state on `some`,
+peel an `if gate then … else none`, discharge a balance-neutral edit. Each combinator below
+expands to exactly those tactic steps — no oracle, no `native_decide`, so a wrong arm still
+fails loudly. -/
+
+/-- `reject_none h hk` — the FAIL-CLOSED `none` branch. `hk : f = none` rewrites the commit
+hypothesis `h : f = some _` to `none = some _`, closed by `absurd`. -/
+macro "reject_none" h:ident hk:ident : tactic =>
+  `(tactic| (rw [$hk:ident] at $h:ident; exact absurd $h:ident (by simp)))
+
+/-- `commit_subst h hk` — the `some` branch. `hk : f = some k'` rewrites `h`, peels the
+`some`-injection, and substitutes the committed state into the goal. -/
+macro "commit_subst" h:ident hk:ident : tactic =>
+  `(tactic| (rw [$hk:ident] at $h:ident; simp only [Option.some.injEq] at $h:ident; rcases $h:ident with ⟨rfl⟩))
+
+/-- `gate_peel hk with finisher` — peel an `if guard then some _ else none` inside a chained step
+`hk : (if … then some _ else none) = some _`. Uses `split` (so the guard need NOT be named): the
+`then` branch substitutes the committed kernel and runs `finisher`; the `else` branch is
+FAIL-CLOSED against `hk`. -/
+macro "gate_peel" hk:ident " with " fin:tactic : tactic =>
+  `(tactic|
+    (split at $hk:ident
+     · simp only [Option.some.injEq] at $hk:ident
+       subst $hk:ident
+       $fin
+     · exact absurd $hk:ident (by simp)))
+
+-- NOTE: the balance-NEUTRAL finisher `bal_neutral` (the fourth combinator) lives in
+-- `Dregg2/Exec/RecordKernel.lean`, next to the per-asset measure (`recTotalAsset`)
+-- it unfolds — a tactic-macro must reference user globals from a site where they are in
+-- scope (macro hygiene resolves the simp-lemma names at the DEFINITION site, not the use
+-- site), so a domain-specific finisher belongs with its domain, not in this generic file.
+
+end Dregg2.Tactics

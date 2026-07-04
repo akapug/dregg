@@ -1,0 +1,165 @@
+# deos-hermes — Hermes (Nous Research's self-improving agent) as a CONFINED
+# deos agent: every Hermes tool-call becomes a cap-gated, metered, receipted
+# dregg turn. The ADOS realization with a REAL agent.
+#
+# STANDALONE WORKSPACE (declares its own `[workspace]`). It is deliberately
+# EXCLUDED from the repo-root `Cargo.toml` members — like `starbridge-v2/` and
+# `dregg-tui/` — because it depends on `dregg-sdk` with its DEFAULT features,
+# which EMBED THE REAL VERIFIED LEAN EXECUTOR (`libdregg_lean.a` via
+# `dregg-turn`/`dregg-cell`). That is exactly what we want here: a Hermes
+# tool-call must terminate in a GENUINE receipted turn on the verified
+# executor, not a mock. Unifying that Lean link onto the main workspace would
+# be the `no-lean-link` feature-unification footgun the verifier/wasm crates
+# exist to avoid.
+#
+# Build FROM INSIDE this directory:
+#   cd deos-hermes && cargo build
+#   cd deos-hermes && cargo test
+#
+# The `rust-toolchain.toml` here pins the ROLLING `nightly` channel (same as
+# starbridge-v2 / deos-zed): the optional `cockpit-surface` feature links gpui at
+# the pinned zed rev, which needs `cold_path` (stabilized after the repo root's
+# `nightly-2026-01-01`). The verified Lean executor `dregg-sdk` drags compiles
+# fine under rolling nightly too (starbridge-v2 embeds the SAME executor there).
+
+[package]
+name = "deos-hermes"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+authors = ["Dregg Contributors"]
+license = "AGPL-3.0-or-later"
+description = "Hermes-as-a-confined-deos-agent: every ACP tool-call becomes a cap-gated, metered, receipted dregg turn through the proven ToolGateway."
+
+[[bin]]
+name = "deos-hermes"
+path = "src/main.rs"
+
+[dependencies]
+# THE GROUNDING DEP — the real SDK with its DEFAULT features (the verified Lean
+# executor + the proven `ToolGateway`). We reuse `ToolGateway::{admit,invoke}`,
+# the `delegAdmit`-mirrored `ToolGrant`, and the `GatewayRefusal`/`ToolReceipt`
+# vocabulary VERBATIM — this crate builds NO new enforcement, only the ACP↔gate
+# seam on top of the proven crown.
+dregg-sdk = { path = "../sdk" }
+dregg-turn = { path = "../turn" }
+dregg-cell = { path = "../cell" }
+
+# THE SANDBOXED-FIRMAMENT HOST-PD (the ambient-authority confinement face). A
+# confined Hermes runs INSIDE a forked, OS-sandboxed host-PD whose ONLY channel
+# is its firmament Endpoint: `spawn_pd_confined` (macOS Seatbelt / Linux
+# ns+seccomp+landlock) drops every ambient OS authority (no `open`, no `socket`,
+# no `execve`, no inherited fd) before the agent body runs. We pull the sandbox
+# wire features so `crate::confined` can launch the agent into a PD. dregg-firmament
+# is its OWN workspace; cargo resolves it (and its proof dep-tree) under THIS
+# workspace's `[patch]` tables, so the ark-serialize + plonky3-recursion forks
+# above apply to it identically to the rest of the graph. The sandbox path is
+# Unix-only; on a non-Unix host it cfg-compiles to a stub.
+dregg-firmament = { path = "../sel4/dregg-firmament", features = [
+    "process-pd",
+    "process-pd-sandbox",
+] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# THE LIVE LLM TRANSPORT (gated by `live-brain`, OFF by default). A real
+# `reqwest::blocking` POST to an OpenAI-compatible `/v1/chat/completions` endpoint
+# OR the Anthropic Messages API (`/v1/messages`), with the operator's BYO key in
+# the auth header. OFF by default so the std-only green build (the recorded/mock
+# provider tests, `brain::kimi_adapter_tests`) needs no HTTP/TLS stack; the live
+# `post` closure the brain's `OpenAICompatCaller`/`LlmHttpCaller` seam takes is
+# only supplied under this feature, its live call an `#[ignore]`d test. reqwest
+# 0.12 is already resolved in the workspace lockfile, so this adds no new external
+# crate — it just enables it for this crate. `blocking` keeps the brain a sync
+# call; `json` does the body (de)serialization; `rustls-tls` is the self-contained
+# TLS provider.
+reqwest = { version = "0.12", optional = true, default-features = false, features = [
+  "blocking",
+  "json",
+  "rustls-tls",
+] }
+
+# ── THE HANDS (deos-js), gated behind `js-agent` ──
+# The confined agent's `run_js` tool runs deos-js (real SpiderMonkey via mozjs)
+# bound to the agent's `held` authority. deos-js pulls the multi-GB mozjs
+# SpiderMonkey C++ build, so it is OPTIONAL and OFF by default: the workspace
+# default `cargo build`/`cargo test` stays mozjs-free (deos-hermes is a normal
+# workspace member). The `run_js` path + its test run ONLY under
+# `--features js-agent`. deos-js is its OWN workspace (in the repo-root
+# `exclude`); cargo resolves it under THIS workspace's `[patch]` tables.
+deos-js = { path = "../deos-js", optional = true }
+# The card-authoring tool (`create_card`/`edit_card`) attributes each authored
+# view-line to the agent's `dregg_doc::Author` (the blame identity). Direct dep so
+# the tool names the author type without reaching through deos-js's re-exports.
+# Same `js-agent` gate (it only compiles with the card-authoring path).
+dregg-doc = { path = "../dregg-doc", optional = true }
+
+# ── the agent dock cockpit surface (gpui), gated behind `cockpit-surface` ──
+# Same gpui fork rev as starbridge-v2 / deos-zed / gpui-component so the WHOLE
+# graph resolves to ONE gpui — the `Entity`/`Window` types are byte-identical to
+# the cockpit's, so the delivered `impl CockpitSurface` drops into starbridge-v2's
+# dock with no second gpui linkage. OFF by default (the SDK-only build stays
+# gpui-free; the heavy tree is only pulled with `--features cockpit-surface`).
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "x11", "wayland", "runtime_shaders"], optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
+gpui-component-assets = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", optional = true }
+# Offscreen-capture deps (the `screenshot` feature). `image 0.25` matches
+# gpui_wgpu's `image` (one resolved version, same as starbridge-v2 / deos-zed).
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+# `anyhow` unifies the offscreen-capture error path (font load / window open /
+# screenshot / PNG write). Only pulled with the `screenshot` feature.
+anyhow = { version = "1", optional = true }
+
+[features]
+default = []
+# THE LIVE BYO-KEY BRAIN TRANSPORT. Supplies the real HTTP `post`/`complete`
+# closure the brain's provider seam takes but the crate otherwise never fills
+# live: `brain::live_openai_caller()` (an OpenAI-compatible `/v1/chat/completions`
+# POST) and `brain::AnthropicMessagesCaller` (the Anthropic Messages API), plus
+# `brain::live_brain_from_env()` which resolves a BYO key from the env chain
+# (DREGG_LLM_API_KEY → ANTHROPIC_API_KEY → OPENAI_API_KEY → NVIDIA_API_KEY →
+# ~/.nvidiakey) and wires the matching transport. OFF by default so the SDK-only
+# build stays HTTP/TLS-free; the live call is an `#[ignore]`d test.
+live-brain = ["dep:reqwest"]
+# THE HANDS — the confined agent's `run_js` tool. Pulls deos-js (real
+# SpiderMonkey) so a Hermes agent can crawl + drive the cockpit as the
+# operator's co-pilot, every fire a cap-gated verified turn under the agent's
+# `held`. OFF by default (the mozjs elephant stays out of the default build).
+js-agent = ["dep:deos-js", "dep:dregg-doc"]
+# THE AGENT DOCK COCKPIT SURFACE — the gpui `CockpitSurface` that mounts the
+# confined Hermes agent into starbridge-v2's moldable-inspector dock: a chat
+# pane (streamed agent text), the tool-call ledger (each receipt / refusal), and
+# the embedded mandate inspector. OFF by default so the SDK-only `cargo build` /
+# `cargo test` stays gpui-free (mirrors deos-zed / deos-terminal).
+cockpit-surface = ["dep:gpui", "dep:gpui_platform", "dep:gpui-component", "dep:gpui-component-assets"]
+# OFFSCREEN SCREENSHOT capture for the dock surface — drive it to a painted frame
+# in a headless gpui app over the offscreen wgpu renderer + a no-system-fonts
+# text system, then write the RGBA out as a PNG (mirrors deos-zed's `screenshot`).
+# Implies `cockpit-surface`.
+screenshot = [
+    "cockpit-surface",
+    "dep:image",
+    "dep:gpui_wgpu",
+    "dep:anyhow",
+    "gpui_wgpu/test-support",
+    "gpui_platform/test-support",
+]
+
+# `libc` backs the confined-launch fd plumbing (the fcntl/open/socket/connect
+# sandbox probes the stand-in agent runs INSIDE the PD, and the Endpoint-fd
+# recovery). Already a transitive dep of the dregg + firmament crates (no new
+# lockfile surface). Unix-only; on a non-Unix host `crate::confined` is cfg'd out.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Test-only: the multi-cell compose acceptance test (`hermes_composes_multi_cell`)
+# derives the deterministic cell ids its `mintCard` legs stand up (`blake3` — the
+# SAME derivation `deos_js::mint_id_of` / the node's `mint_open_cell` use) and renders
+# cell ids as the hex strings `deos.compose` consumes. Both are already in the lockfile
+# transitively (the dregg crates depend on them); dev-only, no shipped-crate surface.
+[dev-dependencies]
+blake3 = "1"
+hex = "0.4"

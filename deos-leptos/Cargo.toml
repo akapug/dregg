@@ -1,0 +1,117 @@
+# deos-leptos — the Leptos RUNTIME for the deos cell-affordance surface.
+#
+# THE HYPOTHESIS (ember): "we can use the leptos runtime if it helps us with the
+# deos/cell-stuff — i think it will." This crate confirms it for the dimensions
+# Leptos's model actually covers, and names the one seam where the deos trust
+# boundary and the WASM target boundary COINCIDE (which is a feature, not a bug).
+#
+# The three mappings (see src/lib.rs):
+#   1. signals ↔ the Reactive rung — a cell's state is a Leptos `RwSignal`;
+#      a `ReactiveAffordance` renders as a `Memo`-driven view that lights/darkens
+#      as the signal changes. The runtime dual of `fireReactive_window_reactive`.
+#   2. Leptos hydration ↔ frustum-snapshot rehydration — SSR renders the surface;
+#      per-viewer the membrane (`project_membrane`) decides what is shown. Two
+#      viewers → DISTINCT surfaces (`membrane_two_viewers_distinct`).
+#   3. htmx-on-crack in Rust — a reactive button press fires a REAL
+#      `ReactiveAffordance::fire` through a (mock) executor; the signal updates;
+#      the view reacts.
+#
+# WE DO NOT REINVENT THE GATE. Every gate is the REAL one imported from
+# `starbridge-web-surface`: `CellAffordance`/`ReactiveAffordance`/`TransitionGate`,
+# `Viewer::membrane_shows`, `AffordanceSurface::project_membrane`, the
+# `Sturdyref`/`Membrane`/`Rehydration` rehydration stack — all on the genuine
+# `dregg_cell::is_attenuation` lattice and the genuine `dregg_turn::Effect`.
+
+[package]
+name = "deos-leptos"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The Leptos runtime as the deos cell-affordance web surface: cell state = signal, affordances = gated reactive components, rehydration = per-viewer Leptos hydration. The reactive predicate IS the real ReactiveAffordance/Viewer gate."
+
+[dependencies]
+# THE REAL deos surface types — never a parallel gate. `CellAffordance`,
+# `ReactiveAffordance`, `TransitionGate`, `EvalContext`, `Viewer`,
+# `AffordanceSurface`, `Sturdyref`, `Membrane`, `Rehydration`, `FireError` and the
+# real `is_attenuation`/`AuthRequired`/`CellId`/`Effect` re-exports all come from
+# here. This is the load-bearing import: the Leptos view's reactive predicate is a
+# call into these, not a reimplementation.
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
+# THE DREGGVERSE DOCUMENT — Ted Nelson's *actual* document model (an EDL of OWN +
+# transcluded spans), made honest on the verified substrate. The
+# `parallel_source_view` module (the EEL) is built ENTIRELY on this crate's STABLE
+# API: `DreggverseDocument`/`Span`/`SpanRange`, `RenderedDocument`/`RenderedSpan`
+# (`source_link()` is the per-span jump-to-source anchor the parallel view consumes),
+# `resolve`/`resolve_for` (the per-viewer membrane meet that DARKENS a span the viewer
+# cannot read), and the re-exported `WebOfCells`/`Membrane`/`SurfaceCapability`/
+# `TranscludedField`/`Provenance`/`WebBundle`. We edit none of it — this is the thin
+# Leptos UX layer (the side-by-side render + the live re-resolve) over the genuine
+# document machinery. It is its own workspace root (like `starbridge-web-surface`), so
+# cargo resolves the shared real dregg crates into this crate's local target.
+deos-web-cells = { path = "../deos-web-cells" }
+
+# The REAL cell types we touch directly: `CellState` (the signal payload — the
+# council cell's status/tally slots the TransitionGate reads BOTH of) and the
+# `AuthRequired` lattice. Named directly so the cell-state-as-signal is the genuine
+# `CellState`, not a stand-in.
+dregg-cell = { path = "../cell" }
+dregg-types = { path = "../types" }
+dregg-turn = { path = "../turn" }
+
+# THE REAL EXECUTOR — this is the seam-closer. `dregg_sdk::AgentRuntime` OWNS a genuine
+# `dregg_turn::TurnExecutor` over an in-process verified ledger; its `AgentCipherclerk`
+# signs the action with a REAL `Authorization::Signature`; `execute_turn(&Turn)` runs
+# the verified turn and returns a real `dregg_turn::TurnReceipt`. The prototype's
+# MockExecutor is DELETED in favour of this.
+#
+# We drive `AgentRuntime` DIRECTLY rather than through `dregg-app-framework`'s
+# `EmbeddedExecutor` wrapper: app-framework carries an in-flight, currently-uncompilable
+# `stark_rehydrate` module (an UNTRACKED WIP that calls the non-generic
+# `verify_vm_descriptor2` with a recursion-config proof — a type mismatch that fails in
+# the ROOT workspace too, unrelated to this crate). Driving the SDK runtime directly is
+# both the working path AND the cleaner architecture: a Leptos SSR crate atop the SDK
+# runtime, not dragging app-framework's axum/captp/rehydrate surface. The gate stays the
+# REAL one — `starbridge_web_surface::ReactiveAffordance` (the SAME gate the island's
+# lit/dark Memo uses), so the client-will predicate and the server-law gate are byte-
+# identical. (The browser island still cannot link this: it sits atop the native STARK
+# stack — exactly why the executor is server-side and the island POSTs to a server-fn.)
+dregg-sdk = { path = "../sdk" }
+
+# Leptos, server-side-render mode. 0.8 resolves to 0.8.19 (current max-stable,
+# upstream-verified). `ssr` is the feature that renders a reactive view tree to an
+# HTML string on the NATIVE target — which is exactly where the deos gate types
+# (native-only: they sit atop the STARK crypto stack) can be linked. The
+# fine-grained reactive graph (`RwSignal`/`Memo`) is the same graph CSR/hydrate
+# use; only the render backend differs.
+leptos = { version = "0.8", features = ["ssr"] }
+
+[dev-dependencies]
+# (tests live inline in src/lib.rs)
+
+# The council-vote SSR demo (the original `cargo run` — per-viewer rehydration + the
+# real-executor fire). Kept as the default-named binary.
+[[bin]]
+name = "deos-leptos"
+path = "src/main.rs"
+
+# The LIVE reactive transclusion demo — the "live quote". `cargo run --bin
+# transclusion_demo` founds a constitution, renders the council's live quote of its
+# `threshold`, then AMENDS the source and re-renders, printing the quote tracking the
+# source reactively (V → V', the provenance height advancing) — the runnable demo of
+# the proven `Dregg2.Deos.Transclusion` primitive.
+[[bin]]
+name = "transclusion_demo"
+path = "src/bin/transclusion_demo.rs"
+
+# The EEL / PARALLEL-SOURCE-VIEW demo — Ted Nelson's parallel source view, made
+# runnable. `cargo run --bin parallel_source_view` resolves a multi-span
+# `deos_web_cells::DreggverseDocument` and renders the two-column EEL: the document in
+# one column, and BESIDE each transcluded span its SOURCE cell with the quoted byte
+# range highlighted + a working `#eel-src-N` jump-to-source anchor. It shows the
+# DARKENED-span case (a weaker viewer: "you may not read this, but here is what it
+# cites" — citation preserved, bytes withheld) AND the live update (amend a source →
+# the highlighted range tracks the new committed value, the provenance height advances).
+[[bin]]
+name = "parallel_source_view"
+path = "src/bin/parallel_source_view.rs"

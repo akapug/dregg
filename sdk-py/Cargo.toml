@@ -1,0 +1,91 @@
+[package]
+name = "dregg-sdk-py"
+# Aligned with @dregg/sdk (sdk-ts) — the same SDK generation (two nouns +
+# the trustline/channels/mailbox organs + attested-query + the typed surface).
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.94.0"
+authors = ["Dregg Contributors"]
+license = "AGPL-3.0-or-later"
+homepage = "https://dregg.fg-goose.online"
+repository = "https://github.com/emberian/dregg"
+description = "Python (pyo3) binding for the dregg SDK's two-noun surface: Identity → turn → sign → submit → Receipt"
+
+[lib]
+# The Python extension module is `import dregg`.
+name = "dregg"
+crate-type = ["cdylib", "rlib"]
+
+# ─── build modes: the LIGHT (kernel-free) client vs the HEAVY embedded kernel ───
+#
+# The DEFAULT build is the LIGHT, client-only wheel: small, no `libleanshared`
+# (~150 MB), NO Lean toolchain required on the building host. The whole CLIENT
+# surface — Identity.turn/transfer/sign/submit, the organs, AttestedQuery,
+# deploy.check, dregg.pg — is Ed25519 + wire-codec + HTTP, NOT the executor, so
+# it needs none of the verified kernel. `dregg.kernel()` degrades gracefully
+# (reports kernel-absent) in this build.
+#
+# HOW: `default = ["light"]` forwards `no-lean-link` to the single shared
+# `dregg-lean-ffi` instance (cargo features UNIFY: one request flips that one
+# node for the whole sdk-py graph). Its build.rs then early-returns — no `lake`,
+# no archive splice, no shim, no link directives — so the cdylib links WITHOUT
+# the Lean runtime and `lean_available()` is false. This is the SAME polarity-
+# inverted platform opt-out wasm32/zkvm use (docs/FEATURE-HYGIENE.md §Lean).
+#
+# The HEAVY wheel (the embedded verified kernel — `dregg[kernel]`) is built with
+#   maturin build --release --no-default-features --features kernel
+# which leaves `no-lean-link` OFF, so `dregg-lean-ffi` links `libdregg_lean.a`
+# (the Dregg2 module objects) + `libleanshared` in SHARED mode (set by
+# `.cargo/config.toml`'s `DREGG_LEAN_LINK=shared`). That build DOES need the
+# Lean toolchain (`./scripts/bootstrap.sh`) and produces a much larger wheel.
+[features]
+default = ["light"]
+light = ["dregg-lean-ffi/no-lean-link"]
+kernel = []
+
+[dependencies]
+# Authorization-first SDK surface only. `default-features = false` drops the
+# `network`/`captp`/`federation-client` features (tokio, quinn, dregg-wire,
+# dregg-captp, reqwest) — the Python binding does its own blocking HTTP via
+# ureq. The always-on modules we ride: cipherclerk, profiles, turns/raw,
+# receipt, program, explain. The Lean FFI link is UNCONDITIONAL on native
+# (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean) and this module gets the
+# REAL Lean kernel via the SHARED link mode: `.cargo/config.toml` sets
+# `DREGG_LEAN_LINK=shared` (an ENV var, not a feature — features unify, env
+# vars don't), under which dregg-lean-ffi links the toolchain's libleanshared
+# instead of the static runtime archives (whose mimalloc members carry
+# local-exec TLS, illegal under `-shared` on ELF — Convergence round 7; the
+# `no-lean-link` expedient that this replaces was REJECTED: the Python SDK
+# must not be forced onto the unverified Rust kernel).
+# Standalone workspace (root excludes sdk-py) so the link-mode choice never
+# leaks onto the native crates — the same discipline as the wasm eviction
+# (55318b702).
+dregg-sdk = { path = "../sdk", default-features = false }
+dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
+# Direct dep for the kernel() report + the import-time Lean runtime init
+# (lean_available / shadow_record_kernel_step).
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# DreggDL: the REAL parse → lower → userspace-verify pipeline. The Python
+# `dregg.deploy` module is a thin binding over `dregg_deploy::{check,
+# Lowered::from_deployment}` — no lowering / no checker is reimplemented here.
+dregg-deploy = { path = "../dregg-deploy" }
+dregg-userspace-verify = { path = "../dregg-userspace-verify" }
+
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py310"] }
+ureq = { version = "2.12", features = ["json"] }
+postcard = { version = "1", features = ["use-std"] }
+serde_json = "1"
+hex = "0.4"
+blake3 = "1"
+# Relay (mailbox organ) payload encoding + fresh signing nonces.
+base64 = "0.22"
+getrandom = "0.2"
+
+[workspace]
+
+# Mirrors the root workspace's patch (patch sections don't cross workspace boundaries).
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }

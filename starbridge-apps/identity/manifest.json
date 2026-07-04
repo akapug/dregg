@@ -1,0 +1,78 @@
+{
+  "id": "identity",
+  "name": "Identity",
+  "description": "Credential issuance and selective disclosure starbridge-app (dregg-native).",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d6964656e746974792d6973737565722d6661637421"
+  ],
+  "page": "/starbridge-apps/identity/pages/index.html",
+  "inspectors": [
+    "credential",
+    "credential-issue-form",
+    "credential-present-form",
+    "credential-verifier"
+  ],
+  "host_inspectors": [
+    { "id": "credential", "label": "Credential", "tag": "dregg-credential", "uri_attribute": "uri" },
+    { "id": "issue", "label": "Issue", "tag": "dregg-credential-issue-form", "uri_attribute": "issuer-uri" },
+    { "id": "present", "label": "Present", "tag": "dregg-credential-present-form", "uri_attribute": "credential-uri" },
+    { "id": "verify", "label": "Verify", "tag": "dregg-credential-verifier", "uri_attribute": "presentation-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_issuer", "label": "Inspect issuer", "uri": "dregg://cell/identity-issuer-default", "kind": "inspect" },
+    { "id": "issue_credential", "label": "Issue credential", "builder": "issue_credential", "kind": "turn" },
+    { "id": "revoke_credential", "label": "Revoke credential", "builder": "revoke_credential", "kind": "turn" },
+    { "id": "present_credential", "label": "Present credential", "builder": "present_credential", "kind": "local" },
+    { "id": "verify_presentation", "label": "Verify presentation", "builder": "verify_presentation", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "issuer_uri", "label": "Issuer URI", "type": "uri", "default": "dregg://cell/identity-issuer-default" },
+    { "id": "privacy", "label": "Disclosure", "type": "select", "options": ["selective", "full"], "default": "selective" }
+  ],
+  "turn_builders": [
+    "issue_credential",
+    "revoke_credential",
+    "present_credential",
+    "verify_presentation"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.identity"
+  ],
+  "slot_layout": {
+    "SCHEMA_COMMITMENT_SLOT": 2,
+    "ISSUANCE_COUNTER_SLOT": 3,
+    "REVOCATION_ROOT_SLOT": 4,
+    "ISSUER_AUTH_ROOT_SLOT": 5
+  },
+  "state_constraints": [
+    "Immutable(SCHEMA_COMMITMENT_SLOT)",
+    "MonotonicSequence(ISSUANCE_COUNTER_SLOT)",
+    "Monotonic(REVOCATION_ROOT_SLOT)",
+    "SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "identity_app(cipherclerk, executor)",
+    "cell": "issuer",
+    "discoverable": ["identity", "credentials"],
+    "publish": "Signature (the issuer cell is a dregg:// sturdyref a relying party — a verifier on another federation — reacquires to verify credentials across the trust boundary)",
+    "affordances": {
+      "verify": "cap-only, Signature (a VERIFIER reads + re-derives a presentation)",
+      "present": "cap-only, Either (a PRESENTER produces a disclosure; a holder-side read path)",
+      "issue": "GATED (cap∧state), None/root — schema-bound precondition (SCHEMA_COMMITMENT>=1); the fire advances ISSUANCE_COUNTER by exactly +1 off live state, the executor re-enforcing MonotonicSequence(ISSUANCE_COUNTER)",
+      "revoke": "GATED (cap∧state), None/root — something-issued precondition (ISSUANCE_COUNTER>=1); the fire advances REVOCATION_ROOT (strictly greater), the executor re-enforcing Monotonic(REVOCATION_ROOT)"
+    },
+    "seam": "CLOSED — INCLUDING THE AUTHORITY TOOTH. The issue/revoke fires run against the seeded issuer cell carrying the FULL floor issuer_program (WriteOnce(SCHEMA_COMMITMENT) + MonotonicSequence(ISSUANCE_COUNTER) + Monotonic(REVOCATION_ROOT) + SenderAuthorized(PublicRoot(ISSUER_AUTH_ROOT_SLOT))), all four RE-ENFORCED by the executor on the submission path: a non-+1 issuance and a revocation-root rewind BITE, and the now-REAL MerkleMembership STARK verifier (the EmbeddedExecutor's embedded runtime defaults to registry_with_real_verifiers) enforces SenderAuthorized for real. seed_issuer seeds ISSUER_AUTH_ROOT = single_member_authorized_root(signer_pk) and the fires attach single_member_membership_proof(signer_pk) as a MerklePath witness, so the honest issuer's issue/revoke fire GREEN through the real authority tooth; a non-member signer (or the right signer with no/wrong proof) is REFUSED by the real STARK. tests/deos_seam.rs demonstrates both faces: (b) the authorized signer issues green through the real verifier carrying the proof (and (b') the same signer with no proof is refused — the proof does the work); (d) a non-member signer is refused by the real MerkleMembership STARK. (tests/factory_birth.rs — a floor test — still asserts the fail-closed red path on factory-born cells via unwitnessed hostile turns, which the real verifier refuses too.)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/identity/src/lib.rs"
+  }
+}

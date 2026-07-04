@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# pbuild — offload a CARGO build/test to persvati (24-core build host), in an
+# ISOLATED per-lane dir so concurrent lanes don't fight one target lock.
+#
+#   Usage:  scripts/pbuild <lane-name> <command...>
+#   e.g.    scripts/pbuild swap cargo build -p dregg-turn
+#           scripts/pbuild crypto cargo test -p dregg-lightclient
+#
+# It rsyncs the LOCAL working tree (carrying uncommitted WIP) — gitignore-filtered
+# so target/ and .lake/ are NOT synced (persvati keeps its own warm build caches
+# per lane). Then runs the command there with the toolchain env sourced.
+#
+# NOTE: use this for CARGO (Rust) builds — the CPU-heavy crypto/circuit/lightclient
+# ones. Keep LEAN (lake) builds LOCAL (the local .lake/mathlib cache is warm;
+# a fresh persvati lane-dir would re-download mathlib = catastrophic).
+set -euo pipefail
+LANE="${1:?usage: pbuild <lane> <command...>}"; shift
+[ "$#" -ge 1 ] || { echo "pbuild: no command given" >&2; exit 2; }
+
+SRC="/Users/ember/dev/breadstuffs/"
+REMOTE="dregg-build/${LANE}"
+
+# Sync working tree (WIP included) -> isolated lane dir. gitignore filter keeps
+# target/.lake out so persvati's per-lane build cache survives across invocations.
+ssh persvati "mkdir -p '${REMOTE}'"
+rsync -az --delete --filter=':- .gitignore' --exclude='.git/' \
+  "$SRC" "persvati:${REMOTE}/"
+
+# Build on persvati with cargo + elan env sourced (non-login shells lack them).
+ssh persvati "set -e; source ~/.cargo/env 2>/dev/null || true; \
+  [ -f ~/.elan/env ] && source ~/.elan/env 2>/dev/null || true; \
+  export PATH=\"\$HOME/.cargo/bin:\$HOME/.elan/bin:\$PATH\"; \
+  cd '${REMOTE}' && $*"

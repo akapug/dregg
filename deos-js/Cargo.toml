@@ -1,0 +1,72 @@
+# deos-js — a deos-native JavaScript scripting surface.
+#
+# THE SPIKE: JS (real SpiderMonkey via `mozjs`) drives deos *substance* — sovereign
+# cells + cap-gated *verified turns* — with ember's factoring:
+#
+#   - a CELL is a sovereignty/distribution boundary (one whole interactive "applet"),
+#     NOT a DOM node. It is a polynomial-functor interface: positions = the views it
+#     presents, directions = the affordances (turns) it accepts.
+#   - the applet's MODEL is the cell's state; the only mutators are its affordances =
+#     cap-gated verified turns leaving a real `TurnReceipt`.
+#   - ephemeral view-state (draft text, hover) is NOT cell state and is NEVER a turn.
+#   - applets COMPOSE via transclusion (the cap-gated, provenanced distributed DOM).
+#
+# STANDALONE WORKSPACE (own `[workspace]` below, and listed in the repo-root
+# `exclude`): `mozjs` pulls the multi-GB SpiderMonkey C++ build — exactly the reason
+# `servo-render`/`wasm` are kept out of `cargo test --workspace`. Keeping `deos-js`
+# standalone stops that elephant from feature-unifying onto the whole workspace.
+[package]
+name = "deos-js"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "A deos-native JavaScript scripting surface: JS drives sovereign-cell applets via cap-gated verified turns."
+
+[dependencies]
+# THE ENGINE — real SpiderMonkey. The SAME version servo-render's `libservo` path
+# resolves (mozjs 0.15.7 / mozjs_sys 0.140.8-2), so "the engine is already in the
+# workspace dep graph". `jit`/`intl` default features are kept (the prebuilt static
+# archive ships with them); this is the genuine C++ SpiderMonkey, not a stub.
+mozjs = "0.15.7"
+
+# THE SUBSTANCE — the embedded verified executor + cells + turns.
+dregg-sdk = { path = "../sdk" }       # DreggEngine: execute_turn -> real TurnReceipt; ledger() witnessed reads.
+dregg-cell = { path = "../cell" }     # Cell / CellState / AuthRequired / is_attenuation.
+dregg-turn = { path = "../turn" }     # TurnBuilder / ActionBuilder / Effect / Turn / TurnReceipt.
+dregg-types = { path = "../types" }   # CellId.
+
+# THE REFLECTIVE SUBSTRATE — cap-bounded, attested crawl of the live image (slice 2).
+# gpui-free; the JS `deos.world`/`deos.cell` object graph binds to it.
+deos-reflect = { path = "../deos-reflect" }
+
+# THE TRANSCLUSION PRIMITIVE — the cap-gated, provenanced distributed-DOM compose.
+# `WholeCellTransclusion` lives in starbridge-v2 (off-limits) but is a THIN welder over
+# this crate's REAL `WebOfCells` + `TranscludedField` (content -> commitment -> receipt
+# -> receipt-stream-root -> quorum). We reuse that genuine primitive directly.
+starbridge-web-surface = { path = "../starbridge-web-surface" }
+
+# THE PROGRAM-IN-CELL WELD — the applet manifest (its affordances + view source) is a
+# serializable blob stored in the cell heap, so a program becomes a portable cell-blob.
+# `serde`/`serde_json` serialize the manifest; `postcard` serializes the whole cell (the
+# SAME wire codec `dregg-cell` uses) for `to_cell_bytes`/`from_cell`.
+
+# THE PROGRAM-SOURCE-AS-DOCUMENT WELD — the applet's `view_source` is a `dregg_doc::Doc`
+# (a patch-history), so editing a gadget is a PATCH (blame attributes each line),
+# transcluding another gadget's source is a cap-gated provenanced embed (darkens out of
+# cap), and two concurrent edits MERGE (disjoint → clean fold; overlapping → a first-class
+# `ConflictRegion`). The doc's fold IS the `view_source` the runtime runs. Standalone,
+# dependency-free patch core (its OWN workspace, a cross-workspace path dep).
+dregg-doc = { path = "../dregg-doc" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+postcard = { version = "1", features = ["use-std"] }
+# blake3: the `deos.server.spawnCell` native derives a stable cell seed from a JS label
+# (and the default token domain), matching the node's `blake3("default")` token id.
+blake3 = "1"
+
+# ── THE FORK SEAMS (mirrored from servo-render/starbridge-v2, the other standalone
+#    workspaces that path-dep the dregg crates). Because deos-js is its OWN workspace
+#    root, the repo-root `[patch]` does NOT reach it, so the transitive dregg deps
+#    cannot re-resolve without these. They revert with the others once the forks land.
+

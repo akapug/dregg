@@ -1,0 +1,97 @@
+name: Publish @dregg/sdk (npm)
+
+# Publishes the TypeScript SDK (`sdk-ts/`, package `@dregg/sdk`) to the public
+# npm registry.
+#
+# TRIGGER: a `sdk-ts-v*` tag (e.g. `sdk-ts-v0.3.0`) OR a manual workflow_dispatch.
+# Tag-on-release keeps the published version tied to a commit; dispatch is the
+# escape hatch for a re-publish.
+#
+# CREDENTIAL: needs the repo/org secret `NPM_TOKEN` — an npm automation token
+# with publish rights on the `@dregg` scope. The publish step is gated on that
+# secret; without it the job no-ops with a clear message rather than failing.
+#
+# WHY a wasm build first: `@dregg/sdk` does NOT bundle the wasm — `dregg-wasm`
+# is an OPTIONAL peer dependency, published separately. But the SDK's typed
+# `@dregg/sdk/wasm` face declares `typeof import("dregg-wasm")`, so the `.d.ts`
+# generation needs the `dregg-wasm` types present at `../wasm/pkg` (gitignored).
+# We build the wasm pkg the same way pages.yml does (sibling fork checkout at the
+# pinned rev + wasm-pack), so the dts step resolves the real types.
+
+on:
+  push:
+    tags:
+      - 'sdk-ts-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build + publish @dregg/sdk
+    runs-on: ubuntu-latest
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: publish-sdk-ts-wasm
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Fetch the plonky3-recursion fork as a sibling (wasm/ patch target)
+        # The standalone wasm/ workspace patches p3-* to ../../plonky3-recursion.
+        # REV is the pushed `update-plonky3-rev` tip (lockstep with
+        # wasm/Cargo.toml's [patch] sibling + pages.yml + extension.yml).
+        run: |
+          set -euo pipefail
+          REV=0b4da97a430cf47710a5b03ef998f6a8674761ad
+          if [ ! -d ../plonky3-recursion/.git ]; then
+            git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
+            git -C ../plonky3-recursion fetch --depth 1 origin "$REV"
+            git -C ../plonky3-recursion checkout "$REV"
+          fi
+
+      - name: Build the dregg-wasm pkg (provides @dregg/sdk/wasm types)
+        run: |
+          set -euo pipefail
+          RUSTFLAGS="-C link-arg=-zstack-size=33554432" \
+            wasm-pack build wasm --target web --out-dir pkg --release
+          test -s wasm/pkg/dregg_wasm.d.ts
+
+      - name: Install + build the SDK
+        working-directory: sdk-ts
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Verify the package is well-formed (npm pack --dry-run)
+        working-directory: sdk-ts
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        working-directory: sdk-ts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: No NPM_TOKEN — skipping publish
+        if: ${{ env.NPM_TOKEN == '' }}
+        run: |
+          echo "::warning::NPM_TOKEN is not set; built + verified the package but did not publish."
+          echo "Set the repo secret NPM_TOKEN (an npm automation token with @dregg publish rights) and re-run."

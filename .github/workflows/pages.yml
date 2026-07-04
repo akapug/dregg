@@ -1,0 +1,122 @@
+name: Deploy deos to GitHub Pages
+
+# A LAYERED static site: a sober landing that opens into the live, in-browser,
+# node-LESS deos. The verified executor runs CLIENT-SIDE in the visitor's own
+# WebAssembly tab (no backend server — GitHub Pages is static).
+#   /              the sober landing (what-is / play / quickstart / does / enables)
+#   /deos/         the deos cockpit (WebImage model skin) — land IN deos, fire a real turn
+#   /cockpit-gpui/ the FULL gpui renderer on a WebGPU canvas (same in-tab executor)
+#   /cards/        the deos-js card gallery (counter · inspector · tally · kv-store · doc-collab)
+#   /explorer/     caps-as-rows (your capabilities expressed as the rows you may read)
+#   /light-client/ verify a whole finalized history in ONE recursive proof, in-tab
+#   /atlas/        the interactive atlas
+# scripts/build-pages-dist.sh assembles site/dist; this workflow just builds + uploads it.
+
+# DEPLOY CONTROL — this workflow is MANUAL-ONLY (workflow_dispatch). Committing or
+# pushing the site source does NOT publish it. The owner goes live on purpose by
+# running the workflow:
+#   gh workflow run "Deploy deos to GitHub Pages" --ref main
+# (or the green "Run workflow" button on the Actions tab). To restore push-to-publish,
+# re-add the `push:` trigger below.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Materialize the atlas's LFS-tracked images into the working tree so the
+          # real files (not LFS pointer stubs) land in the Pages artifact.
+          lfs: true
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pages-wasm
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Fetch the plonky3-recursion fork (starbridge-v2 [patch]es it at a pinned rev)
+        # starbridge-v2 patches the plonky3-recursion fork to a local sibling for dev;
+        # fetch it at the pinned Cargo rev. The fork is public; the sequence is verified.
+        run: |
+          set -euo pipefail
+          # Keep this rev == the root Cargo.toml's p3-* git pin (the pushed fork tip);
+          # the sibling path-patch shadows that pin, so a stale clone here builds a
+          # DIFFERENT circuit than a fresh `cargo` resolve would.
+          if [ ! -d ../plonky3-recursion/.git ]; then
+            git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
+            git -C ../plonky3-recursion fetch --depth 1 origin be52a51b87c39e41ade632320697df983751471f
+            git -C ../plonky3-recursion checkout be52a51b87c39e41ade632320697df983751471f
+          fi
+
+      - name: Build the layered deos site (sober landing + all wasm client-side, node-less)
+        # GREEN-OR-BUST: a broken wasm crate fails the workflow — we fix the crate, never
+        # ship stale or placeholder artifacts. The script assembles the sober landing (/),
+        # the WebImage cockpit (/deos/), the gpui-web cockpit (/cockpit-gpui/), the card
+        # gallery (/cards/), caps-as-rows (/explorer/), the light client (/light-client/),
+        # and the atlas (/atlas/), all into site/dist.
+        run: scripts/build-pages-dist.sh
+
+      - name: Sanity-check the dist
+        run: |
+          set -euo pipefail
+          # the sober landing + shared green stylesheet
+          test -f site/dist/index.html
+          test -f site/dist/assets/style.css
+          grep -q 'A turn is the exercise' site/dist/index.html
+          # the deos cockpit (WebImage skin)
+          test -f site/dist/deos/index.html
+          test -s site/dist/deos/pkg/starbridge_web_bg.wasm
+          # the card gallery (re-themed green) — all five cards
+          test -s site/dist/cards/pkg/dregg_wasm_bg.wasm
+          for c in index counter inspector tally kvstore doccollab; do test -f "site/dist/cards/$c.html"; done
+          # the reclaimed surfaces
+          test -f site/dist/explorer/index.html
+          test -f site/dist/explorer/caps-as-rows.js
+          test -f site/dist/light-client/index.html
+          # dregg.works — the trustless-host front door + the injectable verify badge
+          test -f site/dist/dregg-works/index.html
+          test -s site/dist/dregg-works/verify-badge.js
+          grep -q 'cannot tamper' site/dist/dregg-works/index.html
+          # the real pre-folded whole-history aggregate the light-client page verifies in-tab
+          test -s site/dist/light-client/history.json
+          # the atlas + its materialized (non-LFS-stub) images
+          test -f site/dist/atlas/index.html
+          if head -c 20 site/dist/atlas/ui-states/HOME_.jpg 2>/dev/null | grep -q '^version https://gi'; then
+            echo "ERROR: atlas image is an unmaterialized LFS pointer — checkout needs lfs:true" && exit 1
+          fi
+          echo "dist OK: $(find site/dist -type f | wc -l) files"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

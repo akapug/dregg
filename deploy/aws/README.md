@@ -1,0 +1,320 @@
+# `dregg` Gateway Node — AWS Graviton Deployment
+
+Always-on gateway node for the dregg federation. Runs on an AWS Graviton instance
+in the commonquant-ember account, providing a stable HTTPS/WSS endpoint for browser
+clients and a permanent peer for ephemeral GitHub Actions federation nodes.
+
+## Architecture
+
+```
+Internet
+  │
+  ├── Browser/Extension ──► https://devnet.dregg.fg-goose.online (Caddy TLS)
+  │                              │
+  │                              ├── /api/*     → dregg-node :8420
+  │                              ├── /ws        → dregg-node :8420 (WebSocket)
+  │                              ├── /explorer  → static files
+  │                              └── /playground → static files
+  │
+  └── GitHub Actions nodes ──► devnet.dregg.fg-goose.online:9420 (QUIC gossip)
+```
+
+### 3-node federation (n=3, live)
+
+The instance can run the full 3-member federation (gateway = validator
+node-0 plus two internal-only nodes on ports 8421/9421 and 8422/9422):
+template unit `dregg-node@.service`, gateway drop-in
+`dregg-gateway-federation.conf`, on-instance keygen `federation-keygen.sh`,
+env templates `node-{2,3}.env.example`. Bring-up order, verification gates,
+and the partition drill: **`deploy/aws/N3-RUNBOOK.md`**. Caddy keeps routing
+exclusively to node 1 (`localhost:8420`); nodes 2/3 are never proxied and
+their ports stay out of the security group.
+
+Only `/api/*`-prefixed node routes (plus `/ws`, `/status`, `/federation/*`,
+`/checkpoint/*`, `/pir/*`, `/queues/*`, `/cipherclerk`) traverse the gateway.
+The node exposes `/api/` aliases for the public app surface (turn submit, the
+turn/atomic family, turns/peer-exchange, cells/create-from-factory,
+programs/deploy, cipherclerk/unlock — see the alias router in
+`node/src/api.rs`). Canonical routes WITHOUT an `/api/` alias (set-passphrase,
+cells/register / deregister / update-commitment / make-sovereign,
+turns/aggregate, the conditional-turn pair, proofs/compose) are operator-local
+by choice: reach them on the instance via `localhost:8420`.
+
+## Prerequisites
+
+- AWS Graviton instance (t4g.small or larger) with Ubuntu 22.04+ or AL2023
+- Domain `devnet.dregg.fg-goose.online` pointing to the instance's public IP
+- Ports open: 80 (HTTP, for ACME), 443 (HTTPS), 8420 (HTTP API, optional direct), 9420 (QUIC gossip)
+- SSH access configured
+- GitHub deploy key for the source repo (`git@github.com:emberian/dregg.git`, or your `DREGG_REPO_URL`)
+
+## First-Time Setup
+
+The canonical source repo is `git@github.com:emberian/dregg.git` (the current
+`origin` remote of this checkout). `setup.sh` clones it by default; override with
+`DREGG_REPO_URL` for a fork or mirror.
+
+```bash
+ssh ubuntu@devnet.dregg.fg-goose.online
+curl -sSL https://raw.githubusercontent.com/emberian/dregg/main/deploy/aws/setup.sh | bash
+```
+
+Or if you prefer to inspect first:
+
+```bash
+ssh ubuntu@devnet.dregg.fg-goose.online
+git clone git@github.com:emberian/dregg.git /tmp/dregg-setup
+less /tmp/dregg-setup/deploy/aws/setup.sh
+# DREGG_REPO_URL defaults to the clone source above; override for a fork.
+bash /tmp/dregg-setup/deploy/aws/setup.sh
+```
+
+## Updating
+
+```bash
+ssh ubuntu@devnet.dregg.fg-goose.online
+bash /opt/dregg/deploy/aws/update.sh
+```
+
+The update script refuses to deploy over local or untracked changes. It fetches
+`origin/main`, fast-forwards the checkout, builds both `dregg-node` and
+`dregg-discord-bot`, restarts both systemd services, updates Caddy when needed,
+and runs `deploy/aws/preflight-discord-bot.sh`.
+
+Preflight treats the explorer/devnet artifact contract as part of deployment:
+node receipts must expose `receipt_hash`, `turn_hash`, `has_witness`, and
+`witness_count`; `/api/receipts/{hash}/witnesses` must return a
+`witnessed_receipts` array; committed activity events must expose
+`proof_status`.
+
+## Static Site Artifacts
+
+The public site is served from `site/dist`, not raw `site/` sources. Build the
+browser artifacts in dependency order before copying to the server:
+
+```bash
+./scripts/build-web-artifacts.sh
+rsync -az --delete site/dist/ ubuntu@devnet.dregg.fg-goose.online:/opt/dregg/site/dist/
+ssh ubuntu@devnet.dregg.fg-goose.online /opt/dregg/deploy/aws/deploy-site.sh
+```
+
+That script rebuilds `wasm/pkg`, refreshes `site/pkg`, packages the Cipherclerk
+extension downloads, rebuilds `site/dist`, and writes
+`site/dist/artifacts-manifest.json` with SHA-256 checksums for the WASM and
+extension packages. The server deploy refuses to proceed if those artifacts or
+the manifest are missing. If the server has the full web toolchain, set
+`BUILD_WEB_ARTIFACTS=1` before running `deploy-site.sh`; otherwise the server
+uses the prebuilt `site/dist` uploaded by rsync.
+
+## Monitoring
+
+```bash
+# Service status
+sudo systemctl status dregg-gateway
+
+# Logs (live)
+sudo journalctl -u dregg-gateway -f
+
+# Last 100 lines
+sudo journalctl -u dregg-gateway -n 100 --no-pager
+
+# Caddy logs
+sudo journalctl -u caddy -f
+
+# Health check
+curl https://devnet.dregg.fg-goose.online/status
+```
+
+## Devnet Smoke
+
+After an update, run the coordinator smoke from the checkout to verify the
+browser/devnet surface, canonical witnessed-receipt artifact endpoint, and a
+deterministic turn path:
+
+```bash
+cd /opt/dregg
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url http://127.0.0.1:8420 \
+  --api-token "$DEVNET_API_TOKEN" \
+  --site-url https://devnet.dregg.fg-goose.online
+```
+
+For the public endpoint:
+
+```bash
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url https://devnet.dregg.fg-goose.online \
+  --api-token "$DEVNET_API_TOKEN" \
+  --site-url https://devnet.dregg.fg-goose.online
+```
+
+The smoke checks node health, cells, receipts, events, explorer/starbridge
+assets, submits one HTTP turn, confirms the receipt/event is explorer-visible,
+and queries `/api/receipts/{hash}/witnesses`. The witness endpoint is expected
+to expose both the legacy `witnessed_receipts` JSON and canonical
+`artifact_format: "DWR1"` / `witness_artifacts` hex blobs. Use
+`--expect-witness` for lanes that must produce persisted witnessed receipts.
+At the time of writing, the legacy `/api/turns/submit` smoke may reject with
+`call forest is empty`; that is a live submit-path blocker, and the script now
+reports it explicitly instead of masking it as a connectivity failure.
+
+For a local two-terminal smoke:
+
+```bash
+tmpdir="$(mktemp -d /tmp/dregg-smoke-node.XXXXXX)"
+cargo run -p dregg-node -- init --data-dir "$tmpdir"
+cargo run -p dregg-node -- run \
+  --data-dir "$tmpdir" \
+  --port 8420 \
+  --federation-mode solo
+
+scripts/devnet-smoke.sh \
+  --skip-build \
+  --node-url http://127.0.0.1:8420 \
+  --site-url http://127.0.0.1:3000
+```
+
+For a single-command local smoke that starts a temporary node and stops it on
+exit:
+
+```bash
+scripts/devnet-smoke.sh --start-local-node --skip-site-build
+```
+
+`--start-local-node` initializes and unlocks a temporary node, captures the
+returned bearer token, and uses it for protected submit endpoints. Against an
+already-running node, pass `--api-token "$DEVNET_API_TOKEN"` or export
+`DREGG_API_TOKEN` / `DEVNET_API_TOKEN` before running a smoke that submits a
+turn.
+
+When only auditing script wiring on a machine without a running node, use:
+
+```bash
+scripts/devnet-smoke.sh --skip-build --no-trigger --non-strict
+```
+
+## Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 80   | TCP      | Caddy ACME challenge (auto-redirects to 443) |
+| 443  | TCP      | HTTPS (Caddy reverse proxy, auto Let's Encrypt) |
+| 8420 | TCP      | dregg-node HTTP API (direct, optional) |
+| 9420 | UDP      | QUIC gossip (federation peer protocol) |
+
+## Security Group (AWS)
+
+Inbound rules:
+- TCP 80 from 0.0.0.0/0 (ACME)
+- TCP 443 from 0.0.0.0/0 (HTTPS)
+- UDP 9420 from 0.0.0.0/0 (QUIC gossip)
+- TCP 22 from your IP (SSH)
+
+## Relay Operator Deployment
+
+To run a relay operator alongside (or instead of) the gateway node:
+
+```bash
+# Start the relay operator service on port 3100
+dregg-node relay \
+  --bond 10000 \
+  --port 3100 \
+  --data-dir /opt/dregg-data \
+  --state-file /opt/dregg-data/relay-state.json \
+  --gc-interval 300 \
+  --message-ttl 1000 \
+  --max-capacity 100000
+```
+
+### Systemd Unit (dregg-relay.service)
+
+Create `/etc/systemd/system/dregg-relay.service`:
+
+```ini
+[Unit]
+Description=Dregg Relay Operator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dregg
+ExecStart=/opt/dregg/target/release/dregg-node relay \
+  --bond 10000 \
+  --port 3100 \
+  --data-dir /opt/dregg-data \
+  --state-file /opt/dregg-data/relay-state.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now dregg-relay
+```
+
+### Caddy Configuration (add to Caddyfile)
+
+```
+handle /relay/* {
+    reverse_proxy localhost:3100
+}
+```
+
+### Relay Ports
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 3100 | TCP      | Relay operator HTTP API |
+
+Add to the security group:
+- TCP 3100 from 0.0.0.0/0 (relay API) -- or restrict to known senders
+
+### Monitoring
+
+```bash
+# Check relay status
+curl http://localhost:3100/relay/status
+
+# Service logs
+sudo journalctl -u dregg-relay -f
+```
+
+## Troubleshooting
+
+**Node won't start:**
+```bash
+sudo journalctl -u dregg-gateway -n 50 --no-pager
+# Check data dir permissions
+ls -la /opt/dregg-data/
+```
+
+**TLS certificate issues:**
+```bash
+sudo journalctl -u caddy -n 50 --no-pager
+# Ensure port 80 is open for ACME challenges
+sudo ss -tlnp | grep :80
+```
+
+**Federation peers can't connect:**
+```bash
+# Check QUIC port is open
+sudo ss -ulnp | grep :9420
+# Check firewall
+sudo ufw status
+```
+
+**Out of disk:**
+```bash
+df -h
+# Prune old data if needed
+sudo systemctl stop dregg-gateway
+# The node supports pruning, but manual cleanup:
+du -sh /opt/dregg-data/*
+sudo systemctl start dregg-gateway
+```

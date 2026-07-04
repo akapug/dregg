@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang=en>
+<head>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>THE DREGG ATLAS</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel=stylesheet href="atlas.css">
+</head>
+<body>
+<div class=app>
+  <header>
+    <h1>THE&nbsp;DREGG&nbsp;ATLAS <small>— the live verified ocap image, mapped</small></h1>
+    <nav class=tabs id=tabs>
+      <button data-v=surfaces class=on>Surfaces</button>
+      <button data-v=ocap>Cells &amp; Caps</button>
+      <button data-v=gametree>Turns</button>
+      <button data-v=protocol>Protocol</button>
+      <button data-v=components>Components</button>
+      <button data-v=map>Web</button>
+      <button data-v=about>About</button>
+    </nav>
+    <button class=spotbtn id=spotbtn title="Search everything (⌘K)">⌘K&nbsp;search</button>
+    <span class=stat id=stat></span>
+  </header>
+  <div class=main>
+    <!-- SURFACES (the visual UI atlas) — the default landing: what you'd see + touch -->
+    <div class=view data-v=surfaces><div class=gallery id=gallery></div></div>
+    <!-- OCAP WEB — cells + the capability grants between them -->
+    <div class=view data-v=ocap>
+      <div id=cyo></div>
+      <div class=panel id=ocapPanel><h2>Cells &amp; capabilities</h2>
+        <p class=muted>The live image's cells and the capability grants between
+        them — the object-capability graph read straight off the ledger. A cell is
+        a sovereign object; an edge is one cell holding a capability to act on
+        another. Click a cell for its balance, its affordances (the messages it
+        understands), and its presentation faces.</p>
+      </div>
+    </div>
+    <!-- TURNS — what a turn is, shown small. Was the 600-state game tree; now the
+         curated near-genesis frontier (concept kept, combinatorial bloat cut). -->
+    <div class=view data-v=gametree>
+      <div id=cy></div>
+      <div class=legend>
+        <span><i class=dot style="background:#3fb950"></i>committed turn</span>
+        <span><i class=dot style="background:#f85149"></i>refused (cap-gate / kernel)</span>
+        <span><i class=dot style="background:#58a6ff"></i>world-state</span>
+      </div>
+      <div class=panel id=gtPanel><h2>What a turn is</h2>
+        <p class=muted>A turn is the exercise of an attenuable proof-carrying token
+        over owned state, leaving a verifiable receipt. Each node here is a
+        world-state (keyed by its post-state Merkle root); each edge is one turn
+        fired through the <em>verified</em> executor — green committed and advanced
+        the world, red was refused (with the reason: the cap-gate before any turn,
+        or a kernel guarantee firing inside it). Click a node for its cell
+        snapshot, an edge for the action + outcome.</p>
+        <p class=muted>This shows the near-genesis frontier — the whole move
+        vocabulary, not a combinatorial dump. The full reachable state-space is
+        regenerable (<code>crawl.py</code>) but explodes the same few moves across
+        states; the shape of a turn is already legible here.</p>
+      </div>
+    </div>
+    <!-- PROTOCOL -->
+    <div class=view data-v=protocol><div class=scroll id=protocol></div></div>
+    <!-- COMPONENTS (the gpui-component widget pillar) -->
+    <div class=view data-v=components><div class=gallery id=components></div></div>
+    <!-- WEB (the cross-linked hypermedia map — for adepts who want the typed edges) -->
+    <div class=view data-v=map>
+      <div id=cymap></div>
+      <div class=legend id=mapLegend>
+        <span><i class=dot style="background:#58a6ff"></i>cell</span>
+        <span><i class=dot style="background:#3fb950"></i>surface</span>
+        <span><i class=dot style="background:#bc8cff"></i>component</span>
+        <span><i class=dot style="background:#f0883e"></i>effect</span>
+        <span><i class=dot style="background:#d29922"></i>verb</span>
+      </div>
+      <div class=mapfilter id=mapfilter></div>
+      <div class=panel id=mapPanel><h2>The Web</h2>
+        <p class=muted>Every object in the image — cells, surfaces, components,
+        effects, verbs — and the typed edges between them, as one navigable web.
+        A cell exposes <em>affordances</em>; each fires an <em>effect</em>; each
+        effect belongs to a <em>verb</em>; verbs are exercised through the
+        <em>surfaces</em> the cockpit renders; each surface is built from
+        <em>components</em>. Click any node to walk its neighbourhood.</p>
+        <p class=muted>Use the type filter (top-right) to focus a slice. Press
+        <kbd>⌘K</kbd> to jump to any object by name.</p>
+      </div>
+    </div>
+    <!-- ABOUT -->
+    <div class=view data-v=about><div class="scroll doc" id=about></div></div>
+  </div>
+</div>
+
+<!-- ⌘K spotter -->
+<div class=spotter id=spotter hidden>
+  <div class=spotbox>
+    <input id=spotinput class=spotinput placeholder="Search cells · surfaces · components · effects · verbs · turns…" autocomplete=off spellcheck=false>
+    <div class=spotresults id=spotresults></div>
+    <div class=spothint>↑↓ navigate · ↵ open · esc close</div>
+  </div>
+</div>
+
+<script src="assets/cytoscape.min.js"></script>
+<script src="assets/dagre.min.js"></script>
+<script src="assets/cytoscape-dagre.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+[package]
+name = "dregg-protocol-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Protocol-invariant property tests for dregg — generators + proptest harnesses."
+
+# This crate is a library of generators + invariants; the actual proptest
+# blocks live as `#[test]` functions inside `src/invariants/*` and are run
+# via the library's own `cargo test` target.
+
+[dependencies]
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-circuit = { path = "../circuit" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
+proptest = { workspace = true }
+blake3 = "1"
+postcard = { version = "1", features = ["alloc"] }
+serde = { workspace = true }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+
+[dev-dependencies]
+# Used by the conservation_proof_wasm adversarial test to build Ristretto
+# scalars for Pedersen value commitments (mirrors the WASM binding's path).
+curve25519-dalek = { version = "4", features = ["alloc"] }
+
+[lints]
+workspace = true

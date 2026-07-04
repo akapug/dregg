@@ -1,0 +1,70 @@
+{
+  "id": "compartment-workflow-mandate",
+  "name": "Compartment Workflow Mandate",
+  "description": "DAG workflow mandate starbridge-app: step cursor (MonotonicSequence), immutable commitment anchor, clearance-label admission, and Stingray spend-policy demo. Maps Lean CompartmentWorkflowMandate theorems to Rust slot caveats and predicate-layer admission checks.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d63776d2d6d616e646174652d666163746f72792121"
+  ],
+  "inspectors": [
+    "dregg-cwm-mandate",
+    "dregg-cwm-advance-form"
+  ],
+  "host_inspectors": [
+    { "id": "mandate", "label": "Workflow Mandate", "tag": "dregg-cwm-mandate", "uri_attribute": "uri" },
+    { "id": "advance", "label": "Advance Step", "tag": "dregg-cwm-advance-form", "uri_attribute": "mandate-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_mandate", "label": "Inspect mandate", "uri": "dregg://cell/cwm-mandate-default", "kind": "inspect" },
+    { "id": "advance_step", "label": "Advance workflow step", "builder": "advance_step", "kind": "turn" },
+    { "id": "init_mandate", "label": "Initialize mandate", "builder": "init_mandate", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "mandate_uri", "label": "Mandate URI", "type": "uri", "default": "dregg://cell/cwm-mandate-default" },
+    { "id": "phase", "label": "Charter phase", "type": "select", "options": ["review", "redact", "sign"], "default": "review" }
+  ],
+  "turn_builders": [
+    "advance_step",
+    "init_mandate"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.compartmentWorkflowMandate"
+  ],
+  "slot_layout": {
+    "STEP_CURSOR_SLOT": 0,
+    "COMMITMENT_ANCHOR_SLOT": 1,
+    "CHARTER_TERMINAL_SLOT": 2,
+    "CLEARANCE_GRAPH_ROOT_SLOT": 3,
+    "SPEND_POLICY_SLOT": 4
+  },
+  "state_constraints": [
+    "WriteOnce(COMMITMENT_ANCHOR_SLOT)",
+    "WriteOnce(CHARTER_TERMINAL_SLOT)",
+    "WriteOnce(CLEARANCE_GRAPH_ROOT_SLOT)",
+    "WriteOnce(SPEND_POLICY_SLOT)",
+    "FieldLteField(STEP_CURSOR_SLOT, CHARTER_TERMINAL_SLOT)",
+    "MethodIs(advance_step) => MonotonicSequence(STEP_CURSOR_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "workflow_app(cipherclerk, executor)",
+    "cell": "workflow",
+    "discoverable": ["workflow", "compartment"],
+    "publish": "Signature (the mandate cell is a dregg:// sturdyref an auditor on another federation reacquires)",
+    "affordances": {
+      "view_workflow": "cap-only, Signature (an OBSERVER reads the charter cursor)",
+      "advance_step": "GATED (cap∧state), None/operator — not-at-terminal precondition (STEP_CURSOR < CHARTER_TERMINAL); the fire submits the FULL advance (cursor + step-advanced event) reading the live cursor, the executor re-enforcing MonotonicSequence(STEP_CURSOR) (exact +1) AND FieldLteField(STEP_CURSOR <= CHARTER_TERMINAL)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded mandate cell carrying the workflow program (WriteOnce charter-config slots + FieldLteField(STEP_CURSOR<=CHARTER_TERMINAL) + advance_step-scoped MonotonicSequence(STEP_CURSOR)), so a SKIPPED/REPEATED step (non-+1) and a PAST-TERMINAL advance BITE in the deos fire path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/compartment-workflow-mandate/src/lib.rs"
+  }
+}

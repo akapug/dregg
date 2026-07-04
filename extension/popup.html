@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>dregg Cipherclerk</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 360px;
+      min-height: 400px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      padding: 16px;
+    }
+    h1 { font-size: 18px; margin-bottom: 12px; color: #a78bfa; }
+    .status {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 12px; padding: 8px 12px;
+      background: #16213e; border-radius: 8px;
+    }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #4ade80;
+    }
+    .status-dot.locked { background: #f87171; }
+    .tabs {
+      display: flex; gap: 4px; margin-bottom: 12px;
+      border-bottom: 1px solid #374151; padding-bottom: 8px;
+    }
+    .tab-btn {
+      width: auto; padding: 6px 10px; font-size: 11px; font-weight: 500;
+      background: #16213e; color: #9ca3af; border: 1px solid #374151;
+      border-radius: 6px; cursor: pointer;
+    }
+    .tab-btn.active { background: #a78bfa; color: #1a1a2e; border-color: #a78bfa; }
+    .tab-btn:hover:not(.active) { background: #1e293b; color: #e0e0e0; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .section { margin-bottom: 16px; }
+    .section-title {
+      font-size: 12px; text-transform: uppercase;
+      letter-spacing: 0.05em; color: #9ca3af; margin-bottom: 8px;
+    }
+    .stat {
+      padding: 8px 12px; background: #16213e;
+      border-radius: 6px; margin-bottom: 4px;
+      display: flex; justify-content: space-between;
+    }
+    .stat-value { color: #a78bfa; font-weight: 600; }
+    .log-entry {
+      padding: 6px 12px; background: #16213e;
+      border-radius: 6px; margin-bottom: 4px; font-size: 12px;
+    }
+    .log-entry .time { color: #6b7280; font-size: 10px; }
+    button {
+      width: 100%; padding: 10px; border: none;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+    }
+    #lockBtn { background: #a78bfa; color: #1a1a2e; margin-bottom: 8px; }
+    #lockBtn:hover { background: #8b5cf6; }
+    #lockBtn.locked { background: #4ade80; }
+    #backupBtn { background: #f59e0b; color: #1a1a2e; margin-bottom: 8px; }
+    #backupBtn:hover { background: #d97706; }
+    #recoverBtn { background: #16213e; color: #e0e0e0; border: 1px solid #374151; }
+    #recoverBtn:hover { background: #1e293b; }
+    .empty { color: #6b7280; font-size: 12px; padding: 8px 0; }
+    .passphrase-input {
+      width: 100%; padding: 8px 12px; margin-bottom: 8px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 13px;
+    }
+    .passphrase-input::placeholder { color: #6b7280; }
+    .mnemonic-display {
+      padding: 12px; background: #0f172a; border-radius: 8px;
+      border: 1px solid #374151; margin-bottom: 12px;
+      font-family: 'Courier New', monospace; font-size: 12px;
+      line-height: 1.6; word-spacing: 4px; color: #fbbf24;
+      display: none;
+    }
+    .warning {
+      padding: 8px 12px; background: #451a03; border-radius: 6px;
+      border: 1px solid #92400e; color: #fbbf24; font-size: 11px;
+      margin-bottom: 8px; display: none;
+    }
+    .hidden { display: none; }
+    .ref-item, .dir-item {
+      padding: 8px 12px; background: #16213e;
+      border-radius: 6px; margin-bottom: 4px; font-size: 11px;
+    }
+    .ref-item .ref-cell { color: #a78bfa; font-family: monospace; word-break: break-all; }
+    .ref-item .ref-meta { color: #6b7280; font-size: 10px; margin-top: 2px; }
+    .dir-item .dir-path { color: #fbbf24; }
+    .dir-item .dir-kind { color: #6b7280; font-size: 10px; }
+    .quota-bar {
+      height: 6px; background: #374151; border-radius: 3px;
+      margin: 4px 0 8px 0; overflow: hidden;
+    }
+    .quota-bar-fill {
+      height: 100%; background: #a78bfa; border-radius: 3px;
+      transition: width 0.3s;
+    }
+    .accept-input {
+      width: 100%; padding: 8px 12px; margin-bottom: 8px;
+      background: #16213e; border: 1px solid #374151; border-radius: 6px;
+      color: #e0e0e0; font-size: 12px; font-family: monospace;
+    }
+    .accept-input::placeholder { color: #6b7280; }
+    .small-btn {
+      width: auto; padding: 4px 10px; font-size: 11px;
+      background: #065f46; color: #6ee7b7; border: none;
+      border-radius: 4px; cursor: pointer; display: inline-block;
+    }
+    .small-btn.danger { background: #7f1d1d; color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1><code>dregg</code> Cipherclerk</h1>
+  <div class="status">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connected</span>
+  </div>
+  <div id="wasmError" class="warning" style="display: none;">
+    Cryptographic module failed to load. Cipherclerk operations requiring proof generation or key derivation are unavailable. Ensure your browser supports WebAssembly.
+  </div>
+
+  <!-- First-run onboarding: forces passphrase + recovery-phrase backup BEFORE
+       any key is created. No wallet exists until both steps complete. -->
+  <div id="onboardingSection" class="hidden">
+    <div class="section">
+      <div class="section-title">Welcome — set up your wallet</div>
+      <p style="font-size:12px;color:#9ca3af;margin-bottom:12px;">
+        Your signing keys are generated and stored only on this device. To
+        protect them, you must set a passphrase and back up your recovery
+        phrase before the wallet is created.
+      </p>
+
+      <!-- Step 1: passphrase -->
+      <div id="onbStep1">
+        <p style="font-size:12px;color:#fbbf24;margin-bottom:8px;">Step 1 of 2 — Choose a passphrase (encrypts your keys at rest).</p>
+        <input type="password" id="onbPass" class="passphrase-input" placeholder="Passphrase (at least 8 characters)">
+        <input type="password" id="onbPassConfirm" class="passphrase-input" placeholder="Confirm passphrase">
+        <div id="onbErr1" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+        <button id="onbNextBtn" style="background:#a78bfa;color:#1a1a2e;">Continue</button>
+      </div>
+
+      <!-- Step 2: recovery phrase backup + confirm -->
+      <div id="onbStep2" class="hidden">
+        <p style="font-size:12px;color:#fbbf24;margin-bottom:8px;">Step 2 of 2 — Write down these 24 words and store them safely.</p>
+        <div id="onbMnemonic" class="mnemonic-display" style="display:block;"></div>
+        <div class="warning" style="display:block;">
+          This recovery phrase is the ONLY way to restore your wallet. Anyone with
+          these words can take your funds. Never share them or store them online.
+        </div>
+        <p style="font-size:12px;color:#9ca3af;margin:8px 0 4px;">Confirm: re-type all 24 words in order.</p>
+        <textarea id="onbConfirm" class="passphrase-input" rows="3" style="font-family:'Courier New',monospace;resize:vertical;" placeholder="word1 word2 word3 ..."></textarea>
+        <div id="onbErr2" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+        <button id="onbCreateBtn" style="background:#4ade80;color:#1a1a2e;margin-bottom:6px;">Create wallet</button>
+        <button id="onbBackBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;">Back</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab navigation -->
+  <div class="tabs" id="tabsNav">
+    <button class="tab-btn active" data-tab="cipherclerk">Cipherclerk</button>
+    <button class="tab-btn" data-tab="account">Node Ops</button>
+    <button class="tab-btn" data-tab="capabilities">Caps</button>
+    <button class="tab-btn" data-tab="directory">Directory</button>
+    <button class="tab-btn" data-tab="storage">Storage</button>
+  </div>
+
+  <!-- Cipherclerk tab -->
+  <div class="tab-content active" id="tab-cipherclerk">
+    <div class="section">
+      <div class="section-title">Identity</div>
+      <div class="stat" style="align-items:center;">
+        <span>Profile</span>
+        <select id="profileSelect" style="background:#0f172a;color:#a78bfa;border:1px solid #374151;border-radius:6px;padding:4px 8px;font-size:12px;max-width:180px;">
+          <option value="">--</option>
+        </select>
+      </div>
+      <div class="ref-meta" id="profilePubkey" style="color:#6b7280;font-size:10px;font-family:monospace;word-break:break-all;padding:2px 12px;"></div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <input type="text" id="newProfileName" class="accept-input" placeholder="new profile name (a-z 0-9 - _)" style="margin-bottom:0;flex:1;">
+        <button id="createProfileBtn" class="small-btn" style="flex-shrink:0;">New</button>
+      </div>
+      <div id="profileError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+    </div>
+    <!-- Cap-account login: prove possession of the active profile's key to the
+         live cloud (challenge -> sign -> session). No username, no password. -->
+    <div class="section">
+      <div class="section-title">Cloud Session</div>
+      <div class="stat" style="align-items:center;">
+        <span>Cloud</span>
+        <span class="stat-value" id="loginCloudUrl" style="font-size:10px;word-break:break-all;">--</span>
+      </div>
+      <div id="loginLoggedOut">
+        <div class="ref-meta" style="color:#6b7280;font-size:10px;margin:4px 0 8px;">
+          Log in with the active profile. Your key signs a one-time challenge —
+          it never leaves this device, and there is no password.
+        </div>
+        <button id="loginBtn" style="background:#a78bfa;color:#1a1a2e;">Log in to the dregg network</button>
+        <div id="loginError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+      </div>
+      <div id="loginLoggedIn" class="hidden">
+        <div class="stat" style="align-items:center;">
+          <span>Signed in</span>
+          <span class="stat-value" id="loginSubject" style="font-size:10px;word-break:break-all;color:#6ee7b7;">--</span>
+        </div>
+        <div class="ref-meta" id="loginProfile" style="color:#6b7280;font-size:10px;padding:2px 12px;"></div>
+        <button id="logoutBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;margin-top:6px;">Log out</button>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Recent Receipts</div>
+      <div id="receiptsContainer">
+        <div class="empty">No receipts observed yet</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Tokens</div>
+      <div class="stat">
+        <span>Active tokens</span>
+        <span class="stat-value" id="tokenCount">0</span>
+      </div>
+      <div class="stat">
+        <span>Receipt chain</span>
+        <span class="stat-value" id="chainLength">0</span>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Recent Authorizations</div>
+      <div id="logContainer">
+        <div class="empty">No recent authorizations</div>
+      </div>
+    </div>
+    <div id="passphraseSection" class="hidden">
+      <input type="password" id="passphraseInput" class="passphrase-input" placeholder="Enter passphrase to unlock">
+    </div>
+    <div id="passphraseSetupSection" class="hidden">
+      <p style="font-size: 12px; color: #fbbf24; margin-bottom: 8px;">Set a passphrase to protect your cipherclerk:</p>
+      <input type="password" id="newPassphraseInput" class="passphrase-input" placeholder="Choose a strong passphrase">
+      <input type="password" id="confirmPassphraseInput" class="passphrase-input" placeholder="Confirm passphrase">
+      <button id="setPassphraseBtn" style="background: #4ade80; color: #1a1a2e; margin-bottom: 8px;">Set Passphrase</button>
+    </div>
+    <div id="mnemonicWarning" class="warning">
+      Write down these 24 words and store them safely. They are the ONLY way to recover your cipherclerk.
+    </div>
+    <div id="mnemonicDisplay" class="mnemonic-display"></div>
+    <div class="section" id="intentsSection" style="display: none;">
+      <div class="section-title">Fulfillable Intents</div>
+      <div id="intentsContainer">
+        <div class="empty">No fulfillable intents</div>
+      </div>
+    </div>
+    <div class="section" id="permissionsSection" style="display: none;">
+      <div class="section-title">Allowed Origins</div>
+      <div id="permissionsContainer">
+        <div class="empty">No origins approved</div>
+      </div>
+    </div>
+    <button id="lockBtn">Lock Cipherclerk</button>
+    <button id="backupBtn">Backup (Show Recovery Phrase)</button>
+    <button id="intentsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Fulfill Intents</button>
+    <button id="managePermsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Manage Permissions</button>
+    <button id="settingsBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Node Settings</button>
+    <button id="recoverBtn">Recover Cipherclerk</button>
+  </div>
+
+  <!-- Node Ops / Devnet tab -->
+  <div class="tab-content" id="tab-account">
+    <div class="warning" style="display:block;">
+      Operator tools. Actions here are signed by the connected node operator's
+      key and act on the operator's cell — NOT your self-custody wallet. To move
+      your own funds, a dApp builds a turn you review and sign on the Cipherclerk
+      tab.
+    </div>
+    <div class="section">
+      <div class="section-title">Node</div>
+      <div class="stat">
+        <span>Endpoint</span>
+        <span class="stat-value" id="acctNodeUrl" style="font-size:10px;word-break:break-all;">--</span>
+      </div>
+      <div class="stat">
+        <span>Operator</span>
+        <span class="stat-value" id="acctUnlocked">--</span>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Agent Cell</div>
+      <div class="ref-cell" id="acctCell" style="font-size:10px;word-break:break-all;">--</div>
+      <div class="stat" style="margin-top:6px;">
+        <span>Balance</span>
+        <span class="stat-value" id="acctBalance">--</span>
+      </div>
+      <div class="stat">
+        <span>Nonce</span>
+        <span class="stat-value" id="acctNonce">--</span>
+      </div>
+      <button id="acctRefreshBtn" style="background:#16213e;color:#e0e0e0;border:1px solid #374151;margin-top:6px;">Refresh</button>
+      <button id="acctFaucetBtn" style="background:#065f46;color:#6ee7b7;margin-top:6px;">Faucet: fund 1000 DEC</button>
+    </div>
+    <div class="section">
+      <div class="section-title">Operator Send (node-signed)</div>
+      <div class="ref-meta" style="color:#6b7280;font-size:10px;margin-bottom:6px;">Moves the node operator's funds, not yours.</div>
+      <input type="text" id="acctSendTo" class="accept-input" placeholder="Recipient cell ID (64-char hex)">
+      <input type="number" id="acctSendAmount" class="accept-input" placeholder="Amount (DEC)" min="1">
+      <button id="acctSendBtn" style="background:#a78bfa;color:#1a1a2e;margin-top:6px;">Operator Send</button>
+      <div id="acctResult" style="display:none;margin-top:8px;font-size:11px;"></div>
+    </div>
+  </div>
+
+  <!-- Capabilities tab -->
+  <div class="tab-content" id="tab-capabilities">
+    <!-- Powerbox: grant an ATTENUATED capability to a site/app. The grant is
+         bounded to one action + one target cell + an expiry; it can only ever
+         be narrowed further, never amplified (the no-amplify story). -->
+    <div class="section">
+      <div class="section-title">Grant Capability (Powerbox)</div>
+      <div class="ref-meta" style="color:#6b7280;font-size:10px;margin-bottom:6px;">
+        Hand a site or app a narrowed, bearer capability. It is scoped to exactly
+        the action, cell, and expiry you choose — and can only be attenuated
+        further, never amplified.
+      </div>
+      <input type="text" id="grantCellInput" class="accept-input" placeholder="Target cell ID (64-char hex)">
+      <input type="text" id="grantActionInput" class="accept-input" placeholder="Action to grant (e.g. read, transfer)">
+      <input type="number" id="grantExpiryInput" class="accept-input" placeholder="Expires in (minutes; 0 = no expiry)" min="0">
+      <button id="grantCapBtn" style="background:#a78bfa;color:#1a1a2e;margin-bottom:8px;">Grant attenuated capability</button>
+      <div id="grantError" style="display:none;color:#f87171;font-size:11px;padding:4px 0;"></div>
+      <div id="grantResult" style="display:none;margin-top:4px;">
+        <div class="ref-item">
+          <div class="ref-meta" style="color:#6ee7b7;">Granted — bounded, cannot be amplified:</div>
+          <div class="ref-cell" id="grantResultToken" style="word-break:break-all;"></div>
+          <div class="ref-meta" id="grantResultScope" style="color:#fbbf24;margin-top:2px;"></div>
+          <button class="small-btn" id="copyGrantBtn" style="margin-top:4px;">Copy token</button>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Live References</div>
+      <div id="liveRefsContainer">
+        <div class="empty">No live references held</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Accept Capability</div>
+      <input type="text" id="acceptUriInput" class="accept-input" placeholder="Paste dregg:// URI here">
+      <button id="acceptCapBtn" style="background: #065f46; color: #6ee7b7; margin-bottom: 8px;">Accept Capability</button>
+    </div>
+    <div class="section">
+      <div class="section-title">Share Capability</div>
+      <input type="text" id="shareCellInput" class="accept-input" placeholder="Cell ID (64-char hex)">
+      <button id="shareCapBtn" style="background: #a78bfa; color: #1a1a2e; margin-bottom: 8px;">Share as URI</button>
+      <div id="shareResult" style="display: none; margin-top: 8px;">
+        <div class="ref-item">
+          <div class="ref-cell" id="shareResultUri"></div>
+          <button class="small-btn" id="copyUriBtn" style="margin-top: 4px;">Copy URI</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Directory tab -->
+  <div class="tab-content" id="tab-directory">
+    <div class="section">
+      <div class="section-title">Mounted Services</div>
+      <div id="directoryContainer">
+        <div class="empty">No services mounted</div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-title">Discover Services</div>
+      <input type="text" id="discoverTagsInput" class="accept-input" placeholder="Tags (comma-separated)">
+      <button id="discoverBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Search</button>
+      <div id="discoveryResults"></div>
+    </div>
+  </div>
+
+  <!-- Storage tab -->
+  <div class="tab-content" id="tab-storage">
+    <div class="section">
+      <div class="section-title">Storage Quota</div>
+      <div id="quotaContainer">
+        <div class="stat">
+          <span>Bytes stored</span>
+          <span class="stat-value" id="quotaBytesStored">--</span>
+        </div>
+        <div class="stat">
+          <span>Limit</span>
+          <span class="stat-value" id="quotaBytesLimit">--</span>
+        </div>
+        <div class="quota-bar">
+          <div class="quota-bar-fill" id="quotaBarFill" style="width: 0%;"></div>
+        </div>
+        <div class="stat">
+          <span>Objects</span>
+          <span class="stat-value" id="quotaObjectCount">--</span>
+        </div>
+        <div class="stat">
+          <span>Computrons remaining</span>
+          <span class="stat-value" id="quotaComputrons">--</span>
+        </div>
+      </div>
+      <button id="refreshQuotaBtn" style="background: #16213e; color: #e0e0e0; border: 1px solid #374151; margin-bottom: 8px;">Refresh Quota</button>
+    </div>
+  </div>
+
+  <script src="dist/popup-script.js"></script>
+</body>
+</html>

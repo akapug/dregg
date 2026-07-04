@@ -1,0 +1,11 @@
+# seL4 build outputs
+build/
+dregg-pd/target/
+verifier-pd/target/
+*.img
+*.report.txt
+# resume-wave build dirs + per-arch / per-PD targets (regenerated; never source)
+build-*/
+dregg-pd/target-*/
+**/target/
+**/out/

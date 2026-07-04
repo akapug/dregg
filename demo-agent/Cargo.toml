@@ -1,0 +1,161 @@
+[package]
+name = "dregg-demo-agent"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-turn = { path = "../turn" }
+dregg-coord = { path = "../coord" }
+dregg-types = { path = "../types" }
+dregg-bridge = { path = "../bridge", features = ["test-utils"] }
+dregg-circuit = { path = "../circuit" }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-commit = { path = "../commit" }
+dregg-sdk = { path = "../sdk" }
+dregg-trace = { path = "../trace" }
+dregg-federation = { path = "../federation" }
+dregg-intent = { path = "../intent" }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+blake3 = "1"
+serde_json = { workspace = true }
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+getrandom = { workspace = true }
+postcard = { version = "1", features = ["use-std"] }
+
+[[bin]]
+name = "dregg-agent-demo"
+path = "src/main.rs"
+
+[[example]]
+name = "nft_demo"
+
+[[example]]
+name = "escrow_demo"
+
+[[example]]
+name = "auction_demo"
+
+[[example]]
+name = "atomic_swap_demo"
+
+[[example]]
+name = "private_orderbook"
+
+[[example]]
+name = "payment_channel"
+
+[[example]]
+name = "multi_silo_budget"
+
+[[example]]
+name = "causal_ordering"
+
+[[example]]
+name = "offline_verification"
+
+[[example]]
+name = "cipherclerk_lifecycle"
+
+[[example]]
+name = "web_auth_flow"
+
+[[example]]
+name = "ivc_attenuation_chain"
+
+[[example]]
+name = "programmable_cell"
+
+[[example]]
+name = "multi_org_delegation"
+
+[[example]]
+name = "sub_agent_spawn"
+
+[[example]]
+name = "rbac_datalog"
+
+[[example]]
+name = "token_revocation"
+
+[[example]]
+name = "progressive_disclosure"
+
+[[example]]
+name = "note_privacy"
+
+[[example]]
+name = "pipeline_demo"
+
+[[example]]
+name = "unified_harness"
+
+[[example]]
+name = "cdt_revocation"
+
+[[example]]
+name = "delegation_demo"
+
+[[example]]
+name = "delegation_swarm"
+
+[[example]]
+name = "intent_lifecycle"
+
+[[example]]
+name = "compute_marketplace"
+
+[[example]]
+name = "agent_network"
+
+[[example]]
+name = "note_bridge"
+
+[[example]]
+name = "cross_fed_atomic"
+
+# RETIRED (dregg3): proof_obligation example removed — built on the dissolved
+# dregg_turn::obligation verb family (ProofObligation/create_obligation/...).
+
+[[example]]
+name = "bench_summary"
+
+[[example]]
+name = "anonymous_credit_check"
+
+[[example]]
+name = "ai_agent_mcp_workflow"
+
+[[example]]
+name = "cross_federation_nft_swap"
+
+[[example]]
+name = "payment_channel_burst"
+
+[[example]]
+name = "base_anonymous_credential"
+
+[[example]]
+name = "base_private_transfer"
+
+[[example]]
+name = "private_auction"
+
+[[example]]
+name = "garbled_ot_auction"
+
+[[example]]
+name = "private_hiring"
+
+[[example]]
+name = "seal_unseal_transfer"
+
+[[example]]
+name = "three_party_introduction"
+
+[[example]]
+name = "orchestration_demo"
+
+[lints]
+workspace = true

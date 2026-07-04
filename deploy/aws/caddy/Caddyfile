@@ -1,0 +1,164 @@
+# CORS OWNERSHIP: Caddy is the single owner of the Access-Control-* response
+# headers for proxied routes (the global `header` directives in the site block
+# below). The node emits its own origin-aware, allowlist-gated CORS headers;
+# without this strip a browser sees BOTH (Caddy's value, set before the proxy
+# runs, plus the upstream's appended copy) and rejects the response for having
+# a duplicate Access-Control-Allow-Origin. Stripping the upstream copies here
+# leaves exactly one header — Caddy's. Clients that talk to the node directly
+# (no proxy) still get the node's origin-aware headers.
+(strip_upstream_cors) {
+    header_down -Access-Control-Allow-Origin
+    header_down -Access-Control-Allow-Methods
+    header_down -Access-Control-Allow-Headers
+}
+
+# The domains this node serves (TLS + reverse proxy). Centralized as a Caddy
+# env placeholder so pointing at production / a new domain is a config edit, not
+# a Caddyfile patch: set DREGG_SITE_DOMAINS in caddy's environment (e.g. the
+# systemd unit's Environment=, or `export DREGG_SITE_DOMAINS="dregg.works"`
+# before `caddy run`). Comma-separated; the default preserves the current devnet
+# routing. Keep deploy-site.sh's DREGG_SITE_DOMAIN in sync with the primary one.
+{$DREGG_SITE_DOMAINS:devnet.dregg.fg-goose.online, dregg.fg-goose.online} {
+    # HTTP API
+    handle /api/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # WebSocket endpoint
+    handle /ws {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Node status/health
+    handle /status {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Federation endpoints
+    handle /federation/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Programmable queue endpoints
+    handle /queues/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Checkpoint endpoints
+    handle /checkpoint/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # PIR endpoints
+    handle /pir/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Wallet endpoints
+    handle /cipherclerk {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Discord bot Starbridge RemoteRuntime read surface
+    handle /discord-bot/api/* {
+        uri strip_prefix /discord-bot
+        reverse_proxy localhost:8080 {
+            import strip_upstream_cors
+        }
+    }
+    handle /discord-bot/observability/stream {
+        uri strip_prefix /discord-bot
+        reverse_proxy localhost:8080 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Faucet
+    handle /faucet/* {
+        reverse_proxy localhost:8420 {
+            import strip_upstream_cors
+        }
+    }
+
+    # Governed Namespace (service mesh)
+    handle /namespace/* {
+        reverse_proxy localhost:3003 {
+            import strip_upstream_cors
+        }
+    }
+    handle /app/namespace/* {
+        root * /opt/dregg/apps/governed-namespace/frontend
+        file_server
+    }
+
+    # Chain explorer (built static files; deep links fall back to SPA shell)
+    handle /explorer* {
+        root * /opt/dregg/site/dist
+        try_files {path} {path}/ /explorer/index.html
+        file_server
+    }
+
+    # Playground (built static files)
+    handle /playground* {
+        root * /opt/dregg/site/dist
+        try_files {path} {path}/ /playground/index.html /playground.html
+        file_server
+    }
+
+    # Starbridge app shell (single built page; support /starbridge and /starbridge/)
+    @starbridge_shell path /starbridge /starbridge/
+    handle @starbridge_shell {
+        root * /opt/dregg/site/dist
+        try_files /starbridge.html
+        file_server
+    }
+
+    # Built site root
+    handle {
+        root * /opt/dregg/site/dist
+        try_files {path} {path}.html {path}/ /index.html
+        file_server
+    }
+
+    # CORS headers for browser clients.
+    #
+    # RECOMMENDED (CORS-free) path: this Caddyfile already reverse-proxies the
+    # node API (/api/*, /status, /ws, /federation/*, ...) AND serves the built
+    # site (/explorer, /playground, /starbridge, /) from the SAME origin
+    # (devnet.dregg.fg-goose.online). Same-origin requests are not subject to
+    # CORS at all, so a browser on the deployed site talks to the node without
+    # any Access-Control-* negotiation. The headers below remain for any
+    # genuinely cross-origin client. If you instead point the browser directly
+    # at the node on another origin, set DREGG_CORS_ORIGINS (or --cors-origin)
+    # on dregg-node to that site origin so the node echoes it back.
+    header Access-Control-Allow-Origin "*"
+    header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    header Access-Control-Allow-Headers "Content-Type, Authorization, X-Devnet-Key"
+
+    # Security headers
+    header X-Content-Type-Options "nosniff"
+    # SAMEORIGIN (not DENY) so the deployed site can embed its OWN app iframes
+    # (the chain explorer / playground / starbridge shells are framed by the
+    # site shell). CSP frame-ancestors 'self' is the modern equivalent and
+    # supersedes X-Frame-Options in browsers that honor it; both are set so
+    # older and newer browsers agree on "self may frame, others may not."
+    header X-Frame-Options "SAMEORIGIN"
+    header Content-Security-Policy "frame-ancestors 'self'"
+    header Referrer-Policy "strict-origin-when-cross-origin"
+}

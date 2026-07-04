@@ -1,0 +1,51 @@
+[package]
+name = "dregg-wire"
+version.workspace = true
+edition.workspace = true
+
+# No [features]: the STARK verifier and the bridge verifier are CORE SEMANTICS and are
+# always compiled in. (The old `stark-verifier`/`bridge` features were illusory anyway:
+# the unconditional `dregg-dsl-runtime` dep pulls `dregg-circuit/plonky3` by default.)
+# Feature flags in this workspace answer "what platform am I compiling for", never
+# "which guarantees does this dregg have" — see docs/FEATURE-HYGIENE.md.
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = { version = "0.26" }
+rustls-pemfile = { version = "2" }
+postcard = { version = "1", features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+blake3 = "1"
+ed25519-dalek = { version = "2", features = ["std"] }
+tracing = { workspace = true }
+getrandom = { workspace = true }
+dregg-circuit = { path = "../circuit" }
+dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
+dregg-bridge = { path = "../bridge", features = ["test-utils"] }
+dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
+dregg-commit = { path = "../commit" }
+dregg-captp = { path = "../captp" }
+dregg-cell = { path = "../cell" }
+dregg-federation = { path = "../federation", default-features = false }
+dregg-persist = { path = "../persist" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
+dregg-dfa = { path = "../dfa" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bin]]
+name = "dregg-network-demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "cross_node_auth"
+path = "src/bin/cross_node_auth.rs"
+
+[[bench]]
+name = "wire_bench"
+harness = false
+
+[lints]
+workspace = true

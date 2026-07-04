@@ -1,0 +1,43 @@
+[package]
+name = "starbridge-subscription"
+version = "0.1.0"
+edition = "2024"
+description = "Starbridge userspace subscription — CapInbox-as-cell-program. The proof-of-pattern for STORAGE-AS-CELL-PROGRAMS.md §3.1: a publisher/consumer message queue whose invariants (monotonic head/tail, WriteOnce message slots, publisher/consumer SenderAuthorized sets) are baked into a FactoryDescriptor and enforced by the executor on every turn — not by an operator-side enforcement loop."
+
+# Greenfield rebuild of `apps/subscription/`'s storage-layer surface as
+# a starbridge-app, following STORAGE-AS-CELL-PROGRAMS.md §3.1.
+#
+# This crate is the FIRST app that exercises the CapInbox -> cell-program
+# migration. It mirrors `starbridge-apps/nameservice/`'s shape:
+# FactoryDescriptor + turn-builders + Effect-only composition. No new
+# Effect variants; no operator-side storage enforcement.
+#
+# See `src/lib.rs` for the in-source design notes, the
+# `subscription_factory_descriptor()` slot layout, and the operation-scoped
+# `CellProgram::Cases(_)` that wires publish vs consume to disjoint
+# `MonotonicSequence` constraints (publish advances head only, consume
+# advances tail only).
+
+[lib]
+name = "starbridge_subscription"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The deos-app re-expression proof (`tests/reexpress_deos_app.rs`, relocated from
+# `app-framework/tests/reexpress_subscription.rs` — census Tier-1 #2 promotion) + the
+# fire→full-CellProgram seam proof (`tests/deos_seam.rs`). Both drive the mounted axum
+# surface (per-viewer projection + cap-gated fires) end-to-end.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true

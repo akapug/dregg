@@ -1,0 +1,22 @@
+[package]
+name = "dregg-query"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Attested queries over the receipt fact-base: the Q1 conjunctive query surface (fact schema + eval + the CALM coordination classifier) and the Q2 non-omission certificate (the Rust embodiment of Dregg2.Lightclient.MMR's RVerifies / server_cannot_omit_position). NOT a full Datalog engine — see docs/EPISTEMIC-DATALOG.md staging."
+
+[dependencies]
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+blake3 = "1"
+hex = "0.4"
+
+[dev-dependencies]
+blake3 = "1"
+hex = "0.4"
+serde_json = { workspace = true }

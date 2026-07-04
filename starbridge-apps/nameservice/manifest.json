@@ -1,0 +1,78 @@
+{
+  "id": "nameservice",
+  "name": "Nameservice",
+  "description": "First end-to-end starbridge-app: federation name directory built from dregg-native primitives (FactoryDescriptor, StateConstraints/WriteOnce+Monotonic slot caveats, AppCipherclerk signed Actions). Supports register, renew, transfer, revoke, set-target. Demonstrates slot layout, event topics, and inspector reuse.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d6e616d65736572766963652d666163746f72792121"
+  ],
+  "page": null,
+  "inspectors": [
+    "dregg-name",
+    "dregg-name-registry",
+    "dregg-name-register-form"
+  ],
+  "host_inspectors": [
+    { "id": "registry", "label": "Registry", "tag": "dregg-name-registry", "uri_attribute": "uri" },
+    { "id": "name", "label": "Name Cell", "tag": "dregg-name", "uri_attribute": "uri" },
+    { "id": "register", "label": "Register", "tag": "dregg-name-register-form", "uri_attribute": "registry-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_registry", "label": "Inspect registry", "uri": "dregg://cell/registry-default", "kind": "inspect" },
+    { "id": "register_name", "label": "Register name", "builder": "register_name", "kind": "turn" },
+    { "id": "renew_name", "label": "Renew name", "builder": "renew_name", "kind": "turn" },
+    { "id": "transfer_name", "label": "Transfer name", "builder": "transfer_name", "kind": "turn" },
+    { "id": "revoke_name", "label": "Revoke name", "builder": "revoke_name", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "registry_uri", "label": "Registry URI", "type": "uri", "default": "dregg://cell/registry-default" },
+    { "id": "mode", "label": "Mutation mode", "type": "select", "options": ["register", "renew", "transfer", "revoke", "set-target"], "default": "register" }
+  ],
+  "turn_builders": [
+    "register_name",
+    "renew_name",
+    "transfer_name",
+    "revoke_name",
+    "set_target_name"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.nameservice"
+  ],
+  "slot_layout": {
+    "NAME_HASH_SLOT": 2,
+    "OWNER_HASH_SLOT": 3,
+    "EXPIRY_SLOT": 4,
+    "REVOKED_SLOT": 5,
+    "RESOLVE_TARGET_SLOT": 6
+  },
+  "state_constraints": [
+    "WriteOnce(NAME_HASH_SLOT)",
+    "Monotonic(EXPIRY_SLOT)",
+    "WriteOnce(REVOKED_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router; DeosApp::publish_all mints the name cell's dregg:// sturdyref",
+    "src_factory": "name_app(cipherclerk, executor)",
+    "cell": "name",
+    "discoverable": ["names"],
+    "publish": "Signature (the name cell IS a dregg:// sturdyref a peer on another federation reacquires — so RESOLVE_TARGET can point at a LIVE reacquirable cell ref, not an opaque blake3(uri); the name directory is a web OF cells)",
+    "affordances": {
+      "resolve": "cap-only, Signature (a RESOLVER reads RESOLVE_TARGET and reacquires the cell the name points at)",
+      "transfer": "cap-only, None/root (the OWNER re-keys OWNER_HASH — a cap-graph re-key)",
+      "renew": "GATED (cap∧state), None/root — not-revoked precondition (REVOKED==0); the fire advances EXPIRY off live state, the executor re-enforcing Monotonic(EXPIRY)",
+      "revoke": "GATED (cap∧state), None/root — not-revoked precondition (REVOKED==0); the fire sets REVOKED->1, the executor re-enforcing WriteOnce(REVOKED) (one-way)",
+      "set_target": "GATED (cap∧state), None/root — not-revoked precondition (REVOKED==0); the fire re-points RESOLVE_TARGET"
+    },
+    "seam": "CLOSED — the fire runs against the seeded name cell carrying the name program (WriteOnce(NAME_HASH) + Monotonic(EXPIRY) + WriteOnce(REVOKED)), so a REWOUND expiry (renew rolling the rent backward), an UN-REVOKE (REVOKED 1->0), and a name REBIND (NAME_HASH overwrite) BITE in the deos fire path. The htmx tooth: after revoke, renew/set_target go DARK (REVOKED!=0 fails their precondition) (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/nameservice/src/lib.rs"
+  }
+}

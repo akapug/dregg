@@ -1,0 +1,62 @@
+[package]
+name = "dregg-federation"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# The adjudication court (`court.rs`): the equivocation-evidence wire value
+# lives where the lace retains it. blocklace has no dregg deps besides types,
+# so this edge introduces no cycle.
+dregg-blocklace = { path = "../blocklace" }
+dregg-captp = { path = "../captp" }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-commit = { path = "../commit" }
+dregg-turn = { path = "../turn" }
+dregg-types = { path = "../types" }
+serde_json = { workspace = true }
+hints = { path = "../hints", package = "dregg-hints" }
+blake3 = "1"
+# `vrf.rs` (RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI) needs the raw group ops
+# (decompress / cofactor-clear / double-scalar-mul) under the SAME curve
+# ed25519-dalek already pins here — no new curve enters the tree.
+curve25519-dalek = { version = "4", features = ["alloc"] }
+ed25519-dalek = { version = "2", features = ["std"] }
+sha2 = { workspace = true }
+hex = "0.4"
+getrandom = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+tracing = "0.1"
+ark-serialize = { version = "0.5.0", features = ["serde_with"] }
+ark-ff = "0.5.0"
+ark-ec = "0.5.0"
+ark-std = "0.5.0"
+# `runtime` feature: gates async/TCP transport + the in-memory tokio mpsc
+# transport in `transport.rs`. Both pull tokio (mio, signal-hook on unix) and
+# crossbeam-channel, neither of which cross-compiles cleanly to wasm32 nor
+# is meaningful in the browser. Native consumers keep these via `default`.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "net", "sync", "time"], optional = true }
+crossbeam-channel = { version = "0.5", optional = true }
+# FFI-FREE BY CONSTRUCTION: `AdmissionRegistry::admitted` routes the F-4 hybrid gate through the
+# `verified_gate` SEAM (`FederationVerifiedGate`), never `dregg-lean-ffi` directly. A native node
+# installs the Lean-backed gate (from `dregg-exec-lean`) once at startup; an FFI-free target (wasm /
+# verifier-PD / pg) never registers one and the Rust `admitted_rust` differential sibling decides.
+# The deleted `no-lean-link` feature is now a dependency choice, not a flag.
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "consensus_bench"
+harness = false
+
+[features]
+# Native default keeps full networking surface — backward-compatible. Wasm
+# consumers (and any embedded callers that only want the pure-state /
+# consensus-orchestration types) pass `default-features = false`.
+default = ["runtime"]
+runtime = ["dep:tokio", "dep:crossbeam-channel"]
+
+[lints]
+workspace = true

@@ -1,0 +1,151 @@
+name: "Federation Discovery"
+
+on:
+  schedule:
+    # Every 30 minutes — maintain fresh discovery info
+    - cron: '*/30 * * * *'
+  repository_dispatch:
+    types: [node-state-updated]
+  workflow_dispatch:
+
+concurrency:
+  group: discovery-update
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  update-discovery:
+    name: "Update Discovery File"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Ensure federation-state branch exists
+        run: |
+          if ! git ls-remote --heads origin federation-state | grep -q federation-state; then
+            git checkout --orphan federation-state
+            git rm -rf . 2>/dev/null || true
+            mkdir -p nodes
+            echo '{}' > nodes/.gitkeep
+            git config user.name "dregg-federation[bot]"
+            git config user.email "federation@dregg.fg-goose.online"
+            git add .
+            git commit -m "Initialize federation-state branch"
+            git push origin federation-state
+            git checkout main
+          fi
+
+      - name: Read federation state
+        run: |
+          git fetch origin federation-state || true
+          mkdir -p /tmp/nodes
+          for f in node-1 node-2 node-3 intent-service; do
+            git show "origin/federation-state:nodes/${f}.json" > "/tmp/nodes/${f}.json" 2>/dev/null || echo '{}' > "/tmp/nodes/${f}.json"
+          done
+          echo "Node state files:"
+          ls -la /tmp/nodes/
+
+      - name: Assemble discovery.json
+        run: |
+          #!/bin/bash
+          set -euo pipefail
+
+          # Helper: read node discovery info from state file
+          read_node_info() {
+            local state_file="$1"
+            local role="$2"
+
+            if [ -f "$state_file" ] && [ -s "$state_file" ]; then
+              local node_id ticket last_seen
+              node_id=$(jq -r '.node_id // empty' "$state_file" 2>/dev/null || echo "")
+              ticket=$(jq -r '.ticket // empty' "$state_file" 2>/dev/null || echo "")
+              last_seen=$(jq -r '.last_seen // empty' "$state_file" 2>/dev/null || echo "")
+
+              if [ -n "$node_id" ]; then
+                echo "{\"node_id\":\"$node_id\",\"ticket\":\"$ticket\",\"last_seen\":\"$last_seen\",\"role\":\"$role\"}"
+                return 0
+              fi
+            fi
+            return 1
+          }
+
+          NODES="[]"
+
+          # Read each node's state
+          for i in 1 2 3; do
+            if info=$(read_node_info "/tmp/nodes/node-$i.json" "node-$i"); then
+              NODES=$(echo "$NODES" | jq ". + [$info]")
+            fi
+          done
+
+          # Read intent service
+          INTENT_SERVICE="null"
+          if info=$(read_node_info "/tmp/nodes/intent-service.json" "intent-service"); then
+            INTENT_SERVICE="$info"
+          fi
+
+          # Gateway node (always-on Graviton instance)
+          GATEWAY=$(jq -n '{
+            "url": "https://dregg.commonquant.com",
+            "ws": "wss://dregg.commonquant.com/ws",
+            "api": "https://dregg.commonquant.com/api",
+            "gossip": "dregg.commonquant.com:9420"
+          }')
+
+          # Build final discovery file
+          UPDATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT="${GITHUB_SHA:-unknown}"
+
+          mkdir -p site
+          jq -n \
+            --argjson gateway "$GATEWAY" \
+            --argjson federation "$NODES" \
+            --argjson intent_service "$INTENT_SERVICE" \
+            --arg updated_at "$UPDATED_AT" \
+            --arg commit "$COMMIT" \
+            '{
+              gateway: $gateway,
+              federation: $federation,
+              intent_service: $intent_service,
+              updated_at: $updated_at,
+              commit: $commit
+            }' > site/discovery.json
+
+          echo "Generated discovery.json:"
+          cat site/discovery.json
+
+      - name: Publish discovery to federation-state branch
+        run: |
+          git fetch origin federation-state || true
+          git worktree add /tmp/fed-state federation-state 2>/dev/null || {
+            git worktree add --detach /tmp/fed-state
+            cd /tmp/fed-state
+            git checkout --orphan federation-state
+            git rm -rf . 2>/dev/null || true
+            mkdir -p nodes
+            echo '{}' > nodes/.gitkeep
+            git config user.name "dregg-federation[bot]"
+            git config user.email "federation@dregg.fg-goose.online"
+            git add .
+            git commit -m "Initialize federation-state branch"
+          }
+          cd /tmp/fed-state
+          cp "$GITHUB_WORKSPACE/site/discovery.json" discovery.json
+          git add discovery.json
+          git diff --cached --quiet || {
+            git config user.name "dregg-federation[bot]"
+            git config user.email "federation@dregg.fg-goose.online"
+            git commit -m "Update discovery.json [skip ci]"
+            git push origin federation-state
+          }
+
+      # Discovery state is pushed ONLY to the federation-state orphan branch.
+      # Never push federation automation to main.

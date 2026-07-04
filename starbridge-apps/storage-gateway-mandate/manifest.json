@@ -1,0 +1,78 @@
+{
+  "id": "storage-gateway-mandate",
+  "name": "Storage Gateway Mandate",
+  "description": "Storage gateway mandate starbridge-app: StorageOp GET/PUT/LIST, prefix authorization, clearance labels, and Stingray volume budget. Maps Lean StorageGatewayMandate theorems to Rust slot caveats and predicate-layer admission checks.",
+  "version": "0.1.0",
+  "factory_vks": [
+    "737461726272696467652d73676d2d6d616e646174652d666163746f72792121"
+  ],
+  "inspectors": [
+    "dregg-sgm-gateway",
+    "dregg-sgm-storage-form"
+  ],
+  "host_inspectors": [
+    { "id": "gateway", "label": "Storage Gateway", "tag": "dregg-sgm-gateway", "uri_attribute": "uri" },
+    { "id": "storage", "label": "Storage Op", "tag": "dregg-sgm-storage-form", "uri_attribute": "mandate-uri" }
+  ],
+  "host_actions": [
+    { "id": "inspect_gateway", "label": "Inspect gateway", "uri": "dregg://cell/sgm-gateway-default", "kind": "inspect" },
+    { "id": "storage_get", "label": "GET object", "builder": "storage_get", "kind": "turn" },
+    { "id": "storage_put", "label": "PUT object", "builder": "storage_put", "kind": "turn" },
+    { "id": "storage_list", "label": "LIST prefix", "builder": "storage_list", "kind": "turn" },
+    { "id": "init_gateway", "label": "Initialize gateway", "builder": "init_gateway", "kind": "turn" }
+  ],
+  "host_controls": [
+    { "id": "gateway_uri", "label": "Gateway URI", "type": "uri", "default": "dregg://cell/sgm-gateway-default" },
+    { "id": "op", "label": "Storage op", "type": "select", "options": ["GET", "PUT", "LIST"], "default": "GET" },
+    { "id": "key_prefix", "label": "Key prefix", "type": "text", "default": "uploads/" }
+  ],
+  "turn_builders": [
+    "storage_get",
+    "storage_put",
+    "storage_list",
+    "init_gateway"
+  ],
+  "required_apis": [
+    "signTurn",
+    "blake3",
+    "cell.readField",
+    "builders.storageGatewayMandate"
+  ],
+  "slot_layout": {
+    "OBJECT_KEY_SLOT": 0,
+    "LAST_OP_SLOT": 1,
+    "VOLUME_SPENT_SLOT": 2,
+    "COMMITMENT_ANCHOR_SLOT": 3,
+    "VOLUME_CEILING_SLOT": 4,
+    "KEY_PREFIX_HASH_SLOT": 5,
+    "READ_COMPARTMENT_SLOT": 6
+  },
+  "state_constraints": [
+    "WriteOnce(COMMITMENT_ANCHOR_SLOT)",
+    "WriteOnce(VOLUME_CEILING_SLOT)",
+    "WriteOnce(KEY_PREFIX_HASH_SLOT)",
+    "WriteOnce(READ_COMPARTMENT_SLOT)",
+    "Monotonic(VOLUME_SPENT_SLOT)",
+    "FieldLteField(VOLUME_SPENT_SLOT, VOLUME_CEILING_SLOT)"
+  ],
+  "deos": {
+    "surface": "DeosApp",
+    "mount": "register_deos (src/lib.rs) — folds the composed DeosApp into the StarbridgeAppContext affordance registry; DeosApp::mount yields the axum router",
+    "src_factory": "gateway_app(cipherclerk, executor)",
+    "cell": "gateway",
+    "discoverable": ["storage"],
+    "publish": "Signature (the gateway cell is a dregg:// sturdyref a peer on another federation reacquires)",
+    "affordances": {
+      "get": "cap-only, Signature (a READER reads an object)",
+      "list": "cap-only, Signature (a READER enumerates a prefix)",
+      "put": "GATED (cap∧state), Either — budget-remaining precondition (VOLUME_SPENT < VOLUME_CEILING); the fire submits the FULL metered write (key + op + new spend) reading the LIVE VOLUME_SPENT, the executor re-enforcing FieldLteField(VOLUME_SPENT <= VOLUME_CEILING) + Monotonic(VOLUME_SPENT)"
+    },
+    "seam": "CLOSED — the fire runs against the seeded gateway cell carrying the volume invariants (WriteOnce anchor/ceiling/prefix/compartment + Monotonic(VOLUME_SPENT) + FieldLteField(VOLUME_SPENT<=VOLUME_CEILING)), so the volume budget is a LIVE gate: an OVER-BUDGET write (spend pushed past the ceiling) and a REWOUND meter (spend rolled back to forge free budget) BITE in the deos fire path (tests/deos_seam.rs)"
+  },
+  "manifest_health": {
+    "status": "ready",
+    "embedded": true,
+    "deos_native_src": true,
+    "source_of_truth": "starbridge-apps/storage-gateway-mandate/src/lib.rs"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["chrome"],
+    "baseUrl": ".",
+    "paths": {
+      "@dregg/sdk/browser": ["../src/browser.ts"],
+      "@dregg/sdk/raw": ["../src/raw.ts"],
+      "@dregg/sdk": ["../src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "test/harness.ts"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,117 @@
+# Rust hosts the compiled Lean kernel and calls it for real.
+# Member of the repo root workspace (see root Cargo.toml).
+
+[package]
+name = "dregg-lean-ffi"
+version = "0.1.0"
+edition = "2021"
+# With `lean-lib` + `libdregg_lean.a` present: `cargo run --features lean-lib`.
+default-run = "differential"
+# Declares a native lib so the build script's `rustc-link-lib` / `rustc-link-search`
+# directives PROPAGATE to every downstream binary (the `dregg-turn` lean-shadow tests + the
+# node), not just this crate's own bins. Without `links`, a build script's link directives are
+# local only — which is why the `dregg-turn` shadow tests previously failed to resolve
+# `dregg_ffi_init` / `dregg_exec_full_forest_auth_str`.
+links = "dregg_lean"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+# PLATFORM gate (polarity-inverted, see docs/FEATURE-HYGIENE.md §Lean): linking
+# libdregg_lean.a is the UNCONDITIONAL default on native. `no-lean-link` is ON only for
+# targets that genuinely cannot link the archive (wasm32, zkvm guest); it suppresses the
+# archive refresh + all link directives, so the crate builds marshal-only with the runtime
+# stubs (`lean_available()` = false). build.rs additionally hard-skips the link for
+# wasm32/zkvm targets as defense-in-depth.
+no-lean-link = []
+# Enable the differential/marshal binaries (they require the linked archive at run time).
+lean-lib = ["dep:proptest"]
+
+[[bin]]
+name = "dregg-lean-ffi"
+path = "src/main.rs"
+required-features = ["lean-lib"]
+
+# The cascade beachhead: a property-based DIFFERENTIAL harness that makes the
+# verified Lean kernel the golden oracle for a Rust reference implementation.
+[[bin]]
+name = "differential"
+path = "src/differential.rs"
+required-features = ["lean-lib"]
+
+# The CIRCUIT-extraction differential: decodes the Lean-`emit`ted kernelCircuit
+# wire form and binds it to the Rust-native AIR by fingerprint. Does not call
+# Lean FFI itself, but links the same archive (build.rs is crate-global).
+[[bin]]
+name = "circuit_differential"
+path = "src/circuit_differential.rs"
+required-features = ["lean-lib"]
+
+# The STATE differential: marshals a real `Value` record `RecordKernelState` (not a
+# scalar) across the FFI, runs the verified `recKExec` via the C string bridge
+# (dregg_record_kernel_step_str), and diffs it against a Rust reference. This is the
+# cascade SWAP-enabler — the node calls the dregg2 record kernel over real cell-state.
+[[bin]]
+name = "state_differential"
+path = "src/state_differential.rs"
+required-features = ["lean-lib"]
+
+# The FULL-TURN differential (E6 / Path A): marshals a whole
+# (RecChainedState, List FullAction) across the FFI, runs the verified `execFullTurn`
+# (the all-or-nothing transaction) via `dregg_exec_full_turn_str`, and diffs it against a
+# Rust reference reimplementation — INCLUDING the all-or-nothing rollback case. This is the
+# turn-decision swap-enabler (the executor that replaces authorize.rs).
+[[bin]]
+name = "full_turn_differential"
+path = "src/full_turn_differential.rs"
+required-features = ["lean-lib"]
+
+# THE SWAP marshaller round-trip GATE (T8/T9): marshals a WireState + WireTurn with the
+# byte-exact `marshal.rs` encoder, feeds it to the GATED complete-turn executor via the C
+# bridge `dregg_exec_full_forest_auth_str`, and asserts the output parses + commits with the
+# conserved balance delta (plus forged/overspend rollback + malformed-wire fail-closed). This
+# is the non-negotiable correctness gate for the cutover marshaller. `marshal.rs` is included
+# as a module (via #[path]); it is the reusable T8/T9 codec the node will eventually call.
+[[bin]]
+name = "marshal_roundtrip"
+path = "src/marshal_roundtrip.rs"
+required-features = ["lean-lib"]
+
+# THE TRANSLATION-VALIDATION GATE (Klein CRITICAL-2, Rust half): asserts the hand-written
+# `marshal.rs` T8/T9 marshaller reproduces, BYTE-FOR-BYTE, the Lean-emitted golden corpus produced
+# by the PROVED encoders (`Dregg2.Exec.FFI.encodeWWire`/`encodeWStatusOut`, via
+# `metatheory/EmitMarshalGolden.lean`, committed at `goldens/marshal-golden.txt`). Unlike
+# `marshal_roundtrip` (which calls the LIVE Lean kernel and so must be a `lean-lib` bin), this
+# compares against the COMMITTED golden string and needs NO archive link — it runs in plain
+# `cargo test -p dregg-lean-ffi` on any target. `marshal.rs` is included via `#[path]`.
+[[test]]
+name = "marshal_conformance"
+path = "src/marshal_conformance.rs"
+
+[dependencies]
+# Reproduces circuit::air_descriptor::fingerprint (BLAKE3-derive-key) so the
+# decoded-Lean AIR can be fingerprint-bound to the Rust-native AIR.
+blake3 = "1"
+# The REAL adversarial fuzzer (E6): proptest drives generated adversarial full-turns
+# (overflow/underflow amounts, unauthorized delegates, double-mints, empty/huge lists,
+# malformed orderings) through BOTH the Lean FFI oracle and the Rust reference, asserting
+# agreement on accept/reject + final state across many minimized cases. Used as a normal
+# dependency (not dev) because the fuzzer runs inside the `full_turn_differential` BINARY,
+# which performs the one-time Lean runtime init (`dregg_ffi_init`) before driving proptest's
+# `TestRunner` — a `#[test]` cannot guarantee the single-init ordering the FFI requires.
+# Optional (tied to `lean-lib`): the fuzzer only runs in the differential bins; keeping it
+# out of the default graph is what lets the now-unconditional lib dep compile on wasm32.
+proptest = { version = "1", optional = true }
+
+[build-dependencies]
+cc = "1"
+
+# RE-MEASURE the no-copy boundary win: JSON marshalling vs the direct lean_object* path on the SAME
+# extracted wire (both run the identical verified executor). `harness = false` (plain timed main,
+# prints a table like the Stage-0 baseline in perf/benches/lean_ffi_turn.rs).
+[[bench]]
+name = "direct_vs_json_overhead"
+path = "benches/direct_vs_json_overhead.rs"
+harness = false

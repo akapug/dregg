@@ -1,0 +1,73 @@
+# dregg-tui — the face of the Robigalia v0 demo: a terminal light client.
+#
+# A STANDALONE crate (its own workspace root — deliberately NOT a member of the
+# repo-root workspace, so it can pin a TUI/HTTP toolchain without perturbing the
+# main tree). It is a light client: it connects over HTTP to a running dregg
+# node's API (node/src/api.rs — /api/node/identity, /api/cells, /api/receipts),
+# lists cells, shows receipts, and renders the node identity. This is M4 of the
+# seL4 boot ladder (docs/SEL4-EMBEDDING.md §5): once the M3 net stack carries
+# the node onto seL4, this same TUI is the operator's window onto it.
+#
+# Runs on the host (the operator's terminal). It reaches the node over the
+# network the M3 PD provides — it does not itself boot on seL4.
+
+# STANDALONE WORKSPACE. dregg-tui is the ONLY `ratatui` user in the tree, and
+# ratatui 0.29 pins `unicode-width =0.2.0` EXACTLY. The full-Zed editor surface
+# (starbridge-v2 → deos-zed-full → editor → markdown → merman) needs
+# `unicode-width ^0.2.2`. Both constraints in one resolution graph is unsatisfiable,
+# so dregg-tui is EXCLUDED from the root workspace and declares its OWN here — the
+# same root-exclusion pattern `discord-bot`/`deos-zed-full` use. Its path-deps
+# (dregg-sdk/turn/circuit/verifier) are members of the ROOT workspace, so THEIR
+# `workspace = true` deps (p3-*, ark-serialize, dregg-* locals) resolve against the
+# root; this manifest references none of them via `workspace = true`, so the
+# `[workspace.dependencies]` table is empty. `[patch.crates-io]` replicates only
+# the root patch this graph consumes — the `ark-serialize` serde-integration fork
+# the proof tree (dregg-hints via dregg-circuit/dregg-sdk) needs. The
+# plonky3-recursion deps are direct git deps in the root `[workspace.dependencies]`
+# (no patch) and resolve via the path-dep'd circuit crate's root membership.
+[workspace]
+members = ["."]
+resolver = "2"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[workspace.lints.rust]
+unexpected_cfgs = "allow"
+
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[package]
+name = "dregg-tui"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "dregg-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+# The REAL light-client verify path — no mocks. The TUI fetches a node's DWR1
+# witness artifact (`/api/receipts/{hash}/witnesses`), decodes it with the SDK's
+# canonical decoder (`dregg-sdk::decode_witnessed_receipt_artifact_hex`), and
+# runs the REAL plonky3 STARK verifier (`dregg-verifier::verify_effect_vm_proof`)
+# over the proof bytes + public inputs the artifact carries. Both are pulled with
+# `no-lean-link` so the TUI stays a pure host binary (no Lean runtime / libuv /
+# GMP) — link-suppression only; the verify path is plonky3 + crypto, never Lean.
+dregg-sdk = { path = "../sdk", default-features = false, features = ["no-lean-link"] }
+dregg-verifier = { path = "../verifier", features = ["no-lean-link"] }
+dregg-turn = { path = "../turn", default-features = false }
+# Used only by `--selfcheck`: prove a fresh HEAD-version Effect-VM turn so the
+# verify core can be shown reaching VERIFIED on a version-matched proof (the live
+# devnet runs an older PI layout). Same audited plonky3 prover the node uses.
+dregg-circuit = { path = "../circuit" }

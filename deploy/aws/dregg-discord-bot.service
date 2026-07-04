@@ -1,0 +1,41 @@
+[Unit]
+Description=Dregg Discord Bot
+After=network-online.target dregg-gateway.service
+Wants=network-online.target
+Requires=dregg-gateway.service
+# Restart-storm brake (see dregg-gateway.service).
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=dregg
+Group=dregg
+WorkingDirectory=/opt/dregg
+EnvironmentFile=/etc/dregg/discord-bot.env
+ExecStart=/opt/dregg/target/release/dregg-discord-bot
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/dregg-data /var/lib/dregg-discord-bot
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+# The bot is a thin client of the gateway; bound it well below the node's
+# budget so a leak here can never starve the node on the shared 8 GB host.
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

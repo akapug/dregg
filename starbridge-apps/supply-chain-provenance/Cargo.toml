@@ -1,0 +1,64 @@
+[package]
+name = "starbridge-supply-chain-provenance"
+version = "0.1.0"
+edition = "2024"
+description = "Verifiable supply-chain provenance — an ITEM is a factory-born sovereign cell whose installed CellProgram enforces single-custodianship as a CONSERVATION law. Each CUSTODY HANDOFF is a cap-attenuated transfer (the incoming custodian gains the item's custody cap, the prior LOSES it — EXACTLY ONE custodian at a time, no double-custody) that strictly advances a provenance epoch (no replay) and appends a tamper-evident receipt link. The PROVENANCE is the on-cell hash chain (link_i = blake3(prev ‖ event)); a third party PROVES the full custody chain by re-derivation (verify_chain). A FORGED handoff — a party claiming custody it does not hold — is REFUSED by the real verified executor on TWO teeth: the cap-graph (no custody cap reaching the item ⇒ the authorization gate rejects) and the actor-bound register (a custodian flip not signed by the incoming holder ⇒ the AnyOf[Immutable, SenderInSlot] caveat rejects). Composes EXISTING slot-caveat atoms only (StrictMonotonic epoch · WriteOnce receipt links + Monotonic head, mirroring agent-provenance · AnyOf[Immutable, SenderInSlot] actor-bound baton, mirroring the verified AgentOrchestrationBudget keystone). No NEW Lean module."
+
+# Mirrors the verified Lean developments (NO new Lean module is added by this app):
+#   - `metatheory/Dregg2/Apps/AgentOrchestrationBudget.lean` — the actor-bound
+#     baton keystone `anyOf [immutable batonF, senderInField batonF]` and its
+#     teeth (`stolen_baton_rejected` vs `honest_dispatch_admits`,
+#     `strictMono epochF` no-replay). The custody register reuses this EXACT
+#     shape: `AnyOf[Immutable(CUSTODIAN), SenderInSlot(CUSTODIAN)]` — the
+#     custodian may change only in a turn SIGNED BY the incoming holder.
+#   - `metatheory/Dregg2/Apps/AgentProvenanceGated.lean` — the append-only
+#     hash-chain provenance (`prov_entry_writeonce`, `prov_head_cannot_rewind`,
+#     `prov_append_reads_back`, `prov_chain_links`). The custody receipt chain
+#     reuses this EXACT shape: each link slot is `WriteOnce`, the head is
+#     `Monotonic`, and `verify_chain` re-derives the chain link-for-link.
+#   - `metatheory/Dregg2/Apps/AgentOrchestration.lean` — the kernel-executor
+#     swarm with attenuated, non-amplifying delegation (`derive_no_amplify`):
+#     the custody cap is handed forward NARROWED, never widened — the
+#     no-amplification guarantee firing at the custody layer exactly as it fires
+#     for a transfer.
+#
+# This crate is the executable surface: the custody POLICY is a factory
+# descriptor's `state_constraints` installed as the born ITEM cell's
+# `CellProgram`, re-checked by the verified executor (`EmbeddedExecutor`) on
+# EVERY turn that touches the item — so the forged handoff, the replayed
+# handoff, and the rewritten provenance are REAL executor refusals, not app
+# bookkeeping.
+
+[lib]
+name = "starbridge_supply_chain_provenance"
+
+[dependencies]
+dregg-app-framework = { path = "../../app-framework" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-turn = { path = "../../turn" }
+dregg-types = { path = "../../types" }
+dregg-coord = { path = "../../coord" }
+# The attested-query face (the derived-cell / attested-query showcase): the Q1
+# conjunctive-query surface + the Q2 non-omission certificate (the receipt-log MMR
+# `server_cannot_omit_position`). Used by `src/derived.rs` to certify the
+# completeness of an item's custody-handoff log to a light client.
+dregg-query = { path = "../../dregg-query" }
+
+blake3 = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The userspace "lint your custody forest before you spend gas" toolkit: the
+# handoff forest is run through `analyze()` (conservation + non-amplification +
+# well-formedness) BEFORE submission, exactly as a stranger would pre-flight it.
+dregg-userspace-verify = { path = "../../dregg-userspace-verify" }
+# The deos-app re-expression proof (`tests/reexpress_deos_app.rs`): the SAME app
+# on the composed `DeosApp` bones — smaller + more capable. Drives the mounted
+# axum surface (per-viewer projection + cap-gated fires) end-to-end.
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+
+[lints]
+workspace = true

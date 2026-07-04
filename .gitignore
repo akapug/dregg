@@ -1,0 +1,69 @@
+.claude
+.claire
+
+hints/benches/*.bincode
+hints/benches/committee_1024.json
+hints/benches/committee.json
+hints/benches/committee_128.json
+
+extension/dist
+site/dist
+site/assets/dregg.pdf
+site/paper/
+paper/*.pdf
+
+target
+node_modules
+__pycache__
+.playwright-mcp
+
+# Devnet secrets
+docker/devnet-config/*
+!docker/devnet-config/.gitkeep
+!docker/devnet-config/README.md
+deploy/genesis/keys/
+deploy/genesis/*.key
+deploy/genesis/secrets/
+demo/two-ai-handoff/state/
+demo/multi-node-devnet/state/
+
+CLAUDIT.md
+
+states/
+spec/states
+
+*.zip
+*.xpi
+
+metatheory/.lake
+lean-objs
+
+libdregg_lean.a*
+# Starbridge Lean-as-web-citizen workspace: 3.7GB lean4-src checkout + WASM
+# build spikes; a build/scratch area, never committed.
+/web
+/target-swaplane
+/site/pkg
+/sdk-ts/dist
+sel4/dregg-pd/executor-microkit-pd/microkit-patch/microkit-2.2.0-patched
+
+# build artifacts — never checkpoint compiled output into history
+*.wasm
+*.rlib
+*.rmeta
+*.dylib
+
+# macOS finder junk
+.DS_Store
+discord-values
+
+# night-shift render frames — artifacts, not source (ember: do not check PNGs into git)
+night-shift-woven.png
+*.woven.png
+deos-*-woven*.png
+
+# session working notes + product planning — NOT substrate (kept private, out of the public repo)
+DEOS-NIGHT-SHIFT.md
+PLANS-BREADCRUMBS.md
+DREGG-COMPUTER.md
+DREGG*-MIGRATION.md

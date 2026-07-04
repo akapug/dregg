@@ -1,0 +1,609 @@
+name: starbridge-v2 native installers
+
+# Packs the REAL native installers for Starbridge v2 — the dregg master interface
+# (the native gpui desktop shell that EMBEDS the verified executor). This is the
+# "you can actually run this" desktop proof: a macOS .app/.dmg and a Linux
+# AppImage/.tar.gz, each a `--release` `native-full` build. See
+# docs/STARBRIDGE-V2.md for the build (cd starbridge-v2 && cargo build) + the
+# gpui `runtime_shaders` Metal note this relies on.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PLONKY3-RECURSION FORK (resolved — branch is pushed):
+#
+# `native-full` pulls `embedded-executor`, which pulls `dregg-circuit` (via
+# dregg-turn/dregg-sdk). That circuit references the recursion-fork-only
+# `RecursionInput::NativeBatchStark` variant, which the upstream pinned rev
+# (c14b5fc0) does not carry. starbridge-v2/Cargo.toml therefore [patch]es the
+# four `p3-*` crates at a local fork checkout (`../../plonky3-recursion/…`, i.e.
+# a sibling of the repo root). The CI reconstruction step below clones the fork
+# at FORK_REF into that sibling path so Cargo resolves the [patch] identically.
+#
+# FORK STATUS: `update-plonky3-rev` (tip 72ffc56, carrying NativeBatchStark) is
+# PUSHED to https://github.com/emberian/plonky3-recursion — this workflow is
+# ready to go green. The next step after this CI is stable: bump the Cargo.toml
+# [patch] blocks from the local path to a pinned git rev + drop the reconstruction
+# step (the fork-cutover-settle).
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  # No `paths:` on push — a paths filter applies to TAG pushes too and would
+  # path-gate releases. Push is unfiltered (main + starbridge-v* tags); the PR
+  # `paths` filter keeps PR noise down.
+  push:
+    branches: [main]
+    tags:
+      - 'starbridge-v*'
+  pull_request:
+    paths:
+      - 'starbridge-v2/**'
+      - '.github/workflows/starbridge-v2-installers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # attach installers to a release on a starbridge-v* tag
+
+concurrency:
+  group: starbridge-v2-installers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The public fork carrying the `NativeBatchStark` WIP the embedded circuit
+  # needs (see the FIRST-RUN PRECONDITION above). FORK_REF is the branch/commit
+  # to check out; flip it to the pushed WIP ref to turn this workflow green.
+  FORK_REPO: "https://github.com/emberian/plonky3-recursion"
+  FORK_REF: "update-plonky3-rev"
+
+jobs:
+  # ── macOS — SEPARATE per-arch installers (NO universal/fat binary) ──────────
+  # We ship ONE clean download per arch — `starbridge-v2-macos-arm64.dmg` and
+  # `starbridge-v2-macos-x86_64.dmg` — so a user grabs only the binary they need.
+  # We deliberately DO NOT `lipo -create` the two arches into a universal Mach-O:
+  # a fat binary forces every user to download both arches (bloat). Separate
+  # downloads are leaner and clearer.
+  #
+  # WHY TWO NATIVE BUILDS, NOT ONE CROSS-COMPILE: the embedded executor links
+  # `dregg-lean-ffi/libdregg_lean.a`, a HOST-NATIVE Mach-O archive of objects the
+  # Lean compiler emits, spliced/linked by `build.rs` via `cargo:rustc-link-lib=
+  # static=dregg_lean` into the rustc *target* binary. The git-tracked seed is
+  # arm64-only and `bootstrap.sh` re-splices it against the runner's own Lean
+  # toolchain (which emits the runner's host arch). So a plain
+  # `cargo build --target x86_64-apple-darwin` on the arm64 runner would link an
+  # arm64-only `libdregg_lean.a` into an x86_64 binary and FAIL. The honest fix:
+  # build each arch on its OWN native runner (elan installs the matching-arch
+  # Lean, bootstrap.sh seeds a matching-arch archive). This matrix job then
+  # packages each arch's single-arch binary INDEPENDENTLY into its own
+  # .app/.dmg/.tar.gz — no fuse step, no shared universal artifact.
+  macos-build:
+    name: macOS ${{ matrix.arch }} installer
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon (arm64); Xcode + Metal.framework present.
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+          # Intel (x86_64); the last Intel-host GitHub-hosted macOS runner. Builds
+          # the x86_64 Lean archive + binary natively (no cross-compile).
+          - arch: x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      # starbridge-v2 pins the ROLLING nightly (gpui needs std::hint::cold_path,
+      # stabilized after the repo root's dated pin). rust-toolchain.toml is
+      # directory-scoped, so cargo picks it up when we build FROM INSIDE the
+      # crate. Install the rolling nightly explicitly.
+      - name: Install rolling Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: starbridge-v2 -> target
+          key: starbridge-v2-macos-${{ matrix.arch }}
+
+      # Reconstruct the local plonky3-recursion fork checkout the standalone
+      # workspace [patch]es at `../../plonky3-recursion` (a sibling of the repo
+      # root). GREEN OR BUST: if FORK_REF lacks the NativeBatchStark commit, this
+      # fails loudly with the precondition note — no silent fallback.
+      - name: Reconstruct the plonky3-recursion fork checkout
+        run: |
+          set -euo pipefail
+          DEST="$(cd "$GITHUB_WORKSPACE/.." && pwd)/plonky3-recursion"
+          if [ -d "$DEST/.git" ]; then
+            echo "fork checkout already present at $DEST"
+          else
+            echo "cloning $FORK_REPO @ $FORK_REF -> $DEST"
+            git clone --no-tags "$FORK_REPO" "$DEST"
+            git -C "$DEST" checkout "$FORK_REF"
+          fi
+          if ! grep -Rq "NativeBatchStark" "$DEST/recursion/src" 2>/dev/null; then
+            echo "::error::plonky3-recursion @ $FORK_REF does NOT carry RecursionInput::NativeBatchStark."
+            echo "::error::The embedded circuit needs it. Push the fork WIP branch and set FORK_REF (see this workflow's FIRST-RUN PRECONDITION header)."
+            exit 1
+          fi
+          echo "fork checkout OK ($(git -C "$DEST" rev-parse --short HEAD), carries NativeBatchStark)"
+
+      # The verified Lean archive (dregg-lean-ffi/libdregg_lean.a) is linked by
+      # the embedded executor (native-full). It is NOT prebuilt on the runner —
+      # the repo's `scripts/bootstrap.sh` is the blessed "fresh clone → working
+      # verified-executor build" entry point: it reconstructs the mathlib path
+      # dep, `lake build`s Dregg2.Exec.FFI, and SEEDS the archive
+      # (dregg-lean-ffi/scripts/seed-dregg2-closure.sh). bootstrap.sh requires the
+      # mathlib checkout at the lakefile's pinned local path FIRST, so we
+      # reconstruct it exactly as ci.yml's `metatheory-no-sorry` job does (pinned
+      # rev + `lake exe cache get` for the prebuilt mathlib oleans), then run
+      # bootstrap. HEAVY (first run compiles the Lean closure); cache the result.
+      - name: Cache libdregg_lean.a + Lean build (.lake)
+        id: lean-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dregg-lean-ffi/libdregg_lean.a
+            metatheory/.lake/build
+          # arch IS in the key: libdregg_lean.a is an arch-native Mach-O archive,
+          # so the arm64 and x86_64 caches MUST NOT collide (runner.os is "macOS"
+          # for both runners).
+          key: libdregg-lean-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('metatheory/lean-toolchain', 'metatheory/lakefile.toml') }}-${{ hashFiles('metatheory/Dregg2/**/*.lean', 'metatheory/Metatheory/**/*.lean') }}
+
+      - name: Install elan (Lean toolchain manager)
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          bash elan-init.sh -y --default-toolchain "$(cat metatheory/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Reconstruct the pinned mathlib path dependency
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # metatheory/lakefile.toml pins mathlib as a LOCAL PATH dep; bootstrap.sh
+          # reads that path. Recreate it at the pinned rev + pull the prebuilt cache.
+          MATHLIB_REL="$(sed -n 's/^path = "\(.*\)"/\1/p' metatheory/lakefile.toml | head -1)"
+          MATHLIB_REV="$(grep -oE '[0-9a-f]{40}' metatheory/lakefile.toml | head -1)"
+          MATHLIB_DIR="$(cd metatheory && pwd)/$MATHLIB_REL"
+          mkdir -p "$(dirname "$MATHLIB_DIR")"
+          git clone https://github.com/leanprover-community/mathlib4 "$MATHLIB_DIR"
+          git -C "$MATHLIB_DIR" checkout "$MATHLIB_REV"
+          ( cd "$MATHLIB_DIR" && "$HOME/.elan/bin/lake" exe cache get )
+
+      - name: bootstrap.sh — build + seed libdregg_lean.a
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: bash scripts/bootstrap.sh
+
+      - name: Assert libdregg_lean.a present
+        run: |
+          test -f dregg-lean-ffi/libdregg_lean.a || {
+            echo "::error::dregg-lean-ffi/libdregg_lean.a missing; the native-full (embedded-executor) link cannot succeed.";
+            exit 1;
+          }
+          ls -la dregg-lean-ffi/libdregg_lean.a
+
+      - name: Install Metal Toolchain (best-effort; runtime_shaders covers absence)
+        run: |
+          # gpui-ui enables `runtime_shaders`, so shaders compile at RUNTIME via
+          # Metal.framework — the offline Metal Toolchain is NOT required to BUILD.
+          # We still try to fetch it so a future build-time-shader path also works;
+          # a failure here is fine BECAUSE runtime_shaders makes it non-load-bearing.
+          xcodebuild -downloadComponent MetalToolchain 2>/dev/null || \
+            echo "Metal Toolchain unavailable; runtime_shaders path is used (see docs/STARBRIDGE-V2.md §Window)."
+
+      # Each runner is its OWN native arch, so the default host target IS
+      # matrix.target — no `--target` cross-compile (which would mismatch the
+      # arch-native libdregg_lean.a). Assert the produced Mach-O arch to catch a
+      # runner/target drift loudly.
+      - name: Build native-full (--release)
+        working-directory: starbridge-v2
+        run: cargo build --release   # default features == native-full (embedded + gpui)
+
+      - name: Assert the binary is the expected arch
+        working-directory: starbridge-v2
+        run: |
+          set -euo pipefail
+          BIN=target/release/starbridge-v2
+          test -x "$BIN"
+          GOT="$(lipo -archs "$BIN")"
+          echo "built arch(s): $GOT (expected ${{ matrix.arch }})"
+          case "${{ matrix.arch }}" in
+            arm64)  echo "$GOT" | grep -qw arm64  || { echo "::error::expected arm64 Mach-O, got '$GOT'"; exit 1; } ;;
+            x86_64) echo "$GOT" | grep -qw x86_64 || { echo "::error::expected x86_64 Mach-O, got '$GOT'"; exit 1; } ;;
+          esac
+
+      - name: Headless self-check (the embedded executor boots + killer demo)
+        working-directory: starbridge-v2
+        # `--headless` boots the live image, runs the four-surface killer demo,
+        # and EXITS NON-ZERO on a headline-contract regression. No display needed.
+        # Each runner runs its OWN native arch, so this exercises both binaries.
+        run: ./target/release/starbridge-v2 --headless
+
+      # Package THIS arch's single-arch binary into its own .app/.dmg/.tar.gz,
+      # named by arch (`...-arm64.dmg` / `...-x86_64.dmg`) so a user downloads
+      # exactly the one they need. NO `lipo -create`, NO universal artifact: the
+      # binary stays the single arch the assertion above verified.
+      - name: Package per-arch .app + .dmg + .tar.gz
+        working-directory: starbridge-v2
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.arch }}"
+          BIN=target/release/starbridge-v2
+          test -x "$BIN"
+          mkdir -p dist
+          APP="Starbridge v2.app"
+          rm -rf "dist/$APP" && mkdir -p "dist/$APP/Contents/MacOS" "dist/$APP/Contents/Resources"
+          cp "$BIN" "dist/$APP/Contents/MacOS/starbridge-v2"
+          # Re-assert the packaged binary is single-arch (exactly this arch, not fat).
+          PKG_ARCHS="$(lipo -archs "dist/$APP/Contents/MacOS/starbridge-v2")"
+          echo "packaged arch(s): $PKG_ARCHS (expected exactly: $ARCH)"
+          test "$PKG_ARCHS" = "$ARCH" || { echo "::error::packaged binary is not single-arch $ARCH (got '$PKG_ARCHS')"; exit 1; }
+          cat > "dist/$APP/Contents/Info.plist" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Starbridge v2</string>
+            <key>CFBundleDisplayName</key><string>Starbridge v2</string>
+            <key>CFBundleIdentifier</key><string>dev.dregg.starbridge-v2</string>
+            <key>CFBundleVersion</key><string>0.1.0</string>
+            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleExecutable</key><string>starbridge-v2</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>LSMinimumSystemVersion</key><string>13.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+          # Ad-hoc sign so the .app launches without "damaged" Gatekeeper refusal
+          # (unsigned/no-notarization is acceptable per the brief; ad-hoc is the
+          # minimum that lets a local user open it).
+          codesign --force --deep --sign - "dist/$APP" || \
+            echo "ad-hoc codesign unavailable; shipping unsigned .app (user may need to allow it in System Settings)."
+          # .dmg via hdiutil (always present on macOS runners), named by arch.
+          hdiutil create -volname "Starbridge v2" -srcfolder "dist/$APP" \
+            -ov -format UDZO "dist/starbridge-v2-macos-$ARCH.dmg"
+          # Raw single-arch binary tarball, named by arch.
+          tar -C target/release -czf "dist/starbridge-v2-macos-$ARCH.tar.gz" starbridge-v2
+          ls -la dist
+
+      - name: Upload macOS ${{ matrix.arch }} installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: starbridge-v2-macos-${{ matrix.arch }}
+          path: |
+            starbridge-v2/dist/*.dmg
+            starbridge-v2/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to release (starbridge-v* tag)
+        if: startsWith(github.ref, 'refs/tags/starbridge-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            starbridge-v2/dist/*.dmg
+            starbridge-v2/dist/*.tar.gz
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Linux (x86_64) — AppImage + .tar.gz ────────────────────────────────────
+  linux:
+    name: Linux installer (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # gpui's native deps on Linux: the windowing/font/vulkan/wayland/x11 stack
+      # (the subset of zed's script/linux that gpui itself needs). build-essential
+      # + cmake + clang/lld cover the C build of gpui's transitive native crates.
+      - name: Install gpui system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake clang lld llvm pkg-config \
+            libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev \
+            libgl1-mesa-dev libvulkan1 libvulkan-dev mesa-vulkan-drivers \
+            libssl-dev libdbus-1-dev \
+            wget file fuse libfuse2 patchelf desktop-file-utils \
+            zstd
+
+      - name: Install rolling Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      # dregg-node lives in the REPO-ROOT workspace, which pins nightly-2026-01-01
+      # (rust-toolchain.toml). Install it explicitly so the node build resolves a
+      # present toolchain (rustup would auto-install on demand, but this fails fast
+      # and pre-warms it before the heavy Lean-linked node compile).
+      - name: Install repo-root pinned nightly (for dregg-node)
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml | head -1)" --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: starbridge-v2 -> target
+          key: starbridge-v2-linux
+
+      - name: Reconstruct the plonky3-recursion fork checkout
+        run: |
+          set -euo pipefail
+          DEST="$(cd "$GITHUB_WORKSPACE/.." && pwd)/plonky3-recursion"
+          if [ -d "$DEST/.git" ]; then
+            echo "fork checkout already present at $DEST"
+          else
+            echo "cloning $FORK_REPO @ $FORK_REF -> $DEST"
+            git clone --no-tags "$FORK_REPO" "$DEST"
+            git -C "$DEST" checkout "$FORK_REF"
+          fi
+          if ! grep -Rq "NativeBatchStark" "$DEST/recursion/src" 2>/dev/null; then
+            echo "::error::plonky3-recursion @ $FORK_REF does NOT carry RecursionInput::NativeBatchStark."
+            echo "::error::Push the fork WIP branch and set FORK_REF (see this workflow's FIRST-RUN PRECONDITION header)."
+            exit 1
+          fi
+          echo "fork checkout OK ($(git -C "$DEST" rev-parse --short HEAD))"
+
+      # Build + seed dregg-lean-ffi/libdregg_lean.a via the repo's blessed
+      # bootstrap.sh (same as the macOS job — see its comment for the rationale).
+      - name: Cache libdregg_lean.a + Lean build (.lake)
+        id: lean-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            dregg-lean-ffi/libdregg_lean.a
+            metatheory/.lake/build
+          key: libdregg-lean-${{ runner.os }}-${{ hashFiles('metatheory/lean-toolchain', 'metatheory/lakefile.toml') }}-${{ hashFiles('metatheory/Dregg2/**/*.lean', 'metatheory/Metatheory/**/*.lean') }}
+
+      - name: Install elan (Lean toolchain manager)
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o elan-init.sh
+          bash elan-init.sh -y --default-toolchain "$(cat metatheory/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Reconstruct the pinned mathlib path dependency
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          MATHLIB_REL="$(sed -n 's/^path = "\(.*\)"/\1/p' metatheory/lakefile.toml | head -1)"
+          MATHLIB_REV="$(grep -oE '[0-9a-f]{40}' metatheory/lakefile.toml | head -1)"
+          MATHLIB_DIR="$(cd metatheory && pwd)/$MATHLIB_REL"
+          mkdir -p "$(dirname "$MATHLIB_DIR")"
+          git clone https://github.com/leanprover-community/mathlib4 "$MATHLIB_DIR"
+          git -C "$MATHLIB_DIR" checkout "$MATHLIB_REV"
+          ( cd "$MATHLIB_DIR" && "$HOME/.elan/bin/lake" exe cache get )
+
+      - name: bootstrap.sh — build + seed libdregg_lean.a
+        if: steps.lean-cache.outputs.cache-hit != 'true'
+        run: bash scripts/bootstrap.sh
+
+      - name: Assert libdregg_lean.a present
+        run: |
+          test -f dregg-lean-ffi/libdregg_lean.a || {
+            echo "::error::dregg-lean-ffi/libdregg_lean.a missing; the native-full (embedded-executor) link cannot succeed.";
+            exit 1;
+          }
+          ls -la dregg-lean-ffi/libdregg_lean.a
+
+      - name: Build native-full (--release)
+        working-directory: starbridge-v2
+        run: cargo build --release
+
+      # Build the LOCAL NODE too, so one AppImage = cockpit + a node you can
+      # `init` + `run` and `--node`-attach the cockpit to. `dregg-node` lives in
+      # the REPO-ROOT workspace (NOT starbridge-v2's standalone workspace) and
+      # links the same verified Lean archive (libdregg_lean.a, seeded above). Its
+      # toolchain is directory-scoped: building from the repo root resolves the
+      # root `rust-toolchain.toml` (nightly-2026-01-01), which rustup auto-installs
+      # on first use — distinct from starbridge-v2's rolling-nightly pin.
+      - name: Build dregg-node (--release)
+        run: cargo build --release -p dregg-node
+
+      - name: Assert dregg-node present
+        run: |
+          test -x target/release/dregg-node || {
+            echo "::error::target/release/dregg-node missing; the AppImage cannot bundle the node.";
+            exit 1;
+          }
+          ls -la target/release/dregg-node
+
+      - name: Headless self-check (embedded executor + killer demo)
+        working-directory: starbridge-v2
+        run: ./target/release/starbridge-v2 --headless
+
+      # THE SELF-DESCRIBING VESSEL — assemble the dregg SOURCE PAYLOAD (the
+      # Rust/Lean/docs that DEFINE the system, NO build artifacts) into
+      # `dregg-src.tar.zst`, which the AppImage carries at usr/share/dregg-src/ so
+      # an agent inside deos (the embedded Hermes / the cockpit's SourceVessel) can
+      # READ the system it is trapped within. See docs/deos/SELF-DESCRIBING-VESSEL.md.
+      - name: Pack the dregg source payload (self-describing vessel)
+        run: |
+          set -euo pipefail
+          # Pack to a staging path OUTSIDE starbridge-v2/dist (the packaging step
+          # does `rm -rf dist`); the packaging step copies it into AppDir from here.
+          bash scripts/pack-dregg-src.sh "$GITHUB_WORKSPACE/dregg-src-payload/dregg-src.tar.zst"
+          ls -la "$GITHUB_WORKSPACE/dregg-src-payload/"
+
+      - name: Package AppImage + .tar.gz
+        working-directory: starbridge-v2
+        run: |
+          set -euo pipefail
+          COCKPIT=target/release/starbridge-v2
+          NODE="$GITHUB_WORKSPACE/target/release/dregg-node"
+          ICON="$GITHUB_WORKSPACE/assets/starbridge-v2.png"
+          test -x "$COCKPIT"
+          test -x "$NODE"
+          test -f "$ICON"
+          rm -rf AppDir dist && mkdir -p AppDir/usr/bin AppDir/usr/share/icons/hicolor/256x256/apps dist
+
+          # BOTH binaries — one download = cockpit + a local node. The cockpit is
+          # the default surface; the node can be init'd + run from the SAME image
+          # (see AppRun + the deos-node launcher below).
+          cp "$COCKPIT" AppDir/usr/bin/starbridge-v2
+          cp "$NODE"    AppDir/usr/bin/dregg-node
+
+          # THE SOURCE PAYLOAD — the self-describing vessel's carrier. The image
+          # carries the dregg source (the Rust/Lean/docs that DEFINE the system) at
+          # usr/share/dregg-src/ so a running agent/cockpit's SourceVessel finds it
+          # via the executable-relative search (AppDir/usr/bin → ../share/dregg-src).
+          SRC_PAYLOAD="$GITHUB_WORKSPACE/dregg-src-payload/dregg-src.tar.zst"
+          test -f "$SRC_PAYLOAD" || { echo "::error::source payload missing; the vessel cannot be bundled"; exit 1; }
+          mkdir -p AppDir/usr/share/dregg-src
+          cp "$SRC_PAYLOAD" AppDir/usr/share/dregg-src/dregg-src.tar.zst
+
+          # A real icon (256x256, committed at assets/starbridge-v2.png) — not a
+          # 1x1 stub. linuxdeploy reads top-level AppDir/<name>.png AND the hicolor
+          # theme path; provide both so desktop integration is clean.
+          cp "$ICON" AppDir/starbridge-v2.png
+          cp "$ICON" AppDir/usr/share/icons/hicolor/256x256/apps/starbridge-v2.png
+
+          cat > AppDir/starbridge-v2.desktop <<'DESK'
+          [Desktop Entry]
+          Type=Application
+          Name=Starbridge v2
+          Comment=The dregg master interface — a live verified ocap world (bundles a local dregg-node)
+          Exec=starbridge-v2
+          Icon=starbridge-v2
+          Categories=Development;
+          Terminal=false
+          DESK
+
+          # AppRun dispatcher: default = cockpit. Run the bundled node instead via
+          # either  ./*.AppImage --run-node <args>  or  ARGV0=deos-node (symlink).
+          # Everything after --run-node (or all args under the deos-node name) is
+          # passed straight through to `dregg-node` (init / run / status / …).
+          # NOTE the dispatcher token is `--run-node`, NOT `--node`: the cockpit
+          # uses `--node <url>` itself (attach to a REMOTE node), so that flag must
+          # pass through to starbridge-v2 untouched.
+          cat > AppDir/AppRun <<'RUN'
+          #!/bin/sh
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export PATH="$HERE/usr/bin:$PATH"
+          export LD_LIBRARY_PATH="$HERE/usr/lib:${LD_LIBRARY_PATH:-}"
+          # Node entrypoint via a deos-node argv0 (symlink) or a leading --run-node flag.
+          case "${ARGV0:-$(basename "$0")}" in
+            deos-node|dregg-node) exec "$HERE/usr/bin/dregg-node" "$@" ;;
+          esac
+          if [ "${1:-}" = "--run-node" ]; then
+            shift
+            exec "$HERE/usr/bin/dregg-node" "$@"
+          fi
+          exec "$HERE/usr/bin/starbridge-v2" "$@"
+          RUN
+          chmod +x AppDir/AppRun
+          # deos-node convenience launcher inside the image (argv0 → node path).
+          ln -sf AppRun AppDir/deos-node
+
+          # linuxdeploy bundles the transitive NON-glibc native deps the gpui stack
+          # pulls (libxkbcommon / libwayland-client / libfontconfig / libfreetype),
+          # widening glibc reach back toward ~Ubuntu 18.04. GPU/Vulkan drivers are
+          # deliberately NOT bundled — those are host-provided (an AppImage cannot
+          # ship kernel/driver userspace); the host needs a working Vulkan loader.
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage -O linuxdeploy
+          chmod +x linuxdeploy
+          # FUSE is flaky on CI runners; extract-and-run sidesteps it for BOTH tools.
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./linuxdeploy \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/starbridge-v2 \
+            --executable AppDir/usr/bin/dregg-node \
+            --desktop-file AppDir/starbridge-v2.desktop \
+            --icon-file AppDir/starbridge-v2.png \
+            --output appimage
+          # linuxdeploy emits Starbridge_v2-x86_64.AppImage in CWD; normalize the name.
+          mv ./*-x86_64.AppImage dist/starbridge-v2-linux-x86_64.AppImage
+
+          # .tar.gz carries BOTH binaries too (cockpit + node). Stage them into one
+          # dir so a single archive holds both (you can't append to a gzip'd tar).
+          STAGE="$(mktemp -d)"
+          cp target/release/starbridge-v2 "$STAGE/"
+          cp "$GITHUB_WORKSPACE/target/release/dregg-node" "$STAGE/"
+          tar -C "$STAGE" -czf dist/starbridge-v2-linux-x86_64.tar.gz starbridge-v2 dregg-node
+          rm -rf "$STAGE"
+          ls -la dist
+          # Smoke: the AppImage must contain BOTH binaries.
+          ./dist/starbridge-v2-linux-x86_64.AppImage --appimage-extract >/dev/null 2>&1 || true
+          test -x squashfs-root/usr/bin/starbridge-v2
+          test -x squashfs-root/usr/bin/dregg-node
+          echo "AppImage contains BOTH binaries: starbridge-v2 + dregg-node"
+          # Smoke: the AppImage carries the SOURCE PAYLOAD (the self-describing
+          # vessel's carrier) at usr/share/dregg-src/, and it holds the real source.
+          test -f squashfs-root/usr/share/dregg-src/dregg-src.tar.zst
+          zstd -dc squashfs-root/usr/share/dregg-src/dregg-src.tar.zst \
+            | tar -tf - dregg-src/metatheory/CONSTRUCTIVE-KNOWLEDGE.md >/dev/null
+          echo "AppImage carries the dregg source payload (self-describing vessel): \
+            usr/share/dregg-src/dregg-src.tar.zst, incl. metatheory/CONSTRUCTIVE-KNOWLEDGE.md"
+
+      - name: Upload Linux installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: starbridge-v2-linux-x86_64
+          path: |
+            starbridge-v2/dist/*.AppImage
+            starbridge-v2/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach to release (starbridge-v* tag)
+        if: startsWith(github.ref, 'refs/tags/starbridge-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            starbridge-v2/dist/*.AppImage
+            starbridge-v2/dist/*.tar.gz
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Windows — intentionally NOT built (honest skip; one HARD blocker) ───────
+  # Windows is NOT packaged, and that is a deliberate, honest decision rather than
+  # a faked artifact. The native-full (default) build CANNOT compile-and-link on
+  # Windows today. The decisive, code-level blocker:
+  #
+  #   THE LEAN ARCHIVE HARD-SKIPS WINDOWS (the load-bearing one). The default
+  #   `native-full` build pulls `embedded-executor`, which links the REAL verified
+  #   executor against `dregg-lean-ffi/libdregg_lean.a`. That archive is a
+  #   HOST-NATIVE Mach-O/ELF archive of objects the Lean compiler emits, and
+  #   `dregg-lean-ffi/build.rs` explicitly returns early when
+  #   `CARGO_CFG_TARGET_OS == "windows"` (build.rs ~L1045, alongside wasm32/zkvm):
+  #   the archive members are the wrong object format for MSVC (COFF / link.exe)
+  #   and the unix binutils trio (nm/ar/leanc + -fPIC + libc++/gmp/uv) it splices
+  #   with is absent. On Windows the crate degrades to MARSHAL-ONLY stubs with
+  #   `lean_available() == false` — i.e. it does NOT embed the verified executor,
+  #   so a "native-full Windows installer" would not be the real verified cockpit.
+  #   There is no Windows `libdregg_lean.a` build path in this repo.
+  #
+  #   (Secondary, smaller:) gpui's Windows backend at the pinned zed rev
+  #   (gpui_platform @ 407a6ffd) is the least-exercised path, and `runtime_shaders`
+  #   — the load-bearing escape hatch the macOS build leans on — is a Metal concept
+  #   with no Windows analogue. This alone might be surmountable; the Lean archive
+  #   skip is not, without new build infrastructure.
+  #
+  # Faking a Windows installer would violate green-or-bust. THE PRECISE PATH TO
+  # ENABLE (both are required, in order):
+  #   1. Build a native Windows `libdregg_lean.a` (or `.lib`): `lake build`
+  #      Dregg2.Exec.FFI on a windows runner against an MSVC Lean toolchain, then
+  #      lift the `gate_os == "windows"` early-return in dregg-lean-ffi/build.rs
+  #      and teach its splice/link path the MSVC object/linker commands (ar→lib,
+  #      leanc→cl/link, the libc++/gmp/uv equivalents). This is a real chunk of
+  #      build work, NOT a flag flip.
+  #   2. Confirm gpui's windows backend compiles at the pinned rev under
+  #      `native-full` features (no runtime_shaders dependency on Windows).
+  # Once BOTH hold, add a `windows-latest` job mirroring the macos/linux jobs
+  # (reconstruct the plonky3 fork, build the Windows Lean archive, build
+  # native-full --release, run the --headless smoke, package an .msi or .zip).
+  # Until then: documented skip, no artifact.
+  windows-skipped:
+    name: Windows installer (skipped — see comment)
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Windows installer intentionally skipped (honest gap)."
+          echo "HARD blocker: dregg-lean-ffi/build.rs hard-skips target_os=windows"
+          echo "  (~L1045: gate_os == \"windows\" early-return) — no Windows libdregg_lean.a,"
+          echo "  so native-full degrades to marshal-only stubs (lean_available()==false)"
+          echo "  and would NOT embed the real verified executor."
+          echo "Secondary: gpui windows backend untested at the pinned rev; no runtime_shaders analogue."
+          echo "See this workflow's 'Windows' comment block for the precise enable path."

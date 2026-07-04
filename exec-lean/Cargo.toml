@@ -1,0 +1,44 @@
+[package]
+name = "dregg-exec-lean"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The verified-Lean-FFI executor cluster — the shadow differential, the strict-veto gate, and the authoritative state producer (native-only; links libdregg_lean.a)"
+
+# NATIVE-ONLY. This crate links the verified Lean archive (`libdregg_lean.a`) via
+# `dregg-lean-ffi`; it is the crate a native node depends on to acquire the verified
+# shadow/gate executor. A wasm / no-FFI build simply does NOT depend on it (it composes
+# `dregg-turn` with the default `NoOpShadowObserver`) — that is the crate-boundary
+# replacement for the deleted `no-lean-link` feature.
+
+[dependencies]
+dregg-turn = { path = "../turn" }
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+dregg-cell = { path = "../cell" }
+dregg-cell-crypto = { path = "../cell-crypto" }
+dregg-types = { path = "../types" }
+# The verified-Lean gate impls for the distributed coordination crates (their `verified_gate` seams).
+# This is the single FFI boundary: these crates are FFI-free and route through their seams; the
+# Lean-backed impls live here and a native node installs them via `register_distributed_gates`.
+dregg-coord = { path = "../coord" }
+dregg-captp = { path = "../captp" }
+dregg-federation = { path = "../federation", default-features = false }
+dregg-intent = { path = "../intent" }
+blake3 = "1"
+postcard = { version = "1", features = ["alloc"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+# The shadow marshaller recomputes + verifies the executor's ed25519 signing message (the WHO leg).
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+
+[dev-dependencies]
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
+# The denotational-census differential names the full `dregg_circuit::effect_vm::Effect` universe.
+dregg-circuit = { path = "../circuit" }
+
+[lints]
+workspace = true

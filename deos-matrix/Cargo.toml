@@ -1,0 +1,173 @@
+[package]
+name = "deos-matrix"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native deos Matrix client core on matrix-rust-sdk: homeserver config, password login, encrypted sync, room list, room timeline — headless library + CLI, UI deferred to gpui."
+
+[lib]
+name = "deos_matrix"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deos-matrix-cli"
+path = "src/bin/cli.rs"
+
+# The deos-chat gpui demo: a window with a room-list sidebar, a timeline, and a
+# real gpui-component composer. Gated on `gui` so the headless library/CLI never
+# pulls the gpui graph. Falls back to a mock/recorded sync so the UI is real even
+# with no live homeserver.
+[[bin]]
+name = "deos-chat"
+path = "src/bin/chat.rs"
+required-features = ["gui"]
+
+[features]
+default = []
+# The gpui UI (deos-chat): pulls the SAME vendored gpui fork + gpui-component the
+# cockpit pins, so the chat surface drops into starbridge-v2's dock without a
+# second gpui linkage. Off by default — the protocol foundation + CLI stay lean.
+gui = [
+    "dep:gpui",
+    "dep:gpui_platform",
+    "dep:gpui-component",
+    "dep:gpui-component-assets",
+    # OFFSCREEN SCREENSHOT capture (`deos-chat --screenshot OUT.png`). Mirrors
+    # starbridge-v2's `render-capture` feature: gpui's `test-support` lights up
+    # `HeadlessAppContext` + the offscreen wgpu renderer (`current_headless_renderer`),
+    # `gpui_wgpu` supplies the `CosmicTextSystem` platform text system, and `image`
+    # re-encodes the captured RGBA frame to a PNG. Bundled INTO `gui` so the atlas
+    # can bake the chat UI headlessly with the same `--features gui` it already uses.
+    "gpui/test-support",
+    "gpui_platform/test-support",
+    "dep:gpui_wgpu",
+    "gpui_wgpu/test-support",
+    "dep:image",
+]
+# The CockpitSurface adapter (mounts the chat in starbridge-v2's dock). Inherent
+# methods here; the ~20-line forwarder ships ready-to-drop in starbridge-v2.
+cockpit-surface = ["gui"]
+
+# `live-matrix` — the ON-DISK, SQLite-persisted Matrix client (a real homeserver
+# login that survives a restart). OFF by default: the default native build uses
+# matrix-sdk's IN-MEMORY state + crypto store (`Client::builder().build()` with no
+# store seam), which is all the cockpit's seeded `MockSource` showcase needs and —
+# critically — pulls NO `matrix-sdk-sqlite` → `libsqlite3-sys`, so it does NOT
+# collide with Zed's `sqlez` `links="sqlite3"` when this crate sits in the
+# starbridge-v2 cockpit graph alongside `deos-zed-full`. Turn this on for a real
+# persisted client (and then do NOT also enable starbridge-v2's `zed-full` in the
+# same binary — the two-`links="sqlite3"` conflict returns, by design, only for
+# that exact combination). `matrix-sdk?/sqlite` re-enables the on-disk store on the
+# already-present native matrix-sdk dep; `client.rs`'s `sqlite_store` call is gated
+# on this feature, falling back to the in-memory builder when it is off.
+live-matrix = ["matrix-sdk/sqlite"]
+
+[dependencies]
+# The official Matrix client-server SDK — protocol + E2E encryption (vodozemac).
+# Default features already give us `e2e-encryption` + `sqlite` (persistent state
+# and crypto store). `sso-login` adds the local-HTTP SSO redirect flow (roadmap;
+# off by default to keep the dep tree minimal). `markdown` lets us send formatted
+# messages. We do NOT pull `matrix-sdk-ui` yet — the headless foundation only
+# needs the mid-level `matrix-sdk` Client/Room/Timeline-via-messages surface.
+#
+# matrix-sdk is per-TARGET (see the `[target.…]` tables below): NATIVE keeps the
+# default feature set (`e2e-encryption` + `sqlite` — the persistent SQLite state +
+# crypto store) plus `sso-login` (the local-HTTP redirect flow). WASM cannot use
+# either: `sqlite` pulls rusqlite (a C library, no wasm32 path) and `sso-login`
+# pulls `local-server` (axum — binds a native TCP socket). So the wasm32 build
+# uses `default-features = false` + `e2e-encryption` + `indexeddb` (the
+# browser-native IndexedDB state/crypto store that REPLACES sqlite) + `js` (the
+# wasm-bindgen `js-sys`/`web-sys` time + getrandom plumbing the SDK needs in a
+# browser). `markdown` is shared. This is matrix-sdk's documented wasm story:
+# the crate itself gates tokio (sync+macros only, no rt-multi-thread/mio) and
+# reqwest (rustls, no native TLS) under `cfg(target_family = "wasm")`.
+
+# MIME types for media sends (the content-type an image/file/audio/video upload
+# carries) and guessing one from a filename.
+mime = "0.3"
+mime_guess = "2"
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+url = "2"
+
+# --- gpui UI deps (gated on `gui`) -----------------------------------------
+# Same emberian/zed fork rev as starbridge-v2/Cargo.toml, deos-zed/Cargo.toml,
+# and gpui-component/Cargo.toml so the WHOLE graph resolves to ONE gpui — the
+# chat `Entity`/`Window` types are byte-identical to the cockpit's, so the
+# CockpitSurface adapter drops into starbridge-v2's dock without a second gpui
+# linkage. (See deos-zed/Cargo.toml for the rationale this mirrors.) These are
+# optional + only enabled by `gui` (a NATIVE-only feature) — kept in the shared
+# `[dependencies]` (above the per-target tables) so the TOML stays well-formed;
+# the wasm build never enables `gui`, so this graph is absent from wasm32.
+gpui = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+gpui_platform = { git = "https://github.com/emberian/zed", rev = "adb9026524", features = ["font-kit", "x11", "wayland", "runtime_shaders"], optional = true }
+gpui-component = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", default-features = false, optional = true }
+gpui-component-assets = { git = "https://github.com/emberian/gpui-component", rev = "498321a4", optional = true }
+
+# The wgpu renderer leaf, pulled DIRECTLY only for the offscreen screenshot bake
+# (the `CosmicTextSystem` platform text system + the surfaceless renderer behind
+# `current_headless_renderer`). Same fork rev as gpui above so cargo resolves ONE
+# gpui instance across the graph. Gated on `gui`; absent from the lean CLI build.
+gpui_wgpu = { git = "https://github.com/emberian/zed", rev = "adb9026524", optional = true }
+# Re-encodes the captured RGBA frame to a PNG. 0.25 matches gpui_wgpu's `image`
+# (one resolved version), exactly as starbridge-v2 pins it for its cockpit bake.
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+# --- NATIVE-ONLY deps -------------------------------------------------------
+# The native build owns its own multi-thread tokio runtime (the MatrixWorker's
+# OS thread + blocking_recv facade), the SQLite-backed client, the CLI surface
+# (clap/rpassword/directories), and the env-filter log subscriber.
+# `default-features = false` DROPS matrix-sdk's default `sqlite` store (and its
+# `matrix-sdk-sqlite` → `libsqlite3-sys` `links="sqlite3"`, which would collide
+# with Zed's `sqlez` in the starbridge-v2 cockpit graph). We re-name the rest of
+# the default set explicitly — `e2e-encryption` (vodozemac olm),
+# `automatic-room-key-forwarding` (matrix-sdk's `default` set is exactly
+# `e2e-encryption` + `automatic-room-key-forwarding` + `sqlite`; TLS rides
+# reqwest's own transitive default, not a matrix-sdk feature) — plus `markdown` +
+# `sso-login`. The state + crypto store falls back to matrix-sdk's IN-MEMORY store
+# (the builder with no store seam). `live-matrix` re-adds `sqlite` for a
+# disk-persisted client.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+matrix-sdk = { version = "0.18", default-features = false, features = ["e2e-encryption", "automatic-room-key-forwarding", "markdown", "sso-login"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive", "env"] }
+rpassword = "7"
+directories = "5"
+
+# --- WASM-ONLY deps (the in-browser path) -----------------------------------
+# matrix-sdk WITHOUT sqlite/sso-login: IndexedDB store + the `js` plumbing. tokio
+# drops rt-multi-thread (no mio/native sockets) — only the cooperative `sync` +
+# `macros` features survive, matching matrix-sdk's own wasm tokio pin. The async
+# model is `wasm-bindgen-futures::spawn_local` on the browser's single-threaded
+# event loop (the MatrixWorker's OS-thread bridge is `cfg(not(wasm32))` out).
+# `getrandom`'s `js` backend wires the CSPRNG to `crypto.getRandomValues` (the
+# crypto store + olm need it; without this the wasm build fails to find an RNG).
+[target.'cfg(target_family = "wasm")'.dependencies]
+matrix-sdk = { version = "0.18", default-features = false, features = ["e2e-encryption", "indexeddb", "js", "markdown"] }
+tokio = { version = "1", features = ["sync", "macros"], default-features = false }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+# TWO getrandom majors are in the wasm graph and BOTH need a browser RNG backend:
+#   * 0.2 (matrix-sdk-store-encryption, oauth2): the `js` feature selects the
+#     `crypto.getRandomValues` backend at compile time.
+#   * 0.3 (imbl → rand_core 0.9, transitively under matrix-sdk's `eyeball-im`):
+#     0.3 moved backend selection OUT of features — it needs BOTH the `wasm_js`
+#     feature AND the `--cfg getrandom_backend="wasm_js"` rustflag, which
+#     `.cargo/config.toml` sets for the wasm32 target. Without the 0.3 backend the
+#     build fails with "wasm32-unknown-unknown … not supported by default".
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+# wasm32 test runner: `wasm-bindgen-test` executes `#[wasm_bindgen_test]` cases in
+# a headless browser (or node) via `wasm-pack test`. This is how the wasm-shaped
+# ChatSource (MockSource + the membrane round-trip) is PROVEN to run in-browser,
+# the wasm analogue of the native `#[test]` suite in `src/source.rs`.
+[target.'cfg(target_family = "wasm")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
