@@ -1,8 +1,42 @@
 # The DECO Carrier — making the Stripe/zkTLS money-in crown light-client-live
 
-**Status: BUILT** (Option B, the recommended path) — the carrier's own layer is live and its
-tooth bites; the ONE deployed-descriptor emit rides the coordinated big-bang regen (by design,
-§2 finale — "it does not fire independently"). What landed:
+**Status: LIVE** (Option B, the recommended path) — the carrier is now EXERCISED on a real
+deployed-path turn (NON-VK), not merely built. The DECO deployed tooth
+(`circuit-prove/tests/deco_binding_deployed_tooth.rs`) folds an HONEST Stripe money-in mint
+through the deployed chain prover's Deco arm and the light client ACCEPTS; a FORGED payment
+identity is REJECTED (no root) — both poles run green through the REAL recursion
+(`prove_turn_chain_recursive` → `verify_turn_chain_recursive`, ~410s, 2/2). This is the
+non-vacuity witness that fiat money-in is ACTUALLY light-client-witnessed on a live turn.
+
+## ⚑ DECO-LIVE UPDATE (2026-07-05) — NON-VK, no descriptor regen
+
+The carrier went live by **riding the EXISTING committed pinned mint row** —
+`mintVmDescriptor2R24` (Lean `mintV3BridgeHash`) — which ALREADY publishes `param0` at PI 46 on
+the FIRST row (`DECO_PAYMENT_HASH_PI == BRIDGE_MINT_HASH_PI == 46`). A mint row publishes ONE
+mint-identity PI; the carrier is distinguished by the **witness/leaf** (`CarrierWitness::Deco` →
+the Poseidon2 DECO commitment leaf recomputes the felt), NOT by a distinct descriptor. So the
+separate `stripeMint`/`withPaymentHashPin` descriptor emit named below is **NOT required** for
+the carrier to be light-client-live — DECO shares bridge's committed pinned mint row. NO
+descriptor moved (drift PASS). Three producers + the tooth landed together (atomic):
+
+1. **Executor felt-attach** — `bridge/src/stripe_mirror.rs::VerifiedPayment` gains the
+   felt-domain `payment_hash: BabyBear`, computed by
+   `dregg_circuit::dsl::deco_payment::stripe_payment_hash_felt` over the `PaymentFacts` (the
+   ONE canonical encoder `stripe_payment_facts_felts`). The felt the executor writes = the felt
+   the producer pins at PI 46 = the felt the leaf recomputes (the anti-vacuity tie), all
+   decomposed through ONE encoder. ⚑ NOT the byte-domain BLAKE3 `payment_nullifier` (that stays
+   the consume-once double-mint key).
+2. **Producer** — `circuit/src/effect_vm/trace_rotated.rs::generate_rotated_stripe_mint_wide`
+   mints a Stripe money-in leg through the pinned `mintVmDescriptor2R24`
+   (`generate_rotated_bridge_mint_wide`, same descriptor/trace shape), filling `param0`/PI 46
+   with the felt payment identity. NON-VK (same descriptor as bridge).
+3. **Tooth** — `deco_binding_deployed_tooth.rs`: cheap teeth (PI-46 pin geometry · producer
+   publishes the felt identity · paymentIntentId linkage) run in normal CI; the two slow poles
+   (honest folds+LC-verifies · forged UNSAT) run green through the real deployed recursion.
+
+The below reads in the original "BUILT" tense as the as-built design rationale.
+
+**What landed (original build):**
 
 - **Step 1a — the felt anchor:** `dregg_circuit::dsl::deco_payment::deco_payment_hash_felt` =
   `hash_fact(hash_fact(amountCents, [currency, recipient]), [paymentIntentId])` + the byte-domain
