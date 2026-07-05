@@ -1,5 +1,45 @@
 # The coordinated VK epoch — scoped, reconciled against HEAD (2026-07-05)
 
+> **STATUS: EXECUTED (2026-07-05).** The VK batch — **G5 tags 18/19 in-AIR
+> satisfaction-descriptor emit** — landed. Phase 0 verdicts confirmed: **DECO is
+> NON-VK (Reading A)** — a Stripe `Effect::Mint` rides the already-emitted
+> `mintVmDescriptor2R24` PI-46 pin (col 68 = `PARAM_BASE(68)+param::MINT_HASH(0)`),
+> so no new descriptor row and DECO is OUT of the VK batch; its
+> producer/executor/fold-tooth is decoupled NON-VK follow-through (see below).
+> **G5 orphan confirmed** — `EmitDischargeVaultSat.lean` was a scratch runner
+> (not in lakefile, imported by nothing); the two descriptors were built +
+> `#assert_all_clean` (piCount 47) but unemitted. Wired into `EmitRotationV3.lean`
+> beside tag-17 + crown-imported into `Dregg2/Deos.lean`.
+> **GATES (all green):** regen scoped to +2 staged rows in
+> `rotation-v3-staged-registry.tsv` + the one `V3_STAGED_REGISTRY_FP` re-pin;
+> **drift PASS** (re-emit byte-identical); **`lake build Dregg2` green** (4254
+> jobs) with the apex `#assert_axioms lightclient_unfoolable_circuit_sound`
+> (ClosureFinal.lean:268) + `deployed_system_secure` (AssuranceCase.lean:942)
+> re-verified axiom-clean over the new registry; **G5 prove exercise 10/10 green**
+> (`circuit/tests/gentian_discharge_vault_prove.rs` — honest discharge+vault
+> prove-and-verify, all 6 forge arms refused; fixtures byte-identical to the
+> emitted registry rows); **cargo check** circuit/circuit-prove/turn/cell/sdk
+> green; **no carrier regression** (bridge deployed-tooth cheap arms green, old FP
+> unreferenced). The sound deployed-default flip stays GENTIAN-blocked and OUT, as
+> scoped.
+>
+> **NOT DONE (decoupled follow-through, precisely scoped — NOT part of the
+> coordinated regen since DECO is NON-VK):** the DECO on-wire *live* path —
+> (1) `generate_rotated_stripe_mint_wide` producer filling the mint row's
+> `param0`/PI-46 with `stripe_payment_hash_felt` + a Stripe-context dispatch that
+> routes a Stripe `Effect::Mint` through the PI-46-pinned `mintVmDescriptor2R24`
+> (plain `Effect::Mint` currently routes to `supplyMintVmDescriptor2R24` with NO
+> pin — `trace_rotated.rs:5030`; and `generate_rotated_effect_vm_trace` applies
+> the pin only for `Effect::BridgeMint` — `:617`); (2) executor felt-attach in
+> `bridge/src/stripe_mirror.rs` (compute + retain `stripe_payment_hash_felt` on
+> `VerifiedPayment`; today only the BLAKE3 `payment_nullifier` exists); (3) the
+> DECO deployed fold tooth (twin of `bridge_binding_deployed_tooth.rs`). These
+> MUST land atomically (executor felt → producer → dispatch → fold-live → real-
+> STARK tooth) or the felt is a dead shadow field; that is why they are held as
+> one cohesive lane rather than shipped half-built.
+
+
+
 **Grounded at** `/Users/ember/dev/breadstuffs` @ `db466dcd9` (the fresh post-squash
 baseline — history was big-banged; every file:line below is against the LIVE tree, not
 old SHAs). Tree is green (drift PASS, no-degraded PASS, core crates build).
