@@ -8,20 +8,20 @@ the dual STARK floor `[StarkComplete hash R]` + the named hash CR carrier, it co
 proof committing to `(pre, post)`. It carries the per-effect `descriptorComplete` as an OPAQUE hypothesis
 at ONE claimed effect. This module DISCHARGES that hypothesis — value-leg-UNCONDITIONALLY, for EVERY live
 effect tag — and composes the AUTHORITY dichotomy honestly, mirroring the soundness-side assembly
-(`Rfix`/`kstepAll` + `closedLogExtract_all_genuine`'s 36-way actionTag dispatch + the
+(`RfixBare`/`kstepAll` + `closedLogExtract_all_genuine`'s 36-way actionTag dispatch + the
 `lightclient_unfoolable_*_assembled` headlines) rung-for-rung in the converse direction.
 
 ## What is assembled (the dual of `ClosureFanoutGenuine`)
 
   1. **`CompletenessWitnesses` — the per-effect prover-floor bundle (`Type 1`).** The DUAL of
-     `ClosureReadouts`: where soundness bundles per-effect `Satisfied2 (Rfix e) ⟹ <e>Encode` decode-
+     `ClosureReadouts`: where soundness bundles per-effect `Satisfied2 (RfixBare e) ⟹ <e>Encode` decode-
      READOUTS, completeness bundles per-effect `buildWitness` prover floors — for each live effect, the
-     honest prover's CONSTRUCTION of a satisfying trace of `Rfix e` whose published commitment is the
+     honest prover's CONSTRUCTION of a satisfying trace of `RfixBare e` whose published commitment is the
      kernel's own `commitOf S pre post turn`. Every field is a NAMED realizable prover floor (the dual of
      `StarkSound`'s extraction — here a CONSTRUCTION), never an axiom, never `:= True`.
 
   2. **`descriptorComplete_all` — the `∀ e` VALUE-LEG discharge.** From the bundle, `∀ e,
-     descriptorComplete S hash (Rfix e) (kstepAll e)` — the apex's per-effect SATISFIABILITY obligation,
+     descriptorComplete S hash (RfixBare e) (kstepAll e)` — the apex's per-effect SATISFIABILITY obligation,
      ENUMERATED over the live tags. The 36-way `match e` mirrors `closedLogExtract_all_genuine`: each tag
      LOWERS the kernel step `kstepAll e = dispatchArm e` to its leaf `Spec` (`dispatchArm_<e>` — the
      `fullActionStep` arm IS the leaf spec definitionally) and DISPATCHES to its proven `<e>_descriptor
@@ -37,9 +37,9 @@ effect tag — and composes the AUTHORITY dichotomy honestly, mirroring the soun
      the value leg is `∀ e` unconditional; the authority leg is the dichotomy, covering every authorized
      turn through its OWN of the two disjuncts.
 
-  4. **`lightclient_complete_assembled` — THE COMPLETENESS HEADLINE.** The apex at `Rfix`/`kstepAll`/the
+  4. **`lightclient_complete_assembled` — THE COMPLETENESS HEADLINE.** The apex at `RfixBare`/`kstepAll`/the
      discharged `descriptorComplete_all`: a genuine kernel transition `kstepAll e pre post` (with
-     `AccountsWF` boundary kernels) ⟹ ∃ an accepting batch proof against `vkOfRegistry Rfix` committing to
+     `AccountsWF` boundary kernels) ⟹ ∃ an accepting batch proof against `vkOfRegistry RfixBare` committing to
      `(pre, post)`. The value-leg premise is GONE from the signature; what remains is the named realizable
      floors (`StarkComplete`, the `Poseidon2SpongeCR` hash carrier, the `CompletenessWitnesses` prover
      bundle) — the dual of the soundness `lightclient_unfoolable_*_assembled`'s carried floors.
@@ -78,7 +78,7 @@ import Dregg2.Circuit.CircuitSoundnessAssembled
 namespace Dregg2.Circuit.CircuitCompletenessAssembled
 
 open Dregg2.Circuit.CircuitSoundness
-open Dregg2.Circuit.CircuitSoundnessAssembled (Rfix kstepAll actionTagToPos transferDescr)
+open Dregg2.Circuit.CircuitSoundnessAssembled (Rfix RfixBare kstepAll actionTagToPos transferDescr)
 open Dregg2.Circuit.CircuitCompleteness (commitOf descriptorComplete stateDecode_construct
   lightclient_complete StarkComplete)
 open Dregg2.Circuit.CircuitCompletenessSatFloor (SatFloor descriptorComplete_of_satFloor)
@@ -277,16 +277,16 @@ theorem dispatchArm_spawn (pre post : RecChainedState)
 /-! ## §2 — `CompletenessWitnesses`: the per-effect UNIFORM `SatFloor` bundle (DUAL of `ClosureReadouts`).
 
 For each VALUE/RECORD/LIFECYCLE/SET-INSERT live effect, the realizable `SatFloor`-class prover floor: from
-the leaf kernel `Spec` the honest prover CONSTRUCTS a satisfying trace of `Rfix e` publishing the kernel's
+the leaf kernel `Spec` the honest prover CONSTRUCTS a satisfying trace of `RfixBare e` publishing the kernel's
 own `commitOf S pre post turn` — and NOTHING ELSE. The fat per-effect `<e>TraceProver`/`<e>RootProver`
 bundles (the trace rows, the boundary `CellState`s, the FIX-root insert data) are GONE: they were
 spec-DETERMINED (built by `<e>_rotatedEncodes_construct`, consumed only into an unused `_henc`), so the
-rung never needed them. Each field is now the SAME uniform shape — `Satisfied2 hash (Rfix e) … ∧
+rung never needed them. Each field is now the SAME uniform shape — `Satisfied2 hash (RfixBare e) … ∧
 publication` — the descriptor-AGNOSTIC StarkComplete-class realizability, the dual of the soundness
 `<e>TraceReadout` extraction (soundness READS a trace; completeness BUILDS one). This is the value-leg
 analog of the authority-leg slim `CapOpenTraceFloor`.
 
-Every field is at the SAME descriptor `Rfix e` (the value tags' `Rfix e = <e>V3` is `rfl`, the `Rfix_*`
+Every field is at the SAME descriptor `RfixBare e` (the value tags' `RfixBare e = <e>V3` is `rfl`, the `Rfix_*`
 identities); the dispatchers (§4) lower the kernel step to its leaf `Spec` and feed the slim field. -/
 
 /-- The per-effect slim `Satisfied2`-publication floor, uniform over effects — `SatFloor` specialized to a
@@ -295,7 +295,7 @@ carries; the realizability shape is identical across all 21.) -/
 structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
     (compressN : List ℤ → ℤ) : Type 1 where
   /-- transfer (tag 0) — at the DEPLOYED membership-teeth transfer descriptor
-  (`CarrierComposed.transferV3Membership` = `Rfix 0`, the v12 big-bang): the honest prover also
+  (`CarrierComposed.transferV3Membership` = `RfixBare 0`, the v12 big-bang): the honest prover also
   publishes the 4 rc TAIL PIs AND the two `(sender_leaf, authorized_root)` teeth PIs (50..51 —
   additive `.piBinding` pins over appended teeth columns, filled by the producer). -/
   bwTransfer : ∀ (pre post : RecChainedState) (tr : Turn) (a : AssetId) (turn : BoundaryTurn),
@@ -305,7 +305,7 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
         Dregg2.Circuit.Emit.CarrierComposed.transferV3Membership minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- burn (tag 4) — at the DEPLOYED rc-EMIT-wrapped burn descriptor (`withDfaRcPins burnV3`
-  = `Rfix 4`). -/
+  = `RfixBare 4`). -/
   bwBurn : ∀ (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.SupplyDestruction.BurnSpec pre actor cell a amt post →
@@ -317,7 +317,7 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
   /-- bridgeMint (tag 20) — at the DEPLOYED felt-mint-hash bridge descriptor
   (`mintV3BridgeHash = withMintHashPin (withSelectorGate selM.MINT mintV3)`, the live
   `mintVmDescriptor2R24` on selector `BRIDGE_MINT = 40` with the STEP-3 mint-hash pin at PI 46)
-  — `= Rfix 20`. An honest bridge-mint completeness witness publishes a trace satisfying it
+  — `= RfixBare 20`. An honest bridge-mint completeness witness publishes a trace satisfying it
   (active rows set `sel[BRIDGE_MINT]`, pads `sel[NOOP]`; the producer publishes the mint row's
   `param0` — the felt-domain mint identity — at the appended pin slot, `trace_rotated.rs`'s
   BridgeMint arm). The dedicated supply-mint (tag 3) is `bwSupplyMint`. -/
@@ -330,7 +330,7 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
           Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3BridgeHash) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- mint (tag 3) — the DEDICATED supply-mint (SUPPLY-MODEL.md Stage 2b). At the deployed
-  `supplyMintVmDescriptor2R24` (`withSelectorGate sel.MINT mintV3`, selector `MINT = 14`) — `= Rfix
+  `supplyMintVmDescriptor2R24` (`withSelectorGate sel.MINT mintV3`, selector `MINT = 14`) — `= RfixBare
   3`. Same `MintASpec` and same `mintV3` body as `bwMint`; only the selector the gate binds differs
   (the supply-mint's active rows set `sel[MINT]`, not `sel[BRIDGE_MINT]`). -/
   bwSupplyMint : ∀ (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
@@ -342,15 +342,15 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
           Dregg2.Circuit.Emit.EffectVmEmit.sel.MINT
           Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
-  /-- setField (tag 5) — GENERIC field name, at the live `Rfix 5` descriptor (the `setFieldDyn` rung). -/
+  /-- setField (tag 5) — GENERIC field name, at the live `RfixBare 5` descriptor (the `setFieldDyn` rung). -/
   bwSetFieldDyn : ∀ (pre post : RecChainedState) (actor cell : CellId) (f : FieldName) (v : ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateField.SetFieldSpec pre actor cell f v post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 5) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 5) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- incrementNonce (tag 7) — at the DEPLOYED rc-EMIT-wrapped descriptor (`withDfaRcPins
-  incNonceV3` = `Rfix 7`). -/
+  incNonceV3` = `RfixBare 7`). -/
   bwIncNonce : ∀ (pre post : RecChainedState) (actor cell : CellId) (n : ℤ) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateMonotone.IncrementNonceSpec pre actor cell n post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
@@ -363,96 +363,96 @@ structure CompletenessWitnesses (S : CommitSurface) (hash : List ℤ → ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateLog.EmitEventSpec pre actor cell topic data post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 6) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 6) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- pipelinedSend (tag 47) — LIVE descriptor. -/
   bwPipelinedSend : ∀ (pre post : RecChainedState) (actor : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.QueuePipelinedSend.PipelinedSendSpec pre actor post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 47) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 47) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- makeSovereign (tag 38). -/
   bwMakeSovereign : ∀ (pre post : RecChainedState) (actor cell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.SovereignCommitment.MakeSovereignSpec pre actor cell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 38) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 38) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- setPermissions (tag 8). -/
   bwSetPermissions : ∀ (pre post : RecChainedState) (actor cell : CellId) (p : ℤ) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStatePermissions.SetPermissionsSpec pre actor cell p post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 8) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 8) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- setVK (tag 9). -/
   bwSetVK : ∀ (pre post : RecChainedState) (actor cell : CellId) (vk : ℤ) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateVK.SetVKSpec pre actor cell vk post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 9) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 9) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- cellSeal (tag 52). -/
   bwCellSeal : ∀ (pre post : RecChainedState) (actor cell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellLifecycle.CellSealSpec pre actor cell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 52) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 52) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- cellUnseal (tag 53). -/
   bwCellUnseal : ∀ (pre post : RecChainedState) (actor cell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellLifecycle.CellUnsealSpec pre actor cell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 53) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 53) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- cellDestroy (tag 54). -/
   bwCellDestroy : ∀ (pre post : RecChainedState) (actor cell : CellId) (certHash : Nat)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellLifecycle.CellDestroySpec pre actor cell certHash post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 54) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 54) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- refusal (tag 39). -/
   bwRefusal : ∀ (pre post : RecChainedState) (actor cell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateAudit.RefusalSpec pre actor cell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 39) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 39) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- receiptArchive (tag 40) — the DEPLOYED lifecycle-move spec (`lifecycle := Archived`). -/
   bwReceiptArchive : ∀ (pre post : RecChainedState) (actor cell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.CellStateAudit.ReceiptArchiveLifecycleSpec pre actor cell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 40) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 40) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- noteSpend (tag 27). -/
   bwNoteSpend : ∀ (pre post : RecChainedState) (nf : Nat) (actor : CellId) (spendProof : Bool)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.NoteNullifier.NoteSpendSpec pre nf actor spendProof post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 27) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 27) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- noteCreate (tag 28). -/
   bwNoteCreate : ∀ (pre post : RecChainedState) (cm : Nat) (actor : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.NoteCommitment.NoteCreateASpec pre cm actor post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 28) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 28) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- createCell (tag 17). -/
   bwCreateCell : ∀ (pre post : RecChainedState) (actor newCell : CellId) (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.AccountGrowth.CreateCellSpec pre actor newCell post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 17) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 17) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
   /-- createCellFromFactory (tag 18). -/
   bwCreateCellFromFactory : ∀ (pre post : RecChainedState) (actor newCell : CellId) (vk : ℤ)
       (turn : BoundaryTurn),
     Dregg2.Circuit.Spec.FactoryCreation.CreateFromFactorySpec pre actor newCell vk post →
     ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-      Satisfied2 hash (Rfix 18) minit mfin maddrs t ∧
+      Satisfied2 hash (RfixBare 18) minit mfin maddrs t ∧
       tracePublishedCommit t = commitOf S pre post turn
 
 /-! ## §3 — `Rfix_<e>` value-tag descriptor identities (the cohort positions the re-key preserves).
 
-The Value rungs conclude `Satisfied2 hash <e>V3`; the apex needs `Satisfied2 hash (Rfix e)`. The re-key
-(`actionTagToPos`) lands each value tag at its cohort position, so `Rfix e = <e>V3` by `rfl`. -/
+The Value rungs conclude `Satisfied2 hash <e>V3`; the apex needs `Satisfied2 hash (RfixBare e)`. The re-key
+(`actionTagToPos`) lands each value tag at its cohort position, so `RfixBare e = <e>V3` by `rfl`. -/
 
-theorem Rfix_burn : Rfix 4 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+theorem Rfix_burn : RfixBare 4 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
     Dregg2.Circuit.RotatedKernelRefinementMintBurn.burnV3 := rfl
 -- mint (tag 3) routes to the DEDICATED `supplyMintVmDescriptor2R24` (the bare `mintV3` plus the
 -- appended `selectorGate sel.MINT = 14`, SUPPLY-MODEL.md Stage 2b — its OWN selector). bridgeMint
@@ -460,23 +460,23 @@ theorem Rfix_burn : Rfix 4 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaR
 -- (`mintV3BridgeHash = withMintHashPin (withSelectorGate selM.MINT = BRIDGE_MINT = 40)`).
 -- The descriptor BODY is identical (`mintV3`); only the appended selector operand + the additive
 -- mint-hash pin differ, so the two share every proven value/anti-ghost tooth (through the peel).
-theorem Rfix_mint : Rfix 3 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
+theorem Rfix_mint : RfixBare 3 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
     Dregg2.Circuit.Emit.EffectVmEmit.sel.MINT
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3 := rfl
-theorem Rfix_bridgeMint : Rfix 20 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+theorem Rfix_bridgeMint : RfixBare 20 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
     Dregg2.Circuit.Emit.EffectVmEmitRotationV3.mintV3BridgeHash := rfl
 
 /-! ## §4 — the per-effect VALUE-LEG dischargers (DUAL of `closedLogExtract_<e>_closed`).
 
-Each `descriptorComplete_<e> : descriptorComplete S hash (Rfix e) (kstepAll e)` now rides the UNIFORM slim
-floor: it ASSEMBLES a `SatFloor S hash (Rfix e) (kstepAll e)` from the bundle's slim `bw<e>` field
+Each `descriptorComplete_<e> : descriptorComplete S hash (RfixBare e) (kstepAll e)` now rides the UNIFORM slim
+floor: it ASSEMBLES a `SatFloor S hash (RfixBare e) (kstepAll e)` from the bundle's slim `bw<e>` field
 (`dispatchArm_<e>` LOWERS the kernel step to its leaf `Spec`, then the slim field supplies the satisfying
 trace + publication), and discharges `descriptorComplete` via `descriptorComplete_of_satFloor` (the decode
 is CONSTRUCTED, not carried). The fat `<e>_descriptorComplete` rungs over `<e>TraceProver`/`<e>RootProver`
 are NO LONGER on this path — the spec-determined prover data DISAPPEARED from the live apex (it survives
 only as the SEPARATE `<e>_descriptorComplete_genuine` teeth). For the VALUE-family tags pinned to a
-concrete `<e>V3` descriptor, `Rfix e = <e>V3` is `rfl` (the `Rfix_*` identities), so the slim field's
-`Satisfied2 hash <e>V3 …` IS `Satisfied2 hash (Rfix e) …` definitionally.
+concrete `<e>V3` descriptor, `RfixBare e = <e>V3` is `rfl` (the `Rfix_*` identities), so the slim field's
+`Satisfied2 hash <e>V3 …` IS `Satisfied2 hash (RfixBare e) …` definitionally.
 
 These are UNCONDITIONAL in authority: `descriptorComplete` is the value/state SATISFIABILITY (a kernel-valid
 step HAS a satisfying trace publishing the kernel's own commitment); the authority lives INSIDE `kstepAll e`
@@ -494,20 +494,21 @@ theorem descriptorComplete_transfer
     (bw : CompletenessWitnesses (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest)
       hash compressN) :
     descriptorComplete (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest)
-      hash (Rfix 0) (kstepAll 0) :=
-  descriptorComplete_of_satFloor _ hash (Rfix 0) (kstepAll 0) <| by
+      hash (RfixBare 0) (kstepAll 0) :=
+  descriptorComplete_of_satFloor _ hash (RfixBare 0) (kstepAll 0) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨tr, a, hspec⟩ := dispatchArm_transfer pre post hstep
-    -- v12 big-bang: route the goal to the deployed teeth-exposing member (`Rfix 0 =
-    -- transferV3Membership`), the descriptor `bwTransfer` publishes at.
-    rw [Dregg2.Circuit.CircuitSoundnessAssembled.Rfix_transfer]
+    -- v12 big-bang: route the goal to the deployed teeth-exposing member (`RfixBare 0 =
+    -- transferV3Membership`, unchanged by the flag-day — transfer rides the tail, not the welded
+    -- cohort), the descriptor `bwTransfer` publishes at.
+    rw [show RfixBare 0 = Dregg2.Circuit.Emit.CarrierComposed.transferV3Membership from rfl]
     exact bw.bwTransfer pre post tr a turn hspec
 
 /-- burn (tag 4). -/
 theorem descriptorComplete_burn (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 4) (kstepAll 4) :=
-  descriptorComplete_of_satFloor S hash (Rfix 4) (kstepAll 4) <| by
+    descriptorComplete S hash (RfixBare 4) (kstepAll 4) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 4) (kstepAll 4) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, a, amt, hspec⟩ := dispatchArm_burn pre post hstep
     rw [Rfix_burn]
@@ -516,8 +517,8 @@ theorem descriptorComplete_burn (S : CommitSurface) (hash : List ℤ → ℤ) (c
 /-- mint (tag 3). -/
 theorem descriptorComplete_mint (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 3) (kstepAll 3) :=
-  descriptorComplete_of_satFloor S hash (Rfix 3) (kstepAll 3) <| by
+    descriptorComplete S hash (RfixBare 3) (kstepAll 3) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 3) (kstepAll 3) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, a, amt, hspec⟩ := dispatchArm_mint pre post hstep
     rw [Rfix_mint]
@@ -526,18 +527,18 @@ theorem descriptorComplete_mint (S : CommitSurface) (hash : List ℤ → ℤ) (c
 /-- bridgeMint (tag 20) — shares the mint floor over the same `mintV3`. -/
 theorem descriptorComplete_bridgeMint (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 20) (kstepAll 20) :=
-  descriptorComplete_of_satFloor S hash (Rfix 20) (kstepAll 20) <| by
+    descriptorComplete S hash (RfixBare 20) (kstepAll 20) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 20) (kstepAll 20) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, a, amt, hspec⟩ := dispatchArm_bridgeMint pre post hstep
     rw [Rfix_bridgeMint]
     exact bw.bwMint pre post actor cell a amt turn hspec
 
-/-- setField (tag 5) — at `Rfix 5`, GENERIC field name. -/
+/-- setField (tag 5) — at `RfixBare 5`, GENERIC field name. -/
 theorem descriptorComplete_setField (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 5) (kstepAll 5) :=
-  descriptorComplete_of_satFloor S hash (Rfix 5) (kstepAll 5) <| by
+    descriptorComplete S hash (RfixBare 5) (kstepAll 5) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 5) (kstepAll 5) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, f, v, hspec⟩ := dispatchArm_setField pre post hstep
     exact bw.bwSetFieldDyn pre post actor cell f v turn hspec
@@ -545,19 +546,19 @@ theorem descriptorComplete_setField (S : CommitSurface) (hash : List ℤ → ℤ
 /-- incrementNonce (tag 7). -/
 theorem descriptorComplete_incrementNonce (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 7) (kstepAll 7) :=
-  descriptorComplete_of_satFloor S hash (Rfix 7) (kstepAll 7) <| by
+    descriptorComplete S hash (RfixBare 7) (kstepAll 7) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 7) (kstepAll 7) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, n, hspec⟩ := dispatchArm_incrementNonce pre post hstep
-    rw [show Rfix 7 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
+    rw [show RfixBare 7 = Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withDfaRcPins
       Dregg2.Circuit.RotatedKernelRefinementIncNonce.incNonceV3 from rfl]
     exact bw.bwIncNonce pre post actor cell n turn hspec
 
 /-- emitEvent (tag 6) — LIVE descriptor. -/
 theorem descriptorComplete_emitEvent (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 6) (kstepAll 6) :=
-  descriptorComplete_of_satFloor S hash (Rfix 6) (kstepAll 6) <| by
+    descriptorComplete S hash (RfixBare 6) (kstepAll 6) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 6) (kstepAll 6) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, topic, data, hspec⟩ := dispatchArm_emitEvent pre post hstep
     exact bw.bwEmitEvent pre post actor cell topic data turn hspec
@@ -565,8 +566,8 @@ theorem descriptorComplete_emitEvent (S : CommitSurface) (hash : List ℤ → �
 /-- pipelinedSend (tag 47) — LIVE descriptor. -/
 theorem descriptorComplete_pipelinedSend (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 47) (kstepAll 47) :=
-  descriptorComplete_of_satFloor S hash (Rfix 47) (kstepAll 47) <| by
+    descriptorComplete S hash (RfixBare 47) (kstepAll 47) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 47) (kstepAll 47) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, hspec⟩ := dispatchArm_pipelinedSend pre post hstep
     exact bw.bwPipelinedSend pre post actor turn hspec
@@ -574,8 +575,8 @@ theorem descriptorComplete_pipelinedSend (S : CommitSurface) (hash : List ℤ �
 /-- makeSovereign (tag 38). -/
 theorem descriptorComplete_makeSovereign (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 38) (kstepAll 38) :=
-  descriptorComplete_of_satFloor S hash (Rfix 38) (kstepAll 38) <| by
+    descriptorComplete S hash (RfixBare 38) (kstepAll 38) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 38) (kstepAll 38) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, hspec⟩ := dispatchArm_makeSovereign pre post hstep
     exact bw.bwMakeSovereign pre post actor cell turn hspec
@@ -583,8 +584,8 @@ theorem descriptorComplete_makeSovereign (S : CommitSurface) (hash : List ℤ �
 /-- setPermissions (tag 8). -/
 theorem descriptorComplete_setPermissions (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 8) (kstepAll 8) :=
-  descriptorComplete_of_satFloor S hash (Rfix 8) (kstepAll 8) <| by
+    descriptorComplete S hash (RfixBare 8) (kstepAll 8) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 8) (kstepAll 8) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, p, hspec⟩ := dispatchArm_setPermissions pre post hstep
     exact bw.bwSetPermissions pre post actor cell p turn hspec
@@ -592,8 +593,8 @@ theorem descriptorComplete_setPermissions (S : CommitSurface) (hash : List ℤ �
 /-- setVK (tag 9). -/
 theorem descriptorComplete_setVK (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 9) (kstepAll 9) :=
-  descriptorComplete_of_satFloor S hash (Rfix 9) (kstepAll 9) <| by
+    descriptorComplete S hash (RfixBare 9) (kstepAll 9) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 9) (kstepAll 9) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, vk, hspec⟩ := dispatchArm_setVK pre post hstep
     exact bw.bwSetVK pre post actor cell vk turn hspec
@@ -601,8 +602,8 @@ theorem descriptorComplete_setVK (S : CommitSurface) (hash : List ℤ → ℤ) (
 /-- cellSeal (tag 52). -/
 theorem descriptorComplete_cellSeal (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 52) (kstepAll 52) :=
-  descriptorComplete_of_satFloor S hash (Rfix 52) (kstepAll 52) <| by
+    descriptorComplete S hash (RfixBare 52) (kstepAll 52) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 52) (kstepAll 52) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, hspec⟩ := dispatchArm_cellSeal pre post hstep
     exact bw.bwCellSeal pre post actor cell turn hspec
@@ -610,8 +611,8 @@ theorem descriptorComplete_cellSeal (S : CommitSurface) (hash : List ℤ → ℤ
 /-- cellUnseal (tag 53). -/
 theorem descriptorComplete_cellUnseal (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 53) (kstepAll 53) :=
-  descriptorComplete_of_satFloor S hash (Rfix 53) (kstepAll 53) <| by
+    descriptorComplete S hash (RfixBare 53) (kstepAll 53) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 53) (kstepAll 53) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, hspec⟩ := dispatchArm_cellUnseal pre post hstep
     exact bw.bwCellUnseal pre post actor cell turn hspec
@@ -619,8 +620,8 @@ theorem descriptorComplete_cellUnseal (S : CommitSurface) (hash : List ℤ → �
 /-- cellDestroy (tag 54). -/
 theorem descriptorComplete_cellDestroy (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 54) (kstepAll 54) :=
-  descriptorComplete_of_satFloor S hash (Rfix 54) (kstepAll 54) <| by
+    descriptorComplete S hash (RfixBare 54) (kstepAll 54) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 54) (kstepAll 54) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, certHash, hspec⟩ := dispatchArm_cellDestroy pre post hstep
     exact bw.bwCellDestroy pre post actor cell certHash turn hspec
@@ -628,8 +629,8 @@ theorem descriptorComplete_cellDestroy (S : CommitSurface) (hash : List ℤ → 
 /-- refusal (tag 39). -/
 theorem descriptorComplete_refusal (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 39) (kstepAll 39) :=
-  descriptorComplete_of_satFloor S hash (Rfix 39) (kstepAll 39) <| by
+    descriptorComplete S hash (RfixBare 39) (kstepAll 39) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 39) (kstepAll 39) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, hspec⟩ := dispatchArm_refusal pre post hstep
     exact bw.bwRefusal pre post actor cell turn hspec
@@ -637,8 +638,8 @@ theorem descriptorComplete_refusal (S : CommitSurface) (hash : List ℤ → ℤ)
 /-- receiptArchive (tag 40). -/
 theorem descriptorComplete_receiptArchive (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 40) (kstepAll 40) :=
-  descriptorComplete_of_satFloor S hash (Rfix 40) (kstepAll 40) <| by
+    descriptorComplete S hash (RfixBare 40) (kstepAll 40) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 40) (kstepAll 40) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, cell, hspec⟩ := dispatchArm_receiptArchive pre post hstep
     exact bw.bwReceiptArchive pre post actor cell turn hspec
@@ -646,8 +647,8 @@ theorem descriptorComplete_receiptArchive (S : CommitSurface) (hash : List ℤ �
 /-- noteSpend (tag 27). -/
 theorem descriptorComplete_noteSpend (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 27) (kstepAll 27) :=
-  descriptorComplete_of_satFloor S hash (Rfix 27) (kstepAll 27) <| by
+    descriptorComplete S hash (RfixBare 27) (kstepAll 27) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 27) (kstepAll 27) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨nf, actor, spendProof, hspec⟩ := dispatchArm_noteSpend pre post hstep
     exact bw.bwNoteSpend pre post nf actor spendProof turn hspec
@@ -655,8 +656,8 @@ theorem descriptorComplete_noteSpend (S : CommitSurface) (hash : List ℤ → �
 /-- noteCreate (tag 28). -/
 theorem descriptorComplete_noteCreate (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 28) (kstepAll 28) :=
-  descriptorComplete_of_satFloor S hash (Rfix 28) (kstepAll 28) <| by
+    descriptorComplete S hash (RfixBare 28) (kstepAll 28) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 28) (kstepAll 28) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨cm, actor, hspec⟩ := dispatchArm_noteCreate pre post hstep
     exact bw.bwNoteCreate pre post cm actor turn hspec
@@ -664,8 +665,8 @@ theorem descriptorComplete_noteCreate (S : CommitSurface) (hash : List ℤ → �
 /-- createCell (tag 17). -/
 theorem descriptorComplete_createCell (S : CommitSurface) (hash : List ℤ → ℤ) (compressN : List ℤ → ℤ)
     (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 17) (kstepAll 17) :=
-  descriptorComplete_of_satFloor S hash (Rfix 17) (kstepAll 17) <| by
+    descriptorComplete S hash (RfixBare 17) (kstepAll 17) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 17) (kstepAll 17) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, newCell, hspec⟩ := dispatchArm_createCell pre post hstep
     exact bw.bwCreateCell pre post actor newCell turn hspec
@@ -673,8 +674,8 @@ theorem descriptorComplete_createCell (S : CommitSurface) (hash : List ℤ → �
 /-- createCellFromFactory (tag 18). -/
 theorem descriptorComplete_createCellFromFactory (S : CommitSurface) (hash : List ℤ → ℤ)
     (compressN : List ℤ → ℤ) (bw : CompletenessWitnesses S hash compressN) :
-    descriptorComplete S hash (Rfix 18) (kstepAll 18) :=
-  descriptorComplete_of_satFloor S hash (Rfix 18) (kstepAll 18) <| by
+    descriptorComplete S hash (RfixBare 18) (kstepAll 18) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 18) (kstepAll 18) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, newCell, vk, hspec⟩ := dispatchArm_createCellFromFactory pre post hstep
     exact bw.bwCreateCellFromFactory pre post actor newCell vk turn hspec
@@ -690,10 +691,10 @@ theorem descriptorComplete_spawn
     (buildWitness : ∀ (pre post : RecChainedState) (actor child target : CellId) (turn : BoundaryTurn),
       Dregg2.Circuit.Spec.AccountGrowth.SpawnFullSpec pre actor child target post →
       ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace),
-        Satisfied2 hash (Rfix 19) minit mfin maddrs t ∧
+        Satisfied2 hash (RfixBare 19) minit mfin maddrs t ∧
         tracePublishedCommit t = commitOf S pre post turn) :
-    descriptorComplete S hash (Rfix 19) (kstepAll 19) :=
-  descriptorComplete_of_satFloor S hash (Rfix 19) (kstepAll 19) <| by
+    descriptorComplete S hash (RfixBare 19) (kstepAll 19) :=
+  descriptorComplete_of_satFloor S hash (RfixBare 19) (kstepAll 19) <| by
     intro pre post turn hstep _hpreWF _hpostWF
     obtain ⟨actor, child, target, hspec⟩ := dispatchArm_spawn pre post hstep
     exact buildWitness pre post actor child target turn hspec
@@ -723,7 +724,7 @@ theorem authority_leg (caps : FacetCaps) (provided : AuthProvided) (effectBit : 
     authorizedFacetEffB caps provided effectBit tr = true :=
   authorityComplete_dichotomy caps provided effectBit tr h
 
-/-! ## §6 — `lightclient_complete_assembled`: THE COMPLETENESS HEADLINE at `Rfix`/`kstepAll`.
+/-! ## §6 — `lightclient_complete_assembled`: THE COMPLETENESS HEADLINE at `RfixBare`/`kstepAll`.
 
 The apex `lightclient_complete` consumes the per-effect satisfiability at EXACTLY the published effect. Each
 §4 discharger SUPPLIES that rung from the prover bundle, so the headline carries NO value-leg premise — only
@@ -735,24 +736,24 @@ its per-effect corollaries. -/
 
 /-- **`lightclient_complete_assembled` — THE COMPLETENESS HEADLINE (generic over the published effect).**
 From a genuine kernel transition `kstepAll e pre post` (with `AccountsWF` boundary kernels), the discharged
-per-effect satisfiability rung `descriptorComplete S hash (Rfix e) (kstepAll e)` (SUPPLIED by the matching
-§4 `descriptorComplete_<e>`), the dual STARK floor `[StarkComplete hash Rfix]`, and the named hash CR
-carrier, there EXIST public inputs `pi` and a batch proof `π` with `verifyBatch (vkOfRegistry Rfix) pi π =
+per-effect satisfiability rung `descriptorComplete S hash (RfixBare e) (kstepAll e)` (SUPPLIED by the matching
+§4 `descriptorComplete_<e>`), the dual STARK floor `[StarkComplete hash RfixBare]`, and the named hash CR
+carrier, there EXIST public inputs `pi` and a batch proof `π` with `verifyBatch (vkOfRegistry RfixBare) pi π =
 accept`, committing to `(pre, post)`. A VALID turn HAS an accepting proof — the dual of
 `lightclient_unfoolable_assembled`. The value-leg premise is DISCHARGED (the §4 rung), not opaque. -/
 theorem lightclient_complete_assembled
     (hash : List ℤ → ℤ) (S : CommitSurface)
-    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash Rfix]
+    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash RfixBare]
     (e : EffectIdx) (pre post : RecChainedState) (turn : BoundaryTurn)
-    (hcomplete : descriptorComplete S hash (Rfix e) (kstepAll e))
+    (hcomplete : descriptorComplete S hash (RfixBare e) (kstepAll e))
     (hstep : kstepAll e pre post)
     (hpreWF : AccountsWF pre.kernel) (hpostWF : AccountsWF post.kernel) :
     ∃ (pi : BatchPublicInputs) (π : BatchProof),
       pi.effect = e ∧
-      verifyBatch (vkOfRegistry Rfix) pi π = Verdict.accept ∧
+      verifyBatch (vkOfRegistry RfixBare) pi π = Verdict.accept ∧
       pi.pre = S.commit pre.kernel turn ∧
       pi.post = S.commit post.kernel turn :=
-  lightclient_complete hash S Rfix hCR kstepAll e pre post turn hcomplete hstep hpreWF hpostWF
+  lightclient_complete hash S RfixBare hCR kstepAll e pre post turn hcomplete hstep hpreWF hpostWF
 
 /-- **`lightclient_complete_transfer` — the transfer beachhead, value-leg DISCHARGED.** The headline at the
 transfer tag with the satisfiability premise supplied by `descriptorComplete_transfer` from the prover
@@ -765,7 +766,7 @@ theorem lightclient_complete_transfer
     {hCompressN : compressNInjective compressN} {hLeaf : cellLeafInjective CH}
     {hRest : RestHashIffFrame RH}
     (hash : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash Rfix]
+    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash RfixBare]
     (bw : CompletenessWitnesses (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest)
       hash compressN)
     (pre post : RecChainedState) (turn : BoundaryTurn)
@@ -773,7 +774,7 @@ theorem lightclient_complete_transfer
     (hpreWF : AccountsWF pre.kernel) (hpostWF : AccountsWF post.kernel) :
     ∃ (pi : BatchPublicInputs) (π : BatchProof),
       pi.effect = 0 ∧
-      verifyBatch (vkOfRegistry Rfix) pi π = Verdict.accept ∧
+      verifyBatch (vkOfRegistry RfixBare) pi π = Verdict.accept ∧
       pi.pre = (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest).commit
         pre.kernel turn ∧
       pi.post = (S_live CH RH cmb compress compressN hCmb hCompress hCompressN hLeaf hRest).commit
@@ -785,14 +786,14 @@ theorem lightclient_complete_transfer
 (any of the 21 §4 dischargers composes identically): a genuine burn kernel step HAS an accepting proof. -/
 theorem lightclient_complete_burn
     (hash : List ℤ → ℤ) (S : CommitSurface) (compressN : List ℤ → ℤ)
-    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash Rfix]
+    (hCR : Poseidon2SpongeCR hash) [StarkComplete hash RfixBare]
     (bw : CompletenessWitnesses S hash compressN)
     (pre post : RecChainedState) (turn : BoundaryTurn)
     (hstep : kstepAll 4 pre post)
     (hpreWF : AccountsWF pre.kernel) (hpostWF : AccountsWF post.kernel) :
     ∃ (pi : BatchPublicInputs) (π : BatchProof),
       pi.effect = 4 ∧
-      verifyBatch (vkOfRegistry Rfix) pi π = Verdict.accept ∧
+      verifyBatch (vkOfRegistry RfixBare) pi π = Verdict.accept ∧
       pi.pre = S.commit pre.kernel turn ∧
       pi.post = S.commit post.kernel turn :=
   lightclient_complete_assembled hash S hCR 4 pre post turn
@@ -821,24 +822,28 @@ conjunction, not a claim that one floor set suffices for both. -/
 SINGLE statement carrying BOTH arms as a conjunction, each under its OWN named floors (the honest
 asymmetry — NOT a single `⟺` pretending one floor set serves both):
 
-  * SOUND arm: from a verifying batch `(pi, π)` against `vkOfRegistry Rfix` + the soundness floors
-    (`[StarkSound]`, `Poseidon2SpongeCR`, `WitnessDecodes hash Rfix S pi`, the per-effect
-    `EffectDecodeBridge` decode-extraction family), there is a genuine kernel transition
-    `kstepAll pi.effect pre post` committing to `(pi.pre, pi.post)`.
+  * SOUND arm: from a verifying batch `(pi, π)` against `vkOfRegistry Rfix` (the DEPLOYED WELDED registry —
+    the flag-day cohort that REFUSES a capacity dodge) + the soundness floors (`[StarkSound]`,
+    `Poseidon2SpongeCR`, `WitnessDecodes hash Rfix S pi`, the per-effect `EffectDecodeBridge`
+    decode-extraction family), there is a genuine kernel transition `kstepAll pi.effect pre post` committing
+    to `(pi.pre, pi.post)`.
   * COMPLETE arm: from a genuine kernel transition `kstepAll e pre post` + the completeness floors
     (`[StarkComplete]`, `Poseidon2SpongeCR`, the discharged satisfiability rung `descriptorComplete S hash
-    (Rfix e) (kstepAll e)`), there is an accepting batch committing to `(pre, post)`.
+    (RfixBare e) (kstepAll e)`), there is an accepting batch committing to `(pre, post)`.
 
-The two arms quantify over the SAME registry `Rfix` and the SAME `kstepAll`, so they are genuinely the two
-directions of "verifyBatch-acceptable ⟺ kernel-valid". They are kept as a conjunction (not a fused `↔`)
-because the SOUND arm needs `WitnessDecodes` (surject roots onto kernels — the hard direction) while the
-COMPLETE arm needs only `stateDecode_construct` (the prover HOLDS the kernels); fusing them would hide that
-asymmetry. This IS the honest bidirectional. -/
+**The flag-day asymmetry (honest).** The SOUND arm is over the DEPLOYED WELDED `Rfix` (what a light client
+verifies — a declared-capacity dodge is UNSAT). The COMPLETE arm is over the honest-producer BARE
+`RfixBare`: the welded cohort member is DELIBERATELY unsat for a capacity-declaring cell, so its
+completeness is capacity-conditional; the honest producer for a capacity-declaring turn routes through the
+discharge/vault/escrow SATISFACTION descriptor, and for a capacity-FREE turn the bare trace (floor decodes
+to 0) satisfies the welded member too. The two arms are kept as a conjunction (not a fused `↔`) precisely
+because they range over the SOUND-side welded and COMPLETE-side bare cohorts — fusing them would HIDE the
+flag-day's intended one-way refusal. This IS the honest bidirectional. -/
 theorem verifyBatch_kernel_bidirectional
     (hash : List ℤ → ℤ) (S : CommitSurface)
-    (hCR : Poseidon2SpongeCR hash) [StarkSound hash Rfix] [StarkComplete hash Rfix]
+    (hCR : Poseidon2SpongeCR hash) [StarkSound hash Rfix] [StarkComplete hash RfixBare]
     (hbridge : ∀ e, CircuitSoundnessAssembled.EffectDecodeBridge S hash Rfix e) :
-    -- SOUND: verifyBatch accept ⟹ ∃ genuine kernel transition.
+    -- SOUND: verifyBatch accept ⟹ ∃ genuine kernel transition (over the DEPLOYED WELDED registry).
     (∀ (pi : BatchPublicInputs) (π : BatchProof),
         WitnessDecodes hash Rfix S pi →
         verifyBatch (vkOfRegistry Rfix) pi π = Verdict.accept →
@@ -850,11 +855,11 @@ theorem verifyBatch_kernel_bidirectional
     ∧
     -- COMPLETE: genuine kernel transition ⟹ ∃ verifyBatch accept.
     (∀ (e : EffectIdx) (pre post : RecChainedState) (turn : BoundaryTurn),
-        descriptorComplete S hash (Rfix e) (kstepAll e) →
+        descriptorComplete S hash (RfixBare e) (kstepAll e) →
         kstepAll e pre post → AccountsWF pre.kernel → AccountsWF post.kernel →
         ∃ (pi : BatchPublicInputs) (π : BatchProof),
           pi.effect = e ∧
-          verifyBatch (vkOfRegistry Rfix) pi π = Verdict.accept ∧
+          verifyBatch (vkOfRegistry RfixBare) pi π = Verdict.accept ∧
           pi.pre = S.commit pre.kernel turn ∧
           pi.post = S.commit post.kernel turn) :=
   ⟨fun pi π hwitdec hacc =>

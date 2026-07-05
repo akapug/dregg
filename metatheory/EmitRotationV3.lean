@@ -50,7 +50,7 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationR (rotationProbeVmDescriptorR2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
   (rotationCaveatLayoutManifest rotationCaveatProbeVmDescriptor2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (v3Registry)
-open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpen)
+open Dregg2.Circuit.Emit.CapOpenEmit (v3RegistryCapOpen v3RegistryCapOpenDep)
 
 def main : IO Unit := do
   IO.println s!"rotationLayoutManifest\t{rotationLayoutManifest}"
@@ -71,7 +71,11 @@ def main : IO Unit := do
   -- then the cap-open line `attenuateCapOpenVmDescriptor2R24` — byte-identical to the prior
   -- "loop v3Registry then emit capOpen" shape, now from ONE source of truth (the apex's `Rfix`
   -- re-keys over THIS list, so the wire and the committed registry coincide).
-  for (key, d) in v3RegistryCapOpen do
+  -- THE FLAG-DAY: emit the DEPLOYED WELDED cohort (`v3RegistryCapOpenDep` — the 36 cohort members
+  -- carry the capacity-floor refuse; the cap-open tail is identical). The apex's `Rfix` re-keys over
+  -- the SAME list (via `v3RegistryHeap = v3RegistryCapOpenDep ++ …`), so the committed VK bytes and
+  -- the soundness apex coincide on the refuse — the flip is REAL, not staged.
+  for (key, d) in v3RegistryCapOpenDep do
     IO.println s!"v3rot\t{key}\t{d.name}\t{emitVmJson2 d}"
   -- THE TURN-IDENTITY WELD (CapOpenTurnPins): the transfer cap-open PLUS the three turn-identity PI
   -- pins welding `capOpenCols.src`/`actor`/`dst` to published PIs (the in-circuit realization of
