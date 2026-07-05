@@ -1,5 +1,24 @@
 # WELD-STATE — the grounded carrier-deployment / universal-fold weld map
 
+> **⚑ TRUTH-PASS NOTE (2026-07-05, verified at post-squash HEAD).** §0's "DEPLOYED
+> for only custom" and the §2/§4/§5 per-carrier "BLOCKED / absent / not-flipped"
+> rows are **STALE** — frozen at the pre-v12 early-bang state. At HEAD all **8
+> carriers are DEPLOYED**: `*BindingFromFold.lean` exists and is `#assert_axioms`-
+> clean for Bridge/Custom/Deco/Dsl/Factory/Hatchery/Membership/Sovereign (all in
+> the green `lake build Dregg2`, 4254 jobs), and a `*_binding_deployed_tooth.rs`
+> integration tooth (honest-accept + forged-reject arms) is committed for
+> custom/bridge/dsl/factory/hatchery/membership/sovereign. Factory carries the
+> committed `child_vk8` carrier octet (`EffectVmEmitRotationV3.factoryV3Carriers`,
+> deployed PIs); sovereign carries `KEY_COMMIT` at PI 58..61. The one genuine
+> remaining on-wire gap is **DECO (the 8th carrier)**: proof spine + fold arm +
+> socket + `DecoBindingFromFold` are built & clean, but the *live* producer/
+> executor felt-attach is decoupled NON-VK follow-through (see
+> `docs/deos/VK-EPOCH-PLAN-2026-07-05.md` STATUS block). The **G5 tags 18/19
+> in-AIR satisfaction descriptors** were emitted to the staged registry this pass
+> (joining tag-17); the sound deployed-default flip stays GENTIAN-blocked, as
+> scoped. Trust `docs/reference/` + the code for the STATE; read the rows below for
+> the historical SHAPE, not the current status.
+
 *Grounded to git HEAD `956b8be93` (working tree clean; `origin/main` at `53a3b4336`,
 local main ahead by 2). Written 2026-07-01. This is a READ-ONLY census: what is
 built-and-committed vs what is the-emit-not-yet-run, so we weld the RIGHT thing.*
