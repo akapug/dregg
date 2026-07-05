@@ -26,12 +26,17 @@
 //! non-declaring cell decodes `floor = 0` and the refuse is inert (no false reject; the flip is
 //! complete). The blocks ride DISJOINT aux column headroom so all three coexist.
 //!
-//! ## STAGED — built beside the deployed, awaiting the ONE regen + apex re-verify
+//! ## FLIPPED — the refuse is in the DEPLOYED committed VK bytes
 //!
-//! These gates are the emit-side deployed-column realization of the Lean soundness. STAGED: not yet
-//! emitted into the committed cohort VKs; the deployed descriptors are byte-identical until the
-//! `scripts/emit-descriptors.sh` flag-day regen welds `refuseGatesT` onto `v3RegistryBare`. The
-//! anti-launder forge tooth below BITES today (declared-capacity row UNSAT, non-declared row SAT).
+//! These gates are the emit-side deployed-column realization of the Lean soundness, and the flag-day
+//! regen (`scripts/emit-descriptors.sh` over the welded `v3RegistryCapOpenDep`) has LANDED them into the
+//! committed cohort. Every one of the 36 `rotation-v3-staged-registry.tsv` cohort rows now carries the
+//! `-gentian-deployed-bare-refuse` suffix, `trace_width` 1626, and the three per-tag `floor == 0`-refuse
+//! gates on cols `floor_col(0/1/2) = 1593/1609/1625` — witnessed on the DEPLOYED bytes by
+//! `deployed_cohort_bytes_carry_the_refuse` below (not just the synthetic gates). The apex `Rfix`
+//! re-keys over the SAME `v3RegistryCapOpenDep`, so the committed VK and the soundness apex coincide on
+//! the refuse. The anti-launder forge tooth still BITES on the constructed gates (declared-capacity row
+//! UNSAT, non-declared row SAT); the deployed-bytes test proves the flip is REAL, not staged.
 
 use super::carrier_floor_weld::caveat_tag_col;
 use super::pi::{
@@ -383,6 +388,54 @@ mod tests {
                 .iter()
                 .any(|g| violation(g, &local, &next) != BabyBear::ZERO),
             "a non-uniform manifest must trip a uniformity gate"
+        );
+    }
+
+    /// **THE ANTI-LAUNDER GATE, ON THE DEPLOYED BYTES (VK-EPOCH §9.3b).** The flip is REAL, not staged:
+    /// every one of the 36 deployed cohort rows in the committed `rotation-v3-staged-registry.tsv`
+    /// carries the flag-day weld — the `-gentian-deployed-bare-refuse` name suffix, the widened
+    /// `trace_width` 1626, and the three pure `floor_col(b) == 0`-refuse gates at cols 1593/1609/1625.
+    /// A light client that verifies any of these deployed descriptors REFUSES a declared-capacity dodge
+    /// (Lean `declared_capacity_unsat_deployed`), because the refuse block is in the COMMITTED VK bytes,
+    /// not merely the synthetic gates the other tests exercise.
+    #[test]
+    fn deployed_cohort_bytes_carry_the_refuse() {
+        let tsv = crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
+        // The refuse floor gates the Lean/Rust deployed alignment welds (compact-JSON serialized).
+        let refuse_gate =
+            |col: usize| format!("{{\"t\":\"gate\",\"body\":{{\"t\":\"var\",\"v\":{col}}}}}");
+        let g0 = refuse_gate(floor_col(0)); // 1593 (escrow)
+        let g1 = refuse_gate(floor_col(1)); // 1609 (discharge)
+        let g2 = refuse_gate(floor_col(2)); // 1625 (vault)
+        assert_eq!(floor_col(0), 1593);
+        assert_eq!(floor_col(1), 1609);
+        assert_eq!(floor_col(2), 1625);
+
+        let mut cohort_rows = 0usize;
+        for line in tsv.lines() {
+            let cols: Vec<&str> = line.split('\t').collect();
+            // v3rot cohort rows are `key \t name \t json`; the welded cohort carries the suffix.
+            let name = cols.get(1).copied().unwrap_or("");
+            if !name.ends_with("-gentian-deployed-bare-refuse") {
+                continue;
+            }
+            cohort_rows += 1;
+            let json = cols.last().copied().unwrap_or("");
+            assert!(
+                json.contains("\"trace_width\":1626"),
+                "deployed cohort row {name} must be widened to trace_width 1626"
+            );
+            for (g, tag) in [(&g0, "escrow"), (&g1, "discharge"), (&g2, "vault")] {
+                assert!(
+                    json.contains(g.as_str()),
+                    "deployed cohort row {name} must carry the {tag} floor-refuse gate in its committed bytes"
+                );
+            }
+        }
+        // The whole bare cohort (28 named + 8 setField slots) must be welded — not a subset.
+        assert_eq!(
+            cohort_rows, 36,
+            "all 36 deployed bare cohort rows must carry the flag-day refuse weld"
         );
     }
 }
