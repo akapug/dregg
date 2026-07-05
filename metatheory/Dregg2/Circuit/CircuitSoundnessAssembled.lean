@@ -402,6 +402,31 @@ def Rfix : Registry := fun e =>
   | some (_, d) => d
   | none => transferDescr
 
+/-! ### `RfixBare` — the pre-flag-day BARE registry (for the COMPLETENESS dual).
+
+The flag-day welds the capacity-floor refuse onto the deployed cohort so a light client REFUSES a
+declared-capacity dodge (`Rfix`, over `v3RegistryHeap = v3RegistryCapOpenDep ++ …`). That is the SOUNDNESS
+direction. The COMPLETENESS direction ("every genuine turn HAS an accepting trace") is stated over the
+HONEST-PRODUCER cohort: the welded bare member is DELIBERATELY UNSAT for a cell whose committed manifest
+declares a capacity (that IS the dodge closure — `declared_capacity_unsat_deployed`), so its completeness
+is capacity-CONDITIONAL. The honest producer for a capacity-declaring turn routes through the discharge /
+vault / escrow SATISFACTION descriptor (tags 17/18/19), NOT the bare cohort. So `RfixBare` ranges over the
+un-welded cohort (`v3RegistryHeapBare = v3Registry ++ v3RegistryHeap.drop 36` — the cohort UN-welded, the
+cap-open/heap tail identical), and the completeness apex is stated there: unconditionally TRUE, no false
+floor. A capacity-FREE turn's honest trace (floor decodes to 0) satisfies the welded member too, so
+deployed completeness for the capacity-free case follows; the capacity case is the intended re-route. -/
+def v3RegistryHeapBare : List (String × EffectVmDescriptor2) :=
+  Dregg2.Circuit.Emit.EffectVmEmitRotationV3.v3Registry ++ v3RegistryHeap.drop 36
+
+/-- **`RfixBare`** — the completeness dual's registry: the un-welded cohort at every position (the
+cap-open/heap tail is identical to `Rfix`'s). `RfixBare e = Rfix e` for every tail-routed tag (positions
+≥ 36); for a cohort-routed tag it is the BARE `withDfaRcPins <face>` (no refuse), the descriptor the
+honest producer fills. -/
+def RfixBare : Registry := fun e =>
+  match v3RegistryHeapBare[actionTagToPos e]? with
+  | some (_, d) => d
+  | none => transferDescr
+
 /-- `Rfix` is total: every effect index resolves to a real descriptor (so `vkOfRegistry Rfix` and the
 `StarkSound`/`WitnessDecodes` floors are well-defined at every published index). Holds by construction
 (`match` is total). -/
