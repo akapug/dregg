@@ -169,6 +169,15 @@ import Dregg2.Deos.InAirAuthorityDigestGadget
 -- The forged-floor dodge is closed at the binding (`gentian_forged_floor_unsat_carrier`); only the
 -- in-AIR decode + selector-force arithmetic gates remain a (small, staged) VK delta.
 import Dregg2.Deos.CarrierBoundFloorGadget
+-- The GENTIAN FLAG-DAY bare-descriptor dodge, CLOSED IN PROOF (soundness core + deployed-aligned
+-- keystone). BareCohortFloorRefuse: the abstract-column floor==0-REFUSE weld makes a declared-capacity
+-- turn UNSAT under any bare cohort member (declared_tag_unsat_under_bare, tags 17/18/19).
+-- BareCohortFloorRefuseDeployed: the column-parametric lift to the DEPLOYED caveat columns
+-- (643/650/657/664) with three disjoint aux blocks at GRAD_ROT_WIDTH — the sound emit-weld target the
+-- flag-day maps over v3RegistryBare (declared_{escrow,discharge,vault}_unsat_deployed). Both
+-- #assert_all_clean; hbind dischargeable by the live PI-45 caveat pin.
+import Dregg2.Deos.BareCohortFloorRefuse
+import Dregg2.Deos.BareCohortFloorRefuseDeployed
 -- The HATCHERY abstraction-mint house-capacity, GROUNDED (the LAST of the six — the house COMPLETE):
 -- a user-defined verified KIND's declared invariant IS enforced, forever, and its attestation is REAL.
 -- Enforcement is the SAME `CellProgram::evaluate_with_meta` gate (`evalStep`), a violating turn →

@@ -244,12 +244,19 @@ def deployedRefuseGates : List VmConstraint2 :=
     ++ blockGates (tagDischargeObligation : ℤ) 1
     ++ blockGates (tagVaultDeposit : ℤ) 2
 
+/-- The widened trace width covering the three disjoint aux blocks (`fcDep 2 + 1 = 1626`). Every bare
+cohort member has `traceWidth ≤ GRAD_ROT_WIDTH = 1581 < 1626`, so the aux blocks ride FREE headroom
+(no collision) and the widening is the honest flag-day geometry cost. -/
+def REFUSE_TRACE_WIDTH : Nat := fcDep 2 + 1
+
 /-- **`gentianDeployedBareRefuse d`** — an arbitrary deployed bare cohort member `d` welded with the
-three-block deployed refuse. The flag-day maps this over the whole `v3RegistryBare` cohort AND widens
-each member's `traceWidth` to cover the aux block (`≥ GRAD_ROT_WIDTH + 3·REFUSE_STRIDE`). -/
+three-block deployed refuse AND widened to cover the aux block. The flag-day maps this over the whole
+`v3RegistryBare` cohort. The soundness keystones below never mention `traceWidth`, so the widening is
+transparent to them (it only enlarges the AIR `main` arity to host the free aux columns). -/
 def gentianDeployedBareRefuse (d : EffectVmDescriptor2) : EffectVmDescriptor2 :=
   { d with
     name        := d.name ++ "-gentian-deployed-bare-refuse"
+    traceWidth  := max d.traceWidth REFUSE_TRACE_WIDTH
     constraints := d.constraints ++ deployedRefuseGates }
 
 /-- The block-`b`, tag-`T` decode gates are members of block `b`'s refuse block. -/
@@ -372,6 +379,14 @@ section Witnesses
 #guard fcDep 2 + 1 == 1626
 -- The three-block weld adds 3 × 13 = 39 gates (each block: 8 is-zero + 3 fold-into + 1 refuse = 13).
 #guard deployedRefuseGates.length == 39
+-- The widened trace width covers the aux blocks (1626 > GRAD_ROT_WIDTH); every bare member widens to it.
+#guard REFUSE_TRACE_WIDTH == 1626
+private def toyBare : EffectVmDescriptor2 :=
+  { name := "toy", traceWidth := 1581, piCount := 46, tables := [], constraints := [], hashSites := [],
+    ranges := [] }
+#guard (gentianDeployedBareRefuse toyBare).traceWidth == 1626
+#guard (gentianDeployedBareRefuse toyBare).constraints.length == 39
+#guard (gentianDeployedBareRefuse toyBare).piCount == 46
 #guard (refuseGatesAt (tagSettleEscrow : ℤ) ebDep (bcDep 0) (icDep 0) (ocDep 0) (fcDep 0)).length == 13
 -- The decode over a committed manifest, both poles per capacity tag (declared ⟹ 1, absent ⟹ 0).
 #guard tagBitZ (tagSettleEscrow : ℤ) [(tagSettleEscrow : ℤ)] == 1
