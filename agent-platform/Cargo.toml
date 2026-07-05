@@ -50,6 +50,14 @@ dregg-agent = { path = "../dregg-agent" }
 # mints (R2) rather than sealing an unminted shadow receipt (R0).
 grain-turn = { path = "../grain-turn" }
 dregg-cell = { path = "../cell" }
+# THE FEDERATION/LOCAL-SUBMIT LEG (src/node.rs): the SDK runtime + kernel executor
+# (`AgentRuntime`/`ToolGateway`) the platform's node-backed minter drives, and the
+# receipt-chain verifier (`verify_receipt_chain`/`verify_receipt_extends`) the local
+# node's finalization gate + light-client verify path run. A minted grain turn now
+# commits onto a real (local) node's ledger + finalized receipt log rather than only
+# grain-turn's throwaway in-process runtime — cross-node-verifiable, not host-trusted.
+dregg-sdk = { path = "../sdk" }
+dregg-turn = { path = "../turn" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 blake3 = "1"

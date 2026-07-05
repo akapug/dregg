@@ -36,6 +36,9 @@
 //! - **R3 (the named gap):** proving the committed turns genuinely RAN is the
 //!   whole-history STARK leg — [`grain_verify::WHOLE_HISTORY_GAP`], VK-terminal.
 
+/// The federation / local-submit leg: a minted grain turn lands on a REAL
+/// (locally-runnable) node's ledger + finalized receipt log, cross-node-verifiable.
+pub mod node;
 /// Serve the platform over HTTP (rent/drive/verify a grain over the mesh).
 pub mod serve;
 /// Roles as an attenuable facet lattice — the per-grain share model.
@@ -43,6 +46,7 @@ pub mod share;
 /// The SSE transcript wire — replay a grain's drive as meta/step/done frames.
 pub mod transcript;
 
+pub use node::{LocalNode, NodeError, NodeMinter};
 pub use share::Role;
 
 use std::collections::HashMap;
@@ -221,6 +225,19 @@ struct Tenant {
     /// [`drive_minted`](AgentPlatform::drive_minted), in order. What
     /// [`verify_r2`](AgentPlatform::verify_r2) checks the receipts' links against.
     committed_turns: Vec<[u8; 32]>,
+    /// **The grain's local node** — the ledger + finalized receipt log its minted
+    /// turns land on ([`node::LocalNode`]). Lazily brought up on the first served
+    /// drive together with [`node_minter`](Self::node_minter). A cheap `Arc`-sharing
+    /// handle the platform reads/verifies the finalized chain through
+    /// ([`verify_landed`](AgentPlatform::verify_landed)). `None` until the grain has
+    /// been driven through the minting path (or after a cold wake, re-brought-up).
+    node: Option<node::LocalNode>,
+    /// **The grain's persistent node-backed minter** ([`node::NodeMinter`]). Opened
+    /// once and reused across drives, so the worker cell is stable and the node's
+    /// finalized chain is a single-agent, verifiable sequence that accumulates every
+    /// turn the grain commits. Replaces `grain-turn`'s per-drive throwaway runtime on
+    /// the served path.
+    node_minter: Option<node::NodeMinter>,
     /// **The share ACL** — `(verified X-Dregg-Subject → [`Role`])` grants beyond the
     /// owner. The owner is NOT stored here (they are implicit [`Role::Admin`] via
     /// [`AgentPlatform::role_of`]); a subject absent from both the owner slot and
@@ -274,6 +291,16 @@ pub struct AgentPlatform {
     /// schedule against it, so a delinquent grain lapses on use rather than being
     /// hosted free forever. Stays `0` (nothing lapses) until an operator ticks it.
     clock: std::sync::atomic::AtomicI64,
+    /// **The federation node the platform submits minted turns to.** `None` (the
+    /// default) means the built-in, in-process [`node::LocalNode`] — "a locally-hosted
+    /// node you can actually use": every grain mints onto a real node ledger + a
+    /// finalized, light-client-verifiable receipt log, no external daemon required.
+    /// `Some(url)` names an EXTERNAL federation node (e.g. a homelab node); the
+    /// platform still mints onto the local node here, and forwarding the finalized
+    /// turn to `url`'s ingress over HTTP is the operational DEPLOY step (not performed
+    /// in-process — the external node runs full multi-node blocklace consensus). See
+    /// [`node_url`](AgentPlatform::node_url).
+    node_url: Option<String>,
 }
 
 /// Why an agent-platform operation was refused.
@@ -354,13 +381,49 @@ impl Default for AgentPlatform {
     }
 }
 
+/// The result of [`AgentPlatform::verify_landed`]: the grain's minted turns are on
+/// a real node's finalized, light-client-verifiable ledger log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Landed {
+    /// How many turns are finalized on the node's receipt log.
+    pub finalized_len: usize,
+    /// How many turns the grain's committed-turn manifest names (all of which were
+    /// confirmed present on the finalized log).
+    pub manifest_len: usize,
+}
+
 impl AgentPlatform {
-    /// An empty platform.
+    /// An empty platform submitting minted turns to the built-in local node (the
+    /// default — no external node URL configured).
     pub fn new() -> AgentPlatform {
         AgentPlatform {
             tenants: Mutex::new(HashMap::new()),
             clock: std::sync::atomic::AtomicI64::new(0),
+            node_url: None,
         }
+    }
+
+    /// An empty platform configured to target the federation node at `url` (a local
+    /// daemon or a homelab node). The minted turns are still committed onto the
+    /// built-in local node here; forwarding the finalized turn to `url` over HTTP is
+    /// the operational deploy step (see [`node_url`](Self::node_url)). Pass an empty
+    /// string / `None`-equivalent to fall back to the default local node.
+    pub fn with_node_url(url: impl Into<String>) -> AgentPlatform {
+        let url = url.into();
+        AgentPlatform {
+            tenants: Mutex::new(HashMap::new()),
+            clock: std::sync::atomic::AtomicI64::new(0),
+            node_url: (!url.is_empty()).then_some(url),
+        }
+    }
+
+    /// The external federation node URL this platform is configured to submit to, or
+    /// `None` when it uses the built-in local node (the default). When `Some`,
+    /// forwarding the finalized turn to that node's `/turns/submit` ingress is the
+    /// operational deploy step — the in-process local node is what mints + verifies
+    /// here.
+    pub fn node_url(&self) -> Option<&str> {
+        self.node_url.as_deref()
     }
 
     /// Advance the platform's notion of the current block height (from the node). A
@@ -506,6 +569,8 @@ impl AgentPlatform {
                 anchor,
                 checkpoint: None,
                 committed_turns: Vec::new(),
+                node: None,
+                node_minter: None,
                 acl: HashMap::new(),
             })),
         );
@@ -637,7 +702,7 @@ impl AgentPlatform {
         goal: impl Into<String>,
         brain: &mut dyn AgentBrain,
     ) -> Result<GoalReport, AgentPlatformError> {
-        self.drive_in(host, goal, brain, None)
+        self.drive_in(host, goal, brain, Mint::None)
     }
 
     /// **R2 — [`drive`](Self::drive) welded to genuine kernel turns.** Every
@@ -659,7 +724,7 @@ impl AgentPlatform {
         brain: &mut dyn AgentBrain,
         minter: &mut dyn GrainTurnMinter,
     ) -> Result<GoalReport, AgentPlatformError> {
-        self.drive_in(host, goal, brain, Some(minter))
+        self.drive_in(host, goal, brain, Mint::External(minter))
     }
 
     /// **The DEFAULT served drive — R2, minter-wired.** Constructs the platform's
@@ -674,37 +739,25 @@ impl AgentPlatform {
     /// standalone/adoption escape hatch (no executor attached, receipts below R2);
     /// the SERVED default is this, which mints.
     ///
-    /// Honest residual (the next wave item): the turns this mints commit to
-    /// `grain-turn`'s IN-PROCESS ledger (a fresh `AgentRuntime` per grain), NOT the
-    /// live federation ledger. So this flips the shipped product R0→R2 (the receipts
-    /// are views over real kernel turns and the meter is executor-enforced host-side)
-    /// but the *submit-the-turn-onto-the-federation-ledger* leg is still open — a
-    /// third party still trusts THIS host committed the turn (the R3 whole-history
-    /// STARK leg / the federation-submit wire is what closes it).
+    /// **The federation / local-submit leg (this is the keystone the wave closed):**
+    /// the minted turns commit onto the grain's [`node::LocalNode`] — a real,
+    /// locally-runnable node's ledger + finalized, light-client-verifiable receipt
+    /// log — through a persistent [`node::NodeMinter`], NOT a per-drive throwaway
+    /// `AgentRuntime`. So a renter no longer just trusts THIS process's private
+    /// runtime: the committed turn lands on a node's ledger, is recorded on its
+    /// finalized chain, and [`verify_landed`](Self::verify_landed) (a light-client
+    /// verify + membership check) confirms it. Point the platform at an EXTERNAL
+    /// federation node with [`with_node_url`](Self::with_node_url) — forwarding the
+    /// finalized turn to a homelab node's ingress is the operational deploy step
+    /// (still local here). Proving the turns RAN under a whole-chain STARK is the
+    /// remaining R3 leg ([`grain_verify::WHOLE_HISTORY_GAP`]).
     pub fn drive_serving(
         &self,
         host: &str,
         goal: impl Into<String>,
         brain: &mut dyn AgentBrain,
     ) -> Result<GoalReport, AgentPlatformError> {
-        let mut minter = self.open_minter(host)?;
-        self.drive_in(host, goal, brain, Some(&mut minter))
-    }
-
-    /// Open the platform's real kernel minter for the grain at `host`: a
-    /// `grain-turn` [`ToolGatewayMinter`] whose `ToolGateway` rate ceiling is the
-    /// grain's granted budget (so the executor's own `calls_made` `FieldLte` caveat
-    /// is the host-side meter). Reads the budget under a momentary tenant lock and
-    /// releases it before opening the runtime (the minter owns a fresh runtime — it
-    /// touches no tenant state), so it never contends the drive's own lock.
-    fn open_minter(&self, host: &str) -> Result<grain_turn::ToolGatewayMinter, AgentPlatformError> {
-        let budget = {
-            let arc = self.tenant_arc(host)?;
-            let guard = arc.lock().expect("tenant poisoned");
-            guard.budget
-        };
-        grain_turn::ToolGatewayMinter::open(host, budget)
-            .map_err(|e| AgentPlatformError::Session(format!("open kernel minter: {e}")))
+        self.drive_in(host, goal, brain, Mint::Node)
     }
 
     /// The one drive path both public drives share: audit the rent schedule, run
@@ -714,7 +767,7 @@ impl AgentPlatform {
         host: &str,
         goal: impl Into<String>,
         brain: &mut dyn AgentBrain,
-        minter: Option<&mut dyn GrainTurnMinter>,
+        mint: Mint<'_>,
     ) -> Result<GoalReport, AgentPlatformError> {
         let arc = self.tenant_arc(host)?;
         let mut guard = arc.lock().expect("tenant poisoned");
@@ -727,14 +780,45 @@ impl AgentPlatform {
         if tenant.lease.is_lapsed() {
             return Err(AgentPlatformError::Lapsed);
         }
+        // The served path mints onto the grain's LOCAL NODE. Bring the node + its
+        // persistent node-backed minter up lazily (once), so the worker cell stays
+        // stable and the node's finalized chain accumulates a single-agent, verifiable
+        // sequence across drives.
+        if matches!(mint, Mint::Node) && tenant.node_minter.is_none() {
+            let localnode = node::LocalNode::new(host);
+            let node_minter = node::NodeMinter::open(localnode.clone(), tenant.budget)
+                .map_err(|e| AgentPlatformError::Session(format!("open node minter: {e}")))?;
+            tenant.node = Some(localnode);
+            tenant.node_minter = Some(node_minter);
+        }
         let toolkit = OperatorTools::new(Toolkit::new(), &tenant.workdir);
-        let report = match minter {
-            None => tenant.session.run_goal(goal, brain, &toolkit),
-            Some(inner) => {
+        let report = match mint {
+            Mint::None => tenant.session.run_goal(goal, brain, &toolkit),
+            Mint::External(inner) => {
                 // Record every hash the minter commits into the grain's manifest —
                 // the host-side committed-turn set verify_r2 audits receipts against.
                 let mut recording = RecordingMinter {
                     inner,
+                    minted: Vec::new(),
+                };
+                let report =
+                    tenant
+                        .session
+                        .run_goal_minted(goal, brain, &toolkit, Some(&mut recording));
+                tenant.committed_turns.extend(recording.minted);
+                report
+            }
+            Mint::Node => {
+                // Drive through the grain's PERSISTENT node-backed minter: every
+                // admitted action is minted as a genuine executor turn onto the local
+                // node's ledger AND landed on its finalized receipt log. Record the
+                // committed hashes into the manifest, same as the external path.
+                let node_minter = tenant
+                    .node_minter
+                    .as_mut()
+                    .expect("node minter brought up above");
+                let mut recording = RecordingMinter {
+                    inner: node_minter,
                     minted: Vec::new(),
                 };
                 let report =
@@ -897,6 +981,47 @@ impl AgentPlatform {
         self.attestation_of(&guard)
             .verify_r2(&guard.committed_turns)
             .map_err(|e| AgentPlatformError::Verify(format!("{e:?}")))
+    }
+
+    /// **The federation / local-submit leg — confirm the grain's minted turns
+    /// LANDED on a real node, cross-node-verifiably.** Runs the local node's
+    /// light-client verify ([`node::LocalNode::verify`] — the finalized receipt chain
+    /// is a non-empty, unbroken, single-agent, state-continuous chain) AND checks that
+    /// EVERY turn hash in the grain's committed-turn manifest is present on the node's
+    /// finalized log ([`node::LocalNode::contains`]). Returns the [`Landed`] summary
+    /// (the finalized chain length + how many manifest turns landed).
+    ///
+    /// This is what a renter checks to know the receipts are views over turns a real
+    /// node committed — not just this process's private in-process runtime. It is
+    /// stronger than [`verify_r2`](Self::verify_r2)'s host-side manifest: the manifest
+    /// says "the host claims it minted these"; this says "these turns are on a node's
+    /// finalized, independently re-verifiable ledger log."
+    ///
+    /// `NotLanded` if the grain has never been driven through the served minting path
+    /// (no node brought up), or if a manifest turn is missing from the finalized log,
+    /// or the chain fails structural verification.
+    pub fn verify_landed(&self, host: &str) -> Result<Landed, AgentPlatformError> {
+        let arc = self.tenant_arc(host)?;
+        let guard = arc.lock().expect("tenant poisoned");
+        let node = guard.node.as_ref().ok_or_else(|| {
+            AgentPlatformError::Verify("grain has no local node (never driven-minted)".into())
+        })?;
+        // Light-client verify: the node's finalized receipt chain is structurally sound.
+        node.verify()
+            .map_err(|e| AgentPlatformError::Verify(format!("node chain unverifiable: {e}")))?;
+        // Every manifest turn must be on the node's finalized log (it landed, not just
+        // "the host says it minted it").
+        for turn_hash in &guard.committed_turns {
+            if !node.contains(turn_hash) {
+                return Err(AgentPlatformError::Verify(format!(
+                    "manifest turn {turn_hash:?} is not on the node's finalized log"
+                )));
+            }
+        }
+        Ok(Landed {
+            finalized_len: node.finalized_len(),
+            manifest_len: guard.committed_turns.len(),
+        })
     }
 
     /// Lapse the lease at `host` if it is behind schedule at `clock` (non-payment):
@@ -1308,6 +1433,19 @@ fn image_binds(tenant: &Tenant) -> Result<(), AgentPlatformError> {
 fn session_digest(report: &AgentRunReport) -> FieldElement {
     let bytes = serde_json::to_vec(report).unwrap_or_default();
     *blake3::hash(&bytes).as_bytes()
+}
+
+/// How a drive mints its admitted actions.
+enum Mint<'a> {
+    /// No minter — receipts carry no kernel-turn link (the standalone/adoption
+    /// escape hatch, below R2).
+    None,
+    /// A caller-supplied minter (e.g. `drive_minted`'s explicit `grain-turn` minter
+    /// or a test `SyntheticMinter`).
+    External(&'a mut dyn GrainTurnMinter),
+    /// The served default: the grain's persistent node-backed minter, minting onto
+    /// the local node's ledger + finalized log (brought up lazily in `drive_in`).
+    Node,
 }
 
 /// Forwards to a caller-supplied [`GrainTurnMinter`] and RECORDS every committed
@@ -2105,6 +2243,153 @@ mod tests {
             ),
             "the unminted standalone path does not pass R2"
         );
+    }
+
+    /// **THE FEDERATION / LOCAL-SUBMIT LEG — a minted turn LANDS on a real node's
+    /// finalized ledger, cross-node-verifiably, and a forged turn is rejected.**
+    ///
+    /// The served path mints every admitted action onto the grain's
+    /// [`node::LocalNode`]: a real node's ledger + finalized receipt log, not
+    /// grain-turn's throwaway in-process runtime. This test drives the served path,
+    /// then proves:
+    ///   1. `verify_landed` confirms every manifest turn is on the node's finalized
+    ///      log AND the log light-client-verifies (finalized_len == manifest_len ==
+    ///      admitted).
+    ///   2. A THIRD PARTY holding only the node's exported receipt chain re-verifies
+    ///      it offline (`verify_receipt_chain`) — no trust in this host — and each
+    ///      minted turn hash is present.
+    ///   3. A second drive ACCUMULATES on the SAME persistent node (the chain grows,
+    ///      single-agent, still verifiable).
+    ///   4. The node's finalization gate REJECTS a forged/non-linking turn (a replayed
+    ///      genesis receipt and a tampered receipt both fail to land).
+    #[test]
+    fn served_path_lands_minted_turns_on_a_real_node_and_forged_is_rejected() {
+        use dregg_turn::verify_receipt_chain;
+
+        let wd = workdir();
+        let platform = AgentPlatform::new();
+        assert_eq!(
+            platform.node_url(),
+            None,
+            "the default platform submits to the built-in local node"
+        );
+
+        let host = platform
+            .rent(
+                "landed.agents.dregg",
+                "dga1_landed",
+                "fs",
+                10_000,
+                wd.to_str().unwrap(),
+                terms(),
+                None,
+            )
+            .expect("provision");
+
+        let mut brain = fs_plan(&[("n1.txt", "alpha"), ("n2.txt", "beta"), ("n3.txt", "gamma")]);
+        let report = platform
+            .drive_serving(&host, "write onto the node", &mut brain)
+            .expect("the served default drive mints onto the node");
+        assert!(report.admitted > 0, "the served grain did admitted work");
+
+        // R2 still holds (receipts are views over committed kernel turns).
+        let r2 = platform.verify_r2(&host).expect("R2 verifies");
+        assert_eq!(r2.linked as u64, report.admitted);
+
+        // (1) The federation leg: every minted turn LANDED on the node's finalized
+        // ledger log, and that log light-client-verifies.
+        let landed = platform
+            .verify_landed(&host)
+            .expect("the minted turns landed on a real node + the chain verifies");
+        assert_eq!(
+            landed.manifest_len as u64, report.admitted,
+            "every admitted turn is on the manifest"
+        );
+        assert_eq!(
+            landed.finalized_len, landed.manifest_len,
+            "and every manifest turn is finalized on the node's log"
+        );
+        assert!(landed.finalized_len > 0, "the node finalized real turns");
+
+        // (2) THIRD-PARTY re-verification: export the node's receipt chain and verify
+        // it offline, exactly as a light client would — no trust in this host.
+        let (chain, manifest) = {
+            let arc = platform
+                .tenants
+                .lock()
+                .unwrap()
+                .get(&host)
+                .cloned()
+                .unwrap();
+            let t = arc.lock().unwrap();
+            let node = t.node.as_ref().expect("the grain has a live local node");
+            (node.chain(), t.committed_turns.clone())
+        };
+        verify_receipt_chain(&chain).expect("a third party re-verifies the node's finalized chain");
+        assert_eq!(
+            chain.len(),
+            manifest.len(),
+            "the node holds exactly the minted turns"
+        );
+        for turn_hash in &manifest {
+            assert!(
+                chain.iter().any(|r| &r.turn_hash == turn_hash),
+                "each minted turn hash is on the node's finalized chain"
+            );
+        }
+
+        // (3) A second drive accumulates on the SAME persistent node (a real,
+        // growing node ledger for the grain — not a per-drive throwaway).
+        let mut brain2 = fs_plan(&[("n4.txt", "delta")]);
+        platform
+            .drive_serving(&host, "one more", &mut brain2)
+            .expect("second minted drive");
+        let landed2 = platform
+            .verify_landed(&host)
+            .expect("still landed + verifies");
+        assert!(
+            landed2.finalized_len > landed.finalized_len,
+            "the node's finalized log grew across drives"
+        );
+
+        // (4) The node's finalization gate REJECTS forged/non-linking turns.
+        let arc = platform
+            .tenants
+            .lock()
+            .unwrap()
+            .get(&host)
+            .cloned()
+            .unwrap();
+        let t = arc.lock().unwrap();
+        let node = t.node.as_ref().expect("live node");
+        let chain = node.chain();
+        assert!(chain.len() >= 2);
+
+        // 4a: replay the genesis receipt on top of the current head — no predecessor,
+        // does not extend the head → rejected.
+        let replay_genesis = chain[0].clone();
+        assert!(
+            matches!(node.land(replay_genesis), Err(NodeError::Rejected(_))),
+            "a replayed genesis receipt is rejected by the node"
+        );
+
+        // 4b: a TAMPERED receipt (mutated turn_hash) copied from the head does not
+        // link the head → rejected. The forged turn cannot be laundered onto the node.
+        let mut tampered = chain.last().unwrap().clone();
+        tampered.turn_hash = [0x99u8; 32];
+        assert!(
+            matches!(node.land(tampered.clone()), Err(NodeError::Rejected(_))),
+            "a tampered receipt is rejected by the node's finalization gate"
+        );
+        // And the tampered turn is NOT on the finalized log (nothing forged landed).
+        assert!(
+            !node.contains(&[0x99u8; 32]),
+            "the forged turn never landed"
+        );
+
+        // The honest chain is still intact + verifiable after the rejected attempts.
+        verify_receipt_chain(&node.chain())
+            .expect("the node chain is untouched by forgery attempts");
     }
 
     /// **PHASE 2 — A GRAIN COLD-WAKES FROM ITS LEASE HEAP ALONE, both polarities.**
