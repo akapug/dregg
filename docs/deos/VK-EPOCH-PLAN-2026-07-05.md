@@ -494,14 +494,22 @@ a per-member geometry widening (the `main` table arity moves), larger than §6's
 > PROVEN sound at the deployed columns with the traceWidth widening baked in. Steps 1–4 are the
 > geometry-cascade grind that reds the apex tree; the ember-gated deploy is Step 5.
 
-1. **Emit weld (STEP 1) — the VK-shape change.** In
-   `metatheory/Dregg2/Circuit/Emit/EffectVmEmitRotationV3.lean`, change `v3Registry` (def at `:5372`) to
-   map each `v3RegistryBare` member through `gentianDeployedBareRefuse` (import
-   `Dregg2.Deos.BareCohortFloorRefuseDeployed`). Order: `withDfaRcPins (gentianDeployedBareRefuse d)`
-   (the refuse widens traceWidth 1581→1626; `withDfaRcPins` is width-invariant + adds 4 PIs → the
-   welded member keeps piCount+4 and width 1626). Do NOT touch the 9 cap-open members
-   (`v3RegistryCapOpen` tail at `CapOpenEmit.lean:1280`, widths 1910+) — they are not the bare route and
-   their aux would collide (out of task scope).
+1. **Emit weld (STEP 1) — the VK-shape change.** ⚑ **IMPORT-CYCLE CONSTRAINT (grounded — do NOT fight
+   it):** the refuse chain `BareCohortFloorRefuseDeployed → BareCohortFloorRefuse →
+   CarrierBoundFloorGadget → SettleEscrowSatDescriptor → EffectVmEmitRotationV3` means you CANNOT import
+   `BareCohortFloorRefuseDeployed` into `EffectVmEmitRotationV3.lean` (cycle). So the weld CANNOT be
+   applied inside the `v3Registry` def (`:5372`). Instead, create a NEW module (e.g.
+   `Dregg2/Circuit/Emit/EffectVmEmitRotationV3Refused.lean`) that imports BOTH `EffectVmEmitRotationV3`
+   AND `BareCohortFloorRefuseDeployed`, and defines
+   `v3RegistryRefused := v3RegistryBare.map (fun (k,d) => (k, withDfaRcPins (gentianDeployedBareRefuse d)))`
+   (order: refuse FIRST — it widens traceWidth 1581→1626 — then `withDfaRcPins`, width-invariant, +4 PIs;
+   welded member = width 1626, piCount+4). Then **re-key the apex + the emit runner over
+   `v3RegistryRefused`** in place of `v3Registry`: `CapOpenEmit.v3RegistryCapOpen` (`:1280`,
+   `= v3Registry ++ [...]`), the `Rfix` re-keys in `CircuitSoundnessAssembled.lean`, and
+   `EmitRotationV3.lean`'s runner loop. Do NOT touch the 9 cap-open members (`v3RegistryCapOpen` tail,
+   widths 1910+) — not the bare route, their aux would collide (out of task scope). The
+   `gentianDeployedBareRefuse` transformer + its three closed-dodge soundness theorems are ALREADY PROVEN
+   (§9.1b) — this step is wiring + the cascade, not new soundness.
    - **`#guard` breakage to fix (expected — the flag-day):** `EffectVmEmitRotationV3.lean:5376-5378`
      (`w.traceWidth == b.traceWidth` — now 1626 ≠ 1581, update), `:5382-5385` (piCount guards — recompute
      with the widened width; piCount is UNCHANGED by the refuse, only width moves, so these stay if they
