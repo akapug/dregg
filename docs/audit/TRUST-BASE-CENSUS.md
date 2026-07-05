@@ -1,5 +1,16 @@
 # TRUST-BASE-CENSUS — the surviving soundness carriers, adversarially classified
 
+> **TIER3 UPDATE (2026-07-05, post-big-bang).** The repo was squashed to a single
+> `initial commit` (`db466dcd9`). A tier-3 re-verification (`docs/audit/TIER3.md`)
+> confirms **all campaign teeth survived the squash** — 8 carrier Lean pairs + apex +
+> 5 guarantees `lake`-green and `#assert_axioms`-clean (3227 jobs); 7 deployed-fold
+> teeth + 7 audit teeth present and passing; zero regression. It also lands the
+> deepest completeness finding: the whole-history fold's `final_root` is committee-
+> anchored but **`genesis_root` is prover-chosen and unanchored** in both Lean
+> (`RecursiveAggregation.lean:194`) and the deployed verify API
+> (`lightclient/src/lib.rs:540`) — a prefix-completeness residual (interior-omission
+> and injection are CLOSED). See `docs/audit/TIER3.md`.
+
 **Adversarial Audit, Lane 1.** Repo `/Users/ember/dev/breadstuffs` @ `main`
 HEAD `b5fe0ff97` (`deos-hermes: brain-in-jail`). READ-ONLY census: this document
 edits nothing but itself. Every row is grounded to `file:line`.
