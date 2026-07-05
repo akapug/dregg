@@ -4483,6 +4483,7 @@ dependencies = [
  "dregg-bridge",
  "dregg-cell",
  "dregg-circuit",
+ "dregg-circuit-prove",
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-macaroon",

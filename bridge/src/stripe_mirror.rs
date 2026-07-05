@@ -209,6 +209,22 @@ pub enum StripeMirrorError {
     /// DECO leaf's range gadget `1 ≤ amountCents < 2^30`
     /// (`Deco.lean::DecoRelation` conjunct 5 / `deco_payment::AMOUNT_LIMB_BITS`).
     DecoAmountOutOfRange { amount: u64 },
+    /// **DECO path** ([`crate::stripe_deco`]): the attestation carries NO STARK proof
+    /// (`zk_tls_proof == None`) in a build that requires one. A production binary
+    /// (`cfg(not(any(test, feature = "test-utils")))`) refuses `MoneyIn::Deco` without
+    /// a present, verified proof — the honest prover-gap label cannot be out-run by a
+    /// call-site flip. In test / `test-utils` builds `None` falls through to the
+    /// commitment-binding-only path so fixtures can exercise the non-proof teeth.
+    DecoProofMissing,
+    /// **DECO path** ([`crate::stripe_deco`]): the carried `zk_tls_proof` does not
+    /// decode, fails the `BatchStarkProof` structural validation, or exposes no claim
+    /// tuple (`circuit-prove::deco_leaf_adapter::verify_deco_leaf_proof_bytes`).
+    DecoProofInvalid { reason: String },
+    /// **DECO path** ([`crate::stripe_deco`]): the STARK's exposed in-AIR-recomputed
+    /// payment identity (leaf claim lane `DECO_LEAF_PAYMENT_HASH_PI`) does NOT equal the
+    /// canonical recompute over the disclosed facts — a genuine proof attesting a
+    /// DIFFERENT payment than the attestation claims.
+    DecoProofClaimMismatch,
     /// An accounting addition overflowed `u64`.
     Overflow,
 }
@@ -262,6 +278,20 @@ impl std::fmt::Display for StripeMirrorError {
             Self::DecoAmountOutOfRange { amount } => write!(
                 f,
                 "DECO amount {amount} out of range (gate 5 requires 1 <= amountCents < 2^30)"
+            ),
+            Self::DecoProofMissing => write!(
+                f,
+                "DECO attestation carries no zk_tls_proof STARK (production requires a verified proof)"
+            ),
+            Self::DecoProofInvalid { reason } => {
+                write!(
+                    f,
+                    "DECO zk_tls_proof failed structural verification: {reason}"
+                )
+            }
+            Self::DecoProofClaimMismatch => write!(
+                f,
+                "DECO zk_tls_proof exposed identity does not bind the disclosed facts"
             ),
             Self::Overflow => write!(f, "supply accounting overflow"),
         }

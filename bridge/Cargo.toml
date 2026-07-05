@@ -14,6 +14,15 @@ test-utils = []
 dregg-commit = { path = "../commit" }
 dregg-trace = { path = "../trace" }
 dregg-circuit = { path = "../circuit" }
+# The DECO leaf's TRANSPORT teeth (`deco_leaf_adapter::verify_deco_leaf_proof_bytes`:
+# structural `BatchStarkProof::validate` + exposed-claim extraction) live in the prove
+# crate — `stripe_deco::verify_deco_payment` calls them to VERIFY a
+# `DecoPaymentAttestation::zk_tls_proof` and bind its exposed identity to the disclosed
+# facts (not just recompute-consistency). Full FRI re-verify happens when the leaf is
+# folded into the per-turn aggregate; this layer does structural-validate + claim-bind.
+# No cycle: circuit-prove depends only on {circuit,cell,cell-crypto,turn}, none of which
+# depend on bridge.
+dregg-circuit-prove = { path = "../circuit-prove" }
 dregg-turn = { path = "../turn" }
 dregg-types = { path = "../types" }
 # The committed mirror-ledger nullifier (`solana_mirror`/`stripe_mirror` derive a

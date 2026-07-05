@@ -48,22 +48,35 @@
 //! path exactly as on the HMAC path — the mint still draws against recorded
 //! backing.
 //!
-//! # ⚑ THE PROVER GAP (honest — do NOT claim live-trustless money-in yet)
+//! # ⚑ THE STARK CARRIER IS VERIFIED HERE (the attestation-verifier, not a consistency check)
 //!
-//! The DECO *verification* is proven and wired; the DECO **prover** — the zkTLS
-//! client that runs a live Stripe TLS session and EMITS a `DecoPaymentAttestation`
-//! with a genuine STARK proof — is the one external piece NOT yet in this tree.
-//! Until it lands, the commitment binding here rebinds the disclosed facts to the
-//! committed identity (refusing a tampered attestation) but does NOT by itself
-//! prove the facts came from a genuine Stripe session — that is exactly what the
-//! [`DecoPaymentAttestation::zk_tls_proof`] STARK carrier delivers, verified when
-//! the prover exists. So [`crate::stripe_mirror`]'s HMAC webhook stays as the
-//! explicitly-labeled trusted FALLBACK ([`MoneyIn::HmacWebhook`]) — the only
-//! working money-in today — and production flips to [`MoneyIn::Deco`] the moment
-//! the prover is in-tree, changing one call site.
+//! [`StripeMirrorState::verify_deco_payment`] now VERIFIES
+//! [`DecoPaymentAttestation::zk_tls_proof`]: after the range + felt-commitment gates it
+//! structurally validates the carried DECO leaf STARK
+//! ([`dregg_circuit_prove::deco_leaf_adapter::verify_deco_leaf_proof_bytes`]) and BINDS
+//! the proof's exposed in-AIR-recomputed identity to the disclosed facts. So a
+//! self-consistent fabrication (correct recomputed `payment_hash` but NO valid STARK)
+//! is REFUSED — the felt binding alone was only a consistency check; the STARK carrier
+//! is what proves the facts came from a genuine Stripe session.
+//!
+//! The DECO **prover** (live Stripe TLS session → `DecoPaymentAttestation` with a genuine
+//! STARK) lives in the `dregg-deco-prove` crate (`prove_stripe_deco`, MPC-TLS/notary
+//! capture). A production build refuses `zk_tls_proof: None`
+//! ([`StripeMirrorError::DecoProofMissing`], `cfg(not(any(test, feature = "test-utils")))`),
+//! so the honest label cannot be out-run by a call-site flip.
+//!
+//! HONEST BOUNDARY: this layer does STRUCTURAL validation + exposed-claim binding, NOT
+//! full FRI re-verification — the full FRI re-verify of the leaf happens when it is
+//! FOLDED into the per-turn aggregate (the recursion verifier re-verifies each child
+//! in-circuit). [`crate::stripe_mirror`]'s HMAC webhook remains the explicitly-labeled
+//! trusted FALLBACK ([`MoneyIn::HmacWebhook`]); production flips to [`MoneyIn::Deco`] by
+//! changing one call site.
 
 use dregg_circuit::dsl::deco_payment::stripe_payment_hash_felt;
 use dregg_circuit::field::BabyBear;
+use dregg_circuit_prove::deco_leaf_adapter::{
+    DECO_LEAF_PAYMENT_HASH_PI, verify_deco_leaf_proof_bytes,
+};
 use dregg_types::CellId;
 
 use crate::stripe_mirror::{
@@ -103,11 +116,13 @@ pub struct DecoPaymentAttestation {
     /// **The zkTLS DECO STARK proof** (`Deco.lean::DecoVerifierKernel::verify` /
     /// `deco_leaf_adapter::prove_deco_leaf_with_claim`).
     ///
-    /// ⚑ **PROVER GAP:** producing this from a live Stripe TLS session is the one
-    /// external piece not yet in-tree (see module docs). `None` =
-    /// commitment-binding-only (the deployable half wired here); `Some(bytes)` =
-    /// full zkTLS proof, verified against the recursion verifier once the prover
-    /// lands. The verifier does NOT claim live-trustlessness from `None`.
+    /// `Some(bytes)` = a genuine DECO leaf STARK (produced by `dregg-deco-prove`'s
+    /// `prove_stripe_deco`); [`StripeMirrorState::verify_deco_payment`] structurally
+    /// verifies it and binds its exposed identity to the disclosed facts (tooth 2b).
+    /// `None` = commitment-binding-only — REFUSED by a production verifier
+    /// ([`StripeMirrorError::DecoProofMissing`]); accepted only in test / `test-utils`
+    /// builds so fixtures can exercise the non-proof teeth. The verifier does NOT claim
+    /// live-trustlessness from `None`.
     pub zk_tls_proof: Option<Vec<u8>>,
 }
 
@@ -162,6 +177,51 @@ pub enum MoneyIn<'a> {
     },
 }
 
+/// Whether this build REQUIRES a present, verified STARK carrier for a DECO mint.
+/// `true` in a production build; `false` in test / `test-utils` builds (which allow the
+/// commitment-binding-only `None` path so fixtures can run without the heavy prover).
+/// Derived at compile time, so a production binary can never accept a `None`-carrier
+/// DECO attestation — the honest label cannot be out-run by a call-site flip.
+const DECO_REQUIRES_STARK_PROOF: bool = cfg!(not(any(test, feature = "test-utils")));
+
+/// **The STARK-carrier tooth of [`StripeMirrorState::verify_deco_payment`]**, factored
+/// so the production requirement is a testable runtime value.
+///
+/// - `Some(proof)`: ALWAYS structurally verified
+///   ([`verify_deco_leaf_proof_bytes`]) and its exposed identity (claim lane
+///   [`DECO_LEAF_PAYMENT_HASH_PI`]) BOUND to `recomputed` (the canonical felt over the
+///   disclosed facts). A blob that fails to decode/validate/expose is
+///   [`StripeMirrorError::DecoProofInvalid`]; a genuine proof whose exposed identity
+///   disagrees is [`StripeMirrorError::DecoProofClaimMismatch`].
+/// - `None`: refused with [`StripeMirrorError::DecoProofMissing`] when `require_proof`
+///   (production); otherwise falls through (commitment-binding-only).
+///
+/// HONEST BOUNDARY: this is STRUCTURAL validation + exposed-claim binding, NOT full FRI
+/// re-verification — that happens when the leaf is folded into the per-turn aggregate.
+fn check_deco_stark(
+    att: &DecoPaymentAttestation,
+    recomputed: BabyBear,
+    require_proof: bool,
+) -> Result<(), StripeMirrorError> {
+    match &att.zk_tls_proof {
+        Some(proof_bytes) => {
+            let claim = verify_deco_leaf_proof_bytes(proof_bytes)
+                .map_err(|reason| StripeMirrorError::DecoProofInvalid { reason })?;
+            if claim[DECO_LEAF_PAYMENT_HASH_PI] != recomputed {
+                return Err(StripeMirrorError::DecoProofClaimMismatch);
+            }
+            Ok(())
+        }
+        None => {
+            if require_proof {
+                Err(StripeMirrorError::DecoProofMissing)
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 impl StripeMirrorState {
     /// **Verify a DECO attestation for the COMMITTED bridge mint, mutating no
     /// per-relayer RAM** — the DECO twin of
@@ -181,12 +241,28 @@ impl StripeMirrorState {
     ///      recompute over its disclosed facts, or it is a forged-facts attestation
     ///      ([`StripeMirrorError::DecoCommitmentMismatch`]) — the executor-domain
     ///      twin of the leaf's `forged_amount_does_not_fold` tooth.
+    ///   2b. **the STARK attestation (`zk_tls_proof`):** the carried DECO leaf proof is
+    ///      structurally verified ([`dregg_circuit_prove::deco_leaf_adapter::verify_deco_leaf_proof_bytes`]:
+    ///      decode + `BatchStarkProof::validate` + `expose_claim` extraction) and its
+    ///      exposed identity (lane
+    ///      [`dregg_circuit_prove::deco_leaf_adapter::DECO_LEAF_PAYMENT_HASH_PI`]) is
+    ///      BOUND to the canonical recompute over the disclosed facts. A missing proof
+    ///      ([`StripeMirrorError::DecoProofMissing`], production only), a garbage/invalid
+    ///      proof ([`StripeMirrorError::DecoProofInvalid`]), or a genuine proof attesting
+    ///      a DIFFERENT payment ([`StripeMirrorError::DecoProofClaimMismatch`]) is
+    ///      REFUSED. This is what makes the path a real attestation-verifier, not a mere
+    ///      fact-consistency check: a self-consistent fabrication (correct recomputed
+    ///      `payment_hash` but no valid STARK) cannot mint.
     ///   3. the mirror's currency + amount bounds (shared with the HMAC path).
     ///
-    /// ⚑ PROVER GAP: full trustlessness additionally verifies
-    /// [`DecoPaymentAttestation::zk_tls_proof`] (the STARK extractability + the
-    /// ed25519/HMAC §8 carriers). Its prover is not yet in-tree; until then this
-    /// binds the disclosed facts to the committed identity (the deployable half).
+    /// ⚑ HONEST TRANSPORT-vs-FULL-FRI BOUNDARY: tooth 2b does STRUCTURAL validation +
+    /// exposed-claim binding of [`DecoPaymentAttestation::zk_tls_proof`] — it does NOT
+    /// run full FRI re-verification here. The FULL FRI re-verify of the leaf happens
+    /// when it is FOLDED into the per-turn aggregate (the recursion verifier re-verifies
+    /// each child in-circuit — `deco_leaf_adapter::prove_deco_binding_node` /
+    /// `aggregate_tree`). The remaining named §8 carriers (STARK extractability,
+    /// ed25519 EUF-CMA, HMAC, Poseidon2-CR) and the Web-PKI / honest-Stripe floor stay
+    /// as documented in `Deco.lean`.
     pub fn verify_deco_payment(
         &self,
         att: &DecoPaymentAttestation,
@@ -215,10 +291,35 @@ impl StripeMirrorState {
             return Err(StripeMirrorError::DecoCommitmentMismatch);
         }
 
-        // ⚑ PROVER GAP (do NOT claim live-trustlessness from the binding alone):
-        // the STARK extractability + ed25519/HMAC §8 carriers of `Deco.lean` are
-        // delivered by `att.zk_tls_proof`, whose PROVER (live-Stripe-TLS →
-        // attestation) is not yet in-tree. When it lands, verify it here.
+        // (2b) THE STARK ATTESTATION VERIFICATION — what turns this from a
+        // fact-CONSISTENCY check into a real ATTESTATION-VERIFIER. Without it the felt
+        // binding above only proves the disclosed facts are internally consistent with
+        // the committed identity; an attacker who fabricates any (amount, recipient) and
+        // sets `payment_hash = stripe_payment_hash_felt(facts)` passes gate 2. Here we
+        // REQUIRE the STARK carrier and BIND its exposed identity to those same facts.
+        //
+        // TRANSPORT-vs-FULL-FRI BOUNDARY (honest — do NOT overclaim this layer):
+        //   * `verify_deco_leaf_proof_bytes` decodes the leaf's `BatchStarkProof`, runs
+        //     its STRUCTURAL validation (ext-degree / row counts / packing / the
+        //     non-primitive manifest a raw derive-deserialize would bypass), and reads
+        //     the exposed `expose_claim` tuple; a blob that does not decode / validate /
+        //     expose a claim is REFUSED (`DecoProofInvalid`).
+        //   * we then BIND the leaf's in-AIR-recomputed identity (claim lane
+        //     `DECO_LEAF_PAYMENT_HASH_PI`) to the canonical recompute over the disclosed
+        //     facts; a genuine proof attesting a DIFFERENT payment is refused
+        //     (`DecoProofClaimMismatch`).
+        //   * the FULL FRI re-verification of the leaf happens when it is FOLDED into
+        //     the per-turn aggregate (the recursion verifier re-verifies each child
+        //     in-circuit — `deco_leaf_adapter::prove_deco_binding_node` / `aggregate_tree`).
+        //     This layer does structural-validate + claim-bind, NOT full FRI.
+        //
+        // The production requirement is a compile-time-derived runtime bool: a PRODUCTION
+        // build (`cfg!(not(any(test, feature = "test-utils")))`) requires the proof
+        // present, so `MoneyIn::Deco` can never be promoted without a verified STARK —
+        // the honest label cannot be out-run by a call-site flip. Test / `test-utils`
+        // builds allow `None` (commitment-binding-only) so fixtures exercise the
+        // non-proof teeth. A `Some` carrier is ALWAYS verified regardless of the build.
+        check_deco_stark(att, recomputed, DECO_REQUIRES_STARK_PROOF)?;
 
         // (3) the shared currency + bounds gate (identical to the HMAC path).
         if att.currency != self.config.currency {
@@ -390,6 +491,83 @@ mod tests {
         assert_eq!(mirror.live_supply, 0);
         assert_eq!(mirror.total_verified_payments, 0);
         assert!(mirror.invariant_holds());
+    }
+
+    /// THE LATENT-CRITICAL CLOSED — the STARK carrier is now VERIFIED, so a
+    /// SELF-CONSISTENT FABRICATION cannot mint. The attacker fabricates any facts and
+    /// sets `payment_hash = stripe_payment_hash_felt(facts)`, so gate 2 (the
+    /// felt-commitment binding) PASSES — BEFORE this fix that reached the mint (the STARK
+    /// was never inspected). Now tooth 2b structurally verifies `zk_tls_proof` and
+    /// REFUSES a garbage proof. Same self-consistent facts, only the carrier differs:
+    /// `None` (test-build fall-through, the pre-fix accept shape) is accepted, but
+    /// `Some(garbage)` is refused — proving it is 2b, not gate 2, that bites.
+    #[test]
+    fn self_consistent_fabrication_with_invalid_stark_is_refused() {
+        let mirror = StripeMirrorState::new(config());
+
+        // A self-consistent fabrication: the committed payment_hash IS the canonical
+        // recompute over the attacker-chosen facts, so gate 2 passes.
+        let fabricated = DecoPaymentAttestation::attest("pi_fab", 2500, "usd", cid(7), None);
+        assert_eq!(
+            fabricated.payment_hash,
+            stripe_payment_hash_felt(2500, "usd", &cid(7).0, "pi_fab"),
+            "the fabrication is self-consistent (gate 2 would pass)"
+        );
+        // In this (test) build the None carrier falls through — exactly the pre-fix
+        // acceptance shape (gate 2 passes, the STARK was never inspected).
+        assert!(
+            mirror.verify_deco_payment(&fabricated).is_ok(),
+            "gate 2 passes for a self-consistent fabrication (the pre-fix accept path)"
+        );
+
+        // The SAME self-consistent facts, now carrying a GARBAGE STARK blob, is REFUSED
+        // by tooth 2b — the structural validation fails. This is the regression closed.
+        let mut fab_garbage = fabricated.clone();
+        fab_garbage.zk_tls_proof = Some(vec![0xABu8; 64]);
+        assert!(
+            matches!(
+                mirror.verify_deco_payment(&fab_garbage),
+                Err(StripeMirrorError::DecoProofInvalid { .. })
+            ),
+            "a self-consistent fabrication with a garbage STARK is refused by tooth 2b"
+        );
+    }
+
+    /// THE PRODUCTION GUARD (non-vacuous, both directions). The STARK-carrier tooth is
+    /// factored so the production requirement is a testable runtime value:
+    ///   * `require_proof = true` (production): a `None` carrier is REFUSED
+    ///     (`DecoProofMissing`) — `MoneyIn::Deco` cannot be promoted without a proof.
+    ///   * `require_proof = false` (test / test-utils): `None` falls through (the
+    ///     commitment-binding-only path fixtures use).
+    ///   * a garbage `Some` carrier is refused REGARDLESS of the flag (structural fail).
+    /// The compile-time policy [`DECO_REQUIRES_STARK_PROOF`] is `false` in this test
+    /// build (so fixtures run) and `true` in a production binary.
+    #[test]
+    fn deco_production_guard_requires_the_stark_proof() {
+        let att = DecoPaymentAttestation::attest("pi_guard", 2500, "usd", cid(1), None);
+        let recomputed = att.payment_hash;
+
+        // Production: a missing proof is refused.
+        assert_eq!(
+            check_deco_stark(&att, recomputed, true).unwrap_err(),
+            StripeMirrorError::DecoProofMissing
+        );
+        // Test / test-utils: a missing proof falls through (binding-only).
+        assert!(check_deco_stark(&att, recomputed, false).is_ok());
+        // This IS a test build, so the compile-time policy allows the None path here.
+        assert!(!DECO_REQUIRES_STARK_PROOF);
+
+        // A garbage STARK carrier is refused regardless of the requirement flag.
+        let mut garbage = att.clone();
+        garbage.zk_tls_proof = Some(vec![0x01u8; 40]);
+        assert!(matches!(
+            check_deco_stark(&garbage, recomputed, false),
+            Err(StripeMirrorError::DecoProofInvalid { .. })
+        ));
+        assert!(matches!(
+            check_deco_stark(&garbage, recomputed, true),
+            Err(StripeMirrorError::DecoProofInvalid { .. })
+        ));
     }
 
     /// Gate 5 (range): a zero amount and an amount ≥ 2^30 are refused (the DECO
