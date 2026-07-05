@@ -262,6 +262,8 @@ dependencies = [
  "dregg-agent",
  "dregg-auth",
  "dregg-cell",
+ "dregg-sdk",
+ "dregg-turn",
  "getrandom 0.3.4",
  "grain-turn",
  "grain-verify",

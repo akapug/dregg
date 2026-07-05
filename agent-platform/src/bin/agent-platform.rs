@@ -33,7 +33,26 @@ fn main() -> std::io::Result<()> {
     let bind = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "127.0.0.1:8903".to_string());
-    let platform = Arc::new(AgentPlatform::new());
+    // The federation node minted turns land on. Unset = the built-in in-process local
+    // node (the default — a locally-hosted node you can actually use). Set
+    // DREGG_NODE_URL to point at an external federation node (a homelab node); the
+    // in-process node still mints + verifies here, forwarding the finalized turn to
+    // that URL over HTTP is the operational deploy step.
+    let node_url = std::env::var("DREGG_NODE_URL")
+        .ok()
+        .filter(|u| !u.is_empty());
+    let platform = Arc::new(match &node_url {
+        Some(url) => AgentPlatform::with_node_url(url.clone()),
+        None => AgentPlatform::new(),
+    });
+    match &node_url {
+        Some(url) => eprintln!(
+            "agent-platform: minted turns land on the local node; deploy target DREGG_NODE_URL={url} (HTTP forward is the deploy step)"
+        ),
+        None => eprintln!(
+            "agent-platform: minted turns land on the built-in local node (set DREGG_NODE_URL to target an external federation node)"
+        ),
+    }
     let workdir_base = std::env::temp_dir().join("dregg-grains");
     std::fs::create_dir_all(&workdir_base).ok();
     let operator = std::env::var("DREGG_OPERATOR_SUBJECT").ok();
