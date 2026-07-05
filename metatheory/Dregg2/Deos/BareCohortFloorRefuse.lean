@@ -294,7 +294,210 @@ private def toyBase : EffectVmDescriptor2 :=
 
 end Witnesses
 
-/-! ## §9 — Axiom hygiene. -/
+/-! ## §9 — THE CAPACITY-GENERAL (tag-parametric) REFUSE — discharge (18) + vault (19) + escrow (17).
+
+The escrow keystone above closes the PRIMARY named forge (a settle-escrow routed to a bare Transfer).
+The SAME method closes the discharge-obligation (tag 18) and vault-deposit (tag 19) dodges: the emit
+welds one decode+refuse block PER capacity tag onto every bare member (at disjoint aux columns — the
+emit-side alignment, exactly as the escrow module treats column layout). This section proves the method
+is sound for ANY capacity tag `T`, once, generically; the three deployed capacity tags are instances. -/
+
+open Dregg2.Deos.ConstraintBinding (tagSettleEscrow tagDischargeObligation tagVaultDeposit)
+
+/-- The felt-domain decode of a floor for an ARBITRARY capacity tag `T`. -/
+def tagBitZ (tag : ℤ) (floor : List ℤ) : ℤ := if tag ∈ floor then 1 else 0
+
+/-- (def_k, tag-parametric) is-zero defining gate `b_k + (tag_k − T)·inv_k − 1 == 0`. -/
+def isZeroDefGateT (tag : ℤ) (tagCol boolCol invC : Nat) : VmConstraint2 :=
+  .base (.gate (.add (.add (.var boolCol)
+    (.mul (.add (.var tagCol) (.const (-tag))) (.var invC))) (.const (-1))))
+
+/-- (force_k, tag-parametric) is-zero forcing gate `(tag_k − T)·b_k == 0`. -/
+def isZeroForceGateT (tag : ℤ) (tagCol boolCol : Nat) : VmConstraint2 :=
+  .base (.gate (.mul (.add (.var tagCol) (.const (-tag))) (.var boolCol)))
+
+/-- The tag-parametric decode gates: four per-slot is-zero gadgets against `T` + the running-OR fold
+into `GENTIAN_FLOOR_ESCROW_COL` (reusing the tag-agnostic OR seed/fold arithmetic). -/
+def decodeGatesT (tag : ℤ) : List VmConstraint2 :=
+  [ isZeroDefGateT tag (cavTagCol 0) (bitCol 0) (invCol 0), isZeroForceGateT tag (cavTagCol 0) (bitCol 0)
+  , isZeroDefGateT tag (cavTagCol 1) (bitCol 1) (invCol 1), isZeroForceGateT tag (cavTagCol 1) (bitCol 1)
+  , isZeroDefGateT tag (cavTagCol 2) (bitCol 2) (invCol 2), isZeroForceGateT tag (cavTagCol 2) (bitCol 2)
+  , isZeroDefGateT tag (cavTagCol 3) (bitCol 3) (invCol 3), isZeroForceGateT tag (cavTagCol 3) (bitCol 3)
+  , orSeedGate (orCol 0) (bitCol 0)
+  , orFoldGate (orCol 1) (orCol 0) (bitCol 1)
+  , orFoldGate (orCol 2) (orCol 1) (bitCol 2)
+  , orFoldGate GENTIAN_FLOOR_ESCROW_COL (orCol 2) (bitCol 3) ]
+
+/-- The tag-parametric refuse block: the decode + the `floorZeroRefuseGate`. -/
+def refuseGatesT (tag : ℤ) : List VmConstraint2 :=
+  decodeGatesT tag ++ [floorZeroRefuseGate GENTIAN_FLOOR_ESCROW_COL]
+
+/-- **`gentianBareRefuseDescriptorT tag d`** — a bare member `d` welded with the tag-`T` decode+refuse
+block. The deployed flag-day welds one such block per capacity tag onto every cohort member. -/
+def gentianBareRefuseDescriptorT (tag : ℤ) (d : EffectVmDescriptor2) : EffectVmDescriptor2 :=
+  { d with
+    name        := d.name ++ "-gentian-bare-refuse-t"
+    constraints := d.constraints ++ refuseGatesT tag }
+
+/-- A tag-decode gate is a member. -/
+theorem decodeGateT_mem (tag : ℤ) (d : EffectVmDescriptor2) (g : VmConstraint2)
+    (hg : g ∈ decodeGatesT tag) : g ∈ (gentianBareRefuseDescriptorT tag d).constraints := by
+  unfold gentianBareRefuseDescriptorT refuseGatesT
+  exact List.mem_append_right d.constraints (List.mem_append_left _ hg)
+
+/-- The refuse gate is a member. -/
+theorem refuseGateT_mem (tag : ℤ) (d : EffectVmDescriptor2) :
+    floorZeroRefuseGate GENTIAN_FLOOR_ESCROW_COL ∈ (gentianBareRefuseDescriptorT tag d).constraints := by
+  unfold gentianBareRefuseDescriptorT refuseGatesT
+  exact List.mem_append_right d.constraints
+    (List.mem_append_right (decodeGatesT tag) (List.mem_singleton.mpr rfl))
+
+/-- A welded gate's body vanishes on a satisfying non-last row (tag-parametric). -/
+theorem bare_gate_holdsT (hash : List ℤ → ℤ) (tag : ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT tag d) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (g : VmConstraint2) (hg : g ∈ (gentianBareRefuseDescriptorT tag d).constraints)
+    (body : EmittedExpr) (hbody : g = .base (.gate body)) :
+    body.eval (envAt t i).loc = 0 := by
+  have hrow := hsat.rowConstraints i hi g hg
+  rw [hbody] at hrow
+  simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, hnl] using hrow
+
+set_option linter.unusedSimpArgs false in
+/-- The tag-parametric OR-fold step. -/
+theorem orStepT {tag : ℤ} {pre : List ℤ} {tg o b oNext : ℤ}
+    (ho : o = tagBitZ tag pre) (hb : b = tagBitZ tag [tg]) (hg : oNext = o + b - o * b) :
+    oNext = tagBitZ tag (pre ++ [tg]) := by
+  rw [hg, ho, hb]
+  simp only [tagBitZ, List.mem_append, List.mem_cons, List.not_mem_nil, or_false]
+  by_cases hp : tag ∈ pre <;> by_cases ht : tag = tg <;>
+    simp only [hp, ht, or_true, or_false, true_or, false_or, if_true, if_false] <;> ring
+
+/-- A per-slot is-zero gadget forces `bitCol k = tagBitZ T [tagColumn]` (tag-parametric). -/
+theorem bit_decodesT (hash : List ℤ → ℤ) (tag : ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT tag d) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
+    (k : Nat)
+    (hdefmem : isZeroDefGateT tag (cavTagCol k) (bitCol k) (invCol k) ∈ decodeGatesT tag)
+    (hforcemem : isZeroForceGateT tag (cavTagCol k) (bitCol k) ∈ decodeGatesT tag) :
+    (envAt t i).loc (bitCol k) = tagBitZ tag [(envAt t i).loc (cavTagCol k)] := by
+  have hdef := bare_gate_holdsT hash tag d hsat i hi hnl
+    (isZeroDefGateT tag (cavTagCol k) (bitCol k) (invCol k)) (decodeGateT_mem tag d _ hdefmem) _ rfl
+  have hforce := bare_gate_holdsT hash tag d hsat i hi hnl
+    (isZeroForceGateT tag (cavTagCol k) (bitCol k)) (decodeGateT_mem tag d _ hforcemem) _ rfl
+  simp only [EmittedExpr.eval] at hdef hforce
+  have hb := isZero_from_gates hdef hforce
+  rw [hb]
+  unfold tagBitZ
+  simp only [List.mem_cons, List.not_mem_nil, or_false]
+  by_cases h : (envAt t i).loc (cavTagCol k) + (-tag) = 0
+  · rw [if_pos h, if_pos (by omega : tag = (envAt t i).loc (cavTagCol k))]
+  · rw [if_neg h, if_neg (by omega : ¬ tag = (envAt t i).loc (cavTagCol k))]
+
+/-- **THE TAG-PARAMETRIC DECODE.** On a satisfying non-last row, the floor column is the felt decode of
+the row's four caveat-manifest type tags against tag `T`. -/
+theorem floor_decodesT (hash : List ℤ → ℤ) (tag : ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT tag d) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false) :
+    (envAt t i).loc GENTIAN_FLOOR_ESCROW_COL
+      = tagBitZ tag (manifestTags (gadgetManifest (envAt t i).loc)) := by
+  have hb0 := bit_decodesT hash tag d hsat i hi hnl 0 (by simp [decodeGatesT]) (by simp [decodeGatesT])
+  have hb1 := bit_decodesT hash tag d hsat i hi hnl 1 (by simp [decodeGatesT]) (by simp [decodeGatesT])
+  have hb2 := bit_decodesT hash tag d hsat i hi hnl 2 (by simp [decodeGatesT]) (by simp [decodeGatesT])
+  have hb3 := bit_decodesT hash tag d hsat i hi hnl 3 (by simp [decodeGatesT]) (by simp [decodeGatesT])
+  have hseed := bare_gate_holdsT hash tag d hsat i hi hnl
+    (orSeedGate (orCol 0) (bitCol 0)) (decodeGateT_mem tag d _ (by simp [decodeGatesT])) _ rfl
+  have hf1 := bare_gate_holdsT hash tag d hsat i hi hnl
+    (orFoldGate (orCol 1) (orCol 0) (bitCol 1)) (decodeGateT_mem tag d _ (by simp [decodeGatesT])) _ rfl
+  have hf2 := bare_gate_holdsT hash tag d hsat i hi hnl
+    (orFoldGate (orCol 2) (orCol 1) (bitCol 2)) (decodeGateT_mem tag d _ (by simp [decodeGatesT])) _ rfl
+  have hf3 := bare_gate_holdsT hash tag d hsat i hi hnl
+    (orFoldGate GENTIAN_FLOOR_ESCROW_COL (orCol 2) (bitCol 3))
+    (decodeGateT_mem tag d _ (by simp [decodeGatesT])) _ rfl
+  simp only [EmittedExpr.eval] at hseed hf1 hf2 hf3
+  have ho0 : (envAt t i).loc (orCol 0) = tagBitZ tag [(envAt t i).loc (cavTagCol 0)] := by
+    rw [show (envAt t i).loc (orCol 0) = (envAt t i).loc (bitCol 0) by linarith [hseed]]; exact hb0
+  have ho1 : (envAt t i).loc (orCol 1)
+      = tagBitZ tag ([(envAt t i).loc (cavTagCol 0)] ++ [(envAt t i).loc (cavTagCol 1)]) :=
+    orStepT ho0 hb1 (by linarith [hf1])
+  have ho2 : (envAt t i).loc (orCol 2)
+      = tagBitZ tag ([(envAt t i).loc (cavTagCol 0), (envAt t i).loc (cavTagCol 1)]
+          ++ [(envAt t i).loc (cavTagCol 2)]) :=
+    orStepT ho1 hb2 (by linarith [hf2])
+  have ho3 : (envAt t i).loc GENTIAN_FLOOR_ESCROW_COL
+      = tagBitZ tag ([(envAt t i).loc (cavTagCol 0), (envAt t i).loc (cavTagCol 1),
+          (envAt t i).loc (cavTagCol 2)] ++ [(envAt t i).loc (cavTagCol 3)]) :=
+    orStepT ho2 hb3 (by linarith [hf3])
+  rw [ho3, manifestTags_gadget]
+  simp only [List.cons_append, List.nil_append]
+
+/-- **THE CAPACITY-GENERAL REFUSE KEYSTONE.** For ANY capacity tag `T` and ANY bare member `d`, a
+satisfying witness of the tag-`T` refuse-welded member on a cell whose COMMITTED manifest declares `T`
+is FALSE — under only `Poseidon2SpongeCR`. The escrow (17), discharge (18), and vault (19) dodges are
+all closed on the default path: the decode pins the floor to the committed manifest, the declaration
+lights `floorCol = 1`, the refuse gate demands `0`. -/
+theorem declared_tag_unsat_under_bare (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (tag : ℤ) (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT tag d) minit mfin maddrs t)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (committedManifest : RotCaveatManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
+    (hreq : tag ∈ manifestTags committedManifest) :
+    False := by
+  have hmeq : gadgetManifest (envAt t 0).loc = committedManifest := caveatCommit_binds hash hCR hbind
+  have hrowreq : tag ∈ manifestTags (gadgetManifest (envAt t 0).loc) := by rw [hmeq]; exact hreq
+  have hdec := floor_decodesT hash tag d hsat 0 hi hnl
+  have hfloor : (envAt t 0).loc GENTIAN_FLOOR_ESCROW_COL = 1 := by
+    rw [hdec]; unfold tagBitZ; rw [if_pos hrowreq]
+  have hrefuse := bare_gate_holdsT hash tag d hsat 0 hi hnl
+    (floorZeroRefuseGate GENTIAN_FLOOR_ESCROW_COL) (refuseGateT_mem tag d)
+    (.var GENTIAN_FLOOR_ESCROW_COL) rfl
+  simp only [EmittedExpr.eval] at hrefuse
+  rw [hfloor] at hrefuse
+  exact absurd hrefuse (by decide)
+
+/-- **The three deployed capacity dodges, closed.** Escrow / discharge / vault are each the keystone
+instantiated at their tag. -/
+theorem declared_discharge_unsat_under_bare (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT (tagDischargeObligation : ℤ) d) minit mfin maddrs t)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (committedManifest : RotCaveatManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
+    (hreq : (tagDischargeObligation : ℤ) ∈ manifestTags committedManifest) :
+    False :=
+  declared_tag_unsat_under_bare hash hCR _ d hsat hi hnl committedManifest hbind hreq
+
+theorem declared_vault_unsat_under_bare (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
+    (d : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash (gentianBareRefuseDescriptorT (tagVaultDeposit : ℤ) d) minit mfin maddrs t)
+    (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (committedManifest : RotCaveatManifest)
+    (hbind : caveatCommit hash (gadgetManifest (envAt t 0).loc) = caveatCommit hash committedManifest)
+    (hreq : (tagVaultDeposit : ℤ) ∈ manifestTags committedManifest) :
+    False :=
+  declared_tag_unsat_under_bare hash hCR _ d hsat hi hnl committedManifest hbind hreq
+
+section CapWitnesses
+private def gateValT (g : VmConstraint2) (loc : Nat → ℤ) : ℤ :=
+  match g with | .base (.gate body) => body.eval loc | _ => 999
+-- The three capacity tags decode both poles: declared ⟹ 1, absent ⟹ 0.
+#guard tagBitZ (tagDischargeObligation : ℤ) [(tagDischargeObligation : ℤ)] == 1
+#guard tagBitZ (tagVaultDeposit : ℤ) [(tagSettleEscrow : ℤ)] == 0
+#guard tagBitZ (tagSettleEscrow : ℤ) [(tagSettleEscrow : ℤ)] == 1
+-- The tag-18 def gate bites when the bit is wrong (tag present, bit 0).
+#guard gateValT (isZeroDefGateT (tagDischargeObligation : ℤ) (cavTagCol 0) (bitCol 0) (invCol 0))
+  (fun c => if c == cavTagCol 0 then (tagDischargeObligation : ℤ) else 0) != 0
+#guard (refuseGatesT (tagVaultDeposit : ℤ)).length == 13
+end CapWitnesses
+
+/-! ## §10 — Axiom hygiene. -/
 
 #assert_all_clean [
   refuse_additive,
@@ -304,7 +507,16 @@ end Witnesses
   bit_decodes_bare,
   floor_decodes_bare,
   declared_escrow_unsat_under_bare,
-  non_declared_floor_zero
+  non_declared_floor_zero,
+  decodeGateT_mem,
+  refuseGateT_mem,
+  bare_gate_holdsT,
+  orStepT,
+  bit_decodesT,
+  floor_decodesT,
+  declared_tag_unsat_under_bare,
+  declared_discharge_unsat_under_bare,
+  declared_vault_unsat_under_bare
 ]
 
 end Dregg2.Deos.BareCohortFloorRefuse
