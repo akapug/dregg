@@ -99,7 +99,7 @@ Zero `sorry` / `admit` / `sorryAx`. One benign `native_decide` (below).
 | `Ed25519EufCma` / `SchnorrDLHard` / BLS `SnarkOk`,`BlsAggregateOk` | `Crypto/Ed25519Reduction.lean:18`, `Crypto/SchnorrCurveField.lean`, `Crypto/BlsThreshold.lean:148-150` | EUF-CMA game / DL hardness / pairing+SNARK accept bits | terminal-by-design | Prop carriers whose negation is a concrete solver; two-sided teeth (`forge_not_eufCma`). |
 | `GnarkRefines` / `TranscriptRefines` | `Circuit/FriVerifier.lean:849,861` | gnark circuit computes the SAME Bool / challenger as Lean `verifyAlgo` | terminal **code-trust** (not crypto) | A Rust/Go↔Lean *code refinement*, honestly labeled, fixture-anchored. |
 | **`DeployedRefines`** | `Circuit/FriVerifierBridge.lean:92` | deployed Rust `verify_batch` accept ⟹ spec `verifyAlgo` accept | **CHECKED (terminal code-refinement, battery-backed)** — was ATTACK-SURFACE | Discharged 2026-07-03 by `circuit/tests/deployed_refines_verifier_teeth.rs` (per-tooth tamper battery, green) + a source cross-map (§6 R2): every `verifyAlgo` reject-tooth bites in the deployed `verify_batch`; no modeled check is absent. Residual = the `GnarkRefines`-class Rust↔spec refinement. |
-| **`DeployedFaithful{,Eff,8}`** | `Circuit/DeployedCapTree.lean:305 / 353 / 732` | a conferring member leaf opened in the deployed depth-16 cap-tree IS backed by a real held `FacetCap` (toy-caps ↔ deployed-leaf codec faithfulness) | **reducible-open** | The ONE carrier that is a *dregg-specific representation/codec* property, not a standard crypto primitive. Sits on the authority leg (`deployedCapOpen_implies_authorizedB:327`) + the exercise hold-gate (`Dregg2.lean:652`). Honestly a `structure … : Prop`, not laundered — but provable-in-principle by modeling the leaf codec. |
+| **`DeployedFaithful{,Eff,8}`** | `Circuit/DeployedCapTree.lean:305 / 353 / 732` | a conferring member leaf opened in the deployed depth-16 cap-tree IS backed by a real held `FacetCap` (toy-caps ↔ deployed-leaf codec faithfulness) | **PROVEN — reducible, DISCHARGED IN-TREE** (was "reducible-open"; see §6 R4) | Is a hypothesis ONLY when carried over a *free* `leafAt`. For the CANONICAL leaf function `canonicalLeafAt caps` (the leaves the tree actually commits, built from the c-list — the cap-tree analog of `recStateCommit`'s "leaves from the kernel"), `deployedFaithfulEff_canonical` (`:551`) / `deployedFaithfulEff_canonical8` (`:779`) PROVE `DeployedFaithful*` UNCONDITIONALLY (the `backed` witness is read off `find?`; the membership hyp is discarded), `#assert_axioms`-clean (`:938,:947`, build-verified green). The LIVE authority leg routes through the SLIM `EffAuthoritySourceCanon`/`TransferAuthoritySourceCanon` (`hfaith`/`leafAt` RETIRED — `CircuitSoundnessAssembled:739`, `RotatedKernelForestFacet:67`, `ClosureTransfer:187`). The residual floor beneath is `Compress8CR` (already terminal, correctly named) + the named IPC-tier `vkOfTag` side condition. NOT parked in the floor. |
 
 **`#assert_namespace_axioms except` clauses:** the tactic supports `except`
 (`Tactics.lean:155`) but **no invocation in the tree uses it** — zero keystones
@@ -117,10 +117,14 @@ carriers as typeclass/hypothesis arguments and never see them, and a FALSE
 counter-half is pinned (`PortalFloor.lean:466-529`). Confirmed non-vacuous.
 
 **Verdict (floor):** the crypto floor is genuinely terminal and correctly scoped —
-no dregg-specific property is parked as a crypto `axiom` — **except**
-`DeployedFaithful{,Eff,8}` (a reducible codec-faithfulness property inside the
-"terminal" floor) and `DeployedRefines` (a code-trust equation marketed as
-verifier-out-of-TCB but never discharged). Those two are the floor's soft spots.
+no dregg-specific property is parked as a crypto `axiom`. The two prior "soft
+spots" are now discharged/checked: `DeployedFaithful{,Eff,8}` is **PROVEN**
+(reducible AND already discharged in-tree by `deployedFaithfulEff_canonical{,8}`
+for the canonical leaf set — the census's original "reducible-open" was
+STALE-pessimistic; see §6 R4 for the attack + verdict), and `DeployedRefines` is
+CHECKED (terminal code-refinement, battery-backed; §6 R2). The genuine floor
+under `DeployedFaithful` is the standard `Compress8CR` (Poseidon2 CR at 8-felt
+width), which is correctly named terminal-by-design in the row above.
 
 ---
 
@@ -395,13 +399,75 @@ each is a genuine hole (not a terminal floor) with a concrete refutation to try.
    green while the producer diverges. **(exploitable via any coverage gap;
    tractable as a coverage audit.)**
 
-4. **R4 — `DeployedFaithful{,Eff,8}` codec faithfulness parked in the floor (§1).**
-   The one dregg-specific representation property inside the "terminal" crypto
-   floor, load-bearing on the authority leg + exercise hold-gate. Provable in
-   principle by modeling the deployed depth-16 cap-tree leaf codec. **Refutation /
-   close:** exhibit a deployed leaf that opens as conferring but is NOT backed by a
-   real held `FacetCap` (test the codec's injectivity), or discharge the hypothesis
-   by proving the codec. **(medium exploitability; medium tractability.)**
+4. **R4 — `DeployedFaithful{,Eff,8}` — PROVEN (reducible AND already discharged
+   in-tree; attacked 2026-07-05).** The original R4 classification ("reducible-open,
+   provable-in-principle by modeling the leaf codec") was **STALE-pessimistic** —
+   the reduction is not merely possible, it is DONE and CI-pinned at HEAD. This is
+   the verify-before-pessimism dual of the R1 catch: an audit read a *carrier NAME*
+   (`structure DeployedFaithful … : Prop`) as a parked floor hypothesis without
+   grounding whether the tree already discharges it.
+
+   **What it states.** `DeployedFaithful S vkOfTag provided caps root leafAt`
+   (`DeployedCapTree.lean:305`; `.Eff:353` generalizes the pinned `EFFECT_TRANSFER`
+   to an arbitrary effect bit; `.8:732` / `Eff8:717` lift the digest to the native
+   8-felt tree) carries ONE field, `backed`: a TRANSFER-conferring member leaf
+   opened in the deployed depth-16 cap-tree at an `(actor ⇒ src)` edge is backed by
+   a real held `FacetCap` over `src` whose facet permits `EFFECT_TRANSFER` under a
+   satisfied tier. It is the toy-`Caps` ↔ deployed-leaf codec faithfulness — a
+   *dregg representation property*, NOT a crypto primitive.
+
+   **Where it WAS a hypothesis, and why that is now moot.** It is a hypothesis only
+   when carried over a *free* `leafAt` (any leaf assignment). The old
+   `EffAuthoritySource`/`TransferAuthoritySource` structures did carry
+   `hfaith : DeployedFaithful*` as an assumed field over a free `leafAt` — the
+   soundness analog of the ledger-faithfulness laundering. But the ledger does NOT
+   assume its faithfulness: it BUILDS the commitment from the kernel (`recStateCommit`
+   is a function OF `k`) and recovers `k` by CR injectivity. §6.D/§5b of
+   `DeployedCapTree.lean` supplies the missing analog **builder** for the cap-tree:
+   `canonicalLeafAt caps` (`:481`) — the leaf function the deployed
+   `compute_canonical_capability_root_felt` actually commits (leaf-per-held-cap via
+   `find?`). For THAT canonical leaf function, `deployedFaithfulEff_canonical`
+   (`:551`) and `deployedFaithfulEff_canonical8` (`:779`) prove `DeployedFaithful*`
+   **UNCONDITIONALLY, for ANY root** (the `backed` obligation is structural in the
+   c-list encoding: a conferring canonical leaf EXISTS only when built from a held
+   conferring cap, so the witness is the held cap `find?` returns; the membership
+   hypothesis `_hopen` is *discarded*), modulo only the named IPC-tier `hipc` side
+   condition (a `Custom` tier rides the `vkOfTag` felt residual — transfers never use
+   `Custom`). Both discharge lemmas are `#assert_axioms`-clean (pins `:938,:947`;
+   whole cone rebuilt green, 3131 jobs).
+
+   **The LIVE authority leg consumes the discharged version** (verified, not just
+   defined — the R1 "ground on the DEPLOYED artifact" discipline): the slim
+   `EffAuthoritySourceCanon`/`TransferAuthoritySourceCanon`
+   (`RotatedKernelRefinementFacet.lean:573,630`, `hfaith`/`leafAt` RETIRED) are what
+   `CircuitSoundnessAssembled.lean:739`, `RotatedKernelForestFacet.lean:67`,
+   `ClosureTransfer.lean:187` (`TransferAuthorityWitness`), and
+   `RotatedKernelRefinementFacetTurnBound.lean` actually take; faithfulness is
+   *constructed* inside `effAuthoritySourceCanon_authorizes` via
+   `deployedFaithfulEff_canonical8`, never a carried field. `EFF_TRANSFER = 1 < 32`
+   fits the `1 <<< n` single-bit shape exactly. `DeployedFaithful` is NOT among the
+   apex's ledgered carriers (§4: `[StarkSound]`, `Poseidon2SpongeCR`, `CommitSurface`
+   CR, `hrefines`, `WitnessDecodes`) — it lives *inside* the per-effect
+   `descriptorRefines` rung, discharged there.
+
+   **Verdict: PROVEN (reducible + discharged in-tree).** The genuine terminal floor
+   beneath — leaf/node injectivity binding the committed root to a unique leaf set —
+   is `Compress8CR` (Poseidon2 CR at 8-felt ~124-bit width), which §1 already lists
+   correctly as terminal-by-design. There is no dregg-specific property parked in the
+   floor here. The attack "exhibit a conferring deployed leaf NOT backed by a held
+   cap" fails against the canonical construction: such a leaf would have to be
+   `canonicalLeaf c` for a held `c` (or the deny-all leaf, which never confers).
+
+   **The one honest same-class carry still standing (a NAMED follow-up, not an R4
+   hole):** the exercise hold-gate's sibling `ExerciseHoldFaithful`
+   (`RotatedKernelRefinementExerciseAuth.lean:89`, consumed at `:125,:282`) is the
+   IDENTICAL residual class but has NOT yet been instantiated with the canonical
+   discharge — its `backed : leaf.target = target → exerciseGuard pre actor target`
+   is still a carried `hfaith` field over the opened leaf. It is dischargeable by the
+   same `canonicalLeafAt` pattern (a conferring canonical leaf ⟹ held cap ⟹
+   `exerciseGuard`); the drop-in is deferred (it rides the 1-felt `CapHashScheme`
+   source, so it needs the same 8-felt/canonical re-seat the transfer leg already
+   got). **(R4 proper: CLOSED. Follow-up: instantiate `exerciseHoldFaithful_canonical`.)**
 
 5. **R5 — transferCapOpenTB ~31-bit LC binding (S3 / D5).** A live sub-floor
    commitment on a cap-open transfer's turn identity — grindable below the ~130-bit
