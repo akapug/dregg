@@ -75,17 +75,37 @@ smaller than ACP, and mappable onto it later:
 for priced calls, `cell-read`/`cell-write`, …); an unmappable proposal is refused
 in-band, exactly as an over-budget action is.
 
-## Staging
+## What runs today
 
-1. **The seam + protocol** — `ConfinedBrain` + the line protocol, validated
-   against a stand-in body over an in-process pipe (proposal→verdict translation
-   correct, refusals surfaced, done terminates). No jail yet.
-2. **The real jail** — spawn the body under firmament `process-pd[-sandbox]`,
-   the endpoint fd carrying the protocol; the confinement teeth asserted.
-3. **A real grain, end-to-end** — `agent-platform` rents a grain, drives it with
-   a `ConfinedBrain` over a jailed body, meters + receipts each turn, and the
-   renter verifies (R2) the whole session — the jailed body's authority never
-   exceeds the grain's caps, its spend never exceeds the lease budget.
+- **The seam + protocol** — `ConfinedBrain` + the line protocol; `map_proposal`
+  translates a proposal into the grain's `AgentAction` vocabulary and refuses the
+  malformed in-band. (`grain-jail/src/{lib,protocol}.rs`.)
+- **The real jail** — `spawn_confined_body` (`real-jail` feature,
+  `grain-jail/src/jail.rs`) forks the body into a firmament process-PD confined
+  to Endpoint-only (macOS Seatbelt / Linux seccomp+Landlock) and drives it over
+  the surface socketpair. A jailed body cannot open a host file; the tooth is
+  asserted in `jail::tests`.
+- **A real grain, end-to-end** — `grain-jail/tests/grain_end_to_end.rs`:
+  `agent-platform` rents a grain, drives it with a `ConfinedBrain` (in-process
+  AND, under `real-jail`, a genuinely OS-jailed body), meters + mints each turn,
+  and the renter verifies (R2) that every turn is a committed kernel turn; a
+  proposal for an ungranted cell is cap-refused; a forged manifest is refused.
+- **A runnable demo** — `cargo run -p grain-jail --example rent_a_confined_agent`
+  (add `--features real-jail` to OS-jail the body).
+
+## Frontier
+
+- **The real coding-agent body.** The jail denies `execve`, so an arbitrary
+  external agent binary needs a granted exec-door. The buildable shape is a
+  confined in-jail Rust harness reaching a model over ONE granted, revocable
+  egress door (firmament `with_read_path` / the egress policy) — the harness is
+  jailed, its only outward reach is the model API, its only inward reach is the
+  grain's cap-gated seam.
+- **Productization.** `agent-platform` gaining a first-class jailed-grain drive
+  (rent → jailed body → drive) so the confined agent is a rentable product, not
+  only a test path.
+- **R3.** The whole-session STARK fold (`grain_verify::WHOLE_HISTORY_GAP`) stays
+  the grain's verifiability frontier; R2 is today's ceiling.
 
 ## Boundaries (what this is not)
 
