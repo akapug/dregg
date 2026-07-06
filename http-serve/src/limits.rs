@@ -7,23 +7,18 @@
 //! Ported dregg-native from the prior operated layer (the hardened
 //! connection loop: `Limits` :93, `read_sized_body` :839, `read_chunked_body`
 //! :869, `is_timeout` :950), where these bounds guarded the public internet
-//! surface. The current [`serve_http_connection`](crate::serve::serve_http_connection)
-//! enforces only the 64 KiB header cap — no read/write timeout, no body cap, no
-//! connection ceiling, no deadline. These limits reject only abusive/malformed
-//! traffic; a well-behaved client sees the same bytes as before.
+//! surface. These limits reject only abusive/malformed traffic; a well-behaved
+//! client sees the same bytes as before.
 //!
 //! Everything here is pure `std` (the crate's no-deps property is preserved).
 //!
-//! WIRING (main loop): add `pub mod limits;` to `http-serve/src/lib.rs`, then in
-//! `serve.rs`
-//! - `serve_http`: hold a [`ConnGate`] permit around each spawned connection
-//!   thread (`Limits::from_env().max_connections`);
-//! - `serve_http_connection`: take a `&Limits`, call [`Limits::apply_socket`]
-//!   first, carry `deadline = Instant::now() + limits.request_deadline` through
-//!   the header loop (408 via [`is_timeout`] / deadline check), use
-//!   `limits.max_header_bytes` for the 431 cap, and read the body through
-//!   [`read_sized_body`] / [`read_chunked_body`] mapping [`BodyOutcome`] to
-//!   413/408/400 (`WebResponse::error`).
+//! WIRED into [`crate::serve`]: [`serve_on`](crate::serve::serve_on) holds a
+//! [`ConnGate`] permit (`max_connections`) across each connection thread, and
+//! [`serve_http_connection_limited`](crate::serve::serve_http_connection_limited)
+//! applies [`Limits::apply_socket`] first, carries the request deadline through
+//! the header loop (`408` via [`is_timeout`] / the deadline check), enforces
+//! `max_header_bytes` (`431`), and reads the body through [`read_sized_body`] /
+//! [`read_chunked_body`], mapping [`BodyOutcome`] to `413`/`408`/`400`.
 
 use std::io::Read;
 use std::net::TcpStream;
