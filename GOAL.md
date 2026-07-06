@@ -1,194 +1,66 @@
-# GOAL — deos as the substrate for confined, verifiable, forkable hosted agents
+# GOAL — STORAGE-IN-LEAN: rebuild the dregg storage layer in Lean (proven), package to Rust
 
-**Standing goal (set 2026-07-05, ember asleep → Fable works the night):**
-Unify the grain and the confined-hermes hosting stacks so a hosted agent (a
-jailed coding agent, or any BYO brain) IS a first-class grain: OS-jailed +
-leased/metered + persisted-as-forkable-mind-cell + R2-verifiable by the renter.
+## The mission
+Rebuild the Rust storage constructions **IN LEAN as the source of truth** — executable Lean
+`def`s + REAL theorems — then package to Rust via `@[export]` (leanc-compiled, FFI'd, like the
+kernel), retiring the hand-written Rust. North star: **decentralized storage providers with
+erasure + fountain codes + proof-of-retrievability + a provider market, all Lean-verified.**
 
-North star: *rent a coding agent you can jail, budget, fork, rewind, and
-cryptographically audit against the chain.*
+## THE PATTERN (proven — follow it exactly)
+The template is `metatheory/Dregg2/Storage/BucketCommitment.lean` (committed `06a1e8fe8`):
+- Build on the existing Lean machinery — `Dregg2.Lightclient.MMR` (`mroot`, `mroot_injective`,
+  `Opens`, `mroot_binds_position`; the executable Merkle with real binding proofs), and the ONE
+  crypto floor `Dregg2.Circuit.Poseidon2Binding.Poseidon2SpongeCR`.
+- Prove the REAL property (`contentRoot_injective`: the root binds the object set; `read_sound`:
+  the trustless read). Reduce to the existing theorems + CR — do NOT re-prove Merkle from scratch.
+- The ONLY assumption is `Poseidon2SpongeCR`, threaded as a HYPOTHESIS (not a Lean axiom). Prove
+  it `#assert_axioms`-clean. Carrier ONLY at the irreducible crypto floor (the §8 line the circuit
+  already draws) — NEVER carrier the math you can prove.
+- Iterate single-file: `cd metatheory && lake env lean Dregg2/Storage/<File>.lean` (fast, cached).
+- Integrate: add `import Dregg2.Storage.<File>` to `metatheory/Dregg2.lean` (with a one-line
+  descriptive comment matching the style), then `lake build Dregg2.Storage.<File>` (~15s cached).
+- Commit path-specifically (`git commit <files> -F -`) — `Dregg2.lean` is a shared file (many
+  lanes); path-specific commits avoid the shared-index race. `git add && git commit` bypasses the
+  boundary guard AND can lose a stage to a concurrent lane.
 
-## STATE FOR MORNING-EMBER (2026-07-06 ~02:20, overnight session)
-The confined-body grain — INCLUDING the egress door and the full model-driven
-mechanic — is DONE and green (18 commits, `8de7447da`..`95581b198`). The NORTH
-STAR is architecturally proven: a jailed body reads instructions from a "model"
-over its ONE granted egress door, relays them as proposals to a real grain that
-cap-gates + meters + mints + R2-verifies each, and reaches NOTHING but the model.
-The only mock is the model itself. Egress deny verified non-vacuously on macOS
-Seatbelt. Full hostile-body robustness (crash/hang+SIGKILL/garbage/cap/flood).
-A hosted body plugs into the grain's `AgentBrain` seam as a `ConfinedBrain`
-(crate `grain-jail`), so with ZERO grain-drive-path change a body is OS-jailed
-(firmament, macOS Seatbelt — validated locally, denies /etc/passwd), yet every
-action is cap-gated + metered + minted + R2-verified, does real file work through
-the seam, and a crashing body leaves the grain clean. Play with it:
-`cargo run -p grain-jail --example rent_a_confined_agent [--features real-jail]`.
+## HARD-WON LESSONS (do not repeat)
+- **The 2026-07-06 mis-fire**: I first swarmed Rust-first-with-Lean-"probes" + assumed the hard
+  math via "honest carriers". WRONG. ember: "the whole point is to rebuild all that old rust shit
+  in lean." Lean-first, real proofs, no probes, no carriering the provable math.
+- **CENSUS FIRST**: I overwrote a real 29KB `storage/src/erasure.rs` (Reed–Solomon, k-of-n,
+  availability sampling) with a stub because I assumed it didn't exist. The Rust storage is RICH
+  (`erasure`, `availability`, `retrieval`, `sharding`, `bucket_commitment`, `dedup`, `quota`,
+  `metering`, `wal`, the queue primitives). READ the Rust construction you're rebuilding first.
+- **Lean is LOCAL** (never persvati/hbox). Lean builds are slow; single-file `lake env lean` for
+  iteration, full `lake build` as the integration gate.
+- **Verify agent claims** + **don't launder**: green + self-reported ≠ verified. A `P→P` Lean
+  theorem builds green. Audit every theorem STATEMENT for non-vacuity (refutable on a false
+  instance). Lead the HARD proofs (codec correctness) myself; only fan out the tractable ones
+  (decidable-eval cell-programs) against the proven template, with a hard `#assert_axioms` audit.
 
-WHY I STOPPED HERE (not blocked, a quality call): the one remaining north-star
-piece — the real coding-agent body (an in-jail LLM harness over ONE granted
-egress door) — is first-of-its-kind, security-sensitive network-confinement work
-(no existing firmament test drives the real net door from a jailed child; a
-correct deny-test must distinguish sandbox-EPERM from ECONNREFUSED on macOS SBPL).
-Rushing it at 00:25 risked a vacuous/wrong test. It is CRISPLY SCOPED with exact
-APIs in `docs/deos/GRAIN-CONFINED-BODY.md` (Frontier) — a clean fresh-head start.
+## Next constructions (each: Lean-first, proven, then packaged)
+1. **RS/erasure correctness** — `Dregg2/Storage/Erasure.lean`: decode of any k-of-n shards = the
+   original (the emblematic "rebuild the Rust codec in Lean"; a real algebraic theorem —
+   Vandermonde/RS-distance; the field arithmetic is the hard part). Rust twin: `storage/src/erasure.rs`.
+2. **Proof-of-retrievability** — `Dregg2/Storage/Retrievability.lean`: challenge → Merkle opening
+   → verify over `contentRoot`; verify accepts ⟹ the provider holds the challenged data (Merkle
+   soundness REAL via BucketCommitment.read_sound; sampling-extractability the honest carrier). NEW.
+3. **Fountain/rateless codes** — `Dregg2/Storage/Fountain.lean`: LT/Raptor; decode(≥k+ε droplets)
+   = original, droplets bind `contentRoot`. NEW (no Rust yet). Hand-roll a real LT (robust soliton
+   + BP decode); the recovery bound may be an honest carrier, the root-binding must be real.
+4. **Provider market** — `Dregg2/Verify/…` or a cell-program: deals/bond/slash/registration as a
+   decidable-eval cell-program (TRACTABLE real proof, like `QueueFactoryProbe`). Rust twin lives in
+   `dregg-storage-templates` (a template, not a codec).
+5. **@[export] packaging** (batch, later): compile the executable Lean defs to native via leanc,
+   wire into `dregg-lean-ffi` (the `libdregg_lean.a` archive splice), thin Rust FFI bindings,
+   retire the hand-written Rust codecs. See `dregg-lean-ffi/build.rs` + the `@[export]` surface
+   (`dregg_exec_full_turn` etc. — the kernel is already Lean-compiled-into-Rust).
 
-## Verified GAPS (from a resume-tick verify-before-building pass)
-- FORK/REWIND a CONFINED session is BLOCKED: fork/rewind/stitch live on
-  `grain-fork::Grain` (mind = raw `learn`/`recall` cell memory, NO agent-brain
-  drive); the confined session lives on `agent-platform::Tenant` (brain-driven,
-  only R1 checkpoint-countersign, NO fork/rewind). Composing them = the spine-#4
-  grain-struct UNIFICATION (give the Tenant's Session-mind fork/rewind, OR give
-  grain-fork::Grain an AgentBrain drive) + an agent-platform edit (another
-  terminal's file). A real unit, not a demo.
-- EGRESS DOOR needs a firmament API note: `spawn_pd_confined_with_surface` gives a
-  clean byte-pipe but the DEFAULT (endpoint-only) confinement; `spawn_pd_confined_
-  with(granted, Confinement, body)` takes a custom `Confinement` (add the net door
-  via `with_net_out("host:port")`) but gives NO surface socket. Combining a net
-  door WITH a clean line-protocol pipe needs either a firmament surface+confinement
-  variant (edit the excluded firmament crate) or the fd-recovery dance
-  (deos-hermes's `recover_endpoint_fd`). RESOLVED: the KernelClient lead is a DEAD
-  END — `KernelClient { sock: Mutex<UnixStream> }` keeps its socket PRIVATE (no
-  accessor). So the clean path is a small FIRMAMENT ADDITION: a
-  `spawn_pd_confined_with_surface_and_confinement(granted, Confinement, body)`
-  variant giving BOTH a net-door `Confinement` AND a surface `UnixStream` (mirror
-  `spawn_pd_confined_with_surface` but thread a Confinement into
-  `spawn_pd_inner_with_extra`). Editing the excluded firmament crate = coordinated/
-  fresh-head. THAT is the real first step of the egress door; then grain-jail's
-  `spawn_confined_body_with_egress` is trivial on top. Decide before building the LLM body.
-
-## Next moves (fresh head)
-1. The egress door — resolve the surface+netdoor variant question above first,
-   then `spawn_confined_body_with_egress` (`Confinement::with_net_out`, ONE
-   host:port) + a CORRECT deny test (distinguish sandbox-EPERM from ECONNREFUSED).
-2. The in-jail model harness: `OpenAICompatBrain` inside the jail over a MOCK
-   model server on 127.0.0.1 → the full "rent a coding agent" mechanic.
-3. Spine-#4 grain-struct unification (fork/rewind a confined session).
-4. PRODUCTIZE in agent-platform (first-class confined/jailed drive) — other
-   terminal's file; helper or quiet window. + run `--features real-jail` in CI.
-
-## Key grounding facts (verified at HEAD)
-- The unification seam is `AgentBrain` (`dregg-agent/src/agent.rs:482`):
-  `next_action(step)->Option<AgentAction>` + `observe(&ActionObservation)`.
-  A jailed body plugs in as a brain — the grain drive path is unchanged.
-- `deos-hermes` is a STANDALONE heavy workspace (pulls `dregg-sdk` default =
-  verified Lean executor) → a main-workspace crate can't depend on it. Reuse the
-  jail primitive directly: `dregg-firmament` `process-pd` = `libc`-only (cheap),
-  `process-pd-sandbox` adds seccomp+landlock. That's the light path.
-- `agent-host/src/isolation.rs` `JailSpec` (bwrap, Linux-only) is a 2nd backend.
-
-## Next 3 moves
-1. `grain-jail` crate: the line protocol + `ConfinedBrain` (AgentBrain impl),
-   validated against a stand-in body over a pipe. No jail yet. [UNIT 1 — code
-   written, building (blocked on the shared cargo lock)]
-2. Spawn the body under firmament `process-pd[-sandbox]`; assert confinement
-   teeth. [UNIT 2]
-3. Drive a real `agent-platform` grain with a `ConfinedBrain` end-to-end;
-   renter verifies (R2) the jailed session. [UNIT 3]
-
-## Unit-2 grounding (verified at HEAD)
-- `dregg-firmament` is workspace-EXCLUDED (its own `[workspace]`, edition 2021),
-  BUT members `servo-render`/`starbridge-v2`/`android-cell`/`starbridge-web-surface`
-  already path-dep it — so `grain-jail` CAN path-dep it under a `real-jail`
-  feature (cargo ignores a path-dep's own `[workspace]`). No manifest fight.
-- `process-pd` = `libc`-only (fork/fd-close/socketpair); `process-pd-sandbox`
-  adds seccomp+landlock (Linux). macOS sandbox: firmament HAS a Seatbelt backend
-  (`process_kernel.rs:1247`), so the real OS-jailed body can be validated LOCALLY
-  on this macOS box, not only on a Linux builder. `spawn_pd_confined` lives in
-  `sel4/dregg-firmament/src/process_kernel.rs`.
-
-## Reorder note
-UNIT 3 (real-grain end-to-end) pulled AHEAD of UNIT 2 (firmament jail): proving
-the unification against the real grain machinery is higher value-per-risk than
-hand-rolling firmament fork/fd at this hour. Key facts that made it clean:
-`drive`/`drive_serving` take `&mut dyn AgentBrain` (ConfinedBrain slots in);
-`AgentAction::CellWrite` is INTRINSIC (`agent.rs:1775` `state.cells.insert` — no
-external tool); `cell:<path>` caps grant the write. So a ConfinedBrain over an
-in-process channel drives a real grain with zero drive-path change. Unit 2 (swap
-the in-process channel for a firmament endpoint fd via `spawn_pd_confined_with_
-surface` → clean parent `UnixStream`) is next; it needs `process-pd-sandbox`
-(macOS Seatbelt works locally).
+## STILL-OPEN from this session (not storage-in-lean but owed)
+- **Storage endpoint auth-gap**: `app-framework/src/inbox_endpoint.rs` STILL trusts a
+  client-asserted `sender_hex` (P0-5 fail-open) — must derive the sender from a SIGNED action
+  (fail-closed), two-pole. (An agent was mid-flight; killed. Redo — it has `auth.rs`/`cipherclerk.rs`
+  siblings for the real auth.) Same twin already fixed at `node/api.rs:2493` (`75f6b0032`).
 
 ## Done-log
-- Grounded the grain↔confined-body seam; wrote `docs/deos/GRAIN-CONFINED-BODY.md`.
-- UNIT 1 LANDED (`8de7447da`): `grain-jail` (protocol + `ConfinedBrain` + map +
-  5 tests green), added to workspace.
-- UNIT 3 LANDED (`ee47494c4`): `grain-jail/tests/grain_end_to_end.rs` — a
-  ConfinedBrain drives a REAL grain (rent → drive_serving → meter → R2 verify →
-  forgery refused; + a cap-refusal test). 2 tests green.
-- UNIT 2 LANDED (`f855fec2a`): `grain-jail/src/jail.rs` (`real-jail` feature) —
-  a REAL firmament-jailed body (macOS Seatbelt) drives the ConfinedBrain over a
-  socketpair and is DENIED /etc/passwd (confinement tooth bites). Validated
-  locally. Run with `--features real-jail`.
-- UNIT 4 LANDED (`d994fdee9`): a REAL jailed body drives a REAL grain, R2-verified
-  — the complete mechanic bar the LLM.
-- DEMO + DOCS LANDED (`49d1ee5b2`, `bb9666e69`): runnable `cargo run` example
-  (both in-process + `--features real-jail`), `docs/guide/CONFINED-AGENTS.md`.
-- CRASH-ROBUSTNESS LANDED (`23df1d51e`): a jailed body that crashes mid-session
-  leaves the grain clean + R2-verifiable (host absorbs a hostile/faulty body).
-- OP EXTENSION LANDED (`4fff5263a`): protocol `args` → generic `Op(ToolCall)` so a
-  confined body does REAL file work (fs_write host-side, cap-gated).
-- HOSTILE-BODY ROBUSTNESS COMPLETE: crash (`23df1d51e`) + hang/timeout+SIGKILL-reap
-  (`4973c6a59`) + flood/OOM cap (`ea92ed7d3`) + garbage + cap-exceed.
-- EGRESS DOOR LANDED (`3277d4cec`): firmament `spawn_pd_confined_with_surface_and_
-  egress` + grain-jail `spawn_confined_body_with_egress` — a jailed body reaches
-  EXACTLY one granted host:port; NON-VACUOUS deny test (macOS Seatbelt, two live
-  listeners) verifies granted-reachable ∧ ungranted-denied.
-- CAPSTONE LANDED (`95581b198`): a model-driven jailed body runs a real grain over
-  its egress door, R2-verified — the full "rent a coding agent" loop (mock brain).
-- DEMO SHOWCASES THE FULL STORY (`91e95f3ce`): `cargo run -p grain-jail --example
-  rent_a_confined_agent --features real-jail` = OS-jailed + model-driven +
-  net-reaches-only-the-model + cap-gated + metered + R2-verified, in one command.
-- CONFINEMENT MATRIX COMPLETE (`51f796366`): the egress dual — a jailed body with
-  NO grant reaches NO network (default-deny), verified on macOS Seatbelt. (Granted
-  → exactly one door; sealed → nothing.)
-
-## THE ONE OPEN EMBER DECISION
-Everything in the goal is done + green (24 commits) EXCEPT "forkable confined
-session," which needs a substantial addition to `agent-platform` (a Tenant
-checkpoint-HISTORY mechanism — the Tenant persists only the latest carrier today;
-`grain-fork::Grain` has the history model to copy). It's a shared file + a real
-unit. DECISION: build it (a coordinated ~session's work), or leave it as a scoped
-follow-up? Until then, the confined-body grain is complete to its solo-buildable
-maximum.
-
-## FORK-A-CONFINED-SESSION — SCOPE VERIFIED (resume tick ~04:30)
-Checked: the tree is quiescent (agent-platform last commit `8a0b8550a`, no
-uncommitted changes). BUT the fork/rewind is NOT a small additive change: the
-Tenant persists only the LATEST SessionCarrier (overwrites the EXEC_COLL working
-slots via `advance_checkpoint` — a Monotonic cursor, no stored history), so
-rewind-to-an-earlier-point / fork-from-a-checkpoint needs a NEW checkpoint-HISTORY
-mechanism (multiple carriers at addressable roots, like `grain-fork::Grain`'s
-`checkpoints: Vec<GrainCheckpoint>` + `checkpoint_roots()`, which the Tenant lacks).
-That is a substantial agent-platform addition — coordinated/deliberate, not a
-4:30am quiet-window slip. Ember decision / coordination gated.
-
-## CORE ASPECT ACHIEVED (2026-07-06 ~03:25)
-The confined-body grain — the goal's north star — is proven, tested (10 lib + 6
-e2e + firmament), demoed (full story runnable), documented, and robust. Every
-remaining frontier item has a real blocker for solo overnight work: a REAL LLM
-needs a working provider (broken in-env; the loopback-proxy shape is already
-demonstrated by the demo's mock model over the door); productization + SSE touch
-agent-platform (another lane's file); fork-a-confined-session is spine-#4
-(grain-struct unification + an agent-platform edit). Loop stays alive for those
-under coordination / fresh conditions; nothing more is cleanly solo-buildable.
-
-## What "awesome" is next (post-spine)
-- A runnable EXAMPLE (`cargo run`) — the "rent a verifiable confined agent" demo.
-- docs/guide onramp.
-- PRODUCTIZE: agent-platform gains a first-class jailed-grain drive (⚠ agent-
-  platform is another terminal's active file — do via a grain-jail helper or a
-  quiet-window edit, not a clobber).
-- The real coding-agent body: a confined Rust harness + a GRANTED EGRESS DOOR to
-  an LLM (firmament `with_read_path`/egress) — the jail denies execve, so the
-  body is in-jail Rust reaching the model over one revocable door. [bigger]
-- SSE transcript: replay → incremental live push (spine #5).
-
-## Open decisions for morning-ember
-- (none yet)
-
-## Honest caveats carried
-- Live external Nous hermes broken in-env (`ModuleNotFoundError: acp`) → validate
-  live via the Rust stand-in ACP peer / `--brain hermes` model-over-portal.
-- Grain R3 whole-history STARK is a known gap (`WHOLE_HISTORY_GAP`); R2 is the
-  verifiability ceiling today.
-- `agent-host/src/isolation.rs` bwrap jail is built-but-unwired.
-  stack name (the HTTP stack is `httpe`); a commit hook enforces this.
+- `06a1e8fe8` — storage-in-lean (1/N): `BucketCommitment.lean` proven + in-corpus. THE PATTERN.
