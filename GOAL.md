@@ -26,14 +26,28 @@ Design: `docs/deos/GRAIN-CONFINED-BODY.md`.
 
 ## Next 3 moves
 1. `grain-jail` crate: the line protocol + `ConfinedBrain` (AgentBrain impl),
-   validated against a stand-in body over a pipe. No jail yet. [UNIT 1]
+   validated against a stand-in body over a pipe. No jail yet. [UNIT 1 — code
+   written, building (blocked on the shared cargo lock)]
 2. Spawn the body under firmament `process-pd[-sandbox]`; assert confinement
    teeth. [UNIT 2]
 3. Drive a real `agent-platform` grain with a `ConfinedBrain` end-to-end;
    renter verifies (R2) the jailed session. [UNIT 3]
 
+## Unit-2 grounding (verified at HEAD)
+- `dregg-firmament` is workspace-EXCLUDED (its own `[workspace]`, edition 2021),
+  BUT members `servo-render`/`starbridge-v2`/`android-cell`/`starbridge-web-surface`
+  already path-dep it — so `grain-jail` CAN path-dep it under a `real-jail`
+  feature (cargo ignores a path-dep's own `[workspace]`). No manifest fight.
+- `process-pd` = `libc`-only (fork/fd-close/socketpair); `process-pd-sandbox`
+  adds seccomp+landlock (Linux). macOS sandbox: firmament HAS a Seatbelt backend
+  (`process_kernel.rs:1247`), so the real OS-jailed body can be validated LOCALLY
+  on this macOS box, not only on a Linux builder. `spawn_pd_confined` lives in
+  `sel4/dregg-firmament/src/process_kernel.rs`.
+
 ## Done-log
 - Grounded the grain↔confined-body seam; wrote `docs/deos/GRAIN-CONFINED-BODY.md`.
+- UNIT 1 code written: `grain-jail` crate (protocol + `ConfinedBrain` + map +
+  5 tests); added to workspace. Verifying (cargo lock contention).
 
 ## Open decisions for morning-ember
 - (none yet)
