@@ -68,8 +68,15 @@ surface` → clean parent `UnixStream`) is next; it needs `process-pd-sandbox`
   a REAL firmament-jailed body (macOS Seatbelt) drives the ConfinedBrain over a
   socketpair and is DENIED /etc/passwd (confinement tooth bites). Validated
   locally. Run with `--features real-jail`.
-- UNIT 4 building: a REAL jailed body drives a REAL grain (the complete mechanic
-  bar the LLM) — the money-shot integration.
+- UNIT 4 LANDED (`d994fdee9`): a REAL jailed body drives a REAL grain, R2-verified
+  — the complete mechanic bar the LLM.
+- DEMO + DOCS LANDED (`49d1ee5b2`, `bb9666e69`): runnable `cargo run` example
+  (both in-process + `--features real-jail`), `docs/guide/CONFINED-AGENTS.md`.
+- CRASH-ROBUSTNESS LANDED (`23df1d51e`): a jailed body that crashes mid-session
+  leaves the grain clean + R2-verifiable (host absorbs a hostile/faulty body).
+- OP EXTENSION building: protocol `args` → generic `Op(ToolCall)` so a confined
+  body does REAL file work (fs_write executed host-side by the grain, cap-gated —
+  the body has no ambient fs). + unit + fs-write e2e test.
 
 ## What "awesome" is next (post-spine)
 - A runnable EXAMPLE (`cargo run`) — the "rent a verifiable confined agent" demo.

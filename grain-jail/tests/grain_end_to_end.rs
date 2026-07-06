@@ -50,6 +50,7 @@ fn body_script(msgs: &[BodyMsg]) -> LineChannel<Cursor<Vec<u8>>, Vec<u8>> {
 fn cell_write(path: &str, value: &str) -> BodyMsg {
     BodyMsg::Propose(Proposal {
         tool: "cell-write".into(),
+        args: None,
         amount_cents: None,
         path: Some(path.into()),
         value: Some(value.into()),
@@ -120,6 +121,60 @@ fn confined_brain_drives_a_real_grain_metered_receipted_and_r2_verified() {
         att.verify_r2(&[[0u8; 32]]).is_err(),
         "a forged manifest (turns never committed) fails R2"
     );
+}
+
+/// A confined body does REAL FILE WORK: it proposes an `fs_write` op (the shape
+/// the grain's toolkit runs), the grain performs it host-side in the grain's
+/// workdir, cap-gated by `fs` — the body itself never touches the filesystem, it
+/// requests the write through the seam. The file lands and the turn verifies.
+#[test]
+fn a_confined_body_requests_real_file_work_through_the_seam() {
+    let platform = AgentPlatform::new();
+    let wd = workdir();
+
+    // `fs` grants the operator fs tools (fs_write/fs_read/list_dir/mkdir).
+    let host = platform
+        .rent(
+            "fsbody.agents.dregg",
+            "dga1_fsbody",
+            "fs",
+            10_000,
+            &wd,
+            terms(),
+            None,
+        )
+        .expect("provision");
+
+    // The body proposes an fs_write op, then Done. (A raw shell would be refused;
+    // fs_write is the confined file tool.)
+    let body = body_script(&[
+        BodyMsg::Propose(Proposal::op(
+            "fs_write",
+            [
+                ("path".to_string(), "hello.txt".to_string()),
+                (
+                    "content".to_string(),
+                    "written by a confined body".to_string(),
+                ),
+            ],
+        )),
+        BodyMsg::Done(DoneNote::default()),
+    ]);
+    let mut brain = ConfinedBrain::new(body);
+
+    let report = platform
+        .drive_serving(&host, "write a file", &mut brain)
+        .expect("the confined body's fs_write drives the grain");
+    assert_eq!(report.admitted, 1, "the fs_write op was admitted");
+
+    // The grain performed the write host-side, in the grain's workdir.
+    let written = std::fs::read_to_string(std::path::Path::new(&wd).join("hello.txt"))
+        .expect("the grain wrote the file the confined body requested");
+    assert_eq!(written, "written by a confined body");
+
+    // And the turn verifies at R2.
+    let r2 = platform.verify_r2(&host).expect("R2 verify");
+    assert_eq!(r2.linked, 1);
 }
 
 /// THE COMPLETE MECHANIC: a REAL firmament-jailed body (OS-sandboxed, host-file

@@ -25,7 +25,7 @@
 
 use std::io::{self, BufRead, Write};
 
-use dregg_agent::agent::{ActionObservation, AgentAction, AgentBrain};
+use dregg_agent::agent::{ActionObservation, AgentAction, AgentBrain, ToolCall};
 
 pub mod protocol;
 
@@ -127,8 +127,11 @@ impl std::fmt::Display for MapError {
 /// The mapping is intentionally total over the well-formed shapes and refuses
 /// the rest in-band (so a malformed proposal costs nothing and never reaches the
 /// braid):
-/// - any proposal with `amount_cents` ⇒ the priced [`AgentAction::Spend`] rail
-///   (the service is `tool` with an optional `spend:` / `invoke:` prefix stripped);
+/// - any proposal with `args` ⇒ a generic [`AgentAction::Op`] tool-call
+///   (`ToolCall { tool, args }` — the shape the grain's real toolkit runs, e.g.
+///   `fs_write`);
+/// - else any proposal with `amount_cents` ⇒ the priced [`AgentAction::Spend`]
+///   rail (the service is `tool` with a `spend:` / `invoke:` prefix stripped);
 /// - `cell-write` ⇒ [`AgentAction::CellWrite`] (needs `path` + `value`);
 /// - `cell-read` ⇒ [`AgentAction::CellRead`] (needs `path`);
 /// - anything else ⇒ [`AgentAction::Invoke`] (a bare or `invoke:`-prefixed call).
@@ -140,6 +143,12 @@ pub fn map_proposal(p: &Proposal) -> Result<AgentAction, MapError> {
             .unwrap_or(&p.tool)
             .to_string()
     };
+    if let Some(args) = &p.args {
+        return Ok(AgentAction::Op(ToolCall::new(
+            p.tool.clone(),
+            args.clone().into_iter(),
+        )));
+    }
     if let Some(amount) = p.amount_cents {
         if amount <= 0 {
             return Err(MapError::NonPositiveSpend(amount));
@@ -290,6 +299,7 @@ mod tests {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "spend:stripe_pay".into(),
+                args: None,
                 amount_cents: Some(250),
                 path: None,
                 value: None,
@@ -303,6 +313,7 @@ mod tests {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "cell-write".into(),
+                args: None,
                 amount_cents: None,
                 path: Some("notes/1".into()),
                 value: Some("hello".into()),
@@ -316,6 +327,7 @@ mod tests {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "cell-read".into(),
+                args: None,
                 amount_cents: None,
                 path: Some("notes/1".into()),
                 value: None,
@@ -328,10 +340,32 @@ mod tests {
     }
 
     #[test]
+    fn maps_generic_op_with_args() {
+        // A proposal carrying `args` is the generic operator tool-call the grain's
+        // real toolkit runs (e.g. fs_write) — mapped to AgentAction::Op.
+        let p = Proposal::op(
+            "fs_write",
+            [
+                ("path".to_string(), "notes.txt".to_string()),
+                ("content".to_string(), "hi".to_string()),
+            ],
+        );
+        match map_proposal(&p).unwrap() {
+            AgentAction::Op(call) => {
+                assert_eq!(call.tool, "fs_write");
+                assert_eq!(call.args.get("path").map(String::as_str), Some("notes.txt"));
+                assert_eq!(call.args.get("content").map(String::as_str), Some("hi"));
+            }
+            other => panic!("expected Op, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn refuses_malformed_proposals() {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "cell-write".into(),
+                args: None,
                 amount_cents: None,
                 path: Some("p".into()),
                 value: None,
@@ -341,6 +375,7 @@ mod tests {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "cell-read".into(),
+                args: None,
                 amount_cents: None,
                 path: None,
                 value: None,
@@ -350,6 +385,7 @@ mod tests {
         assert_eq!(
             map_proposal(&Proposal {
                 tool: "stripe_pay".into(),
+                args: None,
                 amount_cents: Some(0),
                 path: None,
                 value: None,
@@ -418,6 +454,7 @@ mod tests {
             "{}{}{}",
             line(&BodyMsg::Propose(Proposal {
                 tool: "cell-write".into(),
+                args: None,
                 amount_cents: None,
                 path: Some("p".into()),
                 value: None,

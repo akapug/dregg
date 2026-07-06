@@ -8,6 +8,8 @@
 //! than ACP and maps onto it: an ACP `ToolCallRequest` is a [`Proposal`], an ACP
 //! `request_permission` response is a [`Verdict`].
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// A message FROM the jailed body TO the host.
@@ -25,14 +27,22 @@ pub enum BodyMsg {
 /// fields carry the arguments the structured actions need.
 ///
 /// Recognised `tool` shapes (mapped to `AgentAction` in [`crate::map_proposal`]):
-/// - `invoke:<service>` or a bare `<service>` → `Invoke`.
+/// - any `tool` WITH `args` set → a generic operator tool-call `Op` (e.g.
+///   `fs_write` with `{path, content}`) — the shape the grain's real toolkit
+///   consumes; the grain performs it host-side, cap-gated, so a jailed body with
+///   no ambient file access can still request file work through the seam.
 /// - any `tool` WITH `amount_cents` set → the priced `Spend` rail.
 /// - `cell-write` (needs `path` + `value`) → `CellWrite`.
 /// - `cell-read` (needs `path`) → `CellRead`.
+/// - `invoke:<service>` or a bare `<service>` → `Invoke`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Proposal {
     /// The tool / service the body wants to call.
     pub tool: String,
+    /// A generic operator tool-call's string args (`path`/`content` for
+    /// `fs_write`, `url`/`dest` for http/git, …). Present ⇒ a generic `Op`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<BTreeMap<String, String>>,
     /// The priced-spend amount (USD-cents). Present ⇒ the proposal is a `Spend`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amount_cents: Option<i64>,
@@ -49,6 +59,22 @@ impl Proposal {
     pub fn invoke(tool: impl Into<String>) -> Proposal {
         Proposal {
             tool: tool.into(),
+            args: None,
+            amount_cents: None,
+            path: None,
+            value: None,
+        }
+    }
+
+    /// A generic operator tool-call (`Op`) — a `tool` plus its string args (e.g.
+    /// `fs_write` with `path`/`content`).
+    pub fn op(
+        tool: impl Into<String>,
+        args: impl IntoIterator<Item = (String, String)>,
+    ) -> Proposal {
+        Proposal {
+            tool: tool.into(),
+            args: Some(args.into_iter().collect()),
             amount_cents: None,
             path: None,
             value: None,
