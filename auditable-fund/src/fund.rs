@@ -27,7 +27,9 @@ use dregg_agent::agent::GrainTurnMinter;
 
 use crate::brain::{Brain, Decision, MarketView, Side};
 use crate::mandate::{Mandate, MandateViolation};
-use crate::oracle::{AttestedPrice, OracleError, PriceError, PriceOracle, verify_attested_price};
+use crate::oracle::{
+    AttestedPrice, EndpointConfig, PriceError, PriceOracle, ZkPriceError, verify_attested_price,
+};
 
 /// Domain separator for the trade-commitment hash chain.
 const TRADE_COMMIT_DOMAIN: &[u8] = b"auditable-fund-trade-commitment-chain-v1";
@@ -128,7 +130,7 @@ pub struct TrackRecord {
 pub struct Fund {
     mandate: Mandate,
     carrier: AttestationCarrier,
-    oracle_config: AnthropicConfig,
+    oracle_config: EndpointConfig,
     node: LocalNode,
     minter: NodeMinter,
     cash: i64,
@@ -148,7 +150,7 @@ impl Fund {
         domain: &str,
         mandate: Mandate,
         decision_seed: &[u8; 32],
-        oracle_config: AnthropicConfig,
+        oracle_config: EndpointConfig,
     ) -> Result<Fund, FundError> {
         let node = LocalNode::new(domain);
         let minter = NodeMinter::open(node.clone(), mandate.max_turns)
@@ -226,7 +228,9 @@ impl Fund {
 
         // 4. Fold the trade commitment and BIND it onto the on-ledger turn.
         let decision_commit = attestation_commitment(&decision_att);
-        let price_commit = price_att.as_ref().map(|ap| ap.commitment());
+        let price_commit = price_att
+            .as_ref()
+            .map(|ap| attestation_commitment(&ap.attestation));
         let new_acc = fold_commitment(
             self.acc,
             decision_commit,
@@ -302,12 +306,10 @@ impl Fund {
                     .prices
                     .get(&decision.asset)
                     .cloned()
-                    .ok_or(FundError::Oracle(OracleError::NoQuote(
-                        decision.asset.clone(),
-                    )))?;
-                verify_attested_price(&ap, &self.oracle_config)
+                    .ok_or_else(|| FundError::NoQuote(decision.asset.clone()))?;
+                // Re-verify the attestation and BIND the fill to the notarized amount (in cents).
+                let price = verify_attested_price(&ap, &self.oracle_config)
                     .map_err(FundError::UnattestedPrice)?;
-                let price = ap.amount;
                 let cur = self.position(&decision.asset);
 
                 match decision.side {
@@ -384,8 +386,10 @@ pub struct StepOutcome {
 /// Why a fund step refused. Every variant means NO turn landed and NO state changed.
 #[derive(Clone, Debug)]
 pub enum FundError {
-    /// The oracle could not quote a mandate asset.
-    Oracle(OracleError),
+    /// The price oracle could not quote a mandate asset (unknown asset / bad session).
+    Oracle(ZkPriceError),
+    /// A gathered market view was missing a quote for a traded asset (internal inconsistency).
+    NoQuote(String),
     /// The decision attestation prover refused.
     Attest(ProveError),
     /// A mandate cap was breached (disallowed asset / over-position / oversell).
@@ -409,6 +413,7 @@ impl core::fmt::Display for FundError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             FundError::Oracle(e) => write!(f, "oracle: {e}"),
+            FundError::NoQuote(a) => write!(f, "no attested quote gathered for `{a}`"),
             FundError::Attest(e) => write!(f, "decision attestation refused: {e:?}"),
             FundError::Mandate(v) => write!(f, "mandate refused: {v}"),
             FundError::UnattestedPrice(e) => write!(f, "unattested price refused: {e}"),

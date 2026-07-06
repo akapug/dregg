@@ -23,7 +23,7 @@ use deos_hermes::{AnthropicConfig, attestation_commitment, verify_zkoracle};
 
 use crate::brain::Side;
 use crate::fund::{TrackRecord, fold_commitment};
-use crate::oracle::verify_attested_price;
+use crate::oracle::{EndpointConfig, verify_attested_price};
 
 /// The result of a passing audit — the fund's provable track record.
 #[derive(Clone, Debug)]
@@ -96,7 +96,7 @@ impl std::error::Error for AuditError {}
 pub fn audit_fund(
     track: &TrackRecord,
     decision_config: &AnthropicConfig,
-    oracle_config: &AnthropicConfig,
+    oracle_config: &EndpointConfig,
 ) -> Result<AuditReport, AuditError> {
     // (1) LIGHT-CLIENT: the finalized receipt chain verifies (no operator trust).
     track
@@ -156,9 +156,11 @@ pub fn audit_fund(
                     .price_att
                     .as_ref()
                     .ok_or(AuditError::PriceNotAttested(i))?;
-                verify_attested_price(ap, oracle_config)
+                // Re-verify the attestation and re-derive the notarized amount in cents; the
+                // record's stated fill price must be exactly that attested amount.
+                let cents = verify_attested_price(ap, oracle_config)
                     .map_err(|_| AuditError::PriceNotAttested(i))?;
-                if ap.amount != r.price {
+                if cents != r.price {
                     return Err(AuditError::FillPriceMismatch(i));
                 }
 

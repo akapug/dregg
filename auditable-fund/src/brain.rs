@@ -118,9 +118,12 @@ pub struct MarketView {
 }
 
 impl MarketView {
-    /// The attested amount for `asset`, if quoted this round.
+    /// The attested amount for `asset` in cents, if quoted this round (parsed from the
+    /// notarized decimal-USD amount).
     pub fn amount(&self, asset: &str) -> Option<i64> {
-        self.prices.get(asset).map(|p| p.amount)
+        self.prices
+            .get(asset)
+            .and_then(|p| crate::oracle::amount_to_cents(&p.amount).ok())
     }
 }
 

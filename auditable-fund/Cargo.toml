@@ -31,5 +31,10 @@ agent-platform = { path = "../agent-platform" }
 # `AnthropicConfig`, `ProveError`, `ZkOracleError`) from `dregg-zkoracle-prove`, so the
 # fund reaches the whole attestation surface through this one dependency.
 deos-hermes = { path = "../deos-hermes" }
+# The REAL price lane: `CoinbaseSpotOracle` / `PriceOracle` / `verify_coinbase_spot` — every
+# fill is at a Coinbase spot quote carrying a re-verifiable `ZkOracleAttestation`. (deos-hermes
+# re-exports the attestation *core* but not the price endpoints, so the fund depends on the
+# price lane directly.)
+dregg-zkoracle-prove = { path = "../zkoracle-prove" }
 dregg-agent = { path = "../dregg-agent" }
 blake3 = "1"
