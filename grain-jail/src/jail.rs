@@ -340,4 +340,35 @@ mod tests {
              (10 = LEAK to an ungranted endpoint, 11 = grant did not take, 12 = both)"
         );
     }
+
+    /// The DUAL of the egress test: a jailed body with NO egress grant (the
+    /// default sealed jail) reaches NO network at all — even a live loopback
+    /// listener is unreachable. Default-deny confirmed: net is opt-in via a
+    /// grant, never ambient.
+    #[test]
+    fn a_sealed_jail_body_is_denied_all_network() {
+        use std::net::{SocketAddr, TcpListener, TcpStream};
+        use std::time::Duration;
+
+        // A live loopback listener the body will TRY (and must fail) to reach.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr: SocketAddr = listener.local_addr().unwrap();
+        std::thread::spawn(move || listener.incoming().for_each(|s| drop(s)));
+
+        let kernel = ProcessKernel::new();
+        // NO egress grant → the default endpoint-only jail seals ALL network.
+        let (handle, _channel) = spawn_confined_body(&kernel, move |_surf| {
+            match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                Ok(_) => 30, // LEAK: reached the network with no grant
+                Err(_) => 0, // correct: sealed (socket/connect denied)
+            }
+        })
+        .expect("spawn a sealed jailed body");
+
+        let code = handle.join().expect("join the sealed body");
+        assert_eq!(
+            code, 0,
+            "a jailed body with NO egress grant reaches NO network (30 = leak — net was ambient)"
+        );
+    }
 }
