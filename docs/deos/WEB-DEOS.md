@@ -316,10 +316,15 @@ the native-resource backends:
      the wire. No new server.
    - **Chat** — `matrix-sdk 0.18` wasm-compiles (IndexedDB store + `js` plumbing +
      `spawn_local`, per deos-matrix's `cfg(target_family = "wasm")` block), so the
-     backend is in-tab against a live homeserver. Same seam shape as the editor:
-     `dev-surfaces` (which pulls `deos-matrix`) is off the gpui-web build, so the
-     ChatView is not mounted yet; the wire is enabling deos-matrix's wasm graph on
-     gpui-web + mounting ChatView.
+     backend is in-tab against a live homeserver. And chat now has a
+     **renderer-independent card**: `deos_matrix::chat_view::chat_view` projects the
+     real `ChatCard` (timeline, live turn-count bind, composer input firing the real
+     `send_turn`) to the serializable view-tree, mounted through the same
+     CardPane/dock bridge as the composer (`build_chat_card_surface`,
+     `dock/card_surface.rs`) — so chat reaches every `deos-view` backend, not just
+     gpui. Remaining: `dev-surfaces` (which pulls `deos-matrix`) is off the gpui-web
+     build — the wire is enabling deos-matrix's wasm graph on gpui-web + an opener
+     that mounts the chat card surface.
    These surfaces are feature-gated OFF the web build (`dev-surfaces`/`web-shell`
    are not in the `gpui-web` feature). The UI for terminal/editor/chat is already
    gpui and web-ready; the terminal *backend* now runs, and the editor/chat
