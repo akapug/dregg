@@ -134,6 +134,40 @@ lane). It is NOT edited here.
   session-integrity that makes the notary signature *trustless* is exercised locally; a
   deployed notary + a live session is a deploy step, not new crypto.
 
+## Measured paces (2026-07-06, Apple Silicon dev box, release build)
+
+`cargo run -p dregg-zkoracle-prove --example paces --release` — per-leg + end-to-end,
+median-of-k. Two scaling axes, because the tokenizer collapses a whole JSON string to ONE
+token: a text-heavy model response grows in BYTES but not tokens; a structure-dense body
+grows in TOKENS.
+
+| case | bytes | tokens | chain symbols | cert prove | cert verify | commit | PROVE e2e | VERIFY e2e |
+|---|---|---|---|---|---|---|---|---|
+| text-1k (realistic) | 1.2k | 51 | 1.2k | 9 µs | 6 µs | 263 µs | **321 µs** | **317 µs** |
+| text-16k | 16.6k | 51 | 1.2k | 17 µs | 15 µs | 3.55 ms | 3.62 ms | 3.62 ms |
+| text-256k | 262k | 51 | 1.2k | 165 µs | 160 µs | 56.1 ms | 56.8 ms | 56.6 ms |
+| dense-1k elems | 2.1k | 2.1k | 2.1M | 1.41 ms | 2.60 ms | 437 µs | 1.91 ms | 3.04 ms |
+| dense-4k elems | 8.2k | 8.2k | 33.7M | 19.0 ms | 37.9 ms | 1.78 ms | 21.0 ms | 39.2 ms |
+| dense-16k elems | 32.8k | 32.8k | 537M | 649 ms | 624 ms | 7.19 ms | 610 ms | 625 ms |
+
+Refuse paths (hostiles bounce FAST, before any heavy leg): forged notary sig **33 µs** ·
+cross-leg splice **35 µs** · injection match alone **11 µs**. The live local MPC-TLS 2PC
+roundtrip (`tlsn-live` test) completes in **~0.4 s** warm.
+
+Readings:
+- **A realistic Anthropic response attests in well under a millisecond each way**; at
+  larger text sizes both directions are dominated by the linear Poseidon2
+  `content_commitment` (~215 µs/KiB), not the CFG or injection legs.
+- **⚑ NAMED FINDING — the dense axis is quadratic in tokens**: the certificate stores the
+  full derivation form-chain, O(tokens²) symbols (a 33 kB body of 33k tokens → 537M
+  symbols, ~0.6 s, ~GB-scale allocation). Harmless for model responses (strings collapse
+  to one token) but a hostile/degenerate body is a resource-blowup vector for any service
+  that PROVES or VERIFIES unbounded bodies. Closure lanes (HORIZONLOG 2026-07-06):
+  (a) a delta-encoded chain (rule+position per step, O(tokens) certificate) — a
+  certificate-format decision COORDINATED with the Lean `Cfg.lean` chain shape (the
+  capstone owner's lane, cf. ZKORACLE-COORDINATION.md); (b) an explicit token/cert-size
+  admission bound at the service boundary as interim policy.
+
 ## 🏆 The CROWN — the confined brain's turn, ATTESTED (`deos-hermes`)
 
 The prover above PRODUCES an attestation over a `/v1/messages` session. The crown WELDS
