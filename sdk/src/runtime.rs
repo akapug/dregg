@@ -459,61 +459,7 @@ impl AgentRuntime {
     /// effect) — this is the legacy `self.executor.execute(turn, ledger)` path, explicitly FENCED
     /// (the uncovered partition is named + surfaced, not a silent Rust default).
     fn run_turn(&self, turn: &Turn, ledger: &mut Ledger) -> TurnResult {
-        #[cfg(feature = "exec-lean")]
-        {
-            if self.lean_producer_enabled {
-                use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
-                let (result, outcome) = lean_apply::produce_via_lean(&self.executor, turn, ledger);
-                match &outcome {
-                    ProducerOutcome::LeanAuthoritative {
-                        committed,
-                        rust_agreed,
-                        lean_root,
-                        rust_root,
-                        rust_committed,
-                    } => {
-                        if *rust_agreed {
-                            tracing::info!(
-                                target: "dregg::sdk::lean_producer",
-                                agent = ?turn.agent,
-                                committed = *committed,
-                                "THE SWAP producer mode (SDK): verified Lean executor is \
-                                 AUTHORITATIVE for this covered turn; Rust reference AGREES"
-                            );
-                        } else {
-                            // THE AUTHORITY INVERSION's tooth: a covered Lean↔Rust disagreement is
-                            // the Rust path being WRONG. The verified Lean verdict was committed;
-                            // this surfaces the Rust bug — it is NOT a fallback to Rust.
-                            tracing::error!(
-                                target: "dregg::sdk::lean_producer",
-                                agent = ?turn.agent,
-                                lean_committed = *committed,
-                                rust_committed = *rust_committed,
-                                lean_root = ?lean_root,
-                                rust_root = ?rust_root,
-                                "THE SWAP authority inversion (SDK): verified Lean executor \
-                                 (AUTHORITATIVE) and the demoted Rust reference DISAGREE on a \
-                                 covered turn — the Rust path is BUGGY (REAL finding). The verified \
-                                 Lean verdict was committed; Rust was NOT allowed to override it"
-                            );
-                        }
-                    }
-                    ProducerOutcome::Fallback { reason } => {
-                        tracing::warn!(
-                            target: "dregg::sdk::lean_producer",
-                            agent = ?turn.agent,
-                            reason = %reason,
-                            "THE SWAP producer mode (SDK): turn outside the swap-safe covered set \
-                             — FENCED onto the legacy Rust path for this turn (explicit, surfaced; \
-                             the named burning-down partition, not a silent Rust default)"
-                        );
-                    }
-                }
-                return result;
-            }
-        }
-        // Legacy Rust-producer path (also the only path under the `no-lean-link` platform gate).
-        self.executor.execute(turn, ledger)
+        produce(&self.executor, turn, ledger, self.lean_producer_enabled)
     }
 
     /// Open the typed turn builder — the SDK's one public turn shape:
@@ -985,8 +931,85 @@ impl AgentRuntime {
             ledger: self.ledger.clone(),
             nonce: Mutex::new(0),
             last_receipt_hash: Mutex::new(None),
+            // Inherit producer mode from the parent runtime so worker turns route
+            // through the SAME producer-selection seam a runtime turn does.
+            lean_producer_enabled: self.lean_producer_enabled,
         })
     }
+}
+
+/// Run one fully-built turn against `ledger`, choosing the PRODUCER per `lean_producer_enabled`.
+///
+/// This is the single producer-selection seam shared by [`AgentRuntime::run_turn`] and every
+/// worker turn ([`SubAgent::execute_method`]). When producer mode is on (and the crate was built
+/// with `exec-lean`), on the COVERED set the VERIFIED Lean executor is AUTHORITATIVE via
+/// `dregg_exec_lean::produce_via_lean` — its post-state AND commit verdict are committed
+/// unconditionally, and the Rust `TurnExecutor` is demoted to a checked reference. A covered
+/// Lean↔Rust disagreement is a surfaced RUST BUG (`error!`), NOT a fallback to Rust. Off the
+/// covered set (or with producer mode off, or under the `no-lean-link` platform gate) this is the
+/// legacy `executor.execute(turn, ledger)` path — byte-identical to the pre-weld behavior.
+#[cfg_attr(not(feature = "exec-lean"), allow(unused_variables))]
+fn produce(
+    executor: &TurnExecutor,
+    turn: &Turn,
+    ledger: &mut Ledger,
+    lean_producer_enabled: bool,
+) -> TurnResult {
+    #[cfg(feature = "exec-lean")]
+    {
+        if lean_producer_enabled {
+            use dregg_exec_lean::{self as lean_apply, ProducerOutcome};
+            let (result, outcome) = lean_apply::produce_via_lean(executor, turn, ledger);
+            match &outcome {
+                ProducerOutcome::LeanAuthoritative {
+                    committed,
+                    rust_agreed,
+                    lean_root,
+                    rust_root,
+                    rust_committed,
+                } => {
+                    if *rust_agreed {
+                        tracing::info!(
+                            target: "dregg::sdk::lean_producer",
+                            agent = ?turn.agent,
+                            committed = *committed,
+                            "THE SWAP producer mode (SDK): verified Lean executor is \
+                             AUTHORITATIVE for this covered turn; Rust reference AGREES"
+                        );
+                    } else {
+                        // THE AUTHORITY INVERSION's tooth: a covered Lean↔Rust disagreement is
+                        // the Rust path being WRONG. The verified Lean verdict was committed;
+                        // this surfaces the Rust bug — it is NOT a fallback to Rust.
+                        tracing::error!(
+                            target: "dregg::sdk::lean_producer",
+                            agent = ?turn.agent,
+                            lean_committed = *committed,
+                            rust_committed = *rust_committed,
+                            lean_root = ?lean_root,
+                            rust_root = ?rust_root,
+                            "THE SWAP authority inversion (SDK): verified Lean executor \
+                             (AUTHORITATIVE) and the demoted Rust reference DISAGREE on a \
+                             covered turn — the Rust path is BUGGY (REAL finding). The verified \
+                             Lean verdict was committed; Rust was NOT allowed to override it"
+                        );
+                    }
+                }
+                ProducerOutcome::Fallback { reason } => {
+                    tracing::warn!(
+                        target: "dregg::sdk::lean_producer",
+                        agent = ?turn.agent,
+                        reason = %reason,
+                        "THE SWAP producer mode (SDK): turn outside the swap-safe covered set \
+                         — FENCED onto the legacy Rust path for this turn (explicit, surfaced; \
+                         the named burning-down partition, not a silent Rust default)"
+                    );
+                }
+            }
+            return result;
+        }
+    }
+    // Legacy Rust-producer path (also the only path under the `no-lean-link` platform gate).
+    executor.execute(turn, ledger)
 }
 
 impl std::fmt::Debug for AgentRuntime {
@@ -1065,6 +1088,14 @@ pub struct SubAgent {
     /// Used to bind each new turn to its predecessor, preventing reordering
     /// and replay of sub-agent turns.
     last_receipt_hash: Mutex<Option<[u8; 32]>>,
+    /// Whether producer mode is active for this worker's turns — inherited from
+    /// the parent runtime at spawn. When on (and built with `exec-lean`), a
+    /// worker turn on the covered set is produced by the VERIFIED Lean executor
+    /// via [`produce`], exactly like a runtime turn through
+    /// [`AgentRuntime::run_turn`]. This is what routes served/minted grain
+    /// turns through the same producer-selection seam instead of the legacy
+    /// direct Rust producer.
+    lean_producer_enabled: bool,
 }
 
 impl SubAgent {
@@ -1273,7 +1304,11 @@ impl SubAgent {
         };
 
         let mut ledger = self.ledger.lock().unwrap();
-        let result = executor.execute(&turn, &mut ledger);
+        // Route the worker turn through the SAME producer-selection seam a runtime
+        // turn owns (see [`produce`] / [`AgentRuntime::run_turn`]): under producer
+        // mode, a covered worker turn (e.g. the served/minted grain turn) is
+        // produced by the VERIFIED Lean executor, not the direct Rust producer.
+        let result = produce(&executor, &turn, &mut ledger, self.lean_producer_enabled);
 
         match result {
             TurnResult::Committed { receipt, .. } => {
