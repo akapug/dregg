@@ -14,11 +14,14 @@
 //! hosting platform's `serve` layer binds to.
 
 pub mod http;
-/// Connection hardening: slow-loris read/write timeouts, 413 body cap, chunked
-/// decode bound, connection gate. Call-site wiring into `serve.rs` is a
-/// follow-up (see the module header).
+/// Connection hardening: slow-loris read/write timeouts (`408`), the `413` body
+/// cap, bounded chunked decoding (`400` on bad framing), and the connection gate —
+/// enforced on every connection [`serve`] handles.
 pub mod limits;
 pub mod serve;
 
 pub use http::{HttpMethod, WebRequest, WebResponse};
-pub use serve::{serve_http, serve_http_connection, ServeRequest};
+pub use limits::{ConnGate, Limits};
+pub use serve::{
+    serve_http, serve_http_connection, serve_http_connection_limited, serve_on, ServeRequest,
+};
