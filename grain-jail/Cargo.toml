@@ -1,0 +1,32 @@
+# grain-jail — an OS-jailed subprocess body behind the grain's `AgentBrain`
+# seam. A `ConfinedBrain` plugs a jailed body (proposing tool-calls over the
+# newline-JSON line protocol) into the existing brain seam, so a grain gains an
+# OS-jailed body with no change to its lease/lifecycle/attestation drive path.
+#
+# Deps are DELIBERATELY light: `dregg-agent` for the brain seam, serde for the
+# wire protocol. The jail mechanism (firmament `process-pd`) is added as a
+# feature when the real-jail body-spawn lands (staged; see
+# docs/deos/GRAIN-CONFINED-BODY.md) — the seam here is jail-agnostic (any
+# `BufRead + Write` pair is a channel), so this crate never pulls the heavy
+# verified-executor sdk.
+
+[package]
+name = "grain-jail"
+description = "An OS-jailed subprocess agent body behind the grain's AgentBrain seam: the ConfinedBrain + confined-body line protocol"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+
+[lib]
+name = "grain_jail"
+
+[dependencies]
+# The brain seam this crate implements: AgentBrain / AgentAction / ActionObservation.
+dregg-agent = { path = "../dregg-agent" }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
