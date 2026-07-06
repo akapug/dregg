@@ -110,9 +110,11 @@ surface` → clean parent `UnixStream`) is next; it needs `process-pd-sandbox`
   (both in-process + `--features real-jail`), `docs/guide/CONFINED-AGENTS.md`.
 - CRASH-ROBUSTNESS LANDED (`23df1d51e`): a jailed body that crashes mid-session
   leaves the grain clean + R2-verifiable (host absorbs a hostile/faulty body).
-- OP EXTENSION building: protocol `args` → generic `Op(ToolCall)` so a confined
-  body does REAL file work (fs_write executed host-side by the grain, cap-gated —
-  the body has no ambient fs). + unit + fs-write e2e test.
+- OP EXTENSION LANDED (`4fff5263a`): protocol `args` → generic `Op(ToolCall)` so a
+  confined body does REAL file work (fs_write host-side, cap-gated).
+- HOSTILE-BODY ROBUSTNESS COMPLETE: crash (`23df1d51e`) + hang/timeout+SIGKILL-reap
+  (`4973c6a59`) + flood/OOM cap (this commit) + garbage + cap-exceed. A confined
+  or jailed body cannot wedge, fool, or OOM the host by any of these.
 
 ## What "awesome" is next (post-spine)
 - A runnable EXAMPLE (`cargo run`) — the "rent a verifiable confined agent" demo.
