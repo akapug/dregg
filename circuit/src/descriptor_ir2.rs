@@ -4878,6 +4878,12 @@ fn trace_with_chip_lanes(
             row.resize(desc.trace_width, BabyBear::ZERO);
         }
         fill_chip_lanes(desc, row);
+        // THE GENTIAN FLAG-DAY completeness leg: a refuse-welded (bare cohort) descriptor carries
+        // the `floor == 0` refuse gates over aux columns `GRAD_ROT_WIDTH..trace_width` whose is-zero
+        // decode witnesses (esp. the `inv` columns) the base producers do NOT fill — leaving them
+        // zero violates the decode gate → OodEvaluationMismatch on honest legs. Fill them here from
+        // the caveat type-tag columns the row already carries (no-op for a non-welded descriptor).
+        crate::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(desc, row);
     }
     t
 }

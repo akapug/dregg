@@ -55,7 +55,7 @@ enum Cov {
     Uncovered(&'static str),
 }
 
-/// V3-live (`rotation-v3-staged-registry.tsv`, 58 members) — the CURRENTLY-DEPLOYED 1-felt registry
+/// V3-live (`rotation-v3-staged-registry.tsv`, 60 members) — the CURRENTLY-DEPLOYED 1-felt registry
 /// (the prover keeps using the per-map V3 registry until the gated VK epoch flips). This is the
 /// highest-priority coverage surface: it is what a light client verifies against TODAY.
 fn v3_coverage_ledger() -> Vec<(&'static str, Cov)> {
@@ -92,6 +92,21 @@ fn v3_coverage_ledger() -> Vec<(&'static str, Cov)> {
         (
             "settleEscrowSatVmDescriptor2R24",
             Covered("settle_escrow_weld_prove"),
+        ),
+        // ── discharge / vault satisfaction (tags 18/19, staged into the registry by the G5 emit):
+        //    real prove+verify roundtrips against the committed registry bytes, via the genuine
+        //    rotated settle-carrier producer + the exported production aux-fills.
+        (
+            "dischargeSatVmDescriptor2R24",
+            Covered(
+                "gentian_deployed_capacity_liveness::honest_discharge_proves_through_deployed_member",
+            ),
+        ),
+        (
+            "vaultSatVmDescriptor2R24",
+            Covered(
+                "gentian_deployed_capacity_liveness::honest_vault_deposit_proves_through_deployed_member",
+            ),
         ),
         // ── notes grow-gate — COVERED
         (

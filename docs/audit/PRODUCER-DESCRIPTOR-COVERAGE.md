@@ -19,7 +19,7 @@ silent-divergence risk). The machine-checked ledger + the anti-regression gate l
 
 | Registry (file) | Members | COVERED | PARTIAL | UNCOVERED | Completeness gate |
 |---|---:|---:|---:|---:|---|
-| **v3-live** (`rotation-v3-staged-registry.tsv`) — the CURRENTLY-DEPLOYED 1-felt registry | 58 | 25 | 10 | 23 | `producer_descriptor_coverage_gate::v3_registry_every_member_classified` (**new**) |
+| **v3-live** (`rotation-v3-staged-registry.tsv`) — the CURRENTLY-DEPLOYED 1-felt registry | 60 | 27 | 10 | 23 | `producer_descriptor_coverage_gate::v3_registry_every_member_classified` (**new**) |
 | **bare-wide** (`rotation-wide-registry-staged.tsv`) — STAGED 8-felt (the v13-affected surface) | 57 | 35 | 2 | 20 | `producer_descriptor_coverage_gate::wide_registry_every_member_classified` (**new**) + `wide_completeness_ledger::provability_scoreboard_deployed_wide_path` (existing) |
 | **umem-welded** (`rotation-wide-umem-welded-registry-staged.tsv`) — STAGED welded | 57 | 17 | 27 | 13 | `wide_umem_weld_matrix_gauntlet::matrix_enumerates_all_57` (existing) |
 
