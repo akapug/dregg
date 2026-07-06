@@ -45,6 +45,7 @@ use super::pi::{
 };
 use super::trace_rotated::GRAD_ROT_WIDTH;
 use crate::descriptor_ir2::{VmConstraint2, WindowExpr, WindowGateSpec};
+use crate::field::BabyBear;
 use crate::lean_descriptor_air::{LeanExpr, VmConstraint};
 
 use super::columns::rotation::caveat as cav;
@@ -192,6 +193,57 @@ pub fn bare_floor_refuse_gates() -> Vec<VmConstraint2> {
         gates.push(caveat_uniform_gate(caveat_tag_col(k)));
     }
     gates
+}
+
+/// The deployed refuse-welded descriptor-name suffix (the gentian flag-day cohort). The weld is
+/// applied to exactly the members whose json `name` ends with this; the producer aux-fill below
+/// keys on the SAME suffix so it fills iff-welded — width alone would false-positive (a cap-open
+/// appendix also anchors at [`GRAD_ROT_WIDTH`]).
+pub const REFUSE_WELD_SUFFIX: &str = "-gentian-deployed-bare-refuse";
+
+/// **THE COMPLETENESS LEG of the gentian flag-day.** Fill the bare-floor-refuse decode witnesses —
+/// per caveat slot the is-zero `bit`, its inverse witness `inv` (when the slot is NOT the tag), the
+/// running-OR carriers, and the folded `floor` — for every capacity-tag block, reading the caveat
+/// type-tag columns the row already carries. The prove wrapper calls this once per row, AFTER
+/// [`crate::descriptor_ir2::fill_chip_lanes`], for a refuse-welded descriptor.
+///
+/// The flag-day welded the `floor == 0` refuse gates onto every bare cohort member's committed VK
+/// and updated the *transfer* producer, but did NOT propagate the aux fill to the non-transfer
+/// producers — so their honest traces left cols `GRAD_ROT_WIDTH..trace_width` (in particular the
+/// `inv` witnesses) at zero, violating the is-zero decode gate → `OodEvaluationMismatch` on
+/// light-client verify. This restores that leg:
+/// - a NON-declaring cell decodes every `floor_col(b) = 0`, the refuse gates are inert, and the
+///   honest trace proves + verifies (COMPLETENESS restored — no false reject);
+/// - a DECLARING cell has the matching slot decode `bit = 1`, folding `floor = 1`, so the
+///   `floor == 0` gate is UNSAT — the cell cannot route through the bare descriptor and is forced
+///   onto its satisfaction descriptor (SOUNDNESS preserved: the bare-descriptor dodge stays closed).
+pub fn fill_refuse_aux(desc: &crate::descriptor_ir2::EffectVmDescriptor2, row: &mut [BabyBear]) {
+    if !desc.name.ends_with(REFUSE_WELD_SUFFIX) {
+        return;
+    }
+    for (b, &tag) in CAPACITY_TAGS.iter().enumerate() {
+        let mut running_or = 0u32;
+        for k in 0..cav::MAX_CAVEATS {
+            let tag_k = row[caveat_tag_col(k)];
+            let is_tag = tag_k == BabyBear::new(tag);
+            let bit = u32::from(is_tag);
+            row[bit_col(b, k)] = BabyBear::new(bit);
+            if !is_tag {
+                // The is-zero DEFINING gate `b_k + (tag_k − T)·inv_k − 1 == 0` forces this witness
+                // when the slot is not the tag; when it IS the tag `b_k = 1` leaves `inv_k` free.
+                row[inv_col(b, k)] = (tag_k - BabyBear::new(tag))
+                    .inverse()
+                    .expect("a nonzero (tag_k − T) has a field inverse");
+            }
+            let next_or = running_or | bit;
+            if k < cav::MAX_CAVEATS - 1 {
+                row[or_col(b, k)] = BabyBear::new(next_or);
+            } else {
+                row[floor_col(b)] = BabyBear::new(next_or);
+            }
+            running_or = next_or;
+        }
+    }
 }
 
 #[cfg(test)]

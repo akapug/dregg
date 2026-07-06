@@ -70,6 +70,20 @@ fn rotated_json(key: &str) -> &'static str {
 }
 
 /// Resolve the rotated transfer descriptor JSON from the staged registry TSV.
+/// The committed rotated trace width for a descriptor. A gentian flag-day refuse-welded (bare
+/// cohort, `-gentian-deployed-bare-refuse`) member extends PAST the graduated width to cover the
+/// three floor-refuse aux blocks — exactly `floor_col(last)+1`; every other rotated member is
+/// exactly `GRAD_ROT_WIDTH`. (The flag-day grew the deployed descriptors but left these test width
+/// pins at the pre-weld value.)
+fn expected_rot_width(desc: &dregg_circuit::descriptor_ir2::EffectVmDescriptor2) -> usize {
+    use dregg_circuit::effect_vm::bare_floor_refuse_weld as refuse;
+    if desc.name.ends_with(refuse::REFUSE_WELD_SUFFIX) {
+        refuse::floor_col(refuse::CAPACITY_TAGS.len() - 1) + 1
+    } else {
+        GRAD_ROT_WIDTH
+    }
+}
+
 fn rotated_transfer_json() -> &'static str {
     rotated_json("transferVmDescriptor2R24")
 }
@@ -145,7 +159,8 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(
@@ -423,7 +438,8 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         .expect("burnVmDescriptor2R24 in registry");
     let desc = parse_vm_descriptor2(json).expect("burn descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(desc.public_input_count, 50);
@@ -542,7 +558,8 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         .expect("noteSpendVmDescriptor2R24 in the staged registry");
     let desc = parse_vm_descriptor2(json).expect("rotated note-spend descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(
@@ -783,7 +800,8 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
     let desc =
         parse_vm_descriptor2(rotated_descriptor_json(name)).expect("rotated createCell parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(
@@ -1117,7 +1135,8 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
         let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
             .expect("rotated setField descriptor parses");
         assert_eq!(
-            desc.trace_width, GRAD_ROT_WIDTH,
+            desc.trace_width,
+            expected_rot_width(&desc),
             "graduated rotated width 608"
         );
         assert_eq!(
@@ -1236,7 +1255,8 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
         let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
             .expect("rotated bridgeMint descriptor parses");
         assert_eq!(
-            desc.trace_width, GRAD_ROT_WIDTH,
+            desc.trace_width,
+            expected_rot_width(&desc),
             "graduated rotated width 608"
         );
         assert_eq!(
@@ -1381,7 +1401,11 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
     assert_eq!(name, "supplyMintVmDescriptor2R24");
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated supply-mint descriptor parses");
-    assert_eq!(desc.trace_width, GRAD_ROT_WIDTH, "graduated rotated width");
+    assert_eq!(
+        desc.trace_width,
+        expected_rot_width(&desc),
+        "graduated rotated width"
+    );
     assert_eq!(
         desc.public_input_count, 46,
         "supplyMintVmDescriptor2R24 (registry) is UNWRAPPED — the Lean `supplyMintV3` is emitted \
@@ -2045,7 +2069,8 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
     let json = rotated_descriptor_json(name);
     let desc = parse_vm_descriptor2(json).expect("rotated cellSeal descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(
@@ -2203,7 +2228,8 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
     let desc =
         parse_vm_descriptor2(rotated_transfer_json()).expect("rotated transfer descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
     assert_eq!(
@@ -2382,7 +2408,8 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
         let json = rotated_descriptor_json(name);
         let desc = parse_vm_descriptor2(json).expect("rotated audit descriptor parses");
         assert_eq!(
-            desc.trace_width, GRAD_ROT_WIDTH,
+            desc.trace_width,
+            expected_rot_width(&desc),
             "graduated rotated width 608"
         );
         // H1: a record-digest mover (refusal, pin offset `B_RECORD_DIGEST`) pins ALL 8 faithful
@@ -2653,7 +2680,8 @@ fn note_create_pins_commitments_and_refuses_tamper() {
     let desc = parse_vm_descriptor2(rotated_descriptor_json(name))
         .expect("rotated note-create descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "graduated rotated width 608"
     );
 
@@ -2782,7 +2810,8 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
     let desc = parse_vm_descriptor2(rotated_json("transferFeeVmDescriptor2R24"))
         .expect("rotated fee'd transfer descriptor parses");
     assert_eq!(
-        desc.trace_width, GRAD_ROT_WIDTH,
+        desc.trace_width,
+        expected_rot_width(&desc),
         "fee'd transfer keeps the graduated rotated width 608"
     );
     assert_eq!(
