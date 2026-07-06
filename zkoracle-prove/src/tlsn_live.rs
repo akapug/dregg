@@ -1,0 +1,510 @@
+//! **The authentic leg, run for real — vendored TLSNotary, live-local MPC-TLS.**
+//!
+//! Where [`crate::authentic`] MODELS the shape a verified `tlsn` presentation takes, THIS
+//! module runs the genuine thing against an **Anthropic-shaped** endpoint: a real [`tlsn`]
+//! Prover + a real local Notary perform the **MPC-TLS 2PC** handshake against a test HTTPS
+//! server, the Prover **`POST`s `/v1/messages`** and **selectively discloses** the response
+//! body while HIDING the `x-api-key` secret, the Notary signs a real `Attestation`, the
+//! Prover builds a real `Presentation`, and `presentation.verify()` yields a real
+//! `PresentationOutput`. The authenticated response body then drives the well-formed (CFG)
+//! and injection-free legs unchanged.
+//!
+//! Gated behind the `tlsn-live` cargo feature (the heavy `mpz` 2PC + tokio + rustls
+//! backend). Self-contained: server, Notary, and Prover all run in-process over
+//! `tokio::io::duplex` — no external notary binary, no network. This is the exact
+//! generalization of `deco-prove/src/tlsn_live.rs` (proven live-local for Stripe) with the
+//! method flipped `GET`→`POST`, `Authorization`→`x-api-key`, and the response shaped as an
+//! Anthropic messages object.
+//!
+//! ## What is REAL here vs the operational live-Anthropic remainder
+//!
+//! - **REAL:** the vendored tlsn stack, the MPC-TLS 2PC session (the Notary co-derives
+//!   session keys and sees no plaintext), the signed `Attestation`, selective disclosure
+//!   (x-api-key hidden), the `Presentation`, `presentation.verify()`, and the extracted
+//!   body driving the CFG + injection legs. A tampered `Presentation` fails the real
+//!   `verify()`.
+//! - **Operational remainder (a deploy step, NOT built here):** pointing the Prover at the
+//!   live `api.anthropic.com` (a real Anthropic TLS session with a real key, and a
+//!   deployed/pinned notary). The machinery below is exactly that path with the server
+//!   swapped: the local test server presents the `tlsn-server-fixture` cert
+//!   (`test-server.io`), so the server pin here is that domain; live-Anthropic pins
+//!   [`crate::authentic::ANTHROPIC_SERVER_NAME`] (`api.anthropic.com`).
+
+#![cfg(feature = "tlsn-live")]
+
+use std::future::IntoFuture;
+use std::sync::Arc;
+
+use anyhow::{Context, Result, anyhow};
+use futures::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+
+use tlsn::{
+    Session,
+    attestation::{
+        Attestation, AttestationConfig, CryptoProvider,
+        presentation::{Presentation, PresentationOutput},
+        request::{Request as AttestationRequest, RequestConfig},
+        signing::Secp256k1Signer,
+    },
+    config::{
+        prove::ProveConfig, prover::ProverConfig, tls::TlsClientConfig,
+        tls_commit::mpc::MpcTlsConfig, verifier::VerifierConfig,
+    },
+    connection::{CertBinding, ConnectionInfo, HandshakeData, ServerName, TranscriptLength},
+    prover::ProverOutput,
+    transcript::{ContentType, TranscriptCommitConfig},
+    verifier::{ServerCertVerifier, VerifierCommitStart, VerifierOutput},
+    webpki::{CertificateDer, RootCertStore},
+};
+use tlsn_formats::http::{DefaultHttpCommitter, HttpCommit, HttpTranscript};
+use tlsn_server_fixture_certs::{CA_CERT_DER, SERVER_CERT_DER, SERVER_DOMAIN, SERVER_KEY_DER};
+
+/// The `x-api-key` value the caller sends — a secret that MUST be redacted (never
+/// authenticated) in the presentation. An obvious placeholder so no real-key shape lands
+/// in the tree; the redaction is identical regardless of the token's contents.
+const API_KEY_SECRET: &str = "sk-ant-MERCHANT-API-KEY-PLACEHOLDER";
+
+// MPC-TLS preprocessing bounds (mirror `crates/examples`): the amount of data the 2PC
+// preprocesses. The messages request/response are under these.
+const MAX_SENT_DATA: usize = 1 << 12;
+const MAX_RECV_DATA: usize = 1 << 14;
+
+/// A canned Anthropic `POST /v1/messages` exchange the test server answers.
+#[derive(Clone, Debug)]
+pub struct LiveExchange {
+    /// The request body (the messages request JSON — the prompt etc.).
+    pub request_body: String,
+    /// The response body the server returns (an Anthropic messages object).
+    pub response_body: String,
+}
+
+impl LiveExchange {
+    /// A minimal well-formed messages exchange over `text`.
+    pub fn messages(prompt: &str, reply: &str) -> Self {
+        LiveExchange {
+            request_body: format!(
+                "{{\"model\":\"claude-opus-4-8\",\"max_tokens\":64,\
+                 \"messages\":[{{\"role\":\"user\",\"content\":\"{prompt}\"}}]}}"
+            ),
+            response_body: format!(
+                "{{\"id\":\"msg_live\",\"type\":\"message\",\"role\":\"assistant\",\
+                 \"model\":\"claude-opus-4-8\",\
+                 \"content\":[{{\"type\":\"text\",\"text\":\"{reply}\"}}],\
+                 \"stop_reason\":\"end_turn\",\"stop_sequence\":null,\
+                 \"usage\":{{\"input_tokens\":12,\"output_tokens\":5}}}}"
+            ),
+        }
+    }
+}
+
+/// The disclosed body + views a verified presentation yields.
+#[derive(Clone, Debug)]
+pub struct VerifiedResponse {
+    /// The authenticated messages JSON response body (feed to the CFG + injection legs).
+    pub response_body: Vec<u8>,
+    /// The authenticated server identity (must be the pinned host).
+    pub server_name: String,
+    /// The session time (`connection_info.time`, unix seconds).
+    pub connection_time: u64,
+    /// The delivered *sent* (request) bytes, unauthenticated positions set to `X`.
+    pub sent_redacted: Vec<u8>,
+}
+
+impl VerifiedResponse {
+    /// Whether the `x-api-key` secret was hidden (selective disclosure worked).
+    pub fn api_key_hidden(&self) -> bool {
+        !contains_subslice(&self.sent_redacted, API_KEY_SECRET.as_bytes())
+            && !contains_subslice(&self.sent_redacted, b"MERCHANT-API-KEY")
+    }
+}
+
+/// A completed real roundtrip: the verified response + the raw `Presentation` bytes.
+#[derive(Clone, Debug)]
+pub struct LiveRoundtrip {
+    /// The verified, extracted response.
+    pub verified: VerifiedResponse,
+    /// The bincode-serialized real `tlsn` `Presentation`.
+    pub presentation_bytes: Vec<u8>,
+    /// The server host the presentation was verified against (the local cert domain).
+    pub pinned_server: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The test HTTPS server — a controllable server returning the Anthropic-shaped JSON over
+// TLS, presenting the tlsn-server-fixture cert (domain test-server.io).
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn serve_messages_once<S>(server_socket: S, exchange: LiveExchange) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Unpin + 'static,
+{
+    use futures_rustls::TlsAcceptor;
+    use futures_rustls::pki_types::{
+        CertificateDer as RustlsCert, PrivateKeyDer as RustlsKey, PrivatePkcs8KeyDer,
+    };
+    use futures_rustls::rustls::{ServerConfig, crypto::ring, version::TLS12};
+
+    let cert = RustlsCert::from(SERVER_CERT_DER);
+    let key = RustlsKey::Pkcs8(PrivatePkcs8KeyDer::from(SERVER_KEY_DER));
+
+    let config = ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        .with_protocol_versions(&[&TLS12])
+        .context("server: TLS1.2 provider")?
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .context("server: single cert")?;
+
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let tls = acceptor.accept(server_socket.compat()).await?;
+    let io = TokioIo::new(tls.compat());
+
+    let body = exchange.response_body;
+    let service = hyper::service::service_fn(move |_req: Request<hyper::body::Incoming>| {
+        let body = body.clone();
+        async move {
+            Ok::<_, std::convert::Infallible>(
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .header("connection", "close")
+                    .body(Full::new(Bytes::from(body)))
+                    .unwrap(),
+            )
+        }
+    });
+
+    hyper::server::conn::http1::Builder::new()
+        .keep_alive(false)
+        .serve_connection(io, service)
+        .await
+        .map_err(|e| anyhow!("server: serve_connection: {e}"))?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Notary — a real local tlsn verifier that runs the MPC-TLS commitment protocol and
+// signs an `Attestation` (secp256k1). Mirrors deco-prove's notary.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn notary<S>(socket: S) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+{
+    let session = Session::new(socket.compat());
+    let (driver, mut handle) = session.split();
+    let driver_task = tokio::spawn(driver);
+
+    let verifier_config = VerifierConfig::builder()
+        .root_store(RootCertStore {
+            roots: vec![CertificateDer(CA_CERT_DER.to_vec())],
+        })
+        .build()?;
+
+    let verifier = match handle.new_verifier(verifier_config)?.commit().await? {
+        VerifierCommitStart::Mpc(verifier) => verifier.accept().await?.run().await?,
+        VerifierCommitStart::Proxy(verifier) => {
+            verifier.reject(Some("expecting MPC-TLS")).await?;
+            return Err(anyhow!("notary rejected non-MPC configuration"));
+        }
+    };
+
+    let (
+        VerifierOutput {
+            transcript_commitments,
+            ..
+        },
+        verifier,
+    ) = verifier.verify().await?.accept().await?;
+
+    let tls_transcript = verifier.tls_transcript().clone();
+    verifier.close().await?;
+
+    let sent_len: usize = tls_transcript
+        .sent()
+        .iter()
+        .filter_map(|r| match r.typ {
+            ContentType::ApplicationData => Some(r.ciphertext.len()),
+            _ => None,
+        })
+        .sum();
+    let recv_len: usize = tls_transcript
+        .recv()
+        .iter()
+        .filter_map(|r| match r.typ {
+            ContentType::ApplicationData => Some(r.ciphertext.len()),
+            _ => None,
+        })
+        .sum();
+
+    handle.close();
+    let mut socket = driver_task.await??;
+
+    let mut request_bytes = Vec::new();
+    socket.read_to_end(&mut request_bytes).await?;
+    let request: AttestationRequest = bincode::deserialize(&request_bytes)?;
+
+    let signing_key = k256::ecdsa::SigningKey::from_bytes(&[1u8; 32].into())?;
+    let signer = Box::new(Secp256k1Signer::new(&signing_key.to_bytes())?);
+    let mut provider = CryptoProvider::default();
+    provider.signer.set_signer(signer);
+
+    let mut att_config_builder = AttestationConfig::builder();
+    att_config_builder.supported_signature_algs(Vec::from_iter(provider.signer.supported_algs()));
+    let att_config = att_config_builder.build()?;
+
+    let CertBinding::V1_2(binding) = tls_transcript.certificate_binding() else {
+        return Err(anyhow!("unsupported cert binding version"));
+    };
+    let mut builder = Attestation::builder(&att_config).accept_request(request)?;
+    builder
+        .connection_info(ConnectionInfo {
+            time: tls_transcript.time(),
+            version: tls_transcript.version(),
+            transcript_length: TranscriptLength {
+                sent: sent_len as u32,
+                received: recv_len as u32,
+            },
+        })
+        .server_ephemeral_key(binding.server_ephemeral_key.clone())
+        .transcript_commitments(transcript_commitments);
+
+    let attestation = builder.build(&provider)?;
+    let attestation_bytes = bincode::serialize(&attestation)?;
+    socket.write_all(&attestation_bytes).await?;
+    socket.close().await?;
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Prover — connects, runs MPC-TLS, POSTs /v1/messages, selectively discloses (hiding
+// x-api-key), and builds a real `Presentation`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async fn prove_messages_presentation(exchange: &LiveExchange) -> Result<Vec<u8>> {
+    let (notary_socket, prover_notary_socket) = tokio::io::duplex(1 << 23);
+    let (server_socket, prover_server_socket) = tokio::io::duplex(1 << 16);
+
+    let notary_task = tokio::spawn(notary(notary_socket));
+    let server_task = tokio::spawn(serve_messages_once(server_socket, exchange.clone()));
+
+    let session = Session::new(prover_notary_socket.compat());
+    let (driver, mut handle) = session.split();
+    let driver_task = tokio::spawn(driver);
+
+    let prover = handle
+        .new_prover(ProverConfig::builder().build()?)?
+        .commit(
+            MpcTlsConfig::builder()
+                .max_sent_data(MAX_SENT_DATA)
+                .max_recv_data(MAX_RECV_DATA)
+                .build()?,
+        )
+        .await?;
+
+    let (tls_connection, prover) = prover.connect(
+        TlsClientConfig::builder()
+            .server_name(ServerName::Dns(SERVER_DOMAIN.try_into()?))
+            .root_store(RootCertStore {
+                roots: vec![CertificateDer(CA_CERT_DER.to_vec())],
+            })
+            .build()?,
+        prover_server_socket.compat(),
+    )?;
+    let tls_connection = TokioIo::new(tls_connection.compat());
+    let prover_task = tokio::spawn(prover.into_future());
+
+    let (mut request_sender, connection) =
+        hyper::client::conn::http1::handshake(tls_connection).await?;
+    tokio::spawn(connection);
+
+    let request = Request::builder()
+        .uri("/v1/messages")
+        .method("POST")
+        .header("Host", SERVER_DOMAIN)
+        .header("Accept", "*/*")
+        .header("Accept-Encoding", "identity")
+        .header("Connection", "close")
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .header("x-api-key", API_KEY_SECRET)
+        .body(Full::<Bytes>::new(Bytes::from(
+            exchange.request_body.clone(),
+        )))?;
+    let response = request_sender.send_request(request).await?;
+    if response.status() != StatusCode::OK {
+        return Err(anyhow!("server returned {}", response.status()));
+    }
+    // Drain the body so the transcript is complete before proving.
+    let _ = response.into_body().collect().await?;
+
+    let mut prover = prover_task.await??;
+
+    let transcript = HttpTranscript::parse(prover.transcript())?;
+    let mut commit_builder = TranscriptCommitConfig::builder(prover.transcript());
+    DefaultHttpCommitter::default().commit_transcript(&mut commit_builder, &transcript)?;
+    let transcript_commit = commit_builder.build()?;
+
+    let mut req_cfg_builder = RequestConfig::builder();
+    req_cfg_builder.transcript_commit(transcript_commit);
+    let request_config = req_cfg_builder.build()?;
+
+    let mut prove_builder = ProveConfig::builder(prover.transcript());
+    if let Some(config) = request_config.transcript_commit() {
+        prove_builder.transcript_commit(config.clone());
+    }
+    let disclosure_config = prove_builder.build()?;
+
+    let ProverOutput {
+        transcript_commitments,
+        transcript_secrets,
+        ..
+    } = prover.prove(&disclosure_config).await?;
+
+    let prover_transcript = prover.transcript().clone();
+    let tls_transcript = prover.tls_transcript().clone();
+    prover.close().await?;
+
+    let mut att_req_builder = AttestationRequest::builder(&request_config);
+    att_req_builder
+        .server_name(ServerName::Dns(SERVER_DOMAIN.try_into()?))
+        .handshake_data(HandshakeData {
+            certs: tls_transcript
+                .server_cert_chain()
+                .context("server cert chain present")?
+                .to_vec(),
+            sig: tls_transcript
+                .server_signature()
+                .context("server signature present")?
+                .clone(),
+            binding: tls_transcript.certificate_binding().clone(),
+        })
+        .transcript(prover_transcript)
+        .transcript_commitments(transcript_secrets, transcript_commitments);
+    let (att_request, secrets) = att_req_builder.build(&CryptoProvider::default())?;
+
+    handle.close();
+    let mut socket = driver_task.await??;
+    socket.write_all(&bincode::serialize(&att_request)?).await?;
+    socket.close().await?;
+    let mut attestation_bytes = Vec::new();
+    socket.read_to_end(&mut attestation_bytes).await?;
+    let attestation: Attestation = bincode::deserialize(&attestation_bytes)?;
+    att_request.validate(&attestation, &CryptoProvider::default())?;
+
+    // ── Build the PRESENTATION with selective disclosure.
+    let http = HttpTranscript::parse(secrets.transcript())?;
+    let mut builder = secrets.transcript_proof_builder();
+
+    // Request: reveal structure + target + every header EXCEPT the x-api-key VALUE (the
+    // killer property — prove the response without revealing your Anthropic key).
+    let req = &http.requests[0];
+    builder.reveal_sent(req.without_data())?;
+    builder.reveal_sent(&req.request.target)?;
+    for header in &req.headers {
+        if header.name.as_str().eq_ignore_ascii_case("x-api-key") {
+            builder.reveal_sent(header.without_value())?;
+        } else {
+            builder.reveal_sent(header)?;
+        }
+    }
+
+    // Response: reveal it entirely — the messages body is the disclosed public evidence.
+    let resp = &http.responses[0];
+    builder.reveal_recv(resp)?;
+    let transcript_proof = builder.build()?;
+
+    let provider = CryptoProvider::default();
+    let mut pres_builder = attestation.presentation_builder(&provider);
+    pres_builder
+        .identity_proof(secrets.identity_proof())
+        .transcript_proof(transcript_proof);
+    let presentation: Presentation = pres_builder.build()?;
+
+    let bytes = bincode::serialize(&presentation)?;
+
+    notary_task.await??;
+    server_task.await??;
+    Ok(bytes)
+}
+
+/// **Verify a real `tlsn` presentation** and extract the authenticated messages response
+/// body. Runs `presentation.verify()` (real crypto — a tampered presentation fails here),
+/// pins the server host, and reads the response body out of the authenticated transcript.
+pub fn verify_messages_presentation(
+    presentation_bytes: &[u8],
+    expected_server: &str,
+) -> Result<VerifiedResponse> {
+    let presentation: Presentation =
+        bincode::deserialize(presentation_bytes).context("presentation does not deserialize")?;
+
+    let root_cert_store = RootCertStore {
+        roots: vec![CertificateDer(CA_CERT_DER.to_vec())],
+    };
+    let crypto_provider = CryptoProvider {
+        cert: ServerCertVerifier::new(&root_cert_store)?,
+        ..Default::default()
+    };
+
+    let PresentationOutput {
+        server_name,
+        connection_info,
+        transcript,
+        ..
+    } = presentation
+        .verify(&crypto_provider)
+        .map_err(|e| anyhow!("presentation.verify() refused: {e}"))?;
+
+    let server_name = server_name.context("presentation did not authenticate a server name")?;
+    let ServerName::Dns(server_dns) = server_name;
+    let server_name = server_dns.as_str().to_string();
+    if server_name != expected_server {
+        return Err(anyhow!(
+            "server pin: got {server_name:?}, expected {expected_server:?}"
+        ));
+    }
+
+    let mut partial = transcript.context("presentation revealed no transcript")?;
+    partial.set_unauthed(b'X');
+    let sent_redacted = partial.sent_unsafe().to_vec();
+    let recv_redacted = partial.received_unsafe().to_vec();
+
+    let body_start =
+        find_subslice(&recv_redacted, b"\r\n\r\n").context("no header/body separator")? + 4;
+    let response_body = recv_redacted[body_start..].to_vec();
+
+    Ok(VerifiedResponse {
+        response_body,
+        server_name,
+        connection_time: connection_info.time,
+        sent_redacted,
+    })
+}
+
+/// **Run the full REAL local MPC-TLS roundtrip** (server + notary + prover in-process),
+/// producing a signed presentation, then verify it and extract the response body.
+/// Blocking: stands up its own multi-thread tokio runtime.
+pub fn run_local_roundtrip_blocking(exchange: &LiveExchange) -> Result<LiveRoundtrip> {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    let presentation_bytes = rt.block_on(prove_messages_presentation(exchange))?;
+    let verified = verify_messages_presentation(&presentation_bytes, SERVER_DOMAIN)?;
+    Ok(LiveRoundtrip {
+        verified,
+        presentation_bytes,
+        pinned_server: SERVER_DOMAIN.to_string(),
+    })
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    find_subslice(haystack, needle).is_some()
+}
