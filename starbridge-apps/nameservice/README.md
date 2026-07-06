@@ -46,15 +46,17 @@ sees only signed Rust-shaped `Action`s.
 ## State machine
 
 Each registered name lives in a sovereign cell whose state is laid out
-across five slots:
+across seven slots:
 
 | Slot | Constant | Purpose | Constraint |
 |:---:|---|---|---|
 | `2` | `NAME_HASH_SLOT`        | `blake3(name_bytes)` | `WriteOnce` |
-| `3` | `OWNER_HASH_SLOT`       | `blake3(owner_pubkey_bytes)` | (auth — see below) |
+| `3` | `OWNER_HASH_SLOT`       | `blake3(owner_pubkey_bytes)` | owner-authorized (see below) |
 | `4` | `EXPIRY_SLOT`           | block-height of rent expiry (BE-padded u64) | `Monotonic` |
 | `5` | `REVOKED_SLOT`          | `0` while active; tombstone after revocation | `WriteOnce` |
 | `6` | `RESOLVE_TARGET_SLOT`   | content-address (`blake3(uri_bytes)`) of the resolve target | _unconstrained_ |
+| `7` | `OWNER_PK_SLOT`         | raw Ed25519 pubkey of the CURRENT owner (the authority register) | owner-authorized rotation (staged + accepted) |
+| `8` | `PENDING_OWNER_PK_SLOT` | raw pubkey staged for an ownership handoff | owner-authorized (see below) |
 
 `WriteOnce` on `NAME_HASH_SLOT` closes the duplicate-registration gap
 (`APPS-USERSPACE-GAPS.md` §Gap 1) — the slot transitions from `FIELD_ZERO`
@@ -81,19 +83,38 @@ different cipherclerks produce two different signatures for the same logical
 action (see the `auth_different_cclerks_produce_different_signatures_on_same_logical_action`
 test in `tests/lifecycle.rs`).
 
-The factory descriptor does **not** currently install a
-`StateConstraint::SenderAuthorized { set: AuthorizedSet::PublicRoot { set_root_index: OWNER_HASH_SLOT } }`
-on the cell. **TODO (follow-up):** add this so the executor will reject
-a transfer/renew action whose signer is not the holder of the owner cap.
-The slot layout already supports it — `OWNER_HASH_SLOT` would just be
-reinterpreted as a single-element Merkle root over the owner's pubkey
-— but the witness-side plumbing (`SenderAuthorized` requires a
-`Merkle-membership` witness in the action's `auth_witness` blob) is not
-yet wired through `AppCipherclerk::make_action`. The current authorization
-story is: actions carry a real signature, so the executor *can* tell
-who signed, but the cell program does not yet refuse transfers from
-non-owners. Tracked in this README and in the comment on
-`build_transfer_action` in `src/lib.rs`.
+**The cell program itself refuses owner-mutating writes from non-owners.**
+The factory descriptor (and `name_cell_program()`) carry the
+owner-authorization caveats (`owner_authorization_constraints()` in
+`src/lib.rs`): every sender-reading atom in the constraint language binds
+the *post-state* slot value, so the sound form is the conjunction of
+single-level disjunctions
+
+```text
+(WriteOnce(owner) ∨ SenderInSlot(auth)) ∧ (WriteOnce(owner) ∨ Immutable(auth))
+```
+
+— past the first write, the owner image moves only in a turn whose
+executor-verified sender equals the authority register `OWNER_PK_SLOT`,
+frozen in that same turn (i.e. **sender == the CURRENT owner**). The
+authority register itself rotates only as a staged, accepted handoff:
+the current owner stages the incoming key in `PENDING_OWNER_PK_SLOT`
+(`build_transfer_action`), and the incoming key accepts by signing the
+rotation to exactly the staged value (`build_accept_transfer_action`).
+An impostor can neither move the owner image, nor stage, nor rotate the
+authority register — including the atomic stage-and-seize turn — and a
+missing sender context fails closed. Registration stays
+permissionless-first-write; a registration that binds an owner image
+without its authority register is refused ("no ownerless names").
+
+Two-pole tests: `owner_transfer_from_current_owner_is_admitted` /
+`adversarial_transfer_from_non_owner_authorization_diverges` (+
+`owner_authority_follows_accepted_transfer`,
+`adversarial_staging_and_atomic_seizure_are_refused`) in
+`tests/lifecycle.rs`, and the live-executor pair
+`executor_transfer_emits_name_transferred_event_with_correct_owner_hashes` /
+`executor_refuses_transfer_when_sender_is_not_the_owner` in
+`tests/integration_register_full_flow.rs`.
 
 ---
 
@@ -128,6 +149,7 @@ slice this app contributes (today: one entry).
 build_register_action(cclerk,   registry_cell, name, owner, expiry_height)
 build_renew_action(cclerk,      registry_cell, name, new_expiry_height)
 build_transfer_action(cclerk,   registry_cell, name, old_owner, new_owner)
+build_accept_transfer_action(cclerk, registry_cell, name, new_owner)
 build_revoke_action(cclerk,     registry_cell, name)
 build_set_target_action(cclerk, registry_cell, name, target_field)
 ```

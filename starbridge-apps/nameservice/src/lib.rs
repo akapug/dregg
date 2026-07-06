@@ -43,9 +43,13 @@
 //!    baked into the factory descriptor enforces the increment is
 //!    exact.
 //!
-//! 5. [`build_transfer_action`] — emits `name-transferred` and updates
-//!    the owner-hash slot. Uses two events + two SetFields composed in
-//!    a single action; capability handoff (`Effect::GrantCapability` /
+//! 5. [`build_transfer_action`] — the CURRENT owner re-points the
+//!    owner-hash slot and stages the incoming owner's raw key; the
+//!    handoff completes with [`build_accept_transfer_action`] (the
+//!    incoming owner rotates the authority register to the staged key).
+//!    The cell program's [`owner_authorization_constraints`] refuse
+//!    both halves from anyone but the respective authorized signer.
+//!    Capability handoff (`Effect::GrantCapability` /
 //!    `Effect::RevokeCapability`) is the responsibility of the
 //!    capability-broker turn that issues *with* this one — kept
 //!    separate so this helper stays pure-state.
@@ -144,6 +148,29 @@ pub const REVOKED_SLOT: usize = 5;
 /// document, etc.); no `Monotonic` or `WriteOnce` constraint applies.
 pub const RESOLVE_TARGET_SLOT: usize = 6;
 
+/// State field slot holding the **raw Ed25519 public key of the current
+/// owner** — THE authority register the owner-authorization caveats bind
+/// the turn sender against.
+///
+/// [`OWNER_HASH_SLOT`] stays the blake3 *image* of the owner key (the
+/// display/index form off-chain consumers already read); `OWNER_PK_SLOT`
+/// carries the raw 32-byte key so `StateConstraint::SenderInSlot` (which
+/// compares `ctx.sender`, the raw signer pubkey, against a slot value)
+/// can enforce **sender == current owner** on every owner-mutating
+/// transition. See [`owner_authorization_constraints`] for the caveat
+/// set and the soundness argument.
+pub const OWNER_PK_SLOT: usize = 7;
+
+/// State field slot staging the **incoming owner's raw public key**
+/// during an ownership handoff (the propose half of propose→accept).
+///
+/// Written only by the *current* owner (the caveats refuse any other
+/// signer). The authority register [`OWNER_PK_SLOT`] may then rotate
+/// **only to this staged key, in a turn signed by that key** (the accept
+/// half) — ownership moves exactly where the current owner pointed it,
+/// never anywhere else. See [`owner_authorization_constraints`].
+pub const PENDING_OWNER_PK_SLOT: usize = 8;
+
 // =============================================================================
 // Rent / factory configuration
 // =============================================================================
@@ -183,11 +210,14 @@ pub const NAME_FACTORY_VK: [u8; 32] = *b"starbridge-nameservice-factory!!";
 /// - `WriteOnce(NAME_HASH_SLOT)` — names cannot be re-bound.
 /// - `Monotonic(EXPIRY_SLOT)`     — rent extensions only push forward.
 /// - `WriteOnce(REVOKED_SLOT)`    — revocations are one-way.
+/// - [`owner_authorization_constraints`] — owner-mutating writes are
+///   refused unless the turn's **sender is the current owner** (and
+///   authority rotation is a staged, accepted handoff).
 ///
 /// Lifted as an `Always`-guarded `CellProgram::Cases` so future
 /// operation-scoped cases can be added without restructuring.
 pub fn name_cell_program() -> CellProgram {
-    CellProgram::always(vec![
+    let mut constraints = vec![
         StateConstraint::WriteOnce {
             index: NAME_HASH_SLOT as u8,
         },
@@ -197,7 +227,110 @@ pub fn name_cell_program() -> CellProgram {
         StateConstraint::WriteOnce {
             index: REVOKED_SLOT as u8,
         },
-    ])
+    ];
+    constraints.extend(owner_authorization_constraints());
+    CellProgram::always(constraints)
+}
+
+/// **The owner-authorization caveats** — the cell-program teeth that make an
+/// unauthorized owner-change a REAL refusal at the constraint layer (not
+/// just at the signature/cap layers above it).
+///
+/// The problem these close: the slot caveats used to be silent about *who*
+/// may write [`OWNER_HASH_SLOT`], so an impostor's `SetField(OWNER_HASH_SLOT, ..)`
+/// passed `CellProgram::evaluate` (the executor's per-cell program check).
+///
+/// The mechanism. Every sender-reading atom in the constraint language
+/// (`SenderInSlot`, `SenderAuthorized{PublicRoot}`) binds the **post-state**
+/// slot value — read alone on the mutated slot, that is the *seizure* pole
+/// ("the slot moved to whoever signed"). The sound form is the conjunction
+/// of single-level disjunctions
+///
+/// ```text
+/// (WriteOnce(s) ∨ SenderInSlot(auth)) ∧ (WriteOnce(s) ∨ Immutable(auth))
+/// ```
+///
+/// which distributes to `WriteOnce(s) ∨ (SenderInSlot(auth) ∧ Immutable(auth))`:
+/// past the first write, slot `s` may move only in a turn whose sender equals
+/// the post-state authority register — and the register is frozen in that same
+/// turn, so post-state == pre-state == **the CURRENT owner**. `ctx.sender` is
+/// the raw signer pubkey the executor binds from the verified turn parent, so
+/// the authority register ([`OWNER_PK_SLOT`]) holds the owner's *raw* key
+/// (while [`OWNER_HASH_SLOT`] keeps the blake3 image for display/indexing).
+///
+/// The full set (F1–F7, all `SimpleStateConstraint`s under single-level
+/// `AnyOf` — no new kernel atoms):
+///
+/// - **F1/F2 (the owner-field gate):** `OWNER_HASH_SLOT` moves only on its
+///   first write (registration, from zero) or by the current owner.
+/// - **F3/F4/F5 (accepted handoff):** `OWNER_PK_SLOT` rotates only in a turn
+///   *signed by the incoming key* (F3: sender == new value), *to the staged
+///   key* (F4: sender == staged value ⇒ new == staged), with the staging
+///   register frozen (F5) — so the staged value is the one the current owner
+///   authorized, and an atomic stage-and-seize turn is refused.
+/// - **F6 (owner-only staging):** `PENDING_OWNER_PK_SLOT` moves only by the
+///   current owner (with F5 forcing the authority register immutable in any
+///   staging turn past its first write).
+/// - **F7 (no ownerless names):** any state with a bound owner image carries
+///   a non-zero authority register — a registration that "forgets" the
+///   authority register (leaving it seizable via first-write) is refused.
+///
+/// Together: **register** stays permissionless-first-write; **renew /
+/// revoke / set-target** are untouched (no owner slot moves); **transfer**
+/// is the owner-signed re-point + stage ([`build_transfer_action`]) followed
+/// by the incoming owner's acceptance ([`build_accept_transfer_action`]).
+/// An impostor can neither move the owner image, nor stage, nor rotate the
+/// authority register — each path fails one of F1–F7 (fail-closed: a
+/// missing sender context refuses too).
+pub fn owner_authorization_constraints() -> Vec<StateConstraint> {
+    use dregg_cell::program::SimpleStateConstraint as S;
+    let oh = OWNER_HASH_SLOT as u8;
+    let opk = OWNER_PK_SLOT as u8;
+    let pend = PENDING_OWNER_PK_SLOT as u8;
+    vec![
+        // F1 — owner-image writes are owner-authorized.
+        StateConstraint::AnyOf {
+            variants: vec![S::WriteOnce { index: oh }, S::SenderInSlot { index: opk }],
+        },
+        // F2 — ...with the authority register frozen in the same turn
+        // (so F1's post-state read IS the current owner).
+        StateConstraint::AnyOf {
+            variants: vec![S::WriteOnce { index: oh }, S::Immutable { index: opk }],
+        },
+        // F3 — authority rotation is signed by the incoming key.
+        StateConstraint::AnyOf {
+            variants: vec![S::WriteOnce { index: opk }, S::SenderInSlot { index: opk }],
+        },
+        // F4 — the incoming key must be the STAGED key.
+        StateConstraint::AnyOf {
+            variants: vec![S::WriteOnce { index: opk }, S::SenderInSlot { index: pend }],
+        },
+        // F5 — the staging register is frozen during rotation (the staged
+        // value is the pre-state, owner-authorized one; also refuses an
+        // atomic stage-and-seize turn).
+        StateConstraint::AnyOf {
+            variants: vec![S::WriteOnce { index: opk }, S::Immutable { index: pend }],
+        },
+        // F6 — staging is owner-authorized.
+        StateConstraint::AnyOf {
+            variants: vec![S::Immutable { index: pend }, S::SenderInSlot { index: opk }],
+        },
+        // F7 — an owned name always carries a non-zero authority register
+        // (closes the "register the image, leave the authority register
+        // zero/seizable-by-first-write" gap).
+        StateConstraint::AnyOf {
+            variants: vec![
+                S::FieldEquals {
+                    index: oh,
+                    value: [0u8; 32],
+                },
+                S::Not(Box::new(S::FieldEquals {
+                    index: opk,
+                    value: [0u8; 32],
+                })),
+            ],
+        },
+    ]
 }
 
 /// The child cell program VK installed on per-name cells.
@@ -269,17 +402,27 @@ pub fn name_factory_descriptor() -> FactoryDescriptor {
         // privacy-voting/bounty-board: drop the birth NonZero, let `WriteOnce`
         // admit the first write from zero.)
         field_constraints: vec![],
-        state_constraints: vec![
-            StateConstraint::WriteOnce {
-                index: NAME_HASH_SLOT as u8,
-            },
-            StateConstraint::Monotonic {
-                index: EXPIRY_SLOT as u8,
-            },
-            StateConstraint::WriteOnce {
-                index: REVOKED_SLOT as u8,
-            },
-        ],
+        state_constraints: {
+            let mut cs = vec![
+                StateConstraint::WriteOnce {
+                    index: NAME_HASH_SLOT as u8,
+                },
+                StateConstraint::Monotonic {
+                    index: EXPIRY_SLOT as u8,
+                },
+                StateConstraint::WriteOnce {
+                    index: REVOKED_SLOT as u8,
+                },
+            ];
+            // Owner authorization (see `owner_authorization_constraints`):
+            // an owner-mutating write is refused unless the sender IS the
+            // current owner; authority rotation is a staged, accepted
+            // handoff. Appended after the three legacy caveats so existing
+            // error-shape consumers (WriteOnce/Monotonic matchers) see the
+            // same first-violation ordering.
+            cs.extend(owner_authorization_constraints());
+            cs
+        },
         default_mode: CellMode::Sovereign,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),
     }
@@ -308,17 +451,21 @@ pub fn factory_descriptors() -> Vec<FactoryDescriptor> {
 
 /// Build the on-ledger [`Action`] that records a name registration.
 ///
-/// The action carries four effects:
+/// The action carries five effects:
 ///
 /// 1. `SetField(cell=registry_cell, index=NAME_HASH_SLOT, value=name_hash)`
 ///    — anchors the name binding in the cell's state.
 /// 2. `SetField(cell=registry_cell, index=OWNER_HASH_SLOT, value=owner_hash)`
-///    — anchors the owner.
-/// 3. `SetField(cell=registry_cell, index=EXPIRY_SLOT, value=expiry_height)`
+///    — anchors the owner image (`blake3(owner)`).
+/// 3. `SetField(cell=registry_cell, index=OWNER_PK_SLOT, value=owner)`
+///    — anchors the raw owner key as THE authority register the
+///    owner-authorization caveats bind the turn sender against (see
+///    [`owner_authorization_constraints`]).
+/// 4. `SetField(cell=registry_cell, index=EXPIRY_SLOT, value=expiry_height)`
 ///    — anchors the rent expiry. The on-cell `FieldDelta` constraint
 ///    (when Tier-1 #1 lands) enforces subsequent `renew_name` turns
 ///    increment exactly by `DEFAULT_RENT_EPOCH_BLOCKS`.
-/// 4. `EmitEvent(cell=registry_cell, topic="name-registered",
+/// 5. `EmitEvent(cell=registry_cell, topic="name-registered",
 ///    data=[name_hash, owner_hash, expiry])` — surfaces the
 ///    registration for off-chain indexers.
 ///
@@ -358,6 +505,16 @@ pub fn build_register_action(
             cell: registry_cell,
             index: OWNER_HASH_SLOT,
             value: owner_hash,
+        },
+        // The authority register: the raw owner pubkey the
+        // owner-authorization caveats bind the turn sender against.
+        // Written atomically with the owner image — a registration that
+        // omitted it would be refused by the caveats' "no ownerless
+        // names" tooth (see `owner_authorization_constraints`).
+        Effect::SetField {
+            cell: registry_cell,
+            index: OWNER_PK_SLOT,
+            value: owner,
         },
         Effect::SetField {
             cell: registry_cell,
@@ -409,11 +566,23 @@ pub fn build_renew_action(
     cipherclerk.make_action(registry_cell, "renew_name", effects)
 }
 
-/// Build the on-ledger [`Action`] that records a name-owner transfer.
+/// Build the on-ledger [`Action`] that records a name-owner transfer —
+/// **the propose half, signed by the CURRENT owner**.
 ///
-/// Updates `OWNER_HASH_SLOT` and emits `name-transferred` with the
-/// old/new owner hashes. Capability handoff
-/// (`Effect::GrantCapability` to the new owner /
+/// Updates `OWNER_HASH_SLOT` (the owner image), stages the incoming
+/// owner's raw key in [`PENDING_OWNER_PK_SLOT`], and emits
+/// `name-transferred` with the old/new owner hashes. The cell program's
+/// owner-authorization caveats ([`owner_authorization_constraints`])
+/// admit this action **only when the executor-verified sender is the
+/// current owner** (the key in [`OWNER_PK_SLOT`]); an impostor's
+/// transfer is refused at the constraint layer.
+///
+/// The handoff completes when the incoming owner fires
+/// [`build_accept_transfer_action`], rotating the authority register
+/// [`OWNER_PK_SLOT`] to the staged key. Until acceptance, authority
+/// remains with the proposing owner (who may freely re-stage).
+///
+/// Capability handoff (`Effect::GrantCapability` to the new owner /
 /// `Effect::RevokeCapability` from the old owner) is intentionally
 /// *not* part of this action — capability brokerage is the
 /// responsibility of the issuer turn that pairs with this one,
@@ -437,6 +606,14 @@ pub fn build_transfer_action(
             index: OWNER_HASH_SLOT,
             value: new_hash,
         },
+        // Stage the incoming owner's raw key — the accept half
+        // (`build_accept_transfer_action`) may rotate the authority
+        // register ONLY to this owner-authorized value.
+        Effect::SetField {
+            cell: registry_cell,
+            index: PENDING_OWNER_PK_SLOT,
+            value: new_owner,
+        },
         Effect::EmitEvent {
             cell: registry_cell,
             event: Event::new(
@@ -447,6 +624,46 @@ pub fn build_transfer_action(
     ];
 
     cipherclerk.make_action(registry_cell, "transfer_name", effects)
+}
+
+/// Build the on-ledger [`Action`] that **completes** a name-owner
+/// transfer — the accept half, signed by the INCOMING owner.
+///
+/// Rotates the authority register [`OWNER_PK_SLOT`] to `new_owner` and
+/// emits `name-transfer-accepted`. The owner-authorization caveats
+/// ([`owner_authorization_constraints`]) admit this **only** when:
+///
+/// - the turn's sender is `new_owner` itself (the rotation is signed by
+///   the incoming key), AND
+/// - `new_owner` equals the key staged in [`PENDING_OWNER_PK_SLOT`] by
+///   the *current* owner's [`build_transfer_action`].
+///
+/// So the authority register moves exactly where the current owner
+/// pointed it, and only with the incoming owner's own signature —
+/// neither the current owner alone (no acceptance) nor an impostor
+/// (not staged) can rotate it.
+pub fn build_accept_transfer_action(
+    cipherclerk: &AppCipherclerk,
+    registry_cell: CellId,
+    name: &str,
+    new_owner: [u8; 32],
+) -> Action {
+    let name_hash = field_from_bytes(name.as_bytes());
+    let new_hash = field_from_bytes(&new_owner);
+
+    let effects = vec![
+        Effect::SetField {
+            cell: registry_cell,
+            index: OWNER_PK_SLOT,
+            value: new_owner,
+        },
+        Effect::EmitEvent {
+            cell: registry_cell,
+            event: Event::new(symbol("name-transfer-accepted"), vec![name_hash, new_hash]),
+        },
+    ];
+
+    cipherclerk.make_action(registry_cell, "accept_transfer_name", effects)
 }
 
 /// Build the on-ledger [`Action`] that revokes a name.
@@ -799,6 +1016,9 @@ pub fn seed_name(
         if let Some(c) = ledger.get_mut(&cell) {
             c.state.set_field(NAME_HASH_SLOT, nh);
             c.state.set_field(OWNER_HASH_SLOT, field_from_bytes(&owner));
+            // The authority register: the raw owner key the
+            // owner-authorization caveats bind the turn sender against.
+            c.state.set_field(OWNER_PK_SLOT, owner);
             c.state
                 .set_field(EXPIRY_SLOT, field_from_u64(initial_expiry));
             c.state.set_field(REVOKED_SLOT, field_from_u64(0));
@@ -989,6 +1209,8 @@ pub fn web_constants() -> ConstantsModule {
         .slot("EXPIRY_SLOT", EXPIRY_SLOT as u64)
         .slot("REVOKED_SLOT", REVOKED_SLOT as u64)
         .slot("RESOLVE_TARGET_SLOT", RESOLVE_TARGET_SLOT as u64)
+        .slot("OWNER_PK_SLOT", OWNER_PK_SLOT as u64)
+        .slot("PENDING_OWNER_PK_SLOT", PENDING_OWNER_PK_SLOT as u64)
         .string("FACTORY_VK_HEX", hex_encode_32(&NAME_FACTORY_VK))
         .string(
             "REVOKED_TOMBSTONE_PREFIX",
@@ -1173,8 +1395,9 @@ pub fn identity_attested_witness_predicate(
 
 /// Build the `Action` recording a credential-gated name registration.
 ///
-/// Behaves like [`build_register_action`] (same four-effect shape: name
-/// hash, owner hash, expiry, event) but additionally:
+/// Behaves like [`build_register_action`] (same five-effect shape: name
+/// hash, owner hash, owner authority register, expiry, event) but
+/// additionally:
 ///
 /// 1. Attaches `credential_presentation_proof_bytes` as
 ///    `witness_blobs[0]` (kind `ProofBytes`). The bytes are typically
@@ -1217,6 +1440,14 @@ pub fn build_register_with_credential_action(
             cell: registry_cell,
             index: OWNER_HASH_SLOT,
             value: owner_hash,
+        },
+        // The authority register — mirrors `build_register_action`; the
+        // owner-authorization caveats refuse a registration that binds an
+        // owner image without its raw-key authority register.
+        Effect::SetField {
+            cell: registry_cell,
+            index: OWNER_PK_SLOT,
+            value: owner,
         },
         Effect::SetField {
             cell: registry_cell,
@@ -1355,7 +1586,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             other => panic!("expected CellProgram::Cases, got {other:?}"),
         };
-        assert_eq!(constraints.len(), 3);
+        assert_eq!(
+            constraints.len(),
+            3 + owner_authorization_constraints().len()
+        );
         assert!(constraints.iter().any(|c| matches!(
             c,
             StateConstraint::WriteOnce { index } if *index == NAME_HASH_SLOT as u8
@@ -1368,6 +1602,13 @@ mod tests {
             c,
             StateConstraint::WriteOnce { index } if *index == REVOKED_SLOT as u8
         )));
+        // The owner-authorization gate rides the same program.
+        for oc in owner_authorization_constraints() {
+            assert!(
+                constraints.contains(&oc),
+                "name_cell_program must carry the owner-authorization caveat {oc:?}"
+            );
+        }
     }
 
     #[test]
@@ -1413,8 +1654,20 @@ mod tests {
             )),
             "name factory must install WriteOnce on REVOKED_SLOT (revocations are one-way)"
         );
+        // The owner-authorization gate is baked into the descriptor too —
+        // the born cell's `Predicate(state_constraints)` program refuses an
+        // impostor's owner-slot write.
+        for oc in owner_authorization_constraints() {
+            assert!(
+                d.state_constraints.contains(&oc),
+                "factory descriptor must bake the owner-authorization caveat {oc:?}"
+            );
+        }
         // Pin the exact set so additions are caught in review.
-        assert_eq!(d.state_constraints.len(), 3);
+        assert_eq!(
+            d.state_constraints.len(),
+            3 + owner_authorization_constraints().len()
+        );
     }
 
     #[test]
@@ -1544,7 +1797,7 @@ mod tests {
         let action =
             build_register_action(&cipherclerk, test_cell(), "alice.dregg", [3u8; 32], 1_000);
 
-        assert_eq!(action.effects.len(), 4);
+        assert_eq!(action.effects.len(), 5);
         assert!(matches!(
             &action.effects[0],
             Effect::SetField { index, .. } if *index == NAME_HASH_SLOT
@@ -1553,11 +1806,18 @@ mod tests {
             &action.effects[1],
             Effect::SetField { index, .. } if *index == OWNER_HASH_SLOT
         ));
+        // The authority register rides the registration atomically (the
+        // owner-authorization caveats refuse an image without it).
         assert!(matches!(
             &action.effects[2],
+            Effect::SetField { index, value, .. }
+                if *index == OWNER_PK_SLOT && *value == [3u8; 32]
+        ));
+        assert!(matches!(
+            &action.effects[3],
             Effect::SetField { index, .. } if *index == EXPIRY_SLOT
         ));
-        assert!(matches!(&action.effects[3], Effect::EmitEvent { .. }));
+        assert!(matches!(&action.effects[4], Effect::EmitEvent { .. }));
     }
 
     #[test]
@@ -1611,11 +1871,36 @@ mod tests {
         let old = [3u8; 32];
         let new = [4u8; 32];
         let action = build_transfer_action(&cipherclerk, test_cell(), "alice.dregg", old, new);
-        assert_eq!(action.effects.len(), 2);
+        assert_eq!(action.effects.len(), 3);
         match &action.effects[0] {
             Effect::SetField { index, value, .. } => {
                 assert_eq!(*index, OWNER_HASH_SLOT);
                 assert_eq!(*value, field_from_bytes(&new));
+            }
+            other => panic!("expected SetField, got {other:?}"),
+        }
+        // The propose half stages the incoming owner's raw key for the
+        // accept half to rotate the authority register to.
+        match &action.effects[1] {
+            Effect::SetField { index, value, .. } => {
+                assert_eq!(*index, PENDING_OWNER_PK_SLOT);
+                assert_eq!(*value, new);
+            }
+            other => panic!("expected SetField, got {other:?}"),
+        }
+        assert!(matches!(&action.effects[2], Effect::EmitEvent { .. }));
+    }
+
+    #[test]
+    fn accept_transfer_action_rotates_authority_register_and_emits_event() {
+        let cipherclerk = test_cipherclerk();
+        let new = [4u8; 32];
+        let action = build_accept_transfer_action(&cipherclerk, test_cell(), "alice.dregg", new);
+        assert_eq!(action.effects.len(), 2);
+        match &action.effects[0] {
+            Effect::SetField { index, value, .. } => {
+                assert_eq!(*index, OWNER_PK_SLOT);
+                assert_eq!(*value, new);
             }
             other => panic!("expected SetField, got {other:?}"),
         }
@@ -1917,14 +2202,19 @@ mod tests {
         );
 
         assert_eq!(action.method, symbol("register_name_attested"));
-        assert_eq!(action.effects.len(), 4);
-        // First three SetFields parallel build_register_action.
+        assert_eq!(action.effects.len(), 5);
+        // The SetFields parallel build_register_action (incl. the
+        // authority register).
         assert!(matches!(
             &action.effects[0],
             Effect::SetField { index, .. } if *index == NAME_HASH_SLOT
         ));
-        // Fourth effect is the attested event with issuer + schema fields.
-        match &action.effects[3] {
+        assert!(matches!(
+            &action.effects[2],
+            Effect::SetField { index, .. } if *index == OWNER_PK_SLOT
+        ));
+        // Last effect is the attested event with issuer + schema fields.
+        match &action.effects[4] {
             Effect::EmitEvent { event, .. } => {
                 assert_eq!(event.topic, symbol("name-registered-attested"));
                 assert_eq!(event.data.len(), 4);
