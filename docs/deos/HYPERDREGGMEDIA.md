@@ -205,22 +205,26 @@ Four name-collisions that confuse orientation; the docs use all of them:
   (`Dregg2/Circuit/SettlementSoundness.lean` — a Rust circuit-emit conformance obligation) and
   rides the gated VK epoch. Same shelf: the ocap-membrane's composition tooth (`exposed ⊑ a∧b`
   in-circuit) and its turn-executor routing.
-- **Fidelity seams (named, each with its wire):** MCP `run_js` lands on the server's own
-  embedded World — the socket world-bridge to the cockpit's live World is the wire
-  (`run_attached_on` already accepts any `WorldSink`); tool-*exclusivity* against an unpatched
-  `hermes-acp` is one upstream knob (base toolset additive today, every base tool still
-  authority-gated); the jailed live brain is proven against a hermetic mock provider — the
-  real-provider run is an env swap; the standalone `deos-matrix` chat demo defaults to the mock
-  membrane host unless the real `ForkMembraneHost` links; distributed time-travel ("the same
-  past for *everyone*") is consensus-modeled, not consensus-wired; gpui-web needs its
-  per-surface view mounts.
+- **Fidelity seams (named, each with its wire):** the MCP world-bridge is BUILT — bridged
+  `run_js` lands on a served live World over a fail-closed socket (`with_world_bridge` +
+  `SocketWorldSink`, e2e-proven with a real SpiderMonkey turn); the residue is the cockpit
+  boot/frame-loop call that binds the serving side (`serve_world_bridge`/`pump` exist,
+  uncalled); tool-*exclusivity* against an unpatched `hermes-acp` is one upstream knob (base
+  toolset additive today, every base tool still authority-gated); the jailed live brain is
+  proven against a hermetic mock provider — the real-provider run is an env swap; the
+  standalone `deos-matrix` chat demo defaults to the mock membrane host unless the real
+  `ForkMembraneHost` links; distributed time-travel ("the same past for *everyone*") is
+  consensus-modeled, not consensus-wired; gpui-web needs its per-surface view mounts (chat's
+  renderer-independent card + cockpit mount now exist — the wasm graph + an opener remain);
+  the rolodex's possession partition reads the live c-list, but the cockpit host does not yet
+  thread its launched cells + session into the guest surface.
 - **Frontier (the genuine roadmap):** cross-**machine** migrate (the rails exist — tear-off,
   HostPd endpoint round-trip, CapTP handoff nonces; missing: `Target`-level Distributed re-home
   + a network transport for the surface cap) · patch-history living *in* the cell (the heap
   carries the text; the blame/patch chain is not yet first-class heap state) · the MUD's
-  multi-inhabitant phase (presence + "say" over the data-plane Bus / RoomCell) · a rolodex
-  backed by the live c-list (a gadget = a cap you actually hold) · `Target::Mirror` (cap-secure
-  reflection depth) · the two MCP surfaces unified (confined AND live-World) · co-driven cards
+  multi-inhabitant phase (presence + "say" over the data-plane Bus / RoomCell) ·
+  `Target::Mirror` (cap-secure reflection depth) · the two MCP surfaces unified (confined AND
+  live-World — the world-bridge socket now makes this reachable) · co-driven cards
   crossing between two *running* cockpits over Matrix.
 
 ## The north star (the self-hosting cure)

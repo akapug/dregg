@@ -19,9 +19,23 @@ disambiguation). Companions corrected: `LOG-A-HERMES-IN.md` (STAND-IN era over),
 `MEMBRANE-MERGE-SEAM.md` (design-lineage vs live call graph; circuit residual named),
 `GRAPHIDEOS.md` (paint→renderer-ready), `CROSS-DEVICE-FIRMAMENT.md` (turn_gate path),
 `DEOS-RUNS.md` (+distributed_card, +dregg-doc substrate entries). 4 build lanes fired same
-breath (SourceHealth→console wiring · rolodex←live c-list · MCP world-bridge socket sink ·
-chat ViewTree mount) — outcomes recorded when they land. NAMED-NOT-BUILT (census-surfaced,
-each with its seam):
+breath — ALL FOUR LANDED GREEN + committed (cockpit native-full gate green):
+SourceHealth→console (`d09277b1f`, deos-view 49 lib + 15 suites) · rolodex←live c-list
+(`46549227a`, Possession::{Held,Discoverable} via Session::reaches, real login-ceremony
+tests) · MCP world-bridge socket sink (with_world_bridge + SocketWorldSink, fail-closed,
+72/72 + SpiderMonkey weld e2e) · chat ViewTree card + cockpit mount (deos-matrix 39+4,
+2 new substance tests). FRESH RESIDUES from the lanes (each classified in its commit):
+- **cockpit host binding for the world-bridge** — `serve_world_bridge`/`WorldBridgeServer::pump`
+  exist + checked, nothing in cockpit boot/frame-loop calls them yet.
+- **chat card opener** — `build_chat_card_surface` exported, no cockpit menu/keybinding opens it.
+- **rolodex designations thread** — guest surface takes `gadget_cells` from the launching host;
+  the live cockpit host does not yet thread its launched cells + session in.
+- **console header-balance bind** — still renders under an unreachable source (panels gated,
+  header not); one-conditional follow-up if it should displace too.
+- **world-bridge wire twins** — deos-hermes/starbridge-v2 share the frame contract by
+  comment-pinned twin definitions (no dep direction possible); consider a tiny shared wire
+  crate if it ever drifts.
+NAMED-NOT-BUILT (census-surfaced, each with its seam):
 - **[VK-lane] settlement circuit-emit conformance** — deployed rest-hash must absorb the
   revocation-registry MDB root; residual stated in `Dregg2/Circuit/SettlementSoundness.lean:42-56`;
   flips branch-and-stitch "executor-real"→"circuit-bound". Rides the gated VK epoch; batch with it.
@@ -49,7 +63,8 @@ each with its seam):
 - **android-cell desktop mount** — the ~40-line native-full gpui body painting `RgbaFrame` +
   forwarding `AndroidInputCmd` (`deos_desktop/android_window.rs` wire is built).
 - **unify the two MCP surfaces** — `dregg-mcp` (live image) × `deos-hermes mcp-server` (confined);
-  one host that is both confined AND live-World (depends on the world-bridge lane).
+  one host that is both confined AND live-World (the world-bridge LANDED — this is now reachable:
+  a confined mcp-server with with_world_bridge pointed at a cockpit that binds the serving side).
 - **cross-party stitch holes** — a genuine two-owner stitch where a conflict opens a
   `PendingTurnRegistry` hole the other party resolves (today `CrossPartyResolution` is a type alias).
 - **hermes-acp exclusivity knob** — upstream: honor explicit empty `enabled_toolsets` so the dregg
