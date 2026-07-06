@@ -23,7 +23,7 @@
 //! the jail's endpoint fd, an in-process pipe, or a test cursor all drive it
 //! identically). See `docs/deos/GRAIN-CONFINED-BODY.md`.
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 
 use dregg_agent::agent::{ActionObservation, AgentAction, AgentBrain, ToolCall};
 
@@ -58,26 +58,50 @@ pub struct LineChannel<R: BufRead, W: Write> {
     reader: R,
     writer: W,
     line: String,
+    max_line_bytes: usize,
 }
+
+/// Default per-message byte cap: proposals are small JSON; a body cannot make the
+/// host allocate unboundedly by sending a line with no newline.
+pub const DEFAULT_MAX_LINE_BYTES: usize = 1 << 20; // 1 MiB
 
 impl<R: BufRead, W: Write> LineChannel<R, W> {
     /// A channel reading the body's messages from `reader`, writing verdicts to
-    /// `writer`.
+    /// `writer`, with the [`DEFAULT_MAX_LINE_BYTES`] flood cap.
     pub fn new(reader: R, writer: W) -> LineChannel<R, W> {
         LineChannel {
             reader,
             writer,
             line: String::new(),
+            max_line_bytes: DEFAULT_MAX_LINE_BYTES,
         }
+    }
+
+    /// Set the maximum bytes a single body message may occupy before it is
+    /// rejected as a flood (a hostile body must not OOM the host).
+    pub fn with_max_line_bytes(mut self, max: usize) -> LineChannel<R, W> {
+        self.max_line_bytes = max.max(1);
+        self
     }
 }
 
 impl<R: BufRead, W: Write> BodyChannel for LineChannel<R, W> {
     fn recv(&mut self) -> io::Result<Option<BodyMsg>> {
         self.line.clear();
-        let n = self.reader.read_line(&mut self.line)?;
+        // Read at most `max_line_bytes` (+1 to detect overflow) — a body that
+        // streams a line with no newline cannot grow the buffer without bound.
+        let cap = self.max_line_bytes as u64 + 1;
+        let n = (&mut self.reader).take(cap).read_line(&mut self.line)?;
         if n == 0 {
             return Ok(None); // clean EOF — the body closed its side.
+        }
+        // Hit the cap without a terminating newline ⇒ a flood; fail closed. (The
+        // reader is now mis-framed, but the drive ends here regardless.)
+        if self.line.len() > self.max_line_bytes && !self.line.ends_with('\n') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "confined-body message exceeds the max line length (flood)",
+            ));
         }
         let trimmed = self.line.trim_end_matches(['\n', '\r']);
         if trimmed.is_empty() {
@@ -521,6 +545,18 @@ mod tests {
         let body = "this is not json\n";
         let mut brain = ConfinedBrain::new(channel(body));
         // A parse error must NOT fabricate an action — it ends the drive.
+        assert_eq!(brain.next_action(0), None);
+    }
+
+    #[test]
+    fn a_flooding_body_is_rejected_not_ooming_the_host() {
+        // A 10 KiB message with NO terminating newline, against a small cap: a
+        // hostile body must not be able to grow the host's buffer without bound.
+        let flood = "x".repeat(10_000);
+        let ch =
+            LineChannel::new(Cursor::new(flood.into_bytes()), Vec::new()).with_max_line_bytes(256);
+        let mut brain = ConfinedBrain::new(ch);
+        // The oversized message is refused fail-closed — the drive ends, no action.
         assert_eq!(brain.next_action(0), None);
     }
 }
