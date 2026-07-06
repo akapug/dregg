@@ -1,26 +1,26 @@
-//! # GENTIAN deployed-registry VERIFY — the FORGE (the decider).
+//! # GENTIAN deployed-registry VERIFY — the FORGE (the decider), CLOSED.
 //!
 //! The meta-review flagged a registry mismatch: the flag-day capacity-floor REFUSE
-//! (`gentianDeployedBareRefuse`, `EffectVmEmitRotationV3Refused.v3RegistryRefused`) is welded onto the
-//! **V3 1-felt** cohort (`rotation-v3-staged-registry.tsv`, bare members widened 1581→1626 + 39 refuse
-//! gates). But the DEPLOYED light-client verify path — the SDK wire verifier
+//! (`gentianDeployedBareRefuse`, `EffectVmEmitRotationV3Refused.v3RegistryRefused`) was welded onto the
+//! **V3 1-felt** cohort ONLY. But the DEPLOYED light-client verify path — the SDK wire verifier
 //! [`dregg_sdk::full_turn_proof::verify_effect_vm_rotated_with_cutover`] and the executor
 //! `verify_one_cohort_run` — resolves the **WIDE / WELDED** registries
-//! (`WIDE_REGISTRY_STAGED_TSV` + `WIDE_UMEM_WELD_REGISTRY_TSV`), FALLING BACK to V3 only for cap-open
-//! members that lack a wide twin (`name.contains("CapOpen")`, and only when the wide set is empty).
+//! (`WIDE_REGISTRY_STAGED_TSV` + `WIDE_UMEM_WELD_REGISTRY_TSV`), so a declared-capacity cell settling via
+//! a plain BARE wide leg bound the (refuse-free) WIDE bare member and was ACCEPTED — the open dodge.
 //!
-//! The three capacity-satisfaction members (`settleEscrowSat` / `dischargeSat` / `vaultSat`) AND the
-//! refuse-welded bare members live ONLY in the V3 registry. They are NOT cap-open names, so the V3
-//! fallback filter EXCLUDES them, and the wide set is never empty for a bare-cohort proof. So the
-//! deployed LC binds the WIDE bare member — which carries NEITHER the refuse NOR the satisfaction gate.
+//! THE FIX (option a — the wide VK epoch): the capacity-floor refuse is now lifted to ride the WIDE /
+//! WELDED bare cohort too (`Dregg2.Deos.BareCohortFloorRefuseWide.gentianWideBareRefuse`, aux blocks PAST
+//! the wide member width; `declared_capacity_unsat_wide`), emitted onto exactly the 36 bare cohort
+//! members and regenerated into `WIDE_REGISTRY_STAGED_TSV` / `WIDE_UMEM_WELD_REGISTRY_TSV`. The Rust
+//! `fill_refuse_aux` fills the wide aux base (`trace_width − 3·REFUSE_STRIDE`).
 //!
-//! THE FORGE: a cell whose caveat manifest DECLARES a capacity obligation (escrow, tag 17) settles via a
-//! plain bare-cohort effect (here a value-draining `Burn`, a bare-46-PI cohort member — the refuse
-//! theorem `declared_capacity_unsat_deployed` is stated for ANY bare member). The producer emits the
-//! WIDE bare leg (the deployed default). We drive that real STARK through the ACTUAL deployed entry
-//! `verify_effect_vm_rotated_with_cutover`. If it ACCEPTS, the bare-descriptor dodge is OPEN on the
-//! deployed path (the refuse only bites on the V3 registry the deployed LC never verifies a bare leg
-//! against) — the gentian flip is NOT live on the deployed light-client path.
+//! THIS FORGE now DECIDES the flip: a cell whose caveat manifest DECLARES the escrow capacity (tag 17,
+//! folded into caveatCommit PI 45) and settles via a plain bare-cohort `Burn` is REJECTED by the deployed
+//! entry `verify_effect_vm_rotated_with_cutover` — the honest producer path is UNSAT under the
+//! refuse-welded member (floor=1 → the floor==0 gate), and a genuine PRE-FLIP bare-dodge STARK binds NO
+//! deployed cohort descriptor. A NON-declaring normal turn still verifies (completeness/liveness). If the
+//! deployed LC ever ACCEPTS the declared-capacity bare dodge again, the refuse regressed off the deployed
+//! WIDE/WELDED registries.
 //!
 //! Requires `prover`; self-skips under `not(prover)`. SLOW (real batch STARK).
 #![cfg(feature = "prover")]
