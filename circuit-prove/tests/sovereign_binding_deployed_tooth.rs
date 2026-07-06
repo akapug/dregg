@@ -129,11 +129,13 @@ fn keyed_sovereign_twin() -> (EffectVmDescriptor2, usize) {
         insert_at + KEY_COMMIT_LEN + 16,
         "the NATIVE sovereign row carries the 4 teeth claim PIs (58..61) ahead of the 16 anchors"
     );
-    // The KEY_COMMIT gate's digest appendix (4 quads × 8 lanes) rides the wide end:
-    // host 1163 + 608 carriers + 32 digest columns (Lean `makeSovereignV3DeployedWide` #guard).
+    // The KEY_COMMIT gate's digest appendix (4 quads × 8 lanes) rides at the FIXED sovereign wide base
+    // (2493 = the wide host); the member is 2525, THEN the gentian capacity-floor refuse (makeSovereign
+    // is a bare cohort member) widens it +48 -> 2573, with the refuse aux PAST the digest.
     assert_eq!(
-        desc.trace_width, 1803,
-        "the native sovereign row carries the 32-column KEY_COMMIT digest appendix at the wide end"
+        desc.trace_width, 2573,
+        "the native sovereign row carries the 32-column KEY_COMMIT digest appendix (base 2493) + the \
+         48-column gentian capacity-floor refuse aux at the wide end"
     );
     (desc, insert_at)
 }
@@ -191,13 +193,22 @@ fn mint_sovereign_leg(
     let (twin, insert_at) = keyed_sovereign_twin();
     // The gate's digest appendix: lane 0 of each quad's chip absorb is producer-filled (the
     // prover's `fill_chip_lanes` fills lanes 1..7; out0 is the genuine producer column).
-    let dg_base = twin.trace_width - 32;
+    // The digest appendix rides at the FIXED sovereign wide base; the gentian refuse aux (48 cols) is
+    // appended PAST it, so the digest base is `trace_width − 48 − 32`, NOT `trace_width − 32`. Fill the
+    // refuse aux (floor=0, makeSovereign declares no capacity) so the welded member proves.
+    let refuse_w: usize = if twin.name.ends_with("-gentian-deployed-bare-refuse") {
+        48
+    } else {
+        0
+    };
+    let dg_base = twin.trace_width - refuse_w - 32;
     for row in trace.iter_mut() {
         row.resize(twin.trace_width, dregg_circuit::field::BabyBear::ZERO);
         for (k, v) in kc.iter().enumerate() {
             row[kc_col + k] = *v;
             row[dg_base + 8 * k] = *v;
         }
+        dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&twin, row);
     }
 
     let twin_dpis = splice_pi_values(&dpis, insert_at, &kc);
