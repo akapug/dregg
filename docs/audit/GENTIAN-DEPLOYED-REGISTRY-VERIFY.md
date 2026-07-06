@@ -17,15 +17,46 @@ The meta-review flagged a **registry mismatch**: that refuse is emitted onto the
 WELDED** registries. If the descriptor the deployed LC actually verifies a capacity turn against does not
 carry the refuse, the flip is not live on the deployed path.
 
-## VERDICT: NOT LIVE on the deployed light-client path.
+## VERDICT (2026-07-06): CLOSED on the deployed light-client path (option a — the wide VK epoch).
 
-The capacity-floor refuse and the three satisfaction members live **only** on the V3 1-felt registry.
+**The bare-descriptor dodge is now UNSAT on the deployed default registries.** The capacity-floor refuse
+was lifted to ride the **WIDE + WELDED** bare cohort (the registries `verify_effect_vm_rotated_with_cutover`
+actually resolves), not only the V3 1-felt cohort. The deployed forge
+`sdk/tests/gentian_deployed_registry_dodge_forge.rs` now goes **ACCEPTED → REJECTED**: a cell that
+DECLARES the escrow capacity (tag 17) and settles via a plain bare-cohort `Burn` is rejected by
+`verify_effect_vm_rotated_with_cutover` ("verified under NO cohort descriptor"), while a NON-declaring
+normal turn still verifies (completeness/liveness preserved).
+
+The original finding (below) stands as the record of WHY it was open; the closure is option (a).
+
+### The closure (option a — assessed sound + smaller; grounded + built)
+
+- **Why (a) over (b):** the deployed SDK verify (`verify_effect_vm_rotated_with_cutover`) only sees the
+  proof's PUBLIC INPUTS, and the declared capacity is folded into the `caveatCommit` hash PI (PI 45), a
+  digest — the verifier cannot read the declared tag at the Rust layer. A discriminator (b) would need the
+  tag exposed as a raw committed PI (itself a wide emit change), so it is NOT smaller. (a) makes the WIDE
+  bare descriptor itself in-circuit-UNSAT for a declared-capacity trace, reusing the fully-built refuse
+  machinery — the forge rejects because no deployed descriptor accepts.
+- **Lean:** `Dregg2.Deos.BareCohortFloorRefuseWide.gentianWideBareRefuse` places the three decode+refuse
+  blocks at aux columns PAST the wide member's own width (past the two 13×8 wide carriers), reading the
+  SAME deployed caveat tag columns `ebDep = 643/650/657/664` (which `wideAppend` preserves). Soundness
+  `declared_capacity_unsat_wide` reuses the column-parametric `declared_tag_unsat_at`; the append-only peel
+  `satisfied2_of_gentianWideBareRefuse` lifts every wide value/faithfulness rung. `#assert_all_clean`.
+- **Emit:** `EmitWideRegistryProbe.lean` + `EmitWideUMemWeldRegistryProbe.lean` map `gentianWideBareRefuse`
+  over exactly the 36 bare cohort members (mirroring V3's `v3RegistryRefused ++ drop 36`); regenerated into
+  `WIDE_REGISTRY_STAGED_TSV` / `WIDE_UMEM_WELD_REGISTRY_TSV` (FPs re-pinned). The forge burn route
+  (`burnVmDescriptor2R24`) widened 2493 → 2541.
+- **Rust producer:** `fill_refuse_aux` derives the aux base for a wide/welded member as
+  `trace_width − 3·REFUSE_STRIDE` (past its own width); a non-declaring cell decodes `floor = 0` (inert,
+  no false reject), a declared cell decodes `floor = 1` (UNSAT under the `floor == 0` gate).
+
+### Original finding (the record of why it was open): NOT LIVE on the deployed path.
+
+The capacity-floor refuse and the three satisfaction members lived **only** on the V3 1-felt registry.
 The deployed light-client verify (both the SDK wire verifier and the executor cohort verify) resolves the
 **WIDE** registry first, then the **WELDED** registry, and falls back to V3 **only** for `CapOpen`
-members that lack a wide twin. A bare-cohort leg for a declared-capacity cell therefore binds its **WIDE**
-member — which carries **neither the refuse nor the satisfaction gate** — and is accepted. The gentian
-soundness flip is real in Lean and on the V3 registry, but the deployed light client never verifies a
-capacity turn against that registry.
+members that lack a wide twin. A bare-cohort leg for a declared-capacity cell therefore bound its **WIDE**
+member — which carried **neither the refuse nor the satisfaction gate** — and was accepted.
 
 ## Ground truth (grep + file:line)
 
@@ -92,37 +123,40 @@ WIDE/WELDED satisfaction member exists for a producer to emit or the LC to bind.
 3. Drives the serialized proof through the ACTUAL deployed entry
    `dregg_sdk::full_turn_proof::verify_effect_vm_rotated_with_cutover`.
 
-RESULT (real `--release` STARK, `1 passed`, verify in 1.52s): <!-- FORGE_RESULT -->the deployed LC
-**ACCEPTS** the leg. `verify_effect_vm_rotated_with_cutover` bound the WIDE `burnVmDescriptor2R24`
-(width 2493, marker-free — no `gentian-deployed-bare-refuse`); the refuse-welded V3 member (width 1626,
-`...-gentian-deployed-bare-refuse`) and the V3 satisfaction members are UNREACHABLE on the deployed path.
-UNSAT would have meant the refuse reached the deployed path (flip live); the ACCEPT confirms the
-declared-capacity bare-descriptor dodge is OPEN on the deployed light-client path. (Structural corroboration
-asserted in the same test: the `gentian-deployed-bare-refuse` marker is present on the V3 bare member and
-absent from both the WIDE and WELDED bare members; the three satisfaction members are committed V3 members,
-absent from WIDE/WELDED, and not `CapOpen` names.)<!-- /FORGE_RESULT -->
+RESULT (post-flip, real batch STARK, `1 passed` in ~3.5s): <!-- FORGE_RESULT -->the deployed LC
+**REJECTS** the declared-capacity bare leg. The deployed WIDE + WELDED `burnVmDescriptor2R24` now carry
+the capacity-floor refuse (widened 2493 → 2541, marker `...-gentian-deployed-bare-refuse`). The honest
+producer path is UNSAT under the refuse-welded member (`floor = 1` for the declared escrow → the
+`floor == 0` gate has no satisfying assignment), and even a genuine PRE-FLIP bare-dodge STARK (the exact
+artifact an old producer would emit) binds **NO** deployed cohort descriptor
+("rotated effect-vm proof verified under NO cohort descriptor"). A NON-declaring normal wide burn still
+proves + verifies through `verify_effect_vm_rotated_with_cutover` (completeness/liveness preserved). The
+flip is LIVE on the deployed light-client path.<!-- /FORGE_RESULT -->
 
-## What is and isn't true
+## What is now true
 
-- TRUE: the gentian soundness flip is real **in Lean and on the V3 1-felt registry** — a declared-capacity
-  turn is UNSAT under every `v3RegistryRefused` member, and the V3 satisfaction members prove honest turns.
-- FALSE (the overclaim): that the flip is **live on the deployed light-client path**. The deployed LC
-  (`verify_effect_vm_rotated_with_cutover`, `verify_one_cohort_run`) verifies a bare-cohort capacity turn
-  against its WIDE/WELDED twin, which carries no refuse and no satisfaction gate. A light client is
-  therefore still foolable by a declared-capacity bare-descriptor dodge.
+- The gentian soundness flip is live **on the deployed WIDE / WELDED registries** — a declared-capacity
+  turn is UNSAT under every welded wide/welded bare cohort member (`declared_capacity_unsat_wide`), and the
+  deployed forge REJECTS the bare-descriptor dodge through `verify_effect_vm_rotated_with_cutover`.
+- Completeness/liveness is preserved: a non-declaring normal turn still verifies through the deployed LC
+  (the refuse decodes `floor = 0`, inert).
 
-## The real hole → the closure lane
+## Named remaining lanes (burn-down, not parking)
 
-The refuse + satisfaction weld must be carried on the **WIDE / WELDED** cohort (the registries the deployed
-LC actually resolves), not only on the V3 1-felt registry — OR the deployed resolution must be repointed to
-require the V3 refuse/satisfaction member for a declared-capacity turn. Concretely, either:
-(a) emit `gentianDeployedBareRefuse` onto the WIDE bare cohort (a wide re-emit + VK epoch, so the wide
-    transfer/burn members widen to carry the floor refuse), and add WIDE satisfaction twins the deployed
-    producer emits and the LC binds; or
-(b) add a declared-capacity discriminator to `verify_effect_vm_rotated_with_cutover` /
-    `verify_one_cohort_run` that, when the committed caveat manifest declares a capacity tag, REQUIRES the
-    (V3) satisfaction member and REJECTS the bare wide member — the verify-side analog of the routing
-    helper that already exists on the producer side.
-
-Until then the caveat-declaration is enforced only by the off-AIR host / the V3 face, not by the deployed
-light client.
+1. **Carrier-regression sweep (in progress).** The 36 cohort wide members widened +48, so test consumers
+   that derive teeth columns as `trace_width − N` (the `#[ignore]`d deployed-tooth STARK tests — sovereign
+   `width−32` digest base, transfer/mint `width−2` teeth) or hardcode cohort widths must use
+   `trace_width − 3·REFUSE_STRIDE − N` and fill the refuse aux (`fill_refuse_aux`, floor=0). PRODUCTION is
+   unaffected (the producer teeth-fill riders use fixed absolute bases; only tests assumed teeth-at-the-end).
+   Done: `effect_vm_wide_roundtrip` (8/8), `sovereign_binding_deployed_tooth`, `membership_binding_deployed_tooth`.
+   Remaining: `bridge` / `dsl` / `deco` (transfer `width−2` teeth), `factory` / `hatchery`, `wide_new_members_cover`,
+   the sdk wide gauntlet, and the `vk_epoch_*_light_client_binding` cohort-width pins.
+2. **Honest declared-capacity SETTLE via a wide satisfaction member (liveness, net-new).** A wide/welded
+   satisfaction descriptor exists (`SettleEscrowSatWideDescriptor.settleEscrowSatVmDescriptor2R24Wide`) but
+   is NOT emitted into the deployed registry, and no producer routes an honest declared-capacity settle to
+   it, so an honest escrow/discharge/vault SETTLE does not yet verify through the deployed path (it never
+   did — this is a net-new deployed capability, not a regression). Emitting the three wide satisfaction
+   twins + the producer routing (`rotated_descriptor_name_for_declared_capacity`) is the liveness half.
+3. **WELDED-route forge.** The welded twin is emitted with the refuse (the executor `require_welded` path),
+   but there is not yet a dedicated forge driving a declared-capacity WELDED bare leg through
+   `verify_one_cohort_run`.

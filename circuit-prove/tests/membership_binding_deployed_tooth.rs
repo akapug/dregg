@@ -126,7 +126,15 @@ fn membership_twin() -> (EffectVmDescriptor2, usize, usize) {
         insert_at + 2 + 16,
         "the NATIVE transfer row carries the 2 membership claim PIs (50..51) ahead of the 16 anchors"
     );
-    let teeth_col = desc.trace_width - 2; // the two native teeth columns, past the wide carriers
+    // The two teeth columns ride at the FIXED membership host end (past the wide carriers); the gentian
+    // capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols PAST the teeth, so
+    // the teeth base is `trace_width − 48 − 2`, NOT `trace_width − 2`.
+    let refuse_w: usize = if desc.name.ends_with("-gentian-deployed-bare-refuse") {
+        48
+    } else {
+        0
+    };
+    let teeth_col = desc.trace_width - refuse_w - 2;
     (desc, insert_at, teeth_col)
 }
 
@@ -183,6 +191,12 @@ fn mint_membership_leg(
         debug_assert_eq!(row.len(), teeth_col);
         row.push(tuple.sender_leaf);
         row.push(tuple.authorized_root);
+        // Grow to the full welded width and fill the gentian refuse aux (floor=0 — a plain transfer
+        // declares no capacity), exactly as the deployed prove wrapper does.
+        if twin.trace_width > row.len() {
+            row.resize(twin.trace_width, BabyBear::ZERO);
+            dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&twin, row);
+        }
     }
     let twin_dpis = splice_pi_values(
         &dpis,
