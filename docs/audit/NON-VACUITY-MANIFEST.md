@@ -90,3 +90,42 @@ When a new WORLD-property apex lands: add its `*_satisfiable` (fires) + a biting
 A new property added without a row does not appear in the ledger — pair this with review of new
 `@[load_bearing_keystone]` / `#assert_axioms` blocks. If you genuinely cannot name the tooth yet, use a
 `SpotCheckedOnly("… promote: <lane>")` row — a conscious, reviewed decision, never a silent gap.
+
+## The unified schema — every row above, as ONE `governed_holds`
+
+`metatheory/Metatheory/Adversary/Schema.lean` collapses the deployed guarantees into a single
+abstract schema `GovernedDynamics` = (Control, run, accept, invariant, `holds : GovernedProperty`),
+consumed by ONE lemma `governed_holds : ∀ D c, D.accept (D.run c) → D.invariant (D.run c)`.
+`metatheory/Metatheory/Adversary/Instances.lean` re-states the WHOLE deployed assurance case as
+instances of that schema — each instance's `holds` field **IS** the already-registered deployed
+theorem (reused, not re-proven), so the schema view inherits every row's cleanliness and teeth:
+
+| deployed property (registered row) | schema instance | `holds :=` | schema-level anti-vacuity |
+|---|---|---|---|
+| `settlement_soundness` (row 10) | `settlementDynamics` | `settlement_soundness` | `settlement_accept_bites` + `settlement_invariant_bites` |
+| `light_client_verifies_whole_history` (row 4) + genesis anchor | `wholeHistoryDynamics` | `light_client_verifies_anchored_history` | `wholeHistory_accept_bites` + `wholeHistory_invariant_bites` |
+| `custom_binding_from_fold` (row 13) | `customCarrierDynamics` | `custom_binding_from_fold` | `customCarrier_bites` |
+| `factory_binding_from_fold` (row 14) | `factoryCarrierDynamics` | `factory_binding_from_fold` | `factoryCarrier_bites` |
+| `bridge_binding_from_fold` (row 15) | `bridgeCarrierDynamics` | `bridge_binding_from_fold` | `bridgeCarrier_bites` |
+| `sovereign_binding_from_fold` (row 16) | `sovereignCarrierDynamics` | `sovereign_binding_from_fold` | `sovereignCarrier_bites` |
+| `membership_binding_from_fold` (row 17) | `membershipCarrierDynamics` | `membership_binding_from_fold` | `membershipCarrier_bites` |
+| `dsl_binding_from_fold` (row 18) | `dslCarrierDynamics` | `dsl_binding_from_fold` | `dslCarrier_bites` |
+| `hatchery_binding_from_fold` (row 19) | `hatcheryCarrierDynamics` | `hatchery_binding_from_fold` | `hatcheryCarrier_bites` |
+| `deco_binding_from_fold` (row 20) | `decoCarrierDynamics` | `deco_binding_from_fold` | `decoCarrier_bites` |
+| `deployed_system_secure` (rows 1–5 composed) | `assuranceApexDynamics` | `deployed_system_secure` | inherits rows 1–5 teeth (the 5-guarantee invariant) |
+
+The payoff `assurance_case_governed` runs non-domination, unfoolability, settlement soundness and
+whole-history through `governed_holds` against ONE `Adversary` — the entire top-level security of
+dregg as one lemma, N instances, one adversary. All `*_via_schema` / `*_bites` are `#assert_axioms`-
+clean (asserted at the foot of `Instances.lean`). These add NO new WORLD-property (the underlying
+rows above are the registered properties); the schema is a unification over them, so the Rust
+meta-gate `security_property_manifest()` is unchanged.
+
+### Named folded-hypothesis seams (the schema's honest discipline)
+
+Where a per-control realizability floor is needed for `accept`, it is folded in FAITHFULLY and NAMED
+(the `WitnessDecodes` precedent from `circuitDynamics`): `wholeHistoryDynamics` folds `EngineSound`
+into accept; `assuranceApexDynamics` folds the per-step coverage `EachStepMemProg` (`hcov`),
+`EngineSound`, and `KernelGenesisPin`/`SeamStruct` — each already an explicit hypothesis of
+`deployed_system_secure`. Settlement and the 8 carriers fit with NO folded seam (the binding
+discipline / crypto floor is fixed at instance-build, not per-control).
