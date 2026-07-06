@@ -1,0 +1,4 @@
+/target
+# Standalone-workspace lock — regenerated on build and superseded by the repo-root
+# Cargo.lock once this crate is promoted into `workspace.members`.
+/Cargo.lock

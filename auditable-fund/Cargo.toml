@@ -1,0 +1,54 @@
+# THE AUDITABLE FUND — an agent that trades a budget on a mandate and CANNOT LIE
+# about what it did. Every decision is a jailed+attested turn, every trade an
+# on-ledger verifiable receipt, every price proven via zkOracle. "An AI fund you
+# audit instead of trust."
+#
+# ⚑ PAPER TRADING ONLY. There is NO code path here that places a real exchange
+#   order or moves real custody. Fills are SIMULATED against attested prices. A
+#   real-broker path would be an explicit, un-built, REVIEWED-GO change gated on
+#   ember + a real broker integration — it is deliberately absent.
+#
+# This crate COMPOSES the real dregg primitives (it does not reimplement them):
+#   * agent-platform  — the on-ledger R2 turn (`LocalNode` / `NodeMinter`): each
+#                       trade lands as a light-client-verifiable finalized receipt.
+#   * deos-hermes     — the attested brain (`AttestationCarrier` / `attest_turn` /
+#                       `attestation_commitment` / `verify_zkoracle`): each decision
+#                       is an authentic ∧ well-formed ∧ injection-free turn.
+#   * dregg-zkoracle-prove — the `ZkOracleAttestation` a price / decision carries.
+#   * grain-turn      — `ATTESTATION_SLOT`, the on-ledger slot the binding rides.
+#   * dregg-agent     — the `GrainTurnMinter` trait `NodeMinter` implements.
+[package]
+name = "auditable-fund"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94.0"
+license = "AGPL-3.0-or-later"
+description = "The auditable fund: an AI trading agent (PAPER-ONLY) whose every decision is an attested turn, every trade an on-ledger receipt, every price a zkOracle attestation — a track record a third party AUDITS instead of trusts."
+
+# ⚑ Standalone-workspace declaration (cargo's own suggested fix for a package
+# under a workspace root that is not yet a member). REMOVE this `[workspace]`
+# table when promoting auditable-fund into the repo-root `workspace.members`
+# array — a member may not carry its own workspace table. Until then this lets
+# `cargo build --manifest-path auditable-fund/Cargo.toml` resolve standalone,
+# exactly as the excluded `dregg-tui` crate does.
+[workspace]
+members = ["."]
+resolver = "2"
+
+# Mirror of the repo-root `[patch.crates-io]` entries THIS crate's dependency graph
+# needs (a standalone workspace does not inherit the root's patches). The
+# ark-serialize fork carries the `serde_with` feature `dregg-hints` requires. These
+# are git deps, path-independent — they resolve identically here and at the root.
+# (Drops on promotion into root members, together with the `[workspace]` table above.)
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[dependencies]
+agent-platform = { path = "../agent-platform" }
+# deos-hermes re-exports the zkOracle types (`ZkOracleAttestation`, `verify_zkoracle`,
+# `AnthropicConfig`, `ProveError`, `ZkOracleError`) from `dregg-zkoracle-prove`, so the
+# fund reaches the whole attestation surface through this one dependency.
+deos-hermes = { path = "../deos-hermes" }
+dregg-agent = { path = "../dregg-agent" }
+blake3 = "1"
