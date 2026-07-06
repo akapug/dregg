@@ -98,9 +98,24 @@ in-band, exactly as an over-budget action is.
 - **The real coding-agent body.** The jail denies `execve`, so an arbitrary
   external agent binary needs a granted exec-door. The buildable shape is a
   confined in-jail Rust harness reaching a model over ONE granted, revocable
-  egress door (firmament `with_read_path` / the egress policy) — the harness is
-  jailed, its only outward reach is the model API, its only inward reach is the
-  grain's cap-gated seam.
+  egress door — the harness is jailed, its only outward reach is the model API,
+  its only inward reach is the grain's cap-gated seam. The pieces exist:
+  - the granted network door: `ProcessKernel::spawn_pd_confined_with(granted,
+    confinement, body)` takes a `sandbox::Confinement` carrying exactly one
+    `(allow network-outbound (remote ip "host:port"))` grant (macOS SBPL / Linux
+    LSM). `sel4/dregg-firmament/src/sandbox.rs` builds it; a provider-only door is
+    `EgressNetGrant { host, port }`.
+  - the in-jail model client: `dregg_agent::brain::{OpenAICompatBrain,
+    LiveOpenAICompatCaller}` (the `live-brain` feature — `reqwest::blocking` POST
+    to an OpenAI-compat `/v1/chat/completions`), run INSIDE the jail so its only
+    reachable endpoint is the granted door.
+  - validation: a MOCK model server on `127.0.0.1:<port>` (the live Nous portal
+    is broken in-env), the jail granted egress to exactly that host:port; assert
+    the jailed harness reaches it and NO other address.
+  The next `grain-jail` slice is `spawn_confined_body_with_egress(kernel,
+  EgressNetGrant, body)` + a test that a jailed body reaches only the one door.
+  (Security-sensitive network confinement + post-fork socket I/O + port binding —
+  a fresh-head unit, not a tail-end one.)
 - **Productization.** `agent-platform` gaining a first-class jailed-grain drive
   (rent → jailed body → drive) so the confined agent is a rentable product, not
   only a test path.

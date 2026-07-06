@@ -30,12 +30,14 @@ fn body_script() -> Vec<BodyMsg> {
     vec![
         BodyMsg::Propose(Proposal {
             tool: "cell-write".into(),
+            args: None,
             amount_cents: None,
             path: Some("notes/1".into()),
             value: Some("hello from a confined agent".into()),
         }),
         BodyMsg::Propose(Proposal {
             tool: "cell-write".into(),
+            args: None,
             amount_cents: None,
             path: Some("notes/2".into()),
             value: Some("every turn is auditable".into()),
