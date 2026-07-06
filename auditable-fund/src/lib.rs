@@ -56,5 +56,6 @@ pub use brain::{Brain, Decision, MarketView, RecordedBrain, Side, ThresholdBrain
 pub use fund::{Fund, FundError, StepOutcome, TrackRecord, TradeRecord};
 pub use mandate::{Mandate, MandateViolation};
 pub use oracle::{
-    AttestedPrice, ModeledOracle, OracleError, PriceError, PriceOracle, verify_attested_price,
+    AttestedPrice, CoinbaseSpotOracle, EndpointConfig, FixtureNotary, PriceError, PriceOracle,
+    ZkPriceError, amount_to_cents, coinbase_spot_spec, verify_attested_price,
 };
