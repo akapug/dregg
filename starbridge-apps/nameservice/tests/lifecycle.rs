@@ -28,12 +28,13 @@
 use dregg_app_framework::{
     AgentCipherclerk, AppCipherclerk, Authorization, CellId, Effect, FieldElement,
 };
-use dregg_cell::{CellProgram, ProgramError, StateConstraint};
+use dregg_cell::{CellProgram, EvalContext, ProgramError, StateConstraint};
 use starbridge_nameservice::{
-    EXPIRY_SLOT, NAME_FACTORY_VK, NAME_HASH_SLOT, OWNER_HASH_SLOT, RESOLVE_TARGET_SLOT,
-    REVOKED_SLOT, build_register_action, build_renew_action, build_revoke_action,
-    build_set_target_action, build_transfer_action, expiry_field, factory_descriptors,
-    name_factory_descriptor, name_hash, register, resolve_target, revoked_tombstone,
+    EXPIRY_SLOT, NAME_FACTORY_VK, NAME_HASH_SLOT, OWNER_HASH_SLOT, OWNER_PK_SLOT,
+    PENDING_OWNER_PK_SLOT, RESOLVE_TARGET_SLOT, REVOKED_SLOT, build_accept_transfer_action,
+    build_register_action, build_renew_action, build_revoke_action, build_set_target_action,
+    build_transfer_action, expiry_field, factory_descriptors, name_factory_descriptor, name_hash,
+    register, resolve_target, revoked_tombstone,
 };
 
 // =============================================================================
@@ -67,6 +68,17 @@ fn project_setfield(action: &dregg_app_framework::Action, slot: usize) -> Option
     None
 }
 
+/// An [`EvalContext`] carrying `sender` — the raw signer pubkey the executor
+/// binds from the verified turn parent (`execute_tree.rs`: `ctx.sender =
+/// parent_pk_opt`). The owner-authorization caveats compare this against the
+/// authority register (`OWNER_PK_SLOT`).
+fn ctx_with_sender(sender: [u8; 32]) -> EvalContext {
+    EvalContext {
+        sender: Some(sender),
+        ..EvalContext::default()
+    }
+}
+
 // =============================================================================
 // Round-trip lifecycle
 // =============================================================================
@@ -91,6 +103,8 @@ fn lifecycle_register_set_target_renew_transfer_revoke_round_trips() {
         project_setfield(&register_action, NAME_HASH_SLOT).unwrap();
     state_after_register.fields[OWNER_HASH_SLOT] =
         project_setfield(&register_action, OWNER_HASH_SLOT).unwrap();
+    state_after_register.fields[OWNER_PK_SLOT] =
+        project_setfield(&register_action, OWNER_PK_SLOT).unwrap();
     state_after_register.fields[EXPIRY_SLOT] =
         project_setfield(&register_action, EXPIRY_SLOT).unwrap();
     state_after_register.set_nonce(1);
@@ -98,6 +112,10 @@ fn lifecycle_register_set_target_renew_transfer_revoke_round_trips() {
         .evaluate(&state_after_register, Some(&empty_state()), None)
         .expect("register: passes WriteOnce(name)+Monotonic(expiry)+WriteOnce(revoked)");
     assert_eq!(state_after_register.fields[NAME_HASH_SLOT], name_hash(name));
+    assert_eq!(
+        state_after_register.fields[OWNER_PK_SLOT], owner,
+        "register anchors the raw owner key as the authority register"
+    );
 
     // ── Step 2: set-target (no slot caveat applies). ────────────────
     let target = resolve_target("dregg://cell/alices-document");
@@ -125,24 +143,48 @@ fn lifecycle_register_set_target_renew_transfer_revoke_round_trips() {
         expiry_field(new_expiry)
     );
 
-    // ── Step 4: transfer (owner change, no other slot moves). ───────
+    // ── Step 4: transfer (owner-image re-point + stage), SIGNED BY THE
+    //    CURRENT OWNER — the owner-authorization caveats admit the move
+    //    only when ctx.sender == the authority register. ───────────────
     let transfer_action = build_transfer_action(&cipherclerk, cell, name, owner, new_owner);
     let mut state_after_transfer = state_after_renew.clone();
     state_after_transfer.fields[OWNER_HASH_SLOT] =
         project_setfield(&transfer_action, OWNER_HASH_SLOT).unwrap();
+    state_after_transfer.fields[PENDING_OWNER_PK_SLOT] =
+        project_setfield(&transfer_action, PENDING_OWNER_PK_SLOT).unwrap();
     state_after_transfer.set_nonce(4);
     program
-        .evaluate(&state_after_transfer, Some(&state_after_renew), None)
-        .expect("transfer: only OWNER_HASH_SLOT moves; no caveat is violated");
+        .evaluate(
+            &state_after_transfer,
+            Some(&state_after_renew),
+            Some(&ctx_with_sender(owner)),
+        )
+        .expect("transfer: the CURRENT owner may move the owner image + stage the handoff");
+
+    // ── Step 4b: the incoming owner ACCEPTS — the authority register
+    //    rotates to the staged key, signed by that key. ────────────────
+    let accept_action = build_accept_transfer_action(&cipherclerk, cell, name, new_owner);
+    let mut state_after_accept = state_after_transfer.clone();
+    state_after_accept.fields[OWNER_PK_SLOT] =
+        project_setfield(&accept_action, OWNER_PK_SLOT).unwrap();
+    state_after_accept.set_nonce(5);
+    program
+        .evaluate(
+            &state_after_accept,
+            Some(&state_after_transfer),
+            Some(&ctx_with_sender(new_owner)),
+        )
+        .expect("accept: the staged incoming owner may rotate the authority register");
+    assert_eq!(state_after_accept.fields[OWNER_PK_SLOT], new_owner);
 
     // ── Step 5: revoke (REVOKED_SLOT zero → tombstone — WriteOnce permits). ──
     let revoke_action = build_revoke_action(&cipherclerk, cell, name);
-    let mut state_after_revoke = state_after_transfer.clone();
+    let mut state_after_revoke = state_after_accept.clone();
     state_after_revoke.fields[REVOKED_SLOT] =
         project_setfield(&revoke_action, REVOKED_SLOT).unwrap();
-    state_after_revoke.set_nonce(5);
+    state_after_revoke.set_nonce(6);
     program
-        .evaluate(&state_after_revoke, Some(&state_after_transfer), None)
+        .evaluate(&state_after_revoke, Some(&state_after_accept), None)
         .expect("revoke: WriteOnce permits the first revocation");
     assert_eq!(
         state_after_revoke.fields[REVOKED_SLOT],
@@ -330,41 +372,33 @@ fn auth_different_cclerks_produce_different_signatures_on_same_logical_action() 
 }
 
 // =============================================================================
-// Adversarial: transfer attempted by a non-owner
+// Owner authorization: two-pole (owner admitted ∧ impostor refused)
 // =============================================================================
 
-/// Transfer authorship is bound to the cclerk that signs the action. A
-/// non-owner attempting the same logical transfer produces a different
-/// `Authorization::Signature`, so the executor's signer-vs-owner check
-/// can distinguish them — even though the cell-program slot caveats
-/// alone are silent about *who* may write `OWNER_HASH_SLOT`.
+/// Build the "alice.dregg is owned by `owner_pk`" baseline state the
+/// owner-authorization tests transition from.
+fn owned_state(name: &str, owner_pk: [u8; 32]) -> dregg_cell::state::CellState {
+    let mut s = empty_state();
+    s.fields[NAME_HASH_SLOT] = name_hash(name);
+    s.fields[OWNER_HASH_SLOT] = *blake3::hash(&owner_pk).as_bytes();
+    s.fields[OWNER_PK_SLOT] = owner_pk;
+    s.fields[EXPIRY_SLOT] = expiry_field(5_000);
+    s.set_nonce(1);
+    s
+}
+
+/// **The impostor is REFUSED at the state-constraint layer.**
 ///
-/// This test pins the two halves of the property today:
-///
-/// 1. **Authorization differs by signer.** The legitimate owner's
-///    transfer and a non-owner's transfer over the same `(name, old,
-///    new)` tuple yield different signatures. An executor-side check
-///    of `signer_pubkey == owner_pubkey` (or, equivalently, a
-///    `StateConstraint::SenderAuthorized { set: AuthorizedSet::PublicRoot { set_root_index: OWNER_HASH_SLOT } }`
-///    once the witness-blob plumbing is wired through
-///    `AppCipherclerk::make_action`) refuses the impostor.
-///
-/// 2. **The slot caveats alone do not enforce owner-only writes.** The
-///    `name_factory_descriptor` carries `WriteOnce(NAME_HASH_SLOT)`,
-///    `Monotonic(EXPIRY_SLOT)`, and `WriteOnce(REVOKED_SLOT)`; none of
-///    them gate `OWNER_HASH_SLOT`. The test asserts the program
-///    *accepts* a state transition that moves `OWNER_HASH_SLOT`,
-///    documenting that the rejection happens at the
-///    authorization-layer (signature check on the action), not the
-///    state-constraint layer.
-///
-/// TODO(owner-auth): install
-/// `StateConstraint::SenderAuthorized { set: AuthorizedSet::PublicRoot { .. } }`
-/// on `name_factory_descriptor()` once `AppCipherclerk::make_action`
-/// emits the Merkle-membership witness blob the constraint requires.
-/// Until then, owner-only enforcement is the action-authorization
-/// layer's job (signature verification + caller-vs-owner equality
-/// check), not the cell program's. See README §"Owner authorization".
+/// A non-owner attempting the same logical transfer produces a different
+/// `Authorization::Signature` (pinned below), AND — since the
+/// owner-authorization caveats landed on `name_factory_descriptor()` /
+/// `name_cell_program()` — the projection of the impostor's action onto
+/// the cell's post-state is REJECTED by `CellProgram::evaluate` itself:
+/// past the first write, `OWNER_HASH_SLOT` moves only in a turn whose
+/// executor-verified sender equals the authority register
+/// (`OWNER_PK_SLOT`, frozen in the same turn). This inverts the old
+/// "slot caveats are silent about *who* may write OWNER_HASH_SLOT"
+/// documentation test: the write that used to PASS now REFUSES.
 #[test]
 fn adversarial_transfer_from_non_owner_authorization_diverges() {
     let owner_cclerk = cclerk_with_seed(0xA1);
@@ -373,6 +407,7 @@ fn adversarial_transfer_from_non_owner_authorization_diverges() {
     let name = "alice.dregg";
     let old_owner_pk = [0xAAu8; 32];
     let new_owner_pk = [0xCCu8; 32];
+    let impostor_pk = [0xEEu8; 32];
 
     // Both cipherclerks produce the *same* effect payload (the data the
     // executor would write into OWNER_HASH_SLOT is identical) — but the
@@ -392,22 +427,162 @@ fn adversarial_transfer_from_non_owner_authorization_diverges() {
     );
 
     // ...AND the projection of the impostor's action onto the cell's
-    // post-state *would* pass the slot-caveat program (the program
-    // does not yet know about OWNER_HASH_SLOT ownership). This is the
-    // gap the TODO above tracks.
+    // post-state is REFUSED by the slot-caveat program: the sender
+    // (the impostor's key) is not the authority register's key.
     let program = fresh_program();
-    let mut old = empty_state();
-    old.fields[NAME_HASH_SLOT] = name_hash(name);
-    old.fields[OWNER_HASH_SLOT] = name_hash("legit-owner-cap");
-    old.fields[EXPIRY_SLOT] = expiry_field(5_000);
-    old.set_nonce(1);
+    let old = owned_state(name, old_owner_pk);
     let mut new = old.clone();
     new.fields[OWNER_HASH_SLOT] = project_setfield(&impostor, OWNER_HASH_SLOT).unwrap();
+    new.fields[PENDING_OWNER_PK_SLOT] = project_setfield(&impostor, PENDING_OWNER_PK_SLOT).unwrap();
     new.set_nonce(2);
-    program.evaluate(&new, Some(&old), None).expect(
-        "state-constraint layer alone does not reject the impostor — \
-         authorization layer must (TODO(owner-auth))",
+    let err = program
+        .evaluate(&new, Some(&old), Some(&ctx_with_sender(impostor_pk)))
+        .expect_err("an impostor's owner-slot write MUST be refused by the cell program");
+    // The AnyOf evaluator surfaces the decisive branch's violation: the
+    // sender is not the identity held in the authority register.
+    match err {
+        ProgramError::ConstraintViolated {
+            constraint: StateConstraint::SenderInSlot { index },
+            ..
+        } => assert_eq!(
+            index, OWNER_PK_SLOT as u8,
+            "the violated gate must be sender == authority register (OWNER_PK_SLOT)"
+        ),
+        other => panic!(
+            "expected the owner-authorization SenderInSlot(OWNER_PK_SLOT) violation, got {other:?}"
+        ),
+    }
+
+    // Fail-closed: with NO sender context at all (system/legacy caller),
+    // the owner-slot write is refused too — never silently admitted.
+    program
+        .evaluate(&new, Some(&old), None)
+        .expect_err("an owner-slot write without a sender context must fail closed");
+}
+
+/// **Completeness pole:** the LEGITIMATE current owner CAN still move the
+/// owner field — the same transition the impostor is refused on is
+/// admitted when the sender IS the authority register's key.
+#[test]
+fn owner_transfer_from_current_owner_is_admitted() {
+    let owner_cclerk = cclerk_with_seed(0xA1);
+    let cell = registry_cell();
+    let name = "alice.dregg";
+    let old_owner_pk = [0xAAu8; 32];
+    let new_owner_pk = [0xCCu8; 32];
+
+    let transfer = build_transfer_action(&owner_cclerk, cell, name, old_owner_pk, new_owner_pk);
+
+    let program = fresh_program();
+    let old = owned_state(name, old_owner_pk);
+    let mut new = old.clone();
+    new.fields[OWNER_HASH_SLOT] = project_setfield(&transfer, OWNER_HASH_SLOT).unwrap();
+    new.fields[PENDING_OWNER_PK_SLOT] = project_setfield(&transfer, PENDING_OWNER_PK_SLOT).unwrap();
+    new.set_nonce(2);
+    program
+        .evaluate(&new, Some(&old), Some(&ctx_with_sender(old_owner_pk)))
+        .expect("the CURRENT owner's transfer (re-point + stage) must be admitted");
+    assert_eq!(
+        new.fields[PENDING_OWNER_PK_SLOT], new_owner_pk,
+        "the transfer stages the incoming owner's raw key"
     );
+}
+
+/// **Authority follows ownership.** After the staged handoff is accepted,
+/// the NEW owner is the one admitted on the next owner-field move and the
+/// OLD owner is refused — `sender == current owner` tracks the live
+/// owner, not the birth owner.
+#[test]
+fn owner_authority_follows_accepted_transfer() {
+    let cell = registry_cell();
+    let cclerk = cclerk_with_seed(0xA1);
+    let name = "alice.dregg";
+    let owner_a = [0xAAu8; 32];
+    let owner_b = [0xBBu8; 32];
+    let owner_c = [0xCCu8; 32];
+    let program = fresh_program();
+
+    // A stages the handoff to B (and re-points the image).
+    let transfer_ab = build_transfer_action(&cclerk, cell, name, owner_a, owner_b);
+    let s0 = owned_state(name, owner_a);
+    let mut s1 = s0.clone();
+    s1.fields[OWNER_HASH_SLOT] = project_setfield(&transfer_ab, OWNER_HASH_SLOT).unwrap();
+    s1.fields[PENDING_OWNER_PK_SLOT] =
+        project_setfield(&transfer_ab, PENDING_OWNER_PK_SLOT).unwrap();
+    s1.set_nonce(2);
+    program
+        .evaluate(&s1, Some(&s0), Some(&ctx_with_sender(owner_a)))
+        .expect("A (current owner) stages the handoff");
+
+    // B accepts: the authority register rotates to the STAGED key,
+    // signed by that key.
+    let accept_b = build_accept_transfer_action(&cclerk, cell, name, owner_b);
+    let mut s2 = s1.clone();
+    s2.fields[OWNER_PK_SLOT] = project_setfield(&accept_b, OWNER_PK_SLOT).unwrap();
+    s2.set_nonce(3);
+    program
+        .evaluate(&s2, Some(&s1), Some(&ctx_with_sender(owner_b)))
+        .expect("B (the staged incoming owner) accepts the handoff");
+
+    // An impostor cannot accept in B's place (not the staged key)...
+    let mut seize = s1.clone();
+    seize.fields[OWNER_PK_SLOT] = [0xEEu8; 32];
+    seize.set_nonce(3);
+    program
+        .evaluate(&seize, Some(&s1), Some(&ctx_with_sender([0xEEu8; 32])))
+        .expect_err("rotating the authority register to a non-staged key must be refused");
+
+    // ...and A, having handed off, is REFUSED on the next owner move,
+    // while B (the CURRENT owner) is admitted.
+    let transfer_bc = build_transfer_action(&cclerk, cell, name, owner_b, owner_c);
+    let mut s3 = s2.clone();
+    s3.fields[OWNER_HASH_SLOT] = project_setfield(&transfer_bc, OWNER_HASH_SLOT).unwrap();
+    s3.fields[PENDING_OWNER_PK_SLOT] =
+        project_setfield(&transfer_bc, PENDING_OWNER_PK_SLOT).unwrap();
+    s3.set_nonce(4);
+    program
+        .evaluate(&s3, Some(&s2), Some(&ctx_with_sender(owner_a)))
+        .expect_err("the FORMER owner must be refused after the handoff");
+    program
+        .evaluate(&s3, Some(&s2), Some(&ctx_with_sender(owner_b)))
+        .expect("the CURRENT owner (B) is admitted after the handoff");
+}
+
+/// **Anti-seizure:** an impostor cannot stage themselves, nor stage and
+/// rotate atomically — the staged register is owner-written and frozen
+/// during rotation.
+#[test]
+fn adversarial_staging_and_atomic_seizure_are_refused() {
+    let name = "alice.dregg";
+    let owner_pk = [0xAAu8; 32];
+    let impostor_pk = [0xEEu8; 32];
+    let program = fresh_program();
+    let old = owned_state(name, owner_pk);
+
+    // Impostor stages themselves.
+    let mut stage = old.clone();
+    stage.fields[PENDING_OWNER_PK_SLOT] = impostor_pk;
+    stage.set_nonce(2);
+    program
+        .evaluate(&stage, Some(&old), Some(&ctx_with_sender(impostor_pk)))
+        .expect_err("a non-owner staging the handoff register must be refused");
+
+    // Impostor stages AND rotates in one turn (the atomic seizure).
+    let mut seize = old.clone();
+    seize.fields[PENDING_OWNER_PK_SLOT] = impostor_pk;
+    seize.fields[OWNER_PK_SLOT] = impostor_pk;
+    seize.set_nonce(2);
+    program
+        .evaluate(&seize, Some(&old), Some(&ctx_with_sender(impostor_pk)))
+        .expect_err("an atomic stage-and-rotate seizure must be refused");
+
+    // Impostor re-points the owner image directly (the original hole).
+    let mut repoint = old.clone();
+    repoint.fields[OWNER_HASH_SLOT] = *blake3::hash(&impostor_pk).as_bytes();
+    repoint.set_nonce(2);
+    program
+        .evaluate(&repoint, Some(&old), Some(&ctx_with_sender(impostor_pk)))
+        .expect_err("a non-owner's owner-image write must be refused");
 }
 
 // =============================================================================

@@ -207,7 +207,10 @@ fn executor_transfer_emits_name_transferred_event_with_correct_owner_hashes() {
     let cipherclerk = common::make_cipherclerk(0x40);
     let (executor, registry_cell) = common::make_executor_with_cell(&cipherclerk);
 
-    let old_owner = [0xAAu8; 32];
+    // The owner-authorization caveats bind the transfer to the turn's
+    // executor-verified sender (the agent cell's pubkey) — so the LEGIT
+    // flow registers the name to the cipherclerk's own key.
+    let old_owner = cipherclerk.public_key().0;
     let new_owner = [0xBBu8; 32];
     let name = "dan.dregg";
 
@@ -217,12 +220,12 @@ fn executor_transfer_emits_name_transferred_event_with_correct_owner_hashes() {
         .submit_action(&cipherclerk, reg_action)
         .expect("registration must succeed");
 
-    // Transfer.
+    // Transfer — signed by the CURRENT owner: admitted.
     let transfer_action =
         build_transfer_action(&cipherclerk, registry_cell, name, old_owner, new_owner);
     let transfer_receipt = executor
         .submit_action(&cipherclerk, transfer_action)
-        .expect("transfer must succeed");
+        .expect("the current owner's transfer must succeed");
 
     // The event data must carry name_hash, old_owner_hash, new_owner_hash.
     assert!(!transfer_receipt.emitted_events.is_empty());
@@ -235,6 +238,42 @@ fn executor_transfer_emits_name_transferred_event_with_correct_owner_hashes() {
     // data[2] = new_owner_hash = blake3(new_owner)
     let expected_new = *blake3::hash(&new_owner).as_bytes();
     assert_eq!(ev.data[2], expected_new, "event must carry new owner hash");
+}
+
+/// **Live two-pole soundness through the REAL executor:** a name owned by
+/// a key that is NOT the turn sender's cannot have its owner slot moved —
+/// the installed cell program refuses the write in the submission path —
+/// while the same executor admits the owner-signed transfer (previous
+/// test). This is the executor-side inversion of the old "impostor's
+/// SetField(OWNER) passes" documentation test in `lifecycle.rs`.
+#[test]
+fn executor_refuses_transfer_when_sender_is_not_the_owner() {
+    let cipherclerk = common::make_cipherclerk(0x41);
+    let (executor, registry_cell) = common::make_executor_with_cell(&cipherclerk);
+
+    // Register the name to a FOREIGN key — the cipherclerk driving this
+    // executor is NOT the owner.
+    let foreign_owner = [0xAAu8; 32];
+    let name = "eve-target.dregg";
+    let reg_action = build_register_action(&cipherclerk, registry_cell, name, foreign_owner, 2_000);
+    executor
+        .submit_action(&cipherclerk, reg_action)
+        .expect("registration (first write, permissionless) must succeed");
+
+    // The impostor (this executor's cipherclerk) tries to seize the name.
+    let transfer_action = build_transfer_action(
+        &cipherclerk,
+        registry_cell,
+        name,
+        foreign_owner,
+        cipherclerk.public_key().0,
+    );
+    let result = executor.submit_action(&cipherclerk, transfer_action);
+    assert!(
+        result.is_err(),
+        "a transfer whose sender is not the current owner must be REFUSED \
+         by the installed cell program; got: {result:?}"
+    );
 }
 
 // =============================================================================
