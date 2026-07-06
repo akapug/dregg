@@ -171,8 +171,11 @@ The v13 VK epoch is packaged for ember's eyes-open call. Three human-gated items
   change), so a hosted body is OS-jailed (firmament, macOS Seatbelt — denies /etc/passwd) yet every action
   is cap-gated + metered + minted + R2-verified, and a crashing body leaves the grain clean. Demo:
   `cargo run -p grain-jail --example rent_a_confined_agent [--features real-jail]`. Trail = `GOAL.md`;
-  detail = HORIZONLOG (07-05→06) + `docs/deos/GRAIN-CONFINED-BODY.md`. FRONTIER (fresh-head next) = the
-  in-jail LLM harness over ONE granted egress door (exact APIs in the design doc).
+  detail = HORIZONLOG (07-05→06) + `docs/deos/GRAIN-CONFINED-BODY.md`. NORTH STAR ARCHITECTURALLY PROVEN:
+  the EGRESS DOOR (`3277d4cec`, a jailed body reaches exactly one granted host:port, non-vacuous deny on
+  macOS Seatbelt) + the CAPSTONE (`95581b198`, a model-driven jailed body runs a real grain over its
+  egress door, R2-verified — full "rent a coding agent" loop, only-the-model-mock). FRONTIER = a REAL LLM
+  body (in-jail HTTP without a post-fork tokio runtime) + agent-platform productization + fork-a-confined-session.
 
 ### IN-FLIGHT / HUMAN-GATED (what needs ember)
 

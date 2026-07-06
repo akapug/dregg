@@ -85,15 +85,22 @@ rent_a_confined_agent [--features real-jail]`. LANDED, all green:
 - REAL firmament OS-jail body (`f855fec2a`) — macOS Seatbelt, denies /etc/passwd;
   validated locally.
 - REAL grain end-to-end (`ee47494c4`) + a REAL jailed body driving a REAL grain,
-  R2-verified (`d994fdee9`); crash-robust (`23df1d51e`, a crashing body leaves the
-  grain clean).
-NAMED FRONTIER (fresh-head, next): the real coding-agent body — a confined in-jail
-Rust harness reaching a model over ONE granted `EgressNetGrant` door
-(`spawn_pd_confined_with` + `OpenAICompatBrain` in-jail + a mock model server);
-exact APIs in the design doc's Frontier. Also: agent-platform first-class
-jailed-drive productization (its file is another terminal's — via a helper or a
-quiet window); adapt `deos-hermes` ACP onto the line protocol; SSE incremental
-transcript (spine #5).
+  R2-verified (`d994fdee9`); crash-robust (`23df1d51e`) + hang/SIGKILL (`4973c6a59`)
+  + flood-cap (`ea92ed7d3`) — full hostile-body robustness.
+- EGRESS DOOR (`3277d4cec`): firmament `spawn_pd_confined_with_surface_and_egress`
+  (threads `net_out` → folds `Confinement::with_net_out`) + grain-jail
+  `spawn_confined_body_with_egress`; a jailed body reaches EXACTLY one granted
+  host:port, NON-VACUOUS deny verified on macOS Seatbelt (two live listeners,
+  granted-reachable ∧ ungranted-EPERM).
+- CAPSTONE (`95581b198`): a model-driven jailed body runs a real grain over its
+  egress door, R2-verified — the full "rent a coding agent" loop (mock brain).
+THE NORTH STAR IS ARCHITECTURALLY PROVEN. Remaining FRONTIER: (1) a REAL LLM body —
+an in-jail HTTP client to a provider over the granted door WITHOUT a post-fork
+tokio runtime (blocking reqwest/raw-TLS on the socket, or a loopback host-proxy;
+live Nous portal broken in-env → mock/recorded stays CI); (2) agent-platform
+first-class jailed-drive productization (another lane's file — coordinate); (3)
+fork-a-confined-session = spine-#4 grain-struct unification (grain-fork::Grain ↔
+agent-platform::Tenant); (4) SSE incremental transcript.
 
 ## NOW-STATE addition (2026-07-05, Fable — join-with-a-doc + operated-layer-gap wiring LANDED)
 
