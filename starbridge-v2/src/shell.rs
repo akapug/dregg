@@ -248,6 +248,22 @@ pub struct Shell {
     /// cap to the child. `None` until the first surface migrates.
     #[cfg(all(feature = "process-pd", unix))]
     present_transport: Option<crate::dock::migrate::PresentTransport>,
+    /// The MIGRATED-TO-FEDERATION surfaces: surface id → its re-homed Distributed
+    /// cap (a `Capability{ Target::Distributed { cell }, rights }` the `migrate`
+    /// verb minted for the Local→Distributed leg). A surface here no longer paints
+    /// through the in-process `compositor`; its `present`/`route_input` resolve as
+    /// REAL turns on the destination federation node
+    /// ([`Shell::distributed_transport`]). Unlike the HostPd `migrated` registry
+    /// this is NOT `process-pd`-gated — the distributed re-home is in-process (the
+    /// a-bar), so the whole leg is live in the default `native-full` build.
+    distributed_migrated: Vec<(SurfaceId, SurfaceCapability)>,
+    /// THE DISTRIBUTED RE-HOME endpoint: the in-process federation node the
+    /// migrated surfaces re-homed onto (the a-bar second endpoint). Once a surface
+    /// migrates ([`Shell::migrate_surface_distributed`]) the shell routes its
+    /// `present`/`route_input` through this — a captp-handed-off cap resolving real
+    /// turns on the node — instead of the in-process compositor. `None` until the
+    /// first surface migrates to a federation.
+    distributed_transport: Option<crate::dock::migrate::DistributedTransport>,
 }
 
 impl Default for Shell {
@@ -276,6 +292,8 @@ impl Shell {
             migrated: Vec::new(),
             #[cfg(all(feature = "process-pd", unix))]
             present_transport: None,
+            distributed_migrated: Vec::new(),
+            distributed_transport: None,
         }
     }
 
@@ -727,6 +745,14 @@ impl Shell {
             return self.present_migrated(cap, world, regions, new_digest);
         }
 
+        // (0b) the DISTRIBUTED fork: if this surface re-homed onto a federation
+        // cell, the present is a REAL turn on that node (resolved over the re-homed
+        // Distributed cap), NOT the in-process compositor. In-process (the a-bar),
+        // so it is live in every build — no `process-pd`/OS-child dependency.
+        if self.is_distributed_migrated(cap.surface()) {
+            return self.present_distributed(cap, world, new_digest);
+        }
+
         // (1) the WINDOW-cap gate: you can only present a window you hold.
         let id = self.authorize(cap)?;
         let Some(surface) = self.get(id) else {
@@ -786,6 +812,16 @@ impl Shell {
         if let Some(id) = self.migrated_surface_for_cell(delivered) {
             let cap = self.migrated_cap(id).ok_or(ShellError::Unauthorized)?;
             let _frame = self.route_input_migrated(&cap)?;
+        }
+        // The DISTRIBUTED fork: if the focus holder's surface re-homed onto a
+        // federation cell, deliver the input as a REAL turn on that node (the
+        // input + the glass both flow through the federation now). The T3 routing
+        // law above already confirmed `delivered` is the unique focus holder.
+        if let Some(id) = self.distributed_migrated_surface_for_cell(delivered) {
+            let cap = self
+                .distributed_migrated_cap(id)
+                .ok_or(ShellError::Unauthorized)?;
+            let _frame = self.route_input_distributed(&cap)?;
         }
         Ok(delivered)
     }
@@ -922,8 +958,8 @@ impl Shell {
     /// per-surface `frame_digests` and synthesize a [`FrameCommit`] bound to the
     /// surface's live source-state-root + genuine label (so a migrated frame is
     /// recorded with the SAME provenance shape as an in-process present). Used by
-    /// the `present` path (it has the world for the live root).
-    #[cfg(all(feature = "process-pd", unix))]
+    /// the HostPd `present` path AND the distributed present path (both have the
+    /// world for the live root); not `process-pd`-gated for the latter.
     fn commit_migrated_frame(&mut self, id: SurfaceId, world: &World, digest: u64) -> FrameCommit {
         let (presenter, root) = match self.get(id) {
             Some(s) => {
@@ -945,8 +981,7 @@ impl Shell {
     /// Like [`Self::commit_migrated_frame`] but without re-reading the world (the
     /// input re-render path): advance the digest + record a FrameCommit bound to
     /// the surface's presenter cell at the digest's own root sentinel. The
-    /// load-bearing fact is the child's digest crossing back into the shell.
-    #[cfg(all(feature = "process-pd", unix))]
+    /// load-bearing fact is the child's/node's digest crossing back into the shell.
     fn commit_migrated_frame_digest(&mut self, id: SurfaceId, digest: u64) -> FrameCommit {
         let presenter = self
             .get(id)
@@ -960,6 +995,145 @@ impl Shell {
             source_state_root: digest,
             label: label_of(&presenter, digest),
         }
+    }
+
+    // --- DISTRIBUTED SURFACE MIGRATION (the a-bar federation re-home) ---------
+    //
+    // `migrate(surface_cap, Distributed { cell, rights })` (dock/migrate.rs)
+    // re-mints the surface's cap onto a dregg cell on a FEDERATION; these methods
+    // make the SHELL route that surface's present/route_input as REAL turns on the
+    // destination federation node (an in-process `DistributedBacking` reached over
+    // a captp handoff) instead of the in-process compositor. NOT `process-pd`-
+    // gated — the re-home is in-process (the a-bar), live in every build.
+
+    /// Whether a surface has MIGRATED to a federation cell (its present/input now
+    /// resolve as turns on the federation node, not the in-process compositor).
+    fn is_distributed_migrated(&self, id: SurfaceId) -> bool {
+        self.distributed_migrated.iter().any(|(sid, _)| *sid == id)
+    }
+
+    /// The re-homed (`Target::Distributed`) cap recorded for a migrated surface.
+    fn distributed_migrated_cap(&self, id: SurfaceId) -> Option<SurfaceCapability> {
+        self.distributed_migrated
+            .iter()
+            .find(|(sid, _)| *sid == id)
+            .map(|(_, c)| c.clone())
+    }
+
+    /// The distributed-migrated surface (if any) owning `cell` — the bridge from
+    /// `route_input`'s claimed CellId to a re-homed surface (migration relocates
+    /// transport, not the surface's viewed-cell identity, so the focus holder's
+    /// cell maps back to its surface here).
+    fn distributed_migrated_surface_for_cell(&self, cell: CellId) -> Option<SurfaceId> {
+        self.distributed_migrated
+            .iter()
+            .find_map(|(sid, _)| self.get(*sid).filter(|s| s.cell() == cell).map(|_| *sid))
+    }
+
+    /// MIGRATE a held surface onto a FEDERATION cell and bind its live transport —
+    /// the distributed glass-follows-the-cap move through the SHELL (the a-bar).
+    /// The presented `cap` is authenticated FIRST (you can only migrate a window
+    /// you hold) through the same firmament gate every op runs; then the surface's
+    /// cap is re-minted onto `target` (the attenuating `migrate` verb, which
+    /// refuses a widening). The surface is recorded as distributed-migrated and the
+    /// [`DistributedTransport`](crate::dock::migrate::DistributedTransport) (the
+    /// federation node the cap was handed off to) is installed. Thereafter
+    /// [`Shell::present`]/[`Shell::route_input`] for this surface resolve real turns
+    /// on that node — the in-process compositor never sees it again.
+    ///
+    /// Returns the re-homed [`SurfaceCapability`] (now naming
+    /// `Target::Distributed { cell }`). `target` MUST name the transport's own
+    /// destination cell ([`DistributedTransport::cell`]) — else the re-homed cap
+    /// would address a cell the node's recipient holds no cap over, and every
+    /// present would be refused; this is checked and refused up front.
+    pub fn migrate_surface_distributed(
+        &mut self,
+        cap: &SurfaceCapability,
+        target: crate::dock::migrate::MigrationTarget,
+        transport: crate::dock::migrate::DistributedTransport,
+    ) -> Result<SurfaceCapability, ShellError> {
+        // You can only migrate a window you actually hold (cap-gated like every op).
+        let id = self.authorize(cap)?;
+        // The target's cell must be the transport's own destination (the cell the
+        // handoff landed the recipient's cap over) — otherwise present/route could
+        // never resolve. A mismatched target is refused before any state changes.
+        if target.firmament_cell() != Some(transport.cell()) {
+            return Err(ShellError::ShareDenied(
+                "distributed migration target cell does not match the handed-off transport cell"
+                    .to_string(),
+            ));
+        }
+        // The attenuating re-mint (refuses a widening migration — `granted ⊆ held`).
+        let rehomed = crate::dock::migrate::migrate(cap, &target)
+            .map_err(|e| ShellError::ShareDenied(e.to_string()))?;
+        // Record the surface as distributed-migrated + install the live transport.
+        self.distributed_migrated.retain(|(sid, _)| *sid != id);
+        self.distributed_migrated.push((id, rehomed.clone()));
+        self.distributed_transport = Some(transport);
+        Ok(rehomed)
+    }
+
+    /// PRESENT a distributed-migrated surface as a REAL turn on the federation node.
+    /// The presented `cap` must match the recorded re-homed cap (anti-confusion — a
+    /// forged cap naming this migrated surface id is refused here); the node then
+    /// resolves the cap's rights over its cell (`granted ⊆ held`, the real
+    /// executor), and the returned frame digest folds into the shell's bookkeeping
+    /// exactly like an in-process present.
+    fn present_distributed(
+        &mut self,
+        cap: &SurfaceCapability,
+        world: &World,
+        _new_digest: u64,
+    ) -> Result<FrameCommit, ShellError> {
+        let id = cap.surface();
+        let rehomed = self
+            .distributed_migrated_cap(id)
+            .ok_or(ShellError::Unauthorized)?;
+        // ANTI-CONFUSION: the presented cap must be the recorded re-homed cap. A
+        // forged cap (different target/rights) naming this migrated surface id is
+        // refused — the re-homed authority is not guessable from the surface id.
+        if cap != &rehomed {
+            return Err(ShellError::Unauthorized);
+        }
+        // The present sequence: the surface id (a stable, surface-scoped seq; the
+        // real cockpit threads the frame counter). The node's resolution is the
+        // load-bearing turn; its returned digest is the frame id.
+        let seq = id.as_u64();
+        let frame = {
+            let transport = self
+                .distributed_transport
+                .as_ref()
+                .ok_or(ShellError::Unauthorized)?;
+            transport
+                .present(&rehomed, seq)
+                .map_err(|e| ShellError::ShareDenied(e.to_string()))?
+        };
+        Ok(self.commit_migrated_frame(id, world, frame.digest))
+    }
+
+    /// ROUTE an input to a distributed-migrated surface as a REAL turn on the
+    /// federation node — the same `granted ⊆ held` resolution as
+    /// [`Self::present_distributed`], folding the node's re-rendered frame digest
+    /// into the shell (input + glass both flow through the federation now).
+    fn route_input_distributed(
+        &mut self,
+        cap: &SurfaceCapability,
+    ) -> Result<FrameCommit, ShellError> {
+        let id = cap.surface();
+        let rehomed = self
+            .distributed_migrated_cap(id)
+            .ok_or(ShellError::Unauthorized)?;
+        let code = id.as_u64();
+        let frame = {
+            let transport = self
+                .distributed_transport
+                .as_ref()
+                .ok_or(ShellError::Unauthorized)?;
+            transport
+                .route_input(&rehomed, code)
+                .map_err(|e| ShellError::ShareDenied(e.to_string()))?
+        };
+        Ok(self.commit_migrated_frame_digest(id, frame.digest))
     }
 
     /// The compositor's committed frame log (the scene's provenance — every
@@ -1727,5 +1901,135 @@ mod tests {
         assert!(shell
             .present(&cap, &world, vec![region], true, 0x4242)
             .is_ok());
+    }
+
+    // --- DISTRIBUTED SURFACE MIGRATION (the a-bar federation re-home) ---------
+
+    /// THE HONEST POLE: a held surface migrates onto a FEDERATION cell over a REAL
+    /// captp handoff, its SurfaceId preserved and rights attenuated; thereafter a
+    /// present PAINTS and an input ROUTES as real turns on the federation node (the
+    /// glass follows the cap to the federation).
+    #[test]
+    fn a_surface_migrates_to_a_federation_and_its_glass_follows() {
+        use crate::dock::migrate::{DistributedTransport, MigrationTarget};
+        use dregg_firmament::{AuthRequired, Target};
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        // A held surface (full rights) over the service cell; it is focused on open.
+        let cap = shell.open_cell_view(anchors[1], "Service");
+        assert_eq!(cap.rights(), &AuthRequired::None);
+
+        // Establish the destination federation endpoint via a REAL captp handoff:
+        // carry a Signature mirror (⊆ held None) to the node.
+        let (transport, cell) =
+            DistributedTransport::establish(AuthRequired::None, AuthRequired::Signature)
+                .expect("attenuating captp handoff is accepted");
+
+        // Migrate: re-mint onto the handed-off federation cell, rights attenuated.
+        let target = MigrationTarget::Distributed {
+            cell,
+            rights: AuthRequired::Signature,
+        };
+        let rehomed = shell
+            .migrate_surface_distributed(&cap, target, transport)
+            .expect("distributed migration re-mints + binds the federation transport");
+
+        // Identity preserved; re-homed onto the federation cell; rights attenuated.
+        assert_eq!(rehomed.surface(), cap.surface());
+        assert_eq!(rehomed.authority().target, Target::Distributed { cell });
+        assert_eq!(rehomed.rights(), &AuthRequired::Signature);
+
+        // PRESENT over the re-homed cap → a REAL turn on the federation node paints.
+        let region = rehomed.surface().region();
+        let commit = shell
+            .present(
+                &rehomed,
+                &world,
+                vec![region],
+                /*claims_focus*/ true,
+                0xABCD,
+            )
+            .expect("present resolves as a turn on the federation node");
+        // The frame is bound to the surface's real presenter cell + its region (the
+        // migrated frame carries the SAME provenance shape as an in-process one).
+        assert_eq!(commit.presenter, anchors[1]);
+        assert_eq!(commit.regions, vec![rehomed.surface().region()]);
+
+        // INPUT to the focus holder (the migrated surface's cell) routes over the
+        // federation node too — T3 confirms it is the unique focus holder first.
+        assert_eq!(shell.route_input(anchors[1], &world), Ok(anchors[1]));
+    }
+
+    /// FAIL-CLOSED POLE: a FORGED cap naming a distributed-migrated surface id is
+    /// refused every op — the re-homed authority is not guessable from the id.
+    #[test]
+    fn a_forged_cap_for_a_federation_migrated_surface_is_refused() {
+        use crate::dock::migrate::{DistributedTransport, MigrationTarget};
+        use dregg_firmament::{AuthRequired, Capability, CellId as FCellId};
+        let (mut shell, world, anchors, _console) = shell_with_console();
+        let cap = shell.open_cell_view(anchors[1], "Service");
+        let (transport, cell) =
+            DistributedTransport::establish(AuthRequired::None, AuthRequired::Signature)
+                .expect("handoff accepted");
+        let rehomed = shell
+            .migrate_surface_distributed(
+                &cap,
+                MigrationTarget::Distributed {
+                    cell,
+                    rights: AuthRequired::Signature,
+                },
+                transport,
+            )
+            .expect("migrate");
+
+        // Forge a cap with the migrated surface id but a bogus authority.
+        let ghost = {
+            let mut k = [0u8; 32];
+            k[0] = 0xEE;
+            FCellId::derive_raw(&k, &[0u8; 32])
+        };
+        let forged = SurfaceCapability::new(
+            rehomed.surface(),
+            Capability::surface(ghost, AuthRequired::None),
+        );
+        let region = rehomed.surface().region();
+        // The distributed present fork refuses the forged cap (it is not the
+        // recorded re-homed authority for this surface).
+        assert_eq!(
+            shell.present(&forged, &world, vec![region], true, 0x1),
+            Err(ShellError::Unauthorized)
+        );
+        // The genuine re-homed cap still paints — the gate refuses forgeries only.
+        assert!(shell
+            .present(&rehomed, &world, vec![region], true, 0x2)
+            .is_ok());
+    }
+
+    /// FAIL-CLOSED POLE: a WIDENING distributed migration is refused — you cannot
+    /// carry more authority to a federation than the held cap holds.
+    #[test]
+    fn a_widening_distributed_migration_is_refused() {
+        use crate::dock::migrate::{DistributedTransport, MigrationTarget};
+        use dregg_firmament::AuthRequired;
+        let (mut shell, _world, anchors, _console) = shell_with_console();
+        let a = shell.open_cell_view(anchors[1], "Service"); // rights None
+                                                             // A read-only Signature mirror via a REAL narrowing share.
+        let b = shell
+            .share(&a, 0xB, AuthRequired::Signature)
+            .expect("a narrowing share commits");
+        assert_eq!(b.rights(), &AuthRequired::Signature);
+
+        let (transport, cell) =
+            DistributedTransport::establish(AuthRequired::None, AuthRequired::Signature)
+                .expect("handoff accepted");
+        // Carry Either — WIDER than b's held Signature. Refused by the migrate gate.
+        let target = MigrationTarget::Distributed {
+            cell,
+            rights: AuthRequired::Either,
+        };
+        let r = shell.migrate_surface_distributed(&b, target, transport);
+        assert!(
+            matches!(r, Err(ShellError::ShareDenied(_))),
+            "a widening distributed migration must be refused, got {r:?}"
+        );
     }
 }

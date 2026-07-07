@@ -50,7 +50,7 @@
 //! `live_transport` e2e test below (a held surface migrates and its present/input
 //! cross to a confined child by running).
 
-use dregg_firmament::{is_attenuation, HostPdId, Rights, Target};
+use dregg_firmament::{is_attenuation, CellId, HostPdId, Rights, Target};
 
 use crate::surface::SurfaceCapability;
 
@@ -74,6 +74,23 @@ pub enum MigrationTarget {
         /// migration is refused as a widening.
         rights: Rights,
     },
+    /// Re-home the surface onto a DREGG CELL on a FEDERATION — the Local→
+    /// Distributed leg. `cell` is the destination cell on the federation node
+    /// (the [`Target::Distributed`] addressee); invocation is a turn through that
+    /// node's executor, revocation is the epoch lift. Unlike [`Self::HostPd`]
+    /// (which crosses an OS Endpoint to a confined child), the distributed leg
+    /// carries the surface's authority to the node over a REAL captp HANDOFF and
+    /// resolves present/route as real turns there. The re-minted cap targets
+    /// `Distributed { cell }`; the live carriage + transport is
+    /// [`distributed::DistributedTransport`] (the a-bar, in-process; a genuine
+    /// second OS process / network wire for the handoff is the b-bar).
+    Distributed {
+        /// The destination cell on the federation the surface re-homes onto.
+        cell: CellId,
+        /// The rights to carry across. Must be `⊆` the held cap's rights, else the
+        /// migration is refused as a widening.
+        rights: Rights,
+    },
 }
 
 impl MigrationTarget {
@@ -82,6 +99,18 @@ impl MigrationTarget {
     pub fn rights(&self) -> &Rights {
         match self {
             MigrationTarget::HostPd { rights, .. } => rights,
+            MigrationTarget::Distributed { rights, .. } => rights,
+        }
+    }
+
+    /// The destination federation cell this migration names, if it is a
+    /// [`Self::Distributed`] target (else `None`). The shell checks this against
+    /// the handed-off transport's own cell so a re-homed cap always addresses a
+    /// cell the destination node actually holds the surface's authority over.
+    pub fn firmament_cell(&self) -> Option<CellId> {
+        match self {
+            MigrationTarget::Distributed { cell, .. } => Some(*cell),
+            MigrationTarget::HostPd { .. } => None,
         }
     }
 
@@ -89,6 +118,7 @@ impl MigrationTarget {
     fn firmament_target(&self) -> Target {
         match self {
             MigrationTarget::HostPd { pd, .. } => Target::HostPd { pd: *pd },
+            MigrationTarget::Distributed { cell, .. } => Target::Distributed { cell: *cell },
         }
     }
 }
@@ -262,6 +292,262 @@ mod transport {
 #[cfg(all(feature = "process-pd", unix))]
 pub use transport::{PresentTransport, TransportError};
 
+// ───────────────────── THE DISTRIBUTED RE-HOME (a-bar, in-process) ───────────
+//
+// `migrate(surface_cap, Distributed { cell, rights })` re-mints a surface's cap
+// onto a dregg CELL on a FEDERATION. Unlike the HostPd leg (which crosses an OS
+// Endpoint to a confined child), the distributed leg carries the surface's
+// authority to the federation node over a REAL captp HANDOFF, then resolves
+// present/route as REAL turns through that node's executor. The "second endpoint"
+// is an in-process [`dregg_firmament::DistributedBacking`] — this is the a-bar
+// MECHANISM (in-process, two endpoints in one address space). A genuine second OS
+// process / network wire for the handoff (a real captp `NetConnection` between two
+// federation nodes on different boxes) is the b-bar — named at the module tail,
+// not built here.
+//
+// This module is NOT gated on `process-pd`/unix: the distributed re-home needs no
+// OS child, only the captp handoff primitives + the firmament executor, both of
+// which `embedded-executor` already links. So the whole distributed leg (carriage
+// + transport + the shell dispatch) is live in the default `native-full` build.
+
+pub mod distributed {
+    use super::{is_attenuation, MigrateError, Rights};
+    use crate::surface::SurfaceCapability;
+    use dregg_captp::handoff::{
+        validate_handoff, HandoffCertificate, HandoffError, HandoffPresentation,
+    };
+    use dregg_captp::sturdy::SwissTable;
+    use dregg_captp::FederationId;
+    use dregg_firmament::{CellId, DistributedBacking, SurfaceFrame};
+    use dregg_types::{generate_keypair, PublicKey};
+
+    /// Why a distributed re-home (carriage or transport) failed.
+    #[derive(Clone, Debug)]
+    pub enum DistributedError {
+        /// The migrate re-mint itself was refused (a WIDENING carriage — the
+        /// carried rights exceed the held cap's, the same `granted ⊆ held` gate
+        /// every migration runs). This fires BEFORE the captp handoff.
+        Widening(MigrateError),
+        /// The captp handoff carrying the surface's authority to the federation
+        /// node was refused. A WIDENING handoff is [`HandoffError::Amplification`];
+        /// a redirected target is [`HandoffError::TargetMismatch`]; a REPLAYED
+        /// presentation (the one-shot certificate nonce already consumed) is
+        /// [`HandoffError::ReplayDetected`].
+        Handoff(HandoffError),
+        /// A present/route turn on the federation node was refused — the re-homed
+        /// cap's rights exceed what actually landed on the node (`granted ⊆ held`
+        /// failed at the executor). Carries the backing's reason.
+        Backing(String),
+    }
+
+    impl std::fmt::Display for DistributedError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                DistributedError::Widening(e) => write!(f, "distributed migrate refused: {e}"),
+                DistributedError::Handoff(e) => write!(f, "distributed handoff refused: {e}"),
+                DistributedError::Backing(why) => write!(f, "distributed turn refused: {why}"),
+            }
+        }
+    }
+
+    impl std::error::Error for DistributedError {}
+
+    /// A deterministic frame digest for a resolved distributed present/route (the
+    /// a-bar's "glass"): a fold of the destination cell id and the sequence. The
+    /// load-bearing fact is that the present TURN resolved on the federation node
+    /// (a forged / over-broad cap is refused there and no frame is produced); the
+    /// digest is the fingerprint of the frame that resolution stands for.
+    fn render_digest(cell: CellId, seq: u64) -> u64 {
+        let mut x = seq.rotate_left(17);
+        for b in cell.as_bytes() {
+            x = x.wrapping_mul(31).wrapping_add(*b as u64);
+        }
+        x ^= x >> 30;
+        x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x ^= x >> 27;
+        x
+    }
+
+    /// The in-process DESTINATION federation endpoint a surface re-homes onto —
+    /// the a-bar second endpoint of a distributed migration.
+    ///
+    /// Holds a REAL [`DistributedBacking`] (the federation node's ledger +
+    /// executor), the `recipient` holder whose handed-off cap the present/route
+    /// turns resolve, the destination `cell`, and the captp [`SwissTable`] the
+    /// handoff rode (with its one-shot nonce registry — a replayed handoff is
+    /// refused). Constructed by [`Self::establish`], which performs the captp
+    /// handoff carriage.
+    pub struct DistributedTransport {
+        federation: DistributedBacking,
+        cell: CellId,
+        recipient: CellId,
+        /// The swiss table the handoff rode: its `seen_handoff_nonces` set carries
+        /// the consumed certificate nonce, so a replay is refused.
+        swiss: SwissTable,
+        /// The presentation kept so a replay can be exercised (the one-shot nonce).
+        presentation: HandoffPresentation,
+        introducer_pk: PublicKey,
+        introducer_fed: FederationId,
+        height: u64,
+    }
+
+    impl DistributedTransport {
+        /// ESTABLISH the federation endpoint by carrying `held` authority to it
+        /// over a REAL captp handoff, granting `granted` (which must be `⊆ held`).
+        ///
+        /// Seeds a destination `cell` + a `recipient` holder on a fresh federation
+        /// node; exports the cell into a swiss table at the HELD rights (the node's
+        /// authoritative record of what the introducer holds); then presents a
+        /// [`HandoffCertificate`] granting `granted` to the recipient through the
+        /// real [`validate_handoff`]. That validation REFUSES a widening
+        /// (`Amplification`), a redirected target (`TargetMismatch`), and — via the
+        /// one-shot [`SwissTable::register_handoff_nonce`] — a replayed presentation
+        /// (`ReplayDetected`). On acceptance the recipient's cap is installed over
+        /// the cell at the ACCEPTED (granted) rights, so present/route turns
+        /// resolve. Returns the transport and the destination `cell` (the addressee
+        /// a [`super::MigrationTarget::Distributed`] names).
+        pub fn establish(
+            held: Rights,
+            granted: Rights,
+        ) -> Result<(Self, CellId), DistributedError> {
+            // The carriage is attenuating: refuse a widening BEFORE the handoff
+            // (the same `granted ⊆ held` gate the `migrate` verb runs; here it
+            // guards the captp carriage from ever attempting a widening handoff).
+            if !is_attenuation(&held, &granted) {
+                return Err(DistributedError::Widening(MigrateError::Widening {
+                    held: held.clone(),
+                    requested: granted.clone(),
+                }));
+            }
+
+            // The in-process handoff parties (the a-bar: real keys, one address space).
+            let (intro_sk, intro_pk) = generate_keypair();
+            let (recip_sk, recip_pk) = generate_keypair();
+            let introducer_fed = FederationId(intro_pk.0);
+            let target_fed = FederationId([0x5D; 32]);
+            let height = 1u64;
+
+            // The federation node: seed the destination cell, the recipient holder,
+            // and an introducer holder carrying the HELD authority over the cell.
+            let mut federation = DistributedBacking::new();
+            let cell = federation.seed_cell(0xD1);
+            let recipient = federation.seed_cell(0xD2);
+            let introducer = federation.seed_cell(0xD3);
+            federation.install(introducer, cell, held.clone());
+
+            // Export the cell into the swiss table at the HELD rights — the target
+            // federation's authoritative record of what the introducer holds (the
+            // `held` the non-amplification check reads, NOT the cert's own claim).
+            let mut swiss = SwissTable::new();
+            let swiss_num = swiss.export(cell, held.clone(), height, None);
+
+            // The certificate GRANTS `granted` (⊆ held) to the recipient.
+            let cert = HandoffCertificate::create(
+                &intro_sk,
+                introducer_fed,
+                target_fed,
+                cell,
+                recip_pk.0,
+                granted.clone(),
+                None,
+                None,
+                None,
+                swiss_num,
+            );
+            let presentation = HandoffPresentation::create(cert, &recip_sk);
+
+            // PRESENT the handoff (refuses Amplification / TargetMismatch; consumes
+            // the one-shot nonce so a replay is later refused as ReplayDetected).
+            let known = [introducer_fed];
+            let acceptance = validate_handoff(&presentation, &intro_pk, &mut swiss, &known, height)
+                .map_err(DistributedError::Handoff)?;
+
+            // Install the recipient's cap over the cell at the ACCEPTED rights, so
+            // present/route resolve as real turns on the node.
+            federation.install(recipient, cell, acceptance.permissions.clone());
+
+            Ok((
+                DistributedTransport {
+                    federation,
+                    cell,
+                    recipient,
+                    swiss,
+                    presentation,
+                    introducer_pk: intro_pk,
+                    introducer_fed,
+                    height,
+                },
+                cell,
+            ))
+        }
+
+        /// The destination cell the re-homed cap names (the `Target::Distributed`
+        /// addressee).
+        pub fn cell(&self) -> CellId {
+            self.cell
+        }
+
+        /// Re-present the SAME handoff certificate — REFUSED by the one-shot nonce.
+        /// `establish` consumed the certificate's nonce
+        /// ([`SwissTable::register_handoff_nonce`] returned `true`); a second
+        /// presentation finds it already seen (returns `false`), so
+        /// [`validate_handoff`] yields [`HandoffError::ReplayDetected`]. Proves the
+        /// carriage is replay-bounded by the certificate, independent of the swiss
+        /// entry's use budget. Returns the refusal (never `Ok`).
+        pub fn replay_handoff(&mut self) -> HandoffError {
+            let known = [self.introducer_fed];
+            match validate_handoff(
+                &self.presentation,
+                &self.introducer_pk,
+                &mut self.swiss,
+                &known,
+                self.height,
+            ) {
+                Ok(_) => unreachable!("a replayed handoff certificate must be refused"),
+                Err(e) => e,
+            }
+        }
+
+        /// PRESENT the migrated surface via a REAL turn on the federation node: the
+        /// recipient resolves its handed-off cap over the cell at `cap.rights()`
+        /// (`granted ⊆ held`, the real executor). A cap whose rights exceed what
+        /// landed is REFUSED here. Returns the rendered frame (a deterministic
+        /// digest standing for the resolved present — the a-bar's glass).
+        pub fn present(
+            &self,
+            cap: &SurfaceCapability,
+            seq: u64,
+        ) -> Result<SurfaceFrame, DistributedError> {
+            self.federation
+                .invoke(self.recipient, self.cell, cap.rights())
+                .map_err(|e| DistributedError::Backing(format!("{e:?}")))?;
+            Ok(SurfaceFrame {
+                seq,
+                digest: render_digest(self.cell, seq),
+            })
+        }
+
+        /// ROUTE an input to the migrated surface via a REAL turn on the federation
+        /// node — the same `granted ⊆ held` resolution as [`Self::present`]. The
+        /// returned frame folds the input `code` into the surface's re-render.
+        pub fn route_input(
+            &self,
+            cap: &SurfaceCapability,
+            code: u64,
+        ) -> Result<SurfaceFrame, DistributedError> {
+            self.federation
+                .invoke(self.recipient, self.cell, cap.rights())
+                .map_err(|e| DistributedError::Backing(format!("{e:?}")))?;
+            Ok(SurfaceFrame {
+                seq: code,
+                digest: render_digest(self.cell, code.wrapping_add(0x1_0000)),
+            })
+        }
+    }
+}
+
+pub use distributed::{DistributedError, DistributedTransport};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +677,111 @@ mod tests {
             },
         )
         .is_ok());
+    }
+
+    // ── the DISTRIBUTED leg: re-mint onto a federation cell + the captp carriage ──
+
+    /// A Local→Distributed migration re-mints with `Target::Distributed`, preserves
+    /// the SurfaceId, and keeps the (attenuated) rights — the same total `migrate`
+    /// verb, a new destination on the distance axis.
+    #[test]
+    fn local_to_distributed_remints_and_preserves_identity() {
+        use dregg_types::CellId as TCellId;
+        let cap = held_surface(21, 0x33, AuthRequired::Either);
+        let fed_cell = TCellId::from_bytes([0xAB; 32]);
+        // Narrow Either → Signature across the move (a genuine attenuation).
+        let target = MigrationTarget::Distributed {
+            cell: fed_cell,
+            rights: AuthRequired::Signature,
+        };
+        let migrated = migrate(&cap, &target).expect("attenuating distributed migration admitted");
+        // Identity preserved: SAME SurfaceId across the move.
+        assert_eq!(migrated.surface(), SurfaceId(21));
+        // Re-homed onto the federation cell.
+        assert_eq!(
+            migrated.authority().target,
+            Target::Distributed { cell: fed_cell }
+        );
+        // Rights attenuated to exactly what was carried.
+        assert_eq!(migrated.rights(), &AuthRequired::Signature);
+    }
+
+    /// A WIDENING distributed migration is REFUSED by the same `granted ⊆ held`
+    /// gate — you cannot migrate authority you don't hold to a federation either.
+    #[test]
+    fn widening_distributed_migration_is_refused() {
+        use dregg_types::CellId as TCellId;
+        let cap = held_surface(22, 0x34, AuthRequired::Signature);
+        let target = MigrationTarget::Distributed {
+            cell: TCellId::from_bytes([0xCD; 32]),
+            rights: AuthRequired::Either, // wider than held Signature
+        };
+        let err = migrate(&cap, &target).expect_err("widening distributed migration refused");
+        assert!(matches!(err, MigrateError::Widening { .. }));
+    }
+
+    /// THE CAPTP CARRIAGE — the honest pole: an attenuating handoff to the
+    /// federation node is ACCEPTED, and a present TURN over the re-homed cap
+    /// resolves on that node (the glass follows to the federation).
+    #[test]
+    fn distributed_carriage_establishes_and_present_resolves() {
+        use super::distributed::DistributedTransport;
+        // Held Either, carry Signature (attenuating). The handoff lands.
+        let (transport, cell) =
+            DistributedTransport::establish(AuthRequired::Either, AuthRequired::Signature)
+                .expect("attenuating captp handoff is accepted");
+        // Build the re-homed cap the shell would mint for this destination.
+        let cap = held_surface(23, 0x35, AuthRequired::Either);
+        let migrated = migrate(
+            &cap,
+            &MigrationTarget::Distributed {
+                cell,
+                rights: AuthRequired::Signature,
+            },
+        )
+        .expect("re-mint onto the handed-off cell");
+        assert_eq!(migrated.surface(), SurfaceId(23));
+        assert_eq!(migrated.authority().target, Target::Distributed { cell });
+        // A present + an input both resolve as real turns on the federation node.
+        let f1 = transport
+            .present(&migrated, 7)
+            .expect("present resolves on the node");
+        assert_eq!(f1.seq, 7);
+        let f2 = transport
+            .route_input(&migrated, 9)
+            .expect("input resolves on the node");
+        assert_eq!(f2.seq, 9);
+        // Distinct events yield distinct frame digests (the glass advances).
+        assert_ne!(f1.digest, f2.digest);
+    }
+
+    /// THE ONE-SHOT NONCE — a replayed handoff certificate is REFUSED
+    /// (`ReplayDetected`), independent of the swiss budget. This is
+    /// `register_handoff_nonce` returning `false` the second time, surfaced.
+    #[test]
+    fn distributed_carriage_refuses_a_replayed_handoff() {
+        use super::distributed::DistributedTransport;
+        use dregg_captp::handoff::HandoffError;
+        let (mut transport, _cell) =
+            DistributedTransport::establish(AuthRequired::None, AuthRequired::Signature)
+                .expect("first handoff accepted");
+        // Re-presenting the SAME certificate is a replay.
+        assert_eq!(transport.replay_handoff(), HandoffError::ReplayDetected);
+    }
+
+    /// THE ANTI-AMPLIFICATION TOOTH — a WIDENING carriage is refused BEFORE the
+    /// handoff by the migrate gate; and even were the gate bypassed, the captp
+    /// `validate_handoff` refuses an amplifying grant. Here the carriage's own
+    /// gate fires (held Signature, granted None is wider).
+    #[test]
+    fn distributed_carriage_refuses_a_widening_grant() {
+        use super::distributed::{DistributedError, DistributedTransport};
+        // `DistributedTransport` is not `Debug` (it holds the federation executor),
+        // so match rather than `expect_err`.
+        match DistributedTransport::establish(AuthRequired::Signature, AuthRequired::None) {
+            Ok(_) => panic!("a widening carriage must be refused"),
+            Err(e) => assert!(matches!(e, DistributedError::Widening(_))),
+        }
     }
 }
 
