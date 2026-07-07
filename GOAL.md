@@ -196,3 +196,18 @@ Per-module (template-covers? / gaps / consumers):
 ORDER: 1 pubsub (test-only) → 2 programmable (close preset gaps, then queue_endpoint) → 3 blinded
 (keep AIR residual) → 4 inbox-consumers → 5 relay-consumers → 6 operator (relay_service, the one real
 model change) → then delete inbox+relay. queue KEEPS. Full detail: agent a242d9d357a4b3532 output.
+
+### PURGE SWARM (2026-07-07, 2 waves, 10 lanes) — DONE (wave 3 died on Fable credits)
+Went WIDE per ember. Committed + verified-myself:
+- 8 storage modules BOUND to falsifiable specs: erasure+bucket_commitment (5e8ec5fb5), sharding
+  (40ef4285d), availability+retrieval (c6777bc52), commitment+content+wal (bf306ca29). Every bind
+  refused to fake a mismatched Lean binding — documented "no spec yet" where none applies.
+- 2 REAL BUGS FIXED: inverted deadline (2b986558d — FieldLteHeight→FieldGteHeight, kernel-verified,
+  two-pole that inverts the enshrined test); DAS confidence-inflation (a6b0dcccf — chunk.index binding).
+- auth-gap CLOSED (e16dfe17e — inbox_endpoint signed-send, fail-closed, two-pole).
+- 14 honesty overclaims corrected: starbridge ×12 (b7a235e22), core crates ×2 (0a7842ba8).
+- dead-sweep: clean (nothing dead left). Phase-2 recon MAPPED (bf2942330 — queue STAYS, 5 real consumers).
+NAMED RESIDUALS (HORIZONLOG, not laundered): accumulator verify_non_membership FORGEABLE (+ sdk/
+privacy.rs prover-supplied gap); commitment encode_bytes_to_felts bit-6/7 masking non-binding;
+from_leaves leaf-count non-binding. WAVE-3 TODO (Fable credits): accumulator soundness fix; honesty-3
+(turn/intent/deos); pubsub→pubsub_topic migration (test-only, the easy Phase-2 first step).
