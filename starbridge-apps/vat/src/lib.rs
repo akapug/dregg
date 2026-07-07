@@ -65,9 +65,10 @@
 //!
 //! The verifiable core is the lifecycle + economics + durable cursor — all cells.
 //! The economics/cursor teeth are the lease crate's; the vat's own program
-//! ([`vat_cell_program`]) is offered but NOT yet installed by any path here, and
-//! no vat transition is yet submitted through an executor — the apply layer is a
-//! host-side write. What is NOT in the verifiable core (and never should be): the
+//! ([`vat_cell_program`]) is INSTALLED by [`seed_vat`] and every lifecycle move is
+//! submitted through the executor by [`fire_vat_transition`] — which re-enforces the
+//! invariants, so an illegal move (a phase-rank regression) is REFUSED in the fire
+//! path, not merely by the pure check. What is NOT in the verifiable core (and never should be): the
 //! operational provisioning glue (spinning an actual VM, the mesh overlay, the
 //! backend placement decision). That stays an imperative adapter the vat *drives*
 //! — it reads the vat cell's state and makes the box match. So a light client
@@ -81,7 +82,10 @@
 /// The lifecycle apply layer — pure open_vat + apply_transition over a vat Cell.
 pub mod lifecycle;
 
-use dregg_app_framework::{CellProgram, StateConstraint, TransitionCase, TransitionGuard};
+use dregg_app_framework::{
+    AppCipherclerk, CellId, CellProgram, Effect, EmbeddedExecutor, ExecutorSubmitError,
+    StateConstraint, TransitionCase, TransitionGuard, TurnReceipt,
+};
 
 pub use dregg_app_framework::{FieldElement, field_from_u64};
 pub use starbridge_execution_lease::{self as lease, field_to_u64};
@@ -345,6 +349,53 @@ pub fn vat_cell_program() -> CellProgram {
     }])
 }
 
+// =============================================================================
+// The verified-turn WIRE — install the program, submit transitions through the executor
+// =============================================================================
+
+/// The effects that drive a vat cell to `target`: write the two lifecycle-axis slots the installed
+/// [`vat_cell_program`] governs — the phase rank on [`VAT_PHASE_SLOT`] and the liveness bit on
+/// [`VAT_UP_SLOT`]. Submitting these as a turn lets the executor re-enforce the invariants.
+pub fn vat_transition_effects(vat: CellId, target: VatState) -> Vec<Effect> {
+    vec![
+        Effect::SetField {
+            cell: vat,
+            index: VAT_PHASE_SLOT as usize,
+            value: field_from_u64(target.phase().rank()),
+        },
+        Effect::SetField {
+            cell: vat,
+            index: VAT_UP_SLOT as usize,
+            value: field_from_u64(target.is_up() as u64),
+        },
+    ]
+}
+
+/// Create a vat cell and INSTALL [`vat_cell_program`], so the executor re-enforces the lifecycle
+/// invariants (monotone phase, valid two-axis states) on every submitted transition. A fresh cell's
+/// slots are zero — i.e. [`VatState::Created`] (phase `Provisioned`, not up). Returns the cell id.
+pub fn seed_vat(executor: &EmbeddedExecutor) -> CellId {
+    let vat = executor.cell_id();
+    executor.install_program(vat, vat_cell_program());
+    vat
+}
+
+/// **Submit a vat transition as a verified turn.** Wraps the transition effects in a signed action and
+/// submits it through the executor — which RE-ENFORCES the installed [`vat_cell_program`], so an
+/// illegal move (a phase-rank regression, a contradictory two-axis state) is REFUSED in the fire path,
+/// not merely rejected by the pure [`VatTransition::is_legal_from`] check. This is the verified-turn
+/// wire: a vat lifecycle move IS a cap-checked, program-enforced turn leaving a receipt.
+pub fn fire_vat_transition(
+    cipherclerk: &AppCipherclerk,
+    executor: &EmbeddedExecutor,
+    vat: CellId,
+    target: VatState,
+) -> Result<TurnReceipt, ExecutorSubmitError> {
+    let action =
+        cipherclerk.make_action(vat, "vat_transition", vat_transition_effects(vat, target));
+    executor.submit_action(cipherclerk, action)
+}
+
 /// The vat invariants as a flat `Predicate` program — for a host to install on a
 /// seeded vat cell so its fires re-enforce them (no path in this crate installs
 /// it yet).
@@ -355,6 +406,25 @@ pub fn vat_invariants_program() -> CellProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fire_admits_a_legal_move_and_refuses_a_phase_regression() {
+        use dregg_app_framework::{AgentCipherclerk, AppCipherclerk, EmbeddedExecutor};
+        let cipherclerk = AppCipherclerk::new(AgentCipherclerk::new(), [7u8; 32]);
+        let executor = EmbeddedExecutor::new(&cipherclerk, "default");
+        let vat = seed_vat(&executor);
+        // Created (phase Provisioned=0, down) -> Running (phase Live=1, up): a legal forward move.
+        assert!(
+            fire_vat_transition(&cipherclerk, &executor, vat, VatState::Running).is_ok(),
+            "a legal lifecycle move (phase advances) must be admitted through the executor"
+        );
+        // Running (phase Live=1) -> Created (phase Provisioned=0): a phase-rank REGRESSION —
+        // `Monotonic(VAT_PHASE_SLOT)` in the installed program REFUSES it in the fire path.
+        assert!(
+            fire_vat_transition(&cipherclerk, &executor, vat, VatState::Created).is_err(),
+            "a phase-rank regression must be REFUSED by the installed vat_cell_program"
+        );
+    }
 
     #[test]
     fn the_phase_axis_is_a_monotone_lattice_and_states_round_trip_two_slots() {
