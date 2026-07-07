@@ -92,3 +92,14 @@ THREE buckets (purge means different things per bucket):
   `Retrievability`/`availability` via `@[export]` (closure RE-SEED of `libdregg_lean.a` via
   `scripts/rebuild-dregg2-closure.sh`) → replace the Rust verify with thin FFI bindings → purge the
   hand-written verify. "Lean IS the runtime." Needs a clean window + FFI-lane coordination.
+
+### Purge-campaign done-log
+- `208712676` — Phase 0: purged dead `poly_queue` (-1457).
+- `5e8ec5fb5` — Phase 1: BOUND erasure (RS) + bucket_commitment to their Lean specs (falsifiable
+  tests, mutation-canary-confirmed non-vacuous). Codecs now checked-impl-of-proven-spec.
+- Phase 2 MAP (grounded): inbox->cap_inbox, blinded->blinded_queue, programmable->programmable_queue,
+  pubsub->pubsub_topic, relay->relay_operator. inbox's 16 consumers: 6 teasting/tests, 2 app-framework
+  (incl. inbox_endpoint.rs = THE AUTH-GAP), + subscription/preflight/node/sdk-net/templates. KEY:
+  migrating inbox_endpoint -> cap_inbox CLOSES the client-asserted-sender auth-gap (the template
+  enforces SenderAuthorized) — the migration IS the fix. Do the easy test/preflight consumers first,
+  then the real crates, then delete the deprecated module.
