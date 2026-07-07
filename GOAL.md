@@ -248,3 +248,4 @@ the executor-wired cell-program but COARSE (open/claimed + a slash-with-auditFai
 collapses the audit states). Clean close = upgrade ProviderMarket to carry the full DealLifecycle
 states so the cell-program refines the abstract protocol; needs the RecordKernelState field mechanics.
 NEXT after that: the deployment (Rust I/O daemon/client/market-on-ledger) — orb transport deferred.
+- `8304d0fbc` — 14/N: MarketRefinement — the executor cell-program refines the abstract protocol (claim leg, via cell field mechanics). PROTOCOL-IN-LEAN COMPLETE. Only slash-leg refinement remains (needs ProviderMarket upgraded to carry the audit states — a LEGACY-alignment follow-on, not a protocol-logic gap).
