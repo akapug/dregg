@@ -185,6 +185,11 @@ a new `NodeWorldSink` home). Serialize Pillars 1/2/4 after the foundation lands.
 
 ## Done-log
 *(append one line per landing: commit · pillar · the two-pole proof · a-bar or b-bar)*
+- Pillar 2 (a-bar) — `mud.rs` `speak_cap_for(world, token)`: the speak cap is derived from the
+  on-ledger presence token (revoked unless the room c-list hosts it), the host-side speak table
+  fully retired. 14/14 mud green (2 new, both poles: enter→admits, leave→same derivation refuses;
+  only the leaver's speech stops). native-full gate green. Honest: a ledger-gated projection across
+  two cap systems, not a one-call attenuation. b-bar (2b) = point the read at `NodeWorldSink`.
 - Pillar 0 (a-bar) — `NodeWorldSink` (dregg-sdk-net, `world-sink` feat): remote WorldSink commits via
   `/turns/submit` + reads via `/api/cell/{id}`. Both poles vs a real-executor test node (commit+read;
   overreach refused); 70 lib green; no-feature build mozjs-free. Unblocks 1/2/4.
