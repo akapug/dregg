@@ -45,6 +45,14 @@ re-derived in-circuit); only the NOT law is fully in-circuit (`compound_not_comp
 DONE) — the AND/OR gaps are the same missing-constraint class, and the compound descriptor carries NO
 crypto lookup at all, so there is no Rung-2 carrier discharge for it.
 
+§5b turns this prose into a MACHINE-CHECKED measurement: `fg_accepts_unequal_committed` exhibits an
+accepting EQ proof over a REAL INJECTIVE `hash` (perfect CR) whose committed values are FULLY CR-bound
+by `relational_commit_binds` to `value_a = 5`, `value_b = 7` — yet `5 ≠ 7`, so the accepting proof's
+committed values VIOLATE the claimed EQ relation. The residual therefore SURVIVES the CR carrier; it is
+NOT crypto-closable, and any "discharge" that transports the relation from a relation-carrying reference
+would ignore every in-circuit comparison gate — a vacuous strengthening, not a Rung-2 carrier
+consumption. Closing it is the EMIT/AIR fix `diff - (value_a - value_b) = 0` (STILL_PARTIAL, precisely).
+
 ## The named carrier
 
 The binding rides the Poseidon2 collision-resistance carrier `CollisionFree` (arity-2
@@ -345,6 +353,126 @@ theorem bwTrace_binds_value (hinj : Function.Injective hash) :
 
 end TrueWitness
 
+/-! ## §5b — The RUNG2_PARTIAL residual SURVIVES the CR carrier (the AIR-gap measurement).
+
+The §4 cheat rides a COLLIDING `hash0` to break the commitment BINDING; that gap
+`relational_commit_binds` CLOSES against `CollisionFree`. But the NAMED `RUNG2_PARTIAL` residual — "the
+COMMITTED VALUES satisfy the claimed relation" — is NOT a crypto gap: it survives a PERFECT (injective)
+`hash`. Here is the machine-checked forgery. An EQ proof commits `value_a = 5`, `value_b = 7` (UNEQUAL),
+and sets the FREE difference witness `diff = 0`, so the ONLY comparison tooth on the private difference
+(`eq_flag · diff = 0`) passes and the trace `Satisfied2`s. Fed to `relational_commit_binds` over an
+INJECTIVE `hash`, its committed columns are FULLY CR-bound to the reference `(5, 0, 7, 1)` — yet
+`5 ≠ 7`: the accepting EQ proof's committed values VIOLATE the claimed relation. So NO named crypto
+carrier discharges this residual (an injective hash is the strongest CR carrier there is, and the
+forgery survives it); closing it is the EMIT/AIR fix `diff − (value_a − value_b) = 0`, not a Rung-2
+carrier consumption. This is the FALSE half that proves the residual is genuinely an in-circuit
+constraint gap, the mirror of §4's colliding-hash FALSE half for the binding. -/
+
+section ResidualMeasurement
+variable (hash : List ℤ → ℤ)
+
+/-- The forging committed row: EQ selected (`eq_flag = 1`), `value_a = 5`, `value_b = 7` (UNEQUAL), the
+FREE difference witness `diff = 0` (so `eq_flag · diff = 0` passes), `blinding_a = 0`, `blinding_b = 1`,
+`result_bit = 1`, `commit_a = hash [5, 0]`, `commit_b = hash [7, 1]`. -/
+def fgRow : Assignment := fun c =>
+  if c = COMMIT_A then hash [5, 0]
+  else if c = COMMIT_B then hash [7, 1]
+  else if c = VALUE_A then 5
+  else if c = VALUE_B then 7
+  else if c = BLINDING_B then 1
+  else if c = RESULT_BIT then 1
+  else if c = EQ_FLAG then 1
+  else 0
+
+/-- Public inputs: `pi[0] = hash [5,0]`, `pi[1] = hash [7,1]`, `pi[2] = result_bit = 1`. -/
+def fgPub : Assignment := fun k =>
+  if k = 0 then hash [5, 0] else if k = 1 then hash [7, 1] else if k = 2 then 1 else 0
+
+def fgTf : TraceFamily := fun id =>
+  match id with
+  | .poseidon2 =>
+      [ (chipLookupTuple [.var VALUE_A, .var BLINDING_A] COMMIT_A LANES_A).map (·.eval (fgRow hash)),
+        (chipLookupTuple [.var VALUE_B, .var BLINDING_B] COMMIT_B LANES_B).map (·.eval (fgRow hash)) ]
+  | _ => []
+
+/-- The 1-row forging trace. -/
+def fgTrace : VmTrace := { rows := [fgRow hash], pub := fgPub hash, tf := fgTf hash }
+
+/-- **The chip table is SOUND** — each row IS a genuine `chipRow hash` of the committed pair (the
+forgery does not lie about the commitments; it lies about the RELATION via the free `diff`). -/
+theorem fgTf_chipSound : ChipTableSound hash ((fgTrace hash).tf .poseidon2) := by
+  intro r hr
+  simp only [fgTrace, fgTf, List.mem_cons, List.not_mem_nil, or_false] at hr
+  rcases hr with rfl | rfl
+  · exact ⟨[5, 0], List.replicate 7 0, by decide, by decide, rfl⟩
+  · exact ⟨[7, 1], List.replicate 7 0, by decide, by decide, rfl⟩
+
+/-- **The 1-row forging trace `Satisfied2`s** — gates vacuous on the only/last row, the two commitment
+lookups by membership, and every PI pin met (`result_bit = 1`, `commit_a`/`commit_b` = their `pi`). NO
+gate ties `diff` to `value_a − value_b`, so `value_a = 5 ≠ 7 = value_b` with `diff = 0` accepts. -/
+theorem fgTrace_satisfied2 :
+    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (fgTrace hash) where
+  rowConstraints := by
+    intro i hi c hc
+    have gL : ((0 : Nat) + 1 == (fgTrace hash).rows.length) = true := rfl
+    have hF : ((0 : Nat) == 0) = true := rfl
+    have hi1 : i < 1 := hi
+    clear hi
+    simp only [relationalPredicateDesc, relationalConstraints] at hc
+    interval_cases i
+    fin_cases hc <;>
+      simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, Lookup.holdsAt, gate, piFirst,
+        commitLookup, hF, fgTrace, fgTf, fgPub, fgRow, envAt, VALUE_A, BLINDING_A,
+        VALUE_B, BLINDING_B, DIFF, RESULT_BIT, RANGE_FLAG, EQ_FLAG, NEQ_FLAG, COMMIT_A, COMMIT_B,
+        COMMIT_VERIFY, ZERO_PAD, List.getD_cons_zero, reduceIte, reduceCtorEq] <;>
+      first
+        | exact List.mem_cons.mpr (Or.inl rfl)
+        | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
+        | trivial
+        | rfl
+        | simp
+  rowHashes := by intro i _; trivial
+  rowRanges := by intro i _ r hr; simp only [relationalPredicateDesc, List.not_mem_nil] at hr
+  memAddrsNodup := List.nodup_nil
+  memClosed := by intro op hop; rw [rmemLog] at hop; simp at hop
+  memDisciplined := by rw [rmemLog]; trivial
+  memBalanced := by rw [rmemLog]; exact memCheck_nil _ _
+  memTableFaithful := by rw [rmemLog]; rfl
+  mapTableFaithful := by rw [rmapLog]; rfl
+
+/-- **Binding FIRES on the forgery, over a PERFECT injective `hash`.** `relational_commit_binds`
+consumes the CR carrier (from `Function.Injective hash`) and forces the committed value/blinding columns
+equal to the reference `(5, 0, 7, 1)` — the commitment binding is FULLY discharged even for the
+forging trace. -/
+theorem fgTrace_binds_fires (hinj : Function.Injective hash) :
+    (envAt (fgTrace hash) 0).loc VALUE_A = 5 ∧ (envAt (fgTrace hash) 0).loc BLINDING_A = 0
+      ∧ (envAt (fgTrace hash) 0).loc VALUE_B = 7 ∧ (envAt (fgTrace hash) 0).loc BLINDING_B = 1 :=
+  relational_commit_binds (by simp [fgTrace]) (fgTf_chipSound hash) (fgTrace_satisfied2 hash)
+    (collisionFree_of_injective hinj) 5 0 7 1 (by simp [fgTrace, fgPub]) (by simp [fgTrace, fgPub])
+
+/-- **THE RESIDUAL SURVIVES THE CR CARRIER (the AIR-gap FALSE half).** A `Satisfied2` EQ proof
+(`result_bit = 1`), over a PERFECT injective `hash` (so the binding is fully discharged and the
+committed values are CR-bound to `value_a = 5`, `value_b = 7`), has `value_a ≠ value_b` — the accepting
+proof's committed values VIOLATE the claimed EQ relation. So no `Satisfied2 + CollisionFree`-only
+theorem can conclude "committed values satisfy the relation"; that residual is the MISSING in-circuit
+constraint `diff − (value_a − value_b) = 0`, an EMIT/AIR fix, NOT a crypto-carrier discharge. -/
+theorem fg_accepts_unequal_committed (hinj : Function.Injective hash) :
+    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (fgTrace hash)
+      ∧ (envAt (fgTrace hash) 0).loc EQ_FLAG = 1
+      ∧ (envAt (fgTrace hash) 0).loc RESULT_BIT = 1
+      ∧ (envAt (fgTrace hash) 0).loc DIFF = 0
+      ∧ (envAt (fgTrace hash) 0).loc VALUE_A = 5
+      ∧ (envAt (fgTrace hash) 0).loc VALUE_B = 7
+      ∧ (envAt (fgTrace hash) 0).loc VALUE_A ≠ (envAt (fgTrace hash) 0).loc VALUE_B := by
+  obtain ⟨ha, _, hb, _⟩ := fgTrace_binds_fires hash hinj
+  refine ⟨fgTrace_satisfied2 hash, ?_, ?_, ?_, ha, hb, ?_⟩
+  · show (fgRow hash) EQ_FLAG = 1; rfl
+  · show (fgRow hash) RESULT_BIT = 1; rfl
+  · show (fgRow hash) DIFF = 0; rfl
+  · rw [ha, hb]; decide
+
+end ResidualMeasurement
+
 /-! ## §6 — Axiom tripwires: every keystone is `#assert_axioms`-clean (carriers named). -/
 
 #assert_axioms collisionFree_of_injective
@@ -357,5 +485,9 @@ end TrueWitness
 #assert_axioms bwTrace_satisfied2
 #assert_axioms bwTrace_binds_fires
 #assert_axioms bwTrace_binds_value
+#assert_axioms fgTf_chipSound
+#assert_axioms fgTrace_satisfied2
+#assert_axioms fgTrace_binds_fires
+#assert_axioms fg_accepts_unequal_committed
 
 end Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2
