@@ -1,38 +1,44 @@
-//! Polynomial-evaluation accumulator for O(1) non-membership proofs.
+//! Polynomial-evaluation accumulator for O(1) non-membership witnesses.
 //!
-//! Implements the STARK-native polynomial accumulator over BabyBear^4 (quartic extension
-//! field, ~124-bit security via Schwartz-Zippel). Replaces the sorted-Merkle approach
-//! with a single multiplication check per ancestor.
+//! A polynomial accumulator over BabyBear^4 (quartic extension field). Replaces the
+//! sorted-Merkle approach with a single multiply-and-add check per ancestor.
 //!
 //! # Construction
 //!
 //! Given a set S = {h_1, ..., h_n} of BabyBear field elements (revocation hashes)
-//! and a public random challenge alpha in BabyBear^4:
+//! and a challenge alpha in BabyBear^4 (Fiat-Shamir-derived from a commitment to S
+//! via [`PolynomialAccumulator::derive_alpha`]):
 //!
 //! ```text
-//! Acc = product(alpha - h_i) for all h_i in S
+//! Acc = product(alpha - h_i) for all h_i in S     (= f(alpha), f(X) = product(X - h_i))
 //! ```
 //!
-//! # Non-membership proof for element x NOT in S
+//! # Non-membership witness for element x NOT in S (remainder form)
+//!
+//! The witness is the pair `(quotient, remainder)` with `remainder = f(x)` and
+//! `quotient = (Acc - remainder) / (alpha - x)`. The check:
 //!
 //! ```text
-//! witness = Acc / (alpha - x)
-//! Verification: witness * (alpha - x) == Acc
+//! quotient * (alpha - x) + remainder == Acc   AND   remainder != 0
 //! ```
 //!
-//! If x IS in S, then (alpha - x) divides Acc, but the "witness" would be
-//! Acc/(alpha-x) which is a valid division — the key insight is that the prover
-//! doesn't know x is absent; the verification equation holds trivially for members.
-//! Non-membership is enforced by the protocol: the verifier checks that witness
-//! was computed correctly from the public accumulator, and the prover demonstrates
-//! they DON'T have a factor (alpha - x) in Acc by providing the remainder.
+//! If x IS in S then f(x) = 0, so the honestly-computed remainder is zero and no
+//! non-membership witness exists (`non_membership_witness` returns `None`);
+//! membership uses the same identity with `remainder == 0`.
 //!
-//! Actually for non-membership with remainder:
-//! ```text
-//! Acc = witness * (alpha - x) + remainder
-//! ```
-//! where remainder != 0 proves x is NOT in S.
-//! If x IS in S, (alpha - x) | Acc exactly, so remainder = 0.
+//! # Soundness scope (honest)
+//!
+//! The equation above is an IDENTITY check, not by itself a binding proof: for any
+//! public `(Acc, alpha, x)` and ANY chosen `remainder' != 0`, the value
+//! `quotient' = (Acc - remainder') / (alpha - x)` satisfies it — including for a
+//! member x. Non-membership is sound only when the remainder is independently
+//! bound to `f(x)` (the set polynomial evaluated at x): e.g. the verifier
+//! recomputes the witness from the set it holds, the witness computation is
+//! constrained in-circuit, or the witness comes from a trusted accumulator
+//! holder. A bare `verify_non_membership` call on prover-supplied values does
+//! NOT provide that binding. (Schwartz-Zippel over BabyBear^4 protects against a
+//! prover choosing set elements after seeing alpha — `derive_alpha` binds alpha
+//! to the set commitment — but it does not substitute for the remainder binding.)
 
 use dregg_circuit::field::BabyBear;
 
@@ -288,79 +294,29 @@ pub struct PolynomialAccumulator {
     elements: Vec<BabyBear>,
 }
 
-/// A non-membership witness for the polynomial accumulator.
+/// A membership / non-membership witness for the polynomial accumulator
+/// (the remainder form).
 ///
-/// For element x NOT in the set S:
-/// - `witness`: Acc / (alpha - x) — the quotient
-/// - `remainder`: Always zero for a proper non-membership proof using this construction
+/// With `f(X) = product(X - h_i)` over the set S (so `Acc = f(alpha)`), the
+/// witness for an element x is the division-with-remainder of f at the point x:
 ///
-/// Verification: witness * (alpha - x) == Acc
+/// ```text
+/// Acc = quotient * (alpha - x) + remainder,   remainder = f(x)
+/// ```
 ///
-/// If x IS in S, then (alpha - x) is one of the factors of Acc, so
-/// Acc / (alpha - x) = product of all OTHER factors. The verification
-/// equation `witness * (alpha - x) == Acc` would succeed — which means
-/// this is actually a MEMBERSHIP witness.
+/// - **Non-membership** (x NOT in S): `f(x) != 0`, so `remainder != 0`.
+/// - **Membership** (x IN S): `(X - x)` divides f, so `remainder == 0`.
 ///
-/// The protocol distinction: for NON-membership, we provide a witness such that
-/// `witness * (alpha - x) == Acc`. This always succeeds if we compute it honestly.
-/// The soundness comes from: if x IS in S, the prover CANNOT produce a witness
-/// that makes verification fail (they'd have to find a different alpha or break
-/// the Fiat-Shamir binding). And if x is NOT in S, the honest computation of
-/// Acc / (alpha - x) gives a valid witness.
-///
-/// Wait — that's backwards. Let me reconsider the design doc's construction:
-///
-/// The CORRECT non-membership approach from the design doc uses polynomial division
-/// with remainder:
-///   Acc = witness * (alpha - x) + remainder
-///   Non-membership: remainder != 0
-///   Membership: remainder == 0
-///
-/// But for our use case (proving ancestor is NOT revoked), we need the simpler form:
-/// Since we KNOW the element is not in the set (we're the honest prover), we compute:
-///   witness = Acc / (alpha - x)
-/// And verification checks: witness * (alpha - x) == Acc
-///
-/// The key insight: if x WERE in S, then alpha - x would be a factor of Acc,
-/// and the division would be exact. But the CIRCUIT doesn't know whether x is in S;
-/// it just checks the equation. The soundness comes from the Fiat-Shamir binding
-/// of alpha to the set contents: the prover cannot choose alpha to make a false
-/// statement verify.
-///
-/// Actually, re-reading the design doc more carefully: the simple form
-/// `witness * (alpha - x) == Acc` works for BOTH membership and non-membership
-/// (the equation is satisfiable in both cases). The difference is:
-///
-/// For our non-revocation use case, we use: `witness * (alpha - x) == Acc`
-/// where witness = product(alpha - h_j) for j != the-index-of-x.
-/// This proves x IS in the set (membership).
-///
-/// For NON-membership, we need the remainder form:
-/// `witness * (alpha - x) + remainder == Acc` AND `remainder != 0`
-///
-/// Let me implement the remainder-based approach as specified in the design doc.
+/// See the module docs' "Soundness scope" note: the identity check alone does
+/// not bind `remainder` to `f(x)`; the caller must obtain/verify the witness
+/// against the actual set for the non-membership claim to be meaningful.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccumulatorWitness {
     /// The quotient: (Acc - remainder) / (alpha - x).
     pub quotient: BabyBear4,
-    /// The remainder: Acc mod (alpha - x) in the polynomial sense.
-    /// For non-membership: remainder = Acc - quotient * (alpha - x) != 0.
-    /// For membership: remainder = 0.
-    ///
-    /// Concretely: remainder = Acc evaluated at x's embedding = product(alpha - h_j)
-    /// ... no, this is evaluation of the SET polynomial at (alpha - x).
-    ///
-    /// Actually from the doc: f(x) = product(x - h_i). Then:
-    /// - Acc = f(alpha)
-    /// - For non-membership of h: f(h) != 0
-    /// - Witness: (w, v) where Acc = w * (alpha - h) + v
-    /// - w = (Acc - v) / (alpha - h), v = f(h) = product(h - h_i) mapped to ext field
-    ///
-    /// Wait, f(h) is in the BASE field since all h_i are base field elements.
-    /// But alpha is in the extension field, so Acc is in the extension field.
-    /// v must be: product(h - h_i) for all h_i in S, computed in the extension.
-    /// Actually h is also a base field element, so product(h - h_i) is a base field element.
-    /// We embed it into the extension field for the constraint.
+    /// The remainder: `f(x) = product(x - h_i)` — a base-field value (x and all
+    /// h_i are base-field elements), embedded into BabyBear^4 for the check.
+    /// Non-zero exactly when x is not in the set.
     pub remainder: BabyBear4,
 }
 
@@ -512,6 +468,14 @@ impl PolynomialAccumulator {
     ///
     /// Checks: `quotient * (alpha - element) + remainder == accumulator_value`
     /// AND `remainder != 0`.
+    ///
+    /// This is a CONSISTENCY check of the tuple, not by itself a binding
+    /// non-membership proof — see the module docs' "Soundness scope" note:
+    /// a malicious prover who knows `(Acc, alpha, element)` can fabricate a
+    /// passing `(quotient, remainder)` even for a member. The caller must
+    /// ensure the witness's remainder is bound to `f(element)` (e.g. the
+    /// witness was produced by [`Self::non_membership_witness`] on the
+    /// authoritative set).
     pub fn verify_non_membership(
         witness: &AccumulatorWitness,
         element: BabyBear,
