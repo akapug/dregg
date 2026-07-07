@@ -66,6 +66,11 @@ Surfaced by the refinement proof itself — exactly what Rung 1 is for.
   the refinement proof caught is fixed (adjLastOrderFix, every-row enforcement); membership Rung-2 now
   FULL/unconditional. Verified my tree (3 Lean + 9 gate tests incl forged_top_level_ordering_refuses).
 
+- ASSURANCE partials→full swarm (wf_31b63f12-9c7): all 3 STILL_PARTIAL, HONESTLY — ivc + revocation
+  residuals are EMIT-LEVEL gaps (same class as membership: transition gates vacuous on last row → need
+  every-row boundaries); predicates-relational already discharges its crypto slice. DEFERRED as polish
+  (descriptors are Rung-1-full + honest-Rung-2-partial = correct); the CUTOVER is the priority, not this.
+
 ## Phase 2b — THE CUTOVER (ember approved 2026-07-07, "stark.rs dead ASAP")
 Reality (grounded): ~35 real consumers + ~46 test/bench. TWO WALLS: (1) emitted descriptors
 are MINIMAL INSTANCES (dfaRoutingDesc hardcodes the toggle transition; membership is depth-2)
