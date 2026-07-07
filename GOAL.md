@@ -1,3 +1,11 @@
+<!-- ⚑⚑ THIS REPO RUNS MULTIPLE CONCURRENT /goal SESSIONS. This GOAL.md is only the
+     storage-in-lean lane. The full list of live goals + their trail files is in
+     GOALS-INDEX.md — read that to see every active goal (stark-kill, distributed-deos,
+     fable, federation, storage-in-lean). Edit only YOUR lane's trail; don't clobber. -->
+
+> ⚑ **Multiple goals are live in this repo — see [`GOALS-INDEX.md`](GOALS-INDEX.md).**
+> This file is the **storage-in-lean** lane only.
+
 # GOAL — STORAGE-IN-LEAN: rebuild the dregg storage layer in Lean (proven), package to Rust
 
 ## The mission
