@@ -144,3 +144,21 @@ FFI binds both ways. Working precedent: `@[extern "dregg_ed25519_verify"]` (Port
   Deployed + the wrapper module to build.rs's compile list; heavy build (delta leanc + 171MB link).
   (e) DIFFERENTIAL test: Lean-extracted content_root vs Rust content_root — if they AGREE (same
   Poseidon2 + encoding), the Rust content_root LOGIC can be retired (the real purge). Verify green.
+
+### THE EXTRACTION — status: PROVEN both sides; link-wiring is the coordinated-window last step
+- Lean (`94da933b5`): Dregg2/Storage/Deployed.lean — contentRootDeployed over @[extern "dregg_poseidon2
+  _2to1"], binding proven, @[export dregg_storage_content_root] entry, #assert_axioms-clean, lake-green.
+- Rust (`01708af9d`): circuit::storage_ffi::dregg_poseidon2_2to1 = real hash_2_to_1 (tested).
+- REMAINING (link-wiring — touches SHARED lean_init.c + build.rs; do in a COORDINATED window, NOT while
+  another lane is building; mirror the FlowRefine/DistributedExports splice):
+  1. dregg-lean-ffi: add `circuit` as a (dev-)dep so `dregg_poseidon2_2to1` resolves at final link.
+  2. build.rs: add "Dregg2.Storage.Deployed" to `lake_targets` (~line 232); add a probe
+     `archive_exports(&build_archive, "dregg_storage_content_root")` → cfg `dregg_storage_content_root_present`
+     (mirror `dregg_decide_refines`).
+  3. lean_init.c: `extern lean_object *initialize_Dregg2_Dregg2_Storage_Deployed(uint8_t);` +
+     `extern lean_object *dregg_storage_content_root(lean_object *);` + the initialize CALL in the shim
+     (mirror StrandAdmission/FlowRefine so the self-linking closure pulls Deployed's object).
+  4. A dregg-lean-ffi test (cfg-gated): marshal a String of object-int-triples → call
+     dregg_storage_content_root → assert a non-empty root felt. THE ROUND-TRIP: Lean logic + Rust Poseidon2.
+  5. (step 3 / the real purge) DIFFERENTIAL: make Lean contentRootDeployed byte-match the Rust
+     content_root (same leaf/fold/domain-sep) → retire the Rust content_root logic.
