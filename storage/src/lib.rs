@@ -77,6 +77,8 @@ pub mod bucket_commitment;
 pub mod commitment;
 pub mod content;
 pub mod dedup;
+/// A structured, serde-serializable verified-storage walkthrough (CLI + web share it).
+pub mod demo;
 pub mod erasure;
 pub mod inbox;
 pub mod multi_asset;
