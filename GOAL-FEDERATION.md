@@ -271,3 +271,13 @@ Two sequential gates on one pipeline:
   dregg-lean-ffi/libdregg_lean.a is still the OLD 03:59 seed → must install the fixed seed for the live deploy.
 - NEXT (ember: BOTH): confirm reliability → install fixed seed → deploy fully-verified to LIVE mesh
   (check it's safe to restart) → real attested client turn finalizes on the LIVING verified federation = THE GOAL.
+
+## ★★★ FULLY-VERIFIED PAYOFF — ROBUST (07-07): 3/3 gate-ON passes ★★★
+- My reliability check: 3/3 gate-ON runs PASSED — all [1,1,1,1]→[2,2,2,2], dest funded on all 4,
+  ~30s each. The earlier [2,2,1,1] was concurrent-build contention, not the fix. The verified Lean
+  finality gate now RELIABLY finalizes a fresh client's attested Transfer cross-node on n=4. The
+  CORE GOAL is met LOCALLY: a real attested agent turn stream-finalizes on a VERIFIED n=4, robustly,
+  and the mechanism is fully known (O(n³) List caches → @[implemented_by] O(1) HashMap/HashSet).
+- REMAINING: the LIVE persistent-mesh demonstration + push. Deploy friction to scope: the fixed seed
+  is Darwin-arm64 (nextop); the live mesh's hbox is Linux-x86_64 and needs its OWN Linux seed (cold
+  Lean build). Checking the live mesh topology/safety before the deploy approach.
