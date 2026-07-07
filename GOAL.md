@@ -308,3 +308,19 @@ REMAINING — each needs an ember-decision OR deeper cross-crate work; NONE is a
   (turn_hash includes signing). A turn-crate change, not a local fix.
 - nameservice FieldDelta: bake the exact-increment caveat into the name FACTORY DESCRIPTOR (real
   cell-program wiring). vat verified-turn wire: unbuilt (a FEATURE, not a bug).
+
+### RESIDUAL GRIND — round 2 (2026-07-07): nameservice CLOSED; 3 genuinely remain
+- nameservice FieldDelta CLOSED (93d06be26): restructured name_cell_program to CellProgram::Cases with
+  a MethodIs(renew_name) case carrying FieldDelta{EXPIRY_SLOT, DEFAULT_RENT_EPOCH_BLOCKS} — renew now
+  advances EXPIRY by EXACTLY one rent epoch (all matching cases enforced). (Flagged "deep", was
+  tractable — the guard model supports per-transition caveats.)
+- sdk accumulator forgery CLOSED (37425294a). [Campaign total: 10 soundness/binding fixes.]
+GENUINELY REMAINING (each PROVEN deep/gated by actually digging in, not hand-waved):
+1. canonical_32_to_felts VK — regenerating it RE-KEYS the live federation (deployed-faithful). Only
+   ember can trigger. Dual-BLAKE3 binds meanwhile; the masking is non-exploitable for CR-digest input.
+2. audit_run step<->receipt cross-check — needs to store the SIGNED action in the log (additive, fine)
+   AND recompute make_turn + turn_hash to bind e.step<->e.receipt; the turn-hashing isn't exposed +
+   make_turn determinism is unverified. A real turn/app-framework infra build.
+3. vat verified-turn wire — vat has ZERO executor integration (no cipherclerk/executor imports); the
+   wire is a from-scratch feature: a transition->effects builder + fire_vat_transition + install + a
+   two-pole executor test. A genuine feature build.
