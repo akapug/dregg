@@ -121,6 +121,8 @@ pub mod dsl;
 pub mod faithful8;
 pub mod field;
 pub mod ivc;
+/// FFI symbols the Lean-compiled storage logic calls back for its Poseidon2 hashing (@[extern]).
+pub mod storage_ffi;
 
 // Shared accumulator types used by both DSL and non-membership modules.
 pub mod accumulator_types;
