@@ -245,11 +245,23 @@ fn mint_plain_transfer_leg(before_balance: i64, amount: u64, nonce: u64) -> Rota
         (desc, dpis, trace)
     } else {
         let mut trace = trace;
-        let teeth_col = desc.trace_width - 2;
+        // The gentian capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols
+        // PAST the teeth, widening the wide member 2495->2543; derive the teeth base from the
+        // pre-refuse width (`trace_width - 48 - 2`), then grow + fill the refuse aux (floor=0).
+        let refuse_w: usize = if desc.name.ends_with("-gentian-deployed-bare-refuse") {
+            48
+        } else {
+            0
+        };
+        let teeth_col = desc.trace_width - refuse_w - 2;
         for row in trace.iter_mut() {
             debug_assert_eq!(row.len(), teeth_col);
             row.push(BabyBear::ZERO);
             row.push(BabyBear::ZERO);
+            if desc.trace_width > row.len() {
+                row.resize(desc.trace_width, BabyBear::ZERO);
+                dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&desc, row);
+            }
         }
         let dpis = dregg_circuit_prove::carrier_pin_twin::splice_pi_values(
             &dpis,
