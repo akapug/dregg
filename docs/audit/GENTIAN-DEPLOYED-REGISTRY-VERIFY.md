@@ -148,9 +148,18 @@ flip is LIVE on the deployed light-client path.<!-- /FORGE_RESULT -->
    `width−32` digest base, transfer/mint `width−2` teeth) or hardcode cohort widths must use
    `trace_width − 3·REFUSE_STRIDE − N` and fill the refuse aux (`fill_refuse_aux`, floor=0). PRODUCTION is
    unaffected (the producer teeth-fill riders use fixed absolute bases; only tests assumed teeth-at-the-end).
-   Done: `effect_vm_wide_roundtrip` (8/8), `sovereign_binding_deployed_tooth`, `membership_binding_deployed_tooth`.
-   Remaining: `bridge` / `dsl` / `deco` (transfer `width−2` teeth), `factory` / `hatchery`, `wide_new_members_cover`,
-   the sdk wide gauntlet, and the `vk_epoch_*_light_client_binding` cohort-width pins.
+   Done: `effect_vm_wide_roundtrip` (8/8), `sovereign_binding_deployed_tooth`, `membership_binding_deployed_tooth`,
+   and (2026-07-06, CP6c) `bridge` / `dsl` / `deco`. All three bind the WIDE bare transfer member
+   (`transferVmDescriptor2R24`, `2495 → 2543` after the `-gentian-deployed-bare-refuse` weld) via a plain
+   transfer leg whose teeth were derived end-relative (`trace_width − 2`); fixed to
+   `trace_width − 48 − 2` + `fill_refuse_aux` (floor=0), mirroring sovereign/membership. VALIDATED under the
+   widened registry with real recursion folds: `bridge` 2/2 (398s), `deco` 2/2 (402s), `dsl` 3/3 (372s) —
+   both the honest-accepts (liveness) AND the forged-reject (the tooth still BITES) poles pass. Cheap arms
+   green (2/2/3). PRODUCTION unaffected (the fix touches only the teeth base the tests assume; the producer
+   riders use fixed absolute bases). Core canaries confirmed no regression: the deployed forge still
+   REJECTS (closure intact), 3/3 honest capacity settles verify (liveness), `effect_vm_wide_roundtrip` 8/8.
+   Remaining: `factory` / `hatchery`, `wide_new_members_cover`, the sdk wide gauntlet, and the
+   `vk_epoch_*_light_client_binding` cohort-width pins.
 2. **Honest declared-capacity SETTLE via a wide satisfaction member (liveness, net-new).** A wide/welded
    satisfaction descriptor exists (`SettleEscrowSatWideDescriptor.settleEscrowSatVmDescriptor2R24Wide`) but
    is NOT emitted into the deployed registry, and no producer routes an honest declared-capacity settle to

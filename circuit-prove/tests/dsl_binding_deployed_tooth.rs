@@ -272,11 +272,22 @@ fn mint_dfa_leg(
     // The native row carries the membership teeth (columns trace_width-2.., PIs 50..51) past
     // the rc; fill them with inert constants — this leg exercises the DSL lane only.
     let teeth = [BabyBear::new(0x5E4D), BabyBear::new(0xA07)];
-    let teeth_col = twin.trace_width - 2;
+    // The gentian capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols PAST the
+    // teeth, so the teeth base is `trace_width - 48 - 2`; grow + fill the refuse aux (floor=0) after.
+    let refuse_w: usize = if twin.name.ends_with("-gentian-deployed-bare-refuse") {
+        48
+    } else {
+        0
+    };
+    let teeth_col = twin.trace_width - refuse_w - 2;
     for row in trace.iter_mut() {
         debug_assert_eq!(row.len(), teeth_col);
         row.push(teeth[0]);
         row.push(teeth[1]);
+        if twin.trace_width > row.len() {
+            row.resize(twin.trace_width, BabyBear::ZERO);
+            dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&twin, row);
+        }
     }
     let twin_dpis = splice_pi_values(&dpis, MEMBERSHIP_CLAIM_PI_LO, &teeth);
     assert_eq!(twin_dpis.len(), twin.public_input_count);
