@@ -497,25 +497,31 @@ mod tests {
 
     /// **THE ANTI-LAUNDER GATE, ON THE DEPLOYED BYTES (VK-EPOCH §9.3b).** The flip is REAL, not staged:
     /// every one of the 36 deployed cohort rows in the committed `rotation-v3-staged-registry.tsv`
-    /// carries the flag-day weld — the `-gentian-deployed-bare-refuse` name suffix, the widened
-    /// `trace_width` 1626, and the three pure `floor_col(b) == 0`-refuse gates at cols 1593/1609/1625.
+    /// carries the flag-day weld — the `-gentian-deployed-bare-refuse` name suffix, the per-member
+    /// widened `trace_width`, and the three pure `floor_col(b) == 0`-refuse gates over ITS OWN base.
+    /// §HETEROGENEOUS GEOMETRY: a standard graduated member (base `GRAD_ROT_WIDTH = 1581`) widens to
+    /// `1626` with floor cols `1593/1609/1625`; the two DISTINCT V1Face members (setFieldDyn / custom,
+    /// base `1553` — four fewer chip sites) widen to `1598` with floor cols `1565/1581/1597` over THEIR
+    /// own 1553 base (NOT the fixed 1581 that would strand a 28-column dead gap). Both derive from the
+    /// per-member aux base = `trace_width − (3·REFUSE_STRIDE − 3)`; the refuse block spans `base..base+44`.
     /// A light client that verifies any of these deployed descriptors REFUSES a declared-capacity dodge
     /// (Lean `declared_capacity_unsat_deployed`), because the refuse block is in the COMMITTED VK bytes,
     /// not merely the synthetic gates the other tests exercise.
     #[test]
     fn deployed_cohort_bytes_carry_the_refuse() {
         let tsv = crate::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
-        // The refuse floor gates the Lean/Rust deployed alignment welds (compact-JSON serialized).
+        // The refuse floor gate the Lean/Rust deployed alignment welds (compact-JSON serialized).
         let refuse_gate =
             |col: usize| format!("{{\"t\":\"gate\",\"body\":{{\"t\":\"var\",\"v\":{col}}}}}");
-        let g0 = refuse_gate(floor_col(0)); // 1593 (escrow)
-        let g1 = refuse_gate(floor_col(1)); // 1609 (discharge)
-        let g2 = refuse_gate(floor_col(2)); // 1625 (vault)
-        assert_eq!(floor_col(0), 1593);
-        assert_eq!(floor_col(1), 1609);
-        assert_eq!(floor_col(2), 1625);
+        // Per-member widening span: the weld widens to `fcDep base 2 + 1 = base + 45`.
+        const REFUSE_SPAN: usize = 2 * REFUSE_STRIDE + 13; // = 45
+        // The refuse block rides the member's OWN base; floor col b = base + b·REFUSE_STRIDE + 12.
+        let member_floor_col =
+            |base: usize, b: usize| base + b * REFUSE_STRIDE + 3 * cav::MAX_CAVEATS;
 
         let mut cohort_rows = 0usize;
+        let mut standard_rows = 0usize;
+        let mut distinct_rows = 0usize;
         for line in tsv.lines() {
             let cols: Vec<&str> = line.split('\t').collect();
             // v3rot cohort rows are `key \t name \t json`; the welded cohort carries the suffix.
@@ -525,14 +531,40 @@ mod tests {
             }
             cohort_rows += 1;
             let json = cols.last().copied().unwrap_or("");
-            assert!(
-                json.contains("\"trace_width\":1626"),
-                "deployed cohort row {name} must be widened to trace_width 1626"
-            );
-            for (g, tag) in [(&g0, "escrow"), (&g1, "discharge"), (&g2, "vault")] {
+            // Derive the member's per-member widened width from its own bytes.
+            let tw: usize = json
+                .split("\"trace_width\":")
+                .nth(1)
+                .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| panic!("cohort row {name} has a trace_width"));
+            let base = tw - REFUSE_SPAN;
+            match tw {
+                1626 => {
+                    assert_eq!(
+                        base, GRAD_ROT_WIDTH,
+                        "standard member bases at GRAD_ROT_WIDTH"
+                    );
+                    standard_rows += 1;
+                }
+                1598 => {
+                    assert_eq!(
+                        base, 1553,
+                        "distinct V1Face member (setFieldDyn/custom) bases at 1553"
+                    );
+                    distinct_rows += 1;
+                }
+                other => panic!(
+                    "cohort row {name} has unexpected welded width {other} (expected 1626 or 1598)"
+                ),
+            }
+            for (b, tag) in [(0, "escrow"), (1, "discharge"), (2, "vault")] {
+                let g = refuse_gate(member_floor_col(base, b));
                 assert!(
                     json.contains(g.as_str()),
-                    "deployed cohort row {name} must carry the {tag} floor-refuse gate in its committed bytes"
+                    "deployed cohort row {name} must carry the {tag} floor-refuse gate at its OWN base \
+                     column {} in its committed bytes",
+                    member_floor_col(base, b)
                 );
             }
         }
@@ -540,6 +572,16 @@ mod tests {
         assert_eq!(
             cohort_rows, 36,
             "all 36 deployed bare cohort rows must carry the flag-day refuse weld"
+        );
+        // Exactly the two distinct-geometry members (setFieldDyn + custom) ride the 1553 base; the rest
+        // are standard 1581-base graduated members. This pins the HETEROGENEOUS-geometry weld.
+        assert_eq!(
+            distinct_rows, 2,
+            "setFieldDyn + custom are the two distinct-geometry (1553-base) members"
+        );
+        assert_eq!(
+            standard_rows, 34,
+            "the other 34 cohort members are standard 1581-base members"
         );
     }
 }
