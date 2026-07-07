@@ -3331,6 +3331,10 @@ async fn post_submit_signed_turn(
     // + commits authoritatively here.
     let exec_result = if is_solo {
         crate::blocklace_sync::provision_signer_actor_cell(&mut s.ledger, &signed.signer.0);
+        crate::blocklace_sync::provision_transfer_destinations(
+            &mut s.ledger,
+            &signed.turn.call_forest,
+        );
         crate::executor_setup::execute_via_producer(
             &executor,
             &signed.turn,
@@ -3338,8 +3342,17 @@ async fn post_submit_signed_turn(
             lean_producer_enabled,
         )
     } else {
+        // The scratch clone carries the SAME provisioning the finalized path applies
+        // (`execute_finalized_turn`): the actor cell (fix 2b) AND any Transfer
+        // destination — so the receipt-only ingress execution reflects exactly the
+        // authoritative finalized outcome instead of rejecting on a not-yet-seen
+        // actor/destination. Identical functions, no drift (mirrors the faucet).
         let mut scratch = s.ledger.clone();
         crate::blocklace_sync::provision_signer_actor_cell(&mut scratch, &signed.signer.0);
+        crate::blocklace_sync::provision_transfer_destinations(
+            &mut scratch,
+            &signed.turn.call_forest,
+        );
         crate::executor_setup::execute_via_producer(
             &executor,
             &signed.turn,
