@@ -35,7 +35,7 @@
 //!
 //!   * **`setFieldDyn` — the dynamic overflow write PROVES (the residual is CLOSED).** The dynamic
 //!     `SetField` (`field_idx > 7`) routes to `setFieldDynVmDescriptor2R24`, a DISTINCT V1Face
-//!     geometry (1135-wide at HEAD) the standard generator could not produce (it panicked on
+//!     geometry (1598-wide at HEAD) the standard generator could not produce (it panicked on
 //!     `field_idx < 8` and laid the 829-wide host). `generate_rotated_set_field_dyn_base` now builds
 //!     it from scratch: the
 //!     Blum write→read pair (`addr = value = col 69`, `prev_value = col 70`, `prev_serial = col 74`,
@@ -586,19 +586,21 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         "setFieldDyn descriptor DECLARES the fields-root weld fifth pin + the 4 dsl rc pins \
          (46 rotated + fifth pin at PI 46 + withDfaRcPins rc at PI 47..50 = 51)"
     );
-    // The DISTINCT geometry the generator now produces from scratch: a V1Face (the v13-geom
-    // re-lay), NOT the ungraduated rotated trace (the structural reason the standard generator
-    // cannot satisfy it) — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard
-    // GRAD_ROT_WIDTH (1581) graduated host of the same geometry (the trio's registry trace_width).
+    // The DISTINCT geometry the generator produces from scratch: a V1Face (the v13-geom re-lay), NOT
+    // the ungraduated rotated trace — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard
+    // GRAD_ROT_WIDTH (1581) graduated host, so its BASE geometry is 1553. The gentian flag-day refuse
+    // rides that OWN 1553 base (§HETEROGENEOUS GEOMETRY): the three capacity-floor blocks widen it to
+    // 1553 + 45 = 1598 (NOT the fixed 1581-base 1626 that would strand a 28-column dead gap "as if
+    // standard"). The narrow committed setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 are both 1598.
     assert_eq!(
-        desc.trace_width, 1553,
-        "setFieldDyn is a DISTINCT V1Face geometry: GRAD_ROT_WIDTH (1581) graduated host minus \
-         four chip sites (4 × 7 lanes = 28 cols) = 1553, NOT the ungraduated rotated trace \
-         (matches committed setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 trace_width)"
+        desc.trace_width, 1598,
+        "setFieldDyn is a DISTINCT V1Face geometry (base 1553 = GRAD_ROT_WIDTH 1581 − four chip \
+         sites·7) refuse-welded over ITS OWN base: 1553 + 45 refuse span = 1598 (matches committed \
+         setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 trace_width — per-member, not fixed-1626)"
     );
     assert_ne!(
         desc.trace_width, ROT_WIDTH,
-        "setFieldDyn's width (1553) != the ungraduated rotated width (ROT_WIDTH = 685)"
+        "setFieldDyn's width (1598) != the ungraduated rotated width (ROT_WIDTH = 685)"
     );
 
     // The dynamic SetField (field_idx > 7) routes to the dyn descriptor by name.
@@ -656,10 +658,10 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     );
 
     // THE PROVABILITY GATE: the honest dynamic-field write PROVES + light-client VERIFIES against the
-    // DEPLOYED 1135-wide descriptor — no catch_unwind. The residual is CLOSED.
+    // DEPLOYED 1598-wide descriptor — no catch_unwind. The residual is CLOSED.
     let proof =
         prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[]).unwrap_or_else(|e| {
-            panic!("setFieldDyn must PROVE against its deployed descriptor (1135-wide): {e}")
+            panic!("setFieldDyn must PROVE against its deployed descriptor (1598-wide): {e}")
         });
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .unwrap_or_else(|e| panic!("setFieldDyn proof must light-client VERIFY: {e}"));
@@ -683,7 +685,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
 
     eprintln!(
         "VK-EPOCH setFieldDyn: the DYNAMIC overflow-field write PROVES + light-client VERIFIES against \
-         the deployed 1135-wide descriptor (the Blum write→read transport over the V1Face geometry), \
+         the deployed 1598-wide descriptor (the Blum write→read transport over the V1Face geometry), \
          and a forged read-back is REJECTED. The missing-generator residual is CLOSED."
     );
 }

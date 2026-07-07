@@ -226,56 +226,62 @@ def CAVEAT_BASE : Nat := 642
 def ccDep : Nat := CAVEAT_BASE
 /-- The deployed caveat entry-base / type-tag columns (643/650/657/664). Rust twin `caveat_tag_col`. -/
 def ebDep (k : Nat) : Nat := CAVEAT_BASE + 1 + 7 * k
-/-- The per-block disjoint decode-aux columns (Rust twins `bit_col`/`inv_col`/`or_col`/`floor_col`). -/
-def bcDep (b k : Nat) : Nat := GRAD_ROT_WIDTH + b * REFUSE_STRIDE + k
-def icDep (b k : Nat) : Nat := GRAD_ROT_WIDTH + b * REFUSE_STRIDE + 4 + k
-def ocDep (b j : Nat) : Nat := GRAD_ROT_WIDTH + b * REFUSE_STRIDE + 8 + j
-def fcDep (b : Nat) : Nat := GRAD_ROT_WIDTH + b * REFUSE_STRIDE + 12
+/-- The per-block disjoint decode-aux columns at a PER-MEMBER aux base (Rust twins
+`bit_col`/`inv_col`/`or_col`/`floor_col`, recovered by `refuse_aux_base`). The aux base is the member's
+OWN `traceWidth` (§HETEROGENEOUS GEOMETRY): a standard graduated member bases its refuse at
+`GRAD_ROT_WIDTH = 1581` (its own width); a DISTINCT V1Face member — `setFieldDyn` / `custom`, four fewer
+chip sites, width `1553` — bases its refuse at `1553`, so the block always rides the member's OWN free
+headroom (never the fixed 1581 that would leave a 28-column dead gap on a 1553-wide member). -/
+def bcDep (auxBase b k : Nat) : Nat := auxBase + b * REFUSE_STRIDE + k
+def icDep (auxBase b k : Nat) : Nat := auxBase + b * REFUSE_STRIDE + 4 + k
+def ocDep (auxBase b j : Nat) : Nat := auxBase + b * REFUSE_STRIDE + 8 + j
+def fcDep (auxBase b : Nat) : Nat := auxBase + b * REFUSE_STRIDE + 12
 
-/-- The block-`b` refuse block for its capacity tag (0 = escrow, 1 = discharge, 2 = vault). -/
-def blockGates (tag : ℤ) (b : Nat) : List VmConstraint2 :=
-  refuseGatesAt tag ebDep (bcDep b) (icDep b) (ocDep b) (fcDep b)
+/-- The block-`b` refuse block for its capacity tag (0 = escrow, 1 = discharge, 2 = vault) at aux base
+`auxBase`. -/
+def blockGates (auxBase : Nat) (tag : ℤ) (b : Nat) : List VmConstraint2 :=
+  refuseGatesAt tag ebDep (bcDep auxBase b) (icDep auxBase b) (ocDep auxBase b) (fcDep auxBase b)
 
-/-- The deployed three-block refuse weld: block 0 = escrow (17), block 1 = discharge (18), block 2 =
-vault (19), each at its disjoint aux columns. This is the Lean source-of-truth the flag-day emit maps
-over `v3RegistryBare`. -/
-def deployedRefuseGates : List VmConstraint2 :=
-  blockGates (tagSettleEscrow : ℤ) 0
-    ++ blockGates (tagDischargeObligation : ℤ) 1
-    ++ blockGates (tagVaultDeposit : ℤ) 2
-
-/-- The widened trace width covering the three disjoint aux blocks (`fcDep 2 + 1 = 1626`). Every bare
-cohort member has `traceWidth ≤ GRAD_ROT_WIDTH = 1581 < 1626`, so the aux blocks ride FREE headroom
-(no collision) and the widening is the honest flag-day geometry cost. -/
-def REFUSE_TRACE_WIDTH : Nat := fcDep 2 + 1
+/-- The deployed three-block refuse weld at aux base `auxBase`: block 0 = escrow (17), block 1 =
+discharge (18), block 2 = vault (19), each at its disjoint aux columns. This is the Lean source-of-truth
+the flag-day emit maps over `v3RegistryBare`. -/
+def deployedRefuseGates (auxBase : Nat) : List VmConstraint2 :=
+  blockGates auxBase (tagSettleEscrow : ℤ) 0
+    ++ blockGates auxBase (tagDischargeObligation : ℤ) 1
+    ++ blockGates auxBase (tagVaultDeposit : ℤ) 2
 
 /-- **`gentianDeployedBareRefuse d`** — an arbitrary deployed bare cohort member `d` welded with the
-three-block deployed refuse AND widened to cover the aux block. The flag-day maps this over the whole
-`v3RegistryBare` cohort. The soundness keystones below never mention `traceWidth`, so the widening is
-transparent to them (it only enlarges the AIR `main` arity to host the free aux columns). -/
+three-block deployed refuse over its OWN geometry AND widened to cover the aux block. The aux base is
+`d.traceWidth`, so the blocks ride the free headroom ABOVE the member's own data — a standard `1581`
+member widens to `1626` (byte-identical to the pre-heterogeneous weld), a distinct-geometry `1553`
+member (`setFieldDyn` / `custom`) widens to `1598` over ITS 1553 base. The flag-day maps this over the
+whole `v3RegistryBare` cohort. The soundness keystones below take the aux base parametrically, so the
+per-member base is transparent to them (it only enlarges the AIR `main` arity to host the free aux
+columns). -/
 def gentianDeployedBareRefuse (d : EffectVmDescriptor2) : EffectVmDescriptor2 :=
   { d with
     name        := d.name ++ "-gentian-deployed-bare-refuse"
-    traceWidth  := max d.traceWidth REFUSE_TRACE_WIDTH
-    constraints := d.constraints ++ deployedRefuseGates }
+    traceWidth  := fcDep d.traceWidth 2 + 1
+    constraints := d.constraints ++ deployedRefuseGates d.traceWidth }
 
-/-- The block-`b`, tag-`T` decode gates are members of block `b`'s refuse block. -/
-theorem decode_mem_block (tag : ℤ) (b : Nat) (g : VmConstraint2)
-    (hg : g ∈ decodeGatesAt tag ebDep (bcDep b) (icDep b) (ocDep b) (fcDep b)) :
-    g ∈ blockGates tag b := by
+/-- The block-`b`, tag-`T` decode gates are members of block `b`'s refuse block (at aux base `auxBase`). -/
+theorem decode_mem_block (auxBase : Nat) (tag : ℤ) (b : Nat) (g : VmConstraint2)
+    (hg : g ∈ decodeGatesAt tag ebDep (bcDep auxBase b) (icDep auxBase b)
+      (ocDep auxBase b) (fcDep auxBase b)) :
+    g ∈ blockGates auxBase tag b := by
   unfold blockGates refuseGatesAt; exact List.mem_append_left _ hg
 
-/-- The block-`b` refuse gate is a member of block `b`'s refuse block. -/
-theorem refuse_mem_block (tag : ℤ) (b : Nat) :
-    floorZeroRefuseGate (fcDep b) ∈ blockGates tag b := by
+/-- The block-`b` refuse gate is a member of block `b`'s refuse block (at aux base `auxBase`). -/
+theorem refuse_mem_block (auxBase : Nat) (tag : ℤ) (b : Nat) :
+    floorZeroRefuseGate (fcDep auxBase b) ∈ blockGates auxBase tag b := by
   unfold blockGates refuseGatesAt
   exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
 
 /-- A member of ANY of the three blocks is a member of the deployed welded member's constraints. -/
 theorem block_mem_deployed (d : EffectVmDescriptor2) (g : VmConstraint2)
-    (hg : g ∈ blockGates (tagSettleEscrow : ℤ) 0
-      ∨ g ∈ blockGates (tagDischargeObligation : ℤ) 1
-      ∨ g ∈ blockGates (tagVaultDeposit : ℤ) 2) :
+    (hg : g ∈ blockGates d.traceWidth (tagSettleEscrow : ℤ) 0
+      ∨ g ∈ blockGates d.traceWidth (tagDischargeObligation : ℤ) 1
+      ∨ g ∈ blockGates d.traceWidth (tagVaultDeposit : ℤ) 2) :
     g ∈ (gentianDeployedBareRefuse d).constraints := by
   unfold gentianDeployedBareRefuse deployedRefuseGates
   refine List.mem_append_right d.constraints ?_
@@ -286,11 +292,10 @@ theorem block_mem_deployed (d : EffectVmDescriptor2) (g : VmConstraint2)
 manifest declares capacity tag `T` at deployed block `b` (escrow 0 / discharge 1 / vault 2), a
 satisfying witness of the three-block deployed bare member is FALSE. -/
 theorem declared_capacity_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    (tag : ℤ) (b : Nat)
-    (hblock : blockGates tag b = blockGates (tagSettleEscrow : ℤ) 0
-      ∨ blockGates tag b = blockGates (tagDischargeObligation : ℤ) 1
-      ∨ blockGates tag b = blockGates (tagVaultDeposit : ℤ) 2)
-    (d : EffectVmDescriptor2)
+    (tag : ℤ) (b : Nat) (d : EffectVmDescriptor2)
+    (hblock : blockGates d.traceWidth tag b = blockGates d.traceWidth (tagSettleEscrow : ℤ) 0
+      ∨ blockGates d.traceWidth tag b = blockGates d.traceWidth (tagDischargeObligation : ℤ) 1
+      ∨ blockGates d.traceWidth tag b = blockGates d.traceWidth (tagVaultDeposit : ℤ) 2)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianDeployedBareRefuse d) minit mfin maddrs t)
     (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
@@ -299,19 +304,20 @@ theorem declared_capacity_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseid
       = caveatCommit hash committedManifest)
     (hreq : tag ∈ manifestTags committedManifest) :
     False := by
-  refine declared_tag_unsat_at hash hCR tag ccDep ebDep (bcDep b) (icDep b) (ocDep b) (fcDep b)
+  refine declared_tag_unsat_at hash hCR tag ccDep ebDep (bcDep d.traceWidth b) (icDep d.traceWidth b)
+    (ocDep d.traceWidth b) (fcDep d.traceWidth b)
     (gentianDeployedBareRefuse d) (fun g hg => block_mem_deployed d g ?_)
     (block_mem_deployed d _ ?_) hsat hi hnl committedManifest hbind hreq
   · -- decode gate membership: route into the matching block via `hblock`.
     rcases hblock with h | h | h
-    · exact Or.inl (h ▸ decode_mem_block tag b g hg)
-    · exact Or.inr (Or.inl (h ▸ decode_mem_block tag b g hg))
-    · exact Or.inr (Or.inr (h ▸ decode_mem_block tag b g hg))
+    · exact Or.inl (h ▸ decode_mem_block d.traceWidth tag b g hg)
+    · exact Or.inr (Or.inl (h ▸ decode_mem_block d.traceWidth tag b g hg))
+    · exact Or.inr (Or.inr (h ▸ decode_mem_block d.traceWidth tag b g hg))
   · -- refuse gate membership.
     rcases hblock with h | h | h
-    · exact Or.inl (h ▸ refuse_mem_block tag b)
-    · exact Or.inr (Or.inl (h ▸ refuse_mem_block tag b))
-    · exact Or.inr (Or.inr (h ▸ refuse_mem_block tag b))
+    · exact Or.inl (h ▸ refuse_mem_block d.traceWidth tag b)
+    · exact Or.inr (Or.inl (h ▸ refuse_mem_block d.traceWidth tag b))
+    · exact Or.inr (Or.inr (h ▸ refuse_mem_block d.traceWidth tag b))
 
 /-- Escrow (block 0) is UNSAT under the deployed bare member when the committed manifest declares it. -/
 theorem declared_escrow_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
@@ -324,7 +330,7 @@ theorem declared_escrow_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseidon
       = caveatCommit hash committedManifest)
     (hreq : (tagSettleEscrow : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_deployed hash hCR _ 0 (Or.inl rfl) d hsat hi hnl committedManifest hbind hreq
+  declared_capacity_unsat_deployed hash hCR _ 0 d (Or.inl rfl) hsat hi hnl committedManifest hbind hreq
 
 /-- Discharge (block 1) is UNSAT under the deployed bare member when the committed manifest declares it. -/
 theorem declared_discharge_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
@@ -337,7 +343,7 @@ theorem declared_discharge_unsat_deployed (hash : List ℤ → ℤ) (hCR : Posei
       = caveatCommit hash committedManifest)
     (hreq : (tagDischargeObligation : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_deployed hash hCR _ 1 (Or.inr (Or.inl rfl)) d hsat hi hnl committedManifest
+  declared_capacity_unsat_deployed hash hCR _ 1 d (Or.inr (Or.inl rfl)) hsat hi hnl committedManifest
     hbind hreq
 
 /-- Vault (block 2) is UNSAT under the deployed bare member when the committed manifest declares it. -/
@@ -351,7 +357,7 @@ theorem declared_vault_unsat_deployed (hash : List ℤ → ℤ) (hCR : Poseidon2
       = caveatCommit hash committedManifest)
     (hreq : (tagVaultDeposit : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_deployed hash hCR _ 2 (Or.inr (Or.inr rfl)) d hsat hi hnl committedManifest
+  declared_capacity_unsat_deployed hash hCR _ 2 d (Or.inr (Or.inr rfl)) hsat hi hnl committedManifest
     hbind hreq
 
 /-! ## §5b — THE PEEL: `Satisfied2 (gentianDeployedBareRefuse d) ⟹ Satisfied2 d`.
@@ -421,31 +427,49 @@ section Witnesses
 #guard ebDep 1 == 650
 #guard ebDep 2 == 657
 #guard ebDep 3 == 664
--- The three aux blocks are DISJOINT (no bit/inv/or/floor column aliases across blocks) — the deployed
--- alignment. (The floor cols 1593/1609/1625 and bit/inv/or all separated by REFUSE_STRIDE = 16.)
-#guard fcDep 0 == 1593
-#guard fcDep 1 == 1609
-#guard fcDep 2 == 1625
-#guard ([ bcDep 0 0, bcDep 0 1, bcDep 0 2, bcDep 0 3, icDep 0 0, icDep 0 1, icDep 0 2, icDep 0 3,
-          ocDep 0 0, ocDep 0 1, ocDep 0 2, fcDep 0,
-          bcDep 1 0, bcDep 1 1, bcDep 1 2, bcDep 1 3, icDep 1 0, icDep 1 1, icDep 1 2, icDep 1 3,
-          ocDep 1 0, ocDep 1 1, ocDep 1 2, fcDep 1,
-          bcDep 2 0, bcDep 2 1, bcDep 2 2, bcDep 2 3, icDep 2 0, icDep 2 1, icDep 2 2, icDep 2 3,
-          ocDep 2 0, ocDep 2 1, ocDep 2 2, fcDep 2 ]).dedup.length == 36
+-- STANDARD geometry (auxBase = GRAD_ROT_WIDTH = 1581): the three aux blocks are DISJOINT (no
+-- bit/inv/or/floor column aliases across blocks). Floor cols 1593/1609/1625, separated by REFUSE_STRIDE.
+#guard fcDep GRAD_ROT_WIDTH 0 == 1593
+#guard fcDep GRAD_ROT_WIDTH 1 == 1609
+#guard fcDep GRAD_ROT_WIDTH 2 == 1625
+#guard ([ bcDep GRAD_ROT_WIDTH 0 0, bcDep GRAD_ROT_WIDTH 0 1, bcDep GRAD_ROT_WIDTH 0 2,
+          bcDep GRAD_ROT_WIDTH 0 3, icDep GRAD_ROT_WIDTH 0 0, icDep GRAD_ROT_WIDTH 0 1,
+          icDep GRAD_ROT_WIDTH 0 2, icDep GRAD_ROT_WIDTH 0 3,
+          ocDep GRAD_ROT_WIDTH 0 0, ocDep GRAD_ROT_WIDTH 0 1, ocDep GRAD_ROT_WIDTH 0 2, fcDep GRAD_ROT_WIDTH 0,
+          bcDep GRAD_ROT_WIDTH 1 0, bcDep GRAD_ROT_WIDTH 1 1, bcDep GRAD_ROT_WIDTH 1 2,
+          bcDep GRAD_ROT_WIDTH 1 3, icDep GRAD_ROT_WIDTH 1 0, icDep GRAD_ROT_WIDTH 1 1,
+          icDep GRAD_ROT_WIDTH 1 2, icDep GRAD_ROT_WIDTH 1 3,
+          ocDep GRAD_ROT_WIDTH 1 0, ocDep GRAD_ROT_WIDTH 1 1, ocDep GRAD_ROT_WIDTH 1 2, fcDep GRAD_ROT_WIDTH 1,
+          bcDep GRAD_ROT_WIDTH 2 0, bcDep GRAD_ROT_WIDTH 2 1, bcDep GRAD_ROT_WIDTH 2 2,
+          bcDep GRAD_ROT_WIDTH 2 3, icDep GRAD_ROT_WIDTH 2 0, icDep GRAD_ROT_WIDTH 2 1,
+          icDep GRAD_ROT_WIDTH 2 2, icDep GRAD_ROT_WIDTH 2 3,
+          ocDep GRAD_ROT_WIDTH 2 0, ocDep GRAD_ROT_WIDTH 2 1, ocDep GRAD_ROT_WIDTH 2 2, fcDep GRAD_ROT_WIDTH 2 ]).dedup.length == 36
 -- The aux blocks start PAST the graduated rotated width (the traceWidth widening the flag-day pays).
-#guard fcDep 2 ≥ GRAD_ROT_WIDTH
-#guard fcDep 2 + 1 == 1626
+#guard fcDep GRAD_ROT_WIDTH 2 ≥ GRAD_ROT_WIDTH
+#guard fcDep GRAD_ROT_WIDTH 2 + 1 == 1626
 -- The three-block weld adds 3 × 13 = 39 gates (each block: 8 is-zero + 3 fold-into + 1 refuse = 13).
-#guard deployedRefuseGates.length == 39
--- The widened trace width covers the aux blocks (1626 > GRAD_ROT_WIDTH); every bare member widens to it.
-#guard REFUSE_TRACE_WIDTH == 1626
+#guard (deployedRefuseGates GRAD_ROT_WIDTH).length == 39
+-- DISTINCT V1Face geometry (auxBase = 1553 = GRAD_ROT_WIDTH − 4 chip sites·7): setFieldDyn / custom
+-- base their refuse at 1553 (floor cols 1565/1581/1597) and widen to 1598 over their OWN base — NOT
+-- the fixed 1581 that would over-widen to 1626 and strand a 28-column dead gap.
+#guard fcDep 1553 0 == 1565
+#guard fcDep 1553 2 == 1597
+#guard fcDep 1553 2 + 1 == 1598
 private def toyBare : EffectVmDescriptor2 :=
   { name := "toy", traceWidth := 1581, piCount := 46, tables := [], constraints := [], hashSites := [],
     ranges := [] }
+-- Standard member: widens 1581 → 1626 (byte-identical to the pre-heterogeneous weld).
 #guard (gentianDeployedBareRefuse toyBare).traceWidth == 1626
 #guard (gentianDeployedBareRefuse toyBare).constraints.length == 39
 #guard (gentianDeployedBareRefuse toyBare).piCount == 46
-#guard (refuseGatesAt (tagSettleEscrow : ℤ) ebDep (bcDep 0) (icDep 0) (ocDep 0) (fcDep 0)).length == 13
+private def toyDistinct : EffectVmDescriptor2 :=
+  { name := "toy-distinct", traceWidth := 1553, piCount := 46, tables := [], constraints := [],
+    hashSites := [], ranges := [] }
+-- Distinct-geometry member: widens 1553 → 1598 over its OWN 1553 base (per-member geometry respected).
+#guard (gentianDeployedBareRefuse toyDistinct).traceWidth == 1598
+#guard (gentianDeployedBareRefuse toyDistinct).constraints.length == 39
+#guard (refuseGatesAt (tagSettleEscrow : ℤ) ebDep (bcDep GRAD_ROT_WIDTH 0) (icDep GRAD_ROT_WIDTH 0)
+  (ocDep GRAD_ROT_WIDTH 0) (fcDep GRAD_ROT_WIDTH 0)).length == 13
 -- The decode over a committed manifest, both poles per capacity tag (declared ⟹ 1, absent ⟹ 0).
 #guard tagBitZ (tagSettleEscrow : ℤ) [(tagSettleEscrow : ℤ)] == 1
 #guard tagBitZ (tagDischargeObligation : ℤ) [(tagDischargeObligation : ℤ)] == 1

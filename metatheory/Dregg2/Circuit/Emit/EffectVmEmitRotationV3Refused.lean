@@ -26,7 +26,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitRotationV3Refused
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (v3RegistryBare withDfaRcPins)
 open Dregg2.Deos.BareCohortFloorRefuseDeployed
-  (gentianDeployedBareRefuse satisfied2_of_gentianDeployedBareRefuse REFUSE_TRACE_WIDTH)
+  (gentianDeployedBareRefuse satisfied2_of_gentianDeployedBareRefuse)
 
 set_option autoImplicit false
 
@@ -55,9 +55,11 @@ section Witnesses
 
 -- The flag-day cohort has the SAME 36-member shape as the bare cohort.
 #guard v3RegistryRefused.length == 36
--- Every welded member is widened to the refuse trace width (1626) and gains exactly the 4 rc tail PIs.
+-- Every welded member widens over its OWN base by the refuse span (fcDep base 2 + 1 − base = 45) and
+-- gains exactly the 4 rc tail PIs. Standard 1581 members → 1626; distinct-geometry 1553 members
+-- (setFieldDyn / custom) → 1598 (per-member geometry, not the fixed 1626 that stranded a dead gap).
 #guard (v3RegistryRefused.zip v3RegistryBare).all fun ((_, w), (_, b)) =>
-  w.traceWidth == 1626 && w.piCount == b.piCount + 4
+  w.traceWidth == b.traceWidth + 45 && w.piCount == b.piCount + 4
 -- The keys are name-stable (the deployed descriptor set is member-for-member the bare cohort).
 #guard v3RegistryRefused.map (·.1) == v3RegistryBare.map (·.1)
 -- Every welded member carries the 39 refuse gates over the bare constraints (+ the 4 rc pins).
