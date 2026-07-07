@@ -103,3 +103,27 @@ THREE buckets (purge means different things per bucket):
   migrating inbox_endpoint -> cap_inbox CLOSES the client-asserted-sender auth-gap (the template
   enforces SenderAuthorized) — the migration IS the fix. Do the easy test/preflight consumers first,
   then the real crates, then delete the deprecated module.
+
+### Phase 2 — the ordered MIGRATION plan (dependency-graphed; execute to COMPLETION, never strand)
+The deprecated operator-process cluster is INTERDEPENDENT (sg-mapped): `queue` is the base (used by
+operator6/programmable4/blinded2/inbox1/relay1/pubsub1); `operator` mid-layer (uses inbox2+relay1+
+queue6); external consumers wrap the operator OBJECTS. Templates that "replace": cap_inbox,
+blinded_queue, programmable_queue, pubsub_topic, relay_operator. The current tree is CONSISTENT (the
+deprecated modules compile+work; templates exist alongside) — NOT partial. Do NOT half-delete.
+
+ORDER (each step a complete-consistent commit; green-gate the whole tree after each):
+1. LIGHT swaps: consumers using only the SLOT constants / CAP_INBOX_FACTORY_VK (node/genesis,
+   subscription, preflight, ...) → re-import the SAME-named consts from `dregg_storage_templates::
+   cap_inbox` (mechanical). Reduces coupling, strands nothing.
+2. KEYSTONE: rewrite `app-framework/src/inbox_endpoint.rs` (15 CapInbox refs — it WRAPS the operator)
+   + `dregg-sdk-net/src/mailbox.rs` (4) to produce SIGNED TURNS via `cap_inbox::build_send_action` /
+   `build_dequeue_action` instead of wrapping the operator object. THIS closes the client-asserted-
+   sender auth-gap (the template enforces SenderAuthorized). Two-pole test each.
+3. TESTS: teasting/storage_lifecycle + storage/tests operator tests → migrate to the template's own
+   tests (or delete — the operator they test is going away).
+4. DELETE `inbox` (once no non-operator consumer remains), then `programmable`/`blinded`/`pubsub`/
+   `relay` similarly, then `operator` (mid-layer), then `queue` (base) LAST.
+5. Full-tree green gate + a grep proving no `dregg_storage::{inbox,operator,relay,...}` consumer
+   remains before each module deletion.
+RISK: step 2 changes a LIVE auth contract — needs focused care + two-pole tests, NOT a hasty tail-of-
+session cut. Best as a dedicated focused push with the plan above as the anti-strand insurance.
