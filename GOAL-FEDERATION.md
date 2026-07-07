@@ -297,3 +297,12 @@ Two sequential gates on one pipeline:
   (lake-builds metatheory/Dregg2 → the seed), THEN cargo build the node. Running bootstrap.sh on hbox
   now (source ~/.elan/env; log hbox:~/hbox-bootstrap.log). Then cargo build -p dregg-node --release →
   cross-machine verified n=4 deploy.
+
+## hbox bootstrap — phantom caught + really running (07-07)
+- CAUGHT: my first bootstrap launches silently failed to detach (log file never created); the
+  "bootstrap alive: YES" was a pgrep SELF-MATCH (grep -f bootstrap.sh matched my own ssh cmd). Waited
+  ~26min on nothing. verify-never-fake caught it (log MISSING + 0 fresh oleans + real-ps empty).
+- FIXED: relaunched via setsid + </dev/null (survives ssh close). NOW genuinely running: log grows,
+  real proc bash scripts/bootstrap.sh, in the "lake exe cache get" mathlib phase (fast path; 3057
+  mathlib oleans already present) → then Dregg2 closure → leanc → the Linux seed. Watching the SEED
+  FILE (dregg-lean-ffi/libdregg_lean.a), not pgrep.
