@@ -594,11 +594,15 @@ fn wide_fields_write_proves_and_verifies() {
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
     // v13 geometry (the Lean-authoritative deployed bare wide, drift-clean): the OPTION I after-spine
     // wide tracks the grown GRAD_ROT_WIDTH graduated base. The producer's READ appendix base tracks
-    // GRAD_ROT_WIDTH via `REFUSAL_WRITE_READ_BASE`; committed refusalVmDescriptor2R24 (wide) = 2965.
+    // GRAD_ROT_WIDTH via `REFUSAL_WRITE_READ_BASE`; the refusal fields-write / cap-WRITE bare-cohort
+    // host base is 2965. The gentian flag-day refuse-welds the bare cohort: 3·REFUSE_STRIDE = 48
+    // floor-refuse aux columns ride PAST that host base, so the committed wide refusalVmDescriptor2R24
+    // trace_width = 2965 + 48 refuse span = 3013 (the producer trace stays 2965 — the 48 aux columns
+    // are filled at prove time by `bare_floor_refuse_weld::fill_refuse_aux`, see the len assert below).
     assert_eq!(
-        desc.trace_width, 2965,
-        "refusal fields-write wide width 2965 (OPTION I after-spine, v13 graduated base — committed \
-         wide refusalVmDescriptor2R24 trace_width)"
+        desc.trace_width, 3013,
+        "refusal fields-write wide host base 2965 (OPTION I after-spine, v13 graduated base) + 48 \
+         refuse span = 3013 (committed wide refusalVmDescriptor2R24 trace_width — refuse-welded bare cohort)"
     );
     assert_eq!(
         desc.public_input_count, 74,
