@@ -40,6 +40,12 @@ pub mod names;
 pub mod node_world_sink;
 pub mod remote;
 
+/// A REAL-executor in-process test node (`TestNode`), exported so OTHER crates'
+/// tests drive a genuine node — not a stub. Gated behind `test-support`; carries
+/// no `deos-js` dependency (executor + HTTP only).
+#[cfg(feature = "test-support")]
+pub mod test_support;
+
 mod wire_codec;
 pub mod embed {
     //! The networked face of [`dregg_sdk::embed`]: the [`WireCodec`].

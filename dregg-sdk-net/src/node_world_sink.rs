@@ -333,7 +333,7 @@ fn cell_from_detail(v: &serde_json::Value) -> Option<Cell> {
 }
 
 /// Decode a 64-char hex string into a 32-byte array. `None` on malformed input.
-fn decode_32(s: &str) -> Option<[u8; 32]> {
+pub(crate) fn decode_32(s: &str) -> Option<[u8; 32]> {
     let s = s.trim();
     if s.len() != 64 {
         return None;
@@ -443,247 +443,10 @@ mod sink {
     }
 }
 
-#[cfg(all(test, feature = "world-sink"))]
+#[cfg(all(test, feature = "world-sink", feature = "test-support"))]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-
-    use dregg_cell::{AuthRequired, Cell, Ledger, Permissions};
-    use dregg_turn::{TurnReceipt, TurnResult};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::Mutex;
-
-    // A fully-open permission set (every action AuthRequired::None) so a SetField
-    // on the agent's own cell authorizes without a grant.
-    fn open_permissions() -> Permissions {
-        Permissions {
-            send: AuthRequired::None,
-            receive: AuthRequired::None,
-            set_state: AuthRequired::None,
-            set_permissions: AuthRequired::None,
-            set_verification_key: AuthRequired::None,
-            increment_nonce: AuthRequired::None,
-            delegate: AuthRequired::None,
-            access: AuthRequired::None,
-        }
-    }
-
-    fn default_token_id() -> [u8; 32] {
-        *blake3::hash(b"default").as_bytes()
-    }
-
-    /// The minimal in-process test NODE: a real `dregg_cell::Ledger` driven by the
-    /// REAL `dregg_turn::TurnExecutor` (so the authority gate — the refusal pole —
-    /// is genuine), plus the receipt chain the client threads. It cannot depend on
-    /// the `node` crate (that crate depends on `dregg-sdk-net`, a cycle), so it
-    /// serves just the four routes the client speaks over hand-rolled HTTP/1.1.
-    struct TestNode {
-        ledger: Ledger,
-        receipts: Vec<TurnReceipt>,
-        fed_id: [u8; 32],
-        node_public_key: [u8; 32],
-    }
-
-    impl TestNode {
-        fn chain_head(&self) -> Option<[u8; 32]> {
-            self.receipts.last().map(|r| r.receipt_hash())
-        }
-    }
-
-    /// Execute a submitted postcard `SignedTurn` through the REAL executor,
-    /// mirroring `node::api::post_submit_signed_turn`'s checks. Returns the JSON
-    /// body the client parses.
-    fn handle_submit(node: &mut TestNode, body: &[u8]) -> serde_json::Value {
-        let signed: dregg_sdk::SignedTurn = match postcard::from_bytes(body) {
-            Ok(s) => s,
-            Err(_) => {
-                return serde_json::json!({"accepted": false, "error": "malformed SignedTurn"});
-            }
-        };
-        let turn_hash = signed.turn.hash();
-        if !signed.signer.verify(&turn_hash, &signed.signature) {
-            return serde_json::json!({
-                "accepted": false,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-                "error": "invalid turn signature",
-            });
-        }
-        let expected_agent = CellId::derive_raw(&signed.signer.0, &default_token_id());
-        if signed.turn.agent != expected_agent {
-            return serde_json::json!({
-                "accepted": false,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-                "error": "turn agent does not match signer default cell",
-            });
-        }
-        if signed.turn.previous_receipt_hash != node.chain_head() {
-            return serde_json::json!({
-                "accepted": false,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-                "error": "receipt chain mismatch",
-            });
-        }
-
-        let mut executor = TurnExecutor::new(ComputronCosts::default());
-        executor.set_local_federation_id(node.fed_id);
-        executor.set_timestamp(0);
-        match executor.execute(&signed.turn, &mut node.ledger) {
-            TurnResult::Committed { receipt, .. } => {
-                node.receipts.push(receipt);
-                serde_json::json!({
-                    "accepted": true,
-                    "turn_hash": dregg_types::hex_encode(&turn_hash),
-                })
-            }
-            TurnResult::Rejected { reason, .. } => serde_json::json!({
-                "accepted": false,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-                "error": format!("{reason}"),
-            }),
-            other => serde_json::json!({
-                "accepted": false,
-                "turn_hash": dregg_types::hex_encode(&turn_hash),
-                "error": format!("unexpected result: {other:?}"),
-            }),
-        }
-    }
-
-    fn cell_detail_json(id_hex: &str, node: &TestNode) -> serde_json::Value {
-        let bytes = match decode_32(id_hex) {
-            Some(b) => b,
-            None => return serde_json::json!({"id": id_hex, "found": false}),
-        };
-        match node.ledger.get(&CellId(bytes)) {
-            Some(cell) => serde_json::json!({
-                "id": id_hex,
-                "found": true,
-                "balance": cell.state.balance(),
-                "nonce": cell.state.nonce(),
-                "public_key": dregg_types::hex_encode(cell.public_key()),
-                "token_id": dregg_types::hex_encode(cell.token_id()),
-                "delegate": cell.delegate.as_ref().map(|d| dregg_types::hex_encode(&d.0)),
-                "fields": cell.state.fields.iter()
-                    .map(|f| dregg_types::hex_encode(f)).collect::<Vec<_>>(),
-            }),
-            None => serde_json::json!({"id": id_hex, "found": false}),
-        }
-    }
-
-    fn receipts_json(node: &TestNode) -> serde_json::Value {
-        let last = node.receipts.len().saturating_sub(1);
-        let arr: Vec<serde_json::Value> = node
-            .receipts
-            .iter()
-            .enumerate()
-            .map(|(i, r)| {
-                serde_json::json!({
-                    "chain_index": i as u64,
-                    "chain_head": i == last,
-                    "receipt_hash": dregg_types::hex_encode(&r.receipt_hash()),
-                    "turn_hash": dregg_types::hex_encode(&r.turn_hash),
-                })
-            })
-            .collect();
-        serde_json::Value::Array(arr)
-    }
-
-    /// Serve one HTTP/1.1 request on `sock` against the shared node.
-    async fn handle_conn(mut sock: tokio::net::TcpStream, node: Arc<Mutex<TestNode>>) {
-        // Read headers (until CRLFCRLF), then Content-Length body.
-        let mut buf = Vec::new();
-        let mut tmp = [0u8; 4096];
-        let header_end = loop {
-            match sock.read(&mut tmp).await {
-                Ok(0) => return,
-                Ok(n) => {
-                    buf.extend_from_slice(&tmp[..n]);
-                    if let Some(pos) = find_subslice(&buf, b"\r\n\r\n") {
-                        break pos;
-                    }
-                }
-                Err(_) => return,
-            }
-        };
-        let header_str = String::from_utf8_lossy(&buf[..header_end]).to_string();
-        let mut lines = header_str.split("\r\n");
-        let request_line = lines.next().unwrap_or("");
-        let mut parts = request_line.split_whitespace();
-        let method = parts.next().unwrap_or("").to_string();
-        let path = parts.next().unwrap_or("").to_string();
-        let content_length = lines
-            .find_map(|l| {
-                let l = l.to_ascii_lowercase();
-                l.strip_prefix("content-length:")
-                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-            })
-            .unwrap_or(0);
-
-        let mut body = buf[header_end + 4..].to_vec();
-        while body.len() < content_length {
-            match sock.read(&mut tmp).await {
-                Ok(0) => break,
-                Ok(n) => body.extend_from_slice(&tmp[..n]),
-                Err(_) => break,
-            }
-        }
-
-        let json = {
-            let mut guard = node.lock().await;
-            route(&method, &path, &body, &mut guard)
-        };
-        let payload = serde_json::to_vec(&json).unwrap();
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            payload.len()
-        );
-        let _ = sock.write_all(head.as_bytes()).await;
-        let _ = sock.write_all(&payload).await;
-        let _ = sock.flush().await;
-    }
-
-    fn route(method: &str, path: &str, body: &[u8], node: &mut TestNode) -> serde_json::Value {
-        match (method, path) {
-            ("GET", "/api/cells") => {
-                let arr: Vec<serde_json::Value> = node
-                    .ledger
-                    .iter()
-                    .map(|(id, cell)| {
-                        serde_json::json!({
-                            "id": dregg_types::hex_encode(&id.0),
-                            "balance": cell.state.balance(),
-                            "nonce": cell.state.nonce(),
-                        })
-                    })
-                    .collect();
-                serde_json::Value::Array(arr)
-            }
-            ("GET", "/api/receipts") => receipts_json(node),
-            ("GET", "/status") => serde_json::json!({
-                "federation_mode": "solo",
-                "public_key": dregg_types::hex_encode(&node.node_public_key),
-            }),
-            ("POST", "/turns/submit") => handle_submit(node, body),
-            ("GET", p) if p.starts_with("/api/cell/") => {
-                let id_hex = p.trim_start_matches("/api/cell/");
-                cell_detail_json(id_hex, node)
-            }
-            _ => serde_json::json!({"error": "not found"}),
-        }
-    }
-
-    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack.windows(needle.len()).position(|w| w == needle)
-    }
-
-    /// Seed a funded open-perms cell for `public_key` and insert it.
-    fn seed_open_cell(ledger: &mut Ledger, public_key: [u8; 32], balance: i64) -> CellId {
-        let mut cell = Cell::with_balance(public_key, default_token_id(), balance);
-        cell.permissions = open_permissions();
-        let id = cell.id();
-        ledger.insert_cell(cell).expect("seed cell");
-        id
-    }
+    use crate::test_support::{TestNode, signature_gated_cell};
 
     /// BOTH poles on ONE node:
     ///   * `fire_effects` commits a SetField on the agent cell and `with_ledger`
@@ -700,47 +463,19 @@ mod tests {
         let agent_pk = clerk.public_key().0;
         let foreign_pk = foreign.public_key().0;
 
-        let fed_id = *blake3::hash(&agent_pk).as_bytes(); // arbitrary but shared
-        let node_public_key = agent_pk; // so /status → blake3(pk) == fed_id
-
-        let mut ledger = Ledger::new();
-        let agent = seed_open_cell(&mut ledger, agent_pk, 1_000_000);
+        // A distinct node identity (the executor fed id is blake3 of it) — the
+        // client resolves it off `/status`, so it need not equal the agent key.
+        let node_public_key = *blake3::hash(b"round-trip-test-node").as_bytes();
+        let (mut node, agent) = TestNode::genesis(node_public_key, agent_pk, 1_000_000);
+        let fed_id = node.fed_id();
 
         // A foreign cell whose set_state REQUIRES the foreign owner's signature —
         // the agent holds neither the key nor a capability, so a SetField on it is
         // an over-reach the executor refuses.
-        let mut foreign_cell = Cell::with_balance(foreign_pk, default_token_id(), 1_000_000);
-        let mut perms = open_permissions();
-        perms.set_state = AuthRequired::Signature;
-        foreign_cell.permissions = perms;
-        let foreign_id = foreign_cell.id();
-        ledger.insert_cell(foreign_cell).expect("seed foreign cell");
+        let foreign_id = node.insert_cell(signature_gated_cell(foreign_pk, 1_000_000));
 
-        let node = Arc::new(Mutex::new(TestNode {
-            ledger,
-            receipts: Vec::new(),
-            fed_id,
-            node_public_key,
-        }));
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        {
-            let node = node.clone();
-            tokio::spawn(async move {
-                loop {
-                    match listener.accept().await {
-                        Ok((sock, _)) => {
-                            let node = node.clone();
-                            tokio::spawn(handle_conn(sock, node));
-                        }
-                        Err(_) => break,
-                    }
-                }
-            });
-        }
-
-        let base_url = format!("http://{addr}");
+        let spawned = node.spawn().await;
+        let base_url = spawned.base_url().to_string();
 
         // Drive the SINK off the tokio runtime (a plain OS thread): the sink owns
         // its own current-thread runtime and blocks on it, exactly as the real
@@ -831,25 +566,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn fetch_executor_federation_id_resolves_solo_node() {
         let node_public_key = *blake3::hash(b"some-node-key").as_bytes();
-        let fed_id = *blake3::hash(&node_public_key).as_bytes();
-        let node = Arc::new(Mutex::new(TestNode {
-            ledger: Ledger::new(),
-            receipts: Vec::new(),
-            fed_id,
-            node_public_key,
-        }));
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        {
-            let node = node.clone();
-            tokio::spawn(async move {
-                while let Ok((sock, _)) = listener.accept().await {
-                    let node = node.clone();
-                    tokio::spawn(handle_conn(sock, node));
-                }
-            });
-        }
-        let client = NodeHttpClient::new(format!("http://{addr}"));
+        let (node, _agent) = TestNode::genesis(node_public_key, [1u8; 32], 0);
+        let fed_id = node.fed_id();
+        let spawned = node.spawn().await;
+
+        let client = NodeHttpClient::new(spawned.base_url().to_string());
         let got = client
             .fetch_executor_federation_id()
             .await
