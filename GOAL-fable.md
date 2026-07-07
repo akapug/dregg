@@ -56,6 +56,21 @@ verified-resident demo, then **(3) N3 on the unified/fixed foundation**. Rung-5 
   canaries all REFUSE. REMAINDER (NAMED, thought-requiring — soundness-adjacent authentic-leg verification-model
   change, NOT force-fired): fuse the tlsn PresentationOutput INTO the attestation's authentic leg (today still modeled
   ed25519 over the real body); + a live api.anthropic.com session. Both stay named-not-forced (ember's thought/keystroke).
-- 2026-07-07 · RESTING POINT: the forceable-autonomous frontier is DONE + verified (gentian · resident · N3-on-iron ·
-  2PC-on-iron). Remaining frontier is ember/thought-gated by design (the fusion, DECO rung-5, live session, VK-epoch
-  flip, origin re-genesis). Awaiting ember's steer on direction.
+- 2026-07-07 · RESTING POINT reached (gentian · resident · N3-on-iron · 2PC-on-iron). Ember STEERED → the FUSION.
+- 2026-07-07 · FUSION implemented + committed `af1002570` (thoughtful, staged-additive — designed before touching,
+  default path UNCHANGED): `ZkOracleAttestation.tlsn_presentation: Option<Vec<u8>>` (always-present, not feature-gated);
+  behind `tlsn-live`, `verify_zkoracle_live` authenticates leg 1 by the REAL `presentation.verify()` (trustless 2PC
+  notary) not the modeled ed25519; legs 2-4 factored to a shared helper; `attest_turn_live` carries the real
+  presentation; zk_live_carrier verifies the trustless path + a live-leg tamper canary (NotAuthenticLive). Default
+  path GREEN by my local check (cargo check -p dregg-zkoracle-prove --tests, Finished) — the compiler caught all 10
+  construction sites (measured, not guessed). VERIFYING: gauntlet on af1002570 (default whole-tree) + iron worktree
+  b4dffqbzb building tlsn-live + running the FUSED zk_live_carrier (verify_zkoracle_live ACCEPTS + live-leg canary bites).
+  Move-2's largest seam CLOSED once iron-green; remainder = only the live api.anthropic.com session (ember-gated).
+- 2026-07-07 · FUSION CLOSED ✅ (verified by me, both paths): default whole-tree GAUNTLET-RESULT: PASS @af1002570;
+  zk-live iron run (worktree, `a2dfc8674`) green — `verify_zkoracle_live` ACCEPTS (authentic leg = REAL
+  presentation.verify(), trustless 2PC, NOT modeled ed25519) ∧ well-formed ∧ injection-free; LIVE-LEG CANARY bites
+  (a flipped real tlsn presentation → NotAuthenticLive, refused at the genuine crypto — green CAN red); injection
+  canary refuses. One iron-caught miss (forgot to re-export verify_zkoracle_live → fixed `a2dfc8674`) — building the
+  feature-gated path on real iron is exactly what caught it. Worktree cleaned. The confined mind's attestation now
+  rides a genuine MPC-TLS presentation. RESTING POINT: forceable frontier complete; remainder ALL ember-gated (live
+  api.anthropic.com session · DECO rung-5 · VK-epoch flip · origin re-genesis).

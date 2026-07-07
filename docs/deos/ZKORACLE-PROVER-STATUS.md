@@ -226,10 +226,14 @@ on `dregg-zkoracle-prove` and attests each turn.
   An end-to-end runner exercises this on iron: `deos-hermes/examples/zk_live_carrier.rs`
   (`cd deos-hermes && DREGG_REQUIRE_LEAN=0 cargo run --release --example zk_live_carrier
   --features zk-live`) — the 2PC roundtrip completes, `presentation.verify()` accepts, the
-  x-api-key is redacted, `verify_zkoracle` accepts all three legs over the authenticated
-  body, and the real-crypto / tamper / injection canaries all REFUSE. The named remainder:
-  fusing the tlsn `PresentationOutput` INTO the attestation's authentic *leg* (today the
-  modeled ed25519 carrier over the genuinely-authenticated body), and a live session.
+  x-api-key is redacted, and — FUSED — `verify_zkoracle_live` authenticates leg 1 by that
+  real `presentation.verify()` over the presentation the attestation now CARRIES
+  (`ZkOracleAttestation::tlsn_presentation`), a trustless 2PC notary rather than the modeled
+  ed25519 carrier, then the well-formed ∧ injection-free legs over the authenticated body.
+  Canaries all REFUSE: real-crypto (a flipped presentation), live-leg (a flipped carried
+  presentation → `NotAuthenticLive`), and injection (a `{{`-bearing reply). The ONE remaining
+  step: a live `api.anthropic.com` session (a real key + a deployed/pinned notary) — the same
+  real 2PC path pointed at the live endpoint.
 
 - **The crown test (`deos-hermes/tests/crown_attested_turn.rs`, 2 tests green):**
   `jailed_turn_is_also_attested` — a jailed brain run over the granted provider door
