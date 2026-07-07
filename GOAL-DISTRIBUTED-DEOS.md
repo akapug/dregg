@@ -216,6 +216,15 @@ a new `NodeWorldSink` home). Serialize Pillars 1/2/4 after the foundation lands.
   `check_endpoint` gates the endpoint before booting anything; fail-closed on node refusal. 94 green,
   both poles (Pole B admits-layer per provider_egress). Round-trip THROUGH node execution deferred to
   the `test-support` TestNode export (next unit — shared infra for the 4a full proof + 2b).
+- dregg-forge keystone (community thread) — `dregg-doc/pull_request.rs`: the `PullRequest` +
+  review-as-stitcher, welded over the existing Pijul core (three_way/pushout/ConflictRegion/resolve_*)
+  with the merge routed through executor_drive's REAL cap gate (`check_cross_cell_permission`). Three
+  poles green (default 105+/substrate 137+): clean→pushout landed Final; conflict→refused-until-resolved;
+  capless merger→in-band CapabilityNotHeld, rolled back. `docs/deos/DREGG-FORGE.md`.
+- homeserver-grain body PICKED (community thread) — live scout → **continuwuity** (matrix.org Stable,
+  multi-maintainer, rlib workspace, Element-X-proven sync); tuwunel runner-up. Architecture SIMPLIFIED:
+  lib-embed (execve door gone) + `with_fds` pre-bound listener (listen door gone) → ONE new firmament
+  door, `grant_read_write` for the RocksDB dir. `docs/deos/GRAIN-HOMESERVER.md`.
 - Pillar 1 (a-bar) — `MigrationTarget::Distributed` (migrate.rs + shell.rs): a surface re-homes onto a
   federation cell over a real captp handoff, SurfaceId preserved + attenuated (zero change to the
   generic migrate() body); handoff refuses Amplification/TargetMismatch/Replay; present/route resolve

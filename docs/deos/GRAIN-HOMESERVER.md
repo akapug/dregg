@@ -14,7 +14,27 @@ world that is NOT dregg-hosted. Hosting the homeserver as a grain closes that: t
 becomes a confined body with a granted door, a metered lease, and effects that are verifiable turns —
 and it keeps Matrix-ecosystem interop (any Matrix client can still join a room).
 
-## The three parts
+## ⚑ ARCHITECTURE REVISION (2026-07-07, supersedes the three-door plan below): LIB-EMBED, ONE DOOR
+
+Two census facts collapsed the confinement cost:
+- **The conduit lineage is `[lib]` + a thin `[[bin]]`** — so the homeserver is COMPILED INTO the
+  grain body as a Rust library (exactly as the confined brain is compiled into the PD body). The
+  `execve` door DISSOLVES: no exec grant, tightest jail, and the body can weld dregg machinery
+  (receipted message-accepts, metering) directly instead of wrapping a black-box process.
+- **`Confinement::with_fds` already exists** (`sandbox.rs:109`) — the parent pre-binds the
+  `TcpListener` and hands the bound fd into the child's keep-list; the child `accept()`s an fd it
+  was GIVEN and never holds bind authority (the Endpoint-fd pattern). The listen door DISSOLVES
+  into existing machinery.
+- Remaining NEW door: **`grant_read_write(path)`** for the homeserver's DB dir (RocksDB) — the
+  write dual of `grant_read`, one canonicalized subpath, sibling-denied, revocable. ONE door.
+  (Endgame curiosity, not this slice: sandstorm-bridge already models grain `/var` = a cell's umem
+  heap; a sqlite-backed server could eventually checkpoint AS a cell. RocksDB won't ride umem.)
+
+**THE BODY — REVISED PICK (live-scouted 2026-07-07): `continuwuity`**
+(canonical https://forgejo.ellis.link/continuwuation/continuwuity, mirror codeberg.org/continuwuity).
+The conduwuit lineage's community continuation: commit-fresh (last commit the day before the scout),
+multi-maintainer (real bus factor), release every week or two, matrix.org-listed **Stable**, spec
+v1.8–1.14 with a rewritten sync proven against matrix-r
 
 **(a) The body — a homeserver serving the CS-API subset the membrane needs.** `deos-matrix`'s
 `matrix-rust-sdk` client exercises a bounded slice of the client-server API: the `/_matrix/client/
@@ -43,50 +63,72 @@ cap-metered, its lifecycle reaped, and — the interesting part — room members
 be surfaced as verifiable turns (a room is a cell, a message an event; the homeserver-grain's accept
 of a message is a receipted turn, so the relay itself is auditable, not a trusted black box).
 
-## THE BODY — DECIDED: real Conduit via `execve`-grant (ember, 2026-07-07)
+## THE BODY — DECIDED: continuwuity, embedded as a LIBRARY (ember + live scout, 2026-07-07)
 
-Full interop wins: a complete, spec-correct homeserver (federation, E2EE, any Matrix client), which
-earns its heavier confinement. The body is **already available: `~/src/conduit`** (a full Conduit
-Rust checkout — its own workspace + `rust-toolchain.toml` + `flake.nix`). We build it and run its
-binary as the jailed grain body.
+Full interop wins (federation, E2EE, any Matrix client), and the census + a live homeserver scout
+turned the "which server / how confined" question into a much tighter answer than the first draft's
+`~/src/conduit`-via-execve:
 
-Cost, made precise — real Conduit needs **three firmament doors**, of which the grant surface today
-(`deos-hermes/src/egress.rs`) has NONE: it grants only `grant_read(path)` (read-only) and
-`grant_provider(host,port)` (outbound). The three new doors:
+**The pick: `continuwuity`** (`https://codeberg.org/continuwuity/continuwuity`, canonical
+`https://forgejo.ellis.link/continuwuation/continuwuity`). Why over the alternatives (scout, live
+July 2026): conduwuit is **Obsolete** (discontinued ~Apr 2025); continuwuity is the community
+continuation — committed *yesterday*, ~7.3k commits, weekly-ish releases, matrix.org-listed **Stable**,
+**multi-maintainer** (real bus factor), a rewritten sync proven against Element X / matrix-rust-sdk,
+Apache-2.0, and a **proper rlib workspace** (`conduwuit-{core,api,service,database,router,admin,…}`,
+the main crate declaring `[lib] crate-type=["rlib"]`). Runner-up `tuwunel` (matrix-construct/Volk,
+Swiss-government-sponsored — the "Matrix Foundation adjacency" rumor is UNCONFIRMED/false) has the
+single cleanest embed shim (`Runtime::new → Server::new → exec`) but single-lead bus factor +
+enterprise orientation. `grapevine` skipped (no releases ever, dormant, pre-conduwuit feature level).
+Non-lineage: `palpo` (new, good — but PostgreSQL, kills self-contained embedding). ⚠ continuwuity's
+critical deps are git-pinned forks (ruma + rust-rocksdb) on their own forgejo — **pin exact revs,
+consider vendoring**; crates still named `conduwuit-*`, main is calendar-alpha → expect internal API
+churn between releases.
 
-1. **`execve`-grant of exactly the conduit image.** The maximally-confined PD denies `execve`
-   (`process-exec*`/`execve` denied — the reason the confined-agent body must BE a Rust peer today).
-   Grant `execve` of ONE absolute image path (the built conduit binary) and nothing else — a named
-   door, not lifting the exec wall. (`sandbox::Confinement` gains an `exec_allow: Option<PathBuf>`;
-   macOS SBPL `(allow process-exec (literal "<path>"))`, Linux a seccomp `execve` arg-match on the
-   image path.)
-2. **A storage WRITE door.** `grant_read` opens a read-only subpath; Conduit's DB (rocksdb/sqlite)
-   needs read+write to one dir. Add `grant_read_write(path)` — the write dual, one canonicalized
-   subpath, sibling-denied, revocable (macOS `(allow file-write* (subpath …))`, Linux Landlock
-   `LANDLOCK_ACCESS_FS_WRITE_FILE|MAKE_REG|…` on the dir).
-3. **The inbound LISTEN door** (part (b) above) — bind+accept on exactly one `host:port`, the dual of
-   the provider door. Preferred realization: the parent pre-binds the listener and passes the bound
-   socket fd into the child's keep-list, so the child `accept()`s an fd it was handed and never holds
-   raw `bind` authority (mirrors the Endpoint fd).
+**The architecture SIMPLIFIED — the "three doors" collapse to ONE.** The first draft assumed we
+`execve` a homeserver binary. But the conduit lineage is `[lib]` + a thin `[[bin]]` wrapper, so we
+**embed the homeserver as a Rust library compiled INTO the grain body** — exactly like the confined
+brain is a Rust ACP peer compiled into the PD, not an `execve`'d process. Consequences:
 
-All three are firmament/kernel-adjacent. Per the be-thoughtful discipline they get a **design pass +
-sound primitives**, NOT a swarm from thin context (this doc IS that pass). They are concrete
-extensions of existing mechanisms (read→read_write, egress-out→listen-in, deny-exec→exec-one-image),
-each a named door with deny-default and revocation — not a loosening of the jail's shape.
+1. **The execve door DISSOLVES.** No `execve` grant — the homeserver runs *as the body*, so the jail
+   keeps its tightest shape (`process-exec*`/`execve` stays denied). The body can also weld dregg
+   things directly (receipted message-accepts, metering) instead of wrapping a black-box process.
+2. **The listen door MOSTLY dissolves.** `Confinement::with_fds` (`sandbox.rs:109`) already hands a
+   child a keep-list of fds. The parent **pre-binds the `TcpListener`** and passes the bound socket
+   fd in; the child `accept()`s on an fd it was handed and never holds raw `bind` authority (the
+   Endpoint-fd pattern, already proven). No new bind/accept syscall door needed for the common case.
+3. **The ONE remaining door: `grant_read_write(path)`** — the storage write dual of `grant_read`.
+   continuwuity is **RocksDB-only** (a C++ build dep, file-system-hungry), so the body needs read+write
+   to exactly one DB dir: one canonicalized subpath, sibling-denied, revocable (macOS `(allow
+   file-write* (subpath …))`, Linux Landlock `LANDLOCK_ACCESS_FS_WRITE_FILE|MAKE_REG|MAKE_DIR|…`).
+   This is the only genuinely new firmament grant — a concrete extension of the existing read door.
 
-## The sequence (app layer in parallel; the three doors are the design-first kernel lane)
+That single door is still firmament-adjacent → design-first, sound primitive + two-pole test (granted
+dir writable, sibling denied), NOT a thin-context swarm (this doc is the design pass). But it is one
+door, not three — the lib-embed decision paid for itself.
 
-1. **Body de-risk (app, now):** build `~/src/conduit`; run its binary as a plain subprocess
-   (unconfined), point two `deos-matrix` `MatrixClient`s at it, and drive the real card-carry loop
-   (`card_carry` / `card_carry_bridge`) end-to-end — proving Conduit satisfies matrix-sdk over the
-   membrane slice, and that this replaces the external Docker Conduit the Pillar-3 live test uses.
-2. **The three firmament doors (kernel, design-first — THOUGHT before code):** `exec_allow`
-   (one-image execve), `grant_read_write` (storage door), the listen door (pre-bound-fd). Each a
-   named door, deny-default, revocable; each with a two-pole test (granted works / sibling denied).
-   These land in `sel4/dregg-firmament/src/sandbox.rs` + `process_kernel.rs` + `deos-hermes` egress.
-3. **The confined spawn (weld):** `spawn_pd_confined` a body that `execve`s the conduit binary with
-   exactly {exec_allow=conduit, read_write=db-dir, listen=host:port, net_out=federation-peers if
-   federating}. The card-carry clients dial the listen door.
+**Non-Rust homeservers ride the sandstorm rail.** Synapse (Python) / Dendrite (Go) can't embed as a
+lib, but `sandstorm-bridge` already models a grain as an `.spk`-packaged execve-in-chroot body with
+`/var` = a cell umem heap. So a heavy homeserver ships as a sandstorm grain (its own confinement
+story) while the Rust pick gets the tight native lib-grain — both worlds covered by the two rails.
+
+## The sequence (app layer now; ONE firmament door, design-first)
+
+1. **Body de-risk + embed seam (app, now):** vendor/pin continuwuity (exact revs of it + its ruma /
+   rust-rocksdb forks), stand its homeserver up **in-process as a library** (the rlib workspace entry
+   — for tuwunel the documented `Runtime::new → Server::new → exec` shim; for continuwuity the
+   equivalent `conduwuit-router`/`service` boot), point two `deos-matrix` `MatrixClient`s at it over a
+   plain loopback listener, and drive the real card-carry loop (`card_carry` / `card_carry_bridge`)
+   end-to-end — proving the embedded server satisfies matrix-sdk over the membrane slice and replaces
+   the external Docker Conduit the Pillar-3 live test uses. No jail yet. (RocksDB is the real tax: a
+   C++ build dep + a hungry db dir — note the dir for the one door.)
+2. **The ONE firmament door (kernel, design-first — THOUGHT before code):** `grant_read_write(path)`,
+   the storage write dual of `grant_read` — one canonicalized subpath (the RocksDB dir),
+   sibling-denied, revocable; a two-pole test (granted dir writable / sibling denied). Lands in
+   `sel4/dregg-firmament/src/sandbox.rs` + `process_kernel.rs` + `deos-hermes/src/egress.rs`. (The
+   execve door is gone — lib-embed; the listen door is the existing `with_fds` pre-bound-fd pattern.)
+3. **The confined spawn (weld):** `spawn_pd_confined_with_surface_and_egress` a body that RUNS the
+   embedded homeserver with exactly {read_write=db-dir, listen=the pre-bound fd, net_out=federation
+   peers if federating}. `execve` stays denied. The card-carry clients dial the listen door.
 4. **The lifecycle (reuse):** wrap it in `agent-platform` (rent/host/meter/reap) + `grain-turn` R2 so
    the homeserver-grain's lease is metered and its message-accepts are receipted turns.
 
