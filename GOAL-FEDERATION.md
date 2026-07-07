@@ -151,3 +151,19 @@ Two sequential gates on one pipeline:
 - NEXT: read the confirming-run verdict → if PASS (uniform height + receipt on all 4 + attestation),
   the payoff is locally proven on a verified n=4 → surface the 3 diffs + evidence to ember for the
   LIVE-mesh deploy call. Fixes committed: c976f76ab, 8e7497958, d25e5bddc, 74f83d472, db9b02d6b(harness).
+
+## PAYOFF PROOF — HONEST VERDICT (07-07): PARTIAL, not achieved
+- CLEAN run (mine, durable log payoff-mine.log, EXIT 101 FAILED under REQUIRE_FINALITY):
+  * ROUND 1 (faucet funds fresh client): HTTP 200 → "client cell funded on ALL 4 nodes" ✓.
+    PROVES fixes 1+3 (verified gate-ON n=4 finality STREAMS: height 0→1 uniform) + cross-node cell
+    provisioning + the faucet submit→DAG→finalize→execute path. A REAL milestone.
+  * ROUND 2 (fresh client's OWN signed Transfer via /turns/submit): HTTP 200 accepted:true BUT
+    proof_status="proof_pending", has_witness=false → heights FROZEN at [1,1,1,1], destination
+    (false,0) on all 4 for the full 90s. The client turn was ACCEPTED but NEVER FINALIZED.
+- The harness note ("residual is loopback QUIC mesh speed") is NOT credible — 0/4 for 90s with
+  proof_pending is a turn stuck awaiting a proof, not slow mesh. Likely a 4th gap: VERIFIED-MODE
+  PROVING is not wired for /turns/submit external caller-signed turns (the faucet finalizes because
+  it's operator/proof-exempt). Diagnosing (proof-gap vs mesh-speed) — do NOT accept the rationalization.
+- SO: the payoff (a real attested CLIENT turn finalized cross-node) is NOT achieved. What IS proven:
+  verified finality streams on n=4 (fixes 1+3), faucet turn finalizes cross-node, client cell
+  provisions cross-node. The remaining wall = external-client-turn finalization in verified mode.
