@@ -32,3 +32,24 @@ cross-node (solve submit-auth: passphrase+bearer). Marshal now; verified next.
 
 ## Done-log
 - (pending)
+
+## Done-log / findings (07-07)
+- AUTH SOLVED (#3): node `/turn/submit` gates on a bearer token (POST /cipherclerk/unlock
+  mints it; random salt so not passphrase-derivable). Proven: no-token 401 / wrong 401 /
+  correct 200. Fleet already sends it (HttpNode::with_bearer). Token capture required.
+- ⚠ REAL WALL behind auth (#3, consensus-layer, NOT faked): on a fresh-genesis n=4 marshal
+  mesh, HTTP-submitted turns commit ONLY to the entry node's local cipherclerk receipt chain —
+  they do NOT inject into the blocklace DAG, block_height stays 0 since genesis (despite 258
+  DAG blocks + live tau), execute_finalized_turn never fires. The lane REFUSED to run paper_fund
+  to a fake green (landed() checks node0's local receipt → would look like the payoff while
+  height=0). Reframes the earlier "n=4 streams to 22" — that was likely internal operator turns,
+  not submitted ones. THIS is the genuine blocker to the payoff. Overlaps the n=3 lane (finality).
+- ⚠ VERIFIED-QUIC (#2 blocker): nextop's verified (Lean-linked) node's BLOCKING executor STARVES
+  the async QUIC/gossip runtime (every dial times out — raw UDP works, so it's the binary, not
+  the net). The A1/blocking-FFI class again. The verified upgrade needs the executor OFF the async
+  worker (spawn_blocking) to gossip. Consensus/kernel — ember's call.
+- IN FLIGHT: n=3 root-cause (a6137a773, the finality-gate verdict), seed cut (a285968e4, #2 prereq),
+  real Nemotron (a4829f241, build-lock queued).
+- NEXT: synthesize n=3 + depth-crown findings → the coherent "why don't submitted turns finalize
+  on the live mesh" root cause + fix design → surface to ember/consensus-owners (do NOT fire a
+  consensus change). The two make-it-real units (#2,#3) are consensus-blocked pending this.
