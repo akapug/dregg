@@ -32,10 +32,16 @@ verified by `#assert_axioms` to depend on nothing but the three standard Lean ax
 
 ## The honest boundary (say this — it makes the claim stronger, not weaker)
 
-- **The Lean is the *specification*; the fast Rust is *checked against* it.** The RS/commitment Rust
-  codecs are the production impl, and their tests assert the exact property the Lean proves (a
-  mutation canary confirms the tests bite). Compiling the Lean itself to the runtime via `@[export]`
-  (like the kernel already does) is in progress — it's the next step, not a claim we make today.
+- **The Lean is the *specification*; the fast Rust is *checked against* it** — for the storage
+  codecs, today. The RS/commitment Rust are the production impl, and their tests assert the exact
+  property the Lean proves (a mutation canary confirms the tests bite).
+- **"The Lean *is* the runtime" is not aspirational — it already ships, for the kernel.** The core
+  turn executor runs as **Lean compiled to native code, linked into the binary** (`@[export]` via
+  `leanc`; `dregg-lean-ffi/libdregg_lean.a` is a 171 MB archive of the machine-checked Lean, and
+  `dregg-lean-ffi`'s tests call it from Rust). The storage verify functions plug into the *identical*
+  `@[export]` path — extracting them is mechanical (add the export, regen the seed), not a new
+  mechanism. So the honest ladder is: kernel = *extracted-from-Lean today*; storage codecs =
+  *checked-against-Lean today, extraction is the wired-in next step.*
 - **The Merkle/commitment binding is proved down to Poseidon2 collision-resistance** — a standard,
   named assumption, not hand-waving. We do not claim Poseidon2 is unbreakable; we claim everything
   above it is a theorem *given* it.
