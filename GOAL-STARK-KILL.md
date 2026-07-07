@@ -71,6 +71,11 @@ Surfaced by the refinement proof itself — exactly what Rung 1 is for.
   every-row boundaries); predicates-relational already discharges its crypto slice. DEFERRED as polish
   (descriptors are Rung-1-full + honest-Rung-2-partial = correct); the CUTOVER is the priority, not this.
 
+- ⚡ CUTOVER #1 LANDED + the PERF NUMBER (the loop-closer): zkOracle injection leg OFF stark.rs onto
+  prove_vm_descriptor2. MEASURED 1KB 19.37s→1.87s = **10.4×**; 8KB 15.5s (was ~20min, ~80×). O(n log n)
+  plonky3 replaces O(n²) hand engine. New DfaRoutingGeneralEmit.lean, grep stark==0, 42 tests green.
+  Committed. This is the first consumer dead + proof the whole campaign's premise pays off.
+
 ## Phase 2b — THE CUTOVER (ember approved 2026-07-07, "stark.rs dead ASAP")
 Reality (grounded): ~35 real consumers + ~46 test/bench. TWO WALLS: (1) emitted descriptors
 are MINIMAL INSTANCES (dfaRoutingDesc hardcodes the toggle transition; membership is depth-2)
