@@ -8,6 +8,22 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## NOW-STATE addition (2026-07-06 late, Fable — THE STORAGE EXTRACTION ROUND-TRIPS)
+
+The storage-in-lean mission's CAPSTONE landed (`2ae48bf1b`): "Lean IS the runtime" for storage, proven
+AND running end-to-end. The `@[export]`ed Lean content-root (`Dregg2.Storage.Deployed.contentRootFFI`,
+binding proven by `contentRootDeployed_injective`) executes as leanc-compiled native code INSIDE the
+Rust binary, calling the fast Rust Poseidon2 (`circuit::storage_ffi::dregg_poseidon2_2to1`) back
+through `@[extern "dregg_poseidon2_2to1"]` — verified LOGIC in Lean, hot PRIMITIVE in Rust, FFI both
+ways. Test `verified_content_root_runs_in_lean_calling_rust_poseidon2` PASSES. Not a demo, not
+"checked-against" — the real thing. Architecture was ember's ("just use Lean FFI to call the fastest
+Rust" — no toy hash, no Lean-Poseidon2 reimpl; the proofs are over an ABSTRACT CR hash instantiated at
+the FFI-backed one). Battle scars: harness restarts, a 100%-full disk (target/debug = 174GB; freed
+targeted), and a `#[used]` force-link (circuit was dead-stripped since no Rust code referenced it → the
+@[extern] symbol went undefined). Full arc: 7 Lean constructions (#assert_axioms-clean) + the
+verified_storage demo + docs/VERIFIED-STORAGE.md + purge Phase 0/1 + THIS. NEXT: the DIFFERENTIAL
+(byte-match Lean vs Rust content_root → retire the Rust logic); purge Phase 2 (migration).
+
 ## NOW-STATE addition (2026-07-06 night, Fable — MUD phase 2 + doc-history-in-cell LANDED; two charter frontier clauses moved)
 
 Two hyperdreggmedia frontier lanes closed (charter/DEOS-RUNS updated same breath):
