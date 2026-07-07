@@ -47,23 +47,27 @@ fn main() {
     let t_verify = s.elapsed();
 
     let leg = att.zk_injection.as_ref().unwrap();
-    let proof_bytes = bincode::serialize(&leg.proof)
-        .expect("StarkProof is serde")
-        .len();
+    let proof_bytes = leg.proof_bytes.len();
     println!("attestation over a real messages response, field \"France\":");
-    println!("  PROVE  (attestation + STARK)  {}", fmt_d(t_prove));
-    println!("  VERIFY (all legs + STARK)     {}", fmt_d(t_verify));
-    println!("  STARK proof size              {proof_bytes} bytes");
+    println!(
+        "  PROVE  (attestation + descriptor proof)  {}",
+        fmt_d(t_prove)
+    );
+    println!(
+        "  VERIFY (all legs + descriptor proof)     {}",
+        fmt_d(t_verify)
+    );
+    println!("  descriptor proof size                    {proof_bytes} bytes");
     println!(
         "  public inputs                 [initial, final, table_commit, route_commit] = {:?}",
         leg.public_inputs
     );
 
-    // ── The prover bill by field size (the STARK trace is one row per field byte). ──
-    // NOTE: the current DSL STARK prover is single-threaded and O(rows²) in its
-    // Lagrange interpolation (`circuit/src/stark.rs::interpolate`), so wall-clock is
-    // super-linear — see the scaling curve, and the review note handed to ember.
-    println!("\ninjection-leg STARK alone, by field size:");
+    // ── The prover bill by field size (the trace is one row per field byte). ──
+    // The injection leg now rides the plonky3 IR-v2 descriptor prover
+    // (`descriptor_ir2::prove_vm_descriptor2`), which replaced the legacy O(rows²)
+    // hand STARK (`circuit/src/stark.rs`) — the scaling curve below is the new prover's.
+    println!("\ninjection-leg descriptor proof alone, by field size:");
     println!(
         "{:<12} {:>8} {:>12} {:>12} {:>14}",
         "field", "rows", "prove", "verify", "proof bytes"
@@ -76,7 +80,7 @@ fn main() {
         let s = Instant::now();
         verify_injection_leg(&field, &leg).expect("verify");
         let t_v = s.elapsed();
-        let bytes = bincode::serialize(&leg.proof).unwrap().len();
+        let bytes = leg.proof_bytes.len();
         let rows = size.next_power_of_two().max(2);
         println!(
             "{:<12} {:>8} {:>12} {:>12} {:>14}",
