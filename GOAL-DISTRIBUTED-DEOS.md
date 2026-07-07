@@ -25,18 +25,24 @@ inhabited world.
 
 ## STATUS (this IS the goal file — GOAL.md is storage-in-lean's, off-limits; refresh here each landing)
 
-**Current thrust:** Pillars 0, 2, 3, 4a LANDED + the `test-support` TestNode export (4a round-trip
-THROUGH node execution closed) + dregg-sdk-net doctest debt cleared (crate fully green). Building:
-Pillar 1 (`Distributed` surface migration, starbridge-v2). Pillar 2b is BLOCKED on Pillar 1 (same
-crate).
+**⚑ A-BAR PHASE COMPLETE (2026-07-07).** Every mechanism of the distributed inhabited world is BUILT
++ GREEN + committed: Pillars 0, 1, 2, 2b, 3, 4a + the shared `test-support` TestNode. The wire is
+dumb, the proof is smart — proven in-process / loopback / over a local Conduit, each with two poles.
 
-**Next 3 moves:**
-1. Land + commit Pillar 1 (the last surface-mechanism a-bar).
-2. Pillar 2b — wire `mud.rs` `speak_cap_for`'s read onto `NodeWorldSink::with_ledger` (+ hearing
-   subscriber set from on-ledger presence per box), proven over the new `test_support::TestNode`:
-   3 inhabitants, 3 sinks, 1 node, presence provable from each view.
-3. The iron pass (b-bars on hbox-persvati-nextop) → the three-box co-inhabited-room CAPSTONE. All
-   a-bar mechanisms green; the iron pass is validation on real boxes, tag after it runs.
+**What remains is IRON-GATED (ember): the b-bars + the capstone need real boxes.** Nothing more is
+buildable-now without the `hbox-persvati-nextop` localnet. Do NOT invent busywork. When the localnet
+is up, the iron pass runs the b-bars box-by-box (each named in its pillar's done-log entry), then the
+three-box co-inhabited-room CAPSTONE — a human on one cockpit + a confined agent on another, presence
++ speech + a co-authored card, all ledger-proven. Tag AFTER it runs on iron.
+
+**The b-bar checklist (for the iron pass):**
+1. Pillar 1 — surface migrates hbox→persvati; revoke darkens the far glass one round-trip.
+2. Pillar 2b — 3 inhabitants on 3 boxes, one room; each derives its speak cap from its own node's
+   ledger crawl (`NodeWorldSink` over a real node); a revoked speaker refused from every view.
+3. Pillar 3 — two cockpits on two boxes co-drive one card over a shared homeserver.
+4. Pillar 4 — a confined brain on box A commits through its node; the cockpit on box B repaints from
+   box B's ledger.
+5. Capstone — all four at once, human + confined agent co-inhabiting.
 
 ## THE DISCIPLINE (carry it into every pillar)
 
@@ -202,7 +208,11 @@ a new `NodeWorldSink` home). Serialize Pillars 1/2/4 after the foundation lands.
   on-ledger presence token (revoked unless the room c-list hosts it), the host-side speak table
   fully retired. 14/14 mud green (2 new, both poles: enter→admits, leave→same derivation refuses;
   only the leaver's speech stops). native-full gate green. Honest: a ledger-gated projection across
-  two cap systems, not a one-call attenuation. b-bar (2b) = point the read at `NodeWorldSink`.
+  two cap systems, not a one-call attenuation.
+- Pillar 2b (a-bar) — `mud.rs`: `hosts`/`speak_cap_for`/`who_is_here` refactored to take `&Ledger`;
+  the derivation is a pure function of ledger state, proven identical across the `WorldSink` boundary
+  (`world.ledger()` vs `WorldSinkAdapter::with_ledger`), both poles. 15/15 mud green; cockpit gate
+  green. Composes with Pillar 0 → any box derives the identical cap from its own ledger copy.
 - Pillar 0 (a-bar) — `NodeWorldSink` (dregg-sdk-net, `world-sink` feat): remote WorldSink commits via
   `/turns/submit` + reads via `/api/cell/{id}`. Both poles vs a real-executor test node (commit+read;
   overreach refused); 70 lib green; no-feature build mozjs-free. Unblocks 1/2/4.
