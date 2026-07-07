@@ -233,6 +233,10 @@ fn launch(
         .env("RUST_LOG", "warn")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::from(log_file));
+    // node-0 is the faucet operator (funds the fresh external client, step 1).
+    if node_index == 0 {
+        cmd.arg("--enable-faucet");
+    }
     let child = cmd.spawn().expect("spawn `dregg-node run`");
     NodeProc {
         child,
