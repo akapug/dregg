@@ -11,11 +11,15 @@ refinement) AND Rung 2 (semantic no-forgery) for EVERY family, Rung 3 (fold → 
 verifiable) where there's a consumer, and beyond (cross-circuit composition + assurance-case
 apex). Done = engine + AIRs deleted, every survivor Lean-emitted + Rung-1&2-proven.
 
-## Current thrust
-**Rung 0 + Rung 1 COMPLETE; Rung 2 essentially COMPLETE** (`464c34b8d`): 10 DONE_AT_RUNG1
-(Rung 1 already = no-forgery) + 4 full Rung-2 (note_spending/quantified_absence/temporal/
-garbled) + 4 honest PARTIAL (membership/ivc/predicates-relational/revocation) + DFA template.
-Pending: predicates-arithmetic (StructuredOutput cap — re-run).
+## Current thrust — PARKED at a clean milestone (ember hold, 2026-07-07)
+**Rung 0 + Rung 1 + Rung 2 ALL COMPLETE and committed.** Every one of the ~20 emitted
+circuits is Lean-emitted, byte-pinned, functionally refined (Rung 1), AND no-forgery proven
+(Rung 2): 10 DONE_AT_RUNG1 + 5 full Rung-2 (note_spending/quantified_absence/temporal/garbled/
+effect_action) + DFA template + 4 honest PARTIAL. predicates-arithmetic → DONE_AT_RUNG1.
+REMAINING (both HELD for the free tree / a fresh session):
+- push the 4 honest PARTIALs → full (ivc, predicates-relational-compound, revocation are
+  crypto-dischargeable additive proof; membership needs the emit-fix);
+- Phase 2b CUTOVER (ember-confirm-gated) — the perf win + the Rust deletion.
 
 ## ⚑ EMBER DECISION (2026-07-07): Phase 2b is HELD
 The CUTOVER (rewire 55 live `stark::prove` consumers onto `prove_vm_descriptor2` + delete the
