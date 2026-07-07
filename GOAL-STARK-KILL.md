@@ -58,6 +58,16 @@ FALSE POSITIVES (already done): `turn/aggregate_bilateral_prover.rs` (already Ir
 - GATE 3 (runtime, mandatory): integration run — executor membership/adjacency discharge, bridge
   present→verify round-trip, wasm serde_json, SP1 decode (or confirm fenced).
 
+### ⚑ EMBER DECISIONS (2026-07-07) + EXECUTION STATUS
+- SP1/EVM-wrap: **DELETE, rebuild later** (not fence). ✅ DONE — Gate 0: `git rm -r chain/` (332MB,
+  leaf crate, 0 dependents; removes the bincode hazard + 3 files). Prod stark refs 20→17.
+- Variable-depth membership: **do depth-general as GROUNDWORK** (not a depth-2 pad hack). → Gate 1.
+- Breaks: **ALL breaks OK — discarding all pre-persisted things.** Full green light on serialization.
+- GATE 1 RUNNING (workflow wf_67644971-9b9): production `descriptor_by_name` dispatch (the #1-danger
+  air-name→descriptor analog) + depth-general membership descriptor builder. Round-trip-gated
+  (name→desc→prove→verify per kind; depth-{2,4,8}), adversarially verified. On CONFIRMED: verify on my
+  tree + commit, then Gate 2 (the coordinated ~15-site consumer swap).
+
 ## Current thrust — PARKED at a clean milestone (ember hold, 2026-07-07)
 **Rung 0 + Rung 1 + Rung 2 ALL COMPLETE and committed.** Every one of the ~20 emitted
 circuits is Lean-emitted, byte-pinned, functionally refined (Rung 1), AND no-forgery proven
