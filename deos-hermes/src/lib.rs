@@ -99,6 +99,8 @@ pub mod live_js;
 pub mod mandate;
 pub mod mcp_server;
 pub mod mock_peer;
+#[cfg(all(unix, feature = "node-brain"))]
+pub mod node_hands;
 pub mod resident;
 #[cfg(feature = "js-agent")]
 pub mod run_js;
@@ -147,6 +149,8 @@ pub use dregg_sdk::{AgentCipherclerk, AgentRuntime, HeldToken, ToolGrant};
 pub use live_js::{LiveAuthoringHands, LiveComposeHands, LiveJsHands, script_of_call};
 pub use mandate::{Mandate, MandateRow};
 pub use mock_peer::{MockHermesPeer, ScriptedCall};
+#[cfg(all(unix, feature = "node-brain"))]
+pub use node_hands::{NodeHandsError, NodeJsHands, agent_cell_of, check_endpoint};
 pub use resident::{AnthropicCaller, ResidentBrain, resident_brain_from_env};
 #[cfg(feature = "js-agent")]
 pub use run_js::{
