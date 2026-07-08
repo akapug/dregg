@@ -907,6 +907,151 @@ mod tests {
         ));
     }
 
+    /// PIECE-2B — THE NO-DRIFT DIFFERENTIAL. The Rust `VoteCollector`'s quorum
+    /// decision (`assembled_quorum`: distinct signers per root >= superMajority)
+    /// is the SAME decision `Dregg2.Distributed.FinalizationQuorum.quorumRoot`
+    /// proves sound + conflict-free and `dregg_lean_ffi::
+    /// verified_finalization_quorum` exports. This test ties them: many tallies
+    /// — targeted edges (exactly-threshold, one-below, unanimous, split vote,
+    /// duplicate signers, an equivocating signer, empty, n=1) plus deterministic
+    /// pseudo-random ones — are driven through BOTH the real collector (real
+    /// hybrid-signed votes) AND the verified Lean gate over the marshalled
+    /// tally, asserting the decided root (or none) AGREES on every case. Drift
+    /// between the hand-Rust decision and the proven Lean rule is a test
+    /// failure, with NO per-vote FFI cost on the hot path (the differential is
+    /// test-only; the collector stays pure Rust at runtime).
+    ///
+    /// MARSHALLING. The Lean wire (`decodeQuorumWire`) is
+    /// `"n=<committee>;V=<signer>:<root>,..."` with `Sig = Root = Nat`; the
+    /// documented wire contract is the collector's ALREADY-DEDUPED tally
+    /// (first-write-wins per signer — exactly `record`'s `or_insert`). So the
+    /// test interns the 32-byte keys/roots to stable u64 ids (signer = its pool
+    /// index, root = its pool index) and applies the SAME first-write-wins
+    /// dedup to the raw emission sequence it feeds the collector — the identical
+    /// tally, two deciders. Self-skips when the archive lacks the export.
+    #[test]
+    fn quorum_decision_matches_verified_lean_gate() {
+        if !dregg_lean_ffi::distributed_ffi::finalization_quorum_available() {
+            eprintln!(
+                "SKIP: Lean finalization-quorum export not linked \
+                 (finalization_quorum_available()==false)"
+            );
+            return;
+        }
+
+        /// The root pool: stable id `r` ↔ the 32-byte root `[r+1; 32]`.
+        fn root_hash(r: u64) -> [u8; 32] {
+            [(r + 1) as u8; 32]
+        }
+        fn root_id(hash: &[u8; 32]) -> u64 {
+            u64::from(hash[0]) - 1
+        }
+
+        /// Run ONE tally through both deciders and assert agreement.
+        /// `votes` is the raw emission sequence of `(signer_index, root_id)`;
+        /// signer index `i` is committee seed `i+1` and doubles as its interned
+        /// wire id.
+        fn check_case(n: usize, votes: &[(usize, u64)], label: &str) {
+            let seeds: Vec<u8> = (1..=n as u8).collect();
+            let (committee, pq) = committee_of(&seeds);
+            let threshold = dregg_blocklace::ordering::supermajority_threshold(n);
+            let mut col = VoteCollector::new(committee, pq, threshold);
+            let blk = BlockId([0xEE; 32]);
+
+            // Drive the REAL collector with real hybrid-signed votes.
+            for &(signer, root) in votes {
+                let outcome = col.record(&signed_vote(
+                    seeds[signer],
+                    blk,
+                    FinalityLevel::Ordered,
+                    root_hash(root),
+                ));
+                assert_ne!(
+                    outcome,
+                    RecordOutcome::Rejected,
+                    "{label}: a genuine member vote must never be rejected"
+                );
+            }
+            let rust_decision: Option<u64> = col
+                .assembled_quorum(&blk)
+                .map(|(root, _sigs)| root_id(&root));
+
+            // Marshal the SAME tally for the verified Lean gate: first-write-wins
+            // per signer (the collector's record contract = the documented wire
+            // input), keys interned to their stable pool-index ids.
+            let mut seen: HashSet<usize> = HashSet::new();
+            let mut tally: Vec<(usize, u64)> = Vec::new();
+            for &(signer, root) in votes {
+                if seen.insert(signer) {
+                    tally.push((signer, root));
+                }
+            }
+            let wire = format!(
+                "n={n};V={}",
+                tally
+                    .iter()
+                    .map(|(s, r)| format!("{s}:{r}"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+            let lean_decision =
+                dregg_lean_ffi::distributed_ffi::verified_finalization_quorum(&wire)
+                    .expect("the verified quorum gate ran");
+
+            assert_eq!(
+                rust_decision, lean_decision,
+                "{label}: the Rust collector's quorum decision must agree with \
+                 the verified Lean quorumRoot (wire: {wire})"
+            );
+        }
+
+        // ── Targeted edges. superMajority(4) = 3. ──
+        check_case(4, &[], "empty tally");
+        check_case(4, &[(0, 0), (1, 0)], "one below threshold (2 of 3)");
+        check_case(4, &[(0, 0), (1, 0), (2, 0)], "exactly threshold (3 of 3)");
+        check_case(4, &[(0, 0), (1, 0), (2, 0), (3, 0)], "unanimous");
+        check_case(4, &[(0, 0), (1, 0), (2, 1), (3, 1)], "split vote 2/2");
+        check_case(
+            4,
+            &[(0, 0), (0, 0), (1, 0)],
+            "duplicate signer does not double-count",
+        );
+        check_case(
+            4,
+            &[(0, 0), (0, 1), (1, 0), (2, 0)],
+            "equivocating signer counts once, first-write-wins (quorum forms)",
+        );
+        check_case(
+            4,
+            &[(0, 1), (0, 0), (1, 0), (2, 0)],
+            "equivocating signer's FIRST root is the counted one (no quorum)",
+        );
+        check_case(1, &[(0, 0)], "n=1 solo committee (threshold 1)");
+        check_case(1, &[], "n=1 empty");
+        check_case(
+            6,
+            &[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+            "n=6 exactly threshold 5",
+        );
+
+        // ── Deterministic pseudo-random tallies (xorshift64). ──
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for case in 0..48u32 {
+            let n = 1 + (next() % 7) as usize; // committee of 1..=7
+            let vote_count = (next() % (2 * n as u64 + 1)) as usize; // 0..=2n
+            let votes: Vec<(usize, u64)> = (0..vote_count)
+                .map(|_| ((next() % n as u64) as usize, next() % 3))
+                .collect();
+            check_case(n, &votes, &format!("random case {case} (n={n})"));
+        }
+    }
+
     /// MONOTONE-SAFE BOUNDARY. A block already consensus-attested under the old
     /// committee STAYS attested after a reconfigure — the epoch boundary never
     /// retroactively un-finalizes a block (no safety violation across the

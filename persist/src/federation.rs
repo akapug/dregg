@@ -232,6 +232,23 @@ impl StoredAttestedRoot {
     /// that does NOT match any self/committee-signed root must still be refused.
     /// It preserves the merkle_root-binding integrity the lone local signature
     /// provides, without treating that lone signature as a quorum anchor.
+    ///
+    /// HYBRID BAR on the vote leg. A `finalization_quorum` entry counts here
+    /// only when BOTH its halves — ed25519 AND the carried ML-DSA-65 — verify
+    /// over the finalization-vote message (classical ∧ pq), the SAME bar
+    /// [`verify_finalization_quorum`](Self::verify_finalization_quorum) sets
+    /// per signer. Every genuinely emitted vote carries both halves
+    /// (`FinalizationVote::sign` is hybrid), so requiring both loses nothing —
+    /// while a valid ed25519 half riding with a forged/absent PQ half is NOT a
+    /// committee binding and must not be treated as one. This closes the last
+    /// classical-only acceptance surface over `QuorumSignature`s.
+    ///
+    /// The `quorum_signatures` leg (the node's OWN light-client signature over
+    /// `signing_message()`) remains ed25519-only BY STRUCTURE: that field is
+    /// `(PublicKey, Signature)` pairs with no PQ material on its wire. It is a
+    /// lone local self-binding, never an anchor — anchoring always goes through
+    /// the full hybrid `verify_finalization_quorum` — and a positive result
+    /// from THIS check can only REFUSE a mismatched ledger, never accept one.
     pub fn has_any_valid_committee_signature(&self, committee: &[PublicKey]) -> bool {
         let full_msg = self.signing_message();
         for (pk, sig) in &self.quorum_signatures {
@@ -242,15 +259,21 @@ impl StoredAttestedRoot {
         if let Some(block_id) = self.blocklace_block_id {
             let vote_msg =
                 dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
-            // DELIBERATELY ed25519-only here. This is the weaker lone-signature
-            // merkle-binding tamper check (a single valid sig, NOT a quorum): it
-            // only asserts that SOME committee member bound this exact root, to
-            // refuse a ledger recovered to an unsigned state. The full hybrid
-            // (classical ∧ pq) bar lives in `verify_finalization_quorum`, which
-            // is what actually re-anchors a restart; checking the ed25519 half
-            // alone for this tamper floor is sufficient and keeps it cheap.
             for qs in &self.finalization_quorum {
-                if committee.contains(&qs.voter) && qs.voter.verify(&vote_msg, &qs.signature) {
+                if !committee.contains(&qs.voter) {
+                    continue;
+                }
+                // CLASSICAL half.
+                if !qs.voter.verify(&vote_msg, &qs.signature) {
+                    continue;
+                }
+                // POST-QUANTUM half (ML-DSA-65) against the carried pubkey. An
+                // undecodable key or a failing signature means this entry is NOT
+                // a valid committee binding — never a silent ed25519-only pass.
+                let Ok(pk_bytes) = <[u8; 1952]>::try_from(qs.ml_dsa_pubkey.as_slice()) else {
+                    continue;
+                };
+                if MlDsaPublicKey(pk_bytes).verify(&vote_msg, &qs.pq_signature) {
                     return true;
                 }
             }

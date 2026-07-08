@@ -515,6 +515,78 @@ fn restart_refuses_missing_pq_half() {
     );
 }
 
+/// The LONE-SIGNATURE tamper floor is HYBRID on the vote leg: a single
+/// `finalization_quorum` entry counts toward `has_any_valid_committee_signature`
+/// only when BOTH halves verify. A lone signature whose ML-DSA half is forged,
+/// empty, or rides an undecodable pubkey no longer counts — even though its
+/// ed25519 half is perfectly valid — so there is no classical-only acceptance
+/// surface left over `QuorumSignature`s (consistent with
+/// `verify_finalization_quorum`'s per-signer bar).
+#[test]
+fn lone_signature_tamper_floor_is_hybrid() {
+    let (committee, root, _block_id, _merkle_root) = hybrid_quorum_fixture();
+
+    // A single GENUINE hybrid vote entry satisfies the floor (it is a
+    // lone-signature check, not a quorum).
+    let lone = StoredAttestedRoot {
+        finalization_quorum: root.finalization_quorum[..1].to_vec(),
+        ..root.clone()
+    };
+    assert!(
+        lone.has_any_valid_committee_signature(&committee),
+        "one genuine hybrid committee vote binds the root (the tamper floor)"
+    );
+
+    // Forge the PQ half ONLY: the ed25519 half stays valid, yet the lone
+    // signature must NOT count any more (classical ∧ pq).
+    let mut pq_forged = lone.clone();
+    pq_forged.finalization_quorum[0].pq_signature[0] ^= 0xFF;
+    assert!(
+        !pq_forged.has_any_valid_committee_signature(&committee),
+        "a lone signature with a FORGED ML-DSA half must not count — no \
+         classical-only acceptance surface"
+    );
+
+    // An EMPTY PQ half is equally refused.
+    let mut pq_missing = lone.clone();
+    pq_missing.finalization_quorum[0].pq_signature = Vec::new();
+    assert!(
+        !pq_missing.has_any_valid_committee_signature(&committee),
+        "an empty ML-DSA signature cannot satisfy the hybrid tamper floor"
+    );
+
+    // An undecodable (wrong-length) carried ML-DSA pubkey is refused.
+    let mut pq_badkey = lone.clone();
+    pq_badkey.finalization_quorum[0].ml_dsa_pubkey = vec![0u8; 10];
+    assert!(
+        !pq_badkey.has_any_valid_committee_signature(&committee),
+        "an undecodable ML-DSA pubkey is not a committee binding"
+    );
+
+    // A voter outside the committee never counts, hybrid-valid or not.
+    assert!(
+        !lone.has_any_valid_committee_signature(&committee[1..]),
+        "a non-member's signature is not a committee binding"
+    );
+
+    // The quorum_signatures leg (the node's OWN light-client self-signature,
+    // structurally classical) still provides the floor when the vote leg is
+    // empty — the trailing-head tamper-check the lone local signature exists for.
+    use dregg_types::{SigningKey, sign};
+    let sk = SigningKey::from_bytes(&[1u8; 32]);
+    let mut self_signed = StoredAttestedRoot {
+        quorum_signatures: Vec::new(),
+        finalization_quorum: Vec::new(),
+        ..root.clone()
+    };
+    let msg = self_signed.signing_message();
+    self_signed.quorum_signatures = vec![(sk.public_key(), sign(&sk, &msg))];
+    assert!(
+        self_signed.has_any_valid_committee_signature(&committee),
+        "the local light-client self-signature still provides the tamper floor"
+    );
+}
+
 #[test]
 fn attested_root_store_and_load() {
     let store = new_store();
