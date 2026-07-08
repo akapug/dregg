@@ -437,6 +437,13 @@ refs), a SECURITY-CRITICAL data-model flip (do carefully/fresh, NOT tired):
     DescriptorDispatchVerifier) — needs the struct+producer+4 verifiers moved to it in lockstep. NOTE:
     present.rs:150 says the field may be "only populated locally for debugging/off-chain" — CONFIRM whether
     the 4 verifiers are debug-only (lower risk) or the live wire path before flipping.
+  ⚑ DE-RISKED (2026-07-08): the 4 verify fns are NOT the live wire path — verify_presentation_full has
+  0 callers (dead); verify_proof_complete/_presentation/_presentation_bb are called ONLY from tests +
+  a bench in present.rs. The LIVE executor verify already flipped to DescriptorDispatchVerifier
+  (committed bridge/verifier.rs). So issuer_membership_stark_proof + its 4 verifiers are the LEGACY
+  OFF-CHAIN/TEST path → this is CLEANUP (retire the StarkProof field + its off-chain verifiers + update
+  tests to the Ir2 wire), NOT a live-security migration. Lower risk, but large + mechanical + coupled
+  (the struct field ripples to ~10 accessors + sdk-net + tests).
   · sdk/privacy.rs:736 (1 issuer verify), sdk/verify.rs (×12), sdk/cipherclerk.rs (×2) — same/adjacent path.
   · dregg-sdk-net/client.rs:290 — calls the removed BridgePresentationProof::issuer_proof_bytes(); a
     CONSUMER of this migration (fix in lockstep, update to the new wire API). This is the workspace-red crate.
