@@ -1526,8 +1526,13 @@ def v2Registry : List (String × EffectVmDescriptor2) :=
 -- The dyn setField is mem-op shaped: 2 mem ops, no map ops.
 #guard (memOpsOf setFieldDynVmDescriptor2).length == 2
 #guard (mapOpsOf setFieldDynVmDescriptor2).length == 0
--- Every registry entry emits a versioned v2 wire string.
-#guard v2Registry.all fun (_, d) => (emitVmJson2 d).startsWith "{\"name\":\""
+-- Every registry entry is a well-formed, populated descriptor (named, non-empty constraints,
+-- non-zero width). This is the cheap STRUCTURAL smoke test — it replaces a former
+-- `emitVmJson2 d |>.startsWith "{\"name\":\""` prefix check that serialized all 39 registry
+-- descriptors to full JSON at elaboration time (~9 s of the file's ~13 s; measured). `emitVmJson2`
+-- correctness itself is covered EXACTLY and per-family by the `#guard emitVmJson2 <desc> == "…"`
+-- byte-pins in each `*Emit.lean`, so re-serializing the whole registry here was redundant compute.
+#guard v2Registry.all fun (_, d) => !d.name.isEmpty && !d.constraints.isEmpty && d.traceWidth != 0
 
 #assert_axioms graduable_spec
 #assert_axioms constraints_graduateV1_shapes
