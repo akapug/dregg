@@ -364,6 +364,44 @@ pub struct Ledger {
     /// lock is present the cell is quiescent (rejects effects) and the local node retains the
     /// voucher it will COMMIT against. See [`crate::migration`].
     migration_locks: HashMap<CellId, crate::migration::MigrationLock>,
+    /// Reverse index: public key -> the cell(s) that carry it. A CellId derives
+    /// from `(public_key, token_id)`, so a single pubkey CAN back several cells
+    /// (distinct token_ids); the `Vec` holds all of them. Maintained on every
+    /// `cells` mutation so a pubkey lookup (bearer-cap delegator resolution) is
+    /// O(1) instead of an O(N_cells) full scan.
+    pubkey_index: HashMap<[u8; 32], Vec<CellId>>,
+    /// Active per-turn undo journal (armed via [`Ledger::begin_restore_point`]).
+    /// `None` in normal operation — a single `Option` check per mutation, no
+    /// clone. When armed, the FIRST mutation of each cell records that cell's
+    /// prior image here, so a rejected/receipt-only turn is rolled back in
+    /// O(cells-touched) instead of cloning the whole O(cells) ledger on the
+    /// commit path (each `Cell` deep-copies its capability `Vec` + state).
+    restore_point: Option<RestorePoint>,
+}
+
+/// Captured pre-turn state for an O(touched) atomic rollback — the cheap
+/// alternative to cloning the whole ledger before executing a turn.
+///
+/// The heavy `cells` map (each `Cell` deep-copies its capability `Vec`/state) is
+/// journaled per-touched-cell: only the cells a turn actually mutates are cloned,
+/// and only on their FIRST mutation. The small, shallow side-maps
+/// (`[u8; 32]`/`u64`/small structs — NO `Cell` deep-copy) are captured whole at
+/// arm time; the full-clone path this replaces copied them anyway, so this is no
+/// regression for them while it eliminates the O(cells) deep clone.
+///
+/// The `pubkey_index` and the lazy Merkle tree are NOT captured: both are pure
+/// derived caches of `cells`, so restoring `cells` (through `remove`/`insert_cell`,
+/// which maintain the index) and re-materializing the tree on the next `root()`
+/// reproduces them exactly.
+#[derive(Clone, Debug, Default)]
+struct RestorePoint {
+    /// cell_id -> its prior whole cell (`None` = the cell was ABSENT pre-turn,
+    /// so rollback removes it). Recorded on the FIRST mutation of each cell.
+    cells: HashMap<CellId, Option<Cell>>,
+    sovereign_commitments: HashMap<CellId, [u8; 32]>,
+    sovereign_registrations: HashMap<CellId, SovereignRegistration>,
+    sovereign_witness_sequence: HashMap<CellId, u64>,
+    migration_locks: HashMap<CellId, crate::migration::MigrationLock>,
 }
 
 impl Ledger {
@@ -380,7 +418,156 @@ impl Ledger {
             witness_subscribers: HashMap::new(),
             sovereign_witness_sequence: HashMap::new(),
             migration_locks: HashMap::new(),
+            pubkey_index: HashMap::new(),
+            restore_point: None,
         }
+    }
+
+    // =========================================================================
+    // Per-turn restore point (O(touched) atomic rollback without a full clone)
+    // =========================================================================
+
+    /// Arm a per-turn undo journal so a subsequent rejected/receipt-only turn
+    /// can be rolled back WITHOUT cloning the whole ledger (the commit-path
+    /// O(ledger) tax the old `let pre = ledger.clone()` paid on every turn).
+    ///
+    /// While armed, the first mutation of each cell records that cell's prior
+    /// image; the shallow sovereign/migration side-maps are captured whole here.
+    /// Pair with exactly one of [`Ledger::commit_restore_point`] (turn accepted —
+    /// drop the journal) or [`Ledger::rollback_restore_point`] (turn rejected —
+    /// restore the exact pre-turn state). Re-arming discards any prior journal.
+    pub fn begin_restore_point(&mut self) {
+        self.restore_point = Some(RestorePoint {
+            cells: HashMap::new(),
+            sovereign_commitments: self.sovereign_commitments.clone(),
+            sovereign_registrations: self.sovereign_registrations.clone(),
+            sovereign_witness_sequence: self.sovereign_witness_sequence.clone(),
+            migration_locks: self.migration_locks.clone(),
+        });
+    }
+
+    /// Accept the turn: discard the undo journal (O(touched) to drop, keeping the
+    /// in-place mutations the turn committed). No-op if none is armed.
+    pub fn commit_restore_point(&mut self) {
+        self.restore_point = None;
+    }
+
+    /// Whether an undo journal is currently armed.
+    pub fn has_restore_point(&self) -> bool {
+        self.restore_point.is_some()
+    }
+
+    /// Reject the turn: restore the ledger to its state at the matching
+    /// [`Ledger::begin_restore_point`]. No-op if none is armed.
+    ///
+    /// Correctness: for every consensus-/persistence-observable field this is
+    /// equivalent to `*self = <pre-turn clone>`. The touched cells are restored
+    /// from the journal (prior whole-cell image reinstated, or removed if the
+    /// turn created it); the sovereign/migration side-maps are restored wholesale
+    /// from the arm-time snapshot. The `pubkey_index` and lazy Merkle tree are
+    /// derived caches: routing the cell restores through `remove`/`insert_cell`
+    /// maintains the index and marks the tree structural, so the next `root()`
+    /// recomputes the exact pre-turn root from the restored cells.
+    pub fn rollback_restore_point(&mut self) {
+        let Some(rp) = self.restore_point.take() else {
+            return;
+        };
+        self.sovereign_commitments = rp.sovereign_commitments;
+        self.sovereign_registrations = rp.sovereign_registrations;
+        self.sovereign_witness_sequence = rp.sovereign_witness_sequence;
+        self.migration_locks = rp.migration_locks;
+        // Restore exactly the touched cells (O(touched)). The journal is already
+        // taken (`restore_point` is now `None`), so these `remove`/`insert_cell`
+        // calls do NOT re-journal — they just re-maintain the pubkey index and
+        // mark the tree structural for the next `root()`.
+        for (id, prior) in rp.cells {
+            // Drop whatever the rejected turn left at this id, then reinstate the
+            // exact prior image (or leave it absent for a turn-created cell).
+            self.remove(&id);
+            if let Some(cell) = prior {
+                debug_assert_eq!(cell.id, id, "journal keyed a cell under a foreign id");
+                let _ = self.insert_cell(cell);
+            }
+        }
+    }
+
+    /// Build a minimal ledger holding the prior images of exactly the cells the
+    /// in-progress turn has touched (from the active journal). Lets the commit
+    /// path read pre-turn cell state (receipt attestation, effect summaries)
+    /// WITHOUT retaining a full pre-turn ledger clone. Empty when no journal is
+    /// armed. A cell the turn CREATED (no prior image) is absent here — exactly
+    /// as it would be in a true pre-turn ledger.
+    ///
+    /// The consumers (`prepare_rotatable_turn`, `summarize_turn_effects`) only
+    /// read the pre-state of cells the turn mutates (the actor, whose nonce is
+    /// bumped; transfer sources/burn targets, which are debited), and every such
+    /// cell is journaled — so this is equivalent to the full pre-turn ledger for
+    /// their reads.
+    pub fn pre_turn_touched_ledger(&self) -> Ledger {
+        let mut pre = Ledger::new();
+        if let Some(rp) = &self.restore_point {
+            for prior in rp.cells.values().flatten() {
+                let _ = pre.insert_cell(prior.clone());
+            }
+        }
+        pre
+    }
+
+    /// Record a cell's prior image into the active journal on its FIRST mutation.
+    /// A cheap no-op when no journal is armed or the cell is already recorded.
+    #[inline]
+    fn journal_cell(&mut self, id: &CellId) {
+        match &self.restore_point {
+            // Armed and not yet recorded for this cell — fall through to record.
+            Some(rp) if !rp.cells.contains_key(id) => {}
+            // Disarmed, or this cell's prior image is already captured.
+            _ => return,
+        }
+        let prior = self.cells.get(id).cloned();
+        self.restore_point
+            .as_mut()
+            .expect("restore point armed")
+            .cells
+            .insert(*id, prior);
+    }
+
+    /// Record a cell's public key in the reverse index.
+    fn pubkey_index_add(&mut self, public_key: [u8; 32], id: CellId) {
+        self.pubkey_index.entry(public_key).or_default().push(id);
+    }
+
+    /// Drop a `(public_key, id)` entry from the reverse index.
+    fn pubkey_index_remove(&mut self, public_key: &[u8; 32], id: &CellId) {
+        if let Some(ids) = self.pubkey_index.get_mut(public_key) {
+            ids.retain(|c| c != id);
+            if ids.is_empty() {
+                self.pubkey_index.remove(public_key);
+            }
+        }
+    }
+
+    /// Rebuild the reverse pubkey index from the current cell set. Used after a
+    /// wholesale `cells` replacement (e.g. `apply_delta`), where per-entry
+    /// maintenance would be more error-prone than a single O(N) rebuild (the
+    /// caller already pays O(N) to clone/swap the map).
+    fn rebuild_pubkey_index(&mut self) {
+        let mut index: HashMap<[u8; 32], Vec<CellId>> = HashMap::new();
+        for (id, cell) in &self.cells {
+            index.entry(*cell.public_key()).or_default().push(*id);
+        }
+        self.pubkey_index = index;
+    }
+
+    /// Resolve a public key to a cell it backs, in O(1) via the reverse index.
+    ///
+    /// When a pubkey backs several cells (distinct token_ids) the first is
+    /// returned — matching the prior arbitrary `iter().find()` iteration-order
+    /// choice for the bearer-cap delegator lookup.
+    pub fn cell_by_pubkey(&self, public_key: &[u8; 32]) -> Option<&Cell> {
+        self.pubkey_index
+            .get(public_key)
+            .and_then(|ids| ids.first())
+            .and_then(|id| self.cells.get(id))
     }
 
     /// Get an immutable reference to a cell.
@@ -398,6 +585,9 @@ impl Ledger {
     /// dirty before returning, re-derive `id` if pubkey changed). The closure
     /// form scopes the mutation and runs an integrity check on exit.
     pub fn get_mut(&mut self, id: &CellId) -> Option<&mut Cell> {
+        // Journal the prior image before handing out the `&mut` (the caller may
+        // write any field) — no-op unless a restore point is armed.
+        self.journal_cell(id);
         let result = self.cells.get_mut(id);
         if let Some(cell) = &result {
             // VALUE mutation: the leaf set is unchanged, so a batched O(log N)
@@ -428,6 +618,9 @@ impl Ledger {
     where
         F: FnOnce(&mut Cell) -> R,
     {
+        // Journal the prior image before the closure mutates the cell — no-op
+        // unless a restore point is armed.
+        self.journal_cell(id);
         // Snapshot for integrity rollback.
         let snapshot = match self.cells.get(id) {
             Some(c) => c.clone(),
@@ -470,7 +663,11 @@ impl Ledger {
     pub fn create_cell(&mut self, public_key: [u8; 32], token_id: [u8; 32]) -> CellId {
         let cell = Cell::new_hosted(public_key, token_id);
         let id = cell.id;
+        let pk = *cell.public_key();
+        // Journal the (absent) prior image so a rollback removes this new cell.
+        self.journal_cell(&id);
         self.cells.insert(id, cell);
+        self.pubkey_index_add(pk, id);
         self.pending.touch_structural(); // a new leaf shifts positions
         id
     }
@@ -489,7 +686,11 @@ impl Ledger {
         // Cheap insurance; a fresh dirty cache only costs ONE BLAKE3 on first
         // `hash_cell`.
         cell.invalidate_leaf_cache();
+        let pk = *cell.public_key();
+        // Journal the (absent) prior image so a rollback removes this new cell.
+        self.journal_cell(&id);
         self.cells.insert(id, cell);
+        self.pubkey_index_add(pk, id);
         self.pending.touch_structural(); // a new leaf shifts positions
         Ok(id)
     }
@@ -556,6 +757,9 @@ impl Ledger {
 
         // All succeeded — swap in the new state atomically.
         self.cells = new_cells;
+        // The cell set changed wholesale; rebuild the reverse pubkey index. This
+        // is O(N), but the map clone/swap above is already O(N).
+        self.rebuild_pubkey_index();
 
         // TRULY LAZY: do NO tree work here — just record what changed. The tree
         // materializes (minimally) on the next `root()`/`membership_proof()`.
@@ -1074,8 +1278,11 @@ impl Ledger {
     ///
     /// The Merkle tree rebuild is deferred until `root()` is called.
     pub fn remove(&mut self, id: &CellId) -> Option<Cell> {
+        // Journal the prior image before removal so a rollback reinstates it.
+        self.journal_cell(id);
         let cell = self.cells.remove(id);
-        if cell.is_some() {
+        if let Some(removed) = &cell {
+            self.pubkey_index_remove(removed.public_key(), id);
             self.pending.touch_structural(); // a removed leaf shifts positions
         }
         cell
@@ -1376,7 +1583,9 @@ impl Ledger {
                 installed.invalidate_leaf_cache();
                 installed.mode = CellMode::Hosted;
                 installed.lifecycle = crate::lifecycle::CellLifecycle::Live;
+                let pk = *installed.public_key();
                 self.cells.insert(id, installed);
+                self.pubkey_index_add(pk, id);
                 self.pending.touch_structural(); // a new leaf shifts positions
             }
             CellMode::Sovereign => {
