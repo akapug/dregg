@@ -120,11 +120,18 @@ sets the key, `:466` Final). So the weld is exactly one signature domain. Two ro
   EXACTLY what `check.rs:40-43` already envisions ("the check job as a confined grain whose only egress
   is committing the check-turn receipt"). It does NOT change any grain host's security surface — the
   forge-grain's executor key is the trust anchor, pinned in `trusted_executor_keys`.
-- **Route (ii) — sign the whole grain drive path (deeper unification, ember-decision).** Teach
-  agent-platform/grain-turn to build their `AgentRuntime`/`TurnExecutor` with
-  `set_executor_signing_key(grain_seed)` and register that pubkey as a trusted executor key. Then EVERY
-  grain turn becomes forge-admissible — but the grain host's executor key becomes a forge trust anchor
-  (a real security-surface change). Powerful; needs ember's call.
+- **Route (ii) — sign the whole grain drive path — CHOSEN (ember, 2026-07-08).** The grain HOST is the
+  thing doing the executing, so it is the natural signer. Teach the grain executor construction
+  (`sdk/src/runtime.rs:78` `executor_with_real_verifiers` → `AgentRuntime`) to install the host's
+  `executor_signing_key` (the surface exists: `turn/src/executor/mod.rs:1196` `with_executor_signing_key`),
+  threaded from `agent-platform` (the host holds the seed); expose the host's executor pubkey so the forge
+  pins it in `trusted_executor_keys`. Then EVERY grain turn is `Final` + SIGNED → forge-admissible, and a
+  CWM CI charter's terminal `advance_step` receipt directly satisfies `RequiredCheck::CommittedReceipt`
+  (no bridging check-commit). The grain host's key becomes a forge trust anchor — accepted, and kept
+  honest by the **audit/slashing horizon**: `agent-orchestration::audit_run` already re-derives every
+  receipt from the committed turns, so a host that signs a false pass is DETECTABLE; for deterministic /
+  high-value workloads, random re-execution audits + a stake-slashing bond on the host make lying
+  unprofitable. (Vision — the audit machinery exists; the slashing bond is a later economic layer.)
 
 **The same weld closes the market side:** bind `bounty-board::payout` / `compute-exchange::settle` to
 require the runner's terminal SIGNED receipt (the completion witness) — then *PR merges → the runner's
