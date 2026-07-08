@@ -209,7 +209,7 @@ pub use dregg_cell::{CellId, Ledger};
 pub use dregg_turn::Effect;
 pub use dregg_types::{PublicKey, Signature};
 pub use error::SdkError;
-pub use runtime::{AgentRuntime, SubAgent};
+pub use runtime::{AgentRuntime, SubAgent, executor_pubkey_from_seed};
 
 // ORGAN 4 — THE GATEWAY surface: the delegated tool-access seam for a live
 // tool-calling agent loop (the proven `delegAdmit` mandate over the cap-gated

@@ -75,8 +75,29 @@ pub fn lean_producer_env_enabled() -> bool {
 /// kept as a named seam so the SDK's intent stays explicit and so a host that
 /// wants the host-context-full registry can find the upgrade path
 /// (`registry_with_real_verifiers_full`) from here.
-fn executor_with_real_verifiers() -> TurnExecutor {
-    TurnExecutor::new(ComputronCosts::default_costs())
+fn executor_with_real_verifiers(executor_signing_seed: Option<[u8; 32]>) -> TurnExecutor {
+    let mut executor = TurnExecutor::new(ComputronCosts::default_costs());
+    // ROUTE (ii): when the HOST supplies an executor signing seed, install it so
+    // every committed `TurnReceipt` carries an Ed25519 `executor_signature` over
+    // `canonical_executor_signed_message` (the exact bytes
+    // `turn::verify_receipt_signature_with_keys` — and the forge check
+    // `RequiredCheck::CommittedReceipt` — verify). `None` = today's UNSIGNED
+    // behavior, byte-unchanged.
+    if let Some(seed) = executor_signing_seed {
+        executor.set_executor_signing_key(seed);
+    }
+    executor
+}
+
+/// Derive the Ed25519 executor PUBLIC key from a 32-byte signing seed — the key a
+/// forge / auditor pins in `trusted_executor_keys` to admit receipts this runtime's
+/// executor signed (`turn::verify_receipt_signature_with_keys`). This is exactly the
+/// verifying key `TurnExecutor::maybe_sign_receipt` signs under, so a receipt this
+/// runtime committed under `seed` verifies against `executor_pubkey_from_seed(&seed)`.
+pub fn executor_pubkey_from_seed(seed: &[u8; 32]) -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(seed)
+        .verifying_key()
+        .to_bytes()
 }
 
 /// The default method a [`SubAgent`] is scoped to when no explicit set is
@@ -207,6 +228,14 @@ pub struct AgentRuntime {
     /// `true` on every native build (Lean unconditional; gated OUT only by `no-lean-link`); an unlinked archive
     /// self-falls-back per turn.
     lean_producer_enabled: bool,
+    /// ROUTE (ii) — the HOST executor signing seed, or `None` for today's UNSIGNED
+    /// default. When `Some`, this runtime's own executor AND every worker
+    /// [`SubAgent`] it spawns (the grain drive path) sign every committed
+    /// `TurnReceipt`'s `executor_signature` (Ed25519 over
+    /// `canonical_executor_signed_message`), so a grain turn is forge-admissible
+    /// (`turn::verify_receipt_signature_with_keys` against [`Self::executor_pubkey`]
+    /// passes). Additive: `None` leaves the pre-existing behavior byte-unchanged.
+    executor_signing_seed: Option<[u8; 32]>,
 }
 
 impl AgentRuntime {
@@ -266,7 +295,7 @@ impl AgentRuntime {
             .insert_cell(agent_cell)
             .expect("fresh ledger, no conflict");
 
-        let executor = executor_with_real_verifiers();
+        let executor = executor_with_real_verifiers(None);
         {
             let w = cipherclerk.read().unwrap_or_else(|e| e.into_inner());
             if let Some(head) = w.receipt_head() {
@@ -282,6 +311,7 @@ impl AgentRuntime {
             executor,
             nonce: Mutex::new(0),
             lean_producer_enabled: lean_producer_env_enabled(),
+            executor_signing_seed: None,
         }
     }
 
@@ -298,7 +328,7 @@ impl AgentRuntime {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .cell_id(domain);
-        let executor = executor_with_real_verifiers();
+        let executor = executor_with_real_verifiers(None);
 
         AgentRuntime {
             cipherclerk,
@@ -308,7 +338,45 @@ impl AgentRuntime {
             executor,
             nonce: Mutex::new(0),
             lean_producer_enabled: lean_producer_env_enabled(),
+            executor_signing_seed: None,
         }
+    }
+
+    /// ROUTE (ii) — install a HOST executor signing seed on this runtime (builder
+    /// form), so every committed receipt — this runtime's own AND every worker
+    /// [`SubAgent`] it spawns (the grain drive path) — is Ed25519-signed over
+    /// `canonical_executor_signed_message`. This is what makes a grain turn's
+    /// receipt FORGE-ADMISSIBLE: `turn::verify_receipt_signature_with_keys` against
+    /// [`Self::executor_pubkey`] passes, exactly the check
+    /// `RequiredCheck::CommittedReceipt` runs. Without it the runtime keeps today's
+    /// UNSIGNED behavior (`executor_signature == None`) — additive, opt-in.
+    pub fn with_executor_signing_key(mut self, seed: [u8; 32]) -> Self {
+        self.executor_signing_seed = Some(seed);
+        self.executor.set_executor_signing_key(seed);
+        self
+    }
+
+    /// Install the HOST executor signing seed after construction (see
+    /// [`Self::with_executor_signing_key`]). The signed path is opt-in; the seed
+    /// threads into every worker [`SubAgent`] this runtime spawns AFTERWARD.
+    pub fn set_executor_signing_key(&mut self, seed: [u8; 32]) {
+        self.executor_signing_seed = Some(seed);
+        self.executor.set_executor_signing_key(seed);
+    }
+
+    /// The HOST executor signing seed installed on this runtime, if any.
+    pub fn executor_signing_seed(&self) -> Option<[u8; 32]> {
+        self.executor_signing_seed
+    }
+
+    /// The Ed25519 executor PUBLIC key this runtime signs receipts under (derived
+    /// from the installed seed via [`executor_pubkey_from_seed`]), or `None` if no
+    /// seed is installed. A forge / auditor pins this in `trusted_executor_keys` to
+    /// admit the runtime's — and its grains' — signed receipts.
+    pub fn executor_pubkey(&self) -> Option<[u8; 32]> {
+        self.executor_signing_seed
+            .as_ref()
+            .map(executor_pubkey_from_seed)
     }
 
     /// Get the agent's cell ID.
@@ -934,6 +1002,10 @@ impl AgentRuntime {
             // Inherit producer mode from the parent runtime so worker turns route
             // through the SAME producer-selection seam a runtime turn does.
             lean_producer_enabled: self.lean_producer_enabled,
+            // ROUTE (ii) — inherit the host executor signing seed, so the FRESH
+            // executor this worker builds per `execute_method` signs the committed
+            // grain-turn receipt (forge-admissible). `None` = unsigned worker turns.
+            executor_signing_seed: self.executor_signing_seed,
         })
     }
 }
@@ -1096,6 +1168,13 @@ pub struct SubAgent {
     /// turns through the same producer-selection seam instead of the legacy
     /// direct Rust producer.
     lean_producer_enabled: bool,
+    /// ROUTE (ii) — the HOST executor signing seed inherited from the parent
+    /// runtime at spawn. When `Some`, the FRESH executor this worker builds per
+    /// [`Self::execute_method`] signs the committed grain-turn receipt's
+    /// `executor_signature` (Ed25519 over `canonical_executor_signed_message`), so a
+    /// served / minted grain turn is forge-admissible. `None` = today's UNSIGNED
+    /// worker receipts.
+    executor_signing_seed: Option<[u8; 32]>,
 }
 
 impl SubAgent {
@@ -1228,7 +1307,9 @@ impl SubAgent {
         effects: Vec<Effect>,
     ) -> Result<TurnReceipt, SdkError> {
         let executor = {
-            let mut e = executor_with_real_verifiers();
+            // ROUTE (ii): the fresh executor carries the host signing seed inherited
+            // at spawn, so the committed grain-turn receipt is signed (forge-admissible).
+            let mut e = executor_with_real_verifiers(self.executor_signing_seed);
             // Run under the runtime's federation id so the token verifier's
             // AuthRequest (which binds `app_id = hex(federation_id)`) and the
             // receipt-chain domain separation match the parent runtime. The

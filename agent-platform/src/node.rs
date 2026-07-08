@@ -228,6 +228,20 @@ impl NodeMinter {
     /// `FieldLte` caveat bounds the committed-turn count host-side). Every turn this
     /// mints commits onto `node`'s ledger and lands on `node`'s finalized log.
     pub fn open(node: LocalNode, budget: i64) -> Result<NodeMinter, SdkError> {
+        Self::open_signed(node, budget, None)
+    }
+
+    /// **ROUTE (ii) — open a node-backed minter whose grain turns are HOST-SIGNED.**
+    /// Exactly [`open`](Self::open), but when `executor_signing_seed` is `Some`, the
+    /// runtime the grain worker mints through carries the host's executor signing key,
+    /// so every committed grain-turn receipt is Ed25519-signed over
+    /// `canonical_executor_signed_message` — forge-admissible against the host's
+    /// executor pubkey. `None` reproduces the legacy UNSIGNED behavior byte-for-byte.
+    pub fn open_signed(
+        node: LocalNode,
+        budget: i64,
+        executor_signing_seed: Option<[u8; 32]>,
+    ) -> Result<NodeMinter, SdkError> {
         let mut cclerk = AgentCipherclerk::new();
         let root = cclerk.mint_token(&[0x6au8; 32], node.domain());
         let public_key = cclerk.public_key();
@@ -245,8 +259,14 @@ impl NodeMinter {
             // A fresh node ledger has no such cell; a re-open would (idempotent seed).
             let _ = l.insert_cell(root_cell);
         }
-        let runtime =
+        let mut runtime =
             AgentRuntime::with_ledger(Arc::new(RwLock::new(cclerk)), node.domain(), ledger);
+        // ROUTE (ii): install the host executor signing seed BEFORE the worker is
+        // spawned (via `ToolGateway::admit`), so the worker `SubAgent` inherits it and
+        // its committed grain-turn receipts are signed.
+        if let Some(seed) = executor_signing_seed {
+            runtime.set_executor_signing_key(seed);
+        }
         let grant = ToolGrant {
             tool_id: GRAIN_TOOL_ID,
             rate_limit: budget.max(0),
