@@ -394,3 +394,18 @@ Two sequential gates on one pipeline:
   order fix). Follow-on for ember: a clean fresh-genesis slow-cadence redeploy OR the incremental-verified-
   order fix (design in the finding doc). The clean fast mesh already showed cross-machine real-turn finality.
 - Lesson banked: do NOT tear down a demonstrated-working state to chase a bonus.
+
+## ★★★★ CAPSTONE LANDED (07-08) — the WHOLE goal, complete ★★★★
+- A FRESH external client (signer 70af52fc, no pre-existing cell) funded itself, signed its OWN
+  attested Transfer, POST /turns/submit, and it STREAM-FINALIZED CROSS-MACHINE on the live verified
+  federation: turn e8d0c7cf, destination 1b6e99b6 funded 1000 on BOTH machines; latest_height 2→3
+  UNIFORM on ALL 4 nodes (hbox-Linux .39 ×2 + nextop-Darwin .130 ×2). Submitter exit 0 SUCCESS.
+- Landed on a CLEAN fresh-genesis (ed6c8ba1) 4s-cadence mesh with the CURRENT binary (implemented_by
+  fix) — no throughput fix needed: the diagnosis's "crawls, would finalize slower" → validated in
+  FACT (moderate cadence lets the verified gate keep pace). Greenfield redeploy (ember: regenesis at will).
+- ═══ GOAL COMPLETE ═══ n=3 mechanism KNOWN; fully-verified payoff proven robust single-machine (3/3)
+  AND cross-machine (a real attested CLIENT turn finalized cross-machine on a verified live federation);
+  PUSHED. The corpus RUNS FOR REAL end-to-end on the living federation, and we know WHY.
+- HARDENING in flight (greenfield, will integrate + push): finality-throughput fixes (bounded-timeout
+  + incremental order + topo-order Rust differential) for fast-cadence robustness; SWAP-inversion Rust-
+  executor faithfulness fix (the differential-caught covered-turn divergence).
