@@ -993,6 +993,49 @@ pub struct DeosDesktop {
     /// (`tail -f` for the World); the id-sorted Ledger keeps its place. The base
     /// handle feeds the same NT scrollbar the flat faces wear.
     virtual_faces: virtual_face::VirtualFaceRegistry,
+    /// **PER-CELL RECEIPT INDEX (paint memo)** — cell → its receipt positions,
+    /// so the inspector's turn count, its "recent turns" chronicle and the App
+    /// Shelf's per-app receipt count read O(1) per paint instead of re-scanning
+    /// the whole receipt log on every keystroke/mouse-move/tick. Rebuilt lazily
+    /// only when the log it indexes actually changes — the LIVE map when a commit
+    /// appends (keyed on the live receipt count), the REWIND-projection counts
+    /// when the scrub cursor moves (keyed on cursor+projection length) — so it
+    /// stays exactly correct across live append AND rewind. Interior-mutable: the
+    /// render paths hold `&self`.
+    receipt_index: RefCell<ReceiptIndexCache>,
+    /// **PROVENANCE-WALKER CHAIN MEMO (paint memo)** — the fully-derived walk
+    /// rows (effects column, reseed flags, both re-derived blocklace/state links)
+    /// cached with the chain head they were built at. The walk recomputes a
+    /// blake3 receipt hash for EVERY receipt; without this it re-walked the whole
+    /// chain on every repaint of the open walker window. Rebuilt only when the
+    /// live chain grows.
+    prov_walker_rows: RefCell<Option<ProvWalkerRowsCache>>,
+}
+
+/// The paint-time per-cell receipt index behind [`DeosDesktop::receipt_index`].
+/// Two independently-validated halves: the LIVE index (used by the always-live
+/// "recent turns" chronicle and by the count path while at HEAD) and the REWIND
+/// projection counts (used by the count path while scrubbing). Each carries a
+/// cheap validity token so a stale half is rebuilt, never silently reused.
+#[derive(Default)]
+struct ReceiptIndexCache {
+    /// Valid while `live_token == Some(live receipt count)` — a commit only ever
+    /// appends, so the live log's length is a sufficient identity.
+    live_token: Option<usize>,
+    /// Live log: cell → its receipt indices, in ascending log order.
+    live_per_cell: HashMap<CellId, Vec<usize>>,
+    /// Valid while `rewind_token == Some((cursor step, projection receipt count))`.
+    rewind_token: Option<(u64, usize)>,
+    /// Rewind projection: cell → its receipt count at the scrub cursor.
+    rewind_counts: HashMap<CellId, usize>,
+}
+
+/// The memoized Provenance-Walker chain walk behind [`DeosDesktop::prov_walker_rows`].
+struct ProvWalkerRowsCache {
+    /// `(chain height, receipt count, recorded-step count)` — any growth of the
+    /// chain moves at least one, forcing a re-walk; otherwise the rows are reused.
+    token: (u64, usize, usize),
+    rows: Vec<provenance_walker::WalkRow>,
 }
 
 /// The live state of the open Spotter command palette overlay.
@@ -1158,6 +1201,8 @@ impl DeosDesktop {
             rewind: rewind::RewindState::default(),
             face_scrolls: face_scroll::FaceScrollRegistry::default(),
             virtual_faces: virtual_face::VirtualFaceRegistry::default(),
+            receipt_index: RefCell::new(ReceiptIndexCache::default()),
+            prov_walker_rows: RefCell::new(None),
         };
         // Re-open any windows the persisted layout remembers (spatial persistence
         // for windows, not just icons — and now for window TYPE too).
@@ -1893,6 +1938,96 @@ impl DeosDesktop {
     /// over the effective receipt log (truncated to the cursor while rewound).
     fn cell_receipt_count(&self, cell: &CellId) -> usize {
         self.effective_cell_receipt_count(cell)
+    }
+
+    /// Ensure the LIVE half of [`Self::receipt_index`] reflects the live receipt
+    /// log, rebuilding (one O(receipts) pass) only when a commit has appended.
+    /// The paint-time O(1) source for the always-live "recent turns" chronicle
+    /// and for the count path while at HEAD.
+    fn ensure_live_receipt_index(&self) {
+        let len = self.world.borrow().receipts().len();
+        if self.receipt_index.borrow().live_token == Some(len) {
+            return;
+        }
+        let mut per_cell: HashMap<CellId, Vec<usize>> = HashMap::new();
+        {
+            let w = self.world.borrow();
+            for (i, r) in w.receipts().iter().enumerate() {
+                per_cell.entry(r.agent).or_default().push(i);
+            }
+        }
+        let mut cache = self.receipt_index.borrow_mut();
+        cache.live_token = Some(len);
+        cache.live_per_cell = per_cell;
+    }
+
+    /// The `n` most-recent LIVE receipts whose agent IS `cell`, newest-first, as
+    /// the inspector's chronicle lines (`turn xxxxxx → post yyyyyy`). Reads the
+    /// memoized live index for the O(1) tail slice, then formats only those `n`
+    /// receipts — no full-log scan. Always LIVE (the chronicle is not rewound).
+    fn cell_recent_receipt_lines(&self, cell: &CellId, n: usize) -> Vec<String> {
+        self.ensure_live_receipt_index();
+        let idxs: Vec<usize> = {
+            let cache = self.receipt_index.borrow();
+            match cache.live_per_cell.get(cell) {
+                Some(v) => v.iter().rev().take(n).copied().collect(),
+                None => return Vec::new(),
+            }
+        };
+        let w = self.world.borrow();
+        let receipts = w.receipts();
+        idxs.into_iter()
+            .map(|i| {
+                let r = &receipts[i];
+                let hh: String = r.turn_hash[..3]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                let post: String = r.post_state_hash[..3]
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                format!("turn {hh} → post {post}")
+            })
+            .collect()
+    }
+
+    /// The memoized Provenance-Walker chain walk at the current chain head —
+    /// effects column, reseed flags and both re-derived links — rebuilt (a full
+    /// re-walk, one blake3 per receipt) only when the chain has grown; otherwise
+    /// the cached rows are cloned. `w` is the caller's already-taken World borrow.
+    fn ensure_walker_rows(&self, w: &World) -> Vec<provenance_walker::WalkRow> {
+        use provenance_walker as pw;
+        let token = (
+            w.height(),
+            w.receipts().len(),
+            w.recorded_turns().steps().len(),
+        );
+        if let Some(cache) = self.prov_walker_rows.borrow().as_ref() {
+            if cache.token == token {
+                return cache.rows.clone();
+            }
+        }
+        let effects: Vec<String> = {
+            use crate::replay::RecordedStep;
+            w.recorded_turns()
+                .steps()
+                .iter()
+                .filter_map(|s| match s {
+                    RecordedStep::Committed { turn, .. } => {
+                        Some(crate::provenance_navigator::effect_kinds(turn).join(" · "))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let reseeded = pw::reseeded_flags(w.recorded_turns());
+        let rows = pw::walk_rows(w.receipts(), &effects, &reseeded);
+        *self.prov_walker_rows.borrow_mut() = Some(ProvWalkerRowsCache {
+            token,
+            rows: rows.clone(),
+        });
+        rows
     }
 
     /// The largest live cell balance (a denominator for the inspector's balance
@@ -5311,26 +5446,7 @@ impl DeosDesktop {
 
         // ── Recent turns whose agent IS this cell (the cell's own chronicle) ──
         col = col.child(face_section("Recent turns (this cell)"));
-        let cell_receipts: Vec<String> = {
-            let w = self.world.borrow();
-            w.receipts()
-                .iter()
-                .filter(|r| r.agent == cell)
-                .rev()
-                .take(5)
-                .map(|r| {
-                    let hh: String = r.turn_hash[..3]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect();
-                    let post: String = r.post_state_hash[..3]
-                        .iter()
-                        .map(|b| format!("{b:02x}"))
-                        .collect();
-                    format!("turn {hh} → post {post}")
-                })
-                .collect()
-        };
+        let cell_receipts: Vec<String> = self.cell_recent_receipt_lines(&cell, 5);
         if cell_receipts.is_empty() {
             col = col.child(face_row("(none)", "actuate to write a receipt"));
         } else {
@@ -6407,28 +6523,12 @@ impl DeosDesktop {
                 .ensure(FaceScrollKey::Window(cell, WinKindTag::ProvenanceWalker, 1));
 
         let w = self.world.borrow();
-        // The effects column reads the RECORDED turns (the same call-forest walk
-        // the navigator's lineage does) — one summary line per committed receipt,
-        // in log order. A receipt with no recorded turn (a symbolic-mode commit
-        // the tape skipped) falls back to its action count inside `walk_rows`.
-        let effects: Vec<String> = {
-            use crate::replay::RecordedStep;
-            w.recorded_turns()
-                .steps()
-                .iter()
-                .filter_map(|s| match s {
-                    RecordedStep::Committed { turn, .. } => {
-                        Some(crate::provenance_navigator::effect_kinds(turn).join(" · "))
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        // Genesis-install boundaries (a hire's mid-session seed) are named off
-        // the recorded History so a lawful out-of-band root move never paints
-        // as a broken chain.
-        let reseeded = pw::reseeded_flags(w.recorded_turns());
-        let rows = pw::walk_rows(w.receipts(), &effects, &reseeded);
+        // The full chain walk — the effects column off the RECORDED turns, the
+        // reseed flags off the recorded History, and both links re-derived per
+        // receipt — is a PAINT MEMO (`ensure_walker_rows`): a full re-walk
+        // (one blake3 per receipt) only when the chain grows, else the cached
+        // rows are reused. Preserves the exact rows the live walk produced.
+        let rows = self.ensure_walker_rows(&w);
         let height = w.height();
 
         // The walk cursor: the pinned receipt, else the chain head (the natural
