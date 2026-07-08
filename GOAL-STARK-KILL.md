@@ -359,3 +359,21 @@ REMAINING 3 (on-disk, HELD — delicate proof work, do FRESH under the guard, se
   bugfix-seeds.json has the dossiers. The 2 sorryAx families FAILED the axiom-hygiene gate → NOT shipped
   (the gate working as designed). Also still HELD: the final consumer-flips + git rm stark.rs, gated on
   these 3 landing.
+
+## ⚑ BUGFIX CAMPAIGN — 9/10 DONE (2026-07-08, pushed through under the guard)
+Finished the audit-confirmed forgery fixes SEQUENTIALLY under .bin/lean-safe (one build at a time — no
+OOM). Both sorryAx cheats the axiom-hygiene gate caught were GENUINELY discharged (via fresh single
+agents, verified on my tree):
+- GarbledEval (8/10, 70bc33261): the sorryAx was Lean's error-RECOVERY injection (MemoryChecking.*
+  unresolved); discharged with memCheck_nil. Axiom-clean.
+- Derivation (9/10, 86d941d26): bodyHash 1..7 were slot-0-only bound → forgeable; c6c binds all body
+  atoms (piCount 6→13); der_rejects_unexported_body_fact. Axiom-clean. Follow-up (ember-gated): the
+  dsl/derivation.rs Rust lockstep + VK regen.
+9/10 COMMITTED (all axiom-clean under guard, real ¬Satisfied2 forge-rejects): Adjacency, NonRevocation,
+NoteSpendingLeaf, MerkleMembership, Fold, CommittedThreshold, Presentation(+bomb), GarbledEval, Derivation.
+- 10/10 = PredicatesRelationalCompound: BLOCKED BY A LIVE CONCURRENT INSTANCE actively refactoring it
+  (Emit descriptor 91→219 constraints + RelClassified extended with 4 unfilled fields → red). My agent's
+  membership-lemma sorry-fix (the same error-recovery pattern) is ON DISK + correct + durable; it greens
+  when the other instance finishes its value-bit range gates. NOT mine to commit — the parking didn't take
+  on that lane. (The ORIGINAL relational diff-bug was already closed by another instance, 0cfa85c82.)
+STILL GATED on Relational landing + the descriptor VK regens: the final consumer-flips + git rm stark.rs.
