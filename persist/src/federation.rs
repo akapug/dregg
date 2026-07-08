@@ -14,6 +14,37 @@ use crate::{PersistentStore, Result, StoreError};
 
 pub use dregg_types::{FederationId, PublicKey, Signature, ThresholdQC};
 
+use dregg_federation::frost::MlDsaPublicKey;
+
+/// One committee member's HYBRID finalization-vote signature over an attested
+/// root — BOTH halves (ed25519 ∧ ML-DSA-65), plus the voter's ML-DSA-65 public
+/// key carried ALONGSIDE the signature.
+///
+/// Option (a) — SELF-CONTAINED persist. The voter's post-quantum public key
+/// rides with the signature so a restarting node re-verifies the PQ half with
+/// NO ML-DSA committee history. That matters because an epoch/committee change
+/// carries no PQ key history otherwise: the persisted quorum is re-verifiable
+/// on its own terms, robust across reconfiguration. Soundness is unaffected —
+/// `verify_finalization_quorum` still requires each `voter` to be in the
+/// committee passed at restart, so a self-carried key cannot admit a non-member.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuorumSignature {
+    /// The voter's federation Ed25519 public key (the committee identity).
+    pub voter: PublicKey,
+    /// The ed25519 (CLASSICAL) signature over
+    /// [`dregg_types::finalization_vote_signing_message`].
+    pub signature: Signature,
+    /// The voter's ML-DSA-65 (FIPS 204) public key, as its 1952 serialized
+    /// bytes. Stored as `Vec<u8>` because `MlDsaPublicKey`'s 1952-byte array is
+    /// beyond serde's array-derive ceiling; length-checked at verify time.
+    pub ml_dsa_pubkey: Vec<u8>,
+    /// The ML-DSA-65 (POST-QUANTUM) signature over the SAME canonical bytes as
+    /// `signature`. The quorum counts a signer only when BOTH halves verify, so
+    /// a quantum adversary who breaks ed25519 alone still cannot re-anchor a
+    /// forged root on restart.
+    pub pq_signature: Vec<u8>,
+}
+
 /// A stored attested root, capturing the federation's consensus state at a
 /// particular block height.
 ///
@@ -70,8 +101,17 @@ pub struct StoredAttestedRoot {
     /// verified on restart by [`Self::verify_finalization_quorum`]. Empty for
     /// legacy roots and for a freshly persisted head whose vote quorum has not
     /// yet assembled (the anchor recovers to the last quorum-carrying root).
+    ///
+    /// HYBRID (option (a)): each [`QuorumSignature`] carries BOTH the ed25519 and
+    /// the ML-DSA-65 half PLUS the voter's ML-DSA public key, so the restart
+    /// re-verifier re-checks the FULL hybrid quorum (classical ∧ pq) with no
+    /// committee PQ-key history. Widening this field changes the postcard wire
+    /// shape of a `StoredAttestedRoot`: postcard is non-self-describing, so
+    /// attested roots persisted before this change will NOT decode after upgrade.
+    /// That is ACCEPTED (state wipe on upgrade, as prior schema additions were) —
+    /// no versioned decode is provided by design; this is a mesh flag-day field.
     #[serde(default)]
-    pub finalization_quorum: Vec<(PublicKey, Signature)>,
+    pub finalization_quorum: Vec<QuorumSignature>,
 }
 
 impl StoredAttestedRoot {
@@ -130,13 +170,21 @@ impl StoredAttestedRoot {
     /// Returns `true` only when ALL of:
     ///   * this root is anchored to a blocklace block (`blocklace_block_id` is
     ///     `Some` — the vote preimage binds it);
-    ///   * every `(voter, sig)` is a committee member's valid Ed25519 signature
-    ///     over [`dregg_types::finalization_vote_signing_message`] for THIS
-    ///     root's `(blocklace_block_id, merkle_root)` — a signature over any
-    ///     other root or block does not count;
-    ///   * the number of **distinct** valid committee signers is `>= threshold`
-    ///     (an equivocating/duplicated voter counts at most once, so a single
-    ///     member cannot inflate the quorum).
+    ///   * every signer is a committee member whose BOTH signature halves —
+    ///     ed25519 AND ML-DSA-65 — verify over
+    ///     [`dregg_types::finalization_vote_signing_message`] for THIS root's
+    ///     `(blocklace_block_id, merkle_root)`. A signature over any other root
+    ///     or block, or a valid ed25519 half with a broken/missing PQ half, does
+    ///     not count (fail-closed hybrid: `classical ∧ pq`);
+    ///   * the number of **distinct** fully-valid committee signers is
+    ///     `>= threshold` (an equivocating/duplicated voter counts at most once,
+    ///     so a single member cannot inflate the quorum).
+    ///
+    /// The ML-DSA public key each half verifies against rides ALONGSIDE the
+    /// signature (option (a)), so this is self-contained — no committee PQ-key
+    /// history is needed to re-verify the post-quantum half across an epoch
+    /// change. A quantum adversary who has broken ed25519 alone still cannot
+    /// re-anchor a forged root: the ML-DSA half must independently verify.
     ///
     /// This never accepts a root without a genuine >=threshold committee quorum
     /// over the exact finalized state — it closes the liveness fail-close
@@ -150,14 +198,25 @@ impl StoredAttestedRoot {
         }
         let message = dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
         let mut distinct: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
-        for (pk, sig) in &self.finalization_quorum {
-            if !committee.contains(pk) {
+        for qs in &self.finalization_quorum {
+            if !committee.contains(&qs.voter) {
                 return false;
             }
-            if !pk.verify(&message, sig) {
+            // CLASSICAL half.
+            if !qs.voter.verify(&message, &qs.signature) {
                 return false;
             }
-            distinct.insert(pk.0);
+            // POST-QUANTUM half (ML-DSA-65). Decode the carried pubkey; an
+            // undecodable key (wrong length) or a failing signature refuses the
+            // whole quorum — never a silent ed25519-only downgrade.
+            let Ok(pk_bytes) = <[u8; 1952]>::try_from(qs.ml_dsa_pubkey.as_slice()) else {
+                return false;
+            };
+            let ml_dsa_pk = MlDsaPublicKey(pk_bytes);
+            if !ml_dsa_pk.verify(&message, &qs.pq_signature) {
+                return false;
+            }
+            distinct.insert(qs.voter.0);
         }
         distinct.len() >= self.threshold
     }
@@ -183,8 +242,15 @@ impl StoredAttestedRoot {
         if let Some(block_id) = self.blocklace_block_id {
             let vote_msg =
                 dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
-            for (pk, sig) in &self.finalization_quorum {
-                if committee.contains(pk) && pk.verify(&vote_msg, sig) {
+            // DELIBERATELY ed25519-only here. This is the weaker lone-signature
+            // merkle-binding tamper check (a single valid sig, NOT a quorum): it
+            // only asserts that SOME committee member bound this exact root, to
+            // refuse a ledger recovered to an unsigned state. The full hybrid
+            // (classical ∧ pq) bar lives in `verify_finalization_quorum`, which
+            // is what actually re-anchors a restart; checking the ed25519 half
+            // alone for this tamper floor is sufficient and keeps it cheap.
+            for qs in &self.finalization_quorum {
+                if committee.contains(&qs.voter) && qs.voter.verify(&vote_msg, &qs.signature) {
                     return true;
                 }
             }
