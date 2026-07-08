@@ -49,8 +49,16 @@
 //! * only the COMBINED signature `z` is short/flooded — per-signer partials
 //!   ride Lagrange coefficients that are full-range in `ℤ_q` (the real
 //!   threshold scheme's per-party masking story is out of scope);
-//! * no RFC-style per-signer binding factors (concurrent-session attacks
-//!   apply), no constant-time arithmetic, toy parameters.
+//! * RFC-style per-signer binding factors are now PRESENT (reference):
+//!   [`hermine_sign_bound`] derives `ρ_i = H(t ‖ msg ‖ B ‖ i)` from the
+//!   round's FULL commitment set via blake3 (the FROST/RFC 9591 shape, the
+//!   concurrent-session mix-and-match defense) — but this is defense
+//!   SHAPING, not a proven defense: the formal ROS-resistance argument for
+//!   the lattice instantiation, a vetted hash-to-ring encoding, and
+//!   constant-time derivation are still owed. The unbound [`hermine_sign`]
+//!   stays for the Lean-pinned algebra (its shared-commitment fork IS the
+//!   extractor tests' hypothesis) and remains single-ceremony-only;
+//! * no constant-time arithmetic, toy parameters.
 
 use rand_chacha::ChaCha20Rng;
 use rand_core::RngCore;
@@ -622,17 +630,7 @@ fn sign_ceremony(
     message: &[u8],
     mut mask_for: impl FnMut(u64) -> PolyVec,
 ) -> Option<HermineSignature> {
-    if signers.is_empty() {
-        return None;
-    }
-    let parts: Vec<u64> = signers.iter().map(|s| s.index).collect();
-    // Distinct indices only (a duplicated signer is a caller bug, not a quorum).
-    {
-        let mut seen = std::collections::HashSet::new();
-        if !parts.iter().all(|i| seen.insert(*i)) {
-            return None;
-        }
-    }
+    let parts = validated_parts(signers)?;
 
     // Round 1: flooded masks + combined commitment.
     let masks: Vec<PolyVec> = signers.iter().map(|s| mask_for(s.index)).collect();
@@ -655,6 +653,22 @@ fn sign_ceremony(
     Some(HermineSignature { w, c, z })
 }
 
+/// Validate a signer set: nonempty, distinct indices. Returns the index list
+/// `parts` (the Lagrange evaluation set) or `None` on a degenerate set — the
+/// shared front door of both the unbound ceremony and the bound one.
+fn validated_parts(signers: &[&HermineShare]) -> Option<Vec<u64>> {
+    if signers.is_empty() {
+        return None;
+    }
+    let parts: Vec<u64> = signers.iter().map(|s| s.index).collect();
+    // Distinct indices only (a duplicated signer is a caller bug, not a quorum).
+    let mut seen = std::collections::HashSet::new();
+    if !parts.iter().all(|i| seen.insert(*i)) {
+        return None;
+    }
+    Some(parts)
+}
+
 /// Signer `i`'s partial response `z_i = y_i + c·(λ_i·s_i)` — the Lean
 /// `masks i + c • (lam i • shares i)`, one summand of the certificate.
 /// Exposed so tests can witness `hermine_share_is_valid_under_key_share`.
@@ -672,6 +686,208 @@ pub fn verify_hermine(
     sig: &HermineSignature,
 ) -> bool {
     sig.c == challenge(&sig.w, group_key, message) && verify(a, group_key, &sig.w, &sig.c, &sig.z)
+}
+
+// =============================================================================
+// FROST-style per-signer binding factors — the concurrent-session defense
+// =============================================================================
+
+/// The fixed weight `κ` of a binding factor: every `ρ_i` is a sparse ternary
+/// ring element with EXACTLY `κ` nonzero (±1) coefficients, so `‖ρ_i‖₁ = κ`.
+///
+/// Why sparse-fixed-weight instead of a full scalar (FROST's `ρ` lives in a
+/// prime field where size is free): here `ρ_i` MULTIPLIES the flooded mask,
+/// and shortness must survive — `‖ρ_i·y_i‖∞ ≤ ‖ρ_i‖₁·‖y_i‖∞ = κ·(M/2)`. The
+/// weight caps the norm inflation at exactly `κ` while the binding entropy
+/// stays real: `C(256, 8)·2⁸ ≈ 2⁵⁶` distinct binding factors.
+pub const BINDING_WEIGHT: usize = 8;
+
+/// The bound signing path's noise-flooding width. Narrower than
+/// [`MASK_WIDTH_WIDE`] because the combined response carries the `κ`-fold
+/// binding inflation: both sides of the trade still hold at `t = 3`,
+/// * **shortness** — `t·κ·(M/2) + N·η = 3·8·2¹⁷ + 512 = 3146240 < ⌊q/2⌋`,
+///   so [`acceptance_bound`]`(t·κ, M, shift)` keeps teeth;
+/// * **hiding** — the smudging leakage `‖c·s‖∞ / M ≤ 512/2¹⁸ ≈ 0.2%` per
+///   coefficient (and the `ρ`-weighted mask is a ±sum of `κ` independent
+///   flooded coefficients, which only smooths further).
+pub const MASK_WIDTH_BOUND: u64 = 1 << 18; // 262144
+
+/// One signer's round-1 broadcast in the BOUND ceremony: its index and its
+/// nonce/mask commitment `w_i = A·y_i`. The round's full list is the
+/// commitment set `B` every binding factor absorbs — the object a
+/// concurrent-session adversary would need to mix-and-match across sessions,
+/// and cannot, because changing ANY entry changes EVERY `ρ_i`.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct NonceCommitment {
+    /// The committing signer's 1-based Shamir index.
+    pub index: u64,
+    /// The commitment `w_i = A·y_i`.
+    pub w: PolyVec,
+}
+
+/// The per-signer binding factor
+/// `ρ_i = H(t ‖ message ‖ encode(B) ‖ i)` — RFC 9591's
+/// `binding_factor_for_participant`, transported to the module setting:
+/// blake3 absorbs the group key, the message, the ENTIRE round-1 commitment
+/// set `B = [(j, w_j)]`, and the signer index; the XOF then squeezes a
+/// sparse ternary ring element of weight [`BINDING_WEIGHT`].
+///
+/// Because `B` is absorbed whole, a commitment lifted from a DIFFERENT
+/// session (different masks, different message, different roster) yields a
+/// different `ρ_i` for EVERY signer — the mix-and-match (Drijvers/ROS-style
+/// concurrent-session) forgery loses its algebraic handle: an adversary
+/// cannot choose the session's effective commitment `Σ ρ_j·w_j` as a linear
+/// combination of commitments it saw elsewhere, since every substitution
+/// re-randomizes all the weights.
+///
+/// REFERENCE hash-to-ring: the squeeze (rejection-sample `κ` distinct
+/// positions + signs from the XOF stream) is uniform over the weight-`κ`
+/// ternary set (a byte is an exact position since `N = 256`) but has not
+/// been vetted as a deployed encoding, and it is not constant-time.
+pub fn binding_factor(
+    group_key: &PolyVec,
+    message: &[u8],
+    commitments: &[NonceCommitment],
+    index: u64,
+) -> Poly {
+    let mut h = blake3::Hasher::new();
+    h.update(b"crypto-hermine/binding-factor/v1");
+    let absorb_vec = |h: &mut blake3::Hasher, v: &PolyVec| {
+        h.update(&(v.len() as u64).to_le_bytes());
+        for p in &v.0 {
+            for &c in &p.coeffs {
+                h.update(&c.to_le_bytes());
+            }
+        }
+    };
+    absorb_vec(&mut h, group_key);
+    h.update(&(message.len() as u64).to_le_bytes());
+    h.update(message);
+    h.update(&(commitments.len() as u64).to_le_bytes());
+    for cm in commitments {
+        h.update(&cm.index.to_le_bytes());
+        absorb_vec(&mut h, &cm.w);
+    }
+    h.update(&index.to_le_bytes());
+
+    // Squeeze a fixed-weight sparse ternary element from the XOF.
+    let mut xof = h.finalize_xof();
+    let mut coeffs = [0u64; N];
+    let mut placed = 0usize;
+    let mut buf = [0u8; 2];
+    while placed < BINDING_WEIGHT {
+        xof.fill(&mut buf);
+        let pos = buf[0] as usize % N; // N = 256: one byte IS a uniform position
+        if coeffs[pos] != 0 {
+            continue; // occupied — rejection keeps the weight exact
+        }
+        coeffs[pos] = if buf[1] & 1 == 0 { 1 } else { Q - 1 };
+        placed += 1;
+    }
+    Poly { coeffs }
+}
+
+/// Produce a Hermine threshold signature WITH per-signer binding factors —
+/// the production-shaped ceremony (FROST/RFC 9591's concurrent-session
+/// defense, transported to the module setting). [`hermine_sign`] stays for
+/// the Lean-pinned single-ceremony algebra; THIS is the entry new wiring
+/// should shape itself against.
+///
+/// # The ceremony
+///
+/// * **Round 1** — each signer `i` draws a flooded mask `y_i` (uniform width
+///   [`MASK_WIDTH_BOUND`]) and broadcasts `w_i = A·y_i`; the round's
+///   commitment set is `B = [(i, w_i)]`.
+/// * **Binding** — each signer derives `ρ_i =` [`binding_factor`]
+///   `(t, message, B, i)`; the session's effective commitment is
+///   `w = Σ ρ_i·w_i` (computable from the broadcasts alone — by `A`'s
+///   linearity it equals `A·(Σ ρ_i·y_i)`).
+/// * **Round 2** — the challenge is `c = H(w ‖ t ‖ message)` as ever, and
+///   each partial response carries its OWN commitment's weight:
+///   `z_i = ρ_i·y_i + c·(λ_i·s_i)`; the certificate is `(w, c, z = Σ z_i)`.
+///
+/// # Why verification is unchanged
+///
+/// The binding factors ride ONLY the nonce side (exactly FROST's shape — the
+/// group key is never reweighted):
+///
+/// ```text
+/// A·z = Σ ρ_i·(A·y_i) + c·A·(Σ λ_i·s_i) = Σ ρ_i·w_i + c·t = w + c·t ,
+/// ```
+///
+/// so [`verify_hermine`] accepts the bound certificate as-is whenever the
+/// subset carries ≥ threshold genuine shares. Shortness survives because
+/// `‖ρ_i‖₁ =` [`BINDING_WEIGHT`]: `‖z‖∞ ≤ t·κ·(M/2) + ‖c·s‖∞`, i.e.
+/// [`acceptance_bound`]`(t·κ, M, shift)` — non-vacuous at these parameters
+/// (see [`MASK_WIDTH_BOUND`]).
+///
+/// # What binding buys
+///
+/// Under [`hermine_sign`], re-running a ceremony with the same masks and a
+/// different message forks the transcript at the challenge with a SHARED
+/// commitment — which is exactly the algebraic surface the Drijvers/ROS
+/// concurrent-session attacks exploit across parallel sessions. Here the
+/// commitment itself moves: `ρ_i` absorbs the message and the whole set `B`,
+/// so a commitment transplanted from any other session (or the same masks
+/// under another message) re-randomizes every weight and the transplanted
+/// algebra dies. The session-specificity is what the
+/// `binding_is_session_specific` test pins.
+///
+/// Same reference boundary as the rest of the crate — and the binding is
+/// REFERENCE-grade defense-shaping, not a proven defense: the formal
+/// ROS-resistance argument for this lattice instantiation, a vetted
+/// hash-to-ring encoding, and constant-time derivation are still owed.
+pub fn hermine_sign_bound(
+    a: &Matrix,
+    group_key: &PolyVec,
+    signers: &[&HermineShare],
+    mask_seed: u64,
+    message: &[u8],
+) -> Option<HermineSignature> {
+    let parts = validated_parts(signers)?;
+
+    // Round 1: per-signer flooded masks and broadcast commitments w_i = A·y_i.
+    let masks: Vec<PolyVec> = signers
+        .iter()
+        .map(|s| {
+            let mut state = mask_seed ^ s.index.wrapping_mul(0x9e3779b97f4a7c15);
+            sample_wide_mask_vec(&mut state, a.cols, MASK_WIDTH_BOUND)
+        })
+        .collect();
+    let commitments: Vec<NonceCommitment> = signers
+        .iter()
+        .zip(masks.iter())
+        .map(|(s, y)| NonceCommitment {
+            index: s.index,
+            w: a.mul_vec(y),
+        })
+        .collect();
+
+    // Binding: ρ_i from the FULL commitment set; w = Σ ρ_i·w_i, assembled
+    // from the broadcasts alone (what a coordinator actually computes).
+    let rhos: Vec<Poly> = signers
+        .iter()
+        .map(|s| binding_factor(group_key, message, &commitments, s.index))
+        .collect();
+    let w = commitments
+        .iter()
+        .zip(rhos.iter())
+        .fold(PolyVec::zero(a.rows), |acc, (cm, rho)| {
+            acc.add(&cm.w.scale(rho))
+        });
+
+    // Round 2: challenge on the BOUND commitment; partials z_i = ρ_i·y_i +
+    // c·(λ_i·s_i) — partial_response with the ρ-weighted mask.
+    let c = challenge(&w, group_key, message);
+    let z = signers
+        .iter()
+        .zip(masks.iter())
+        .zip(rhos.iter())
+        .map(|((s, y), rho)| partial_response(s, &parts, &y.scale(rho), &c))
+        .reduce(|acc, zi| acc.add(&zi))
+        .expect("nonempty signer set");
+
+    Some(HermineSignature { w, c, z })
 }
 
 // =============================================================================
@@ -1279,6 +1495,129 @@ mod tests {
         assert_ne!(sig1.c, sig2.c);
         let (lhs, rhs) = extracted_relation(&d.a, &d.group_key, &sig1, &sig2);
         assert_eq!(lhs, rhs);
+    }
+
+    // -- (e) per-signer binding factors: the concurrent-session defense ------
+
+    #[test]
+    fn bound_signature_verifies() {
+        // The bound ceremony's algebra is sound: A·z = Σρ_i·w_i + c·t = w + c·t,
+        // so verify_hermine accepts UNCHANGED — for any threshold subset.
+        let d = dealer_5_of_3();
+        let message = b"dregg-federation-vote-v1:hermine-bound";
+        for subset in [[0usize, 1, 2], [0, 2, 4], [1, 3, 4]] {
+            let signers: Vec<&HermineShare> = subset.iter().map(|&i| &d.shares[i]).collect();
+            let sig = hermine_sign_bound(
+                &d.a,
+                &d.group_key,
+                &signers,
+                0xB1D0 + subset[0] as u64,
+                message,
+            )
+            .unwrap();
+            assert!(verify_hermine(&d.a, &d.group_key, message, &sig));
+            assert!(verify(&d.a, &d.group_key, &sig.w, &sig.c, &sig.z));
+        }
+        // Shortness survives the κ-fold binding inflation:
+        // ‖z‖∞ ≤ t·κ·(M/2) + ‖c·s‖∞, non-vacuously below ⌊q/2⌋.
+        let bound = acceptance_bound(3 * BINDING_WEIGHT as u64, MASK_WIDTH_BOUND, SHIFT_BOUND);
+        assert!(
+            bound < Q / 2,
+            "bound-path acceptance bound must be non-vacuous"
+        );
+        let signers: Vec<&HermineShare> = d.shares[0..3].iter().collect();
+        for seed in 0..25u64 {
+            let sig = hermine_sign_bound(&d.a, &d.group_key, &signers, 0xB1D1_0000 + seed, message)
+                .unwrap();
+            assert!(verify_hermine(&d.a, &d.group_key, message, &sig));
+            assert!(signature_norm(&sig.z) <= bound);
+        }
+        // Refusals mirror the unbound path; wrong message and tampering fail.
+        assert!(hermine_sign_bound(&d.a, &d.group_key, &[], 0x1, message).is_none());
+        let dup: Vec<&HermineShare> = vec![&d.shares[0], &d.shares[0], &d.shares[1]];
+        assert!(hermine_sign_bound(&d.a, &d.group_key, &dup, 0x1, message).is_none());
+        let mut sig = hermine_sign_bound(&d.a, &d.group_key, &signers, 0xB1D2, message).unwrap();
+        assert!(!verify_hermine(&d.a, &d.group_key, b"other message", &sig));
+        sig.z.0[0] = sig.z.0[0].add(&Poly::constant(1));
+        assert!(!verify_hermine(&d.a, &d.group_key, message, &sig));
+        // Sub-threshold subsets still cannot forge through the bound path.
+        let sub: Vec<&HermineShare> = d.shares[0..2].iter().collect();
+        let sig = hermine_sign_bound(&d.a, &d.group_key, &sub, 0xB1D3, message).unwrap();
+        assert!(!verify_hermine(&d.a, &d.group_key, message, &sig));
+    }
+
+    #[test]
+    fn binding_is_session_specific() {
+        // THE mix-and-match defense: ρ_i must move whenever the commitment
+        // set B or the message moves, so a commitment lifted from another
+        // session cannot be replayed under the weights it was signed for.
+        let d = dealer_5_of_3();
+        let message = b"session-alpha";
+        // Two sessions' commitment sets over the same roster (different masks).
+        let commitment_set = |seed: u64| -> Vec<NonceCommitment> {
+            d.shares[0..3]
+                .iter()
+                .map(|s| {
+                    let mut state = seed ^ s.index.wrapping_mul(0x9e3779b97f4a7c15);
+                    let y = super::sample_wide_mask_vec(&mut state, d.a.cols, MASK_WIDTH_BOUND);
+                    NonceCommitment {
+                        index: s.index,
+                        w: d.a.mul_vec(&y),
+                    }
+                })
+                .collect()
+        };
+        let b1 = commitment_set(0xA11CE);
+        let b2 = commitment_set(0xB0B00);
+        assert_ne!(b1, b2, "two sessions must have distinct commitment sets");
+        for i in 1..=3u64 {
+            let rho = binding_factor(&d.group_key, message, &b1, i);
+            // A different session's B → a different ρ_i.
+            assert_ne!(rho, binding_factor(&d.group_key, message, &b2, i));
+            // A different message under the SAME B → a different ρ_i.
+            assert_ne!(rho, binding_factor(&d.group_key, b"session-beta", &b1, i));
+            // The weight is exactly κ, coefficients ternary (±1).
+            let rho_weight = rho
+                .coeffs
+                .iter()
+                .filter(|&&c| c != 0)
+                .inspect(|&&c| assert!(c == 1 || c == Q - 1, "non-ternary ρ coeff"))
+                .count();
+            assert_eq!(rho_weight, BINDING_WEIGHT);
+        }
+        // Distinct signers get distinct factors within one session.
+        assert_ne!(
+            binding_factor(&d.group_key, message, &b1, 1),
+            binding_factor(&d.group_key, message, &b1, 2)
+        );
+        // Transplanting ONE foreign commitment re-randomizes EVERY signer's
+        // ρ — the attacker cannot hold anyone's weight fixed while mixing.
+        let mut mixed = b1.clone();
+        mixed[2] = b2[2].clone();
+        for i in 1..=3u64 {
+            assert_ne!(
+                binding_factor(&d.group_key, message, &b1, i),
+                binding_factor(&d.group_key, message, &mixed, i)
+            );
+        }
+        // Ceremony-level consequence: same masks + two messages give the
+        // UNBOUND path a shared commitment (the forkable surface); the bound
+        // path's effective commitment AND response both move.
+        let signers: Vec<&HermineShare> = d.shares[0..3].iter().collect();
+        let seed = 0x005E_5510;
+        let u1 = hermine_sign(&d.a, &d.group_key, &signers, seed, b"msg-1").unwrap();
+        let u2 = hermine_sign(&d.a, &d.group_key, &signers, seed, b"msg-2").unwrap();
+        assert_eq!(u1.w, u2.w, "unbound: same masks share a commitment");
+        let s1 = hermine_sign_bound(&d.a, &d.group_key, &signers, seed, b"msg-1").unwrap();
+        let s2 = hermine_sign_bound(&d.a, &d.group_key, &signers, seed, b"msg-2").unwrap();
+        assert_ne!(
+            s1.w, s2.w,
+            "bound: the session binding moves the commitment"
+        );
+        assert_ne!(s1.z, s2.z, "bound: the combined response moves too");
+        // Both still verify — binding costs no correctness.
+        assert!(verify_hermine(&d.a, &d.group_key, b"msg-1", &s1));
+        assert!(verify_hermine(&d.a, &d.group_key, b"msg-2", &s2));
     }
 
     // -- harness hygiene (mirroring frost.rs's refusals) ---------------------
