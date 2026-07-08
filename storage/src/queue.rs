@@ -28,8 +28,163 @@ pub struct MerkleQueue {
     capacity: usize,
     /// Current root hash (blake3 of all entries from head to tail).
     root: [u8; 32],
+    /// Incremental balanced-Merkle cache over the pending window
+    /// (`leaf_hashes[head..tail]`), kept BYTE-IDENTICAL to
+    /// [`merkle_root`]/[`blake3_binary_root`](crate::commitment::blake3_binary_root)
+    /// at every state. Enqueue extends the window at its END, so the root
+    /// updates along the rightmost spine only (O(log m)); dequeue advances the
+    /// window FRONT, re-indexing every leaf, so it rebuilds (O(m), unavoidable
+    /// for this front-aligned shape — the same reshape `DequeueProof` documents).
+    tree: IncrementalMerkle,
     /// Optional WAL for durable mode.
     wal: Option<Box<WalState>>,
+}
+
+/// An incremental balanced-binary Merkle tree that reproduces
+/// [`blake3_binary_root`](crate::commitment::blake3_binary_root) over its
+/// current leaf window BYTE-IDENTICALLY at every state.
+///
+/// `blake3_binary_root(leaves)` is a balanced tree over `m = leaves.len()`
+/// leaves padded to `next_power_of_two(m)` with all-zero leaves that ARE
+/// hashed into the tree (`m == 0` → `[0; 32]`; `m == 1` → the leaf itself, no
+/// hashing). This cache stores each level as the non-empty PREFIX of its
+/// nodes; a node index beyond a level's prefix covers only zero-padding and
+/// equals `zeros[level]` — the exact constant the dense build folds those
+/// zeros to (`zeros[0] = [0; 32]`, `zeros[k] = blake3(zeros[k-1] ‖ zeros[k-1])`).
+///
+/// [`append`](IncrementalMerkle::append) extends the window at the END and
+/// touches only the rightmost root-ward spine (O(log m));
+/// [`rebuild`](IncrementalMerkle::rebuild) re-folds from scratch (O(m)) for the
+/// window-front advance a dequeue performs, where no subtree survives the
+/// re-indexing.
+#[derive(Debug, Clone)]
+struct IncrementalMerkle {
+    /// Level 0 is the window leaves; level `k` is the non-empty prefix of
+    /// parent hashes (index `i` covers leaves `[i·2^k, (i+1)·2^k)`). A node at
+    /// an index `>= levels[k].len()` covers only zero-padding and equals
+    /// `zeros[k]`.
+    levels: Vec<Vec<[u8; 32]>>,
+    /// `zeros[k]` = the root of an all-zero subtree of height `k`. Grown on
+    /// demand; retained across [`clear`](IncrementalMerkle::clear).
+    zeros: Vec<[u8; 32]>,
+}
+
+impl IncrementalMerkle {
+    fn new() -> Self {
+        Self {
+            levels: vec![Vec::new()],
+            zeros: vec![[0u8; 32]],
+        }
+    }
+
+    /// The blake3 pair hash `blake3(l ‖ r)` — byte-identical to the parent fold
+    /// inside [`blake3_binary_root`](crate::commitment::blake3_binary_root).
+    fn hash_pair(l: &[u8; 32], r: &[u8; 32]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(l);
+        h.update(r);
+        *h.finalize().as_bytes()
+    }
+
+    /// `zeros[level]`, extending the cache as needed.
+    fn zero(&mut self, level: usize) -> [u8; 32] {
+        while self.zeros.len() <= level {
+            let prev = *self.zeros.last().expect("zeros is non-empty");
+            self.zeros.push(Self::hash_pair(&prev, &prev));
+        }
+        self.zeros[level]
+    }
+
+    /// The value at `(level, idx)`: the stored prefix value, else the all-zero
+    /// subtree constant for `level` (a pure-padding node).
+    fn node(&mut self, level: usize, idx: usize) -> [u8; 32] {
+        match self.levels.get(level).and_then(|lv| lv.get(idx)) {
+            Some(v) => *v,
+            None => self.zero(level),
+        }
+    }
+
+    /// The current leaf count `m`.
+    fn m(&self) -> usize {
+        self.levels[0].len()
+    }
+
+    /// The root level `d` with `2^d == next_power_of_two(m)` (requires `m >= 1`).
+    fn depth(m: usize) -> usize {
+        m.next_power_of_two().trailing_zeros() as usize
+    }
+
+    /// Drop all leaves (an empty window). Keeps the `zeros` cache.
+    fn clear(&mut self) {
+        self.levels.clear();
+        self.levels.push(Vec::new());
+    }
+
+    /// Re-fold the tree over `leaves` from scratch (O(m)) — byte-identical to
+    /// [`blake3_binary_root`](crate::commitment::blake3_binary_root). Used for
+    /// the window-front advance a dequeue performs.
+    fn rebuild(&mut self, leaves: &[[u8; 32]]) {
+        self.levels.clear();
+        self.levels.push(leaves.to_vec());
+        if leaves.len() <= 1 {
+            return;
+        }
+        let d = Self::depth(leaves.len());
+        for level in 0..d {
+            let prev_len = self.levels[level].len();
+            let next_len = prev_len.div_ceil(2);
+            let mut next = Vec::with_capacity(next_len);
+            for i in 0..next_len {
+                let l = self.levels[level][2 * i];
+                let r = if 2 * i + 1 < prev_len {
+                    self.levels[level][2 * i + 1]
+                } else {
+                    self.zero(level)
+                };
+                next.push(Self::hash_pair(&l, &r));
+            }
+            self.levels.push(next);
+        }
+    }
+
+    /// Append one leaf at the window END, updating only the rightmost spine
+    /// (O(log m)). Byte-identical to a full rebuild over the extended window.
+    fn append(&mut self, leaf: [u8; 32]) {
+        self.levels[0].push(leaf);
+        let n = self.levels[0].len();
+        let d = Self::depth(n);
+        let mut k = 0usize;
+        while k < d {
+            let a = (n - 1) >> k; // the changed index at level k
+            let parent_idx = a >> 1;
+            let lchild = self.node(k, parent_idx * 2);
+            let rchild = self.node(k, parent_idx * 2 + 1);
+            let parent = Self::hash_pair(&lchild, &rchild);
+            if self.levels.len() == k + 1 {
+                self.levels.push(Vec::new());
+            }
+            let lv = &mut self.levels[k + 1];
+            if parent_idx < lv.len() {
+                lv[parent_idx] = parent;
+            } else {
+                debug_assert_eq!(parent_idx, lv.len(), "prefix grows contiguously");
+                lv.push(parent);
+            }
+            k += 1;
+        }
+    }
+
+    /// The current Merkle root, byte-identical to
+    /// [`blake3_binary_root`](crate::commitment::blake3_binary_root) over the
+    /// window (`[0; 32]` for an empty window; the sole leaf for `m == 1`).
+    fn root(&mut self) -> [u8; 32] {
+        let m = self.m();
+        if m == 0 {
+            return [0u8; 32];
+        }
+        let d = Self::depth(m);
+        self.node(d, 0)
+    }
 }
 
 /// Internal WAL state.
@@ -48,6 +203,7 @@ impl Clone for MerkleQueue {
             head: self.head,
             capacity: self.capacity,
             root: self.root,
+            tree: self.tree.clone(),
             wal: None,
         }
     }
@@ -113,6 +269,7 @@ impl MerkleQueue {
             head: 0,
             capacity,
             root: [0u8; 32],
+            tree: IncrementalMerkle::new(),
             wal: None,
         };
         q.recompute_root();
@@ -140,6 +297,7 @@ impl MerkleQueue {
             head: 0,
             capacity,
             root: [0u8; 32],
+            tree: IncrementalMerkle::new(),
             wal: Some(Box::new(WalState { wal, queue_id })),
         };
         q.recompute_root();
@@ -179,7 +337,7 @@ impl MerkleQueue {
         // Now apply in memory.
         self.leaf_hashes.push(hash_entry(&entry));
         self.entries.push(entry);
-        self.recompute_root();
+        self.append_reseal();
         Ok(self.root)
     }
 
@@ -272,6 +430,7 @@ impl MerkleQueue {
             head,
             capacity,
             root: [0u8; 32],
+            tree: IncrementalMerkle::new(),
             wal: Some(Box::new(WalState { wal, queue_id })),
         };
         q.recompute_root();
@@ -300,7 +459,7 @@ impl MerkleQueue {
         }
         self.leaf_hashes.push(hash_entry(&entry));
         self.entries.push(entry);
-        self.recompute_root();
+        self.append_reseal();
         Ok(self.root)
     }
 
@@ -404,15 +563,36 @@ impl MerkleQueue {
     /// For an empty queue, the root is `MerkleRoot::empty().blake3_root`
     /// (the all-zeros sentinel) — NOT the legacy `blake3(b"empty_queue")`.
     fn recompute_root(&mut self) {
-        // Reuse the cached, index-aligned leaf commitments for the pending
-        // window (head..tail) — byte-identical to re-hashing each entry via
+        // Re-fold the incremental cache over the whole pending window
+        // (head..tail) and adopt its root. Byte-identical to `merkle_root`
+        // over the same leaves (the cache reproduces `blake3_binary_root`),
+        // which is itself byte-identical to re-hashing each entry via
         // `hash_entry`, since `leaf_hashes[i] == hash_entry(&entries[i])`.
-        let pending = &self.leaf_hashes[self.head..];
-        if pending.is_empty() {
+        //
+        // This full O(m) fold is the DEQUEUE path: advancing `head` re-indexes
+        // every pending leaf relative to the window front, so no cached subtree
+        // survives (the same reshape `DequeueProof` documents — there is no
+        // succinct front-drop for this shape). Enqueue takes the incremental
+        // [`append_reseal`] fast path instead.
+        if self.head >= self.leaf_hashes.len() {
+            self.tree.clear();
             self.root = empty_queue_root();
             return;
         }
-        self.root = merkle_root(pending);
+        self.tree.rebuild(&self.leaf_hashes[self.head..]);
+        self.root = self.tree.root();
+    }
+
+    /// Incremental enqueue reseal: the just-pushed tail leaf extends the
+    /// pending window at its END (head is unchanged), so the balanced-tree root
+    /// updates along the rightmost spine only — O(log m), byte-identical to a
+    /// full [`recompute_root`](Self::recompute_root). Requires the incremental
+    /// cache to already mirror the pre-enqueue window (every mutation keeps it
+    /// in sync), and `leaf_hashes` to hold the new tail leaf.
+    fn append_reseal(&mut self) {
+        let leaf = *self.leaf_hashes.last().expect("enqueue pushed a leaf");
+        self.tree.append(leaf);
+        self.root = self.tree.root();
     }
 
     /// Leaf hashes of the current pending window (head..tail), in FIFO order.
@@ -795,6 +975,58 @@ mod tests {
             }
             // Live root tracks the reference at every step.
             assert_eq!(q.root(), rebuild_root(&all_entries, ref_head));
+        }
+    }
+
+    /// The incremental Merkle cache must reproduce
+    /// [`blake3_binary_root`](crate::commitment::blake3_binary_root) BYTE-FOR-
+    /// BYTE at every state over a long random sequence of appends (window END
+    /// extend — the enqueue fast path) and front-drops + rebuilds (the dequeue
+    /// window-front advance). Any divergence is a Merkle-root regression.
+    #[test]
+    fn incremental_tree_byte_identical_to_full_recompute() {
+        use crate::commitment::blake3_binary_root;
+
+        // Deterministic xorshift PRNG (no external dep).
+        let mut state: u64 = 0xD1CE_5EED_1234_5678;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        let mut tree = IncrementalMerkle::new();
+        let mut leaves: Vec<[u8; 32]> = Vec::new();
+
+        // Empty window agrees up front (both are the all-zero root).
+        assert_eq!(tree.root(), blake3_binary_root(&leaves));
+
+        for step in 0..4000u64 {
+            if leaves.is_empty() || next() % 4 != 0 {
+                // Append at the END — the enqueue fast path.
+                let mut leaf = [0u8; 32];
+                leaf[..8].copy_from_slice(&next().to_le_bytes());
+                leaf[8..16].copy_from_slice(&next().to_le_bytes());
+                leaf[16..24].copy_from_slice(&next().to_le_bytes());
+                leaves.push(leaf);
+                tree.append(leaf);
+            } else {
+                // Drop k from the FRONT and rebuild — the dequeue path (the
+                // window-front advance that re-indexes every leaf).
+                let k = (next() as usize % leaves.len()) + 1;
+                leaves.drain(0..k.min(leaves.len()));
+                tree.rebuild(&leaves);
+            }
+            // Byte-identity against the from-scratch reference at EVERY step,
+            // including the m==0 (empty), m==1 (bare leaf) and power-of-two
+            // depth-growth boundaries.
+            assert_eq!(
+                tree.root(),
+                blake3_binary_root(&leaves),
+                "incremental root diverged at step {step} (m = {})",
+                leaves.len()
+            );
         }
     }
 
