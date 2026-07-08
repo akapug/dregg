@@ -1292,13 +1292,14 @@ pub(crate) fn apply_fee_distribution(
 pub(crate) fn apply_committed_height(
     ledger: &mut Ledger,
     turn: &Turn,
+    template: &Ledger,
     block_height: u64,
     committed: bool,
 ) {
     if !committed {
         return;
     }
-    for cell_id in committed_height_touched_cells(turn) {
+    for cell_id in committed_height_touched_cells(turn, template) {
         if let Some(c) = ledger.get_mut(&cell_id) {
             // Mirror apply.rs EXACTLY: only stamp when the height actually advances (a no-op at
             // `block_height == 0`, and idempotent on re-execution at the same height). The
@@ -1322,8 +1323,22 @@ pub(crate) fn apply_committed_height(
 /// `apply_burn` resolves/creates), which the turn does not name, so this write-set stamps only the
 /// `target` and the well's committed-height is left to the (separate) issuer-well reconstitution.
 /// The live SWAP-inversion is a fee-bearing `Transfer` (both endpoints named), which is exact here.
-fn committed_height_touched_cells(turn: &Turn) -> std::collections::BTreeSet<CellId> {
-    fn walk(tree: &CallTree, out: &mut std::collections::BTreeSet<CellId>) {
+///
+/// CONDITIONAL-JOURNAL FIDELITY: most committing effects journal their cell UNCONDITIONALLY, but
+/// `RevokeCapability` is the exception — `apply_revoke_capability` records the journal entry ONLY
+/// inside `if let Some(old_cap) = c.capabilities.lookup(slot)`, so a NO-OP revoke of an empty/absent
+/// slot COMMITS but journals nothing, and the Rust committed-height loop leaves that cell unstamped.
+/// A syntactic write-set would then OVER-stamp it (Lean advancing a height Rust did not), diverging
+/// on `.root()` at height>0. So the revoke arm is gated on the pre-state (`template`) slot occupancy,
+/// exactly mirroring the executor's live-ledger `lookup(slot).is_some()` predicate. (A pathological
+/// intra-turn grant-then-revoke of the SAME freshly-assigned slot — occupied at revoke time but
+/// absent from the pre-state — is the one residual; it does not occur in the single-cap-effect
+/// covered turns and a mismatch would surface as a `CoveredDivergence`, never a silent forgery.)
+fn committed_height_touched_cells(
+    turn: &Turn,
+    template: &Ledger,
+) -> std::collections::BTreeSet<CellId> {
+    fn walk(tree: &CallTree, template: &Ledger, out: &mut std::collections::BTreeSet<CellId>) {
         let action_target = tree.action.target;
         for eff in &tree.action.effects {
             match eff {
@@ -1334,12 +1349,22 @@ fn committed_height_touched_cells(turn: &Turn) -> std::collections::BTreeSet<Cel
                 Effect::SetField { cell, .. }
                 | Effect::EmitEvent { cell, .. }
                 | Effect::IncrementNonce { cell }
-                | Effect::RevokeCapability { cell, .. }
                 | Effect::SetPermissions { cell, .. }
                 | Effect::SetVerificationKey { cell, .. }
                 | Effect::AttenuateCapability { cell, .. }
                 | Effect::Refusal { cell, .. } => {
                     out.insert(*cell);
+                }
+                // Conditional journal (see the fn doc): stamp only when the slot is actually occupied
+                // in the pre-state, matching `apply_revoke_capability`'s `lookup(slot).is_some()`.
+                Effect::RevokeCapability { cell, slot } => {
+                    let occupied = template
+                        .get(cell)
+                        .map(|c| c.capabilities.lookup(*slot).is_some())
+                        .unwrap_or(false);
+                    if occupied {
+                        out.insert(*cell);
+                    }
                 }
                 // Grant/Introduce journal the RECIPIENT holder (`record_grant_capability(*to)` /
                 // `record_grant_capability(*recipient)`) — the cell whose c-list gains the edge.
@@ -1375,12 +1400,12 @@ fn committed_height_touched_cells(turn: &Turn) -> std::collections::BTreeSet<Cel
             }
         }
         for child in &tree.children {
-            walk(child, out);
+            walk(child, template, out);
         }
     }
     let mut out = std::collections::BTreeSet::new();
     for root in &turn.call_forest.roots {
-        walk(root, &mut out);
+        walk(root, template, &mut out);
     }
     out
 }
@@ -1448,7 +1473,8 @@ pub fn execute_via_lean(
     // PI-v3 committed-height replay: stamp each forest-touched cell's `committed_height` to the host
     // block height (the extractor drops this host-stamped commitment limb, exactly as it dropped the
     // fee move). Gated on the commit bit; a no-op at height 0. Closes the covered-set root divergence.
-    apply_committed_height(&mut ledger, turn, host.block_height, committed);
+    // `pre_ledger` is the template the conditional-journal (revoke-occupancy) fidelity reads.
+    apply_committed_height(&mut ledger, turn, pre_ledger, host.block_height, committed);
     if prof {
         let t3 = std::time::Instant::now();
         prof_outer_accum(
@@ -1554,7 +1580,7 @@ pub(crate) fn lean_post_state_root(
     // PI-v3 committed-height replay (same lever as the fee replay): the denotational differential's
     // reconstituted root must reflect the host height stamp the Rust executor folds into every
     // forest-touched cell's commitment, else the shadow root diverges at `block_height > 0`.
-    apply_committed_height(&mut ledger, turn, host.block_height, committed);
+    apply_committed_height(&mut ledger, turn, &template, host.block_height, committed);
     Ok(ledger.root())
 }
 

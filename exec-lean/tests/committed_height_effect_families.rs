@@ -94,7 +94,9 @@ fn single_effect_turn(agent: CellId, target: CellId, effect: Effect) -> Turn {
         call_forest: forest,
         fee: 0,
         memo: None,
-        valid_until: Some(1_000_000),
+        // Above the largest test height (1_048_576) so the turn is never expiry-rejected — the
+        // matrix must isolate the committed-height limb, not a `valid_until < block_height` refusal.
+        valid_until: Some(1 << 40),
         previous_receipt_hash: None,
         depends_on: vec![],
         conservation_proof: None,
@@ -274,8 +276,11 @@ fn fx_increment_nonce() -> Fixture {
 }
 
 fn fx_revoke_capability() -> Fixture {
-    // Revoke on an empty c-list: a no-op in Rust (cap_root stays the empty root) that STILL journals
-    // the cell (`record_revoke_capability`) — so the committed-height stamp fires on it.
+    // Revoke on an EMPTY c-list: a committing no-op in Rust that journals NOTHING
+    // (`apply_revoke_capability` records only inside `if let Some(_) = lookup(slot)`), so the Rust
+    // committed-height loop leaves the cell UNSTAMPED. THE NON-VACUOUS TOOTH for the conditional-
+    // journal fix: a syntactic write-set over-stamps this cell (Lean height N, Rust height 0) and
+    // diverges on `.root()` at height>0; the occupancy gate makes Lean skip it, matching Rust.
     let a = make_open_cell(1, 100);
     let a_id = a.id();
     let mut pre = Ledger::new();
