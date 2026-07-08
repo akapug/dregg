@@ -404,6 +404,88 @@ impl GrainWorkload for NotesApp {
     }
 }
 
+/// A **hosted-grain card server** — the WebSession leg of trustless cloud hosting. The
+/// grain holds a `deos-view` card (a [`GrainRun`]: a CI run / rented-grain surface) and,
+/// on a GET of the card's path, renders it to a full browser-loadable HTML document
+/// ([`render_card_document`]) and serves that as the response — the SAME card the native
+/// cockpit paints, now served over the web.
+///
+/// **Witnessed.** The served HTML is materialized into the grain's `/var` (the cell umem
+/// heap) at [`Self::key`], so the `data_root` [`HttpBridge::serve`] commits is the
+/// commitment of *exactly the bytes served*. A light client re-hashes the served bytes
+/// (put them in a fresh umem at the same key, commit) and gets the same root — the host
+/// cannot serve one card and commit to another. The write is content-addressed and
+/// idempotent: serving the same card twice yields the same root.
+///
+/// **Cap-gated.** The powerbox cap-gate is [`HttpBridge::serve`]: an empty permission set
+/// (no cap, a cap for another grain, a forged/leaked credential, or one granting no
+/// declared facet) is answered `403` before the workload ever runs, so the card is not
+/// served. The workload additionally requires the `view` facet on the derived header,
+/// mirroring [`NotesApp`].
+pub struct CardGrainWorkload {
+    /// The document `<title>` (the page heads the browser tab with it).
+    pub title: String,
+    /// The grain path the card is served at (a GET here → the card; anything else → 404).
+    pub path: String,
+    /// The card to serve — a `deos-view` grain-run surface rendered via [`grain_run_view`].
+    pub run: deos_view::GrainRun,
+}
+
+impl CardGrainWorkload {
+    /// Host a `deos-view` [`GrainRun`] card, served at `path` with document title `title`.
+    pub fn new(
+        title: impl Into<String>,
+        path: impl Into<String>,
+        run: deos_view::GrainRun,
+    ) -> Self {
+        CardGrainWorkload {
+            title: title.into(),
+            path: path.into(),
+            run,
+        }
+    }
+
+    /// Render the held card to a full, browser-loadable HTML document — the SAME
+    /// `ViewNode` the native cockpit paints, projected to HTML by the web renderer.
+    pub fn render(&self) -> String {
+        let tree = deos_view::grain_run_view(&self.run);
+        deos_view::render_card_document(&self.title, &tree, &[])
+    }
+
+    /// The `/var` key the served card bytes are materialized under — what the committed
+    /// `data_root` witnesses. A light client reconstructs `/var` from this key + the
+    /// served bytes to re-derive the root.
+    pub fn key(&self) -> String {
+        format!("card{}", self.path)
+    }
+}
+
+impl GrainWorkload for CardGrainWorkload {
+    fn serve(&self, req: &BridgedRequest, var: &mut Umem) -> HttpResponse {
+        match req.method {
+            // The card's path: render + witness + serve. (The shim's `HttpResponse`
+            // carries no header map — the real bridge sets `Content-Type: text/html`
+            // from the app; here the body is a complete `<!doctype html>` document, so
+            // it is self-describing.)
+            Method::Get if req.path == self.path => {
+                if !req.has("view") {
+                    return HttpResponse::forbidden();
+                }
+                let html = self.render();
+                // Materialize the served bytes into `/var` so the committed `data_root`
+                // witnesses exactly what was served (content-addressed + idempotent).
+                var.put(self.key(), html.clone().into_bytes());
+                HttpResponse::ok(html.into_bytes())
+            }
+            // A hosted card grain serves only its one card path; everything else is 404.
+            _ => HttpResponse {
+                status: 404,
+                body: b"not found".to_vec(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,5 +809,127 @@ mod tests {
         );
         assert_eq!(served.response.status, 200);
         assert!(!var.is_empty());
+    }
+
+    /// A `deos-view` grain-run card with an all-`Done` pipeline (terminal receipt present),
+    /// so its rendered HTML carries the distinctive "checks green" gate line + the title.
+    fn sample_card() -> CardGrainWorkload {
+        use deos_view::{GrainRun, LeaseStatus, LeaseView, StepStatus, StepView};
+        let run = GrainRun {
+            title: "verify breadstuffs".to_string(),
+            lease: LeaseView {
+                host: "grain-host-7".to_string(),
+                metered: 512,
+                budget: 1000,
+                status: LeaseStatus::Active,
+            },
+            pipeline: vec![
+                StepView {
+                    name: "fetch".to_string(),
+                    status: StepStatus::Done,
+                    receipt: Some("a1b2c3".to_string()),
+                },
+                StepView {
+                    name: "build".to_string(),
+                    status: StepStatus::Done,
+                    receipt: Some("d4e5f6".to_string()),
+                },
+                StepView {
+                    name: "report".to_string(),
+                    status: StepStatus::Done,
+                    receipt: Some("aabbcc".to_string()),
+                },
+            ],
+            bounty: None,
+        };
+        CardGrainWorkload::new("my CI run — dregg.works", "/", run)
+    }
+
+    /// THE CLOUD-SERVING WELD, both poles. A hosted grain serves its own `deos-view` card
+    /// over the WebSession/HTTP surface — cap-gated (the powerbox cap) and witnessed (the
+    /// committed `data_root` is the commitment of exactly the served bytes).
+    #[test]
+    fn a_hosted_grain_serves_its_deos_view_card_cap_gated_and_witnessed() {
+        let host = host();
+        let grain = "cell:card-grain";
+        let card = sample_card();
+        let declared = vec!["view".to_string()];
+
+        // ── POLE 1: WITH the powerbox cap (a `view` grant for THIS grain) → the card is
+        //    served (200) AND the returned data_root witnesses the served bytes. ──
+        let mut var = Umem::new();
+        let empty_root = var.commit();
+        let served = HttpBridge::serve(
+            &card,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut var,
+            &HttpRequest::get("/"),
+        );
+        assert_eq!(served.response.status, 200, "the card is served");
+        let body = String::from_utf8(served.response.body.clone()).unwrap();
+        // The SAME card content the native cockpit paints, now in the served HTML.
+        assert!(body.starts_with("<!doctype html>"), "a full HTML document");
+        assert!(
+            body.contains("my CI run — dregg.works"),
+            "the card's page title is served"
+        );
+        assert!(
+            body.contains("checks green"),
+            "the derived CI-gate line paints in the served card"
+        );
+        assert!(
+            body.contains("verify breadstuffs"),
+            "the run title paints in the served card"
+        );
+
+        // WITNESSED: the committed data_root moved off empty, and a light client that
+        // re-hashes the served bytes (put them in a fresh umem at the known key, commit)
+        // re-derives the SAME root — the host cannot serve one card and commit another.
+        assert_ne!(
+            served.new_data_root, empty_root,
+            "the serve committed state"
+        );
+        let mut light_client = Umem::new();
+        light_client.put(card.key(), served.response.body.clone());
+        assert_eq!(
+            light_client.commit(),
+            served.new_data_root,
+            "re-hashing the served bytes reproduces the committed data_root (witnessed)"
+        );
+        // TAMPER-EVIDENT: flip one served byte → a different root (the commitment binds).
+        let mut tampered = served.response.body.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        let mut forger = Umem::new();
+        forger.put(card.key(), tampered);
+        assert_ne!(
+            forger.commit(),
+            served.new_data_root,
+            "a tampered card cannot match the committed root"
+        );
+
+        // ── POLE 2: with EMPTY permissions (no powerbox cap for this grain — the session
+        //    holds a genuine `view` cap for a DIFFERENT grain, so it confers nothing here)
+        //    → 403 and the card is NOT served (nothing materialized into /var). ──
+        let mut var2 = Umem::new();
+        let no_cap = HttpBridge::serve(
+            &card,
+            grain,
+            &viewer_session(&host, "cell:OTHER-grain"),
+            &host.public(),
+            &declared,
+            1000,
+            &mut var2,
+            &HttpRequest::get("/"),
+        );
+        assert_eq!(no_cap.response, HttpResponse::forbidden(), "no cap → 403");
+        assert!(
+            var2.is_empty(),
+            "the card was not served — nothing witnessed"
+        );
     }
 }
