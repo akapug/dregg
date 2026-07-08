@@ -357,19 +357,24 @@ fn close_all_but(keep: &[RawFd]) -> Result<(), ConfineError> {
     Ok(())
 }
 
-/// An upper bound on the fd table to sweep. Uses `RLIMIT_NOFILE` soft limit,
-/// clamped to a sane ceiling so we never spin over a 2^31 limit.
+/// An upper bound on the fd table to sweep. Uses the `RLIMIT_NOFILE` soft limit
+/// AS-IS when finite — the whole point is that NO inherited fd survives the jail,
+/// so we must sweep the entire open range, not a fixed 4096 (a host with a raised
+/// `RLIMIT_NOFILE` routinely holds fds above 4096; clamping there would leak them
+/// into the confined child, since `execve` does not CLOEXEC them). A ceiling
+/// (2^20) is applied ONLY to bound the `RLIM_INFINITY` / absurd-limit cases so we
+/// never spin over 2^31.
 fn max_open_fds() -> RawFd {
     let mut rl = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
     };
-    let cap: RawFd = 4096;
+    let ceiling: RawFd = 1 << 20;
     let rc = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) };
     if rc == 0 && rl.rlim_cur != libc::RLIM_INFINITY {
-        (rl.rlim_cur as RawFd).min(cap).max(16)
+        (rl.rlim_cur as RawFd).max(16).min(ceiling)
     } else {
-        cap
+        ceiling
     }
 }
 
