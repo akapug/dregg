@@ -150,18 +150,18 @@ theorem honestTraceV_satisfied2 (hash : List ℤ → ℤ) :
     interval_cases i <;>
       fin_cases hc <;>
       simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, Lookup.holdsAt, gate, piFirst,
-        commitLookup, hF0, hF1, relTraceV, relTfV, relPubV, relRowV, envAt, subV,
-        VALUE_A, BLINDING_A, VALUE_B, BLINDING_B, DIFF, RESULT_BIT, RANGE_FLAG, EQ_FLAG, NEQ_FLAG,
-        COMMIT_A, COMMIT_B, COMMIT_VERIFY, ZERO_PAD, List.getD_cons_zero, List.getD_cons_succ,
-        reduceIte, reduceCtorEq] <;>
+        commitLookup, relTraceV, relTfV, relPubV, relRowV, envAt, subC, subV, binBody, sumE,
+        atLeastOne, oneMinus, prodE, recomposeExpr, recomposeAExpr, recomposeBExpr, EmittedExpr.eval,
+        VALUE_A, BLINDING_A, VALUE_B, BLINDING_B, DIFF, NEQ_INV, RESULT_BIT, RANGE_FLAG, EQ_FLAG,
+        NEQ_FLAG, COMMIT_A, COMMIT_B, COMMIT_VERIFY, ZERO_PAD, VALUE_A_BITS_START, VALUE_B_BITS_START,
+        NUM_DIFF_BITS, List.getD_cons_zero, List.getD_cons_succ, List.length_cons, List.length_nil,
+        reduceIte, reduceCtorEq, Nat.reduceAdd, Nat.reduceBEq, mul_zero, zero_mul, mul_one, one_mul,
+        beq_self_eq_true, eq_self_iff_true, true_implies, false_implies] <;>
       first
-        | rfl
         | exact List.mem_cons.mpr (Or.inl rfl)
         | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
-        | decide
-        | exact fun h => absurd h (by decide)
         | trivial
-        | simp
+        | rfl
   rowHashes := by intro i _; trivial
   rowRanges := by intro i _ r hr; simp only [relationalPredicateDesc, List.not_mem_nil] at hr
   memAddrsNodup := List.nodup_nil
