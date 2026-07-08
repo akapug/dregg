@@ -74,6 +74,75 @@ Everything above is a substrate; the forge is the *product surface* welded onto 
    the forge paints in every glass (cockpit, browser, Discord, terminal) — like the other reflective
    cards. `cell_git` already computes the data; the forge card renders it.
 
+## THE FULL COMPOSITION (3-lane census, 2026-07-08) — it is ONE weld, not reinvention
+
+A comprehensive census of the grain economy (mandate/workflow/gateway + hosting/lease/economy/grain +
+market/bounty/orchestration) found that the ENTIRE forge-as-a-grain body already exists and composes.
+The map:
+
+| Lifecycle leg | Existing crate / entry point |
+|---|---|
+| List + rent the runner | `grain-commons::GrainRegistry`/`RentQuote` → `agent-platform::AgentPlatform::rent` |
+| Fund + meter the lease (prepaid, fused meter⊗draw); lapse/reap | `hosted-lease::HostedLease` · `bill_period` · `reap_if_behind` |
+| Settle rent (conserving, exactly-once) | `hosted-durable::{Settlement, LeaseCharge, SettleReceipt}` |
+| Confine the runner body (one egress door) | `grain-jail::ConfinedBrain` + firmament `process-pd` / `spawn_pd_confined_exec` |
+| The CI pipeline (DAG: fetch→build→test→report, no-skip, exact-+1) | `compartment-workflow-mandate` (CWM) `cwm_cell_program` + `advance_step` |
+| Per-step COMPUTE budget tooth (`SPEND_ACCUM ≤ BUDGET`) | CWM `colonist_job` |
+| Clearance (which runner role runs which step) | CWM `ClearanceDominates` root-bound lattice |
+| Runner cap (rate/deadline/scope, revocable) | `tool-access-delegation` `Grant`/`fire_invoke`/`RevokeDelegation` |
+| Runner identity + spend budget + caps body | `edge-mandate` `CapMandate` + `authorized_keys_line` |
+| Artifact/log upload (volume-metered) | `storage-gateway-mandate` `fire_put` |
+| Drive each step as a metered kernel turn | `agent-platform::drive_serving` → `grain-turn::ToolGatewayMinter` |
+| Finalize + cross-node verify | `agent-platform::node::LocalNode` · `verify_landed`/`verify_r2` |
+| Renter attestation (R2 ladder) | `grain-verify::GrainAttestation::verify_r2_for_renter` |
+| Fork the runner (matrix / fan-out jobs) | `grain-fork::ConfinedSession::fork_two` (egress+budget attenuated) |
+| CI-fan-out orchestration (N runners, one budget, audited) | `swarm-orchestration` (+ `agent-orchestration::audit_run`) |
+| Pay to trigger / entitlement | `discharge-gateway` `PaymentEvaluator`/`ProofRequiredEvaluator` |
+| **PR-as-a-bounty** (post→claim→submit→payout, no-double-pay) | `bounty-board` `BountyTreasury::payout` (conserving) |
+| **CI-as-a-market-job** (post/bid/settle, conservation) | `compute-exchange` |
+| Branch-protection (who changes the required-check set) | `governed-namespace` threshold-committee swap |
+| **Terminal check-receipt the forge gate consumes** | ⚠ **THE ONE GAP — see below** |
+
+## THE ONE WELD: the terminal check turn needs an executor-SIGNED receipt
+
+Every drive path in the grain family (`agent-platform::drive*`, `grain-turn`, `node.land`) mints
+`Finality::Final` but **`executor_signature == None`** — because `sdk/src/runtime.rs:78` builds the
+`TurnExecutor` with no signing key and NOTHING in the family calls `set_executor_signing_key`. The
+forge gate `RequiredCheck::CommittedReceipt` (`dregg-doc/check.rs:211-230`) refuses an unsigned receipt
+fail-closed (`CheckRefusal::Unsigned`) and Ed25519-verifies over `canonical_executor_signed_message`.
+The ONLY existing producer of a gate-valid receipt is `dregg-doc::ExecutorDrivenDoc` (`executor_drive.rs:182`
+sets the key, `:466` Final). So the weld is exactly one signature domain. Two routes:
+
+- **Route (i) — the forge's own executor signs the terminal check turn (RECOMMENDED first slice).** The
+  runner drives the CI workflow through the grain path (metered, R2 — intermediate steps need no
+  signature), and the TERMINAL "checks passed" turn is committed through the forge-grain's
+  `ExecutorDrivenDoc` (signed), producing the receipt `RequiredCheck::satisfied_by` accepts. This is
+  EXACTLY what `check.rs:40-43` already envisions ("the check job as a confined grain whose only egress
+  is committing the check-turn receipt"). It does NOT change any grain host's security surface — the
+  forge-grain's executor key is the trust anchor, pinned in `trusted_executor_keys`.
+- **Route (ii) — sign the whole grain drive path (deeper unification, ember-decision).** Teach
+  agent-platform/grain-turn to build their `AgentRuntime`/`TurnExecutor` with
+  `set_executor_signing_key(grain_seed)` and register that pubkey as a trusted executor key. Then EVERY
+  grain turn becomes forge-admissible — but the grain host's executor key becomes a forge trust anchor
+  (a real security-surface change). Powerful; needs ember's call.
+
+**The same weld closes the market side:** bind `bounty-board::payout` / `compute-exchange::settle` to
+require the runner's terminal SIGNED receipt (the completion witness) — then *PR merges → the runner's
+signed terminal receipt satisfies BOTH the forge merge gate AND the bounty payout*. One signature, three
+gates lit (CI, bounty, market).
+
+## The weld gaps, prioritized (the ONLY new code)
+
+1. **Signed terminal receipt** (Route i or ii) — the one hard blocker.
+2. **The forge↔grain binding** — a thin forge-grain that seeds a CWM charter, drives it, signs the
+   terminal turn, and hands its receipt to `PullRequest::present_witness`. (`dregg-doc` has no dep on the
+   grain crates today — a new binding crate or a dregg-doc feature.)
+3. **`planned_advance_turn_hash`** on CWM/colonist_job (the pre-image so `RequiredCheck::committed_receipt`
+   can name the terminal turn before it runs — the analogue of `ExecutorDrivenDoc::planned_turn_hash`).
+4. **Completion-witness precondition** on `bounty-board::payout` / `compute-exchange::settle`.
+5. **2→N orchestration arity** (both orchestration crates hardwire `enum Worker{A,B}`) + a **forge-event→
+   turn settlement reactor** (auto-payout on merge; the `CoordinatorReactor` pattern is the template).
+
 ## Forge-as-a-grain (the design, grounded in tonight's confinement machinery)
 
 The forge-grain is the homeserver-grain's sibling — and it reuses the EXACT machinery the
