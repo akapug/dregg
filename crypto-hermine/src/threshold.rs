@@ -49,15 +49,19 @@
 //! * only the COMBINED signature `z` is short/flooded — per-signer partials
 //!   ride Lagrange coefficients that are full-range in `ℤ_q` (the real
 //!   threshold scheme's per-party masking story is out of scope);
-//! * RFC-style per-signer binding factors are now PRESENT (reference):
-//!   [`hermine_sign_bound`] derives `ρ_i = H(t ‖ msg ‖ B ‖ i)` from the
-//!   round's FULL commitment set via blake3 (the FROST/RFC 9591 shape, the
-//!   concurrent-session mix-and-match defense) — but this is defense
-//!   SHAPING, not a proven defense: the formal ROS-resistance argument for
-//!   the lattice instantiation, a vetted hash-to-ring encoding, and
-//!   constant-time derivation are still owed. The unbound [`hermine_sign`]
-//!   stays for the Lean-pinned algebra (its shared-commitment fork IS the
-//!   extractor tests' hypothesis) and remains single-ceremony-only;
+//! * the CONCURRENCY defense is the Raccoon-aligned 2-round MASKING +
+//!   COMMIT-THEN-REVEAL ceremony ([`hermine_sign_raccoon`] /
+//!   [`RaccoonSignSession`]) — the REAL scheme's mechanism: one-time flooded
+//!   masks + a BN06-style hash commitment on each `w_i` before any reveal,
+//!   so a rushing/concurrent adversary cannot choose its commitment
+//!   adaptively; the security argument is STRAIGHT-LINE under Hint-MLWE
+//!   (formalized in the metatheory separately), NOT a ROS/binding argument.
+//!   The FROST-style per-signer binding factors ([`hermine_sign_bound`] /
+//!   [`binding_factor`]) are SUPERSEDED — not the Raccoon mechanism —
+//!   and retained only for the differential/regression tests. The unbound
+//!   [`hermine_sign`] stays for the Lean-pinned algebra (its
+//!   shared-commitment fork IS the extractor tests' hypothesis) and remains
+//!   single-ceremony-only;
 //! * no constant-time arithmetic, toy parameters.
 
 use rand_chacha::ChaCha20Rng;
@@ -689,7 +693,8 @@ pub fn verify_hermine(
 }
 
 // =============================================================================
-// FROST-style per-signer binding factors — the concurrent-session defense
+// FROST-style per-signer binding factors — SUPERSEDED (not the Raccoon
+// mechanism; retained only for the differential/regression tests)
 // =============================================================================
 
 /// The fixed weight `κ` of a binding factor: every `ρ_i` is a sparse ternary
@@ -725,6 +730,13 @@ pub struct NonceCommitment {
     pub w: PolyVec,
 }
 
+/// **SUPERSEDED — FROST-style binding, NOT the Raccoon mechanism; retained
+/// only for the differential/regression tests.** The real concurrency defense
+/// is the Raccoon 2-round commit-then-reveal ([`hermine_sign_raccoon`]);
+/// Raccoon defeats rushing/concurrent adversaries with one-time masks + a
+/// BN06-style commit-then-reveal, proved straight-line under Hint-MLWE — not
+/// via ROS/binding.
+///
 /// The per-signer binding factor
 /// `ρ_i = H(t ‖ message ‖ encode(B) ‖ i)` — RFC 9591's
 /// `binding_factor_for_participant`, transported to the module setting:
@@ -787,11 +799,16 @@ pub fn binding_factor(
     Poly { coeffs }
 }
 
+/// **SUPERSEDED — FROST-style binding, NOT the Raccoon mechanism; retained
+/// only for the differential/regression tests.** The real path is the Raccoon
+/// 2-round masking + commit-then-reveal ceremony
+/// ([`hermine_sign_raccoon`]) — that is what new wiring should shape itself
+/// against. [`hermine_sign`] stays for the Lean-pinned single-ceremony
+/// algebra.
+///
 /// Produce a Hermine threshold signature WITH per-signer binding factors —
-/// the production-shaped ceremony (FROST/RFC 9591's concurrent-session
-/// defense, transported to the module setting). [`hermine_sign`] stays for
-/// the Lean-pinned single-ceremony algebra; THIS is the entry new wiring
-/// should shape itself against.
+/// the FROST/RFC 9591 concurrent-session defense, transported to the module
+/// setting.
 ///
 /// # The ceremony
 ///
@@ -836,7 +853,9 @@ pub fn binding_factor(
 /// Same reference boundary as the rest of the crate — and the binding is
 /// REFERENCE-grade defense-shaping, not a proven defense: the formal
 /// ROS-resistance argument for this lattice instantiation, a vetted
-/// hash-to-ring encoding, and constant-time derivation are still owed.
+/// hash-to-ring encoding, and constant-time derivation were never provided —
+/// one more reason the Raccoon commit-then-reveal path (whose concurrency
+/// argument is straight-line under Hint-MLWE, no ROS) supersedes this one.
 pub fn hermine_sign_bound(
     a: &Matrix,
     group_key: &PolyVec,
@@ -888,6 +907,329 @@ pub fn hermine_sign_bound(
         .expect("nonempty signer set");
 
     Some(HermineSignature { w, c, z })
+}
+
+// =============================================================================
+// Raccoon 2-round signing — one-time masks + BN06-style commit-then-reveal
+// (the REAL scheme's concurrency mechanism)
+// =============================================================================
+
+/// One signer's Round-1 broadcast in the RACCOON ceremony: a blake3 HASH
+/// COMMITMENT `cm_i = H("dregg-raccoon-commit" ‖ i ‖ w_i)` to its nonce
+/// commitment `w_i = A·y_i` — NOT `w_i` itself. Withholding `w_i` until every
+/// party has committed is the whole point: a rushing adversary must fix its
+/// contribution before it sees any honest one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RaccoonCommitMsg {
+    /// The committing signer's 1-based Shamir index.
+    pub index: u64,
+    /// The hash commitment `cm_i` (see [`raccoon_commitment`]).
+    pub cm: [u8; 32],
+}
+
+/// One signer's Round-2 broadcast: the REVEAL of the `w_i` it committed to in
+/// Round 1. Every party checks it against `cm_i` before summing
+/// ([`RaccoonSignSession::combine_reveals`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RaccoonRevealMsg {
+    /// The revealing signer's 1-based Shamir index.
+    pub index: u64,
+    /// The revealed nonce commitment `w_i = A·y_i`.
+    pub w: PolyVec,
+}
+
+/// Why a Raccoon 2-round session refused to complete.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RaccoonError {
+    /// Mis-shaped round: wrong reveal count, out-of-order/mismatched indices,
+    /// or inconsistent vector shapes.
+    BadParameters,
+    /// Signer `index`'s Round-2 reveal does not hash to its Round-1
+    /// commitment — EQUIVOCATION. This is the teeth of the commit-then-reveal
+    /// defense: the rushing/mix-and-match adversary is caught and named.
+    Equivocation {
+        /// The signer whose reveal contradicts its commitment.
+        index: u64,
+    },
+}
+
+/// The Round-1 hash commitment `cm_i = H("dregg-raccoon-commit" ‖ i ‖ w_i)`
+/// over blake3 — binding (up to collision resistance) the signer's nonce
+/// commitment before any honest `w` is on the wire.
+///
+/// NOTE this reference commits to `w_i` directly, with no extra hiding
+/// randomness: `w_i = A·y_i` under a flooded one-time mask already has full
+/// entropy, and what the BN06-style round needs here is BINDING (the reveal
+/// cannot move). A deployment reviewing hiding formally would add an explicit
+/// commitment opening; that is transport-layer polish, not the mechanism.
+pub fn raccoon_commitment(index: u64, w: &PolyVec) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"dregg-raccoon-commit");
+    h.update(&index.to_le_bytes());
+    h.update(&(w.len() as u64).to_le_bytes());
+    for p in &w.0 {
+        for &c in &p.coeffs {
+            h.update(&c.to_le_bytes());
+        }
+    }
+    *h.finalize().as_bytes()
+}
+
+/// The Raccoon session challenge
+/// `c = H("dregg-raccoon-chal" ‖ w ‖ t ‖ message)` — the SelfTargetMSIS
+/// challenge over the SUMMED commitment `w = Σᵢ wᵢ`, the group key, and the
+/// message; blake3-XOF squeezed into the SHORT ternary set (`‖c‖∞ ≤ 1`, the
+/// bound the smudging shift accounting needs), by rejection so each
+/// coefficient is exactly uniform over `{-1, 0, 1}`.
+///
+/// Reference boundary: a real hash (blake3) and a real domain tag, but still
+/// not the deployed fixed-weight unit-difference challenge set, and the
+/// squeeze is not constant-time.
+pub fn raccoon_challenge(w: &PolyVec, group_key: &PolyVec, message: &[u8]) -> Poly {
+    let mut h = blake3::Hasher::new();
+    h.update(b"dregg-raccoon-chal");
+    let absorb_vec = |h: &mut blake3::Hasher, v: &PolyVec| {
+        h.update(&(v.len() as u64).to_le_bytes());
+        for p in &v.0 {
+            for &c in &p.coeffs {
+                h.update(&c.to_le_bytes());
+            }
+        }
+    };
+    absorb_vec(&mut h, w);
+    absorb_vec(&mut h, group_key);
+    h.update(&(message.len() as u64).to_le_bytes());
+    h.update(message);
+    let mut xof = h.finalize_xof();
+    let mut coeffs = [0u64; N];
+    let mut buf = [0u8; 1];
+    for c in coeffs.iter_mut() {
+        // Rejection keeps {-1, 0, 1} exactly uniform (255 = 3·85).
+        loop {
+            xof.fill(&mut buf);
+            if buf[0] < 255 {
+                *c = match buf[0] % 3 {
+                    0 => 0,
+                    1 => 1,
+                    _ => Q - 1, // −1 mod q
+                };
+                break;
+            }
+        }
+    }
+    Poly { coeffs }
+}
+
+/// One signer's local state across the Raccoon 2-round ceremony: its ONE-TIME
+/// flooded mask `y_i` (never leaves this struct) and its nonce commitment
+/// `w_i = A·y_i` (revealed only in Round 2, after every commitment is in).
+pub struct RaccoonSigner {
+    index: u64,
+    /// The one-time noise-flooding mask `y_i` — signer-local, never sent.
+    y: PolyVec,
+    /// The nonce commitment `w_i = A·y_i` — withheld until Round 2.
+    w: PolyVec,
+}
+
+impl RaccoonSigner {
+    /// ROUND 1 (COMMIT): sample the one-time flooded mask `y_i` (uniform
+    /// width [`MASK_WIDTH_WIDE`] — the Lean-pinned flooding sampler), form
+    /// `w_i = A·y_i`, and broadcast ONLY the hash commitment `cm_i`.
+    pub fn round1(a: &Matrix, index: u64, mask_seed: u64) -> (Self, RaccoonCommitMsg) {
+        let mut state = mask_seed ^ index.wrapping_mul(0x9e3779b97f4a7c15);
+        let y = sample_wide_mask_vec(&mut state, a.cols, MASK_WIDTH_WIDE);
+        let w = a.mul_vec(&y);
+        let cm = raccoon_commitment(index, &w);
+        (Self { index, y, w }, RaccoonCommitMsg { index, cm })
+    }
+
+    /// This signer's 1-based Shamir index.
+    pub fn index(&self) -> u64 {
+        self.index
+    }
+
+    /// ROUND 2 (REVEAL): broadcast the `w_i` committed to in Round 1 — only
+    /// after ALL Round-1 commitments are in ([`RaccoonSignSession::new`]).
+    pub fn round2_reveal(&self) -> RaccoonRevealMsg {
+        RaccoonRevealMsg {
+            index: self.index,
+            w: self.w.clone(),
+        }
+    }
+
+    /// ROUND 2 (RESPOND): the partial response `z_i = y_i + c·(λ_i·s_i)` —
+    /// the UNCHANGED Lean threshold algebra ([`partial_response`]) under this
+    /// session's one-time mask. `None` if the share is not this signer's.
+    pub fn respond(&self, share: &HermineShare, parts: &[u64], c: &Poly) -> Option<PolyVec> {
+        if share.index != self.index {
+            return None;
+        }
+        Some(partial_response(share, parts, &self.y, c))
+    }
+}
+
+/// The Raccoon 2-round session, coordinator view: the Round-1 commitment set,
+/// frozen. Constructing the session IS the round boundary — reveals are only
+/// meaningful against a complete, immutable commitment list, which is exactly
+/// what defeats the rushing adversary: by the time any honest `w_i` is
+/// visible, every party's contribution is already bound to its `cm_i`.
+///
+/// Concurrency story (why NO binding factors): unlike FROST's ρ-reweighting,
+/// Raccoon needs no per-signer binding factors — each session burns a fresh
+/// one-time flooded mask, and the commit-then-reveal round denies the
+/// adversary any adaptive choice of its commitment. The security argument is
+/// STRAIGHT-LINE under Hint-MLWE (no forking, no ROS-style rewinding); its
+/// formalization lives in the metatheory, not here.
+pub struct RaccoonSignSession {
+    commits: Vec<RaccoonCommitMsg>,
+}
+
+impl RaccoonSignSession {
+    /// Freeze a complete Round-1 commitment set. `None` on an empty set or
+    /// duplicate signer indices (a malformed roster, not a quorum).
+    pub fn new(commits: Vec<RaccoonCommitMsg>) -> Option<Self> {
+        if commits.is_empty() {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !commits.iter().all(|c| seen.insert(c.index)) {
+            return None;
+        }
+        Some(Self { commits })
+    }
+
+    /// The frozen Round-1 commitment set, in roster order.
+    pub fn commits(&self) -> &[RaccoonCommitMsg] {
+        &self.commits
+    }
+
+    /// The signer index set (the Lagrange evaluation set `parts`).
+    pub fn parts(&self) -> Vec<u64> {
+        self.commits.iter().map(|c| c.index).collect()
+    }
+
+    /// ROUND 2 verification + aggregation: check EVERY reveal hashes to its
+    /// Round-1 commitment, then sum `w = Σᵢ wᵢ`.
+    ///
+    /// The teeth: a signer whose reveal differs from what it committed to is
+    /// rejected by NAME ([`RaccoonError::Equivocation`]) — a rushing
+    /// adversary that wants to pick its `w_j` after seeing the honest `w_i`s
+    /// cannot get that `w_j` into the sum, because only reveals matching the
+    /// pre-honest-reveal commitments are summed. Reveals must arrive in
+    /// roster order with consistent shapes ([`RaccoonError::BadParameters`]
+    /// otherwise).
+    pub fn combine_reveals(&self, reveals: &[RaccoonRevealMsg]) -> Result<PolyVec, RaccoonError> {
+        if reveals.len() != self.commits.len() {
+            return Err(RaccoonError::BadParameters);
+        }
+        let dim = reveals[0].w.len();
+        let mut w = PolyVec::zero(dim);
+        for (cm, reveal) in self.commits.iter().zip(reveals) {
+            if reveal.index != cm.index || reveal.w.len() != dim {
+                return Err(RaccoonError::BadParameters);
+            }
+            if raccoon_commitment(reveal.index, &reveal.w) != cm.cm {
+                return Err(RaccoonError::Equivocation { index: cm.index });
+            }
+            w = w.add(&reveal.w);
+        }
+        Ok(w)
+    }
+}
+
+/// Produce a Hermine threshold signature via the RACCOON 2-round MASKING +
+/// COMMIT-THEN-REVEAL ceremony — the REAL Raccoon concurrency design, and the
+/// entry point new wiring should shape itself against.
+///
+/// # The ceremony
+///
+/// * **Round 1 (COMMIT)** — each signer `i` samples its ONE-TIME flooded mask
+///   `y_i` (the existing noise-flooding sampler, width [`MASK_WIDTH_WIDE`]),
+///   forms `w_i = A·y_i`, and broadcasts only the hash commitment
+///   `cm_i = H("dregg-raccoon-commit" ‖ i ‖ w_i)` ([`RaccoonSigner::round1`]).
+/// * **Round 2 (REVEAL + RESPOND)** — with ALL `cm_i` in
+///   ([`RaccoonSignSession::new`]), each signer reveals `w_i`; every party
+///   verifies each reveal against its commitment and aborts on equivocation
+///   ([`RaccoonSignSession::combine_reveals`]). Then `w = Σᵢ wᵢ`,
+///   `c =` [`raccoon_challenge`]`(w, t, message)`, and each signer responds
+///   `z_i = y_i + c·(λ_i·s_i)` — the UNCHANGED Lagrange-weighted threshold
+///   algebra; `z = Σᵢ zᵢ`.
+///
+/// Verification is the unchanged Lean relation `A·z = w + c·t`
+/// ([`verify_hermine_raccoon`] recomputes the raccoon challenge and delegates
+/// to [`crate::verify`]).
+///
+/// # Why commit-then-reveal defeats the rushing/concurrent adversary
+///
+/// The Drijvers/ROS-style concurrent attacks all need the adversary to choose
+/// its commitment contribution ADAPTIVELY — as a function of honest
+/// commitments (possibly across many parallel sessions) — so the combined `w`
+/// (hence the challenge) lands where the attacker wants. Here that choice
+/// point does not exist: `cm_j` is fixed before any honest `w_i` is visible,
+/// and Round 2 only sums reveals that match Round-1 commitments. Combined
+/// with the ONE-TIME mask (fresh `y_i` per session — reuse across two
+/// challenges hands out the secret, which is the extractor identity), the
+/// scheme's concurrent security is proved STRAIGHT-LINE under Hint-MLWE — no
+/// ROS assumption, no binding factors. (The superseded FROST-style
+/// [`hermine_sign_bound`] attacked the same surface by ρ-reweighting; that is
+/// NOT the Raccoon mechanism and is retained only for differentials.)
+///
+/// In-process reference: this function plays all signers and the coordinator
+/// honestly in one address space (`mask_seed` fresh per ceremony, as ever).
+/// The adversarial cases — equivocation, late adaptive reveals — are
+/// exercised directly against [`RaccoonSignSession`] in the tests. Same
+/// reference boundary as the rest of the crate (no network transport, not
+/// constant-time, pre-audit).
+pub fn hermine_sign_raccoon(
+    a: &Matrix,
+    group_key: &PolyVec,
+    signers: &[&HermineShare],
+    mask_seed: u64,
+    message: &[u8],
+) -> Option<HermineSignature> {
+    let parts = validated_parts(signers)?;
+
+    // Round 1: every signer commits (hashes only on the wire).
+    let (locals, commits): (Vec<RaccoonSigner>, Vec<RaccoonCommitMsg>) = signers
+        .iter()
+        .map(|s| RaccoonSigner::round1(a, s.index, mask_seed))
+        .unzip();
+    let session = RaccoonSignSession::new(commits)?;
+
+    // Round 2: reveal, verify-against-commitments, sum.
+    let reveals: Vec<RaccoonRevealMsg> = locals.iter().map(RaccoonSigner::round2_reveal).collect();
+    let w = session.combine_reveals(&reveals).ok()?;
+
+    // Challenge + responses: the unchanged threshold algebra.
+    let c = raccoon_challenge(&w, group_key, message);
+    let z = locals
+        .iter()
+        .zip(signers.iter())
+        .map(|(local, share)| {
+            local
+                .respond(share, &parts, &c)
+                .expect("signer/share indices aligned by construction")
+        })
+        .reduce(|acc, zi| acc.add(&zi))
+        .expect("nonempty signer set");
+
+    Some(HermineSignature { w, c, z })
+}
+
+/// Verify a Raccoon-ceremony signature: recompute the domain-separated
+/// [`raccoon_challenge`] from `(w, t, message)` and check the UNCHANGED Lean
+/// relation `A·z = w + c·t` ([`crate::verify`]) — the raccoon counterpart of
+/// [`verify_hermine`] (which recomputes the toy single-ceremony challenge;
+/// the two challenge oracles are domain-separated, so neither wrapper accepts
+/// the other path's certificates).
+pub fn verify_hermine_raccoon(
+    a: &Matrix,
+    group_key: &PolyVec,
+    message: &[u8],
+    sig: &HermineSignature,
+) -> bool {
+    sig.c == raccoon_challenge(&sig.w, group_key, message)
+        && verify(a, group_key, &sig.w, &sig.c, &sig.z)
 }
 
 // =============================================================================
@@ -1618,6 +1960,161 @@ mod tests {
         // Both still verify — binding costs no correctness.
         assert!(verify_hermine(&d.a, &d.group_key, b"msg-1", &s1));
         assert!(verify_hermine(&d.a, &d.group_key, b"msg-2", &s2));
+    }
+
+    // -- (f) the Raccoon 2-round ceremony: masking + commit-then-reveal ------
+
+    #[test]
+    fn raccoon_two_round_verifies() {
+        // An honest t-of-n 2-round session produces a certificate the
+        // raccoon verifier accepts — both the wrapper (challenge recompute)
+        // and the raw Lean relation A·z = w + c·t.
+        let d = dealer_5_of_3();
+        let message = b"dregg-federation-vote-v1:hermine-raccoon";
+        for subset in [[0usize, 1, 2], [0, 2, 4], [1, 3, 4]] {
+            let signers: Vec<&HermineShare> = subset.iter().map(|&i| &d.shares[i]).collect();
+            let sig = hermine_sign_raccoon(
+                &d.a,
+                &d.group_key,
+                &signers,
+                0x4ACC + subset[0] as u64,
+                message,
+            )
+            .unwrap();
+            assert!(verify_hermine_raccoon(&d.a, &d.group_key, message, &sig));
+            assert!(verify(&d.a, &d.group_key, &sig.w, &sig.c, &sig.z));
+        }
+        // Shortness: no ρ-inflation on this path, so the UNBOUND budget
+        // holds — ‖z‖∞ ≤ t·(M/2) + ‖c·s‖∞, non-vacuously below ⌊q/2⌋.
+        let bound = acceptance_bound(3, MASK_WIDTH_WIDE, SHIFT_BOUND);
+        assert!(
+            bound < Q / 2,
+            "raccoon acceptance bound must be non-vacuous"
+        );
+        let signers: Vec<&HermineShare> = d.shares[0..3].iter().collect();
+        for seed in 0..25u64 {
+            let sig =
+                hermine_sign_raccoon(&d.a, &d.group_key, &signers, 0x4ACC_0000 + seed, message)
+                    .unwrap();
+            assert!(verify_hermine_raccoon(&d.a, &d.group_key, message, &sig));
+            assert!(signature_norm(&sig.z) <= bound);
+        }
+        // Refusals mirror the other ceremonies.
+        assert!(hermine_sign_raccoon(&d.a, &d.group_key, &[], 0x1, message).is_none());
+        let dup: Vec<&HermineShare> = vec![&d.shares[0], &d.shares[0], &d.shares[1]];
+        assert!(hermine_sign_raccoon(&d.a, &d.group_key, &dup, 0x1, message).is_none());
+        // Wrong message and tampering fail; and the two challenge oracles
+        // are domain-separated (the toy-challenge wrapper rejects a raccoon
+        // certificate).
+        let mut sig =
+            hermine_sign_raccoon(&d.a, &d.group_key, &signers, 0x004A_CCFF, message).unwrap();
+        assert!(!verify_hermine_raccoon(
+            &d.a,
+            &d.group_key,
+            b"other message",
+            &sig
+        ));
+        assert!(!verify_hermine(&d.a, &d.group_key, message, &sig));
+        sig.z.0[0] = sig.z.0[0].add(&Poly::constant(1));
+        assert!(!verify_hermine_raccoon(&d.a, &d.group_key, message, &sig));
+        // Sub-threshold subsets still cannot forge through the raccoon path.
+        let sub: Vec<&HermineShare> = d.shares[0..2].iter().collect();
+        let sig = hermine_sign_raccoon(&d.a, &d.group_key, &sub, 0x4A_FFFF, message).unwrap();
+        assert!(!verify_hermine_raccoon(&d.a, &d.group_key, message, &sig));
+    }
+
+    #[test]
+    fn commit_reveal_catches_equivocation() {
+        // THE teeth: a signer whose Round-2 reveal differs from its Round-1
+        // hash commitment is detected and NAMED.
+        let d = dealer_5_of_3();
+        let (locals, commits): (Vec<RaccoonSigner>, Vec<RaccoonCommitMsg>) = d.shares[0..3]
+            .iter()
+            .map(|s| RaccoonSigner::round1(&d.a, s.index, 0xE9_0001))
+            .unzip();
+        let session = RaccoonSignSession::new(commits).unwrap();
+        // Honest reveals pass, and the combined commitment is their sum.
+        let honest: Vec<RaccoonRevealMsg> =
+            locals.iter().map(RaccoonSigner::round2_reveal).collect();
+        let w = session.combine_reveals(&honest).unwrap();
+        let expected = honest
+            .iter()
+            .fold(PolyVec::zero(d.a.rows), |acc, r| acc.add(&r.w));
+        assert_eq!(w, expected);
+        // Signer 3 (roster position 2) equivocates: its reveal w₃' differs
+        // from the w₃ behind cm₃. The reveal check fails, naming signer 3.
+        let mut evil = honest.clone();
+        evil[2].w.0[0] = evil[2].w.0[0].add(&Poly::constant(1));
+        assert_eq!(
+            session.combine_reveals(&evil),
+            Err(RaccoonError::Equivocation { index: 3 })
+        );
+        // Round hygiene: short/reordered reveal sets are malformed, not sums.
+        assert_eq!(
+            session.combine_reveals(&honest[0..2]),
+            Err(RaccoonError::BadParameters)
+        );
+        let mut swapped = honest.clone();
+        swapped.swap(0, 1);
+        assert_eq!(
+            session.combine_reveals(&swapped),
+            Err(RaccoonError::BadParameters)
+        );
+        // Roster hygiene: empty or duplicate-index commitment sets refuse.
+        assert!(RaccoonSignSession::new(vec![]).is_none());
+        let cm = *session.commits().first().unwrap();
+        assert!(RaccoonSignSession::new(vec![cm, cm]).is_none());
+    }
+
+    #[test]
+    fn rushing_adversary_cannot_bias_w() {
+        // The BN06 binding in motion: the adversary (signer 3) fixes cm₃ in
+        // Round 1, BEFORE any honest w is visible. Once the honest reveals
+        // w₁, w₂ arrive, it would like to substitute the ADAPTIVE
+        // w₃' = target − w₁ − w₂, steering the combined commitment (hence
+        // the challenge) to a value of its choice — the rushing bias. The
+        // substitution is rejected; only the value committed in Round 1 is
+        // summed.
+        let d = dealer_5_of_3();
+        let (locals, commits): (Vec<RaccoonSigner>, Vec<RaccoonCommitMsg>) = d.shares[0..3]
+            .iter()
+            .map(|s| RaccoonSigner::round1(&d.a, s.index, 0xAD_0002))
+            .unzip();
+        let session = RaccoonSignSession::new(commits).unwrap();
+        // Round 2 opens: the honest parties reveal first (worst case for
+        // them — the adversary is rushing).
+        let honest: Vec<RaccoonRevealMsg> = locals[0..2]
+            .iter()
+            .map(RaccoonSigner::round2_reveal)
+            .collect();
+        // The adversary back-solves for the w₃' that forces w to its target.
+        let mut state = 0x00AD_BEEF;
+        let target = super::sample_vec(&mut state, d.a.rows);
+        let w_adaptive = target.sub(&honest[0].w).sub(&honest[1].w);
+        // Had the substitution been accepted, the bias would be total: the
+        // adaptive sum IS the target. That is exactly what cm₃ excludes.
+        assert_eq!(
+            honest[0].w.add(&honest[1].w).add(&w_adaptive),
+            target,
+            "sanity: the adaptive reveal would fully steer w"
+        );
+        let mut rushed = honest.clone();
+        rushed.push(RaccoonRevealMsg {
+            index: 3,
+            w: w_adaptive,
+        });
+        assert_eq!(
+            session.combine_reveals(&rushed),
+            Err(RaccoonError::Equivocation { index: 3 })
+        );
+        // Only the COMMITTED w₃ goes through, and the accepted sum is the
+        // committed one — not the adversary's target.
+        let committed_w3 = locals[2].round2_reveal();
+        let mut bound_reveals = honest.clone();
+        bound_reveals.push(committed_w3.clone());
+        let w = session.combine_reveals(&bound_reveals).unwrap();
+        assert_eq!(w, honest[0].w.add(&honest[1].w).add(&committed_w3.w));
+        assert_ne!(w, target);
     }
 
     // -- harness hygiene (mirroring frost.rs's refusals) ---------------------

@@ -18,6 +18,7 @@ publish = false
 rand_chacha = "0.3"
 rand_core = "0.6"
 subtle = "2"
-# Real hash for the FROST-style per-signer binding factors (rho_i derived from
-# the round's full commitment set + message via a blake3 XOF).
+# Real hash for the Raccoon 2-round ceremony (the commit-then-reveal hash
+# commitments cm_i and the domain-separated session challenge) and for the
+# SUPERSEDED FROST-style binding factors (differential/regression only).
 blake3 = "1"
