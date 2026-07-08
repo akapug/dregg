@@ -322,6 +322,33 @@ pub mod membership_descriptor_4ary;
 /// module docs.
 pub mod adjacency_witness;
 
+/// Rust witness builder for the emitted `presentation` descriptor
+/// (`dregg-presentation-freshness::summary-v1`, `PresentationEmit.lean`) — the analog of
+/// `membership_witness_4ary` for the blinded-presentation family, so consumers of
+/// `descriptor_by_name` can prove/verify a fresh-token presentation summary. See module docs.
+pub mod presentation_descriptor_witness;
+
+/// Descriptor + Rust witness builder for the emitted note-spend recursion-leaf descriptor
+/// (`note-spend-leaf::dregg-note-spending-dsl-v3`, `NoteSpendingLeafEmit.lean`) — the analog of
+/// `membership_witness_4ary` / `adjacency_witness` for the note-spend (blinded-note) family, so
+/// consumers of `descriptor_by_name` can prove/verify a real spend (spending-key knowledge +
+/// full-width commitment + Merkle membership + the felt-domain mint identity) WITHOUT the recursion
+/// crate. See module docs.
+pub mod note_spend_witness;
+
+/// Rust witness builder for the emitted sorted-tree non-revocation (freshness) descriptor
+/// (`dregg-non-revocation-sorted-tree::poseidon2-v1`) — the analog of `adjacency_witness`, so
+/// consumers of `descriptor_by_name` can prove/verify that a queried item is strictly bracketed by
+/// two adjacent committed sorted leaves (hence NOT revoked). See module docs.
+pub mod non_revocation_witness;
+
+/// Rust witness builder for the emitted arithmetic-threshold descriptor
+/// (`dregg-predicate-arith-ge::threshold-v1`) — the analog of `membership_witness_4ary` /
+/// `adjacency_witness`, so consumers of `descriptor_by_name` can prove/verify a
+/// `GreaterThanOrEqual(value, threshold)` predicate witness (value/threshold/diff + the appended
+/// range-decomposition limbs). See module docs.
+pub mod predicate_arith_witness;
+
 /// The IR-v2 delegation scope-binding descriptor (`dregg-delegate::v2`) — the descriptor-world twin
 /// of the executor's `StarkDelegation` scope check (`action.rs::verify_stark_delegation_binding`),
 /// pinning the 24-limb `[root_issuer ‖ target ‖ scope_hash]` scope to public inputs. See module docs.

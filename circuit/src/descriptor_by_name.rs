@@ -47,6 +47,7 @@ pub use crate::membership_descriptor_4ary::{
     MEMBERSHIP_4ARY_NAME_PREFIX, membership_descriptor_of_depth_4ary,
 };
 pub use crate::membership_descriptor_general::membership_descriptor_of_depth;
+pub use crate::note_spend_witness::{NOTE_SPEND_LEAF_NAME, note_spend_leaf_descriptor};
 
 // ---- The byte-pinned emitted predicate-descriptor goldens (verbatim from the Lean #guards). ----
 const DFA_ROUTING_JSON: &str = include_str!("../descriptors/by-name/dfa-routing.json");
@@ -63,6 +64,14 @@ const ACCUMULATOR_NONREV_JSON: &str =
     include_str!("../descriptors/by-name/accumulator-nonrev.json");
 const BRIDGE_ACTION_JSON: &str = include_str!("../descriptors/by-name/bridge-action.json");
 const PREDICATE_ARITH_JSON: &str = include_str!("../descriptors/by-name/predicate-arith.json");
+/// The `presentation` family (token-presentation summary AIR + internalized FRESHNESS binding),
+/// authored in `metatheory/Dregg2/Circuit/Emit/PresentationEmit.lean` (`presentationFreshnessDesc`)
+/// and byte-pinned there by an `emitVmJson2` `#guard`. The blinded-presentation path
+/// (`sdk::verify_anonymous_presentation`, `bridge` issuer path) reduces to this descriptor for the
+/// summary + freshness tooth; the blinded issuer Merkle membership itself rides as a NAMED STARK leaf
+/// (the `FITS_WITH_NAMED_GATE` verdict), so it is not internalized here.
+const PRESENTATION_FRESHNESS_JSON: &str =
+    include_str!("../descriptors/by-name/presentation-freshness.json");
 
 /// The prefix of the depth-GENERAL Merkle-membership descriptor name
 /// ([`membership_descriptor_of_depth`] pins `depth{N}` after it).
@@ -147,6 +156,11 @@ pub fn descriptor_by_name(name: &str) -> Option<EffectVmDescriptor2> {
     if name == DELEGATE_V2_NAME {
         return Some(delegate_binding_descriptor());
     }
+    // The note-spend recursion-leaf descriptor (built by lowering the deployed DSL note-spending
+    // circuit; asserted byte-equal to the Lean emit). Fail-closed on a lowering refusal.
+    if name == NOTE_SPEND_LEAF_NAME {
+        return note_spend_leaf_descriptor().ok();
+    }
 
     let json = match name {
         "dfa-routing-toggle-2state::poseidon2-v1" => DFA_ROUTING_JSON,
@@ -158,6 +172,7 @@ pub fn descriptor_by_name(name: &str) -> Option<EffectVmDescriptor2> {
         "dregg-accumulator-nonrev-emit-v2" => ACCUMULATOR_NONREV_JSON,
         "bridge-action-leaf::bridge_action_air_v1" => BRIDGE_ACTION_JSON,
         "dregg-predicate-arith-ge::threshold-v1" => PREDICATE_ARITH_JSON,
+        "dregg-presentation-freshness::summary-v1" => PRESENTATION_FRESHNESS_JSON,
         "dregg-effectvm-custom-v1" => crate::effect_vm_descriptors::DREGG_EFFECTVM_CUSTOM_IR2_JSON,
         _ => return None,
     };
