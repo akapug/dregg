@@ -162,6 +162,208 @@ pub fn verify_chain(claims: &[FieldElement], committed: &[FieldElement]) -> bool
     committed == entry_digests(claims).as_slice()
 }
 
+/// **`IncrementalChainVerifier`** — the amortized face of [`verify_chain`] for the
+/// growing-log workload. [`verify_chain`] re-folds the ENTIRE entry history on every
+/// call (`O(n)` per verify, `O(n²)` if a verifier re-checks after every append).
+/// Because the entry digest chain is *prefix-extensible* —
+/// `digest[i] = link_hash(digest[i-1], claim_i)` depends only on the running digest
+/// and the next claim, never on any later entry — a verifier that already confirmed a
+/// prefix need only fold the NEW tail.
+///
+/// This caches `(verified_len, prev_digest)`: the length of the longest entry prefix
+/// already confirmed honest, and that prefix's committed tip digest (which equals the
+/// honest tip and, by collision-resistance, commits the whole verified prefix).
+/// [`Self::verify`] fast-forwards past that prefix — after an `O(1)` boundary check
+/// that the committed tip of the cached prefix is unchanged — and folds only
+/// `claims[verified_len..]`.
+///
+/// **Verdict identity.** For an append/extension workload — the log only grows and its
+/// committed prefix is never rewritten — [`Self::verify`] returns the byte-for-byte
+/// SAME verdict as [`verify_chain`] at every step, and [`Self::tip`] equals the
+/// re-derived chain tip. If the committed tip of the cached prefix changed, or the
+/// input shrank, the boundary check fails and it transparently re-folds from genesis
+/// (still identical, merely uncached). A caller that does not control the append
+/// discipline — verifying an arbitrary externally-supplied array that may rewrite an
+/// already-verified interior while preserving its tip digest — should use
+/// [`verify_chain`] directly.
+#[derive(Clone, Debug)]
+pub struct IncrementalChainVerifier {
+    verified_len: usize,
+    prev_digest: FieldElement,
+}
+
+impl Default for IncrementalChainVerifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IncrementalChainVerifier {
+    /// A fresh verifier with an empty verified prefix (tip = [`GENESIS_PREV`]).
+    pub fn new() -> Self {
+        Self {
+            verified_len: 0,
+            prev_digest: GENESIS_PREV,
+        }
+    }
+
+    /// The length of the longest entry prefix confirmed honest so far.
+    pub fn verified_len(&self) -> usize {
+        self.verified_len
+    }
+
+    /// The re-derived chain tip after the last accepting [`Self::verify`]
+    /// ([`GENESIS_PREV`] when the verified prefix is empty). Byte-identical to
+    /// `entry_digests(claims).last()` for the verified prefix.
+    pub fn tip(&self) -> FieldElement {
+        self.prev_digest
+    }
+
+    /// Verify `committed` against the honest hash chain of `claims`, folding only the
+    /// tail beyond the cached verified prefix. Returns the SAME verdict as
+    /// [`verify_chain`] (`true` IFF `committed` equals the honest chain link-for-link)
+    /// and advances the cache to the longest confirmed prefix.
+    pub fn verify(&mut self, claims: &[FieldElement], committed: &[FieldElement]) -> bool {
+        // The honest chain has exactly one digest per claim; unequal lengths can never
+        // match (identical to `verify_chain`'s slice comparison).
+        if claims.len() != committed.len() {
+            return false;
+        }
+        let n = claims.len();
+        // Fast-forward past the verified prefix iff it is still a prefix of THIS
+        // committed slice (its tip digest is unchanged) and the input did not shrink;
+        // otherwise re-fold from genesis (still correct, merely uncached).
+        let (mut i, mut prev) = if self.verified_len > 0
+            && self.verified_len <= n
+            && committed[self.verified_len - 1] == self.prev_digest
+        {
+            (self.verified_len, self.prev_digest)
+        } else {
+            (0, GENESIS_PREV)
+        };
+        while i < n {
+            let honest = link_hash(&prev, &claims[i]);
+            if committed[i] != honest {
+                // The longest matching prefix is [0, i); cache it (prev = honest[i-1]).
+                self.verified_len = i;
+                self.prev_digest = prev;
+                return false;
+            }
+            prev = honest;
+            i += 1;
+        }
+        self.verified_len = n;
+        self.prev_digest = prev;
+        true
+    }
+}
+
+#[cfg(test)]
+mod incremental_verify_tests {
+    use super::*;
+
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    fn mk_claim(seed: u64) -> FieldElement {
+        claim_digest(format!("claim-{seed}").as_bytes())
+    }
+
+    /// A randomized APPEND / tamper / truncate sequence: at EVERY step the incremental
+    /// verifier's verdict MUST equal the full re-fold [`verify_chain`], and on accept the
+    /// cached tip MUST equal the re-derived chain tip.
+    #[test]
+    fn incremental_matches_full_verify_at_every_step() {
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut inc = IncrementalChainVerifier::new();
+        let mut claims: Vec<FieldElement> = Vec::new();
+        let mut committed: Vec<FieldElement> = Vec::new();
+        // The running committed tip an appender chains the next link from.
+        let mut tip = GENESIS_PREV;
+
+        for step in 0..4000u64 {
+            match xorshift(&mut rng) % 10 {
+                // honest append of 1..=3 links
+                0..=6 => {
+                    let k = 1 + (xorshift(&mut rng) % 3);
+                    for _ in 0..k {
+                        let claim = mk_claim(xorshift(&mut rng));
+                        let digest = link_hash(&tip, &claim);
+                        claims.push(claim);
+                        committed.push(digest);
+                        tip = digest;
+                    }
+                }
+                // forged/tampered append — commit a WRONG digest
+                7 | 8 => {
+                    let claim = mk_claim(xorshift(&mut rng));
+                    let mut forged = link_hash(&tip, &claim);
+                    forged[0] ^= 0xFF; // (almost surely) not the honest link
+                    claims.push(claim);
+                    committed.push(forged);
+                    tip = forged;
+                }
+                // truncate to a random shorter length
+                _ => {
+                    if !claims.is_empty() {
+                        let new_len = (xorshift(&mut rng) as usize) % (claims.len() + 1);
+                        claims.truncate(new_len);
+                        committed.truncate(new_len);
+                        tip = committed.last().copied().unwrap_or(GENESIS_PREV);
+                    }
+                }
+            }
+
+            let full = verify_chain(&claims, &committed);
+            let incr = inc.verify(&claims, &committed);
+            assert_eq!(
+                incr,
+                full,
+                "step {step}: incremental verdict must equal full re-fold (len {})",
+                claims.len()
+            );
+            if full {
+                let derived_tip = entry_digests(&claims)
+                    .last()
+                    .copied()
+                    .unwrap_or(GENESIS_PREV);
+                assert_eq!(
+                    inc.tip(),
+                    derived_tip,
+                    "step {step}: cached tip must equal the re-derived chain tip"
+                );
+            }
+        }
+    }
+
+    /// A pure append run (the `O(n²)`->`O(n)` hot path): the incremental verifier accepts
+    /// the whole way and its cached tip tracks the honest chain digest for digest.
+    #[test]
+    fn pure_append_stays_accepted() {
+        let mut inc = IncrementalChainVerifier::new();
+        let mut claims: Vec<FieldElement> = Vec::new();
+        let mut committed: Vec<FieldElement> = Vec::new();
+        let mut tip = GENESIS_PREV;
+        for n in 0..200u64 {
+            let claim = mk_claim(n.wrapping_mul(2_654_435_761));
+            let digest = link_hash(&tip, &claim);
+            claims.push(claim);
+            committed.push(digest);
+            tip = digest;
+            assert!(inc.verify(&claims, &committed));
+            assert!(verify_chain(&claims, &committed));
+            assert_eq!(inc.verified_len(), claims.len());
+            assert_eq!(inc.tip(), digest);
+        }
+    }
+}
+
 /// Convenience: encode an arbitrary claim payload (a content/output blob) as the
 /// 32-byte field the agent records — `blake3(claim_bytes)`.
 pub fn claim_digest(claim_bytes: &[u8]) -> FieldElement {

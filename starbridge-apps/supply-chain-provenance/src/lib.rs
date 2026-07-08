@@ -316,6 +316,212 @@ pub fn verify_chain(handoffs: &[Handoff], committed: &[FieldElement]) -> bool {
     committed == custody_chain_digests(handoffs).as_slice()
 }
 
+/// **`IncrementalChainVerifier`** — the amortized face of [`verify_chain`] for the
+/// growing-chain workload. [`verify_chain`] re-folds the ENTIRE custody history on
+/// every call (`O(n)` per verify, `O(n²)` if a verifier re-checks after every handoff
+/// append). Because the custody digest chain is *prefix-extensible* —
+/// `digest[i] = link_hash(digest[i-1], event_i)` depends only on the running digest
+/// and the next event, never on any later handoff — a verifier that already confirmed
+/// a prefix need only fold the NEW tail.
+///
+/// This caches `(verified_len, prev_digest)`: the length of the longest custody prefix
+/// already confirmed honest, and that prefix's committed tip digest (which equals the
+/// honest tip and, by collision-resistance, commits the whole verified prefix).
+/// [`Self::verify`] fast-forwards past that prefix — after an `O(1)` boundary check
+/// that the committed tip of the cached prefix is unchanged — and folds only
+/// `handoffs[verified_len..]`.
+///
+/// **Verdict identity.** For an append/extension workload — the chain only grows and
+/// its committed prefix is never rewritten — [`Self::verify`] returns the byte-for-byte
+/// SAME verdict as [`verify_chain`] at every step, and [`Self::tip`] equals the
+/// re-derived chain tip. If the committed tip of the cached prefix changed, or the
+/// input shrank, the boundary check fails and it transparently re-folds from genesis
+/// (still identical, merely uncached). A caller that does not control the append
+/// discipline — verifying an arbitrary externally-supplied array that may rewrite an
+/// already-verified interior while preserving its tip digest — should use
+/// [`verify_chain`] directly.
+#[derive(Clone, Debug)]
+pub struct IncrementalChainVerifier {
+    verified_len: usize,
+    prev_digest: FieldElement,
+}
+
+impl Default for IncrementalChainVerifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl IncrementalChainVerifier {
+    /// A fresh verifier with an empty verified prefix (tip = [`GENESIS_PREV`]).
+    pub fn new() -> Self {
+        Self {
+            verified_len: 0,
+            prev_digest: GENESIS_PREV,
+        }
+    }
+
+    /// The length of the longest custody prefix confirmed honest so far.
+    pub fn verified_len(&self) -> usize {
+        self.verified_len
+    }
+
+    /// The re-derived chain tip after the last accepting [`Self::verify`]
+    /// ([`GENESIS_PREV`] when the verified prefix is empty). Byte-identical to
+    /// `custody_chain_digests(handoffs).last()` for the verified prefix.
+    pub fn tip(&self) -> FieldElement {
+        self.prev_digest
+    }
+
+    /// Verify `committed` against the honest custody chain of `handoffs`, folding only
+    /// the tail beyond the cached verified prefix. Returns the SAME verdict as
+    /// [`verify_chain`] (`true` IFF `committed` equals the honest chain link-for-link)
+    /// and advances the cache to the longest confirmed prefix.
+    pub fn verify(&mut self, handoffs: &[Handoff], committed: &[FieldElement]) -> bool {
+        // The honest chain has exactly one digest per handoff; unequal lengths can
+        // never match (identical to `verify_chain`'s slice comparison).
+        if handoffs.len() != committed.len() {
+            return false;
+        }
+        let n = handoffs.len();
+        // Fast-forward past the verified prefix iff it is still a prefix of THIS
+        // committed slice (its tip digest is unchanged) and the input did not shrink;
+        // otherwise re-fold from genesis (still correct, merely uncached).
+        let (mut i, mut prev) = if self.verified_len > 0
+            && self.verified_len <= n
+            && committed[self.verified_len - 1] == self.prev_digest
+        {
+            (self.verified_len, self.prev_digest)
+        } else {
+            (0, GENESIS_PREV)
+        };
+        while i < n {
+            let honest = link_hash(&prev, &handoffs[i].event());
+            if committed[i] != honest {
+                // The longest matching prefix is [0, i); cache it (prev = honest[i-1]).
+                self.verified_len = i;
+                self.prev_digest = prev;
+                return false;
+            }
+            prev = honest;
+            i += 1;
+        }
+        self.verified_len = n;
+        self.prev_digest = prev;
+        true
+    }
+}
+
+#[cfg(test)]
+mod incremental_verify_tests {
+    use super::*;
+
+    fn xorshift(state: &mut u64) -> u64 {
+        let mut x = *state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        *state = x;
+        x
+    }
+
+    fn mk_handoff(seed: u64, epoch: u64) -> Handoff {
+        let from = identity_field(&format!("party-{}", seed % 97));
+        let to = identity_field(&format!("party-{}", (seed / 97) % 97));
+        Handoff { from, to, epoch }
+    }
+
+    /// A randomized APPEND / tamper / truncate sequence: at EVERY step the incremental
+    /// verifier's verdict MUST equal the full re-fold [`verify_chain`], and on accept the
+    /// cached tip MUST equal the re-derived chain tip.
+    #[test]
+    fn incremental_matches_full_verify_at_every_step() {
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut inc = IncrementalChainVerifier::new();
+        let mut handoffs: Vec<Handoff> = Vec::new();
+        let mut committed: Vec<FieldElement> = Vec::new();
+        // The running committed tip an appender chains the next link from.
+        let mut tip = GENESIS_PREV;
+
+        for step in 0..4000u64 {
+            match xorshift(&mut rng) % 10 {
+                // honest append of 1..=3 links
+                0..=6 => {
+                    let k = 1 + (xorshift(&mut rng) % 3);
+                    for _ in 0..k {
+                        let epoch = handoffs.len() as u64 + 1;
+                        let h = mk_handoff(xorshift(&mut rng), epoch);
+                        let digest = link_hash(&tip, &h.event());
+                        handoffs.push(h);
+                        committed.push(digest);
+                        tip = digest;
+                    }
+                }
+                // forged/tampered append — commit a WRONG digest
+                7 | 8 => {
+                    let epoch = handoffs.len() as u64 + 1;
+                    let h = mk_handoff(xorshift(&mut rng), epoch);
+                    let mut forged = link_hash(&tip, &h.event());
+                    forged[0] ^= 0xFF; // (almost surely) not the honest link
+                    handoffs.push(h);
+                    committed.push(forged);
+                    tip = forged;
+                }
+                // truncate to a random shorter length
+                _ => {
+                    if !handoffs.is_empty() {
+                        let new_len = (xorshift(&mut rng) as usize) % (handoffs.len() + 1);
+                        handoffs.truncate(new_len);
+                        committed.truncate(new_len);
+                        tip = committed.last().copied().unwrap_or(GENESIS_PREV);
+                    }
+                }
+            }
+
+            let full = verify_chain(&handoffs, &committed);
+            let incr = inc.verify(&handoffs, &committed);
+            assert_eq!(
+                incr,
+                full,
+                "step {step}: incremental verdict must equal full re-fold (len {})",
+                handoffs.len()
+            );
+            if full {
+                let derived_tip = custody_chain_digests(&handoffs)
+                    .last()
+                    .copied()
+                    .unwrap_or(GENESIS_PREV);
+                assert_eq!(
+                    inc.tip(),
+                    derived_tip,
+                    "step {step}: cached tip must equal the re-derived chain tip"
+                );
+            }
+        }
+    }
+
+    /// A pure append run (the `O(n²)`->`O(n)` hot path): the incremental verifier accepts
+    /// the whole way and its cached tip tracks the honest chain digest for digest.
+    #[test]
+    fn pure_append_stays_accepted() {
+        let mut inc = IncrementalChainVerifier::new();
+        let mut handoffs: Vec<Handoff> = Vec::new();
+        let mut committed: Vec<FieldElement> = Vec::new();
+        let mut tip = GENESIS_PREV;
+        for n in 0..200u64 {
+            let h = mk_handoff(n.wrapping_mul(2_654_435_761), n + 1);
+            let digest = link_hash(&tip, &h.event());
+            handoffs.push(h);
+            committed.push(digest);
+            tip = digest;
+            assert!(inc.verify(&handoffs, &committed));
+            assert!(verify_chain(&handoffs, &committed));
+            assert_eq!(inc.verified_len(), handoffs.len());
+            assert_eq!(inc.tip(), digest);
+        }
+    }
+}
+
 /// **`custody_chain_is_connected`** — the single-custodianship CONSERVATION check
 /// on a custody history: the `from` of every handoff equals the `to` of the
 /// previous handoff (and the first handoff's `from` is the genesis zero scalar).
