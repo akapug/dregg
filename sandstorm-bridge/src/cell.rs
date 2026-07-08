@@ -7,138 +7,154 @@
 //! is re-witnessable (a backup that proves what it contains), and the transitions —
 //! not just a snapshot — are what get committed.
 //!
-//! This is the prototype's stand-in for `turn/src/umem.rs` + `durable/`: a real
-//! content-addressed heap (a sha256 **Merkle tree** over the sorted entries) with the
-//! same shape the grain lifecycle leans on (commit → `data_root`; restore from a
-//! `data_root`).
+//! ## The commitment is the REAL dregg heap-root scheme (not an ad-hoc sha256 tree)
 //!
-//! The heap commits to a Merkle root over its sorted, length-prefixed `(key, value)`
-//! leaves, so a single entry's inclusion under the root is provable *without the rest
-//! of the heap*: [`Umem::prove`] emits an [`InclusionProof`] for one key, and the
-//! host-state-free [`verify_inclusion`] checks `{key, value, proof, root}` alone. This
-//! is the tooth the trustless-serve weld leans on — a visitor re-hashes just the served
-//! card and, with the proof, confirms it is the value at `key` under a root they trust,
-//! independent of the (arbitrarily large, stateful) rest of `/var`.
+//! This module commits a grain's `/var` through the **same** openable sorted-Poseidon2
+//! binary Merkle tree the kernel commits a cell's heap with:
+//! [`dregg_circuit::heap_root`] (`CanonicalHeapTree` / `compute_heap_root`, the exact
+//! primitive `dregg_cell::compute_heap_root` wraps). Each `/var` entry `(key, value)`
+//! becomes a [`dregg_circuit::heap_root::HeapLeaf`] `{ addr, value }`:
+//!
+//! * `addr = var_addr(key)` — a Poseidon2 felt over the domain-tagged key bytes (the
+//!   real heap keys `(collection_id, key)` u32 pairs via `heap_addr`; a grain's `/var`
+//!   keys are strings, so its sort key is the Poseidon2 image of the key — the same
+//!   sorted-tree sort key, the same `CanonicalHeapTree`, same sentinels, same depth);
+//! * `value = var_value_felt(value)` — a Poseidon2 felt digest of the value bytes
+//!   (the real heap folds a 32-byte `FieldElement`; a grain value is arbitrary-length,
+//!   so its committed value is the Poseidon2 digest, binding under Poseidon2 CR).
+//!
+//! So `Umem::commit_root_bytes()` == `dregg_circuit::heap_root::compute_heap_root` of
+//! the grain's leaves, encoded to 32 bytes exactly as `dregg_cell` encodes a heap-root
+//! felt (`babybear_to_bytes32` / `felt_to_bytes32`). This is the value a real
+//! deployment's ledger carries for a cell's heap — NOT a bespoke sha256 root the
+//! federation never stores. A single entry's inclusion under the root is provable
+//! *without the rest of the heap*: [`Umem::prove`] emits an [`InclusionProof`] (the
+//! `CanonicalHeapTree` sibling path, a Poseidon2/felt path), and the host-state-free
+//! [`verify_inclusion`] checks `{key, value, proof, root}` alone — a visitor re-hashes
+//! just the served card and confirms it is the value at `key` under a heap-root it
+//! obtains independently.
 
 use std::collections::BTreeMap;
 
-use sha2::{Digest, Sha256};
+use dregg_circuit::field::BabyBear;
+use dregg_circuit::heap_root::{
+    compute_heap_root as heap_compute_root, CanonicalHeapTree, HeapLeaf, HEAP_TREE_DEPTH,
+};
+use dregg_circuit::poseidon2::{hash_bytes, hash_fact};
 
 use crate::spk::base32;
 
-/// Domain-separation tags for the Merkle hash — a leaf and an internal node can never
-/// collide (a leaf is `H(0x00 ‖ …)`, a node `H(0x01 ‖ …)`), so an internal node cannot
-/// be reinterpreted as a leaf to forge an inclusion proof, and the empty heap has its
-/// own tag (`0x02`) rather than aliasing any node.
-const LEAF_TAG: u8 = 0x00;
-const NODE_TAG: u8 = 0x01;
-const EMPTY_TAG: u8 = 0x02;
+/// Domain tag for the `/var` heap ADDRESS (sort-key) felt — keeps a key-derived
+/// address from ever aliasing a value-derived felt, and separates a grain `/var`
+/// address from any other Poseidon2 image.
+const VAR_ADDR_DOMAIN: &[u8] = b"grain/var/addr:v1\0";
 
-/// The leaf commitment for one `(key, value)` entry: `H(0x00 ‖ klen ‖ key ‖ vlen ‖ value)`.
-/// Length-prefixed so `(key, value)` is unambiguous, domain-tagged so it is never an
-/// internal node.
-fn leaf_hash(key: &str, value: &[u8]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update([LEAF_TAG]);
-    h.update((key.len() as u64).to_le_bytes());
-    h.update(key.as_bytes());
-    h.update((value.len() as u64).to_le_bytes());
-    h.update(value);
-    h.finalize().into()
+/// Domain tag for the `/var` heap VALUE felt.
+const VAR_VALUE_DOMAIN: &[u8] = b"grain/var/value:v1\0";
+
+/// The canonical heap ADDRESS (sort key) of a `/var` string key: a domain-separated
+/// Poseidon2 felt. The string-keyed analog of [`dregg_circuit::heap_root::heap_addr`]
+/// (which addresses a `(collection_id, key)` u32 pair): a grain's `/var` is keyed by
+/// strings, so the sort key is the Poseidon2 image of the domain-tagged key bytes —
+/// the SAME sorted-tree sort key the real heap tree places leaves by.
+pub fn var_addr(key: &str) -> BabyBear {
+    let mut buf = Vec::with_capacity(VAR_ADDR_DOMAIN.len() + key.len());
+    buf.extend_from_slice(VAR_ADDR_DOMAIN);
+    buf.extend_from_slice(key.as_bytes());
+    hash_bytes(&buf)
 }
 
-/// An internal Merkle node: `H(0x01 ‖ left ‖ right)`.
-fn node_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update([NODE_TAG]);
-    h.update(left);
-    h.update(right);
-    h.finalize().into()
+/// The heap-leaf VALUE felt committing a `/var` value blob: a domain-separated
+/// Poseidon2 image of the value bytes. The real heap stores a folded 32-byte
+/// `FieldElement`; a grain value is arbitrary-length, so its committed value is the
+/// Poseidon2 digest of the bytes — binding under Poseidon2 collision-resistance. The
+/// visitor recomputes it from the served card bytes to check inclusion.
+pub fn var_value_felt(value: &[u8]) -> BabyBear {
+    let mut buf = Vec::with_capacity(VAR_VALUE_DOMAIN.len() + value.len());
+    buf.extend_from_slice(VAR_VALUE_DOMAIN);
+    buf.extend_from_slice(value);
+    hash_bytes(&buf)
 }
 
-/// Fold sorted leaves into a Merkle root. An odd node at a level is *promoted*
-/// (carried up unchanged), so a one-leaf heap's root is that leaf's hash. The empty
-/// heap commits to `H(0x02)`.
-fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-    if leaves.is_empty() {
-        let mut h = Sha256::new();
-        h.update([EMPTY_TAG]);
-        return h.finalize().into();
+/// The [`HeapLeaf`] for one `/var` entry — the leaf both [`Umem::commit_root_bytes`]
+/// and [`Umem::prove`] build the `CanonicalHeapTree` over.
+fn var_leaf(key: &str, value: &[u8]) -> HeapLeaf {
+    HeapLeaf {
+        addr: var_addr(key),
+        value: var_value_felt(value),
     }
-    let mut level = leaves.to_vec();
-    while level.len() > 1 {
-        let mut next = Vec::with_capacity(level.len().div_ceil(2));
-        let mut i = 0;
-        while i < level.len() {
-            if i + 1 < level.len() {
-                next.push(node_hash(&level[i], &level[i + 1]));
-                i += 2;
-            } else {
-                next.push(level[i]); // promote the odd node
-                i += 1;
-            }
-        }
-        level = next;
-    }
-    level[0]
 }
 
-/// Encode a 32-byte Merkle root as the `umem1…` [`DataRoot`] wire string.
+/// Encode a BabyBear heap-root felt as the raw 32 bytes the federation ledger carries:
+/// the felt's 4 little-endian bytes in the low positions, the rest zero — byte-identical
+/// to `dregg_cell`'s `babybear_to_bytes32` / `felt_to_bytes32` (the encoding
+/// `dregg_cell::compute_heap_root` returns and the canonical state commitment absorbs
+/// for the `heap_root` register). Deterministic and injective on canonical BabyBear
+/// values (`< p`).
+pub fn felt_to_bytes32(felt: BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0..4].copy_from_slice(&felt.as_u32().to_le_bytes());
+    out
+}
+
+/// Encode a 32-byte heap root as the `heap1…` [`DataRoot`] wire string.
 fn root_string(root: &[u8; 32]) -> String {
-    format!("umem1{}", base32(root))
+    format!("heap1{}", base32(root))
 }
 
-/// One step of an [`InclusionProof`], bottom-up: the sibling to combine with the running
-/// hash on the given side, or `Promote` when the node had no sibling at that level (it was
-/// carried up unchanged).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ProofStep {
-    /// Sibling on the left: `node = H(0x01 ‖ sibling ‖ node)`.
-    Left([u8; 32]),
-    /// Sibling on the right: `node = H(0x01 ‖ node ‖ sibling)`.
-    Right([u8; 32]),
-    /// Odd node at this level, carried up unchanged.
-    Promote,
-}
-
-/// A Merkle inclusion proof that a single key's value is a leaf under a committed root —
-/// the sibling path from that leaf to the root. Small (log-sized in the heap), and
-/// verified with [`verify_inclusion`] against `{key, value, root}` alone; no heap needed.
+/// A Merkle inclusion proof that a single key's value is a leaf under a committed
+/// heap-root — the [`CanonicalHeapTree`] sibling path from that leaf to the root (a
+/// Poseidon2/felt path, NOT a sha256 tree). Log-sized in the tree depth, and verified
+/// with [`verify_inclusion`] against `{key, value, root}` alone; no heap needed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InclusionProof {
-    pub steps: Vec<ProofStep>,
+    /// Sibling digests along the path from the leaf to the root (bottom-up), in the
+    /// real `dregg_circuit::heap_root` scheme.
+    pub siblings: Vec<BabyBear>,
+    /// Direction bits: `directions[i] == 0` when the running node is the LEFT child at
+    /// level `i` (sibling on the right), `1` otherwise. Same convention as
+    /// [`CanonicalHeapTree::prove_membership`].
+    pub directions: Vec<u8>,
 }
 
 /// **Verify a single-leaf inclusion proof — host-state-free.** Given only the served
 /// `{key, value}`, the `proof`, and a `root` the caller trusts (obtained independently —
-/// e.g. an owner-attested root from the ledger, NOT from the serving host), recompute the
-/// leaf and fold the proof to a root and check it matches. `true` iff `value` is exactly
-/// the value at `key` under `root`. A light client runs this against just the card bytes.
+/// e.g. the cell's heap-root from the ledger, NOT from the serving host), recompute the
+/// leaf digest `hash[addr, value]` and fold the sibling path through the heap-tree node
+/// hash ([`hash_fact`], the `heap_node` the real tree folds with), then check it matches.
+/// `true` iff `value` is exactly the value at `key` under `root`. A light client runs
+/// this against just the card bytes.
 pub fn verify_inclusion(root: &DataRoot, key: &str, value: &[u8], proof: &InclusionProof) -> bool {
-    let mut acc = leaf_hash(key, value);
-    for step in &proof.steps {
-        acc = match step {
-            ProofStep::Left(sib) => node_hash(sib, &acc),
-            ProofStep::Right(sib) => node_hash(&acc, sib),
-            ProofStep::Promote => acc,
+    if proof.siblings.len() != proof.directions.len() {
+        return false;
+    }
+    let mut acc = var_leaf(key, value).digest();
+    for (sib, &dir) in proof.siblings.iter().zip(proof.directions.iter()) {
+        // `heap_node(l, r) = hash_fact(l, &[r])`; dir 0 ⇒ acc is LEFT, dir 1 ⇒ RIGHT —
+        // the exact fold `CanonicalHeapTree::update_witness` recomposes with.
+        acc = if dir == 0 {
+            hash_fact(acc, &[*sib])
+        } else {
+            hash_fact(*sib, &[acc])
         };
     }
-    DataRoot(root_string(&acc)) == *root
+    DataRoot::from_root_bytes(felt_to_bytes32(acc)) == *root
 }
 
 /// A content commitment to a umem heap state (`data_root`). Deterministic in the
-/// heap contents, order-free.
+/// heap contents, order-free. The raw 32 bytes behind it are the cell's real
+/// heap-root felt (the `heap_root` the canonical state commitment absorbs).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DataRoot(pub String);
 
 impl DataRoot {
-    /// Reconstruct the wire `data_root` from the raw 32-byte Merkle root — the inverse of
-    /// the encoding [`Umem::commit`] applies. The federation ledger stores a grain cell's
-    /// commitment as the **raw 32 bytes** (`GET /api/cell/{id}` → `state_commitment`); a
-    /// visitor that fetches those bytes from the ledger rebuilds the `DataRoot` this way to
-    /// run [`verify_inclusion`] / check an owner attestation against the LEDGER's root —
-    /// never the serving host's. `DataRoot::from_root_bytes(u.commit_root_bytes()) ==
-    /// u.commit()` (the wire form and the raw form are the same commitment).
+    /// Reconstruct the wire `data_root` from the raw 32-byte heap root — the inverse of
+    /// the encoding [`Umem::commit`] applies. The value the ledger stores for a cell's
+    /// heap is the `dregg_cell` heap-root felt encoded to 32 bytes (the `heap_root`
+    /// register the canonical state commitment absorbs); a visitor that obtains those
+    /// bytes rebuilds the `DataRoot` this way to run [`verify_inclusion`] / check an
+    /// owner attestation against that heap-root. `DataRoot::from_root_bytes(u.commit_root_bytes())
+    /// == u.commit()` (the wire form and the raw form are the same commitment).
     pub fn from_root_bytes(root: [u8; 32]) -> Self {
         DataRoot(root_string(&root))
     }
@@ -190,70 +206,56 @@ impl Umem {
         self.entries.values().map(|v| v.len()).sum()
     }
 
+    /// The [`HeapLeaf`] set committing this `/var`, in the real
+    /// [`dregg_circuit::heap_root`] scheme — the leaves both [`commit_root_bytes`](Self::commit_root_bytes)
+    /// and [`prove`](Self::prove) fold the `CanonicalHeapTree` over.
+    pub fn heap_leaves(&self) -> Vec<HeapLeaf> {
+        self.entries.iter().map(|(k, v)| var_leaf(k, v)).collect()
+    }
+
     /// Commit to the current heap state — the `data_root` a checkpoint records.
-    /// Content-addressed as the sha256 **Merkle root** over the sorted, length-prefixed
-    /// `(key, value)` leaves, so two heaps with the same contents commit to the same root
-    /// regardless of insert order (the property that makes a checkpoint re-witnessable) —
-    /// AND a single entry's inclusion is provable under this root via [`prove`](Self::prove)
-    /// without disclosing the rest of the heap.
+    /// Content-addressed as the openable sorted-Poseidon2 heap root over the `/var`
+    /// leaves (the SAME [`dregg_circuit::heap_root`] scheme the kernel commits a cell's
+    /// heap with), so two heaps with the same contents commit to the same root
+    /// regardless of insert order — AND a single entry's inclusion is provable under
+    /// this root via [`prove`](Self::prove) without disclosing the rest of the heap.
     pub fn commit(&self) -> DataRoot {
         DataRoot(root_string(&self.commit_root_bytes()))
     }
 
-    /// The **raw 32-byte Merkle root** of the current heap — the value the federation
-    /// ledger stores as this grain cell's state commitment (the bytes behind
-    /// `GET /api/cell/{id}` → `state_commitment`). [`commit`](Self::commit) is exactly this
-    /// wrapped in the `umem1…` wire form, so the two are the same commitment
+    /// The **raw 32-byte heap root** of the current `/var` — the real cell heap-root:
+    /// [`dregg_circuit::heap_root::compute_heap_root`] over the grain's leaves, encoded
+    /// exactly as `dregg_cell` encodes a heap-root felt. This is the value a real
+    /// deployment's ledger carries for the cell's heap (the `heap_root` register the
+    /// canonical `state_commitment` absorbs). [`commit`](Self::commit) is this wrapped
+    /// in the `heap1…` wire form, so the two are the same commitment
     /// ([`DataRoot::from_root_bytes`]). This is the value [`crate::grain::grain_cell_commitment`]
-    /// publishes, so "the cell's committed root on the ledger" == "the root the served card
-    /// is a leaf under".
+    /// publishes, so "the cell's committed heap-root" == "the root the served card is a
+    /// leaf under".
     pub fn commit_root_bytes(&self) -> [u8; 32] {
-        let leaves: Vec<[u8; 32]> = self.entries.iter().map(|(k, v)| leaf_hash(k, v)).collect();
-        merkle_root(&leaves)
+        felt_to_bytes32(heap_compute_root(self.heap_leaves()))
     }
 
     /// **Prove one key's value is included under [`commit`](Self::commit)'s root** — the
-    /// Merkle sibling path from that leaf to the root, so a visitor can verify the served
-    /// value is the value at `key` under a trusted root with only `{key, value, proof,
-    /// root}` (see [`verify_inclusion`]) — never the whole heap. `None` if `key` is absent.
+    /// [`CanonicalHeapTree`] sibling path from that leaf to the root, so a visitor can
+    /// verify the served value is the value at `key` under a trusted root with only
+    /// `{key, value, proof, root}` (see [`verify_inclusion`]) — never the whole heap.
+    /// `None` if `key` is absent.
     ///
-    /// This is what makes the serve path witnessable for a *real, stateful* `/var`: a light
-    /// client re-hashing just the served card, with this proof, reproduces the whole-heap
-    /// root — it does not need (and never sees) the grain's other keys.
+    /// This is what makes the serve path witnessable for a *real, stateful* `/var`: a
+    /// light client re-hashing just the served card, with this proof, reproduces the
+    /// whole-heap root — it does not need (and never sees) the grain's other keys.
     pub fn prove(&self, key: &str) -> Option<InclusionProof> {
-        let idx = self.entries.keys().position(|k| k == key)?;
-        // Build the level stack over the sorted leaves (same order as `commit`).
-        let leaves: Vec<[u8; 32]> = self.entries.iter().map(|(k, v)| leaf_hash(k, v)).collect();
-        let mut levels: Vec<Vec<[u8; 32]>> = vec![leaves];
-        while levels.last().unwrap().len() > 1 {
-            let cur = levels.last().unwrap();
-            let mut next = Vec::with_capacity(cur.len().div_ceil(2));
-            let mut i = 0;
-            while i < cur.len() {
-                if i + 1 < cur.len() {
-                    next.push(node_hash(&cur[i], &cur[i + 1]));
-                    i += 2;
-                } else {
-                    next.push(cur[i]);
-                    i += 1;
-                }
-            }
-            levels.push(next);
+        if !self.entries.contains_key(key) {
+            return None;
         }
-        // Walk up, recording the sibling (or a promotion) at each level.
-        let mut steps = Vec::with_capacity(levels.len().saturating_sub(1));
-        let mut index = idx;
-        for level in &levels[..levels.len() - 1] {
-            if index % 2 == 1 {
-                steps.push(ProofStep::Left(level[index - 1]));
-            } else if index + 1 < level.len() {
-                steps.push(ProofStep::Right(level[index + 1]));
-            } else {
-                steps.push(ProofStep::Promote);
-            }
-            index /= 2;
-        }
-        Some(InclusionProof { steps })
+        let tree = CanonicalHeapTree::new(self.heap_leaves(), HEAP_TREE_DEPTH);
+        let pos = tree.position_of(var_addr(key))?;
+        let (siblings, directions) = tree.prove_membership(pos)?;
+        Some(InclusionProof {
+            siblings,
+            directions,
+        })
     }
 }
 
@@ -282,7 +284,36 @@ mod tests {
     #[test]
     fn empty_commit_is_stable() {
         assert_eq!(Umem::new().commit(), Umem::new().commit());
-        assert!(Umem::new().commit().0.starts_with("umem1"));
+        assert!(Umem::new().commit().0.starts_with("heap1"));
+    }
+
+    /// **THE SCHEME IS THE REAL ONE.** The empty-`/var` root is byte-identical to
+    /// `dregg_cell::empty_heap_root()` (the fixed `heap_root` a legacy no-heap-activity
+    /// cell carries), and a non-empty `/var` commits through the SAME
+    /// `dregg_circuit::heap_root::compute_heap_root` the kernel commits a cell's heap
+    /// with — NOT a bespoke sha256 tree. This is the value a real deployment's ledger
+    /// carries for the cell's heap.
+    #[test]
+    fn commit_is_the_real_dregg_heap_root_scheme() {
+        // Empty heap → exactly the dregg-cell empty heap-root constant.
+        assert_eq!(
+            Umem::new().commit_root_bytes(),
+            dregg_cell::empty_heap_root(),
+            "empty /var root == dregg_cell::empty_heap_root()"
+        );
+
+        // Non-empty heap → the dregg_circuit heap-root primitive (the exact function
+        // `dregg_cell::compute_heap_root` wraps) over the grain's leaves, encoded as the
+        // real heap-root felt — NOT a sha256 Merkle root.
+        let mut u = Umem::new();
+        u.put("card/", b"<!doctype html>hello".to_vec());
+        u.put("notes/a", b"alpha".to_vec());
+        let expect = felt_to_bytes32(dregg_circuit::heap_root::compute_heap_root(u.heap_leaves()));
+        assert_eq!(
+            u.commit_root_bytes(),
+            expect,
+            "grain_cell_commitment IS the dregg heap-root over the /var leaves"
+        );
     }
 
     /// The inclusion proof works for a **non-degenerate** heap: put several keys, prove one,
@@ -313,7 +344,7 @@ mod tests {
 
     /// The proof binds the exact `(key, value)` under the exact root: a wrong value, a wrong
     /// key, or a stale root all fail. This is the tooth a tampering host cannot beat without
-    /// finding a sha256 collision.
+    /// finding a Poseidon2 collision.
     #[test]
     fn inclusion_proof_rejects_wrong_value_key_or_root() {
         let mut u = Umem::new();
@@ -336,15 +367,21 @@ mod tests {
         assert!(u.prove("zzz").is_none());
     }
 
-    /// A single-entry heap: its root IS the leaf hash, the proof is empty, and it still
-    /// verifies — the degenerate case is handled, not special-cased away.
+    /// A single-entry heap: the sorted tree still opens the leaf against the whole-heap
+    /// root (the path is the full-depth sentinel/empty-subtree path — the degenerate
+    /// case is handled by the same sorted-Merkle machinery, not special-cased away).
     #[test]
     fn inclusion_proof_for_a_single_entry_heap() {
         let mut u = Umem::new();
         u.put("only", b"solo".to_vec());
         let root = u.commit();
         let proof = u.prove("only").unwrap();
-        assert!(proof.steps.is_empty(), "a lone leaf needs no siblings");
+        // The real sorted-tree opening is a full depth-16 path (sentinels + padding),
+        // not an empty step list.
+        assert_eq!(proof.siblings.len(), HEAP_TREE_DEPTH);
+        assert_eq!(proof.directions.len(), HEAP_TREE_DEPTH);
         assert!(verify_inclusion(&root, "only", b"solo", &proof));
+        // A tampered value still fails under the single-entry root.
+        assert!(!verify_inclusion(&root, "only", b"SOLO", &proof));
     }
 }

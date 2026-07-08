@@ -35,14 +35,24 @@
 //! * **REAL:** the owner-cap gate on every lifecycle mutation (backup / transfer /
 //!   delete), the ed25519 backup attestation + its three restore teeth, the
 //!   content-addressed re-witness of every `data_root` (including the first-wake
-//!   genesis root — the committed empty heap), the L2/L4/L6 postures.
-//! * **STAND-IN:** [`crate::cell::Umem`] is a sha256 content-addressed heap standing
-//!   in for the kernel's committed umem heap (`dregg_cell::compute_heap_root`; the
-//!   real committed mind lives in `grain-fork`'s `Grain`, whose heap IS a
-//!   `dregg_cell::Cell`). `wake(lease_funded: bool)` stands in for the real funded
-//!   payment-lease gate (the hosting substrate's `Lease`); the in-crate [`ResourceLease`]
-//!   bounds resources, not payment. [`GrainReceipt`] is an unsigned operation record —
-//!   an index into the witnessed story, not itself a receipted kernel turn.
+//!   genesis root — the committed empty heap), the L2/L4/L6 postures, AND the
+//!   commitment scheme itself: [`crate::cell::Umem`] commits through the REAL openable
+//!   sorted-Poseidon2 heap-root ([`dregg_circuit::heap_root::compute_heap_root`], the
+//!   primitive `dregg_cell::compute_heap_root` wraps), so a `data_root` / `grain_cell_commitment`
+//!   is a genuine cell heap-root the federation ledger carries (the `heap_root` register
+//!   the canonical `state_commitment` absorbs) and inclusion proofs fold to it in that
+//!   scheme — not a bespoke sha256 tree.
+//! * **STAND-IN:** the `/var` LEAF MAPPING — a grain's `/var` is string-keyed, so each
+//!   entry is a heap leaf `{ addr = Poseidon2(key), value = Poseidon2(bytes) }` rather
+//!   than the kernel's `(collection_id, key) → FieldElement` leaf; the tree scheme is
+//!   identical, only the entry shape differs (the real committed mind lives in
+//!   `grain-fork`'s `Grain`, whose heap IS a `dregg_cell::Cell`). The PUBLISH of the
+//!   heap-root as a distinct fetchable ledger value (its membership in the whole-cell
+//!   `state_commitment` a separate check) is the named federation seam.
+//!   `wake(lease_funded: bool)` stands in for the real funded payment-lease gate (the
+//!   hosting substrate's `Lease`); the in-crate [`ResourceLease`] bounds resources, not
+//!   payment. [`GrainReceipt`] is an unsigned operation record — an index into the
+//!   witnessed story, not itself a receipted kernel turn.
 //!
 //! The layer split with the detached grain crates: THIS module is the hosting
 //! lifecycle (`/var`-image flavor, consumed by `grain-commons` for pedigreed
@@ -65,21 +75,30 @@ use crate::tenant::TenantId;
 /// pointed and reaped (it then costs only storage until re-opened). Sandstorm uses ~90s.
 pub const IDLE_SHUTDOWN_SECS: u64 = 90;
 
-/// **The grain cell's committed commitment — the value the federation ledger stores.**
+/// **The grain cell's committed HEAP-ROOT — the value the federation ledger carries for
+/// the cell's heap, in the real dregg scheme.**
 ///
-/// This is the binding that makes a served card independently verifiable: a grain's
-/// committed cell commitment IS its `/var` umem Merkle root (the raw 32 bytes behind the
-/// `data_root` that [`crate::bridge::HttpBridge::serve_attested`] commits and the served
-/// card is a leaf under). The federation stores exactly this value keyed by the grain's
-/// cell id — it is what `GET /api/cell/{id}` returns as `state_commitment` (see
-/// `node/src/api.rs`, "the federation stores only the commitment"). So the trusted root a
-/// visitor reads from the LEDGER == the root the inclusion proof folds to; authenticity
-/// chains to the federation's independently-stored record, not the serving host's response.
+/// This is the binding that makes a served card independently verifiable: a grain's `/var`
+/// commits through the SAME openable sorted-Poseidon2 heap-root the kernel commits a
+/// cell's heap with ([`crate::cell::Umem::commit_root_bytes`] == the encoded
+/// [`dregg_circuit::heap_root::compute_heap_root`], the exact primitive
+/// `dregg_cell::compute_heap_root` wraps). So the raw 32 bytes returned here are a
+/// GENUINE cell heap-root felt — the `heap_root` register the canonical
+/// `state_commitment` absorbs (`dregg_cell::commitment`, `hash_cell_state_into`) — not a
+/// bespoke sha256 Merkle root the federation never stores. The served card is a leaf
+/// under exactly this root, so the inclusion proofs a visitor checks fold precisely to a
+/// real ledger heap-root (a Poseidon2/felt path), and the cell binding is carried by (a)
+/// the heap-root's membership in the cell's `state_commitment` + (b) the owner
+/// attestation, which signs `(grain_cell_id ‖ data_root)`.
 ///
-/// It is the raw `/var` root **verbatim** (not a hash that mixes in the cell id): the
-/// inclusion proofs a visitor checks fold precisely to this root, and the cell binding is
-/// carried instead by (a) the ledger keying this value under the grain's cell id and (b)
-/// the owner attestation, which signs `(grain_cell_id ‖ data_root)`.
+/// **The honest seam (NOT a present-fact claim).** `GET /api/cell/{id}` returns the
+/// WHOLE-cell BLAKE3 `state_commitment` (hex), which absorbs this heap-root but is not
+/// itself locally reproducible without the full cell. So a visitor obtains THIS heap-root
+/// as an independently-published value (the grain publishes its heap-root; the heap-root's
+/// membership in `state_commitment` is a separate, named check the federation must expose)
+/// and verifies inclusion against it — in the real Poseidon2 heap scheme. The remaining
+/// wiring is the federation WRITE of the heap-root as a distinct fetchable value; the
+/// SCHEME below already matches what a real deployment's ledger carries.
 pub fn grain_cell_commitment(var: &Umem) -> [u8; 32] {
     var.commit_root_bytes()
 }
@@ -224,7 +243,7 @@ pub struct GrainBackup {
 
 /// The canonical bytes an owner signs to attest a backup's pedigree: a
 /// domain-separated, NUL-delimited `(app_id ‖ data_root)`. Both fields are NUL-free
-/// (base32 app id, `umem1…` data root), so the delimiter is unambiguous. Binding both
+/// (base32 app id, `heap1…` data root), so the delimiter is unambiguous. Binding both
 /// means the signature breaks if EITHER the claimed app or the committed image is
 /// altered after signing.
 pub fn attestation_message(app_id: &AppId, data_root: &str) -> Vec<u8> {
