@@ -214,3 +214,12 @@ a Lean follow-on, NOT a migration blocker).
 NEXT = GATE 2: flip the ~15 consumer sites against the now-complete foundations, per-cluster
 runtime-gated (bridge · turn-executor+~8-apps [fail-open, run app suites] · sdk · wire/storage ·
 wasm) → delete hand AIRs → git rm circuit/src/stark.rs.
+
+## ⚑ DEPTH RESIDUAL CLOSED BY PROOF (2026-07-07, background Lean lane)
+MembershipDepthGeneralRung2.lean (committed, lake green, axiom-clean): membership_depth_general_sound
+— accept at ANY nominal depth + same committed root ⟹ same leaf/siblings/actual-depth (root binds
+the path). REAL FINDING: CR alone does NOT suffice — cross-depth needs a 2nd carrier LeafNodeSep
+(leaf/node domain separation, the Merkle depth-extension guard). The deployed Poseidon2 SATISFIES it
+(poseidon2.rs:618 leaf-domain-sep). So depth-nominal is SOUND-BY-PROOF (2 named+realized carriers),
+not just argued. Residual: mirror a per-depth emit descriptor to metatheory for the SAT⟹SEM lift at
+actual height (additive follow-on; the functional-model soundness here governs it).
