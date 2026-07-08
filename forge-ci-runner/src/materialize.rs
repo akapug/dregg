@@ -136,6 +136,91 @@ pub fn read_materialized_history(work_dir: &Path) -> io::Result<Option<History>>
     }
 }
 
+/// **THE SERVE-X-COMMIT-Y REFUSAL.** The on-disk tree at `work_dir` is NOT the
+/// faithful materialization of its committed patch-history: the bytes the CI
+/// command would actually read differ from the bytes the committed `input_root`
+/// commits to. So a root is NEVER produced for a tree that carries an honest
+/// `merged.history` for code Y while its `document.txt` (or a stray file the
+/// command could read) is attacker code X.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MaterializationMismatch(pub String);
+
+impl std::fmt::Display for MaterializationMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "materialization mismatch: {}", self.0)
+    }
+}
+impl std::error::Error for MaterializationMismatch {}
+
+/// **VERIFY** that the on-disk tree at `work_dir` is EXACTLY the materialization
+/// of `history` — the bind that makes a computed `input_root` honest (the bytes
+/// the command reads == the bytes the committed root commits to). Two checks:
+///
+/// 1. `document.txt` equals `content(replay(history)).to_marked_string()`
+///    byte-for-byte — the executed document IS the committed fold; and
+/// 2. the tree contains NO file other than `document.txt` and the sidecar
+///    `.dregg-ci/merged.history` — a stray file the command could read is not
+///    committed by `input_root`, so it must not exist.
+///
+/// Any deviation is a [`MaterializationMismatch`]. On `Ok(())` the caller may take
+/// `substrate_commit(replay(history))` as the tree's honest `input_root`; this is
+/// exactly what [`crate::input_root_of_dir`] does when the sidecar is present.
+pub fn verify_faithful_materialization(
+    work_dir: &Path,
+    history: &History,
+) -> Result<(), MaterializationMismatch> {
+    // (1) The executed document must BE the committed fold, byte-for-byte.
+    let expected = content(&history.replay()).to_marked_string();
+    let doc_path = document_path(work_dir);
+    let actual = std::fs::read(&doc_path)
+        .map_err(|e| MaterializationMismatch(format!("cannot read {DOCUMENT_FILE}: {e}")))?;
+    if actual != expected.as_bytes() {
+        return Err(MaterializationMismatch(format!(
+            "{DOCUMENT_FILE} is not the committed history's rendered content \
+             ({} on-disk bytes vs {} committed bytes)",
+            actual.len(),
+            expected.len()
+        )));
+    }
+
+    // (2) No file beyond the materialization itself — nothing else the command
+    //     could read (and that the committed root would NOT commit to).
+    let mut files = Vec::new();
+    collect_rel_files(work_dir, work_dir, &mut files)
+        .map_err(|e| MaterializationMismatch(format!("cannot walk work tree: {e}")))?;
+    let sidecar_rel = format!("{SIDECAR_DIR}/{HISTORY_FILE}");
+    for f in &files {
+        let norm = f.replace('\\', "/");
+        if norm != DOCUMENT_FILE && norm != sidecar_rel {
+            return Err(MaterializationMismatch(format!(
+                "unexpected file in materialized tree: {norm} \
+                 (only {DOCUMENT_FILE} and {sidecar_rel} are permitted)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Collect every file's path under `dir`, relative to `base`, as a string. The
+/// walk that lets [`verify_faithful_materialization`] refuse a stray file.
+fn collect_rel_files(base: &Path, dir: &Path, out: &mut Vec<String>) -> io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            collect_rel_files(base, &path, out)?;
+        } else {
+            let rel = path
+                .strip_prefix(base)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .into_owned();
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The patch-history codec — a canonical, length-prefixed, domain-tagged byte
 // serialization over the PUBLIC `Op` grammar. Canonical (order IS the data), so
@@ -298,7 +383,7 @@ pub fn decode_history(bytes: &[u8]) -> Option<History> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input_root_of_dir;
+    use crate::{input_root_of_dir, InputRootError};
     use dregg_doc::{substrate_commit, AtomId, History, Patch, PullRequest};
 
     /// A small two-atom document history ("two\nthree\n"), mirroring how
@@ -394,6 +479,54 @@ mod tests {
         for d in [da, db] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    // ── POLE (i, guard): HONEST — a faithfully materialized tree yields the
+    //    committed root; ── POLE (ii): SERVE-X-COMMIT-Y — the same tree with
+    //    document.txt overwritten by attacker bytes X (honest sidecar for Y left
+    //    in place) is REFUSED: input_root_of_dir returns MaterializationMismatch,
+    //    so R_Y is NEVER produced for a tree that ran X.
+    #[test]
+    fn serve_x_commit_y_is_refused_no_root_for_a_tampered_tree() {
+        let y = sample_history();
+        let dir = tempdir("fcr-sxcy");
+        materialize(&y, &dir).unwrap();
+
+        // HONEST: the faithful materialization yields exactly the committed root.
+        let honest = input_root_of_dir(&dir).expect("faithful tree accepted");
+        assert_eq!(honest, canonical_input_root(&y));
+
+        // ATTACK: overwrite the EXECUTED document with attacker bytes X, keeping
+        // the honest merged.history for Y beside it.
+        std::fs::write(document_path(&dir), b"attacker-controlled-X\n").unwrap();
+        match input_root_of_dir(&dir) {
+            Err(InputRootError::Mismatch(_)) => {}
+            other => panic!("serve-X-commit-Y must be refused, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── POLE (iii): STRAY FILE — a faithfully materialized tree plus an extra
+    //    file the command could read is REFUSED (only document.txt + the sidecar
+    //    are committed by input_root; anything else must not exist).
+    #[test]
+    fn a_stray_readable_file_is_refused() {
+        let y = sample_history();
+        let dir = tempdir("fcr-stray");
+        materialize(&y, &dir).unwrap();
+        assert!(
+            input_root_of_dir(&dir).is_ok(),
+            "clean materialization accepted"
+        );
+
+        std::fs::write(dir.join("evil.sh"), b"#!/bin/sh\necho pwned\n").unwrap();
+        match input_root_of_dir(&dir) {
+            Err(InputRootError::Mismatch(_)) => {}
+            other => panic!("a stray file must be refused, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // The codec round-trips ANY history bit-for-bit (provenance fidelity rests on

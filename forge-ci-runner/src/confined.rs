@@ -8,12 +8,13 @@
 use std::io::{self, Read};
 use std::path::Path;
 
-use dregg_doc::{run_ci_verdict, CiVerdict};
+use dregg_doc::{run_ci_verdict, CiVerdict, History};
 use dregg_firmament::process_kernel::ProcessKernel;
 use dregg_firmament::sandbox::Confinement;
 use dregg_turn::{TurnError, TurnReceipt};
 
-use crate::{confinement_id, input_root_of_dir, WORK_TOKEN};
+use crate::materialize::{canonical_input_root, materialize};
+use crate::{confinement_id, WORK_TOKEN};
 
 /// The signed witness a successful [`run_check_confined`] produces: the
 /// [`CiVerdict`] plus the committed, executor-signed genesis-turn
@@ -65,7 +66,7 @@ pub enum AuditVerdict {
     /// re-executing the same command actually produced. `field` names the
     /// divergent field; `claimed`/`recomputed` are its hex/decimal renderings.
     HostLied {
-        /// `"confinement_id"`, `"exit_code"`, or `"output_digest"`.
+        /// `"input_root"`, `"confinement_id"`, `"exit_code"`, or `"output_digest"`.
         field: &'static str,
         /// What the signed verdict claimed.
         claimed: String,
@@ -155,13 +156,20 @@ fn run_confined(
 
 /// **L2 — THE CONFINED RUNNER.** Run the check command `command_image` (with
 /// `argv`; [`WORK_TOKEN`] → the confined work dir) inside a macOS-Seatbelt
-/// confinement seeded from `input_dir`, then commit the result as a signed
-/// [`CiVerdict`] via [`dregg_doc::run_ci_verdict`] — the GENESIS turn of a fresh
-/// CI-run cell `(editor_seed, region_seed)`, signed by `host_signing_seed`.
+/// confinement over the PR's committed code `history`, then commit the result as a
+/// signed [`CiVerdict`] via [`dregg_doc::run_ci_verdict`] — the GENESIS turn of a
+/// fresh CI-run cell `(editor_seed, region_seed)`, signed by `host_signing_seed`.
 ///
-/// - `input_root` = [`input_root_of_dir`]`(input_dir)` — the REAL
-///   `substrate_commit` of the working tree (equals a PR's `input_root` when the
-///   tree materializes that PR's `merged_graph`; see the crate-root seam note).
+/// THE SERVE-X-COMMIT-Y CLOSURE: the runner MATERIALIZES `history` into a fresh
+/// work dir IT owns ([`materialize`]) and runs the command over THAT — so the
+/// command provably executes over the committed bytes. A host cannot pre-seed a
+/// `document.txt = X` while committing history Y: the runner writes `document.txt`
+/// itself from `history`, and `input_root = canonical_input_root(history)` is the
+/// root of exactly those bytes.
+///
+/// - `input_root` = [`canonical_input_root`]`(history)` — the REAL
+///   `substrate_commit` of the committed code (equals a PR's `input_root` when
+///   `history` is that PR's merged code; see the crate-root seam note).
 /// - `command_id` is the required check's command id (the forge's `CiRun.command_id`).
 /// - `confinement_id` = [`confinement_id`] of the sandbox profile + command.
 ///
@@ -170,7 +178,7 @@ fn run_confined(
 /// verdict — the in-turn binding the forge `CiRun` check verifies.
 #[allow(clippy::too_many_arguments)]
 pub fn run_check_confined(
-    input_dir: &Path,
+    history: &History,
     command_image: &Path,
     argv: &[String],
     command_id: [u8; 32],
@@ -178,8 +186,16 @@ pub fn run_check_confined(
     editor_seed: u8,
     region_seed: u8,
 ) -> Result<CiRunReceipt, RunError> {
-    let run = run_confined(input_dir, command_image, argv)?;
-    let input_root = input_root_of_dir(input_dir)?;
+    // Materialize the committed code into a fresh dir WE control — the command
+    // runs over these bytes, not a host-seeded document.txt.
+    let work = fresh_work_dir()?;
+    materialize(history, &work)?;
+
+    let run = run_confined(&work, command_image, argv)?;
+    let _ = std::fs::remove_dir_all(&work);
+
+    // The root of exactly the bytes we materialized and ran over.
+    let input_root = canonical_input_root(history);
 
     let verdict = CiVerdict {
         input_root,
@@ -198,23 +214,46 @@ pub fn run_check_confined(
     Ok(CiRunReceipt { verdict, receipt })
 }
 
-/// **L3 — THE RE-EXECUTOR (the non-circular audit).** Re-run the SAME command
-/// (`command_image` + `argv`) in a FRESH confinement seeded from `input_dir`, and
-/// compare the recomputed `{confinement_id, exit_code, output_digest}` to
-/// `verdict`. [`AuditVerdict::Honest`] iff all three match; otherwise
+/// **L3 — THE RE-EXECUTOR (the non-circular audit).** Given the PR's TRUSTED
+/// committed code `history` (supplied by the auditor, NOT the host's on-disk
+/// dir), RE-MATERIALIZE it into a FRESH dir the auditor owns, re-run the SAME
+/// command (`command_image` + `argv`) in a FRESH confinement over THAT, and
+/// compare the recomputed `{input_root, confinement_id, exit_code, output_digest}`
+/// to `verdict`. [`AuditVerdict::Honest`] iff all match; otherwise
 /// [`AuditVerdict::HostLied`] naming the first divergent field.
 ///
 /// This is what convicts a lying host: the host is the executor and can SIGN a
-/// well-formed verdict, but it cannot make a HONEST re-run reproduce a fabricated
-/// `output_digest` / `exit_code`. See the crate-root determinism constraint (a
-/// nondeterministic check is a false-conviction hazard).
+/// well-formed verdict, but it cannot make an HONEST re-run — over the code the
+/// verdict COMMITS to — reproduce a fabricated `output_digest` / `exit_code`.
+/// Because L3 re-materializes from `history` rather than trusting the host's dir,
+/// the serve-X-commit-Y attack (run over X, commit Y) is caught: the re-run over
+/// Y yields the true output, which diverges from the output the host produced over
+/// X. See the crate-root determinism constraint (a nondeterministic check is a
+/// false-conviction hazard).
 pub fn reexecute_and_verify(
     verdict: &CiVerdict,
-    input_dir: &Path,
+    history: &History,
     command_image: &Path,
     argv: &[String],
 ) -> io::Result<AuditVerdict> {
-    let run = run_confined(input_dir, command_image, argv)?;
+    // Re-materialize the TRUSTED committed code into a fresh dir the auditor owns,
+    // then re-run over it — a host cannot hand L3 a tampered tree.
+    let work = fresh_work_dir()?;
+    materialize(history, &work)?;
+    let run = run_confined(&work, command_image, argv)?;
+    let _ = std::fs::remove_dir_all(&work);
+
+    // The verdict must bind THIS committed code. If it claims a different
+    // input_root than the code the auditor re-materialized, it was not a verdict
+    // for this PR's code at all.
+    let committed_root = canonical_input_root(history);
+    if verdict.input_root != committed_root {
+        return Ok(AuditVerdict::HostLied {
+            field: "input_root",
+            claimed: hex(&verdict.input_root),
+            recomputed: hex(&committed_root),
+        });
+    }
 
     // The sandbox/command the auditor rebuilt must be the one the verdict claims
     // it ran under. A mismatch means the signed verdict was for a different
@@ -334,13 +373,11 @@ mod tests {
         let pr_root = pr.input_root();
         assert_eq!(pr_root, canonical_input_root(&h));
 
-        // Materialize the merged code into a work dir the confined command reads.
-        let work = tempdir("fcr-e2e");
-        materialize(&h, &work).unwrap();
-
         // A deterministic, exit-0 command: /usr/bin/true (empty stdout, code 0).
+        // The runner materializes `h` itself — the command provably runs over the
+        // committed code.
         let receipt = run_check_confined(
-            &work,
+            &h,
             std::path::Path::new("/usr/bin/true"),
             &[],
             COMMAND,
@@ -384,8 +421,64 @@ mod tests {
             check.satisfied_by(&witness, other).is_err(),
             "the verdict does not satisfy an unrelated input_root"
         );
+    }
 
-        let _ = std::fs::remove_dir_all(work);
+    /// **POLE (iv) — L3 CATCHES SERVE-X-COMMIT-Y.** A host runs the command over
+    /// ATTACKER code X while committing the real code Y (`input_root = R_Y`, exit
+    /// 0, `output_digest = digest(output-over-X)`). L3, re-materializing the
+    /// TRUSTED committed history Y into a fresh dir, recomputes the true output
+    /// over Y — which diverges from the output over X — and returns
+    /// `HostLied{output_digest}`. The verdict's spoofed `input_root == R_Y` passes
+    /// the input_root check, so the conviction is genuinely on the OUTPUT.
+    #[test]
+    fn l3_rematerializes_and_catches_serve_x_commit_y() {
+        use crate::materialize::{document_path, DOCUMENT_FILE};
+
+        let y = sample_history(); // the real PR code: renders "two\nthree\n"
+        let cat = std::path::Path::new("/bin/cat");
+        let argv = vec![format!("{WORK_TOKEN}/{DOCUMENT_FILE}")];
+
+        // THE ATTACK: a tree materialized for Y but with document.txt overwritten
+        // by attacker bytes X — exactly the serve-X-commit-Y on-disk state the
+        // host would run the command over.
+        let tampered = tempdir("fcr-l3-serveX");
+        materialize(&y, &tampered).unwrap();
+        std::fs::write(document_path(&tampered), b"attacker-controlled-X\n").unwrap();
+
+        // What the host ACTUALLY executed: cat over X → output digest over X.
+        let attack_run = run_confined(&tampered, cat, &argv).expect("host runs cat over X");
+        assert_eq!(attack_run.exit_code, 0);
+
+        // The lying verdict: input_root SPOOFED to R_Y (so the forge L1 gate would
+        // accept it as "CI green for Y"), but exit/output are the run over X.
+        let lie = CiVerdict {
+            input_root: canonical_input_root(&y),
+            command_id: COMMAND,
+            confinement_id: attack_run.confinement_id,
+            exit_code: attack_run.exit_code,
+            output_digest: attack_run.output_digest,
+        };
+
+        // L3 re-materializes the TRUSTED Y (not the host's tampered dir) and
+        // re-runs → the true output over Y diverges from the output over X.
+        let audit = reexecute_and_verify(&lie, &y, cat, &argv).expect("audit runs");
+        match audit {
+            AuditVerdict::HostLied {
+                field: "output_digest",
+                claimed,
+                recomputed,
+            } => {
+                assert_eq!(
+                    claimed,
+                    hex(&attack_run.output_digest),
+                    "claim = output over X"
+                );
+                assert_ne!(claimed, recomputed, "the true output over Y differs from X");
+            }
+            other => panic!("L3 must convict serve-X-commit-Y on output_digest, got {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(tampered);
     }
 }
 
