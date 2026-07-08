@@ -28,43 +28,24 @@ hash0 [0,0]`. The trace `Satisfied2`s (`cheatTrace_satisfied2`), both open `pi[0
 carrier — exactly what `CollisionFree.compress_pair_inj` supplies. So the anchor is a real filter, not
 `True`.
 
-## ⚑ UPDATE — the RUNG2_PARTIAL residual is now CLOSED by the emit weld C2b
+## ⚑ UPDATE — the RUNG2_PARTIAL residual is CLOSED by the emit weld C2b (+ the value bounds)
 
-The residual described below ("the COMMITTED VALUES satisfy the claimed relation") was closed by adding
-the emit gate `(R) : diff = value_a − value_b` (C2b) to `relationalPredicateDesc`. On an ACTIVE
-(height-≥2) trace the weld gate now REJECTS the decoupling forge — see
-`PredicatesRelationalCompoundRung2Full.decoupled_forge_rejected` and the unconditional closure
-`eq_relation_over_committed`, and the value-level relations
+The historical residual "the COMMITTED VALUES satisfy the claimed relation" was closed by adding the
+emit gate `(R) : diff = value_a − value_b` (C2b) to `relationalPredicateDesc`, whose LAST-ROW twin
+fires on EVERY row (so the decoupling forge is rejected even on a degenerate 1-row trace). On an ACTIVE
+trace the weld REJECTS the decoupling forge — see `PredicatesRelationalCompoundRung2Full.decoupled_forge_rejected`
+and the unconditional closure `eq_relation_over_committed`, and the value-level relations
 `PredicatesRelationalCompoundRefine.{relational_eq_forces_values_equal, relational_neq_forces_values_distinct,
-relational_range_forces_ge}`. The §5b measurement below survives ONLY on a DEGENERATE 1-row trace
-where every transition gate (including the weld) is vacuous (row 0 is the last row); it is retained as
-the historical motivation for C2b, not a live gap.
-
-## The (historical) RESIDUAL that RUNG 2 alone does NOT close (named precisely — RUNG2_PARTIAL)
-
-The relational descriptor certifies the comparison on `diff` (col 4), but NOTHING ties `diff` to
-`value_a - value_b`: the value columns `0`/`2` enter the AIR ONLY through the two commitment lookups,
-and `diff` is a FREE witness (this is true of BOTH the emitted `relationalPredicateDesc` AND the Rust
-hand-AIR `circuit/src/dsl/predicates/relational.rs` — the witness generator computes `diff = value_a -
-value_b` off-circuit at `relational.rs:425`, but no CONSTRAINT enforces it). So an accepting proof does
-NOT certify that the COMMITTED VALUES satisfy the claimed relation — only that they are uniquely bound
-(this file), and that the free `diff` satisfies the selected comparison (RUNG 1). Closing "committed
-values satisfy the relation" is an EMIT/AIR FIX (add a gate `diff - (value_a - value_b) = 0`, or gate
-the comparison directly on the value columns), NOT a crypto residual — NO named carrier discharges a
-missing in-circuit arithmetic constraint. Likewise the COMPOUND descriptor's AND/OR/Threshold/Custom
-laws route the composed bit through the prover-supplied `and_intermediate`/`gate_output` (never
-re-derived in-circuit); only the NOT law is fully in-circuit (`compound_not_computes_negation`, RUNG 1,
-DONE) — the AND/OR gaps are the same missing-constraint class, and the compound descriptor carries NO
-crypto lookup at all, so there is no Rung-2 carrier discharge for it.
-
-§5b turns this prose into a MACHINE-CHECKED measurement: `fg_accepts_unequal_committed` exhibits an
-accepting EQ proof over a REAL INJECTIVE `hash` (perfect CR) whose committed values are FULLY CR-bound
-by `relational_commit_binds` to `value_a = 5`, `value_b = 7` — yet `5 ≠ 7`, so the accepting proof's
-committed values VIOLATE the claimed EQ relation. The residual therefore SURVIVES the CR carrier; it is
-NOT crypto-closable, and any "discharge" that transports the relation from a relation-carrying reference
-would ignore every in-circuit comparison gate — a vacuous strengthening, not a Rung-2 carrier
-consumption. ⚑ Closing it is the EMIT/AIR fix `diff - (value_a - value_b) = 0` — NOW EMITTED as C2b in
-`relationalPredicateDesc` (see the §UPDATE note above); the residual is CLOSED, not partial.
+relational_range_forces_ge}`. The ≥ (RANGE) mode additionally range-bounds `VALUE_A`/`VALUE_B < 2^29`
+(C6a-C8a / C6b-C8b), so `relational_range_value_bounds` proves `0 ≤ value_a, 0 ≤ value_b` and the
+comparison is wrap-sound (closing the field-wrap ≥ forgery). The former §5b "residual measurement"
+(`fg_accepts_unequal_committed`, which exhibited an accepting EQ proof over unequal committed values on a
+1-row vacuous trace) is REMOVED: with the every-row weld that forge no longer `Satisfied2`s, and its
+rejection is the machine-checked `Rung2Full.decoupled_forge_rejected`. The COMPOUND descriptor's
+AND/OR/Threshold/Custom laws still route the composed bit through the prover-supplied
+`and_intermediate`/`gate_output` (only the NOT law is fully in-circuit,
+`compound_not_computes_negation`, RUNG 1) — the compound descriptor carries no crypto lookup, so there
+is no Rung-2 carrier discharge for it.
 
 ## The named carrier
 
@@ -207,10 +188,14 @@ the SAME public commitment `0 = hash0 [0,0]`. The trace `Satisfied2`s (1-row: ga
 only/last row, lookups by membership, PI pins met), both open `pi[0]`, yet `7 ≠ 0`. So the RUNG-2
 CR anchor is LOAD-BEARING — the binding is impossible from `Satisfied2` + opening alone. -/
 
-/-- The cheating row: `value_a = 7` (nonzero), `eq_flag = 1`, `diff = 0`, `result_bit = 1`; every
-commitment/lane column `0`, so `commit_a = commit_b = hash0 [·] = 0`. -/
+/-- The cheating row: `value_a = value_b = 7` (nonzero), `eq_flag = 1`, `diff = 0`, `result_bit = 1`;
+every commitment/lane column `0`, so `commit_a = commit_b = hash0 [·] = 0`. `value_b = value_a` so the
+weld C2b (`diff = value_a − value_b = 0`) holds on the last row — the §4 binding gap is that the
+committed `value_a = 7` opens the SAME colliding `hash0`-commitment as the reference `(0,0)`, not the
+relation. -/
 def cheatRow : Assignment :=
-  fun c => if c = VALUE_A then 7 else if c = RESULT_BIT then 1 else if c = EQ_FLAG then 1 else 0
+  fun c => if c = VALUE_A then 7 else if c = VALUE_B then 7 else if c = RESULT_BIT then 1
+           else if c = EQ_FLAG then 1 else 0
 
 /-- The two Poseidon2 chip rows the commitment lookups target, evaluated on `cheatRow` (both hash to
 `hash0 [·] = 0`). -/
@@ -330,15 +315,18 @@ theorem bwTrace_satisfied2 :
     interval_cases i
     fin_cases hc <;>
       simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, Lookup.holdsAt, gate, piFirst,
-        commitLookup, hF, bwTrace, bwTf, bwPub, bwRow, envAt, VALUE_A, BLINDING_A,
-        VALUE_B, BLINDING_B, DIFF, RESULT_BIT, RANGE_FLAG, EQ_FLAG, NEQ_FLAG, COMMIT_A, COMMIT_B,
-        COMMIT_VERIFY, ZERO_PAD, List.getD_cons_zero, reduceIte, reduceCtorEq] <;>
+        commitLookup, bwTrace, bwTf, bwPub, bwRow, envAt, subC, subV, binBody, sumE,
+        atLeastOne, oneMinus, prodE, recomposeExpr, recomposeAExpr, recomposeBExpr, EmittedExpr.eval,
+        VALUE_A, BLINDING_A, VALUE_B, BLINDING_B, DIFF, NEQ_INV, RESULT_BIT, RANGE_FLAG, EQ_FLAG,
+        NEQ_FLAG, COMMIT_A, COMMIT_B, COMMIT_VERIFY, ZERO_PAD, VALUE_A_BITS_START, VALUE_B_BITS_START,
+        NUM_DIFF_BITS, List.getD_cons_zero, List.getD_cons_succ, List.length_cons, List.length_nil,
+        reduceIte, reduceCtorEq, mul_zero, zero_mul, mul_one, one_mul, beq_self_eq_true,
+        eq_self_iff_true, true_implies] <;>
       first
         | exact List.mem_cons.mpr (Or.inl rfl)
         | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
         | trivial
         | rfl
-        | simp
   rowHashes := by intro i _; trivial
   rowRanges := by intro i _ r hr; simp only [relationalPredicateDesc, List.not_mem_nil] at hr
   memAddrsNodup := List.nodup_nil
@@ -366,134 +354,6 @@ theorem bwTrace_binds_value (hinj : Function.Injective hash) :
 
 end TrueWitness
 
-/-! ## §5b — [HISTORICAL] the RUNG2_PARTIAL residual on a DEGENERATE 1-row trace (now closed by C2b).
-
-⚑ The `fgTrace` below is 1-ROW, so every transition gate — including the emit weld C2b `diff =
-value_a − value_b` — is VACUOUS (row 0 is the last row). That is the ONLY reason this decoupled forge
-still `Satisfied2`s. On an ACTIVE height-≥2 trace the weld REJECTS exactly this forge
-(`PredicatesRelationalCompoundRung2Full.decoupled_forge_rejected`), and the committed-value relation is
-now certified UNCONDITIONALLY (`...Rung2Full.eq_relation_over_committed`). This section is retained as
-the historical measurement that MOTIVATED the C2b weld; it is not a live soundness gap.
-
-The §4 cheat rides a COLLIDING `hash0` to break the commitment BINDING; that gap
-`relational_commit_binds` CLOSES against `CollisionFree`. But the NAMED `RUNG2_PARTIAL` residual — "the
-COMMITTED VALUES satisfy the claimed relation" — is NOT a crypto gap: it survives a PERFECT (injective)
-`hash`. Here is the machine-checked forgery. An EQ proof commits `value_a = 5`, `value_b = 7` (UNEQUAL),
-and sets the FREE difference witness `diff = 0`, so the ONLY comparison tooth on the private difference
-(`eq_flag · diff = 0`) passes and the trace `Satisfied2`s. Fed to `relational_commit_binds` over an
-INJECTIVE `hash`, its committed columns are FULLY CR-bound to the reference `(5, 0, 7, 1)` — yet
-`5 ≠ 7`: the accepting EQ proof's committed values VIOLATE the claimed relation. So NO named crypto
-carrier discharges this residual (an injective hash is the strongest CR carrier there is, and the
-forgery survives it); ⚑ closing it is the EMIT/AIR fix `diff − (value_a − value_b) = 0` — NOW EMITTED as
-the C2b weld. NOTE this 1-row `fgTrace` accepts ONLY because its single row is the last row (all
-transition gates, including C2b, vacuous); on an active height-≥2 trace C2b REJECTS this exact forge
-(`...Rung2Full.decoupled_forge_rejected`). This section is retained as the historical FALSE-half
-measurement that motivated C2b, not a live gap. -/
-
-section ResidualMeasurement
-variable (hash : List ℤ → ℤ)
-
-/-- The forging committed row: EQ selected (`eq_flag = 1`), `value_a = 5`, `value_b = 7` (UNEQUAL), the
-FREE difference witness `diff = 0` (so `eq_flag · diff = 0` passes), `blinding_a = 0`, `blinding_b = 1`,
-`result_bit = 1`, `commit_a = hash [5, 0]`, `commit_b = hash [7, 1]`. -/
-def fgRow : Assignment := fun c =>
-  if c = COMMIT_A then hash [5, 0]
-  else if c = COMMIT_B then hash [7, 1]
-  else if c = VALUE_A then 5
-  else if c = VALUE_B then 7
-  else if c = BLINDING_B then 1
-  else if c = RESULT_BIT then 1
-  else if c = EQ_FLAG then 1
-  else 0
-
-/-- Public inputs: `pi[0] = hash [5,0]`, `pi[1] = hash [7,1]`, `pi[2] = result_bit = 1`. -/
-def fgPub : Assignment := fun k =>
-  if k = 0 then hash [5, 0] else if k = 1 then hash [7, 1] else if k = 2 then 1 else 0
-
-def fgTf : TraceFamily := fun id =>
-  match id with
-  | .poseidon2 =>
-      [ (chipLookupTuple [.var VALUE_A, .var BLINDING_A] COMMIT_A LANES_A).map (·.eval (fgRow hash)),
-        (chipLookupTuple [.var VALUE_B, .var BLINDING_B] COMMIT_B LANES_B).map (·.eval (fgRow hash)) ]
-  | _ => []
-
-/-- The 1-row forging trace. -/
-def fgTrace : VmTrace := { rows := [fgRow hash], pub := fgPub hash, tf := fgTf hash }
-
-/-- **The chip table is SOUND** — each row IS a genuine `chipRow hash` of the committed pair (the
-forgery does not lie about the commitments; it lies about the RELATION via the free `diff`). -/
-theorem fgTf_chipSound : ChipTableSound hash ((fgTrace hash).tf .poseidon2) := by
-  intro r hr
-  simp only [fgTrace, fgTf, List.mem_cons, List.not_mem_nil, or_false] at hr
-  rcases hr with rfl | rfl
-  · exact ⟨[5, 0], List.replicate 7 0, by decide, by decide, rfl⟩
-  · exact ⟨[7, 1], List.replicate 7 0, by decide, by decide, rfl⟩
-
-/-- **The 1-row forging trace `Satisfied2`s** — gates vacuous on the only/last row, the two commitment
-lookups by membership, and every PI pin met (`result_bit = 1`, `commit_a`/`commit_b` = their `pi`). NO
-gate ties `diff` to `value_a − value_b`, so `value_a = 5 ≠ 7 = value_b` with `diff = 0` accepts. -/
-theorem fgTrace_satisfied2 :
-    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (fgTrace hash) where
-  rowConstraints := by
-    intro i hi c hc
-    have gL : ((0 : Nat) + 1 == (fgTrace hash).rows.length) = true := rfl
-    have hF : ((0 : Nat) == 0) = true := rfl
-    have hi1 : i < 1 := hi
-    clear hi
-    simp only [relationalPredicateDesc, relationalConstraints] at hc
-    interval_cases i
-    fin_cases hc <;>
-      simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, Lookup.holdsAt, gate, piFirst,
-        commitLookup, hF, fgTrace, fgTf, fgPub, fgRow, envAt, VALUE_A, BLINDING_A,
-        VALUE_B, BLINDING_B, DIFF, RESULT_BIT, RANGE_FLAG, EQ_FLAG, NEQ_FLAG, COMMIT_A, COMMIT_B,
-        COMMIT_VERIFY, ZERO_PAD, List.getD_cons_zero, reduceIte, reduceCtorEq] <;>
-      first
-        | exact List.mem_cons.mpr (Or.inl rfl)
-        | exact List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))
-        | trivial
-        | rfl
-        | simp
-  rowHashes := by intro i _; trivial
-  rowRanges := by intro i _ r hr; simp only [relationalPredicateDesc, List.not_mem_nil] at hr
-  memAddrsNodup := List.nodup_nil
-  memClosed := by intro op hop; rw [rmemLog] at hop; simp at hop
-  memDisciplined := by rw [rmemLog]; trivial
-  memBalanced := by rw [rmemLog]; exact memCheck_nil _ _
-  memTableFaithful := by rw [rmemLog]; rfl
-  mapTableFaithful := by rw [rmapLog]; rfl
-
-/-- **Binding FIRES on the forgery, over a PERFECT injective `hash`.** `relational_commit_binds`
-consumes the CR carrier (from `Function.Injective hash`) and forces the committed value/blinding columns
-equal to the reference `(5, 0, 7, 1)` — the commitment binding is FULLY discharged even for the
-forging trace. -/
-theorem fgTrace_binds_fires (hinj : Function.Injective hash) :
-    (envAt (fgTrace hash) 0).loc VALUE_A = 5 ∧ (envAt (fgTrace hash) 0).loc BLINDING_A = 0
-      ∧ (envAt (fgTrace hash) 0).loc VALUE_B = 7 ∧ (envAt (fgTrace hash) 0).loc BLINDING_B = 1 :=
-  relational_commit_binds (by simp [fgTrace]) (fgTf_chipSound hash) (fgTrace_satisfied2 hash)
-    (collisionFree_of_injective hinj) 5 0 7 1 (by simp [fgTrace, fgPub]) (by simp [fgTrace, fgPub])
-
-/-- **THE RESIDUAL SURVIVES THE CR CARRIER (the AIR-gap FALSE half).** A `Satisfied2` EQ proof
-(`result_bit = 1`), over a PERFECT injective `hash` (so the binding is fully discharged and the
-committed values are CR-bound to `value_a = 5`, `value_b = 7`), has `value_a ≠ value_b` — the accepting
-proof's committed values VIOLATE the claimed EQ relation. So no `Satisfied2 + CollisionFree`-only
-theorem can conclude "committed values satisfy the relation"; that residual is the MISSING in-circuit
-constraint `diff − (value_a − value_b) = 0`, an EMIT/AIR fix, NOT a crypto-carrier discharge. -/
-theorem fg_accepts_unequal_committed (hinj : Function.Injective hash) :
-    Satisfied2 hash relationalPredicateDesc (fun _ => 0) (fun _ => (0, 0)) [] (fgTrace hash)
-      ∧ (envAt (fgTrace hash) 0).loc EQ_FLAG = 1
-      ∧ (envAt (fgTrace hash) 0).loc RESULT_BIT = 1
-      ∧ (envAt (fgTrace hash) 0).loc DIFF = 0
-      ∧ (envAt (fgTrace hash) 0).loc VALUE_A = 5
-      ∧ (envAt (fgTrace hash) 0).loc VALUE_B = 7
-      ∧ (envAt (fgTrace hash) 0).loc VALUE_A ≠ (envAt (fgTrace hash) 0).loc VALUE_B := by
-  obtain ⟨ha, _, hb, _⟩ := fgTrace_binds_fires hash hinj
-  refine ⟨fgTrace_satisfied2 hash, ?_, ?_, ?_, ha, hb, ?_⟩
-  · show (fgRow hash) EQ_FLAG = 1; rfl
-  · show (fgRow hash) RESULT_BIT = 1; rfl
-  · show (fgRow hash) DIFF = 0; rfl
-  · rw [ha, hb]; decide
-
-end ResidualMeasurement
 
 /-! ## §6 — Axiom tripwires: every keystone is `#assert_axioms`-clean (carriers named). -/
 
@@ -507,9 +367,5 @@ end ResidualMeasurement
 #assert_axioms bwTrace_satisfied2
 #assert_axioms bwTrace_binds_fires
 #assert_axioms bwTrace_binds_value
-#assert_axioms fgTf_chipSound
-#assert_axioms fgTrace_satisfied2
-#assert_axioms fgTrace_binds_fires
-#assert_axioms fg_accepts_unequal_committed
 
 end Dregg2.Circuit.Emit.PredicatesRelationalCompoundRung2
