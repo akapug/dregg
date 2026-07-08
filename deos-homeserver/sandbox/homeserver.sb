@@ -1,0 +1,81 @@
+(version 1)
+;; Minimal deny-default SBPL profile that hosts the embedded continuwuity
+;; homeserver (deos-homeserver bin: rocksdb + tokio worker pool + one loopback
+;; TCP bind). This is the faithful macOS-Seatbelt proxy for the firmament
+;; confined-spawn door spec (docs/deos/GRAIN-HOMESERVER.md step 3): whatever
+;; minimal allow-set appears here is what grant_read_write(db_dir) +
+;; grant_listen(port) must open. Parameterised so nothing is hardcoded:
+;;   -D DB_DIR=<the RocksDB temp root>   (the ONE write subpath == the door)
+;;   -D HOMEBREW=<brew prefix>           (rocksdb + its compression dylibs)
+(deny default)
+
+;; ---- process / thread machinery (tokio worker pool + rocksdb bg threads) ----
+;; sandbox-exec execs the target; tokio/rocksdb spawn threads (bsdthread_create,
+;; not fork) and read their own task/thread info. No child processes are spawned.
+(allow process-fork)
+(allow process-exec
+  (literal (param "SELF")))
+(allow process-info-pidinfo)
+(allow process-info-setcontrol)
+(allow signal (target self))
+
+;; ---- sysctl (available_parallelism -> hw.ncpu, rocksdb cpu/mem probes) ----
+(allow sysctl-read)
+
+;; ---- reads: dyld, system libs, frameworks, homebrew rocksdb stack, the bin --
+;; Path resolution needs metadata up the whole tree; data reads are scoped.
+(allow file-read-metadata)
+(allow file-read*
+  ;; dyld/libSystem init opendir()s the root itself (firmlink resolution) —
+  ;; without this the process SIGABRTs pre-main with no output.
+  (literal "/")
+  (subpath "/usr/lib")
+  (subpath "/System")
+  (subpath "/Library/Preferences/Logging")
+  (literal "/dev/null")
+  (literal "/dev/random")
+  (literal "/dev/urandom")
+  (literal "/dev/dtracehelper")
+  (literal "/etc")
+  (literal "/private/etc")
+  (subpath "/private/etc")
+  (subpath "/private/var/db/timezone")
+  (literal (param "SELF"))
+  (subpath (param "HOMEBREW")))
+
+;; ---- writes: the RocksDB dir + the generated config TOML live under DB_DIR ---
+;; This subpath IS the firmament grant_read_write door. Nothing outside it is
+;; writable. (RocksDB also needs to read back what it wrote.)
+(allow file-read* (subpath (param "DB_DIR")))
+(allow file-write* (subpath (param "DB_DIR")))
+
+;; ---- mach services (CoreFoundation / Security / SystemConfiguration) ----
+;; Scoped allow-list, not a blanket (allow mach-lookup): the named services a
+;; loopback tokio+rocksdb+rustls process actually resolves.
+(allow mach-lookup
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.trustd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.SystemConfiguration.configd")
+  (global-name "com.apple.CoreServices.coreservicesd")
+  (global-name "com.apple.diagnosticd"))
+
+;; ---- network: loopback only. Bind + accept inbound on 127.0.0.1; NO outbound.
+;; (federation is off, so the server never dials out.) The firmament listen door
+;; pins EXACTLY one port via a pre-bound fd handed to the child; this SBPL proxy
+;; permits any loopback port only because the step-1 bin self-selects an
+;; ephemeral port — the real door is strictly tighter (child holds no bind auth).
+(allow network-bind (local ip "localhost:*"))
+(allow network-inbound (local ip "localhost:*"))
+;; Loopback OUTBOUND is needed ONLY by the step-1 bin's in-process readiness
+;; self-probe (a TcpStream::connect to its own 127.0.0.1:port to confirm the CS
+;; API answers 200 before printing READY). The homeserver itself makes NO
+;; outbound connection (federation is off) — so the firmament listen-door grants
+;; inbound-only, and this outbound rule DISSOLVES once the with_fds pre-bound-fd
+;; design replaces the self-probe. All non-loopback network stays denied.
+(allow network-outbound (remote ip "localhost:*"))
+(allow system-socket)
