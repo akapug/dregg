@@ -223,54 +223,157 @@ pub fn verify_token(
 }
 
 // ============================================================================
-// STARK Proof operations
+// IR-v2 descriptor-proof operations (the StarkProof -> Ir2BatchProof wire flip)
 // ============================================================================
+//
+// These playground entry points USED to prove/verify a simplified linear
+// `MerkleStarkAir` (field-addition "parent" rows -- a toy, not the deployed
+// hash). They now drive the SAME production-faithful path the executor/bridge
+// use post-migration: a REAL arity-4 Poseidon2 Merkle-membership proof, minted
+// as an `Ir2BatchProof` over the depth-general 4-ary descriptor
+// (`merkle-membership::poseidon2-4ary-general-depth{N}`, byte-equal root to the
+// deployed `hash_4_to_1` chain) via `prove_vm_descriptor2`, and checked by the
+// deployed `verify_vm_descriptor2` after a fail-closed `descriptor_by_name`
+// dispatch. The opaque proof blob is postcard (the canonical `Ir2BatchProof`
+// encoder, same as every other cluster); the wasm WIRE around it is serde_json
+// -- an `Ir2ProofEnvelope` carrying the two facts the blob does NOT
+// self-describe: the descriptor dispatch NAME and the public inputs.
 
-/// Demo/playground only. Uses simplified linear AIR (field-addition parent
-/// computation), not cryptographically sound for production. Generates a STARK
-/// proof for a Merkle membership claim using `MerkleStarkAir`.
+/// The wasm serde_json wire envelope for an IR-v2 descriptor proof.
 ///
-/// `leaf_value` is a u32 field element, `depth` controls the Merkle tree depth (2-8).
-///
-/// Returns JSON with proof bytes, generation time, proof size, etc.
-#[wasm_bindgen]
-pub fn generate_demo_stark_proof(leaf_value: u32, depth: u32) -> Result<JsValue, JsError> {
+/// The `Ir2BatchProof` blob carries neither a descriptor name nor its public
+/// inputs, so the consumer needs both alongside it. The proof itself is the
+/// canonical postcard encoding (identical to
+/// `turn/tests/stark_kill_wire_roundtrip.rs`); this JSON envelope wraps those
+/// bytes with the dispatch NAME + public inputs.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct Ir2ProofEnvelope {
+    /// The descriptor dispatch key (encodes the membership depth). The consumer
+    /// resolves it through `descriptor_by_name` -- a miss is fail-closed, never accept.
+    pub descriptor_name: String,
+    /// Public inputs as canonical `BabyBear` u32 values (membership: `[leaf, root]`).
+    pub public_inputs: Vec<u32>,
+    /// The opaque `Ir2BatchProof`, postcard-encoded (its canonical wire form).
+    pub proof_postcard: Vec<u8>,
+}
+
+/// The result of the producer core (fields the wasm wrapper surfaces to JS).
+pub(crate) struct Ir2ProveOutcome {
+    pub json: String,
+    pub proof_size_bytes: usize,
+    pub depth: usize,
+    pub leaf_value: u32,
+    pub root_value: u32,
+    pub descriptor_name: String,
+}
+
+/// PRODUCER core: prove a real depth-`d` arity-4 Poseidon2 Merkle-membership
+/// claim and package it as an `Ir2ProofEnvelope` JSON string. `depth` is snapped
+/// to a power of two in `{2, 4, 8}` (the descriptor's trace-height requirement).
+/// The proof self-verifies inside `prove_vm_descriptor2` before return.
+pub(crate) fn ir2_membership_prove(leaf_value: u32, depth: u32) -> Result<Ir2ProveOutcome, String> {
+    use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
     use dregg_circuit::field::BabyBear;
-    use dregg_circuit::stark::{MerkleStarkAir, prove};
+    use dregg_circuit::membership_descriptor_4ary::{
+        membership_descriptor_of_depth_4ary, membership_witness_4ary,
+    };
 
-    let depth = depth.clamp(2, 8) as usize;
-
-    let start = perf_now();
-
-    // Build a Merkle membership trace:
-    // Each row = [current_hash, sibling0, sibling1, sibling2, position, parent_hash]
-    // The AIR checks: parent = current + sib0 + sib1 + sib2 + position
-    let num_rows = depth.next_power_of_two().max(4);
+    let depth = (depth.clamp(2, 8)).next_power_of_two() as usize; // {2, 4, 8}
     let leaf = BabyBear::new(leaf_value);
 
-    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(num_rows);
-    let mut current = leaf;
-
-    for level in 0..num_rows {
-        let position = BabyBear::new((level % 4) as u32);
-        // Deterministic siblings based on level
-        let sib0 = BabyBear::new(100 + level as u32 * 7);
-        let sib1 = BabyBear::new(200 + level as u32 * 13);
-        let sib2 = BabyBear::new(300 + level as u32 * 17);
-        let parent = current + sib0 + sib1 + sib2 + position;
-
-        trace.push(vec![current, sib0, sib1, sib2, position, parent]);
-        current = parent;
+    // A deterministic depth-`d` authentication path (distinct siblings per level,
+    // positions cycling through the 4-ary children slots).
+    let mut siblings: Vec<[BabyBear; 3]> = Vec::with_capacity(depth);
+    let mut positions: Vec<u8> = Vec::with_capacity(depth);
+    for level in 0..depth {
+        siblings.push([
+            BabyBear::new(100 + level as u32 * 7),
+            BabyBear::new(200 + level as u32 * 13),
+            BabyBear::new(300 + level as u32 * 17),
+        ]);
+        positions.push((level % 4) as u8);
     }
 
-    let public_inputs = vec![leaf, current]; // leaf and root
-    let air = MerkleStarkAir;
-    let proof = prove(&air, &trace, &public_inputs);
+    let (trace, pis) = membership_witness_4ary(leaf, &siblings, &positions)?;
+    let desc = membership_descriptor_of_depth_4ary(depth);
+    let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])?;
 
+    let proof_postcard = postcard::to_allocvec(&proof).map_err(|e| e.to_string())?;
+    let proof_size_bytes = proof_postcard.len();
+    let root_value = pis[1].as_u32();
+    let envelope = Ir2ProofEnvelope {
+        descriptor_name: desc.name.clone(),
+        public_inputs: pis.iter().map(|f| f.as_u32()).collect(),
+        proof_postcard,
+    };
+    let json = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+
+    Ok(Ir2ProveOutcome {
+        json,
+        proof_size_bytes,
+        depth,
+        leaf_value: leaf.as_u32(),
+        root_value,
+        descriptor_name: desc.name,
+    })
+}
+
+/// CONSUMER core: the migrated verify contract. Parse the envelope, resolve the
+/// descriptor from its NAME via `descriptor_by_name` (fail-closed `Err` on a
+/// miss -- NEVER a silent accept), decode the postcard `Ir2BatchProof`, and
+/// check it against the envelope's public inputs with the deployed
+/// `verify_vm_descriptor2`. Any decode failure or verify failure is a
+/// fail-closed `Err`. Reused by both `verify_demo_stark_proof` and the
+/// `compose_and_verify_proofs` membership arm.
+pub(crate) fn ir2_verify_membership_envelope(proof_json: &str) -> Result<(), String> {
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2};
+    use dregg_circuit::field::BabyBear;
+
+    let env: Ir2ProofEnvelope =
+        serde_json::from_str(proof_json).map_err(|e| format!("envelope: {e}"))?;
+    let desc = descriptor_by_name(&env.descriptor_name).ok_or_else(|| {
+        format!(
+            "fail-closed: no descriptor dispatches for {:?}",
+            env.descriptor_name
+        )
+    })?;
+    let proof: Ir2BatchProof<DreggStarkConfig> =
+        postcard::from_bytes(&env.proof_postcard).map_err(|e| format!("proof decode: {e}"))?;
+    let pis: Vec<BabyBear> = env
+        .public_inputs
+        .iter()
+        .map(|&v| BabyBear::new(v))
+        .collect();
+    verify_vm_descriptor2(&desc, &proof, &pis)
+}
+
+/// TAMPER core: flip the claimed root in an envelope's public inputs, producing
+/// a proof that still decodes but no longer matches its claim -- so the deployed
+/// `verify_vm_descriptor2` REJECTS it. Demonstrates the proof<->claim binding.
+pub(crate) fn ir2_tamper_root(proof_json: &str) -> Result<String, String> {
+    let mut env: Ir2ProofEnvelope =
+        serde_json::from_str(proof_json).map_err(|e| format!("envelope: {e}"))?;
+    if env.public_inputs.len() < 2 {
+        return Err("envelope has no root public input to tamper".to_string());
+    }
+    env.public_inputs[1] = env.public_inputs[1].wrapping_add(1);
+    serde_json::to_string(&env).map_err(|e| e.to_string())
+}
+
+/// Generates a REAL arity-4 Poseidon2 Merkle-membership proof as an
+/// `Ir2BatchProof`, wrapped in the serde_json `Ir2ProofEnvelope` wire (the
+/// StarkProof->Ir2BatchProof migration). `leaf_value` is a u32 field element;
+/// `depth` is snapped to a power of two in `{2, 4, 8}`. The returned
+/// `proof_json` feeds straight into `verify_demo_stark_proof`.
+///
+/// Returns JSON with the envelope, generation time, proof size, and the
+/// descriptor dispatch name.
+#[wasm_bindgen]
+pub fn generate_demo_stark_proof(leaf_value: u32, depth: u32) -> Result<JsValue, JsError> {
+    let start = perf_now();
+    let outcome = ir2_membership_prove(leaf_value, depth).map_err(|e| JsError::new(&e))?;
     let elapsed_ms = perf_now() - start;
-
-    // Serialize the proof for size measurement
-    let proof_bytes = serde_json::to_vec(&proof).unwrap_or_default();
 
     #[derive(Serialize)]
     struct ProofResult {
@@ -280,41 +383,32 @@ pub fn generate_demo_stark_proof(leaf_value: u32, depth: u32) -> Result<JsValue,
         trace_rows: usize,
         leaf_value: u32,
         root_value: u32,
-        num_queries: usize,
-        fri_layers: usize,
+        descriptor_name: String,
     }
 
     let result = ProofResult {
-        proof_json: serde_json::to_string(&proof).unwrap_or_default(),
-        proof_size_bytes: proof_bytes.len(),
+        proof_json: outcome.json,
+        proof_size_bytes: outcome.proof_size_bytes,
         generation_time_ms: elapsed_ms,
-        trace_rows: num_rows,
-        leaf_value: leaf.0,
-        root_value: current.0,
-        num_queries: proof.query_proofs.len(),
-        fri_layers: proof.fri_commitments.len(),
+        trace_rows: outcome.depth,
+        leaf_value: outcome.leaf_value,
+        root_value: outcome.root_value,
+        descriptor_name: outcome.descriptor_name,
     };
     Ok(serde_wasm_bindgen::to_value(&result)?)
 }
 
-/// Demo/playground only. Uses simplified linear AIR, not cryptographically
-/// sound for production. Verifies a previously generated demo STARK proof.
+/// Verifies an `Ir2ProofEnvelope` produced by `generate_demo_stark_proof`
+/// through the migrated CONSUMER contract: fail-closed `descriptor_by_name`
+/// dispatch on the envelope's name, postcard-decode the `Ir2BatchProof`, and
+/// check it with the deployed `verify_vm_descriptor2`. A dispatch miss, a
+/// malformed blob, or a failed cryptographic check all yield `valid: false`.
 ///
 /// Returns JSON: { "valid": bool, "error": null | "..." }
 #[wasm_bindgen]
 pub fn verify_demo_stark_proof(proof_json: &str) -> Result<JsValue, JsError> {
-    use dregg_circuit::field::BabyBear;
-    use dregg_circuit::stark::{MerkleStarkAir, StarkProof, verify};
-
     let start = perf_now();
-
-    let proof: StarkProof =
-        serde_json::from_str(proof_json).map_err(|e| JsError::new(&e.to_string()))?;
-
-    let public_inputs: Vec<BabyBear> = proof.public_inputs.iter().map(|&v| BabyBear(v)).collect();
-    let air = MerkleStarkAir;
-
-    let result = verify(&air, &proof, &public_inputs);
+    let result = ir2_verify_membership_envelope(proof_json);
     let elapsed_ms = perf_now() - start;
 
     #[derive(Serialize)]
@@ -339,25 +433,83 @@ pub fn verify_demo_stark_proof(proof_json: &str) -> Result<JsValue, JsError> {
     Ok(serde_wasm_bindgen::to_value(&out)?)
 }
 
-/// Demo/playground only. Tamper with a demo STARK proof by flipping bits in
-/// the first query's trace values.
+/// Tamper with a demo membership proof by flipping the claimed root in its
+/// envelope's public inputs. The `Ir2BatchProof` still decodes, but its claim no
+/// longer matches the witnessed root, so `verify_demo_stark_proof` REJECTS it --
+/// demonstrating the binding between an IR-v2 proof and its public claim.
 ///
-/// Returns the tampered proof JSON.
+/// Returns the tampered envelope JSON.
 #[wasm_bindgen]
 pub fn tamper_demo_stark_proof(proof_json: &str) -> Result<String, JsError> {
-    use dregg_circuit::stark::StarkProof;
+    ir2_tamper_root(proof_json).map_err(|e| JsError::new(&e))
+}
 
-    let mut proof: StarkProof =
-        serde_json::from_str(proof_json).map_err(|e| JsError::new(&e.to_string()))?;
+#[cfg(test)]
+mod ir2_wire_roundtrip {
+    //! RUNTIME round-trip gate for the wasm StarkProof->Ir2BatchProof flip: real
+    //! prove (`prove_vm_descriptor2`) -> serde_json envelope -> consume/verify
+    //! through the deployed `verify_vm_descriptor2`. Non-vacuous: an honest proof
+    //! is ACCEPTED; a tampered claim, a tampered blob, a cross-kind descriptor,
+    //! and a fail-closed dispatch miss are each REJECTED.
+    use super::*;
+    use std::panic::AssertUnwindSafe;
 
-    // Flip bits in the first query proof's trace values
-    if let Some(query) = proof.query_proofs.first_mut() {
-        if let Some(val) = query.trace_values.first_mut() {
-            *val ^= 0xDEAD; // Corrupt the value
+    /// `true` iff the envelope is REJECTED end-to-end (verify `Err` OR a panic,
+    /// treated as rejection -- the deployed batch verifier posture).
+    fn rejects(json: &str) -> bool {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| ir2_verify_membership_envelope(json))) {
+            Ok(Ok(())) => false,
+            Ok(Err(_)) => true,
+            Err(_) => true,
         }
     }
 
-    serde_json::to_string(&proof).map_err(|e| JsError::new(&e.to_string()))
+    #[test]
+    fn membership_prove_serialize_verify_roundtrip() {
+        for depth in [2u32, 4] {
+            let out = ir2_membership_prove(0xABCD, depth)
+                .unwrap_or_else(|e| panic!("depth-{depth} honest prove: {e}"));
+
+            // POSITIVE -- honest envelope ACCEPTS through the full consumer contract.
+            ir2_verify_membership_envelope(&out.json)
+                .unwrap_or_else(|e| panic!("depth-{depth} honest must ACCEPT: {e}"));
+
+            // NEGATIVE 1 -- tampered claim (root PI flipped) -> REJECT.
+            let tampered_claim = ir2_tamper_root(&out.json).expect("tamper root");
+            assert!(
+                rejects(&tampered_claim),
+                "depth-{depth}: a tampered claimed root must be REJECTED"
+            );
+
+            // NEGATIVE 2 -- tampered proof blob (bit-flip in the postcard bytes) -> REJECT.
+            let mut env: Ir2ProofEnvelope = serde_json::from_str(&out.json).unwrap();
+            let mid = env.proof_postcard.len() / 2;
+            env.proof_postcard[mid] ^= 0xFF;
+            let tampered_blob = serde_json::to_string(&env).unwrap();
+            assert!(
+                rejects(&tampered_blob),
+                "depth-{depth}: a tampered proof blob must be REJECTED"
+            );
+
+            // NEGATIVE 3 -- cross-KIND descriptor (membership proof under the DFA name) -> REJECT.
+            let mut env2: Ir2ProofEnvelope = serde_json::from_str(&out.json).unwrap();
+            env2.descriptor_name = "dfa-routing-toggle-2state::poseidon2-v1".to_string();
+            let cross = serde_json::to_string(&env2).unwrap();
+            assert!(
+                rejects(&cross),
+                "depth-{depth}: verifying under the wrong-KIND descriptor must be REJECTED"
+            );
+
+            // NEGATIVE 4 -- fail-closed dispatch miss (unknown predicate name) -> REJECT.
+            let mut env3: Ir2ProofEnvelope = serde_json::from_str(&out.json).unwrap();
+            env3.descriptor_name = "no-such-predicate::does-not-exist".to_string();
+            let miss = serde_json::to_string(&env3).unwrap();
+            assert!(
+                rejects(&miss),
+                "depth-{depth}: an unknown predicate name must fail closed (REJECT)"
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -1464,9 +1616,9 @@ pub fn schnorr_verify(
 /// Returns JSON with: result (pass/fail), proof_size, garbling_time_ms
 #[wasm_bindgen]
 pub fn garbled_compare(prover_value: u32, verifier_threshold: u32) -> Result<JsValue, JsError> {
+    use dregg_circuit::dsl::garbled::{prove_private_threshold_dsl, verify_private_threshold_dsl};
     use dregg_circuit::garbled::{
         COMPARISON_BITS, evaluate_garbled_circuit, garble_comparison_circuit,
-        prove_private_threshold, verify_private_threshold,
     };
 
     let start = perf_now();
@@ -1493,14 +1645,17 @@ pub fn garbled_compare(prover_value: u32, verifier_threshold: u32) -> Result<JsV
     let _eval_time = perf_now() - start;
 
     // Prover generates STARK proof (if passed).
-    let proof = prove_private_threshold(&circuit, &prover_labels);
+    let proof = prove_private_threshold_dsl(&circuit, &prover_labels);
     let proof_time = perf_now() - start;
 
     let (proof_size, verified) = match &proof {
         Some(p) => {
             let size = serde_json::to_vec(&p.stark_proof).unwrap_or_default().len();
-            let v =
-                verify_private_threshold(p, &circuit.circuit_commitment, &secrets.true_output_hash);
+            let v = verify_private_threshold_dsl(
+                p,
+                &circuit.circuit_commitment,
+                &secrets.true_output_hash,
+            );
             (size, v)
         }
         None => (0, false),
