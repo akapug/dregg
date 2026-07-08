@@ -110,6 +110,27 @@ ONE substrate: the firmament confinement tier + the membrane + the agent-platfor
 three services. Every one is confined, cap-metered, federated, and receipted — a town with a square, a
 workshop, and a foundry, all built the same way, caps all the way down.
 
+**CI-as-grains, welded to the WorkflowMandate (the census — DON'T reinvent it).** A CI pipeline is a
+`compartment-workflow-mandate` (CWM) **charter**: a step DAG (fetch → build → test → report) where each
+`advance_step` is a `Signature`-cap-gated, `step_clearance_ok` clearance-checked, `cwm_cell_program`-
+enforced turn (teeth: `FieldLteField(STEP_CURSOR ≤ CHARTER_TERMINAL)`, `MonotonicSequence(STEP_CURSOR)`),
+and the CWM **reactor** self-drives (one committed step wakes the next — the on-chain officer loop). Three
+things weld:
+1. **The step's WORK runs confined** — `spawn_pd_confined_exec` (firmament heavy-body tier) runs the
+   build/test tool under {`write_path` = scratch, `exec_image` = the tool, no net or one proxy door}. The
+   runner physically can't do anything but its build + advance the step.
+2. **The terminal step's receipt IS the forge check** — the CI charter's terminal `advance_step` commits
+   an executor-signed receipt; a forge `PullRequest`'s `RequiredCheck::CommittedReceipt{turn_hash}`
+   (`dregg-doc/check.rs`) is bound to exactly that turn. So "merge requires CI green" = the forge merge
+   gate requires the CWM charter to reach its terminal step. No trusted runner: the proof IS the pass,
+   and the workflow-mandate + confinement mean the runner can neither forge the receipt nor escape.
+3. **Metered** — the run's lease/discharge rides `discharge-gateway` / `agent-platform` (a CI run costs;
+   the mandate discharges it), for free.
+The weld keystone (first slice): bind a forge `RequiredCheck` to a CWM charter's terminal receipt and
+prove a PR gates on the charter completing (incomplete → merge refused; terminal receipt → admitted).
+The confined-exec of a real build is the terminal step's work, layered on. All in CLEAN crates
+(compartment-workflow-mandate + dregg-doc + firmament).
+
 **First buildable slices (safe zones, hbox-gated):** the repo-grain lease (agent-platform over a repo
 cell — `agent-platform` is a root crate, coordinate) · the CI-runner grain (reuse
 `spawn_pd_confined_exec` + `check.rs::CommittedReceipt` — firmament excluded ws + dregg-doc excluded ws,
