@@ -61,7 +61,8 @@ namespace Dregg2.Circuit.Emit.PresentationRefine
 open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit
-  (VmRowEnv VmConstraint VmRow holdsVm_gate_false holdsVm_gate_true holdsVm_piFirst_true)
+  (VmRowEnv VmConstraint VmRow holdsVm_gate_false holdsVm_gate_true holdsVm_piFirst_true
+   holdsVm_boundaryLast_true)
 open Dregg2.Circuit.DescriptorIR2
   (EffectVmDescriptor2 VmConstraint2 Lookup TableId TraceFamily VmTrace Satisfied2 envAt
    rangeRows range_row_mem_iff lookup_replaces_range lookup_range_complete memOpsOf mapOpsOf
@@ -276,7 +277,7 @@ theorem honest_satisfies :
         show honestRow j = honestPub j
         rw [honestRow_summary j hjr, honestPub_summary j hjr]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at htail
-        rcases htail with rfl | rfl | rfl | rfl | rfl
+        rcases htail with rfl | rfl | rfl | rfl | rfl | rfl | rfl
         · show VmConstraint.holdsVm (envAt honestTrace 0) (0 == 0) (0 + 1 == 2)
             (.piBinding VmRow.first VERIFIER PI_VERIFIER)
           rw [show (0 == 0) = true from rfl, holdsVm_piFirst_true]
@@ -295,18 +296,37 @@ theorem honest_satisfies :
           norm_num
         · exact honest_range_lookup 0 DIFF 500 rfl (by norm_num) (by norm_num [FRESH_BITS])
         · exact honest_range_lookup 0 HI 1006632460 rfl (by norm_num) (by norm_num [FRESH_BITS])
-    · -- row 1 (last): piBindings/gates vacuous; range lookups still fire.
+        · -- diffBindLast (boundary .last) on row 0 (not last) — vacuous.
+          simp [diffBindLast, VmConstraint2.holdsAt, VmConstraint.holdsVm]
+        · -- boundLast (boundary .last) on row 0 (not last) — vacuous.
+          simp [boundLast, VmConstraint2.holdsAt, VmConstraint.holdsVm]
+    · -- row 1 (last): piBindings/gates vacuous; range lookups + last-row boundaries fire.
       rcases List.mem_append.mp hc with hsum | htail
       · rw [summaryPins, List.mem_map] at hsum
         obtain ⟨j, _, rfl⟩ := hsum
         simp [VmConstraint2.holdsAt, VmConstraint.holdsVm]
       · simp only [List.mem_cons, List.not_mem_nil, or_false] at htail
-        rcases htail with rfl | rfl | rfl | rfl | rfl
+        rcases htail with rfl | rfl | rfl | rfl | rfl | rfl | rfl
         · simp [verifierPin, VmConstraint2.holdsAt, VmConstraint.holdsVm]
         · simp [diffBindGate, VmConstraint2.holdsAt, VmConstraint.holdsVm]
         · simp [boundGate, VmConstraint2.holdsAt, VmConstraint.holdsVm]
         · exact honest_range_lookup 1 DIFF 500 rfl (by norm_num) (by norm_num [FRESH_BITS])
         · exact honest_range_lookup 1 HI 1006632460 rfl (by norm_num) (by norm_num [FRESH_BITS])
+        · -- diffBindLast (boundary .last) on row 1 (last) — FIRES; holds by construction.
+          show VmConstraint.holdsVm (envAt honestTrace 1) (1 == 0) (1 + 1 == 2)
+            (.boundary VmRow.last diffBindBody)
+          rw [show (1 + 1 == 2) = true from rfl, holdsVm_boundaryLast_true]
+          show diffBindBody.eval honestRow = 0
+          simp only [diffBindBody, EmittedExpr.eval, honestRow_diff, honestRow_notafter,
+            honestRow_verifier]
+          norm_num
+        · -- boundLast (boundary .last) on row 1 (last) — FIRES; holds by construction.
+          show VmConstraint.holdsVm (envAt honestTrace 1) (1 == 0) (1 + 1 == 2)
+            (.boundary VmRow.last boundBody)
+          rw [show (1 + 1 == 2) = true from rfl, holdsVm_boundaryLast_true]
+          show boundBody.eval honestRow = 0
+          simp only [boundBody, EmittedExpr.eval, honestRow_diff, honestRow_hi]
+          norm_num
   · intro i _
     simp only [presentationFreshnessDesc]
     exact True.intro
