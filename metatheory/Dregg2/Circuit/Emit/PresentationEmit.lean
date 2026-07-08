@@ -167,6 +167,27 @@ def diffRangeLookup : VmConstraint2 := .lookup ⟨TableId.range, [.var DIFF]⟩
 /-- Range lookup: `hi ∈ [0, 2^30)` (the exact-`p/2` tooth: forces `diff ≤ p/2`, not `diff < 2^30`). -/
 def hiRangeLookup : VmConstraint2 := .lookup ⟨TableId.range, [.var HI]⟩
 
+/-- **The last-row freshness binding — `diffBindLast`.** The diff-binding body re-lowered as a
+`.base (.boundary VmRow.last …)` so it fires on the LAST row, where the transition-only `diffBindGate`
+(`.gate`, vacuous on `isLast = true`, `EffectVmEmit.holdsVm_gate_true`) drops it. The deployed
+presentation trace is a SINGLE summary row (`PresentationAir::generate_trace` → `vec![row]`,
+`presentation.rs:842`), so its only row IS the last row: without this the entire freshness binding
+`diff = not_after − verifier` is VACUOUS on the deployed trace, decoupling `DIFF` from
+`NOT_AFTER`/`VERIFIER` and admitting an EXPIRED token (set `DIFF = HI = 0`, both in range, gates
+vacuous). The `adjLastOrderFix` precedent (`AdjacencyMembershipEmit`). -/
+def diffBindLast : VmConstraint2 := .base (.boundary VmRow.last diffBindBody)
+
+/-- **The last-row bound binding — `boundLast`.** The `diff + hi = p/2` body re-lowered as a
+`.base (.boundary VmRow.last …)`, the last-row counterpart of `boundGate` — so the exact-`p/2` bound
+also binds on the single deployed (= last) row. -/
+def boundLast : VmConstraint2 := .base (.boundary VmRow.last boundBody)
+
+/-- **`presFreshLastFix`** — the two last-row boundary constraints the emit adds to close the vacuous
+last-row freshness hole (the `adjLastOrderFix` pattern): the diff-binding and bound bodies re-lowered
+as `.base (.boundary VmRow.last …)`, so the freshness gadget binds on EVERY row (the `.gate`s cover
+rows `0..n−2`, these cover row `n−1` — and on the height-1 deployed trace, row 0 IS row `n−1`). -/
+def presFreshLastFix : List VmConstraint2 := [diffBindLast, boundLast]
+
 /-- **`presentationFreshnessDesc`** — the presentation summary AIR + internalized freshness binding.
 `tables` declares the single shared range table (`bits = 30` feeds the assembler's `decomp_cols`);
 the byte table is Presence-detected from the range lookups, so no other table is declared. -/
@@ -176,14 +197,15 @@ def presentationFreshnessDesc : EffectVmDescriptor2 :=
   , piCount     := PI_COUNT
   , tables      := [rangeTableDef FRESH_BITS]
   , constraints := summaryPins ++
-      [verifierPin, diffBindGate, boundGate, diffRangeLookup, hiRangeLookup]
+      [verifierPin, diffBindGate, boundGate, diffRangeLookup, hiRangeLookup,
+       diffBindLast, boundLast]
   , hashSites   := []
   , ranges      := [] }
 
 /-! ## §3 — The byte-pinned wire golden (the Rust decoder ingests THIS string). -/
 
 #guard emitVmJson2 presentationFreshnessDesc ==
-  "{\"name\":\"dregg-presentation-freshness::summary-v1\",\"ir\":2,\"trace_width\":23,\"public_input_count\":20,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":0,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":1,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":2},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":3},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":4},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":5,\"pi_index\":5},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":6,\"pi_index\":6},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":7,\"pi_index\":7},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":8,\"pi_index\":8},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":9,\"pi_index\":9},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":10,\"pi_index\":10},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":11,\"pi_index\":11},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":12,\"pi_index\":12},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":13,\"pi_index\":13},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":14,\"pi_index\":14},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":15,\"pi_index\":15},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":16,\"pi_index\":16},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":17,\"pi_index\":17},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":18,\"pi_index\":18},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":19,\"pi_index\":19},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":20}}},\"r\":{\"t\":\"var\",\"v\":19}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"var\",\"v\":22}},\"r\":{\"t\":\"const\",\"v\":-1006632960}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":21}]},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":22}]}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"dregg-presentation-freshness::summary-v1\",\"ir\":2,\"trace_width\":23,\"public_input_count\":20,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":30}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":0,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":1,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":2},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":3},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":4},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":5,\"pi_index\":5},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":6,\"pi_index\":6},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":7,\"pi_index\":7},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":8,\"pi_index\":8},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":9,\"pi_index\":9},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":10,\"pi_index\":10},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":11,\"pi_index\":11},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":12,\"pi_index\":12},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":13,\"pi_index\":13},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":14,\"pi_index\":14},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":15,\"pi_index\":15},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":16,\"pi_index\":16},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":17,\"pi_index\":17},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":18,\"pi_index\":18},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":19,\"pi_index\":19},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":20}}},\"r\":{\"t\":\"var\",\"v\":19}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"var\",\"v\":22}},\"r\":{\"t\":\"const\",\"v\":-1006632960}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":21}]},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":22}]},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":20}}},\"r\":{\"t\":\"var\",\"v\":19}}},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":21},\"r\":{\"t\":\"var\",\"v\":22}},\"r\":{\"t\":\"const\",\"v\":-1006632960}}}],\"hash_sites\":[],\"ranges\":[]}"
 
 /-! ## §4 — Genuinely-proven, non-vacuous semantic lemmas (the freshness teeth). -/
 
@@ -231,15 +253,18 @@ theorem freshness_bound_bites (diff hi : ℤ)
 
 -- The range teeth, in Lean: an honest `diff = 500 ∈ [0, 2^30)` is a range row; the first
 -- out-of-range value `2^30` (and hence any wrapped/expired diff) is NOT.
-#guard decide (([500] : List ℤ) ∈ rangeRows FRESH_BITS)
-#guard decide (¬ (([2 ^ 30] : List ℤ) ∈ rangeRows FRESH_BITS))
+-- TRACTABILITY: `[v] ∈ rangeRows k ↔ 0 ≤ v ∧ v < 2^k` (`DescriptorIR2.lean:1350`), so we `decide`
+-- the O(1) BOUND predicate rather than membership in the 2^30-row range TABLE — deciding the latter
+-- materializes a billion-element list in the kernel (the 80GB-OOM bomb). Same witness, no enumeration.
+#guard decide (0 ≤ (500 : ℤ) ∧ (500 : ℤ) < 2 ^ FRESH_BITS)
+#guard decide (¬ (0 ≤ (2 ^ 30 : ℤ) ∧ (2 ^ 30 : ℤ) < 2 ^ FRESH_BITS))
 -- The exact `p/2` tooth: for `diff = p/2 + 1` the complement `hi = -1 = p − 1` is out of range.
-#guard decide (¬ (([2013265920] : List ℤ) ∈ rangeRows FRESH_BITS))
+#guard decide (¬ (0 ≤ (2013265920 : ℤ) ∧ (2013265920 : ℤ) < 2 ^ FRESH_BITS))
 
 -- Shape pins.
 #guard presentationFreshnessDesc.traceWidth == PRES_WIDTH
 #guard presentationFreshnessDesc.piCount == PI_COUNT
-#guard presentationFreshnessDesc.constraints.length == SUMMARY_WIDTH + 5
+#guard presentationFreshnessDesc.constraints.length == SUMMARY_WIDTH + 7
 #guard presentationFreshnessDesc.tables.length == 1
 
 #assert_axioms diffBind_body_zero_iff
