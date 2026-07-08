@@ -8,6 +8,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::frost::MlDsaPublicKey;
+
 // Re-export canonical cryptographic primitives and AttestedRoot from dregg-types.
 pub use dregg_types::{
     AttestedRoot, PublicKey, Signature, SigningKey, generate_keypair, hex_encode, sign, verify,
@@ -320,6 +322,100 @@ impl QuorumCertificate {
 }
 
 // =============================================================================
+// Hybrid (FIPS 204 ML-DSA-65) quorum — STAGED, OFF BY DEFAULT
+// =============================================================================
+
+/// A vote extended with its post-quantum half: the SAME member, over the SAME
+/// canonical vote message ([`QuorumCertificate::vote_message`]), signed with
+/// ed25519 (inside [`Vote`], exactly as today) AND ML-DSA-65 (under
+/// [`crate::frost::HYBRID_PQ_CTX`]).
+///
+/// Only produced when the committee's `HybridPq` flag is ON
+/// ([`crate::node::ConsensusConfig::hybrid_pq`]); the default path never
+/// constructs one, and [`Vote`] itself is untouched.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HybridVote {
+    /// The classical vote — byte-identical to today's [`Vote`].
+    pub vote: Vote,
+    /// ML-DSA-65 signature by `vote.voter` over the same vote message.
+    pub pq_signature: Vec<u8>,
+}
+
+/// A hybrid quorum certificate for the LIVE consensus path: the classical
+/// half is the EXISTING ed25519 `votes` quorum (the untouched
+/// [`QuorumCertificate`], verified exactly as today), the post-quantum half
+/// is one ML-DSA-65 signature per voter over the same vote message.
+///
+/// The Lean shape is `hybridVerify = classical ∧ pq`
+/// (`metatheory/Dregg2/Crypto/ThresholdForking.lean`): a certificate is a
+/// quorum only if BOTH halves verify, so forging one requires breaking
+/// ed25519 AND module-lattice SIS/LWE simultaneously. Additive and staged:
+/// nothing in the default consensus path constructs or requires this type.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HybridQuorumCertificate {
+    /// The classical half: today's QC, unchanged (its `votes` are the
+    /// ed25519 quorum; `aggregate_qc` may still carry BLS).
+    pub qc: QuorumCertificate,
+    /// The post-quantum half: `(voter_id, ML-DSA-65 signature bytes)` per
+    /// voter, over the same [`QuorumCertificate::vote_message`].
+    pub pq_sigs: Vec<(usize, Vec<u8>)>,
+}
+
+impl HybridQuorumCertificate {
+    /// Full hybrid verification: `classical ∧ pq`.
+    ///
+    /// * (classical) [`QuorumCertificate::verify_with_keys`] — the UNCHANGED
+    ///   ed25519 votes-quorum check against `members`.
+    /// * (binding) the PQ signer set is EXACTLY the ed25519 voter set — every
+    ///   vote arrives with its ML-DSA companion, no mix-and-match.
+    /// * (post-quantum) [`crate::frost::verify_pq_quorum_half`] — ≥ threshold
+    ///   distinct, in-range, valid ML-DSA-65 signatures under
+    ///   `ml_dsa_pubkeys` (member `i` at position `i`).
+    pub fn verify_with_keys(
+        &self,
+        members: &[PublicKey],
+        ml_dsa_pubkeys: &[MlDsaPublicKey],
+    ) -> bool {
+        // Classical half — the exact code path the default mode runs.
+        if !self.qc.verify_with_keys(members) {
+            return false;
+        }
+        // Signer-set binding: PQ signers == ed25519 voters.
+        let voters: std::collections::BTreeSet<usize> =
+            self.qc.votes.iter().map(|(id, _)| *id).collect();
+        let pq_signers: std::collections::BTreeSet<usize> =
+            self.pq_sigs.iter().map(|(id, _)| *id).collect();
+        if voters != pq_signers || self.pq_sigs.len() != self.qc.votes.len() {
+            return false;
+        }
+        // Post-quantum half.
+        let message =
+            QuorumCertificate::vote_message(&self.qc.block_hash, self.qc.height, self.qc.view);
+        crate::frost::verify_pq_quorum_half(
+            ml_dsa_pubkeys,
+            &message,
+            &self.pq_sigs,
+            self.qc.threshold,
+        )
+    }
+
+    /// Serialize to opaque bytes (postcard) — the `dregg_types::ThresholdQC`
+    /// convention, dispatched by [`crate::frost::QuorumScheme::HybridVotes`].
+    pub fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_stdvec(self).expect("HybridQuorumCertificate serialization cannot fail")
+    }
+
+    /// Deserialize from opaque bytes; `None` on any framing violation
+    /// (including trailing bytes).
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        match postcard::take_from_bytes(bytes) {
+            Ok((hqc, rest)) if rest.is_empty() => Some(hqc),
+            _ => None,
+        }
+    }
+}
+
+// =============================================================================
 // Attested Root (re-exported from dregg-types, with federation-specific helpers)
 // =============================================================================
 
@@ -506,6 +602,14 @@ pub enum ConsensusMessage {
     AttestedRootResponse(AttestedRoot),
     /// A view-change request (leader timeout).
     ViewChange(ViewChangeMessage),
+    /// A hybrid (ed25519 + ML-DSA-65) vote. Only sent when the committee's
+    /// `HybridPq` flag is ON; APPENDED LAST so the postcard discriminants of
+    /// every pre-existing variant (and thus the default path's wire bytes)
+    /// are unchanged.
+    HybridVoteMsg(HybridVote),
+    /// A finalized hybrid quorum certificate. Only sent when `HybridPq` is
+    /// ON; appended last for the same wire-stability reason.
+    HybridFinalize(HybridQuorumCertificate, RevocationBlock),
 }
 
 /// An addressed message (source, destination, payload).

@@ -25,6 +25,14 @@ struct GenesisValidator {
     name: String,
     public_key: String,
     xmss_root: String,
+    /// OPTIONAL hex-encoded ML-DSA-65 public key (FIPS 204, 1952 bytes) — the
+    /// post-quantum half of the staged `HybridPq` quorum
+    /// (`dregg_federation::frost`). ABSENT (the default) means the hybrid is
+    /// inactive; the field is skipped when `None` so today's genesis.json is
+    /// byte-identical, and every reader parses `validators[]` as loose JSON,
+    /// so a future genesis carrying it deserializes everywhere unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ml_dsa_public_key: Option<String>,
 }
 
 /// An initial cell in the genesis configuration.
@@ -144,6 +152,9 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
             name: format!("node-{i}"),
             public_key: pk_hex,
             xmss_root: xmss_root_hex,
+            // HybridPq is OFF: no ML-DSA keys are generated at genesis today.
+            // Flipping the hybrid on (a human decision) populates this.
+            ml_dsa_public_key: None,
         });
 
         // Write the key file as raw 32 bytes (matching what the runtime expects).
