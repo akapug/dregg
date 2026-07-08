@@ -5387,7 +5387,9 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
 #guard v3Registry.length == 36
 -- Every registry entry emits a versioned v2 wire string with the rotated width, the five
 -- EPOCH tables, and the four appended PI slots.
-#guard v3Registry.all fun (_, d) => (emitVmJson2 d).startsWith "{\"name\":\""
+-- cheap STRUCTURAL smoke (see EffectVmEmitV2): the emitVmJson2 per-descriptor byte-pins cover
+-- serialization exactly; re-serializing all 45 v3Registry entries here was ~redundant elab compute.
+#guard v3Registry.all fun (_, d) => !d.name.isEmpty && !d.constraints.isEmpty && d.traceWidth != 0
 -- Phase B-GATE: each graduated registry descriptor's width is the rotated base PLUS `7·n_sites`
 -- lane columns (n_sites varies by v1 face), so the width is `≥ base` and the surplus is a
 -- multiple of 7 (`CHIP_OUT_LANES - 1`). Concrete per-descriptor widths are pinned by the
