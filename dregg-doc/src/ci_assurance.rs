@@ -48,9 +48,14 @@
 //!   - `OptimisticChallenge`'s live dispute transport — the gossip/challenge
 //!     network that WRITES a [`ChallengeContext::conviction`] is out-of-crate;
 //!     the height/conviction gate here actually gates on what it is told.
-//!   - `Staked`'s slash-transfer — the escrow-market / stake-cell that MOVES the
-//!     forfeit bond is out-of-crate; the [`Conviction`]-carrying outcome and the
-//!     `bond_ref` binding are real and typed.
+//!   - `Staked`'s slash-transfer is now REAL and in-crate: an inner conviction
+//!     produces a [`crate::staked_bond::SlashOutcome`] that
+//!     [`crate::staked_bond::slash_bond`] fires as a conserving (`Σδ=0`), one-shot
+//!     forfeiture of the bonded value (reusing the `dregg_cell` balance ledger +
+//!     the `escrow_sealed` committed-heap one-shot discipline). See
+//!     [`CiAssurance::bond_disposition`]. What stays out-of-crate is the host
+//!     POSTING the bond at job-start and a cross-node `bond_ref → holding-cell`
+//!     stake registry — the deployment wires those.
 
 use crate::ci_verdict::{CiVerdict, planned_ci_run_hash};
 use dregg_turn::{Finality, TurnReceipt, verify_receipt_signature_with_keys};
@@ -430,8 +435,11 @@ pub enum CiAssurance {
     /// The inner policy's.
     /// # Catches a lying host?
     /// As the inner policy does — and additionally SLASHES it when caught. The
-    /// slash-transfer itself is the named seam; the conviction + `bond_ref`
-    /// binding is real.
+    /// slash is REAL: an inner conviction yields a
+    /// [`crate::staked_bond::SlashOutcome`] that
+    /// [`crate::staked_bond::slash_bond`] fires as a conserving, one-shot
+    /// forfeiture (see [`CiAssurance::bond_disposition`]); a satisfied inner
+    /// leaves the bond releasable to the host.
     Staked {
         /// The bond forfeit on an inner conviction.
         bond_ref: BondRef,
@@ -614,6 +622,29 @@ impl CiAssurance {
                 }
             },
         }
+    }
+
+    /// BRIDGE the evaluate outcome to a real bond movement. Evaluate this policy
+    /// against `input`, then — using the caller-held [`crate::staked_bond::StakedBond`]
+    /// descriptor (keyed by `bond_ref`) — decide the bond disposition:
+    ///
+    /// - an inner [`AssuranceOutcome::Convicted`] naming this bond →
+    ///   [`crate::staked_bond::BondDisposition::Slash`] (the caller fires
+    ///   [`crate::staked_bond::slash_bond`], a conserving one-shot forfeiture);
+    /// - [`AssuranceOutcome::Satisfied`] →
+    ///   [`crate::staked_bond::BondDisposition::Release`] (the untouched bond is
+    ///   returnable to the host);
+    /// - a mere [`AssuranceOutcome::Unmet`] → no bond movement.
+    ///
+    /// This is the conviction-gate: only a real conviction moves the bond. The
+    /// transfer itself is driven by the caller's executor over the holding /
+    /// beneficiary cells — see [`crate::staked_bond`].
+    pub fn bond_disposition(
+        &self,
+        input: &AssuranceInput<'_>,
+        bond: &crate::staked_bond::StakedBond,
+    ) -> crate::staked_bond::BondDisposition {
+        crate::staked_bond::bond_disposition(&self.evaluate(input), bond)
     }
 }
 
