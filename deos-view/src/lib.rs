@@ -39,6 +39,12 @@ pub mod fmt;
 /// every glass (native gpui / web HTML / discord / seL4). PURE serde + `tree` (no
 /// `dregg-doc`, no gpui): the self-contained `ForgeView` data model + `forge_view`.
 pub mod forge_card;
+/// The grain economy's VISUAL surface — a CI pipeline / rented-grain run (a CWM charter
+/// of steps run in a rented, metered, confined grain; a PR can be a bounty) as a
+/// serializable [`tree::ViewNode`] tree, so a grain run paints in every glass (native
+/// gpui / web HTML / discord / seL4). PURE serde + `tree` (no `agent-platform`, no gpui):
+/// the self-contained `GrainRun` snapshot + `grain_run_view`, mirroring `forge_card`.
+pub mod grain_run_card;
 /// Console data-source honesty: unreachable ≠ empty ≠ fixtures (never render a
 /// live-green surface over an unreachable node). Wired into `console::ConsoleModel`
 /// (`ConsoleModel::health` drives the page banner + panel gate + per-surface notes).
@@ -54,6 +60,10 @@ pub use forge_card::{
     forge_view, forge_view_json, CheckStatus, CheckView, ConflictView, DiffHunk, DiffKind,
     DiffLine, FileEntry, FileStatus, ForgeView, MergeGate, PullRequest, Repo, ReviewEntry,
     ReviewKind,
+};
+pub use grain_run_card::{
+    grain_run_view, grain_run_view_json, BountyState, BountyView, CheckGate, GrainRun, LeaseStatus,
+    LeaseView, StepStatus, StepView,
 };
 pub use source_health::{Banner, SourceHealth, SurfaceNote};
 pub use tree::{
