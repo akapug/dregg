@@ -128,6 +128,25 @@ project/outline/terminal panels, a save through the IDE is a verified turn.
 The framework-shaped apps, each launched onto the cockpit `World` ledger, firing
 a representative receipted affordance.
 
+### DEOS private server on a RAM-backed node
+- **What it is:** a headless `dregg-node` whose `NodeState` data directory is
+  created under `/dev/shm`, hosting a deos private server that publishes a
+  coordination board. Two independent `AgentCipherclerk`s discover the board and
+  fire `claim_slot`, `post_note`, `read_board`, and `release_slot` over the real
+  `/turns/submit` HTTP ingress.
+- **Reproduce:**
+  ```sh
+  fab build --repo . -- cargo nextest run -p dregg-node --features deos-host -E 'test(/ramspace_deos_private_server_coordinates_two_agents_over_http/)' --no-capture
+  ```
+- **Proof:** the test asserts `dregg.redb` and `node.key` are under `/dev/shm`,
+  the task completes without duplicate observed claims, each coordination act
+  appends exactly one `TurnReceipt`, and every new `previous_receipt_hash` links
+  to the prior receipt. It prints the transcript, receipt span, per-fire latency,
+  and panel note.
+- **Seam:** this proves the RAM-backed binding substrate and signed-turn client
+  path, not server-side compare-and-swap conflict prevention or an AX-native
+  client surface.
+
 ### 19/20 apps launch + fire real turns
 - **What it is:** the `AppRegistry` wires the DeosApps (gallery, tussle,
   sealed-auction, bounty-board, identity, nameservice, escrow-market, …) plus

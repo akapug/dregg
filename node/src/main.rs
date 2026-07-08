@@ -20,6 +20,8 @@ mod deos_host;
 mod deos_host_e2e;
 #[cfg(all(test, feature = "deos-host"))]
 mod deos_host_fork_client_e2e;
+#[cfg(all(test, feature = "deos-host"))]
+mod deos_ramspace_e2e;
 mod dkg_service;
 mod finality_gate;
 #[cfg(all(test, feature = "deos-host"))]
