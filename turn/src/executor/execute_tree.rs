@@ -628,6 +628,8 @@ impl TurnExecutor {
             Authorization::Unchecked => 0,
             // CapTpDelivered verifies introducer signature + sender signature: two ed25519 verifies.
             Authorization::CapTpDelivered { .. } => self.costs.signature_verify.saturating_mul(2),
+            // Hybrid: one ed25519 verify + one ML-DSA-65 verify.
+            Authorization::HybridSignature { .. } => self.costs.signature_verify.saturating_mul(2),
             // Authorization::Custom: a witnessed-predicate dispatch
             // through the registry; meter as a proof verify.
             Authorization::Custom { .. } => self.costs.proof_verify,
@@ -645,6 +647,9 @@ impl TurnExecutor {
                         Authorization::Bearer(_) => costs.signature_verify,
                         Authorization::Unchecked => 0,
                         Authorization::CapTpDelivered { .. } => {
+                            costs.signature_verify.saturating_mul(2)
+                        }
+                        Authorization::HybridSignature { .. } => {
                             costs.signature_verify.saturating_mul(2)
                         }
                         Authorization::Custom { .. } => costs.proof_verify,

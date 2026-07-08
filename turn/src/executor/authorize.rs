@@ -700,8 +700,31 @@ impl TurnExecutor {
             )),
             AuthRequired::Signature => match &action.authorization {
                 Authorization::Signature(r, s) => {
+                    // STAGED PQ: when the executor requires the post-quantum
+                    // half, a classical-only signature is rejected.
+                    if self.require_pq() {
+                        return Err((
+                            TurnError::InvalidAuthorization {
+                                reason: "classical-only signature rejected: post-quantum (hybrid) authorization required".to_string(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
                     self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
+                Authorization::HybridSignature {
+                    ed25519,
+                    ml_dsa,
+                    ml_dsa_pk,
+                } => self.verify_hybrid_signature(
+                    action,
+                    target_cell,
+                    ed25519,
+                    ml_dsa,
+                    ml_dsa_pk,
+                    path,
+                    turn_nonce,
+                ),
                 // Stealth one-time signatures satisfy a Signature
                 // requirement; the relation was already verified in
                 // `verify_authorization` (fail-closed) before falling
@@ -787,8 +810,29 @@ impl TurnExecutor {
             }
             AuthRequired::Either => match &action.authorization {
                 Authorization::Signature(r, s) => {
+                    if self.require_pq() {
+                        return Err((
+                            TurnError::InvalidAuthorization {
+                                reason: "classical-only signature rejected: post-quantum (hybrid) authorization required".to_string(),
+                            },
+                            path.to_vec(),
+                        ));
+                    }
                     self.verify_ed25519_signature(action, target_cell, r, s, path, turn_nonce)
                 }
+                Authorization::HybridSignature {
+                    ed25519,
+                    ml_dsa,
+                    ml_dsa_pk,
+                } => self.verify_hybrid_signature(
+                    action,
+                    target_cell,
+                    ed25519,
+                    ml_dsa,
+                    ml_dsa_pk,
+                    path,
+                    turn_nonce,
+                ),
                 Authorization::Proof {
                     proof_bytes,
                     bound_action,
@@ -940,6 +984,93 @@ impl TurnExecutor {
                     path.to_vec(),
                 )
             })
+    }
+
+    /// Verify a HYBRID (ed25519 + ML-DSA-65) signature — the quantum-safe turn
+    /// perimeter (`crate::pq`). Both halves cover the SAME canonical signing
+    /// message the classical `verify_ed25519_signature` uses.
+    ///
+    /// STAGED, `classical ∧ pq`, fail-CLOSED:
+    /// - The ed25519 half MUST verify against the target cell's identity.
+    /// - If the ML-DSA half is PRESENT, it MUST verify against `ml_dsa_pk` under
+    ///   [`crate::pq::HYBRID_TURN_PQ_CTX`] — a present-but-invalid PQ half
+    ///   REJECTS the action regardless of [`TurnExecutor::require_pq`] (never
+    ///   fail-open on a bad PQ half).
+    /// - If the ML-DSA half is ABSENT (`ml_dsa` empty): accepted on the ed25519
+    ///   half alone when `require_pq` is off (the rollout default); rejected when
+    ///   `require_pq` is on.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn verify_hybrid_signature(
+        &self,
+        action: &Action,
+        target_cell: &Cell,
+        ed25519: &[u8; 64],
+        ml_dsa: &[u8],
+        ml_dsa_pk: &[u8],
+        path: &[usize],
+        turn_nonce: u64,
+    ) -> Result<(), (TurnError, Vec<usize>)> {
+        use crate::action::CommitmentMode;
+
+        let message = match action.commitment_mode {
+            CommitmentMode::Partial => {
+                let position = path.first().copied().unwrap_or(0);
+                Self::compute_partial_signing_message(
+                    action,
+                    position,
+                    &self.local_federation_id,
+                    turn_nonce,
+                )
+            }
+            CommitmentMode::Full => {
+                Self::compute_signing_message(action, &self.local_federation_id)
+            }
+        };
+
+        // Classical half — verified against the target cell's ed25519 identity.
+        let signature = Signature::from_bytes(ed25519);
+        let verifying_key = VerifyingKey::from_bytes(&target_cell.public_key()).map_err(|_| {
+            (
+                TurnError::InvalidAuthorization {
+                    reason: "cell public key is not a valid Ed25519 point".to_string(),
+                },
+                path.to_vec(),
+            )
+        })?;
+        verifying_key
+            .verify_strict(&message, &signature)
+            .map_err(|_| {
+                (
+                    TurnError::InvalidAuthorization {
+                        reason: "hybrid: Ed25519 (classical) signature half failed".to_string(),
+                    },
+                    path.to_vec(),
+                )
+            })?;
+
+        // Post-quantum half — STAGED.
+        let pq_present = !ml_dsa.is_empty();
+        if pq_present {
+            // fail-CLOSED: a present PQ half MUST verify, regardless of require_pq.
+            if !crate::pq::ml_dsa_verify(ml_dsa_pk, &message, ml_dsa) {
+                return Err((
+                    TurnError::InvalidAuthorization {
+                        reason: "hybrid: ML-DSA-65 (post-quantum) signature half failed"
+                            .to_string(),
+                    },
+                    path.to_vec(),
+                ));
+            }
+        } else if self.require_pq() {
+            return Err((
+                TurnError::InvalidAuthorization {
+                    reason: "hybrid: post-quantum signature half required but absent".to_string(),
+                },
+                path.to_vec(),
+            ));
+        }
+
+        Ok(())
     }
 
     /// Verify a ZK proof against the target cell's verification key.
@@ -3009,5 +3140,189 @@ mod cap1_authority_tests {
                 "{label} must require SetPermissions-level authority"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod hybrid_pq_tests {
+    //! HYBRID (ed25519 + ML-DSA-65) turn authorization — the staged
+    //! end-to-end-PQ perimeter (`crate::pq`). Pins:
+    //!   (a) a hybrid-signed action verifies (BOTH halves) through
+    //!       `verify_authorization`, at require_pq off AND on;
+    //!   (b) a VALID ed25519 half + a FORGED ML-DSA half is REJECTED (present-
+    //!       but-bad PQ → fail-closed) EVEN with require_pq=false;
+    //!   (c) require_pq=true rejects a classical-only `Signature`; require_pq=false
+    //!       accepts it (staged rollout); require_pq=true rejects a hybrid whose
+    //!       PQ half is absent;
+    //!   (d) the ML-DSA derivation is deterministic (same seed → same key), so a
+    //!       hybrid signed with the derived key verifies against the carried pk.
+    use super::*;
+    use crate::action::{Authorization, CommitmentMode, DelegationMode, Effect};
+    use crate::executor::{ComputronCosts, TurnExecutor};
+    use dregg_cell::{Cell, Ledger, Preconditions};
+    use ed25519_dalek::{Signer, SigningKey};
+
+    const FED: [u8; 32] = [7u8; 32];
+
+    fn exec(require_pq: bool) -> TurnExecutor {
+        let e = TurnExecutor::new(ComputronCosts::zero());
+        let mut e = e;
+        e.local_federation_id = FED;
+        e.set_require_pq(require_pq);
+        e
+    }
+
+    /// A cell whose `set_state` requires a Signature; its owner key is the
+    /// ed25519 seed `[seed; 32]` (so the ML-DSA half derives from the same seed).
+    fn owner_cell(seed: u8) -> (Cell, [u8; 32]) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        (Cell::new(pk, [0u8; 32]), [seed; 32])
+    }
+
+    fn set_field_action(target: CellId, authorization: Authorization) -> Action {
+        Action {
+            target,
+            method: [0u8; 32],
+            args: vec![],
+            authorization,
+            preconditions: Preconditions::default(),
+            effects: vec![Effect::SetField {
+                cell: target,
+                index: 0,
+                value: [9u8; 32],
+            }],
+            may_delegate: DelegationMode::None,
+            commitment_mode: CommitmentMode::Full,
+            balance_change: None,
+            witness_blobs: vec![],
+        }
+    }
+
+    /// Sign the canonical message for `target`'s set-field action with the seed's
+    /// ed25519 + ML-DSA halves. `forge_pq` flips a PQ byte; `omit_pq` leaves the
+    /// PQ half absent (empty).
+    fn hybrid_auth(seed: [u8; 32], target: CellId, forge_pq: bool, omit_pq: bool) -> Authorization {
+        let sk = SigningKey::from_bytes(&seed);
+        let unsigned = set_field_action(target, Authorization::Unchecked);
+        let msg = TurnExecutor::compute_signing_message(&unsigned, &FED);
+        let ed25519 = sk.sign(&msg).to_bytes();
+        let pq = crate::pq::MlDsaTurnKey::from_ed25519_seed(&seed);
+        let ml_dsa = if omit_pq {
+            Vec::new()
+        } else {
+            let mut s = pq.sign(&msg).expect("ml-dsa sign");
+            if forge_pq {
+                s[0] ^= 0xff;
+            }
+            s
+        };
+        Authorization::HybridSignature {
+            ed25519,
+            ml_dsa,
+            ml_dsa_pk: pq.public_bytes(),
+        }
+    }
+
+    fn classical_auth(seed: [u8; 32], target: CellId) -> Authorization {
+        let sk = SigningKey::from_bytes(&seed);
+        let unsigned = set_field_action(target, Authorization::Unchecked);
+        let msg = TurnExecutor::compute_signing_message(&unsigned, &FED);
+        Authorization::from_sig_bytes(sk.sign(&msg).to_bytes())
+    }
+
+    fn run(e: &TurnExecutor, cell: &Cell, auth: Authorization) -> Result<(), TurnError> {
+        let mut ledger = Ledger::new();
+        ledger.insert_cell(cell.clone()).unwrap();
+        e.verify_authorization(
+            &set_field_action(cell.id(), auth),
+            cell,
+            &ledger,
+            &cell.id(),
+            &[0],
+            0,
+        )
+        .map_err(|(err, _)| err)
+    }
+
+    // (a) hybrid verifies through the executor — both halves valid.
+    #[test]
+    fn hybrid_both_halves_valid_accepted() {
+        let (cell, seed) = owner_cell(11);
+        let auth = hybrid_auth(seed, cell.id(), false, false);
+        assert!(
+            run(&exec(false), &cell, auth.clone()).is_ok(),
+            "hybrid (require_pq=off) must verify"
+        );
+        // And when the PQ half is mandatory it still verifies.
+        assert!(
+            run(&exec(true), &cell, auth).is_ok(),
+            "hybrid (require_pq=on) must verify"
+        );
+    }
+
+    // (b) forged PQ half is REJECTED even when require_pq=false (fail-closed).
+    #[test]
+    fn forged_pq_half_rejected_fail_closed() {
+        let (cell, seed) = owner_cell(11);
+        let auth = hybrid_auth(seed, cell.id(), /*forge_pq=*/ true, false);
+        let res = run(&exec(false), &cell, auth);
+        assert!(
+            matches!(res, Err(TurnError::InvalidAuthorization { .. })),
+            "a VALID ed25519 half with a FORGED ML-DSA half MUST fail closed even at require_pq=off, got {res:?}"
+        );
+    }
+
+    // (c) staged require_pq semantics on a classical-only signature.
+    #[test]
+    fn classical_only_gated_by_require_pq() {
+        let (cell, seed) = owner_cell(11);
+        // require_pq=false: classical accepted (rollout).
+        assert!(
+            run(&exec(false), &cell, classical_auth(seed, cell.id())).is_ok(),
+            "classical Signature must be accepted when require_pq=off"
+        );
+        // require_pq=true: classical rejected.
+        let res = run(&exec(true), &cell, classical_auth(seed, cell.id()));
+        assert!(
+            matches!(res, Err(TurnError::InvalidAuthorization { .. })),
+            "classical-only Signature MUST be rejected when require_pq=on, got {res:?}"
+        );
+    }
+
+    // (c') require_pq=true rejects a hybrid whose PQ half is absent.
+    #[test]
+    fn require_pq_rejects_absent_pq_half() {
+        let (cell, seed) = owner_cell(11);
+        let auth = hybrid_auth(seed, cell.id(), false, /*omit_pq=*/ true);
+        let res = run(&exec(true), &cell, auth);
+        assert!(
+            matches!(res, Err(TurnError::InvalidAuthorization { .. })),
+            "a hybrid with no PQ half MUST be rejected when require_pq=on, got {res:?}"
+        );
+    }
+
+    // (d) determinism: the same seed derives the same ML-DSA key, so a hybrid
+    // signed with the derived key verifies against the carried public key.
+    #[test]
+    fn deterministic_derivation_verifies() {
+        let seed = [11u8; 32];
+        let a = crate::pq::MlDsaTurnKey::from_ed25519_seed(&seed);
+        let b = crate::pq::MlDsaTurnKey::from_ed25519_seed(&seed);
+        assert_eq!(
+            a.public_bytes(),
+            b.public_bytes(),
+            "same seed → same ML-DSA public key"
+        );
+        let (cell, _) = owner_cell(11);
+        // The cell's owner seed IS [11;32]; a hybrid built from it verifies.
+        assert!(
+            run(
+                &exec(true),
+                &cell,
+                hybrid_auth(seed, cell.id(), false, false)
+            )
+            .is_ok()
+        );
     }
 }

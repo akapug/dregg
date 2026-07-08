@@ -958,6 +958,22 @@ pub struct SignedTurn {
     pub signature: Signature,
     /// The signer's public key.
     pub signer: PublicKey,
+    /// The ML-DSA-65 (FIPS 204) signature over the SAME turn hash the ed25519
+    /// half signs — the post-quantum half of the HYBRID turn perimeter
+    /// (`dregg_turn::pq`). Empty ⇒ no PQ half (legacy classical envelope).
+    ///
+    /// STAGED: a verifier checks this half when present and REJECTS a
+    /// present-but-invalid PQ half (fail-closed); whether it is *required* is
+    /// gated node-side by `TurnExecutor::require_pq` (default off). Wire
+    /// flag-day: this trailing field widens the postcard envelope (big-bang).
+    #[serde(default)]
+    pub pq_signature: Vec<u8>,
+    /// The signer's serialized ML-DSA-65 public key (FIPS 204), carried so the
+    /// verifier is self-contained during the staged rollout. Derived
+    /// deterministically from the same seed as `signer`
+    /// (`dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed`). Empty ⇒ no PQ half.
+    #[serde(default)]
+    pub pq_signer: Vec<u8>,
 }
 
 /// A signed action paired with the clerk's faithful explanation of what it
@@ -2795,11 +2811,30 @@ impl AgentCipherclerk {
     pub fn sign_turn(&self, turn: &Turn) -> SignedTurn {
         let turn_bytes = self.compute_turn_bytes(turn);
         let sig = self.signing_key.sign(&turn_bytes);
+        // HYBRID perimeter: also sign the SAME turn hash with the ML-DSA-65 key
+        // derived from the same seed (`dregg_turn::pq`). The client always signs
+        // both halves; the verifier gates the PQ half (staged).
+        let pq = self.ml_dsa_key();
+        let pq_signature = pq.sign(&turn_bytes).unwrap_or_default();
+        let pq_signer = pq.public_bytes();
         SignedTurn {
             turn: turn.clone(),
             signature: Signature(sig.to_bytes()),
             signer: self.public_key,
+            pq_signature,
+            pq_signer,
         }
+    }
+
+    /// Derive this cipherclerk's ML-DSA-65 (FIPS 204) signing key DETERMINISTIC-
+    /// ally from the SAME 32-byte seed as its ed25519 identity — the post-quantum
+    /// half of the HYBRID turn perimeter (`dregg_turn::pq`).
+    ///
+    /// Deriving from `signing_key.to_bytes()` (the ed25519 secret seed) means the
+    /// PQ public key matches a node / genesis fixture built from the same
+    /// mnemonic, with no separate ceremony (deterministic: same seed → same key).
+    fn ml_dsa_key(&self) -> dregg_turn::pq::MlDsaTurnKey {
+        dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed(&self.signing_key.to_bytes())
     }
 
     /// Sign arbitrary bytes with this cipherclerk's identity.
@@ -2942,6 +2977,47 @@ impl AgentCipherclerk {
         let sig = self.signing_key.sign(&message);
         Action {
             authorization: Authorization::from_sig_bytes(sig.to_bytes()),
+            ..unsigned
+        }
+    }
+
+    /// Sign an action with a HYBRID (ed25519 + ML-DSA-65) authorization — the
+    /// quantum-safe, per-action counterpart of [`sign_action`](Self::sign_action).
+    ///
+    /// Both halves cover the SAME canonical message
+    /// ([`TurnExecutor::compute_signing_message`]) the classical path signs; the
+    /// ML-DSA half is produced by the key derived from the SAME seed
+    /// ([`Self::ml_dsa_key`]) and the derived PQ public key is carried in the
+    /// [`Authorization::HybridSignature`] so the verifier is self-contained.
+    ///
+    /// STAGED: the executor accepts this alongside classical `Signature` and
+    /// fail-closes on a present-but-invalid PQ half; whether the PQ half is
+    /// *required* is gated node-side by `TurnExecutor::require_pq` (default off).
+    /// Distinct from [`sign_action`](Self::sign_action) so the app layer can
+    /// adopt the per-action PQ half incrementally during the rollout without a
+    /// wire-shape flag-day on every existing signed-action consumer.
+    pub fn sign_action_hybrid(
+        &self,
+        action: dregg_turn::action::Action,
+        federation_id: &[u8; 32],
+    ) -> dregg_turn::action::Action {
+        use dregg_turn::action::{Action, Authorization};
+        use dregg_turn::executor::TurnExecutor;
+        let unsigned = Action {
+            authorization: Authorization::Unchecked,
+            ..action
+        };
+        let message = TurnExecutor::compute_signing_message(&unsigned, federation_id);
+        let sig = self.signing_key.sign(&message);
+        let pq = self.ml_dsa_key();
+        let ml_dsa = pq.sign(&message).unwrap_or_default();
+        let ml_dsa_pk = pq.public_bytes();
+        Action {
+            authorization: Authorization::HybridSignature {
+                ed25519: sig.to_bytes(),
+                ml_dsa,
+                ml_dsa_pk,
+            },
             ..unsigned
         }
     }

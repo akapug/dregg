@@ -440,6 +440,33 @@ pub enum Authorization {
         #[serde(default)]
         discharges: Vec<Vec<u8>>,
     },
+    /// **HYBRID (ed25519 + ML-DSA-65) signature — the quantum-safe turn
+    /// perimeter.** Both halves cover the SAME canonical signing message
+    /// ([`crate::executor::TurnExecutor::compute_signing_message`] /
+    /// `compute_partial_signing_message`). A hybrid authorization verifies only
+    /// when `classical ∧ pq`: the ed25519 half is checked against the target
+    /// cell's identity, and the ML-DSA half (FIPS 204, ctx
+    /// [`crate::pq::HYBRID_TURN_PQ_CTX`]) is checked against `ml_dsa_pk`.
+    ///
+    /// STAGED, fail-closed: a present-but-invalid `ml_dsa` half REJECTS the
+    /// action regardless of `TurnExecutor::require_pq`; whether the PQ half is
+    /// *required* (vs. the ed25519 half alone sufficing during rollout) is gated
+    /// by that flag (default off). `ml_dsa` empty ⇒ the PQ half is absent (only
+    /// valid when `require_pq` is off). The classical [`Authorization::Signature`]
+    /// variant stays valid throughout the rollout.
+    HybridSignature {
+        /// The ed25519 signature over the canonical signing message (64 bytes).
+        #[serde(with = "serde_sig64")]
+        ed25519: [u8; 64],
+        /// The ML-DSA-65 signature over the SAME message under
+        /// [`crate::pq::HYBRID_TURN_PQ_CTX`]. Empty ⇒ PQ half absent.
+        ml_dsa: Vec<u8>,
+        /// The signer's serialized ML-DSA-65 public key (FIPS 204), carried so
+        /// the verifier is self-contained during the staged rollout. Derived
+        /// deterministically from the same seed as the ed25519 identity
+        /// ([`crate::pq::MlDsaTurnKey::from_ed25519_seed`]).
+        ml_dsa_pk: Vec<u8>,
+    },
 }
 
 /// How a [`Authorization::Token`] verifier resolves the credential's
@@ -693,6 +720,9 @@ impl Authorization {
     pub fn to_auth_kind(&self) -> Option<dregg_cell::AuthKind> {
         match self {
             Authorization::Signature(_, _) => Some(dregg_cell::AuthKind::Signature),
+            // A hybrid (ed25519 + ML-DSA) signature satisfies a Signature
+            // requirement; it IS a signature (with a post-quantum half).
+            Authorization::HybridSignature { .. } => Some(dregg_cell::AuthKind::Signature),
             Authorization::Proof { .. } => Some(dregg_cell::AuthKind::Proof),
             Authorization::Breadstuff(_) => None,
             Authorization::Bearer(_) => None,
@@ -1568,6 +1598,24 @@ impl Action {
                 hasher.update(&[0u8]);
                 hasher.update(r);
                 hasher.update(s);
+            }
+            Authorization::HybridSignature {
+                ed25519,
+                ml_dsa,
+                ml_dsa_pk,
+            } => {
+                // New discriminant (10) — distinct from `Signature` (0) so a
+                // classical and a hybrid authorization over the same action
+                // never collide in the action hash. Binding the PQ material
+                // (signature + public key) here means the OUTER turn envelope's
+                // signatures cover it: a tampering executor cannot swap or strip
+                // the PQ half under a signed-turn envelope.
+                hasher.update(&[10u8]);
+                hasher.update(ed25519);
+                hasher.update(&(ml_dsa.len() as u64).to_le_bytes());
+                hasher.update(ml_dsa);
+                hasher.update(&(ml_dsa_pk.len() as u64).to_le_bytes());
+                hasher.update(ml_dsa_pk);
             }
             Authorization::Proof {
                 proof_bytes,

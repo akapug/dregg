@@ -3273,6 +3273,27 @@ async fn post_submit_signed_turn(
         }));
     }
 
+    // HYBRID perimeter (`dregg_turn::pq`): when the outer envelope carries a
+    // post-quantum half, verify it over the SAME turn hash the ed25519 half
+    // covers — fail-CLOSED. A present-but-invalid PQ half REJECTS the turn
+    // regardless of `require_pq` (never fail-open on a bad PQ half). Whether the
+    // PQ half is *required* is gated below off the submit executor's
+    // `require_pq` flag (staged, default off).
+    if !signed.pq_signature.is_empty()
+        && !dregg_turn::pq::ml_dsa_verify(&signed.pq_signer, &turn_hash_bytes, &signed.pq_signature)
+    {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(hex_encode(&turn_hash_bytes)),
+            signer: Some(hex_encode(&signed.signer.0)),
+            action_count: signed.turn.call_forest.action_count(),
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("invalid post-quantum turn signature".to_string()),
+        }));
+    }
+
     let default_token_id = *blake3::hash(b"default").as_bytes();
     let expected_agent = dregg_cell::CellId::derive_raw(&signed.signer.0, &default_token_id);
     if signed.turn.agent != expected_agent {
@@ -3339,6 +3360,23 @@ async fn post_submit_signed_turn(
     // like a local one (its SDK stamps `valid_until`, so it does not fall off
     // the wire marshal).
     let executor = crate::executor_setup::new_submit_executor(&s);
+    // HYBRID perimeter (staged): when this node REQUIRES the post-quantum half,
+    // reject an outer envelope that carries no PQ signature. A present PQ half
+    // was already fail-closed-verified above; here we enforce presence. Default
+    // off (`require_pq()` false) — the classical envelope is accepted during the
+    // rollout, matching the consensus HybridPq default-off flip.
+    if executor.require_pq() && signed.pq_signature.is_empty() {
+        return Ok(Json(SubmitSignedTurnResponse {
+            accepted: false,
+            turn_hash: Some(turn_hash),
+            signer: Some(signer),
+            action_count,
+            proof_status: ActivityProofStatus::NotCommitted,
+            has_witness: false,
+            witness_count: 0,
+            error: Some("post-quantum turn signature required but absent".to_string()),
+        }));
+    }
     // ChainHead seed: the operator's own agent binds to the NODE head; a FOREIGN
     // client binds to ITS OWN claimed `previous_receipt_hash` (None for a first
     // turn). `execute_finalized_turn` only seeds the LOCAL agent's head, so a

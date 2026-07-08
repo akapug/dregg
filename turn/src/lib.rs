@@ -106,6 +106,7 @@ pub mod fast_path;
 pub mod forest;
 pub(crate) mod journal;
 pub mod pending;
+pub mod pq;
 pub mod presence_discharge;
 pub mod reactive;
 pub mod reversible;
