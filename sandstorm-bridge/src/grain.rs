@@ -103,6 +103,115 @@ pub fn grain_cell_commitment(var: &Umem) -> [u8; 32] {
     var.commit_root_bytes()
 }
 
+// =============================================================================
+// The federation WRITE half of the cloud-witness bridge.
+//
+// `grain_cell_commitment` gives the root; the missing wiring (the last-named seam
+// of the witness bridge) was that NOTHING published that root to the federation, so
+// a visitor's "fetch the root independently" had no source. `publish_grain_root`
+// produces the exact owner-signed body a grain owner POSTs to node's
+// `/cells/update-commitment` at each honest checkpoint — the WRITE. The READ half
+// (`crate::bridge::fetch_ledger_root`) reads it back out of `GET /api/cell/{id}`.
+// =============================================================================
+
+/// A faithful mirror of node's `UpdateCommitmentRequest` (`node/src/api.rs:1005`) — the
+/// JSON body an owner POSTs to `/cells/update-commitment`. node is not a dependency of this
+/// crate (it would be a heavy, cyclic dependency), so the type is MIRRORED, not imported;
+/// the LIVE wire uses node's own struct. The mirror is field-for-field identical (same JSON
+/// names, same hex encodings, same signed message), so a body built here deserializes into
+/// node's struct and its signature passes node's `post_update_commitment` check unchanged.
+///
+/// The signature signs `cell_id ‖ old_commitment ‖ new_commitment` (96 bytes), verified
+/// with the `cell_id` bytes AS the ed25519 public key — node's sovereign-cell convention
+/// (`verify_ed25519_signature(&cell_id_bytes, …)`, `node/src/api.rs:6268`). So a grain whose
+/// root is published this way has `cell_id == owner_pubkey`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateCommitmentRequest {
+    /// Hex-encoded 32-byte cell id — doubles as the owner's ed25519 public key.
+    pub cell_id: String,
+    /// Hex-encoded 32-byte previously-committed root (node checks it matches the stored value).
+    pub old_commitment: String,
+    /// Hex-encoded 32-byte new committed root — the grain's heap-root at this checkpoint.
+    pub new_commitment: String,
+    /// Hex-encoded 64-byte ed25519 signature over `cell_id ‖ old_commitment ‖ new_commitment`.
+    pub signature: String,
+}
+
+/// **The WRITE half: publish the grain's heap-root to the federation ledger.** At each
+/// honest checkpoint the grain owner posts the grain's committed heap-root
+/// ([`grain_cell_commitment`] of the current `/var`) as the cell's new committed value,
+/// OWNER-SIGNED so a real node accepts it. The returned [`UpdateCommitmentRequest`] is the
+/// exact body sent to node's `/cells/update-commitment`; only the HTTP transport is out of a
+/// unit test.
+///
+/// `grain_cell_id` is the 32-byte sovereign cell id, which under node's convention IS the
+/// owner's ed25519 public key (the signature is verified against it). `owner_key` must be the
+/// signing key for that public key — `owner_key.verifying_key().to_bytes() == *grain_cell_id`
+/// — or a real node rejects the signature (the OWNER-SIGNED negative pole). `previous_root`
+/// is the last-committed root the ledger stores (node checks `old_commitment` matches); use
+/// `[0u8; 32]` for the genesis publish of a freshly-registered cell.
+///
+/// The published `new_commitment` is `grain_cell_commitment(var)` — the real dregg Poseidon2
+/// heap-root, hex-encoded exactly as node returns commitments — so the value a visitor later
+/// fetches with [`crate::bridge::fetch_ledger_root`] is byte-identical to the root the served
+/// card is a leaf under. That WRITE/READ consistency is what closes the seam.
+pub fn publish_grain_root(
+    grain_cell_id: &[u8; 32],
+    var: &Umem,
+    owner_key: &SigningKey,
+    previous_root: [u8; 32],
+) -> UpdateCommitmentRequest {
+    let new_commitment = grain_cell_commitment(var);
+    // Mirror node's signed message EXACTLY: cell_id ‖ old_commitment ‖ new_commitment.
+    let mut message = Vec::with_capacity(96);
+    message.extend_from_slice(grain_cell_id);
+    message.extend_from_slice(&previous_root);
+    message.extend_from_slice(&new_commitment);
+    let signature = owner_key.sign(&message);
+    UpdateCommitmentRequest {
+        cell_id: data_encoding::HEXLOWER.encode(grain_cell_id),
+        old_commitment: data_encoding::HEXLOWER.encode(&previous_root),
+        new_commitment: data_encoding::HEXLOWER.encode(&new_commitment),
+        signature: data_encoding::HEXLOWER.encode(&signature.to_bytes()),
+    }
+}
+
+/// Mirror of node's `post_update_commitment` signature check (`node/src/api.rs:6263`): the
+/// signature must sign `cell_id ‖ old_commitment ‖ new_commitment`, verified with the
+/// `cell_id` bytes AS the ed25519 public key. Returns `true` iff a real node would ACCEPT the
+/// request's signature. It does NOT run node's stateful `old_commitment`-matches-stored ledger
+/// check (that is node-side state); it is the offline half a test uses to assert
+/// node-acceptance without a running node. A wrong signing key, or a mutated commitment under
+/// a genuine signature, fails here exactly as node's check does.
+pub fn verify_update_commitment_signature(req: &UpdateCommitmentRequest) -> bool {
+    let dec = |s: &str| data_encoding::HEXLOWER_PERMISSIVE.decode(s.as_bytes()).ok();
+    let (Some(cell_id), Some(old_c), Some(new_c), Some(sig)) = (
+        dec(&req.cell_id),
+        dec(&req.old_commitment),
+        dec(&req.new_commitment),
+        dec(&req.signature),
+    ) else {
+        return false;
+    };
+    let (Ok(cell_id), Ok(sig)) = (
+        <[u8; 32]>::try_from(cell_id.as_slice()),
+        <[u8; 64]>::try_from(sig.as_slice()),
+    ) else {
+        return false;
+    };
+    if old_c.len() != 32 || new_c.len() != 32 {
+        return false;
+    }
+    let Ok(vk) = VerifyingKey::from_bytes(&cell_id) else {
+        return false;
+    };
+    let mut message = Vec::with_capacity(96);
+    message.extend_from_slice(&cell_id);
+    message.extend_from_slice(&old_c);
+    message.extend_from_slice(&new_c);
+    vk.verify(&message, &Signature::from_bytes(&sig)).is_ok()
+}
+
 /// The dregg sandbox tier a grain runs at — a faithful subset of the sandbox executor's
 /// `CapTier` (`exec/src/lib.rs`). A grain *never* routes weaker than `Caged`: the
 /// Sandstorm supervisor is a namespace+seccomp jail, and an in-process wasm tier
