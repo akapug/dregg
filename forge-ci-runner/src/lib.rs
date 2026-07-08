@@ -16,12 +16,15 @@
 //!   check runs (the L1 in-turn binding).
 //!
 //! - **L3 [`reexecute_and_verify`]** — the RE-EXECUTOR (the audit that replaces
-//!   the circular one). Given a verdict + the same inputs, it re-runs the SAME
-//!   command in a FRESH confinement and compares `{exit_code, output_digest,
-//!   confinement_id}`. [`AuditVerdict::Honest`] iff every field matches;
-//!   [`AuditVerdict::HostLied`] (naming the divergent field) otherwise. A host
-//!   that signed `exit_code=0` over a command that actually failed, or a bogus
-//!   `output_digest`, is CONVICTED here — detection is real, not circular.
+//!   the circular one). Given a verdict + the PR's TRUSTED committed history, it
+//!   RE-MATERIALIZES that history into a FRESH dir it owns (never the host's dir,
+//!   which could be tampered), re-runs the SAME command in a FRESH confinement,
+//!   and compares `{input_root, confinement_id, exit_code, output_digest}`.
+//!   [`AuditVerdict::Honest`] iff every field matches; [`AuditVerdict::HostLied`]
+//!   (naming the divergent field) otherwise. A host that signed `exit_code=0`
+//!   over a command that actually failed, a bogus `output_digest`, or a verdict
+//!   whose claimed output was over attacker code X while committing the real code
+//!   Y, is CONVICTED here — detection is real, not circular.
 //!
 //! ## The determinism constraint (operational, load-bearing)
 //!
@@ -68,9 +71,40 @@ pub use confined::{
 };
 
 pub mod materialize;
-pub use materialize::{canonical_input_root, materialize};
+pub use materialize::{canonical_input_root, materialize, MaterializationMismatch};
 
 use dregg_doc::{substrate_commit, AtomId, Author, DocGraph, Patch};
+
+/// Why [`input_root_of_dir`] refused to emit a root.
+#[derive(Debug)]
+pub enum InputRootError {
+    /// I/O reading the working tree or its sidecar.
+    Io(std::io::Error),
+    /// The tree carries a committed history sidecar but is NOT that history's
+    /// faithful materialization (serve-X-commit-Y, or a stray readable file). A
+    /// root is deliberately NOT produced — see [`MaterializationMismatch`].
+    Mismatch(MaterializationMismatch),
+}
+
+impl std::fmt::Display for InputRootError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InputRootError::Io(e) => write!(f, "input_root I/O error: {e}"),
+            InputRootError::Mismatch(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl std::error::Error for InputRootError {}
+impl From<std::io::Error> for InputRootError {
+    fn from(e: std::io::Error) -> Self {
+        InputRootError::Io(e)
+    }
+}
+impl From<MaterializationMismatch> for InputRootError {
+    fn from(e: MaterializationMismatch) -> Self {
+        InputRootError::Mismatch(e)
+    }
+}
 
 /// The placeholder the runner substitutes with the per-run confined WORK dir in
 /// every `argv` element (so the same tokenized argv drives both the L2 run and
@@ -121,14 +155,26 @@ pub fn confinement_id(command_image: &str, argv: &[String], homebrew_prefix: &st
 /// and all. So a verdict this crate produces over a materialized tree carries the
 /// `input_root` the forge L1 gate binds.
 ///
+/// THE SERVE-X-COMMIT-Y BIND (the security-load-bearing check): before returning
+/// that root, the tree is VERIFIED to BE the sidecar history's materialization
+/// ([`materialize::verify_faithful_materialization`]) — `document.txt` equals the
+/// committed fold byte-for-byte AND no stray file the command could read exists.
+/// Otherwise [`InputRootError::Mismatch`] is returned and NO root is produced. So
+/// the value this emits always commits to the exact bytes the command consumes; a
+/// host cannot seed `document.txt = X` beside an honest `merged.history` for Y and
+/// obtain `R_Y`.
+///
 /// FALLBACK (no sidecar — a raw tree): the projection is deterministic: files are
 /// collected recursively, sorted by relative path, and each becomes one atom
 /// whose content is `"<relpath>\0<blake3-hex of file bytes>"` (chained in sorted
 /// order). Distinct trees project to distinct graphs, hence distinct roots. This
 /// path does NOT equal a document's `substrate_commit` (different atom grammar) —
 /// it is the last-resort digest for a non-materialized tree.
-pub fn input_root_of_dir(dir: &std::path::Path) -> std::io::Result<[u8; 32]> {
+pub fn input_root_of_dir(dir: &std::path::Path) -> Result<[u8; 32], InputRootError> {
     if let Some(history) = materialize::read_materialized_history(dir)? {
+        // A root is emitted ONLY for a tree that provably IS its committed
+        // history's materialization — the bytes read == the bytes committed.
+        materialize::verify_faithful_materialization(dir, &history)?;
         return Ok(substrate_commit(&history.replay()));
     }
     Ok(substrate_commit(&doc_graph_of_dir(dir)?))
