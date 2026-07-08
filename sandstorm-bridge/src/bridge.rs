@@ -26,8 +26,9 @@
 use std::collections::BTreeMap;
 
 use dregg_auth::credential::PublicKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
-use crate::cell::{DataRoot, Umem};
+use crate::cell::{DataRoot, InclusionProof, Umem};
 use crate::limits::ResourceLease;
 use crate::net::{EgressDecision, NetworkPolicy};
 use crate::webauth_rail::derive_permissions;
@@ -224,10 +225,150 @@ impl Session {
 
 /// The result of serving one request through the bridge: the app's response plus the
 /// new committed `data_root` (so the caller can record the witnessed state change).
+///
+/// ## The independent anchor the bare `Served` lacks
+///
+/// A `Served` alone does **not** make the serve trustless: the visitor gets the bytes AND
+/// the `new_data_root` from the *same* host, so a host that renders card `Y`, writes `Y`
+/// into `/var`, and returns body `Y` with `new_data_root = commit({key: Y})` is fully
+/// self-consistent — the visitor re-hashing `Y` reproduces `root(Y)` and matches. Nothing
+/// external says `root(Y)` is the state the OWNER committed. Trustlessness needs (a) an
+/// independent anchor on the root, and (b) a way to check the served card is the value at
+/// the served key under that root without re-hashing the whole heap. Those are
+/// [`RootAttestation`] (an ed25519 owner signature over the root) + a [`InclusionProof`]
+/// (a single-leaf Merkle path) — bundled as an [`AttestedServed`].
 #[derive(Clone, Debug)]
 pub struct Served {
     pub response: HttpResponse,
     pub new_data_root: DataRoot,
+}
+
+/// The canonical bytes the grain OWNER signs to attest a **served** `data_root`: a
+/// domain-separated, NUL-delimited `(grain_cell_id ‖ data_root)`. Mirrors
+/// [`crate::grain::attestation_message`] (the backup pedigree tooth), specialized to the
+/// serve path — binding the root to the specific grain, so an attestation for one grain's
+/// root cannot be replayed as another's. Both fields are NUL-free (a `cell:…` id, a
+/// `umem1…` root), so the delimiter is unambiguous.
+pub fn served_root_message(grain_cell_id: &str, data_root: &str) -> Vec<u8> {
+    let mut msg = Vec::new();
+    msg.extend_from_slice(b"grain-served-root-attestation:v1");
+    msg.push(0);
+    msg.extend_from_slice(grain_cell_id.as_bytes());
+    msg.push(0);
+    msg.extend_from_slice(data_root.as_bytes());
+    msg
+}
+
+/// **The independent anchor on a served root** — an ed25519 signature by the grain OWNER's
+/// key over `(grain_cell_id ‖ data_root)` ([`served_root_message`]). It is the serve-path
+/// analog of [`crate::grain::GrainBackup`]'s attestation: the decisive tooth that a
+/// hostile serving host cannot forge, because it lacks the owner's key.
+///
+/// A visitor verifies it with [`RootAttestation::verify`] against the owner's public key
+/// **obtained independently** — from the cell's ledger commitment, NOT from the serving
+/// host's response. A host that fabricates a card `Y` and a matching `root(Y)` can sign
+/// `root(Y)` only under its OWN key; that attestation fails to verify under the owner's
+/// key, so the fabrication is caught.
+#[derive(Clone, Debug)]
+pub struct RootAttestation {
+    /// The grain the root belongs to (bound into the signed message).
+    pub grain_cell_id: String,
+    /// The committed root this attestation vouches for.
+    pub data_root: DataRoot,
+    /// The ed25519 public key (32 bytes) that produced the signature — carried for
+    /// routing; [`verify`](Self::verify) does NOT trust it blindly, it must equal the
+    /// externally-supplied *expected* owner key.
+    pub signer: [u8; 32],
+    /// The ed25519 signature (64 bytes) over [`served_root_message`].
+    pub signature: Vec<u8>,
+}
+
+impl RootAttestation {
+    /// The OWNER attests a committed served root: sign `(grain_cell_id ‖ data_root)` with
+    /// the owner's key. In a real deployment this key is the owner's registered identity
+    /// key (the same `subject` principal the webauth rail seals grain caps to), held by the
+    /// owner's device / the host's identity registry — the same seam noted on
+    /// [`crate::grain::GrainCell::backup`]. A hostile serving host does not hold it.
+    pub fn sign(owner_key: &SigningKey, grain_cell_id: &str, data_root: &DataRoot) -> Self {
+        let sig = owner_key.sign(&served_root_message(grain_cell_id, &data_root.0));
+        RootAttestation {
+            grain_cell_id: grain_cell_id.to_string(),
+            data_root: data_root.clone(),
+            signer: owner_key.verifying_key().to_bytes(),
+            signature: sig.to_bytes().to_vec(),
+        }
+    }
+
+    /// Verify the attestation against the owner's **expected** public key — the key the
+    /// visitor obtains independently (from the cell's ledger commitment, never from the
+    /// serving host). Checks the self-declared `signer` equals the expected key AND the
+    /// signature verifies over `(grain_cell_id ‖ data_root)`. `false` on any mismatch — an
+    /// attestation minted under a different key (a tampering host's own key) is rejected.
+    pub fn verify(&self, expected_owner: &VerifyingKey) -> bool {
+        if self.signer != expected_owner.to_bytes() {
+            return false;
+        }
+        let sig_bytes: [u8; 64] = match self.signature.as_slice().try_into() {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let sig = Signature::from_bytes(&sig_bytes);
+        expected_owner
+            .verify(
+                &served_root_message(&self.grain_cell_id, &self.data_root.0),
+                &sig,
+            )
+            .is_ok()
+    }
+}
+
+/// A served response bundled with everything a visitor needs to verify authenticity
+/// **against an owner key + root obtained independently** (the ledger), even when the
+/// serving host is hostile: the owner's [`RootAttestation`] over the committed root, plus
+/// an [`InclusionProof`] that the served card is the value at its key under that root.
+///
+/// The visitor's check (see [`AttestedServed::witnessed_authentic`]): given the owner's
+/// public key from an independent channel, `(owner signed root R) ∧ (card is the value at
+/// key under R)` ⇒ the card is authentic. A host that swaps card+root together fails the
+/// first conjunct (it cannot sign under the owner's key); a host that lies about the leaf
+/// fails the second (the Merkle path will not fold to `R`).
+#[derive(Clone, Debug)]
+pub struct AttestedServed {
+    pub response: HttpResponse,
+    pub new_data_root: DataRoot,
+    /// The owner's signature over `new_data_root` — the independent anchor.
+    pub attestation: RootAttestation,
+    /// The `/var` key the served card was materialized under (the leaf being proven).
+    pub witness_key: Option<String>,
+    /// The single-leaf Merkle proof that `witness_key`'s value is included under
+    /// `new_data_root`. `None` when no witness key was requested (e.g. a `403`).
+    pub inclusion: Option<InclusionProof>,
+}
+
+impl AttestedServed {
+    /// **The trustless-serve verification a visitor runs**, holding only the owner's public
+    /// key from an independent channel (the ledger — NOT this host), the served card bytes,
+    /// and this bundle. Returns `true` iff BOTH:
+    ///
+    /// 1. the owner attested this exact `new_data_root` for this grain (the root has an
+    ///    independent anchor — a hostile host cannot forge it without the owner's key), and
+    /// 2. `card` is exactly the value at `witness_key` under `new_data_root` (the served
+    ///    bytes are the committed leaf — proven by the Merkle path, no whole-heap re-hash).
+    ///
+    /// This is authentic-IFF: it holds even if the serving host is hostile, and it does NOT
+    /// trust anything the host asserts about the root — only the owner's independent
+    /// signature and the visitor's own re-hash of the card.
+    pub fn witnessed_authentic(&self, expected_owner: &VerifyingKey, card: &[u8]) -> bool {
+        if !self.attestation.verify(expected_owner) {
+            return false;
+        }
+        match (&self.witness_key, &self.inclusion) {
+            (Some(key), Some(proof)) => {
+                crate::cell::verify_inclusion(&self.new_data_root, key, card, proof)
+            }
+            _ => false,
+        }
+    }
 }
 
 impl HttpBridge {
@@ -304,6 +445,55 @@ impl HttpBridge {
         Served {
             new_data_root: var.commit(),
             response,
+        }
+    }
+
+    /// **Trustless serve** — [`serve`](Self::serve), plus the two teeth that make "the host
+    /// cannot tamper with what it serves" actually TRUE against a hostile host:
+    ///
+    /// * the committed root is **owner-attested** ([`RootAttestation::sign`] with
+    ///   `owner_key`) — an independent anchor the serving host cannot forge, and
+    /// * an **inclusion proof** for `witness_key` (the key the served card is materialized
+    ///   under) is emitted, so a visitor verifies the card is the value at that key under
+    ///   the attested root without the rest of `/var`.
+    ///
+    /// The visitor then runs [`AttestedServed::witnessed_authentic`] with the owner's key
+    /// obtained *independently* (the ledger). `owner_key` models the OWNER co-signing the
+    /// committed state; a hostile host lacks it and can only attest under its own key, which
+    /// the visitor's owner-key check rejects. (Publishing the attested root to the
+    /// federation ledger — the visitor's independent channel for the owner key + root — is
+    /// the named deferred seam; the attestation itself is real here.)
+    #[allow(clippy::too_many_arguments)]
+    pub fn serve_attested(
+        workload: &dyn GrainWorkload,
+        grain_cell_id: &str,
+        session: &Session,
+        host_pub: &PublicKey,
+        declared_permissions: &[String],
+        now: u64,
+        var: &mut Umem,
+        req: &HttpRequest,
+        owner_key: &SigningKey,
+        witness_key: Option<&str>,
+    ) -> AttestedServed {
+        let served = Self::serve(
+            workload,
+            grain_cell_id,
+            session,
+            host_pub,
+            declared_permissions,
+            now,
+            var,
+            req,
+        );
+        let attestation = RootAttestation::sign(owner_key, grain_cell_id, &served.new_data_root);
+        let inclusion = witness_key.and_then(|k| var.prove(k));
+        AttestedServed {
+            response: served.response,
+            new_data_root: served.new_data_root,
+            attestation,
+            witness_key: witness_key.map(|s| s.to_string()),
+            inclusion,
         }
     }
 
@@ -410,12 +600,28 @@ impl GrainWorkload for NotesApp {
 /// ([`render_card_document`]) and serves that as the response — the SAME card the native
 /// cockpit paints, now served over the web.
 ///
-/// **Witnessed.** The served HTML is materialized into the grain's `/var` (the cell umem
-/// heap) at [`Self::key`], so the `data_root` [`HttpBridge::serve`] commits is the
-/// commitment of *exactly the bytes served*. A light client re-hashes the served bytes
-/// (put them in a fresh umem at the same key, commit) and gets the same root — the host
-/// cannot serve one card and commit to another. The write is content-addressed and
-/// idempotent: serving the same card twice yields the same root.
+/// **Witnessed — and what that requires.** The served HTML is materialized into the
+/// grain's `/var` (the cell umem heap) at [`Self::key`], so the `data_root` the bridge
+/// commits is the commitment of *exactly the bytes served at that key*. But a bare
+/// [`HttpBridge::serve`] is NOT trustless on its own: the visitor gets the bytes AND the
+/// root from the same host, so a hostile host can render card `Y`, commit `root(Y)`, and
+/// return both self-consistently — the re-hash matches, and nothing external says `root(Y)`
+/// is the state the owner committed. Two things close that, and the visitor MUST have both
+/// from an INDEPENDENT channel (the cell's ledger), not the host's response:
+///
+/// * an **owner attestation** over the served root ([`HttpBridge::serve_attested`] →
+///   [`RootAttestation`]) — the independent anchor a tampering host cannot forge (it lacks
+///   the owner's key), and
+/// * a **single-leaf inclusion proof** ([`crate::cell::Umem::prove`]) that the served card
+///   is the value at [`Self::key`] under that root — so the check needs only the card bytes,
+///   NOT a re-hash of the whole (real, stateful) `/var`, which a flat digest would require.
+///
+/// The property is therefore: *witnessed IFF the visitor obtains the owner's public key and
+/// the committed root independently (the ledger) and runs
+/// [`AttestedServed::witnessed_authentic`]* — then `(owner signed root R) ∧ (card is the
+/// value at key under R)` ⇒ the card is authentic even if the serving host is hostile. The
+/// write is content-addressed and idempotent: serving the same card twice yields the same
+/// root.
 ///
 /// **Cap-gated.** The powerbox cap-gate is [`HttpBridge::serve`]: an empty permission set
 /// (no cap, a cap for another grain, a forged/leaked credential, or one granting no
@@ -452,9 +658,11 @@ impl CardGrainWorkload {
         deos_view::render_card_document(&self.title, &tree, &[])
     }
 
-    /// The `/var` key the served card bytes are materialized under — what the committed
-    /// `data_root` witnesses. A light client reconstructs `/var` from this key + the
-    /// served bytes to re-derive the root.
+    /// The `/var` key the served card bytes are materialized under — the leaf a visitor
+    /// proves inclusion of. A light client verifies the served card is the value at THIS
+    /// key under the owner-attested root ([`crate::cell::verify_inclusion`] with
+    /// [`crate::cell::Umem::prove`]'s proof) — it needs only the card bytes, this key, the
+    /// proof, and the independently-obtained root, never the rest of `/var`.
     pub fn key(&self) -> String {
         format!("card{}", self.path)
     }
@@ -930,6 +1138,145 @@ mod tests {
         assert!(
             var2.is_empty(),
             "the card was not served — nothing witnessed"
+        );
+    }
+
+    /// A deterministic grain-OWNER signing key. In a real deployment this is the owner's
+    /// registered identity key (the `subject` the webauth rail seals grain caps to), NOT a
+    /// key the serving host holds.
+    fn owner_key() -> SigningKey {
+        SigningKey::from_bytes(&[77u8; 32])
+    }
+
+    /// **THE TRUSTLESS-SERVE WELD — the property "the host cannot tamper with what it
+    /// serves" made TRUE, at all three poles.** The old witnessed check re-hashed the whole
+    /// (single-entry) `/var` and only flipped a byte within a self-served root — it never
+    /// modeled a host swapping card+root together, nor a stateful `/var`. These do.
+    #[test]
+    fn a_served_card_is_authentic_only_against_an_independent_owner_key_and_inclusion_proof() {
+        let host = host();
+        let grain = "cell:card-grain";
+        let card = sample_card();
+        let declared = vec!["view".to_string()];
+        let owner = owner_key();
+        // The visitor obtains the owner's pubkey from an INDEPENDENT channel (the cell's
+        // ledger commitment), never from the serving host's response.
+        let owner_pub = owner.verifying_key();
+
+        // ── POLE (i): HONEST serve into a NON-DEGENERATE /var. The owner co-signs the
+        //    committed root; the bridge emits the card's inclusion proof. The visitor —
+        //    holding only the owner pubkey (independent), the served card, and the bundle —
+        //    verifies BOTH the owner-attestation over the root AND the card as the leaf
+        //    under it. Accepted. ──
+        let mut var = Umem::new();
+        // Pre-existing grain state: this is a REAL stateful /var, not the empty-umem crutch.
+        var.put("notes/a", b"alpha".to_vec());
+        var.put("notes/b", b"beta".to_vec());
+        var.put("prefs/theme", b"dark".to_vec());
+        let attested = HttpBridge::serve_attested(
+            &card,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut var,
+            &HttpRequest::get("/"),
+            &owner,
+            Some(&card.key()),
+        );
+        assert_eq!(attested.response.status, 200, "the card is served");
+        let card_bytes = attested.response.body.clone();
+        // The whole-heap root is NOT the single-leaf root — the card is one leaf among four.
+        let mut lone = Umem::new();
+        lone.put(card.key(), card_bytes.clone());
+        assert_ne!(
+            lone.commit(),
+            attested.new_data_root,
+            "a real stateful /var: the served root is over the whole heap, not one leaf"
+        );
+        // THE VISITOR'S CHECK — owner-attestation ∧ inclusion, against the independent key.
+        assert!(
+            attested.witnessed_authentic(&owner_pub, &card_bytes),
+            "honest serve: owner signed the root AND the card is the leaf under it → authentic"
+        );
+        // The inclusion proof also checks in isolation (host-state-free), against the
+        // whole-heap root — the visitor never needs notes/*, prefs/* to verify the card.
+        assert!(crate::cell::verify_inclusion(
+            &attested.new_data_root,
+            &card.key(),
+            &card_bytes,
+            attested.inclusion.as_ref().unwrap(),
+        ));
+
+        // ── POLE (ii): TAMPER — a HOSTILE host serves a fabricated card `Y` and commits a
+        //    matching `root(Y)`, self-consistent under a re-hash. But it CANNOT produce a
+        //    valid OWNER attestation over `root(Y)` — it lacks the owner's key — so it signs
+        //    under its OWN key. The visitor verifies against the owner pubkey → the
+        //    owner-attestation check FAILS → tamper CAUGHT. This is the pole the old test
+        //    missed. ──
+        struct TamperCard;
+        impl GrainWorkload for TamperCard {
+            fn serve(&self, _req: &BridgedRequest, var: &mut Umem) -> HttpResponse {
+                // The host renders and commits a DIFFERENT card than the owner's.
+                let forged = b"<!doctype html><title>evil</title>attacker-controlled".to_vec();
+                var.put("card/", forged.clone());
+                HttpResponse::ok(forged)
+            }
+        }
+        // The attacker's key — NOT the owner's. This is all a hostile host can sign with.
+        let attacker = SigningKey::from_bytes(&[201u8; 32]);
+        let mut evil_var = Umem::new();
+        let tampered = HttpBridge::serve_attested(
+            &TamperCard,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut evil_var,
+            &HttpRequest::get("/"),
+            &attacker, // the host has no owner key
+            Some("card/"),
+        );
+        let evil_bytes = tampered.response.body.clone();
+        // The tamper is INTERNALLY self-consistent: re-hashing Y reproduces root(Y), and the
+        // attacker's own inclusion proof folds to root(Y). A visitor that trusted the host's
+        // own attestation would be fooled — which is exactly why it must not.
+        assert!(crate::cell::verify_inclusion(
+            &tampered.new_data_root,
+            "card/",
+            &evil_bytes,
+            tampered.inclusion.as_ref().unwrap(),
+        ));
+        assert!(
+            tampered.attestation.verify(&attacker.verifying_key()),
+            "the tamper is self-consistent under the ATTACKER's own key"
+        );
+        // But against the OWNER's independent key it collapses: the owner never signed
+        // root(Y), and the attacker cannot forge that signature.
+        assert!(
+            !tampered.attestation.verify(&owner_pub),
+            "the owner did not attest root(Y) — the host cannot forge it"
+        );
+        assert!(
+            !tampered.witnessed_authentic(&owner_pub, &evil_bytes),
+            "TAMPER CAUGHT: card+root swapped together, but no valid OWNER attestation over root(Y)"
+        );
+
+        // ── POLE (iii): the inclusion proof is load-bearing over a NON-DEGENERATE /var — a
+        //    wrong card at the card key does not verify under the honest attested root, even
+        //    though the owner-attestation itself checks (the two teeth are independent). ──
+        let mut wrong = card_bytes.clone();
+        let last = wrong.len() - 1;
+        wrong[last] ^= 0x01;
+        assert!(
+            attested.attestation.verify(&owner_pub),
+            "the honest root is genuinely owner-attested",
+        );
+        assert!(
+            !attested.witnessed_authentic(&owner_pub, &wrong),
+            "a card that is not the committed leaf fails the inclusion tooth under the real root"
         );
     }
 }
