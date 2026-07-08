@@ -98,15 +98,17 @@ impl std::error::Error for VerifyBreak {}
 /// and each name a genuine, distinct committed turn.
 pub fn verify_chain_linkage(playthrough: &Playthrough) -> Result<(), VerifyBreak> {
     let receipts = playthrough.receipts();
-    let mut seen: Vec<[u8; 32]> = Vec::new();
+    // Dedup turn hashes through a `HashSet` (O(n)) rather than a `Vec::contains` scan
+    // (O(n²)). `insert` returns `false` on a duplicate — the same first-duplicate detection,
+    // and the linkage/zero-hash checks stay in receipt order.
+    let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     for (i, r) in receipts.iter().enumerate() {
         if r.turn_hash == [0u8; 32] {
             return Err(VerifyBreak::ZeroTurnHash { index: i });
         }
-        if seen.contains(&r.turn_hash) {
+        if !seen.insert(r.turn_hash) {
             return Err(VerifyBreak::DuplicateTurnHash { index: i });
         }
-        seen.push(r.turn_hash);
         if i > 0 && r.pre_state_hash != receipts[i - 1].post_state_hash {
             return Err(VerifyBreak::LinkageBroken { index: i });
         }
