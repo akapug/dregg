@@ -167,8 +167,15 @@ pub mod ci_verdict;
 // first-class, self-documenting choice. See src/ci_assurance.rs.
 #[cfg(feature = "substrate")]
 pub mod ci_assurance;
+// STAKED-BOND FORFEITURE — the real, conserving, one-shot slash behind
+// `CiAssurance::Staked`: a conviction moves the bonded value out of the lying
+// host to a slash beneficiary (reusing the `dregg_cell` balance ledger as the
+// conserving transfer + the escrow_sealed committed-heap one-shot discipline).
+// See src/staked_bond.rs.
 #[cfg(feature = "rope")]
 pub mod rope;
+#[cfg(feature = "substrate")]
+pub mod staked_bond;
 #[cfg(feature = "cell-heap")]
 mod substrate;
 mod threeway;
@@ -234,6 +241,11 @@ pub use review::ReviewThread;
 pub use review::{Approval, ReviewComment, approvals_of, comments_of};
 #[cfg(feature = "rope")]
 pub use rope::{RopeDoc, graph_to_rope, rope_diff};
+#[cfg(feature = "substrate")]
+pub use staked_bond::{
+    BOND_COLL, BondDisposition, BondError, BondRelease, BondState, BondStatus, SlashBeneficiary,
+    SlashOutcome, StakedBond, bond_disposition, post_bond, release_bond, slash_bond,
+};
 #[cfg(feature = "cell-heap")]
 pub use substrate::{COLL_ATOMS, COLL_EDGES, COLL_FIELDS, substrate_commit, to_heap_map};
 pub use threeway::{ConflictSide, ThreeWayConflict, merge_base, render_three_way, three_way};
