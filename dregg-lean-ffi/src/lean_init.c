@@ -67,6 +67,11 @@ extern lean_object *dregg_blocklace_finalize(lean_object *input);
  * order-faithfully equal to `tauOrder` by `tau_order_export_eq`. Same module ⇒ same initializer ⇒
  * gated on the same DREGG_FINALIZE_GATE define. */
 extern lean_object *dregg_tau_order(lean_object *input);
+/* The verified FINALIZATION-VOTE QUORUM decision, co-located in `Dregg2.Distributed.FinalityGate`:
+ * decodes a deduped `(signer, root)` tally + committee size, runs the VERIFIED
+ * `FinalizationQuorum.quorumRoot` (proved sound + conflict-free), and returns `"R=<root>"` / `"NONE"`
+ * / `"ERR"`. Same module ⇒ same initializer ⇒ gated on the same DREGG_FINALIZE_GATE define. */
+extern lean_object *dregg_finalization_quorum(lean_object *input);
 #endif
 
 /* The @[export]ed Lean `String -> String` VERIFIED STRAND-ADMISSION GATE
@@ -416,6 +421,29 @@ size_t dregg_tau_order_str(const char *in_utf8, char *out, size_t out_cap) {
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_tau_order(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+
+/* dregg_finalization_quorum_str — the C string bridge over the Lean `String -> String` VERIFIED
+ * finalization-vote QUORUM decision. Identical marshalling discipline as the bridges above; it drives
+ * `dregg_finalization_quorum`, whose input wire is `"n=<committee-size>;V=<signer:root,...>"` (the
+ * collector's deduped tally) and whose output is `"R=<root>"` (the consensus-attested root),
+ * `"NONE"` (no root reached quorum), or `"ERR"` (fail-closed on a malformed wire).
+ * `quorum_gate_finalizes_iff_verified` proves the decision IS `FinalizationQuorum.quorumRoot`. Same
+ * return contract (full byte length; (size_t)-1 only on an unusable buffer). Co-located in the
+ * FinalityGate module ⇒ gated on the same DREGG_FINALIZE_GATE. */
+size_t dregg_finalization_quorum_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_finalization_quorum(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);

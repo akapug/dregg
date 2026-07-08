@@ -122,6 +122,106 @@ pub fn verified_tau_order(wire: &str) -> Result<Vec<u64>, String> {
 }
 
 // =============================================================================
+// dregg_finalization_quorum — the verified finalization-vote QUORUM decision (consensus side)
+// =============================================================================
+
+/// The interned root id the quorum decision ranges over (the collector maps a root hash → this id
+/// and back). Mirrors the Lean `Root := Nat`.
+pub type Root = u64;
+
+/// Whether the linked archive exports the verified finalization-quorum gate
+/// (`dregg_finalization_quorum`). It is co-located with `dregg_blocklace_finalize` in
+/// `Dregg2.Distributed.FinalityGate`, so it is present exactly when the finality gate is — probed
+/// via the same `dregg_finalize_gate_present` cfg. When false the collector cannot Lean-back its
+/// quorum decision and falls back to the native Rust `VoteCollector` tally.
+pub fn finalization_quorum_available() -> bool {
+    ffi_quorum::finalization_quorum_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED finalization-quorum gate `@[export] dregg_finalization_quorum` (the PROVED
+/// `FinalizationQuorum.quorumRoot`, carried by `quorum_gate_finalizes_iff_verified`) over a
+/// wire-encoded `(committee-size, deduped (signer,root) tally)` and return the raw output wire
+/// (`"R=<root>"` consensus-attested / `"NONE"` no quorum / `"ERR"` fail-closed). Requires
+/// [`finalization_quorum_available`]; returns `Err` when the archive did not export it.
+pub fn shadow_finalization_quorum(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi_quorum::lean_finalization_quorum(wire)
+}
+
+/// Decode a `"R=<root>"` / `"NONE"` / `"ERR"` quorum-verdict wire to the decided root, if any. This
+/// is the Rust inverse of the Lean `encodeQuorumResult`. Returns `Some(root)` on `"R=<root>"`, and
+/// `None` on `"NONE"`, `"ERR"`, or any malformed body (fail-closed — the collector finalizes NO root
+/// on a parse failure).
+pub fn decode_quorum_root(wire: &str) -> Option<Root> {
+    let body = wire.strip_prefix("R=")?;
+    body.parse::<Root>().ok()
+}
+
+/// The end-to-end verified finalization-quorum query: run the gate and decode the verdict to the
+/// consensus-attested root, FAILING CLOSED (no root ⇒ `None`) on `NONE`/`ERR`/malformed. Returns
+/// `Ok(Some(root))` when the verified rule reached quorum, `Ok(None)` when it did not (or the wire
+/// was malformed), and `Err` only when the archive lacks the export (so the caller can fall back to
+/// the Rust `VoteCollector`, distinguishing "archive missing" from "no quorum reached"). Because the
+/// verified `quorum_no_conflict` proves two distinct roots cannot both reach quorum, gating the
+/// collector on this is gating it on the finalization-safety property by construction.
+pub fn verified_finalization_quorum(wire: &str) -> Result<Option<Root>, String> {
+    let out = shadow_finalization_quorum(wire)?;
+    Ok(decode_quorum_root(&out))
+}
+
+#[cfg(all(lean_lib_present, dregg_finalize_gate_present))]
+mod ffi_quorum {
+    use std::ffi::CString;
+    use std::os::raw::c_char;
+
+    extern "C" {
+        fn dregg_finalization_quorum_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+    }
+
+    pub fn finalization_quorum_present() -> bool {
+        true
+    }
+
+    pub fn lean_finalization_quorum(wire: &str) -> Result<String, String> {
+        let c_in = CString::new(wire).map_err(|e| format!("wire has interior NUL: {e}"))?;
+        let mut cap = wire.len() * 2 + 256;
+        loop {
+            let mut buf = vec![0u8; cap];
+            let full = unsafe {
+                dregg_finalization_quorum_str(c_in.as_ptr(), buf.as_mut_ptr() as *mut c_char, cap)
+            };
+            if full == usize::MAX {
+                return Err("dregg_finalization_quorum_str: unusable output buffer".into());
+            }
+            if full < cap {
+                let nul = buf.iter().position(|&b| b == 0).unwrap_or(full);
+                return String::from_utf8(buf[..nul].to_vec())
+                    .map_err(|e| format!("result not UTF-8: {e}"));
+            }
+            cap = full + 1;
+        }
+    }
+}
+
+#[cfg(not(all(lean_lib_present, dregg_finalize_gate_present)))]
+mod ffi_quorum {
+    pub fn finalization_quorum_present() -> bool {
+        false
+    }
+
+    pub fn lean_finalization_quorum(_wire: &str) -> Result<String, String> {
+        Err(
+            "dregg_finalization_quorum not exported by the linked archive (rebuild to enable)"
+                .into(),
+        )
+    }
+}
+
+// =============================================================================
 // Lean FFI (present only when the archive exported `dregg_strand_admit`)
 // =============================================================================
 
@@ -519,6 +619,60 @@ mod tests {
         assert!(verified_tau_order("not a wire")
             .expect("gate ran on garbage")
             .is_empty());
+    }
+
+    #[test]
+    fn quorum_root_decoder_is_fail_closed_and_exact() {
+        // a decided root round-trips; NONE / ERR / malformed bodies fail closed (None).
+        assert_eq!(decode_quorum_root("R=7"), Some(7));
+        assert_eq!(decode_quorum_root("R=0"), Some(0));
+        assert_eq!(decode_quorum_root("NONE"), None);
+        assert_eq!(decode_quorum_root("ERR"), None);
+        assert_eq!(decode_quorum_root("R=bad"), None);
+        assert_eq!(decode_quorum_root("nope"), None);
+    }
+
+    /// THE LIVE QUORUM-DECISION DIFFERENTIAL — the verified Lean export `dregg_finalization_quorum`
+    /// returns, through the Rust wrapper, the SAME root the Lean `#guard`s pin on the same wires
+    /// (`superMajority 4 = 3`, so an n=4 committee needs 3 distinct signers). Three distinct signers
+    /// for root 7 ⇒ `Some(7)`; two distinct signers ⇒ `None`; a duplicate signer does not
+    /// double-count; a split vote reaches no quorum; a malformed wire is fail-closed to `None`. This
+    /// is the runtime face of the tier-2 no-drift closure: the SAME verified rule the collector calls
+    /// decides exactly these roots. Self-skips when the archive lacks the export.
+    #[test]
+    fn verified_finalization_quorum_matches_guards() {
+        if !finalization_quorum_available() {
+            eprintln!(
+                "SKIP: Lean finalization-quorum export not linked \
+                 (finalization_quorum_available()==false)"
+            );
+            return;
+        }
+        // three distinct signers (0,1,2) attest root 7 in a 4-committee ⇒ quorum ⇒ Some(7).
+        assert_eq!(
+            verified_finalization_quorum("n=4;V=0:7,1:7,2:7").expect("quorum gate ran"),
+            Some(7)
+        );
+        // only two distinct signers ⇒ below the 3-supermajority ⇒ no root finalized.
+        assert_eq!(
+            verified_finalization_quorum("n=4;V=0:7,1:7").expect("ran"),
+            None
+        );
+        // a DUPLICATE signer does not double-count (dedup): 0,0,1 = two DISTINCT ⇒ None.
+        assert_eq!(
+            verified_finalization_quorum("n=4;V=0:7,0:7,1:7").expect("ran"),
+            None
+        );
+        // a SPLIT vote (no root gets 3 distinct) ⇒ None (and by `quorum_no_conflict`, never two).
+        assert_eq!(
+            verified_finalization_quorum("n=4;V=0:7,1:7,2:8,3:8").expect("ran"),
+            None
+        );
+        // malformed wire ⇒ ERR ⇒ fail-closed to no root.
+        assert_eq!(
+            verified_finalization_quorum("not a wire").expect("gate ran on garbage"),
+            None
+        );
     }
 
     #[test]
