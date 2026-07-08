@@ -166,41 +166,44 @@ theorem chain_body_zero_iff (j : Nat) (env : VmRowEnv) :
 
 /-! ## §3 — Membership of each declared constraint in the descriptor's constraint list. -/
 
-/-- The descriptor's constraint list, spelled out (defeq to `garbledEvalDesc.constraints`). -/
+/-- The descriptor's constraint list, spelled out = the 7-part core ++ the last-row binding fix
+(defeq to `garbledEvalDesc.constraints`). Every core-constraint membership lemma below threads one
+extra `mem_append_left` (the core is now the LEFT of `core ++ garbledLastRowFix`). -/
 private def CONSTRAINTS : List VmConstraint2 :=
   commitmentPins ++ outputHashPins ++ decryptionGates ++ selectorBinaryGates
     ++ [.base (.gate exclusivityBody)] ++ chainingGates ++ [gateIndexDeltaBoundary]
+    ++ garbledLastRowFix
 
 theorem decGate_mem (j : Nat) (hj : j < 8) :
     VmConstraint2.base (.gate (decBody j)) ∈ garbledEvalDesc.constraints := by
   show _ ∈ CONSTRAINTS
   exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
-    (List.mem_append_left _ (List.mem_append_right _
-      (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩)))))
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _
+      (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩))))))
 
 theorem chainGate_mem (j : Nat) (hj : j < 8) :
     VmConstraint2.windowGate ⟨chainBody j, true⟩ ∈ garbledEvalDesc.constraints := by
   show _ ∈ CONSTRAINTS
-  exact List.mem_append_left _ (List.mem_append_right _
-    (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩))
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _
+    (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩)))
 
 theorem selGate_mem (c : VmConstraint2) (hc : c ∈ selectorBinaryGates) :
     c ∈ garbledEvalDesc.constraints := by
   show c ∈ CONSTRAINTS
   exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
-    (List.mem_append_right _ hc)))
+    (List.mem_append_left _ (List.mem_append_right _ hc))))
 
 theorem excl_mem :
     VmConstraint2.base (.gate exclusivityBody) ∈ garbledEvalDesc.constraints := by
   show _ ∈ CONSTRAINTS
-  exact List.mem_append_left _ (List.mem_append_left _
-    (List.mem_append_right _ (List.mem_singleton.mpr rfl)))
+  exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+    (List.mem_append_right _ (List.mem_singleton.mpr rfl))))
 
 theorem bnd_mem :
     VmConstraint2.base (.boundary VmRow.first (.var GATE_INDEX_DELTA))
       ∈ garbledEvalDesc.constraints := by
   show _ ∈ CONSTRAINTS
-  exact List.mem_append_right _ (List.mem_singleton.mpr rfl)
+  exact List.mem_append_left _ (List.mem_append_right _ (List.mem_singleton.mpr rfl))
 
 theorem commitPin_mem (j : Nat) (hj : j < 4) :
     VmConstraint2.base (.piBinding VmRow.first (CIRCUIT_COMMITMENT + j) j)
@@ -208,15 +211,15 @@ theorem commitPin_mem (j : Nat) (hj : j < 4) :
   show _ ∈ CONSTRAINTS
   exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
     (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
-      (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩))))))
+      (List.mem_append_left _ (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩)))))))
 
 theorem outHashPin_mem (j : Nat) (hj : j < 4) :
     VmConstraint2.base (.piBinding VmRow.first (OUTPUT_LABEL_HASH + j) (4 + j))
       ∈ garbledEvalDesc.constraints := by
   show _ ∈ CONSTRAINTS
   exact List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
-    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _
-      (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩))))))
+    (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _
+      (List.mem_append_right _ (List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩)))))))
 
 /-! ## §4 — Extracting one forced constraint from `Satisfied2` on an ACTIVE (non-last) row. -/
 
@@ -396,6 +399,28 @@ theorem honestRow0_ohash (j : Nat) (hj : j < 4) :
     honestRow0 (OUTPUT_LABEL_HASH + j) = honestPub (4 + j) := by
   interval_cases j <;> decide
 
+/-- Row 1 of `t₀` is `honestRow0` too, so the last-row window reads it as the local row. -/
+theorem envAt1_loc : (envAt t₀ 1).loc = honestRow0 := rfl
+
+/-! ### Body-vanishing facts on `honestRow0` (shared by the row-0 active proof AND the last-row
+`garbledLastRowFix` boundary proof — both must vanish on the honest row). -/
+
+/-- The decryption body vanishes on the honest row (`0 = 0 − 0`, non-padding). -/
+theorem decBody_honest (j : Nat) (hj : j < 8) : (decBody j).eval honestRow0 = 0 := by
+  simp only [decBody, notPadding, EmittedExpr.eval, honestRow0_output j hj,
+    honestRow0_table j hj, honestRow0_hash j hj, honestRow0_padding]; ring
+
+/-- A boolean-selector body vanishes on the honest row when the selector reads `0` or `1`. -/
+theorem binBody_honest (c : Nat) (h : honestRow0 c = 0 ∨ honestRow0 c = 1) :
+    (binBody c).eval honestRow0 = 0 := by
+  simp only [binBody, EmittedExpr.eval]
+  rcases h with h | h <;> rw [h] <;> ring
+
+/-- The exclusivity body vanishes on the honest row (`is_and = 1`, others `0`, non-padding). -/
+theorem exclBody_honest : exclusivityBody.eval honestRow0 = 0 := by
+  simp only [exclusivityBody, notPadding, EmittedExpr.eval, honestRow0_and, honestRow0_or,
+    honestRow0_xor, honestRow0_not, honestRow0_padding]; ring
+
 /-- A base gate holds on the honest FIRST row (active) iff its body vanishes on `honestRow0`. -/
 theorem honest_gate_holds (hash : List ℤ → ℤ) (body : EmittedExpr)
     (h : body.eval honestRow0 = 0) :
@@ -419,13 +444,13 @@ theorem honest_chain_holds (hash : List ℤ → ℤ) (j : Nat)
       (0 + 1 == t₀.rows.length) := fun _ => h
 
 theorem honest_memOpsOf_nil : memOpsOf garbledEvalDesc = [] := by
-  simp [memOpsOf, garbledEvalDesc, commitmentPins, outputHashPins, decryptionGates,
-    selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
+  simp [memOpsOf, garbledEvalDesc, garbledCoreConstraints, garbledLastRowFix, commitmentPins,
+    outputHashPins, decryptionGates, selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
     List.filterMap_append, List.filterMap_map]
 
 theorem honest_mapOpsOf_nil : mapOpsOf garbledEvalDesc = [] := by
-  simp [mapOpsOf, garbledEvalDesc, commitmentPins, outputHashPins, decryptionGates,
-    selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
+  simp [mapOpsOf, garbledEvalDesc, garbledCoreConstraints, garbledLastRowFix, commitmentPins,
+    outputHashPins, decryptionGates, selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
     List.filterMap_append, List.filterMap_map]
 
 theorem honest_memLog_nil : memLog garbledEvalDesc t₀ = [] := by
@@ -448,11 +473,11 @@ theorem garbled_honest_satisfied2 (hash : List ℤ → ℤ) :
     intro i hi
     rw [show t₀.rows.length = 2 from rfl] at hi
     interval_cases i
-    · -- FIRST row (active): every constraint genuinely holds
-      simp only [garbledEvalDesc]
-      refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
+    · -- FIRST row (active): every constraint genuinely holds; the last-row fix is vacuous here
+      simp only [garbledEvalDesc, garbledCoreConstraints]
+      refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
         ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
-          ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
+          ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
       · -- commitmentPins
         intro c hc; simp only [commitmentPins, List.mem_map, List.mem_range] at hc
         obtain ⟨j, hj, rfl⟩ := hc
@@ -499,11 +524,22 @@ theorem garbled_honest_satisfied2 (hash : List ℤ → ℤ) :
         intro c hc; simp only [List.mem_singleton] at hc; subst hc
         exact honest_boundary_holds hash (.var GATE_INDEX_DELTA) (by
           simp only [EmittedExpr.eval]; exact honestRow0_gid)
-    · -- LAST row: every constraint is vacuous (gates → True, pins/boundary/window → false premise)
-      simp only [garbledEvalDesc]
-      refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
+      · -- garbledLastRowFix: last-row boundaries, VACUOUS on the (non-last) FIRST row (isLast = false)
+        simp only [garbledLastRowFix]
+        refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩
+        · intro c hc; simp only [List.mem_map, List.mem_range] at hc
+          obtain ⟨j, _, rfl⟩ := hc
+          exact fun hcon => absurd hcon (by decide)
+        · intro c hc; simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+          rcases hc with rfl | rfl | rfl | rfl | rfl | rfl <;>
+            exact fun hcon => absurd hcon (by decide)
+        · intro c hc; simp only [List.mem_singleton] at hc; subst hc
+          exact fun hcon => absurd hcon (by decide)
+    · -- LAST row: the transition gates/pins/window are vacuous; the last-row FIX bodies genuinely fire
+      simp only [garbledEvalDesc, garbledCoreConstraints]
+      refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
         ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
-          ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
+          ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
       · intro c hc; simp only [commitmentPins, List.mem_map, List.mem_range] at hc
         obtain ⟨j, _, rfl⟩ := hc
         exact fun hcon => absurd hcon (by decide)
@@ -523,6 +559,23 @@ theorem garbled_honest_satisfied2 (hash : List ℤ → ℤ) :
         exact fun hcon => absurd hcon (by decide)
       · intro c hc; simp only [List.mem_singleton] at hc; subst hc
         exact fun hcon => absurd hcon (by decide)
+      · -- garbledLastRowFix: on the LAST row these boundaries FIRE (isLast = true); bodies vanish on
+        -- honestRow0 (row 1 = honestRow0), exactly as they do on the active first row.
+        simp only [garbledLastRowFix]
+        refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩
+        · intro c hc; simp only [List.mem_map, List.mem_range] at hc
+          obtain ⟨j, hj, rfl⟩ := hc
+          exact fun _ => by rw [envAt1_loc]; exact decBody_honest j hj
+        · intro c hc; simp only [List.mem_cons, List.not_mem_nil, or_false] at hc
+          rcases hc with rfl | rfl | rfl | rfl | rfl | rfl
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inr honestRow0_and)
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inl honestRow0_or)
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inl honestRow0_xor)
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inl honestRow0_not)
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inr honestRow0_chain)
+          · exact fun _ => by rw [envAt1_loc]; exact binBody_honest _ (Or.inl honestRow0_padding)
+        · intro c hc; simp only [List.mem_singleton] at hc; subst hc
+          exact fun _ => by rw [envAt1_loc]; exact exclBody_honest
   · -- rowHashes (hashSites = [])
     intro i _; exact True.intro
   · -- rowRanges (ranges = [])
