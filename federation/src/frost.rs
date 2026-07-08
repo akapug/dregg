@@ -150,6 +150,18 @@ pub enum QuorumScheme<'a> {
         /// Minimum count of distinct, valid ML-DSA signatures required.
         threshold: usize,
     },
+    /// The LIVE-consensus hybrid path (`HybridPq`): the classical half is the
+    /// EXISTING per-member ed25519 votes quorum (no FROST, no DKG), the PQ
+    /// half is per-member ML-DSA-65 signatures over the same vote message.
+    /// The opaque bytes carry a [`crate::types::HybridQuorumCertificate`].
+    HybridVotes {
+        /// The committee's ed25519 member keys, member `i` at position `i`
+        /// (the same table the votes quorum verifies against today).
+        members: &'a [PublicKey],
+        /// One ML-DSA-65 public key per committee member, member `i` at
+        /// position `i` (the post-quantum half).
+        ml_dsa_pubkeys: &'a [MlDsaPublicKey],
+    },
 }
 
 impl QuorumScheme<'_> {
@@ -175,6 +187,23 @@ impl QuorumScheme<'_> {
             } => match HybridQC::from_bytes(qc_bytes) {
                 Some(qc) => {
                     verify_hybrid_quorum(group_key, ml_dsa_pubkeys, message, &qc, *threshold)
+                }
+                None => false,
+            },
+            QuorumScheme::HybridVotes {
+                members,
+                ml_dsa_pubkeys,
+            } => match crate::types::HybridQuorumCertificate::from_bytes(qc_bytes) {
+                Some(hqc) => {
+                    // Bind the certificate to the caller's expected message:
+                    // the vote message the QC's own coordinates derive must be
+                    // exactly the message being attested.
+                    let derived = crate::types::QuorumCertificate::vote_message(
+                        &hqc.qc.block_hash,
+                        hqc.qc.height,
+                        hqc.qc.view,
+                    );
+                    derived == message && hqc.verify_with_keys(members, ml_dsa_pubkeys)
                 }
                 None => false,
             },
@@ -370,6 +399,64 @@ pub const HYBRID_PQ_CTX: &[u8] = b"dregg-hybrid-qc-v1";
 #[derive(Clone, PartialEq, Eq)]
 pub struct MlDsaPublicKey(pub [u8; ml_dsa_65::PK_LEN]);
 
+impl std::fmt::Debug for MlDsaPublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 1952 bytes of key material is noise in a debug dump; show a prefix.
+        write!(f, "MlDsaPublicKey({}..)", hex::encode(&self.0[..8]))
+    }
+}
+
+impl MlDsaPublicKey {
+    /// Verify an ML-DSA-65 signature over `message` under [`HYBRID_PQ_CTX`]
+    /// (the domain-separation context every hybrid-quorum signature binds).
+    ///
+    /// `false` on wrong-length signature bytes or an undecodable key.
+    pub fn verify(&self, message: &[u8], sig_bytes: &[u8]) -> bool {
+        let Ok(sig) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig_bytes) else {
+            return false;
+        };
+        let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(self.0) else {
+            return false;
+        };
+        vk.verify(message, &sig, HYBRID_PQ_CTX)
+    }
+}
+
+/// An ML-DSA-65 signing key held by one committee member, for producing the
+/// PQ half of a hybrid quorum. Wraps the FIPS 204 private key; every
+/// signature it produces is bound to [`HYBRID_PQ_CTX`].
+#[derive(Clone)]
+pub struct MlDsaSigningKey(ml_dsa_65::PrivateKey);
+
+impl std::fmt::Debug for MlDsaSigningKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MlDsaSigningKey(..)")
+    }
+}
+
+impl MlDsaSigningKey {
+    /// Generate a fresh keypair from OS entropy (FIPS 204 `ML-DSA.KeyGen`).
+    pub fn generate() -> Option<(MlDsaPublicKey, Self)> {
+        let (pk, sk) = ml_dsa_65::try_keygen().ok()?;
+        Some((MlDsaPublicKey(pk.into_bytes()), Self(sk)))
+    }
+
+    /// Deterministic keypair from a 32-byte seed `ξ` (`keygen_from_seed`) —
+    /// for reproducible fixtures, exactly like [`HybridTestDealer::deal`].
+    pub fn from_seed(xi: &[u8; 32]) -> (MlDsaPublicKey, Self) {
+        let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(xi);
+        (MlDsaPublicKey(pk.into_bytes()), Self(sk))
+    }
+
+    /// Sign `message` under [`HYBRID_PQ_CTX`] (hedged from OS entropy).
+    pub fn sign(&self, message: &[u8]) -> Option<Vec<u8>> {
+        self.0
+            .try_sign(message, HYBRID_PQ_CTX)
+            .ok()
+            .map(|s| s.to_vec())
+    }
+}
+
 /// A HYBRID quorum certificate: the classical FROST aggregate PLUS one
 /// ML-DSA-65 signature per participating signer.
 ///
@@ -453,33 +540,47 @@ pub fn verify_hybrid_quorum(
     qc: &HybridQC,
     threshold: usize,
 ) -> bool {
-    if threshold == 0 {
-        return false;
-    }
     // Classical half.
     if !verify_frost_quorum(group_key, message, &qc.frost) {
         return false;
     }
     // Post-quantum half.
+    verify_pq_quorum_half(ml_dsa_pubkeys, message, &qc.pq_sigs, threshold)
+}
+
+/// Verify the POST-QUANTUM half of a hybrid quorum on its own: at least
+/// `threshold` entries, EVERY entry naming a distinct in-range committee
+/// position, and EVERY entry's signature ML-DSA-65-verifying over `message`
+/// (with [`HYBRID_PQ_CTX`]) against that position's key.
+///
+/// This is the exact PQ leg of [`verify_hybrid_quorum`], factored so BOTH
+/// classical carriers can share it: the FROST aggregate ([`HybridQC`]) and
+/// the ed25519 per-member votes quorum
+/// ([`crate::types::HybridQuorumCertificate`], the live-consensus wiring).
+/// Same strictness: any invalid, duplicate, or out-of-range entry rejects
+/// the WHOLE set, and `threshold == 0` (a vacuous PQ half) is refused.
+pub fn verify_pq_quorum_half(
+    ml_dsa_pubkeys: &[MlDsaPublicKey],
+    message: &[u8],
+    pq_sigs: &[(usize, Vec<u8>)],
+    threshold: usize,
+) -> bool {
+    if threshold == 0 {
+        return false;
+    }
     let mut seen = std::collections::HashSet::new();
-    for (index, sig_bytes) in &qc.pq_sigs {
+    for (index, sig_bytes) in pq_sigs {
         let Some(pk_bytes) = ml_dsa_pubkeys.get(*index) else {
             return false;
         };
         if !seen.insert(*index) {
             return false;
         }
-        let Ok(sig) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig_bytes.as_slice()) else {
-            return false;
-        };
-        let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(pk_bytes.0) else {
-            return false;
-        };
-        if !vk.verify(message, &sig, HYBRID_PQ_CTX) {
+        if !pk_bytes.verify(message, sig_bytes) {
             return false;
         }
     }
-    qc.pq_sigs.len() >= threshold
+    pq_sigs.len() >= threshold
 }
 
 /// Trusted-dealer keygen for the HYBRID committee: a [`FrostTestDealer`]

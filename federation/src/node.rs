@@ -37,6 +37,18 @@ pub struct ConsensusConfig {
     pub members: Vec<PublicKey>,
     /// Whether to require authentication (signature verification).
     pub require_authentication: bool,
+    /// OPTIONAL per-member ML-DSA-65 public keys (member `i` at position `i`,
+    /// aligned with `members`) — the post-quantum half of the `HybridPq`
+    /// quorum. DEFAULT EMPTY: the hybrid is inactive and the consensus path
+    /// is exactly today's ed25519 (+BLS) path.
+    pub ml_dsa_members: Vec<crate::frost::MlDsaPublicKey>,
+    /// The `HybridPq` flag — DEFAULT OFF. When ON, every vote must carry an
+    /// ML-DSA-65 signature alongside its ed25519 signature and finalization
+    /// yields a [`HybridQuorumCertificate`]. Flipping this on is a HUMAN
+    /// deployment decision (requires `ml_dsa_members` fully populated);
+    /// FAIL-CLOSED: ON with an incomplete key table refuses to finalize
+    /// rather than silently degrading to classical-only.
+    pub hybrid_pq: bool,
 }
 
 impl ConsensusConfig {
@@ -52,6 +64,8 @@ impl ConsensusConfig {
             epoch: 0,
             members: Vec::new(),
             require_authentication: true,
+            ml_dsa_members: Vec::new(),
+            hybrid_pq: false,
         }
     }
 
@@ -67,10 +81,36 @@ impl ConsensusConfig {
             epoch: 0,
             members,
             require_authentication: true,
+            ml_dsa_members: Vec::new(),
+            hybrid_pq: false,
         }
     }
 
+    /// Create an initial (genesis) configuration with the `HybridPq` quorum
+    /// ENABLED: an explicit ed25519 member set plus one ML-DSA-65 public key
+    /// per member (position-aligned). `None` if the key tables misalign —
+    /// a hybrid committee with a missing PQ key is a misconfiguration, not a
+    /// committee.
+    pub fn genesis_hybrid(
+        members: Vec<PublicKey>,
+        ml_dsa_members: Vec<crate::frost::MlDsaPublicKey>,
+    ) -> Option<Self> {
+        if members.is_empty() || ml_dsa_members.len() != members.len() {
+            return None;
+        }
+        let mut config = Self::genesis(members);
+        config.ml_dsa_members = ml_dsa_members;
+        config.hybrid_pq = true;
+        Some(config)
+    }
+
     /// Create the next epoch configuration with a new member set.
+    ///
+    /// Carries the `HybridPq` flag forward but CANNOT carry PQ keys for a
+    /// changed member set — when `hybrid_pq` is ON, use
+    /// [`Self::next_epoch_hybrid`] (this method clears `ml_dsa_members`,
+    /// which under the fail-closed rule refuses hybrid finalization until
+    /// keys are supplied — never a silent classical downgrade).
     pub fn next_epoch(&self, new_members: Vec<PublicKey>) -> Self {
         let num_nodes = new_members.len();
         let max_faults = crate::fault_tolerance(num_nodes);
@@ -82,7 +122,34 @@ impl ConsensusConfig {
             epoch: self.epoch + 1,
             members: new_members,
             require_authentication: self.require_authentication,
+            ml_dsa_members: Vec::new(),
+            hybrid_pq: self.hybrid_pq,
         }
+    }
+
+    /// Create the next epoch configuration with a new member set AND its
+    /// position-aligned ML-DSA-65 key table (the hybrid epoch transition).
+    pub fn next_epoch_hybrid(
+        &self,
+        new_members: Vec<PublicKey>,
+        new_ml_dsa_members: Vec<crate::frost::MlDsaPublicKey>,
+    ) -> Option<Self> {
+        if new_members.is_empty() || new_ml_dsa_members.len() != new_members.len() {
+            return None;
+        }
+        let mut config = self.next_epoch(new_members);
+        config.ml_dsa_members = new_ml_dsa_members;
+        Some(config)
+    }
+
+    /// Whether the `HybridPq` quorum is ACTIVE: the flag is ON and every
+    /// member has a position-aligned ML-DSA-65 key. When the flag is ON but
+    /// this is false (misconfiguration), the consensus path FAILS CLOSED
+    /// (refuses votes/finalization) rather than degrading to classical-only.
+    pub fn hybrid_pq_active(&self) -> bool {
+        self.hybrid_pq
+            && !self.members.is_empty()
+            && self.ml_dsa_members.len() == self.members.len()
     }
 
     /// Determine the leader for a given view.
@@ -209,6 +276,12 @@ pub struct ConsensusState {
     pub pending_reconfig: Option<ReconfigurationVotes>,
     pub local_state_root: [u8; 32],
     pub pending_state_roots: Option<PendingStateRoots>,
+    /// This member's ML-DSA-65 signing key — the PQ half of `HybridPq`.
+    /// `None` (the default) on every non-hybrid committee.
+    pub ml_dsa_signing_key: Option<crate::frost::MlDsaSigningKey>,
+    /// PQ signatures collected alongside `collected_votes` (same voters, same
+    /// vote message). Always empty when `HybridPq` is OFF.
+    pub collected_pq_sigs: Vec<(usize, Vec<u8>)>,
 }
 
 impl ConsensusState {
@@ -234,7 +307,15 @@ impl ConsensusState {
             pending_reconfig: None,
             local_state_root: [0u8; 32],
             pending_state_roots: None,
+            ml_dsa_signing_key: None,
+            collected_pq_sigs: Vec::new(),
         }
+    }
+
+    /// Attach this member's ML-DSA-65 signing key (the `HybridPq` PQ half).
+    pub fn with_ml_dsa_key(mut self, key: crate::frost::MlDsaSigningKey) -> Self {
+        self.ml_dsa_signing_key = Some(key);
+        self
     }
 
     /// Set the local state root for divergence detection.
@@ -391,6 +472,65 @@ impl ConsensusState {
         None
     }
 
+    /// HYBRID (`HybridPq` ON) voting: validate and vote exactly as
+    /// [`Self::vote_on_proposal`] (the ed25519 half is byte-identical), then
+    /// ML-DSA-65-sign the SAME canonical vote message.
+    ///
+    /// FAIL-CLOSED: refuses (`None`) unless the config's hybrid quorum is
+    /// ACTIVE and this member holds its PQ signing key — a hybrid committee
+    /// never emits a classical-only vote.
+    pub fn vote_on_proposal_hybrid(&mut self, block: &RevocationBlock) -> Option<HybridVote> {
+        if !self.config.hybrid_pq_active() {
+            return None;
+        }
+        // Take a reference first so a keyless member refuses BEFORE
+        // `vote_on_proposal` consumes its has_voted budget.
+        if self.ml_dsa_signing_key.is_none() {
+            return None;
+        }
+        let vote = self.vote_on_proposal(block)?;
+        let vote_message =
+            QuorumCertificate::vote_message(&vote.block_hash, vote.height, vote.view);
+        let pq_signature = self
+            .ml_dsa_signing_key
+            .as_ref()
+            .and_then(|k| k.sign(&vote_message))?;
+        Some(HybridVote { vote, pq_signature })
+    }
+
+    /// HYBRID vote collection: verify the ML-DSA-65 half against the
+    /// committee's PQ key table BEFORE delegating the ed25519 half to the
+    /// unchanged [`Self::collect_vote`]. Returns a
+    /// [`HybridQuorumCertificate`] once the (classical) threshold is reached.
+    ///
+    /// FAIL-CLOSED: with `HybridPq` ON but the key table incomplete, every
+    /// vote is refused (consensus halts loudly) — never a silent classical
+    /// downgrade.
+    pub fn collect_hybrid_vote(&mut self, hv: HybridVote) -> Option<HybridQuorumCertificate> {
+        if !self.config.hybrid_pq_active() {
+            return None;
+        }
+        let vote_message =
+            QuorumCertificate::vote_message(&hv.vote.block_hash, hv.vote.height, hv.vote.view);
+        let Some(pq_key) = self.config.ml_dsa_members.get(hv.vote.voter) else {
+            return None;
+        };
+        if !pq_key.verify(&vote_message, &hv.pq_signature) {
+            return None;
+        }
+        // The classical half: today's collection path, unchanged.
+        let before = self.collected_votes.len();
+        let voter = hv.vote.voter;
+        let qc = self.collect_vote(hv.vote);
+        if self.collected_votes.len() > before {
+            self.collected_pq_sigs.push((voter, hv.pq_signature));
+        }
+        qc.map(|qc| HybridQuorumCertificate {
+            qc,
+            pq_sigs: self.collected_pq_sigs.clone(),
+        })
+    }
+
     /// Finalize a block with its quorum certificate.
     pub fn finalize_block(&mut self, block: RevocationBlock, qc: QuorumCertificate) {
         self.last_finalized_hash = block.block_hash;
@@ -398,6 +538,7 @@ impl ConsensusState {
         self.current_height += 1;
         self.current_view += 1;
         self.collected_votes.clear();
+        self.collected_pq_sigs.clear();
         self.current_proposal = None;
         self.has_voted = false;
     }
@@ -406,6 +547,7 @@ impl ConsensusState {
     pub fn advance_view(&mut self) {
         self.current_view += 1;
         self.collected_votes.clear();
+        self.collected_pq_sigs.clear();
         self.current_proposal = None;
         self.has_voted = false;
     }
@@ -731,6 +873,134 @@ impl ConsensusOrchestrator {
 
         Some((proposal, qc))
     }
+
+    /// Run a single HYBRID (`HybridPq` ON) consensus round: propose, vote
+    /// (ed25519 + ML-DSA-65 over the same message), finalize.
+    ///
+    /// A parallel of [`Self::run_round`] — that default path is left
+    /// untouched; this one is only reachable when the config's hybrid quorum
+    /// is active (FAIL-CLOSED otherwise: returns `None` and logs).
+    pub fn run_round_hybrid(
+        &mut self,
+        states: &mut [ConsensusState],
+    ) -> Option<(RevocationBlock, HybridQuorumCertificate)> {
+        if !self.config.hybrid_pq_active() {
+            tracing::error!(
+                hybrid_pq = self.config.hybrid_pq,
+                members = self.config.members.len(),
+                ml_dsa_members = self.config.ml_dsa_members.len(),
+                "HybridPq misconfigured (flag/keys mismatch): refusing to run a round (fail-closed)"
+            );
+            return None;
+        }
+
+        let view = states[0].current_view;
+        let leader_id = self.config.leader_for_view(view);
+
+        if !states[leader_id].is_online {
+            for state in states.iter_mut() {
+                if state.is_online {
+                    state.advance_view();
+                }
+            }
+            let new_view = states
+                .iter()
+                .find(|s| s.is_online)
+                .map(|s| s.current_view)?;
+            let new_leader = self.config.leader_for_view(new_view);
+            if !states[new_leader].is_online {
+                for state in states.iter_mut() {
+                    if state.is_online {
+                        state.advance_view();
+                    }
+                }
+            }
+        }
+
+        let current_view = states.iter().find(|s| s.is_online)?.current_view;
+        let leader_id = self.config.leader_for_view(current_view);
+
+        if !states[leader_id].is_online {
+            return None;
+        }
+
+        let mut all_pending: Vec<RevocationEvent> = Vec::new();
+        for state in states.iter_mut() {
+            if state.is_online {
+                all_pending.extend(state.pending_events.drain(..));
+            }
+        }
+        states[leader_id].pending_events = all_pending;
+
+        let proposal = states[leader_id].create_proposal()?;
+
+        let leader_vote = states[leader_id].vote_on_proposal_hybrid(&proposal)?;
+        states[leader_id].collect_hybrid_vote(leader_vote);
+
+        let mut votes = Vec::new();
+        for state in states.iter_mut() {
+            if state.node_id == leader_id {
+                continue;
+            }
+            if let Some(vote) = state.vote_on_proposal_hybrid(&proposal) {
+                votes.push(vote);
+            }
+        }
+
+        let mut hqc = None;
+        for vote in votes {
+            if let Some(certificate) = states[leader_id].collect_hybrid_vote(vote) {
+                hqc = Some(certificate);
+                break;
+            }
+        }
+
+        let mut hqc = hqc?;
+
+        if let Some(ref committee) = self.committee {
+            let message =
+                QuorumCertificate::vote_message(&hqc.qc.block_hash, hqc.qc.height, hqc.qc.view);
+            let voter_ids: Vec<usize> = hqc.qc.votes.iter().map(|(id, _)| *id).collect();
+            let mut bls_shares = Vec::new();
+            for voter_id in &voter_ids {
+                if let Some(member_secret) = self.member_secrets.get(*voter_id) {
+                    let share = committee.sign_share(member_secret, &message);
+                    bls_shares.push((member_secret.index, share));
+                }
+            }
+
+            if bls_shares.len() >= committee.threshold_value as usize
+                && let Ok(threshold_qc) = committee.aggregate(&bls_shares, &message)
+            {
+                hqc.qc.aggregate_qc = Some(threshold_qc);
+            }
+        }
+
+        for state in states.iter_mut() {
+            if state.is_online {
+                state.finalize_block(proposal.clone(), hqc.qc.clone());
+            }
+        }
+
+        let finalized_height = proposal.height;
+        let at_epoch_boundary = self.epoch_length == 0
+            || crate::epoch::is_epoch_boundary(finalized_height, self.epoch_length);
+
+        if self.reconfig_has_quorum()
+            && at_epoch_boundary
+            && let Some(new_config) = self.apply_pending_reconfiguration()
+        {
+            for state in states.iter_mut() {
+                if state.is_online {
+                    state.config = new_config.clone();
+                    state.epoch = new_config.epoch;
+                    state.pending_reconfig = None;
+                }
+            }
+        }
+
+        Some((proposal, hqc))
+    }
 }
 
 // =============================================================================
@@ -915,6 +1185,9 @@ pub struct Federation {
     pub config: ConsensusConfig,
     /// History of all finalized blocks.
     pub finalized_history: Vec<(RevocationBlock, QuorumCertificate)>,
+    /// The most recent hybrid quorum certificate (`HybridPq` ON only; always
+    /// `None` on a default committee).
+    pub last_hybrid_qc: Option<HybridQuorumCertificate>,
 }
 
 impl Federation {
@@ -944,7 +1217,51 @@ impl Federation {
             orchestrator,
             config,
             finalized_history: Vec::new(),
+            last_hybrid_qc: None,
         }
+    }
+
+    /// Create a federation with the `HybridPq` quorum ENABLED: an explicit
+    /// ed25519 member set (so vote/proposer signatures are verified — never
+    /// legacy count-only mode) plus a freshly generated ML-DSA-65 keypair per
+    /// member. `None` if OS keygen fails.
+    pub fn new_hybrid_pq(names: &[&str]) -> Option<Self> {
+        let nodes: Vec<FederationNode> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| FederationNode::new(name, i))
+            .collect();
+        let members: Vec<PublicKey> = nodes.iter().map(|n| n.identity.public_key).collect();
+
+        let mut ml_dsa_members = Vec::with_capacity(nodes.len());
+        let mut ml_dsa_keys = Vec::with_capacity(nodes.len());
+        for _ in &nodes {
+            let (pk, sk) = crate::frost::MlDsaSigningKey::generate()?;
+            ml_dsa_members.push(pk);
+            ml_dsa_keys.push(sk);
+        }
+
+        let config = ConsensusConfig::genesis_hybrid(members, ml_dsa_members)?;
+
+        let consensus_states: Vec<ConsensusState> = nodes
+            .iter()
+            .zip(ml_dsa_keys)
+            .map(|(node, ml_dsa_key)| {
+                ConsensusState::new(node.identity.id, node.signing_key.clone(), config.clone())
+                    .with_ml_dsa_key(ml_dsa_key)
+            })
+            .collect();
+
+        let orchestrator = ConsensusOrchestrator::new(config.clone());
+
+        Some(Self {
+            nodes,
+            consensus_states,
+            orchestrator,
+            config,
+            finalized_history: Vec::new(),
+            last_hybrid_qc: None,
+        })
     }
 
     /// Get the node identities for QC signature resolution.
@@ -1004,6 +1321,15 @@ impl Federation {
     /// Run a consensus round and apply the result to all nodes.
     /// Returns the finalized block and QC, or None if consensus failed.
     pub fn run_consensus_round(&mut self) -> Option<(RevocationBlock, QuorumCertificate)> {
+        // The `HybridPq` gate: OFF (the default) leaves everything below this
+        // line byte-identical to today. ON routes through the hybrid round
+        // (each vote carries an ML-DSA-65 signature; the full hybrid QC lands
+        // in `self.last_hybrid_qc`), returning its classical projection.
+        if self.config.hybrid_pq {
+            return self
+                .run_consensus_round_hybrid()
+                .map(|(block, hqc)| (block, hqc.qc));
+        }
         // Sync online status and local state roots for divergence detection.
         for (i, node) in self.nodes.iter_mut().enumerate() {
             if i < self.consensus_states.len() {
@@ -1063,6 +1389,64 @@ impl Federation {
         Some((block, qc))
     }
 
+    /// Run a HYBRID (`HybridPq` ON) consensus round: the parallel of
+    /// [`Self::run_consensus_round`] whose finality object is a
+    /// [`HybridQuorumCertificate`] (ed25519 votes quorum AND per-member
+    /// ML-DSA-65 signatures over the same vote message). Also stored in
+    /// `self.last_hybrid_qc`. FAIL-CLOSED on a misconfigured hybrid
+    /// committee (flag ON, key table incomplete): returns `None`.
+    pub fn run_consensus_round_hybrid(
+        &mut self,
+    ) -> Option<(RevocationBlock, HybridQuorumCertificate)> {
+        // Sync online status and local state roots (as the default round).
+        for (i, node) in self.nodes.iter_mut().enumerate() {
+            if i < self.consensus_states.len() {
+                self.consensus_states[i].set_online(node.is_online);
+                let root = node.compute_state_root();
+                self.consensus_states[i].set_local_state_root(root);
+                self.consensus_states[i].pending_state_roots = Some(PendingStateRoots {
+                    pre_state_root: root,
+                    post_state_root: [0u8; 32],
+                    note_tree_root: [0u8; 32],
+                    nullifier_set_root: [0u8; 32],
+                });
+            }
+        }
+
+        let (block, hqc) = self
+            .orchestrator
+            .run_round_hybrid(&mut self.consensus_states)?;
+
+        for node in &mut self.nodes {
+            if node.is_online {
+                node.apply_finalized_block(&block);
+            }
+        }
+
+        let timestamp = current_timestamp();
+        let shared_merkle_root: [u8; 32] = self
+            .nodes
+            .iter_mut()
+            .find(|n| n.is_online)
+            .map(|n| n.compute_state_root())
+            .unwrap_or([0u8; 32]);
+        let quorum_signatures =
+            self.collect_attested_root_signatures(&shared_merkle_root, hqc.qc.height, timestamp);
+        for node in &mut self.nodes {
+            if node.is_online {
+                node.update_attested_root(&hqc.qc, quorum_signatures.clone(), timestamp);
+            }
+        }
+
+        if self.config.epoch != self.orchestrator.config.epoch {
+            self.config = self.orchestrator.config.clone();
+        }
+
+        self.finalized_history.push((block.clone(), hqc.qc.clone()));
+        self.last_hybrid_qc = Some(hqc.clone());
+        Some((block, hqc))
+    }
+
     /// Run a consensus round with state root commitments.
     ///
     /// This variant computes pre/post state roots for the proposing node,
@@ -1070,6 +1454,14 @@ impl Federation {
     pub fn run_consensus_round_with_state_roots(
         &mut self,
     ) -> Option<(RevocationBlock, QuorumCertificate, LightClientProof)> {
+        // The `HybridPq` gate (see `run_consensus_round`): OFF leaves this
+        // path untouched; ON routes through the hybrid round.
+        if self.config.hybrid_pq {
+            return self.run_consensus_round().map(|(b, qc)| {
+                let proof = LightClientProof::from_block(&b, &qc);
+                (b, qc, proof)
+            });
+        }
         // Sync online status and local state roots for divergence detection.
         for (i, node) in self.nodes.iter_mut().enumerate() {
             if i < self.consensus_states.len() {
