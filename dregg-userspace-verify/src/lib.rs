@@ -414,22 +414,29 @@ pub fn cap_attenuates(granted: &CapabilityRef, parent: &CapabilityRef) -> bool {
 pub fn check_no_amplification(forest: &CallForest) -> Verdict {
     let mut findings = Vec::new();
 
-    // Recurse carrying the set of caps the chain has granted into each cell
-    // scope so far (cell -> caps granted to it by ancestors in this forest).
+    // Recurse carrying a PERSISTENT (structurally-shared) view of the caps the
+    // chain has granted into each cell scope so far — the same `GrantedScope`
+    // layer chain `fused_walk` uses. A node that grants nothing reuses the
+    // parent's scope by reference (no clone); a node that grants layers a small
+    // overlay in front, so only the grants themselves are copied — never the
+    // inherited bulk. `caps_for` visits ancestor grants in the same order the
+    // old flattened `granted_to` map did, so every `.iter().any(..)` predicate
+    // over them yields the byte-identical verdict.
     fn rec(
         path: &mut Vec<usize>,
         node: &CallTree,
-        granted_to: &BTreeMap<dregg_types::CellId, Vec<CapabilityRef>>,
+        scope: &GrantedScope<'_>,
         findings: &mut Vec<Finding>,
     ) {
-        // Caps this node grants, indexed by recipient, to pass to children.
-        let mut child_granted = granted_to.clone();
+        // Caps this node grants, indexed by recipient, to layer for children.
+        let mut additions: BTreeMap<dregg_types::CellId, Vec<CapabilityRef>> = BTreeMap::new();
 
         for (ei, eff) in node.action.effects.iter().enumerate() {
             if let Effect::GrantCapability { from, to, cap } = eff {
                 // Does the granting cell `from` itself hold an in-forest cap
                 // covering `cap`'s target? If so, the grant must attenuate it.
-                if let Some(parent_caps) = granted_to.get(from) {
+                let parent_caps = scope.caps_for(from);
+                if !parent_caps.is_empty() {
                     let covers_target = parent_caps.iter().any(|p| p.target == cap.target);
                     if covers_target {
                         let attenuates = parent_caps.iter().any(|p| cap_attenuates(cap, p));
@@ -456,22 +463,36 @@ pub fn check_no_amplification(forest: &CallForest) -> Verdict {
                     // dynamic (live c-list) question; not flagged. boundary.
                 }
                 // Record the grant so descendants under `to` inherit it.
-                child_granted.entry(*to).or_default().push(cap.clone());
+                additions.entry(*to).or_default().push(cap.clone());
             }
         }
 
-        for (i, child) in node.children.iter().enumerate() {
-            path.push(i);
-            rec(path, child, &child_granted, findings);
-            path.pop();
+        // If this node granted nothing, children inherit the parent scope by
+        // reference (no clone); otherwise layer the additions in front.
+        if additions.is_empty() {
+            for (i, child) in node.children.iter().enumerate() {
+                path.push(i);
+                rec(path, child, scope, findings);
+                path.pop();
+            }
+        } else {
+            let child_scope = GrantedScope::Layer {
+                parent: scope,
+                additions,
+            };
+            for (i, child) in node.children.iter().enumerate() {
+                path.push(i);
+                rec(path, child, &child_scope, findings);
+                path.pop();
+            }
         }
     }
 
     let mut path = Vec::new();
-    let empty = BTreeMap::new();
+    let root_scope = GrantedScope::Root;
     for (i, root) in forest.roots.iter().enumerate() {
         path.push(i);
-        rec(&mut path, root, &empty, &mut findings);
+        rec(&mut path, root, &root_scope, &mut findings);
         path.pop();
     }
     Verdict::from_findings(findings)
