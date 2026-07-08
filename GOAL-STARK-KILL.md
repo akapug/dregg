@@ -295,3 +295,26 @@ is a SYSTEMATIC TRAP. Standing fix: every Rung-2 proof must construct the height
 witness and prove it UNSAT; consider a Lean lint flagging any semantic `.gate` without a last-row
 counterpart. The consumer flips REMAIN GATED on their family's descriptor being FIXED (not just the
 earlier audit — a fixed descriptor).
+
+## ⚑ BUGFIX HARVEST + THE OOM LESSON (2026-07-08)
+⚠ CAUSE OF DEATH: the 10-lane fix swarm ran ~10 concurrent `lake build`s → memory exploded →
+HARD REBOOT (killed both the fix swarm + the final-flips workflow). STANDING RULE: NO concurrent
+Lean-building swarms. Lean work is SEQUENTIAL main-loop, LEAN_NUM_THREADS capped. (The Rust flip
+swarms are fine; it is Lean/lake concurrency that OOMs.)
+HARVESTED (on-disk edits survived the reboot; verified sequentially, memory-capped):
+- ✅ COMMITTED 3/10 (afb97de45), build-green + axiom-clean + real ¬Satisfied2 forge-reject:
+  AdjacencyMembership (the REGRESSION — idx-step now every-row; fTrace/cTraceBad reject),
+  NonRevocation (SIB1 bound; both poles prefix_carriers_admitted_forgery→fixed_forbids_the_forgery),
+  NoteSpendingLeaf (merkle chain bound; broken_chain/wrong_root reject).
+- ⚠ HELD 7/10 (on-disk, UNCOMMITTED, need sequential finishing — NOT a swarm):
+  · GarbledEval — has sorryAx (faked-green in garbled_lastRowFix_load_bearing); discharge the sorry.
+  · Derivation — NOTHING on disk (lane died early); redo from the audit dossier (bodyHash cols 1..8 free).
+  · MerkleMembership — fix present, THIN regression (CUR1 height-1 hole); complete the forge-reject proof.
+  · PredicatesRelationalCompound — fix present, thin regression (and_intermediate free); complete.
+  · Fold — fix present (REMOVAL_COUNT_PLUS_ONE free); build-verify + complete regression.
+  · Presentation — fix present, NO regression (NOT_AFTER free); author the forge-reject.
+  · CommittedThreshold — fix present, thin (FACT_COMMITMENT tautological pin); complete.
+  Audit dossiers: /private/tmp/.../scratchpad/bugfix-seeds.json. Both swarms resumable by runId but
+  DO NOT resume as concurrent Lean swarms — finish sequentially.
+- final-flips (wf_0438144d-602) also OOM-died with consumer-crate edits on disk (uncommitted, GATED
+  on the descriptors being fixed — do not commit until the 7 held fixes land).
