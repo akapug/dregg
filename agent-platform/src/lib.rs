@@ -301,6 +301,15 @@ pub struct AgentPlatform {
     /// in-process — the external node runs full multi-node blocklace consensus). See
     /// [`node_url`](AgentPlatform::node_url).
     node_url: Option<String>,
+    /// **ROUTE (ii) — the HOST executor signing seed.** When `Some`, every grain
+    /// this platform drives through the served / minted path
+    /// ([`drive_serving`](AgentPlatform::drive_serving)) mints turns onto a
+    /// [`node::NodeMinter`] opened under this seed, so every committed grain-turn
+    /// receipt is Ed25519-signed over `canonical_executor_signed_message` — FORGE-
+    /// ADMISSIBLE against [`executor_pubkey`](AgentPlatform::executor_pubkey) (the
+    /// key an auditor pins in `trusted_executor_keys`). `None` (the default) leaves
+    /// grain receipts UNSIGNED (`executor_signature == None`), byte-unchanged.
+    executor_signing_seed: Option<[u8; 32]>,
 }
 
 /// Why an agent-platform operation was refused.
@@ -400,7 +409,29 @@ impl AgentPlatform {
             tenants: Mutex::new(HashMap::new()),
             clock: std::sync::atomic::AtomicI64::new(0),
             node_url: None,
+            executor_signing_seed: None,
         }
+    }
+
+    /// **ROUTE (ii) — install the HOST executor signing seed on this platform**
+    /// (builder form). Every grain subsequently driven through the served / minted
+    /// path signs its committed grain-turn receipts under this seed, so a grain turn
+    /// is forge-admissible (a `RequiredCheck::CommittedReceipt` / auditor verifying
+    /// against [`executor_pubkey`](Self::executor_pubkey) passes). Additive: without
+    /// it, grain receipts stay UNSIGNED, byte-unchanged.
+    pub fn with_executor_signing_key(mut self, seed: [u8; 32]) -> AgentPlatform {
+        self.executor_signing_seed = Some(seed);
+        self
+    }
+
+    /// The Ed25519 executor PUBLIC key this platform's grains sign their turn
+    /// receipts under (derived from the installed seed), or `None` when no seed is
+    /// installed (grain receipts unsigned). A forge / auditor pins this in
+    /// `trusted_executor_keys` to admit the platform's grains' signed receipts.
+    pub fn executor_pubkey(&self) -> Option<[u8; 32]> {
+        self.executor_signing_seed
+            .as_ref()
+            .map(dregg_sdk::executor_pubkey_from_seed)
     }
 
     /// An empty platform configured to target the federation node at `url` (a local
@@ -414,6 +445,7 @@ impl AgentPlatform {
             tenants: Mutex::new(HashMap::new()),
             clock: std::sync::atomic::AtomicI64::new(0),
             node_url: (!url.is_empty()).then_some(url),
+            executor_signing_seed: None,
         }
     }
 
@@ -810,8 +842,15 @@ impl AgentPlatform {
         // sequence across drives.
         if matches!(mint, Mint::Node) && tenant.node_minter.is_none() {
             let localnode = node::LocalNode::new(host);
-            let node_minter = node::NodeMinter::open(localnode.clone(), tenant.budget)
-                .map_err(|e| AgentPlatformError::Session(format!("open node minter: {e}")))?;
+            // ROUTE (ii): open the minter under the platform's HOST executor signing
+            // seed (when set), so every grain turn this node mints is host-signed and
+            // forge-admissible. `None` keeps grain receipts unsigned (byte-unchanged).
+            let node_minter = node::NodeMinter::open_signed(
+                localnode.clone(),
+                tenant.budget,
+                self.executor_signing_seed,
+            )
+            .map_err(|e| AgentPlatformError::Session(format!("open node minter: {e}")))?;
             tenant.node = Some(localnode);
             tenant.node_minter = Some(node_minter);
         }
@@ -2762,5 +2801,144 @@ mod tests {
         platform
             .verify(&host)
             .expect("the live session re-witnesses");
+    }
+
+    /// **ROUTE (ii) — the grain HOST installs its executor signing key, so every
+    /// grain turn is signed + FORGE-ADMISSIBLE.** A platform opened WITH a host
+    /// executor signing seed drives one served (node-minted) grain turn; the
+    /// committed receipt on the node's finalized log is (a) `Finality::Final`, (b)
+    /// carries an `executor_signature`, and (c) VERIFIES against the host's executor
+    /// pubkey via `verify_receipt_signature_with_keys` — EXACTLY the check the forge
+    /// gate (`RequiredCheck::CommittedReceipt`) and any auditor run.
+    ///
+    /// TWO POLES: with the correct host pubkey the turn verifies; with a DIFFERENT
+    /// key it is REFUSED, and the DEFAULT no-seed platform mints UNSIGNED receipts
+    /// (`executor_signature == None`, byte-unchanged) that the same check refuses.
+    #[test]
+    fn a_hosted_grain_turn_is_executor_signed_and_forge_admissible() {
+        use dregg_turn::{Finality, verify_receipt_signature_with_keys};
+
+        let host_seed = [0x5cu8; 32];
+        let host_pubkey = dregg_sdk::executor_pubkey_from_seed(&host_seed);
+
+        // --- SIGNED pole: platform WITH the host executor signing seed. ---
+        let wd = workdir();
+        let platform = AgentPlatform::new().with_executor_signing_key(host_seed);
+        assert_eq!(
+            platform.executor_pubkey(),
+            Some(host_pubkey),
+            "the platform exposes the host executor pubkey an auditor pins"
+        );
+
+        let host = platform
+            .rent(
+                "signed.agents.dregg",
+                "dga1_signer",
+                "fs",
+                10_000,
+                wd.to_str().unwrap(),
+                terms(),
+                None,
+            )
+            .expect("provision the grain");
+
+        // Served drive → mints genuine kernel turns onto the grain's local node.
+        let mut brain = fs_plan(&[("notes.txt", "hello"), ("plan.txt", "world")]);
+        let report = platform
+            .drive_serving(&host, "write my notes", &mut brain)
+            .expect("drive the served grain");
+        assert!(report.admitted > 0, "the grain minted admitted work");
+
+        // The minted turns landed on the node's finalized, light-client chain.
+        let landed = platform
+            .verify_landed(&host)
+            .expect("the grain turns landed on the node");
+        assert!(landed.finalized_len > 0, "at least one grain turn landed");
+
+        // Export the finalized receipts off the grain's node and inspect them.
+        let chain = {
+            let arc = platform
+                .tenants
+                .lock()
+                .unwrap()
+                .get(&host)
+                .cloned()
+                .unwrap();
+            let guard = arc.lock().unwrap();
+            guard
+                .node
+                .as_ref()
+                .expect("node brought up on the served drive")
+                .chain()
+        };
+        assert!(
+            !chain.is_empty(),
+            "the finalized log holds committed grain turns"
+        );
+        for receipt in &chain {
+            // (a) Final, (b) SIGNED, (c) forge-admissible against the host pubkey.
+            assert_eq!(receipt.finality, Finality::Final, "grain turn is Final");
+            assert!(
+                receipt.executor_signature.is_some(),
+                "route (ii): the host-signed grain turn carries an executor signature"
+            );
+            verify_receipt_signature_with_keys(receipt, &[host_pubkey]).expect(
+                "the grain turn verifies against the host executor pubkey (forge-admissible)",
+            );
+            // POLE 1 — a DIFFERENT executor key is REFUSED.
+            assert!(
+                verify_receipt_signature_with_keys(receipt, &[[0x99u8; 32]]).is_err(),
+                "a wrong executor key does not admit the grain turn"
+            );
+        }
+
+        // --- UNSIGNED pole: the DEFAULT no-seed platform mints UNSIGNED receipts. ---
+        let wd2 = workdir();
+        let bare = AgentPlatform::new();
+        assert_eq!(
+            bare.executor_pubkey(),
+            None,
+            "no seed installed → no executor pubkey"
+        );
+        let bare_host = bare
+            .rent(
+                "unsigned.agents.dregg",
+                "dga1_bare",
+                "fs",
+                10_000,
+                wd2.to_str().unwrap(),
+                terms(),
+                None,
+            )
+            .expect("provision the bare grain");
+        let mut brain2 = fs_plan(&[("notes.txt", "hi")]);
+        bare.drive_serving(&bare_host, "write", &mut brain2)
+            .expect("drive the bare grain");
+        let bare_chain = {
+            let arc = bare
+                .tenants
+                .lock()
+                .unwrap()
+                .get(&bare_host)
+                .cloned()
+                .unwrap();
+            let guard = arc.lock().unwrap();
+            guard.node.as_ref().expect("bare node up").chain()
+        };
+        assert!(
+            !bare_chain.is_empty(),
+            "the bare grain also committed turns"
+        );
+        for receipt in &bare_chain {
+            // POLE 2 — the default path is byte-unchanged: UNSIGNED, forge check REFUSES.
+            assert!(
+                receipt.executor_signature.is_none(),
+                "default (no-seed) grain turns stay UNSIGNED — byte-unchanged"
+            );
+            assert!(
+                verify_receipt_signature_with_keys(receipt, &[host_pubkey]).is_err(),
+                "an unsigned grain turn is refused by the forge check (not forge-admissible)"
+            );
+        }
     }
 }
