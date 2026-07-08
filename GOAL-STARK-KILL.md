@@ -515,5 +515,12 @@ STAGES (sequential, Lean under .bin/lean-safe, each verified+committed before ne
       (wrong action/facts/tag REJECTS — the audit's carried-vs-bound lesson) + tag Poseidon2 in-circuit.
   S2: the dual-expose fold wiring + presentation_binding_from_fold Lean proof (verifying aggregate ⟹
       commitments forced-backed; both poles non-vacuous) + carrier_claim_pins_admitted arm.
-  S3: circuit witness builder + descriptor_by_name arm + flip bridge/circuit/sdk verify onto it.
+  ✅ S1 DONE (23a0766f3): boundPresentationDesc — action/facts/tag CONSTRAINED PIs, tag in-circuit
+     (Poseidon2, randomness hidden = unlinkability), Rung-0/1/2 (forge_action/facts/tag REJECT), axiom-clean.
+  ✅ S2 DONE (d86fe24dc): presentation_binding_from_fold — the 9th BindingFromFold carrier; verifying
+     aggregate FORCES the published authorization claim backed → binding RIDES THE FOLD to the root
+     (light-client + aggregation soundness). Both poles non-vacuous, welds to the S1 leaf, NO axioms.
+  S3: circuit witness builder (bound_presentation_witness) + descriptor_by_name arm + the dual-expose
+     fold-carrier Rust wiring (prove_descriptor_leaf_dual_expose_at + a presentation carrier arm +
+     carrier_claim_pins_admitted) + flip bridge/circuit/sdk verify onto it.
   S4: finish stark-kill (sdk/verify, cipherclerk) + git rm circuit/src/stark.rs.
