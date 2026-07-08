@@ -426,6 +426,73 @@ fn heap_root_from_hex(hex: &str) -> Option<[u8; 32]> {
     bytes.as_slice().try_into().ok()
 }
 
+/// A faithful (partial) mirror of node's `CellDetailResponse` (`node/src/api.rs:506`) — the
+/// body of `GET /api/cell/{id}`. Only the fields the visitor's READ path needs are modeled;
+/// serde ignores the rest, so a real node's full response deserializes into it unchanged. The
+/// LIVE wire uses node's own type; node is not a dependency of this crate.
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct CellDetailResponse {
+    /// Whether the cell was found in the ledger.
+    #[serde(default)]
+    pub found: bool,
+    /// The cell's committed root, hex-encoded — node's `state_commitment` field
+    /// (`node/src/api.rs:523`). The value the visitor verifies a served card against.
+    #[serde(default)]
+    pub state_commitment: String,
+}
+
+/// Why [`fetch_ledger_root`] could not extract a committed root from a cell-detail response.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LedgerFetchError {
+    /// The response body was not valid `CellDetailResponse` JSON.
+    Malformed,
+    /// The cell was not found in the ledger (`found: false`).
+    NotFound,
+    /// The cell exists but carries no committed value yet.
+    NoCommitment,
+    /// The `state_commitment` field was not valid 32-byte hex.
+    BadCommitmentHex,
+}
+
+impl std::fmt::Display for LedgerFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LedgerFetchError::Malformed => "cell-detail response is not valid JSON",
+            LedgerFetchError::NotFound => "cell not found in the federation ledger",
+            LedgerFetchError::NoCommitment => "cell has no committed value yet",
+            LedgerFetchError::BadCommitmentHex => "state_commitment is not valid 32-byte hex",
+        })
+    }
+}
+
+impl std::error::Error for LedgerFetchError {}
+
+/// **The READ half of the cloud-witness bridge: extract the committed root a visitor verifies
+/// against, from a `GET /api/cell/{id}` response.** Parses the response body (node's
+/// [`CellDetailResponse`]) and decodes its `state_commitment` hex field to raw 32 bytes. This
+/// is the value the grain owner published with [`crate::grain::publish_grain_root`], so
+/// `fetch_ledger_root(response_after(publish_grain_root(.., R))) == R`: the visitor's
+/// independent root equals the root the served card is a leaf under. Feed the returned bytes
+/// (via [`heap_root_hex`]) to [`verify_served_against_ledger`].
+///
+/// The root here is sourced from the FEDERATION response, never the serving host — that is
+/// what makes the witness independent. (The residual seam: on a stock node `state_commitment`
+/// is the whole-cell BLAKE3 digest that *absorbs* this heap-root rather than exposing it
+/// directly; a deployment surfaces the published heap-root as the cell's committed value — the
+/// SCHEME and hex wire already match what `publish_grain_root` writes. See
+/// [`crate::grain::grain_cell_commitment`].)
+pub fn fetch_ledger_root(cell_detail_json: &str) -> Result<[u8; 32], LedgerFetchError> {
+    let detail: CellDetailResponse =
+        serde_json::from_str(cell_detail_json).map_err(|_| LedgerFetchError::Malformed)?;
+    if !detail.found {
+        return Err(LedgerFetchError::NotFound);
+    }
+    if detail.state_commitment.is_empty() {
+        return Err(LedgerFetchError::NoCommitment);
+    }
+    heap_root_from_hex(&detail.state_commitment).ok_or(LedgerFetchError::BadCommitmentHex)
+}
+
 /// **The visitor's independent verify — authenticity chained to the LEDGER's heap-root.**
 ///
 /// The visitor holds: the served `card` bytes + its `witness_key` + `inclusion` proof +
@@ -1571,6 +1638,158 @@ mod tests {
                 &honest.attestation,
             ),
             "a card that is not the committed leaf fails the inclusion tooth under the ledger heap-root"
+        );
+    }
+
+    /// **THE FEDERATION WRITE-PATH WELD — the grain PUBLISHES its heap-root to the ledger,
+    /// and a visitor SOURCES the verification root from the federation response, not the
+    /// serving host.** The prior ledger test assumed the committed heap-root was already
+    /// present; this closes the last-named seam by actually producing the WRITE
+    /// ([`crate::grain::publish_grain_root`] → the exact owner-signed `/cells/update-commitment`
+    /// body node accepts) and the READ ([`fetch_ledger_root`] → the root pulled back out of a
+    /// `GET /api/cell/{id}` response), and shows they are consistent end to end.
+    #[test]
+    fn the_published_grain_root_round_trips_through_the_federation_and_anchors_the_serve() {
+        use crate::grain::{
+            grain_cell_commitment, publish_grain_root, verify_update_commitment_signature,
+        };
+        let host = host();
+        let grain = "cell:published-grain";
+        let card = sample_card();
+        let declared = vec!["view".to_string()];
+
+        // The grain OWNER's registered identity key. Under node's sovereign-cell convention
+        // the 32-byte cell id IS this key's public half (node verifies the update signature
+        // against cell_id-as-pubkey), so that is the federation cell id we publish under.
+        let owner = owner_key();
+        let owner_pub = owner.verifying_key();
+        let fed_cell_id = owner_pub.to_bytes();
+
+        // ── The OWNER's honest checkpoint: serve the real card into a stateful /var,
+        //    committing the grain's heap-root. This is the state the owner will publish. ──
+        let mut var = Umem::new();
+        var.put("notes/a", b"alpha".to_vec());
+        let honest = HttpBridge::serve_attested(
+            &card,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut var,
+            &HttpRequest::get("/"),
+            &owner,
+            Some(&card.key()),
+        );
+        assert_eq!(honest.response.status, 200);
+        let card_bytes = honest.response.body.clone();
+        let published_root = grain_cell_commitment(&var);
+
+        // ── POLE (ii) — OWNER-SIGNED WRITE: build the /cells/update-commitment body. The
+        //    new_commitment is the published heap-root; the signature is over
+        //    (cell_id ‖ old ‖ new), verifiable against the owner key — node would accept it. ──
+        let req = publish_grain_root(&fed_cell_id, &var, &owner, [0u8; 32]);
+        assert_eq!(
+            req.new_commitment,
+            heap_root_hex(published_root),
+            "the published new_commitment is the grain's heap-root, hex as node returns commitments"
+        );
+        assert!(
+            verify_update_commitment_signature(&req),
+            "owner-signed over (cell_id ‖ old ‖ new), verifies against cell_id-as-pubkey — node accepts"
+        );
+        // A wrong signing key → rejected (its signature does not verify against cell_id-as-pubkey).
+        let imposter = SigningKey::from_bytes(&[0x99u8; 32]);
+        let forged = publish_grain_root(&fed_cell_id, &var, &imposter, [0u8; 32]);
+        assert!(
+            !verify_update_commitment_signature(&forged),
+            "a request signed by a non-owner key is rejected — cell_id-as-pubkey does not verify it"
+        );
+        // A mutated commitment under a genuine signature is likewise rejected.
+        let mut tampered_req = req.clone();
+        tampered_req.new_commitment = heap_root_hex([0xabu8; 32]);
+        assert!(
+            !verify_update_commitment_signature(&tampered_req),
+            "mutating the committed value breaks the owner signature — node rejects it"
+        );
+
+        // ── POLE (i) — READ back through the FEDERATION: model the GET /api/cell/{id}
+        //    response node returns AFTER accepting the update — the cell now carries
+        //    new_commitment as its committed value. The visitor parses it with
+        //    fetch_ledger_root, sourcing the root from the FEDERATION, not the serving host. ──
+        let cell_detail_json = serde_json::json!({
+            "id": data_encoding::HEXLOWER.encode(&fed_cell_id),
+            "found": true,
+            "state_commitment": req.new_commitment,
+            // extra node fields the visitor's parser ignores:
+            "balance": 0, "nonce": 1, "program_kind": "None"
+        })
+        .to_string();
+        let fetched = fetch_ledger_root(&cell_detail_json).expect("ledger root parses");
+        assert_eq!(
+            fetched, published_root,
+            "ROUND-TRIP: fetch_ledger_root(response_after(publish_grain_root(R))) == R"
+        );
+        // A not-found / malformed / no-commitment response yields no root.
+        assert_eq!(
+            fetch_ledger_root(r#"{"found":false}"#),
+            Err(crate::bridge::LedgerFetchError::NotFound)
+        );
+
+        // ── POLE (i cont.) — the honest served card verifies against the FEDERATION-sourced
+        //    root (never the serving host's asserted root). ──
+        let ledger_hex = heap_root_hex(fetched);
+        assert!(
+            verify_served_against_ledger(
+                &card_bytes,
+                &card.key(),
+                honest.inclusion.as_ref().unwrap(),
+                &ledger_hex,
+                &owner_pub,
+                &honest.attestation,
+            ),
+            "honest serve anchored on the PUBLISHED (federation) root → authentic"
+        );
+        assert!(
+            honest.verify_against_ledger(&ledger_hex, &owner_pub, &card_bytes),
+            "same, via the AttestedServed convenience method"
+        );
+
+        // ── POLE (iii) — TAMPER END-TO-END: a hostile host serves a DIFFERENT card, commits
+        //    its own root, and self-attests (grant it even the owner key). Against the
+        //    PUBLISHED ledger root the serve collapses — the forged card is not a leaf under
+        //    it — even though the host self-attests. ──
+        struct TamperCard;
+        impl GrainWorkload for TamperCard {
+            fn serve(&self, _req: &BridgedRequest, var: &mut Umem) -> HttpResponse {
+                let forged = b"<!doctype html><title>evil</title>attacker".to_vec();
+                var.put("card/", forged.clone());
+                HttpResponse::ok(forged)
+            }
+        }
+        let mut evil_var = Umem::new();
+        let tampered = HttpBridge::serve_attested(
+            &TamperCard,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut evil_var,
+            &HttpRequest::get("/"),
+            &owner, // strongest adversary: even holding the owner key
+            Some("card/"),
+        );
+        let evil_bytes = tampered.response.body.clone();
+        // Self-consistent against the HOST's own served root (the pole the ledger closes)...
+        assert!(
+            tampered.witnessed_authentic(&owner_pub, &evil_bytes),
+            "against its own served root the tamper looks authentic (the unclosed pole)"
+        );
+        // ...but rejected against the PUBLISHED ledger root sourced from the federation.
+        assert!(
+            !tampered.verify_against_ledger(&ledger_hex, &owner_pub, &evil_bytes),
+            "TAMPER CAUGHT END-TO-END: the served card is not a leaf under the PUBLISHED ledger root"
         );
     }
 }
