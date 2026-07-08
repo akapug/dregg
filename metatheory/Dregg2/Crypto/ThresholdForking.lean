@@ -16,6 +16,8 @@ extractor, with only the ROM forking PROBABILITY (that the rewind succeeds) left
 -/
 import Dregg2.Crypto.Frost
 import Dregg2.Crypto.SchnorrExtractor
+import Dregg2.Crypto.HermineThreshold
+import Dregg2.Crypto.HermineExtractor
 
 namespace Dregg2.Crypto.ThresholdForking
 
@@ -42,5 +44,25 @@ theorem forked_threshold_cert_extracts_group_secret {ι : Type*}
     (frost_cert_verifies_under_group_key g parts shares lam k x e' hrecon)
 
 #assert_axioms forked_threshold_cert_extracts_group_secret
+
+/-- **The post-quantum capstone.** The same result over the lattice: run the Hermine threshold adversary
+twice on the SAME masks with different challenges `c ≠ c'`; each combined certificate verifies under the
+group key `A·s` (`HermineThreshold.hermine_cert_verifies_under_group_key`), so the pair are two
+special-sound Raccoon transcripts, and `Hermine.hermine_special_soundness_extracts_preimage` recovers a
+preimage of the group key: `A (extractPreimage …) = A s`. So a forked Hermine threshold forger hands you
+a preimage of the federation's group key `t = A·s` — the MSIS/MLWE break (its SHORTNESS the named carrier). -/
+theorem forked_hermine_cert_extracts_group_secret {ι : Type*} {K : Type*} [Field K]
+    {M P : Type*} [AddCommGroup M] [AddCommGroup P] [Module K M] [Module K P]
+    (A : M →ₗ[K] P) (parts : Finset ι) (shares : ι → M) (lam : ι → K) (masks : ι → M)
+    (s : M) (c c' : K) (hrecon : s = ∑ i ∈ parts, lam i • shares i) (hne : c ≠ c') :
+    A (Dregg2.Crypto.Hermine.extractPreimage c c'
+        (∑ i ∈ parts, (masks i + c • (lam i • shares i)))
+        (∑ i ∈ parts, (masks i + c' • (lam i • shares i)))) = A s :=
+  Dregg2.Crypto.Hermine.hermine_special_soundness_extracts_preimage
+    A (A s) (A (∑ i ∈ parts, masks i)) c c' _ _ hne
+    (Dregg2.Crypto.HermineThreshold.hermine_cert_verifies_under_group_key A parts shares lam masks s c hrecon)
+    (Dregg2.Crypto.HermineThreshold.hermine_cert_verifies_under_group_key A parts shares lam masks s c' hrecon)
+
+#assert_axioms forked_hermine_cert_extracts_group_secret
 
 end Dregg2.Crypto.ThresholdForking
