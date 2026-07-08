@@ -208,7 +208,7 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
             .state
             .balance()
     };
-    let turn_data = {
+    let (turn_data, fee) = {
         let s = state.read().await;
         let nonce = s
             .ledger
@@ -216,7 +216,15 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
             .map(|c| c.state.nonce())
             .unwrap_or(0);
         let signed = build_signed_transfer(&s, agent_cell, recipient_cell, amount, nonce);
-        postcard::to_stdvec(&signed).expect("serialize SignedTurn")
+        // The turn's fee (sized to the estimated computron cost). On this well-less
+        // dev node it is BURNED (no fee-well/proposer/treasury configured) — the
+        // proven `FeeHistory.feeStep_conserves_modulo_burn` behaviour the escrow
+        // services rely on. So the sender is debited `amount + fee`, not just `amount`.
+        let fee = signed.turn.fee;
+        (
+            postcard::to_stdvec(&signed).expect("serialize SignedTurn"),
+            fee,
+        )
     };
 
     // Insert the turn block into the real blocklace DAG. In solo mode this
@@ -267,8 +275,11 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
     );
     assert_eq!(
         agent_balance_before - agent_balance_after,
-        amount as i64,
-        "[A] sender must be debited exactly the transfer amount (before={agent_balance_before} after={agent_balance_after})"
+        amount as i64 + fee as i64,
+        "[A] sender must be debited the transfer amount PLUS the (burned) turn fee \
+         (before={agent_balance_before} after={agent_balance_after} amount={amount} fee={fee}) — \
+         matches the finalized-path fee model (FeeHistory.feeStep_conserves_modulo_burn) and the \
+         sibling finalized_transfer_…_uniform_across_nodes assertion"
     );
 
     // [A.2] a light-client-verifiable AttestedRoot was written and its quorum
