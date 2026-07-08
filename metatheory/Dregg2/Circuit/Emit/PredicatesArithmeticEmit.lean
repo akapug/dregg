@@ -57,7 +57,8 @@ open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow)
 open Dregg2.Circuit.DescriptorIR2
-  (EffectVmDescriptor2 VmConstraint2 Lookup TableId rangeTableDef emitVmJson2 rangeRows)
+  (EffectVmDescriptor2 VmConstraint2 Lookup TableId rangeTableDef emitVmJson2 rangeRows
+   range_row_mem_iff chipLookupTuple CHIP_RATE CHIP_OUT_LANES)
 
 set_option autoImplicit false
 
@@ -82,8 +83,37 @@ def DIFF : Nat := 3
 `PI_FACT_COMMITMENT`. -/
 def FACT_COMMITMENT : Nat := 4
 
-/-- Total base-trace width (the diff limbs are appended by the assembler, not counted here). -/
-def PRED_WIDTH : Nat := 5
+/-! ### The value↔fact WELD columns (held forgery #2): tie `INPUT` to the committed fact.
+
+`fact_commitment` (col 4) was ONLY PI-pinned, with `INPUT` (the value the range gadget bounds) a FREE
+witness — a prover could prove `value ≥ threshold` about a value they do NOT hold, against a
+`fact_commitment` naming a DIFFERENT real fact. The credentialed fact model is
+`fact_commitment = Poseidon2(hash_fact(pred, [value, term1, term2]), state_root)`. The weld opens both
+hashes IN-CIRCUIT via two Poseidon2 chip lookups feeding the SAME `INPUT` column, so a satisfying
+assignment forces `INPUT` to be the committed fact's value (Poseidon2 CR). -/
+
+/-- The fact's predicate symbol (`hash_fact` `state[0]`). Witness. -/
+def PREDICATE_SYM : Nat := 5
+/-- The fact's `term[1]` (`hash_fact` `state[2]`). Witness. -/
+def TERM1 : Nat := 6
+/-- The fact's `term[2]` (`hash_fact` `state[3]`). Witness. -/
+def TERM2 : Nat := 7
+/-- The token state root the fact commitment covers. Witness. -/
+def STATE_ROOT : Nat := 8
+/-- The recomputed `fact_hash = hash_fact(pred, [INPUT, term1, term2])` = the arity-7 lookup's out0. -/
+def FACT_HASH : Nat := 9
+
+/-- `hash_fact`'s `state[5]` domain marker (`0xFACF = 64207`); an arity-7 chip absorb of
+`[pred, value, term1, term2, 0, FACT_MARK, 1]` reproduces `hash_fact` (Rust KAT). -/
+def FACT_MARK : Int := 64207
+/-- The seven out-lanes 1..7 of the arity-7 fact-hash chip lookup (out0 = `FACT_HASH`). -/
+def FACTHASH_LANES : List Nat := [10, 11, 12, 13, 14, 15, 16]
+/-- The seven out-lanes 1..7 of the arity-2 fact-commitment chip lookup (out0 = `FACT_COMMITMENT`). -/
+def FACTCOMMIT_LANES : List Nat := [17, 18, 19, 20, 21, 22, 23]
+
+/-- Total base-trace width (the diff limbs are appended by the assembler, not counted here): the 5
+predicate columns + 5 fact witness columns + 2×7 fact chip lanes. -/
+def PRED_WIDTH : Nat := 24
 
 /-- Public-input slot for the threshold (`arithmetic.rs::PI_THRESHOLD = 0`). -/
 def PI_THRESHOLD : Nat := 0
@@ -122,6 +152,19 @@ def c5DiffGate : VmConstraint2 := .base (.gate c5Body)
 table). The Rust assembler decomposes `DIFF` into `decomp_cols(29)` limbs on the byte bus. -/
 def c6RangeLookup : VmConstraint2 := .lookup ⟨TableId.range, [.var DIFF]⟩
 
+/-- **THE VALUE↔FACT WELD, leg 1** — arity-7 fact-hash chip lookup binding `FACT_HASH =
+hash_fact(pred, [INPUT, term1, term2])`, feeding the SAME `INPUT` column the range gadget bounds. -/
+def factHashLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                     .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES⟩
+
+/-- **THE VALUE↔FACT WELD, leg 2** — arity-2 fact-commitment chip lookup binding `FACT_COMMITMENT =
+Poseidon2(fact_hash, state_root)`, tying the PI-pinned commitment to the opened fact hash. -/
+def factCommitLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES⟩
+
 /-- **`predicateGeDesc`** — the arithmetic `GreaterThanOrEqual(value, threshold)` descriptor.
 `tables` declares the range table (its `bits` feeds the assembler's `decomp_cols`); the byte
 table is Presence-detected from the range lookup, so no other table is declared. -/
@@ -130,14 +173,15 @@ def predicateGeDesc : EffectVmDescriptor2 :=
   , traceWidth  := PRED_WIDTH
   , piCount     := 2
   , tables      := [rangeTableDef DIFF_BITS]
-  , constraints := [c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup]
+  , constraints := [c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup,
+                    factHashLookup, factCommitLookup]
   , hashSites   := []
   , ranges      := [] }
 
 /-! ## §3 — The byte-pinned wire golden (the Rust decoder ingests THIS string). -/
 
 #guard emitVmJson2 predicateGeDesc ==
-  "{\"name\":\"dregg-predicate-arith-ge::threshold-v1\",\"ir\":2,\"trace_width\":5,\"public_input_count\":2,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":1}}},\"r\":{\"t\":\"var\",\"v\":2}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":3}]}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"dregg-predicate-arith-ge::threshold-v1\",\"ir\":2,\"trace_width\":24,\"public_input_count\":2,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":1}}},\"r\":{\"t\":\"var\",\"v\":2}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":3}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":7},{\"t\":\"var\",\"v\":5},{\"t\":\"var\",\"v\":0},{\"t\":\"var\",\"v\":6},{\"t\":\"var\",\"v\":7},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":64207},{\"t\":\"const\",\"v\":1},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":10},{\"t\":\"var\",\"v\":11},{\"t\":\"var\",\"v\":12},{\"t\":\"var\",\"v\":13},{\"t\":\"var\",\"v\":14},{\"t\":\"var\",\"v\":15},{\"t\":\"var\",\"v\":16}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":2},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":8},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":4},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":18},{\"t\":\"var\",\"v\":19},{\"t\":\"var\",\"v\":20},{\"t\":\"var\",\"v\":21},{\"t\":\"var\",\"v\":22},{\"t\":\"var\",\"v\":23}]}],\"hash_sites\":[],\"ranges\":[]}"
 
 /-! ## §4 — Genuinely-proven, non-vacuous semantic lemmas (the gate teeth).
 
@@ -165,15 +209,24 @@ theorem c5_body_zero_iff (a : Assignment) :
 #guard decide (¬ (c5Body.eval (fun i => if i = DIFF then 59 else if i = SLOT_A then 100 else if i = THRESHOLD then 40 else 0) = 0))
 
 -- The range tooth, in Lean: `diff = 60 ∈ [0, 2^29)` is a range row; a wrapped `value < threshold`
--- diff (here modeled by `2^29`, the first out-of-range value) is NOT.
-#guard decide (([60] : List ℤ) ∈ rangeRows DIFF_BITS)
-#guard decide (¬ (([2^29] : List ℤ) ∈ rangeRows DIFF_BITS))
+-- diff (here modeled by `2^29`, the first out-of-range value) is NOT. Proved via
+-- `range_row_mem_iff` (the interval closed form) — NEVER `decide`, which would enumerate the
+-- 2^29-row table and hang the build.
+example : ([60] : List ℤ) ∈ rangeRows DIFF_BITS := by
+  rw [range_row_mem_iff]; norm_num [DIFF_BITS]
+example : ¬ (([2 ^ 29] : List ℤ) ∈ rangeRows DIFF_BITS) := by
+  rw [range_row_mem_iff]; norm_num [DIFF_BITS]
 
 -- Shape pins.
 #guard predicateGeDesc.traceWidth == PRED_WIDTH
 #guard predicateGeDesc.piCount == 2
-#guard predicateGeDesc.constraints.length == 5
+#guard predicateGeDesc.constraints.length == 7
 #guard predicateGeDesc.tables.length == 1
+#guard (chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                         .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
+#guard (chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
 
 #assert_axioms c3_body_zero_iff
 #assert_axioms c5_body_zero_iff
