@@ -226,6 +226,11 @@ a new `NodeWorldSink` home). Serialize Pillars 1/2/4 after the foundation lands.
   `check_endpoint` gates the endpoint before booting anything; fail-closed on node refusal. 94 green,
   both poles (Pole B admits-layer per provider_egress). Round-trip THROUGH node execution deferred to
   the `test-support` TestNode export (next unit — shared infra for the 4a full proof + 2b).
+- homeserver-grain STEP 2 (community thread) — `deos-homeserver/{src/bin,scripts}`: the card-carry
+  membrane rides OUR embedded homeserver, not Docker Conduit. A `deos-homeserver` bin (READY <url>) +
+  `card-carry-local.sh` boot it as a subprocess the deos-matrix clients dial; `live_two_user_card_
+  fork_carry_roundtrip` passes against it (A→B byte-intact through our continuwuity, forged carry
+  refusable). PILLAR 3 SELF-HOSTED. Two-process/HTTP shape = exactly the confined grain's.
 - homeserver-grain STEP 1 (community thread) — `deos-homeserver/`: continuwuity boots IN-PROCESS as a
   library (`conduwuit::run_with_args`) and serves the CS API — `cs_api_roundtrip` proves versions →
   register → createRoom → send → sync round-trips. Embed PROVEN. Real blockers found+fixed: `[patch]`
