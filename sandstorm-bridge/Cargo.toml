@@ -38,5 +38,11 @@ data-encoding = "2"      # Sandstorm's base32 alphabet for App IDs / dga1_ token
 # the source rail used.
 dregg-auth = { path = "../dregg-auth" }
 
+# The deos-view WEB renderer only (gpui-free + deos-js-free: just serde) — a hosted
+# grain serves its own deos-view card as HTML over the WebSession surface. `web`
+# gives `render_card_document`; `grain_run_view`/`GrainRun` are always-compiled. We
+# take NONE of the native/cap/discord elephants (`default-features = false`).
+deos-view = { path = "../deos-view", default-features = false, features = ["web"] }
+
 [lints.rust]
 unsafe_code = "forbid"
