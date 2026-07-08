@@ -1305,10 +1305,7 @@ impl TurnExecutor {
                         path.to_vec(),
                     )
                 })?;
-                let delegator_cell = ledger
-                    .iter()
-                    .find(|(_, cell)| *cell.public_key() == *delegator_pk)
-                    .map(|(_, cell)| cell);
+                let delegator_cell = ledger.cell_by_pubkey(delegator_pk);
                 let delegator_cell = delegator_cell.ok_or_else(|| {
                     (
                         TurnError::BearerCapDelegatorLacksCapability {
