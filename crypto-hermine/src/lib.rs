@@ -33,11 +33,17 @@
 //!   - the `ShortNorm` carrier (shortness of `z`,
 //!     `z − z'`)                                         → [`threshold::signature_norm`]
 //!     / [`threshold::acceptance_bound`]
-//! * beyond the Lean spec: FROST/RFC-9591-style per-signer
-//!   BINDING FACTORS (the concurrent-session defense)    → [`threshold::binding_factor`]
-//!   / [`threshold::hermine_sign_bound`]; the same verify relation
-//!   `A·z = w + c•t` with `w = Σ ρ_i·w_i` folded on the nonce side —
-//!   reference defense shaping, not Lean-pinned
+//! * beyond the Lean spec: the RACCOON 2-round MASKING +
+//!   COMMIT-THEN-REVEAL ceremony (the real scheme's
+//!   concurrency mechanism)                              → [`threshold::hermine_sign_raccoon`]
+//!   / [`threshold::RaccoonSignSession`]; one-time flooded masks, each
+//!   `w_i = A·y_i` bound by a blake3 hash commitment BEFORE any reveal, then
+//!   the same verify relation `A·z = w + c•t` over `w = Σ w_i` — the
+//!   concurrency security is the Hint-MLWE straight-line argument
+//!   (formalized in the metatheory separately). The FROST-style per-signer
+//!   binding factors ([`threshold::binding_factor`] /
+//!   [`threshold::hermine_sign_bound`]) are SUPERSEDED — NOT the Raccoon
+//!   mechanism — retained only for the differential/regression tests
 //!
 //! The Lean spec is stated over an abstract `R`-linear map `A : M →ₗ[R] N`.
 //! This reference instantiates `R = R_q = ℤ_q[X]/(Xⁿ+1)` ([`ring`]),
@@ -61,15 +67,19 @@
 //!   REFERENCE: synchronous/in-process (no broadcast channel or network),
 //!   detection without complaint-round arbitration, no rushing-adversary
 //!   bias fix (Gennaro et al.), reference PRNG — see [`dkg`]'s boundary doc;
-//! * **binding factors PRESENT (reference)** — [`threshold::hermine_sign_bound`]
-//!   carries FROST/RFC-9591-style per-signer binding factors
-//!   (`ρ_i = H(t ‖ msg ‖ B ‖ i)` over blake3, sparse ternary of weight
-//!   [`threshold::BINDING_WEIGHT`]; `w = Σ ρ_i·w_i`,
-//!   `z_i = ρ_i·y_i + c·(λ_i·s_i)` — verification unchanged), so the
-//!   concurrent-session (Drijvers/ROS-style) mix-and-match defense now has
-//!   reference teeth; the formal ROS-resistance argument for the lattice
-//!   instantiation, a vetted hash-to-ring encoding, and constant-time
-//!   derivation are still owed. The unbound [`threshold::hermine_sign`]
+//! * **concurrency defense = Raccoon commit-then-reveal (reference)** — the
+//!   concurrent/rushing-adversary defense is the Raccoon-aligned 2-round
+//!   ceremony ([`threshold::hermine_sign_raccoon`]): Round 1 broadcasts only
+//!   hash commitments `cm_i = H("dregg-raccoon-commit" ‖ i ‖ w_i)`; Round 2
+//!   reveals are verified against them (equivocation is detected and NAMED),
+//!   then `w = Σ w_i`, a domain-separated blake3 challenge, and the
+//!   unchanged threshold algebra. The concurrency security argument is
+//!   STRAIGHT-LINE under Hint-MLWE (the metatheory's leg, not this crate's);
+//!   this reference is in-process (no network transport), non-constant-time,
+//!   pre-audit. The FROST-style binding factors
+//!   ([`threshold::hermine_sign_bound`] / [`threshold::binding_factor`]) are
+//!   SUPERSEDED — not the Raccoon mechanism — and stay only as
+//!   differential/regression material. The unbound [`threshold::hermine_sign`]
 //!   remains single-ceremony-only (its shared-commitment fork is the
 //!   extractor tests' hypothesis);
 //! * **reference PRNG, non-constant-time samplers** — noise-flooding now
@@ -96,7 +106,9 @@
 //!
 //! The production signer needs the DKG's deployment machinery (real
 //! broadcast/private channels, complaint-round arbitration, the bias fix),
-//! the formal ROS-resistance argument behind the binding factors, a CSPRNG,
+//! real transport for the 2-round commit/reveal broadcasts (plus the
+//! Hint-MLWE straight-line concurrency formalization, the metatheory's
+//! leg), a CSPRNG,
 //! constant-time arithmetic and sampling, full-size parameters, and external
 //! audit. This crate's value is different: every identity the
 //! Lean proofs establish is witnessed here on concrete `R_q` numbers —
@@ -115,9 +127,11 @@ pub use linalg::{Matrix, PolyVec};
 pub use ring::{Poly, N, Q};
 pub use threshold::{
     acceptance_bound, binding_factor, extract_preimage, extracted_relation, hermine_sign,
-    hermine_sign_bound, hermine_sign_gaussian, hermine_sign_with_mask_width, lagrange_reconstruct,
-    partial_response, sample_gaussian_mask, sample_wide_mask, signature_norm, verify_hermine,
+    hermine_sign_bound, hermine_sign_gaussian, hermine_sign_raccoon, hermine_sign_with_mask_width,
+    lagrange_reconstruct, partial_response, raccoon_challenge, raccoon_commitment,
+    sample_gaussian_mask, sample_wide_mask, signature_norm, verify_hermine, verify_hermine_raccoon,
     DiscreteGaussian, HermineShare, HermineSignature, HermineTestDealer, NonceCommitment,
+    RaccoonCommitMsg, RaccoonError, RaccoonRevealMsg, RaccoonSignSession, RaccoonSigner,
     BINDING_WEIGHT, GAUSSIAN_TAIL_CUT, MASK_WIDTH_BOUND, MASK_WIDTH_WIDE, SECRET_ETA,
 };
 
