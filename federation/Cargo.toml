@@ -27,6 +27,14 @@ ed25519-dalek = { version = "2", features = ["std"] }
 # ML-DSA signature, so the QC survives a quantum adversary that breaks the classical half. Staged
 # behind the `QuorumScheme` selector, not yet wired into live consensus.
 fips204 = "0.4"
+# crypto-hermine: the COMPACT post-quantum half of the hybrid quorum certificate
+# (`frost.rs`, `HermineHybridQC`). A lattice (Raccoon/Hermine) THRESHOLD signature —
+# so the PQ half is ONE committee-independent cert, not the `t × ~3.3 KB` ML-DSA
+# concatenation the `HybridVotes` path carries. STAGED behind `QuorumScheme::HermineHybrid`,
+# default-off, reference-only: crypto-hermine is pre-audit (toy challenge hash, no formal
+# ROS argument) — the ML-DSA `HybridVotes` path stays the deployable one. crypto-hermine
+# is a standalone crate (its own `[workspace]` opt-out), so this is a plain external path dep.
+crypto-hermine = { path = "../crypto-hermine" }
 sha2 = { workspace = true }
 hex = "0.4"
 getrandom = { workspace = true }
