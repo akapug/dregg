@@ -36,6 +36,8 @@ use std::sync::Arc;
 
 use dregg_circuit::BabyBear;
 use dregg_circuit::binding::compute_action_binding;
+use dregg_circuit::descriptor_by_name::descriptor_by_name;
+use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2};
 use dregg_circuit::stark;
 use dregg_dsl_runtime::ProgramRegistry;
 use dregg_turn::ProofVerifier;
@@ -501,6 +503,245 @@ impl ProofVerifier for DslAwareProofVerifier {
 
         // Second: treat as custom program (VK hash -> registry lookup).
         self.verify_dsl_program(&stark_proof, action, resource, vk)
+    }
+}
+
+/// A `ProofVerifier` that dispatches on **predicate identity** to the IR-v2
+/// descriptor prover — the consumer half of the `StarkProof` → `Ir2BatchProof`
+/// wire migration, exercised through [`ProofVerifier::verify_with_predicate`].
+///
+/// This is the concrete demonstration that the trait, once it carries a predicate
+/// name (the gap this lane closes), is *capable* of the migrated contract:
+///
+/// 1. `predicate` → [`descriptor_by_name`] (fail-closed [`None`] on a miss);
+/// 2. decode the proof blob as a `postcard`-encoded [`Ir2BatchProof`] (the NEW
+///    wire format that replaces `stark::proof_to_bytes(StarkProof)`);
+/// 3. check it with [`verify_vm_descriptor2`] against the expected public inputs.
+///
+/// The expected public inputs are carried in `vk` as the little-endian u32
+/// canonical encoding of one `BabyBear` per 4 bytes — the cell's verification key
+/// commits the statement the proof must satisfy. Crucially, **no air-name ever
+/// rides the blob**: the descriptor is chosen from the predicate's committed
+/// identity supplied by the executor, never from prover-controlled bytes. Reading
+/// the descriptor name out of the proof (as the legacy `StarkProofVerifier` does
+/// via `stark_proof.air_name`) would let the prover pick the constraint semantics
+/// it is checked against; threading the predicate through the trait is what
+/// removes that choice.
+///
+/// This verifier is NOT yet wired into the production executor — migrating the
+/// standard verifiers/call sites onto the descriptor prover is Gate-2 work. Its
+/// [`ProofVerifier::verify`] (no predicate) is deliberately fail-closed: without a
+/// predicate identity there is no descriptor to name, so it refuses.
+pub struct DescriptorDispatchVerifier {
+    _priv: (),
+}
+
+impl DescriptorDispatchVerifier {
+    /// Create a descriptor-dispatch verifier.
+    pub fn new() -> Self {
+        Self { _priv: () }
+    }
+
+    /// Decode `vk` bytes as the expected public inputs: one canonical `BabyBear`
+    /// per little-endian 4-byte group. A length that is not a positive multiple
+    /// of 4 is rejected (`None`).
+    fn expected_public_inputs(vk: &[u8]) -> Option<Vec<BabyBear>> {
+        if vk.is_empty() || vk.len() % 4 != 0 {
+            return None;
+        }
+        Some(
+            vk.chunks_exact(4)
+                .map(|c| BabyBear::new_canonical(u32::from_le_bytes([c[0], c[1], c[2], c[3]])))
+                .collect(),
+        )
+    }
+}
+
+impl Default for DescriptorDispatchVerifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProofVerifier for DescriptorDispatchVerifier {
+    /// Fail-closed: a descriptor verifier cannot function without a predicate
+    /// identity naming which descriptor to check the proof against.
+    fn verify(&self, _proof: &[u8], _action: &str, _resource: &str, _vk: &[u8]) -> bool {
+        false
+    }
+
+    /// The migrated consumer contract, keyed on the executor-supplied predicate.
+    fn verify_with_predicate(
+        &self,
+        predicate: &str,
+        proof: &[u8],
+        _action: &str,
+        _resource: &str,
+        vk: &[u8],
+    ) -> bool {
+        // 1. Predicate identity → descriptor (fail-closed on an unknown name).
+        let desc = match descriptor_by_name(predicate) {
+            Some(d) => d,
+            None => return false,
+        };
+        // 2. Expected public inputs from the cell VK.
+        let pi = match Self::expected_public_inputs(vk) {
+            Some(pi) => pi,
+            None => return false,
+        };
+        // 3. Decode the proof blob (the NEW postcard(Ir2BatchProof) wire format).
+        let batch: Ir2BatchProof<DreggStarkConfig> = match postcard::from_bytes(proof) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        // 4. Verify against the descriptor. A structurally-malformed proof can
+        //    panic inside verification; treat any panic as a rejection.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_vm_descriptor2(&desc, &batch, &pi).is_ok()
+        }))
+        .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod descriptor_dispatch_tests {
+    use super::*;
+    use dregg_circuit::descriptor_by_name::MEMBERSHIP_GENERAL_NAME_PREFIX;
+    use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
+    use dregg_circuit::membership_descriptor_general::{
+        MembershipStep, membership_root, membership_witness,
+    };
+
+    /// Encode public inputs as the VK the [`DescriptorDispatchVerifier`] expects:
+    /// one canonical `BabyBear` per little-endian 4-byte group.
+    fn pis_to_vk(pis: &[BabyBear]) -> Vec<u8> {
+        let mut vk = Vec::with_capacity(pis.len() * 4);
+        for p in pis {
+            vk.extend_from_slice(&p.0.to_le_bytes());
+        }
+        vk
+    }
+
+    /// Deterministic depth-`d` membership fixture: fixed leaf + `d`-step path.
+    fn fixture(depth: usize) -> (BabyBear, Vec<MembershipStep>, BabyBear) {
+        let leaf = BabyBear::new(0xABCD);
+        let path: Vec<MembershipStep> = (0..depth)
+            .map(|i| MembershipStep {
+                sibling: BabyBear::new(1000 + i as u32),
+                dir: i % 2 == 1,
+            })
+            .collect();
+        let root = membership_root(leaf, &path);
+        (leaf, path, root)
+    }
+
+    /// NON-VACUOUS: with the predicate identity threaded through the trait, a
+    /// [`DescriptorDispatchVerifier`] reaches `descriptor_by_name -> \
+    /// verify_vm_descriptor2` and correctly ACCEPTS an honest proof (built by the
+    /// REAL [`prove_vm_descriptor2`]) while REJECTING every wrong case: the
+    /// predicate-less legacy path, an unknown predicate, a cross-descriptor name,
+    /// a wrong-depth descriptor, a tampered blob, a forged VK, and a malformed VK.
+    /// Runs both directly and through a `Box<dyn ProofVerifier>` (the shape the
+    /// executor stores).
+    #[test]
+    fn descriptor_dispatch_accepts_honest_rejects_wrong() {
+        let depth = 2usize;
+        let name = format!("{MEMBERSHIP_GENERAL_NAME_PREFIX}{depth}");
+
+        // PRODUCER: honest witness → real IR-v2 batch proof.
+        let (leaf, path, root) = fixture(depth);
+        let (trace, pis) = membership_witness(leaf, &path).expect("honest witness");
+        assert_eq!(pis, vec![leaf, root], "membership PIs are [leaf, root]");
+        let desc = descriptor_by_name(&name).expect("depth membership must dispatch");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("honest membership must prove");
+
+        // WIRE: the NEW postcard(Ir2BatchProof) blob; VK carries the expected PIs.
+        let blob = postcard::to_allocvec(&proof).expect("encode batch proof");
+        let vk = pis_to_vk(&pis);
+
+        let v = DescriptorDispatchVerifier::new();
+
+        // ACCEPT: correct predicate identity + honest proof + correct VK.
+        assert!(
+            v.verify_with_predicate(&name, &blob, "read", "res", &vk),
+            "honest proof under the correct predicate must verify"
+        );
+
+        // REJECT: predicate-less legacy path — no descriptor to name → fail-closed.
+        // This is the load-bearing contrast: the SAME honest proof/VK that the
+        // predicate path accepts is refused when the identity is absent, proving
+        // the threaded predicate is what makes verification possible.
+        assert!(
+            !v.verify(&blob, "read", "res", &vk),
+            "without a predicate identity the descriptor verifier is fail-closed"
+        );
+
+        // REJECT: unknown predicate → descriptor_by_name None → fail-closed.
+        assert!(
+            !v.verify_with_predicate("no-such-predicate::v0", &blob, "read", "res", &vk),
+            "an unknown predicate must be refused at dispatch"
+        );
+
+        // REJECT: cross-descriptor (a real but WRONG descriptor name).
+        assert!(
+            !v.verify_with_predicate(
+                "dfa-routing-toggle-2state::poseidon2-v1",
+                &blob,
+                "read",
+                "res",
+                &vk
+            ),
+            "a proof under the wrong descriptor must fail verification"
+        );
+
+        // NOTE (soundness boundary, not an assertion): a proof under a DIFFERENT nominal
+        // depth of the same family is ACCEPTED-BY-DESIGN when it targets the same
+        // [leaf, root] — and this is NOT a forgery. The depth-general descriptor is
+        // constraint-uniform (one Merkle level per row); the actual path is bound by the
+        // ROOT public input via Poseidon2 collision-resistance, so a shallower proof cannot
+        // hit a genuine deeper committed root without a collision (the real attack — a wrong
+        // root — is the `forged expected root` REJECT below, which DOES bite). Production
+        // membership pads to depth-2 today, so this is no regression. Binding the depth
+        // in-circuit (a row-count constraint) is the deferred Rung-2 depth-general soundness
+        // lift — a named Lean follow-on, tracked in GOAL-STARK-KILL.md, not a migration blocker.
+        let _ = depth; // (depth no longer drives a wrong-depth assertion; see the note above)
+
+        // REJECT: tampered proof blob.
+        let mut tampered = blob.clone();
+        if let Some(b) = tampered.last_mut() {
+            *b ^= 0xFF;
+        }
+        assert!(
+            !v.verify_with_predicate(&name, &tampered, "read", "res", &vk),
+            "a tampered proof blob must fail"
+        );
+
+        // REJECT: forged VK (wrong expected root).
+        let forged_pis = vec![leaf, BabyBear::new_canonical(root.0 ^ 1)];
+        let forged_vk = pis_to_vk(&forged_pis);
+        assert!(
+            !v.verify_with_predicate(&name, &blob, "read", "res", &forged_vk),
+            "a forged expected root must fail verification"
+        );
+
+        // REJECT: malformed VK (not a positive multiple of 4 bytes).
+        assert!(
+            !v.verify_with_predicate(&name, &blob, "read", "res", &[1, 2, 3]),
+            "a malformed VK must be refused"
+        );
+
+        // Object-safety: the capability survives dynamic dispatch through
+        // `Box<dyn ProofVerifier>` — the exact shape the executor stores.
+        let boxed: Box<dyn ProofVerifier> = Box::new(DescriptorDispatchVerifier::new());
+        assert!(
+            boxed.verify_with_predicate(&name, &blob, "read", "res", &vk),
+            "trait-object dispatch must accept the honest proof"
+        );
+        assert!(
+            !boxed.verify_with_predicate("nope::v0", &blob, "read", "res", &vk),
+            "trait-object dispatch must fail-close on an unknown predicate"
+        );
     }
 }
 

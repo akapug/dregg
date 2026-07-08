@@ -648,6 +648,40 @@ pub trait ProofVerifier: Send + Sync {
     ///
     /// Returns true if the proof is valid for the given public inputs and verification key.
     fn verify(&self, proof: &[u8], action: &str, resource: &str, vk: &[u8]) -> bool;
+
+    /// Verify a proof WITH the expected *predicate identity* threaded in.
+    ///
+    /// `predicate` is the descriptor/AIR name the EXECUTOR expects for this
+    /// authorization (derived from the cell's policy) — **not** a name read out
+    /// of the prover-controlled proof bytes. Carrying it at the trait boundary is
+    /// what lets a descriptor-backed verifier resolve
+    /// `dregg_circuit::descriptor_by_name::descriptor_by_name(predicate)` and then
+    /// check the proof with `dregg_circuit::descriptor_ir2::verify_vm_descriptor2`
+    /// (the consumer contract of the `StarkProof` → `Ir2BatchProof` wire
+    /// migration). Without this parameter the trait could not name which
+    /// descriptor to check against, so descriptor dispatch was impossible.
+    ///
+    /// # Default
+    ///
+    /// Ignores `predicate` and delegates to [`Self::verify`] — the legacy
+    /// hand-AIR path. Every existing implementation keeps its current behavior
+    /// for free. A descriptor-backed verifier (e.g.
+    /// `dregg_bridge::verifier::DescriptorDispatchVerifier`) OVERRIDES this to
+    /// dispatch on `predicate`. The migration of the production call sites and of
+    /// the standard `StarkProofVerifier`/`DslAwareProofVerifier` onto the
+    /// descriptor prover is Gate-2 work; this method only makes the trait
+    /// *capable* of it.
+    fn verify_with_predicate(
+        &self,
+        predicate: &str,
+        proof: &[u8],
+        action: &str,
+        resource: &str,
+        vk: &[u8],
+    ) -> bool {
+        let _ = predicate;
+        self.verify(proof, action, resource, vk)
+    }
 }
 
 mod costs;
