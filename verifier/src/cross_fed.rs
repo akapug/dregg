@@ -478,11 +478,15 @@ fn verify_attested_root_ed25519(root: &AttestedRoot, known_keys: &[PublicKey]) -
         return false;
     }
 
+    // Build the known-key membership set once (O(committee)) rather than a linear
+    // `known_keys.contains` per signature (O(committee²)). Same membership test — the
+    // set holds the exact 32-byte keys `contains` compared.
+    let known: std::collections::HashSet<[u8; 32]> = known_keys.iter().map(|k| k.0).collect();
     let message = root.signing_message();
     let mut seen = std::collections::HashSet::new();
     let mut valid = 0usize;
     for (pubkey, signature) in &root.quorum_signatures {
-        if !known_keys.contains(pubkey) {
+        if !known.contains(&pubkey.0) {
             return false;
         }
         if !pubkey.verify(&message, signature) {
