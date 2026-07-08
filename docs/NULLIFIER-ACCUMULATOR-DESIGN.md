@@ -1,9 +1,11 @@
 # Nullifier / Revocation Accumulator — Design (review-first, not implemented)
 
-Status: DESIGN DELIVERABLE. Nothing here is implemented; ember reviews the shape and the
-key decision points below before any code moves. Greenfield on the executor-state side; the
-circuit side already deploys most of the machinery this design points at (that is the reuse
-story, §5).
+Status: PARTIALLY IMPLEMENTED (2026-07-07). The proven **accumulator gate** is landed green
+(`metatheory/Dregg2/Exec/NullifierAccumulator.lean`, `#assert_axioms`-clean, non-vacuous — see §9).
+The **VK-epoch flip** (wiring the roots into `RecordKernelState` + the commitment/frame apex) is NOT
+done — it is ember-gated and coordinated with the parked umem VK epoch. §10 records a key finding that
+revises this doc's staging, and gives the exact flag-day touch-list. The circuit side already deploys
+most of the machinery this design points at (the reuse story, §5).
 
 ## 1. Current cost — the two-cost problem, grounded
 
@@ -335,3 +337,99 @@ FRI/STARK extractability (already carried as `extractable`).
    **Decision: confirm both gates share the one accumulator (recommended), vs keeping revocation on
    the cheaper algebraic batch accumulator alone** (which does not support the persistent-insert
    root, only per-proof snapshots — so it cannot be the sole revocation source of truth).
+
+---
+
+## 9. Landed — the proven accumulator gate (`Dregg2/Exec/NullifierAccumulator.lean`)
+
+The novel security content is implemented and green, over a standalone `NfAccState` (the two
+`Digest8` roots — exactly the pair the VK flip lands in `RecordKernelState`). The three §4
+obligations are re-derived from the already-proven Heap8 lemmas; nothing crypto is re-proved:
+
+- **`witness_fresh`** — a valid `NfAccWitness` PROVES its key absent (`nonMembership_sound8`); the
+  witness *earns* non-membership, it is not assumed.
+- **(a)/(c) `present_no_witness`** — a key already committed by `root` admits NO valid witness
+  (`IsEmpty (NfAccWitness …)`), the contrapositive of `nonMembership_sound8` + the unconditional
+  `GapOpen8.excludesSpine`. This is the no-double-spend / non-forgeability keystone.
+- **(b) `spend_inserts_root`** — the committed spend advances the root so `nf` is now present
+  (`update_sound8` `y=nf` disjunct).
+- **`spend_then_no_rewitness`** — composed anti-replay: after a spend, no second witness for the same
+  `nf` exists.
+- **`no_double_spend_root`** — the gate in state terms (`nf ∈ keysOf8 s.nullifierRoot ⇒ IsEmpty`).
+- **Revocation dual `revoked_gate_fails`** — a revoked `credNul` admits no non-membership witness ⇒
+  the revocation leg cannot pass. Same lemma, opposite polarity.
+
+**Non-vacuity (two-valued, not laundered).** `witness_inhabited_of_bindings` is the TRUE pole (a fresh
+key HAS a witness once the `compute_canonical_heap_root_8` bindings realize); `present_no_witness` is
+the FALSE pole; plus decidable spine demos (25 bracketed-admissible, 20 present-refused, `sortedInsert`
+grows by exactly the key / no-op on a present key). **`#assert_axioms`-clean** ⊆ {propext,
+Classical.choice, Quot.sound}; `SpineCommits8` is the SOLE carrier (a hypothesis on the witness, the
+one deployed Poseidon2/`Compress8CR` floor), never an axiom.
+
+## 10. KEY FINDING — additive roots are NOT a separate cheap stage; field-add ≡ VK-epoch flip
+
+This doc's §3/§6 framed the `Digest8`-root fields as a *cheap additive* step (land beside the lists,
+old proofs unaffected) SEPARATE from the later VK-epoch flip. **That is wrong.** Verified empirically:
+literally adding `nullifierRoot`/`revokedRoot` to `RecordKernelState` breaks the whole full-state
+**frame** apex, because every full-state frame theorem *pins every kernel field* (that is their
+anti-silent-mutation job), and honestly pinning the two new roots forces the rest-hash `RH` to
+**absorb** them — which IS the VK-epoch commitment change. The field-add and the VK flip are ONE
+change, not two stages:
+
+- `Transfer.TransferSpec` / `recKExec_iff_spec` go red the moment the field lands (the `←` direction's
+  `cases k'; subst …; rfl` leaves the new roots as free vars ⇒ the `↔` is *false* unless they are
+  pinned) — confirmed by build.
+- Pinning them in the CIRCUIT-side proof (`StateCommit`) can only come from the state hash, so
+  `RestHashIffFrame` (`StateCommit.lean:229`) must gain the two clauses and `RH`/`frameDigest` must
+  absorb the roots — a commitment-semantics (VK) change. (`nullifiers`/`bal` are already in
+  `RestHashIffFrame` for exactly this reason — they paid the same tax when introduced.)
+- The `RotatedKernelRefinement*` `fr*` **frame structures** (~29 files) each enumerate every field, so
+  each needs a `frNullifierRoot`/`frRevokedRoot` field + every construction site updated.
+
+Therefore the proofs are landed over `NfAccState` (§9), and the field-in-`RecordKernelState` is
+deferred to the coordinated flag-day. **Do not fire it piecemeal.**
+
+### VK-EPOCH TOUCH-LIST (the exact flag-day scope, for ember)
+
+**A. Kernel state + gates**
+- `metatheory/Dregg2/Exec/RecordKernel.lean` — add `nullifierRoot`/`revokedRoot : Digest8` to
+  `RecordKernelState`; rewire `noteSpendNullifier` (`:934`) to consume `NfAccWitness` (verify → advance
+  root) instead of the `nf ∈ k.nullifiers` scan; retire `nullifiers`/`revoked : List Nat` at cutover.
+- `metatheory/Dregg2/Exec/FullForestAuth.lean` — `revocationGate` (`:481`) consumes a non-membership
+  witness against `revokedRoot`; ripples to `gateOK` (`:486`), `execFullAGated` (`:515`), and the
+  `NodeAuthC` payload (carry the witness).
+
+**B. State commitment — RH must absorb the roots (the VK-affecting core)**
+- `metatheory/Dregg2/Circuit/StateCommit.lean` — extend `RH`/`frameDigest` to absorb both roots;
+  `RestHashIffFrame` (`:229`) +2 clauses; fix `transfer_circuit_full_sound` (`:524`),
+  `recStateCommit_binds_kernel` (`:626`), `transfer_circuit_full_complete` (`:705`), and the 16→18
+  destructures (`:485,:522,:616,:641,:659,:728`).
+
+**C. Full-state frame specs (+2 clauses each, +2 proof arity)** — the `↔`-spec / `kernelFrame` family:
+- `Transfer.lean` (`TransferSpec :360`, `recKExec_iff_spec :377` — verified-green exemplar, reverted),
+  `EffectCommit.lean` (`kernelFrame :146` + consumers), `EffectCommit2.lean`, `EffectInstances2.lean`,
+  `CommitmentCrossBind.lean`, `ClosureFloorReduce.lean`, `ClosureTransfer.lean`.
+- `Dregg2/Circuit/Inst/*.lean` effect frames (~30): transfer, mintA, burnA, balanceA, spawnA,
+  exerciseA, noteSpendA, noteCreateA, createCellA, createCellFromFactoryA, cellSealA, cellUnsealA,
+  cellDestroyA, delegate, delegateAttenA, introduceA, attenuateA, revoke, revokeDelegationA,
+  revokeDelegationFullA, refreshDelegationA, receiptArchiveLifecycleA, heapWriteA, bridgeMintA, …
+- `Dregg2/Circuit/Spec/*.lean` frame specs (~30): balancemovement, notenullifier, authorityrevocation,
+  cellstate{audit,log,permissions,vk,field,program,monotone}, notecommitment, …
+
+**D. Frame STRUCTURES (add `frNullifierRoot`/`frRevokedRoot` + every construction site)** — ~29 files:
+- `RotatedKernelRefinement.lean` (the `fr*` frame, `:259-273`), `RotatedKernelRefinementCapFamily.lean`
+  (`KernelFrameExceptCaps :129`), …Notes, …NotesFresh, …Exercise, …IncNonce, …SetField, …MintBurn,
+  …Attenuate, …Lifecycle, …CellSeal, …PermsVK, …Program, …Birth, …Misc; `CircuitCompletenessLifecycle`,
+  `CircuitCompletenessSetInsert`; `TransferDecodeBridge`; `FloorsNonVacuousWave{,Birth,MiscNotes,
+  PermsProgram,Lifecycle,Transfer}`.
+
+**E. FFI / wire / seed**
+- The kernel-state `@[export]` codec (`Dregg2/Crypto/UMemCodec.lean` + `exec-lean/src/lean_apply.rs`) —
+  carry the two roots (replace the `List Nat` on the wire). FFI signature changes ⇒ rebuild the seed
+  (`bootstrap.sh` on hbox) + spot-check a gate-ON spend still finalizes + the executor differential
+  re-agrees.
+
+**F. Circuit descriptor / VK**
+- Descriptor swap the `AccumulatorOpenEmit` header calls out (inline map-op lane → after-spine) for
+  `nullifier_root` @ limb 26 (+ a `revoked_root` instantiation); VK regeneration; land in the SAME
+  flag-day as the parked umem VK epoch (design §6 — one flag-day, not piecemeal).
