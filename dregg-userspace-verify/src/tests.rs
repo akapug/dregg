@@ -682,3 +682,148 @@ fn ffi_exposure_subrequest_surfaces_verdict() {
     // exposure is a Fail object (over-reserve), not the "Pass" string.
     assert!(v["assurance"]["exposure"].get("Fail").is_some());
 }
+
+// ─── B20 result-identity: the borrow-layer walk ≡ the clone walk ─────────────
+
+/// The ORIGINAL clone-based `check_no_amplification` traversal, kept verbatim
+/// here as the reference oracle. The shipped `check_no_amplification` now walks
+/// the `GrantedScope::Layer` chain by reference (borrowing the inherited
+/// granted-cap map instead of deep-cloning it at every node of the
+/// attacker-influenced call forest). This oracle folds the whole `granted_to`
+/// map forward by clone, exactly as the code did before the port.
+fn reference_no_amplification_clone(forest: &CallForest) -> Verdict {
+    use std::collections::BTreeMap;
+    fn rec(
+        path: &mut Vec<usize>,
+        node: &CallTree,
+        granted_to: &BTreeMap<CellId, Vec<CapabilityRef>>,
+        findings: &mut Vec<Finding>,
+    ) {
+        let mut child_granted = granted_to.clone();
+        for (ei, eff) in node.action.effects.iter().enumerate() {
+            if let Effect::GrantCapability { from, to, cap } = eff {
+                if let Some(parent_caps) = granted_to.get(from) {
+                    let covers_target = parent_caps.iter().any(|p| p.target == cap.target);
+                    if covers_target {
+                        let attenuates = parent_caps.iter().any(|p| cap_attenuates(cap, p));
+                        if !attenuates {
+                            findings.push(Finding {
+                                guarantee: "A (non-amplification)".to_string(),
+                                locus: Locus::node(path.clone()).at_effect(ei),
+                                message: format!(
+                                    "grant from cell {} amplifies: the granted cap \
+                                     (target slot {}, facet {:?}, expiry {:?}) is NOT an \
+                                     attenuation of any cap this cell was delegated earlier \
+                                     in the forest for the same target — it confers wider \
+                                     authority than the chain handed it",
+                                    short_cell(from),
+                                    cap.slot,
+                                    cap.allowed_effects,
+                                    cap.expires_at,
+                                ),
+                            });
+                        }
+                    }
+                }
+                child_granted.entry(*to).or_default().push(cap.clone());
+            }
+        }
+        for (i, child) in node.children.iter().enumerate() {
+            path.push(i);
+            rec(path, child, &child_granted, findings);
+            path.pop();
+        }
+    }
+    let mut findings = Vec::new();
+    let mut path = Vec::new();
+    let empty = BTreeMap::new();
+    for (i, root) in forest.roots.iter().enumerate() {
+        path.push(i);
+        rec(&mut path, root, &empty, &mut findings);
+        path.pop();
+    }
+    Verdict::from_findings(findings)
+}
+
+/// A tiny deterministic LCG so the differential population is reproducible
+/// without pulling in a `rand` dependency.
+struct Lcg(u64);
+impl Lcg {
+    fn next_u64(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+    fn upto(&mut self, n: u64) -> u64 {
+        self.next_u64() % n
+    }
+}
+
+fn rand_cap(r: &mut Lcg) -> CapabilityRef {
+    // Targets drawn from a SMALL set so grants frequently cover a target an
+    // ancestor already delegated (exercising the covers_target / attenuates
+    // branch, not only the not-flagged boundary case).
+    let target = cell(r.upto(4) as u8);
+    let slot = r.upto(3) as u32;
+    let facet = match r.upto(4) {
+        0 => None,
+        1 => Some(EFFECT_TRANSFER),
+        2 => Some(EFFECT_SET_FIELD),
+        _ => Some(EFFECT_TRANSFER | EFFECT_SET_FIELD),
+    };
+    let expiry = match r.upto(4) {
+        0 => None,
+        1 => Some(50),
+        2 => Some(100),
+        _ => Some(200),
+    };
+    cap(target, slot, facet, expiry)
+}
+
+fn rand_node(r: &mut Lcg, depth: u32) -> CallTree {
+    let ncell = cell(r.upto(6) as u8);
+    let ngrants = r.upto(3);
+    let mut effects = Vec::new();
+    for _ in 0..ngrants {
+        effects.push(Effect::GrantCapability {
+            from: cell(r.upto(6) as u8),
+            to: cell(r.upto(6) as u8),
+            cap: rand_cap(r),
+        });
+    }
+    if effects.is_empty() {
+        effects.push(Effect::IncrementNonce { cell: ncell });
+    }
+    let mut node = CallTree::new(action(ncell, effects));
+    if depth > 0 {
+        let nchildren = r.upto(3);
+        for _ in 0..nchildren {
+            node.children.push(rand_node(r, depth - 1));
+        }
+    }
+    node
+}
+
+#[test]
+fn no_amplification_borrow_walk_matches_clone_walk() {
+    // The NO-AMPLIFICATION capability security check: the accept/reject decision
+    // (and every located finding) must be byte-identical after the borrow-layer
+    // port — including the adversarial amplification attempts the small-cell
+    // population generates deep in the call forest.
+    let mut r = Lcg(0x1234_5678_9abc_def0);
+    for _ in 0..3000 {
+        let nroots = 1 + r.upto(3);
+        let mut roots = Vec::new();
+        for _ in 0..nroots {
+            roots.push(rand_node(&mut r, 4));
+        }
+        let f = forest_of(roots);
+        assert_eq!(
+            check_no_amplification(&f),
+            reference_no_amplification_clone(&f),
+            "borrow-layer walk must produce the byte-identical no-amplification verdict"
+        );
+    }
+}
