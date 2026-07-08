@@ -46,8 +46,9 @@
 //!     (the heavy R3 seam). The POLICY and plumbing are real: a valid
 //!     proof-hook-return satisfies, an invalid one refuses.
 //!   - `OptimisticChallenge`'s live dispute transport — the gossip/challenge
-//!     network that WRITES a [`ChallengeContext::conviction`] is out-of-crate;
-//!     the height/conviction gate here actually gates on what it is told.
+//!     network that WRITES a [`ChallengeContext::upheld_challenge`] id is
+//!     out-of-crate; the height/conviction gate here actually gates on what it is
+//!     told, and MINTS the [`Conviction`] from the upheld-challenge id it saw.
 //!   - `Staked`'s slash-transfer is now REAL and in-crate: an inner conviction
 //!     produces a [`crate::staked_bond::SlashOutcome`] that
 //!     [`crate::staked_bond::slash_bond`] fires as a conserving (`Σδ=0`), one-shot
@@ -267,10 +268,20 @@ pub fn verify_ci_proof(
 pub struct BondRef(pub [u8; 32]);
 
 /// WHAT proved a lie — the evidence carried by a [`Conviction`].
+///
+/// Each variant is `#[non_exhaustive]`, so it CANNOT be constructed outside this
+/// crate: a `ConvictionEvidence` value is minted solely inside
+/// [`CiAssurance::evaluate`], populated from the REAL inputs evaluate verified
+/// (the diverging attestation it saw, the upheld-challenge id it was handed).
+/// This is why a [`Conviction`] — and hence a
+/// [`crate::staked_bond::SlashOutcome`] — cannot be conjured from thin air: the
+/// evidence field is unforgeable by an external caller. Its fields stay `pub`
+/// (READ-only from outside — match with `..`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConvictionEvidence {
     /// A re-execution attestation over the SAME work reported a DIFFERENT
     /// `output_digest` than the verdict — agreement failed, so a host lied.
+    #[non_exhaustive]
     ReExecDivergence {
         /// The verdict's claimed output digest.
         claimed: [u8; 32],
@@ -280,6 +291,7 @@ pub enum ConvictionEvidence {
         signer: [u8; 32],
     },
     /// A challenge was upheld during the optimistic window (a fraud proof landed).
+    #[non_exhaustive]
     ChallengeUpheld {
         /// A digest identifying the upheld challenge (opaque here — the dispute
         /// transport's evidence handle).
@@ -291,26 +303,105 @@ pub enum ConvictionEvidence {
 /// policy was [`CiAssurance::Staked`], the `bond_ref` that is now forfeit. A
 /// conviction is a REFUSAL (the check is not satisfied) that additionally names
 /// what to slash — the transfer itself is the deferred seam.
+///
+/// # Unforgeable by construction
+///
+/// A `Conviction` has PRIVATE fields and NO public constructor, so an external
+/// caller cannot fabricate one. The only way to obtain a `Conviction` is to have
+/// [`CiAssurance::evaluate`] return [`AssuranceOutcome::Convicted`] after it
+/// genuinely detected a lie (a divergent re-execution attestation, or an upheld
+/// optimistic challenge). This is what makes
+/// [`crate::staked_bond::SlashOutcome::from_conviction`] genuinely
+/// conviction-gated: a slash requires a real `Conviction`, and a real
+/// `Conviction` requires a real `evaluate` detection.
+///
+/// Fabricating one does not compile — the fields are private and there is no
+/// public constructor:
+///
+/// ```compile_fail
+/// use dregg_doc::{Conviction, ConvictionEvidence};
+/// let forged = Conviction {
+///     bond_ref: None,
+///     evidence: ConvictionEvidence::ChallengeUpheld { challenge_id: [0u8; 32] },
+/// };
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Conviction {
     /// The bond forfeit by this conviction, if the policy was `Staked`.
-    pub bond_ref: Option<BondRef>,
+    bond_ref: Option<BondRef>,
     /// The evidence that proved the lie.
-    pub evidence: ConvictionEvidence,
+    evidence: ConvictionEvidence,
+}
+
+impl Conviction {
+    /// Mint a conviction for a divergent re-execution. MODULE-PRIVATE: reachable
+    /// only from [`CiAssurance::evaluate`], and populated from the attestation
+    /// evaluate actually verified (not caller-supplied) — this is what binds the
+    /// evidence to a real detection.
+    fn re_exec_divergence(claimed: [u8; 32], divergent: [u8; 32], signer: [u8; 32]) -> Self {
+        Conviction {
+            bond_ref: None,
+            evidence: ConvictionEvidence::ReExecDivergence {
+                claimed,
+                divergent,
+                signer,
+            },
+        }
+    }
+
+    /// Mint a conviction for an upheld optimistic challenge. MODULE-PRIVATE:
+    /// reachable only from [`CiAssurance::evaluate`], which mints it from the
+    /// upheld-challenge id it was handed in the (verified) challenge context.
+    fn challenge_upheld(challenge_id: [u8; 32]) -> Self {
+        Conviction {
+            bond_ref: None,
+            evidence: ConvictionEvidence::ChallengeUpheld { challenge_id },
+        }
+    }
+
+    /// Bind the forfeit bond when the convicting policy was [`CiAssurance::Staked`].
+    /// MODULE-PRIVATE: the `Staked` wrapper in [`CiAssurance::evaluate`] is the
+    /// only caller.
+    fn with_bond(mut self, bond_ref: BondRef) -> Self {
+        self.bond_ref = Some(bond_ref);
+        self
+    }
+
+    /// The bond forfeit by this conviction, if the policy was `Staked`
+    /// (read-only accessor — the field is private so a conviction is unforgeable).
+    pub fn bond_ref(&self) -> Option<BondRef> {
+        self.bond_ref
+    }
+
+    /// The evidence that proved the lie (read-only accessor — the field is
+    /// private so a conviction is unforgeable).
+    pub fn evidence(&self) -> &ConvictionEvidence {
+        &self.evidence
+    }
 }
 
 /// The optimistic-challenge context for [`CiAssurance::OptimisticChallenge`]:
-/// where in the challenge window the verdict is, and whether a conviction has
-/// been recorded. The live gossip/dispute transport that WRITES `conviction` is
-/// the named seam; the height/conviction gate here gates on what it is told.
+/// where in the challenge window the verdict is, and the id of an upheld
+/// challenge if one landed. The live gossip/dispute transport that WRITES
+/// `upheld_challenge` is the named seam; the height/conviction gate here gates on
+/// what it is told.
+///
+/// Note `upheld_challenge` is a plain id, NOT a [`ConvictionEvidence`]: the
+/// transport signals "this challenge was upheld", and [`CiAssurance::evaluate`]
+/// MINTS the [`Conviction`] from that id. The evidence in the resulting
+/// conviction is thus produced by evaluate from the id it verified — it is not a
+/// caller-supplied [`ConvictionEvidence`] (which a caller cannot construct
+/// anyway).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChallengeContext {
     /// The height the verdict was posted (accepted provisionally) at.
     pub posted_height: u64,
     /// The current height (the verifier's clock).
     pub now_height: u64,
-    /// A recorded conviction, if a challenge was upheld during the window.
-    pub conviction: Option<ConvictionEvidence>,
+    /// The id of an upheld challenge, if one landed during the window (written by
+    /// the out-of-crate dispute transport). `Some(id)` convicts; evaluate mints
+    /// the [`Conviction`] from `id`.
+    pub upheld_challenge: Option<[u8; 32]>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -546,14 +637,11 @@ impl CiAssurance {
                     }
                     // Same work, genuine attestation: does it AGREE?
                     if att_verdict.output_digest != input.verdict.output_digest {
-                        return AssuranceOutcome::Convicted(Conviction {
-                            bond_ref: None,
-                            evidence: ConvictionEvidence::ReExecDivergence {
-                                claimed: input.verdict.output_digest,
-                                divergent: att_verdict.output_digest,
-                                signer,
-                            },
-                        });
+                        return AssuranceOutcome::Convicted(Conviction::re_exec_divergence(
+                            input.verdict.output_digest,
+                            att_verdict.output_digest,
+                            signer,
+                        ));
                     }
                     if !matching_signers.contains(&signer) {
                         matching_signers.push(signer);
@@ -580,11 +668,8 @@ impl CiAssurance {
                         "optimistic challenge: no challenge context presented".to_string(),
                     );
                 };
-                if let Some(evidence) = &ctx.conviction {
-                    return AssuranceOutcome::Convicted(Conviction {
-                        bond_ref: None,
-                        evidence: evidence.clone(),
-                    });
+                if let Some(challenge_id) = ctx.upheld_challenge {
+                    return AssuranceOutcome::Convicted(Conviction::challenge_upheld(challenge_id));
                 }
                 let ready_at = ctx.posted_height.saturating_add(*challenge_window_height);
                 if ctx.now_height >= ready_at {
@@ -615,10 +700,9 @@ impl CiAssurance {
             CiAssurance::Staked { bond_ref, inner } => match inner.evaluate(input) {
                 AssuranceOutcome::Satisfied => AssuranceOutcome::Satisfied,
                 AssuranceOutcome::Unmet(why) => AssuranceOutcome::Unmet(why),
-                AssuranceOutcome::Convicted(mut c) => {
+                AssuranceOutcome::Convicted(c) => {
                     // The inner policy caught a lie: this bond is now forfeit.
-                    c.bond_ref = Some(*bond_ref);
-                    AssuranceOutcome::Convicted(c)
+                    AssuranceOutcome::Convicted(c.with_bond(*bond_ref))
                 }
             },
         }
@@ -761,16 +845,16 @@ mod tests {
             CiRunWitness::signed(primary, pv).with_attestations(with_divergence),
         ) {
             Err(CheckRefusal::Convicted(c)) => {
-                assert_eq!(c.bond_ref, None, "an unstaked policy names no bond");
-                match c.evidence {
+                assert_eq!(c.bond_ref(), None, "an unstaked policy names no bond");
+                match c.evidence() {
                     ConvictionEvidence::ReExecDivergence {
                         claimed,
                         divergent,
                         signer,
                     } => {
-                        assert_eq!(claimed, OUTPUT);
-                        assert_eq!(divergent, divergent_out);
-                        assert_eq!(signer, vk(S4));
+                        assert_eq!(*claimed, OUTPUT);
+                        assert_eq!(*divergent, divergent_out);
+                        assert_eq!(*signer, vk(S4));
                     }
                     other => panic!("expected ReExecDivergence, got {other:?}"),
                 }
@@ -793,7 +877,7 @@ mod tests {
         let inside = ChallengeContext {
             posted_height: 100,
             now_height: 105,
-            conviction: None,
+            upheld_challenge: None,
         };
         match satisfied(
             policy(),
@@ -807,7 +891,7 @@ mod tests {
         let past = ChallengeContext {
             posted_height: 100,
             now_height: 110,
-            conviction: None,
+            upheld_challenge: None,
         };
         satisfied(
             policy(),
@@ -815,22 +899,23 @@ mod tests {
         )
         .expect("past the challenge window with no conviction satisfies");
 
-        // A recorded conviction refuses even past the window.
+        // A recorded upheld challenge refuses even past the window; evaluate mints
+        // the ChallengeUpheld conviction from the id it was handed.
         let convicted = ChallengeContext {
             posted_height: 100,
             now_height: 999,
-            conviction: Some(ConvictionEvidence::ChallengeUpheld {
-                challenge_id: [0x7C; 32],
-            }),
+            upheld_challenge: Some([0x7C; 32]),
         };
         match satisfied(
             policy(),
             CiRunWitness::signed(receipt, v).with_challenge(convicted),
         ) {
-            Err(CheckRefusal::Convicted(c)) => assert!(matches!(
-                c.evidence,
-                ConvictionEvidence::ChallengeUpheld { .. }
-            )),
+            Err(CheckRefusal::Convicted(c)) => match c.evidence() {
+                ConvictionEvidence::ChallengeUpheld { challenge_id } => {
+                    assert_eq!(*challenge_id, [0x7C; 32], "evidence carries the upheld id");
+                }
+                other => panic!("expected ChallengeUpheld, got {other:?}"),
+            },
             other => panic!("expected Convicted, got {other:?}"),
         }
     }
@@ -905,12 +990,12 @@ mod tests {
         ) {
             Err(CheckRefusal::Convicted(c)) => {
                 assert_eq!(
-                    c.bond_ref,
+                    c.bond_ref(),
                     Some(BOND),
                     "the staked bond is bound to the conviction"
                 );
                 assert!(matches!(
-                    c.evidence,
+                    c.evidence(),
                     ConvictionEvidence::ReExecDivergence { .. }
                 ));
             }

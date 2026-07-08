@@ -28,12 +28,22 @@
 //!   bond is a spent nullifier. The `i64` heap encoding is
 //!   [`dregg_cell::escrow_sealed::encode_i64`] / `decode_i64`, reused directly.
 //!
-//! ## Conviction-gating
+//! ## Conviction-gating — by construction, literally
 //!
 //! A [`SlashOutcome`] can ONLY be built from a real [`Conviction`]
 //! ([`SlashOutcome::from_conviction`]); mere non-satisfaction ([`AssuranceOutcome::Unmet`])
 //! produces no slash. A satisfied inner policy leaves the bond untouched and
 //! RELEASABLE to the host ([`release_bond`]). See [`bond_disposition`].
+//!
+//! And a [`Conviction`] is itself UNFORGEABLE: its fields are private with no
+//! public constructor, and the [`ConvictionEvidence`] it carries has
+//! `#[non_exhaustive]` variants (also non-constructible outside the crate), so a
+//! `Conviction` — and hence a `SlashOutcome` (whose `evidence` field is a
+//! `ConvictionEvidence`) — can only come from
+//! [`crate::ci_assurance::CiAssurance::evaluate`] genuinely detecting a lie. A
+//! caller cannot conjure a conviction, so it cannot mint a slash from thin air:
+//! "conviction-gating by construction" is true at the type level, not merely by
+//! convention.
 //!
 //! ## The remaining seam (named)
 //!
@@ -304,8 +314,14 @@ pub fn post_bond(
 
 /// THE FORFEITURE ACTION produced on a real inner [`Conviction`]: it names the
 /// bond, the amount to move, where it goes, and the evidence that convicted. Its
-/// ONLY public constructor is [`SlashOutcome::from_conviction`], so a slash cannot
-/// be conjured without a genuine conviction (conviction-gating by construction).
+/// ONLY constructor is [`SlashOutcome::from_conviction`], which REQUIRES a
+/// [`Conviction`] — and a `Conviction` is unforgeable (private fields, no public
+/// constructor, minted only by [`crate::ci_assurance::CiAssurance::evaluate`]).
+/// The `evidence` field below is a [`ConvictionEvidence`], whose variants are
+/// `#[non_exhaustive]` and so cannot be built outside this crate; that alone
+/// blocks fabricating a `SlashOutcome` via its struct literal. A slash therefore
+/// cannot be conjured without a genuine conviction — conviction-gating holds by
+/// construction, at the type level.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlashOutcome {
     /// The bond forfeit by this slash.
@@ -324,12 +340,12 @@ impl SlashOutcome {
     /// the ONLY way to construct a [`SlashOutcome`] — a slash requires a
     /// conviction.
     pub fn from_conviction(bond: &StakedBond, conviction: &Conviction) -> Option<SlashOutcome> {
-        match conviction.bond_ref {
+        match conviction.bond_ref() {
             Some(bref) if bref == bond.bond_ref => Some(SlashOutcome {
                 bond_ref: bond.bond_ref,
                 amount: bond.amount,
                 beneficiary: bond.beneficiary_on_slash,
-                evidence: conviction.evidence.clone(),
+                evidence: conviction.evidence().clone(),
             }),
             _ => None,
         }
