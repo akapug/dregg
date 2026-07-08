@@ -65,6 +65,25 @@ use crate::tenant::TenantId;
 /// pointed and reaped (it then costs only storage until re-opened). Sandstorm uses ~90s.
 pub const IDLE_SHUTDOWN_SECS: u64 = 90;
 
+/// **The grain cell's committed commitment — the value the federation ledger stores.**
+///
+/// This is the binding that makes a served card independently verifiable: a grain's
+/// committed cell commitment IS its `/var` umem Merkle root (the raw 32 bytes behind the
+/// `data_root` that [`crate::bridge::HttpBridge::serve_attested`] commits and the served
+/// card is a leaf under). The federation stores exactly this value keyed by the grain's
+/// cell id — it is what `GET /api/cell/{id}` returns as `state_commitment` (see
+/// `node/src/api.rs`, "the federation stores only the commitment"). So the trusted root a
+/// visitor reads from the LEDGER == the root the inclusion proof folds to; authenticity
+/// chains to the federation's independently-stored record, not the serving host's response.
+///
+/// It is the raw `/var` root **verbatim** (not a hash that mixes in the cell id): the
+/// inclusion proofs a visitor checks fold precisely to this root, and the cell binding is
+/// carried instead by (a) the ledger keying this value under the grain's cell id and (b)
+/// the owner attestation, which signs `(grain_cell_id ‖ data_root)`.
+pub fn grain_cell_commitment(var: &Umem) -> [u8; 32] {
+    var.commit_root_bytes()
+}
+
 /// The dregg sandbox tier a grain runs at — a faithful subset of the sandbox executor's
 /// `CapTier` (`exec/src/lib.rs`). A grain *never* routes weaker than `Caged`: the
 /// Sandstorm supervisor is a namespace+seccomp jail, and an in-process wasm tier

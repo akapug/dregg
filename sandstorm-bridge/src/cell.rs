@@ -131,6 +131,19 @@ pub fn verify_inclusion(root: &DataRoot, key: &str, value: &[u8], proof: &Inclus
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DataRoot(pub String);
 
+impl DataRoot {
+    /// Reconstruct the wire `data_root` from the raw 32-byte Merkle root — the inverse of
+    /// the encoding [`Umem::commit`] applies. The federation ledger stores a grain cell's
+    /// commitment as the **raw 32 bytes** (`GET /api/cell/{id}` → `state_commitment`); a
+    /// visitor that fetches those bytes from the ledger rebuilds the `DataRoot` this way to
+    /// run [`verify_inclusion`] / check an owner attestation against the LEDGER's root —
+    /// never the serving host's. `DataRoot::from_root_bytes(u.commit_root_bytes()) ==
+    /// u.commit()` (the wire form and the raw form are the same commitment).
+    pub fn from_root_bytes(root: [u8; 32]) -> Self {
+        DataRoot(root_string(&root))
+    }
+}
+
 /// The grain's read-write `/var`, realized as a dregg cell's umem heap.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Umem {
@@ -184,8 +197,19 @@ impl Umem {
     /// AND a single entry's inclusion is provable under this root via [`prove`](Self::prove)
     /// without disclosing the rest of the heap.
     pub fn commit(&self) -> DataRoot {
+        DataRoot(root_string(&self.commit_root_bytes()))
+    }
+
+    /// The **raw 32-byte Merkle root** of the current heap — the value the federation
+    /// ledger stores as this grain cell's state commitment (the bytes behind
+    /// `GET /api/cell/{id}` → `state_commitment`). [`commit`](Self::commit) is exactly this
+    /// wrapped in the `umem1…` wire form, so the two are the same commitment
+    /// ([`DataRoot::from_root_bytes`]). This is the value [`crate::grain::grain_cell_commitment`]
+    /// publishes, so "the cell's committed root on the ledger" == "the root the served card
+    /// is a leaf under".
+    pub fn commit_root_bytes(&self) -> [u8; 32] {
         let leaves: Vec<[u8; 32]> = self.entries.iter().map(|(k, v)| leaf_hash(k, v)).collect();
-        DataRoot(root_string(&merkle_root(&leaves)))
+        merkle_root(&leaves)
     }
 
     /// **Prove one key's value is included under [`commit`](Self::commit)'s root** — the
