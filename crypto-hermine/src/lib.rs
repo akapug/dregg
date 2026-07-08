@@ -33,6 +33,11 @@
 //!   - the `ShortNorm` carrier (shortness of `z`,
 //!     `z − z'`)                                         → [`threshold::signature_norm`]
 //!     / [`threshold::acceptance_bound`]
+//! * beyond the Lean spec: FROST/RFC-9591-style per-signer
+//!   BINDING FACTORS (the concurrent-session defense)    → [`threshold::binding_factor`]
+//!   / [`threshold::hermine_sign_bound`]; the same verify relation
+//!   `A·z = w + c•t` with `w = Σ ρ_i·w_i` folded on the nonce side —
+//!   reference defense shaping, not Lean-pinned
 //!
 //! The Lean spec is stated over an abstract `R`-linear map `A : M →ₗ[R] N`.
 //! This reference instantiates `R = R_q = ℤ_q[X]/(Xⁿ+1)` ([`ring`]),
@@ -56,8 +61,17 @@
 //!   REFERENCE: synchronous/in-process (no broadcast channel or network),
 //!   detection without complaint-round arbitration, no rushing-adversary
 //!   bias fix (Gennaro et al.), reference PRNG — see [`dkg`]'s boundary doc;
-//! * **no binding factors** — single-ceremony only; concurrent-session
-//!   (Drijvers/ROS-style) attacks are out of model;
+//! * **binding factors PRESENT (reference)** — [`threshold::hermine_sign_bound`]
+//!   carries FROST/RFC-9591-style per-signer binding factors
+//!   (`ρ_i = H(t ‖ msg ‖ B ‖ i)` over blake3, sparse ternary of weight
+//!   [`threshold::BINDING_WEIGHT`]; `w = Σ ρ_i·w_i`,
+//!   `z_i = ρ_i·y_i + c·(λ_i·s_i)` — verification unchanged), so the
+//!   concurrent-session (Drijvers/ROS-style) mix-and-match defense now has
+//!   reference teeth; the formal ROS-resistance argument for the lattice
+//!   instantiation, a vetted hash-to-ring encoding, and constant-time
+//!   derivation are still owed. The unbound [`threshold::hermine_sign`]
+//!   remains single-ceremony-only (its shared-commitment fork is the
+//!   extractor tests' hypothesis);
 //! * **reference PRNG, non-constant-time samplers** — noise-flooding now
 //!   comes in BOTH variants: the uniform+TV one the Lean `Smudging` spec
 //!   proves (masks uniform over `[-M/2, M/2)`) AND the production-shaped
@@ -82,8 +96,9 @@
 //!
 //! The production signer needs the DKG's deployment machinery (real
 //! broadcast/private channels, complaint-round arbitration, the bias fix),
-//! binding factors, a CSPRNG, constant-time arithmetic and sampling,
-//! full-size parameters, and external audit. This crate's value is different: every identity the
+//! the formal ROS-resistance argument behind the binding factors, a CSPRNG,
+//! constant-time arithmetic and sampling, full-size parameters, and external
+//! audit. This crate's value is different: every identity the
 //! Lean proofs establish is witnessed here on concrete `R_q` numbers —
 //! including the Smudging key-hiding bound as an empirical total-variation
 //! measurement, in both its uniform (Lean-pinned) and discrete-Gaussian
@@ -99,10 +114,11 @@ pub use dkg::{dkg_deal, verify_dkg_share, DkgDealing, DkgError, DkgShareMsg, Her
 pub use linalg::{Matrix, PolyVec};
 pub use ring::{Poly, N, Q};
 pub use threshold::{
-    acceptance_bound, extract_preimage, extracted_relation, hermine_sign, hermine_sign_gaussian,
-    hermine_sign_with_mask_width, lagrange_reconstruct, partial_response, sample_gaussian_mask,
-    sample_wide_mask, signature_norm, verify_hermine, DiscreteGaussian, HermineShare,
-    HermineSignature, HermineTestDealer, GAUSSIAN_TAIL_CUT, MASK_WIDTH_WIDE, SECRET_ETA,
+    acceptance_bound, binding_factor, extract_preimage, extracted_relation, hermine_sign,
+    hermine_sign_bound, hermine_sign_gaussian, hermine_sign_with_mask_width, lagrange_reconstruct,
+    partial_response, sample_gaussian_mask, sample_wide_mask, signature_norm, verify_hermine,
+    DiscreteGaussian, HermineShare, HermineSignature, HermineTestDealer, NonceCommitment,
+    BINDING_WEIGHT, GAUSSIAN_TAIL_CUT, MASK_WIDTH_BOUND, MASK_WIDTH_WIDE, SECRET_ETA,
 };
 
 /// Lattice verification — the Lean `HermineThreshold.verify`, symbol for
