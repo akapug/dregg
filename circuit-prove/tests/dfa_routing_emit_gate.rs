@@ -521,3 +521,51 @@ fn forged_running_hash_refuses() {
         "a fabricated running hash (unserved chip row) must be REJECTED by the chip lookup"
     );
 }
+
+/// Perf probe (run with `--ignored --nocapture`): times the descriptor decode, prove, and verify
+/// legs separately so we know where the wall-clock actually goes (dispatch µs vs prove/verify ms).
+#[test]
+#[ignore]
+fn perf_prove_verify_breakdown() {
+    use std::time::Instant;
+    let (trace, pis) = honest_witness(0, 1, BabyBear::new(7));
+
+    // decode (cold parse of the golden — what the cache eliminates on the hot path)
+    let t = Instant::now();
+    for _ in 0..1000 {
+        std::hint::black_box(parse_vm_descriptor2(std::hint::black_box(GOLDEN_JSON)).unwrap());
+    }
+    let decode_us = t.elapsed().as_secs_f64() * 1e6 / 1000.0;
+
+    let desc = parse_vm_descriptor2(GOLDEN_JSON).unwrap();
+
+    // prove
+    let n = 30u32;
+    let t = Instant::now();
+    let mut proof = None;
+    for _ in 0..n {
+        proof = Some(
+            prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[]).unwrap(),
+        );
+    }
+    let prove_ms = t.elapsed().as_secs_f64() * 1e3 / n as f64;
+    let proof = proof.unwrap();
+
+    // verify
+    let t = Instant::now();
+    for _ in 0..n {
+        std::hint::black_box(verify_vm_descriptor2(&desc, &proof, &pis).unwrap());
+    }
+    let verify_ms = t.elapsed().as_secs_f64() * 1e3 / n as f64;
+
+    eprintln!(
+        "PERF dfa-routing (trace {}x{}):",
+        trace.len(),
+        trace.first().map(|r| r.len()).unwrap_or(0)
+    );
+    eprintln!("  decode: {decode_us:.1} µs   prove: {prove_ms:.2} ms   verify: {verify_ms:.2} ms");
+    eprintln!(
+        "  decode is {:.3}% of a prove+verify cycle",
+        decode_us / 1000.0 / (prove_ms + verify_ms) * 100.0
+    );
+}
