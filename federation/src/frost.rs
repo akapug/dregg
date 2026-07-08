@@ -32,6 +32,16 @@
 //!   so the quorum survives a quantum adversary that breaks the discrete-log
 //!   half (`hybrid_survives_classical_break`). Additive and staged behind
 //!   [`QuorumScheme::Hybrid`], not wired into live consensus.
+//! * [`HermineHybridQC`] / [`verify_hermine_hybrid`] — the COMPACT-PQ hybrid:
+//!   the ed25519 vote quorum AND ONE `crypto_hermine` threshold certificate
+//!   (the Raccoon-based lattice FROST-analog), so the post-quantum half is a
+//!   single committee-INDEPENDENT object instead of [`HybridQC`]'s `t × ~3.3 KiB`
+//!   ML-DSA concatenation. The Lean spec is `Dregg2.Crypto.HermineHybrid`
+//!   (`hermine_hybrid_survives_classical_break`, quantum-safety reducing to
+//!   MSIS). STAGED REFERENCE ONLY behind [`QuorumScheme::HermineHybrid`]:
+//!   crypto-hermine is pre-audit (toy challenge hash, no formal ROS argument),
+//!   so the ML-DSA [`QuorumScheme::HybridVotes`] path stays the deployable one —
+//!   this wires the compact-PQ STRUCTURE and its size win, not a deployment.
 //!
 //! # Production-signing boundary (read before wiring signers)
 //!
@@ -53,6 +63,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 
 use dregg_types::{PublicKey, Signature};
+
+// The COMPACT post-quantum half (`HermineHybridQC`). crypto-hermine is a lattice
+// THRESHOLD signature, so its certificate is ONE object under the group key —
+// committee-INDEPENDENT — unlike ML-DSA's per-signer Vec. STAGED reference only.
+use crypto_hermine::{
+    HermineSignature, Matrix, N as HERMINE_N, Poly as HerminePoly, PolyVec, Q as HERMINE_Q,
+    verify_hermine,
+};
 
 /// Size in bytes of a serialized [`FrostQC`]: one Schnorr signature `(R ‖ z)`.
 pub const FROST_QC_BYTES: usize = 64;
@@ -162,6 +180,25 @@ pub enum QuorumScheme<'a> {
         /// position `i` (the post-quantum half).
         ml_dsa_pubkeys: &'a [MlDsaPublicKey],
     },
+    /// The COMPACT-PQ hybrid path (`HermineHybrid`, STAGED reference): the
+    /// classical half is the ed25519 vote quorum (as [`Self::HybridVotes`]), and
+    /// the PQ half is ONE Hermine threshold certificate under the federation's
+    /// Hermine group key — committee-INDEPENDENT, vs the `t × ~3.3 KiB` ML-DSA
+    /// concatenation. The opaque bytes carry a [`HermineHybridQC`].
+    ///
+    /// Default-off reference: crypto-hermine is pre-audit; [`Self::HybridVotes`]
+    /// stays the deployable post-quantum path.
+    HermineHybrid {
+        /// The committee's ed25519 member keys, member `i` at position `i`.
+        members: &'a [PublicKey],
+        /// The Hermine public matrix `A` (the shared CRS the group key is `A·s`).
+        hermine_a: &'a Matrix,
+        /// The federation's Hermine group public key `t = A·s`.
+        hermine_group_key: &'a PolyVec,
+        /// Minimum count of distinct, valid ed25519 votes required (the Hermine
+        /// half's own threshold is enforced cryptographically at its verifier).
+        threshold: usize,
+    },
 }
 
 impl QuorumScheme<'_> {
@@ -205,6 +242,22 @@ impl QuorumScheme<'_> {
                     );
                     derived == message && hqc.verify_with_keys(members, ml_dsa_pubkeys)
                 }
+                None => false,
+            },
+            QuorumScheme::HermineHybrid {
+                members,
+                hermine_a,
+                hermine_group_key,
+                threshold,
+            } => match HermineHybridQC::from_bytes(qc_bytes) {
+                Some(qc) => verify_hermine_hybrid(
+                    members,
+                    hermine_a,
+                    hermine_group_key,
+                    message,
+                    &qc,
+                    *threshold,
+                ),
                 None => false,
             },
         }
@@ -671,6 +724,235 @@ pub fn hybrid_sign(
     Some(HybridQC { frost, pq_sigs })
 }
 
+// =============================================================================
+// HERMINE HYBRID — the COMPACT post-quantum half (STAGED reference)
+// =============================================================================
+//
+// `HybridQC` above pays for its quantum safety by weight: the PQ half is one
+// FIPS 204 ML-DSA-65 signature (~3.3 KiB) PER signer, so a `t`-of-`n` quorum
+// carries `t × 3.3 KiB` of lattice signatures and the verifier can see which
+// subset signed. That is the price of ML-DSA having NO threshold aggregation.
+//
+// `HermineHybridQC` collapses that half. crypto-hermine is a lattice THRESHOLD
+// signature (the Raccoon-based FROST-analog, IACR ePrint 2026/419): a t-of-n
+// quorum is ONE certificate `(w, c, z)` verified under the federation's Hermine
+// GROUP key — committee-INDEPENDENT in size, exactly as `FrostQC` is on the
+// classical side. So the PQ half becomes a single ~few-KiB object regardless of
+// committee size, and (as with FROST) the verifier cannot tell which subset
+// signed. The Lean spec is `Dregg2.Crypto.HermineHybrid`
+// (`hermine_hybrid_survives_classical_break`): the hybrid stays quantum-safe by
+// reducing to module-SIS at Hermine's verifier, the `hybridVerify = classical ∧
+// pq` shape.
+//
+// ── STAGED-REFERENCE BOUNDARY (read before wiring) ──────────────────────────
+// This wires the compact-PQ STRUCTURE — the mechanism, the size collapse, and
+// the Lean-backed security shape — NOT a production deployment. crypto-hermine
+// is PRE-AUDIT: a toy (non-cryptographic) challenge hash, no formal ROS-hardness
+// argument for the lattice instantiation, reference sampling. The ML-DSA
+// `HybridVotes` path stays the DEPLOYABLE post-quantum quorum; `HermineHybrid` is
+// the compact upgrade to promote once crypto-hermine earns external audit. It is
+// exposed behind `QuorumScheme::HermineHybrid`, default-off, wired into NO live
+// consensus path.
+
+/// Bytes per serialized Hermine coefficient. Every `R_q` coefficient is
+/// `< q = 8380417 < 2²³`, so three bytes are exact (and canonical: `from_bytes`
+/// reduces mod `q` defensively).
+const HERMINE_COEFF_BYTES: usize = 3;
+
+/// Serialized size of one Hermine `R_q` element (a `Poly`): `N` packed
+/// coefficients.
+const HERMINE_POLY_BYTES: usize = HERMINE_N * HERMINE_COEFF_BYTES;
+
+/// A HYBRID quorum certificate whose post-quantum half is ONE Hermine threshold
+/// certificate — the COMPACT counterpart of [`HybridQC`].
+///
+/// * `votes` — the classical half: the EXISTING per-member ed25519 vote quorum
+///   (`(committee position, signature)` pairs), the same shape live consensus
+///   already gathers. No FROST aggregation here; the classical half is the
+///   plain vote set, exactly as [`QuorumScheme::HybridVotes`] carries it.
+/// * `hermine_cert` — the post-quantum half: a SINGLE
+///   [`crypto_hermine::HermineSignature`] `(w, c, z)` under the federation's
+///   Hermine group key. Committee-INDEPENDENT — its size is fixed by the lattice
+///   parameters (matrix rank `k × ℓ`), NOT by how many signers contributed
+///   (contrast [`HybridQC::pq_sigs`], a `Vec` that grows `~3.3 KiB` per signer).
+///
+/// The Hermine half's THRESHOLD is enforced cryptographically on the signing
+/// side (fewer than `t` shares cannot Lagrange-reconstruct the group secret, so
+/// no sub-threshold subset produces a cert that verifies under the group key) —
+/// exactly like [`FrostQC`]. [`verify_hermine_hybrid`]'s `threshold` argument
+/// governs only the CLASSICAL ed25519 vote count.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HermineHybridQC {
+    /// The classical half: ed25519 vote quorum, `(committee position, sig)`.
+    pub votes: Vec<(usize, Signature)>,
+    /// The post-quantum half: ONE Hermine threshold certificate under the
+    /// group key (committee-independent size).
+    pub hermine_cert: HermineSignature,
+}
+
+/// Pack one Hermine `Poly` (its `N` coefficients, three bytes each).
+fn hermine_poly_to_bytes(p: &HerminePoly, out: &mut Vec<u8>) {
+    for &c in &p.coeffs {
+        out.extend_from_slice(&c.to_le_bytes()[..HERMINE_COEFF_BYTES]);
+    }
+}
+
+/// Read one packed Hermine `Poly`; `None` if fewer than [`HERMINE_POLY_BYTES`]
+/// remain. Coefficients are reduced mod `q` (canonicalizing any junk input).
+fn hermine_poly_from_bytes(rest: &mut &[u8]) -> Option<HerminePoly> {
+    let mut coeffs = [0u64; HERMINE_N];
+    for c in coeffs.iter_mut() {
+        let (head, tail) = rest.split_at_checked(HERMINE_COEFF_BYTES)?;
+        *rest = tail;
+        let mut buf = [0u8; 8];
+        buf[..HERMINE_COEFF_BYTES].copy_from_slice(head);
+        *c = u64::from_le_bytes(buf) % HERMINE_Q;
+    }
+    Some(HerminePoly { coeffs })
+}
+
+/// Pack a Hermine `PolyVec`: length prefix `u32 LE`, then each element.
+fn hermine_vec_to_bytes(v: &PolyVec, out: &mut Vec<u8>) {
+    out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+    for p in &v.0 {
+        hermine_poly_to_bytes(p, out);
+    }
+}
+
+/// Read a length-prefixed Hermine `PolyVec`.
+fn hermine_vec_from_bytes(rest: &mut &[u8]) -> Option<PolyVec> {
+    let (head, tail) = rest.split_at_checked(4)?;
+    *rest = tail;
+    let len = u32::from_le_bytes(head.try_into().ok()?) as usize;
+    // `len` is attacker-controlled: cap the preallocation by what could frame.
+    let mut polys = Vec::with_capacity(len.min(rest.len() / HERMINE_POLY_BYTES));
+    for _ in 0..len {
+        polys.push(hermine_poly_from_bytes(rest)?);
+    }
+    Some(PolyVec(polys))
+}
+
+/// Serialize a [`HermineSignature`] `(w, c, z)` to the compact packed form.
+/// This is the POST-QUANTUM half's on-wire size — committee-independent.
+pub fn hermine_cert_to_bytes(cert: &HermineSignature) -> Vec<u8> {
+    let mut out = Vec::new();
+    hermine_vec_to_bytes(&cert.w, &mut out);
+    hermine_poly_to_bytes(&cert.c, &mut out);
+    hermine_vec_to_bytes(&cert.z, &mut out);
+    out
+}
+
+/// Deserialize a [`HermineSignature`] from [`hermine_cert_to_bytes`]; leaves
+/// `rest` positioned after the certificate. `None` on any framing violation.
+fn hermine_cert_from_bytes(rest: &mut &[u8]) -> Option<HermineSignature> {
+    let w = hermine_vec_from_bytes(rest)?;
+    let c = hermine_poly_from_bytes(rest)?;
+    let z = hermine_vec_from_bytes(rest)?;
+    Some(HermineSignature { w, c, z })
+}
+
+impl HermineHybridQC {
+    /// Serialize to the opaque-bytes convention (`dregg_types::ThresholdQC`):
+    /// `votes_count(u32 LE) ‖ [pos(u32 LE) ‖ sig(64)]* ‖ hermine_cert`.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&(self.votes.len() as u32).to_le_bytes());
+        for (pos, sig) in &self.votes {
+            out.extend_from_slice(&(*pos as u32).to_le_bytes());
+            out.extend_from_slice(&sig.0);
+        }
+        out.extend_from_slice(&hermine_cert_to_bytes(&self.hermine_cert));
+        out
+    }
+
+    /// Deserialize; `None` on any framing violation (short header/entry,
+    /// truncated certificate, trailing bytes).
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut rest = bytes;
+        let take_u32 = |rest: &mut &[u8]| -> Option<u32> {
+            let (head, tail) = rest.split_at_checked(4)?;
+            *rest = tail;
+            Some(u32::from_le_bytes(head.try_into().ok()?))
+        };
+        let count = take_u32(&mut rest)?;
+        // `count` is attacker-controlled: cap the preallocation by what the
+        // remaining bytes could frame (≥ 68 bytes per vote entry).
+        let mut votes = Vec::with_capacity((count as usize).min(rest.len() / 68));
+        for _ in 0..count {
+            let pos = take_u32(&mut rest)? as usize;
+            let (sig, tail) = rest.split_at_checked(64)?;
+            rest = tail;
+            votes.push((pos, Signature(sig.try_into().ok()?)));
+        }
+        let hermine_cert = hermine_cert_from_bytes(&mut rest)?;
+        if !rest.is_empty() {
+            return None;
+        }
+        Some(Self {
+            votes,
+            hermine_cert,
+        })
+    }
+
+    /// The byte size of the POST-QUANTUM half alone (the single Hermine cert).
+    /// Committee-INDEPENDENT: this is the compactness win to compare against
+    /// [`HybridQC`]'s `t × ~3.3 KiB` ML-DSA concatenation.
+    pub fn pq_half_bytes(&self) -> usize {
+        hermine_cert_to_bytes(&self.hermine_cert).len()
+    }
+}
+
+/// Verify a [`HermineHybridQC`] — the Lean `hybridVerify = classical ∧ pq` at
+/// Hermine's verifier (`Dregg2.Crypto.HermineHybrid`).
+///
+/// Accepts iff BOTH:
+/// * **(a) classical** — `qc.votes` carries at least `threshold` entries, EVERY
+///   entry names a distinct in-range committee position, and EVERY entry's
+///   ed25519 signature verifies over `message` against that position's key in
+///   `committee_ed25519`;
+/// * **(b) post-quantum** — [`crypto_hermine::verify_hermine`] accepts
+///   `qc.hermine_cert` over `message` under the Hermine group key
+///   `(hermine_a, hermine_group_key)`.
+///
+/// STRICT on the classical half exactly as [`verify_pq_quorum_half`] is on the
+/// ML-DSA side: any invalid, duplicate, or out-of-range vote rejects the WHOLE
+/// certificate, and `threshold == 0` (a vacuous classical half) is refused.
+///
+/// The `threshold` argument bounds ONLY the ed25519 vote count; the Hermine
+/// half's threshold is enforced cryptographically inside `verify_hermine` (a
+/// sub-`t` share subset cannot reconstruct a cert that verifies under the group
+/// key — the same signing-side guarantee `FrostQC` rests on).
+pub fn verify_hermine_hybrid(
+    committee_ed25519: &[PublicKey],
+    hermine_a: &Matrix,
+    hermine_group_key: &PolyVec,
+    message: &[u8],
+    qc: &HermineHybridQC,
+    threshold: usize,
+) -> bool {
+    // (a) classical half — the ed25519 vote quorum.
+    if threshold == 0 {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    for (pos, sig) in &qc.votes {
+        let Some(pk) = committee_ed25519.get(*pos) else {
+            return false;
+        };
+        if !seen.insert(*pos) {
+            return false;
+        }
+        if !pk.verify(message, sig) {
+            return false;
+        }
+    }
+    if qc.votes.len() < threshold {
+        return false;
+    }
+    // (b) post-quantum half — the ONE Hermine threshold certificate.
+    verify_hermine(hermine_a, hermine_group_key, message, &qc.hermine_cert)
+}
+
 /// Decompress a `CompressedEdwardsY` public key — used by tests to sanity-check
 /// dealt keys are canonical points.
 #[cfg(test)]
@@ -1078,5 +1360,298 @@ mod tests {
         )
         .unwrap();
         assert!(!scheme.verify_opaque_qc(&fqc.to_bytes(), message));
+    }
+
+    // =========================================================================
+    // HERMINE HYBRID (ed25519 votes + ONE Hermine threshold cert) tests
+    // =========================================================================
+    //
+    // The COMPACT-PQ structure: the post-quantum half is a SINGLE Hermine
+    // threshold certificate (committee-independent), not ML-DSA's per-signer
+    // Vec. STAGED reference — crypto-hermine is pre-audit.
+
+    use crypto_hermine::{HermineShare, HermineTestDealer, hermine_sign_bound};
+
+    /// The Hermine lattice parameters used by these tests: `k = 2`, `ℓ = 3`.
+    /// The certificate size is fixed by THESE, independent of committee size.
+    const HERMINE_ROWS: usize = 2;
+    const HERMINE_COLS: usize = 3;
+
+    /// Build an `n`-member ed25519 committee (deterministic keys) and the
+    /// signing keys behind it.
+    fn ed25519_committee(n: usize) -> (Vec<dregg_types::SigningKey>, Vec<PublicKey>) {
+        let mut sks = Vec::with_capacity(n);
+        let mut pks = Vec::with_capacity(n);
+        for i in 0..n {
+            let mut seed = [0u8; 32];
+            seed[0] = 0x7e;
+            seed[1] = i as u8;
+            let sk = dregg_types::SigningKey::from_bytes(&seed);
+            pks.push(sk.public_key());
+            sks.push(sk);
+        }
+        (sks, pks)
+    }
+
+    /// Produce a HermineHybridQC: `t` ed25519 votes over `message` from the
+    /// first `t` members PLUS one Hermine threshold cert from the first `t`
+    /// Hermine shares (via the production-shaped binding-factor ceremony).
+    fn hermine_hybrid_qc(
+        sks: &[dregg_types::SigningKey],
+        dealer: &HermineTestDealer,
+        t: usize,
+        mask_seed: u64,
+        message: &[u8],
+    ) -> HermineHybridQC {
+        let votes: Vec<(usize, Signature)> = (0..t)
+            .map(|i| (i, dregg_types::sign(&sks[i], message)))
+            .collect();
+        let signers: Vec<&HermineShare> = dealer.shares[0..t].iter().collect();
+        let hermine_cert =
+            hermine_sign_bound(&dealer.a, &dealer.group_key, &signers, mask_seed, message).unwrap();
+        HermineHybridQC {
+            votes,
+            hermine_cert,
+        }
+    }
+
+    #[test]
+    fn hermine_hybrid_honest_qc_verifies_both_halves() {
+        let n = 4;
+        let t = 3;
+        let (sks, pks) = ed25519_committee(n);
+        let d =
+            HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, n as u64, t as u64, 0xABCD_0001)
+                .unwrap();
+        let message = b"dregg-federation-vote-v1:hermine-hybrid";
+        let qc = hermine_hybrid_qc(&sks, &d, t, 0x5151, message);
+
+        // Both halves accept the honest certificate.
+        assert!(verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &qc,
+            t
+        ));
+        // The Hermine half alone verifies (the classical/pq split is real).
+        assert!(verify_hermine(
+            &d.a,
+            &d.group_key,
+            message,
+            &qc.hermine_cert
+        ));
+        // Neither half accepts a different message.
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            b"other message",
+            &qc,
+            t
+        ));
+    }
+
+    #[test]
+    fn hermine_hybrid_forged_pq_is_rejected() {
+        // THE PQ TEETH: a valid ed25519 quorum cannot carry a bad Hermine cert.
+        let n = 4;
+        let t = 3;
+        let (sks, pks) = ed25519_committee(n);
+        let d =
+            HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, n as u64, t as u64, 0xABCD_0002)
+                .unwrap();
+        let message = b"dregg-federation-vote-v1:hermine-hybrid-forge";
+        let qc = hermine_hybrid_qc(&sks, &d, t, 0x6262, message);
+
+        // Tamper the Hermine response `z` (one coefficient) — the cert no longer
+        // satisfies `A·z = w + c·t`.
+        let mut tampered = qc.clone();
+        tampered.hermine_cert.z.0[0] = tampered.hermine_cert.z.0[0].add(&HerminePoly::constant(1));
+        assert!(!verify_hermine(
+            &d.a,
+            &d.group_key,
+            message,
+            &tampered.hermine_cert
+        ));
+        // The ed25519 votes are untouched and honest — yet the whole QC is
+        // REJECTED (the Lean `classical ∧ pq`).
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &tampered,
+            t
+        ));
+
+        // A sub-threshold Hermine signer set cannot forge a verifying cert
+        // either: 2 of a t=3 sharing reconstruct the wrong secret.
+        let sub_signers: Vec<&HermineShare> = d.shares[0..2].iter().collect();
+        let bad_cert =
+            hermine_sign_bound(&d.a, &d.group_key, &sub_signers, 0x7070, message).unwrap();
+        let sub_qc = HermineHybridQC {
+            votes: qc.votes.clone(),
+            hermine_cert: bad_cert,
+        };
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &sub_qc,
+            t
+        ));
+    }
+
+    #[test]
+    fn hermine_hybrid_sub_threshold_ed25519_is_rejected() {
+        let n = 4;
+        let t = 3;
+        let (sks, pks) = ed25519_committee(n);
+        let d =
+            HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, n as u64, t as u64, 0xABCD_0003)
+                .unwrap();
+        let message = b"dregg-federation-vote-v1:hermine-hybrid-subthreshold";
+        // A perfectly valid Hermine cert, but only 2 ed25519 votes below t = 3.
+        let mut qc = hermine_hybrid_qc(&sks, &d, t, 0x8383, message);
+        qc.votes.truncate(2);
+        assert!(verify_hermine(
+            &d.a,
+            &d.group_key,
+            message,
+            &qc.hermine_cert
+        ));
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &qc,
+            t
+        ));
+        // A duplicate vote cannot pad the count back to threshold.
+        let mut padded = qc.clone();
+        padded.votes.push(padded.votes[0]);
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &padded,
+            t
+        ));
+        // An out-of-range committee position is rejected outright.
+        let mut oob = qc.clone();
+        oob.votes.push((99, dregg_types::sign(&sks[0], message)));
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &oob,
+            t
+        ));
+        // And threshold 0 (a vacuous classical half) is refused.
+        let full = hermine_hybrid_qc(&sks, &d, t, 0x8484, message);
+        assert!(!verify_hermine_hybrid(
+            &pks,
+            &d.a,
+            &d.group_key,
+            message,
+            &full,
+            0
+        ));
+    }
+
+    #[test]
+    fn hermine_hybrid_serialization_round_trips_and_selector_dispatches() {
+        let n = 4;
+        let t = 3;
+        let (sks, pks) = ed25519_committee(n);
+        let d =
+            HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, n as u64, t as u64, 0xABCD_0004)
+                .unwrap();
+        let message = b"hermine hybrid selector";
+        let qc = hermine_hybrid_qc(&sks, &d, t, 0x9595, message);
+
+        // Opaque-bytes round trip.
+        let bytes = qc.to_bytes();
+        let qc2 = HermineHybridQC::from_bytes(&bytes).unwrap();
+        assert_eq!(qc, qc2);
+
+        // Framing violations reject.
+        assert!(HermineHybridQC::from_bytes(&bytes[..bytes.len() - 1]).is_none());
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(HermineHybridQC::from_bytes(&trailing).is_none());
+
+        // The scheme selector dispatches the HermineHybrid arm over the same
+        // opaque-bytes seam as BLS / FROST / Hybrid / HybridVotes.
+        let opaque = dregg_types::ThresholdQC(bytes);
+        let scheme = QuorumScheme::HermineHybrid {
+            members: &pks,
+            hermine_a: &d.a,
+            hermine_group_key: &d.group_key,
+            threshold: t,
+        };
+        assert!(scheme.verify_opaque_qc(&opaque.0, message));
+        assert!(!scheme.verify_opaque_qc(&opaque.0, b"other message"));
+        // A bare FROST cert's bytes are not a HermineHybrid cert.
+        assert!(!scheme.verify_opaque_qc(&[0xAB; 64], message));
+    }
+
+    #[test]
+    fn hermine_hybrid_pq_half_is_compact_and_committee_independent() {
+        // THE COMPACTNESS WIN. crypto-hermine is a THRESHOLD scheme, so the PQ
+        // half is ONE cert regardless of committee size — vs ML-DSA's `t` × one
+        // ~3.3 KiB signature per signer.
+        let (sks, pks) = ed25519_committee(8);
+
+        // The Hermine PQ half at t = 3 …
+        let d3 = HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, 8, 3, 0xABCD_0005).unwrap();
+        let qc3 = hermine_hybrid_qc(&sks, &d3, 3, 0xA1A1, b"m");
+        let hermine_pq = qc3.pq_half_bytes();
+
+        // … and at t = 6 (double the signing subset): IDENTICAL byte size.
+        let d6 = HermineTestDealer::deal(HERMINE_ROWS, HERMINE_COLS, 8, 6, 0xABCD_0006).unwrap();
+        let qc6 = hermine_hybrid_qc(&sks, &d6, 6, 0xA2A2, b"m");
+        assert_eq!(
+            qc6.pq_half_bytes(),
+            hermine_pq,
+            "Hermine PQ half must be committee-independent"
+        );
+        let _ = &pks;
+
+        // The ML-DSA HybridQC PQ half GROWS with the signing subset: one ML-DSA-65
+        // signature (~3.3 KiB) per signer.
+        let hd = HybridTestDealer::deal(8, 6, &seeds(6, 40), &pq_seeds(8, 41)).unwrap();
+        let ml_dsa_qc_t3 = hybrid_sign(&hd, &[0, 1, 2], &seeds(3, 42), b"m").unwrap();
+        let ml_dsa_qc_t6 = hybrid_sign(&hd, &[0, 1, 2, 3, 4, 5], &seeds(6, 43), b"m").unwrap();
+        let ml_dsa_pq_t3: usize = ml_dsa_qc_t3.pq_sigs.iter().map(|(_, s)| s.len()).sum();
+        let ml_dsa_pq_t6: usize = ml_dsa_qc_t6.pq_sigs.iter().map(|(_, s)| s.len()).sum();
+
+        // The collapse: ONE Hermine cert < the t-signer ML-DSA concatenation,
+        // and the gap only widens with committee size.
+        println!(
+            "PQ-half bytes — Hermine (any t): {hermine_pq}  |  ML-DSA t=3: {ml_dsa_pq_t3}  ML-DSA t=6: {ml_dsa_pq_t6}"
+        );
+        assert!(
+            hermine_pq < ml_dsa_pq_t3,
+            "one Hermine cert ({hermine_pq}) must beat t=3 ML-DSA ({ml_dsa_pq_t3})"
+        );
+        assert!(
+            ml_dsa_pq_t6 > ml_dsa_pq_t3,
+            "ML-DSA half grows with the subset"
+        );
+        assert!(
+            ml_dsa_pq_t6 > 3 * hermine_pq,
+            "at t=6 the ML-DSA half ({ml_dsa_pq_t6}) dwarfs the fixed Hermine cert ({hermine_pq})"
+        );
+        // Sanity on the fixed Hermine size: (k + 1 + ℓ) packed R_q elements plus
+        // two u32 length prefixes (w and z; the challenge c is a bare Poly).
+        let expected = (HERMINE_ROWS + 1 + HERMINE_COLS) * HERMINE_POLY_BYTES + 2 * 4;
+        assert_eq!(hermine_pq, expected);
     }
 }
