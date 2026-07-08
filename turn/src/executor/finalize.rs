@@ -90,6 +90,7 @@ impl TurnExecutor {
             Authorization::Bearer(_) => self.costs.signature_verify,
             Authorization::Unchecked => 0,
             Authorization::CapTpDelivered { .. } => self.costs.signature_verify.saturating_mul(2),
+            Authorization::HybridSignature { .. } => self.costs.signature_verify.saturating_mul(2),
             Authorization::Custom { .. } => self.costs.proof_verify,
             Authorization::OneOf { candidates, .. } => candidates
                 .iter()

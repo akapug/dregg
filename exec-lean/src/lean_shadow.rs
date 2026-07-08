@@ -2064,6 +2064,17 @@ fn auth_to_wire_ctx(
         Authorization::Signature(r, s) => {
             sig_echo_wire(action, target_cell, r, s, sig_ctx, position)
         }
+        // HYBRID (ed25519 + ML-DSA): the Lean gate models the CLASSICAL WHO leg,
+        // so realize the ed25519 half through the SAME real-check echo as a plain
+        // `Signature`. The post-quantum half is an additional Rust-side gate
+        // (`dregg_turn::pq`) outside the Lean model — the gate stays a floor.
+        Authorization::HybridSignature { ed25519, .. } => {
+            let mut r = [0u8; 32];
+            let mut s = [0u8; 32];
+            r.copy_from_slice(&ed25519[..32]);
+            s.copy_from_slice(&ed25519[32..]);
+            sig_echo_wire(action, target_cell, &r, &s, sig_ctx, position)
+        }
         // `OneOf` may carry a `Signature` candidate: recurse with the SAME node context so a nested
         // signature is realized against the real check too (the chosen-slot verdict still gates).
         Authorization::OneOf {
@@ -2183,6 +2194,13 @@ fn auth_to_wire(auth: &Authorization) -> dregg_lean_ffi::marshal::WireAuth {
         // emit a NON-echoing pair (a `1` statement vs a `0` proof) ⇒ `portalVerify .signature 1 0 =
         // (1 == 0) = false` ⇒ the gate's WHO leg fail-closes (the §8 no-credential anchor).
         Authorization::Signature(_, _) => WireAuth::Signature {
+            pubkey: Digest::from_u64(1),
+            sig: 0,
+        },
+        // HYBRID reaching the context-free path (a contextless caller) fail-closes
+        // exactly like `Signature`: the ed25519 verdict cannot be decided without
+        // the target cell / signing message, so emit the NON-echoing pair.
+        Authorization::HybridSignature { .. } => WireAuth::Signature {
             pubkey: Digest::from_u64(1),
             sig: 0,
         },

@@ -285,6 +285,9 @@ pub fn explain_effect(effect: &Effect) -> String {
 fn auth_mode(auth: &Authorization) -> &'static str {
     match auth {
         Authorization::Signature(_, _) => "an Ed25519 signature",
+        Authorization::HybridSignature { .. } => {
+            "a hybrid Ed25519 + ML-DSA-65 (post-quantum) signature"
+        }
         Authorization::Proof { .. } => "a zero-knowledge proof",
         Authorization::Breadstuff(_) => "a capability token",
         Authorization::Bearer(_) => "a bearer capability (delegation chain)",

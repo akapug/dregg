@@ -126,6 +126,10 @@ fn estimate_authorization_cost(auth: &Authorization, costs: &ComputronCosts) -> 
         Authorization::Bearer(_) => costs.signature_verify,
         Authorization::Unchecked => 0,
         Authorization::CapTpDelivered { .. } => costs.signature_verify.saturating_mul(2),
+        // Hybrid: one ed25519 verify + one ML-DSA-65 verify — meter as two
+        // signature verifies (the PQ half is heavier than ed25519 but far
+        // lighter than a STARK).
+        Authorization::HybridSignature { .. } => costs.signature_verify.saturating_mul(2),
         Authorization::Custom { .. } => costs.proof_verify,
         Authorization::OneOf { candidates, .. } => candidates
             .iter()
@@ -1017,6 +1021,16 @@ pub struct TurnExecutor {
     /// other construction defaults to [`crate::shadow::NoOpShadowObserver`] — no shadow,
     /// no veto — which is the visible wasm / no-FFI platform fact.
     pub shadow_observer: std::sync::Arc<dyn crate::shadow::ShadowObserver>,
+    /// THE POST-QUANTUM REQUIREMENT GATE (the staged end-to-end-PQ perimeter,
+    /// `crate::pq`). When `false` (the default — matching the consensus
+    /// HybridPq default-off rollout), a classical [`Authorization::Signature`]
+    /// is accepted AND an [`Authorization::HybridSignature`]'s ed25519 half
+    /// alone suffices — but if its ML-DSA half is PRESENT it must verify
+    /// (fail-CLOSED on a present-but-bad PQ half; never fail-open). When `true`,
+    /// the executor REQUIRES the hybrid variant with a valid PQ half and rejects
+    /// classical-only signatures. An `AtomicBool` so a `&self` verify path reads
+    /// it cheaply and a caller can flip it without `&mut`.
+    pub require_pq: std::sync::atomic::AtomicBool,
 }
 
 impl TurnExecutor {
@@ -1061,6 +1075,7 @@ impl TurnExecutor {
             last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
+            require_pq: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1123,6 +1138,7 @@ impl TurnExecutor {
             last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
+            require_pq: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1167,6 +1183,7 @@ impl TurnExecutor {
             last_umem_yield: Mutex::new(None),
             witness_mode: std::sync::atomic::AtomicU8::new(0),
             shadow_observer: std::sync::Arc::new(crate::shadow::NoOpShadowObserver),
+            require_pq: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1201,6 +1218,21 @@ impl TurnExecutor {
     /// Set the executor signing key after construction.
     pub fn set_executor_signing_key(&mut self, signing_key_seed: [u8; 32]) {
         self.executor_signing_key = Some(signing_key_seed);
+    }
+
+    /// Whether this executor REQUIRES the post-quantum (hybrid) authorization
+    /// half. See [`Self::require_pq`]. Default `false` (staged rollout).
+    pub fn require_pq(&self) -> bool {
+        self.require_pq.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Flip the post-quantum requirement gate (`crate::pq`). When `true`, a
+    /// classical-only `Authorization::Signature` is rejected and a
+    /// `HybridSignature` must carry a valid ML-DSA half; a present-but-invalid
+    /// PQ half is rejected in EITHER mode (fail-closed).
+    pub fn set_require_pq(&self, require: bool) {
+        self.require_pq
+            .store(require, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Equip the executor with an X25519 keypair so it can decrypt
