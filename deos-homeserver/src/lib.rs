@@ -77,6 +77,20 @@ impl EmbeddedHomeserver {
     /// federation. `server_name` becomes the homeserver name (user ids look
     /// like `@alice:{server_name}`); pass e.g. `"localhost"`.
     pub fn start(server_name: &str) -> Result<Self> {
+        // ONE server per process (fail-closed, not a confusing late timeout):
+        // `run_with_args` installs a PROCESS-GLOBAL rustls provider one-shot, so a
+        // second boot would panic its background thread while `start()` still
+        // returned Ok and the failure only surfaced as a `wait_until_ready`
+        // timeout. Refuse the second start explicitly instead.
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return Err(anyhow!(
+                "an EmbeddedHomeserver is already running in this process — \
+                 run_with_args installs a process-global rustls provider, so only \
+                 one server may boot per process"
+            ));
+        }
+
         // Unique temp tree per instance (no tempfile dep) — pid + a process-local
         // counter avoids collision across instances and concurrent test runs.
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -86,9 +100,14 @@ impl EmbeddedHomeserver {
         std::fs::create_dir_all(&temp_root).context("create temp root for homeserver")?;
 
         // Unique RocksDB dir per instance — no lock collision across instances
-        // or runs. This is the path the future grant_read_write door governs.
-        let data_dir = temp_root.join("db");
-        std::fs::create_dir_all(&data_dir).context("create db dir")?;
+        // or runs. CANONICALIZED (temp_dir() is often a symlink, e.g. macOS
+        // /var → /private/var): RocksDB writes the resolved path, and the future
+        // grant_read_write door must match that resolved path (an SBPL/Landlock
+        // subpath rule is checked against the kernel's post-symlink path), so
+        // `data_dir()` returns the canonical form.
+        let data_dir_raw = temp_root.join("db");
+        std::fs::create_dir_all(&data_dir_raw).context("create db dir")?;
+        let data_dir = std::fs::canonicalize(&data_dir_raw).unwrap_or(data_dir_raw);
 
         // A free loopback port, chosen by binding :0 and reading it back, then
         // released so continuwuity can bind it itself. (Step 2 replaces this with
