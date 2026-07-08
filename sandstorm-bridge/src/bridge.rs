@@ -369,6 +369,82 @@ impl AttestedServed {
             _ => false,
         }
     }
+
+    /// **The trustless-serve check chained to the LEDGER, not the host.** Identical to
+    /// [`witnessed_authentic`](Self::witnessed_authentic) except the trusted root is the
+    /// grain cell's committed commitment as **fetched from the federation** (`GET
+    /// /api/cell/{id}` → `state_commitment`, 32 bytes), NOT `self.new_data_root` (which the
+    /// serving host chose). This is the seam the witness review named: authenticity must
+    /// chain to the cell's committed root on the ledger, so a host cannot substitute its own
+    /// root. See [`verify_served_against_ledger`] for the checks; `ledger_root` is the raw
+    /// 32-byte commitment the visitor obtained independently from the federation.
+    ///
+    /// It closes the pole owner-attestation-alone could not: a host that somehow held the
+    /// owner key could sign a fabricated root, but it cannot rewrite the federation's stored
+    /// commitment, so a served card that is not a leaf under the LEDGER's root is caught here
+    /// regardless of what attestation the host bundles.
+    pub fn verify_against_ledger(
+        &self,
+        ledger_root: [u8; 32],
+        owner_pubkey: &VerifyingKey,
+        card: &[u8],
+    ) -> bool {
+        match (&self.witness_key, &self.inclusion) {
+            (Some(key), Some(proof)) => verify_served_against_ledger(
+                card,
+                key,
+                proof,
+                ledger_root,
+                owner_pubkey,
+                &self.attestation,
+            ),
+            _ => false,
+        }
+    }
+}
+
+/// **The visitor's independent verify — authenticity chained to the LEDGER's root.**
+///
+/// The visitor holds: the served `card` bytes + its `witness_key` + `inclusion` proof +
+/// the owner's `attestation` (all reachable via the serving host), AND — crucially — the
+/// `ledger_root` and `owner_pubkey` obtained from an **independent channel**: the
+/// federation. `ledger_root` is the grain cell's committed 32-byte commitment as returned
+/// by `GET /api/cell/{grain_cell_id}` (`state_commitment`; = [`crate::grain::grain_cell_commitment`]
+/// of the `/var` at the last honest commit); `owner_pubkey` is the cell owner's registered
+/// key (also on the cell record). Neither comes from the serving host's HTTP response.
+///
+/// Returns `true` iff BOTH:
+/// 1. the owner attested **exactly the ledger's committed root** — `attestation` verifies
+///    under `owner_pubkey` AND its `data_root` equals the ledger root rebuilt from
+///    `ledger_root` (so a host's attestation over some *other* root it served is rejected),
+///    and
+/// 2. `card` is the value at `witness_key` under the **ledger root** (the inclusion proof
+///    folds to the ledger root, not the host's served root).
+///
+/// The decisive property: a hostile host that serves card `Y`, commits `root(Y)`, and
+/// bundles its own self-consistent attestation over `root(Y)` is CAUGHT — the ledger's
+/// committed root is `root(X)` (the last honestly-committed state the federation stored),
+/// and `Y` is not a leaf under `root(X)`, so (2) fails. This holds even against a host that
+/// possessed the owner key: it can forge an attestation but it cannot rewrite the
+/// federation's independently-stored commitment.
+pub fn verify_served_against_ledger(
+    card: &[u8],
+    witness_key: &str,
+    inclusion: &InclusionProof,
+    ledger_root: [u8; 32],
+    owner_pubkey: &VerifyingKey,
+    attestation: &RootAttestation,
+) -> bool {
+    let ledger_data_root = DataRoot::from_root_bytes(ledger_root);
+    // (1) The owner attested EXACTLY the ledger's committed root — the independent anchor,
+    //     bound to the root the FEDERATION stored, not whatever root the host served.
+    if !(attestation.verify(owner_pubkey) && attestation.data_root == ledger_data_root) {
+        return false;
+    }
+    // (2) The served card is the value at `witness_key` under the LEDGER root — the
+    //     inclusion proof must fold to the ledger root, so a card served under any other
+    //     root is rejected here (the tamper-against-ledger tooth).
+    crate::cell::verify_inclusion(&ledger_data_root, witness_key, card, inclusion)
 }
 
 impl HttpBridge {
@@ -1277,6 +1353,155 @@ mod tests {
         assert!(
             !attested.witnessed_authentic(&owner_pub, &wrong),
             "a card that is not the committed leaf fails the inclusion tooth under the real root"
+        );
+    }
+
+    /// **THE LEDGER-ANCHORED SERVE WELD — authenticity chained to the FEDERATION's stored
+    /// commitment, not the serving host's response.** The prior weld anchored on the owner
+    /// key but still let the visitor take the ROOT from the host. This closes that: the
+    /// visitor takes the root from the LEDGER (`GET /api/cell/{id}` → `state_commitment`,
+    /// modeled as [`grain_cell_commitment`] of the last honest `/var`), so even a host that
+    /// serves a self-consistent card+root+attestation is caught.
+    #[test]
+    fn a_served_card_is_authentic_only_against_the_ledgers_committed_root() {
+        use crate::grain::grain_cell_commitment;
+        let host = host();
+        let grain = "cell:card-grain";
+        let card = sample_card();
+        let declared = vec!["view".to_string()];
+        let owner = owner_key();
+        // The visitor obtains the owner pubkey from the cell record (independent channel).
+        let owner_pub = owner.verifying_key();
+
+        // ── The OWNER's last honest commit: serve the real card into a stateful /var and
+        //    commit root(X). The federation stores grain_cell_commitment(/var) keyed by the
+        //    grain's cell id — the LEDGER's independent record (GET /api/cell/{id} →
+        //    state_commitment). The visitor reads THIS, never the serving host. ──
+        let mut var = Umem::new();
+        var.put("notes/a", b"alpha".to_vec());
+        var.put("prefs/theme", b"dark".to_vec());
+        let honest = HttpBridge::serve_attested(
+            &card,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut var,
+            &HttpRequest::get("/"),
+            &owner,
+            Some(&card.key()),
+        );
+        assert_eq!(honest.response.status, 200);
+        let card_bytes = honest.response.body.clone();
+
+        // ── POLE (iii) — THE BINDING: the value the federation stores == the /var root the
+        //    inclusion proofs fold to. grain_cell_commitment is exactly the raw /var root,
+        //    and its wire form is the DataRoot the honest serve committed. ──
+        let ledger_root = grain_cell_commitment(&var);
+        assert_eq!(
+            DataRoot::from_root_bytes(ledger_root),
+            honest.new_data_root,
+            "the ledger's committed commitment is the same root the served card is a leaf under"
+        );
+        assert_eq!(
+            ledger_root,
+            var.commit_root_bytes(),
+            "grain_cell_commitment IS the /var root inclusion proofs are checked against"
+        );
+
+        // ── POLE (i) — HONEST: the visitor reads the LEDGER root + owner key (both
+        //    independent), and verifies the served card is a leaf under the LEDGER root.
+        //    Accepted. ──
+        assert!(
+            verify_served_against_ledger(
+                &card_bytes,
+                &card.key(),
+                honest.inclusion.as_ref().unwrap(),
+                ledger_root,
+                &owner_pub,
+                &honest.attestation,
+            ),
+            "honest serve: card is the committed leaf under the ledger's root → authentic"
+        );
+        assert!(
+            honest.verify_against_ledger(ledger_root, &owner_pub, &card_bytes),
+            "same check via the AttestedServed convenience method"
+        );
+
+        // ── POLE (ii) — TAMPER: a hostile host serves a DIFFERENT card Y, commits root(Y),
+        //    and bundles its OWN self-consistent attestation. Grant the host even the OWNER
+        //    key (the strongest case) — so `witnessed_authentic` against the HOST's served
+        //    root is FOOLED — yet against the LEDGER's committed root(X) the serve collapses:
+        //    Y is not a leaf under root(X). CAUGHT. This is the pole owner-attestation-alone
+        //    cannot close. ──
+        struct TamperCard;
+        impl GrainWorkload for TamperCard {
+            fn serve(&self, _req: &BridgedRequest, var: &mut Umem) -> HttpResponse {
+                let forged = b"<!doctype html><title>evil</title>attacker-controlled".to_vec();
+                var.put("card/", forged.clone());
+                HttpResponse::ok(forged)
+            }
+        }
+        let mut evil_var = Umem::new();
+        let tampered = HttpBridge::serve_attested(
+            &TamperCard,
+            grain,
+            &viewer_session(&host, grain),
+            &host.public(),
+            &declared,
+            1000,
+            &mut evil_var,
+            &HttpRequest::get("/"),
+            &owner, // strong adversary: even holding the owner key
+            Some("card/"),
+        );
+        let evil_bytes = tampered.response.body.clone();
+        // Against the HOST's OWN served root, the tamper is self-consistent — the
+        // owner-attestation-alone check (which trusts self.new_data_root) is FOOLED. Exactly
+        // why chaining to the host's served root does not suffice.
+        assert!(
+            tampered.witnessed_authentic(&owner_pub, &evil_bytes),
+            "against the HOST's own served root the tamper looks authentic (the unclosed pole)"
+        );
+        // But against the LEDGER's committed root(X) it collapses: Y is not a leaf under X.
+        assert!(
+            !tampered.verify_against_ledger(ledger_root, &owner_pub, &evil_bytes),
+            "TAMPER CAUGHT: the served card is not a leaf under the LEDGER's committed root"
+        );
+        // The inclusion tooth in isolation is decisive: even handed the GENUINE owner
+        // attestation over the ledger root (so the attestation conjunct passes), the tampered
+        // card+proof fail inclusion under root(X).
+        assert!(
+            honest.attestation.data_root == DataRoot::from_root_bytes(ledger_root),
+            "the honest attestation is over exactly the ledger root",
+        );
+        assert!(
+            !verify_served_against_ledger(
+                &evil_bytes,
+                "card/",
+                tampered.inclusion.as_ref().unwrap(),
+                ledger_root,
+                &owner_pub,
+                &honest.attestation, // a genuine owner attestation over the ledger root
+            ),
+            "the inclusion tooth alone rejects a card that is not a leaf under the ledger root"
+        );
+
+        // A wrong card at the RIGHT key likewise fails inclusion under the ledger root.
+        let mut wrong = card_bytes.clone();
+        let last = wrong.len() - 1;
+        wrong[last] ^= 0x01;
+        assert!(
+            !verify_served_against_ledger(
+                &wrong,
+                &card.key(),
+                honest.inclusion.as_ref().unwrap(),
+                ledger_root,
+                &owner_pub,
+                &honest.attestation,
+            ),
+            "a card that is not the committed leaf fails the inclusion tooth under the ledger root"
         );
     }
 }
