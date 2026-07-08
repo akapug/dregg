@@ -40,7 +40,75 @@
 //! module's `dispatch_names_decode_and_check` test. The depth-general Merkle membership is built
 //! by [`membership_descriptor_of_depth`] (Foundation 2), not parsed.
 
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
 use crate::descriptor_ir2::{EffectVmDescriptor2, parse_vm_descriptor2};
+
+/// Parse-once cache for the byte-pinned static goldens. `descriptor_by_name` sits on the
+/// per-verify path (`bridge/src/verifier.rs`), and `parse_vm_descriptor2` walks the JSON into
+/// fresh `Vec`s at 15–57 µs/call — pure waste on an immutable constant. We parse each golden ONCE
+/// here and clone from the cache on dispatch (clone ≪ parse), preserving the exact owned-return
+/// signature (zero caller change) AND the legible byte-pin (the `*_JSON` strings remain the source
+/// of truth — this only memoizes the deterministic decode). A golden that fails to decode is simply
+/// absent from the map, so dispatch still falls through to the fail-closed `None`.
+static GOLDEN_CACHE: LazyLock<HashMap<&'static str, EffectVmDescriptor2>> = LazyLock::new(|| {
+    STATIC_GOLDENS
+        .iter()
+        .filter_map(|(name, json)| parse_vm_descriptor2(json).ok().map(|d| (*name, d)))
+        .collect()
+});
+
+/// Singleton caches for the two BUILT (not parsed) descriptors — each is a parameterless, immutable
+/// construction, so we build once and clone on dispatch. Note-spend is the single most expensive
+/// entry (~56 µs to lower the deployed DSL circuit); delegate is cheaper but likewise wasteful to
+/// rebuild per verify.
+static NOTE_SPEND_CACHE: LazyLock<Option<EffectVmDescriptor2>> =
+    LazyLock::new(|| note_spend_leaf_descriptor().ok());
+static DELEGATE_CACHE: LazyLock<EffectVmDescriptor2> = LazyLock::new(delegate_binding_descriptor);
+
+/// The (name → byte-pinned golden JSON) table — the single source of truth shared by the cache and
+/// the round-trip test, so no name can drift between dispatch and validation.
+const STATIC_GOLDENS: &[(&str, &str)] = &[
+    ("dfa-routing-toggle-2state::poseidon2-v1", DFA_ROUTING_JSON),
+    (
+        "dregg-temporal-predicate-gte::dsl-v1",
+        TEMPORAL_PREDICATE_JSON,
+    ),
+    (
+        "merkle-membership-depth2-4ary::poseidon2-v1",
+        MERKLE_MEMBERSHIP_DEPTH2_JSON,
+    ),
+    (
+        "dregg-membership-adjacency::poseidon2-v1",
+        ADJACENCY_MEMBERSHIP_JSON,
+    ),
+    (
+        "quantified-absence-quotient-accumulator::babybear4-v1",
+        QUANTIFIED_ABSENCE_JSON,
+    ),
+    (
+        "dregg-non-revocation-sorted-tree::poseidon2-v1",
+        NON_REVOCATION_JSON,
+    ),
+    ("dregg-accumulator-nonrev-emit-v2", ACCUMULATOR_NONREV_JSON),
+    (
+        "bridge-action-leaf::bridge_action_air_v1",
+        BRIDGE_ACTION_JSON,
+    ),
+    (
+        "dregg-predicate-arith-ge::threshold-v1",
+        PREDICATE_ARITH_JSON,
+    ),
+    (
+        "dregg-presentation-freshness::summary-v1",
+        PRESENTATION_FRESHNESS_JSON,
+    ),
+    (
+        "dregg-effectvm-custom-v1",
+        crate::effect_vm_descriptors::DREGG_EFFECTVM_CUSTOM_IR2_JSON,
+    ),
+];
 
 pub use crate::delegate_descriptor::{DELEGATE_V2_NAME, delegate_binding_descriptor};
 pub use crate::membership_descriptor_4ary::{
@@ -152,32 +220,20 @@ pub fn descriptor_by_name(name: &str) -> Option<EffectVmDescriptor2> {
             .ok()
             .map(membership_descriptor_of_depth_4ary);
     }
-    // The IR-v2 delegation scope-binding descriptor (built, not parsed).
+    // The IR-v2 delegation scope-binding descriptor (built once, then cloned — it is a singleton).
     if name == DELEGATE_V2_NAME {
-        return Some(delegate_binding_descriptor());
+        return Some(DELEGATE_CACHE.clone());
     }
     // The note-spend recursion-leaf descriptor (built by lowering the deployed DSL note-spending
-    // circuit; asserted byte-equal to the Lean emit). Fail-closed on a lowering refusal.
+    // circuit — the most expensive build, ~56 µs; memoized as a singleton, cloned on dispatch).
+    // Fail-closed on a lowering refusal (absent from the cache → `None`).
     if name == NOTE_SPEND_LEAF_NAME {
-        return note_spend_leaf_descriptor().ok();
+        return NOTE_SPEND_CACHE.clone();
     }
 
-    let json = match name {
-        "dfa-routing-toggle-2state::poseidon2-v1" => DFA_ROUTING_JSON,
-        "dregg-temporal-predicate-gte::dsl-v1" => TEMPORAL_PREDICATE_JSON,
-        "merkle-membership-depth2-4ary::poseidon2-v1" => MERKLE_MEMBERSHIP_DEPTH2_JSON,
-        "dregg-membership-adjacency::poseidon2-v1" => ADJACENCY_MEMBERSHIP_JSON,
-        "quantified-absence-quotient-accumulator::babybear4-v1" => QUANTIFIED_ABSENCE_JSON,
-        "dregg-non-revocation-sorted-tree::poseidon2-v1" => NON_REVOCATION_JSON,
-        "dregg-accumulator-nonrev-emit-v2" => ACCUMULATOR_NONREV_JSON,
-        "bridge-action-leaf::bridge_action_air_v1" => BRIDGE_ACTION_JSON,
-        "dregg-predicate-arith-ge::threshold-v1" => PREDICATE_ARITH_JSON,
-        "dregg-presentation-freshness::summary-v1" => PRESENTATION_FRESHNESS_JSON,
-        "dregg-effectvm-custom-v1" => crate::effect_vm_descriptors::DREGG_EFFECTVM_CUSTOM_IR2_JSON,
-        _ => return None,
-    };
-    // A byte-pinned golden always decodes; a decode failure is a fail-closed miss, never accept.
-    parse_vm_descriptor2(json).ok()
+    // Static byte-pinned goldens: served from the parse-once cache (clone ≪ re-parse). A miss is
+    // fail-closed `None`; a golden that failed to decode is absent from the cache → also `None`.
+    GOLDEN_CACHE.get(name).cloned()
 }
 
 #[cfg(test)]
