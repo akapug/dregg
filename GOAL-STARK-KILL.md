@@ -490,3 +490,30 @@ STAGES (design-first, then Lean under .bin/lean-safe, sequential — NO parallel
 6. THEN resume the stark-kill finish (sdk/verify, cipherclerk) + git rm stark.rs.
 This is the campaign becoming what it was always about: not "delete the Rust" but "everything a
 re-executor/light-client/aggregator checks is bound in the proof." The oaks, roots down to the source.
+
+## ⚑ GOLDEN LIFT — APPROVED DESIGN (2026-07-08, ember: "best not parity; unlinkability soundness; NO residuals")
+Architecture map (agent a418b326) settled it. Refined gap: the presentation-freshness descriptor DOES
+bind action[8]+facts[8] and IS verified live (wire/server.rs:136) — BUT (1) it is NOT a dual-expose FOLD
+carrier → its binding is DROPPED under recursion/aggregation (the light-client-at-the-root hole); (2)
+the membership leg + bridge legacy fns verify plain [leaf,root]; (3) composition bound nowhere.
+APPROVED DESIGN (do what is BEST, close everything provable, carriers-not-residuals):
+- Make the bound-presentation a DUAL-EXPOSE FOLD CARRIER (the 9th; mirror the 8 existing
+  *_binding_from_fold carriers — membership is the sibling). Claim slice = [action_binding[8],
+  revealed_facts[8], presentation_tag]. prove_descriptor_leaf_dual_expose_at + carrier_claim_pins_admitted.
+- COMPOSITION → bind to the ROOT FOLD-SEGMENT digest ([genesis,final,count,chain_digest]), NOT a separate
+  commitment PI (best/recursion-native, ember chose over legacy parity). So NO composition[8] PI on the leaf.
+- PRESENTATION_TAG → a CONSTRAINED PI with its Poseidon2 well-formedness IN-CIRCUIT (TID_P2 sub-desc) —
+  unlinkability soundness at the aggregated root (ember chose comprehensive).
+- Close the revealed-facts parity gap (PiBinding it + assert, don't inherit the "carried-not-checked" gap).
+- Binding mechanism = committed-PI (PiBinding-pinned verified PI; light client recomputes off-circuit).
+  BLAKE3 domain-sep/keyed-hash = a NAMED CRYPTO CARRIER (irreducible floor, like Poseidon2CR) — NOT a
+  residual. Poseidon2 stages constrained in-circuit via TID_P2.
+- Reuse MembershipBindingFromFold for issuer∈federation; connect membership-leaf + presentation-leaf via
+  a binding node.
+STAGES (sequential, Lean under .bin/lean-safe, each verified+committed before next):
+  S1: the bound-presentation LEAF descriptor (Emit) + Rung-0 byte-pin + Rung-1 refine + Rung-2 no-forgery
+      (wrong action/facts/tag REJECTS — the audit's carried-vs-bound lesson) + tag Poseidon2 in-circuit.
+  S2: the dual-expose fold wiring + presentation_binding_from_fold Lean proof (verifying aggregate ⟹
+      commitments forced-backed; both poles non-vacuous) + carrier_claim_pins_admitted arm.
+  S3: circuit witness builder + descriptor_by_name arm + flip bridge/circuit/sdk verify onto it.
+  S4: finish stark-kill (sdk/verify, cipherclerk) + git rm circuit/src/stark.rs.
