@@ -449,3 +449,16 @@ refs), a SECURITY-CRITICAL data-model flip (do carefully/fresh, NOT tired):
     CONSUMER of this migration (fix in lockstep, update to the new wire API). This is the workspace-red crate.
 Then: delete hand AIRs → git rm circuit/src/stark.rs when grep==0. The migration is scoped; it wants
 fresh careful attention + a round-trip test on the presentation-verify path (fail-open if wrong).
+
+## ⚑ FINISH PLAN (2026-07-08, ember DECISION: FLIP to preserve API, not delete)
+The last 18 true-live stark refs are ALL legacy/0-caller/test paths (live already flipped+committed).
+ember chose FLIP (preserve the published-SDK API + capability on the new prover), NOT delete. 3 files,
+sequential main-loop (coupled, no swarm), each build-gated + committed before the next:
+1. bridge/present.rs (4) — MOST MECHANICAL: the Ir2IssuerWire + prove_issuer_membership_ir2_wire path
+   is ALREADY BUILT (Gate-2 recovery). Flip RealPresentationProof.issuer_membership_stark_proof (typed
+   StarkProof) + the 4 off-chain/test verify fns onto it; fix sdk-net's issuer_proof_bytes consumer.
+2. sdk/verify.rs (12) — verify_authorization_proof + verify_selective_disclosure (0-caller PUBLIC API) +
+   #[test]s. Flip onto descriptor verify (membership descriptor exists); port the tests to the Ir2 wire.
+3. sdk/cipherclerk.rs (2) — compress/verify_compressed_history (0-caller PUBLIC): sovereign-history IVC.
+   The REAL rewire (onto IvcBuilder/recursion, already imported) — do last, most care.
+Then: the 7 comment-only files are fine; delete hand AIRs; git rm circuit/src/stark.rs when grep==0.
