@@ -261,3 +261,14 @@ the emitted descriptors into AssuranceCase.lean (argus citizens, not islands).
 ⚑ THE FLIP/DELETE IS NOW GATED: do NOT flip consumers onto a descriptor until it is audited-correct +
 Rung-2-full. Replacing known-buggy Rust with unaudited Lean is a lateral move. The Gate-1.6 witness
 builders (wrwj5nf6q) may finish (additive, needed post-audit) but the consumer flips WAIT on assurance.
+
+## ⚑ UN-GATE (2026-07-08, ember): deletion and audit are ORTHOGONAL — DELETE FAST
+ember: "we don't need to wait for that audit to rip out stark.rs / continue the purge. The new ones are
+always going to be better than the old ones, and the faster we delete the old files the less confused
+everything is." CORRECT — I over-gated. The new Lean-emitted descriptors are the go-forward path
+REGARDLESS of the audit (byte-pinned + some proofs vs the old's zero-proofs + confirmed bugs); keeping
+the old buggy Rust around is pure confusion. Any bug the audit finds is fixed IN THE LEAN EMIT, which
+the deletion does not foreclose — it CLARIFIES (one impl to harden, not two).
+CORRECTED THRUST: (a) CONTINUE the purge — finish the consumer flips (builders now exist), delete the
+hand AIRs, git rm circuit/src/stark.rs. (b) The assurance audit (wf_1b09d713-b46) runs IN PARALLEL as
+forward correctness on the KEPT Lean (Rung-2 completion + argus-case tie-in) — NOT a gate on deletion.
