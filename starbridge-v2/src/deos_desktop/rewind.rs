@@ -43,7 +43,7 @@
 //! trees merge; (3) `describe_outcome` (refusal-surfacing lane) should stamp
 //! the rail's status line once it lands.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gpui::{
     div, px, AnyElement, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
@@ -337,15 +337,38 @@ impl DeosDesktop {
     /// The cell's turn count at the current view — the projection's receipt
     /// log while scrubbing (receipts that existed AT the cursor), live else.
     pub(super) fn effective_cell_receipt_count(&self, cell: &CellId) -> usize {
+        // Paint memo (see `DeosDesktop::receipt_index`): rebuild a per-cell tally
+        // only when the log it counts changes, then read O(1) — instead of a full
+        // receipt-log scan on every repaint. Two validity tokens keep it exactly
+        // correct across live append AND rewind.
         match self.rewind.projection() {
-            Some(p) => p.receipts.iter().filter(|r| &r.agent == cell).count(),
-            None => self
-                .world
-                .borrow()
-                .receipts()
-                .iter()
-                .filter(|r| &r.agent == cell)
-                .count(),
+            Some(p) => {
+                let token = (self.rewind.cursor.unwrap_or(0), p.receipts.len());
+                if self.receipt_index.borrow().rewind_token != Some(token) {
+                    let mut counts: HashMap<CellId, usize> = HashMap::new();
+                    for r in &p.receipts {
+                        *counts.entry(r.agent).or_default() += 1;
+                    }
+                    let mut cache = self.receipt_index.borrow_mut();
+                    cache.rewind_token = Some(token);
+                    cache.rewind_counts = counts;
+                }
+                self.receipt_index
+                    .borrow()
+                    .rewind_counts
+                    .get(cell)
+                    .copied()
+                    .unwrap_or(0)
+            }
+            None => {
+                self.ensure_live_receipt_index();
+                self.receipt_index
+                    .borrow()
+                    .live_per_cell
+                    .get(cell)
+                    .map(|v| v.len())
+                    .unwrap_or(0)
+            }
         }
     }
 
