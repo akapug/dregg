@@ -337,6 +337,12 @@ theorem satTrace_satisfied2 (hash : List ℤ → ℤ) :
     · intro _; rw [hloc, hpub]; simp [satRow, NEW_ROOT, FACT_HASH, ROW_TYPE]
     · intro hcon; exact Bool.noConfusion hcon
     · intro hcon; exact Bool.noConfusion hcon
+    -- (A) removal_count_plus_one gate: vacuous on the single (= last) row.
+    · exact True.intro
+    -- (C) removal_count_carry window (onTransition): vacuous on the last row.
+    · intro hcon; exact Bool.noConfusion hcon
+    -- (B) first-row REMOVAL_COUNT = 0 anchor: satRow's REMOVAL_COUNT is 0.
+    · intro _; rw [hloc]; simp [firstRcBody, EmittedExpr.eval, satRow, REMOVAL_COUNT, FACT_HASH, ROW_TYPE]
     · intro _; rw [hloc, hpub]; simp [satRow, PI4_CARRIER, FACT_HASH, ROW_TYPE]
     · intro hcon; exact Bool.noConfusion hcon
     · exact True.intro

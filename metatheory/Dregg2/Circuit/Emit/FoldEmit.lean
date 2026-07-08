@@ -21,6 +21,12 @@ in-descriptor constraint set, with the Poseidon2 fact-commitment hash promoted t
 * `old_root_consistent`  `OLD_ROOT = pi[0]` on EVERY row           → Base `.piBinding .first` + window constancy
 * `new_root_consistent`  `NEW_ROOT = pi[1]` on EVERY row           → Base `.piBinding .first` + window constancy
 * `removal_count_increment` `(1-ROW_TYPE)*(next[RC]-loc[RC+1])=0`  → **`.windowGate` (onTransition)**
+* `removal_count_plus_one`   `(1-ROW_TYPE)*(RC+1_aux-RC-1)=0`       → **Base `.gate` (A) — binds the aux
+  increment column the deployed DSL LEFT FREE (the count-forgery hole this file CLOSES)**
+* `removal_count_carry`      `ROW_TYPE*(next[RC]-loc[RC])=0`        → **`.windowGate` (C) — carries the
+  count constant across the summary/pad tail so the published last-row count is the summary's count**
+* `first_removal_count`      `REMOVAL_COUNT=0` on row 0             → **Base `.boundary .first` (B) —
+  anchors the counter start (the count-before-row-0 is zero)**
 * `root_transition_binding` `ROW_TYPE*(MEMBERSHIP_ROOT-pi[4])=0`   → pi4-carrier (`.piBinding .last` + constancy) + Base `.gate`
 * boundary last `ROW_TYPE=1`                                        → Base `.boundary .last`
 * boundary last `REMOVAL_COUNT=pi[2]`,`CHECK_COUNT=pi[3]`,`MEMBERSHIP_ROOT=pi[4]` → Base `.piBinding .last`
@@ -141,6 +147,29 @@ def removalIncrBody : WindowExpr :=
   .mul (.add (.const 1) (.mul (.const (-1)) (.loc ROW_TYPE)))
        (.add (.nxt REMOVAL_COUNT) (.mul (.const (-1)) (.loc REMOVAL_COUNT_PLUS_ONE)))
 
+/-- **(A) `removal_count_plus_one` faithfulness gate body** `(1-ROW_TYPE)*(REMOVAL_COUNT_PLUS_ONE -
+REMOVAL_COUNT - 1)`. Binds the aux increment column to `REMOVAL_COUNT + 1` on every REMOVAL row — the
+constraint the deployed DSL descriptor DROPPED, which left `REMOVAL_COUNT_PLUS_ONE` a FREE witness the
+increment window read blindly (the removal-count forgery hole). A `.gate` (transition-only) is faithful
+here: `REMOVAL_COUNT_PLUS_ONE` is consumed ONLY by the transition-only increment window, so it is never
+read on the last row. -/
+def rcPlusOneBody : EmittedExpr :=
+  .mul (.add (.const 1) (.mul (.const (-1)) (.var ROW_TYPE)))
+       (.add (.var REMOVAL_COUNT_PLUS_ONE)
+             (.add (.mul (.const (-1)) (.var REMOVAL_COUNT)) (.const (-1))))
+
+/-- **(C) `removal_count_carry` window body** `ROW_TYPE*(nxt REMOVAL_COUNT - loc REMOVAL_COUNT)`. On a
+SUMMARY/pad row (`ROW_TYPE = 1`) it forces the count constant into the next row, carrying the total
+across the summary+pad tail to the LAST row (the increment window is gated OFF on those rows, so without
+this the published last-row count decoupled from the summary's count). -/
+def rcCarryBody : WindowExpr :=
+  .mul (.loc ROW_TYPE) (.add (.nxt REMOVAL_COUNT) (.mul (.const (-1)) (.loc REMOVAL_COUNT)))
+
+/-- **(B) first-row `REMOVAL_COUNT = 0` anchor body** `REMOVAL_COUNT`. Row 0 has no removals before it,
+so the count-before-this-row starts at 0; without this the counter's START value was free (a prover
+could shift the whole increment chain and over/under-report the count). -/
+def firstRcBody : EmittedExpr := .var REMOVAL_COUNT
+
 /-- The `ROW_TYPE=1` last-row boundary body `ROW_TYPE - 1`. -/
 def lastSummaryBody : EmittedExpr := .add (.var ROW_TYPE) (.const (-1))
 
@@ -171,6 +200,12 @@ def foldConstraints : List VmConstraint2 :=
   , .windowGate ⟨constancyBody NEW_ROOT, true⟩
     -- removal-count increment (cross-row transition)
   , .windowGate ⟨removalIncrBody, true⟩
+    -- (A) bind the increment aux column: REMOVAL_COUNT_PLUS_ONE = REMOVAL_COUNT + 1 on removal rows
+  , .base (.gate rcPlusOneBody)
+    -- (C) carry the count constant across summary/pad rows to the last row
+  , .windowGate ⟨rcCarryBody, true⟩
+    -- (B) anchor the counter's start: REMOVAL_COUNT = 0 on the first row
+  , .base (.boundary VmRow.first firstRcBody)
     -- pi4 carrier (last-pin + constancy) then the summary-gated root-transition binding
   , .base (.piBinding VmRow.last PI4_CARRIER PI_TRANSITION_HASH)
   , .windowGate ⟨constancyBody PI4_CARRIER, true⟩
@@ -201,13 +236,13 @@ asserted equal to an independent Rust builder, and proven through the REAL prove
 side breaks THIS `#guard` (Lean) or the Rust `assert_eq!` — neither can silently diverge. -/
 
 #guard emitVmJson2 foldDesc ==
-  "{\"name\":\"dregg-fold-step-v2\",\"ir\":2,\"trace_width\":21,\"public_input_count\":6,\"tables\":[],\"constraints\":[{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":11},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":11},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":3}}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":11}}}}},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":7},{\"t\":\"var\",\"v\":7},{\"t\":\"var\",\"v\":8},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":10},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":64207},{\"t\":\"const\",\"v\":1},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":1},{\"t\":\"var\",\"v\":14},{\"t\":\"var\",\"v\":15},{\"t\":\"var\",\"v\":16},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":18},{\"t\":\"var\",\"v\":19},{\"t\":\"var\",\"v\":20}]},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":0},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":3}}}},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":4}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":12}}}}},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":13,\"pi_index\":4},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":13},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":13}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":13}}}}},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":5,\"pi_index\":2},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":6,\"pi_index\":3},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":2,\"pi_index\":4}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"dregg-fold-step-v2\",\"ir\":2,\"trace_width\":21,\"public_input_count\":6,\"tables\":[],\"constraints\":[{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":11},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":11},\"r\":{\"t\":\"const\",\"v\":-1}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":3}}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":11}}}}},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":7},{\"t\":\"var\",\"v\":7},{\"t\":\"var\",\"v\":8},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":10},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":64207},{\"t\":\"const\",\"v\":1},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":1},{\"t\":\"var\",\"v\":14},{\"t\":\"var\",\"v\":15},{\"t\":\"var\",\"v\":16},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":18},{\"t\":\"var\",\"v\":19},{\"t\":\"var\",\"v\":20}]},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":0},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":3}}}},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":4}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":12}}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"const\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":12},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":5}},\"r\":{\"t\":\"const\",\"v\":-1}}}}},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"loc\",\"c\":0},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"nxt\",\"c\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"loc\",\"c\":5}}}}},{\"t\":\"boundary\",\"row\":\"first\",\"body\":{\"t\":\"var\",\"v\":5}},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":13,\"pi_index\":4},{\"t\":\"window_gate\",\"on_transition\":true,\"body\":{\"t\":\"add\",\"l\":{\"t\":\"loc\",\"c\":13},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"nxt\",\"c\":13}}}},{\"t\":\"gate\",\"body\":{\"t\":\"mul\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":2},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":13}}}}},{\"t\":\"boundary\",\"row\":\"last\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":0},\"r\":{\"t\":\"const\",\"v\":-1}}},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":5,\"pi_index\":2},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":6,\"pi_index\":3},{\"t\":\"pi_binding\",\"row\":\"last\",\"col\":2,\"pi_index\":4}],\"hash_sites\":[],\"ranges\":[]}"
 
 /-! ## §7 — Shape tripwires. -/
 #guard foldDesc.traceWidth == FOLD_WIDTH
 #guard foldDesc.piCount == FOLD_PI_COUNT
-#guard foldConstraints.length == 17
-#guard (foldConstraints.filter (fun c => match c with | .windowGate _ => true | _ => false)).length == 4
+#guard foldConstraints.length == 20
+#guard (foldConstraints.filter (fun c => match c with | .windowGate _ => true | _ => false)).length == 5
 #guard (foldConstraints.filter (fun c => match c with | .lookup _ => true | _ => false)).length == 1
 #guard (chipLookupTuple [.var FACT_PRED, .var FACT_TERM0, .var FACT_TERM1, .var FACT_TERM2,
           .const 0, .const 64207, .const 1] FACT_HASH (siteLaneCols FACT_LANE_BASE)).length
@@ -293,9 +328,66 @@ theorem removal_incr_body_zero_iff (env : VmRowEnv) :
 #guard decide (¬ (removalIncrBody.eval
   ⟨fun i => if i = REMOVAL_COUNT_PLUS_ONE then 2 else 0, fun i => if i = REMOVAL_COUNT then 3 else 0, fun _ => 0⟩ = 0))
 
+/-- **(A) `removal_count_plus_one` tooth.** The gate body is zero EXACTLY when the row is a summary row
+(`ROW_TYPE = 1`) OR the aux column IS `REMOVAL_COUNT + 1`. A removal row whose `REMOVAL_COUNT_PLUS_ONE`
+is anything other than `REMOVAL_COUNT + 1` (the FORGERY the deployed DSL admitted) violates it. -/
+theorem rc_plus_one_body_zero_iff (a : Assignment) :
+    rcPlusOneBody.eval a = 0 ↔
+      a ROW_TYPE = 1 ∨ a REMOVAL_COUNT_PLUS_ONE = a REMOVAL_COUNT + 1 := by
+  simp only [rcPlusOneBody, EmittedExpr.eval]
+  rw [mul_eq_zero]
+  constructor
+  · rintro (h | h)
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+  · rintro (h | h)
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+
+/-- **(C) `removal_count_carry` tooth.** Zero EXACTLY when the row is a removal row (`ROW_TYPE = 0`) OR
+the count is constant across the step (`nxt REMOVAL_COUNT = loc REMOVAL_COUNT`). A summary/pad row that
+changes the count into the next row (the pad-carry forgery) violates it. -/
+theorem rc_carry_body_zero_iff (env : VmRowEnv) :
+    rcCarryBody.eval env = 0 ↔
+      env.loc ROW_TYPE = 0 ∨ env.nxt REMOVAL_COUNT = env.loc REMOVAL_COUNT := by
+  simp only [rcCarryBody, WindowExpr.eval]
+  rw [mul_eq_zero]
+  constructor
+  · rintro (h | h)
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+  · rintro (h | h)
+    · exact Or.inl (by omega)
+    · exact Or.inr (by omega)
+
+/-- **(B) first-row anchor tooth.** The boundary body is zero EXACTLY when `REMOVAL_COUNT = 0` — the
+count-before-row-0 starts at zero. -/
+theorem first_rc_body_zero_iff (a : Assignment) :
+    firstRcBody.eval a = 0 ↔ a REMOVAL_COUNT = 0 := by
+  simp only [firstRcBody, EmittedExpr.eval]
+
+-- (A) non-vacuity: RC_PLUS_ONE = RC+1 on a removal row OK; a forged +9 increment fails.
+#guard decide (rcPlusOneBody.eval
+  (fun i => if i = REMOVAL_COUNT_PLUS_ONE then 1 else 0) = 0)
+#guard decide (¬ (rcPlusOneBody.eval
+  (fun i => if i = REMOVAL_COUNT_PLUS_ONE then 9 else 0) = 0))
+-- (C) non-vacuity: a constant-count summary step OK; a summary step that bumps the count fails.
+#guard decide (rcCarryBody.eval
+  ⟨fun i => if i = ROW_TYPE then 1 else if i = REMOVAL_COUNT then 2 else 0,
+   fun i => if i = REMOVAL_COUNT then 2 else 0, fun _ => 0⟩ = 0)
+#guard decide (¬ (rcCarryBody.eval
+  ⟨fun i => if i = ROW_TYPE then 1 else if i = REMOVAL_COUNT then 2 else 0,
+   fun i => if i = REMOVAL_COUNT then 5 else 0, fun _ => 0⟩ = 0))
+-- (B) non-vacuity: RC = 0 accepted, RC = 3 rejected.
+#guard decide (firstRcBody.eval (fun _ => 0) = 0)
+#guard decide (¬ (firstRcBody.eval (fun i => if i = REMOVAL_COUNT then 3 else 0) = 0))
+
 #assert_axioms mrm_body_zero_iff
 #assert_axioms root_trans_body_zero_iff
 #assert_axioms binary_body_zero_iff
 #assert_axioms removal_incr_body_zero_iff
+#assert_axioms rc_plus_one_body_zero_iff
+#assert_axioms rc_carry_body_zero_iff
+#assert_axioms first_rc_body_zero_iff
 
 end Dregg2.Circuit.Emit.FoldEmit
