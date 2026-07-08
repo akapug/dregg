@@ -223,3 +223,23 @@ the path). REAL FINDING: CR alone does NOT suffice — cross-depth needs a 2nd c
 (poseidon2.rs:618 leaf-domain-sep). So depth-nominal is SOUND-BY-PROOF (2 named+realized carriers),
 not just argued. Residual: mirror a per-depth emit descriptor to metatheory for the SAT⟹SEM lift at
 actual height (additive follow-on; the functional-model soundness here governs it).
+
+## ⚑ GATE 2 RESULT + THE REAL REMAINING SCOPE (2026-07-08, this instance OWNS the finish; others parked)
+Gate-2 cluster workflow: 4/7 CONFIRMED + committed (via a broad "checkpoint commit" 4b19931b8 by a
+concurrent instance — ref 17→14, HEAD builds green): bridge, turn-membership, turn-conditional-delegation,
+wasm. The 3 BLOCKED (sdk, wire-storage, turn-executor-misc) validated the factoring: self-contained
+producer+consumer PAIRS complete; thin consumers whose producers are elsewhere block.
+⚑ DEEPER FINDING (the real gate): the blocked consumers are NOT just call-swaps. Each remaining
+predicate family needs a DESCRIPTOR-WITNESS BUILDER (the Gate-1.5 pattern: a Rust fn producing a trace
+that matches the EMITTED descriptor, since hand-DSL-circuit trace layout ≠ emitted-descriptor layout).
+The confirmed clusters worked ONLY because membership got membership_witness_4ary in Gate 1.5.
+  HAVE builders: membership, adjacency, delegate.
+  MISSING (blocks the flip): non_revocation (sdk/privacy prove_not_revoked+verify), note_spend
+    (storage/blinded), blinded-presentation (sdk verify_anonymous + wire/server + the bridge issuer path),
+    predicate-arith (turn/executor/apply predicate leg).
+REMAINING = per family {non-rev, note-spend, blinded-presentation, predicate-arith}: (a) build the
+descriptor-witness builder [SELF-CONTAINED foundation, agent-able Gate-1.5 style, root/trace byte-match
+gated] → (b) flip producer+consumer [COUPLED, main-loop, runtime-gated] → commit. Then strip additive
+bridge residue + delete hand AIRs → git rm circuit/src/stark.rs. This is ~4 increments, not one turn.
+The 14 refs also include comment-only/false-positives (aggregate_bilateral already Ir2, binding_proof
+hashes-only, fri_from_scratch a self-contained example) that need no flip.
