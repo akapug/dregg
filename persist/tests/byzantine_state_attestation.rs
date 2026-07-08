@@ -28,7 +28,19 @@
 //! See `docs/audit/LIVE-BYZANTINE.md` Attack 5b (and Attack 3 — the same weld).
 
 use dregg_persist::StoredAttestedRoot;
-use dregg_persist::federation::{FederationId, PublicKey, Signature};
+use dregg_persist::federation::{FederationId, PublicKey, QuorumSignature, Signature};
+
+/// A junk HYBRID quorum entry for `pk` — used only in NEGATIVE assertions
+/// (nothing here is expected to verify), so both signature halves are zeroed and
+/// the ML-DSA pubkey is a placeholder.
+fn junk_sig(pk: PublicKey) -> QuorumSignature {
+    QuorumSignature {
+        voter: pk,
+        signature: Signature([0x00; 64]),
+        ml_dsa_pubkey: vec![0u8; 1952],
+        pq_signature: vec![0u8; 3309],
+    }
+}
 
 /// A full-mode attested root as the deployed commit path FIRST persists it
 /// (the trailing-head shape, before `backfill_finalization_quorums` attaches the
@@ -126,10 +138,7 @@ fn finalization_quorum_rejects_forged_and_noncommittee_signatures() {
 
     // A root claiming a 3-of-3 committee quorum, but every signature is junk.
     let mut root = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([1; 32]));
-    root.finalization_quorum = committee
-        .iter()
-        .map(|pk| (*pk, Signature([0x00; 64])))
-        .collect();
+    root.finalization_quorum = committee.iter().map(|pk| junk_sig(*pk)).collect();
     assert!(root.has_finalization_quorum());
     assert!(
         !root.verify_finalization_quorum(&committee),
@@ -141,10 +150,7 @@ fn finalization_quorum_rejects_forged_and_noncommittee_signatures() {
     // even if it were to carry valid signatures: the keys are not in the committee.
     let outsiders = vec![PublicKey([9; 32]), PublicKey([8; 32]), PublicKey([7; 32])];
     let mut sybil = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([9; 32]));
-    sybil.finalization_quorum = outsiders
-        .iter()
-        .map(|pk| (*pk, Signature([0x00; 64])))
-        .collect();
+    sybil.finalization_quorum = outsiders.iter().map(|pk| junk_sig(*pk)).collect();
     assert!(
         !sybil.verify_finalization_quorum(&committee),
         "non-committee signers cannot form a finalization quorum (Sybil rejected)"
@@ -152,6 +158,6 @@ fn finalization_quorum_rejects_forged_and_noncommittee_signatures() {
 
     // A sub-threshold count (below `threshold`) is rejected regardless of validity.
     let mut short = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([1; 32]));
-    short.finalization_quorum = vec![(PublicKey([1; 32]), Signature([0x00; 64]))];
+    short.finalization_quorum = vec![junk_sig(PublicKey([1; 32]))];
     assert!(!short.verify_finalization_quorum(&committee));
 }

@@ -194,7 +194,12 @@ pub struct VoteCollector {
     /// root's `finalization_quorum` and re-verified on restart. First-write-wins
     /// per signer means an equivocating member (a second, differing vote) cannot
     /// displace its counted vote or be counted twice.
-    votes: HashMap<BlockId, HashMap<[u8; 32], (dregg_types::Signature, [u8; 32])>>,
+    ///
+    /// The stored triple is `(ed25519 signature, merkle_root, ML-DSA-65 pq
+    /// signature)`: retaining `pq_signature` is what lets `assembled_quorum` hand
+    /// back the HYBRID signature so the persisted quorum re-verifies BOTH halves
+    /// on restart (the voter's ML-DSA pubkey is looked up from `pq_committee`).
+    votes: HashMap<BlockId, HashMap<[u8; 32], (dregg_types::Signature, [u8; 32], Vec<u8>)>>,
     /// Blocks that have crossed the quorum threshold (consensus-wide Attested).
     attested: HashSet<BlockId>,
 }
@@ -316,12 +321,20 @@ impl VoteCollector {
     /// distinct committee members have signed the SAME finalized `merkle_root`.
     ///
     /// Returns `Some((merkle_root, sigs))` where `sigs` is the set of
-    /// `(voter, signature)` pairs from `>= quorum_threshold` distinct committee
-    /// signers who all attested `merkle_root` — exactly the record the
+    /// [`dregg_persist::QuorumSignature`]s from `>= quorum_threshold` distinct
+    /// committee signers who all attested `merkle_root` — exactly the record the
     /// persistence layer stores as `StoredAttestedRoot::finalization_quorum` and
     /// re-verifies via `verify_finalization_quorum`. Returns `None` while the
     /// quorum is still forming, or if the votes recorded for the block are split
     /// across roots (a fork) with no single root reaching the threshold.
+    ///
+    /// Each returned signature is HYBRID: it carries BOTH the ed25519 and the
+    /// ML-DSA-65 half, PLUS the voter's ML-DSA-65 public key (looked up from the
+    /// collector's `pq_committee`, option (a)), so the persisted quorum
+    /// re-verifies the full hybrid on restart with no committee PQ-key history. A
+    /// recorded signer whose ML-DSA key is no longer in `pq_committee` (e.g. after
+    /// a reconfigure) is dropped from the assembled quorum — fail-closed: if that
+    /// drops it below threshold, no quorum is produced.
     ///
     /// Only distinct signers who agree on ONE root count toward that root, so a
     /// genuine >=threshold quorum over the finalized state is required — this
@@ -329,29 +342,31 @@ impl VoteCollector {
     pub fn assembled_quorum(
         &self,
         block_id: &BlockId,
-    ) -> Option<(
-        [u8; 32],
-        Vec<(dregg_types::PublicKey, dregg_types::Signature)>,
-    )> {
+    ) -> Option<([u8; 32], Vec<dregg_persist::QuorumSignature>)> {
         let signers = self.votes.get(block_id)?;
         // Group distinct signers by the root they attested; pick a root that a
         // supermajority of distinct signers agreed on.
-        let mut by_root: HashMap<[u8; 32], Vec<([u8; 32], dregg_types::Signature)>> =
-            HashMap::new();
-        for (voter, (sig, root)) in signers {
+        let mut by_root: HashMap<[u8; 32], Vec<dregg_persist::QuorumSignature>> = HashMap::new();
+        for (voter, (sig, root, pq_sig)) in signers {
+            // The voter's ML-DSA committee key rides ALONGSIDE the signature so
+            // the persisted quorum re-verifies its PQ half self-contained.
+            let Some(pq_pk) = self.pq_committee.get(voter) else {
+                continue;
+            };
             by_root
                 .entry(*root)
                 .or_default()
-                .push((*voter, sig.clone()));
+                .push(dregg_persist::QuorumSignature {
+                    voter: dregg_types::PublicKey(*voter),
+                    signature: sig.clone(),
+                    ml_dsa_pubkey: pq_pk.0.to_vec(),
+                    pq_signature: pq_sig.clone(),
+                });
         }
         let (root, members) = by_root
             .into_iter()
             .find(|(_, members)| members.len() >= self.quorum_threshold)?;
-        let sigs = members
-            .into_iter()
-            .map(|(voter, sig)| (dregg_types::PublicKey(voter), sig))
-            .collect();
-        Some((root, sigs))
+        Some((root, members))
     }
 
     /// Has this block reached consensus-wide Attested (a quorum of distinct
@@ -392,10 +407,13 @@ impl VoteCollector {
 
         let signers = self.votes.entry(vote.block_id).or_default();
         // First-write-wins per signer: an equivocating member cannot displace
-        // the vote already counted for it, nor be counted twice.
-        signers
-            .entry(vote.voter)
-            .or_insert((vote.signature.clone(), vote.merkle_root));
+        // the vote already counted for it, nor be counted twice. Retain the
+        // ML-DSA (pq) signature too, so the assembled quorum carries BOTH halves.
+        signers.entry(vote.voter).or_insert((
+            vote.signature.clone(),
+            vote.merkle_root,
+            vote.pq_signature.clone(),
+        ));
         let distinct_votes = signers.len();
         let already = self.attested.contains(&vote.block_id);
 
@@ -591,12 +609,22 @@ mod tests {
         assert_eq!(sigs.len(), 3);
 
         // The assembled sigs verify against the shared finalization-vote preimage
-        // (i.e. they are valid persisted `finalization_quorum` signatures).
+        // (i.e. they are valid persisted `finalization_quorum` signatures) — BOTH
+        // the ed25519 half AND the carried ML-DSA-65 half (the hybrid quorum).
         let msg = dregg_types::finalization_vote_signing_message(&blk.0, &TEST_ROOT);
-        for (voter_pk, sig) in &sigs {
+        for qs in &sigs {
             assert!(
-                voter_pk.verify(&msg, sig),
-                "assembled quorum sig must verify"
+                qs.voter.verify(&msg, &qs.signature),
+                "assembled quorum ed25519 half must verify"
+            );
+            let pk_bytes: [u8; 1952] = qs
+                .ml_dsa_pubkey
+                .as_slice()
+                .try_into()
+                .expect("carried ML-DSA pubkey is 1952 bytes");
+            assert!(
+                MlDsaPublicKey(pk_bytes).verify(&msg, &qs.pq_signature),
+                "assembled quorum ML-DSA half must verify against the carried pubkey"
             );
         }
     }
