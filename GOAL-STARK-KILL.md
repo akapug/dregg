@@ -72,6 +72,24 @@ FALSE POSITIVES (already done): `turn/aggregate_bilateral_prover.rs` (already Ir
   on my tree, adversarially CONFIRMED. Residual: Rung-2 depth-general Lean lift (named follow-on).
 - GATE 2 NEXT: coordinated swap of the 15 consumer sites (scout §2/§3 map) onto descriptor_by_name +
   the foundations. cargo check --workspace iterate → one build → Gate 3 runtime validation.
+- ⚑ GATE 2 ATTEMPT (wf_7679d0c8) RETURNED PARTIAL — flipped ZERO prod sites by a SOUND judgment call,
+  and REFUTED the scout's "one coordinated edit" optimism with 4 real foundation gaps (a "Gate 1.5"):
+  1. **membership arity mismatch**: Gate-1 depth-general descriptor is BINARY (arity-2); production
+     membership (`membership_verifier.rs` + ~8 app crates via registry_with_real_verifiers) is 4-ARY.
+     Flipping changes every committed root + is FAIL-OPEN if wrong. → need a 4-ary depth-general variant
+     to MATCH production (fresh-genesis lets us break roots, but the executor+apps must move together +
+     run the app suites). **DECISION: match production arity (4-ary), don't force apps to binary.**
+  2. **bridge `ProofVerifier` trait carries no predicate identity** (`verify(proof,action,resource,vk)`)
+     → can't call descriptor_by_name(predicate_name); needs a trait-signature change (dregg-turn, ripples).
+  3. **delegate descriptors are v1 parse_descriptor, NOT IR-v2** (scout was wrong) — delegation needs a
+     new IR-v2 delegate EffectVmDescriptor2 + a descriptor_by_name arm before action.rs can migrate.
+  4. **adjacency has no descriptor-witness builder** (only `membership_witness`) — needs one.
+  DELIVERED: the Gate-3 runtime harness (turn/tests/stark_kill_wire_roundtrip.rs, 5 green) validating the
+  consumer contract end-to-end. RESHAPED PLAN: **Gate 1.5** (close the 4 gaps: 4-ary depth-general
+  membership + adjacency witness + IR-v2 delegate descriptor + the ProofVerifier trait threading predicate
+  identity) → **Gate 2** (now-mechanical site flips against complete foundations, per-CLUSTER runtime-gated:
+  bridge, turn-executor+8-apps, sdk, wire/storage, wasm). The membership cluster is the fail-open risk —
+  do it its own cluster with the app suites run.
 
 ## Current thrust — PARKED at a clean milestone (ember hold, 2026-07-07)
 **Rung 0 + Rung 1 + Rung 2 ALL COMPLETE and committed.** Every one of the ~20 emitted
