@@ -377,3 +377,24 @@ NoteSpendingLeaf, MerkleMembership, Fold, CommittedThreshold, Presentation(+bomb
   when the other instance finishes its value-bit range gates. NOT mine to commit — the parking didn't take
   on that lane. (The ORIGINAL relational diff-bug was already closed by another instance, 0cfa85c82.)
 STILL GATED on Relational landing + the descriptor VK regens: the final consumer-flips + git rm stark.rs.
+
+## ⚑ MACHINE-SYMPATHY + TRACTABILITY (2026-07-08, "go forth" — while blocked on the sdk red)
+Did measured optimization + a proactive OOM sweep on the emissions code:
+- ✅ PARSE-ONCE CACHE (6f9b9e3fe): descriptor_by_name re-parsed the byte-pinned JSON EVERY call on the
+  per-verify path → LazyLock cache, ~10x dispatch (dfa 12.5x, non-rev 11.5x, adjacency 9.6x, note-spend
+  4.9x). Zero signature change, legibility preserved, correctness green.
+- ✅ MEASURED THE REAL COST (probe a4b389a4d): decode 14.8µs / prove 12.67ms / verify 2.54ms →
+  decode is 0.097% of a cycle. The emissions/dispatch/decode layer is NOT the bottleneck; the STARK
+  prove path is (log_blowup 6 = 64x + 19 FRI queries = a SECURITY param, not waste). For tiny predicate
+  traces the fixed FRI/FFT overhead dominates → the real lever is BATCHING predicates (architectural,
+  not an emissions fix). DO NOT chase further emissions-layer micro-opts (measure-before-a-lever result).
+- ✅ TRACTABILITY SWEEP (read-only): NO active OOM bomb remains (Presentation's fix confirmed; all
+  rangeRows membership uses the O(1) bound or stays opaque). TWO recorded follow-ups (NOT done — in
+  shared/dirty files, fix when quiet):
+  · `Exec/ConditionalTurn.lean:989` — the tree's ONLY `native_decide` (adds ofReduceBool, hygiene-gate
+    violation). In a non-load-bearing `example`, tiny edge set → likely `decide` swaps clean. FILE IS
+    DIRTY (another lane editing) — do NOT touch now.
+  · `Circuit/DecideSatisfied2.lean:60` `checkLookup` — enumerates `tf l.table`; SAFE now (small tables)
+    but the REINCARNATION VECTOR for the 80GB bomb if a witness's `.range` is ever pointed at deployed
+    `rangeRows 30` + decided. Highest-value proactive guardrail: a lint forbidding decide/#guard/#eval
+    over `rangeRows`/`rangeTable`/`subsetTable` with bits ≥ ~20. Core file — coordinate the edit.
