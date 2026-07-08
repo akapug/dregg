@@ -105,6 +105,17 @@ theorem mem_c6 : c6RangeLookup ∈ predicateGeDesc.constraints :=
   List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr
     (Or.inr (List.mem_cons.mpr (Or.inr (List.mem_cons.mpr (Or.inl rfl)))))))))
 
+theorem mem_factHash : factHashLookup ∈ predicateGeDesc.constraints := by
+  simp only [predicateGeDesc]
+  apply List.mem_cons_of_mem; apply List.mem_cons_of_mem; apply List.mem_cons_of_mem
+  apply List.mem_cons_of_mem; apply List.mem_cons_of_mem; exact List.mem_cons_self
+
+theorem mem_factCommit : factCommitLookup ∈ predicateGeDesc.constraints := by
+  simp only [predicateGeDesc]
+  apply List.mem_cons_of_mem; apply List.mem_cons_of_mem; apply List.mem_cons_of_mem
+  apply List.mem_cons_of_mem; apply List.mem_cons_of_mem; apply List.mem_cons_of_mem
+  exact List.mem_cons_self
+
 /-! ## §3 — empty mem/map logs (the descriptor is pure gates + one range lookup). -/
 
 theorem memOpsOf_pred : memOpsOf predicateGeDesc = [] := rfl
@@ -168,23 +179,91 @@ theorem predicateGe_sat_imp_sem {hash : List ℤ → ℤ} {minit : ℤ → ℤ} 
   obtain ⟨hlo, hhi⟩ := hc6
   exact ⟨by omega, by omega, hc2⟩
 
+/-! ## §5b — THE VALUE↔FACT WELD (held forgery #2): the committed fact carries the proven value. -/
+
+/-- **`predicateGe_fact_opens_to_input`** — from the two in-circuit Poseidon2 chip lookups (against a
+SOUND chip table, the NAMED carrier), the public fact commitment `pub PI_FACT_COMMITMENT` — the value a
+verifier binds to a trusted credential — equals, in the genuine Poseidon2 `hash`, the DOUBLE hash of a
+fact whose value slot is the SAME `INPUT` column the `≥` relation is proved about. So a satisfying
+proof cannot name a fact commitment whose value differs from the value it proves about — exactly the
+decoupling held forgery #2 exploited. -/
+theorem predicateGe_fact_opens_to_input {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hlen : 2 ≤ t.rows.length)
+    (hsat : Satisfied2 hash predicateGeDesc minit mfin maddrs t) :
+    (envAt t 0).pub PI_FACT_COMMITMENT
+      = hash [hash [(envAt t 0).loc PREDICATE_SYM, (envAt t 0).loc INPUT,
+                    (envAt t 0).loc TERM1, (envAt t 0).loc TERM2, 0, FACT_MARK, 1],
+              (envAt t 0).loc STATE_ROOT] := by
+  have h0 : 0 < t.rows.length := by omega
+  have hc2 : (envAt t 0).loc FACT_COMMITMENT = (envAt t 0).pub PI_FACT_COMMITMENT := by
+    have h := hsat.rowConstraints 0 h0 c2FactPin mem_c2
+    rw [show ((0 : Nat) == 0) = true from rfl] at h
+    simpa only [c2FactPin, VmConstraint2.holdsAt, holdsVm_piFirst_true] using h
+  have hlF := hsat.rowConstraints 0 h0 factHashLookup mem_factHash
+  simp only [VmConstraint2.holdsAt, factHashLookup, Lookup.holdsAt] at hlF
+  have hfh := chip_lookup_sound hash (t.tf .poseidon2) hChip (envAt t 0).loc
+    [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2, .const 0, .const FACT_MARK, .const 1]
+    FACT_HASH FACTHASH_LANES (by decide) hlF
+  simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hfh
+  have hlC := hsat.rowConstraints 0 h0 factCommitLookup mem_factCommit
+  simp only [VmConstraint2.holdsAt, factCommitLookup, Lookup.holdsAt] at hlC
+  have hfc := chip_lookup_sound hash (t.tf .poseidon2) hChip (envAt t 0).loc
+    [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES (by decide) hlC
+  simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hfc
+  rw [← hc2, hfc, hfh]
+
+/-- **THE WELD BITES (value ≠ committed value ⟹ REJECT).** Under Poseidon2 collision resistance —
+here injectivity of the fact double-hash in its value slot — a proof whose fact witnesses match a
+trusted credential of value `v0` but whose proved `INPUT ≠ v0` CANNOT satisfy the descriptor. The
+honest Lean face of the emit-gate forge probe `forge_committed_value_neq_fact_rejects`. -/
+theorem predicateGe_value_forge_rejected {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hlen : 2 ≤ t.rows.length) (v0 : ℤ)
+    (hcred : (envAt t 0).pub PI_FACT_COMMITMENT
+      = hash [hash [(envAt t 0).loc PREDICATE_SYM, v0, (envAt t 0).loc TERM1,
+                    (envAt t 0).loc TERM2, 0, FACT_MARK, 1], (envAt t 0).loc STATE_ROOT])
+    (hinj : ∀ a b : ℤ,
+      hash [hash [(envAt t 0).loc PREDICATE_SYM, a, (envAt t 0).loc TERM1,
+                  (envAt t 0).loc TERM2, 0, FACT_MARK, 1], (envAt t 0).loc STATE_ROOT]
+        = hash [hash [(envAt t 0).loc PREDICATE_SYM, b, (envAt t 0).loc TERM1,
+                  (envAt t 0).loc TERM2, 0, FACT_MARK, 1], (envAt t 0).loc STATE_ROOT] → a = b)
+    (hforge : (envAt t 0).loc INPUT ≠ v0) :
+    ¬ Satisfied2 hash predicateGeDesc minit mfin maddrs t := by
+  intro hsat
+  have hopen := predicateGe_fact_opens_to_input hChip hlen hsat
+  exact hforge (hinj _ _ (hopen.symm.trans hcred))
+
 /-! ## §6 — Non-vacuity: a concrete satisfying witness, an honest below-threshold run that fails. -/
 
 /-- A row from an explicit column-prefix list (off-the-end = 0). -/
 def rowOf (cols : List ℤ) : Assignment := fun i => cols.getD i 0
 
+/-- The abstract hash never enters the range/gate denotation; the value↔fact weld's two chip lookups
+land in the zero-hash chip table below, so under `hash0 = fun _ => 0` the fact-hash / fact-commitment
+columns are `0`. -/
+def hash0 : List ℤ → ℤ := fun _ => 0
+
 /-- The honest satisfying assignment: `value = 100 ≥ threshold = 40`, slot-A copies the input, and the
-range-proved `diff = value − threshold = 60 ∈ [0, 2^29)`; fact commitment `7`. Columns
-`[INPUT, SLOT_A, THRESHOLD, DIFF, FACT_COMMITMENT]`. -/
-def geAsg : Assignment := rowOf [100, 100, 40, 60, 7]
+range-proved `diff = value − threshold = 60 ∈ [0, 2^29)`. The value↔fact weld columns are `0` (their
+chip digests are `hash0 _ = 0`), with `INPUT` feeding the arity-7 fact-hash absorb. Columns
+`[INPUT, SLOT_A, THRESHOLD, DIFF, FACT_COMMITMENT, PREDICATE_SYM, TERM1, TERM2, STATE_ROOT, FACT_HASH]`
+then the two chip lane groups (all `0`). -/
+def geAsg : Assignment := rowOf [100, 100, 40, 60, 0]
 
-/-- The public inputs: `PI_THRESHOLD = 40`, `PI_FACT_COMMITMENT = 7`. -/
-def gePub : Assignment := rowOf [40, 7]
+/-- The public inputs: `PI_THRESHOLD = 40`, `PI_FACT_COMMITMENT = 0` (the zero-hash fact commitment). -/
+def gePub : Assignment := rowOf [40, 0]
 
-/-- The witness trace family carries the FAITHFUL range table `rangeRows 29`; every other table is empty
-(no mem/map content). Reused by the below-threshold failing witness. -/
+/-- The witness trace family carries the FAITHFUL range table `rangeRows 29` AND the Poseidon2 chip
+table with the two genuine `chipRow`s the weld lookups absorb (arity-7 fact-hash over `INPUT = 100`,
+arity-2 fact-commitment); every other table is empty. Reused by the below-threshold failing witness. -/
 def geTf : TraceFamily
   | TableId.range => rangeRows DIFF_BITS
+  | TableId.poseidon2 =>
+      [chipRow hash0 [0, 100, 0, 0, 0, FACT_MARK, 1] (List.replicate 7 0),
+       chipRow hash0 [0, 0] (List.replicate 7 0)]
   | _ => []
 
 /-- The concrete 2-row satisfying run (row 0 active, row 1 the wrap row); both rows carry `geAsg`. -/
@@ -197,12 +276,10 @@ at the use sites. -/
 theorem geWitnessTf_range : geWitnessTrace.tf .range = rangeRows DIFF_BITS := by
   simp only [geWitnessTrace, geTf]
 
-/-- The abstract hash never enters the denotation (no hash sites / map ops), so any value serves. -/
-def hash0 : List ℤ → ℤ := fun _ => 0
-
 /-- **The witness PROVABLY satisfies the emitted descriptor.** On both rows the range lookup holds by
-`60 ∈ rangeRows 29` (via `range_row_mem_iff`, NOT enumeration); on the active row 0 the two PI pins /
-two gates hold, on the wrap row 1 they are vacuous; the memory legs are the empty-log balance. -/
+`60 ∈ rangeRows 29` (via `range_row_mem_iff`, NOT enumeration); the two value↔fact weld chip lookups
+land in the concrete Poseidon2 chip table (`gph*`/`gpc*`); on the active row 0 the two PI pins / two
+gates hold, on the wrap row 1 they are vacuous; the memory legs are the empty-log balance. -/
 theorem geWitness_satisfies :
     Satisfied2 hash0 predicateGeDesc (fun _ => 0) (fun _ => (0, 0)) [] geWitnessTrace where
   rowConstraints := by
@@ -223,17 +300,39 @@ theorem geWitness_satisfies :
         ⟨TableId.range, [.var DIFF]⟩ := by
       simp only [Lookup.holdsAt, List.map_cons, List.map_nil, EmittedExpr.eval, geWitnessTf_range, hd1]
       exact h60
+    -- the two weld chip lookups land in the concrete Poseidon2 chip table (decidable membership).
+    have gph0 : Lookup.holdsAt geWitnessTrace.tf (envAt geWitnessTrace 0)
+        ⟨TableId.poseidon2, chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+          .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES⟩ := by
+      simp only [Lookup.holdsAt, geWitnessTrace, geTf]; decide
+    have gph1 : Lookup.holdsAt geWitnessTrace.tf (envAt geWitnessTrace 1)
+        ⟨TableId.poseidon2, chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+          .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES⟩ := by
+      simp only [Lookup.holdsAt, geWitnessTrace, geTf]; decide
+    have gpc0 : Lookup.holdsAt geWitnessTrace.tf (envAt geWitnessTrace 0)
+        ⟨TableId.poseidon2, chipLookupTuple [.var FACT_HASH, .var STATE_ROOT]
+          FACT_COMMITMENT FACTCOMMIT_LANES⟩ := by
+      simp only [Lookup.holdsAt, geWitnessTrace, geTf]; decide
+    have gpc1 : Lookup.holdsAt geWitnessTrace.tf (envAt geWitnessTrace 1)
+        ⟨TableId.poseidon2, chipLookupTuple [.var FACT_HASH, .var STATE_ROOT]
+          FACT_COMMITMENT FACTCOMMIT_LANES⟩ := by
+      simp only [Lookup.holdsAt, geWitnessTrace, geTf]; decide
     have hi2 : i < 2 := hi
     clear hi
     simp only [predicateGeDesc] at hc
-    -- the gate / PI-pin teeth reduce by `decide` (concrete trace); the two range lookups by `gl0`/`gl1`.
+    -- gate / PI-pin teeth by `decide`; range lookups by `gl*`; the weld chip lookups by `gph*`/`gpc*`.
     interval_cases i <;>
       fin_cases hc <;>
       simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm,
-        c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup, g0, g1] <;>
+        c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup,
+        factHashLookup, factCommitLookup, g0, g1] <;>
       first
         | exact gl0
         | exact gl1
+        | exact gph0
+        | exact gph1
+        | exact gpc0
+        | exact gpc1
         | decide
   rowHashes := by intro i _; trivial
   rowRanges := by intro i _ r hr; simp only [predicateGeDesc, List.not_mem_nil] at hr
@@ -256,6 +355,25 @@ theorem geWitness_sem_concrete :
       ∧ (envAt geWitnessTrace 0).loc INPUT = 100
       ∧ (envAt geWitnessTrace 0).pub PI_THRESHOLD ≤ (envAt geWitnessTrace 0).loc INPUT := by
   refine ⟨by decide, by decide, geWitness_sem.ge⟩
+
+/-- The concrete Poseidon2 chip table is genuinely SOUND for `hash0` (each row is a real `chipRow`) —
+so the weld's named carrier `ChipTableSound` is realizable, not merely assumed. -/
+theorem geChipSound : ChipTableSound hash0 (geWitnessTrace.tf .poseidon2) := by
+  intro r hr
+  simp only [geWitnessTrace, geTf, List.mem_cons, List.not_mem_nil, or_false] at hr
+  rcases hr with h | h
+  · exact ⟨[0, 100, 0, 0, 0, FACT_MARK, 1], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[0, 0], List.replicate 7 0, by decide, by decide, h⟩
+
+/-- **The value↔fact WELD leg FIRES on the witness (non-vacuously).** Against the sound chip table, the
+public fact commitment opens, in the genuine `hash0`, to the double hash of a fact whose value slot is
+exactly the proved `INPUT = 100` — the held-forgery-#2 binding, derived not assumed. -/
+theorem geWitness_fact_opens :
+    (envAt geWitnessTrace 0).pub PI_FACT_COMMITMENT
+      = hash0 [hash0 [(envAt geWitnessTrace 0).loc PREDICATE_SYM, (envAt geWitnessTrace 0).loc INPUT,
+                (envAt geWitnessTrace 0).loc TERM1, (envAt geWitnessTrace 0).loc TERM2,
+                0, FACT_MARK, 1], (envAt geWitnessTrace 0).loc STATE_ROOT] :=
+  predicateGe_fact_opens_to_input (t := geWitnessTrace) geChipSound (by decide) geWitness_satisfies
 
 /-- The HONEST below-threshold attempt: `value = 30 < threshold = 40`, slot-A copies the input, and the
 diff is the genuine `value − threshold = −10` (so C3 and C5 both HOLD — this is not a malformed trace,
@@ -288,7 +406,11 @@ theorem geBad_not_satisfies :
 /-! ## §7 — Axiom tripwires. -/
 
 #assert_axioms predicateGe_sat_imp_sem
+#assert_axioms predicateGe_fact_opens_to_input
+#assert_axioms predicateGe_value_forge_rejected
 #assert_axioms geWitness_satisfies
+#assert_axioms geChipSound
+#assert_axioms geWitness_fact_opens
 #assert_axioms geWitness_sem
 #assert_axioms geWitness_sem_concrete
 #assert_axioms geBad_not_satisfies
