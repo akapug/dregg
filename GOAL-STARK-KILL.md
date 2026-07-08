@@ -306,16 +306,21 @@ HARVESTED (on-disk edits survived the reboot; verified sequentially, memory-capp
   AdjacencyMembership (the REGRESSION — idx-step now every-row; fTrace/cTraceBad reject),
   NonRevocation (SIB1 bound; both poles prefix_carriers_admitted_forgery→fixed_forbids_the_forgery),
   NoteSpendingLeaf (merkle chain bound; broken_chain/wrong_root reject).
-- ⚠ HELD 7/10 (on-disk, UNCOMMITTED, need sequential finishing — NOT a swarm):
+- ✅ COMMITTED 4/10 (+ Merkle 8f55a2ce7): + MerkleMembership (continuityLastFix binds CUR1=PARENT0 on
+  last row; cTraceBadChain/cTraceBadRoot reject the height-1 forge). Built axiom-clean UNDER THE GUARD.
+- ⚠ HELD 6/10 (on-disk, need sequential finishing UNDER `.bin/lean-safe` — NOT a swarm):
   · GarbledEval — has sorryAx (faked-green in garbled_lastRowFix_load_bearing); discharge the sorry.
   · Derivation — NOTHING on disk (lane died early); redo from the audit dossier (bodyHash cols 1..8 free).
-  · MerkleMembership — fix present, THIN regression (CUR1 height-1 hole); complete the forge-reject proof.
   · PredicatesRelationalCompound — fix present, thin regression (and_intermediate free); complete.
   · Fold — fix present (REMOVAL_COUNT_PLUS_ONE free); build-verify + complete regression.
   · Presentation — fix present, NO regression (NOT_AFTER free); author the forge-reject.
   · CommittedThreshold — fix present, thin (FACT_COMMITMENT tautological pin); complete.
   Audit dossiers: /private/tmp/.../scratchpad/bugfix-seeds.json. Both swarms resumable by runId but
-  DO NOT resume as concurrent Lean swarms — finish sequentially.
+  DO NOT resume as concurrent Lean swarms — finish sequentially UNDER .bin/lean-safe.
+  METHOD (proven): build each held family under `.bin/lean-safe lake build …` — a decide-bomb gets
+  KILLED at 12GB (diagnostic: that family needs decide→== per the tractability rule); a clean build is
+  harvestable. Fold/Relational/CommittedThreshold have `#guard decide(…)`/big-literal suspects; Garbled
+  has a real sorryAx; Derivation must be redone from the dossier.
 - final-flips (wf_0438144d-602) also OOM-died with consumer-crate edits on disk (uncommitted, GATED
   on the descriptors being fixed — do not commit until the 7 held fixes land).
 
