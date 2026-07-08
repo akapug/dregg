@@ -34,6 +34,7 @@
 //!   fed by this registry. The forced-command target and the per-user confinement
 //!   are proven here; the public hosting is the deploy.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -163,6 +164,16 @@ pub struct AgentHostRegistry {
     /// The attach binary the forced commands invoke (default [`DEFAULT_ATTACH_BIN`]).
     #[serde(default = "default_attach_bin")]
     attach_bin: String,
+    /// Login-lookup index: normalized SSH key identity → record index. Rebuilt on every
+    /// (rare) write so a login lookup is O(1) instead of an O(N) roster scan. Not
+    /// serialized — rebuilt from `records` on load.
+    #[serde(skip)]
+    by_key: HashMap<String, usize>,
+    /// Account-id → first record index (an account may hold several enrolled keys; the
+    /// index points at the earliest, matching the linear `find` it replaces). Rebuilt with
+    /// `by_key`.
+    #[serde(skip)]
+    by_account: HashMap<String, usize>,
 }
 
 fn default_attach_bin() -> String {
@@ -184,6 +195,20 @@ impl AgentHostRegistry {
         AgentHostRegistry {
             records: Vec::new(),
             attach_bin: default_attach_bin(),
+            by_key: HashMap::new(),
+            by_account: HashMap::new(),
+        }
+    }
+
+    /// Rebuild the login-lookup indexes from `records`. Called after every mutation (and on
+    /// load); writes are rare, logins frequent. `by_account` keeps the FIRST record index
+    /// for an account, matching the `records.iter().find(..)` order it replaces.
+    fn reindex(&mut self) {
+        self.by_key.clear();
+        self.by_account.clear();
+        for (i, r) in self.records.iter().enumerate() {
+            self.by_key.insert(normalize_key(&r.ssh_pubkey), i);
+            self.by_account.entry(r.account.clone()).or_insert(i);
         }
     }
 
@@ -263,6 +288,7 @@ impl AgentHostRegistry {
             });
         }
         self.records.push(rec);
+        self.reindex();
         Ok(self.records.last().expect("just pushed"))
     }
 
@@ -298,6 +324,7 @@ impl AgentHostRegistry {
                 self.records.len() - 1
             }
         };
+        self.reindex();
         Ok(&self.records[idx])
     }
 
@@ -309,21 +336,21 @@ impl AgentHostRegistry {
             .records
             .iter()
             .position(|r| normalize_key(&r.ssh_pubkey) == key)?;
-        Some(self.records.remove(i))
+        let removed = self.records.remove(i);
+        self.reindex();
+        Some(removed)
     }
 
     /// Look up the account for an SSH key (by its type+blob, the comment ignored) —
     /// what an `AuthorizedKeysCommand` would resolve on each login.
     pub fn find_by_key(&self, ssh_pubkey: &str) -> Option<&AccountRecord> {
         let key = normalize_key(ssh_pubkey);
-        self.records
-            .iter()
-            .find(|r| normalize_key(&r.ssh_pubkey) == key)
+        self.by_key.get(&key).map(|&i| &self.records[i])
     }
 
     /// Look up by account id.
     pub fn find_by_account(&self, account: &str) -> Option<&AccountRecord> {
-        self.records.iter().find(|r| r.account == account)
+        self.by_account.get(account).map(|&i| &self.records[i])
     }
 
     /// The full OpenSSH `authorized_keys` content — one forced-command line per
@@ -357,7 +384,11 @@ impl AgentHostRegistry {
             return Ok(AgentHostRegistry::new());
         }
         let raw = std::fs::read_to_string(path).map_err(|e| HostError::Io(e.to_string()))?;
-        serde_json::from_str(&raw).map_err(|e| HostError::Io(e.to_string()))
+        let mut reg: AgentHostRegistry =
+            serde_json::from_str(&raw).map_err(|e| HostError::Io(e.to_string()))?;
+        // The indexes are `#[serde(skip)]` — rebuild them from the loaded records.
+        reg.reindex();
+        Ok(reg)
     }
 }
 
@@ -605,6 +636,65 @@ mod tests {
         assert_eq!(r.brain, "hermes");
         // The brain rides into the forced command.
         assert!(reg.authorized_keys().contains("--brain hermes"));
+    }
+
+    // ── the side indexes agree with a linear scan across every mutation ───────
+    #[test]
+    fn indexed_lookups_match_a_linear_scan() {
+        // A linear reference over the private `records`, mirroring the pre-index bodies.
+        fn ref_by_key<'a>(reg: &'a AgentHostRegistry, k: &str) -> Option<&'a AccountRecord> {
+            let key = normalize_key(k);
+            reg.records()
+                .iter()
+                .find(|r| normalize_key(&r.ssh_pubkey) == key)
+        }
+        fn ref_by_account<'a>(reg: &'a AgentHostRegistry, a: &str) -> Option<&'a AccountRecord> {
+            reg.records().iter().find(|r| r.account == a)
+        }
+        fn check(reg: &AgentHostRegistry) {
+            for probe in [
+                ALICE_KEY,
+                BOB_KEY,
+                "ssh-ed25519 AAAAmissingblob nobody@nowhere",
+            ] {
+                assert_eq!(reg.find_by_key(probe), ref_by_key(reg, probe));
+            }
+            for probe in ["dga1_alice", "dga1_bob", "dga1_multi", "dga1_absent"] {
+                assert_eq!(reg.find_by_account(probe), ref_by_account(reg, probe));
+            }
+        }
+
+        let mut reg = AgentHostRegistry::new();
+        check(&reg);
+        reg.enroll("dga1_alice", ALICE_KEY, 200, "fs").unwrap();
+        check(&reg);
+        reg.enroll("dga1_bob", BOB_KEY, 300, "fs").unwrap();
+        check(&reg);
+
+        // Two keys under one account: find_by_account must return the FIRST enrolled.
+        let k1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImultiKEYoneMULTIkeyONEmultiKEYoneMU m1@host";
+        let k2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAImultiKEYtwoMULTIkeyTWOmultiKEYtwoMU m2@host";
+        reg.enroll("dga1_multi", k1, 100, "fs").unwrap();
+        reg.enroll("dga1_multi", k2, 100, "fs").unwrap();
+        check(&reg);
+        assert_eq!(
+            reg.find_by_account("dga1_multi").unwrap().ssh_pubkey.trim(),
+            k1
+        );
+
+        // Revoke the first multi key: the account now resolves to the second (still first-in-Vec).
+        reg.revoke(k1);
+        check(&reg);
+        assert_eq!(
+            reg.find_by_account("dga1_multi").unwrap().ssh_pubkey.trim(),
+            k2
+        );
+
+        // Upsert replaces in place.
+        reg.upsert("dga1_alice", ALICE_KEY, 999, "fs", "hermes")
+            .unwrap();
+        check(&reg);
+        assert_eq!(reg.find_by_key(ALICE_KEY).unwrap().budget_cents, 999);
     }
 
     #[test]
