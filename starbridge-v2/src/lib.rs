@@ -776,7 +776,15 @@ pub use two_image_firmament::{run_two_image_firmament, TwoImageOutcome, TwoImage
 // `process-pd` test/headless path. `dock/mod.rs` independently gates its
 // gpui-only submodules, so pulling `dock` in here pulls only its gpui-free members
 // (`migrate`, gated on `embedded-executor`, which `process-pd` implies).
-#[cfg(any(feature = "gpui-ui", feature = "gpui-web", feature = "process-pd"))]
+// `embedded-executor` included so the gpui-free `dock::migrate` (itself gated on
+// exactly that feature) reaches the default WebImage wasm build — shell.rs's
+// distributed re-home leg is deliberately live there.
+#[cfg(any(
+    feature = "gpui-ui",
+    feature = "gpui-web",
+    feature = "process-pd",
+    feature = "embedded-executor"
+))]
 pub mod dock;
 
 // THE COCKPIT — the comprehensive visual master interface (the dock + the 28
