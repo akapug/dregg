@@ -409,3 +409,18 @@ Two sequential gates on one pipeline:
 - HARDENING in flight (greenfield, will integrate + push): finality-throughput fixes (bounded-timeout
   + incremental order + topo-order Rust differential) for fast-cadence robustness; SWAP-inversion Rust-
   executor faithfulness fix (the differential-caught covered-turn divergence).
+
+## ★★★★ 1s CROSS-MACHINE REVALIDATION — the perf campaign PROVEN (07-08) ★★★★
+- 9 alg-complexity fixes committed + tested (throughput 994495ec9, SWAP 7708ed4a3, tau-equivocator-index
+  334ad6df0, catchup 5867f4f78, pubkey-index 77a2caddc, coord-budget 5a24a564a, binary-search 0cf1d5f95,
+  DSL-lookup f72748fbe, api-clone-journal b35a45671). Both machines rebuilt (Rust-only, no seed rebuild).
+- BEFORE/AFTER on identical iron (fresh genesis 91902b60, cross-machine hbox-Linux .39 + nextop-Darwin .130,
+  1s cadence — the exact scenario that CRAWLED last night):
+  * client turn: CRAWLED (stuck h=1, only landed at 4s) → FINALIZED (all 4 → h=2, dest funded 1000 BOTH machines).
+  * DIFFERENTIAL DIVERGENCE: 291 → 0 (topological build_ordering_blocklace → Rust tau agrees with Lean).
+  * authority inversion: firing every covered turn → 0 (committed_height replay).
+  * PREFIX SHIFTED: 27 → 1 (throughput/incremental → stable finality).
+- The verified cross-machine payoff now finalizes at FULL SPEED. The afternoon's systematic alg-complexity
+  sweep (docs/ALG-COMPLEXITY-AUDIT.md + docs/alg-audit/1-6) → 9 fixes → PROVEN on live cross-machine iron.
+- Remaining (master board): storage-Merkle incrementalization (Tier 3), Lean model twins (Tier 4), and the
+  one architectural item — nullifier/revocation history-set → HashSet-field-swap or accumulator (ember's fork).
