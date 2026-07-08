@@ -248,7 +248,7 @@ pub struct Served {
 /// [`crate::grain::attestation_message`] (the backup pedigree tooth), specialized to the
 /// serve path — binding the root to the specific grain, so an attestation for one grain's
 /// root cannot be replayed as another's. Both fields are NUL-free (a `cell:…` id, a
-/// `umem1…` root), so the delimiter is unambiguous.
+/// `heap1…` root), so the delimiter is unambiguous.
 pub fn served_root_message(grain_cell_id: &str, data_root: &str) -> Vec<u8> {
     let mut msg = Vec::new();
     msg.extend_from_slice(b"grain-served-root-attestation:v1");
@@ -372,20 +372,24 @@ impl AttestedServed {
 
     /// **The trustless-serve check chained to the LEDGER, not the host.** Identical to
     /// [`witnessed_authentic`](Self::witnessed_authentic) except the trusted root is the
-    /// grain cell's committed commitment as **fetched from the federation** (`GET
-    /// /api/cell/{id}` → `state_commitment`, 32 bytes), NOT `self.new_data_root` (which the
-    /// serving host chose). This is the seam the witness review named: authenticity must
-    /// chain to the cell's committed root on the ledger, so a host cannot substitute its own
-    /// root. See [`verify_served_against_ledger`] for the checks; `ledger_root` is the raw
-    /// 32-byte commitment the visitor obtained independently from the federation.
+    /// grain cell's committed **heap-root** obtained independently from the federation (the
+    /// real dregg heap-root — the encoded [`dregg_circuit::heap_root::compute_heap_root`]
+    /// felt = [`crate::grain::grain_cell_commitment`]), NOT `self.new_data_root` (which the
+    /// serving host chose). `ledger_heap_root_hex` is the **hex** wire form the federation
+    /// returns (the codec fix decodes it). See [`verify_served_against_ledger`] for the
+    /// checks.
     ///
-    /// It closes the pole owner-attestation-alone could not: a host that somehow held the
-    /// owner key could sign a fabricated root, but it cannot rewrite the federation's stored
-    /// commitment, so a served card that is not a leaf under the LEDGER's root is caught here
-    /// regardless of what attestation the host bundles.
+    /// This is the seam the witness review named, healed in the real scheme: authenticity
+    /// chains to the cell's committed heap-root, a genuine ledger value in the same
+    /// Poseidon2 scheme the inclusion proofs fold in — so a host cannot substitute its own
+    /// root. It closes the pole owner-attestation-alone could not: a host that somehow held
+    /// the owner key could sign a fabricated root, but it cannot rewrite the federation's
+    /// stored heap-root, so a served card that is not a leaf under the LEDGER's heap-root is
+    /// caught here regardless of what attestation the host bundles. (Named remaining seam:
+    /// the federation WRITE of the heap-root as a distinct fetchable value.)
     pub fn verify_against_ledger(
         &self,
-        ledger_root: [u8; 32],
+        ledger_heap_root_hex: &str,
         owner_pubkey: &VerifyingKey,
         card: &[u8],
     ) -> bool {
@@ -394,7 +398,7 @@ impl AttestedServed {
                 card,
                 key,
                 proof,
-                ledger_root,
+                ledger_heap_root_hex,
                 owner_pubkey,
                 &self.attestation,
             ),
@@ -403,47 +407,81 @@ impl AttestedServed {
     }
 }
 
-/// **The visitor's independent verify — authenticity chained to the LEDGER's root.**
+/// Encode a raw 32-byte heap root as the LEDGER's hex wire form — lowercase, no
+/// separators, byte-for-byte the `hex_encode` the federation returns for a cell
+/// commitment (`node/src/api.rs`, `bytes.iter().map(|b| format!("{b:02x}"))`). This is
+/// how a grain's published heap-root arrives at a visitor.
+pub fn heap_root_hex(root: [u8; 32]) -> String {
+    data_encoding::HEXLOWER.encode(&root)
+}
+
+/// Decode the LEDGER's hex heap-root back to raw 32 bytes. Accepts upper- or lowercase
+/// hex (`HEXLOWER_PERMISSIVE`); `None` on malformed input or a non-32-byte length — the
+/// codec fix for the api-returns-hex reality (the value must be decoded, not consumed as
+/// if it were raw bytes).
+fn heap_root_from_hex(hex: &str) -> Option<[u8; 32]> {
+    let bytes = data_encoding::HEXLOWER_PERMISSIVE
+        .decode(hex.as_bytes())
+        .ok()?;
+    bytes.as_slice().try_into().ok()
+}
+
+/// **The visitor's independent verify — authenticity chained to the LEDGER's heap-root.**
 ///
 /// The visitor holds: the served `card` bytes + its `witness_key` + `inclusion` proof +
 /// the owner's `attestation` (all reachable via the serving host), AND — crucially — the
-/// `ledger_root` and `owner_pubkey` obtained from an **independent channel**: the
-/// federation. `ledger_root` is the grain cell's committed 32-byte commitment as returned
-/// by `GET /api/cell/{grain_cell_id}` (`state_commitment`; = [`crate::grain::grain_cell_commitment`]
-/// of the `/var` at the last honest commit); `owner_pubkey` is the cell owner's registered
-/// key (also on the cell record). Neither comes from the serving host's HTTP response.
+/// `ledger_heap_root_hex` and `owner_pubkey` obtained from an **independent channel**: the
+/// federation. `ledger_heap_root_hex` is the grain cell's committed **heap-root**, in the
+/// real dregg scheme (the encoded [`dregg_circuit::heap_root::compute_heap_root`] felt =
+/// [`crate::grain::grain_cell_commitment`] of the `/var` at the last honest commit), as a
+/// **hex string** — the wire form the federation returns (`hex_encode`, mirroring the
+/// `state_commitment` codec), which this function DECODES (the hex-vs-raw codec fix).
+/// `owner_pubkey` is the cell owner's registered key. Neither comes from the serving host.
+///
+/// The heap-root is the value a real deployment's ledger carries for the cell's heap (the
+/// `heap_root` register the canonical `state_commitment` absorbs). The named seam: the
+/// federation must publish this heap-root as a distinct fetchable value (its membership in
+/// the whole-cell `state_commitment` is a separate check); the SCHEME here already matches
+/// what the ledger carries.
 ///
 /// Returns `true` iff BOTH:
-/// 1. the owner attested **exactly the ledger's committed root** — `attestation` verifies
-///    under `owner_pubkey` AND its `data_root` equals the ledger root rebuilt from
-///    `ledger_root` (so a host's attestation over some *other* root it served is rejected),
-///    and
-/// 2. `card` is the value at `witness_key` under the **ledger root** (the inclusion proof
-///    folds to the ledger root, not the host's served root).
+/// 1. the owner attested **exactly the ledger's committed heap-root** — `attestation`
+///    verifies under `owner_pubkey` AND its `data_root` equals the heap-root rebuilt from
+///    the decoded ledger bytes (so a host's attestation over some *other* root is
+///    rejected), and
+/// 2. `card` is the value at `witness_key` under the **ledger heap-root** (the inclusion
+///    proof folds — in the real Poseidon2/felt heap scheme — to the ledger heap-root, not
+///    the host's served root).
 ///
 /// The decisive property: a hostile host that serves card `Y`, commits `root(Y)`, and
 /// bundles its own self-consistent attestation over `root(Y)` is CAUGHT — the ledger's
-/// committed root is `root(X)` (the last honestly-committed state the federation stored),
-/// and `Y` is not a leaf under `root(X)`, so (2) fails. This holds even against a host that
-/// possessed the owner key: it can forge an attestation but it cannot rewrite the
-/// federation's independently-stored commitment.
+/// committed heap-root is `root(X)` (the last honestly-committed state the federation
+/// stored), and `Y` is not a leaf under `root(X)`, so (2) fails. This holds even against a
+/// host that possessed the owner key: it can forge an attestation but it cannot rewrite the
+/// federation's independently-stored commitment. A malformed hex ledger value is rejected.
 pub fn verify_served_against_ledger(
     card: &[u8],
     witness_key: &str,
     inclusion: &InclusionProof,
-    ledger_root: [u8; 32],
+    ledger_heap_root_hex: &str,
     owner_pubkey: &VerifyingKey,
     attestation: &RootAttestation,
 ) -> bool {
+    // Decode the LEDGER's hex heap-root to raw bytes (the api-returns-hex codec fix). A
+    // malformed value cannot authenticate anything.
+    let Some(ledger_root) = heap_root_from_hex(ledger_heap_root_hex) else {
+        return false;
+    };
     let ledger_data_root = DataRoot::from_root_bytes(ledger_root);
-    // (1) The owner attested EXACTLY the ledger's committed root — the independent anchor,
-    //     bound to the root the FEDERATION stored, not whatever root the host served.
+    // (1) The owner attested EXACTLY the ledger's committed heap-root — the independent
+    //     anchor, bound to the root the FEDERATION stored, not whatever root the host served.
     if !(attestation.verify(owner_pubkey) && attestation.data_root == ledger_data_root) {
         return false;
     }
-    // (2) The served card is the value at `witness_key` under the LEDGER root — the
-    //     inclusion proof must fold to the ledger root, so a card served under any other
-    //     root is rejected here (the tamper-against-ledger tooth).
+    // (2) The served card is the value at `witness_key` under the LEDGER heap-root — the
+    //     inclusion proof must fold (in the real Poseidon2 heap scheme) to the ledger
+    //     heap-root, so a card served under any other root is rejected here (the
+    //     tamper-against-ledger tooth).
     crate::cell::verify_inclusion(&ledger_data_root, witness_key, card, inclusion)
 }
 
@@ -1357,11 +1395,15 @@ mod tests {
     }
 
     /// **THE LEDGER-ANCHORED SERVE WELD — authenticity chained to the FEDERATION's stored
-    /// commitment, not the serving host's response.** The prior weld anchored on the owner
-    /// key but still let the visitor take the ROOT from the host. This closes that: the
-    /// visitor takes the root from the LEDGER (`GET /api/cell/{id}` → `state_commitment`,
-    /// modeled as [`grain_cell_commitment`] of the last honest `/var`), so even a host that
-    /// serves a self-consistent card+root+attestation is caught.
+    /// HEAP-ROOT (the real dregg scheme), not the serving host's response.** The prior weld
+    /// anchored on the owner key but still let the visitor take the ROOT from the host. This
+    /// closes that: the visitor takes the cell's committed **heap-root** from the LEDGER
+    /// ([`grain_cell_commitment`] of the last honest `/var` = the encoded
+    /// `dregg_circuit::heap_root::compute_heap_root`, the `heap_root` the whole-cell
+    /// `state_commitment` absorbs), as a **hex** wire value it decodes — so even a host that
+    /// serves a self-consistent card+root+attestation is caught. The named remaining seam is
+    /// the federation WRITE of the heap-root as a distinct fetchable value; the SCHEME here
+    /// is the real one the ledger carries (a Poseidon2/felt heap-root, not sha256).
     #[test]
     fn a_served_card_is_authentic_only_against_the_ledgers_committed_root() {
         use crate::grain::grain_cell_commitment;
@@ -1374,9 +1416,10 @@ mod tests {
         let owner_pub = owner.verifying_key();
 
         // ── The OWNER's last honest commit: serve the real card into a stateful /var and
-        //    commit root(X). The federation stores grain_cell_commitment(/var) keyed by the
-        //    grain's cell id — the LEDGER's independent record (GET /api/cell/{id} →
-        //    state_commitment). The visitor reads THIS, never the serving host. ──
+        //    commit root(X). The federation carries grain_cell_commitment(/var) — the cell's
+        //    heap-root, the `heap_root` the whole-cell state_commitment absorbs — keyed by the
+        //    grain's cell id (the named seam: it must be PUBLISHED as a distinct fetchable
+        //    value). The visitor reads THIS (as hex), never the serving host. ──
         let mut var = Umem::new();
         var.put("notes/a", b"alpha".to_vec());
         var.put("prefs/theme", b"dark".to_vec());
@@ -1395,38 +1438,64 @@ mod tests {
         assert_eq!(honest.response.status, 200);
         let card_bytes = honest.response.body.clone();
 
-        // ── POLE (iii) — THE BINDING: the value the federation stores == the /var root the
-        //    inclusion proofs fold to. grain_cell_commitment is exactly the raw /var root,
-        //    and its wire form is the DataRoot the honest serve committed. ──
+        // ── POLE (iii) — THE BINDING: the value the federation carries == the /var HEAP-ROOT
+        //    (the real dregg scheme) the inclusion proofs fold to. grain_cell_commitment is
+        //    the encoded dregg heap-root felt, and its wire form is the DataRoot the honest
+        //    serve committed. It is a GENUINE cell heap-root — the dregg_circuit heap-root
+        //    primitive dregg_cell::compute_heap_root wraps — NOT a bespoke sha256 tree. ──
         let ledger_root = grain_cell_commitment(&var);
         assert_eq!(
             DataRoot::from_root_bytes(ledger_root),
             honest.new_data_root,
-            "the ledger's committed commitment is the same root the served card is a leaf under"
+            "the ledger's committed heap-root is the same root the served card is a leaf under"
         );
         assert_eq!(
             ledger_root,
             var.commit_root_bytes(),
-            "grain_cell_commitment IS the /var root inclusion proofs are checked against"
+            "grain_cell_commitment IS the /var heap-root inclusion proofs are checked against"
+        );
+        // The SHAPE: it is the real Poseidon2 heap-root, not sha256 — the encoded
+        // dregg_circuit::heap_root::compute_heap_root over the /var leaves (the exact
+        // primitive dregg_cell::compute_heap_root wraps).
+        assert_eq!(
+            ledger_root,
+            crate::cell::felt_to_bytes32(dregg_circuit::heap_root::compute_heap_root(
+                var.heap_leaves()
+            )),
+            "grain_cell_commitment == the real dregg heap-root over the /var leaves"
         );
 
-        // ── POLE (i) — HONEST: the visitor reads the LEDGER root + owner key (both
-        //    independent), and verifies the served card is a leaf under the LEDGER root.
-        //    Accepted. ──
+        // The federation returns the heap-root as HEX (`hex_encode`, like `state_commitment`);
+        // the visitor DECODES it (the codec fix) — round-trips to the same raw bytes.
+        let ledger_hex = heap_root_hex(ledger_root);
+        assert_eq!(
+            ledger_hex,
+            data_encoding::HEXLOWER.encode(&ledger_root),
+            "the ledger heap-root wire form is lowercase hex, matching node/src/api.rs"
+        );
+
+        // ── POLE (i) — HONEST: the visitor reads the LEDGER heap-root (hex, decoded) + owner
+        //    key (both independent), and verifies the served card is a leaf under the LEDGER
+        //    heap-root. Accepted. ──
         assert!(
             verify_served_against_ledger(
                 &card_bytes,
                 &card.key(),
                 honest.inclusion.as_ref().unwrap(),
-                ledger_root,
+                &ledger_hex,
                 &owner_pub,
                 &honest.attestation,
             ),
-            "honest serve: card is the committed leaf under the ledger's root → authentic"
+            "honest serve: card is the committed leaf under the ledger's heap-root → authentic"
         );
         assert!(
-            honest.verify_against_ledger(ledger_root, &owner_pub, &card_bytes),
+            honest.verify_against_ledger(&ledger_hex, &owner_pub, &card_bytes),
             "same check via the AttestedServed convenience method"
+        );
+        // A malformed hex ledger value authenticates nothing (the codec rejects it).
+        assert!(
+            !honest.verify_against_ledger("not-hex!!", &owner_pub, &card_bytes),
+            "a malformed hex ledger heap-root is rejected"
         );
 
         // ── POLE (ii) — TAMPER: a hostile host serves a DIFFERENT card Y, commits root(Y),
@@ -1466,8 +1535,8 @@ mod tests {
         );
         // But against the LEDGER's committed root(X) it collapses: Y is not a leaf under X.
         assert!(
-            !tampered.verify_against_ledger(ledger_root, &owner_pub, &evil_bytes),
-            "TAMPER CAUGHT: the served card is not a leaf under the LEDGER's committed root"
+            !tampered.verify_against_ledger(&ledger_hex, &owner_pub, &evil_bytes),
+            "TAMPER CAUGHT: the served card is not a leaf under the LEDGER's committed heap-root"
         );
         // The inclusion tooth in isolation is decisive: even handed the GENUINE owner
         // attestation over the ledger root (so the attestation conjunct passes), the tampered
@@ -1481,11 +1550,11 @@ mod tests {
                 &evil_bytes,
                 "card/",
                 tampered.inclusion.as_ref().unwrap(),
-                ledger_root,
+                &ledger_hex,
                 &owner_pub,
-                &honest.attestation, // a genuine owner attestation over the ledger root
+                &honest.attestation, // a genuine owner attestation over the ledger heap-root
             ),
-            "the inclusion tooth alone rejects a card that is not a leaf under the ledger root"
+            "the inclusion tooth alone rejects a card that is not a leaf under the ledger heap-root"
         );
 
         // A wrong card at the RIGHT key likewise fails inclusion under the ledger root.
@@ -1497,11 +1566,11 @@ mod tests {
                 &wrong,
                 &card.key(),
                 honest.inclusion.as_ref().unwrap(),
-                ledger_root,
+                &ledger_hex,
                 &owner_pub,
                 &honest.attestation,
             ),
-            "a card that is not the committed leaf fails the inclusion tooth under the ledger root"
+            "a card that is not the committed leaf fails the inclusion tooth under the ledger heap-root"
         );
     }
 }

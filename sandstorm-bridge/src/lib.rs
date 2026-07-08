@@ -61,11 +61,11 @@ pub mod tenant;
 pub mod webauth_rail;
 
 pub use bridge::{
-    served_root_message, verify_served_against_ledger, AttestedServed, BridgedRequest,
-    GrainWorkload, HttpBridge, HttpRequest, HttpResponse, Method, NotesApp, RootAttestation,
-    Served, Session,
+    heap_root_hex, served_root_message, verify_served_against_ledger, AttestedServed,
+    BridgedRequest, GrainWorkload, HttpBridge, HttpRequest, HttpResponse, Method, NotesApp,
+    RootAttestation, Served, Session,
 };
-pub use cell::{verify_inclusion, DataRoot, InclusionProof, ProofStep, Umem};
+pub use cell::{verify_inclusion, DataRoot, InclusionProof, Umem};
 pub use grain::{
     grain_cell_commitment, restore_grain, GrainBackup, GrainCell, GrainError, GrainReceipt,
     GrainSpec, GrainState, SandboxTier, IDLE_SHUTDOWN_SECS,
