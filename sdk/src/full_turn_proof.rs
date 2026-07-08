@@ -46,9 +46,6 @@
 
 use dregg_circuit::cap_root::CapLeaf;
 use dregg_circuit::dsl::cap_membership::verify_cap_membership_p3;
-use dregg_circuit::dsl::derivation::{
-    derivation_circuit_descriptor, prove_derivation_p3, verify_derivation_p3,
-};
 use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::dsl::revocation::{
@@ -104,8 +101,6 @@ pub struct FullTurnProof {
 pub struct TurnProofComponents {
     /// Effect VM proof: state transition is correct.
     pub has_state_transition: bool,
-    /// Derivation chain proof: actor was authorized.
-    pub has_authorization: bool,
     /// Merkle membership proof: capability exists in c-list.
     pub has_membership: bool,
     /// Conservation proof: value inputs == value outputs.
@@ -130,11 +125,6 @@ pub struct FullTurnWitness {
     pub initial_cell_state: CellState,
     /// The effects to prove (in Effect VM encoding).
     pub effects: Vec<effect_vm::Effect>,
-
-    // -- Authorization witness --
-    /// The derivation witness proving the actor's authorization chain.
-    /// If `None`, authorization proof is skipped (self-sovereign turn).
-    pub authorization: Option<AuthorizationWitness>,
 
     // -- Membership witness --
     /// The Merkle membership witness proving the capability is in the c-list.
@@ -548,12 +538,6 @@ impl RotationTurnWitness {
     }
 }
 
-/// Authorization witness for the derivation sub-proof.
-pub struct AuthorizationWitness {
-    /// The derivation witness (single-step or multi-step).
-    pub derivation: dregg_circuit::derivation_air::DerivationWitness,
-}
-
 /// Membership witness for the Merkle sub-proof.
 pub struct MembershipWitness {
     /// The leaf hash (hash of the capability being proven).
@@ -790,11 +774,6 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
         circuits.push(effect_vm_circuit_descriptor());
     }
 
-    // Authorization (derivation chain).
-    if components.has_authorization {
-        circuits.push(derivation_circuit_descriptor());
-    }
-
     // Membership (c-list Merkle proof).
     if components.has_membership {
         circuits.push(dregg_circuit::dsl::descriptors::merkle_poseidon2_descriptor());
@@ -884,31 +863,6 @@ pub fn effect_action_binding(effects: &[effect_vm::Effect]) -> BabyBear {
         ],
     )
 }
-
-/// Reconstruct the expected [`effect_action_binding`] directly from the Effect-VM
-/// sub-proof's published public inputs (verifier side — the effect list is not
-/// transmitted, but its AIR-bound commitment is `PI[EFFECTS_HASH_BASE]`).
-///
-/// This is the verifier twin of [`effect_action_binding`]: the prover binds the
-/// authorization conclusion to `effect_action_binding(effects)`, and the verifier
-/// recomputes the same value from the in-circuit-bound effects commitment carried
-/// in the Effect-VM PIs, without needing the plaintext effects.
-fn effect_action_binding_from_effect_pi(effect_pi: &[BabyBear]) -> BabyBear {
-    let effects_commit = effect_pi[effect_vm::pi::EFFECTS_HASH_BASE];
-    hash_fact(
-        BabyBear::new(ALLOW_PREDICATE),
-        &[
-            effects_commit,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ],
-    )
-}
-
-/// Index of `derived_hash` in the authorization sub-proof's public-input vector.
-/// Layout (see `prove_full_turn`): `[state_root, derived_hash, not_after, org_id, budget]`.
-const AUTH_PI_DERIVED_HASH: usize = 1;
 
 // ============================================================================
 // THE ROTATED IR-v2 ROUTE (the SOLE effect-vm prover) — the v1 hand-AIR is retired.
@@ -4549,40 +4503,6 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     }
 
     // ========================================================================
-    // 2. Authorization proof (derivation chain)
-    // ========================================================================
-    if let Some(auth_witness) = &witness.authorization {
-        // AUDITED PATH: the derivation chain is proven through the real Plonky3
-        // verifier (`p3-batch-stark`) via `prove_derivation_p3`. The derivation
-        // circuit's only non-algebraic constraint (C4 `derived_hash` `hash_fact`
-        // sponge) is arithmetized in-circuit by the real Poseidon2 gadget, so a
-        // forged `derived_hash` is UNSAT — NOT the bespoke `stark`.
-        let auth_proof = prove_derivation_p3(&auth_witness.derivation)
-            .map_err(|e| SdkError::InvalidWitness(format!("derivation p3 proof failed: {e}")))?;
-        let auth_proof_bytes = postcard::to_allocvec(&auth_proof).map_err(|e| {
-            SdkError::InvalidWitness(format!("derivation p3 proof serialize failed: {e}"))
-        })?;
-
-        // Derivation public inputs: [state_root, derived_hash, not_after, org_id, budget]
-        let auth_pi = vec![
-            auth_witness.derivation.state_root,
-            auth_witness.derivation.derived_hash(),
-            auth_witness.derivation.not_after_height,
-            auth_witness.derivation.org_id_hash,
-            auth_witness.derivation.budget_remaining,
-        ];
-
-        components.has_authorization = true;
-        all_public_inputs.extend_from_slice(&auth_pi);
-        sub_proofs.push(AttachedSubProof {
-            label: "authorization".into(),
-            proof_bytes: auth_proof_bytes,
-            sub_public_inputs: auth_pi,
-            vk_hash: compute_vk_hash_bytes(&derivation_circuit_descriptor()),
-        });
-    }
-
-    // ========================================================================
     // 3. Membership proof (c-list Merkle)
     // ========================================================================
     if let Some(mem_witness) = &witness.membership {
@@ -4954,15 +4874,6 @@ pub fn verify_full_turn_bound(
             // position-indexed Merkle hashing) are arithmetized in-circuit by the
             // real Poseidon2 gadget, so a forged auth / membership / freshness
             // witness is UNSAT (see the anti-ghost tests in each AIR).
-            "authorization" => {
-                let p3: DslP3Proof = postcard::from_bytes(&attached.proof_bytes).map_err(|e| {
-                    FullTurnVerifyError::SubProofDeserialize {
-                        index: i,
-                        reason: format!("authorization p3 deserialize: {e}"),
-                    }
-                })?;
-                verify_derivation_p3(&p3, &attached.sub_public_inputs)
-            }
             "membership" => {
                 let p3: MembershipP3Proof =
                     postcard::from_bytes(&attached.proof_bytes).map_err(|e| {
@@ -5164,132 +5075,6 @@ pub fn verify_full_turn_bound(
                 which: "chain_adjacency",
                 expected: prev_after,
                 got: this_before,
-            });
-        }
-    }
-
-    // 5. Cross-proof PI consistency: authorization state_root == membership root.
-    if proof.components.has_authorization && proof.components.has_membership {
-        let auth_sub = proof
-            .composed
-            .sub_proofs
-            .iter()
-            .find(|sp| sp.label == "authorization")
-            .ok_or(FullTurnVerifyError::MissingComponent(
-                "authorization".into(),
-            ))?;
-        let mem_sub = proof
-            .composed
-            .sub_proofs
-            .iter()
-            .find(|sp| sp.label == "membership")
-            .ok_or(FullTurnVerifyError::MissingComponent("membership".into()))?;
-
-        // Authorization PI[0] = state_root; Membership PI[1] = merkle_root
-        let auth_state_root = auth_sub
-            .sub_public_inputs
-            .first()
-            .copied()
-            .unwrap_or(BabyBear::ZERO);
-        let mem_root = mem_sub
-            .sub_public_inputs
-            .get(1)
-            .copied()
-            .unwrap_or(BabyBear::ZERO);
-
-        if auth_state_root != mem_root {
-            return Err(FullTurnVerifyError::CrossProofMismatch {
-                description: format!(
-                    "authorization state_root ({:?}) != membership merkle_root ({:?})",
-                    auth_state_root, mem_root
-                ),
-            });
-        }
-    }
-
-    // 6. CRITICAL: Authorization-to-EffectVM cell binding.
-    //
-    // In P2P composition mode, a malicious prover could pair a valid auth proof
-    // for cell A with a valid Effect VM proof for cell B. We prevent this by
-    // verifying that the authorization proof's state_root commits to the same
-    // cell state as the Effect VM's old_commitment.
-    //
-    // The authorization proof's PI[0] (state_root) MUST equal the Effect VM's
-    // PI[OLD_COMMIT] (old_commitment). This binds the authorization to the
-    // specific cell whose state is being mutated.
-    if proof.components.has_authorization && proof.components.has_state_transition {
-        let auth_sub = proof
-            .composed
-            .sub_proofs
-            .iter()
-            .find(|sp| sp.label == "authorization")
-            .ok_or(FullTurnVerifyError::MissingComponent(
-                "authorization".into(),
-            ))?;
-
-        // Authorization PI[0] = state_root (the cell state the actor is authorized for)
-        let auth_state_root = auth_sub
-            .sub_public_inputs
-            .first()
-            .copied()
-            .unwrap_or(BabyBear::ZERO);
-
-        // Effect VM PI[OLD_COMMIT] = old_commitment (the cell being mutated)
-        let effect_old_commit = effect_sub.sub_public_inputs[effect_vm::pi::OLD_COMMIT];
-
-        if auth_state_root != effect_old_commit {
-            return Err(FullTurnVerifyError::CrossProofMismatch {
-                description: format!(
-                    "authorization state_root ({:?}) does not bind to Effect VM \
-                     old_commitment ({:?}) — possible cross-cell proof splicing attack",
-                    auth_state_root, effect_old_commit
-                ),
-            });
-        }
-
-        // 6b. CRITICAL (capability-security): Authorization-to-EffectVM EFFECT
-        //     binding. The cell binding above proves the actor is authorized for
-        //     SOME fact in this cell's tree; it does NOT prove the actor may
-        //     perform THIS effect. We close that gap by requiring the
-        //     authorization proof's conclusion (auth PI[1] = derived_hash, pinned
-        //     in-circuit to hash_fact(HEAD_PRED, HEAD_TERM) by the derivation
-        //     circuit's C4/C6) to equal the "may perform THIS effect" fact —
-        //     Allow(effects_commit) — reconstructed from the Effect-VM proof's
-        //     in-circuit-bound effects commitment (PI[EFFECTS_HASH_BASE]). An
-        //     authorization proof whose derivation concludes a may-perform fact
-        //     for a DIFFERENT effect (kind / target cell / amount / params)
-        //     carries a different derived_hash and is rejected here.
-        //
-        //     This tooth binds the CONCLUSION (`Allow(h)`) to the effect. ⚠ SOUNDNESS
-        //     GAP in the auth+membership chain (do NOT rely on it as a capability
-        //     boundary as-is): the derivation circuit proves "body fact ⊢ Allow(h)"
-        //     while treating the body fact hash as a FREE (nonzero) witness, and
-        //     step 5 binds only the ROOTS (auth state_root == membership root) — it
-        //     does NOT bind the membership proof's LEAF to the derivation's body
-        //     fact. So this leg proves "SOME fact ∈ tree" + "body ⊢ Allow(h)"
-        //     WITHOUT connecting them: a prover can present a genuine membership
-        //     proof for a real leaf they DO hold while deriving Allow(h) from a
-        //     different body fact they do NOT hold. Closing it requires the
-        //     derivation circuit to export a `body_fact_hash` PI and this verifier
-        //     to bind `membership.leaf_hash == derivation.body_fact_hash`. The LIVE
-        //     authority path is `cap_membership` (below, ~step at 5519), whose leaf
-        //     IS bound to the disclosed `CapLeaf` — sound; this auth+membership path
-        //     has no live producer in-repo (loaded gun, not fired).
-        let auth_derived_hash = auth_sub
-            .sub_public_inputs
-            .get(AUTH_PI_DERIVED_HASH)
-            .copied()
-            .ok_or_else(|| {
-                FullTurnVerifyError::MalformedPublicInputs(
-                    "authorization PI missing derived_hash (PI[1])".into(),
-                )
-            })?;
-        let expected_action_binding =
-            effect_action_binding_from_effect_pi(&effect_sub.sub_public_inputs);
-        if auth_derived_hash != expected_action_binding {
-            return Err(FullTurnVerifyError::AuthEffectMismatch {
-                auth_derived_hash,
-                expected_action_binding,
             });
         }
     }
@@ -6107,44 +5892,6 @@ pub fn derivation_authorizing_effects(
     }
 }
 
-/// Generate a minimal full turn proof with just state transition + authorization.
-///
-/// This is the most common case for sovereign cell turns where:
-/// - The actor is authorized via a derivation chain
-/// - The state transition is proven by the Effect VM
-/// - No value transfers or revocation channels involved
-///
-/// The `derivation`'s conclusion MUST authorize exactly `effects` — i.e. its
-/// `derived_hash` must equal [`effect_action_binding(effects)`](effect_action_binding) —
-/// or [`verify_full_turn`] rejects the proof with
-/// [`FullTurnVerifyError::AuthEffectMismatch`]. Use
-/// [`derivation_authorizing_effects`] to construct a conforming witness.
-///
-/// For the full proof with all components, use [`prove_full_turn`] directly.
-pub fn prove_turn_with_auth(
-    initial_state: &CellState,
-    effects: &[effect_vm::Effect],
-    derivation: &dregg_circuit::derivation_air::DerivationWitness,
-    turn_hash: [u8; 32],
-) -> Result<FullTurnProof, SdkError> {
-    let witness = FullTurnWitness {
-        initial_cell_state: initial_state.clone(),
-        effects: effects.to_vec(),
-        authorization: Some(AuthorizationWitness {
-            derivation: derivation.clone(),
-        }),
-        membership: None,
-        conservation: None,
-        non_revocation: None,
-        cap_membership: None,
-        turn_hash,
-        rotation: None,
-        cap_turn_identity: None,
-        umem_witness: None,
-    };
-    prove_full_turn(&witness)
-}
-
 /// Generate a minimal proof with state transition only (no authorization).
 ///
 /// Used for self-sovereign cells where the owner's signature alone suffices
@@ -6157,7 +5904,6 @@ pub fn prove_turn_self_sovereign(
     let witness = FullTurnWitness {
         initial_cell_state: initial_state.clone(),
         effects: effects.to_vec(),
-        authorization: None,
         membership: None,
         conservation: None,
         non_revocation: None,
@@ -6186,7 +5932,6 @@ pub fn prove_turn_self_sovereign_rotated(
     let witness = FullTurnWitness {
         initial_cell_state: initial_state.clone(),
         effects: effects.to_vec(),
-        authorization: None,
         membership: None,
         conservation: None,
         non_revocation: None,
