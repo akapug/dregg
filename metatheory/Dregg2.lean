@@ -626,6 +626,7 @@ import Dregg2.Crypto.HermineThreshold
 import Dregg2.Crypto.HermineExtractor
 import Dregg2.Crypto.Lattice
 import Dregg2.Crypto.HermineMSIS
+import Dregg2.Crypto.HermineSelfTargetMSIS  -- the SelfTargetMSIS discharge of u≠0 — the argument Dilithium/Raccoon ACTUALLY use, SUPERSEDING the ROLE of HermineDischarge's IsUnit(c−c') route (not satisfiable at deployed params: q^(1/256)≈1.06<2). The FS challenge is bound INTO the M-SIS relation; two forked forgeries share the commitment w but carry c≠c', so subtracting the verify equations gives [A|t]·(z−z', −(c−c'))=0, a NONZERO short MSIS solution on the augmented map — non-triviality FREE from c≠c' (the challenge sits in its own coordinate), NO invertibility, NO MLWE-lossiness for the u≠0 leg. selftarget_extract_nonzero (the headline: c≠c' ⇒ −(c−c')≠0 directly); forked_forgery_yields_msis_solution_selftarget + no_forgery_under_msis_selftarget (MSISHard ⟹ no forgery). Teeth: ZMod 5, c≠c' FIRES (nonzero (4,1)) vs c=c' collapses the challenge coordinate to 0. #assert_axioms-clean.
 import Dregg2.Crypto.HermineDischarge
 import Dregg2.Crypto.HermineConcrete
 import Dregg2.Crypto.HermineLossiness
