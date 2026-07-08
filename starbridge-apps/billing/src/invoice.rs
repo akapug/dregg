@@ -352,14 +352,44 @@ pub fn invoices_for(
     events: &[UsageEvent],
     generated_at: &str,
 ) -> BTreeMap<String, Invoice> {
-    let mut accounts: BTreeMap<String, ()> = BTreeMap::new();
+    // One pass, bucketing each event into `account -> resource -> line`, instead of
+    // rescanning the whole event pool once per account (`Invoice::assemble` per account was
+    // O(A·E)). The per-account line assembly mirrors `Invoice::assemble` exactly — same
+    // resource-sorted lines, same running sums, same receipt order — so each invoice is
+    // byte-identical to the per-account rescan.
+    let mut by_account: BTreeMap<String, BTreeMap<BillableResource, LineItem>> = BTreeMap::new();
     for e in events {
-        accounts.insert(e.account.clone(), ());
+        let by_resource = by_account.entry(e.account.clone()).or_default();
+        let line = by_resource.entry(e.resource).or_insert_with(|| LineItem {
+            resource: e.resource,
+            quantity: 0,
+            unit_rate_units: e.unit_rate_units,
+            flat_units: 0,
+            amount_units: 0,
+            receipts: Vec::new(),
+        });
+        line.quantity = line.quantity.saturating_add(e.quantity);
+        line.flat_units = line.flat_units.saturating_add(e.flat_units);
+        line.amount_units = line.amount_units.saturating_add(e.amount_units);
+        // Keep the first non-zero unit rate seen for the line's display rate.
+        if line.unit_rate_units == 0 && e.unit_rate_units != 0 {
+            line.unit_rate_units = e.unit_rate_units;
+        }
+        line.receipts.push(e.receipt.clone());
     }
-    accounts
-        .into_keys()
-        .map(|acct| {
-            let inv = Invoice::assemble(&acct, period.clone(), asset, events, generated_at);
+    by_account
+        .into_iter()
+        .map(|(acct, by_resource)| {
+            let line_items: Vec<LineItem> = by_resource.into_values().collect();
+            let total_units = line_items.iter().map(|l| l.amount_units).sum();
+            let inv = Invoice {
+                account: acct.clone(),
+                period: period.clone(),
+                asset: asset.to_string(),
+                line_items,
+                total_units,
+                generated_at: generated_at.to_string(),
+            };
             (acct, inv)
         })
         .collect()
@@ -529,6 +559,44 @@ mod tests {
         assert!(stranger.line_items.is_empty());
         assert_eq!(stranger.total_units, 0);
         assert_eq!(stranger.verify_against_receipts(), Ok(()));
+    }
+
+    // ── the one-pass fan-out is byte-identical to per-account rescan ──
+    #[test]
+    fn invoices_for_equals_per_account_assemble() {
+        let mut pool = acct_events("alice");
+        pool.extend(acct_events("bob"));
+        pool.push(UsageEvent::settled(
+            "bob",
+            BillableResource::Agent,
+            "agent-1",
+            3,
+            2,
+            0,
+            SettleReceipt::new(rh(20), CREDIT, 6, 7),
+        ));
+        // Interleave a second alice compute roll-up to exercise line aggregation order.
+        pool.push(UsageEvent::settled(
+            "alice",
+            BillableResource::Compute,
+            "lease-2",
+            2,
+            3,
+            0,
+            SettleReceipt::new(rh(21), CREDIT, 6, 2),
+        ));
+
+        let fanned = invoices_for(period(), CREDIT, &pool, "t0");
+        // Exactly the accounts that appear in the pool, each equal to the rescan invoice.
+        assert_eq!(fanned.len(), 2);
+        for acct in ["alice", "bob"] {
+            let expected = Invoice::assemble(acct, period(), CREDIT, &pool, "t0");
+            assert_eq!(
+                fanned.get(acct),
+                Some(&expected),
+                "account `{acct}` differs"
+            );
+        }
     }
 
     // ── the sealed invoice is re-derivable + tamper-evident ──
