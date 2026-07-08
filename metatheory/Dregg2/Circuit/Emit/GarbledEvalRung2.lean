@@ -193,4 +193,155 @@ theorem garbled_satisfied2_alone_insufficient :
 #assert_axioms garbled_cheat_not_hashBound
 #assert_axioms garbled_satisfied2_alone_insufficient
 
+/-! ## §5 — THE GATE: the last-row `.gate` vacuity WAS a real output-forgery hole; the emit-fix
+(`garbledLastRowFix`) closes it, and this is the REGRESSION that proves it.
+
+The audit found the decryption relation emitted as `.base (.gate (decBody i))` — a `when_transition`
+constraint, VACUOUS on the last row (`holdsVm … isLast=true (.gate _) = True`,
+`EffectVmEmit.lean:465`); on a HEIGHT-1 trace the only row IS last, so decryption went entirely
+unchecked. The deployed DSL binds decryption on EVERY row (the `InvertedGated`/`Polynomial` inner ⇒
+`is_transition = false` ⇒ `builder.assert_zero`, `dsl_plonky3.rs:168`), so the Lean emit was strictly
+WEAKER than the deployed AIR — a genuine regression. `tForge` below is a single, otherwise-well-formed
+garbled-gate row whose exposed `output(0) = 5` is NOT the one-time-pad decryption
+`table_entry(0) − hash_out(0) = 0`. Under the fix-less CORE (`garbledEvalDescCore`) it is ACCEPTED;
+the landed `garbledLastRowFix` — the `.base (.boundary VmRow.last (decBody 0))` counterpart — is
+EXACTLY what turns that acceptance into a rejection. -/
+
+open Dregg2.Circuit.DescriptorIR2
+  (EffectVmDescriptor2 VmConstraint2 memLog mapLog memOpsOf mapOpsOf memCheck_nil)
+open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow)
+
+/-- The forged row: an otherwise well-formed AND gate (`is_and = 1`, non-padding, commitment /
+output-hash / all lanes bound to the all-zero public input) whose exposed `output(0) = 5` VIOLATES the
+Yao decryption `output(0) = table_entry(0) − hash_out(0) = 0`. -/
+private def forgeRow : Assignment := fun c =>
+  if c = OUTPUT 0 then 5 else if c = IS_AND then 1 else 0
+
+private def forgePub : Assignment := fun _ => 0
+
+/-- A HEIGHT-1 trace: its single row is BOTH the first row (the PI pins / `gate_index_delta` boundary
+FIRE) AND the last row (the transition `.gate`s are vacuous — under the CORE the forge's decryption
+goes unchecked). -/
+private def tForge : VmTrace := { rows := [forgeRow], pub := forgePub, tf := fun _ => [] }
+
+/-- **`garbledEvalDescCore`** — the emitted descriptor WITHOUT the last-row fix (the transition-only
+`garbledCoreConstraints`). This is what the emit produced BEFORE `garbledLastRowFix`; it is the
+descriptor the forged trace exploits. -/
+def garbledEvalDescCore : EffectVmDescriptor2 :=
+  { garbledEvalDesc with constraints := garbledCoreConstraints }
+
+theorem forgeRow_commit (j : Nat) (hj : j < 4) :
+    forgeRow (CIRCUIT_COMMITMENT + j) = forgePub j := by interval_cases j <;> decide
+theorem forgeRow_ohash (j : Nat) (hj : j < 4) :
+    forgeRow (OUTPUT_LABEL_HASH + j) = forgePub (4 + j) := by interval_cases j <;> decide
+
+theorem coreForge_memLog_nil : memLog garbledEvalDescCore tForge = [] := by
+  simp [memLog, memOpsOf, garbledEvalDescCore, garbledCoreConstraints, commitmentPins,
+    outputHashPins, decryptionGates, selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
+    List.filterMap_append, List.filterMap_map]
+theorem coreForge_mapLog_nil : mapLog garbledEvalDescCore tForge = [] := by
+  simp [mapLog, mapOpsOf, garbledEvalDescCore, garbledCoreConstraints, commitmentPins,
+    outputHashPins, decryptionGates, selectorBinaryGates, chainingGates, gateIndexDeltaBoundary,
+    List.filterMap_append, List.filterMap_map]
+
+/-- **The forged trace PROVABLY `Satisfied2`s the fix-less CORE descriptor.** On the height-1 trace the
+transition `.gate`s (decryption / selectors / exclusivity) and the wire-chaining window are vacuous, so
+the forged `output(0) = 5` is UNCHECKED; only the first-row PI pins and `gate_index_delta` boundary
+fire, and the forge satisfies those. This is the forgery the deployed every-row `assert_zero` lowering
+— now mirrored by `garbledLastRowFix` — closes. -/
+theorem garbled_forge_was_satisfied2_core :
+    Satisfied2 (fun _ => 0) garbledEvalDescCore (fun _ => 0) (fun _ => (0, 0)) [] tForge := by
+  refine
+    { rowConstraints := ?_, rowHashes := ?_, rowRanges := ?_, memAddrsNodup := ?_,
+      memClosed := ?_, memDisciplined := ?_, memBalanced := ?_, memTableFaithful := ?_,
+      mapTableFaithful := ?_ }
+  · intro i hi
+    rw [show tForge.rows.length = 1 from rfl] at hi
+    interval_cases i
+    simp only [garbledEvalDescCore, garbledCoreConstraints]
+    refine List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
+      ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr ⟨List.forall_mem_append.mpr
+        ⟨List.forall_mem_append.mpr ⟨?_, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩, ?_⟩
+    · -- commitmentPins: FIRE on the first row
+      intro c hc; simp only [commitmentPins, List.mem_map, List.mem_range] at hc
+      obtain ⟨j, hj, rfl⟩ := hc
+      exact fun _ => forgeRow_commit j hj
+    · -- outputHashPins: FIRE
+      intro c hc; simp only [outputHashPins, List.mem_map, List.mem_range] at hc
+      obtain ⟨j, hj, rfl⟩ := hc
+      exact fun _ => forgeRow_ohash j hj
+    · -- decryptionGates: VACUOUS (transition `.gate`, this row is last)
+      intro c hc; simp only [decryptionGates, List.mem_map, List.mem_range] at hc
+      obtain ⟨j, _, rfl⟩ := hc; exact True.intro
+    · -- selectorBinaryGates: VACUOUS
+      intro c hc; simp only [selectorBinaryGates, List.mem_cons, List.not_mem_nil, or_false] at hc
+      rcases hc with rfl | rfl | rfl | rfl | rfl | rfl <;> exact True.intro
+    · -- [exclusivityBody]: VACUOUS
+      intro c hc; simp only [List.mem_singleton] at hc; subst hc; exact True.intro
+    · -- chainingGates: VACUOUS (window on_transition, last row)
+      intro c hc; simp only [chainingGates, List.mem_map, List.mem_range] at hc
+      obtain ⟨j, _, rfl⟩ := hc; exact fun hcon => absurd hcon (by decide)
+    · -- [gateIndexDeltaBoundary]: FIRE on the first row
+      intro c hc; simp only [List.mem_singleton] at hc; subst hc
+      exact fun _ => by decide
+  · intro i _; exact True.intro
+  · intro i _ r hr; exact absurd hr (by simp [garbledEvalDescCore, garbledEvalDesc])
+  · exact List.nodup_nil
+  · intro op hop; rw [coreForge_memLog_nil] at hop; exact absurd hop (by simp)
+  · rw [coreForge_memLog_nil]; exact True.intro
+  · rw [coreForge_memLog_nil]; exact memCheck_nil _ _
+  · rw [coreForge_memLog_nil]; rfl
+  · rw [coreForge_mapLog_nil]; rfl
+
+/-- The last-row decryption boundary (lane 0) is a member of the FIXED descriptor's constraint list —
+it lives in `garbledLastRowFix`, the part the fix appended. -/
+theorem forgeDecBoundary_mem :
+    VmConstraint2.base (.boundary VmRow.last (decBody 0)) ∈ garbledEvalDesc.constraints := by
+  show _ ∈ garbledCoreConstraints ++ garbledLastRowFix
+  refine List.mem_append_right _ ?_
+  simp only [garbledLastRowFix]
+  exact List.mem_append_left _ (List.mem_append_left _
+    (List.mem_map.mpr ⟨0, List.mem_range.mpr (by decide), rfl⟩))
+
+/-- **`garbled_forge_now_refused` — THE REGRESSION / GATE.** The SAME forged trace that `Satisfied2`s
+the fix-less CORE is now REJECTED by the real (fixed-emit) `garbledEvalDesc`: its added last-row
+decryption boundary `.base (.boundary VmRow.last (decBody 0))` FIRES on the height-1 trace's only row
+and its body is `output(0) − table_entry(0) + hash_out(0) = 5 − 0 + 0 = 5 ≠ 0`. This is exactly the
+output-label forgery the vacuous `.gate` let through; `garbledLastRowFix` catches it IN the descriptor. -/
+theorem garbled_forge_now_refused
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) :
+    ¬ Satisfied2 hash garbledEvalDesc minit mfin maddrs tForge := by
+  intro h
+  have h0 := h.rowConstraints 0 (by decide) _ forgeDecBoundary_mem
+  simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm,
+    show (0 + 1 == tForge.rows.length) = true from rfl] at h0
+  revert h0; decide
+
+/-- The forged output `output(0) = 5` is NOT the genuine one-time-pad decryption
+`HonestOutput (fun _ _ => 0) forgeRow 0 = table_entry(0) − 0 = 0`. So the accepted-on-core trace
+exposes a forged label — the very output forgery `garbled_rung2_no_output_forgery` forbids, and which
+the fix now makes UNSAT. -/
+theorem forge_output_not_honest :
+    (envAt tForge 0).loc (OUTPUT 0) = 5
+    ∧ HonestOutput (fun _ _ => (0 : ℤ)) (envAt tForge 0).loc 0 = 0
+    ∧ (envAt tForge 0).loc (OUTPUT 0) ≠ HonestOutput (fun _ _ => (0 : ℤ)) (envAt tForge 0).loc 0 :=
+  ⟨by decide, by decide, by decide⟩
+
+/-- **`garbled_lastRowFix_load_bearing`** — the forged trace witnesses that `garbledLastRowFix` is
+LOAD-BEARING, not decorative: it `Satisfied2`s the fix-less CORE descriptor (the forged output slips
+past the vacuous decryption `.gate`), it exposes a label that is NOT the genuine decryption, AND it is
+REJECTED by the fixed real `garbledEvalDesc`. The fix is exactly what turns the accepted forgery into a
+rejection. -/
+theorem garbled_lastRowFix_load_bearing :
+    Satisfied2 (fun _ => 0) garbledEvalDescCore (fun _ => 0) (fun _ => (0, 0)) [] tForge
+    ∧ (∀ (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ),
+         ¬ Satisfied2 hash garbledEvalDesc minit mfin maddrs tForge)
+    ∧ (envAt tForge 0).loc (OUTPUT 0)
+        ≠ HonestOutput (fun _ _ => (0 : ℤ)) (envAt tForge 0).loc 0 :=
+  ⟨garbled_forge_was_satisfied2_core, garbled_forge_now_refused, forge_output_not_honest.2.2⟩
+
+#assert_axioms garbled_forge_was_satisfied2_core
+#assert_axioms garbled_forge_now_refused
+#assert_axioms garbled_lastRowFix_load_bearing
+
 end Dregg2.Circuit.Emit.GarbledEvalRung2
