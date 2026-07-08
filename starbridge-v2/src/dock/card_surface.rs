@@ -2472,6 +2472,131 @@ impl CockpitSurface for ForgeCardSurface {
 }
 
 // ===========================================================================
+// THE GRAIN-RUN CARD as a dock surface — a CI pipeline / rented-grain run (a CWM
+// charter of steps run in a rented, metered, confined grain; a PR can be a bounty —
+// `docs/deos/DREGG-FORGE.md`) painted by the SAME `CardPane` renderer over an INERT
+// (read-only) substance. The real concepts (a CWM charter, an agent-platform grain
+// lease, the forge CI gate) live in excluded workspaces, so the mount carries the
+// self-contained `deos_view::GrainRun` snapshot (opaque data at the boundary, the
+// `card_carry` decoupling) and renders THAT — the live `From` wiring in agent-platform
+// is the thin follow-up. The grain-run card has no affordances (a read-only survey,
+// like the forge / directory cards), so its substance is inert: a fire is refused, no
+// slot advances.
+// ===========================================================================
+
+/// The grain-run card's INERT read-only substance — the run surface is a survey (no
+/// affordances yet), so it reads no live slots and fires nothing. `cell()` is a stable
+/// nil cell (the card carries no `bind`/`gauge` nodes — its budget bar is a static
+/// `progress` — so nothing registers on it) and `fire` is refused (a read-only card, the
+/// same posture as the forge / directory / proofs cards).
+struct GrainRunCardSubstance;
+
+impl CardSubstance for GrainRunCardSubstance {
+    fn cell(&self) -> CellId {
+        // No `bind`/`gauge` nodes, so no binding registers on this cell; a stable nil id
+        // is the honest "no live sovereign backing" marker.
+        CellId::ZERO
+    }
+    fn receipt_count(&self) -> usize {
+        0
+    }
+    fn get_u64(&self, _slot: usize) -> u64 {
+        0
+    }
+    fn get_view(&self, _key: &str) -> Option<String> {
+        None
+    }
+    fn fire(&mut self, method: &str, _arg: i64) -> Result<(), String> {
+        Err(format!(
+            "grain-run card: read-only survey — no affordance '{method}' (actions land in the grain panel)"
+        ))
+    }
+}
+
+/// The grain-run card mounted as a [`CockpitSurface`] — the [`CardPane`] gpui entity (the
+/// same renderer every other card mounts through) over the inert [`GrainRunCardSubstance`].
+pub struct GrainRunCardSurface {
+    id: SurfaceId,
+    entity: Entity<CardPane>,
+    focus: FocusHandle,
+}
+
+/// **Mount the grain-run card as a dock surface** — the same bridge shape as the forge /
+/// chat cards: project the [`deos_view::GrainRun`] to the renderer-independent `deos.ui.*`
+/// view-tree ([`deos_view::grain_run_view_json`]), bridge it through the canonical
+/// [`deos_view::parse_view_tree`], and host the resulting [`CardPane`] over the inert
+/// read-only substance. So the SAME lease / pipeline / CI-gate / bounty card that paints in
+/// the browser (`deos_view::web::render_html`) and Discord (`deos_view::discord`) paints in
+/// the cockpit's native glass.
+///
+/// A build error is returned for the caller to surface fail-soft.
+#[allow(clippy::result_large_err)]
+pub fn build_grain_run_card_surface(
+    id: u64,
+    run: deos_view::GrainRun,
+    cx: &mut App,
+) -> Result<GrainRunCardSurface, String> {
+    // Project the grain-run snapshot to the renderer-independent view-tree and bridge it
+    // into the renderer's `ViewNode` (the same JSON every renderer — native / web / discord
+    // / seL4 viewer — parses).
+    let json = deos_view::grain_run_view_json(&run);
+    let tree: ViewNode = deos_view::parse_view_tree(&json)
+        .map_err(|e| format!("grain-run card view-tree bridge: {e}"))?;
+
+    let title = if run.title.is_empty() {
+        "grain-run · lease · pipeline · bounty (deos-view card)".to_string()
+    } else {
+        format!("grain-run · {} (deos-view card)", run.title)
+    };
+
+    let sub_dyn: CardSubstanceRef = Rc::new(RefCell::new(GrainRunCardSubstance));
+    let entity = cx.new(|_cx| CardPane::new_substance(sub_dyn, tree, title));
+
+    Ok(GrainRunCardSurface {
+        id: SurfaceId(id),
+        entity,
+        focus: cx.focus_handle(),
+    })
+}
+
+impl GrainRunCardSurface {
+    /// The [`CardPane`] gpui entity (for a host that mounts the card body directly).
+    pub fn entity_handle(&self) -> Entity<CardPane> {
+        self.entity.clone()
+    }
+}
+
+impl CockpitSurface for GrainRunCardSurface {
+    fn item_id(&self) -> SurfaceId {
+        self.id
+    }
+
+    fn tab_label(&self) -> SharedString {
+        SharedString::from("grain-run")
+    }
+
+    fn render_body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        self.entity.update(cx, |_card, cx| cx.notify());
+        div()
+            .size_full()
+            .child(self.entity.clone())
+            .into_any_element()
+    }
+
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+
+    fn boxed_clone(&self) -> Box<dyn CockpitSurface> {
+        Box::new(GrainRunCardSurface {
+            id: self.id,
+            entity: self.entity.clone(),
+            focus: self.focus.clone(),
+        })
+    }
+}
+
+// ===========================================================================
 // TESTS — the stateful cards render LIVE state, not stale data. The honesty
 // claim: a carded surface reflects the SAME live cockpit state its gpui panel
 // shows. These exercise the pure view-builders over the render-models (the same
@@ -2874,6 +2999,60 @@ mod tests {
         assert!(
             sub.fire("merge", 0).is_err(),
             "the forge card fires nothing — a read-only survey"
+        );
+    }
+
+    /// GRAIN-RUN: the grain-run card's mount data-path — the `deos_view::GrainRun` snapshot
+    /// projects through the SAME canonical bridge `build_grain_run_card_surface` uses
+    /// (`grain_run_view_json` → `parse_view_tree` → a `tabs` ViewNode), and its inert
+    /// substance is genuinely read-only (a fire is refused). This exercises everything the
+    /// mount does except the gpui `cx.new` entity host (which needs a live `App`).
+    #[test]
+    fn grain_run_card_bridges_and_the_substance_is_read_only() {
+        let run = deos_view::GrainRun {
+            title: "mount smoke".to_string(),
+            lease: deos_view::LeaseView {
+                host: "grain-host-7".to_string(),
+                metered: 512,
+                budget: 1000,
+                status: deos_view::LeaseStatus::Active,
+            },
+            pipeline: vec![deos_view::StepView {
+                name: "report".to_string(),
+                status: deos_view::StepStatus::Done,
+                receipt: Some("aabbcc".to_string()),
+            }],
+            bounty: Some(deos_view::BountyView {
+                reward: "500 $DREGG".to_string(),
+                state: deos_view::BountyState::Paid,
+            }),
+        };
+
+        // The exact bridge the mount performs: project → parse → a `tabs` ViewNode.
+        let json = deos_view::grain_run_view_json(&run);
+        let tree = deos_view::parse_view_tree(&json)
+            .expect("the grain-run projection parses through the canonical bridge");
+        assert!(
+            matches!(tree, ViewNode::Tabs { .. }),
+            "the grain-run card is a tabs tree (run + bounty)"
+        );
+        assert!(
+            json.contains("mount smoke"),
+            "the run title bridges through"
+        );
+        assert!(
+            json.contains("checks green"),
+            "the derived CI gate bridges through"
+        );
+
+        // The substance is inert: reads are zero, and a fire is refused (read-only card).
+        let mut sub = GrainRunCardSubstance;
+        assert_eq!(sub.cell(), CellId::ZERO);
+        assert_eq!(sub.get_u64(0), 0);
+        assert!(sub.get_view("anything").is_none());
+        assert!(
+            sub.fire("merge", 0).is_err(),
+            "the grain-run card fires nothing — a read-only survey"
         );
     }
 }
