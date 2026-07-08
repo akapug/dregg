@@ -75,11 +75,18 @@ pub struct Confinement {
     /// Deny-default: empty means NO outbound network at all (the Endpoint-only
     /// floor). Each entry opens EXACTLY one host:port and nothing else.
     ///
-    /// macOS: each becomes an SBPL `(allow network-outbound (remote ip
-    /// "<host>:<port>"))` — a precise, enforced allow (host must be a literal IP or
-    /// `localhost`; a hostname is emitted verbatim and only matches if the OS
-    /// resolves it, so a real hostname provider needs a pre-resolved IP or the
-    /// in-jail-DNS caveat, see `deos-hermes`). Linux: HONORED via a seccomp
+    /// macOS: a LOOPBACK entry (`127.0.0.1`/`::1`/`localhost`) becomes an SBPL
+    /// `(allow network-outbound (remote ip "localhost:<port>"))` — a precise,
+    /// enforced host+port allow. A NON-loopback host is NOT expressible: the SBPL
+    /// `remote ip` host field accepts only `localhost`/`*`, so a remote host:port
+    /// could be pinned by PORT but not by host, and emitting `*:PORT` would
+    /// silently widen a single-host grant to ANY host on that port (exfiltration).
+    /// So a non-loopback `net_out` FAILS CLOSED —
+    /// [`build_profile`](self)/[`confine_child`] return
+    /// [`ConfineError::NetOutNotExpressible`] rather than a broad door. Reach a
+    /// real remote provider by fronting it with a loopback egress-proxy (a trusted
+    /// host-side proxy pins the real upstream and the jail is granted only
+    /// `127.0.0.1:PORT`, see `deos-hermes`). Linux: HONORED via a seccomp
     /// `connect`-NOTIFICATION door (see [`super::provider_door`] + the `linux`
     /// backend). The jailed body may `socket()`, but every `connect()` traps to a
     /// trusted supervisor (firmament code kept in the connected net namespace) that
@@ -183,6 +190,13 @@ impl Confinement {
     /// SOCKET door (a net-cap → an OS network-allow rule). Deny-default: without a
     /// grant the child has no outbound network at all; with it, EXACTLY this
     /// host:port opens and every other remote stays denied.
+    ///
+    /// macOS caveat: only a LOOPBACK host is expressible as a precise SBPL door; a
+    /// non-loopback host FAILS CLOSED at confinement time
+    /// ([`ConfineError::NetOutNotExpressible`]) rather than widening to any host on
+    /// the port — front a real remote provider with a loopback egress-proxy and
+    /// grant `127.0.0.1:PORT`. (Linux pins the exact host:port via the seccomp
+    /// connect-notify door, so a remote host IS honored there.)
     pub fn with_net_out(mut self, endpoint: impl Into<String>) -> Self {
         self.net_out.push(endpoint.into());
         self
@@ -285,6 +299,13 @@ pub enum ConfineError {
     Linux(String),
     /// Closing the non-granted fds failed.
     FdClose(String),
+    /// A `net_out` grant cannot be expressed as a precise door on this platform
+    /// and was REFUSED (fail-closed) rather than silently widened. On macOS the
+    /// SBPL `remote ip` host field accepts only `localhost`/`*`, so a non-loopback
+    /// host:port cannot be pinned by host — the caller must front it with a
+    /// loopback egress-proxy (a trusted host-side proxy pins the real upstream and
+    /// the jail reaches only `127.0.0.1:PORT`). Carries the refused entries.
+    NetOutNotExpressible(Vec<String>),
     /// This platform has no implemented backing (neither macOS nor Linux).
     Unsupported,
 }
@@ -295,6 +316,13 @@ impl std::fmt::Display for ConfineError {
             ConfineError::SandboxInit(m) => write!(f, "macOS sandbox_init failed: {m}"),
             ConfineError::Linux(m) => write!(f, "linux confinement failed: {m}"),
             ConfineError::FdClose(m) => write!(f, "closing inherited fds failed: {m}"),
+            ConfineError::NetOutNotExpressible(eps) => write!(
+                f,
+                "net_out grant(s) {eps:?} name a non-loopback host that macOS SBPL \
+                 cannot pin (only localhost/* are expressible) — REFUSED fail-closed \
+                 rather than widened to any host on that port; front the provider with \
+                 a loopback egress-proxy and grant 127.0.0.1:PORT instead"
+            ),
             ConfineError::Unsupported => write!(f, "no sandbox backing on this platform"),
         }
     }
@@ -655,7 +683,29 @@ mod macos {
 
     /// Build the full SBPL profile text from the prologue, the base allow-set,
     /// and any explicitly-granted read paths (the file-cap → allowed-path map).
-    pub(super) fn build_profile(c: &Confinement) -> String {
+    ///
+    /// FAILS CLOSED on a `net_out` grant SBPL cannot express precisely: the
+    /// `remote ip` host field accepts only `localhost`/`*`, so a non-loopback
+    /// host:port can be pinned by PORT but NOT by host. Emitting `*:PORT` there
+    /// would silently WIDEN a single-host grant to any host on that port (an
+    /// exfiltration door), so a non-loopback `net_out` entry is REFUSED with
+    /// [`ConfineError::NetOutNotExpressible`] instead — the caller must front the
+    /// provider with a loopback egress-proxy and grant `127.0.0.1:PORT`.
+    pub(super) fn build_profile(c: &Confinement) -> Result<String, ConfineError> {
+        // Fail closed BEFORE building: any non-loopback net_out is inexpressible
+        // as a host-pinned SBPL rule, and we will not widen it to `*:PORT`.
+        let refused: Vec<String> = c
+            .net_out
+            .iter()
+            .filter(|ep| {
+                let host = ep.rsplit_once(':').map(|(h, _)| h).unwrap_or(ep.as_str());
+                !is_loopback(host)
+            })
+            .cloned()
+            .collect();
+        if !refused.is_empty() {
+            return Err(ConfineError::NetOutNotExpressible(refused));
+        }
         let mut p = String::with_capacity(256);
         p.push_str(PROLOGUE);
         p.push_str(BASE_ALLOW);
@@ -672,7 +722,7 @@ mod macos {
             p.push_str("\"))\n");
         }
         for endpoint in &c.net_out {
-            // (allow network-outbound (remote ip "<host>:<port>")) — ONE granted
+            // (allow network-outbound (remote ip "localhost:<port>")) — ONE granted
             // outbound endpoint (the structured egress socket door). Nothing else
             // network* is allowed, so every other remote stays denied by the
             // (deny default). The `socket(2)` creation itself is not a `network*`
@@ -680,23 +730,20 @@ mod macos {
             // door: the granted endpoint connects, all others EPERM.
             //
             // SBPL LIMITATION (honest): the `remote ip` HOST field accepts only
-            // `*` or `localhost` — a literal remote IP is REJECTED by
-            // `sandbox_init`. So:
-            //   * a LOOPBACK grant (127.0.0.1 / ::1 / localhost) → `localhost:PORT`,
-            //     precise host+port (the hermetic mock + the recommended local
-            //     egress-proxy pattern, where a trusted host-side proxy pins the
-            //     real upstream provider and the jail reaches only localhost).
-            //   * a REMOTE-HOST grant → `*:PORT`, which SBPL can only pin by PORT,
-            //     NOT host. This is a genuine degradation (any host on that port),
-            //     so the host-pinned provider door for a REMOTE endpoint needs the
-            //     local-proxy pattern above; direct-remote is port-scoped only.
-            let (host, port) = endpoint
+            // `localhost` or `*` — a literal remote IP or hostname is NOT pinnable.
+            // Only a LOOPBACK grant (127.0.0.1 / ::1 / localhost) reaches here: it
+            // emits `localhost:PORT`, a precise host+port door (the hermetic mock +
+            // the recommended local egress-proxy pattern, where a trusted host-side
+            // proxy pins the real upstream provider and the jail reaches only
+            // localhost). A NON-loopback grant would degrade to `*:PORT` (any host
+            // on that port — an exfiltration door), so it was already REFUSED above
+            // with `ConfineError::NetOutNotExpressible`; the loop never sees one.
+            let (_host, port) = endpoint
                 .rsplit_once(':')
                 .map(|(h, p)| (h, p))
                 .unwrap_or((endpoint.as_str(), ""));
-            let sbpl_host = if is_loopback(host) { "localhost" } else { "*" };
             p.push_str("(allow network-outbound (remote ip \"");
-            p.push_str(sbpl_host);
+            p.push_str("localhost");
             p.push(':');
             // The port is a bare integer; escape defensively anyway.
             for ch in port.chars() {
@@ -759,7 +806,7 @@ mod macos {
             push_escaped(&mut p, img);
             p.push_str("\"))\n");
         }
-        p
+        Ok(p)
     }
 
     /// Push `s` into the SBPL profile, escaping the TinyScheme string-literal
@@ -814,7 +861,7 @@ mod macos {
 
     /// SELF-apply the Seatbelt profile to this (child) process.
     pub fn confine(c: &Confinement) -> Result<(), ConfineError> {
-        let profile = build_profile(c);
+        let profile = build_profile(c)?;
         let cprofile =
             CString::new(profile).map_err(|e| ConfineError::SandboxInit(format!("nul: {e}")))?;
         let mut err: *mut c_char = ptr::null_mut();
@@ -1491,7 +1538,7 @@ mod tests {
     #[test]
     fn macos_profile_denies_by_default_and_grants_paths() {
         let c = Confinement::endpoint_only(3).with_read_path("/tmp/grant");
-        let p = macos::build_profile(&c);
+        let p = macos::build_profile(&c).unwrap();
         assert!(p.contains("(deny default)"), "must be default-deny");
         assert!(!p.contains("network"), "must NOT allow network");
         assert!(!p.contains("process-exec"), "must NOT allow exec");
@@ -1507,24 +1554,44 @@ mod tests {
     #[test]
     fn macos_profile_opens_exactly_the_granted_net_endpoint() {
         // No net grant → NO network allow at all (the Endpoint-only floor).
-        let sealed = macos::build_profile(&Confinement::endpoint_only(3));
+        let sealed = macos::build_profile(&Confinement::endpoint_only(3)).unwrap();
         assert!(!sealed.contains("network-outbound"), "sealed = no net door");
         // A LOOPBACK grant → precise host+port via the SBPL `localhost` token
         // (a literal remote IP is rejected by sandbox_init).
         let c = Confinement::endpoint_only(3).with_net_out("127.0.0.1:8080");
-        let p = macos::build_profile(&c);
+        let p = macos::build_profile(&c).unwrap();
         assert!(p.contains("(deny default)"), "still default-deny");
         assert!(!p.contains("process-exec"), "still no exec");
         assert!(
             p.contains("(allow network-outbound (remote ip \"localhost:8080\"))"),
             "loopback grant → localhost:port network-outbound allow:\n{p}"
         );
-        // A REMOTE-host grant → port-scoped (SBPL cannot pin a remote host).
-        let c2 = Confinement::endpoint_only(3).with_net_out("api.example.com:443");
-        let p2 = macos::build_profile(&c2);
+    }
+
+    // FAIL-CLOSED: a NON-loopback net_out grant is REFUSED, NOT silently widened to
+    // `*:PORT` (which would let a jail granted ONE remote reach ANY host on that
+    // port — exfiltration). The SBPL `remote ip` host field cannot pin a remote
+    // host, so `build_profile`/`confine` return `NetOutNotExpressible` and emit no
+    // broad door. The caller must front the provider with a loopback egress-proxy.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_nonloopback_net_out_fails_closed_never_widens() {
+        let c = Confinement::endpoint_only(3).with_net_out("api.example.com:443");
+        match macos::build_profile(&c) {
+            Err(ConfineError::NetOutNotExpressible(eps)) => {
+                assert_eq!(eps, vec!["api.example.com:443".to_string()]);
+            }
+            other => panic!("non-loopback net_out must fail closed, got: {other:?}"),
+        }
+        // Belt-and-braces: even a bare IP that is NOT loopback is refused (SBPL
+        // rejects a literal remote IP too), never emitted as `*:PORT`.
+        let c2 = Confinement::endpoint_only(3).with_net_out("10.0.0.5:443");
         assert!(
-            p2.contains("(allow network-outbound (remote ip \"*:443\"))"),
-            "remote grant → port-scoped allow (SBPL host limitation):\n{p2}"
+            matches!(
+                macos::build_profile(&c2),
+                Err(ConfineError::NetOutNotExpressible(_))
+            ),
+            "a non-loopback IP net_out must fail closed, never widen to *:443"
         );
     }
 
@@ -1549,13 +1616,13 @@ mod tests {
 (allow signal (target self))\n";
         // Default (all fields empty/false/None) — the additive floor.
         assert_eq!(
-            macos::build_profile(&Confinement::default()),
+            macos::build_profile(&Confinement::default()).unwrap(),
             baseline,
             "an all-empty Confinement must emit the byte-identical light-jail profile"
         );
         // And endpoint_only(fd) (fds don't affect the profile text) matches too.
         assert_eq!(
-            macos::build_profile(&Confinement::endpoint_only(9)),
+            macos::build_profile(&Confinement::endpoint_only(9)).unwrap(),
             baseline
         );
     }
@@ -1575,7 +1642,7 @@ mod tests {
             .with_net_out("127.0.0.1:*")
             .with_homeserver_mach_defaults()
             .with_exec_image("/abs/deos-homeserver");
-        let p = macos::build_profile(&c);
+        let p = macos::build_profile(&c).unwrap();
 
         // Still the deny-default floor.
         assert!(p.contains("(deny default)"));
@@ -1624,7 +1691,7 @@ mod tests {
     #[test]
     fn macos_non_loopback_listen_opens_no_inbound() {
         let c = Confinement::default().with_listen("0.0.0.0:8080");
-        let p = macos::build_profile(&c);
+        let p = macos::build_profile(&c).unwrap();
         assert!(
             !p.contains("network-inbound"),
             "non-loopback listen = no inbound"
