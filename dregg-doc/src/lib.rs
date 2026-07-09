@@ -125,6 +125,13 @@ mod doc;
 mod graph;
 mod history;
 mod literate;
+// INLINE MARKS — the within-cell rich-text overlay (Peritext / Automerge-marks,
+// DREGG-DOCUMENT-FOUNDATION.md §1.5): a mark is a NON-DESTRUCTIVE range overlay
+// (`Mark { start, end, kind }`) living in a store SEPARATE from the atom graph,
+// so it merges INDEPENDENTLY — a mark and a concurrent text edit never conflict
+// (disjoint stores), and two mark sets merge as a monotone set-union. Standalone
+// (no substrate). See src/marks.rs.
+mod marks;
 mod merge;
 mod patch;
 // THE FORGE KEYSTONE — a PullRequest over the patch theory (review-as-stitcher):
@@ -235,6 +242,7 @@ pub use literate::{
     LiterateDoc, Parsed, ParsedAlternative, ParsedConflict, ParsedField, author_graph, parse,
     parsed_conflicts_of, parsed_shape, render, render_with_fields,
 };
+pub use marks::{Mark, MarkId, MarkKind, MarkedRun, Marks, marks_merge, render_marked};
 pub use merge::{merge, merge_all};
 pub use patch::{Op, Patch};
 #[cfg(feature = "cell-heap")]
