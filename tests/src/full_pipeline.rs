@@ -160,22 +160,25 @@ fn test_full_private_authorization_pipeline() {
     );
     assert_eq!(proof.chain_length, 3);
 
-    // Verify the STARK proof itself
-    let stark_verify = proof.verify_issuer_stark();
-    assert!(stark_verify.is_some());
+    // Verify the two committed descriptor wires (the flip off the hand-STARK issuer proof).
+    let real = proof
+        .real_stark_proof
+        .as_ref()
+        .expect("real STARK proof present");
     assert!(
-        stark_verify.unwrap().is_ok(),
-        "issuer STARK proof should verify"
+        dregg_circuit::presentation::verify_descriptor_wire(&real.blinded_membership).is_some(),
+        "blinded ring-membership descriptor should verify"
+    );
+    assert!(
+        dregg_circuit::presentation::verify_descriptor_wire(&real.bound_presentation).is_some(),
+        "bound-presentation descriptor should verify"
     );
 
-    // --- Step 6: Serialize proof to bytes ---
-    let proof_bytes = proof
-        .issuer_proof_bytes()
-        .expect("should have issuer proof bytes");
+    // --- Step 6: the committed-descriptor proof blobs are non-trivial (postcard Ir2BatchProof) ---
+    let blob_bytes = real.blinded_membership.blob.len() + real.bound_presentation.blob.len();
     assert!(
-        proof_bytes.len() > 1000,
-        "real STARK proof should be > 1KB, got {} bytes",
-        proof_bytes.len()
+        blob_bytes > 1000,
+        "committed descriptor proofs should be > 1KB, got {blob_bytes} bytes"
     );
 
     // --- Step 7: (retired) low-level StarkProof byte round-trip ---
@@ -201,13 +204,9 @@ fn test_full_private_authorization_pipeline() {
     // --- Step 10: Tamper with one byte of proof -> verify fails ---
     let mut tampered_proof = proof.clone();
     if let Some(ref mut real) = tampered_proof.real_stark_proof {
-        // Tamper with a query proof value
-        if !real.issuer_membership_stark_proof.query_proofs.is_empty()
-            && !real.issuer_membership_stark_proof.query_proofs[0]
-                .trace_values
-                .is_empty()
-        {
-            real.issuer_membership_stark_proof.query_proofs[0].trace_values[0] ^= 0xDEAD;
+        // Tamper with the blinded ring-membership committed proof blob.
+        if let Some(b) = real.blinded_membership.blob.last_mut() {
+            *b ^= 0xFF;
         }
     }
     assert!(

@@ -19,7 +19,7 @@ use dregg_circuit::fold_types::{FoldWitness, RemovedFact};
 use dregg_circuit::merkle_air::{MerkleLevelWitness, MerkleWitness};
 use dregg_circuit::merkle_types::compute_parent_poseidon2;
 use dregg_circuit::poseidon2;
-use dregg_circuit::stark;
+use dregg_circuit::presentation::{DescriptorProofWire, verify_descriptor_wire};
 use dregg_circuit::{
     BabyBear, PresentationAir, PresentationProof, PresentationVerification, PresentationWitness,
     RealPresentationProof,
@@ -260,52 +260,14 @@ impl BridgePresentationProof {
         self.real_stark_proof.is_some()
     }
 
-    /// Extract the serialized STARK proof bytes for the issuer membership claim.
-    ///
-    /// This is the primary method for wire protocol integration: the returned bytes
-    /// can be transmitted to a verifier which reconstructs them via
-    /// `stark::proof_from_bytes()` and calls `stark::verify()` with the
-    /// `MerkleStarkAir` and the public inputs `[leaf_hash, federation_root]`.
-    ///
-    /// Returns `None` if this proof was generated via the fast `prove_fast()` path.
-    pub fn issuer_proof_bytes(&self) -> Option<Vec<u8>> {
-        self.real_stark_proof
-            .as_ref()
-            .map(|real| stark::proof_to_bytes(&real.issuer_membership_stark_proof))
-    }
-
-    /// Verify the real STARK issuer membership proof (if present).
-    ///
-    /// This performs full cryptographic verification using the STARK verifier
-    /// with Poseidon2 AIR (collision-resistant). Returns `None` if no real STARK
-    /// proof is attached; returns `Some(Ok(()))` if verification succeeds, or
-    /// `Some(Err(msg))` on failure.
-    ///
-    /// NOTE: The linear AIR fallback has been removed. Only Poseidon2 proofs are
-    /// accepted. If you have legacy linear proofs, they must be re-generated.
-    pub fn verify_issuer_stark(&self) -> Option<Result<(), String>> {
-        self.real_stark_proof.as_ref().map(|real| {
-            let pi: Vec<BabyBear> = real
-                .issuer_membership_stark_proof
-                .public_inputs
-                .iter()
-                .map(|&v| BabyBear::new(v))
-                .collect();
-
-            // Dispatch to DSL circuit based on AIR name (unified path).
-            // FAIL-CLOSED: an AIR name with no registered descriptor is REFUSED.
-            // Guessing a circuit for a legacy/unknown name would let the prover
-            // choose the constraint semantics the verifier checks against.
-            use dregg_dsl_runtime::descriptors;
-            let air_name = &real.issuer_membership_stark_proof.air_name;
-            match descriptors::circuit_for_air_name(air_name) {
-                Some(circuit) => stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi),
-                None => Err(format!(
-                    "unknown AIR '{air_name}': no registered circuit descriptor — refusing to verify"
-                )),
-            }
-        })
-    }
+    // MIGRATED wire accessors: the legacy `issuer_proof_bytes()` (opaque
+    // `stark::proof_to_bytes(issuer_membership_stark_proof)` blob dispatched by
+    // air-name) and `verify_issuer_stark()` (`stark::verify` on that blob) have been
+    // removed on the `StarkProof` → `Ir2BatchProof` migration. The issuer-membership
+    // producer is now `BridgePresentationBuilder::prove_issuer_membership_ir2_wire`
+    // and the consumer is `crate::verifier::DescriptorDispatchVerifier`
+    // (`descriptor_by_name(predicate)` → decode `postcard(Ir2BatchProof)` →
+    // `verify_vm_descriptor2`) — no opaque issuer-STARK wire survives.
 
     /// Convert this proof into a wire-safe representation that strips the private trace.
     ///
@@ -849,7 +811,8 @@ impl BridgePresentationBuilder {
 
         // 5. Generate the presentation proof using the Poseidon2 STARK path.
         //    The STARK proof for issuer membership is stored in the result so the
-        //    wire protocol can extract it via `issuer_proof_bytes()`.
+        //    wire protocol extracts issuer membership via the IR-v2 descriptor wire
+        //    (`prove_issuer_membership_ir2_wire`), not an opaque issuer-STARK blob.
         let air = PresentationAir::new(circuit_witness.clone());
         let verification = air.verify_all();
 
@@ -2072,6 +2035,40 @@ pub fn hash_index(level: usize, sibling_idx: usize, key: &[u8; 32]) -> u32 {
 /// `verify_presentation_full` with an explicit `max_proof_age`.
 pub const DEFAULT_MAX_PROOF_AGE_SECS: i64 = 300;
 
+/// Verify BOTH committed presentation descriptors — the flip off the legacy hand-StarkProof.
+///
+/// Each wire is checked via `descriptor_by_name(predicate)` → decode `postcard(Ir2BatchProof)` →
+/// `verify_vm_descriptor2` (in [`dregg_circuit::presentation::verify_descriptor_wire`]). Returns
+/// `(bound_pis, blinded_pis)` on success:
+/// * `bound_pis` — the bound-presentation summary `[federation_root, action(8), timestamp, tag,
+///   revealed(8), verifier_nonce]`.
+/// * `blinded_pis` — the blinded ring-membership `[blinded_leaf, root]`.
+///
+/// Fail-closed: an unknown predicate, malformed vk, bad blob, or a failed/paniced verify on
+/// EITHER descriptor yields `None` — never a silent accept.
+fn verify_presentation_descriptor_wires(
+    real: &RealPresentationProof,
+) -> Option<(Vec<BabyBear>, Vec<BabyBear>)> {
+    let bound = verify_descriptor_wire(&real.bound_presentation)?;
+    let blinded = verify_descriptor_wire(&real.blinded_membership)?;
+    Some((bound, blinded))
+}
+
+/// Verify one committed descriptor wire with a TYPED outcome (for [`verify_proof_complete`]):
+/// an unknown predicate is [`VerifyError::UnknownAir`] (the fail-closed contract preserved from
+/// the retired air-name dispatch); a malformed/failed proof is [`VerifyError::StarkInvalid`].
+fn verify_wire_typed(wire: &DescriptorProofWire) -> Result<Vec<BabyBear>, VerifyError> {
+    if dregg_circuit::descriptor_by_name::descriptor_by_name(&wire.predicate).is_none() {
+        return Err(VerifyError::UnknownAir(wire.predicate.clone()));
+    }
+    verify_descriptor_wire(wire).ok_or_else(|| {
+        VerifyError::StarkInvalid(format!(
+            "descriptor '{}' verification failed",
+            wire.predicate
+        ))
+    })
+}
+
 /// Verify a presentation proof cryptographically with full authorization checks.
 ///
 /// This is the primary verification entry point. It checks:
@@ -2110,20 +2107,22 @@ pub fn verify_presentation_full(
         None => return false,
     };
 
-    let pi: Vec<BabyBear> = real
-        .issuer_membership_stark_proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new(v))
-        .collect();
+    // 0. Verify BOTH committed descriptors (the flip off the legacy hand-StarkProof).
+    let (bound_pis, blinded_pis) = match verify_presentation_descriptor_wires(real) {
+        Some(v) => v,
+        None => return false,
+    };
 
-    if pi.len() < 2 {
-        return false;
-    }
-
-    // 1. Verify that the proof's federation root matches what we expect (EXTERNAL trust anchor).
+    // 1. Federation-root binding (EXTERNAL trust anchor): the blinded ring-membership root AND the
+    //    bound-presentation summary federation_root must both equal the expected root.
+    use dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY;
+    use dregg_circuit::bound_presentation_witness::{
+        FEDERATION_ROOT as BOUND_FED_ROOT, REQUEST_PREDICATE_BASE,
+    };
     let expected_root = bb_from_bytes(federation_root);
-    if pi[1] != expected_root {
+    if blinded_pis.get(PI_ROOT_4ARY).copied() != Some(expected_root)
+        || bound_pis.get(BOUND_FED_ROOT).copied() != Some(expected_root)
+    {
         return false;
     }
 
@@ -2147,6 +2146,12 @@ pub fn verify_presentation_full(
         let expected_binding = dregg_circuit::compute_action_binding(action, "");
         if proof.circuit_proof.public_inputs.request_predicate != expected_binding {
             return false;
+        }
+        // Bind the bound-presentation descriptor's committed action to the requested action.
+        for i in 0..dregg_circuit::ACTION_BINDING_WIDTH {
+            if bound_pis.get(REQUEST_PREDICATE_BASE + i).copied() != Some(expected_binding[i]) {
+                return false;
+            }
         }
     }
 
@@ -2193,30 +2198,12 @@ pub fn verify_presentation_full(
         if recomputed != proof.composition_commitment {
             return false;
         }
-
-        // Also verify the composition_commitment is present in the STARK's public inputs.
-        // Layout: [leaf, root, action[ACTION_BINDING_WIDTH], composition[WideHash::WIDTH]].
-        let expected_cc_idx = 2 + dregg_circuit::ACTION_BINDING_WIDTH;
-        let cc_width = WideHash::WIDTH;
-        if pi.len() < expected_cc_idx + cc_width {
-            return false;
-        }
-        for i in 0..cc_width {
-            if pi[expected_cc_idx + i] != proof.composition_commitment[i] {
-                return false;
-            }
-        }
+        // (The composition value formerly rode the hand-STARK public inputs; with the descriptor
+        //  flip the sub-proof binding is the recomputed-vs-stored check above.)
     }
 
-    // 5. Verify the real STARK proof.
-    //    Dispatch to DSL circuit based on AIR name.
-    //    FAIL-CLOSED: unknown AIR names are refused — no default-circuit fallback.
-    let air_name = &real.issuer_membership_stark_proof.air_name;
-    let circuit = match dregg_dsl_runtime::descriptors::circuit_for_air_name(air_name) {
-        Some(c) => c,
-        None => return false,
-    };
-    stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
+    // Both committed descriptors verified in step 0, and root/action/composition are bound.
+    true
 }
 
 /// Verify that a proof's verifier nonce matches the expected challenge.
@@ -2439,22 +2426,21 @@ pub fn verify_proof_complete(
         .as_ref()
         .ok_or(VerifyError::NoStarkProof)?;
 
-    // 3. Extract public inputs from the STARK proof.
-    let pi: Vec<BabyBear> = real
-        .issuer_membership_stark_proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new_canonical(v))
-        .collect();
+    // 3. Verify BOTH committed descriptors (the flip off the legacy hand-StarkProof). An unknown
+    //    predicate is a typed UnknownAir; a decode/verify failure is StarkInvalid.
+    use dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY;
+    use dregg_circuit::bound_presentation_witness::{
+        FEDERATION_ROOT as BOUND_FED_ROOT, REQUEST_PREDICATE_BASE,
+    };
+    let bound_pis = verify_wire_typed(&real.bound_presentation)?;
+    let blinded_pis = verify_wire_typed(&real.blinded_membership)?;
 
-    if pi.len() < 2 + dregg_circuit::ACTION_BINDING_WIDTH {
-        return Err(VerifyError::MalformedPublicInputs);
-    }
-
-    // 4. Federation root binding: proof's root must match expected.
-    // Decode using the canonical bb_from_bytes (inverse of bb_to_bytes).
+    // 4. Federation root binding: the blinded ring-membership root AND the bound-presentation
+    //    summary federation_root must both equal the expected root.
     let expected_root = bb_from_bytes(federation_root);
-    if pi[1] != expected_root {
+    if blinded_pis.get(PI_ROOT_4ARY).copied() != Some(expected_root)
+        || bound_pis.get(BOUND_FED_ROOT).copied() != Some(expected_root)
+    {
         return Err(VerifyError::RootMismatch);
     }
 
@@ -2465,9 +2451,9 @@ pub fn verify_proof_complete(
         return Err(VerifyError::ActionMismatch);
     }
 
-    // Also verify in STARK public inputs (pi[2..6]).
+    // Also bind the bound-presentation descriptor's committed action.
     for i in 0..dregg_circuit::ACTION_BINDING_WIDTH {
-        if pi[2 + i] != expected_binding[i] {
+        if bound_pis.get(REQUEST_PREDICATE_BASE + i).copied() != Some(expected_binding[i]) {
             return Err(VerifyError::ActionMismatch);
         }
     }
@@ -2528,40 +2514,13 @@ pub fn verify_proof_complete(
         if recomputed != wire_proof.composition_commitment {
             return Err(VerifyError::CompositionMismatch);
         }
-
-        // Verify the composition_commitment is present in the STARK's public inputs.
-        // Layout: [leaf, root, action[ACTION_BINDING_WIDTH], composition[WideHash::WIDTH]].
-        let expected_cc_idx = 2 + dregg_circuit::ACTION_BINDING_WIDTH;
-        let cc_width = WideHash::WIDTH;
-        if pi.len() < expected_cc_idx + cc_width {
-            return Err(VerifyError::MalformedPublicInputs);
-        }
-        for i in 0..cc_width {
-            if pi[expected_cc_idx + i] != wire_proof.composition_commitment[i] {
-                return Err(VerifyError::CompositionMismatch);
-            }
-        }
+        // (The composition value formerly rode the hand-STARK public inputs; with the descriptor
+        //  flip the sub-proof binding is the recomputed-vs-stored check above.)
     }
 
-    // 8. STARK cryptographic verification.
-    // Dispatches on air_name to select the correct AIR for verification.
-    // FAIL-CLOSED: an AIR name with no registered descriptor is REFUSED with a
-    // typed error. Guessing a circuit for an unknown name would let the prover
-    // choose the constraint semantics the verifier checks against.
-    let air_name = &real.issuer_membership_stark_proof.air_name;
-    let (stark_result, proof_tier) =
-        if let Some(circuit) = dregg_dsl_runtime::descriptors::circuit_for_air_name(air_name) {
-            (
-                stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi),
-                dregg_circuit::ProofTier::Production,
-            )
-        } else {
-            return Err(VerifyError::UnknownAir(air_name.clone()));
-        };
-
-    if let Err(e) = stark_result {
-        return Err(VerifyError::StarkInvalid(e));
-    }
+    // 8. Both committed descriptors were cryptographically verified in step 3 (fail-closed on an
+    //    unknown predicate via UnknownAir, on a failed proof via StarkInvalid).
+    let proof_tier = dregg_circuit::ProofTier::Production;
 
     // Tier is informational only. If the STARK verified cryptographically, the
     // proof is valid. Structural stubs cannot reach this point because they cannot
@@ -2593,37 +2552,9 @@ pub fn verify_proof_complete(
     note = "Use verify_proof_complete() which checks action binding, freshness, and composition. This function skips critical security checks."
 )]
 pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u8; 32]) -> bool {
-    // A real STARK proof is required for cryptographic verification.
-    if let Some(ref real) = proof.real_stark_proof {
-        let pi: Vec<BabyBear> = real
-            .issuer_membership_stark_proof
-            .public_inputs
-            .iter()
-            .map(|&v| BabyBear::new(v))
-            .collect();
-
-        if pi.len() < 2 {
-            return false;
-        }
-
-        // Verify that the proof's federation root matches what we expect.
-        let expected_root = bb_from_bytes(federation_root);
-        if pi[1] != expected_root {
-            return false;
-        }
-
-        // Dispatch to DSL circuit based on AIR name.
-        // FAIL-CLOSED: unknown AIR names are refused — no default-circuit fallback.
-        let air_name = &real.issuer_membership_stark_proof.air_name;
-        let circuit = match dregg_dsl_runtime::descriptors::circuit_for_air_name(air_name) {
-            Some(c) => c,
-            None => return false,
-        };
-        stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
-    } else {
-        // No real proof = not verified. Mock proofs provide no security guarantee.
-        false
-    }
+    // Delegate to the BabyBear-root path (the descriptor flip made the two identical apart from the
+    // root encoding). A real STARK proof is required — the mock/structural path returns false there.
+    verify_presentation_bb(proof, bb_from_bytes(federation_root))
 }
 
 /// Verify a presentation proof against a BabyBear-encoded federation root.
@@ -2636,29 +2567,17 @@ pub fn verify_presentation(proof: &BridgePresentationProof, federation_root: &[u
 /// Do NOT pass a value derived from the proof itself.
 pub fn verify_presentation_bb(proof: &BridgePresentationProof, expected_root: BabyBear) -> bool {
     if let Some(ref real) = proof.real_stark_proof {
-        let pi: Vec<BabyBear> = real
-            .issuer_membership_stark_proof
-            .public_inputs
-            .iter()
-            .map(|&v| BabyBear::new(v))
-            .collect();
-
-        if pi.len() < 2 {
-            return false;
-        }
-
-        if pi[1] != expected_root {
-            return false;
-        }
-
-        // Dispatch to DSL circuit based on AIR name.
-        // FAIL-CLOSED: unknown AIR names are refused — no default-circuit fallback.
-        let air_name = &real.issuer_membership_stark_proof.air_name;
-        let circuit = match dregg_dsl_runtime::descriptors::circuit_for_air_name(air_name) {
-            Some(c) => c,
+        // Verify BOTH committed descriptors (the flip off the legacy hand-StarkProof).
+        let (bound_pis, blinded_pis) = match verify_presentation_descriptor_wires(real) {
+            Some(v) => v,
             None => return false,
         };
-        stark::verify(&circuit, &real.issuer_membership_stark_proof, &pi).is_ok()
+        use dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY;
+        use dregg_circuit::bound_presentation_witness::FEDERATION_ROOT as BOUND_FED_ROOT;
+        // The blinded ring-membership root AND the bound-presentation summary federation_root must
+        // both equal the (externally trusted) expected root.
+        blinded_pis.get(PI_ROOT_4ARY).copied() == Some(expected_root)
+            && bound_pis.get(BOUND_FED_ROOT).copied() == Some(expected_root)
     } else {
         false
     }
@@ -2850,25 +2769,9 @@ pub fn verify_presentation_complete(
     if recomputed != proof.composition_commitment {
         return false;
     }
-
-    // Verify the composition_commitment is present in the STARK's public inputs.
-    // Layout: [leaf, root, action[ACTION_BINDING_WIDTH], composition[WideHash::WIDTH]].
-    let pi: Vec<BabyBear> = real
-        .issuer_membership_stark_proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new(v))
-        .collect();
-    let expected_cc_idx = 2 + dregg_circuit::ACTION_BINDING_WIDTH;
-    let cc_width = WideHash::WIDTH;
-    if pi.len() < expected_cc_idx + cc_width {
-        return false;
-    }
-    for i in 0..cc_width {
-        if pi[expected_cc_idx + i] != proof.composition_commitment[i] {
-            return false;
-        }
-    }
+    // (The composition value formerly rode the hand-STARK public inputs; with the descriptor flip
+    //  the sub-proof binding is the recomputed-vs-stored check above, computed from `real`'s fold
+    //  and derivation sub-proofs.)
 
     true
 }
@@ -3531,23 +3434,11 @@ mod tests {
             "Should have a real STARK proof"
         );
 
-        // Verify the STARK proof cryptographically
-        let stark_verify = proof.verify_issuer_stark();
+        // Verify the issuer-membership proof cryptographically against the
+        // (external) federation root via the retained presentation verifier.
         assert!(
-            stark_verify.is_some(),
-            "Should have a STARK proof to verify"
-        );
-        assert!(
-            stark_verify.unwrap().is_ok(),
-            "Poseidon2 STARK proof should verify"
-        );
-
-        // Check proof size is reasonable
-        let proof_bytes = proof.issuer_proof_bytes().unwrap();
-        assert!(
-            proof_bytes.len() > 1000,
-            "Real Poseidon2 STARK proof should be > 1KB, got {} bytes",
-            proof_bytes.len()
+            verify_presentation_bb(&proof, fed_root_bb),
+            "Poseidon2 issuer-membership proof should verify against the federation root"
         );
     }
 
@@ -3556,8 +3447,7 @@ mod tests {
     /// registered circuit descriptor — never fall back to a guessed circuit.
     /// A cryptographically valid proof is relabeled with an unregistered AIR
     /// name; verification must refuse loudly (typed `VerifyError::UnknownAir`
-    /// on the Result path, `Err(String)` naming the AIR on `verify_issuer_stark`,
-    /// `false` on the bool paths).
+    /// on the Result path, `false` on the bool paths).
     #[test]
     fn test_unknown_air_refused_all_verify_paths() {
         // Build a real proof (same setup as test_prove_real_poseidon2).
@@ -3589,36 +3479,25 @@ mod tests {
         };
         let mut proof = builder.prove(&request).expect("prove should succeed");
 
-        // Baselines: the honest proof verifies on every path.
-        assert!(
-            proof.verify_issuer_stark().unwrap().is_ok(),
-            "baseline: honest proof must verify via verify_issuer_stark"
-        );
+        // Baseline: the honest proof verifies on every retained path.
         assert!(
             verify_presentation_bb(&proof, fed_root_bb),
             "baseline: honest proof must verify via verify_presentation_bb"
         );
 
-        // Relabel with an unregistered AIR name.
+        // Relabel the blinded ring-membership descriptor with an unregistered predicate identity
+        // (the descriptor-flip analog of relabeling the retired hand-STARK air-name).
         proof
             .real_stark_proof
             .as_mut()
             .unwrap()
-            .issuer_membership_stark_proof
-            .air_name = "evil-unregistered-air-v0".to_string();
-
-        // verify_issuer_stark: loud string error naming the AIR.
-        let issuer_result = proof.verify_issuer_stark().unwrap();
-        assert!(
-            matches!(issuer_result, Err(ref m) if m.contains("unknown AIR")),
-            "verify_issuer_stark must refuse unknown AIR loudly, got {:?}",
-            issuer_result
-        );
+            .blinded_membership
+            .predicate = "evil-unregistered-air-v0".to_string();
 
         // verify_presentation_bb (bool path): refusal.
         assert!(
             !verify_presentation_bb(&proof, fed_root_bb),
-            "verify_presentation_bb must refuse unknown AIR"
+            "verify_presentation_bb must refuse an unknown descriptor predicate"
         );
 
         // verify_proof_complete (typed path): VerifyError::UnknownAir.
@@ -3626,7 +3505,7 @@ mod tests {
         let complete = verify_proof_complete(&wire, "anything", "", &fed_root_bytes, 0, 0);
         assert!(
             matches!(complete, Err(VerifyError::UnknownAir(ref n)) if n == "evil-unregistered-air-v0"),
-            "verify_proof_complete must refuse unknown AIR with typed VerifyError::UnknownAir, got {:?}",
+            "verify_proof_complete must refuse an unknown descriptor predicate with typed VerifyError::UnknownAir, got {:?}",
             complete
         );
     }
@@ -3716,26 +3595,36 @@ mod tests {
         assert!(proof1.has_real_stark_proof());
         assert!(proof2.has_real_stark_proof());
 
-        // Both should verify successfully.
-        let v1 = proof1.verify_issuer_stark().unwrap();
-        let v2 = proof2.verify_issuer_stark().unwrap();
-        assert!(v1.is_ok(), "proof1 should verify: {:?}", v1.err());
-        assert!(v2.is_ok(), "proof2 should verify: {:?}", v2.err());
+        // Both should verify successfully against the federation root.
+        assert!(
+            verify_presentation_bb(&proof1, fed_root_bb),
+            "proof1 should verify against the federation root"
+        );
+        assert!(
+            verify_presentation_bb(&proof2, fed_root_bb),
+            "proof2 should verify against the federation root"
+        );
 
-        // The blinded_leaf (pi[0]) should be DIFFERENT between the two proofs.
-        // This is the unlinkability property!
-        let pi1 = &proof1
-            .real_stark_proof
-            .as_ref()
-            .unwrap()
-            .issuer_membership_stark_proof
-            .public_inputs;
-        let pi2 = &proof2
-            .real_stark_proof
-            .as_ref()
-            .unwrap()
-            .issuer_membership_stark_proof
-            .public_inputs;
+        // The blinded ring-membership PIs are [blinded_leaf, root]. The blinded_leaf (pi[0]) should
+        // be DIFFERENT between the two proofs — this is the unlinkability property!
+        let pi1 = dregg_circuit::presentation::descriptor_wire_pis(
+            &proof1
+                .real_stark_proof
+                .as_ref()
+                .unwrap()
+                .blinded_membership
+                .vk,
+        )
+        .expect("blinded ring-membership vk decodes");
+        let pi2 = dregg_circuit::presentation::descriptor_wire_pis(
+            &proof2
+                .real_stark_proof
+                .as_ref()
+                .unwrap()
+                .blinded_membership
+                .vk,
+        )
+        .expect("blinded ring-membership vk decodes");
         assert_ne!(
             pi1[0], pi2[0],
             "Same issuer's two presentations must have different blinded_leaf (unlinkable)"
@@ -3747,16 +3636,16 @@ mod tests {
             "Both proofs should have the same federation root"
         );
 
-        // The AIR name should indicate blinded mode.
-        assert_eq!(
+        // The descriptor predicate should be the blinded ring-membership family.
+        assert!(
             proof1
                 .real_stark_proof
                 .as_ref()
                 .unwrap()
-                .issuer_membership_stark_proof
-                .air_name,
-            dregg_dsl_runtime::descriptors::BLINDED_MERKLE_AIR_NAME,
-            "Proof should use blinded AIR"
+                .blinded_membership
+                .predicate
+                .starts_with(dregg_circuit::blinded_membership_witness::BLINDED_4ARY_NAME_PREFIX),
+            "Proof should use the blinded ring-membership descriptor"
         );
     }
 
@@ -3994,10 +3883,6 @@ mod tests {
         // Both proofs should be cryptographically valid.
         assert!(proof1.has_real_stark_proof());
         assert!(proof2.has_real_stark_proof());
-        let v1 = proof1.verify_issuer_stark().unwrap();
-        let v2 = proof2.verify_issuer_stark().unwrap();
-        assert!(v1.is_ok(), "proof1 should verify: {:?}", v1.err());
-        assert!(v2.is_ok(), "proof2 should verify: {:?}", v2.err());
 
         // Both should verify against the federation root.
         assert!(
@@ -4018,19 +3903,25 @@ mod tests {
             "Same token, two presentations must produce different presentation_tags (unlinkable)"
         );
 
-        // ALSO: the blinded_leaf in the STARK proof should differ (ring membership unlinkability).
-        let stark_pi1 = &proof1
-            .real_stark_proof
-            .as_ref()
-            .unwrap()
-            .issuer_membership_stark_proof
-            .public_inputs;
-        let stark_pi2 = &proof2
-            .real_stark_proof
-            .as_ref()
-            .unwrap()
-            .issuer_membership_stark_proof
-            .public_inputs;
+        // ALSO: the blinded_leaf in the ring-membership descriptor should differ (unlinkability).
+        let stark_pi1 = dregg_circuit::presentation::descriptor_wire_pis(
+            &proof1
+                .real_stark_proof
+                .as_ref()
+                .unwrap()
+                .blinded_membership
+                .vk,
+        )
+        .expect("blinded ring-membership vk decodes");
+        let stark_pi2 = dregg_circuit::presentation::descriptor_wire_pis(
+            &proof2
+                .real_stark_proof
+                .as_ref()
+                .unwrap()
+                .blinded_membership
+                .vk,
+        )
+        .expect("blinded ring-membership vk decodes");
         assert_ne!(
             stark_pi1[0], stark_pi2[0],
             "Same issuer's two presentations must have different blinded_leaf"

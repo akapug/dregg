@@ -65,16 +65,24 @@ fn holder() -> [u8; 32] {
     [77u8; 32]
 }
 
-/// Extract the issuer-membership `blinded_leaf` public input (pi[0]) from
-/// a real STARK presentation proof. Two presentations of the same
-/// credential must produce different values for unlinkability.
+/// Extract the issuer-membership `blinded_leaf` public input from the blinded
+/// ring-membership descriptor wire (the flip off the hand-STARK issuer proof).
+/// Its vk encodes `[blinded_leaf, root]` as one canonical little-endian `u32`
+/// per 4 bytes, so `blinded_leaf` (PI slot 0) is the first 4 vk bytes. Two
+/// presentations of the same credential must produce different values
+/// (unlinkability — a distinct blinding factor per show).
 fn blinded_leaf(p: &dregg_credentials::Presentation) -> u32 {
     let real = p
         .proof
         .real_stark_proof
         .as_ref()
         .expect("anonymous presentation must carry a real STARK proof");
-    real.issuer_membership_stark_proof.public_inputs[0]
+    let vk = &real.blinded_membership.vk;
+    assert!(
+        vk.len() >= 4,
+        "blinded ring-membership vk must carry at least the blinded_leaf public input"
+    );
+    u32::from_le_bytes([vk[0], vk[1], vk[2], vk[3]])
 }
 
 // ── (a) LocalOnly rejected for anonymous verification ─────────────────────────

@@ -22,23 +22,24 @@ use dregg_circuit::descriptor_ir2::{
     DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
     verify_vm_descriptor2,
 };
+use dregg_circuit::dsl::dsl_p3_air::DslP3Proof;
+use dregg_circuit::dsl::revocation::{prove_non_revocation_p3, verify_non_revocation_p3};
 use dregg_circuit::field::BABYBEAR_P;
 use dregg_circuit::note_spending_air::{
     NOTE_SPENDING_WIDTH, NoteSpendingWitness, key_to_field_elements, pi as note_spend_pi,
 };
 use dregg_circuit::poseidon2;
-// The non-revocation prove/verify path still rides the hand STARK engine (`stark::`);
-// it is BLOCKED on a published `non_revocation_to_descriptor2()` + trace adapter.
-use dregg_circuit::stark::{self, StarkProof};
+// `verify_anonymous_presentation` verifies the committed BLINDED ring-membership descriptor
+// (`dregg-blinded-membership-4ary-general-depth{N}`) via `descriptor_by_name` →
+// `verify_vm_descriptor2` — the Golden-Lift flip off the hand-written blinded-Merkle STARK. The
+// self-contained non-revocation pair below is likewise flipped: it rides the audited
+// `p3-batch-stark` prover.
 use dregg_circuit_prove::note_spend_leaf_adapter::{
     note_spend_leaf_public_inputs, note_spend_mint_hash_felt, note_spend_to_descriptor2,
 };
 use dregg_commit::accumulator::{AccumulatorWitness, BabyBear4, PolynomialAccumulator};
 use dregg_dsl_runtime::note_spending::generate_note_spending_trace;
-use dregg_dsl_runtime::revocation::{
-    DslRevocationTree, generate_non_revocation_trace, non_revocation_dsl_circuit,
-    revocation_hash_to_field,
-};
+use dregg_dsl_runtime::revocation::{DslRevocationTree, revocation_hash_to_field};
 use dregg_token::AuthRequest;
 
 // `discovery` is gated behind `network` (tokio-using); the lone method below
@@ -117,8 +118,14 @@ pub struct UnlinkablePredicateProof {
 /// the token's identity, derivation chain, or which ancestors were checked.
 #[derive(Clone, Debug)]
 pub struct NonRevocationProof {
-    /// The STARK proof of non-revocation.
-    pub proof: StarkProof,
+    /// The non-revocation proof, `postcard`-encoded on the audited Plonky3 wire
+    /// format (`postcard(DslP3Proof)` = `postcard(Ir2BatchProof)`). It carries the
+    /// SAME sorted-tree non-membership statement the retired hand STARK did — the
+    /// depth-`TREE_DEPTH` `hash_fact` tree, `non_revocation_dsl_circuit()`, public
+    /// inputs `[revocation_root, queried_item]` — but is produced/checked by
+    /// `prove_non_revocation_p3` / `verify_non_revocation_p3` (`p3-batch-stark`,
+    /// real terminal FRI), never `stark::prove`/`stark::verify`.
+    pub proof: Vec<u8>,
     /// The revocation set root this proof was generated against.
     ///
     /// The verifier must know this root (committed by the federation) to verify.
@@ -591,21 +598,10 @@ impl AgentCipherclerk {
         // Generate the non-revocation proof using DSL circuit (30-bit range, sound).
         let revocation_root = revocation_tree.root();
 
-        // For each ancestor, generate a non-membership witness and prove it.
-        // With the DSL circuit, we prove one ancestor at a time (single control row).
-        // Use the first ancestor (root issuer) as the primary proof.
+        // We prove one ancestor at a time (single control row); use the first ancestor
+        // (root issuer) as the primary proof, and guard that EVERY ancestor is fresh.
         let primary_hash = &ancestor_hashes[0];
-        let witness = revocation_tree
-            .prove_non_membership(primary_hash)
-            .ok_or_else(|| {
-                SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(
-                    "non-revocation proof generation failed: one or more ancestors are revoked"
-                        .to_string(),
-                ))
-            })?;
-
-        // Verify all other ancestors are also not revoked.
-        for hash in &ancestor_hashes[1..] {
+        for hash in &ancestor_hashes {
             if revocation_tree.prove_non_membership(hash).is_none() {
                 return Err(SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(
                     "non-revocation proof generation failed: one or more ancestors are revoked"
@@ -614,15 +610,24 @@ impl AgentCipherclerk {
             }
         }
 
-        let (trace, public_inputs) = generate_non_revocation_trace(&witness, revocation_root);
-        let circuit = non_revocation_dsl_circuit();
-        let proof = stark::prove(&circuit, &trace, &public_inputs);
+        // Prove non-revocation through the AUDITED Plonky3 prover
+        // (`prove_non_revocation_p3` → `p3-batch-stark`), not the retired hand
+        // `crate::stark` engine. This carries the SAME statement — the depth-`TREE_DEPTH`
+        // sorted-tree non-membership over the deployed `hash_fact` node hash,
+        // `non_revocation_dsl_circuit()`, public inputs `[revocation_root, queried_item]`
+        // — with a real terminal FRI low-degree test, then `postcard`-encodes the proof
+        // (the NEW opaque wire format that replaces `stark::proof_to_bytes`).
+        let inv = |e: String| SdkError::Auth(dregg_bridge::AuthError::InvalidRequest(e));
+        let p3_proof = prove_non_revocation_p3(revocation_tree, *primary_hash)
+            .map_err(|e| inv(format!("non-revocation proof generation failed: {e}")))?;
+        let proof = postcard::to_allocvec(&p3_proof)
+            .map_err(|e| inv(format!("non-revocation proof serialize failed: {e}")))?;
 
         Ok(NonRevocationProof {
             proof,
             revocation_root,
-            // The queried item is the primary ancestor (root-issuer) hash, which
-            // `generate_non_revocation_trace` surfaced as `pi[QUERIED_ITEM]`.
+            // The queried item is the primary ancestor (root-issuer) hash, surfaced as
+            // `pi[QUERIED_ITEM]` and bound in-circuit by the row-0 QUERIED_ITEM boundary.
             item_hash: *primary_hash,
         })
     }
@@ -707,42 +712,33 @@ pub fn verify_anonymous_presentation(
     // Re-wrap into a BridgePresentationProof for verification via the bridge layer.
     // The wire proof contains all necessary STARK data.
     if let Some(ref real_stark) = presentation.proof.real_stark_proof {
-        // SECURITY: Use new_canonical() for values from external (potentially adversarial)
-        // proof data. This ensures modular reduction is applied, preventing non-canonical
-        // representations that could cause malleability.
-        let pi: Vec<BabyBear> = real_stark
-            .issuer_membership_stark_proof
-            .public_inputs
-            .iter()
-            .map(|&v| BabyBear::new_canonical(v))
-            .collect();
+        // Verify the committed BLINDED ring-membership descriptor — the flip off the hand-written
+        // blinded-Merkle STARK. Its PIs are [blinded_leaf, root]: the member leaf_hash and the
+        // fresh blinding factor stay HIDDEN, so the verifier never learns which federation member
+        // produced the proof (the anonymity guarantee is preserved). `verify_descriptor_wire`
+        // dispatches `descriptor_by_name(predicate)` → `verify_vm_descriptor2` and is fail-closed on
+        // an unknown predicate / malformed vk / bad blob / failed verify.
+        let blinded_pis = match dregg_circuit::presentation::verify_descriptor_wire(
+            &real_stark.blinded_membership,
+        ) {
+            Some(pis) => pis,
+            None => return false,
+        };
 
-        let air_name = &real_stark.issuer_membership_stark_proof.air_name;
-
-        // Must be a blinded proof for anonymous presentation.
-        if air_name != dregg_dsl_runtime::descriptors::BLINDED_MERKLE_AIR_NAME {
-            return false;
-        }
-
-        // Verify the STARK proof using DSL blinded Merkle circuit.
-        let circuit = dregg_dsl_runtime::descriptors::blinded_merkle_poseidon2_circuit();
-        if stark::verify(&circuit, &real_stark.issuer_membership_stark_proof, &pi).is_err() {
-            return false;
-        }
-
-        // Check federation root is in the public inputs.
+        // Check federation root is the committed root.
         let expected_root_bb = {
             let limbs = BabyBear::encode_hash(expected_federation_root);
             poseidon2::hash_many(&limbs)
         };
 
-        // The root is the second public input in blinded Merkle proofs.
-        if pi.len() >= 2 && pi[1] == expected_root_bb {
+        // The root is the second public input in blinded ring-membership proofs.
+        use dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY;
+        if blinded_pis.get(PI_ROOT_4ARY).copied() == Some(expected_root_bb) {
             return true;
         }
 
         // Fallback: check if root appears anywhere in public inputs.
-        pi.contains(&expected_root_bb)
+        blinded_pis.contains(&expected_root_bb)
     } else {
         false
     }
@@ -756,10 +752,14 @@ pub fn verify_anonymous_presentation(
 ///
 /// Returns `Ok(())` if the proof is valid, `Err` with reason otherwise.
 pub fn verify_non_revocation_proof(proof: &NonRevocationProof) -> Result<(), String> {
-    let circuit = non_revocation_dsl_circuit();
-    // PI layout: [revocation_root, queried_item]. Both are bound in-circuit.
-    let public_inputs = vec![proof.revocation_root, proof.item_hash];
-    dregg_circuit::stark::verify(&circuit, &proof.proof, &public_inputs)
+    // Decode the NEW wire format (postcard(DslP3Proof)); a malformed/tampered blob is a
+    // fail-closed rejection (Err), never a silent accept.
+    let p3_proof: DslP3Proof = postcard::from_bytes(&proof.proof)
+        .map_err(|e| format!("non-revocation proof bytes could not be deserialized: {e}"))?;
+    // Verify on the AUDITED Plonky3 verifier against `[revocation_root, queried_item]`; both are
+    // bound in-circuit (the row-0 root + QUERIED_ITEM boundaries), so a freshness proof for a
+    // different root or a different item publishes different public inputs and is rejected.
+    verify_non_revocation_p3(&p3_proof, proof.revocation_root, proof.item_hash)
 }
 
 /// Verify an accumulator-based non-membership proof against the TRUSTED (federation-committed)
@@ -974,6 +974,88 @@ mod tests {
             verify_result.is_ok(),
             "non-revocation proof should verify: {:?}",
             verify_result.err()
+        );
+    }
+
+    /// GATE RUNTIME round-trip for the non-revocation `StarkProof` → audited-p3 wire
+    /// migration. The proof blob is opaque `postcard` bytes, so `cargo build` cannot see the
+    /// byte-format flip (`stark::proof_to_bytes(StarkProof)` → `postcard(DslP3Proof)`) nor the
+    /// backend swap (`stark::prove`/`stark::verify` → `prove_non_revocation_p3` /
+    /// `verify_non_revocation_p3` on `p3-batch-stark`) — this test is the gate the build cannot
+    /// provide. It drives the exact producer→consumer contract through the REAL prover/verifier
+    /// (never a mock):
+    ///   PRODUCER: honest non-revoked token → `prove_not_revoked` → `postcard(DslP3Proof)`.
+    ///   CONSUMER: `verify_non_revocation_proof` decodes the blob and checks it via the audited
+    ///             `verify_non_revocation_p3` against `[revocation_root, queried_item]`.
+    /// NON-VACUOUS: the honest proof ACCEPTS, and each of a forged root, a forged queried item,
+    /// and a tampered blob is REJECTED (so the migrated prover did not install a trivially-
+    /// accepting proof, and both public-input bindings are load-bearing).
+    #[test]
+    fn non_revocation_wire_roundtrip_gate() {
+        let mut cclerk = AgentCipherclerk::new();
+        let root_key = [0x9Cu8; 32];
+        let token = cclerk.mint_token(&root_key, "service");
+
+        // A revocation tree with several revoked entries (none of them our token).
+        let revoked_hashes: Vec<BabyBear> = (1..=6u32)
+            .map(|i| {
+                let mut h = [0u8; 32];
+                h[0] = i as u8;
+                h[1] = 0xA7;
+                revocation_hash_to_field(&h)
+            })
+            .collect();
+        let tree = DslRevocationTree::new(revoked_hashes, 4);
+
+        // ── PRODUCER: honest non-revoked token → audited-p3 proof, postcard-encoded. ──
+        let honest = cclerk
+            .prove_not_revoked(&token, &tree)
+            .expect("a non-revoked token must produce a valid non-revocation proof");
+        assert_eq!(honest.revocation_root, tree.root());
+
+        // The blob really is the NEW wire format (postcard(DslP3Proof)), NOT a hand StarkProof.
+        let _decoded: DslP3Proof = postcard::from_bytes(&honest.proof)
+            .expect("the blob must decode as the migrated DslP3Proof (= Ir2BatchProof)");
+
+        // ── POSITIVE POLE: honest ACCEPT through the real consumer. ──
+        verify_non_revocation_proof(&honest).expect(
+            "the honest non-revocation proof must ACCEPT through verify_non_revocation_proof",
+        );
+
+        // ── NEGATIVE 1 — a forged revocation root: the row-0 root boundary bites. ──
+        let mut forged_root = honest.clone();
+        forged_root.revocation_root += BabyBear::ONE;
+        assert!(
+            verify_non_revocation_proof(&forged_root).is_err(),
+            "a forged revocation root must be REJECTED (root PI binding)"
+        );
+
+        // ── NEGATIVE 2 — a forged queried item: the row-0 QUERIED_ITEM boundary bites. ──
+        let mut forged_item = honest.clone();
+        forged_item.item_hash += BabyBear::ONE;
+        assert!(
+            verify_non_revocation_proof(&forged_item).is_err(),
+            "a freshness proof for one item must NOT verify against a different expected item"
+        );
+
+        // ── NEGATIVE 3 — a tampered blob (bit-flip in the postcard bytes). ──
+        let mut tampered = honest.clone();
+        let mid = tampered.proof.len() / 2;
+        tampered.proof[mid] ^= 0xFF;
+        let tampered_rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_non_revocation_proof(&tampered)
+        }))
+        .map(|r| r.is_err())
+        .unwrap_or(true); // a decode/verify panic is itself a rejection
+        assert!(tampered_rejected, "a tampered proof blob must be REJECTED");
+
+        // ── Prover-side guard: a token whose OWN root-issuer hash is revoked cannot
+        //    produce a non-revocation proof at all. ──
+        let issuer_hash = revocation_hash_to_field(token.root_key());
+        let tree_revoking_us = DslRevocationTree::new(vec![issuer_hash], 4);
+        assert!(
+            cclerk.prove_not_revoked(&token, &tree_revoking_us).is_err(),
+            "a token whose ancestor IS revoked must not produce a non-revocation proof"
         );
     }
 
