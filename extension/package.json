@@ -9,6 +9,7 @@
     "test": "node --test 'test/*.test.mjs'",
     "test:quiet-upgrade": "node --test tests/quiet-upgrade/run.mjs",
     "test:compose": "node --test tests/compose/run.mjs",
+    "test:netlayer": "node --test tests/netlayer/run.mjs",
     "clean": "rm -rf dist test/.build"
   },
   "devDependencies": {

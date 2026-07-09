@@ -12,6 +12,13 @@ import { mnemonicConfirmed, walletPassphraseOk } from "./onboarding";
 import { defaultNodeUrl, defaultNodeWssUrl } from "./endpoints";
 import { PollEngine, defaultResolveObject, type PollPortRequest, type PollWorldCtor } from "./port";
 import {
+  Netlayer,
+  wasmNetlayerCrypto,
+  httpsNetlayerTransport,
+  netlayerResolveObject,
+  type NetlayerWasmLike,
+} from "./netlayer";
+import {
   AUTH_CHALLENGE_PATH,
   AUTH_LOGIN_PATH,
   AUTH_LOGOUT_PATH,
@@ -3206,9 +3213,23 @@ function getPollEngine(): PollEngine {
   if (!pollEngine) {
     const PollWorld = (wasm as unknown as { PollWorld?: PollWorldCtor }).PollWorld;
     if (!PollWorld) throw new Error("PollWorld unavailable in wasm module");
+    // THE NETLAYER (DREGG-QUIET-UPGRADE.md §0–3): retire the FNV content-addressing
+    // stand-in with the real substrate resolve — a content-addressed (blake3) fetch
+    // over the UNTRUSTED node transport, verified CLIENT-SIDE (recomputed digest ==
+    // addr; receipt/proof chain; committee-anchored quorum). Fail-closed: an
+    // unverifiable object resolves to `null`, so the thin view shows only the
+    // original link. `defaultResolveObject` remains the fixture/test stand-in only.
+    const net = new Netlayer(
+      httpsNetlayerTransport(() => ({ nodeUrl: nodeConfig.nodeUrl, devnetKey: nodeConfig.devnetKey })),
+      wasmNetlayerCrypto(wasm as unknown as NetlayerWasmLike),
+      // The trusted committee (checkpoint config) anchors a cross-fed resolve; an
+      // empty committee runs the same-fed structural quorum gate. TODO: wire from
+      // the light-client checkpoint once the extension carries it.
+      {},
+    );
     pollEngine = new PollEngine({
       PollWorld,
-      resolveObject: defaultResolveObject,
+      resolveObject: nodeConfig.nodeUrl ? netlayerResolveObject(net) : defaultResolveObject,
       // Custody consent: the faithful reading shown in extension chrome the
       // page cannot overlay or clickjack (§3 — the load-bearing property).
       consent: (req) =>
