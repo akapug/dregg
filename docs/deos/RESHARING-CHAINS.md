@@ -15,7 +15,12 @@
 This is `docs/deos/RESHARING-CHAINS.md`. It sits downstream of:
 - `metatheory/Metatheory/CommonSecret.lean` — the common secret `D_G^{≥K}` and its cliff;
 - `metatheory/Dregg2/Apps/PreRotation.lean` — the KERI pre-rotation chain (`rotChain_pinned_by_commitments`);
-- `federation/src/dkg.rs` — the REAL proactive resharing (`reshare_deal` / `ReshareParticipant`, preserves `f(0)`);
+- `metatheory/Dregg2/Crypto/HermineDkg.lean` — the BASE joint-Feldman DKG (genesis `r₀`) modelled in
+  Lean: `dkg_group_key_eq` (correctness), `dkg_share_verify_sound` (Feldman soundness),
+  `dkg_secrecy_reduces` (secrecy, reduced to the pigeonhole + Shamir legs), `#assert_axioms`-clean
+  (commit `f59fab338`) — see the census note in §0;
+- `federation/src/dkg.rs` / `crypto-hermine/src/dkg.rs` — the REAL DKG and proactive resharing
+  (`reshare_deal` / `ReshareParticipant`, preserves `f(0)`);
 - `federation/src/beacon.rs`, `federation/src/vrf.rs` — the randomness organs;
 - `docs/deos/DISTRIBUTED-TIMETRAVEL-SEMANTICS.md` — the prime-event-structure / configuration frame;
 - `docs/deos/BRANCH-AND-STITCH-PROTOCOL.md` — consensual virtualized pasts, the stitch.
@@ -45,6 +50,23 @@ statement, made precise as the cliff applied across a chain link; (2) the embedd
 resharing chain into dregg's blocklace prime-event-structure (fork = re-randomize = branch-and-stitch
 on entropy); (3) the recognition that proactive recovery, the randomness beacon, and forward-secure
 committee secrets are **one organ used three ways**. Sections A–D make each precise; §5 is the verdict.
+
+**The metatheory has caught up with the base DKG (2026-07-09).** An earlier note here observed that the
+DKG *implementation* (`crypto-hermine/src/dkg.rs` / `federation/src/dkg.rs`) ran ahead of the Lean
+model. That gap is now **CLOSED** for the base joint-Feldman DKG (the genesis link `r₀`):
+`metatheory/Dregg2/Crypto/HermineDkg.lean` (commit `f59fab338`) models the same `evalPoly` +
+Feldman-commitment machinery the reshare re-runs and proves — all `#assert_axioms`-clean —
+**`dkg_group_key_eq`** (the broadcasts assemble to the group key `A·s`, no dealer materializes `s`),
+**`dkg_share_verify_sound`** / `dkg_share_verify_off_poly` (a share passing Feldman verification IS the
+committed evaluation mod `ker A`, so a cheating dealer's off-polynomial share is CAUGHT — matching Rust
+`verify_dkg_share`), and **`dkg_secrecy_reduces`**, a secrecy COMPOSITION whose two legs are discharged
+from proved theorems (the `HermineLossiness` pigeonhole + `ShamirPrivacy.shamir_t_privacy`) with the
+computational hiding of the short secret named as the separate MLWE/MSIS floor, not re-asserted (the
+honest, non-laundered framing — see `docs/PQ-CRYPTO.md`). What is still ahead of the metatheory is the
+RESHARE-specific machinery proper: `reshareChain_forward_secret` (`Metatheory/ResharingChain.lean`, §A)
+models the *link* `Sₙ → Sₙ₊₁` forward secrecy, but the executable `reshare_deal`'s constant-term
+anchoring (`Cⱼ,₀ == pkⱼ_old`) and the §C lineage emitter are not yet modelled — those are the remaining
+gaps, not the base DKG.
 
 ---
 
