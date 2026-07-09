@@ -281,6 +281,58 @@ impl NullifierSet {
         Self::merkle_root_from_leaves(&leaves)
     }
 
+    /// The circuit-faithful node8 leaf for a single nullifier — the EXACT
+    /// [`dregg_circuit::heap_root::HeapLeaf`] the deployed rotated noteSpend
+    /// grow-gate keys the nullifier accumulator on: `addr` is the folded
+    /// nullifier felt (`dregg_circuit::effect_vm::fold_bytes32_to_bb`, the SAME
+    /// `nullifier_to_field` fold the freshness path / `DslRevocationTree` use),
+    /// `value` is `1` (the existence bit — matching the BEFORE-set leaf shape the
+    /// SDK threads into `generate_rotated_note_spend_wide`, `full_turn_proof.rs`).
+    ///
+    /// Byte-for-byte agreement with the grow-gate is load-bearing: the committed
+    /// `nullifier_root` group (rotated limb 26 lane-0 ‖ completion limbs 67..=73)
+    /// is opened in-circuit against a `CanonicalHeapTree8` built from these leaves,
+    /// so the executor-derived accumulator root must fold through the identical
+    /// leaf encoding or the published commitment would not match the proof.
+    pub fn accumulator_leaf(nullifier: &[u8; 32]) -> dregg_circuit::heap_root::HeapLeaf {
+        dregg_circuit::heap_root::HeapLeaf {
+            addr: dregg_circuit::effect_vm::fold_bytes32_to_bb(nullifier),
+            value: dregg_circuit::field::BabyBear::ONE,
+        }
+    }
+
+    /// **The faithful 8-felt (~124-bit) accumulator root of the spent-nullifier
+    /// set** — the value that BELONGS in the committed rotated state's
+    /// `nullifier_root` group (limb 26 lane-0 ‖ completion limbs 67..=73), so a
+    /// cross-node anti-replay commitment is genuine: a node that has accepted a
+    /// spend carries a DIFFERENT `root8` than one that has not.
+    ///
+    /// This is the native `CanonicalHeapTree8` (arity-16 sorted-Poseidon2, depth
+    /// [`dregg_circuit::heap_root::HEAP_TREE_DEPTH`]) root the deployed noteSpend
+    /// grow-gate opens against — built from [`Self::accumulator_leaf`] over every
+    /// nullifier in the set, so it equals the BEFORE-tree root the SDK derives
+    /// from `previously_spent` (`full_turn_proof::wide_commit_anchors`) lane-for-lane.
+    /// The empty set folds to the native empty root
+    /// (`dregg_circuit::heap_root::empty_heap_root_8`), NOT the degenerate
+    /// `hash_bytes([0u8; 32])` / `[0u8; 32]` the producer path still fills — that
+    /// is the vacuous 1-felt binding this replaces.
+    ///
+    /// UNLIKE the byte-Merkle [`Self::root`] (which serves the non-membership
+    /// proof machinery), this is the FELT-domain accumulator root the rotated
+    /// circuit commits to.
+    pub fn root8(&self) -> dregg_circuit::Faithful8 {
+        let leaves: Vec<dregg_circuit::heap_root::HeapLeaf> = self
+            .nullifiers
+            .iter()
+            .map(|n| Self::accumulator_leaf(&n.0))
+            .collect();
+        dregg_circuit::heap_root::CanonicalHeapTree8::new(
+            leaves,
+            dregg_circuit::heap_root::HEAP_TREE_DEPTH,
+        )
+        .root8()
+    }
+
     /// Verify a non-membership proof against the current root.
     ///
     /// This verifies:
@@ -446,5 +498,88 @@ mod tests {
         set.insert(make_nullifier(2)).unwrap();
         let root_two = set.root();
         assert_ne!(root_one, root_two);
+    }
+
+    /// The empty set's faithful accumulator root is the NATIVE `CanonicalHeapTree8`
+    /// empty root — the value a producer must fill for a no-spend accumulator, NOT
+    /// the degenerate `hash_bytes([0u8; 32])` / `[0u8; 32]` the lossy producer path
+    /// still uses. This is the "empty default the circuit expects" match.
+    #[test]
+    fn root8_empty_matches_native_empty_heap_root_8() {
+        let set = NullifierSet::new();
+        assert_eq!(
+            set.root8(),
+            dregg_circuit::heap_root::empty_heap_root_8(),
+            "an empty nullifier set must fold to the native empty node8 root the \
+             circuit's nullifier grow-gate defaults to"
+        );
+    }
+
+    /// A non-empty accumulator fills ALL 8 lanes of the committed nullifier-root
+    /// group: the completion lanes (rotated limbs 67..=73, i.e. `limbs()[1..8]`) are
+    /// NON-ZERO — the vacuity the lossy 1-felt fill leaves open — and the root
+    /// ADVANCES on every distinct insert (the cross-node anti-replay observable: a
+    /// node that accepted a spend carries a different root).
+    #[test]
+    fn root8_grows_nonzero_completion_lanes_and_advances() {
+        use dregg_circuit::field::BabyBear;
+
+        let mut set = NullifierSet::new();
+        let empty8 = set.root8();
+
+        set.insert(make_nullifier(1)).unwrap();
+        let one8 = set.root8();
+        assert_ne!(
+            empty8, one8,
+            "inserting a nullifier must ADVANCE the committed accumulator root"
+        );
+        assert!(
+            one8.limbs()[1..8].iter().any(|f| *f != BabyBear::ZERO),
+            "a non-empty accumulator's completion lanes (rotated limbs 67..=73) must \
+             be NON-ZERO — the whole point of the faithful 8-felt fill"
+        );
+
+        set.insert(make_nullifier(2)).unwrap();
+        let two8 = set.root8();
+        assert_ne!(
+            one8, two8,
+            "a second distinct spend must again advance the root (monotone accumulator)"
+        );
+    }
+
+    /// **Encoding-match tooth (the load-bearing differential):** `root8` over the set
+    /// equals a `CanonicalHeapTree8` built DIRECTLY from the deployed grow-gate's
+    /// leaf encoding — `HeapLeaf { addr: fold_bytes32_to_bb(nf), value: 1 }` — so the
+    /// executor-derived accumulator root is byte-identical to the BEFORE-tree root
+    /// the SDK opens the committed `nullifier_root` group against
+    /// (`full_turn_proof::wide_commit_anchors` → `generate_rotated_note_spend_wide`).
+    /// A drift in this encoding would publish a root the in-circuit open cannot match.
+    #[test]
+    fn root8_matches_growgate_before_tree_encoding() {
+        use dregg_circuit::field::BabyBear;
+        use dregg_circuit::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf};
+
+        let nfs = [make_nullifier(7), make_nullifier(42), make_nullifier(99)];
+        let mut set = NullifierSet::new();
+        for n in &nfs {
+            set.insert(*n).unwrap();
+        }
+
+        // The grow-gate's BEFORE-tree encoding, reconstructed independently.
+        let growgate_leaves: Vec<HeapLeaf> = nfs
+            .iter()
+            .map(|n| HeapLeaf {
+                addr: dregg_circuit::effect_vm::fold_bytes32_to_bb(&n.0),
+                value: BabyBear::ONE,
+            })
+            .collect();
+        let expected = CanonicalHeapTree8::new(growgate_leaves, HEAP_TREE_DEPTH).root8();
+
+        assert_eq!(
+            set.root8(),
+            expected,
+            "root8 must fold through the EXACT node8 leaf encoding the deployed \
+             noteSpend grow-gate opens against"
+        );
     }
 }
