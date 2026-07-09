@@ -6,6 +6,7 @@
 import type { MessageType } from "./types";
 import { startDetector } from "./detect";
 import { registerCompositionElements } from "./elements/dregg-embed";
+import { registerDocElement } from "./elements/dregg-doc";
 
 // Generate a random nonce for this injection session to prevent event spoofing.
 const SESSION_NONCE = crypto.randomUUID();
@@ -23,6 +24,12 @@ void startDetector();
 // the nested `<dregg-*>` tags a resolved child renders — upgrade to closed-shadow
 // thin views whose CellEngine lives in the background.
 registerCompositionElements();
+
+// The verifiable document surface (DREGG-DOCUMENT-FOUNDATION): register
+// `<dregg-doc>` — the culminating authoring path. It renders a verifiable
+// document, holds a first-class conflict as BOTH alternatives side by side, and
+// PUBLISHES a resolution as a real verified turn through the background DocEngine.
+registerDocElement();
 
 // Methods that any page origin can call without prior approval.
 const UNRESTRICTED_METHODS = new Set<MessageType>([
