@@ -37,7 +37,7 @@
 //! cannot be shown a conflict that hides or forges an alternative
 //! (`dregg-doc/src/substrate.rs`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use wasm_bindgen::prelude::*;
 
@@ -47,8 +47,8 @@ use crate::runtime::DreggRuntime;
 
 use deos_view::{parse_view_tree, render_html};
 use dregg_doc::{
-    AtomId, Author, ConflictRegion, DocGraph, History, Patch, Rendered, ResolutionChoice, content,
-    merge, resolutions_for, substrate_commit, to_heap_map,
+    AtomId, Author, ConflictRegion, Doc, DocGraph, Granularity, History, Patch, Rendered,
+    ResolutionChoice, content, merge, resolutions_for, substrate_commit, to_heap_map,
 };
 
 /// The model slot the publish turn writes the document's umem boundary root into — a
@@ -308,39 +308,7 @@ impl DocCollabWorld {
     ///     state commitment, which now includes the freshly-resealed `heap_root` (limb 28), so
     ///     the receipt genuinely witnesses the published boundary. A rejected turn is surfaced.
     fn publish(&mut self, graph: &DocGraph) -> Result<(), String> {
-        let cell_id = self.rt.agents[0].cell_id;
-        let boundary: [u8; 32] = substrate_commit(graph);
-
-        // (1) Off-executor umem reseal: the doc-cell's heap IS the document projection.
-        let heap: BTreeMap<(u32, u32), [u8; 32]> = to_heap_map(graph);
-        {
-            let cell = self
-                .rt
-                .ledger
-                .get_mut(&cell_id)
-                .ok_or_else(|| "doc-cell vanished from the ledger".to_string())?;
-            cell.state.heap_map = heap;
-            cell.state.reseal_heap_root();
-            // The boundary the executor will now commit equals the canonical projection.
-            debug_assert_eq!(cell.state.heap_root, boundary);
-        }
-
-        // (2) The real verified turn: bind the new umem boundary root as the receipted publish.
-        let effects = vec![
-            Effect::SetField {
-                cell: cell_id,
-                index: PUBLISH_SLOT,
-                value: boundary,
-            },
-            Effect::IncrementNonce { cell: cell_id },
-        ];
-        match self.rt.execute_turn_for_agent(0, effects, PUBLISH_FEE) {
-            TurnResult::Committed { .. } => Ok(()),
-            TurnResult::Rejected { reason, at_action } => Err(format!(
-                "publish turn rejected: {reason} (at {at_action:?})"
-            )),
-            other => Err(format!("publish turn not committed: {other:?}")),
-        }
+        publish_doc_graph(&mut self.rt, 0, graph)
     }
 
     /// Build the document view-tree JSON value for the current state (ConflictView vs published).
@@ -429,4 +397,398 @@ fn author_name(a: Author) -> String {
 /// First 12 hex chars of a hex string (the legible umem-boundary readout).
 fn short_hex(hex: &str) -> String {
     hex.chars().take(12).collect()
+}
+
+/// **PUBLISH `graph` to a doc-cell's umem-heap as a real verified turn** — the shared
+/// publish path both the conflict-resolution surface ([`DocCollabWorld`]) and the free-text
+/// editing surface ([`DocTextWorld`]) ride. See [`DocCollabWorld::publish`] for the two-step
+/// semantics (off-executor umem reseal, then a cap-gated `SetField(PUBLISH_SLOT) +
+/// IncrementNonce` verified turn binding the new boundary root as the receipted publish).
+/// FAIL-CLOSED: a rejected or non-committed turn returns `Err`, never a silent success.
+fn publish_doc_graph(
+    rt: &mut DreggRuntime,
+    agent_idx: usize,
+    graph: &DocGraph,
+) -> Result<(), String> {
+    let cell_id = rt.agents[agent_idx].cell_id;
+    let boundary: [u8; 32] = substrate_commit(graph);
+
+    // (1) Off-executor umem reseal: the doc-cell's heap IS the document projection.
+    let heap: BTreeMap<(u32, u32), [u8; 32]> = to_heap_map(graph);
+    {
+        let cell = rt
+            .ledger
+            .get_mut(&cell_id)
+            .ok_or_else(|| "doc-cell vanished from the ledger".to_string())?;
+        cell.state.heap_map = heap;
+        cell.state.reseal_heap_root();
+        // The boundary the executor will now commit equals the canonical projection.
+        debug_assert_eq!(cell.state.heap_root, boundary);
+    }
+
+    // (2) The real verified turn: bind the new umem boundary root as the receipted publish.
+    let effects = vec![
+        Effect::SetField {
+            cell: cell_id,
+            index: PUBLISH_SLOT,
+            value: boundary,
+        },
+        Effect::IncrementNonce { cell: cell_id },
+    ];
+    match rt.execute_turn_for_agent(agent_idx, effects, PUBLISH_FEE) {
+        TurnResult::Committed { .. } => Ok(()),
+        TurnResult::Rejected { reason, at_action } => Err(format!(
+            "publish turn rejected: {reason} (at {at_action:?})"
+        )),
+        other => Err(format!("publish turn not committed: {other:?}")),
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+//  FREE-TEXT DOCUMENT EDITING — the person types prose; each edit is a real patch → verified turn
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+/// The wasm-side engine for **free-text document editing**: a person types/edits prose and each
+/// edit becomes a real [`dregg_doc::Patch`] against the current document (via [`Doc::edit`]'s
+/// token-LCS diff → the MINIMAL `Add`/`Delete` patch, never a full rewrite — kept tokens reuse
+/// their existing atom ids), applied to the patch-[`History`], then published as a real cap-gated
+/// verified turn resealing the doc-cell's umem boundary. This is the wasm realization of the
+/// goal's "keyed reconciler / DOM-schema editing": a `<dregg-doc>`'s buffer text is diffed into a
+/// patch here, exactly as a conflict resolution is — a stranger can check the receipt.
+///
+/// It reuses `dregg-doc`'s diff/commit/merge WHOLESALE (no new patch logic): [`Doc::edit`] for the
+/// edit → patch step, [`dregg_doc::merge`] for concurrent reconciliation (disjoint edits commute
+/// clean; a genuine same-span edit surfaces a first-class [`ConflictRegion`]), and the same
+/// [`publish_doc_graph`] verified-turn path [`DocCollabWorld`] uses. Word [`Granularity`] is the
+/// default so prose edits produce fine-grained, minimal patches.
+#[wasm_bindgen]
+pub struct DocTextWorld {
+    rt: DreggRuntime,
+    /// The editable document — a patch-[`History`] authored by typing text. Each
+    /// [`Self::apply_text_edit`] diffs the new text against this and commits the minimal patch.
+    doc: Doc,
+    /// The editing author stamped onto inserted atoms (provenance flows as usual).
+    author: Author,
+    /// The last PUBLISHED document graph — the one the doc-cell's committed umem boundary binds.
+    /// Updated on [`Self::publish_edit`]; unpublished edits are NOT yet bound (the boundary lags,
+    /// as it should, until the edit is published as a verified turn).
+    published: DocGraph,
+}
+
+/// The summary an [`Self::apply_text_edit`] returns: how the minimal patch moved the atom graph.
+struct EditSummary {
+    /// Fresh atoms the edit inserted (new ids, never in the pre-edit graph).
+    atoms_added: usize,
+    /// Previously-alive atoms the edit tombstoned (LCS deletions).
+    atoms_tombstoned: usize,
+    /// The document's rendered text after the edit.
+    text: String,
+}
+
+#[wasm_bindgen]
+impl DocTextWorld {
+    /// Mint a fresh doc-cell on its own embedded executor, seed the document with `initial_text`
+    /// (authored by `author_id`, at word [`Granularity`]), and **publish it to the umem-heap** as
+    /// a real verified turn (the genesis boundary). Subsequent [`Self::apply_text_edit`]s diff
+    /// against this and [`Self::publish_edit`] reseals the boundary.
+    #[wasm_bindgen(constructor)]
+    pub fn new(initial_text: String, author_id: u32) -> Result<DocTextWorld, JsError> {
+        let mut rt = DreggRuntime::new();
+        rt.try_create_agent("doc", 1_000_000)
+            .map_err(|e| JsError::new(&e))?;
+
+        let author = Author(author_id as u64);
+        let mut doc = Doc::new(Granularity::Word);
+        // Seed the initial prose (a diff from the empty document = one Add per token).
+        doc.edit(author, &initial_text);
+        let published = doc.history().replay();
+
+        let mut world = DocTextWorld {
+            rt,
+            doc,
+            author,
+            published,
+        };
+        // Publish the seed to the doc-cell's umem-heap as a real verified turn (the genesis point).
+        let g = world.published.clone();
+        publish_doc_graph(&mut world.rt, 0, &g).map_err(|e| JsError::new(&e))?;
+        Ok(world)
+    }
+
+    /// **APPLY A FREE-TEXT EDIT** — the person edited the prose to `new_text`. Diff it against the
+    /// current document ([`Doc::edit`]'s token-LCS at word granularity), produce the MINIMAL
+    /// `Add`/`Delete` [`Patch`], and commit it to the history. The inserted atoms carry the
+    /// editing author's provenance. Returns a JSON summary
+    /// `{ "atoms_added", "atoms_tombstoned", "text" }` — the counts prove the edit is a minimal
+    /// patch (a word replaced ⇒ one atom added + one tombstoned, the surrounding words KEPT by
+    /// their existing atom ids), NOT a full rewrite. The boundary does NOT move until
+    /// [`Self::publish_edit`].
+    #[wasm_bindgen(js_name = applyTextEdit)]
+    pub fn apply_text_edit(&mut self, new_text: String) -> String {
+        use serde_json::json;
+        let s = self.edit_internal(&new_text);
+        json!({
+            "atoms_added": s.atoms_added,
+            "atoms_tombstoned": s.atoms_tombstoned,
+            "text": s.text,
+        })
+        .to_string()
+    }
+
+    /// **PUBLISH THE EDIT** — reseal the doc-cell's umem boundary `heap_root =
+    /// substrate_commit(current document)` and commit a real cap-gated verified turn (the SAME
+    /// publish path a conflict resolution uses). A free-text edit thus lands as a verified turn a
+    /// stranger can check. Returns a JSON receipt `{ "receiptCount", "commitmentHex" }`.
+    /// FAIL-CLOSED: a rejected publish turn returns an error, never a silent success.
+    #[wasm_bindgen(js_name = publishEdit)]
+    pub fn publish_edit(&mut self) -> Result<String, JsError> {
+        use serde_json::json;
+        self.publish_internal().map_err(|e| JsError::new(&e))?;
+        Ok(json!({
+            "receiptCount": self.rt.receipts.len(),
+            "commitmentHex": self.commitment_hex(),
+        })
+        .to_string())
+    }
+
+    /// The current document's rendered text (the post-edit state the JS reconciler reads).
+    #[wasm_bindgen(js_name = currentText)]
+    pub fn current_text(&self) -> String {
+        self.doc.text()
+    }
+
+    /// **THE RENDERED HTML FRAGMENT** — the current document walked through the gpui-free web
+    /// renderer (`deos-view::render_html`), the same renderer the cockpit's web projection bakes.
+    /// The live `<dregg-doc>` sets this as its container's `innerHTML` after each edit/publish so
+    /// the reconciler can paint the post-edit state.
+    #[wasm_bindgen(js_name = render)]
+    pub fn render(&self) -> String {
+        use serde_json::json;
+        let tree = json!({
+            "kind": "vstack",
+            "props": {},
+            "children": [
+                { "kind": "text", "props": { "text": "Document — free-text editing (each edit a patch → verified turn)" } },
+                { "kind": "text", "props": { "text": self.doc.text() } },
+                { "kind": "text", "props": { "text": format!("umem boundary (heap_root): {}…", short_hex(&self.commitment_hex())) } },
+                { "kind": "text", "props": { "text": format!("verified publish turns (receipts): {}", self.rt.receipts.len()) } }
+            ]
+        })
+        .to_string();
+        match parse_view_tree(&tree) {
+            Ok(t) => render_html(&t, &[]),
+            Err(e) => format!("<pre class=\"deos-text\">view-tree error: {e}</pre>"),
+        }
+    }
+
+    /// The doc-cell's id (hex) — the document's sovereignty boundary.
+    #[wasm_bindgen(js_name = cellId)]
+    pub fn cell_id(&self) -> String {
+        crate::bindings::hex_encode(&self.rt.agents[0].cell_id.0)
+    }
+
+    /// The document's commitment: the doc-cell's committed umem-heap boundary `heap_root` (hex).
+    /// After a [`Self::publish_edit`] this equals `substrate_commit(published)`.
+    #[wasm_bindgen(js_name = commitmentHex)]
+    pub fn commitment_hex(&self) -> String {
+        let cell_id = self.rt.agents[0].cell_id;
+        let root = self
+            .rt
+            .ledger
+            .get(&cell_id)
+            .map(|c| c.state.heap_root)
+            .unwrap_or([0u8; 32]);
+        crate::bindings::hex_encode(&root)
+    }
+
+    /// The committed-receipt count — one per published boundary (incl. the genesis seed publish).
+    #[wasm_bindgen(js_name = receiptCount)]
+    pub fn receipt_count(&self) -> usize {
+        self.rt.receipts.len()
+    }
+
+    /// **The invariant: the doc-cell's committed umem boundary EQUALS `substrate_commit` of the
+    /// last PUBLISHED document.** True right after a [`Self::publish_edit`]; an unpublished edit
+    /// leaves the boundary lagging the working document (correctly — it is not yet a verified turn).
+    #[wasm_bindgen(js_name = boundaryMatchesProjection)]
+    pub fn boundary_matches_projection(&self) -> bool {
+        let cell_id = self.rt.agents[0].cell_id;
+        let Some(cell) = self.rt.ledger.get(&cell_id) else {
+            return false;
+        };
+        cell.state.heap_root == substrate_commit(&self.published)
+    }
+
+    // ── internals ───────────────────────────────────────────────────────────────────────
+
+    /// Diff `new_text` into the document via [`Doc::edit`] and summarize the graph move by
+    /// comparing the pre- and post-edit atom sets (added = fresh ids; tombstoned = previously-alive
+    /// ids now dead). This is a read of `dregg-doc`'s OWN diff/commit result, not a reimplemented
+    /// diff — the minimal-patch property is `Doc::edit`'s, surfaced here.
+    fn edit_internal(&mut self, new_text: &str) -> EditSummary {
+        let before = self.doc.history().replay();
+        let before_ids: HashSet<AtomId> = before.atoms().map(|a| a.id).collect();
+        let before_alive: HashSet<AtomId> = before
+            .atoms()
+            .filter(|a| a.is_alive())
+            .map(|a| a.id)
+            .collect();
+
+        self.doc.edit(self.author, new_text);
+
+        let after = self.doc.history().replay();
+        let atoms_added = after
+            .atoms()
+            .filter(|a| !before_ids.contains(&a.id))
+            .count();
+        let atoms_tombstoned = after
+            .atoms()
+            .filter(|a| !a.is_alive() && before_alive.contains(&a.id))
+            .count();
+
+        EditSummary {
+            atoms_added,
+            atoms_tombstoned,
+            text: self.doc.text(),
+        }
+    }
+
+    /// Publish the current document as a verified turn and record it as the new published boundary.
+    fn publish_internal(&mut self) -> Result<(), String> {
+        let g = self.doc.history().replay();
+        publish_doc_graph(&mut self.rt, 0, &g)?;
+        self.published = g;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// THE FREE-TEXT EDIT LOOP: a person edits prose → a MINIMAL patch (one atom added + one
+    /// tombstoned, the surrounding words KEPT — not a full rewrite) → publish → the doc-cell's
+    /// committed umem boundary equals `substrate_commit` of the edited document, and the current
+    /// text reflects the edit.
+    #[test]
+    fn free_text_edit_is_a_minimal_patch_then_a_verified_turn() {
+        let mut world =
+            DocTextWorld::new("the quick brown fox".to_string(), 1).expect("mint doc-cell");
+
+        // Genesis seed already published: one receipt, boundary matches the seed projection.
+        assert_eq!(
+            world.receipt_count(),
+            1,
+            "the seed published as a verified turn"
+        );
+        assert!(
+            world.boundary_matches_projection(),
+            "the seed boundary equals substrate_commit(seed)"
+        );
+
+        // The person edits "brown" → "RED". The LCS preserves "the quick"/"fox": exactly ONE atom
+        // is added ("RED ") and ONE tombstoned ("brown ") — NOT a four-atom full rewrite.
+        let s = world.edit_internal("the quick RED fox");
+        assert_eq!(
+            s.atoms_added, 1,
+            "one word inserted (minimal, not a rewrite)"
+        );
+        assert_eq!(
+            s.atoms_tombstoned, 1,
+            "one word deleted (minimal, not a rewrite)"
+        );
+        assert_eq!(s.text, "the quick RED fox");
+        assert_eq!(world.current_text(), "the quick RED fox");
+
+        // Before publishing, the committed boundary still binds the last PUBLISHED (seed)
+        // document — the edited WORKING doc is not yet bound (the edit isn't a verified turn yet).
+        let cell_id = world.rt.agents[0].cell_id;
+        let committed_before_pub = world.rt.ledger.get(&cell_id).unwrap().state.heap_root;
+        assert_ne!(
+            committed_before_pub,
+            substrate_commit(&world.doc.history().replay()),
+            "the edited working doc is NOT yet bound by the committed boundary"
+        );
+        assert!(
+            world.boundary_matches_projection(),
+            "the boundary still binds the last published document until publish"
+        );
+
+        // Publish the edit: a real verified turn reseals the boundary.
+        world.publish_internal().expect("publish the edit");
+        assert_eq!(
+            world.receipt_count(),
+            2,
+            "the edit published as a second verified turn"
+        );
+
+        // The receipt's heap_root EQUALS substrate_commit of the edited document.
+        let committed = world.rt.ledger.get(&cell_id).unwrap().state.heap_root;
+        let edited_projection = substrate_commit(&world.doc.history().replay());
+        assert_eq!(
+            committed, edited_projection,
+            "the committed umem boundary binds the edited document"
+        );
+        assert!(world.boundary_matches_projection());
+    }
+
+    /// TWO CONCURRENT EDITS TO DIFFERENT WORDS MERGE CLEAN — disjoint edits commute (the pushout
+    /// carries no conflict). Reuses `dregg-doc`'s `merge` wholesale.
+    #[test]
+    fn concurrent_disjoint_edits_merge_clean() {
+        let mut base = Doc::new(Granularity::Word);
+        base.edit(Author(1), "the quick brown fox");
+        let shared = base.history().clone();
+
+        // Alice replaces "quick"; Bob replaces "fox" — disjoint spans.
+        let mut alice = Doc::from_history(shared.clone(), Granularity::Word);
+        alice.edit(Author(1), "the SLOW brown fox");
+        let mut bob = Doc::from_history(shared.clone(), Granularity::Word);
+        bob.edit(Author(2), "the quick brown DOG");
+
+        let merged = merge(&alice.history().replay(), &bob.history().replay());
+        let rendered = content(&merged);
+        assert!(
+            !rendered.has_conflict(),
+            "disjoint word edits reconcile without a conflict"
+        );
+        assert_eq!(
+            rendered.to_marked_string(),
+            "the SLOW brown DOG",
+            "both disjoint edits land in the merged document"
+        );
+    }
+
+    /// A GENUINE SAME-SPAN CONFLICT IS FIRST-CLASS — two authors edit the SAME word differently,
+    /// so the merge surfaces a `ConflictRegion` (shown, never silently merged away).
+    #[test]
+    fn same_span_edit_is_a_first_class_conflict() {
+        let mut base = Doc::new(Granularity::Word);
+        base.edit(Author(1), "the quick brown fox");
+        let shared = base.history().clone();
+
+        // Both replace the SAME word "quick" — with different words.
+        let mut alice = Doc::from_history(shared.clone(), Granularity::Word);
+        alice.edit(Author(1), "the RED brown fox");
+        let mut bob = Doc::from_history(shared.clone(), Granularity::Word);
+        bob.edit(Author(2), "the BLUE brown fox");
+
+        let merged = merge(&alice.history().replay(), &bob.history().replay());
+        let rendered = content(&merged);
+        assert!(
+            rendered.has_conflict(),
+            "a same-span edit is a first-class conflict, not a silent merge"
+        );
+        // Both alternatives are present and attributed (neither is dropped).
+        let region = rendered.conflicts().next().expect("a conflict region");
+        let authors: HashSet<u64> = region
+            .alternatives
+            .iter()
+            .map(|a| a.provenance.author.0)
+            .collect();
+        assert!(
+            authors.contains(&1) && authors.contains(&2),
+            "both authors' alternatives are carried in the conflict"
+        );
+    }
 }
