@@ -1714,13 +1714,13 @@ mod tests {
         ];
         for a in &actions {
             match &a.authorization {
-                Authorization::Signature(r, s) => {
+                Authorization::HybridSignature { ed25519, .. } => {
                     assert!(
-                        *r != [0u8; 32] || *s != [0u8; 32],
+                        *ed25519 != [0u8; 64],
                         "signature must be non-zero (no [0u8; 64] placeholders!)"
                     );
                 }
-                other => panic!("expected Signature variant, got {other:?}"),
+                other => panic!("expected HybridSignature variant, got {other:?}"),
             }
         }
     }
@@ -1733,10 +1733,12 @@ mod tests {
         let payload = blake3_field(b"payload");
         let a1 = build_publish_action(&cc1, cell, u64_field(1), blake3_field(b"r"), payload);
         let a2 = build_publish_action(&cc2, cell, u64_field(1), blake3_field(b"r"), payload);
-        let (Authorization::Signature(r1, _), Authorization::Signature(r2, _)) =
-            (&a1.authorization, &a2.authorization)
+        let (
+            Authorization::HybridSignature { ed25519: r1, .. },
+            Authorization::HybridSignature { ed25519: r2, .. },
+        ) = (&a1.authorization, &a2.authorization)
         else {
-            panic!("expected Signature variants");
+            panic!("expected HybridSignature variants");
         };
         assert_ne!(
             r1, r2,

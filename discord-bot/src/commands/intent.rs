@@ -117,7 +117,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
 
     // Ephemeral confirmation to the poster.
     let confirm = embeds::success_embed("Signed Intent Published")
-        .description("Real `Authorization::Signature` action posted to the channel.")
+        .description("Real hybrid-signed (`ed25519` + `ML-DSA`) action posted to the channel.")
         .field(
             "Poster pubkey",
             format!("`{}`", cclerk.public_key_hex()),

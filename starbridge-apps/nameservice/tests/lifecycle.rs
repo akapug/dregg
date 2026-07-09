@@ -309,19 +309,19 @@ fn auth_register_action_carries_real_signature() {
         1_000,
     );
     match action.authorization {
-        Authorization::Signature(a, b) => {
+        Authorization::HybridSignature { ed25519, .. } => {
             assert!(
-                a != [0u8; 32] || b != [0u8; 32],
+                ed25519 != [0u8; 64],
                 "the framework signing path must not emit [0u8; 64] placeholders"
             );
         }
-        other => panic!("expected Signature variant, got {other:?}"),
+        other => panic!("expected HybridSignature variant, got {other:?}"),
     }
 }
 
 #[test]
 fn auth_all_lifecycle_actions_carry_real_signatures() {
-    // Every entry point must emit an Authorization::Signature.
+    // Every entry point must emit a hybrid-signed authorization.
     let cipherclerk = cclerk_with_seed(0xCC);
     let cell = registry_cell();
     let name = "alice.dregg";
@@ -343,11 +343,11 @@ fn auth_all_lifecycle_actions_carry_real_signatures() {
     ];
     for (name, action) in actions {
         match action.authorization {
-            Authorization::Signature(a, b) => assert!(
-                a != [0u8; 32] || b != [0u8; 32],
+            Authorization::HybridSignature { ed25519, .. } => assert!(
+                ed25519 != [0u8; 64],
                 "{name} action signature must be non-zero"
             ),
-            other => panic!("expected Signature for `{name}`, got {other:?}"),
+            other => panic!("expected HybridSignature for `{name}`, got {other:?}"),
         }
     }
 }
@@ -360,10 +360,12 @@ fn auth_different_cclerks_produce_different_signatures_on_same_logical_action() 
     let cell = registry_cell();
     let a1 = build_register_action(&w1, cell, "alice", [3u8; 32], 1_000);
     let a2 = build_register_action(&w2, cell, "alice", [3u8; 32], 1_000);
-    let (Authorization::Signature(r1, _), Authorization::Signature(r2, _)) =
-        (&a1.authorization, &a2.authorization)
+    let (
+        Authorization::HybridSignature { ed25519: r1, .. },
+        Authorization::HybridSignature { ed25519: r2, .. },
+    ) = (&a1.authorization, &a2.authorization)
     else {
-        panic!("expected Signature variants");
+        panic!("expected HybridSignature variants");
     };
     assert_ne!(
         r1, r2,
@@ -416,13 +418,19 @@ fn adversarial_transfer_from_non_owner_authorization_diverges() {
     let legit = build_transfer_action(&owner_cclerk, cell, name, old_owner_pk, new_owner_pk);
     let impostor = build_transfer_action(&impostor_cclerk, cell, name, old_owner_pk, new_owner_pk);
 
-    let (Authorization::Signature(r_owner, s_owner), Authorization::Signature(r_imp, s_imp)) =
-        (&legit.authorization, &impostor.authorization)
+    let (
+        Authorization::HybridSignature {
+            ed25519: sig_owner, ..
+        },
+        Authorization::HybridSignature {
+            ed25519: sig_imp, ..
+        },
+    ) = (&legit.authorization, &impostor.authorization)
     else {
-        panic!("expected Signature variants");
+        panic!("expected HybridSignature variants");
     };
     assert!(
-        r_owner != r_imp || s_owner != s_imp,
+        sig_owner != sig_imp,
         "non-owner's signature must diverge from the owner's"
     );
 

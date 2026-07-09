@@ -1485,7 +1485,6 @@ mod wall_a {
         let witness = FullTurnWitness {
             initial_cell_state: initial_vm_state,
             effects: vm_effects,
-            authorization: None,
             membership: None,
             conservation: None,
             non_revocation: None,

@@ -628,15 +628,17 @@ mod tests {
 
         let action = cclerk.make_action(target, "noop", vec![]);
 
-        // The whole point: not Unchecked, and not a zero signature.
+        // The whole point: not Unchecked, and not a zero signature. Since the
+        // hybrid flip, the framework signing path emits HybridSignature
+        // (ed25519 + ML-DSA over the same canonical message).
         match action.authorization {
-            dregg_turn::action::Authorization::Signature(a, b) => {
-                assert!(
-                    a != [0u8; 32] || b != [0u8; 32],
-                    "signature must be non-zero"
-                );
+            dregg_turn::action::Authorization::HybridSignature {
+                ed25519, ml_dsa, ..
+            } => {
+                assert!(ed25519 != [0u8; 64], "ed25519 half must be non-zero");
+                assert!(!ml_dsa.is_empty(), "PQ half must be present");
             }
-            other => panic!("expected Signature variant, got {other:?}"),
+            other => panic!("expected HybridSignature variant, got {other:?}"),
         }
     }
 
@@ -674,10 +676,10 @@ mod tests {
         let action = cclerk.make_self_action("local-bump", vec![]);
         assert_eq!(action.target, cclerk.cell_id());
         match action.authorization {
-            dregg_turn::action::Authorization::Signature(a, b) => {
-                assert!(a != [0u8; 32] || b != [0u8; 32]);
+            dregg_turn::action::Authorization::HybridSignature { ed25519, .. } => {
+                assert!(ed25519 != [0u8; 64]);
             }
-            other => panic!("expected Signature variant, got {other:?}"),
+            other => panic!("expected HybridSignature variant, got {other:?}"),
         }
     }
 
@@ -727,10 +729,10 @@ mod tests {
         }
         // Real signature, not Unchecked.
         match &root.action.authorization {
-            Authorization::Signature(a, b) => {
-                assert!(*a != [0u8; 32] || *b != [0u8; 32]);
+            Authorization::HybridSignature { ed25519, .. } => {
+                assert!(*ed25519 != [0u8; 64]);
             }
-            other => panic!("expected Signature variant, got {other:?}"),
+            other => panic!("expected HybridSignature variant, got {other:?}"),
         }
     }
 

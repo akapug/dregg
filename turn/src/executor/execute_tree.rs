@@ -1186,6 +1186,13 @@ impl TurnExecutor {
                 _ => None,
             },
             Authorization::CapTpDelivered { sender_pk, .. } => Some(*sender_pk),
+            // The hybrid variant's ed25519 half is the SAME 64-byte signature the
+            // classical `Signature` stored as two halves, so its first 32 bytes are
+            // byte-identical to what `Signature(pk, _)` carried — sender-precondition
+            // extraction is behavior-preserving after the sign_action hybrid flip.
+            Authorization::HybridSignature { ed25519, .. } => {
+                <[u8; 32]>::try_from(&ed25519[..32]).ok()
+            }
             _ => None,
         };
         let ctx = EvalContext {

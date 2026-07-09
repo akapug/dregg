@@ -1860,13 +1860,13 @@ mod tests {
         let action =
             build_register_action(&cipherclerk, test_cell(), "alice.dregg", [3u8; 32], 1_000);
         match action.authorization {
-            Authorization::Signature(a, b) => {
+            Authorization::HybridSignature { ed25519, .. } => {
                 assert!(
-                    a != [0u8; 32] || b != [0u8; 32],
+                    ed25519 != [0u8; 64],
                     "signature must be non-zero (no [0u8; 64] placeholders!)"
                 );
             }
-            other => panic!("expected Signature variant, got {other:?}"),
+            other => panic!("expected HybridSignature variant, got {other:?}"),
         }
     }
 
@@ -2318,10 +2318,12 @@ mod tests {
         let cell = test_cell();
         let a1 = build_register_action(&cc1, cell, "alice", [3u8; 32], 1_000);
         let a2 = build_register_action(&cc2, cell, "alice", [3u8; 32], 1_000);
-        let (Authorization::Signature(r1, _), Authorization::Signature(r2, _)) =
-            (&a1.authorization, &a2.authorization)
+        let (
+            Authorization::HybridSignature { ed25519: r1, .. },
+            Authorization::HybridSignature { ed25519: r2, .. },
+        ) = (&a1.authorization, &a2.authorization)
         else {
-            panic!("expected Signature variants");
+            panic!("expected HybridSignature variants");
         };
         assert_ne!(
             r1, r2,

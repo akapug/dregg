@@ -30,13 +30,19 @@ fn sign_action_overwrites_unchecked() {
         witness_blobs: vec![],
     };
     let signed = cclerk.sign_action(unsigned);
-    assert!(matches!(signed.authorization, Authorization::Signature(..)));
+    // Since the hybrid flip, sign_action emits HybridSignature (ed25519 +
+    // ML-DSA over the same canonical message).
+    assert!(matches!(
+        signed.authorization,
+        Authorization::HybridSignature { .. }
+    ));
 
-    // And it's a real non-zero signature.
-    if let Authorization::Signature(a, b) = signed.authorization {
-        assert!(
-            a != [0u8; 32] || b != [0u8; 32],
-            "signature must be non-zero"
-        );
+    // And it's a real non-zero signature carrying the PQ half.
+    if let Authorization::HybridSignature {
+        ed25519, ml_dsa, ..
+    } = signed.authorization
+    {
+        assert!(ed25519 != [0u8; 64], "ed25519 half must be non-zero");
+        assert!(!ml_dsa.is_empty(), "PQ half must be present");
     }
 }

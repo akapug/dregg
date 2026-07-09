@@ -520,6 +520,7 @@ mod tests {
             threshold: 0,
             federation_id: dregg_types::FederationId::PLACEHOLDER,
             receipt_stream_root: None,
+            hybrid_quorum: Vec::new(),
         }
     }
 

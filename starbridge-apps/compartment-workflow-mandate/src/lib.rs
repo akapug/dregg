@@ -1039,10 +1039,10 @@ mod tests {
             WorkflowPhase::Redact,
         );
         match action.authorization {
-            Authorization::Signature(a, b) => {
-                assert!(a != [0u8; 32] || b != [0u8; 32]);
+            Authorization::HybridSignature { ed25519, .. } => {
+                assert!(ed25519 != [0u8; 64]);
             }
-            other => panic!("expected Signature, got {other:?}"),
+            other => panic!("expected HybridSignature, got {other:?}"),
         }
     }
 

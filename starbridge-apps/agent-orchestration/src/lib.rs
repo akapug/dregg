@@ -1388,8 +1388,8 @@ mod tests {
         let cc = cclerk();
         let action = build_worker_step_action(&cc, cell(), WorkerSlot::B, Tool::Read, 0, 1, 2, "t");
         match action.authorization {
-            Authorization::Signature(a, b) => assert!(a != [0u8; 32] || b != [0u8; 32]),
-            other => panic!("expected Signature, got {other:?}"),
+            Authorization::HybridSignature { ed25519, .. } => assert!(ed25519 != [0u8; 64]),
+            other => panic!("expected HybridSignature, got {other:?}"),
         }
     }
 

@@ -67,12 +67,16 @@ pub fn verify_signed_intent(intent: &SignedIntent) -> bool {
     verify_action_signature(&intent.action, &intent.poster_pk, &intent.federation_id)
 }
 
-/// Canonical Ed25519 verification of an `Authorization::Signature` action.
+/// Canonical Ed25519 verification of a signed action — classical
+/// `Authorization::Signature` or the hybrid `Authorization::HybridSignature`
+/// the framework signing path emits since the hybrid flip.
 ///
-/// Reconstructs the 64-byte signature from the `(r, s)` halves and verifies it
-/// against `compute_signing_message(action, federation_id)` — exactly as
+/// Verifies the ed25519 signature against
+/// `compute_signing_message(action, federation_id)` — exactly as
 /// `dregg_turn`'s executor does, using `dregg_types::PublicKey::verify`
-/// (`verify_strict` under the hood, rejecting malleable signatures).
+/// (`verify_strict` under the hood, rejecting malleable signatures). For the
+/// hybrid variant it mirrors the executor's fail-closed rule: a
+/// present-but-invalid ML-DSA half REJECTS.
 pub fn verify_action_signature(
     action: &Action,
     signer_pk: &[u8; 32],
@@ -81,15 +85,32 @@ pub fn verify_action_signature(
     use dregg_turn::executor::TurnExecutor;
     use dregg_types::{PublicKey, Signature};
 
-    let Authorization::Signature(r, s) = &action.authorization else {
-        return false;
+    let (sig_bytes, pq_half) = match &action.authorization {
+        Authorization::Signature(r, s) => {
+            let mut sig = [0u8; 64];
+            sig[..32].copy_from_slice(r);
+            sig[32..].copy_from_slice(s);
+            (sig, None)
+        }
+        Authorization::HybridSignature {
+            ed25519,
+            ml_dsa,
+            ml_dsa_pk,
+        } => (*ed25519, Some((ml_dsa, ml_dsa_pk))),
+        _ => return false,
     };
-    let mut sig_bytes = [0u8; 64];
-    sig_bytes[..32].copy_from_slice(r);
-    sig_bytes[32..].copy_from_slice(s);
 
     let message = TurnExecutor::compute_signing_message(action, federation_id);
-    PublicKey(*signer_pk).verify(&message, &Signature(sig_bytes))
+    if !PublicKey(*signer_pk).verify(&message, &Signature(sig_bytes)) {
+        return false;
+    }
+    // Fail-closed on a present-but-invalid PQ half, as the executor does.
+    match pq_half {
+        Some((ml_dsa, ml_dsa_pk)) if !ml_dsa.is_empty() => {
+            dregg_turn::pq::ml_dsa_verify(ml_dsa_pk, &message, ml_dsa)
+        }
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -115,7 +136,7 @@ mod tests {
         );
         assert!(matches!(
             intent.action.authorization,
-            Authorization::Signature(_, _)
+            Authorization::HybridSignature { .. }
         ));
         assert_eq!(
             intent.action.args,

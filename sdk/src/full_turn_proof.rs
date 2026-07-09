@@ -10006,7 +10006,6 @@ mod tests {
             .expect("proof generation should succeed");
 
         assert!(proof.components.has_state_transition);
-        assert!(!proof.components.has_authorization);
         assert!(!proof.components.has_membership);
         assert!(!proof.components.has_conservation);
         assert!(!proof.components.has_non_revocation);
@@ -10195,7 +10194,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: Some(MembershipWitness {
                 leaf_hash: leaf,
                 siblings,
@@ -10253,7 +10251,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: None,
             conservation: None,
             non_revocation: Some(NonRevocationWitness {
@@ -10326,7 +10323,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: None,
             conservation: None,
             non_revocation: Some(NonRevocationWitness {
@@ -10449,7 +10445,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: None,
             conservation: None,
             non_revocation: Some(NonRevocationWitness {
@@ -10536,7 +10531,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: None,
             conservation: None,
             non_revocation: Some(NonRevocationWitness {
@@ -10572,133 +10566,6 @@ mod tests {
         }
     }
 
-    /// HONEST authorization-bound turn: a derivation whose conclusion is
-    /// `Allow(effects_commit)` for the turn's actual effects (built via
-    /// `derivation_authorizing_effects`) verifies through `verify_full_turn`,
-    /// including the new authorization↔effect binding tooth.
-    #[cfg(feature = "prover")]
-    #[test]
-    fn auth_bound_turn_with_matching_effect_verifies() {
-        let initial = CellState::new(1000, 0);
-        let effects = vec![VmEffect::Transfer {
-            amount: 100,
-            direction: 1,
-        }];
-        // The auth-to-effect cell binding (step 6) reads the NARROW `pi::OLD_COMMIT` (index 0, still
-        // present in the wide PI prefix), so the derivation's `state_root` stays the narrow 1-felt
-        // commit. The commit ENDPOINT anchor (step 4) binds the WIDE 8-felt commits from the rotation
-        // witness — the two are distinct surfaces on the SAME leg.
-        let (_mt, mono_pi) = generate_effect_vm_trace(&initial, &effects);
-        let narrow_old_commit = mono_pi[effect_vm::pi::OLD_COMMIT];
-
-        // The actor's capability evidence lives at the cell's fact-tree root
-        // (== narrow old_commitment, so the cell-binding tooth also holds).
-        let capability_fact_hash = BabyBear::new(0xCA9A);
-        let derivation =
-            derivation_authorizing_effects(&effects, capability_fact_hash, narrow_old_commit);
-
-        let rot = rotation_for_initial(&initial, &effects);
-        let (old_commit, new_commit) = rot
-            .wide_commit_anchors(&initial, &effects, None)
-            .expect("wide_commit_anchors");
-        let witness = FullTurnWitness {
-            initial_cell_state: initial.clone(),
-            effects: effects.clone(),
-            authorization: Some(AuthorizationWitness {
-                derivation: derivation.clone(),
-            }),
-            membership: None,
-            conservation: None,
-            non_revocation: None,
-            cap_membership: None,
-            turn_hash: [0x11u8; 32],
-            rotation: Some(rot),
-            cap_turn_identity: None,
-            umem_witness: None,
-        };
-        let proof = prove_full_turn(&witness).expect("auth-bound proof should generate");
-        assert!(proof.components.has_authorization);
-        assert!(proof.components.has_state_transition);
-
-        verify_full_turn(&proof, old_commit, new_commit)
-            .expect("honest auth-bound turn must verify (derivation concludes Allow(this effect))");
-    }
-
-    /// ANTI-FORGERY (the gap this closes): a turn whose authorization proof
-    /// authorizes a DIFFERENT effect than the Effect-VM proof certifies MUST be
-    /// rejected by `verify_full_turn`. We build a fully valid authorization proof
-    /// whose derivation concludes `Allow(effects_B)` (a different amount), splice
-    /// it onto an Effect-VM proof for `effects_A`, fix up the shared cell-binding
-    /// PI so the prior teeth (cell binding, commitments) all PASS, and confirm the
-    /// new authorization↔effect tooth is the ONLY thing standing between the
-    /// mismatched authorization and acceptance — and that it rejects.
-    #[cfg(feature = "prover")]
-    #[test]
-    fn auth_bound_turn_rejects_authorization_for_different_effect() {
-        let initial = CellState::new(1000, 0);
-
-        // The turn the Effect-VM proof actually performs: transfer 100 out.
-        let effects_a = vec![VmEffect::Transfer {
-            amount: 100,
-            direction: 1,
-        }];
-        let (_mt, mono_pi) = generate_effect_vm_trace(&initial, &effects_a);
-        let narrow_old_commit = mono_pi[effect_vm::pi::OLD_COMMIT];
-        // A DIFFERENT effect the malicious authorization is really for: transfer 500.
-        let effects_b = vec![VmEffect::Transfer {
-            amount: 500,
-            direction: 1,
-        }];
-        // Sanity: the two effects have distinct in-circuit commitments.
-        assert_ne!(
-            effect_vm::compute_effects_hash(&effects_a).0,
-            effect_vm::compute_effects_hash(&effects_b).0
-        );
-
-        // Authorization proof that genuinely concludes Allow(effects_B), rooted at
-        // the SAME cell (narrow state_root, so the cell-binding tooth cannot be what rejects).
-        let capability_fact_hash = BabyBear::new(0xBAD0);
-        let derivation_b =
-            derivation_authorizing_effects(&effects_b, capability_fact_hash, narrow_old_commit);
-
-        // Prove the turn with effects_A but the effects_B-authorizing derivation.
-        let rot = rotation_for_initial(&initial, &effects_a);
-        let (old_commit, new_commit) = rot
-            .wide_commit_anchors(&initial, &effects_a, None)
-            .expect("wide_commit_anchors");
-        let witness = FullTurnWitness {
-            initial_cell_state: initial.clone(),
-            effects: effects_a.clone(),
-            authorization: Some(AuthorizationWitness {
-                derivation: derivation_b.clone(),
-            }),
-            membership: None,
-            conservation: None,
-            non_revocation: None,
-            cap_membership: None,
-            turn_hash: [0x22u8; 32],
-            rotation: Some(rot),
-            cap_turn_identity: None,
-            umem_witness: None,
-        };
-        let proof = prove_full_turn(&witness)
-            .expect("proof generation succeeds (mismatch is a verify-time property)");
-
-        let result = verify_full_turn(&proof, old_commit, new_commit);
-        match result {
-            Err(FullTurnVerifyError::AuthEffectMismatch { .. }) => { /* exactly the tooth */ }
-            Ok(()) => panic!(
-                "SOUNDNESS (capability-security): verify_full_turn ACCEPTED a turn whose \
-                 authorization authorizes a DIFFERENT effect than the one performed — the \
-                 authorization↔effect binding is not enforced!"
-            ),
-            Err(other) => panic!(
-                "expected AuthEffectMismatch (the authorization↔effect tooth), got a \
-                 different rejection: {other:?} — verify the test reached the new check",
-            ),
-        }
-    }
-
     /// ANTI-GHOST end-to-end: forging the published MEMBERSHIP root in a finished
     /// full-turn proof MUST be rejected by the audited membership verifier (the
     /// proof binds the genuine hash-chain root, not the forged PI).
@@ -10722,7 +10589,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: Some(MembershipWitness {
                 leaf_hash: leaf,
                 siblings,
@@ -11213,7 +11079,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial.clone(),
             effects: effects.clone(),
-            authorization: None,
             membership: None,
             conservation: Some(ConservationWitness {
                 expected_net_delta: 0,
@@ -11263,7 +11128,6 @@ mod tests {
         let witness = FullTurnWitness {
             initial_cell_state: initial,
             effects,
-            authorization: None,
             membership: None,
             conservation: Some(ConservationWitness {
                 expected_net_delta: 5,
