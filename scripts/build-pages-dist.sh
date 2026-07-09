@@ -69,6 +69,9 @@ cp "$ROOT/site/root/index.html" "$DIST/index.html"
 # the dense technical index — the developer/operator/prover/machine hub, linked
 # from the landing's nav; deploys at /technical.html (it does NOT replace the landing).
 cp "$ROOT/site/root/technical.html" "$DIST/technical.html"
+# the cloud & userspace subsite — the grain economy (the cloud) + the ~30 starbridge
+# apps (the userspace of the kernel) + trustless serving; deploys at /cloud/.
+cp -R "$ROOT/site/cloud" "$DIST/cloud"
 cp -R "$ROOT/site/assets" "$DIST/assets"
 cp -R "$ROOT/site/explorer" "$DIST/explorer"
 cp -R "$ROOT/site/light-client" "$DIST/light-client"
