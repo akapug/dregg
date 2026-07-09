@@ -35,6 +35,7 @@ pub mod hybrid_kem;
 mod mldsa;
 
 pub use mldsa::{
-    ML_DSA_PK_LEN, ML_DSA_SIG_LEN, MlDsaKey, install_lean_verify_core, ml_dsa_public_from_seed,
-    ml_dsa_sign_from_seed, ml_dsa_verify, ml_dsa_verify_core,
+    ML_DSA_PK_LEN, ML_DSA_SIG_LEN, MlDsaKey, install_lean_sign_core, install_lean_verify_core,
+    ml_dsa_public_from_seed, ml_dsa_sign_core, ml_dsa_sign_from_seed, ml_dsa_verify,
+    ml_dsa_verify_core,
 };

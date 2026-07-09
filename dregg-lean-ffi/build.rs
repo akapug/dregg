@@ -1330,6 +1330,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_direct_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_storage_content_root_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fips204_sign_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1689,6 +1690,17 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_fips204_verify_present");
     }
 
+    // FIPS-204-SIGN extraction: probe the spliced archive for the `@[export] dregg_fips204_sign`
+    // symbol (the extracted, Lean-verified ML-DSA sign core — the Fiat–Shamir-with-aborts signer,
+    // co-located in `Dregg2.Crypto.Fips204Verify` with the verify core). Present ⇒ gate the Rust
+    // `extern "C"` block, the C shim string bridge, and the module define. Its initializer is the SAME
+    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` the verify core uses (same module), run under
+    // DREGG_FIPS204_VERIFY, so no separate init is needed.
+    let fips204_sign_present = archive_exports(&build_archive, "dregg_fips204_sign");
+    if fips204_sign_present {
+        println!("cargo:rustc-cfg=dregg_fips204_sign_present");
+    }
+
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
     // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
@@ -1739,6 +1751,9 @@ fn main() {
     }
     if fips204_verify_present {
         shim.define("DREGG_FIPS204_VERIFY", None);
+    }
+    if fips204_sign_present {
+        shim.define("DREGG_FIPS204_SIGN", None);
     }
     if direct_present {
         shim.define("DREGG_DIRECT", None);

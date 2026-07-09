@@ -45,6 +45,52 @@ pub fn ml_dsa_verify_core(wire: &str) -> Option<bool> {
     }
 }
 
+/// A pluggable, Lean-VERIFIED ML-DSA SIGN backend, installed by an integration layer (the mirror of
+/// [`LeanVerifyCore`] for the signing direction).
+///
+/// The extracted core is `Dregg2.Crypto.Fips204Verify.signCore` — the DETERMINISTIC
+/// Fiat–Shamir-with-aborts signer (`sk → μ → randomness → Option Sig`) at the deployed ML-DSA-65
+/// parameters, `@[export]`ed as `dregg_fips204_sign` and compiled to leanc-native code. It is PROVED to
+/// agree with the spec (`signCore_eq_spec`) and, TOGETHER with the extracted `verifyCore`, to discharge
+/// `DreggPqRefinement.Fips204Correct` FULLY (`signExtractedApi_fips204`) — no `fips204` crate is trusted
+/// for the sign→verify round-trip. `dregg-lean-ffi::shadow_fips204_sign` runs it natively.
+///
+/// Same light-leaf discipline as the verify core: dregg-pq takes a function pointer, never a dependency
+/// on the Lean archive. An integration layer installs the native core via [`install_lean_sign_core`];
+/// [`ml_dsa_sign_core`] then routes the signing path through the Lean-verified object.
+type LeanSignCore = fn(wire: &str) -> Option<String>;
+static LEAN_SIGN_CORE: OnceLock<LeanSignCore> = OnceLock::new();
+
+/// Install the extracted, Lean-verified ML-DSA sign core (e.g.
+/// `|w| dregg_lean_ffi::shadow_fips204_sign(w).ok()`). Returns `false` if one is already installed
+/// (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_sign_core(core: LeanSignCore) -> bool {
+    LEAN_SIGN_CORE.set(core).is_ok()
+}
+
+/// Route a deployed-parameter ML-DSA sign request `"s₁ s₂ t₀ μ y"` (the wire the extracted Lean
+/// `signFFI` reads — secret `(s₁,s₂,t₀)`, message `μ`, and the sampled randomness/mask `y`) through the
+/// installed Lean-verified sign core. The outer `Option` is the install state; the inner `Option` is the
+/// rejection-sampling verdict:
+///
+///   * `None`                 — no core installed (caller falls back to the `fips204` primitive).
+///   * `Some(None)`           — the sample was REJECTED (norm/hint gate failed); the caller resamples
+///                              `y` and retries (the Dilithium rejection loop) — an honest reject, not a
+///                              fake accept.
+///   * `Some(Some(sig_wire))` — an ACCEPTED signature `"c̃ z h"` (three ints), exactly what
+///                              [`ml_dsa_verify_core`] verifies after the `"thi μ "` prefix.
+///
+/// This is the routing seam that sends the signing path through the `Fips204Correct`-discharging Lean
+/// object; the full-byte-codec path over real keys/signatures is the named engineering residual
+/// (`Fips204Verify.lean`).
+pub fn ml_dsa_sign_core(wire: &str) -> Option<Option<String>> {
+    let core = LEAN_SIGN_CORE.get()?;
+    match core(wire)?.as_str() {
+        "REJECT" => Some(None),
+        sig => Some(Some(sig.to_string())),
+    }
+}
+
 /// Serialized length of an ML-DSA-65 public key (FIPS 204 = 1952 bytes).
 pub const ML_DSA_PK_LEN: usize = ml_dsa_65::PK_LEN;
 
@@ -262,6 +308,67 @@ mod tests {
             ml_dsa_verify_core("3 7 7 100000000 0"),
             Some(false),
             "out-of-range z REJECTS"
+        );
+
+        // ── THE SIGN → VERIFY ROUND-TRIP through the extracted cores (Unit 3a) ──
+        // The sign core is a SEPARATE once-per-process seam (its own OnceLock). It stands in for
+        // `dregg-lean-ffi::shadow_fips204_sign` (the leanc-native `signCore`; round-trip green in
+        // dregg-lean-ffi's `verified_ml_dsa_sign_verify_roundtrips_in_lean`). It carries the SAME
+        // contract the Lean `signFFI` proves: the honest secret `(s₁,s₂,t₀)=(5,1,3)` with mask `y=40`
+        // and message `μ=7` SIGNS to `(c̃,z,h) = (7,45,0)`; a mask whose commitment low part fails the
+        // `lowGap` gate (`y=261888`) or whose response is out of norm (`y=1000000`) is honestly
+        // REJECTED (retry), not faked; a malformed wire fails closed.
+        assert_eq!(
+            ml_dsa_sign_core("5 1 3 7 40"),
+            None,
+            "no sign core ⇒ caller falls back"
+        );
+        let sign_installed = install_lean_sign_core(|wire| {
+            Some(
+                match wire {
+                    "5 1 3 7 40" => "7 45 0",
+                    "5 1 3 7 261888" | "5 1 3 7 1000000" => "REJECT",
+                    _ => "REJECT",
+                }
+                .to_string(),
+            )
+        });
+        assert!(sign_installed, "first sign install succeeds");
+        assert!(
+            !install_lean_sign_core(|_| None),
+            "sign install is once-per-process"
+        );
+
+        // The honest sign produces the accepted signature wire.
+        let sig = ml_dsa_sign_core("5 1 3 7 40")
+            .expect("sign core installed")
+            .expect("accepted iteration");
+        assert_eq!(sig, "7 45 0", "honest sign emits the signature wire");
+
+        // ROUND-TRIP: the accepted signature, prefixed with `thi μ` (derived public key thi = 5+1−3 =
+        // 3, message μ = 7), VERIFIES through the SAME extracted verify core installed above.
+        assert_eq!(
+            ml_dsa_verify_core(&format!("3 7 {sig}")),
+            Some(true),
+            "the extracted sign output round-trips through the verify core"
+        );
+
+        // A REJECTED sample is honestly `Some(None)` — the caller resamples; it is NOT a faked accept.
+        assert_eq!(
+            ml_dsa_sign_core("5 1 3 7 261888"),
+            Some(None),
+            "a bad-mask sample (lowGap fails) is honestly rejected (retry)"
+        );
+        assert_eq!(
+            ml_dsa_sign_core("5 1 3 7 1000000"),
+            Some(None),
+            "an out-of-norm response is honestly rejected (retry)"
+        );
+        // A malformed sign wire fails closed (reject/retry, never a spurious signature).
+        assert_eq!(
+            ml_dsa_sign_core("garbage"),
+            Some(None),
+            "malformed sign wire fails closed"
         );
     }
 }
