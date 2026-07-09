@@ -89,12 +89,18 @@ The audit found every document defect is one mistake — **the Lean is a shadow 
 proof is about a model, not the thing.** The foundation kills the shadow-gap by construction. Four
 pieces, each a Lean `@[export]` over canonical bytes (batched — the FFI is not per-node; §4):
 
-**F1 — Cross-cell atom identity.** `AtomId` is a bare `u128` local to one graph; `DocMerge.lean`'s
-`merge_is_lub`/`isPushout` are proven over a *shared id space*; an embed needs `(CellId, atom)`.
-**Without this the pushout theorem does not even TYPE for a composed document** (the sharpest single
-finding). Define the composed carrier in Lean, re-prove `merge_is_lub`/`isPushout` over it (the
-algebra is content-agnostic — Lane 2 proved nothing strains — so this is a carrier change, not a
-new merge). Export `atom_id`.
+**F1 — The composed carrier + product-of-pushouts.** `DocMerge.lean` proves `merge_is_lub`/
+`isPushout` over a SINGLE `DocGraph` (`AtomId := Nat` local to one graph). A composed document is a
+**family of DocGraphs indexed by CellId** — a parent layout graph + a `CellId → DocGraph` map of
+children, each independently owned (matching `composition.rs::merge_composed`). Define `ComposedDoc`
++ `mergeComposed` (componentwise `merge`) in Lean and LIFT the single-cell theorems to the product:
+`mergeComposed_is_lub`, `mergeComposed_isPushout` (product of per-cell pushouts is a pushout), and
+**the boundary lemma** — a child-content edit and a layout edit can never conflict, because their
+carriers are DISJOINT components (§1.2 made a theorem). The algebra is content-agnostic (Lane 2 proved
+nothing strains), so this is a lift, not a new merge. NOTE (corrected from an earlier draft): the
+cross-cell identity here is the family INDEX (`CellId`); `AtomId` stays LOCAL per cell. A *global*
+`(CellId, AtomId)` id is a DOWNSTREAM refinement needed only for atom-RANGE transclusion (quoting
+specific atoms inside another cell), not for whole-cell composition.
 
 **F2 — Real-hash commitment binding the pointer AND the alternatives.** `commit` today rides a
 non-cryptographic `DefaultHasher` outside `--features substrate`. Write `commit` in Lean over
