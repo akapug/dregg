@@ -7,7 +7,7 @@ verifiable receipt") to the crypto floor.
 The whole tower below proves *pieces*: `HybridCombiner.lean` shows the turn's authorization signature
 is EUF-CMA-unforgeable if EITHER the discrete-log floor OR the Module-SIS floor holds
 (`hybrid_secure_if_either_floor`); `Circuit.lean` shows a satisfying STARK witness PROVES the verified
-step invariant (`circuit_sound`). This file WELDS them into the one claim the protocol makes to an
+step invariant (`circuit_sound`). This file states the turn-soundness claim relative to the circuit apex's open carriers, to an
 outside observer:
 
   **a VALID receipt for a turn `(oldState, effect, newState)` ⟹ the actor AUTHORIZED the effect over
@@ -38,21 +38,21 @@ reduces through `EufCma` down to `SchnorrDLHard ∨ MSISHard` — or (b) exhibit
   hypothesis `CircuitSound applyEff checks`: *if the circuit verifier accepts `execProof` for
   `(old, eff, new)` then `new = applyEff eff old`*. This is NOT a hardness carrier and is NOT laundered
   as a proof: it is the honest boundary of this file, the proven-elsewhere circuit floor. For the
-  deployed kernel AIR it is discharged by `Dregg2.Circuit.circuit_sound` (a satisfying witness ⟹ the
+  deployed kernel AIR it is discharged by the circuit apex's [StarkSound] carrier (a satisfying witness ⟹ the
   verified step invariant); the residual seam it carries (the CR-hash digest binding the Rust prover's
   wires) is `Circuit.lean`'s named `-- PRIMITIVE:` obligation, reducible to `HashCR`, not re-asserted here.
 
   **UNIT 2c — `CircuitSound` is now DISCHARGED, not merely a hypothesis.** `AirSoundness` (2a: a trace
   satisfying the AIR constraints IS the VM execution) and `FriSoundness` (2b: FRI low-degree proximity
-  from `HashCR` + the field/rate parameters) are composed in `Dregg2.Circuit.CircuitSoundCompose`
-  (`circuit_sound`), which builds a checker `friChecks` and PROVES `CircuitSound applyEff friChecks`
+  from `HashCR` + the field/rate parameters) are composed in `Dregg2.Circuit.CircuitSoundness (apex turnDecodeChain_refines_turnSpec; STARK/Poseidon carriers)`
+  (the [StarkSound] carrier of the CircuitSoundness apex — see METATHEORY-GROUND-TRUTH.md)
   with NO `CircuitSound`/`FriProximity` hypothesis — residual only `HashCR` + the FRI parameters. The
   composed `turn_sound` with the `CircuitSound` hypothesis GONE is
-  `CircuitSoundCompose.turn_sound_unconditional` (and, folding authorization to the disjunctive floor,
-  `CircuitSoundCompose.turn_sound_under_floor_discharged`: a valid receipt ⟹ authorized, correct
+  `the circuit apex (turnDecodeChain_refines_turnSpec, modulo [StarkSound]/[Poseidon2SpongeCR])` (and, folding authorization to the disjunctive floor,
+  `the circuit apex`: a valid receipt ⟹ authorized, correct
   evolution under `(SchnorrDLHard ∨ MSISHard) ∧ HashCR`). The `hcs : CircuitSound …` hypotheses BELOW
   remain (this file sits below `Circuit` in the import DAG, so it cannot import the discharge); they are
-  now KNOWN-SATISFIABLE by `circuit_sound`, i.e. the boundary is closed one level up, not open.
+  the [StarkSound] carrier of the CircuitSoundness apex — OPEN (real STARK/FRI at deployed params), not discharged here.
 
 ## No named-carrier laundering
 
@@ -124,7 +124,7 @@ def Valid (S : SigScheme SK PK Msg Sig) (encMsg : State → Effect → Msg)
 /-- **`CircuitSound` — the honest circuit-soundness boundary (an explicit hypothesis, NOT a carrier).**
 If the circuit verifier `checks` accepts `execProof` for `(old, eff, new)`, then `new` really is the
 effect-VM's application `applyEff eff old`. For the deployed kernel AIR this is discharged by
-`Dregg2.Circuit.circuit_sound`; here it is the named boundary the turn-soundness theorems rest on for
+the circuit apex's [StarkSound] carrier; here it is the named boundary the turn-soundness theorems rest on for
 their EXECUTION half. It is never `:= True` and never an `axiom` — an auditor reads it in each theorem's
 hypotheses. -/
 def CircuitSound (applyEff : Effect → State → State)
@@ -365,7 +365,7 @@ theorem wrong_turn_valid_when_unsound :
 /-! ## §6 — Axiom hygiene: every turn-soundness keystone is kernel-clean. The standing obligations are the
 NAMED objects — the hardness floors `SchnorrDLHard` / `MSISHard` (through `HybridCombiner`) and the
 explicitly-labelled `CircuitSound` boundary, now DISCHARGED (not merely named) by
-`Dregg2.Circuit.CircuitSoundCompose.circuit_sound` — see `turn_sound_under_floor_discharged` there for
+`Dregg2.Circuit.CircuitSoundness (apex turnDecodeChain_refines_turnSpec; STARK/Poseidon carriers)` apex — the [StarkSound] carrier is the open boundary; see METATHEORY-GROUND-TRUTH.md for
 the `CircuitSound`-free composite. -/
 
 #assert_all_clean [

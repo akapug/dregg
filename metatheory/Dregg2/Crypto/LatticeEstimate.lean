@@ -79,11 +79,12 @@ structure LatticeEstimate where
   /-- The deployed ML-KEM parameters these `mlweBits` were estimated at (for citation). -/
   mlkem : MlKemParams
 
-/-- **THE DEPLOYED ESTIMATE.** ML-DSA-65 / ML-KEM-768, NIST security category 3. The empirical inputs:
-`msisBits = 192` (category-3 MSIS; only feeds the CONTRAST forking bound), `mlweBits = 181` (Kyber768 MLWE —
-the binding lattice floor for the tight signature AND KEM), `msgEntropyBits = 256` (encapsulated seed /
-lossy-soundness α), `foCorrectnessBits = 174` (ML-KEM-768 `δ ≈ 2^(−174)`). -/
-def deployedEstimate : LatticeEstimate where
+/-- ⚠ **ILLUSTRATIVE, NOT SOURCED.** These bit-counts are placeholders for exercising the `advOf`
+calculus and the tight-vs-loose CONTRAST lemmas — they are NOT the Lattice-Estimator output at ML-DSA-65 /
+ML-KEM-768, and `192` in particular is the NIST **Category-3 label** (AES-192 classical), NOT a quantum
+core-SVP hardness estimate. No security claim may cite these numbers until they are replaced by sourced
+quantum core-SVP values. See docs/reference/METATHEORY-GROUND-TRUTH.md. -/
+def illustrativeEstimate : LatticeEstimate where
   msisBits := 192
   mlweBits := 181
   msgEntropyBits := 256
@@ -95,7 +96,7 @@ def deployedEstimate : LatticeEstimate where
 `mlweBits 181→90`), everything else identical. Models the Lattice Estimator delivering a WEAKER hardness
 number (better cryptanalysis). Since the TIGHT bounds track `mlweBits`, halving it moves λ. -/
 def degradedEstimate : LatticeEstimate :=
-  { deployedEstimate with msisBits := 96, mlweBits := 90 }
+  { illustrativeEstimate with msisBits := 96, mlweBits := 90 }
 
 /-! ## THE LOOSE (forking/semiclassical) CONTRAST bit-counts.
 

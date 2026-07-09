@@ -273,7 +273,7 @@ theorem eufcma_tight_bits (mlweBits α simBits log2q : ℕ) (eufcmaReal eufcmaLo
 
 Deployed lossy-ID inputs: `mlweBits = 181` (Kyber/Dilithium decision-MLWE, category 3), `α = 256`
 (statistical lossy soundness — the response entropy gap, `≫` `mlweBits`), `simBits = 181`, `log₂q = 20`.
-The forking baseline reads `ParameterSecurity.sigBitsR deployedEstimate 20 = (192 − 20)/2 = 86`. -/
+The forking baseline reads `ParameterSecurity.sigBitsR illustrativeEstimate 20 = (192 − 20)/2 = 86`. -/
 
 /-- The tight bits at the deployed lossy-ID inputs equal `179` (as reals): `min 181 (min 236 181) − 2`. -/
 theorem sigBitsTight_deployed : sigBitsTight 181 256 181 20 = 179 := by
@@ -290,11 +290,11 @@ theorem sigBitsTight_deployed : sigBitsTight 181 256 181 20 = 179 := by
 -identification bits STRICTLY exceed the forking bits: `sigBitsR = 86 < 179 = sigBitsTight` — a 93-bit gain,
 precisely the halving (`/2`) and the `q_H`/√ losses the tight reduction removes. -/
 theorem tight_beats_forking :
-    ParameterSecurity.sigBitsR ParameterSecurity.deployedEstimate 20 < sigBitsTight 181 256 181 20 := by
+    ParameterSecurity.sigBitsR ParameterSecurity.illustrativeEstimate 20 < sigBitsTight 181 256 181 20 := by
   rw [sigBitsTight_deployed]
   unfold ParameterSecurity.sigBitsR
-  show ((ParameterSecurity.deployedEstimate.msisBits : ℝ) - (20 : ℝ)) / 2 < 179
-  norm_num [ParameterSecurity.deployedEstimate]
+  show ((ParameterSecurity.illustrativeEstimate.msisBits : ℝ) - (20 : ℝ)) / 2 < 179
+  norm_num [ParameterSecurity.illustrativeEstimate]
 
 /-! ### Decidable `ℕ` mirrors — the tightness GAIN, machine-checked. -/
 
