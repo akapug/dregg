@@ -42,6 +42,18 @@ reduces through `EufCma` down to `SchnorrDLHard ∨ MSISHard` — or (b) exhibit
   verified step invariant); the residual seam it carries (the CR-hash digest binding the Rust prover's
   wires) is `Circuit.lean`'s named `-- PRIMITIVE:` obligation, reducible to `HashCR`, not re-asserted here.
 
+  **UNIT 2c — `CircuitSound` is now DISCHARGED, not merely a hypothesis.** `AirSoundness` (2a: a trace
+  satisfying the AIR constraints IS the VM execution) and `FriSoundness` (2b: FRI low-degree proximity
+  from `HashCR` + the field/rate parameters) are composed in `Dregg2.Circuit.CircuitSoundCompose`
+  (`circuit_sound`), which builds a checker `friChecks` and PROVES `CircuitSound applyEff friChecks`
+  with NO `CircuitSound`/`FriProximity` hypothesis — residual only `HashCR` + the FRI parameters. The
+  composed `turn_sound` with the `CircuitSound` hypothesis GONE is
+  `CircuitSoundCompose.turn_sound_unconditional` (and, folding authorization to the disjunctive floor,
+  `CircuitSoundCompose.turn_sound_under_floor_discharged`: a valid receipt ⟹ authorized, correct
+  evolution under `(SchnorrDLHard ∨ MSISHard) ∧ HashCR`). The `hcs : CircuitSound …` hypotheses BELOW
+  remain (this file sits below `Circuit` in the import DAG, so it cannot import the discharge); they are
+  now KNOWN-SATISFIABLE by `circuit_sound`, i.e. the boundary is closed one level up, not open.
+
 ## No named-carrier laundering
 
 `CircuitSound` is a HYPOTHESIS of every theorem, never an `axiom` and never `:= True`; `#assert_axioms`
@@ -352,7 +364,9 @@ theorem wrong_turn_valid_when_unsound :
 
 /-! ## §6 — Axiom hygiene: every turn-soundness keystone is kernel-clean. The standing obligations are the
 NAMED objects — the hardness floors `SchnorrDLHard` / `MSISHard` (through `HybridCombiner`) and the
-explicitly-labelled `CircuitSound` boundary (discharged for the deployed AIR by `Dregg2.Circuit.circuit_sound`). -/
+explicitly-labelled `CircuitSound` boundary, now DISCHARGED (not merely named) by
+`Dregg2.Circuit.CircuitSoundCompose.circuit_sound` — see `turn_sound_under_floor_discharged` there for
+the `CircuitSound`-free composite. -/
 
 #assert_all_clean [
   turn_sound,
