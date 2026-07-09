@@ -110,7 +110,14 @@ lanes' files, or Cargo.lock. Scale with ultracode/Workflow. Sign Co-Authored-By:
 - ✅ **CRITERION #5 ACHIEVED** (5a VRF · 5b beacon · 5c threshold signer · 5d wire-AKE — every deployed impl
   model-connected). **CRITERION #3** essentially achieved (ML-DSA both directions, ML-KEM, X25519, HKDF all
   leanc-native; DualPRF reduced).
-- ▶ REMAINING: criterion #1 (λ ≥ 120 — P1-TIGHT wh5extheb killing the forking + O2H square roots) and 4d
-  (effect-VM real step semantics, agent ac65b7f7).
+- ✅✅ **CRITERION #4 ACHIEVED** — 4d 508cb014e `turn_sound_real`: the soundness theorem is about the DEPLOYED
+  effect-VM (RealEffect mirrors turn/src/action.rs, all six LinearityClass colors; stepGate_iff_real bridges
+  the AIR gate to the real step; RealReceipt mirrors TurnReceipt). Residual exactly (DL∨MSIS) ∧ HashCR.
+- **SIX OF SEVEN CRITERIA BANKED**: #2 CircuitSound-is-a-theorem · #3 every primitive leanc-native · #4
+  protocol end-to-end on the real VM · #5 every impl model-connected · #6 THE CAP WELD · #7 whole tree green
+  (4514 jobs), nothing laundered.
+- ▶ LAST ONE: criterion #1 — λ ≥ 120. P1-TIGHT (wh5extheb) is killing the forking square root (KLS18 lossy
+  identification) and the O2H square root (BHHHP19 double-sided). Then recompute λ in ParameterSecurity and
+  hold it to the bar; if short, diagnose the dominant term and tighten THAT.
 - (superseded) WAVE 2 firing: P1 parameter-level theorem · 2a AIR soundness · 2b FRI soundness (BBHR18/DEEP-FRI) ·
   3b ML-KEM extraction · 3c X25519+HKDF extraction (DualPRF reduced) · 5b beacon refinement.
