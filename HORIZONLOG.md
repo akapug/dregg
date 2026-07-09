@@ -6880,3 +6880,37 @@ SIGN's rejection-sampling extraction (named engineering, next pass — VERIFY is
 The tree now runs floor + modeled-quantum-adversary → primitive games → hybrid-combiner keystone (secure ⟺
 either, UC-composable, adaptive) → protocol games → quantum-safe consensus safety+liveness → turn/effect
 soundness → the deployed code (dregg-pq sig+KEM refined; ML-DSA verify a leanc-native proved object).
+
+## 2026-07-09 — THE VERIFIED SYSTEM: kernel → crypto → protocol → code, one connected proof (CAMPAIGN DONE)
+All seven completion criteria hold; whole tree `lake build Dregg2` green (4518 jobs).
+1. **λ = 149 BITS** (`0be716c0d`). At the deployed params (ML-DSA-65 / ML-KEM-768), a 2^20-query QUANTUM
+   adversary faces 149 bits; `system_security_at_least_120 : 120 ≤ 149` proved by `decide` (29-bit margin;
+   the 2^40-query stress budget still yields 121). The first pass gave 79 — that was LOOSE REDUCTIONS, not weak
+   constructions: the forking lemma's √ (`(msisBits−log2q)/2`) and the semiclassical O2H's √. Both killed by
+   formalizing the tight literature — KLS18/AFLT12 lossy identification (`099f54d74`, +93 bits: decision-MLWE at
+   coefficient 1, lossy soundness a PROVED counting number) and BHHHP19/HHM22 double-sided O2H (`56ef72184`,
+   +45 bits: orthogonal per-query errors combine in QUADRATURE — `norm_sq_sum_orthogonal` — not by triangle
+   inequality). λ now DERIVES from those theorems through the import graph (DAG inverted, `0be716c0d`), and the
+   binding term tracks `mlweBits` — the bound measures the lattice, not our proof.
+2. **CircuitSound is a THEOREM** (`80835f90f`): AIR soundness (`73b099d43`) + FRI soundness (`15ae7114c`,
+   BBHR18's `fold_close_of_two_alpha` proved, error ≤ 1/|F|) welded — `turn_sound` rests on (DL∨MSIS) ∧ HashCR.
+3. **Every deployed primitive is a leanc-native proved object**: ML-DSA verify+sign (`d051ff9d1`,`a52eea5f1`),
+   ML-KEM (`3d65cb122`), X25519 (`13281a768`, `montScalar_correct` a theorem) + HKDF; `DualPRF` reduced.
+4. **Protocol proven end-to-end on the REAL VM**: BFT liveness with view-change (`9a35d3a44`), blocklace
+   equivocation detector sound+complete (`cf2694df9`), light-client soundness (`52040c675` — accepting a forged
+   history BREAKS the floor), and `turn_sound_real` over the deployed effect-VM (`508cb014e`).
+5. **Every deployed impl model-connected**: VRF, beacon, threshold signer, wire-AKE (`7f2cd66c3`,`04f30baa5`,
+   `a8e4d6658`,`5b04c0dad`).
+6. **THE CAP WELD** (`8479e55fd`): `capMap = Slot.rights` is an order embedding that PRESERVES *and REFLECTS* —
+   seL4's kernel rights lattice and the cryptographic attenuation lattice are THE SAME LATTICE. The capability
+   you hold in the kernel IS the capability you can prove in the protocol.
+7. Whole tree green; nothing laundered; load-bearing both-truth teeth on every theorem.
+
+**THE FINAL TRUSTED BASE — the entire system rests on exactly these four things, and nothing else:**
+  (i) the lattice/DL/hash FLOOR: MSIS · decision-MLWE · MLWESearchHard · SchnorrDLHard · HashCR
+  (ii) the leanc/FFI toolchain (which compiles the proved Lean primitives to the native code we run)
+  (iii) ONE clearly-labeled empirical number: the Lattice-Estimator bit-security at the deployed parameters
+  (iv) seL4's own machine-checked kernel proofs (cited, not re-proven)
+Named engineering (published, mechanical, never "open"): FIPS-203 NTT/codec + SHA3 oracles; SHA-256 PRF.
+Method: close by formalizing the literature — never smuggle an assumption as closure, never call published work
+too hard. Two of our own overclaims were caught and fixed by this rule during the campaign.
