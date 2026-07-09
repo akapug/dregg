@@ -559,23 +559,42 @@ pub enum WireMessage {
     /// discrete-log AND module-lattice SIS/LWE simultaneously — a quantum
     /// adversary that can forge the Ed25519 half alone cannot impersonate the
     /// peer on the gossip transport.
+    ///
+    /// HYBRID IDENTITY BINDING: `participant_key` is the peer's HYBRID id
+    /// (`dregg_types::hybrid_id_commitment(ed25519_pk, ml_dsa_pk)`), NOT the raw
+    /// ed25519 key. The two actual public keys are carried SEPARATELY
+    /// (`participant_ed25519`, `participant_ml_dsa`); the verifier recomputes the
+    /// commitment and REJECTS any key pair that does not hash into
+    /// `participant_key` (`dregg_types::verify_committed_ml_dsa`). This makes the
+    /// enroll+pin CRYPTOGRAPHIC (the id commits to the keys) and RETIRES the
+    /// out-of-band `ParticipantSource::ml_dsa_pubkey_for` roster: a self-carried
+    /// ML-DSA key is now SAFE precisely because a wrong one fails the commitment.
     PeerAuthResponse {
-        /// The participant's Ed25519 public key (must be in the constitution).
+        /// The participant's HYBRID id (`H(ed25519_pk ‖ ml_dsa_pk)`) — must be a
+        /// current constitutional participant. The raw ed25519/ML-DSA keys are
+        /// carried below and checked to hash into this id.
         participant_key: [u8; 32],
-        /// Signature over blake3("dregg-wire peer-auth v1" || nonce || server_node_id).
+        /// The peer's actual Ed25519 verifying key. Checked to commit into
+        /// `participant_key` and used to verify `signature`.
+        participant_ed25519: [u8; 32],
+        /// Signature over blake3("dregg-wire peer-auth v1" || nonce || server_node_id),
+        /// verified against `participant_ed25519`.
         signature: Signature,
+        /// The peer's actual ML-DSA-65 (FIPS 204) public key. Checked to commit
+        /// into `participant_key` (so a self-carried key is bound to the id) and
+        /// used to verify `pq_signature`. `None` marks a legacy Ed25519-only
+        /// peer; the server fails CLOSED for a participant whose id commits to a
+        /// PQ key (any real hybrid id does).
+        #[serde(default)]
+        participant_ml_dsa: Option<Vec<u8>>,
         /// The PQ half of the HYBRID: an ML-DSA-65 (FIPS 204) signature over the
         /// SAME `peer_auth_signing_message` bytes the Ed25519 `signature`
         /// covers. The ML-DSA key is derived deterministically from the peer's
         /// Ed25519 seed (`dregg_turn::pq::MlDsaTurnKey::from_ed25519_seed`).
         ///
-        /// ENROLL + PIN: the verifier checks this against the peer's ENROLLED
-        /// ML-DSA public key — bound to `participant_key` in the constitution
-        /// via `ParticipantSource::ml_dsa_pubkey_for` — NEVER a pubkey carried
-        /// in this response. The ML-DSA pubkey is therefore NOT self-carried, so
-        /// an attacker cannot present a fresh ML-DSA key of their own. `None`
-        /// marks a legacy Ed25519-only peer; a server that has an enrolled PQ
-        /// key for this identity fails CLOSED (rejects a `None` PQ half).
+        /// Verified against the SELF-CARRIED `participant_ml_dsa` — safe because
+        /// that key is bound into `participant_key` by the commitment. `None`
+        /// marks a legacy Ed25519-only peer.
         #[serde(default)]
         pq_signature: Option<Vec<u8>>,
         /// The constitution version the peer believes is current.
@@ -932,7 +951,9 @@ mod tests {
             },
             WireMessage::PeerAuthResponse {
                 participant_key: [0x77; 32],
+                participant_ed25519: [0x78; 32],
                 signature: Signature([0x88; 64]),
+                participant_ml_dsa: Some(vec![0x9A; 1952]),
                 pq_signature: Some(vec![0x99; 3309]),
                 claimed_constitution_version: 42,
             },
