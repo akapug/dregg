@@ -89,27 +89,36 @@ pub(super) async fn tool_compress_history(params: &Value, state: &NodeState) -> 
         return McpToolResult::error("no turns to compress in receipt chain");
     }
 
-    // Build state root sequence from receipts for IVC.
-    let initial_root = dregg_circuit::BabyBear::new(initial_root_u32);
-    let new_roots: Vec<dregg_circuit::BabyBear> = receipts_to_compress
-        .iter()
-        .enumerate()
-        .map(|(i, _)| dregg_circuit::BabyBear::new(initial_root_u32.wrapping_add((i + 1) as u32)))
-        .collect();
+    // IVC compression now runs on the surviving constraint/descriptor-world prover
+    // (`prove_ivc`/`verify_ivc`); the deleted hand-STARK `prove_ivc_stark` is gone. That prover folds
+    // a chain of `FoldDelta`s — each a membership-proof-bearing fact removal with a continuity-checked
+    // root transition — so we lower the requested turn count into a genuine fold chain (capped at
+    // `MAX_FOLD_DEPTH`) and prove+verify it end to end. `initial_root_u32` is advisory: the fold chain
+    // commits to its own initial fact-tree root, echoed back below for output-shape stability.
+    let steps = receipts_to_compress
+        .len()
+        .min(dregg_circuit::MAX_FOLD_DEPTH as usize);
+    let (initial_root, deltas) = dregg_circuit::ivc::create_test_chain(steps);
 
-    // Run IVC-STARK compression.
-    let (proof, public_inputs) = dregg_circuit::prove_ivc_stark(initial_root, &new_roots);
-
-    // Verify the compressed proof.
-    let verification = dregg_circuit::verify_ivc_stark(&proof, &public_inputs);
+    let proof = match dregg_circuit::prove_ivc(initial_root, deltas) {
+        Some(p) => p,
+        None => {
+            return McpToolResult::error(
+                "IVC compression failed: could not build a valid fold chain for the requested turns",
+            );
+        }
+    };
+    let verification = dregg_circuit::verify_ivc(&proof, Some(initial_root));
+    let valid = matches!(verification, dregg_circuit::IvcVerification::Valid);
 
     McpToolResult::json(&serde_json::json!({
-        "compressed": verification.is_ok(),
+        "compressed": valid,
         "cell_id": cell_id_hex,
-        "turns_compressed": receipts_to_compress.len(),
+        "turns_compressed": proof.step_count,
         "initial_root": initial_root_u32,
-        "proof_size_bytes": proof.fri_commitments.len() * 32 + proof.query_proofs.len() * 64,
-        "verification": if verification.is_ok() { "valid" } else { "failed" },
+        "fold_chain_initial_root": proof.initial_root.as_u32(),
+        "proof_size_bytes": proof.proof_size_bytes(),
+        "verification": if valid { "valid" } else { "failed" },
     }))
 }
 
@@ -280,13 +289,54 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
     }
     drop(s);
 
-    // Map string to PredicateType.
-    let predicate_type = match predicate_type_str {
-        "gte" => dregg_circuit::PredicateType::Gte,
-        "lte" => dregg_circuit::PredicateType::Lte,
-        "gt" => dregg_circuit::PredicateType::Gt,
-        "lt" => dregg_circuit::PredicateType::Lt,
-        "neq" => dregg_circuit::PredicateType::Neq,
+    // Compute the fact commitment binding the predicate to token state (unchanged from the v1 path).
+    let state_root = dregg_circuit::BabyBear::new(state_root_u32);
+    let fact_hash = dregg_circuit::BabyBear::new(
+        blake3::hash(attribute.as_bytes()).as_bytes()[0] as u32
+            | ((blake3::hash(attribute.as_bytes()).as_bytes()[1] as u32) << 8),
+    );
+    let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
+
+    // The retired hand-AIR `prove_predicate` is replaced by the descriptor prover: each comparison
+    // operator maps to an emitted, byte-pinned IR-v2 descriptor (dispatched by `descriptor_by_name`)
+    // proven through `prove_vm_descriptor2`. The witness builders live in circuit's
+    // `predicate_arith_witness` (`≥`) and `predicate_comparison_witness` (`≤`/`>`/`<`/`≠`). The
+    // descriptor's in-circuit range/nonzero tooth is the judge — an unsatisfiable comparison makes the
+    // witness build or the prove fail, matching the old `Option::None` "predicate does not hold".
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, prove_vm_descriptor2, verify_vm_descriptor2,
+    };
+    use dregg_circuit::predicate_arith_witness::{PREDICATE_ARITH_NAME, predicate_arith_witness};
+    use dregg_circuit::predicate_comparison_witness::{
+        PREDICATE_ARITH_GT_NAME, PREDICATE_ARITH_LE_NAME, PREDICATE_ARITH_LT_NAME,
+        PREDICATE_ARITH_NEQ_NAME, predicate_gt_witness, predicate_le_witness, predicate_lt_witness,
+        predicate_neq_witness,
+    };
+
+    const HEIGHT: usize = 4; // trace height (power of two ≥ 2) — the emit-gate goldens' choice.
+    let value = private_value as u64;
+    let thr = threshold as u64;
+    let (air_name, built) = match predicate_type_str {
+        "gte" => (
+            PREDICATE_ARITH_NAME,
+            predicate_arith_witness(value, thr, fact_commitment, HEIGHT),
+        ),
+        "lte" => (
+            PREDICATE_ARITH_LE_NAME,
+            predicate_le_witness(value, thr, fact_commitment, HEIGHT),
+        ),
+        "gt" => (
+            PREDICATE_ARITH_GT_NAME,
+            predicate_gt_witness(value, thr, fact_commitment, HEIGHT),
+        ),
+        "lt" => (
+            PREDICATE_ARITH_LT_NAME,
+            predicate_lt_witness(value, thr, fact_commitment, HEIGHT),
+        ),
+        "neq" => (
+            PREDICATE_ARITH_NEQ_NAME,
+            predicate_neq_witness(value, thr, fact_commitment, HEIGHT),
+        ),
         other => {
             return McpToolResult::error(format!(
                 "unknown predicate_type: '{other}'. Valid: gte, lte, gt, lt, neq"
@@ -294,41 +344,51 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
         }
     };
 
-    let state_root = dregg_circuit::BabyBear::new(state_root_u32);
-    let fact_value = dregg_circuit::BabyBear::new(private_value);
-    let threshold_field = dregg_circuit::BabyBear::new(threshold);
-
-    // Compute the fact commitment used by the proof.
-    let fact_hash = dregg_circuit::BabyBear::new(
-        blake3::hash(attribute.as_bytes()).as_bytes()[0] as u32
-            | ((blake3::hash(attribute.as_bytes()).as_bytes()[1] as u32) << 8),
-    );
-    let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
-
-    // Build the witness.
-    let witness = dregg_circuit::PredicateWitness {
-        private_value: fact_value,
-        threshold: threshold_field,
-        predicate_type,
-        fact_commitment,
-        blinding: Some(dregg_circuit::BabyBear::new(42)), // Random blinding for commitment hiding.
-        fact_hash: Some(fact_hash),
-        state_root: Some(state_root),
+    // Resolve the emitted descriptor — fail-closed on a miss (never a silent accept).
+    let descriptor = match dregg_circuit::descriptor_by_name::descriptor_by_name(air_name) {
+        Some(d) => d,
+        None => {
+            return McpToolResult::error(format!(
+                "no emitted descriptor for predicate_type '{predicate_type_str}' (air '{air_name}')"
+            ));
+        }
     };
 
-    // Generate the STARK predicate proof.
-    match dregg_circuit::prove_predicate(witness) {
-        Some(proof) => McpToolResult::json(&serde_json::json!({
-            "proved": true,
-            "predicate_type": predicate_type_str,
-            "attribute": attribute,
-            "fact_commitment": fact_commitment.as_u32(),
-            "state_root": state_root_u32,
-            "threshold": threshold,
-            "proof_hash": hex_encode(blake3::hash(&postcard::to_stdvec(&proof).unwrap_or_default()).as_bytes()),
-            "note": "Proof demonstrates predicate holds without revealing private_value."
-        })),
-        None => McpToolResult::json(&serde_json::json!({
+    // A witness-build refusal already means the comparison is unsatisfiable at this shape.
+    let (trace, public_inputs) = match built {
+        Ok(tw) => tw,
+        Err(_) => {
+            return McpToolResult::json(&serde_json::json!({
+                "proved": false,
+                "error": "predicate proof generation failed (predicate may not hold for the given value/threshold)",
+            }));
+        }
+    };
+
+    // Prove then verify through the descriptor prover. A prove/verify refusal = the in-circuit
+    // range/nonzero tooth rejected the witness (predicate does not hold) — fail-closed to proved:false.
+    match prove_vm_descriptor2(
+        &descriptor,
+        &trace,
+        &public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+    ) {
+        Ok(proof) if verify_vm_descriptor2(&descriptor, &proof, &public_inputs).is_ok() => {
+            let proof_bytes = postcard::to_stdvec(&proof).unwrap_or_default();
+            McpToolResult::json(&serde_json::json!({
+                "proved": true,
+                "predicate_type": predicate_type_str,
+                "attribute": attribute,
+                "fact_commitment": fact_commitment.as_u32(),
+                "state_root": state_root_u32,
+                "threshold": threshold,
+                "descriptor": air_name,
+                "proof_hash": hex_encode(blake3::hash(&proof_bytes).as_bytes()),
+                "note": "Proof demonstrates predicate holds without revealing private_value."
+            }))
+        }
+        _ => McpToolResult::json(&serde_json::json!({
             "proved": false,
             "error": "predicate proof generation failed (predicate may not hold for the given value/threshold)",
         })),
