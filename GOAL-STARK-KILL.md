@@ -577,7 +577,9 @@ depth/positions; (c) the fold proof/adapter generalize trivially (claim shape un
   ✅ S3c FLIP DONE (79c630951): presentation family off hand-StarkProof onto BOTH descriptors (bound +
     blinded), 6 files, capability-preserving. dregg-circuit+bridge GREEN, 19+21 tests. presentation
     family = 0 true-live stark. Total prod true-live: 10→14... wait, DOWN to 14 in just 2 files.
-  REMAINING (14 true-live, 2 files): sdk/verify.rs (12: verify_authorization_proof + verify_selective_
-    disclosure, 0-external-caller legacy + #[test]s) + sdk/cipherclerk.rs (2: compress/verify_compressed_
-    history sovereign-history, 0-caller). Both flip onto existing descriptors (membership/bound) or the IVC
-    path. Then: delete hand AIRs + git rm circuit/src/stark.rs. The 8 other files are comment-only.
+  ✅ S3c-final DONE: sdk/verify.rs + sdk/cipherclerk.rs flipped (0 true-live; sdk own-code clean).
+  LAST CONSUMER (2 true-live): circuit/src/cross_state_derivation.rs — a whole module still on the hand
+    engine (StarkProof fields + prove_source_derivation_stark), consumed ONLY by teasting/tests/
+    defi_primitives.rs. It's the DERIVATION family → flip onto the emitted derivation descriptor (exists;
+    DerivationEmit + Rung-2 from the bugfix campaign). Needs a derivation witness builder (mirror the
+    others) + flip the struct/producer/verify. Then: 0 true-live → delete hand AIRs → git rm stark.rs.
