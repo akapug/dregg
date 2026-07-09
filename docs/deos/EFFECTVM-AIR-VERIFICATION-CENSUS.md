@@ -7,7 +7,7 @@ witnesses it), or is the real check delegated to an out-of-circuit / off-AIR
 verifier (a TRUSTED SURFACE the bare STARK does not witness)?**
 
 Provenance: triggered by the `Effect::Custom` `proofBind` finding — the in-AIR op
-is `| .proofBind _ => True` (`metatheory/Dregg2/Circuit/DescriptorIR2.lean:570`),
+is `| .proofBind _ => True` (`metatheory/Dregg2/Circuit/DescriptorIR2.lean:596`),
 the genuine sub-proof check is the out-of-circuit Rust
 `dregg_circuit_prove::custom_proof_bind::verify_proof_bind`
 (`circuit-prove/src/custom_proof_bind.rs`). This census asks what ELSE is in that
@@ -32,23 +32,23 @@ at HEAD.
 - **(4) CARRIED-NOT-FORCED column** — a column the AIR records but no constraint
   binds (a column-level version of (3)).
 
-## The op grammar (`VmConstraint2`, `DescriptorIR2.lean:372`)
+## The op grammar (`VmConstraint2`, `DescriptorIR2.lean:387`)
 
 | op | per-row semantics | in-circuit realization | class | honest? |
 |----|-------------------|------------------------|-------|---------|
 | `base (Gate/Boundary/Transition)` | polynomial `= 0` (`VmConstraint.holdsVm`) | `assert_zero` / `when_first/last/transition` | **1** | n/a |
 | `base (PiBinding)` | `local[col] − pi[i] = 0` (`CircuitEmit.lean:525`) | boundary `assert_zero` binding column↔PI | **1** | n/a |
-| `lookup (Lookup)` | `tuple.map eval ∈ table` (`DescriptorIR2.lean:432`) | LogUp bus (`BUS_FACT`, byte/range buses) | **1** | n/a |
-| `mapOp (MapOp)` | `opensTo`/`writesTo` row-local (`:496`) | Poseidon2 Merkle path on the chip bus `BUS_P2`; functional under CR (`opensTo_functional :465`) | **1** | n/a |
-| `memOp (MemOp)` | `True` row-local (`:567`) | global `Satisfied2` legs: `memDisciplined`/`memBalanced`/`memTableFaithful` → `BUS_MEM_LOG/CHECK/ADDRS` LogUp (Blum `memcheck_sound`) | **2** | honest |
-| `umemOp (UMemOp)` | `True` row-local (`:569`) | global `Satisfied2U` legs: `umemBalanced`/`umemDisciplined`/`umemAddrs`/`umemNullifierInsertOnly` → `BUS_UMEM_LOG/CHECK/ADDRS` LogUp (`universal_memory_sound`) | **2** | honest |
-| `windowGate (WindowConstraint)` | two-row poly `= 0` (`:357`) | windowed `assert_zero` (`when_transition`) | **1** | n/a |
-| `proofBind (ProofBind)` | `True` row-local (`:570`) | **NONE in-AIR** — no bus, bounds-check only (`descriptor_ir2.rs:1299-1305`); content = `Satisfied2Custom.proofBound` leg, an `EngineBinding` named hypothesis; real check is off-AIR `verify_proof_bind` | **3** | honest |
+| `lookup (Lookup)` | `tuple.map eval ∈ table` (`DescriptorIR2.lean:448`) | LogUp bus (`BUS_FACT`, byte/range buses) | **1** | n/a |
+| `mapOp (MapOp)` | `opensTo`/`writesTo` row-local (`:511`) | Poseidon2 Merkle path on the chip bus `BUS_P2`; functional under CR (`opensTo_functional :480`) | **1** | n/a |
+| `memOp (MemOp)` | `True` row-local (`:593`) | global `Satisfied2` legs: `memDisciplined`/`memBalanced`/`memTableFaithful` → `BUS_MEM_LOG/CHECK/ADDRS` LogUp (Blum `memcheck_sound`) | **2** | honest |
+| `umemOp (UMemOp)` | `True` row-local (`:595`) | global `Satisfied2U` legs: `umemBalanced`/`umemDisciplined`/`umemAddrs`/`umemNullifierInsertOnly` → `BUS_UMEM_LOG/CHECK/ADDRS` LogUp (`universal_memory_sound`) | **2** | honest |
+| `windowGate (WindowConstraint)` | two-row poly `= 0` (`:372`) | windowed `assert_zero` (`when_transition`) | **1** | n/a |
+| `proofBind (ProofBind)` | `True` row-local (`:596`) | **NONE in-AIR** — no bus, bounds-check only (`descriptor_ir2.rs:1388-1394`); content = `Satisfied2Custom.proofBound` leg, an `EngineBinding` named hypothesis; real check is off-AIR `verify_proof_bind` | **3** | honest |
 
 `base`/`lookup`/`mapOp`/`windowGate` are genuinely enforced. `memOp`/`umemOp` are
 row-local `True` but their content rides real in-circuit LogUp buses (the memory /
 universal-memory balance arguments are arithmetized in the deployed descriptor —
-`descriptor_ir2.rs:8-29`, bus constants `:275-284`), so they are fail-closed, not
+`descriptor_ir2.rs:8-29`, bus constants `:331-338`), so they are fail-closed, not
 holes. **`proofBind` is the only op kind with NO in-circuit realization at all** —
 no bus, no polynomial; the column pair `(commit, vk)` is declaration-and-bounds
 only, and the program-correctness recursion is delegated off-AIR.
@@ -67,8 +67,8 @@ emit-event counts, bilateral roots, note/burn schemas, …) and matching it to t
 in-circuit-bound PI. Because (a) the PI is bound to the trace in-circuit via
 `PiBinding`, and (b) the reconstruction is a deterministic function of public data,
 **a light client reproduces both legs itself** — this is the standard public-input
-contract, NOT a trusted surface. Examples: `pi.rs:125,485,512,564,594,627`;
-`trace.rs:23,644,1018,1316`. No action needed; named here so they are not mistaken
+contract, NOT a trusted surface. Examples: `pi.rs:125,597,609,649,679`;
+`trace.rs:23,644,1019,1322`. No action needed; named here so they are not mistaken
 for class (3).
 
 ### Trusted: off-AIR recursion / signature (class 3)
@@ -77,7 +77,7 @@ for class (3).
 |---------|----------|----------------------|--------|---------|
 | **Custom proof_bind** | `CUSTOM_PROOFS_*` + descriptor cols 68/72 | recursive STARK verify `verify_proof_bind` (`circuit-prove/src/custom_proof_bind.rs`) | LIVE; commitment 4-felt/~62-bit (below the 8-felt/~124-bit floor) | honest |
 | **Sovereign transition proof (Phase 2)** | `SOVEREIGN_TRANSITION_PROOF_{VK_HASH,COMMITMENT}`, `HAS_TRANSITION_PROOF` (`pi.rs:240-250`) | off-AIR recursive STARK verify ("the off-AIR verifier reads … and recursively verifies the inner STARK", `pi.rs:209-213`; `proof_verify.rs:2485`) | **STAGED** — VK is sentinel-zero today (`proof_verify.rs:2483-2485`), recursive verifier "in a follow-up" | honest |
-| **Sovereign witness signature + sequence** | `SOVEREIGN_WITNESS_{KEY_COMMIT,SEQUENCE}`, `IS_SOVEREIGN_CELL` (`pi.rs:223-235`) | Ed25519 signature verify off-AIR (`authorize.rs:889 verify_ed25519_signature`) + monotonic-sequence chain-walk at executor injection | LIVE; PI carries only a 4-felt key DIGEST + sequence, "backed off-AIR by the actual signature verification" (`pi.rs:217-222`) | honest |
+| **Sovereign witness signature + sequence** | `SOVEREIGN_WITNESS_{KEY_COMMIT,SEQUENCE}`, `IS_SOVEREIGN_CELL` (`pi.rs:240-252`) | Ed25519 signature verify off-AIR (`authorize.rs:933 verify_ed25519_signature`) + monotonic-sequence chain-walk at executor injection | LIVE; PI carries only a 4-felt key DIGEST + sequence, "backed off-AIR by the actual signature verification" (`pi.rs:236`) | honest |
 
 All three are explicitly NAMED at the code level (the Lean comments, the Rust
 `pi.rs`/`trace.rs` doc-comments, and `docs/deos/CUSTOM-VK-AUTHORIZATION.md` are all
@@ -98,14 +98,14 @@ recursive verify (`custom_proof_bind.rs`). The commit body is scrupulous:
 
 But it did NOT make `proofBind` enforced *in the AIR*:
 
-- The in-AIR op is STILL `| .proofBind _ => True` (`DescriptorIR2.lean:570`,
-  unchanged) and STILL bounds-only in Rust (`descriptor_ir2.rs:1299`).
+- The in-AIR op is STILL `| .proofBind _ => True` (`DescriptorIR2.lean:596`,
+  unchanged) and STILL bounds-only in Rust (`descriptor_ir2.rs:1388`).
 - THREE row-local `=> True` ops remain (`memOp`, `umemOp`, `proofBind`). The first
   two are benign (class 2 — forced by in-circuit LogUp buses). `proofBind` is the
   one whose content is off-AIR.
 - So "GENUINELY verifies" is true **verifier-side**, false **in-AIR**. proofBind
   remains a class-(3) trusted-out-of-circuit surface; the recursion soundness is
-  the named `EngineBinding`/`recursive_sound` hypothesis (`DescriptorIR2.lean:867`),
+  the named `EngineBinding`/`recursive_sound` hypothesis (`DescriptorIR2.lean:975`),
   not an arithmetized constraint.
 
 The real in-AIR fix (verify the sub-proof IN-AIR via the recursion verifier
@@ -126,7 +126,7 @@ What the metric does NOT count:
    anyway, but invisible to this count).
 2. The `proofBind`/Custom off-AIR recursion (and `Effect::Custom` is not even one of
    the 32 — it rides the `closedLogExtract_all_genuine` catch-all
-   `| (n+1) => rds.other (n+1)`, `ClosureFanoutGenuine.lean:1009`; see the apex
+   `| (n+1) => rds.other (n+1)`, `ClosureFanoutGenuine.lean:1186`; see the apex
    memory correction).
 3. The sovereign off-AIR signature / transition-proof surfaces (table above).
 

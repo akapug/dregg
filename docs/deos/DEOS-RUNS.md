@@ -358,6 +358,66 @@ Real multi-node `dregg-node` federations over QUIC gossip + blocklace consensus.
 
 ---
 
+## The forge (check-don't-trust CI on the cell substrate)
+
+### dregg-forge — the `Proven` STARK CI verifier + the lying-host audit
+- **What it is:** a CI-verdict assurance lattice (`dregg-doc/src/ci_assurance.rs`,
+  weakest→strongest) topped by `CiAssurance::Proven` — a verdict that carries a REAL
+  dregg STARK (the production `CellProgram` prove/verify over the CI-attestation
+  circuit), verified with NO re-execution and NO trusted host; plus the confined
+  `forge-ci-runner` that runs a required check inside a macOS-Seatbelt PD and
+  re-executes a signed verdict in a FRESH confinement to CONVICT a lying host.
+- **Reproduce:**
+  ```sh
+  cd dregg-doc            # own workspace (root-excluded)
+  cargo test --features substrate proven_real_stark
+  cd ../forge-ci-runner   # own workspace (root-excluded)
+  cargo test
+  ```
+- **Proof:** `proven_real_stark_satisfies_and_wrong_proofs_refuse` — a PASSING verdict
+  (exit code 0) genuinely PRODUCES a STARK the `Proven` verifier accepts (bound to the
+  verdict; a failing check is unsatisfiable so cannot be `Proven`), and a wrong/absent
+  proof refuses. `forge-ci-runner/tests/audit.rs` — an honest confined run re-verifies +
+  satisfies the forge gate (`CiRun`); a host that lies about the output digest, the exit
+  code, the confinement id, or serves-X-commits-Y is caught by L3 re-execution
+  (`AuditVerdict::HostLied`).
+- **Doc:** `docs/reference/forge-as-a-grain.md` (the ground-truth guarantees),
+  `docs/deos/DREGG-FORGE.md` (the design narration).
+
+---
+
+## Homeserver (a confined Matrix grain-body)
+
+### The confined homeserver-grain (`deos-homeserver`)
+- **What it is:** a real embedded Matrix homeserver (continuwuity/conduwuit) as a grain
+  body — the client-server API a matrix-rust-sdk client needs (versions handshake, open
+  registration, room create, message send, `/sync` read-back — the exact slice
+  `deos-matrix`'s membrane relay exercises) — bootable inside a deny-default macOS
+  Seatbelt confinement (the faithful proxy for the firmament confined-spawn door).
+- **Reproduce:**
+  ```sh
+  cd deos-homeserver      # own workspace (root-excluded)
+  # system rocksdb link env (skips the vendored C++ build); see GRAIN-HOMESERVER.md:
+  export ROCKSDB_LIB_DIR="$(brew --prefix rocksdb)/lib"
+  export ROCKSDB_INCLUDE_DIR="$(brew --prefix rocksdb)/include"
+  cargo test cs_api_roundtrip_against_embedded_homeserver
+  # the confinement de-risk (boots the heavy homeserver under sandbox/homeserver.sb
+  # and proves it SERVES the CS API while confined):
+  bash scripts/confined-boot.sh
+  ```
+- **Proof:** `cs_api_roundtrip_against_embedded_homeserver` — the embedded homeserver
+  serves the CS-API slice end to end (versions → register via UIAA → room → send →
+  `/sync` read-back). `confined-boot.sh` boots it under a deny-default Seatbelt profile
+  and gets `GET /_matrix/client/versions -> 200` WHILE confined; the minimal allow-set
+  that boots+serves IS the SBPL spec for the firmament `grant_read_write(db_dir)` +
+  `grant_listen(port)` doors.
+- **Doc:** `docs/deos/GRAIN-HOMESERVER.md`.
+- **Seam:** the confinement is the macOS-Seatbelt proxy; the firmament confined-spawn
+  (`spawn_pd_confined_with_surface_and_egress` execing the `deos-homeserver` binary as a
+  listen-door PD) is the named firmament wire.
+
+---
+
 ## Data plane (the Bus is the spine)
 
 ### Data-plane Bus — the real spine
