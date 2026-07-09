@@ -207,3 +207,17 @@ EMBER-RELEVANT (substrate-adjacent): (a) does anything ELSE consume the ~31-bit 
 commitment (not just docs)? (b) the fix changes the doc commitment value (fine — nothing running depends on it;
 new testnet from genesis) and makes it actually collision-resistant. STOPPED for ember's call before the code fix.
 - done-log: found a REAL bug by verifying (not asserting) — the doc commitment is a forgeable ~31-bit scalar; the fix diverges from the buggy old code toward the proven 8-felt root.
+
+## PRECISION on the ~31-bit finding (don't over-claim either direction)
+BLAST RADIUS: compute_heap_root (~31-bit scalar) is used broadly as [u8;32] — turn/umem.rs, dregg-umem/
+checkpoint.rs, cell::state.heap_root, sandstorm/grain bridges, dregg-doc/{substrate,doc_heap}.rs. The STRONG
+8-felt compute_canonical_heap_root_8 exists and is what the CIRCUIT's GENTIAN weld binds (STARK-verified, ~124-bit, CR).
+VERIFIED: (a) compute_heap_root is ~31 bits; (b) the doc's substrate_commit + my <dregg-doc> fixture's stranger-
+check (boundaryMatchesProjection compares substrate_commit) use it — so the light-client story I BUILT is, as
+built, a ~31-bit check. That is real and mine to own.
+OPEN (ember's substrate call, NOT asserting): is the ~31-bit scalar ever the SOLE thing a verifier trusts (a real
+exploitable gap across umem/checkpoint/cell), or does soundness always ride the on-chain 8-felt binding (scalar =
+convenience)? Needs careful tracing; I will NOT assert it either way (that's the sin I keep repeating).
+FIX DIRECTION (once traced): where a ~31-bit heap-root is load-bearing for a verifier, use the 8-felt
+compute_canonical_heap_root_8 (proven-CR via DeployedHeapTree) — diverging from the weak old code toward the proof.
+- done-log: blast-radius scoped; precise about verified (doc check is ~31 bits) vs open (substrate-wide exploitability = ember's trace). Loop stays STOPPED.
