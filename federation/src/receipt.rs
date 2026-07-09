@@ -25,8 +25,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use fips204::ml_dsa_65;
-
 use crate::frost::MlDsaPublicKey;
 use crate::identity::derive_federation_id_with_epoch;
 use crate::threshold::{FederationCommittee, ThresholdQC};
@@ -131,18 +129,34 @@ pub enum ReceiptQc {
     HybridVotes(Vec<HybridQuorumSig>),
 }
 
-/// Verify a SELF-CONTAINED hybrid quorum — the Lean `hybridVerify = classical ∧ pq`.
+/// Verify a hybrid quorum PINNED to the enrolled roster — the Lean
+/// `hybridVerify = classical ∧ pq`, with the post-quantum key bound to genesis.
+///
+/// `known_keys` is the ed25519 committee and `ml_dsa_committee` is the ENROLLED
+/// ML-DSA-65 roster, aligned INDEX-FOR-INDEX (element `i` of one is the same
+/// member as element `i` of the other, exactly as genesis publishes them).
 ///
 /// Accepts iff at least `threshold` DISTINCT signers each satisfy ALL of:
-/// * committee membership — `pubkey ∈ known_keys`;
+/// * committee membership — `pubkey ∈ known_keys` (at some index `i`);
 /// * (classical) the ed25519 `signature` verifies over `message`;
-/// * (post-quantum) the self-carried `ml_dsa_pubkey` decodes to a valid FIPS 204
-///   key AND the `pq_signature` ML-DSA-65-verifies over `message` (bound to
-///   [`crate::frost::HYBRID_PQ_CTX`]).
+/// * (PQ-key PIN) the self-carried `ml_dsa_pubkey` equals the ENROLLED key
+///   `ml_dsa_committee[i]` — a signer may NOT bring its own ML-DSA key;
+/// * (post-quantum) the `pq_signature` ML-DSA-65-verifies over `message` (bound
+///   to [`crate::frost::HYBRID_PQ_CTX`]) under that ENROLLED key.
 ///
-/// FAIL-CLOSED: any signer outside `known_keys`, any signature that does not
-/// verify, an undecodable/wrong-length ML-DSA public key, or a missing PQ half
-/// rejects the WHOLE quorum — a signer is counted only when BOTH halves pass.
+/// This is the fix for the quantum-forgery downgrade: without the PIN, an
+/// adversary who breaks ed25519 for member `P` could attach its OWN fresh
+/// ML-DSA keypair and a PQ signature valid under it, and BOTH halves would pass
+/// (the PQ half was checked against the attacker's self-carried key). Pinning
+/// the PQ key to the genesis-enrolled roster means the PQ half must verify under
+/// `P`'s real ML-DSA key, which the adversary does not hold — mirroring the
+/// FROST positional pin in [`crate::frost::verify_pq_quorum_half`].
+///
+/// FAIL-CLOSED: a roster misaligned in length (`ml_dsa_committee.len() !=
+/// known_keys.len()`, which includes an EMPTY roster — hybrid not configured),
+/// any signer outside `known_keys`, any signature that does not verify, a
+/// self-carried ML-DSA key that differs from the enrolled one, or a missing PQ
+/// half rejects the WHOLE quorum — never a silent ed25519-only downgrade.
 /// `threshold == 0` (a vacuous quorum) is refused outright.
 ///
 /// Shared by the receipt QC's [`ReceiptQc::HybridVotes`], the hybrid checkpoint
@@ -152,28 +166,41 @@ pub fn verify_hybrid_quorum_sigs(
     sigs: &[HybridQuorumSig],
     message: &[u8],
     known_keys: &[PublicKey],
+    ml_dsa_committee: &[MlDsaPublicKey],
     threshold: usize,
 ) -> bool {
     if threshold == 0 || sigs.len() < threshold {
         return false;
     }
-    let known: std::collections::HashSet<&PublicKey> = known_keys.iter().collect();
+    // The enrolled PQ roster MUST align index-for-index with the ed25519
+    // committee — otherwise there is no well-defined "enrolled key for member
+    // P" to pin against. A misaligned length (an EMPTY roster included) cannot
+    // pin any signer, so fail closed rather than fall back to ed25519 only.
+    if ml_dsa_committee.len() != known_keys.len() {
+        return false;
+    }
+    // Map each committee member to its enrolled index (for the PQ-key pin).
+    let index_of: std::collections::HashMap<&PublicKey, usize> =
+        known_keys.iter().enumerate().map(|(i, k)| (k, i)).collect();
     let mut seen: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
     let mut valid = 0usize;
     for qs in sigs {
-        // Committee membership.
-        if !known.contains(&qs.pubkey) {
+        // Committee membership — and the member's enrolled index.
+        let Some(&idx) = index_of.get(&qs.pubkey) else {
             return false;
-        }
+        };
         // Classical (ed25519) half.
         if !qs.pubkey.verify(message, &qs.signature) {
             return false;
         }
-        // Post-quantum (ML-DSA-65) half — decode the self-carried key, then verify.
-        let Ok(pk_bytes) = <[u8; ml_dsa_65::PK_LEN]>::try_from(qs.ml_dsa_pubkey.as_slice()) else {
+        // Post-quantum half — PINNED to the enrolled roster. The self-carried
+        // key must be a byte-identical COPY of the enrolled key (never trusted
+        // on its own), and the PQ signature is verified under the ENROLLED key.
+        let enrolled = &ml_dsa_committee[idx];
+        if qs.ml_dsa_pubkey.as_slice() != enrolled.0.as_slice() {
             return false;
-        };
-        if !MlDsaPublicKey(pk_bytes).verify(message, &qs.pq_signature) {
+        }
+        if !enrolled.verify(message, &qs.pq_signature) {
             return false;
         }
         // Count only DISTINCT signers whose BOTH halves passed.
@@ -290,10 +317,15 @@ impl FederationReceipt {
     /// - For the `Votes` flavor: requires the `known_keys` slice; signatures
     ///   must be cryptographically valid over `body_hash` AND a unique-signer
     ///   count must meet `threshold`.
+    /// - For the `HybridVotes` flavor: requires BOTH `known_keys` AND the
+    ///   ENROLLED `ml_dsa_keys` roster (aligned index-for-index); each signer's
+    ///   self-carried ML-DSA key must equal its enrolled key and the PQ half
+    ///   must verify under that enrolled key (see [`verify_hybrid_quorum_sigs`]).
     pub fn verify(
         &self,
         committee: Option<&FederationCommittee>,
         known_keys: &[PublicKey],
+        ml_dsa_keys: &[MlDsaPublicKey],
         threshold: usize,
         expected_epoch: u64,
     ) -> bool {
@@ -349,8 +381,9 @@ impl FederationReceipt {
                 valid >= threshold
             }
             ReceiptQc::HybridVotes(sigs) => {
-                // classical ∧ pq per signer, membership, ≥ threshold distinct.
-                verify_hybrid_quorum_sigs(sigs, &body_hash, known_keys, threshold)
+                // classical ∧ pq per signer, membership, PQ key pinned to the
+                // enrolled roster, ≥ threshold distinct.
+                verify_hybrid_quorum_sigs(sigs, &body_hash, known_keys, ml_dsa_keys, threshold)
             }
         }
     }
@@ -416,7 +449,7 @@ mod tests {
         let receipt = FederationReceipt::with_threshold_qc(fed_id, 0, body, &qc);
 
         assert!(
-            receipt.verify(Some(&committee), &ed_keys, 0, 0),
+            receipt.verify(Some(&committee), &ed_keys, &[], 0, 0),
             "threshold receipt must verify against its committee"
         );
     }
@@ -440,7 +473,7 @@ mod tests {
         // derived value. The QC is still valid but the binding check fires.
         let bogus = FederationReceipt::with_threshold_qc([0u8; 32], 0, body, &qc);
         assert!(
-            !bogus.verify(Some(&committee), &ed_keys, 0, 0),
+            !bogus.verify(Some(&committee), &ed_keys, &[], 0, 0),
             "receipt with wrong federation_id must be rejected (F1)"
         );
     }
@@ -463,11 +496,11 @@ mod tests {
         // Receipt claims epoch 1; verifier expects epoch 2 → reject.
         let receipt = FederationReceipt::with_threshold_qc(fed_id_e1, 1, body, &qc);
         assert!(
-            !receipt.verify(Some(&committee), &ed_keys, 0, 2),
+            !receipt.verify(Some(&committee), &ed_keys, &[], 0, 2),
             "receipt with stale committee_epoch must be rejected (F4)"
         );
         // Same receipt with matching expected_epoch verifies.
-        assert!(receipt.verify(Some(&committee), &ed_keys, 0, 1));
+        assert!(receipt.verify(Some(&committee), &ed_keys, &[], 0, 1));
     }
 
     #[test]
@@ -508,7 +541,7 @@ mod tests {
         let body_b = sample_body(2); // different body
         let bogus_receipt = FederationReceipt::with_threshold_qc(fed_id, 0, body_b, &qc);
         assert!(
-            !bogus_receipt.verify(Some(&committee), &ed_keys, 0, 0),
+            !bogus_receipt.verify(Some(&committee), &ed_keys, &[], 0, 0),
             "QC signed over body_a must not satisfy a receipt carrying body_b"
         );
     }
@@ -528,7 +561,7 @@ mod tests {
             .collect();
 
         let receipt = FederationReceipt::with_vote_signatures(fed_id, 0, body, votes);
-        assert!(receipt.verify(None, &known_keys, 2, 0));
+        assert!(receipt.verify(None, &known_keys, &[], 2, 0));
     }
 
     #[test]
@@ -543,7 +576,7 @@ mod tests {
         let votes = vec![(pk2.clone(), sign(&sk1, &body.body_hash()))];
         let receipt = FederationReceipt::with_vote_signatures(fed_id, 0, body, votes);
         assert!(
-            !receipt.verify(None, &known_keys, 1, 0),
+            !receipt.verify(None, &known_keys, &[], 1, 0),
             "signers outside known_keys must be rejected"
         );
     }
@@ -561,7 +594,7 @@ mod tests {
         let votes = vec![(pk.clone(), sig.clone()), (pk.clone(), sig)];
         let receipt = FederationReceipt::with_vote_signatures(fed_id, 0, body, votes);
         assert!(
-            !receipt.verify(None, &known_keys, 2, 0),
+            !receipt.verify(None, &known_keys, &[], 2, 0),
             "duplicate-signer replay must not satisfy threshold"
         );
     }
@@ -582,6 +615,9 @@ mod tests {
             })
             .collect();
 
+        // The ENROLLED ML-DSA roster — aligned index-for-index with `known_keys`.
+        let ml_dsa_roster: Vec<MlDsaPublicKey> = pq.iter().map(|(pk, _)| pk.clone()).collect();
+
         let body = sample_body(9);
         let body_hash = body.body_hash();
         let make = |idxs: &[usize]| -> Vec<HybridQuorumSig> {
@@ -595,11 +631,11 @@ mod tests {
                 .collect()
         };
 
-        // Honest 2-of-3 hybrid quorum verifies (BOTH halves).
+        // Honest 2-of-3 hybrid quorum verifies (BOTH halves, PQ key enrolled).
         let receipt =
             FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), make(&[0, 1]));
         assert!(
-            receipt.verify(None, &known_keys, 2, 0),
+            receipt.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
             "honest hybrid receipt must verify"
         );
 
@@ -608,7 +644,7 @@ mod tests {
         forged[0].pq_signature[0] ^= 0xFF;
         let bad = FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), forged);
         assert!(
-            !bad.verify(None, &known_keys, 2, 0),
+            !bad.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
             "forged ML-DSA half must reject even with a valid ed25519 half"
         );
 
@@ -617,16 +653,16 @@ mod tests {
         missing[1].pq_signature = Vec::new();
         let bad2 = FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), missing);
         assert!(
-            !bad2.verify(None, &known_keys, 2, 0),
+            !bad2.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
             "missing ML-DSA half must reject"
         );
 
-        // TEETH: an undecodable (wrong-length) ML-DSA pubkey → REJECT.
+        // TEETH: a wrong-length ML-DSA pubkey → REJECT (self-carried key ≠ enrolled).
         let mut badkey = make(&[0, 1]);
         badkey[0].ml_dsa_pubkey = vec![0u8; 10];
         let bad3 = FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), badkey);
         assert!(
-            !bad3.verify(None, &known_keys, 2, 0),
+            !bad3.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
             "undecodable ML-DSA pubkey must reject"
         );
 
@@ -639,10 +675,89 @@ mod tests {
             ml_dsa_pubkey: out_pq_pk.0.to_vec(),
             pq_signature: out_pq_sk.sign(&body_hash).expect("ml-dsa sign"),
         }];
-        let bad4 = FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body, outsider);
+        let bad4 =
+            FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), outsider);
         assert!(
-            !bad4.verify(None, &known_keys, 1, 0),
+            !bad4.verify(None, &known_keys, &ml_dsa_roster, 1, 0),
             "non-member hybrid signer must reject"
+        );
+    }
+
+    /// **THE QUANTUM-FORGERY ADVERSARIAL TEST.** This is the exact attack the
+    /// enrolled-roster PIN closes: a quantum adversary breaks ed25519 for an
+    /// ENROLLED member `P` (here we just use P's real ed25519 key to stand in
+    /// for the forged classical half), then generates its OWN fresh ML-DSA-65
+    /// keypair, signs the PQ half with it, and carries that attacker key in
+    /// `ml_dsa_pubkey`. Before the fix, the PQ half was checked against the
+    /// self-carried key, so BOTH halves passed. With the PIN, the self-carried
+    /// key ≠ P's ENROLLED key, so the whole quorum is rejected — the ML-DSA half
+    /// must verify under the genesis-enrolled key the adversary does not hold.
+    #[test]
+    fn quantum_forged_pq_key_is_rejected() {
+        use crate::frost::MlDsaSigningKey;
+        let kps: Vec<(_, _)> = (0..3).map(|_| generate_keypair()).collect();
+        let known_keys: Vec<PublicKey> = kps.iter().map(|(_, pk)| pk.clone()).collect();
+        let fed_id = derive_federation_id(&known_keys);
+        // The genesis-ENROLLED ML-DSA roster (aligned with `known_keys`).
+        let pq: Vec<(_, _)> = (0..3)
+            .map(|i| {
+                let mut s = [0u8; 32];
+                s[0] = 0x40;
+                s[1] = i as u8;
+                MlDsaSigningKey::from_seed(&s)
+            })
+            .collect();
+        let ml_dsa_roster: Vec<MlDsaPublicKey> = pq.iter().map(|(pk, _)| pk.clone()).collect();
+
+        let body = sample_body(21);
+        let body_hash = body.body_hash();
+
+        // The ATTACKER's fresh ML-DSA keypair for members 0 and 1 (≠ enrolled).
+        let attacker0 = MlDsaSigningKey::from_seed(&[0xAA; 32]);
+        let attacker1 = MlDsaSigningKey::from_seed(&[0xBB; 32]);
+        let forged = vec![
+            HybridQuorumSig {
+                pubkey: kps[0].1.clone(),
+                signature: sign(&kps[0].0, &body_hash), // "forged" ed25519 half (P's real key)
+                ml_dsa_pubkey: attacker0.0.0.to_vec(),
+                pq_signature: attacker0.1.sign(&body_hash).expect("ml-dsa sign"),
+            },
+            HybridQuorumSig {
+                pubkey: kps[1].1.clone(),
+                signature: sign(&kps[1].0, &body_hash),
+                ml_dsa_pubkey: attacker1.0.0.to_vec(),
+                pq_signature: attacker1.1.sign(&body_hash).expect("ml-dsa sign"),
+            },
+        ];
+        // The PQ signatures verify under the ATTACKER keys, yet the quorum is
+        // REJECTED because those keys are not the enrolled roster.
+        let attack =
+            FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body.clone(), forged);
+        assert!(
+            !attack.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
+            "a self-carried attacker ML-DSA key must be rejected (not the enrolled key)"
+        );
+
+        // HONEST path stays green: the assembler copies the ENROLLED key in.
+        let honest: Vec<HybridQuorumSig> = (0..2)
+            .map(|i| HybridQuorumSig {
+                pubkey: kps[i].1.clone(),
+                signature: sign(&kps[i].0, &body_hash),
+                ml_dsa_pubkey: pq[i].0.0.to_vec(),
+                pq_signature: pq[i].1.sign(&body_hash).expect("ml-dsa sign"),
+            })
+            .collect();
+        let good = FederationReceipt::with_hybrid_vote_signatures(fed_id, 0, body, honest);
+        assert!(
+            good.verify(None, &known_keys, &ml_dsa_roster, 2, 0),
+            "the honest enrolled-key quorum still verifies"
+        );
+
+        // NO SILENT DOWNGRADE: an empty (misaligned) enrolled roster fails closed
+        // even for the honest signers.
+        assert!(
+            !good.verify(None, &known_keys, &[], 2, 0),
+            "an unconfigured (empty) enrolled roster must fail closed, never ed25519-only"
         );
     }
 }

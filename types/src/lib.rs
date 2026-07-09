@@ -441,19 +441,23 @@ pub fn finalization_vote_signing_message(block_id: &[u8; 32], merkle_root: &[u8;
 }
 
 /// One committee member's HYBRID quorum signature over a canonical message:
-/// the classical ed25519 half AND the FIPS 204 ML-DSA-65 half, with the
-/// signer's ML-DSA-65 public key carried ALONGSIDE the signature
-/// (SELF-CONTAINED). Mirrors `dregg_persist::QuorumSignature` (the
-/// finalization-quorum hybrid record): a verifier counts a signer only when
-/// BOTH halves verify, and the PQ pubkey rides with the signature so the
-/// post-quantum half is re-checkable off-node with NO ML-DSA committee history.
+/// the classical ed25519 half AND the FIPS 204 ML-DSA-65 half, with a REDUNDANT
+/// copy of the signer's ML-DSA-65 public key carried ALONGSIDE the signature.
+/// Mirrors `dregg_persist::QuorumSignature` (the finalization-quorum hybrid
+/// record): a verifier counts a signer only when BOTH halves verify — and the
+/// carried `ml_dsa_pubkey` is PINNED equal to the signer's genesis-ENROLLED
+/// ML-DSA key (which the verifier threads in as an `ml_dsa_committee` roster
+/// aligned with the ed25519 committee), NEVER trusted on its own. That pin is
+/// what makes "an adversary who breaks ed25519 alone still cannot forge the
+/// quorum" TRUE: the PQ half must verify under the enrolled key it does not hold.
 ///
 /// This is the widened Votes-QC wire record for the checkpoint QC
 /// ([`dregg_federation::checkpoint`]), the receipt QC's hybrid Votes flavor
 /// ([`dregg_federation::receipt::ReceiptQc::HybridVotes`]), and the cross-fed
 /// attested-root quorum. This crate is the leaf, so it carries only the wire
-/// DATA — the ML-DSA verification itself lives in `dregg_federation` (which owns
-/// the FIPS 204 primitive; see `dregg_federation::receipt::verify_hybrid_quorum_sigs`).
+/// DATA — the ML-DSA verification (and the enrolled-key pin) lives in
+/// `dregg_federation` (which owns the FIPS 204 primitive; see
+/// `dregg_federation::receipt::verify_hybrid_quorum_sigs`).
 ///
 /// **Wire note (postcard flag-day).** Carrying this record — a new receipt-QC
 /// enum variant or a new checkpoint field — changes the non-self-describing
@@ -466,13 +470,15 @@ pub struct HybridQuorumSig {
     pub pubkey: PublicKey,
     /// The ed25519 (CLASSICAL) signature over the canonical message.
     pub signature: Signature,
-    /// The voter's ML-DSA-65 (FIPS 204) public key, as its 1952 serialized
-    /// bytes. Stored as `Vec<u8>` because the 1952-byte array is beyond serde's
-    /// array-derive ceiling; length-checked (and thus fail-closed on an
-    /// undecodable key) at verify time.
+    /// A REDUNDANT copy of the voter's ML-DSA-65 (FIPS 204) public key, as its
+    /// 1952 serialized bytes (`Vec<u8>` because the 1952-byte array is beyond
+    /// serde's array-derive ceiling). At verify time it is PINNED equal to the
+    /// voter's enrolled roster key — never trusted on its own — and fail-closed
+    /// on a mismatch or an undecodable key.
     pub ml_dsa_pubkey: Vec<u8>,
     /// The ML-DSA-65 (POST-QUANTUM) signature over the SAME canonical message as
-    /// `signature`. The quorum counts a signer only when BOTH halves verify, so
+    /// `signature`, verified under the voter's ENROLLED key. The quorum counts a
+    /// signer only when BOTH halves verify (and the enrolled-key pin holds), so
     /// an adversary who breaks ed25519 alone still cannot forge the quorum.
     pub pq_signature: Vec<u8>,
 }

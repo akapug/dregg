@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::frost::MlDsaPublicKey;
 use crate::types::{NodeIdentity, PublicKey, QuorumCertificate};
 use dregg_types::HybridQuorumSig;
 
@@ -156,17 +157,21 @@ impl Checkpoint {
     /// The hybrid signers in `hybrid_votes` sign the SAME canonical checkpoint
     /// vote message as the classical `qc` ([`checkpoint_vote_message`] over the
     /// content hash). A signer counts toward `threshold` only when BOTH its
-    /// ed25519 and its ML-DSA-65 halves verify under `committee` (its ML-DSA key
-    /// rides self-contained in the signature) — see
-    /// [`crate::receipt::verify_hybrid_quorum_sigs`]. Fail-closed: a forged or
-    /// missing PQ half, a non-member signer, or fewer than `threshold` valid
-    /// hybrid signers is rejected, even if the classical `qc` alone would pass.
+    /// ed25519 half verifies under `committee` AND its ML-DSA-65 half verifies
+    /// under the ENROLLED key `ml_dsa_committee[i]` (aligned index-for-index with
+    /// `committee`) — the self-carried ML-DSA key must EQUAL the enrolled one,
+    /// never be trusted on its own. See [`crate::receipt::verify_hybrid_quorum_sigs`].
+    /// Fail-closed: a forged/missing PQ half, a self-carried ML-DSA key differing
+    /// from the enrolled one, a misaligned/empty enrolled roster, a non-member
+    /// signer, or fewer than `threshold` valid hybrid signers is rejected — even
+    /// if the classical `qc` alone would pass.
     ///
     /// This is the post-quantum checkpoint path; the BLS-aggregate
     /// [`Self::verify_with_committee`] path stays classical (see its doc).
     pub fn verify_hybrid(
         &self,
         committee: &[PublicKey],
+        ml_dsa_committee: &[MlDsaPublicKey],
         threshold: usize,
     ) -> Result<(), CheckpointError> {
         let content_hash = self.content_hash();
@@ -181,6 +186,7 @@ impl Checkpoint {
             &self.hybrid_votes,
             &message,
             committee,
+            ml_dsa_committee,
             threshold,
         ) {
             return Err(CheckpointError::InsufficientQuorum {
@@ -462,6 +468,8 @@ mod tests {
                 MlDsaSigningKey::from_seed(&s)
             })
             .collect();
+        // The ENROLLED ML-DSA roster — aligned index-for-index with `members`.
+        let ml_dsa_roster: Vec<MlDsaPublicKey> = pq.iter().map(|(pk, _)| pk.clone()).collect();
 
         let mut cp = create_checkpoint(
             1000,
@@ -489,10 +497,10 @@ mod tests {
                 .collect()
         };
 
-        // Honest 2-of-3 hybrid checkpoint verifies (BOTH halves).
+        // Honest 2-of-3 hybrid checkpoint verifies (BOTH halves, PQ key enrolled).
         cp.hybrid_votes = make(&[0, 1]);
         assert!(
-            cp.verify_hybrid(&members, 2).is_ok(),
+            cp.verify_hybrid(&members, &ml_dsa_roster, 2).is_ok(),
             "honest hybrid checkpoint must verify"
         );
 
@@ -501,7 +509,7 @@ mod tests {
         forged.hybrid_votes = make(&[0, 1]);
         forged.hybrid_votes[0].pq_signature[0] ^= 0xFF;
         assert!(
-            forged.verify_hybrid(&members, 2).is_err(),
+            forged.verify_hybrid(&members, &ml_dsa_roster, 2).is_err(),
             "forged ML-DSA half must reject even with a valid ed25519 half"
         );
 
@@ -510,8 +518,28 @@ mod tests {
         missing.hybrid_votes = make(&[0, 1]);
         missing.hybrid_votes[1].pq_signature = Vec::new();
         assert!(
-            missing.verify_hybrid(&members, 2).is_err(),
+            missing.verify_hybrid(&members, &ml_dsa_roster, 2).is_err(),
             "missing ML-DSA half must reject"
+        );
+
+        // QUANTUM-FORGERY TEETH: an attacker breaks ed25519 for enrolled member 0
+        // and attaches its OWN fresh ML-DSA keypair with a PQ signature valid
+        // under it. Both self-carried halves "verify" on their own terms, but the
+        // PQ key ≠ the enrolled roster key, so the quorum is REJECTED.
+        let attacker = MlDsaSigningKey::from_seed(&[0xCC; 32]);
+        let mut quantum = cp.clone();
+        quantum.hybrid_votes = make(&[0, 1]);
+        quantum.hybrid_votes[0].ml_dsa_pubkey = attacker.0.0.to_vec();
+        quantum.hybrid_votes[0].pq_signature = attacker.1.sign(&message).expect("ml-dsa sign");
+        assert!(
+            quantum.verify_hybrid(&members, &ml_dsa_roster, 2).is_err(),
+            "a self-carried attacker ML-DSA key (not the enrolled key) must reject"
+        );
+
+        // NO SILENT DOWNGRADE: an empty (misaligned) enrolled roster fails closed.
+        assert!(
+            cp.verify_hybrid(&members, &[], 2).is_err(),
+            "an unconfigured (empty) enrolled roster must fail closed"
         );
     }
 }

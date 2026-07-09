@@ -1140,6 +1140,14 @@ async fn run_node(
                         .iter()
                         .map(|c| c.iter().map(|k| dregg_types::PublicKey(*k)).collect())
                         .collect();
+                    // The on-chain membership blocklace records only ed25519 keys,
+                    // so a chain-derived historical committee has NO enrolled
+                    // ML-DSA roster: populate the aligned twin with an EMPTY roster
+                    // per entry. The restart hybrid re-verify then REFUSES a root
+                    // signed by such a committee (no silent ed25519-only downgrade,
+                    // per `verify_finalization_quorum`'s roster-alignment bound).
+                    s.derived_committee_ml_dsa_history =
+                        derived.history.iter().map(|_| Vec::new()).collect();
                 }
                 s.boot_constitution = Some(cm);
             }
