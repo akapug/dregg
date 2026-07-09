@@ -531,3 +531,22 @@ STAGES (sequential, Lean under .bin/lean-safe, each verified+committed before ne
   S3c (BLOCKED by other terminals: bridge/present.rs + sdk/cipherclerk.rs currently DIRTY): flip the
      live verify path onto the bound descriptor. Wait for those files to clear.
   S4: finish stark-kill (sdk/verify, cipherclerk) + git rm circuit/src/stark.rs.
+
+## ⚑ S3d — BLINDED RING-MEMBERSHIP DESCRIPTOR (2026-07-08, ember: "build it too" — no-residuals maximal)
+S3c flip revealed the legacy issuer_membership_stark_proof carries TWO properties the bound-presentation
+descriptor doesn't: (a) issuer∈federation RING MEMBERSHIP (blinded Merkle path, air_name=BLINDED_MERKLE,
+generate_blinded_merkle_poseidon2_stark_proof circuit/presentation.rs:1377) + (b) BLINDED-LEAF
+UNLINKABILITY (fresh blinded_leaf per show; anonymity_soundness test + verify_anonymous_presentation +
+test_ring_membership_unlinkable depend on it). ember chose: BUILD the blinded-membership descriptor too
+(both in-circuit/fold-sound), not retire it. A full Golden-Lift-style sub-campaign mirroring S1-S3b:
+  S3d-1: blinded-membership descriptor (Emit) — blinded_leaf (hidden blinding witness → unlinkability) +
+    Merkle path to federation_root (4-ary chip, like membership_descriptor_4ary) as CONSTRAINED PIs.
+    Rung 0/1/2 (forge non-member REJECTS; two shows of one credential → different blinded_leaf, unlinkable).
+  S3d-2: blinded_membership_binding_from_fold (Lean) — the 10th carrier; binding rides the fold.
+  S3d-3: witness builder + descriptor_by_name arm + fold adapter (mirror bound_presentation_witness +
+    presentation_leaf_adapter).
+  S3d-4: THEN S3c flip — RealPresentationProof carries BOTH wires (bound-presentation for auth +
+    blinded-membership for ring/unlinkability); flip the 4 verify fns + verify_anonymous_presentation +
+    the anonymity tests onto them. → 0 true-live stark in presentation → S4 git rm.
+This makes the presentation family FULLY in-circuit: authorization + ring membership + unlinkability, all
+constrained, all fold-carried to the root. The comprehensive close ember chose over the fast delete.
