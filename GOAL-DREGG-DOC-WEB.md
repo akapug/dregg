@@ -133,3 +133,12 @@ Honest status of the 6 gaps:
    handlers in background.ts + real Netlayer + consent) → the elements work in production, not just fixtures.
 
 - done-log: BACKGROUND WIRING landed (ff53271bd) — getDocEngine/getCellEngine + dregg:doc/dregg:cell handlers over the real Netlayer + consent; dist/background.js dispatches all three; the elements ship beyond fixtures (hook gap #6 closed).
+
+## HOOK GAPS — SCORECARD (updated)
+1. Deployed FFI cutover → EMBER-GATED (deployed flip; substrate_commit is scheme-pinned/gauntlet-bound, not a shadow).
+2. Element-grammar injectivity → ✅ DONE (DocSubstrateSound.encodeElement_injective, [propext]-clean).
+3. Aggregation → ✅ DONE (89181c09d — 4 modules in Dregg2/Deos.lean, lake build Dregg2.Deos green 3165 jobs).
+4/5. Free-text editing / keyed reconciler / DOM-schema → engine RUNNING (afb9d9601d357242f, wasm apply_text_edit);
+     JS keyed reconciler = the follow-on that integrates with it.
+6. Background wiring → ✅ DONE (ff53271bd — dregg:doc/cell handlers ship to production).
+- done-log: aggregation landed (89181c09d) in the clobber-safe window; 4 of 6 gaps closed, 1 gated, 1 (free-text) in flight.
