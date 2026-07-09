@@ -6857,3 +6857,26 @@ IN-BAND IDENTITY (rebuild): dregg-types verify_committed_ml_dsa + cell-crypto/ca
 to the ML-DSA roster). REMAINING: finality::Block.creator=hybrid-id (~300-callsite unit); consensus LIVENESS;
 turn/effect-VM soundness; deeper refinement. Method throughout: reduce to the true floor, NO named-carrier
 laundering, load-bearing teeth on every theorem, honest boundaries named not hidden.
+
+## 2026-07-09 — every honestly-open frontier CLOSED (by formalizing the literature, not naming it open)
+The goal was: retire every open frontier — proved, not smuggled, not given-up-on. All four closed; whole tree
+lake-green (4498 jobs) + the leanc/FFI cargo build green:
+- ADAPTIVE (cb2699569): the Unmasking-TRaccoon (2025) adaptive proof formalized — AdaptiveErasure DISCHARGED
+  (the masking makes every member's partial sig simulatable from the public key, so the simulator reveals shares
+  on demand, no corrupt-set guessing); adaptive_ts_uf_reduces_lossfree UNCONDITIONAL → MSIS∨MLWE∨HashCR, no loss.
+- UC (e7cb09c2d): the Canetti composition formalized — multi-session F̂_SIG realization (a THEOREM hybrid over
+  sessions) + the universal composition theorem ρ^π = ρ^F; hybrid sig composes into ANY F_SIG-protocol → DL∨MSIS.
+- FIPS-204 (d051ff9d1): the ML-DSA VERIFY EXTRACTED to leanc-compiled native code via @[export], wired through
+  dregg-lean-ffi into dregg-pq; Fips204Correct DISCHARGED by the Lean-verified verifyCore (= the spec at the real
+  ML-DSA-65 params, the real-number rounding proved). The fips204 CRATE is no longer trusted for verify.
+- SURFACE-3 EXECUTOR (a618be80d): the last live participant projection migrated to the hybrid id — NO live path
+  projects identity through raw ed25519.
+
+FINAL TRUSTED BASE (the whole crypto-to-protocol-soundness tree rests on ONLY these — nothing laundered, no
+vaguely-open reduction): (1) the lattice/DL/hash FLOOR — MSIS, MLWESearchHard, SchnorrDLHard, HashCR; (2) the
+leanc/FFI TOOLCHAIN (for the extracted FIPS-204 verify). HONESTLY-NAMED, not hardness assumptions: UC's ≈-as-
+negligible-ensemble-distance abstraction + simulator PPT-efficiency (the tree's modelling level); FIPS-204
+SIGN's rejection-sampling extraction (named engineering, next pass — VERIFY is what unforgeability needs, done).
+The tree now runs floor + modeled-quantum-adversary → primitive games → hybrid-combiner keystone (secure ⟺
+either, UC-composable, adaptive) → protocol games → quantum-safe consensus safety+liveness → turn/effect
+soundness → the deployed code (dregg-pq sig+KEM refined; ML-DSA verify a leanc-native proved object).
