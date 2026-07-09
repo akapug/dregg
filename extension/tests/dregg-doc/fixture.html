@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-doc fixture</title></head>
+<body>
+  <h1>dregg-doc fixture — a verifiable document a stranger can check</h1>
+
+  <!-- A verifiable document that arrives carrying a first-class CONFLICT (two
+       authors edited concurrently). BOTH alternatives must render, attributed,
+       side by side; resolving one publishes a verified turn. -->
+  <p id="prose">Our shared doc: <dregg-doc id="doc" src="dregg://doc/b3_d0cface"></dregg-doc></p>
+
+  <!-- Malformed addr: the engine fails closed — no render, original link + warning. -->
+  <p id="badprose">A broken one: <dregg-doc id="baddoc" src="dregg://doc/notahash">
+    <a href="https://dregg.net/d/doc/notahash">the doc</a>
+  </dregg-doc></p>
+
+  <script src="/dregg_wasm.js"></script>
+  <script>window.wasm_bindgen = wasm_bindgen;</script>
+  <script src="/harness.js"></script>
+</body>
+</html>

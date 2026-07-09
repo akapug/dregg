@@ -541,3 +541,390 @@ export class MapWebOfCells {
     return this.values.get(canonicalUri(uri) ?? uri) ?? null;
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE DOCUMENT-AUTHORING PORT — `<dregg-doc>` (a verifiable document surface).
+// DREGG-DOCUMENT-FOUNDATION.md (conflicts-as-objects), wasm/src/bindings_doc.rs
+// (`DocCollabWorld`). This is the culminating authoring path: a person authors a
+// verifiable document a STRANGER can check — fork → diverge → stitch → a
+// first-class CONFLICT (both live alternatives, side by side, attributed) →
+// resolve (pick an alternative) → PUBLISH as a real cap-gated verified turn whose
+// receipt commits the resealed umem `heap_root` (limb 28).
+//
+// The SAME split as the poll/composition ports: the ENGINE (background, wasm-side)
+// owns the `DocCollabWorld`, the resolve, the render, the resolution, and the
+// verified-turn publish — and routes the publish through the un-overlayable
+// confirm-intent consent. The element is a thin, closed-shadow VIEW: no wasm, no
+// keys, no doc graph ever reaches the page — only these tiered responses. A
+// CONFLICT is NEVER silently resolved or hidden here: the engine renders BOTH
+// alternatives (its `viewHtml` ConflictView) and only a consented publish
+// collapses it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The `DocCollabWorld` wasm surface this engine needs (a structural subset of
+ *  `wasm/src/bindings_doc.rs`'s `#[wasm_bindgen]` methods). */
+export interface DocWorldLike {
+  /** The doc-cell's id (hex) — the document's sovereignty boundary. */
+  cellId(): string;
+  /** The document's commitment: the committed umem-heap boundary `heap_root` (hex). */
+  commitmentHex(): string;
+  /** The audit-tape length (one receipt per published boundary, incl. genesis). */
+  receiptCount(): number;
+  /** True iff a stitched merge is currently carrying an unresolved conflict. */
+  hasConflict(): boolean;
+  /** The light-client invariant: committed `heap_root == substrate_commit(published)`. */
+  boundaryMatchesProjection(): boolean;
+  /** The pending conflict's alternatives as JSON: `[{author, text}]`. */
+  alternativesJson(): string;
+  /** The current published document's rendered text (the resolved reading). */
+  publishedText(): string;
+  /** The document view-tree JSON (`{kind, props, children}`). */
+  viewTreeJson(): string;
+  /** The rendered HTML fragment (the ConflictView when a conflict is held). */
+  viewHtml(): string;
+  /** The affordance wire: `stitch` (diverge+merge) | `resolve` (collapse+publish). */
+  fire(turn: string, arg: number): void;
+}
+export interface DocWorldCtor {
+  new (): DocWorldLike;
+}
+
+/** One live alternative in a conflict — attributed, NEVER hidden. */
+export interface DocAlternative {
+  author: string;
+  text: string;
+}
+
+// ── the document request/response protocol ──────────────────────────────────
+export type DocPortRequest =
+  | { op: "resolveDoc"; uri: string }
+  | { op: "renderDoc"; uri: string }
+  | { op: "stitch"; uri: string }
+  | { op: "resolveConflict"; uri: string; choice: number }
+  | { op: "publish"; uri: string }
+  | { op: "verify"; uri: string };
+
+export interface DocResolveResponse {
+  ok: boolean;
+  verified: boolean;
+  tier: TrustTier;
+  /** The document's public shape (never the graph itself). */
+  object?: { kind: string; addr: string; cellId: string };
+  /** True when the document currently carries a first-class conflict. */
+  hasConflict?: boolean;
+  /** Both live alternatives (attributed) — present whenever a conflict is held. */
+  alternatives?: DocAlternative[];
+  /** The committed umem boundary `heap_root` (hex). */
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export interface DocRenderResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** The engine's `viewHtml()` — the ConflictView (both alternatives side by side,
+   *  attributed, + a resolution button per choice) OR the clean published doc. */
+  html?: string;
+  hasConflict?: boolean;
+  alternatives?: DocAlternative[];
+  error?: string;
+}
+
+export interface DocConflictResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True once an alternative is STAGED (picked). The conflict is STILL shown —
+   *  it collapses only on a consented publish, so nothing is hidden by picking. */
+  staged?: boolean;
+  choice?: number;
+  hasConflict?: boolean;
+  error?: string;
+}
+
+export interface DocPublishResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the publish turn was refused (consent denied / bad choice). */
+  refused?: boolean;
+  reason?: string;
+  verified?: boolean;
+  hasConflict?: boolean;
+  receiptCount?: number;
+  /** The NEW committed umem boundary `heap_root` (hex) after the publish turn. */
+  commitment?: string;
+  /** The light-client witness: the committed `heap_root` EQUALS the independent
+   *  recompute of `substrate_commit(published)` — a stranger can re-check it. */
+  substrateMatches?: boolean;
+  error?: string;
+}
+
+export interface DocVerifyResponse {
+  ok: boolean;
+  tier: TrustTier;
+  verified: boolean;
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export type DocPortResponse =
+  | DocResolveResponse
+  | DocRenderResponse
+  | DocConflictResponse
+  | DocPublishResponse
+  | DocVerifyResponse;
+
+/** The transport the `<dregg-doc>` element holds — a channel to the DocEngine. */
+export interface DocPort {
+  request(req: DocPortRequest): Promise<DocPortResponse>;
+}
+
+/** The public document spec a resolve yields (netlayer stand-in). `stitch` asks
+ *  the engine to surface the demo divergence so the loaded document ALREADY
+ *  carries a first-class conflict (the authoring case the fixture exercises). */
+export interface DocSpec {
+  kind: string;
+  addr: string;
+  stitch?: boolean;
+}
+/** Resolve a canonical doc uri to a spec, or `null` (fail-closed). May be async. */
+export type ResolveDocFn = (uri: string) => DocSpec | null | Promise<DocSpec | null>;
+
+export interface DocEngineDeps {
+  DocWorld: DocWorldCtor;
+  /** The netlayer resolve (content-addr → document spec). */
+  resolveDoc: ResolveDocFn;
+  /** Custody consent — opens `confirm-intent` chrome in the extension for a publish. */
+  consent: ConsentFn;
+}
+
+/** The default (test/stand-in) doc resolver: validate the `dregg://doc/<addr>`
+ *  content-address and yield a fresh document. The REAL netlayer fetches the
+ *  content-addressed document and checks `addr == blake3(document)`; this is the
+ *  standalone analogue (exactly as `defaultResolveObject` is for polls). A fresh
+ *  document carries no conflict — the authoring divergence is surfaced explicitly
+ *  (`stitch`); a malformed addr fails closed. */
+export function defaultResolveDoc(uri: string): DocSpec | null {
+  const parsed = parseDreggUri(uri);
+  if (!parsed) return null;
+  if (parsed.kind !== "doc") return null;
+  if (!VALID_ADDR_RE.test(parsed.addr)) return null; // fail-closed on a bad addr
+  return { kind: "doc", addr: parsed.addr, stitch: false };
+}
+
+/**
+ * THE DOCUMENT ENGINE. Owns one `DocCollabWorld` per resolved uri; every response
+ * is tiered. Runs only in the extension (background) context. It renders the
+ * document (a ConflictView holds BOTH alternatives — never hidden), stages a
+ * resolution pick, and PUBLISHES (a real cap-gated verified turn — reseal the
+ * umem `heap_root`, commit `SetField(20)+IncrementNonce`) ONLY after the injected
+ * consent approves the faithful reading. Never returns the doc graph itself.
+ */
+export class DocEngine {
+  private worlds = new Map<string, DocWorldLike>();
+  private specs = new Map<string, DocSpec>();
+  /** The staged resolution pick per doc — set by `resolveConflict`, consumed by
+   *  `publish`. Staging does NOT collapse the conflict; the publish does. */
+  private staged = new Map<string, number>();
+
+  constructor(private deps: DocEngineDeps) {}
+
+  async handle(req: DocPortRequest, origin?: string): Promise<DocPortResponse> {
+    try {
+      switch (req.op) {
+        case "resolveDoc":
+          return await this.resolve(req.uri);
+        case "renderDoc":
+          return this.render(req.uri);
+        case "stitch":
+          return await this.stitch(req.uri);
+        case "resolveConflict":
+          return this.resolveConflict(req.uri, req.choice);
+        case "publish":
+          return await this.publish(req.uri, origin);
+        case "verify":
+          return this.verify(req.uri);
+        default:
+          return { ok: false, tier: "none", verified: false, error: "unknown op" } as DocResolveResponse;
+      }
+    } catch (e) {
+      return { ok: false, tier: "none", verified: false, error: String((e as Error)?.message ?? e) };
+    }
+  }
+
+  private async world(uri: string): Promise<DocWorldLike | null> {
+    const key = canonicalUri(uri);
+    if (!key) return null;
+    const existing = this.worlds.get(key);
+    if (existing) return existing;
+    const spec = await this.deps.resolveDoc(key);
+    if (!spec) return null;
+    const w = new this.deps.DocWorld();
+    // Surface the authoring divergence so the loaded document carries a first-class
+    // conflict (the case the authoring path is FOR). A fresh document has none.
+    if (spec.stitch) w.fire("stitch", 0);
+    this.worlds.set(key, w);
+    this.specs.set(key, spec);
+    return w;
+  }
+
+  /** Parse the wasm's `[{author, text}]` alternatives — both alternatives always
+   *  travel together (the anti-forge tooth binds them into `substrate_commit`). */
+  private alternatives(w: DocWorldLike): DocAlternative[] {
+    try {
+      const rows = JSON.parse(w.alternativesJson());
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r) => ({ author: String(r.author ?? ""), text: String(r.text ?? "") }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async resolve(uri: string): Promise<DocResolveResponse> {
+    const key = canonicalUri(uri);
+    if (!key) return { ok: false, verified: false, tier: "none", error: "not a dregg-thing" };
+    const w = await this.world(key);
+    if (!w) return { ok: false, verified: false, tier: "none", error: "could not resolve document" };
+    const spec = this.specs.get(key)!;
+    // The light-client invariant: the committed boundary equals the canonical
+    // projection of the published reading (the membership/anti-forge guarantee).
+    const verified = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      verified,
+      tier: verified ? "extension" : "none",
+      object: { kind: spec.kind, addr: spec.addr, cellId: w.cellId() },
+      hasConflict: w.hasConflict(),
+      alternatives: this.alternatives(w),
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+
+  private render(uri: string): DocRenderResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", error: "not resolved" };
+    // Never render a document whose boundary does not match its projection (§6).
+    if (!w.boundaryMatchesProjection()) return { ok: false, tier: "none", error: "unverified" };
+    return {
+      ok: true,
+      tier: "extension",
+      html: w.viewHtml(),
+      hasConflict: w.hasConflict(),
+      alternatives: this.alternatives(w),
+    };
+  }
+
+  /** STITCH — surface a concurrent divergence (the pushout) as a first-class
+   *  conflict, held off-heap (the committed boundary does not move). */
+  private async stitch(uri: string): Promise<DocConflictResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    try {
+      w.fire("stitch", 0);
+    } catch (e) {
+      return { ok: false, tier: "none", error: String((e as Error)?.message ?? e) };
+    }
+    return { ok: true, tier: "extension", hasConflict: w.hasConflict() };
+  }
+
+  /** RESOLVE-CONFLICT — STAGE the pick of an alternative. The conflict is STILL
+   *  shown (both alternatives) until a consented publish collapses it; picking
+   *  never hides an alternative. */
+  private resolveConflict(uri: string, choice: number): DocConflictResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    if (!w.hasConflict()) return { ok: false, tier: "none", error: "no conflict to resolve" };
+    if (!Number.isInteger(choice) || choice < 0) return { ok: false, tier: "none", error: "invalid choice" };
+    this.staged.set(key, choice);
+    return { ok: true, tier: "extension", staged: true, choice, hasConflict: w.hasConflict() };
+  }
+
+  /** PUBLISH — the real cap-gated verified turn. Consent BEFORE any commit (the
+   *  faithful reading of the publish turn, in un-overlayable chrome). On approval,
+   *  `fire("resolve", choice)` collapses the conflict, reseals the umem `heap_root`
+   *  to `substrate_commit(resolved)`, and commits `SetField(20)+IncrementNonce`;
+   *  the receipt witnesses the new boundary at limb 28. */
+  private async publish(uri: string, origin?: string): Promise<DocPublishResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    if (!w.hasConflict()) return { ok: false, tier: "none", error: "nothing to publish (no held conflict)" };
+    if (!this.staged.has(key)) return { ok: false, tier: "none", error: "pick an alternative first" };
+    const choice = this.staged.get(key)!;
+    const spec = this.specs.get(key)!;
+    const chosen = this.alternatives(w)[choice]?.author ?? `choice ${choice}`;
+
+    // Custody consent (the load-bearing property): the faithful reading the page
+    // cannot overlay or clickjack. Every publish is a real turn, so every publish asks.
+    const approved = await this.deps.consent({
+      explanation:
+        `Publish the resolved document ${spec.addr} to the umem-heap. ` +
+        `You are keeping the alternative by ${chosen} and committing ONE verified turn ` +
+        `that binds the new document commitment (heap_root) into the receipt (limb 28).`,
+      turnId: `${key}#publish:${choice}`,
+      origin,
+    });
+    if (!approved) {
+      return {
+        ok: true,
+        tier: "extension",
+        refused: true,
+        reason: "consent denied",
+        verified: w.boundaryMatchesProjection(),
+        hasConflict: w.hasConflict(),
+        commitment: w.commitmentHex(),
+        receiptCount: w.receiptCount(),
+      };
+    }
+
+    // The real verified turn: resolve + publish (reseal heap_root, commit turn).
+    try {
+      w.fire("resolve", choice);
+    } catch (e) {
+      return {
+        ok: true,
+        tier: "extension",
+        refused: true,
+        reason: String((e as Error)?.message ?? e),
+        verified: w.boundaryMatchesProjection(),
+        hasConflict: w.hasConflict(),
+        commitment: w.commitmentHex(),
+        receiptCount: w.receiptCount(),
+      };
+    }
+    this.staged.delete(key);
+    const substrateMatches = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      tier: "extension",
+      refused: false,
+      verified: substrateMatches,
+      hasConflict: w.hasConflict(),
+      receiptCount: w.receiptCount(),
+      commitment: w.commitmentHex(),
+      substrateMatches,
+    };
+  }
+
+  /** VERIFY — the LIGHT-CLIENT check a stranger runs: independently recompute
+   *  `substrate_commit(published)` and confirm it equals the committed `heap_root`
+   *  the receipt bound. This is the "a stranger checks the receipt chain" property. */
+  private verify(uri: string): DocVerifyResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", verified: false, error: "not resolved" };
+    const verified = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      tier: verified ? "extension" : "none",
+      verified,
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+}
