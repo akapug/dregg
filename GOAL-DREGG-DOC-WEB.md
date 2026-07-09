@@ -36,3 +36,19 @@ ON-DISK-FORMAT CUTOVER + any deployed-behavior flip = ember-gated.
 
 ## DONE-LOG
 - 2026-07-09 foundation 7/7 landed + verified + memory'd; specs written (FOUNDATION/WEB/QUIET-UPGRADE).
+
+## ⚠ SCOPE CORRECTION (F4b Step-0, verified on tree) — F2/F4a targeted the WRONG commit
+The DEPLOYED document commitment is `substrate_commit` (sorted-Poseidon2 heap-Merkle root, dregg-doc/
+src/substrate.rs::compute_heap_root) — bindings_doc.rs: `heap_root == substrate_commit(published)`.
+Its INJECTIVITY is ALREADY PROVEN via Storage/BucketCommitment.lean (contentRoot_injective, no-ghost),
+same Poseidon2SpongeCR carrier. BUT F2 (DocCommit) + F4a (DocCore) proved the LINEAR-SPONGE scheme
+(`commit::commit`, DefaultHasher default, ZERO external consumers) — a PARALLEL, NON-DEPLOYED commit.
+So the earlier "F4a = proven core reaches the tab, no shadow" was INFLATED (integrator-scope-compress):
+the tab's real commit is substrate_commit, which DocCore does NOT prove. F2/F4a are real Lean proofs of
+a scheme that isn't deployed.
+REAL CLOSURE (Path A — additive, NO format flip, so main-loop's call not ember-gated): prove the
+conflict-as-state-soundness COROLLARY for the DEPLOYED substrate_commit (equal heap-root ⟹ equal conflict
+alternatives, from contentRoot_injective + to_heap_map faithfulness), and relabel the toy commit::commit
+as a non-security content-address. F2/F4a's linear sponge KEPT (honest parallel; could become the deployed
+default if commit::commit is ever un-toy'd) but its deployment-relevance corrected. Firing Path A now.
+- done-log: F4b Step-0 finding verified; Path A chosen (additive); F2/F4a scope corrected in-trail.
