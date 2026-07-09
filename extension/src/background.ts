@@ -14,14 +14,18 @@ import {
   PollEngine,
   CellEngine,
   DocEngine,
+  DocTextEngine,
   MapWebOfCells,
   defaultResolveObject,
   defaultResolveDoc,
+  defaultResolveDocText,
   type PollPortRequest,
   type PollWorldCtor,
   type CellPortRequest,
   type DocPortRequest,
   type DocWorldCtor,
+  type DocTextPortRequest,
+  type DocTextWorldCtor,
 } from "./port";
 import {
   Netlayer,
@@ -3194,6 +3198,7 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:poll",  // quiet-upgrade thin-view port (§3): resolve/render/fire/verify
   "dregg:cell",  // composition port: <dregg-embed> / <dregg-transclude>
   "dregg:doc",   // verifiable-document authoring port: <dregg-doc>
+  "dregg:doctext", // free-text authoring port: <dregg-doc editable>
 ]);
 
 const POPUP_ONLY_METHODS = new Set<MessageType>([
@@ -3350,6 +3355,46 @@ function getDocEngine(): DocEngine {
   return docEngine;
 }
 
+// ---------------------------------------------------------------------------
+// Free-text authoring engine — <dregg-doc editable>. wasm/src/bindings_doc.rs
+// (`DocTextWorld`). The SAME split again: this ENGINE (background, wasm-side) owns
+// the real wasm `DocTextWorld`, diffs each keystroke into the minimal patch
+// (`Doc::edit`'s token-LCS), renders the working reading, and PUBLISHES a real
+// cap-gated verified turn (reseal the umem `heap_root`) ONLY after the
+// un-overlayable confirm-intent consent approves the faithful reading. The element
+// reaches it ONLY through the "dregg:doctext" message — no wasm, no keys, no doc
+// graph ever leave this context. `defaultResolveDocText` is the seeded stand-in
+// (a fresh doc-cell; a malformed addr fails closed) until a free-text netlayer
+// fetch lands — mirrors the doc/poll engines' `default*` resolvers exactly.
+// ---------------------------------------------------------------------------
+
+let docTextEngine: DocTextEngine | null = null;
+
+function getDocTextEngine(): DocTextEngine {
+  requireWasm("doctext");
+  if (!docTextEngine) {
+    const DocTextWorld = (wasm as unknown as { DocTextWorld?: DocTextWorldCtor }).DocTextWorld;
+    if (!DocTextWorld) throw new Error("DocTextWorld unavailable in wasm module");
+    docTextEngine = new DocTextEngine({
+      DocTextWorld,
+      // TODO: a free-text netlayer fetch (content-addressed document → seed prose);
+      // until then the seeded stand-in resolver (a malformed addr fails closed).
+      resolveDocText: defaultResolveDocText,
+      // Custody consent for PUBLISH: the faithful reading shown in extension chrome
+      // the page cannot overlay or clickjack. Every publish is a real verified turn,
+      // so every publish asks — BEFORE any commit.
+      consent: (req) =>
+        showTurnConfirmation({
+          explanation: req.explanation,
+          turnId: req.turnId,
+          origin: req.origin,
+          hasUnknown: false,
+        }),
+    });
+  }
+  return docTextEngine;
+}
+
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
   // Security: strip _skipDisclosure from page-originated requests.
   if (sender?.tab && message?.request) {
@@ -3421,6 +3466,24 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         choice: Number(message.choice ?? 0),
       } as DocPortRequest;
       const result = await getDocEngine().handle(req, origin);
+      return { id: message.id, result };
+    }
+
+    case "dregg:doctext": {
+      // <dregg-doc editable>: resolveText / renderText / applyEdit (diff a keystroke
+      // into the minimal patch) / publishText (a real verified turn, consent BEFORE
+      // commit) / verifyText (the stranger's light-client re-check). An unpublished
+      // edit is a first-class `dirty` state — surfaced, never an unverified render.
+      const origin =
+        (message._origin as string) ||
+        (sender?.tab?.url ? new URL(sender.tab.url).origin : undefined) ||
+        "unknown";
+      const req: DocTextPortRequest = {
+        op: message.op as DocTextPortRequest["op"],
+        uri: message.uri as string,
+        text: message.text as string,
+      } as DocTextPortRequest;
+      const result = await getDocTextEngine().handle(req, origin);
       return { id: message.id, result };
     }
 
@@ -4282,7 +4345,8 @@ chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender: 
     // be instantiating on wake) so a quiet-upgrade poll never fails closed on a
     // transient cold start rather than a real verification failure.
     if ((message.type === "dregg:authorize" || message.type === "dregg:poll" ||
-         message.type === "dregg:cell" || message.type === "dregg:doc") && !ready) {
+         message.type === "dregg:cell" || message.type === "dregg:doc" ||
+         message.type === "dregg:doctext") && !ready) {
       return new Promise((resolve) => {
         pendingQueue.push({ msg: message, sender, resolve });
       });
