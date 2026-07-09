@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>composition fixture</title></head>
+<body>
+  <h1>composition fixture — a document composed from cells</h1>
+
+  <!-- RECURSION: this embed's child cell itself embeds a grandchild leaf. -->
+  <dregg-embed id="root" src="dregg://cell/b3_root"></dregg-embed>
+
+  <!-- DARKENED: out-of-cap child — citation shown, bytes withheld by the engine. -->
+  <dregg-embed id="secret" src="dregg://cell/b3_secret"></dregg-embed>
+
+  <!-- CYCLE: b3_a embeds b3_b embeds b3_a → a cycle STATE, not a hang. -->
+  <dregg-embed id="cyclic" src="dregg://cell/b3_a"></dregg-embed>
+
+  <!-- UNRESOLVED: no such cell in the web-of-cells. -->
+  <dregg-embed id="gone" src="dregg://cell/b3_missing"></dregg-embed>
+
+  <!-- UNBOUND: a name binding to nothing; heals on rebind + refresh(). -->
+  <dregg-embed id="named" src="dregg://cell/b3_name"></dregg-embed>
+
+  <!-- PINNED: a frozen citation (Pin::At) — still renders, marked pinned. -->
+  <dregg-embed id="pinned" src="dregg://cell/b3_leaf" pin="at:r_leaf_v3"></dregg-embed>
+
+  <!-- TRANSCLUDE: a VERIFIED value snapshot (not live, not editable). -->
+  <dregg-transclude id="quote" src="dregg://cell/b3_quote/body"></dregg-transclude>
+
+  <!-- TRANSCLUDE fail-closed: an unverifiable quote is never shown. -->
+  <dregg-transclude id="badquote" src="dregg://cell/b3_bad/body"></dregg-transclude>
+
+  <script src="/harness.js"></script>
+</body>
+</html>

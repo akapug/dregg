@@ -301,3 +301,243 @@ export class PollEngine {
     };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE COMPOSITION PORT — `<dregg-embed>` (a whole child CELL) and
+// `<dregg-transclude>` (a value QUOTE). DOC-CELL-COMPOSITION.md §1/§2.3,
+// DREGG-DOCUMENT-FOUNDATION.md §1.1–1.5, DREGG-WEB-SPEC.md pillar 5.
+//
+// The SAME split as the poll port: the ENGINE (background, wasm-side) resolves +
+// verifies + renders + makes the trust/cap decision; the element is a thin,
+// closed-shadow VIEW. No wasm, no keys, no cap-lattice ever reaches the page —
+// only these tiered responses. The two operators are DISTINCT (§1):
+//
+//   resolveCell  — `<dregg-embed>`  — a whole child cell. LIVE by default
+//                  (re-resolves to the child's tip) OR pinned to a receipt. Its
+//                  own membrane boundary → its own shadow root. This is Op::Embed.
+//   resolveValue — `<dregg-transclude>` — a VALUE quote: a snapshot of a
+//                  finalized receipt. Never rots, never updates, UNEDITABLE.
+//                  (The Xanadu quote.) Fail-CLOSED if it cannot be verified.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The five resolution states of an embedded child cell (§2.3). The renderer
+ * NEVER forges and NEVER panics — each is a first-class *state* of the output. */
+export type CellResolution = "rendered" | "darkened" | "unresolved" | "cycle" | "unbound";
+
+/** `Pin::Live` re-resolves to the child's tip every render; `Pin::At(receipt)`
+ * freezes an immutable child receipt — a citation that never rots (§2.2). */
+export type Pin = { kind: "live" } | { kind: "at"; receipt: string };
+
+/** The public provenance/citation an embed or a quote carries. ALWAYS survives —
+ * even a darkened embed keeps its citation (the membrane withholds only bytes). */
+export interface Provenance {
+  /** which cell (canonical `dregg://` uri). */
+  cell: string;
+  /** who owns/authored it (public), if known. */
+  author?: string;
+  /** the cited/pinned receipt (a pinned embed or a value quote). */
+  receipt?: string;
+  /** how it resolved: live tip vs a frozen receipt. */
+  pin?: "live" | "at";
+}
+
+// ── the composition request/response protocol ───────────────────────────────
+export type CellPortRequest =
+  | { op: "resolveCell"; uri: string; pin?: Pin; ancestors?: string[] }
+  | { op: "resolveValue"; uri: string };
+
+export interface ResolveCellResponse {
+  ok: boolean;
+  /** which of the five states this child resolved to. */
+  state: CellResolution;
+  tier: TrustTier;
+  /** the child's rendered HTML — PRESENT ONLY when `state === "rendered"`.
+   *  It may itself contain nested `<dregg-*>` tags → the fold is RECURSIVE.
+   *  On `darkened` the engine WITHHOLDS the bytes: this is `undefined` (the
+   *  membrane projection — provenance survives, bytes never leave the engine). */
+  html?: string;
+  /** the citation/provenance — present for every non-error state, darkened too. */
+  provenance?: Provenance;
+  /** the canonical uri (for the light-DOM fallback link on a failed resolve). */
+  canonical?: string;
+  /** a human reason for a non-rendered state (unresolved/cycle/unbound). */
+  reason?: string;
+  error?: string;
+}
+
+export interface ResolveValueResponse {
+  ok: boolean;
+  /** the anchored quote verifier's verdict. `false` ⇒ the element fails closed. */
+  verified: boolean;
+  tier: TrustTier;
+  /** the quoted, engine-rendered bytes — PRESENT ONLY when `verified`. */
+  bytes?: string;
+  provenance?: Provenance;
+  error?: string;
+}
+
+export type CellPortResponse = ResolveCellResponse | ResolveValueResponse;
+
+/** The transport a composition element holds — a channel to the CellEngine. */
+export interface CellPort {
+  request(req: CellPortRequest): Promise<CellPortResponse>;
+}
+
+// ── the resolver seam (the netlayer + membrane stand-in) ────────────────────
+/** A child cell the netlayer fetched + the membrane projected for this viewer. */
+export interface ResolvedCell {
+  /** the child's rendered HTML (may embed grandchildren as nested `<dregg-*>`). */
+  html: string;
+  provenance: Provenance;
+  /** the viewer's caps reach it. `false` ⇒ the ENGINE darkens (withholds html). */
+  inCap: boolean;
+}
+/** A whole-cell lookup: found (with the projected cell) or not (why). */
+export type CellLookup =
+  | { found: true; cell: ResolvedCell }
+  | { found: false; reason: "unbound" | "unresolved" };
+/** Resolve a canonical cell uri (honoring the pin) to a lookup. May be async. */
+export type ResolveCellFn = (uri: string, pin: Pin) => CellLookup | Promise<CellLookup>;
+
+/** A finalized value quote: the bytes a source cell committed at a cited receipt. */
+export interface ValueQuote {
+  bytes: string;
+  provenance: Provenance;
+  /** the anchored verifier's verdict over the cited receipt. */
+  verified: boolean;
+}
+/** Resolve a value uri to a quote, or `null` (unresolvable → fail-closed). */
+export type ResolveValueFn = (uri: string) => ValueQuote | null | Promise<ValueQuote | null>;
+
+export interface CellEngineDeps {
+  resolveCell: ResolveCellFn;
+  resolveValue: ResolveValueFn;
+}
+
+/**
+ * THE COMPOSITION ENGINE. Runs only in the extension (background) context. It
+ * makes the CAP/TRUST decision (darkening is engine-side — the bytes never leave
+ * here on an out-of-cap child) and the CYCLE decision (the element supplies its
+ * DOM ancestor chain — the composition tree IS the DOM — and the engine checks
+ * membership). Every response is tiered; it never returns secret state and never
+ * forges a child it could not resolve.
+ */
+export class CellEngine {
+  constructor(private deps: CellEngineDeps) {}
+
+  async handle(req: CellPortRequest): Promise<CellPortResponse> {
+    try {
+      switch (req.op) {
+        case "resolveCell":
+          return await this.resolveCell(req.uri, req.pin ?? { kind: "live" }, req.ancestors ?? []);
+        case "resolveValue":
+          return await this.resolveValue(req.uri);
+        default:
+          return { ok: false, state: "unresolved", tier: "none", error: "unknown op" } as ResolveCellResponse;
+      }
+    } catch (e) {
+      return { ok: false, state: "unresolved", tier: "none", error: String((e as Error)?.message ?? e) };
+    }
+  }
+
+  /** `<dregg-embed>`: resolve a whole child cell to one of the five states. */
+  private async resolveCell(uri: string, pin: Pin, ancestors: string[]): Promise<ResolveCellResponse> {
+    const canonical = canonicalUri(uri);
+    if (!canonical) {
+      return { ok: false, state: "unresolved", tier: "none", canonical: uri, reason: "not a dregg-thing" };
+    }
+    // CYCLE (§7): the target already sits above us in the composition tree.
+    // A cycle is a first-class STATE, never a hang / stack overflow.
+    if (ancestors.includes(canonical)) {
+      return {
+        ok: true,
+        state: "cycle",
+        tier: "extension",
+        canonical,
+        provenance: { cell: canonical, pin: pin.kind === "at" ? "at" : "live" },
+        reason: "embedding this cell here would loop",
+      };
+    }
+    const lookup = await this.deps.resolveCell(canonical, pin);
+    if (!lookup.found) {
+      // UNBOUND: a Name that binds to nothing (heals on rebind).
+      // UNRESOLVED: a cell that could not be fetched at all (surfaced, not swallowed).
+      return {
+        ok: true,
+        state: lookup.reason,
+        tier: "extension",
+        canonical,
+        provenance: { cell: canonical },
+        reason: lookup.reason === "unbound" ? "the name binds to nothing" : "the child could not be fetched",
+      };
+    }
+    const cell = lookup.cell;
+    const prov: Provenance = { ...cell.provenance, pin: pin.kind === "at" ? "at" : "live" };
+    if (!cell.inCap) {
+      // DARKENED — the membrane projection. Provenance survives; the bytes are
+      // WITHHELD (html is undefined — they never leave the engine). §2.2.2.
+      return { ok: true, state: "darkened", tier: "extension", canonical, provenance: prov, reason: "out of cap" };
+    }
+    // RENDERED — the child (its html may nest more `<dregg-*>` → the recursion).
+    return { ok: true, state: "rendered", tier: "extension", canonical, html: cell.html, provenance: prov };
+  }
+
+  /** `<dregg-transclude>`: resolve a VALUE quote. Fail-CLOSED if unverifiable. */
+  private async resolveValue(uri: string): Promise<ResolveValueResponse> {
+    const canonical = canonicalUri(uri) ?? uri.trim();
+    const quote = await this.deps.resolveValue(canonical);
+    if (!quote) {
+      return { ok: false, verified: false, tier: "none", error: "quote could not be resolved" };
+    }
+    if (!quote.verified) {
+      // The anchored verifier refused — a bad quote is NEVER shown as a value.
+      return { ok: false, verified: false, tier: "none", provenance: quote.provenance, error: "quote failed to verify" };
+    }
+    return { ok: true, verified: true, tier: "extension", bytes: quote.bytes, provenance: quote.provenance };
+  }
+}
+
+/**
+ * A dependency-free, in-memory web-of-cells (the netlayer + nameservice + value
+ * store stand-in). The REAL substrate resolver (`WebOfCells::fetch` +
+ * `Membrane::project` + the anchored `verify_anchored`) is named wiring; this is
+ * the standalone analogue the fixture drives, exactly as `defaultResolveObject`
+ * is for polls. A cell absent from the map is `unresolved`; a name explicitly
+ * bound to nothing is `unbound`; `inCap: false` darkens; a value quote whose
+ * `verified` is false fails closed.
+ */
+export class MapWebOfCells {
+  private cells = new Map<string, ResolvedCell>();
+  private unbound = new Set<string>();
+  private values = new Map<string, ValueQuote>();
+
+  setCell(uri: string, cell: ResolvedCell): this {
+    const key = canonicalUri(uri) ?? uri;
+    this.cells.set(key, cell);
+    this.unbound.delete(key);
+    return this;
+  }
+  /** Mark a name as currently bound to nothing (→ `unbound`; a later `setCell` heals it). */
+  setUnbound(uri: string): this {
+    const key = canonicalUri(uri) ?? uri;
+    this.unbound.add(key);
+    this.cells.delete(key);
+    return this;
+  }
+  setValue(uri: string, quote: ValueQuote): this {
+    this.values.set(canonicalUri(uri) ?? uri, quote);
+    return this;
+  }
+
+  resolveCell: ResolveCellFn = (uri) => {
+    const key = canonicalUri(uri) ?? uri;
+    const cell = this.cells.get(key);
+    if (cell) return { found: true, cell };
+    if (this.unbound.has(key)) return { found: false, reason: "unbound" };
+    return { found: false, reason: "unresolved" };
+  };
+
+  resolveValue: ResolveValueFn = (uri) => {
+    return this.values.get(canonicalUri(uri) ?? uri) ?? null;
+  };
+}
