@@ -543,7 +543,8 @@ test_ring_membership_unlinkable depend on it). ember chose: BUILD the blinded-me
     Merkle path proves HIDDEN leaf∈tree(root) + blinded_leaf=hash_2_to_1(leaf,blinding) via arity-2 chip
     (leaf+blinding hidden → unlinkable). Rung 0/1/2: forge_nonmember_rejected, forge_blinded_leaf_rejected,
     honest_two_shows_unlinkable (anonymity proven IN-CIRCUIT). Axiom-clean. Verified on my tree.
-  S3d-2: blinded_membership_binding_from_fold (Lean) — the 10th carrier; binding rides the fold.
+  ✅ S3d-2 DONE (02fc76cb3): blinded_membership_binding_from_fold — 10th carrier; ring+unlinkability ride
+    the fold to the root. Payload+corollary+poles NO axioms; welds to deployed leaf. Verified my tree.
   S3d-3: witness builder + descriptor_by_name arm + fold adapter (mirror bound_presentation_witness +
     presentation_leaf_adapter).
   S3d-4: THEN S3c flip — RealPresentationProof carries BOTH wires (bound-presentation for auth +
