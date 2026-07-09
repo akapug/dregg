@@ -479,6 +479,20 @@ pub fn verify_finalized_devnet_history(
     let committee = parse_committee_csv(committee_hex_csv)
         .map_err(|e| JsError::new(&format!("config committee parse failed: {e}")))?;
 
+    // THE ENROLLED ML-DSA ROSTER — GAP #0 pin. The hybrid finality gate requires the committee's
+    // genesis-ENROLLED ML-DSA-65 keys, aligned index-for-index with `committee`, sourced from
+    // config EXACTLY like the ed25519 committee above (a separate trusted input) and NEVER
+    // assembled from the cert's self-carried per-vote keys (that self-carry hole IS GAP #0: a
+    // quantum adversary who breaks ed25519 for a validator could otherwise substitute its own
+    // ML-DSA key). This wasm boundary does NOT yet thread an enrolled ML-DSA roster (the only
+    // ML-DSA keys reaching here are the self-carried `FinalityVoteJson.ml_dsa_pubkey_hex` on the
+    // votes, which the GAP #0 pin explicitly forbids trusting). So we FAIL CLOSED with an empty
+    // roster: `distinct_committee_signers`/`has_committee_quorum` count ZERO signers against a
+    // misaligned (empty ≠ committee.len()) roster, so leg 3 refuses the hybrid quorum — a refusal,
+    // NOT a silent ed25519-only downgrade. Threading the real enrolled roster through this wasm
+    // boundary (a new config param, parallel to `committee_hex_csv`) is FLAGGED in GOAL-PQ.md.
+    let ml_dsa_committee: Vec<Vec<u8>> = Vec::new();
+
     // (3) Anchor-discipline pre-check (same as verify_devnet_history): claim vs config.
     let claimed_bytes = parse_hex32(&env.vk_fingerprint_hex)
         .map_err(|e| JsError::new(&format!("envelope claimed fingerprint malformed: {e}")))?;
@@ -531,14 +545,14 @@ pub fn verify_finalized_devnet_history(
         Err(e) => return finalized_refusal(&env, format!("REFUSED: malformed finality cert: {e}")),
     };
     let proven_head = attested.final_root[0].as_u32();
-    if let Err(reason) = finality_leg(proven_head, &cert, &committee) {
+    if let Err(reason) = finality_leg(proven_head, &cert, &committee, &ml_dsa_committee) {
         return finalized_refusal(
             &env,
             format!("REFUSED at the finality leg (leg 3): {reason}"),
         );
     }
 
-    let signers = cert.distinct_committee_signers(&committee);
+    let signers = cert.distinct_committee_signers(&committee, &ml_dsa_committee);
     let view = AttestedHistoryView {
         attested: true,
         genesis_root: attested.genesis_root.iter().map(|d| d.as_u32()).collect(),
@@ -560,10 +574,18 @@ pub fn verify_finalized_devnet_history(
 /// quorum, mirroring `dregg_lightclient::verify_finalized_history`'s legs 2+3 for the byte path.
 /// `proven_head` is lane 0 of the byte-verified final anchor (what tooth 2 re-attested). Returns the
 /// distinct trusted-committee signer count on success, or a precise refusal reason.
+///
+/// `ml_dsa_committee` is the client's TRUSTED, genesis-ENROLLED ML-DSA-65 roster, aligned
+/// index-for-index with `committee` (config, exactly like the ed25519 committee — NEVER assembled
+/// from the cert's self-carried per-vote keys). Each counted vote's carried ML-DSA key is PINNED
+/// equal to the enrolled key for that validator and its PQ half verified under it (the GAP #0 pin).
+/// A misaligned/empty roster counts NO signer (fail-closed sub-quorum) — never an ed25519-only
+/// downgrade.
 fn finality_leg(
     proven_head: u32,
     cert: &dregg_lightclient::FinalityCert,
     committee: &[[u8; 32]],
+    ml_dsa_committee: &[Vec<u8>],
 ) -> Result<usize, String> {
     if committee.is_empty() {
         return Err(
@@ -581,17 +603,19 @@ fn finality_leg(
         ));
     }
     // Committee-anchored quorum — threshold over the TRUSTED committee size, not the cert's count.
-    if !cert.has_committee_quorum(committee) {
+    // The hybrid gate pins each signer's PQ half to the ENROLLED `ml_dsa_committee` roster.
+    if !cert.has_committee_quorum(committee, ml_dsa_committee) {
         let threshold = 2 * committee.len() / 3 + 1;
         return Err(format!(
-            "sub-quorum: only {} of the {} trusted committee members cast a verifying vote ({} \
-             required) — a fork signed by foreign keys does not finalize",
-            cert.distinct_committee_signers(committee),
+            "sub-quorum: only {} of the {} trusted committee members cast a verifying HYBRID vote \
+             ({} required) — a fork signed by foreign keys, or a vote whose PQ half is not the \
+             enrolled ML-DSA key, does not finalize",
+            cert.distinct_committee_signers(committee, ml_dsa_committee),
             committee.len(),
             threshold
         ));
     }
-    Ok(cert.distinct_committee_signers(committee))
+    Ok(cert.distinct_committee_signers(committee, ml_dsa_committee))
 }
 
 /// Reconstruct a [`dregg_lightclient::FinalityCert`] from its JSON form (hex-decoding each vote).
@@ -1176,6 +1200,19 @@ mod tests {
             })
             .collect();
         let committee: Vec<[u8; 32]> = keys.iter().map(|k| k.verifying_key().to_bytes()).collect();
+        // The ENROLLED ML-DSA-65 roster, aligned index-for-index with `committee` (config, NOT
+        // read from the votes): each member's PQ key derived from the SAME 32-byte ed25519 seed
+        // the vote's PQ half is signed under (mirrors `keygen_from_seed`). This is what the GAP #0
+        // pin checks each carried per-vote key against.
+        let ml_dsa_committee: Vec<Vec<u8>> = keys
+            .iter()
+            .map(|k| {
+                ml_dsa_65::KG::keygen_from_seed(&k.to_bytes())
+                    .0
+                    .into_bytes()
+                    .to_vec()
+            })
+            .collect();
 
         let root_felt = 555_123u32;
         let root = BabyBear::new(root_felt);
@@ -1206,14 +1243,14 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            finality_leg(root_felt, &honest, &committee),
+            finality_leg(root_felt, &honest, &committee, &ml_dsa_committee),
             Ok(3),
             "a genuine committee quorum over the proven head finalizes"
         );
 
         // (b) UNANCHORED — no committee configured accepts nothing.
         assert!(
-            finality_leg(root_felt, &honest, &[])
+            finality_leg(root_felt, &honest, &[], &ml_dsa_committee)
                 .unwrap_err()
                 .contains("unanchored"),
             "an unanchored client refuses outright"
@@ -1241,7 +1278,7 @@ mod tests {
             "the forged keys are genuinely outside the trusted committee"
         );
         assert!(
-            finality_leg(root_felt, &forged, &committee)
+            finality_leg(root_felt, &forged, &committee, &ml_dsa_committee)
                 .unwrap_err()
                 .contains("sub-quorum"),
             "a fork signed by foreign keys does not finalize"
@@ -1250,7 +1287,7 @@ mod tests {
         // (d) ROOT-SEAM break — a genuine committee quorum, but over a DIFFERENT head than the
         // aggregate proved. The seam must break before the quorum even matters.
         assert!(
-            finality_leg(root_felt + 1, &honest, &committee)
+            finality_leg(root_felt + 1, &honest, &committee, &ml_dsa_committee)
                 .unwrap_err()
                 .contains("root seam"),
             "a cert finalizing a different head than the proven aggregate is refused"
@@ -1273,7 +1310,7 @@ mod tests {
         };
         let back = reconstruct_finality_cert(&json).expect("the wire cert reconstructs");
         assert_eq!(
-            finality_leg(root_felt, &back, &committee),
+            finality_leg(root_felt, &back, &committee, &ml_dsa_committee),
             Ok(3),
             "the reconstructed wire cert verifies identically"
         );
