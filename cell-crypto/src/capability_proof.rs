@@ -69,14 +69,23 @@ pub struct CapabilityProof {
     /// same ed25519 seed ([`MlDsaCapKey::from_ed25519_seed`]), so a forger must
     /// break ed25519 discrete-log AND module-lattice SIS/LWE simultaneously.
     ///
-    /// The ML-DSA *public* key is deliberately NOT carried here: the verifier
-    /// checks this half against the holder's ENROLLED ML-DSA key (pinned to the
-    /// holder's identity by the caller), never a key self-carried in the proof
-    /// — a self-carried key would give an adversary zero PQ security.
-    ///
     /// `None` is treated as a missing half and fails CLOSED at [`Self::verify`].
     #[serde(default)]
     pub pq_signature: Option<Vec<u8>>,
+    /// The holder's serialized ML-DSA-65 public key, self-carried in the proof.
+    ///
+    /// This is SAFE to self-carry because the verifier does NOT trust it on its
+    /// own: [`Self::verify`] first checks that the holder's IDENTITY commits to
+    /// it — [`CellId::verify_committed_ml_dsa`] recomputes `H("dregg-hybrid-id-v1",
+    /// P_ed ‖ P_ml)` and equality-checks [`Self::holder_cell`]. A key that does
+    /// not hash into the holder's CellId is REJECTED, so the CellId itself is the
+    /// enrollment (replacing the out-of-band roster). An attacker who forges the
+    /// ed25519 half and presents their OWN ML-DSA key is rejected because that
+    /// key is not committed by the holder's identity.
+    ///
+    /// `None` is a missing half and fails CLOSED at [`Self::verify`].
+    #[serde(default)]
+    pub holder_ml_dsa_pubkey: Option<Vec<u8>>,
 }
 
 /// How the holder proves capability membership.
@@ -169,8 +178,17 @@ pub enum CapabilityProofError {
     /// The post-quantum (ML-DSA-65) half is absent — a HYBRID proof MUST carry
     /// both halves, so a missing PQ half fails CLOSED.
     MissingPqSignature,
+    /// The proof does not carry the holder's ML-DSA-65 public key — the hybrid
+    /// PQ half is incomplete, so it fails CLOSED.
+    MissingPqPublicKey,
+    /// The holder's CellId does not COMMIT to the presented ML-DSA-65 public key
+    /// (`H("dregg-hybrid-id-v1", P_ed ‖ P_ml) != holder_cell`). The key was not
+    /// enrolled by the holder's identity — e.g. an attacker who forged the
+    /// ed25519 half and self-supplied their own ML-DSA key, or a legacy
+    /// ed25519-only CellId that commits to no ML-DSA key at all.
+    IdentityCommitmentMismatch,
     /// The post-quantum (ML-DSA-65) half does not verify against the holder's
-    /// ENROLLED ML-DSA key (e.g. it was signed under an attacker's key).
+    /// id-committed ML-DSA key (e.g. it was signed under an attacker's key).
     InvalidPqSignature,
     /// The holder_commitment doesn't match our last-known view of the holder's state.
     CommitmentMismatch { expected: [u8; 32], got: [u8; 32] },
@@ -201,12 +219,23 @@ impl std::fmt::Display for CapabilityProofError {
             Self::MissingPqSignature => {
                 write!(
                     f,
-                    "capability proof is missing its ML-DSA-65 (post-quantum) half"
+                    "capability proof is missing its ML-DSA-65 (post-quantum) signature half"
                 )
             }
+            Self::MissingPqPublicKey => {
+                write!(
+                    f,
+                    "capability proof is missing the holder's ML-DSA-65 public key"
+                )
+            }
+            Self::IdentityCommitmentMismatch => write!(
+                f,
+                "holder CellId does not commit to the presented ML-DSA-65 public key \
+                 (the key was not enrolled by the holder's identity)"
+            ),
             Self::InvalidPqSignature => write!(
                 f,
-                "ML-DSA-65 half does not verify against the holder's enrolled post-quantum key"
+                "ML-DSA-65 half does not verify against the holder's id-committed post-quantum key"
             ),
             Self::CommitmentMismatch { .. } => {
                 write!(f, "holder commitment does not match expected state")
@@ -312,18 +341,21 @@ impl CapabilityProof {
     /// 4. Capability expiry (if applicable)
     /// 5. HYBRID authenticator: the classical Ed25519 half AND the post-quantum
     ///    ML-DSA-65 half both verify over the same canonical message
-    ///    (`ed25519 ∧ ML-DSA`). The PQ half is checked against the holder's
-    ///    ENROLLED ML-DSA key (`holder_ml_dsa_pubkey`), pinned by the caller to
-    ///    the holder's identity — never a key carried inside the proof.
+    ///    (`ed25519 ∧ ML-DSA`). The PQ half is checked against the ML-DSA key
+    ///    the holder self-carries in the proof — but ONLY after the holder's
+    ///    IDENTITY is shown to commit to it: `holder_cell.verify_committed_ml_dsa
+    ///    (holder_pubkey, presented_ml)` recomputes `H("dregg-hybrid-id-v1",
+    ///    P_ed ‖ P_ml)` and equality-checks the CellId. The CellId is thus the
+    ///    enrollment (replacing the out-of-band roster): a self-supplied key not
+    ///    committed by the identity is rejected.
     ///
-    /// `holder_ml_dsa_pubkey` is the serialized ML-DSA-65 public key the caller
-    /// has enrolled for this holder (see [`MlDsaCapKey::from_ed25519_seed`] /
-    /// [`enrolled_ml_dsa_pubkey`]). A missing or attacker-signed PQ half fails
-    /// CLOSED.
+    /// `holder_pubkey` is the holder's ed25519 public key (the caller-pinned
+    /// classical identity anchor; it is also bound into the id-commitment). A
+    /// missing PQ half, a key not committed by the CellId, or an attacker-signed
+    /// PQ half all fail CLOSED.
     pub fn verify(
         &self,
         holder_pubkey: &[u8; 32],
-        holder_ml_dsa_pubkey: &[u8],
         ctx: &VerificationContext,
     ) -> Result<(), CapabilityProofError> {
         // 1. Verify the target is us.
@@ -372,15 +404,31 @@ impl CapabilityProof {
             return Err(CapabilityProofError::InvalidSignature);
         }
 
-        // 5b. Post-quantum ML-DSA-65 half. Fail CLOSED on a missing half, and
-        //     check the signature against the holder's ENROLLED ML-DSA key
-        //     (pinned by the caller to the holder's identity) — NOT a key
-        //     carried in the proof. A proof whose PQ half was signed under an
-        //     attacker's fresh ML-DSA key will not verify here.
+        // 5b. Post-quantum ML-DSA-65 half. The holder self-carries their ML-DSA
+        //     public key, but we do NOT trust it on its own: first require the
+        //     holder's IDENTITY to commit to it. `holder_cell.verify_committed_
+        //     ml_dsa` recomputes `H("dregg-hybrid-id-v1", P_ed ‖ P_ml)` and
+        //     equality-checks the CellId, so the CellId is the enrollment
+        //     (replacing the out-of-band roster). An attacker who forges the
+        //     ed25519 half and self-supplies their OWN ML-DSA key is rejected
+        //     here because that key does not hash into the holder's CellId; a
+        //     legacy ed25519-only CellId (which commits to no ML-DSA key) also
+        //     fails CLOSED.
+        let Some(presented_ml_dsa_pk) = &self.holder_ml_dsa_pubkey else {
+            return Err(CapabilityProofError::MissingPqPublicKey);
+        };
+        if !self
+            .holder_cell
+            .verify_committed_ml_dsa(holder_pubkey, presented_ml_dsa_pk)
+        {
+            return Err(CapabilityProofError::IdentityCommitmentMismatch);
+        }
+        // Only now that the identity commits to it do we trust the presented key
+        // to check the PQ signature. Fail CLOSED on a missing or invalid half.
         let Some(pq_sig) = &self.pq_signature else {
             return Err(CapabilityProofError::MissingPqSignature);
         };
-        if !ml_dsa_cap_verify(holder_ml_dsa_pubkey, &msg, pq_sig) {
+        if !ml_dsa_cap_verify(presented_ml_dsa_pk, &msg, pq_sig) {
             return Err(CapabilityProofError::InvalidPqSignature);
         }
 
@@ -560,8 +608,11 @@ pub fn sign_capability_proof(proof: &mut CapabilityProof, signing_key: &ed25519_
     proof.signature = sig.to_bytes();
     // Post-quantum half: derive the ML-DSA-65 key from the SAME ed25519 seed and
     // sign the SAME message. `None` (RNG failure) leaves the half absent, which
-    // fails CLOSED at verification.
+    // fails CLOSED at verification. The public key is self-carried in the proof;
+    // it is safe to carry because the verifier only trusts it after the holder's
+    // CellId is shown to commit to it (`verify_committed_ml_dsa`).
     let pq = MlDsaCapKey::from_ed25519_seed(&signing_key.to_bytes());
+    proof.holder_ml_dsa_pubkey = Some(pq.public_bytes());
     proof.pq_signature = pq.sign(&msg);
 }
 
@@ -605,15 +656,21 @@ mod tests {
             timestamp,
             signature: [0u8; 64],
             pq_signature: None,
+            holder_ml_dsa_pubkey: None,
         };
         sign_capability_proof(&mut proof, holder_key);
         proof
     }
 
-    /// The ML-DSA-65 public key a verifier enrolls for a holder whose classical
-    /// identity is `holder_key` (derived from the SAME 32-byte seed).
-    fn enrolled_pq(holder_key: &SigningKey) -> Vec<u8> {
-        enrolled_ml_dsa_pubkey(&holder_key.to_bytes())
+    /// The HYBRID CellId for a holder whose classical identity is `holder_key`:
+    /// `H("dregg-hybrid-id-v1", P_ed ‖ P_ml)`, committing to BOTH the ed25519
+    /// public key AND the ML-DSA-65 key derived from the SAME 32-byte seed. This
+    /// is the identity that ENROLLS the holder's PQ key — the honest holder's
+    /// self-carried ML-DSA key hashes into it, so `verify` accepts.
+    fn hybrid_cell_for(holder_key: &SigningKey) -> CellId {
+        let ed = holder_key.verifying_key().to_bytes();
+        let ml = enrolled_ml_dsa_pubkey(&holder_key.to_bytes());
+        CellId::derive_hybrid_raw(&ed, &ml)
     }
 
     /// Helper: standard verification context.
@@ -636,7 +693,7 @@ mod tests {
     fn test_valid_exercise_accepted() {
         let holder_key = SigningKey::from_bytes(&[1u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
-        let holder_cell = test_cell_id(1);
+        let holder_cell = hybrid_cell_for(&holder_key);
         let target_cell = test_cell_id(2);
         let commitment = [42u8; 32];
 
@@ -652,11 +709,7 @@ mod tests {
         );
 
         let ctx = make_context(target_cell, commitment, 1001, 100);
-        assert!(
-            proof
-                .verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx)
-                .is_ok()
-        );
+        assert!(proof.verify(&holder_pubkey, &ctx).is_ok());
 
         // Also check permissions for a SetField effect.
         let effects = vec![PeerEffect::SetField {
@@ -671,16 +724,23 @@ mod tests {
         );
     }
 
-    /// ADVERSARIAL: a proof with a VALID ed25519 half for holder H, but whose
-    /// ML-DSA half is signed under an ATTACKER's fresh key (≠ H's enrolled key),
-    /// must REJECT. The honest holder passes; a missing PQ half fails CLOSED.
-    /// This is the quantum-forgery closure (GAP #4): the ed25519 half alone can
-    /// no longer authenticate a capability holder.
+    /// ADVERSARIAL (GAP #4, id-commitment closure): a proof with a VALID ed25519
+    /// half for holder H, whose CellId = `H("dregg-hybrid-id-v1", P_ed ‖ P_ml)`,
+    /// but whose self-carried ML-DSA key is an ATTACKER's OWN fresh key (≠ the
+    /// key committed by H's CellId), must REJECT — by the id-commitment, NOT a
+    /// roster mismatch. The honest holder passes; missing halves fail CLOSED.
+    ///
+    /// This is the crux the just-committed hybrid-id foundation buys: the holder
+    /// self-carries the ML-DSA key (previously an unsafe GAP #0 pattern), but the
+    /// verifier trusts it ONLY because the holder's IDENTITY commits to it. A
+    /// quantum attacker who forges the ed25519 half and presents their own
+    /// ML-DSA key cannot make that key hash into H's CellId.
     #[test]
-    fn test_pq_half_attacker_key_rejected() {
+    fn test_pq_half_attacker_key_rejected_by_id_commitment() {
         let holder_key = SigningKey::from_bytes(&[20u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
-        let holder_cell = test_cell_id(20);
+        // The holder's IDENTITY commits to BOTH keys: CellId = H(P_ed ‖ P_ml).
+        let holder_cell = hybrid_cell_for(&holder_key);
         let target_cell = test_cell_id(21);
         let commitment = [50u8; 32];
 
@@ -696,33 +756,84 @@ mod tests {
         );
         let ctx = make_context(target_cell, commitment, 1001, 100);
 
-        // Honest holder, verified against H's ENROLLED ML-DSA key → passes.
-        let enrolled = enrolled_pq(&holder_key);
-        assert!(proof.verify(&holder_pubkey, &enrolled, &ctx).is_ok());
+        // Honest holder: the self-carried ML-DSA key is committed by the CellId
+        // → passes. Sanity-check the enrollment is exactly the committed key.
+        assert_eq!(
+            proof.holder_ml_dsa_pubkey.as_deref(),
+            Some(enrolled_ml_dsa_pubkey(&holder_key.to_bytes()).as_slice())
+        );
+        assert!(proof.verify(&holder_pubkey, &ctx).is_ok());
 
-        // The ATTACKER re-signs the PQ half with their OWN fresh ML-DSA key
-        // (they cannot produce H's enrolled-key signature). The ed25519 half is
-        // still H's valid signature. Verified against H's enrolled key → REJECT.
+        // The ATTACKER (a quantum ed25519-forger) presents their OWN fresh
+        // ML-DSA key AND a valid ML-DSA signature under it, keeping H's ed25519
+        // half. Because that key does NOT hash into H's CellId, the id-commitment
+        // gate rejects it BEFORE the signature is ever trusted.
         let attacker = MlDsaCapKey::from_ed25519_seed(&[99u8; 32]);
         let mut forged = proof.clone();
+        forged.holder_ml_dsa_pubkey = Some(attacker.public_bytes());
         forged.pq_signature = attacker.sign(&forged.signing_message());
         assert!(matches!(
-            forged.verify(&holder_pubkey, &enrolled, &ctx),
-            Err(CapabilityProofError::InvalidPqSignature)
+            forged.verify(&holder_pubkey, &ctx),
+            Err(CapabilityProofError::IdentityCommitmentMismatch)
         ));
-        // GAP #0 demonstration: the forged PQ half IS a valid ML-DSA signature
-        // under the attacker's OWN key — so had the verifier trusted a key
-        // carried in the proof, this forgery would PASS. It is rejected ONLY
-        // because the verifier pins to H's ENROLLED key, not a self-carried one.
-        let attacker_pk = attacker.public_bytes();
-        assert!(forged.verify(&holder_pubkey, &attacker_pk, &ctx).is_ok());
+        // The forged PQ half IS itself a valid ML-DSA signature under the
+        // attacker's key — so had the verifier trusted a self-carried key on its
+        // own (the old GAP #0 hazard), this forgery would PASS. It is rejected
+        // ONLY because the holder's CellId does not commit to that key.
+        assert!(ml_dsa_cap_verify(
+            &attacker.public_bytes(),
+            &forged.signing_message(),
+            forged.pq_signature.as_ref().unwrap()
+        ));
 
-        // Missing PQ half → fail CLOSED (not admitted on the ed25519 half alone).
-        let mut no_pq = proof.clone();
-        no_pq.pq_signature = None;
+        // Missing PQ public key → fail CLOSED (not admitted on ed25519 alone).
+        let mut no_pk = proof.clone();
+        no_pk.holder_ml_dsa_pubkey = None;
         assert!(matches!(
-            no_pq.verify(&holder_pubkey, &enrolled, &ctx),
+            no_pk.verify(&holder_pubkey, &ctx),
+            Err(CapabilityProofError::MissingPqPublicKey)
+        ));
+
+        // Missing PQ signature → fail CLOSED.
+        let mut no_sig = proof.clone();
+        no_sig.pq_signature = None;
+        assert!(matches!(
+            no_sig.verify(&holder_pubkey, &ctx),
             Err(CapabilityProofError::MissingPqSignature)
+        ));
+    }
+
+    /// STAGED FLAG-DAY: a holder whose CellId is a LEGACY ed25519-only identity
+    /// (`derive_raw`, distinct domain) commits to NO ML-DSA key, so the hybrid
+    /// cap-proof id-commitment gate fails CLOSED. Exercising a hybrid capability
+    /// proof requires a hybrid CellId — a legacy id can never satisfy the PQ
+    /// enrollment, and is rejected rather than silently admitted.
+    #[test]
+    fn test_legacy_ed25519_only_cellid_rejected() {
+        let holder_key = SigningKey::from_bytes(&[30u8; 32]);
+        let holder_pubkey = holder_key.verifying_key().to_bytes();
+        // Legacy identity: no ML-DSA key is committed by this CellId.
+        let legacy_cell = CellId::derive_raw(&holder_pubkey, &[0u8; 32]);
+        let target_cell = test_cell_id(31);
+        let commitment = [60u8; 32];
+
+        let proof = make_signed_proof(
+            &holder_key,
+            legacy_cell,
+            target_cell,
+            commitment,
+            AuthRequired::Signature,
+            0,
+            None,
+            1000,
+        );
+        let ctx = make_context(target_cell, commitment, 1001, 100);
+
+        // Even though the self-carried key + signature are internally consistent,
+        // the legacy CellId does not commit to any ML-DSA key → REJECTED.
+        assert!(matches!(
+            proof.verify(&holder_pubkey, &ctx),
+            Err(CapabilityProofError::IdentityCommitmentMismatch)
         ));
     }
 
@@ -730,7 +841,7 @@ mod tests {
     fn test_wrong_permissions_rejected() {
         let holder_key = SigningKey::from_bytes(&[2u8; 32]);
         let holder_pubkey = holder_key.verifying_key().to_bytes();
-        let holder_cell = test_cell_id(3);
+        let holder_cell = hybrid_cell_for(&holder_key);
         let target_cell = test_cell_id(4);
         let commitment = [43u8; 32];
 
@@ -747,12 +858,8 @@ mod tests {
         );
 
         let ctx = make_context(target_cell, commitment, 1001, 100);
-        // Proof itself verifies (signature is fine).
-        assert!(
-            proof
-                .verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx)
-                .is_ok()
-        );
+        // Proof itself verifies (both hybrid halves + id-commitment are fine).
+        assert!(proof.verify(&holder_pubkey, &ctx).is_ok());
 
         // But permissions check fails for SetField (requires Signature on default perms).
         let effects = vec![PeerEffect::SetField {
@@ -788,7 +895,7 @@ mod tests {
         );
 
         let ctx = make_context(target_cell, commitment, 1001, 100); // current height 100
-        let result = proof.verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx);
+        let result = proof.verify(&holder_pubkey, &ctx);
         assert!(matches!(
             result,
             Err(CapabilityProofError::CapabilityExpired {
@@ -820,7 +927,7 @@ mod tests {
         );
 
         let ctx = make_context(target_cell, expected_commitment, 1001, 100);
-        let result = proof.verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx);
+        let result = proof.verify(&holder_pubkey, &ctx);
         assert!(matches!(
             result,
             Err(CapabilityProofError::CommitmentMismatch { .. })
@@ -848,7 +955,7 @@ mod tests {
 
         // Current time is 2000, max age is 300s, so 1000 is 1000s old -> stale.
         let ctx = make_context(target_cell, commitment, 2000, 100);
-        let result = proof.verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx);
+        let result = proof.verify(&holder_pubkey, &ctx);
         assert!(matches!(
             result,
             Err(CapabilityProofError::StaleTimestamp { .. })
@@ -878,7 +985,7 @@ mod tests {
 
         let holder_pubkey = holder_key.verifying_key().to_bytes();
         let ctx = make_context(target_cell, commitment, 1001, 100);
-        let result = proof.verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx);
+        let result = proof.verify(&holder_pubkey, &ctx);
         assert!(matches!(
             result,
             Err(CapabilityProofError::InvalidSignature)
@@ -907,7 +1014,7 @@ mod tests {
 
         // Verification context says we are wrong_target, but proof says target_cell.
         let ctx = make_context(wrong_target, commitment, 1001, 100);
-        let result = proof.verify(&holder_pubkey, &enrolled_pq(&holder_key), &ctx);
+        let result = proof.verify(&holder_pubkey, &ctx);
         assert!(matches!(
             result,
             Err(CapabilityProofError::WrongTarget { .. })
