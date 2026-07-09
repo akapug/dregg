@@ -100,3 +100,5 @@ Yes — partly. I over-deleted. The honest split, verified:
   pre-commit hook sweeps parallel lanes' staged files into an agent's commit. Recovered clean (all 4 lanes'
   commits on main, pr_carry intact, one mod pr_carry). GOING FORWARD: agents LEAVE ON DISK; main loop commits.
 - done-log: commit consolidation complete — one real commit, the properties re-homed, tree green.
+
+- done-log: rich-layer v0 MARKS landed (82ca7c39b) — Peritext overlay, separate store, mark∥text-edit-no-conflict proven, 116+192 green. Next: <dregg-doc> element (render+resolve+publish+verify, wrapping the existing DocCollabWorld) — running.
