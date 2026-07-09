@@ -88,3 +88,15 @@ Yes — partly. I over-deleted. The honest split, verified:
 - done-log: over-deletion caught + owned; gap-fillers redirected onto the ONE real commit (substrate_commit).
 
 - done-log: FINISH landed (bd541b9bc) — DocSubstrateSound.lean re-homes Element-structure + conflict-as-state onto substrate_commit, thin over root_binds_get, [propext]-clean. Over-deletion fully corrected.
+
+## ✅ COMMIT CONSOLIDATION DONE (one real commit, no toys, nothing lost)
+- Toy `commit.rs` (DefaultHasher) DELETED (b1dd8814f); 5 redundant anti-forge tests deleted (covered by
+  substrate twins), 2 genuine ones (typed-atom forge, atom-type-binding) MOVED to substrate_commit.
+- Doc-soundness (Element-structure, conflict-as-state) proven ON substrate_commit (bd541b9bc, DocSubstrateSound).
+- Verified my tree: 107 default + 183 substrate tests green; no dangling commit refs; the deployed commit is
+  the ONE commit, proven via root_binds_get. Patch::id/AtomId::derive stay DefaultHasher LOCAL ids (separate
+  cross-cell (CellId,AtomId) seam, noted, not conflated).
+- ⚠ SWARM-GIT LESSON: an agent did `git commit --amend` on a parallel lane's tip; the repo's rustfmt-restage
+  pre-commit hook sweeps parallel lanes' staged files into an agent's commit. Recovered clean (all 4 lanes'
+  commits on main, pr_carry intact, one mod pr_carry). GOING FORWARD: agents LEAVE ON DISK; main loop commits.
+- done-log: commit consolidation complete — one real commit, the properties re-homed, tree green.
