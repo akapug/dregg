@@ -364,6 +364,7 @@ fn test_note_bridge_between_federations() {
         threshold: 0,
         federation_id: dregg_types::FederationId::PLACEHOLDER,
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     };
 
     // Alice initiates the bridge: lock the note in Fed A's pending set.

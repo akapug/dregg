@@ -223,6 +223,7 @@ fn all_effect_variants() -> Vec<Variant> {
                         threshold: 0,
                         federation_id: dregg_types::FederationId::PLACEHOLDER,
                         receipt_stream_root: None,
+                        hybrid_quorum: Vec::new(),
                     },
                     spending_proof: vec![],
                     destination_commitment: NoteCommitment([0u8; 32]),

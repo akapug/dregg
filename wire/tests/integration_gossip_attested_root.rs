@@ -42,6 +42,7 @@ fn build_attested_root(
         threshold,
         federation_id,
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     };
 
     let message = root.signing_message();
@@ -214,6 +215,7 @@ fn threshold_zero_root_has_quorum() {
         threshold: 0,
         federation_id: FederationId([0u8; 32]),
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     };
 
     assert!(

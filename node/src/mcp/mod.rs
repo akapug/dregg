@@ -1157,8 +1157,21 @@ mod tests {
         mut root: dregg_types::AttestedRoot,
         sk: &dregg_types::SigningKey,
     ) -> dregg_types::AttestedRoot {
-        let sig = dregg_types::sign(sk, &root.signing_message());
-        root.quorum_signatures = vec![(sk.public_key(), sig)];
+        let message = root.signing_message();
+        let sig = dregg_types::sign(sk, &message);
+        let pk = sk.public_key();
+        root.quorum_signatures = vec![(pk, sig)];
+        // HYBRID closure: the cross-fed verifier now requires an ed25519 ∧
+        // ML-DSA-65 quorum over the SAME `signing_message()`. Derive this
+        // member's ML-DSA-65 key deterministically from its ed25519 pubkey so
+        // the fixture is reproducible and self-contained.
+        let (pq_pk, pq_sk) = dregg_federation::frost::MlDsaSigningKey::from_seed(&pk.0);
+        root.hybrid_quorum = vec![dregg_types::HybridQuorumSig {
+            pubkey: pk,
+            signature: sig,
+            ml_dsa_pubkey: pq_pk.0.to_vec(),
+            pq_signature: pq_sk.sign(&message).expect("ml-dsa sign"),
+        }];
         root
     }
 
@@ -1192,6 +1205,7 @@ mod tests {
                 threshold: 1,
                 federation_id: dregg_types::FederationId(federation_id),
                 receipt_stream_root: Some(receipt_stream_root),
+                hybrid_quorum: Vec::new(),
             },
             signing_key,
         )
@@ -1206,9 +1220,10 @@ mod tests {
     /// `dregg_federation::receipt::verify_hybrid_quorum_sigs` — the one place the
     /// classical ∧ pq rule lives. A forged or missing ML-DSA half is rejected
     /// even with a valid ed25519 half (the teeth), and a non-member signer is
-    /// rejected. (Wiring this into `verify_cross_fed_bundle` and the `AttestedRoot`
-    /// wire shape is a deferred flag-day: those live in `verifier/` and the
-    /// `sdk/`-shared `types::AttestedRoot`, outside this lane.)
+    /// rejected. The wire `types::AttestedRoot` now carries this `hybrid_quorum`
+    /// and `verify_cross_fed_bundle` (in `verifier/`) requires it — a
+    /// classical-only root fails closed (postcard flag-day; see
+    /// `dregg_types::AttestedRoot::hybrid_quorum`).
     #[test]
     fn cross_fed_attested_root_hybrid_quorum_teeth() {
         use dregg_federation::frost::MlDsaSigningKey;
@@ -1249,6 +1264,7 @@ mod tests {
             threshold: 2,
             federation_id: FederationId(fed_id),
             receipt_stream_root: None,
+            hybrid_quorum: Vec::new(),
         };
         let message = root.signing_message();
 

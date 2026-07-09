@@ -222,6 +222,7 @@ fn setup_genesis() -> Result<SharedState, Box<dyn Error>> {
         threshold: 2,
         federation_id: dregg_types::FederationId::PLACEHOLDER,
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     };
 
     let signing_message = genesis_root.signing_message();

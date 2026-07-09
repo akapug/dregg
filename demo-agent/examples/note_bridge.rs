@@ -58,6 +58,7 @@ fn mock_attested_root(fed_name: &str, height: u64) -> AttestedRoot {
         threshold: 0,
         federation_id: dregg_types::FederationId::PLACEHOLDER,
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     }
 }
 
