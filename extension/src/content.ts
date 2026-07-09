@@ -5,6 +5,7 @@
 
 import type { MessageType } from "./types";
 import { startDetector } from "./detect";
+import { registerCompositionElements } from "./elements/dregg-embed";
 
 // Generate a random nonce for this injection session to prevent event spoofing.
 const SESSION_NONCE = crypto.randomUUID();
@@ -15,6 +16,13 @@ const SESSION_NONCE = crypto.randomUUID();
 // into a live, verified, votable thin view whose engine lives in the
 // background. Per-origin opt-in (default-deny) gates whether anything upgrades.
 void startDetector();
+
+// Composition delivery layer (DOC-CELL-COMPOSITION §2.3, DREGG-WEB-SPEC pillar 5):
+// register the `<dregg-embed>` (whole child cell, recursive) and
+// `<dregg-transclude>` (value quote) custom elements so author-placed tags — and
+// the nested `<dregg-*>` tags a resolved child renders — upgrade to closed-shadow
+// thin views whose CellEngine lives in the background.
+registerCompositionElements();
 
 // Methods that any page origin can call without prior approval.
 const UNRESTRICTED_METHODS = new Set<MessageType>([
