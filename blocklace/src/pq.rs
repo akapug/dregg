@@ -17,12 +17,11 @@
 //! ENROLLED public key (the committee roster, e.g. from genesis). See
 //! [`crate::Blocklace::enroll_pq`] and [`crate::Block::verify_signature`].
 //!
-//! This mirrors `dregg_federation::frost`'s ML-DSA newtypes exactly (same
-//! `fips204` crate, same derivation), re-implemented here because `dregg-blocklace`
-//! sits BELOW `dregg-federation` in the dependency graph.
+//! This pins `dregg_federation::frost`'s ML-DSA domain separation exactly (same
+//! derivation, same shared `dregg-pq` leaf primitive), with a block-specific
+//! [`BLOCK_PQ_CTX`]; the newtype names live here because `dregg-blocklace` sits
+//! BELOW `dregg-federation` in the dependency graph.
 
-use fips204::ml_dsa_65;
-use fips204::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
 
 /// Domain-separation context (FIPS 204 `ctx`) bound into every hybrid-block
@@ -32,10 +31,10 @@ use serde::{Deserialize, Serialize};
 pub const BLOCK_PQ_CTX: &[u8] = b"dregg-blocklace-block-pq-v1";
 
 /// Byte length of a serialized ML-DSA-65 public key (FIPS 204, 1952 bytes).
-pub const PK_LEN: usize = ml_dsa_65::PK_LEN;
+pub const PK_LEN: usize = dregg_pq::ML_DSA_PK_LEN;
 
 /// Byte length of an ML-DSA-65 signature (FIPS 204, 3309 bytes).
-pub const SIG_LEN: usize = ml_dsa_65::SIG_LEN;
+pub const SIG_LEN: usize = dregg_pq::ML_DSA_SIG_LEN;
 
 /// An ML-DSA-65 public key, as its FIPS 204 serialized bytes.
 ///
@@ -58,13 +57,7 @@ impl MlDsaPublicKey {
     /// Returns `false` on a wrong-length signature, an undecodable key, or a
     /// signature that does not verify. Fails CLOSED on every malformed input.
     pub fn verify(&self, message: &[u8], sig_bytes: &[u8]) -> bool {
-        let Ok(sig) = <[u8; SIG_LEN]>::try_from(sig_bytes) else {
-            return false;
-        };
-        let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(self.0) else {
-            return false;
-        };
-        vk.verify(message, &sig, BLOCK_PQ_CTX)
+        dregg_pq::ml_dsa_verify(&self.0, BLOCK_PQ_CTX, message, sig_bytes)
     }
 }
 
@@ -73,8 +66,10 @@ impl MlDsaPublicKey {
 /// Held only by the creator (it never leaves the node); the corresponding
 /// [`MlDsaPublicKey`] is enrolled in the committee roster. Every signature it
 /// produces is bound to [`BLOCK_PQ_CTX`].
+///
+/// A thin newtype over the shared [`dregg_pq::MlDsaKey`] primitive.
 #[derive(Clone)]
-pub struct MlDsaSigningKey(ml_dsa_65::PrivateKey);
+pub struct MlDsaSigningKey(dregg_pq::MlDsaKey);
 
 impl std::fmt::Debug for MlDsaSigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -89,18 +84,20 @@ impl MlDsaSigningKey {
     /// PQ identity is bound to the same seed as the classical identity — exactly
     /// how the node derives its PQ key in `node/src/blocklace_sync.rs`.
     pub fn from_seed(xi: &[u8; 32]) -> (MlDsaPublicKey, Self) {
-        let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(xi);
-        (MlDsaPublicKey(pk.into_bytes()), Self(sk))
+        let key = dregg_pq::MlDsaKey::from_ed25519_seed(xi);
+        let pk = MlDsaPublicKey(
+            key.public_bytes()
+                .try_into()
+                .expect("ML-DSA-65 public key is PK_LEN bytes"),
+        );
+        (pk, Self(key))
     }
 
     /// Sign `message` under [`BLOCK_PQ_CTX`] (hedged from OS entropy).
     ///
     /// `None` only on a transient OS-entropy failure during hedged signing.
     pub fn sign(&self, message: &[u8]) -> Option<Vec<u8>> {
-        self.0
-            .try_sign(message, BLOCK_PQ_CTX)
-            .ok()
-            .map(|s| s.to_vec())
+        self.0.try_sign(BLOCK_PQ_CTX, message)
     }
 }
 

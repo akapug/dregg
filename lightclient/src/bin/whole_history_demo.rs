@@ -39,8 +39,6 @@ fn demo_signed_vote(
     root: dregg_circuit::field::BabyBear,
     participant_count: usize,
 ) -> SignedVote {
-    use fips204::ml_dsa_65;
-    use fips204::traits::{KeyGen as _, SerDes as _, Signer as _};
     let mut seed = [0u8; 32];
     seed[0] = i;
     seed[31] = 0xA5;
@@ -52,15 +50,14 @@ fn demo_signed_vote(
     let mut xi = [0u8; 32];
     xi[0] = i;
     xi[31] = 0xD5;
-    let (ml_pk, ml_sk) = ml_dsa_65::KG::keygen_from_seed(&xi);
-    let pq_signature = ml_sk
-        .try_sign(&msg, dregg_lightclient::HYBRID_PQ_CTX)
-        .expect("ml-dsa-65 sign cannot fail on a valid key")
-        .to_vec();
+    let ml_key = dregg_pq::MlDsaKey::from_ed25519_seed(&xi);
+    let pq_signature = ml_key
+        .try_sign(dregg_lightclient::HYBRID_PQ_CTX, &msg)
+        .expect("ml-dsa-65 sign cannot fail on a valid key");
     SignedVote {
         validator: sk.verifying_key().to_bytes(),
         signature: sig.to_bytes(),
-        ml_dsa_pubkey: ml_pk.into_bytes().to_vec(),
+        ml_dsa_pubkey: ml_key.public_bytes(),
         pq_signature,
     }
 }
@@ -75,6 +72,20 @@ fn demo_committee(n: u8) -> Vec<[u8; 32]> {
             seed[0] = i;
             seed[31] = 0xA5;
             SigningKey::from_bytes(&seed).verifying_key().to_bytes()
+        })
+        .collect()
+}
+
+/// The TRUSTED, genesis-ENROLLED ML-DSA-65 roster for the demo's validators `0..n`,
+/// aligned index-for-index with [`demo_committee`] — the post-quantum anchor
+/// `verify_finalized_history` pins each counted vote's carried ML-DSA key to.
+fn demo_ml_dsa_committee(n: u8) -> Vec<Vec<u8>> {
+    (0..n)
+        .map(|i| {
+            let mut xi = [0u8; 32];
+            xi[0] = i;
+            xi[31] = 0xD5;
+            dregg_pq::MlDsaKey::from_ed25519_seed(&xi).public_bytes()
         })
         .collect()
 }
@@ -393,6 +404,7 @@ fn main() {
         final_root,
         &cert,
         &demo_committee(4),
+        &demo_ml_dsa_committee(4),
         Some(agg.genesis_root),
     )
     .expect("aggregate + root-seam + genesis-anchor + 3-of-4 quorum cert all hold");
@@ -423,6 +435,7 @@ fn main() {
         final_root,
         &weak,
         &demo_committee(4),
+        &demo_ml_dsa_committee(4),
         None,
     ) {
         Ok(_) => panic!("a sub-quorum cert must be refused"),
@@ -438,6 +451,7 @@ fn main() {
         final_root,
         &cert,
         &demo_committee(4),
+        &demo_ml_dsa_committee(4),
         Some(fabricated_genesis),
     ) {
         Ok(_) => panic!("a fabricated genesis anchor must be refused"),
