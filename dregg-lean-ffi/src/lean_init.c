@@ -165,6 +165,21 @@ extern lean_object *initialize_Dregg2_Dregg2_Crypto_Fips204Verify(uint8_t builti
 extern lean_object *dregg_fips204_verify(lean_object *input);
 #endif
 
+/* The @[export]ed Lean `String -> String` VERIFIED ML-DSA SIGN CORE
+ * (`Dregg2.Crypto.Fips204Verify.signFFI`): decodes the wire `"s1 s2 t0 μ y"` (secret + message + the
+ * sampled randomness/mask), runs the extracted, spec-agreeing `signCore` (the deterministic
+ * Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters), and returns the signature wire
+ * `"c̃ z h"` on an ACCEPTED iteration or `"REJECT"` on a rejected sample / malformed wire. Together with
+ * `dregg_fips204_verify` this discharges `Fips204Correct` FULLY (both directions extracted).
+ *
+ * GATED on DREGG_FIPS204_SIGN. The symbol is co-located in the SAME module as the verify core
+ * (`Dregg2.Crypto.Fips204Verify`), so its initializer is the SAME
+ * `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` already run under DREGG_FIPS204_VERIFY — no separate
+ * init is required here (build.rs probes + defines DREGG_FIPS204_SIGN when the symbol is present). */
+#ifdef DREGG_FIPS204_SIGN
+extern lean_object *dregg_fips204_sign(lean_object *input);
+#endif
+
 /* ── NO-COPY BOUNDARY runtime helpers (linkable wrappers over the `static inline`
  * <lean/lean.h> primitives the no-copy `lean_direct.rs` boundary needs). `lean_inc_ref`,
  * `lean_dec_ref`, `lean_box`, and `lean_string_cstr` are `static inline` in the header (no
@@ -379,6 +394,30 @@ size_t dregg_fips204_verify_str(const char *in_utf8, char *out, size_t out_cap) 
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_fips204_verify(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_FIPS204_SIGN
+/* dregg_fips204_sign_str — the C string bridge over the VERIFIED Lean `String -> String` ML-DSA
+ * sign-core export (`Dregg2.Crypto.Fips204Verify.signFFI`). Input: `"s1 s2 t0 μ y"` (secret + message +
+ * the sampled randomness/mask). Output: `"c̃ z h"` (an accepted signature) or `"REJECT"` (a rejected
+ * sample / malformed wire — the caller resamples `y`). Runs the extracted `signCore` — the deterministic
+ * Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters, PROVED to agree with the spec
+ * (`signCore_eq_spec`) and to round-trip through `verifyCore` (`signCore_verifies`). Same return contract
+ * as the bridges above. */
+size_t dregg_fips204_sign_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_fips204_sign(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);

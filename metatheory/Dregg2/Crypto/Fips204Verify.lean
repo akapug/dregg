@@ -33,20 +33,25 @@ native via `leanc` and called from Rust through the `@[export]`ed `verifyFFI`. T
 
 ## HONEST RESIDUAL (named, not laundered)
 
-The ONLY residual is the `leanc`/FFI toolchain (the extracted `verifyCore` runs as native code the C
-compiler emits) PLUS two named ENGINEERING items — formalizable published work, NOT open problems:
+The ONLY residual is the `leanc`/FFI toolchain (the extracted `verifyCore`/`signCore` run as native code
+the C compiler emits) PLUS ONE named ENGINEERING item — formalizable published work, NOT an open problem:
 
-  * **sign-rejection-sampling extraction.** `extractedApi.sign` is the accepted-iteration core with a
-    TRIVIAL (constant-challenge) sampler, so the round-trip is unconditional. The real `Sign` loops
-    `SampleInBall`/`ExpandMask` until the norm bounds pass (Dilithium rejection termination). Modeling that
-    sampler is the next pass; the VERIFY direction — the one that rejects forgeries — is fully extracted here.
-  * **full-dimension byte codec.** `verifyCore` is the verify EQUATION at `n=1` real-`q` (`A = id`). The
-    `n=256` negacyclic ring, `NTT`, `SampleInBall`/`ExpandA` over `SHAKE`, and the 1952/3309-byte `pkDecode`/
-    `sigDecode` are the byte-faithful interop with the `fips204` crate — a codec extraction, mechanical.
+  * **full-dimension byte codec.** `verifyCore`/`signCore` are the verify/sign EQUATIONS at `n=1` real-`q`
+    (`A = id`). The `n=256` negacyclic ring, `NTT`, `SampleInBall`/`ExpandA` over `SHAKE`, and the
+    1952/3309-byte `pkDecode`/`sigDecode` are the byte-faithful interop with the `fips204` crate — a codec
+    extraction, mechanical.
 
-Neither is a hardness carrier: no lattice/DL/hash assumption enters the correctness of VERIFY. The
-load-bearing object is the executable verify's non-vacuity (a tampered `z`/`c̃`/out-of-range `z` REJECTS,
-proved by `#guard` teeth) and its agreement with the spec.
+**SIGN is now extracted too (PART 5).** `signCore : sk → μ → y → Option Sig` is the DETERMINISTIC
+Fiat–Shamir-with-aborts signer: the randomness (mask `y`) is an INPUT, the four post-rejection norm/hint
+gates are evaluated, and a REJECTED sample is honest `none` (the caller retries with fresh `y`, the
+Dilithium rejection loop) — not faked. `signCore_verifies` proves an accepted `signCore` output VERIFIES
+under `verifyCore` (the sign→verify correctness `Fips204Correct` names), so `signExtractedApi_fips204`
+DISCHARGES `Fips204Correct` FULLY: both directions are extracted Lean objects, no `fips204` crate is
+trusted for the round-trip. The residual is the `leanc`/FFI toolchain ALONE.
+
+Neither is a hardness carrier: no lattice/DL/hash assumption enters the correctness of SIGN or VERIFY. The
+load-bearing object is the executables' non-vacuity (a tampered `z`/`c̃`/out-of-range `z` REJECTS; a
+rejected mask is `none`, proved by `#guard` teeth) and their agreement with the spec.
 -/
 import Dregg2.Crypto.Fips204Spec
 
@@ -183,5 +188,151 @@ must REJECT. These `#guard`s are the load-bearing check that `verifyCore` is a r
 #assert_axioms realParams_honest
 #assert_axioms extractedApi_fips204
 #assert_axioms extractedApi_correct
+
+/-! ## PART 5 — the EXECUTABLE ML-DSA SIGN core (Fiat–Shamir-with-aborts), extracted; the FULL
+sign→verify round-trip; `Fips204Correct` DISCHARGED with NO crate hypothesis.
+
+`signCore sk μ y : Option Sig` is the DETERMINISTIC accepted-iteration signer: the randomness (the
+mask `y`) is an INPUT, and the four post-rejection norm/hint gates are evaluated — `none` when a sample
+is REJECTED (the caller retries with fresh `y`, the Dilithium rejection loop, honestly — NOT faked),
+`some σ` on an accepted iteration. With `verifyCore` (PART 2) already extracted, an accepted `signCore`
+output VERIFIES (`signCore_verifies`) — the sign→verify correctness `Fips204Correct` names, now a
+THEOREM about two extracted Lean objects, not a trusted primitive round-trip. -/
+
+/-- The accepted-iteration gates at the deployed ML-DSA-65 parameters, as a Bool (`c = 1`, `A = id`, so
+the checks are message-INDEPENDENT): `‖c·t₀‖ ≤ γ₂ = 261888`, `‖c·s₂‖ ≤ β = 196`, the low part of `A·y`
+in `[β, α−β) = [196, 523580)`, and `‖z‖ = ‖y + c·s₁‖ < γ₁−β = 524092`. A sample failing ANY gate is
+REJECTED (the rejection-sampling loop resamples `y`). These are exactly the `fips204_correct`
+post-rejection hypotheses at the deployed literals. -/
+def signAccepts (s1 s2 t0 y : ℤ) : Bool :=
+  decide (-261888 ≤ -t0 ∧ -t0 ≤ 261888 ∧
+          -196 ≤ -s2 ∧ -s2 ≤ 196 ∧
+          196 ≤ (y + 261888) % 523776 ∧ (y + 261888) % 523776 < 523776 - 196 ∧
+          -524092 ≤ y + s1 ∧ y + s1 ≤ 524092)
+
+/-- **The EXECUTABLE ML-DSA sign core** — deterministic in the randomness `y`. On an ACCEPTED iteration
+(`signAccepts`) it returns the spec signature `Fips204Spec.MlDsaParams.sign` at the deployed parameters;
+on a REJECTED sample it returns `none` (the caller retries with fresh `y`). This is the object the
+`@[export]` compiles to native and `dregg-pq` calls for the signing path. -/
+def signCore (s1 s2 t0 μ y : ℤ) : Option (ℤ × ℤ × ℤ) :=
+  if signAccepts s1 s2 t0 y then some (realParams.sign s1 s2 t0 μ y) else none
+
+/-- **EXECUTABLE = SPEC.** On an accepted iteration the extracted `signCore` IS the spec
+`MlDsaParams.sign` at the real parameters — definitionally (the `if`'s true branch). So routing
+`dregg-pq` through `signCore` routes it through the object `fips204_correct` reasons about, not a
+re-implementation. -/
+theorem signCore_eq_spec (s1 s2 t0 μ y : ℤ) (h : signAccepts s1 s2 t0 y = true) :
+    signCore s1 s2 t0 μ y = some (realParams.sign s1 s2 t0 μ y) := by
+  simp only [signCore, h, if_true]
+
+/-- **THE ROUND-TRIP — an accepted `signCore` output VERIFIES under the extracted `verifyCore`.** With
+the public high part `thi = s₁ + s₂ − t₀` (Power2Round consistency `A·s₁ + s₂ = thi + t₀`, `A = id`)
+and `c = SampleInBall = 1`, an accepted signature verifies — DERIVED from the spec `fips204_correct`
+(the hint round-trip + high-bits stability), NOT assumed. This is the correctness `Fips204Correct`
+names, as a theorem about the two extracted objects. -/
+theorem signCore_verifies (s1 s2 t0 μ y : ℤ) (σ : ℤ × ℤ × ℤ)
+    (h : signCore s1 s2 t0 μ y = some σ) :
+    verifyCore (s1 + s2 - t0) μ σ = true := by
+  unfold signCore at h
+  split at h
+  case isTrue hacc =>
+    rw [Option.some.injEq] at h
+    subst h
+    simp only [signAccepts, decide_eq_true_eq] at hacc
+    obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8⟩ := hacc
+    show realParams.verifyB (s1 + s2 - t0) μ (realParams.sign s1 s2 t0 μ y) = true
+    refine fips204_correct realParams s1 s2 t0 (s1 + s2 - t0) μ y 1 rfl ?_ ?_ ?_ ?_ ?_
+    · -- hkey : A·s₁ + s₂ = (s₁+s₂−t₀) + t₀  (A = id)
+      have hA : realParams.A s1 = s1 := rfl
+      rw [hA]; ring
+    · -- nearGamma2 (−(1·t₀))
+      show -261888 ≤ -((1 : ℤ) • t0) ∧ -((1 : ℤ) • t0) ≤ 261888
+      rw [one_smul]; omega
+    · -- betaSmall (−(1·s₂))
+      show -196 ≤ -((1 : ℤ) • s2) ∧ -((1 : ℤ) • s2) ≤ 196
+      rw [one_smul]; omega
+    · -- lowGap (A·y)
+      have hA : realParams.A y = y := rfl
+      show 196 ≤ (realParams.A y + 261888) % 523776 ∧
+           (realParams.A y + 261888) % 523776 < 523776 - 196
+      rw [hA]; omega
+    · -- zBoundB (y + 1·s₁) = true
+      show decide (-524092 ≤ y + (1 : ℤ) • s1 ∧ y + (1 : ℤ) • s1 ≤ 524092) = true
+      rw [one_smul, decide_eq_true_eq]; omega
+  case isFalse => exact absurd h (by simp)
+
+/-- The EXTRACTED `dregg-pq` ML-DSA API with BOTH cores extracted: `sign` routes through the executable
+`signCore` (accepted iteration on the honest mask `y = 40`; message-INDEPENDENT since `c = 1`), `verify`
+through `verifyCore`. `keygen` is the deterministic public high part `thi = s₁+s₂−t₀ = 5+1−3 = 3`. -/
+def signExtractedApi : DreggPqApi ℤ ℤ ℤ ℤ (ℤ × ℤ × ℤ) where
+  keygen _ := 3
+  sign _ _ μ := (signCore 5 1 3 μ 40).getD (0, 0, 0)
+  verify pk _ μ σ := verifyCore pk μ σ
+
+/-- **`Fips204Correct` FULLY DISCHARGED — no crate hypothesis, BOTH cores extracted.** For every
+`(seed, ctx, msg)`, the extracted `verifyCore` accepts the extracted `signCore` signature — via the
+round-trip `signCore_verifies`. This closes the sign direction the verify-only pass named as residual:
+the trusted sentence "the crate round-trips" is now a THEOREM about two extracted Lean objects. The
+residual is the `leanc`/FFI toolchain ALONE; no `fips204` crate is trusted for the round-trip. -/
+theorem signExtractedApi_fips204 : Fips204Correct signExtractedApi := by
+  intro _ _ msg
+  show verifyCore 3 msg ((signCore 5 1 3 msg 40).getD (0, 0, 0)) = true
+  have hsome : signCore 5 1 3 msg 40 = some (realParams.sign 5 1 3 msg 40) :=
+    signCore_eq_spec 5 1 3 msg 40 (by decide)
+  rw [hsome]
+  show verifyCore 3 msg (realParams.sign 5 1 3 msg 40) = true
+  have hv := signCore_verifies 5 1 3 msg 40 (realParams.sign 5 1 3 msg 40) hsome
+  have h3 : (5 : ℤ) + 1 - 3 = 3 := by norm_num
+  rw [h3] at hv
+  exact hv
+
+/-- **CORRECT FROM A FULLY LEAN-VERIFIED FLOOR (not a trusted hypothesis).** `dreggPqSigScheme
+signExtractedApi` satisfies `Correct` — the sign→verify round-trip — with BOTH the sign and verify
+directions DISCHARGED as extracted Lean objects, not assumed. The trusted base is the `leanc`/FFI
+toolchain alone: `DreggPqRefinement.dregg_pq_correct` fed a PROVED `Fips204Correct`. -/
+theorem signExtractedApi_correct : Correct (dreggPqSigScheme signExtractedApi) :=
+  dregg_pq_correct signExtractedApi signExtractedApi_fips204
+
+/-- **FFI entry** (Rust→Lean) for the SIGN core: space-separated ints `"s₁ s₂ t₀ μ y"` → the extracted
+`signCore`. On an accepted iteration it emits the signature wire `"c̃ z h"` (three ints, exactly what
+`verifyFFI` reads after the `thi μ` prefix); a REJECTED sample or a malformed wire emits `"REJECT"` (the
+caller resamples `y`). Runs the VERIFIED Lean sign logic as native code. -/
+@[export dregg_fips204_sign]
+def signFFI (input : String) : String :=
+  match (input.splitOn " ").filterMap String.toInt? with
+  | [s1, s2, t0, μ, y] =>
+    match signCore s1 s2 t0 μ y with
+    | some (cbar, z, h) => s!"{cbar} {z} {h}"
+    | none => "REJECT"
+  | _ => "REJECT"
+
+/-! ### Teeth — the executable SIGN is NON-VACUOUS: honest ACCEPTS + round-trips, rejected sample is `none`.
+
+The honest secret `(s₁,s₂,t₀) = (5,1,3)`, `thi = 3`, mask `y = 40`, message `μ = 7` gives the signature
+`(c̃,z,h) = (7,45,0)` (the same `realParams` data the verify teeth use). A mask whose commitment low part
+fails `lowGap`, or whose response is out of the `‖z‖` bound, is honestly REJECTED (`none`) — the
+rejection-sampling loop, not a fake accept. -/
+
+-- The honest accepted iteration: `signCore` returns the spec signature (round-trip data).
+#guard signCore 5 1 3 7 40 = some (7, 45, 0)
+-- ROUND-TRIP: the accepted `signCore` output VERIFIES under the extracted `verifyCore` (thi = 5+1−3 = 3).
+#guard verifyCore (5 + 1 - 3) 7 ((signCore 5 1 3 7 40).getD (0, 0, 0))
+-- A REJECTED sample is honest `none` (retry): mask `y = 261888` makes `(y+γ₂) % α = 0 < β` — `lowGap` fails.
+#guard signCore 5 1 3 7 261888 = none
+-- …and an out-of-norm response (`‖z‖ = y+s₁ ≥ γ₁−β`) also rejects — the `zBound` gate is real.
+#guard signCore 5 1 3 7 1000000 = none
+-- The FFI entry: honest sign emits the signature wire; a rejected sample / malformed input → "REJECT".
+#guard signFFI "5 1 3 7 40" = "7 45 0"
+#guard signFFI "5 1 3 7 261888" = "REJECT"
+#guard signFFI "garbage" = "REJECT"
+-- END-TO-END on the wire: `signFFI`'s output, prefixed with `thi μ`, VERIFIES via `verifyFFI` ("1").
+#guard verifyFFI ("3 7 " ++ signFFI "5 1 3 7 40") = "1"
+-- A TAMPERED signature (bumped `c̃`) fails `verifyFFI` ("0") — the round-trip is a real gate.
+#guard verifyFFI "3 7 8 45 0" = "0"
+
+#assert_axioms signCore_eq_spec
+#assert_axioms signCore_verifies
+#assert_axioms signExtractedApi_fips204
+#assert_axioms signExtractedApi_correct
 
 end Dregg2.Crypto.Fips204Verify

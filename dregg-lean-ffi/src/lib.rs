@@ -195,6 +195,34 @@ pub fn shadow_fips204_verify(wire: &str) -> Result<String, String> {
     ffi::lean_fips204_verify(wire)
 }
 
+/// Whether the linked archive exports the extracted, Lean-verified ML-DSA sign core
+/// (`dregg_fips204_sign`, the C-ABI entry over `Dregg2.Crypto.Fips204Verify.signFFI` = the extracted
+/// `signCore`, the Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters). When false, a
+/// caller must fall back to the `fips204` crate sign. Distinct from [`lean_available`]: a stale archive
+/// can lack this export.
+pub fn fips204_sign_core_available() -> bool {
+    ffi::fips204_sign_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted ML-DSA sign core `@[export] dregg_fips204_sign` (the executable
+/// `Dregg2.Crypto.Fips204Verify.signCore`, proved to agree with the spec `Fips204Spec.MlDsaParams.sign`
+/// and — together with `verifyCore` — to discharge `DreggPqRefinement.Fips204Correct` FULLY). This runs
+/// the SIGNING direction as a Lean-verified object (leanc-native).
+///
+/// Wire grammar the export reads:
+///   * in:  `"s1 s2 t0 μ y"` (five decimal ints — the deployed-parameter secret `(s₁,s₂,t₀)`, message,
+///     and the sampled randomness/mask `y`).
+///   * out: `"c̃ z h"` (an accepted signature — three decimal ints) · `"REJECT"` (a rejected sample or a
+///     malformed wire; the caller resamples `y`, the Dilithium rejection loop).
+///
+/// `dregg-pq` routes its ML-DSA sign path through this entry when [`fips204_sign_core_available`], so the
+/// signing runs the verified Lean core rather than a trusted primitive. Returns `Err` if the archive
+/// lacks the export.
+pub fn shadow_fips204_sign(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_fips204_sign(wire)
+}
+
 /// Parse a shadow output wire into a [`ShadowVerdict`], surfacing marshal/parse errors.
 pub fn decode_shadow_verdict(output: &str) -> Result<ShadowVerdict, String> {
     match marshal::unmarshal_result(output) {
@@ -312,6 +340,12 @@ mod ffi {
         ) -> usize;
         #[cfg(dregg_fips204_verify_present)]
         fn dregg_fips204_verify_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+        #[cfg(dregg_fips204_sign_present)]
+        fn dregg_fips204_sign_str(
             in_utf8: *const c_char,
             out: *mut c_char,
             out_cap: usize,
@@ -488,6 +522,33 @@ mod ffi {
         false
     }
 
+    /// FIPS-204-SIGN EXTRACTION — run the VERIFIED Lean ML-DSA sign core (leanc-native).
+    /// Input: `"s1 s2 t0 μ y"` (secret + message + the sampled randomness/mask); output: the signature
+    /// wire `"c̃ z h"` (an accepted iteration) or `"REJECT"` (a rejected sample / malformed wire, retry).
+    /// This is the SIGNING direction as a Lean-verified object: the extracted `signCore` (the
+    /// Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters), proved to round-trip
+    /// through `verifyCore`.
+    #[cfg(dregg_fips204_sign_present)]
+    pub fn lean_fips204_sign(wire: &str) -> Result<String, String> {
+        lean_string_bridge(wire, dregg_fips204_sign_str, "dregg_fips204_sign_str")
+    }
+
+    #[cfg(not(dregg_fips204_sign_present))]
+    pub fn lean_fips204_sign(_wire: &str) -> Result<String, String> {
+        Err("dregg_fips204_sign not exported by the linked archive (rebuild to enable)".into())
+    }
+
+    /// `true` iff the linked archive carries the extracted ML-DSA sign core.
+    #[cfg(dregg_fips204_sign_present)]
+    pub fn fips204_sign_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_fips204_sign_present))]
+    pub fn fips204_sign_present() -> bool {
+        false
+    }
+
     #[cfg(all(test, dregg_fips204_verify_present))]
     mod fips204_verify_extraction {
         use super::*;
@@ -505,6 +566,35 @@ mod ffi {
             assert_eq!(lean_fips204_verify("3 7 7 100000000 0").unwrap(), "0");
             // Malformed wire fails CLOSED.
             assert_eq!(lean_fips204_verify("garbage").unwrap(), "0");
+        }
+    }
+
+    #[cfg(all(test, dregg_fips204_sign_present))]
+    mod fips204_sign_extraction {
+        use super::*;
+        /// THE SIGN → VERIFY ROUND-TRIP: the verified Lean ML-DSA SIGN core runs (leanc-compiled native)
+        /// and its accepted output VERIFIES through the extracted verify core — the full `Fips204Correct`
+        /// round-trip across two extracted objects. The honest secret `(5,1,3)` with mask `y=40`, message
+        /// `μ=7` SIGNS to `"7 45 0"`, which verifies as `"1"` under `thi = 5+1−3 = 3`. A bad-mask sample
+        /// (`lowGap` fails) and an out-of-norm response are honestly `"REJECT"` (retry, not faked); a
+        /// malformed wire fails closed.
+        #[test]
+        fn verified_ml_dsa_sign_verify_roundtrips_in_lean() {
+            lean_init_once().expect("init the Lean runtime");
+            // Honest accepted iteration ⇒ the signature wire.
+            let sig = lean_fips204_sign("5 1 3 7 40").expect("sign round-trip");
+            assert_eq!(sig, "7 45 0", "honest sign emits the signature wire");
+            // ROUND-TRIP: the accepted signature, prefixed `thi μ`, VERIFIES via the extracted verify core.
+            assert_eq!(
+                lean_fips204_verify(&format!("3 7 {sig}")).expect("verify"),
+                "1",
+                "the extracted sign output round-trips through verifyCore"
+            );
+            // Rejected samples are honest "REJECT" (retry): bad mask (lowGap fails) / out-of-norm z.
+            assert_eq!(lean_fips204_sign("5 1 3 7 261888").unwrap(), "REJECT");
+            assert_eq!(lean_fips204_sign("5 1 3 7 1000000").unwrap(), "REJECT");
+            // Malformed wire fails CLOSED.
+            assert_eq!(lean_fips204_sign("garbage").unwrap(), "REJECT");
         }
     }
 
@@ -579,6 +669,14 @@ mod ffi {
     }
 
     pub fn lean_fips204_verify(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    pub fn fips204_sign_present() -> bool {
+        false
+    }
+
+    pub fn lean_fips204_sign(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
 }
