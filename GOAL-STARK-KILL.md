@@ -569,3 +569,8 @@ STAGES: (a) blindedMembershipDesc → depth-general 4-ary + general-position (Le
 membership_descriptor_of_depth_4ary + the blind tooth); (b) blinded_membership_witness → general
 depth/positions; (c) the fold proof/adapter generalize trivially (claim shape unchanged [blinded_leaf,root]);
 (d) THEN S3c flip. Bound-presentation (auth half) is depth-independent — already flip-ready.
+  ✅ S3d-DIM DONE (5e45912a7): blindedMembership4aryDesc(depth) — depth-general 4-ary general-position,
+    name dregg-blinded-membership-4ary-general-depth{N}. THE PRODUCTION PROOF passes:
+    honest_depth8_general_position_proves_and_verifies (real prover). Lean general-depth SAT⟹SEM +
+    forge-rejects + unlinkability; Rust==Lean byte-parity depth 2&8. Staged-additive (depth-2 intact).
+    → the flip is now capability-preserving. NEXT: S3c flip onto BOTH descriptors → 0 stark → git rm.
