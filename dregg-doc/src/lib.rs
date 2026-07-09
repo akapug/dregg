@@ -66,9 +66,10 @@
 //!   reader can take on each conflict (keep-each / order-all / settle-a-field), each
 //!   a ready, authored [`Patch`]. This is the bridge that makes a rendered conflict
 //!   *resolvable from the surface* — the conflict view becomes an editor.
-//! - [`commit`] — the document [`Commitment`] that binds atoms, edges, and
-//!   field assignments *with their provenance*, so a light client cannot be
-//!   shown a conflict that hides or forges an alternative (§4.4 soundness).
+//! - the document **commitment** (the `substrate` ride below) binds atoms,
+//!   edges, and field assignments *with their provenance*, so a light client
+//!   cannot be shown a conflict that hides or forges an alternative (§4.4
+//!   soundness).
 //!
 //! ## The substrate ride (the `substrate` feature — the REAL commitment)
 //!
@@ -77,9 +78,8 @@
 //! heap (`(collection_id, key) -> 32-byte` leaves, atoms/edges/fields in
 //! distinct collections, each leaf binding provenance) and [`substrate_commit`]
 //! is the sorted-Poseidon2 heap root over it — the faithful commitment a light
-//! client actually trusts. This REPLACES the in-crate [`commit`]
-//! `DefaultHasher` stand-in with the real ride (DOCUMENT-LANGUAGE.md §4.1), and
-//! the anti-forge tooth is re-proven against the real Poseidon2 root.
+//! client actually trusts (DOCUMENT-LANGUAGE.md §4.1). The anti-forge tooth is
+//! proven against this real Poseidon2 root (see the `substrate` tests).
 //!
 //! ## What this crate stays (with the feature OFF — "let it breathe")
 //!
@@ -115,7 +115,6 @@
 
 mod atom;
 mod blame;
-mod commit;
 // A document COMPOSED FROM cells — the embed algebra (`Op::Embed` + the two-arm
 // `ChildRef`: Cell(identity) | Name(namespace binding)). Standalone (no
 // substrate). See docs/deos/DOC-CELL-COMPOSITION.md.
@@ -133,6 +132,14 @@ mod patch;
 // landing = cap-gated finalized turns through executor_drive (`substrate`).
 // First slice of docs/deos/DREGG-FORGE.md.
 mod pull_request;
+// THE FEDERATED FORGE-GRAIN — a PullRequest carried ACROSS the membrane, so a PR
+// cut on one instance can be reviewed + landed on another. Mirrors the proven
+// card-fork carry (starbridge-v2::{distributed_card, card_carry_bridge}): the diff
+// + review are sealed with a domain-separated anti-substitution root tooth, carried
+// over a wire, re-opened fail-closed, and re-targeted onto the receiver's own base.
+// Needs blake3 + the patch codec (`cell-heap`); the wire transport is the named seam.
+#[cfg(feature = "cell-heap")]
+mod pr_carry;
 mod regime;
 mod resolution;
 mod resolve;
@@ -210,7 +217,6 @@ pub use ci_verdict::{
     UpdateCommitmentRequest, ci_nullifier, ci_run_patch, fetch_nullifier_root, planned_ci_run_hash,
     publish_nullifier_root, run_ci_verdict, verify_nullifier_update_signature,
 };
-pub use commit::{Commitment, commit};
 pub use content::{Alternative, ConflictRegion, Rendered, Segment, content, walk_atoms};
 pub use depend::{
     DepError, cherry_pick, commute, dependencies, dependents, transitive_dependencies, unrecord,
@@ -231,6 +237,10 @@ pub use literate::{
 };
 pub use merge::{merge, merge_all};
 pub use patch::{Op, Patch};
+#[cfg(feature = "cell-heap")]
+pub use pr_carry::{
+    CarryError, PrEnvelope, open_pull_request, open_pull_request_wire, seal_pull_request,
+};
 pub use pull_request::{MergeOutcome, PullRequest, PullRequestError};
 pub use regime::Regime;
 pub use resolution::{
