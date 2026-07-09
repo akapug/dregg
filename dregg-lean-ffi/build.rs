@@ -253,6 +253,12 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // emitted and the splice picks up the export. Discharges the security-critical verify: the
         // extracted `verifyCore` (= the `Fips204Spec.verifyB` predicate) runs as leanc-native code.
         "Dregg2.Crypto.Fips204Verify",
+        // FIPS-203-KEM extraction: the verified ML-KEM (Kyber) encaps/decaps cores over the deployed
+        // parameters (`@[export] dregg_fips203_encaps` / `dregg_fips203_decaps`), OUTSIDE the FFI closure
+        // — build it so its `.c` IR is emitted and the splice picks up the exports. Discharges the
+        // security-critical decaps (re-encryption check + implicit reject) as leanc-native code, and the
+        // encaps→decaps round-trip: the extracted cores discharge `DreggKemRefinement.Fips203Correct`.
+        "Dregg2.Crypto.Fips203Kem",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -1331,6 +1337,8 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_storage_content_root_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_sign_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fips203_encaps_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fips203_decaps_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1701,6 +1709,19 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_fips204_sign_present");
     }
 
+    // FIPS-203-KEM extraction: probe the spliced archive for the `@[export] dregg_fips203_encaps` /
+    // `dregg_fips203_decaps` symbols (the extracted, Lean-verified ML-KEM encaps/decaps cores). Present ⇒
+    // gate the Rust `extern "C"` block, the C shim string bridges, and the module initializer. Both are
+    // co-located in `Dregg2.Crypto.Fips203Kem`, so a single module define/init serves both.
+    let fips203_encaps_present = archive_exports(&build_archive, "dregg_fips203_encaps");
+    if fips203_encaps_present {
+        println!("cargo:rustc-cfg=dregg_fips203_encaps_present");
+    }
+    let fips203_decaps_present = archive_exports(&build_archive, "dregg_fips203_decaps");
+    if fips203_decaps_present {
+        println!("cargo:rustc-cfg=dregg_fips203_decaps_present");
+    }
+
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
     // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
@@ -1754,6 +1775,16 @@ fn main() {
     }
     if fips204_sign_present {
         shim.define("DREGG_FIPS204_SIGN", None);
+    }
+    // Either ML-KEM export present ⇒ define DREGG_FIPS203 (one module init serves both cores).
+    if fips203_encaps_present || fips203_decaps_present {
+        shim.define("DREGG_FIPS203", None);
+    }
+    if fips203_encaps_present {
+        shim.define("DREGG_FIPS203_ENCAPS", None);
+    }
+    if fips203_decaps_present {
+        shim.define("DREGG_FIPS203_DECAPS", None);
     }
     if direct_present {
         shim.define("DREGG_DIRECT", None);

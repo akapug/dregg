@@ -60,8 +60,64 @@ use hkdf::Hkdf;
 use ml_kem::kem::{Decapsulate, Encapsulate};
 use ml_kem::{Ciphertext, Encoded, EncodedSizeUser, KemCore, MlKem768};
 use sha2::Sha256;
+use std::sync::OnceLock;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
+
+/// A pluggable, Lean-VERIFIED ML-KEM (FIPS 203) encaps/decaps backend, installed by an integration layer
+/// — the KEM mirror of the ML-DSA verify/sign cores in [`crate::mldsa`].
+///
+/// The extracted cores live in `metatheory/Dregg2/Crypto/Fips203Kem.lean` (`encapsCore` = `foEncaps` and
+/// `decapsCore` = `foDecaps` at the deployed Kyber parameters — the re-encryption check + implicit
+/// reject), `@[export]`ed as `dregg_fips203_encaps` / `dregg_fips203_decaps` and compiled to leanc-native
+/// code. They are PROVED to agree with the `MlKemIndCca` spec (`encapsCore_eq_spec` / `decapsCore_eq_spec`)
+/// and to discharge `DreggKemRefinement.Fips203Correct` — the encaps→decaps round-trip — with NO `ml-kem`
+/// crate hypothesis (`extractedKemApi_fips203`). `dregg-lean-ffi::shadow_fips203_{encaps,decaps}` run them.
+///
+/// dregg-pq stays a LIGHT leaf: it takes function pointers, never a dependency on the Lean archive — the
+/// same discipline as the ML-DSA cores. An integration layer installs the native cores via
+/// [`install_lean_encaps_core`] / [`install_lean_decaps_core`]; [`ml_kem_encaps_core`] /
+/// [`ml_kem_decaps_core`] then route the deployed-parameter ML-KEM through the Lean-verified objects.
+type LeanKemCore = fn(wire: &str) -> Option<String>;
+static LEAN_ENCAPS_CORE: OnceLock<LeanKemCore> = OnceLock::new();
+static LEAN_DECAPS_CORE: OnceLock<LeanKemCore> = OnceLock::new();
+
+/// Install the extracted, Lean-verified ML-KEM encaps core (e.g.
+/// `|w| dregg_lean_ffi::shadow_fips203_encaps(w).ok()`). Returns `false` if one is already installed
+/// (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_encaps_core(core: LeanKemCore) -> bool {
+    LEAN_ENCAPS_CORE.set(core).is_ok()
+}
+
+/// Install the extracted, Lean-verified ML-KEM decaps core (e.g.
+/// `|w| dregg_lean_ffi::shadow_fips203_decaps(w).ok()`). Returns `false` if one is already installed
+/// (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_decaps_core(core: LeanKemCore) -> bool {
+    LEAN_DECAPS_CORE.set(core).is_ok()
+}
+
+/// Route a deployed-parameter ML-KEM encaps request `"A t m"` (the wire the extracted Lean `encapsFFI`
+/// reads — public key `(A,t)`, message bit `m`) through the installed Lean-verified encaps core.
+/// `Some("u v K")` = the ciphertext `(u,v)` + encapsulated secret `K`; `None` = no core installed (caller
+/// falls back to the `ml-kem` primitive). This is the routing seam that sends the ML-KEM encaps through
+/// the `Fips203Correct`-discharging Lean object; the full-byte-codec path over real 1184/1088-byte
+/// keys/ciphertexts is the named engineering residual (`Fips203Kem.lean`).
+pub fn ml_kem_encaps_core(wire: &str) -> Option<String> {
+    let core = LEAN_ENCAPS_CORE.get()?;
+    core(wire)
+}
+
+/// Route a deployed-parameter ML-KEM decaps request `"A t s z u v"` (the wire the extracted Lean
+/// `decapsFFI` reads — encapsulation key `(A,t)`, secret `s`, implicit-reject seed `z`, ciphertext
+/// `(u,v)`) through the installed Lean-verified decaps core. `Some(K)` = the recovered shared secret
+/// (`H(m′)` on a matching re-encryption, else the implicit-reject secret `J(z‖c)` — ML-KEM decaps never
+/// fails on a well-formed ciphertext); `None` = no core installed (caller falls back). This is the
+/// SECURITY-CRITICAL direction routed through the Lean-verified object: a tampered ciphertext
+/// implicit-rejects to a DIFFERENT secret, so the parties diverge without leaking.
+pub fn ml_kem_decaps_core(wire: &str) -> Option<String> {
+    let core = LEAN_DECAPS_CORE.get()?;
+    core(wire)
+}
 
 type Ek = <MlKem768 as KemCore>::EncapsulationKey;
 type Dk = <MlKem768 as KemCore>::DecapsulationKey;
@@ -360,6 +416,79 @@ mod tests {
         assert_ne!(
             initiator_key, responder_key,
             "tampering the PQ ciphertext must break key agreement"
+        );
+    }
+
+    /// The routing seam sends the ML-KEM encaps/decaps through the extracted, Lean-verified cores. The
+    /// installed cores stand in for `dregg-lean-ffi::shadow_fips203_{encaps,decaps}` (which drive the
+    /// leanc-native `encapsCore`/`decapsCore`; their round-trip is green in dregg-lean-ffi's
+    /// `verified_ml_kem_encaps_decaps_roundtrips_in_lean`). They carry the SAME contract the Lean FFI
+    /// proves: the honest deployed data `(A,t,s)=(1,2,1)`, message `m=1` ENCAPS to `"1 1667 3"`; DECAPS of
+    /// that ciphertext recovers `"3"` (the round-trip that discharges `Fips203Correct`); a TAMPERED
+    /// ciphertext implicit-rejects to a DIFFERENT secret (`"3536"` ≠ `"3"`).
+    #[test]
+    fn kem_routes_through_lean_core() {
+        // No cores installed ⇒ the seams decline and the caller falls back.
+        assert_eq!(ml_kem_encaps_core("1 2 1"), None);
+        assert_eq!(ml_kem_decaps_core("1 2 1 0 1 1667"), None);
+
+        // Install cores carrying the extracted encaps/decaps cores' proven contract (the `#guard` teeth).
+        let enc_installed = install_lean_encaps_core(|wire| {
+            Some(
+                match wire {
+                    "1 2 1" => "1 1667 3",
+                    _ => "ERR",
+                }
+                .to_string(),
+            )
+        });
+        assert!(enc_installed, "first encaps install succeeds");
+        assert!(
+            !install_lean_encaps_core(|_| None),
+            "encaps install is once-per-process"
+        );
+        let dec_installed = install_lean_decaps_core(|wire| {
+            Some(
+                match wire {
+                    // honest ciphertext ⇒ recovers the encapsulated secret K=3
+                    "1 2 1 0 1 1667" => "3",
+                    // tampered ciphertext ⇒ implicit reject to a DIFFERENT (message-independent) secret
+                    "1 2 1 0 1 1767" => "3536",
+                    _ => "ERR",
+                }
+                .to_string(),
+            )
+        });
+        assert!(dec_installed, "first decaps install succeeds");
+        assert!(
+            !install_lean_decaps_core(|_| None),
+            "decaps install is once-per-process"
+        );
+
+        // The honest encaps produces the ciphertext + encapsulated secret wire.
+        let enc = ml_kem_encaps_core("1 2 1").expect("encaps core installed");
+        assert_eq!(
+            enc, "1 1667 3",
+            "honest encaps emits the ciphertext + secret"
+        );
+
+        // ROUND-TRIP: decaps of the honest ciphertext recovers the encapsulated secret K=3.
+        assert_eq!(
+            ml_kem_decaps_core("1 2 1 0 1 1667"),
+            Some("3".to_string()),
+            "the extracted encaps output round-trips through the decaps core"
+        );
+
+        // A TAMPERED ciphertext implicit-rejects to a DIFFERENT secret — the parties diverge.
+        assert_eq!(
+            ml_kem_decaps_core("1 2 1 0 1 1767"),
+            Some("3536".to_string()),
+            "a tampered ciphertext implicit-rejects to a different secret"
+        );
+        assert_ne!(
+            ml_kem_decaps_core("1 2 1 0 1 1767"),
+            ml_kem_decaps_core("1 2 1 0 1 1667"),
+            "tampering the ML-KEM ciphertext breaks key agreement"
         );
     }
 

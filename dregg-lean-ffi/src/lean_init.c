@@ -180,6 +180,29 @@ extern lean_object *dregg_fips204_verify(lean_object *input);
 extern lean_object *dregg_fips204_sign(lean_object *input);
 #endif
 
+/* The @[export]ed Lean `String -> String` VERIFIED ML-KEM (FIPS 203) ENCAPS/DECAPS CORES
+ * (`Dregg2.Crypto.Fips203Kem.encapsFFI` / `decapsFFI`): the extracted Kyber CPAPKE + Fujisaki–Okamoto
+ * transform at the deployed q=3329 message-decode. encapsFFI reads `"A t m"` and returns `"u v K"` (the
+ * ciphertext + encapsulated secret K=H(m)); decapsFFI reads `"A t s z u v"`, decrypts, RE-ENCRYPTS,
+ * and returns the recovered shared secret K (H(m') on a matching re-encryption, else the implicit-reject
+ * secret J(z‖c) — ML-KEM decaps never fails, a tampered ct yields a DIFFERENT message-independent
+ * secret). The SECURITY-CRITICAL decaps direction as leanc-native code; together they discharge
+ * `DreggKemRefinement.Fips203Correct` (the encaps→decaps round-trip) with no `ml-kem` crate hypothesis.
+ *
+ * GATED on DREGG_FIPS203 (the module is OUTSIDE the FFI closure; build.rs probes + defines it, and
+ * dregg_ffi_init runs its initializer). Both cores share the SAME
+ * `initialize_Dregg2_Dregg2_Crypto_Fips203Kem` (same module), so one init serves both; the individual
+ * DREGG_FIPS203_ENCAPS / DREGG_FIPS203_DECAPS defines gate only the per-export extern + bridge. */
+#ifdef DREGG_FIPS203
+extern lean_object *initialize_Dregg2_Dregg2_Crypto_Fips203Kem(uint8_t builtin);
+#endif
+#ifdef DREGG_FIPS203_ENCAPS
+extern lean_object *dregg_fips203_encaps(lean_object *input);
+#endif
+#ifdef DREGG_FIPS203_DECAPS
+extern lean_object *dregg_fips203_decaps(lean_object *input);
+#endif
+
 /* ── NO-COPY BOUNDARY runtime helpers (linkable wrappers over the `static inline`
  * <lean/lean.h> primitives the no-copy `lean_direct.rs` boundary needs). `lean_inc_ref`,
  * `lean_dec_ref`, `lean_box`, and `lean_string_cstr` are `static inline` in the header (no
@@ -289,6 +312,19 @@ int dregg_ffi_init(void) {
         return 1;
     }
     lean_dec_ref(fvres);
+#endif
+#ifdef DREGG_FIPS203
+    /* The verified ML-KEM encaps/decaps-core module is OUTSIDE the FFI closure; initialize it explicitly
+     * so `dregg_fips203_encaps` / `dregg_fips203_decaps` are callable. Its dependency closure
+     * (Crypto.MlKemIndCca / Crypto.DreggKemRefinement / Crypto.HybridCombiner) is re-entrant-safe under
+     * Lean's init guards (shared with the ML-DSA verify-core module above). */
+    lean_object *kres = initialize_Dregg2_Dregg2_Crypto_Fips203Kem(1);
+    if (!lean_io_result_is_ok(kres)) {
+        lean_io_result_show_error(kres);
+        lean_dec_ref(kres);
+        return 1;
+    }
+    lean_dec_ref(kres);
 #endif
     lean_io_mark_end_initialization();
     return 0;
@@ -418,6 +454,51 @@ size_t dregg_fips204_sign_str(const char *in_utf8, char *out, size_t out_cap) {
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_fips204_sign(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_FIPS203_ENCAPS
+/* dregg_fips203_encaps_str — the C string bridge over the VERIFIED Lean `String -> String` ML-KEM
+ * encaps-core export (`Dregg2.Crypto.Fips203Kem.encapsFFI`). Input: `"A t m"` (three decimal ints).
+ * Output: `"u v K"` (the ciphertext (u,v) + the encapsulated secret K=H(m)). Runs the extracted encaps
+ * core (the Kyber CPAPKE + FO derandomisation at the deployed q=3329). Same return contract as the
+ * bridges above (full byte length; (size_t)-1 only on an unusable buffer). */
+size_t dregg_fips203_encaps_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_fips203_encaps(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_FIPS203_DECAPS
+/* dregg_fips203_decaps_str — the C string bridge over the VERIFIED Lean `String -> String` ML-KEM
+ * decaps-core export (`Dregg2.Crypto.Fips203Kem.decapsFFI`). Input: `"A t s z u v"` (six decimal ints —
+ * the encapsulation key (A,t), secret s, implicit-reject seed z, ciphertext (u,v)). Output: the recovered
+ * shared secret K as a decimal string (H(m') on a matching re-encryption, else the implicit-reject secret
+ * J(z‖c); "ERR" only on a malformed wire). Runs the SECURITY-CRITICAL extracted decaps core (the
+ * re-encryption check + implicit reject). Same return contract as the bridges above. */
+size_t dregg_fips203_decaps_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_fips203_decaps(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
