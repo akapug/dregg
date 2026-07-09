@@ -61,18 +61,26 @@ build is deterministic," anti-Sybil'd by `KeyGovernance`. `Proven` rests on STAR
 These are the intended assumptions, not hidden.
 
 **Unbuilt seams (typed interfaces / stubs with a real drop-in point):**
-- **The zkVM execution-AIR** — `Proven` today proves the pass-gate + binding, not that `output_digest` is
-  the genuine function of the input. Proving an arbitrary command's execution drops into
-  `circuit-prove/src/custom_proof_bind.rs` (real bind+verify engine) as the circuit predicate. THE deepest
-  seam for `Proven`'s full "the proof is the pass."
+- **The `Proven` execution proof (a bounded, honest scope — NOT the load-bearing thing).** `Proven` today
+  proves the pass-gate + verdict-binding, not that `output_digest` is the genuine function of the input.
+  The honest way to close it (settled 2026-07-08): DON'T marry dregg's `p3-recursion` *fork* to an extant
+  zkVM's Plonky3 (SP1 etc.) — the two forks' `StarkConfig`s (field, hash, FRI params) diverge and drift
+  every release, a maintenance sinkhole. Instead bind an external zkVM proof via
+  `circuit-prove/src/custom_proof_bind.rs` (verify the zkVM proof out-of-circuit with its own SDK, bind the
+  commitment) — fork-agnostic, works for any zkVM. AND: zkVM proving of a general build is ~10⁴–10⁶× native
+  (minutes–hours on a GPU), so `Proven` is realistic only for **bounded, high-value, deterministic checks**,
+  not arbitrary `cargo test`. **The general-CI soundness is NOT the zkVM** — it is the already-built
+  *optimistic* stack (`ReExecuted{quorum}` + `OptimisticChallenge` fraud-proofs + `Staked` slash), the same
+  design optimistic rollups use precisely because zk-proving general execution is too slow. `Proven` is a
+  premium rung, not a missing floor.
 - **Live gossip dissemination** — `detect_upheld_challenge` + the equivocation logic are real (over a real
   `Blocklace::insert`); only the network transport that fills `challenge_lace` across nodes is out-of-test.
-- **Federation write transport** — `publish_grain_root` builds a node-acceptable `UpdateCommitmentRequest`
-  (real signature); only the live `POST /cells/update-commitment` / `GET` is out-of-test. Caveat: a stock
-  node's `state_commitment` is whole-cell BLAKE3 *absorbing* the heap-root; a deployment surfaces the
-  heap-root as the committed value (schemes + wire already match).
-- **The nullifier-accumulator root publish** — the identical `UpdateCommitmentRequest` pattern as
-  `publish_grain_root`; the committed accumulator + root are real, only the cross-node commit is wiring.
+- **Federation write TRANSPORT (schemes + signatures are real, only the HTTP call is stubbed).**
+  `publish_grain_root` (grain heap-root) AND `publish_nullifier_root` (the accumulator root — cross-node
+  anti-replay, `ci_verdict.rs`) both build node-acceptable owner-signed `UpdateCommitmentRequest`s and
+  `fetch_*_root` reads them back; only the live `POST /cells/update-commitment` / `GET /api/cell/{id}` is
+  out-of-test. Caveat: a stock node's `state_commitment` is whole-cell BLAKE3 *absorbing* the heap-root; a
+  deployment surfaces the heap-root as the committed value (schemes + wire already match).
 - **Deployment wiring** — host posts the bond at CI-job intake (`post_bond` exists; who-calls-it is
   out-of-crate); a cross-node stake registry (`bond_ref → holding cell`); multi-file repo trees (a PR is
   one document today, so `materialize` is one file; a path→doc repo makes it a fan-out).
