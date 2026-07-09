@@ -9,8 +9,13 @@ two capability systems welded.
 
 ## Completion criteria (the campaign is DONE when ALL hold)
 1. A **parameter-level theorem**: at the deployed params (ML-DSA-65, ML-KEM-768, committee n), the system has
-   ≥ X bits against a quantum adversary making ≤ q queries. (Lattice-estimator input is a labeled NUMERIC
-   assumption, honestly named — the only non-proof input.)
+   **λ ≥ 120 bits** against a quantum adversary making ≤ q queries. (Lattice-estimator input is a labeled
+   NUMERIC assumption, honestly named — the only non-proof input.) The first pass gave λ=79 because our
+   reductions were LOOSE, not our constructions: `sigBitsR=(msisBits−log2q)/2` is the FORKING square-root and
+   `o2hBitsR=msgEntropyBits/2−…` is the O2H square-root. **P1-TIGHT** kills both by formalizing the tight
+   literature: lossy-identification (AFLT12) / KLS18's QROM Dilithium proof (tight from decision-MLWE, the
+   proof FIPS 204 itself cites) and the double-sided O2H (BHHHP19 / HHM22) for the FO transform over Kyber's
+   deterministic T-transform. Expected λ ≈ 140–150.
 2. **CircuitSound is a THEOREM**, not a hypothesis → `turn_sound` rests on the floor alone.
 3. **Every deployed crypto primitive is a proved Lean object** (leanc-native): ML-DSA sign+verify, ML-KEM,
    X25519, HKDF/SHA-256. `Fips203Correct`/`X25519Correct`/`HkdfCorrect`/`DualPRF` all discharged.
