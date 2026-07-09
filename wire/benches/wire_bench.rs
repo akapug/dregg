@@ -29,6 +29,7 @@ fn make_submit_revocation_message() -> WireMessage {
         token_id: "revoked-token-42".into(),
         authority: PublicKey([0x42; 32]),
         authority_sig: Signature([0xFF; 64]),
+        pq_authority_sig: None,
         nonce: [0xAB; 16],
         timestamp: 1700000000,
     }

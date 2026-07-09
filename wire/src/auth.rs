@@ -470,6 +470,7 @@ mod tests {
             token_id: "tok-1".to_string(),
             authority: crate::message::PublicKey([0xAA; 32]),
             authority_sig: crate::message::Signature([0xBB; 64]),
+            pq_authority_sig: None,
             nonce: [0; 16],
             timestamp: 0,
         };
@@ -511,6 +512,7 @@ mod tests {
             token_id: "tok-1".to_string(),
             authority: crate::message::PublicKey([0xAA; 32]),
             authority_sig: crate::message::Signature([0xBB; 64]),
+            pq_authority_sig: None,
             nonce: [0; 16],
             timestamp: 0,
         };
@@ -531,6 +533,7 @@ mod tests {
             token_id: "tok-1".to_string(),
             authority: crate::message::PublicKey([0xAA; 32]),
             authority_sig: crate::message::Signature([0xBB; 64]),
+            pq_authority_sig: None,
             nonce: [0; 16],
             timestamp: 0,
         };
