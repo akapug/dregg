@@ -46,7 +46,7 @@
 //! makes "a b a" -> "b a" delete only the *first* "a" while the *second* "a"
 //! survives — they are genuinely distinct atoms (see the test below).
 
-use crate::atom::{AtomId, Author, PatchId};
+use crate::atom::{AtomContent, AtomId, Author, PatchId};
 use crate::content::{content, walk_atoms};
 use crate::history::History;
 use crate::patch::{Op, Patch};
@@ -304,7 +304,7 @@ pub(crate) fn diff_to_ops(
                 let id = AtomId::derive(seed_from(pred), token);
                 ops.push(Op::Add {
                     id,
-                    content: token.clone(),
+                    content: AtomContent::Text(token.clone()),
                     after: pred,
                 });
                 // Thread into the successor chain: connect this new atom to the
@@ -458,7 +458,7 @@ mod tests {
         let g = d.history().replay();
         let beta = g
             .atoms()
-            .find(|a| a.is_alive() && a.content == "beta ")
+            .find(|a| a.is_alive() && a.content.as_text() == Some("beta "))
             .expect("the inserted 'beta ' atom exists");
         assert_eq!(
             beta.provenance.author,
@@ -468,7 +468,7 @@ mod tests {
         // And a KEPT word still carries its original author (not re-authored).
         let alpha = g
             .atoms()
-            .find(|a| a.is_alive() && a.content == "alpha ")
+            .find(|a| a.is_alive() && a.content.as_text() == Some("alpha "))
             .expect("the kept 'alpha ' atom exists");
         assert_eq!(alpha.provenance.author, Author(1), "kept atoms keep author");
     }

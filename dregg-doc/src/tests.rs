@@ -876,3 +876,286 @@ fn render_three_way_clean_merge_yields_no_conflicts() {
     );
     assert!(render_three_way(&merged, &base.replay()).is_empty());
 }
+
+// ── the TYPED ATOM re-foundation (DREGG-DOCUMENT-DESIGN §2) ───────────────────
+//
+// `AtomContent = Text(Run) | Element{tag, attrs, children}` — DOM-shaped and
+// schema-mappable (Text -> DOM Text node; Element -> DOM Element), NOT a closed
+// bespoke sum. `Embed(ChildRef)` / `Transclude` / marks are named holes for later
+// build-order steps. These tests exercise the typed atom through the SAME laws
+// the string atom rode (diff/merge/commit) plus the anti-forge tooth.
+
+#[test]
+fn a_structural_block_with_text_children_round_trips_through_merge_and_commit() {
+    // A paragraph Element whose children are two Text runs (children are atoms in
+    // the same graph; the Element records their ids — a block+inline tree).
+    let mut g = DocGraph::new();
+    let (t1, op1) = Patch::add(1, "hello ", AtomId::ROOT);
+    let (t2, op2) = Patch::add(2, "world", t1);
+    Patch::by(Author(1), [op1]).apply(&mut g);
+    Patch::by(Author(1), [op2]).apply(&mut g);
+
+    let block = AtomContent::Element {
+        tag: "p".into(),
+        attrs: vec![],
+        children: vec![t1, t2],
+    };
+    let (bid, opb) = Patch::add_content(3, block.clone(), t2);
+    Patch::by(Author(1), [opb]).apply(&mut g);
+
+    // The structural node survives, typed.
+    assert_eq!(
+        g.atom(bid).unwrap().content,
+        block,
+        "the Element atom survived"
+    );
+    // Its text children still render as text (the Element emits no text of its own).
+    assert_eq!(content(&g).to_marked_string(), "hello world");
+
+    // The typed doc rides merge (idempotent pushout) and commit stably.
+    let c0 = commit(&g);
+    let m = merge(&g, &g);
+    assert_eq!(m, g, "idempotent merge preserves the typed doc");
+    assert_eq!(
+        commit(&m),
+        c0,
+        "the typed doc commits stably under re-merge"
+    );
+    assert_eq!(
+        m.atom(bid).unwrap().content,
+        block,
+        "the block survives the merge"
+    );
+}
+
+#[test]
+fn two_authors_add_disjoint_blocks_merge_without_conflict() {
+    // Base: a section Element then a paragraph Element, linear.
+    let mut base = DocGraph::new();
+    let sec = AtomContent::Element {
+        tag: "section".into(),
+        attrs: vec![],
+        children: vec![],
+    };
+    let (s, os) = Patch::add_content(1, sec, AtomId::ROOT);
+    Patch::by(Author(1), [os]).apply(&mut base);
+    let para = AtomContent::Element {
+        tag: "p".into(),
+        attrs: vec![],
+        children: vec![],
+    };
+    let (p, op) = Patch::add_content(2, para, s);
+    Patch::by(Author(1), [op]).apply(&mut base);
+
+    // Author 1 inserts a heading Element at the HEAD (after ROOT, before s).
+    let h = AtomContent::Element {
+        tag: "h1".into(),
+        attrs: vec![("id".into(), "top".into())],
+        children: vec![],
+    };
+    let (hid, oh) = Patch::add_content(3, h, AtomId::ROOT);
+    let mut lp = Patch::by(Author(1), [oh]);
+    lp.push(Op::Connect { from: hid, to: s });
+    let left = lp.apply_to(&base);
+
+    // Author 2 appends a quote Element at the TAIL (after p).
+    let q = AtomContent::Element {
+        tag: "blockquote".into(),
+        attrs: vec![],
+        children: vec![],
+    };
+    let (qid, oq) = Patch::add_content(4, q, p);
+    let right = Patch::by(Author(2), [oq]).apply_to(&base);
+
+    let m = merge(&left, &right);
+    assert!(
+        !content(&m).has_conflict(),
+        "disjoint structural adds do not conflict — the pushout is clean on typed atoms"
+    );
+    assert!(
+        m.atom(hid).is_some() && m.atom(qid).is_some(),
+        "both authors' blocks survived the merge"
+    );
+    // Merge stays commutative/idempotent on the typed atoms.
+    assert_eq!(
+        merge(&left, &right),
+        merge(&right, &left),
+        "commutative on typed atoms"
+    );
+    assert_eq!(merge(&m, &m), m, "idempotent on typed atoms");
+}
+
+#[test]
+fn anti_forge_tooth_bites_on_a_typed_atom() {
+    // A structural Element renders no text of its own, so a forged author is
+    // INVISIBLE in the render — but must still change the commitment.
+    let mut g = DocGraph::new();
+    let block = AtomContent::Element {
+        tag: "p".into(),
+        attrs: vec![],
+        children: vec![],
+    };
+    let (bid, ob) = Patch::add_content(1, block, AtomId::ROOT);
+    Patch::by(Author(5), [ob]).apply(&mut g);
+    let c0 = commit(&g);
+
+    let mut forged = g.clone();
+    forged.forge_atom_provenance(bid, Author(9)); // was Author(5)
+
+    assert_eq!(
+        content(&forged).to_marked_string(),
+        content(&g).to_marked_string(),
+        "the forged doc renders byte-identically (the Element emits no text)"
+    );
+    assert_ne!(
+        commit(&forged),
+        c0,
+        "forging a typed atom's author changes the commitment (the tooth bites)"
+    );
+}
+
+#[test]
+fn the_commitment_binds_the_atom_type_not_just_its_render() {
+    // A Text run and an Element node with the SAME id, provenance, and (empty)
+    // render must commit DIFFERENTLY — the preimage binds the KIND, per design §6
+    // / the DOM-shape constraint (a structural node cannot alias a text run).
+    let id = AtomId::derive(1, "x");
+    let prov = Provenance {
+        author: Author(1),
+        patch: PatchId(7),
+    };
+    let mk = |content: AtomContent| {
+        let mut g = DocGraph::new();
+        g.insert_atom(Atom {
+            id,
+            content,
+            status: Status::Alive,
+            provenance: prov,
+        });
+        g
+    };
+    let text = mk(AtomContent::Text(String::new()));
+    let elem = mk(AtomContent::Element {
+        tag: String::new(),
+        attrs: vec![],
+        children: vec![],
+    });
+    assert_ne!(
+        commit(&text),
+        commit(&elem),
+        "same id/provenance/render but different KIND -> different commitment"
+    );
+}
+
+#[test]
+fn atom_content_canonical_bytes_round_trip() {
+    // The type-tagged encoding fed into the commitment / substrate leaves is a
+    // strict, self-delimiting bijection (a tampered heap byte is refused).
+    let cases = [
+        AtomContent::Text("hello".into()),
+        AtomContent::Text(String::new()),
+        AtomContent::Element {
+            tag: "code".into(),
+            attrs: vec![("lang".into(), "rust".into())],
+            children: vec![AtomId::derive(1, "a"), AtomId::derive(2, "b")],
+        },
+        AtomContent::Element {
+            tag: "img".into(),
+            attrs: vec![("src".into(), "dregg://cell/0xabc".into())],
+            children: vec![],
+        },
+    ];
+    for c in cases {
+        let bytes = c.canonical_bytes();
+        assert_eq!(
+            AtomContent::from_canonical_bytes(&bytes),
+            Some(c.clone()),
+            "canonical bytes round-trip"
+        );
+        // Trailing garbage is refused.
+        let mut tampered = bytes.clone();
+        tampered.push(0xFF);
+        assert_eq!(
+            AtomContent::from_canonical_bytes(&tampered),
+            None,
+            "trailing garbage refused"
+        );
+    }
+}
+
+// ── AUTHORING PAST A CONFLICT (DREGG-DOCUMENT-DESIGN §3) ──────────────────────
+//
+// A conflict is a LOCAL state, not a wall: the document must remain readable and
+// authorable PAST it. Previously `content()`/`walk_atoms()`/`Doc::text()` halted
+// at the first fork, silently dropping the entire tail.
+
+#[test]
+fn a_conflict_in_the_middle_does_not_truncate_the_tail() {
+    // ROOT -> A -> Z (linear "AZ"), then two concurrent inserts BETWEEN A and Z
+    // (each after A, each connected to Z) — a genuine antichain {X,Y} whose
+    // branches REJOIN at Z. The render must carry prefix + conflict + the tail Z.
+    let mut g = DocGraph::new();
+    let (a, opa) = Patch::add(1, "A", AtomId::ROOT);
+    let (z, opz) = Patch::add(2, "Z", a);
+    Patch::by(Author(1), [opa]).apply(&mut g);
+    Patch::by(Author(1), [opz]).apply(&mut g);
+    assert_eq!(content(&g).to_marked_string(), "AZ");
+
+    let (x, opx) = Patch::add(3, "X", a);
+    let mut lp = Patch::by(Author(1), [opx]);
+    lp.push(Op::Connect { from: x, to: z });
+    let left = lp.apply_to(&g);
+
+    let (y, opy) = Patch::add(4, "Y", a);
+    let mut rp = Patch::by(Author(2), [opy]);
+    rp.push(Op::Connect { from: y, to: z });
+    let right = rp.apply_to(&g);
+
+    let m = merge(&left, &right);
+    let r = content(&m);
+    assert!(r.has_conflict(), "X vs Y is a first-class conflict");
+
+    // THE FIX: the tail Z is NOT dropped — the walk resumed at the rejoin.
+    let s = r.to_marked_string();
+    assert!(s.starts_with("A"), "clean prefix present: {s}");
+    assert!(
+        s.contains("Z"),
+        "the tail past the conflict is rendered, not truncated: {s}"
+    );
+    // The per-atom walk (what blame/diff ride) also reaches the tail.
+    let walked: Vec<String> = walk_atoms(&m).into_iter().map(|(_, c)| c).collect();
+    assert!(
+        walked.iter().any(|c| c == "Z"),
+        "walk_atoms resumes past the fork to Z: {walked:?}"
+    );
+    let _ = (x, y);
+}
+
+#[test]
+fn doc_text_reads_past_a_conflict() {
+    // The same middle-conflict via two stitched branches, then `Doc::text()` must
+    // include BOTH the clean prefix and the tail past the fork (it used to stop at
+    // the first fork and drop the tail).
+    let mut base = History::new();
+    let (a, opa) = Patch::add(1, "A\n", AtomId::ROOT);
+    let (z, opz) = Patch::add(2, "Z\n", a);
+    base.commit(Patch::by(Author(1), [opa]));
+    base.commit(Patch::by(Author(1), [opz]));
+
+    let mut l = base.branch();
+    let (x, opx) = Patch::add(3, "X\n", a);
+    l.commit(Patch::by(Author(1), [opx, Op::Connect { from: x, to: z }]));
+    let mut rr = base.branch();
+    let (y, opy) = Patch::add(4, "Y\n", a);
+    rr.commit(Patch::by(Author(2), [opy, Op::Connect { from: y, to: z }]));
+
+    let mut merged_hist = l.clone();
+    merged_hist.stitch(&rr);
+    let d = Doc::from_history(merged_hist, Granularity::Line);
+    let t = d.text();
+    assert!(t.contains("A"), "prefix kept: {t:?}");
+    assert!(
+        t.contains("Z"),
+        "Doc::text does NOT drop the tail past the conflict: {t:?}"
+    );
+}

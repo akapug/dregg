@@ -819,6 +819,12 @@ impl ChildResolver for MapResolver {
 /// conflict where two embeds are unordered.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Segment {
+    /// A clean run of the parent's own TEXT content (a layout-atom whose content
+    /// is [`AtomContent::Text`]). The composed fold interleaves these with the
+    /// embedded children — closing the "named interleave point" the prototype
+    /// used to skip (DREGG-DOCUMENT-DESIGN §2: text is the core's job, but the
+    /// composed render must still emit it in order, not drop it).
+    Text(String),
     /// An embedded child cell, resolved through the viewer's membrane. Carries the
     /// role, who placed it (a fact), the child ref, and the resolution.
     Embedded {
@@ -861,7 +867,7 @@ impl Segment {
     /// embedded (non-conflict) segment.
     pub fn regime(&self) -> Option<Regime> {
         match self {
-            Segment::Embedded { .. } => None,
+            Segment::Text(_) | Segment::Embedded { .. } => None,
             Segment::LayoutConflict { .. } => Some(Regime::Prose),
             Segment::PinConflict { .. } => Some(Regime::Field),
         }
@@ -938,12 +944,15 @@ fn fold(
             None => continue,
         };
         match &atom.content {
-            AtomContent::Text(_) => {
-                // The prototype focuses on the embed half; a production fold
-                // interleaves text runs (the existing `content()` walk). A
-                // text atom here is rendered as an empty embedded? No — we simply
-                // skip text in this embed-focused prototype (text is the core's
-                // job). Left as the named interleave point.
+            AtomContent::Text(t) => {
+                // The interleave point, now CLOSED: a text layout-atom emits its
+                // run in document order alongside the embeds (previously skipped).
+                // Empty text (e.g. the ROOT sentinel or a leaf marker with no run)
+                // contributes nothing, so the pure-embed layouts still render as
+                // before — this only ADDS the missing text, it never reorders.
+                if !t.is_empty() {
+                    out.segments.push(Segment::Text(t.clone()));
+                }
             }
             AtomContent::Embed(child, role) => {
                 // The effective pin (a `Repin` override, else the ref's own pin)
@@ -1839,6 +1848,67 @@ mod tests {
             !content_composed(&layout, &cleared, &resolver).has_darkened(),
             "a fully-capped viewer reads every window"
         );
+    }
+
+    // ── §2: the NAMED INTERLEAVE POINT, now CLOSED (text is no longer skipped) ─
+
+    #[test]
+    fn text_layout_atoms_are_interleaved_not_skipped() {
+        // A composed layout whose parent carries its OWN text run BEFORE an embed.
+        // The prototype used to skip text (composition.rs:941-947, "the named
+        // interleave point"); the fold now emits it in document order.
+        let fig = CellId(0xF1);
+        let mut layout = LayoutGraph::new();
+        // A parent text atom right after ROOT.
+        let tid = AtomId::derive(1234, "intro");
+        layout.insert_atom(LayoutAtom {
+            id: tid,
+            content: AtomContent::Text("Introduction. ".to_string()),
+            status: Status::Alive,
+            provenance: Provenance {
+                author: Author(1),
+                patch: crate::atom::PatchId(1),
+            },
+        });
+        layout.connect_pub(AtomId::ROOT, tid);
+        // Then an embed of the figure, ordered after the text.
+        let eid = embed_id(1, fig);
+        layout.apply_patch(
+            Author(1),
+            &[Op::Embed {
+                id: eid,
+                child: ChildRef::live(fig),
+                after: tid,
+                role: EmbedRole::Figure,
+            }],
+        );
+
+        let viewer = Viewer::able([fig]);
+        let resolver = MapResolver::default().with(fig, leaf_cell("a figure"));
+        let r = content_composed(&layout, &viewer, &resolver);
+
+        // The parent's text run is PRESENT (previously dropped) and ordered before
+        // the embed.
+        let texts: Vec<&str> = r
+            .segments
+            .iter()
+            .filter_map(|s| match s {
+                Segment::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Introduction. "],
+            "the parent's text run is interleaved, not skipped"
+        );
+        assert_eq!(r.embedded_cells(), vec![fig], "the embed still resolves");
+        match (&r.segments[0], &r.segments[1]) {
+            (Segment::Text(t), Segment::Embedded { .. }) => {
+                assert_eq!(t, "Introduction. ", "text comes first, in document order")
+            }
+            other => panic!("expected text then embed, got {other:?}"),
+        }
     }
 
     // (FORKABLE) Two devices each add a different window concurrently => the layout

@@ -141,9 +141,12 @@ impl Rendered {
 /// It follows the same walk as [`content`]: start at [`AtomId::ROOT`], step
 /// through the single live successor, conducting order *through* tombstones. At
 /// a genuine antichain (a conflict) the linear order is not in the graph, so the
-/// walk stops at the fork (the clean prefix is what's authorable). For a clean
-/// linear document — the steady state of single-author text editing — this
-/// yields every alive atom in order.
+/// branch-exclusive atoms cannot be linearized here — but a conflict is a
+/// **local** state, not a wall (DREGG-DOCUMENT-DESIGN §3): the walk skips the
+/// contested alternatives and **resumes at the rejoin point** (the atom the
+/// branches reconverge into), so the document's clean tail past the conflict is
+/// still authorable. For a clean linear document — the steady state of
+/// single-author text editing — this yields every alive atom in order.
 pub fn walk_atoms(g: &DocGraph) -> Vec<(AtomId, String)> {
     let mut out = Vec::new();
     let mut visited = BTreeSet::new();
@@ -155,7 +158,7 @@ pub fn walk_atoms(g: &DocGraph) -> Vec<(AtomId, String)> {
         // reachable from another — the insert-in-the-middle shape, where the
         // anchor keeps its old edge to the successor the insert threads before)
         // collapse to the minimal one; only a genuine antichain (>=2 mutually
-        // unreachable) is a conflict with no linear order, where we stop.
+        // unreachable) is a conflict with no linear order among them.
         let next = match succ.as_slice() {
             [] => return out,
             [single] => *single,
@@ -166,7 +169,25 @@ pub fn walk_atoms(g: &DocGraph) -> Vec<(AtomId, String)> {
                     .filter(|&a| !many.iter().any(|&b| b != a && reachable(g, b, a)))
                     .collect();
                 if antichain.len() >= 2 {
-                    return out; // a genuine fork: stop at the clean prefix.
+                    // A genuine fork: the contested alternatives are not
+                    // linearizable, but skip them and resume at the rejoin so the
+                    // tail is not dropped. No rejoin => the branches are terminal
+                    // tails; the clean prefix is all there is to walk.
+                    for &head in &antichain {
+                        for a in g.branch_atoms(head) {
+                            visited.insert(a);
+                        }
+                    }
+                    match rejoin_point(g, &antichain) {
+                        Some(r) if visited.insert(r) => {
+                            if let Some(a) = g.atom(r) {
+                                out.push((r, a.content.render_text()));
+                            }
+                            cursor = r;
+                            continue;
+                        }
+                        _ => return out,
+                    }
                 }
                 antichain.first().copied().unwrap_or(many[0])
             }
@@ -175,7 +196,7 @@ pub fn walk_atoms(g: &DocGraph) -> Vec<(AtomId, String)> {
             return out;
         }
         if let Some(a) = g.atom(next) {
-            out.push((next, a.content.clone()));
+            out.push((next, a.content.render_text()));
         }
         cursor = next;
     }
@@ -239,7 +260,7 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                     return;
                 }
                 if let Some(a) = g.atom(id) {
-                    out.push(Segment::Clean(a.content.clone()));
+                    out.push(Segment::Clean(a.content.render_text()));
                 }
                 cursor = id;
             }
@@ -260,7 +281,7 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                         return;
                     }
                     if let Some(at) = g.atom(next) {
-                        out.push(Segment::Clean(at.content.clone()));
+                        out.push(Segment::Clean(at.content.render_text()));
                     }
                     cursor = next;
                     continue;
@@ -277,7 +298,7 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                         .unwrap_or(Provenance::GENESIS);
                     if bvisited.insert(head) {
                         if let Some(a) = g.atom(head) {
-                            branch.push(Segment::Clean(a.content.clone()));
+                            branch.push(Segment::Clean(a.content.render_text()));
                         }
                         walk(g, head, &mut bvisited, &mut branch);
                     }
@@ -302,7 +323,28 @@ fn walk(g: &DocGraph, from: AtomId, visited: &mut BTreeSet<AtomId>, out: &mut Ve
                     field: None,
                     alternatives,
                 }));
-                return;
+                // A conflict is a LOCAL state, not a wall (DREGG-DOCUMENT-DESIGN
+                // §3): do NOT stop here. Mark every branch-exclusive atom visited
+                // (so the main walk never re-descends into an alternative), then
+                // resume at the rejoin point — the atom the branches reconverge
+                // into — so the document's tail past the conflict is rendered
+                // (never silently dropped). No rejoin => the branches are terminal
+                // tails and there is nothing after the fork.
+                for &head in &antichain {
+                    for a in g.branch_atoms(head) {
+                        visited.insert(a);
+                    }
+                }
+                match rejoin_point(g, &antichain) {
+                    Some(r) if visited.insert(r) => {
+                        if let Some(a) = g.atom(r) {
+                            out.push(Segment::Clean(a.content.render_text()));
+                        }
+                        cursor = r;
+                        continue;
+                    }
+                    _ => return,
+                }
             }
         }
     }
@@ -335,6 +377,54 @@ fn append_field_conflicts(g: &DocGraph, out: &mut Vec<Segment>) {
             }));
         }
     }
+}
+
+/// The **rejoin point** of a set of conflicting branch heads: the nearest atom
+/// the branches reconverge into — an alive atom reachable from *every* head
+/// (excluding the heads themselves), minimal under reachability (no other common
+/// atom precedes it). `None` when the branches never reconverge (each is a
+/// terminal tail), i.e. there is genuinely nothing after the fork.
+///
+/// This is what lets the walk continue *past* a conflict (design §3): the
+/// contested alternatives are skipped, and the shared tail resumes at the rejoin.
+fn rejoin_point(g: &DocGraph, heads: &[AtomId]) -> Option<AtomId> {
+    if heads.len() < 2 {
+        return None;
+    }
+    let mut common: Option<BTreeSet<AtomId>> = None;
+    for &h in heads {
+        let cone = forward_reach(g, h);
+        common = Some(match common {
+            None => cone,
+            Some(acc) => acc.intersection(&cone).copied().collect(),
+        });
+    }
+    let mut common = common.unwrap_or_default();
+    for &h in heads {
+        common.remove(&h);
+    }
+    common.retain(|a| g.atom(*a).map(|x| x.is_alive()).unwrap_or(false));
+    // The minimal common atom: one not reachable from any other common atom (the
+    // nearest reconvergence). Falls back to the first by id if all incomparable.
+    common
+        .iter()
+        .copied()
+        .find(|&r| !common.iter().any(|&o| o != r && reachable(g, o, r)))
+        .or_else(|| common.iter().copied().next())
+}
+
+/// Every atom reachable from `start` by following order-edges (inclusive of
+/// `start`), through atoms alive or dead. The forward cone used to intersect
+/// branch heads for [`rejoin_point`].
+fn forward_reach(g: &DocGraph, start: AtomId) -> BTreeSet<AtomId> {
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![start];
+    while let Some(s) = stack.pop() {
+        if seen.insert(s) {
+            stack.extend(g.successors(s));
+        }
+    }
+    seen
 }
 
 /// Is `target` reachable from `start` by following order-edges (through any

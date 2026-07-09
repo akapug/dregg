@@ -125,7 +125,11 @@ pub fn commit(g: &DocGraph) -> Commitment {
     e.u64(g.atom_count() as u64);
     for a in g.atoms() {
         e.u128(a.id.0);
-        e.bytes_run(a.content.as_bytes());
+        // The TYPE-tagged canonical bytes (design §6 / the coordinator's DOM-shape
+        // constraint): the commitment binds the atom's KIND, not just a rendered
+        // projection — a structural node and a text run cannot alias, and a
+        // retagged/forged atom changes the commitment even at equal rendered text.
+        e.bytes_run(&a.content.canonical_bytes());
         e.status(a.status);
         e.provenance(a.provenance);
     }

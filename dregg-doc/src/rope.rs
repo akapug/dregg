@@ -276,7 +276,7 @@ mod tests {
         let g = d.history().replay();
         let added = g
             .atoms()
-            .find(|a| a.is_alive() && a.content == "added\n")
+            .find(|a| a.is_alive() && a.content.as_text() == Some("added\n"))
             .expect("the inserted line exists");
         assert_eq!(added.provenance.author, Author(9));
     }
