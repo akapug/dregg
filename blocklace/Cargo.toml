@@ -12,6 +12,13 @@ description = "Blocklace: a DAG-based structure for BFT consensus with cordial d
 [dependencies]
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+# FIPS 204 ML-DSA-65 (Dilithium) — the post-quantum half of a HYBRID block
+# signature. Pure Rust, no C. A block carries ed25519 ∧ ML-DSA-65, so forging a
+# block requires breaking BOTH ed25519 discrete log AND module-lattice SIS/LWE.
+# Matches `dregg-federation`'s `frost.rs` PQ half (same crate/version); this
+# crate cannot depend on `dregg-federation` (that would be a dependency cycle),
+# so the ML-DSA newtypes are re-implemented here over the shared `fips204` crate.
+fips204 = "0.4"
 postcard = { version = "1", features = ["use-std"] }
 dregg-types = { path = "../types" }
 serde = { workspace = true }

@@ -62,6 +62,9 @@ pub mod dregg_bridge;
 pub mod evidence;
 pub mod finality;
 pub mod ordering;
+pub mod pq;
+
+pub use pq::{MlDsaPublicKey, MlDsaSigningKey};
 
 /// THE one quorum formula (strict supermajority `⌊2n/3⌋ + 1`); see
 /// [`ordering::supermajority_threshold`]. `dregg_federation::quorum_threshold`
@@ -98,6 +101,20 @@ pub struct Block {
     /// Set to zeros for unsigned/test blocks.
     #[serde(with = "serde_sig64")]
     pub signature: [u8; 64],
+    /// The POST-QUANTUM half of the HYBRID signature: an ML-DSA-65 (FIPS 204)
+    /// signature over the SAME canonical bytes as the ed25519 half (`id()`),
+    /// produced by the key DERIVED from the creator's ed25519 seed
+    /// ([`pq::MlDsaSigningKey::from_seed`]). Empty (`vec![]`) is the
+    /// PQ-absent/unsigned sentinel — it fails [`Block::verify_signature`]
+    /// closed. A hybrid block carries [`pq::SIG_LEN`] (3309) bytes here.
+    ///
+    /// The verifier PINS this against the creator's ENROLLED ML-DSA public key
+    /// (the committee roster), NOT a key carried in the block — so a quantum
+    /// adversary who forges the ed25519 half still cannot inject blocks under
+    /// another creator's identity. Adding this field is a postcard flag-day
+    /// (blocks are internal wire); all nodes must upgrade together.
+    #[serde(default)]
+    pub pq_signature: Vec<u8>,
 }
 
 /// Serde helper for 64-byte arrays (Ed25519 signatures).
@@ -158,6 +175,7 @@ impl Block {
             predecessors,
             payload,
             signature: [0u8; 64],
+            pq_signature: Vec::new(),
         }
     }
 
@@ -179,40 +197,71 @@ impl Block {
         block
     }
 
-    /// Sign (or re-sign) this block in place with `signing_key`.
+    /// Sign (or re-sign) this block in place with `signing_key`, producing the
+    /// HYBRID (ed25519 ∧ ML-DSA-65) signature.
     ///
-    /// Sets `creator` to the key's public key and `signature` to the Ed25519
-    /// signature over `id()`. Returns the signature for convenience.
+    /// Sets `creator` to the key's public key, `signature` to the Ed25519
+    /// signature over `id()`, and `pq_signature` to the ML-DSA-65 signature over
+    /// the SAME `id()`. The ML-DSA key is DERIVED from the ed25519 seed
+    /// (`signing_key.to_bytes()`) via [`pq::MlDsaSigningKey::from_seed`] — the
+    /// creator never manages a separate PQ key, and the enrolled PQ public key
+    /// is a deterministic function of the ed25519 identity. Returns the ed25519
+    /// signature for convenience.
     pub fn sign(&mut self, signing_key: &SigningKey) -> [u8; 64] {
         self.creator = signing_key.verifying_key().to_bytes();
         let id = self.id();
         let sig = signing_key.sign(&id);
         self.signature = sig.to_bytes();
+        // POST-QUANTUM half: derive the ML-DSA key from the SAME ed25519 seed
+        // and sign the SAME canonical bytes. `None` only on a transient
+        // OS-entropy failure during hedged ML-DSA signing; leaving the PQ half
+        // empty makes the block fail `verify_signature` closed (never a
+        // half-signed block that passes).
+        let (_pk, pq_sk) = pq::MlDsaSigningKey::from_seed(&signing_key.to_bytes());
+        self.pq_signature = pq_sk.sign(&id).unwrap_or_default();
         self.signature
     }
 
-    /// Whether this block carries a (syntactically) non-zero signature.
-    ///
-    /// A zeroed signature is the unsigned sentinel produced by [`Block::new`];
-    /// it can never be a valid Ed25519 signature, so it is rejected on insert.
-    pub fn is_signed(&self) -> bool {
-        self.signature != [0u8; 64]
+    /// The enrollable ML-DSA-65 public key for a creator whose ed25519 signing
+    /// key is `signing_key` — the roster entry a verifier PINS this creator's
+    /// blocks against. Convenience for genesis enrollment and tests; equal to
+    /// [`pq::public_from_ed25519_seed`] on the key's seed.
+    pub fn pq_public_key(signing_key: &SigningKey) -> pq::MlDsaPublicKey {
+        pq::public_from_ed25519_seed(&signing_key.to_bytes())
     }
 
-    /// Verify this block's Ed25519 signature against its `creator` pubkey.
+    /// Whether this block carries BOTH halves of a (syntactically) non-zero
+    /// hybrid signature.
     ///
-    /// Returns `Ok(())` iff `creator` is a valid Ed25519 public key and
-    /// `signature` is a valid signature by it over `id()`. Rejects the unsigned
-    /// (zero-signature) sentinel, a malformed pubkey, and any forged/mismatched
-    /// signature. This is real Ed25519 verification (`ed25519_dalek`), not a
-    /// stub — the §8 crypto seam the design doc calls for, discharged here.
-    pub fn verify_signature(&self) -> Result<(), InsertError> {
+    /// A zeroed ed25519 signature or an empty ML-DSA half is the unsigned
+    /// sentinel produced by [`Block::new`]; neither can be a valid hybrid
+    /// signature, so such a block is rejected on insert (fails closed).
+    pub fn is_signed(&self) -> bool {
+        self.signature != [0u8; 64] && !self.pq_signature.is_empty()
+    }
+
+    /// Verify this block's HYBRID signature: Ed25519 against its `creator`
+    /// pubkey AND ML-DSA-65 against the creator's ENROLLED PQ public key.
+    ///
+    /// Returns `Ok(())` iff BOTH halves verify over `id()`:
+    /// - the ed25519 `signature` verifies against the self-carried `creator`
+    ///   (the ed25519 identity IS the creator id), and
+    /// - the `pq_signature` verifies against `enrolled_pq` — the committee
+    ///   roster's ML-DSA key for this creator, NOT a key carried in the block.
+    ///
+    /// Rejects the unsigned sentinel, a malformed pubkey, and any forged or
+    /// mismatched half. Because the PQ half is pinned to the enrolled key, a
+    /// quantum adversary who forges the ed25519 half — or who signs the PQ half
+    /// under their OWN fresh ML-DSA key — cannot pass: their key is not the one
+    /// enrolled for `creator`.
+    pub fn verify_signature(&self, enrolled_pq: &pq::MlDsaPublicKey) -> Result<(), InsertError> {
         if !self.is_signed() {
             return Err(InsertError::Unsigned {
                 creator: self.creator,
                 sequence: self.sequence,
             });
         }
+        // (a) Classical half: real Ed25519 verification against `creator`.
         let vk =
             VerifyingKey::from_bytes(&self.creator).map_err(|_| InsertError::BadSignature {
                 creator: self.creator,
@@ -223,7 +272,15 @@ impl Block {
             .map_err(|_| InsertError::BadSignature {
                 creator: self.creator,
                 sequence: self.sequence,
-            })
+            })?;
+        // (b) Post-quantum half: ML-DSA-65 pinned to the ENROLLED roster key.
+        if !enrolled_pq.verify(&self.id(), &self.pq_signature) {
+            return Err(InsertError::BadPqSignature {
+                creator: self.creator,
+                sequence: self.sequence,
+            });
+        }
+        Ok(())
     }
 
     /// Serialize the block to bytes for wire transmission.
@@ -276,6 +333,15 @@ pub enum InsertError {
     Unsigned { creator: NodeKey, sequence: u64 },
     /// The block's Ed25519 signature does not verify against `creator`.
     BadSignature { creator: NodeKey, sequence: u64 },
+    /// The block's ML-DSA-65 (post-quantum) signature does not verify against
+    /// the creator's ENROLLED PQ public key. This is the half a quantum
+    /// adversary cannot forge: the ed25519 half may be valid, but the PQ half
+    /// was not signed by the key enrolled for `creator`.
+    BadPqSignature { creator: NodeKey, sequence: u64 },
+    /// No ML-DSA-65 public key is enrolled for `creator`, so the block's
+    /// post-quantum half cannot be pinned to a trusted key. Fails CLOSED: the
+    /// block is rejected rather than trusting a self-carried or derived key.
+    UnenrolledCreator { creator: NodeKey, sequence: u64 },
     /// The block's sequence does not extend the creator's known chain
     /// (it regresses to or below the creator's current tip sequence).
     SeqRegression {
@@ -315,6 +381,18 @@ impl std::fmt::Display for InsertError {
             }
             InsertError::BadSignature { sequence, .. } => {
                 write!(f, "block at seq {sequence} has an invalid signature")
+            }
+            InsertError::BadPqSignature { sequence, .. } => {
+                write!(
+                    f,
+                    "block at seq {sequence} has an invalid post-quantum (ML-DSA) signature"
+                )
+            }
+            InsertError::UnenrolledCreator { sequence, .. } => {
+                write!(
+                    f,
+                    "block at seq {sequence} has no enrolled ML-DSA key for its creator"
+                )
             }
             InsertError::SeqRegression {
                 attempted,
@@ -358,6 +436,14 @@ pub struct Blocklace {
     /// retained value is the FIRST block seen at the position — the canonical
     /// fork witness against which a later equivocating block is compared.
     by_creator_seq: HashMap<(NodeKey, u64), BlockId>,
+    /// The enrolled ML-DSA-65 committee roster: `creator (ed25519 pubkey) ->
+    /// enrolled ML-DSA public key`. The strand-integrity [`Blocklace::insert`]
+    /// PINS a block's post-quantum half to the enrolled key for its creator —
+    /// it never trusts a key carried in the block. A creator absent from the
+    /// roster is rejected ([`InsertError::UnenrolledCreator`], fail-closed).
+    /// Populated out-of-band from the trusted committee roster (genesis), via
+    /// [`Blocklace::enroll_pq`].
+    pq_roster: HashMap<NodeKey, pq::MlDsaPublicKey>,
 }
 
 impl Blocklace {
@@ -366,16 +452,37 @@ impl Blocklace {
         Self::default()
     }
 
+    /// Enroll a creator's ML-DSA-65 public key into the committee roster.
+    ///
+    /// After enrollment, [`Blocklace::insert`] PINS every block by `creator` to
+    /// `pubkey` for its post-quantum half. This is the trusted, out-of-band
+    /// enrollment (genesis committee roster) — the block never carries its own
+    /// PQ key. Re-enrolling a creator replaces the key (e.g. committee
+    /// rotation). The enrollable key is [`Block::pq_public_key`] /
+    /// [`pq::public_from_ed25519_seed`] on the creator's ed25519 seed.
+    pub fn enroll_pq(&mut self, creator: NodeKey, pubkey: pq::MlDsaPublicKey) {
+        self.pq_roster.insert(creator, pubkey);
+    }
+
+    /// The enrolled ML-DSA committee roster (`creator -> enrolled PQ pubkey`).
+    pub fn pq_roster(&self) -> &HashMap<NodeKey, pq::MlDsaPublicKey> {
+        &self.pq_roster
+    }
+
     /// Insert a block into the blocklace, enforcing **feed integrity**.
     ///
     /// This is the strand-integrity write path. A block is accepted only if it
     /// is a valid extension of its creator's append-only, Ed25519-signed,
     /// monotone-sequence feed (a Secure-Scuttlebutt strand). Specifically:
     ///
-    /// 1. **Authenticity** — the block's Ed25519 signature must verify against
-    ///    its `creator` pubkey (the unsigned sentinel and any forged/mismatched
-    ///    signature are rejected: [`InsertError::Unsigned`] /
-    ///    [`InsertError::BadSignature`]).
+    /// 1. **Authenticity (HYBRID)** — the block's Ed25519 signature must verify
+    ///    against its `creator` pubkey AND its ML-DSA-65 signature must verify
+    ///    against the creator's ENROLLED PQ key (the committee roster pinned via
+    ///    [`Blocklace::enroll_pq`], never a self-carried key). The unsigned
+    ///    sentinel, any forged/mismatched half, and an unenrolled creator are
+    ///    rejected fail-closed: [`InsertError::Unsigned`] /
+    ///    [`InsertError::BadSignature`] / [`InsertError::BadPqSignature`] /
+    ///    [`InsertError::UnenrolledCreator`].
     /// 2. **Causal closure** — all predecessors must already be present
     ///    ([`InsertError::MissingPredecessors`]).
     /// 3. **Sequence monotonicity** — the block's `sequence` must strictly
@@ -396,8 +503,19 @@ impl Blocklace {
             return Ok(block_id);
         }
 
-        // (1) Authenticity: real Ed25519 verification against `creator`.
-        block.verify_signature()?;
+        // (1) Authenticity: HYBRID verification — ed25519 against `creator`
+        // AND ML-DSA-65 PINNED to the creator's ENROLLED roster key. A creator
+        // with no enrolled PQ key is rejected (fail-closed): we never trust a
+        // self-carried or on-the-fly-derived key for the post-quantum half.
+        match self.pq_roster.get(&block.creator) {
+            Some(enrolled_pq) => block.verify_signature(enrolled_pq)?,
+            None => {
+                return Err(InsertError::UnenrolledCreator {
+                    creator: block.creator,
+                    sequence: block.sequence,
+                });
+            }
+        }
 
         // (2) Causal closure: all predecessors must be present.
         let missing: Vec<BlockId> = block
@@ -711,6 +829,20 @@ mod tests {
         Block::new_signed(&key_for(creator), seq, preds, payload.to_vec())
     }
 
+    /// A blocklace with the deterministic test creators (`key_for(0..=32)`)
+    /// pre-enrolled in the ML-DSA roster — so hybrid `insert` can PIN their
+    /// post-quantum halves. Every `make_block(c, ..)` used below has `c <= 32`.
+    fn test_lace() -> Blocklace {
+        let mut lace = Blocklace::new();
+        for c in 0u8..=32 {
+            lace.enroll_pq(
+                key_for(c).verifying_key().to_bytes(),
+                Block::pq_public_key(&key_for(c)),
+            );
+        }
+        lace
+    }
+
     #[test]
     fn block_id_deterministic() {
         let b = make_block(1, 0, vec![], b"hello");
@@ -728,7 +860,7 @@ mod tests {
 
     #[test]
     fn insert_genesis() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let b = make_block(1, 0, vec![], b"genesis");
         let id = lace.insert(b).unwrap();
         assert!(lace.contains(&id));
@@ -738,7 +870,7 @@ mod tests {
 
     #[test]
     fn insert_with_predecessor() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let b1 = make_block(1, 0, vec![], b"first");
         let id1 = lace.insert(b1).unwrap();
 
@@ -752,7 +884,7 @@ mod tests {
 
     #[test]
     fn insert_missing_predecessor_fails() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let fake_pred = [0xAA; 32];
         let b = make_block(1, 0, vec![fake_pred], b"orphan");
         let err = lace.insert(b).unwrap_err();
@@ -764,7 +896,7 @@ mod tests {
 
     #[test]
     fn causal_past() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let b1 = make_block(1, 0, vec![], b"a");
         let id1 = lace.insert(b1).unwrap();
         let b2 = make_block(2, 0, vec![], b"b");
@@ -781,7 +913,7 @@ mod tests {
 
     #[test]
     fn topological_order_respects_causality() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let b1 = make_block(1, 0, vec![], b"a");
         let id1 = lace.insert(b1).unwrap();
         let b2 = make_block(2, 0, vec![], b"b");
@@ -799,7 +931,7 @@ mod tests {
 
     #[test]
     fn tips_tracking() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let creator = key_for(1).verifying_key().to_bytes();
         let b1 = make_block(1, 0, vec![], b"a");
         let id1 = lace.insert(b1).unwrap();
@@ -814,7 +946,7 @@ mod tests {
 
     #[test]
     fn duplicate_insert_is_idempotent() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let b = make_block(1, 0, vec![], b"dup");
         let id1 = lace.insert(b.clone()).unwrap();
         let id2 = lace.insert(b).unwrap();
@@ -828,7 +960,7 @@ mod tests {
     /// the write path requires real Ed25519 authenticity.
     #[test]
     fn unsigned_block_rejected() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let creator = key_for(1).verifying_key().to_bytes();
         let unsigned = Block::new(creator, 0, vec![], b"nosig".to_vec());
         assert!(!unsigned.is_signed());
@@ -843,7 +975,7 @@ mod tests {
     /// is rejected by real Ed25519 verification.
     #[test]
     fn bad_signature_rejected() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         // Sign with key 1, then claim a *different* payload so the signature no
         // longer matches the recomputed id (tamper after signing).
         let mut tampered = make_block(1, 0, vec![], b"original");
@@ -854,7 +986,10 @@ mod tests {
             other => panic!("expected BadSignature rejection, got {other:?}"),
         }
 
-        // Also: a signature by the WRONG key for this creator is rejected.
+        // Also: an ed25519 signature by the WRONG key for this creator is
+        // rejected. Give it a (syntactically present) PQ half so it reaches the
+        // ed25519 check — the classical half fails because creator 1 did not
+        // produce it.
         let mut wrong_signer = Block::new(
             key_for(1).verifying_key().to_bytes(),
             0,
@@ -862,7 +997,9 @@ mod tests {
             b"x".to_vec(),
         );
         let sig = key_for(2).sign(&wrong_signer.id());
-        wrong_signer.signature = sig.to_bytes(); // signed by 2, claims creator 1
+        wrong_signer.signature = sig.to_bytes(); // ed signed by 2, claims creator 1
+        let (_pk, pq2) = pq::MlDsaSigningKey::from_seed(&key_for(2).to_bytes());
+        wrong_signer.pq_signature = pq2.sign(&wrong_signer.id()).unwrap();
         match lace.insert(wrong_signer) {
             Err(InsertError::BadSignature { .. }) => {}
             other => panic!("expected BadSignature for wrong signer, got {other:?}"),
@@ -874,7 +1011,7 @@ mod tests {
     /// or below the current tip sequence) is rejected.
     #[test]
     fn seq_regression_rejected() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let creator = key_for(1).verifying_key().to_bytes();
 
         let g0 = make_block(1, 0, vec![], b"g0");
@@ -922,7 +1059,7 @@ mod tests {
     /// overwrote `tips[creator]` and kept both forks as live state.
     #[test]
     fn equivocation_detected_not_lost() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let creator = key_for(9).verifying_key().to_bytes();
 
         // Shared genesis so both forks are causally closed.
@@ -969,7 +1106,7 @@ mod tests {
     /// is only valid if it computes exactly that union.
     #[test]
     fn causal_past_union_equals_per_block_union() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         // Diamond + tails: a shared genesis, two mid blocks, a join, and
         // separate tips — so the tips' pasts overlap heavily.
         let g = make_block(1, 0, vec![], b"g");
@@ -1024,7 +1161,7 @@ mod tests {
             })
         }
 
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let g = make_block(1, 0, vec![], b"genesis");
         let gid = lace.insert(g).unwrap();
 
@@ -1064,5 +1201,118 @@ mod tests {
             // candidates see prior forks.
             let _ = lace.insert(cand.clone());
         }
+    }
+
+    // ─── HYBRID PQ (ed25519 ∧ ML-DSA-65) enroll+PIN tests ────────────────────
+
+    /// An honest hybrid block — creator signs both halves with its from-seed
+    /// keys, verified against its ENROLLED ML-DSA key — passes, and is accepted
+    /// by the strand-integrity `insert`.
+    #[test]
+    fn hybrid_honest_block_passes() {
+        let creator_key = key_for(7);
+        let enrolled = Block::pq_public_key(&creator_key);
+        let block = Block::new_signed(&creator_key, 0, vec![], b"honest".to_vec());
+        assert!(block.is_signed(), "hybrid block carries both halves");
+        assert!(
+            !block.pq_signature.is_empty(),
+            "PQ half is present (~{} bytes)",
+            pq::SIG_LEN
+        );
+        // Direct block-verify against the enrolled key.
+        assert!(block.verify_signature(&enrolled).is_ok());
+        // And through the pinned write path.
+        let mut lace = test_lace();
+        assert!(lace.insert(block).is_ok());
+    }
+
+    /// THE adversarial test: a block with a VALID ed25519 half from committee
+    /// member P, but an ML-DSA half signed under an ATTACKER's OWN fresh ML-DSA
+    /// key (≠ P's enrolled key) MUST be rejected. This is the quantum-adversary
+    /// scenario: the classical half is (assume) forgeable, but the PQ half is
+    /// pinned to P's enrolled key, which the attacker does not hold.
+    #[test]
+    fn hybrid_attacker_pq_key_rejected() {
+        let p_key = key_for(7); // committee member P (ed25519 identity)
+        let p_enrolled = Block::pq_public_key(&p_key); // P's ENROLLED ML-DSA key
+
+        // Build an HONEST-LOOKING block: valid ed25519 half by P over id().
+        let mut forged = Block::new(
+            p_key.verifying_key().to_bytes(),
+            0,
+            vec![],
+            b"inject".to_vec(),
+        );
+        let ed_sig = p_key.sign(&forged.id());
+        forged.signature = ed_sig.to_bytes(); // ed25519 half is genuinely P's
+
+        // The ATTACKER controls the PQ half but NOT P's from-seed ML-DSA key.
+        // They generate their own ML-DSA key (a different seed) and sign the id.
+        let attacker_seed = [0xAB_u8; 32];
+        let (attacker_pq_pub, attacker_pq_sk) = pq::MlDsaSigningKey::from_seed(&attacker_seed);
+        forged.pq_signature = attacker_pq_sk.sign(&forged.id()).unwrap();
+        assert_ne!(
+            attacker_pq_pub, p_enrolled,
+            "attacker key must differ from P's enrolled key"
+        );
+
+        // The forged PQ half is a VALID ML-DSA signature — under the ATTACKER's
+        // key. It MUST NOT verify against P's ENROLLED key.
+        assert!(
+            attacker_pq_pub.verify(&forged.id(), &forged.pq_signature),
+            "sanity: the forged sig is valid under the attacker's own key"
+        );
+        match forged.verify_signature(&p_enrolled) {
+            Err(InsertError::BadPqSignature { .. }) => {}
+            other => panic!("expected BadPqSignature, got {other:?}"),
+        }
+
+        // And it is rejected by the pinned write path (P is enrolled correctly).
+        let mut lace = test_lace();
+        match lace.insert(forged) {
+            Err(InsertError::BadPqSignature { .. }) => {}
+            other => panic!("expected BadPqSignature on insert, got {other:?}"),
+        }
+        assert_eq!(lace.len(), 0, "forged block must not be stored");
+    }
+
+    /// A block with a missing / empty PQ half fails CLOSED (never treated as a
+    /// valid ed25519-only block).
+    #[test]
+    fn hybrid_missing_pq_half_fails_closed() {
+        let p_key = key_for(7);
+        let enrolled = Block::pq_public_key(&p_key);
+
+        // Valid ed25519 half, but NO PQ half (the empty sentinel).
+        let mut ed_only = Block::new(p_key.verifying_key().to_bytes(), 0, vec![], b"x".to_vec());
+        let ed_sig = p_key.sign(&ed_only.id());
+        ed_only.signature = ed_sig.to_bytes();
+        assert!(ed_only.pq_signature.is_empty());
+        assert!(!ed_only.is_signed(), "empty PQ half ⇒ not fully signed");
+        match ed_only.verify_signature(&enrolled) {
+            Err(InsertError::Unsigned { .. }) => {}
+            other => panic!("expected Unsigned (fail-closed), got {other:?}"),
+        }
+        let mut lace = test_lace();
+        match lace.insert(ed_only) {
+            Err(InsertError::Unsigned { .. }) => {}
+            other => panic!("expected Unsigned on insert, got {other:?}"),
+        }
+    }
+
+    /// A creator with NO enrolled ML-DSA key is rejected fail-closed — the
+    /// write path never trusts a self-carried or on-the-fly-derived PQ key.
+    #[test]
+    fn hybrid_unenrolled_creator_rejected() {
+        // A fully-valid hybrid block by creator 200, but the lace has NOT
+        // enrolled 200 (test_lace only enrolls 0..=32).
+        let block = Block::new_signed(&key_for(200), 0, vec![], b"stranger".to_vec());
+        assert!(block.is_signed());
+        let mut lace = test_lace();
+        match lace.insert(block) {
+            Err(InsertError::UnenrolledCreator { .. }) => {}
+            other => panic!("expected UnenrolledCreator, got {other:?}"),
+        }
+        assert_eq!(lace.len(), 0);
     }
 }

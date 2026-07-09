@@ -293,11 +293,22 @@ mod tests {
         Block::new_signed(&signing_for(creator), seq, preds, payload.to_vec())
     }
 
+    /// A blocklace with the deterministic test creators (`signing_for(0..=63)`)
+    /// pre-enrolled in the ML-DSA roster, so hybrid `insert` can PIN their
+    /// post-quantum halves.
+    fn test_lace() -> Blocklace {
+        let mut lace = Blocklace::new();
+        for c in 0u8..=63 {
+            lace.enroll_pq(make_key(c), Block::pq_public_key(&signing_for(c)));
+        }
+        lace
+    }
+
     // ─── Test 1: Block with cross-reference correctly identified ────────────
 
     #[test]
     fn cross_reference_correctly_identified() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
 
         // Group members: 1, 2, 3
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
@@ -353,6 +364,11 @@ mod tests {
     fn external_block_included_in_causal_closure_push() {
         let key_a = make_key(1);
         let mut node = Disseminator::new(key_a);
+        // Enroll the test committee (a non-authoring disseminator self-enrolls
+        // nothing) so its blocklace accepts hybrid blocks by any test creator.
+        for c in 0u8..=63 {
+            node.enroll_pq(make_key(c), Block::pq_public_key(&signing_for(c)));
+        }
 
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
@@ -379,7 +395,7 @@ mod tests {
         let group = ReferenceGroup::new(members.clone(), 10);
         let config = OrderingConfig::default();
 
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
 
         // External block.
         let ext_block = make_block(10, 0, vec![], b"ext");
@@ -437,7 +453,7 @@ mod tests {
 
     #[test]
     fn cross_group_proof_delivery_via_dag() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
         // External prover (creator 20) produces a proof block.
@@ -480,7 +496,7 @@ mod tests {
 
     #[test]
     fn policy_unrestricted_allows_any_cross_ref() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
         let policy = CrossRefPolicy::Unrestricted;
 
@@ -505,7 +521,7 @@ mod tests {
 
     #[test]
     fn policy_bridge_members_only_rejects_non_bridge() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
         // Only member 1 is a bridge member.
@@ -537,7 +553,7 @@ mod tests {
 
     #[test]
     fn policy_forbidden_rejects_all_cross_refs() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
         let policy = CrossRefPolicy::Forbidden;
 
@@ -560,7 +576,7 @@ mod tests {
 
     #[test]
     fn multiple_cross_references_in_one_block() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
         // Multiple external blocks from different creators.
@@ -599,7 +615,7 @@ mod tests {
         let sub = Subscription::from_reference_group(&group);
         let mut discovery = InterestDiscovery::new(2); // auto-subscribe after 2 references
 
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
 
         // External block from strand 50.
         let ext = make_block(50, 0, vec![], b"ext-discovery");
@@ -642,7 +658,7 @@ mod tests {
 
     #[test]
     fn has_cross_references_false_for_internal_only() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
         // Only internal references.
@@ -659,7 +675,7 @@ mod tests {
 
     #[test]
     fn external_causal_context_finds_all_external_blocks() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
 
         // Several external blocks.
@@ -760,7 +776,7 @@ mod tests {
 
     #[test]
     fn policy_requires_approval_rejects_cross_refs() {
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         let group = ReferenceGroup::new(vec![make_key(1), make_key(2), make_key(3)], 10);
         let policy = CrossRefPolicy::RequiresApproval;
 
