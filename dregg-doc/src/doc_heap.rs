@@ -3,9 +3,8 @@
 //! — the boundary of the cell's universal-memory heap (the per-cell umem of
 //! `docs/deos/UMEM-PRIMITIVE.md` §2, §8).
 //!
-//! [`crate::commit`] names this target directly: *"The real substrate commitment
-//! is sorted-Poseidon2 over the document cell's heap (the faithful 8-felt
-//! commitment floor); this crate rides that later"* (`commit.rs:30`). This module
+//! The real substrate commitment is sorted-Poseidon2 over the document cell's
+//! heap (the faithful 8-felt commitment floor); this module
 //! is that ride, onto the **umem-heap** specifically — the cell's
 //! `heap_map`/`heap_root` umem collection that Stage A exposes
 //! (`cell/src/state.rs`: `set_heap` / `reseal_heap_root` / `heap_root_membership`)
@@ -25,7 +24,7 @@
 //! - **Conflicts-as-objects** ride the boundary: a conflict state's *both* live
 //!   alternatives (and their provenance) are heap leaves, so the umem boundary
 //!   binds them — a light client cannot be shown a forged or dropped alternative
-//!   (the [`crate::commit`] anti-forge tooth survives onto the real root).
+//!   (the anti-forge tooth holds on the real root; see [`substrate_commit`]).
 //! - **`dregg://` transclusion** is a **composable umem** ([`DocHeapCell::transclude`]):
 //!   an embed leaf whose VALUE is a child cell's `heap_root` — the parent's umem
 //!   holds, at an embed key, another cell's boundary root. A `Pin::At` citation
@@ -277,6 +276,36 @@ impl<'a> Dec<'a> {
     }
 }
 
+/// Decode one op — the strict inverse of [`enc_op`] (shared by the history
+/// codec and the patch-list codec [`patches_from_bytes`]). `None` on an unknown
+/// op tag, truncation, or invalid UTF-8.
+fn dec_op(d: &mut Dec) -> Option<Op> {
+    Some(match d.u8()? {
+        0 => Op::Add {
+            id: d.atom_id()?,
+            content: AtomContent::from_canonical_bytes(d.run()?)?,
+            after: d.atom_id()?,
+        },
+        1 => Op::Delete { id: d.atom_id()? },
+        2 => Op::Connect {
+            from: d.atom_id()?,
+            to: d.atom_id()?,
+        },
+        3 => Op::SetField {
+            name: d.string()?,
+            value: d.string()?,
+            superseding: d.u8()? != 0,
+        },
+        4 => Op::Resurrect { id: d.atom_id()? },
+        5 => Op::Disconnect {
+            from: d.atom_id()?,
+            to: d.atom_id()?,
+        },
+        6 => Op::RetractField { name: d.string()? },
+        _ => return None,
+    })
+}
+
 /// Decode a history from its canonical bytes — the strict inverse of
 /// [`history_to_bytes`]. `None` on a wrong domain tag, an unknown op tag,
 /// truncation, invalid UTF-8, or trailing garbage.
@@ -292,30 +321,7 @@ fn history_from_bytes(bytes: &[u8]) -> Option<History> {
         let n_ops = d.u64()? as usize;
         let mut ops = Vec::new();
         for _ in 0..n_ops {
-            ops.push(match d.u8()? {
-                0 => Op::Add {
-                    id: d.atom_id()?,
-                    content: AtomContent::from_canonical_bytes(d.run()?)?,
-                    after: d.atom_id()?,
-                },
-                1 => Op::Delete { id: d.atom_id()? },
-                2 => Op::Connect {
-                    from: d.atom_id()?,
-                    to: d.atom_id()?,
-                },
-                3 => Op::SetField {
-                    name: d.string()?,
-                    value: d.string()?,
-                    superseding: d.u8()? != 0,
-                },
-                4 => Op::Resurrect { id: d.atom_id()? },
-                5 => Op::Disconnect {
-                    from: d.atom_id()?,
-                    to: d.atom_id()?,
-                },
-                6 => Op::RetractField { name: d.string()? },
-                _ => return None,
-            });
+            ops.push(dec_op(&mut d)?);
         }
         h.commit(Patch::by(author, ops));
     }
@@ -323,6 +329,46 @@ fn history_from_bytes(bytes: &[u8]) -> Option<History> {
         return None; // trailing garbage is a malformed payload, refuse
     }
     Some(h)
+}
+
+/// Canonical byte serialization of a **patch list** (a count, then each patch as
+/// author + op-count + ops), reusing the committed `v1` op format ([`enc_op`]).
+/// The inverse is [`patches_from_bytes`]. Shared with the federated-PR carry
+/// ([`crate::pr_carry`]): the carried head-suffix + review set ride these exact
+/// bytes, so the carry commits to the same canonical shape the boundary does.
+pub(crate) fn patches_to_bytes(patches: &[Patch]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(patches.len() as u64).to_le_bytes());
+    for p in patches {
+        out.extend_from_slice(&p.author.0.to_le_bytes());
+        out.extend_from_slice(&(p.ops.len() as u64).to_le_bytes());
+        for op in &p.ops {
+            enc_op(&mut out, op);
+        }
+    }
+    out
+}
+
+/// Decode a patch list from its canonical bytes — the strict inverse of
+/// [`patches_to_bytes`]. `None` on truncation, an unknown op tag, invalid UTF-8,
+/// or trailing garbage (an untrusted carry byte is refused, never coerced).
+pub(crate) fn patches_from_bytes(bytes: &[u8]) -> Option<Vec<Patch>> {
+    let mut d = Dec { bytes, at: 0 };
+    let n_patches = d.u64()? as usize;
+    let mut patches = Vec::with_capacity(n_patches);
+    for _ in 0..n_patches {
+        let author = Author(d.u64()?);
+        let n_ops = d.u64()? as usize;
+        let mut ops = Vec::new();
+        for _ in 0..n_ops {
+            ops.push(dec_op(&mut d)?);
+        }
+        patches.push(Patch::by(author, ops));
+    }
+    if d.at != bytes.len() {
+        return None; // trailing garbage is a malformed payload, refuse
+    }
+    Some(patches)
 }
 
 /// Lay a document's patch-history into `map` at [`COLL_HISTORY`] (canonical
