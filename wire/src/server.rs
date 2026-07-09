@@ -905,60 +905,40 @@ impl ConnectionAuth {
 /// to verify challenge-response signatures. This trait abstracts the
 /// source of truth.
 pub trait ParticipantSource: Send + Sync + std::fmt::Debug {
-    /// Check if a public key is a current constitutional participant.
+    /// Check if a HYBRID id (`H(ed25519_pk ‖ ml_dsa_pk)`) is a current
+    /// constitutional participant.
+    ///
+    /// The `key` is the peer's hybrid identity, not a raw ed25519 key: the
+    /// post-quantum enroll+pin is CRYPTOGRAPHIC (the id commits to both keys,
+    /// checked by `dregg_types::verify_committed_ml_dsa`), so this membership
+    /// set is over hybrid ids and the old out-of-band ML-DSA roster
+    /// (`ml_dsa_pubkey_for`) is retired.
     fn is_participant(&self, key: &[u8; 32]) -> bool;
     /// Get the current constitution version.
     fn constitution_version(&self) -> u64;
-
-    /// The enrolled ML-DSA-65 (FIPS 204) public key PINNED to this participant
-    /// identity — the post-quantum half of the HYBRID peer authentication.
-    ///
-    /// The verifier checks a `PeerAuthResponse.pq_signature` against the key
-    /// returned here, NEVER a pubkey carried in the response, so a peer's PQ
-    /// key is bound to its constitutional identity and cannot be self-supplied.
-    ///
-    /// `Some(pk)` means the PQ half is REQUIRED for this participant and must
-    /// verify against `pk` (fail CLOSED). `None` means no PQ key is enrolled for
-    /// this identity — a legacy Ed25519-only participant during the staged
-    /// rollout, for whom the PQ half is not yet demanded. The default returns
-    /// `None` so existing sources stay Ed25519-only until they enroll PQ keys.
-    fn ml_dsa_pubkey_for(&self, _participant_key: &[u8; 32]) -> Option<Vec<u8>> {
-        None
-    }
 }
 
 /// A static participant list (for testing and simple deployments).
+///
+/// The `participants` are HYBRID ids (`H(ed25519_pk ‖ ml_dsa_pk)`). There is no
+/// separate ML-DSA roster: the id itself commits to the PQ key, so peer-auth
+/// verifies a self-carried ML-DSA key against the commitment
+/// (`dregg_types::verify_committed_ml_dsa`) rather than an enrolled table.
 #[derive(Clone, Debug)]
 pub struct StaticParticipants {
-    /// The participant keys (sorted).
+    /// The participant HYBRID ids (sorted).
     pub participants: Vec<[u8; 32]>,
     /// The constitution version.
     pub version: u64,
-    /// Enrolled ML-DSA-65 public keys, PINNED to the Ed25519 `participant_key`
-    /// identity. A participant present here has an enrolled PQ half and MUST
-    /// satisfy the HYBRID check (fail closed); absent participants are legacy
-    /// Ed25519-only. The map value is the FIPS 204 serialized public key.
-    ml_dsa_pubkeys: std::collections::HashMap<[u8; 32], Vec<u8>>,
 }
 
 impl StaticParticipants {
-    /// Create a new static participant source (Ed25519-only; no PQ enrolled).
+    /// Create a new static participant source over HYBRID ids.
     pub fn new(participants: Vec<[u8; 32]>) -> Self {
         Self {
             participants,
             version: 0,
-            ml_dsa_pubkeys: std::collections::HashMap::new(),
         }
-    }
-
-    /// Enroll (PIN) an ML-DSA-65 public key to a participant's Ed25519 identity.
-    ///
-    /// After this, the participant's HYBRID peer authentication REQUIRES a valid
-    /// ML-DSA half verified against `ml_dsa_pubkey` — a fresh/attacker-supplied
-    /// PQ key is rejected because the verifier consults only this enrolled key.
-    pub fn with_ml_dsa_key(mut self, participant_key: [u8; 32], ml_dsa_pubkey: Vec<u8>) -> Self {
-        self.ml_dsa_pubkeys.insert(participant_key, ml_dsa_pubkey);
-        self
     }
 }
 
@@ -969,10 +949,6 @@ impl ParticipantSource for StaticParticipants {
 
     fn constitution_version(&self) -> u64 {
         self.version
-    }
-
-    fn ml_dsa_pubkey_for(&self, participant_key: &[u8; 32]) -> Option<Vec<u8>> {
-        self.ml_dsa_pubkeys.get(participant_key).cloned()
     }
 }
 
@@ -1896,7 +1872,9 @@ impl SiloServer {
 
             if let Some(WireMessage::PeerAuthResponse {
                 participant_key,
+                participant_ed25519,
                 signature,
+                participant_ml_dsa,
                 pq_signature,
                 claimed_constitution_version: _,
             }) = auth_response
@@ -1906,33 +1884,44 @@ impl SiloServer {
                 // challenge bytes. A quantum adversary that forges only the
                 // Ed25519 half cannot impersonate the peer.
                 let signing_msg = peer_auth_signing_message(&nonce, &config.node_id);
-                let pk = PublicKey(participant_key);
+                let pk = PublicKey(participant_ed25519);
 
-                // Classical half.
+                // HYBRID IDENTITY BINDING (enroll+pin is CRYPTOGRAPHIC): the peer
+                // carries its ed25519 AND ML-DSA public keys, and `participant_key`
+                // is the hybrid id that COMMITS to both. Recompute the commitment
+                // and REJECT any key pair that does not hash into the claimed id —
+                // this is what makes the self-carried ML-DSA key safe and retires
+                // the out-of-band roster. A `None` ML-DSA half cannot commit to a
+                // real hybrid id, so it fails closed here.
+                let commit_ok = match &participant_ml_dsa {
+                    Some(ml_dsa_pk) => dregg_types::verify_committed_ml_dsa(
+                        &participant_key,
+                        &participant_ed25519,
+                        ml_dsa_pk,
+                    ),
+                    None => false,
+                };
+
+                // Classical half — verified against the CARRIED ed25519 key
+                // (itself bound into `participant_key` by the commitment above).
                 let ed_ok = pk.verify(&signing_msg, &signature);
 
-                // PQ half — ENROLL + PIN. Verify against the ML-DSA key ENROLLED
-                // for this identity in the constitution, never a pubkey carried
-                // in the response. `ml_dsa_verify` is fail-CLOSED on any bad
+                // PQ half — verified against the SELF-CARRIED ML-DSA key. Self-
+                // carrying is safe precisely because the commitment check pins that
+                // key to the participant's hybrid id (a wrong/attacker-supplied key
+                // fails `commit_ok`). `ml_dsa_verify` is fail-CLOSED on any bad
                 // length / undecodable key / failed check. The peer-auth signing
                 // message is already domain-separated (blake3 derive-key
                 // "dregg-wire peer-auth v1"), so reusing the turn PQ context
                 // cannot cross-replay a turn signature as a peer-auth one.
-                let pq_ok = match source.ml_dsa_pubkey_for(&participant_key) {
-                    // A participant with an enrolled PQ key MUST present a valid
-                    // ML-DSA half; a missing half fails CLOSED.
-                    Some(enrolled_pq_pk) => match &pq_signature {
-                        Some(sig) => {
-                            dregg_turn::pq::ml_dsa_verify(&enrolled_pq_pk, &signing_msg, sig)
-                        }
-                        None => false,
-                    },
-                    // Legacy Ed25519-only participant: no PQ key enrolled, so the
-                    // PQ half is not yet demanded (staged rollout).
-                    None => true,
+                let pq_ok = match (&participant_ml_dsa, &pq_signature) {
+                    (Some(ml_dsa_pk), Some(sig)) => {
+                        dregg_turn::pq::ml_dsa_verify(ml_dsa_pk, &signing_msg, sig)
+                    }
+                    _ => false,
                 };
 
-                if ed_ok && pq_ok && source.is_participant(&participant_key) {
+                if commit_ok && ed_ok && pq_ok && source.is_participant(&participant_key) {
                     // Authentication successful
                     conn_auth.authenticate_as_member(participant_key);
 
@@ -4179,7 +4168,9 @@ mod tests {
         client
             .send(WireMessage::PeerAuthResponse {
                 participant_key,
+                participant_ed25519: participant_key,
                 signature: Signature([0xFF; 64]), // Invalid signature
+                participant_ml_dsa: None,
                 pq_signature: None,
                 claimed_constitution_version: 0,
             })
@@ -4215,9 +4206,16 @@ mod tests {
 
     #[tokio::test]
     async fn authenticated_member_can_proceed() {
-        // Server with require_auth=true: properly authenticated peers proceed.
-        let (sk, pk) = dregg_types::generate_keypair();
-        let participant_key = pk.0;
+        use dregg_turn::pq::MlDsaTurnKey;
+
+        // Server with require_auth=true: a properly authenticated HYBRID peer
+        // proceeds. Its id COMMITS to both keys (no ml_dsa roster).
+        let seed = [0x42u8; 32];
+        let sk = dregg_types::SigningKey::from_bytes(&seed);
+        let ed_pk = sk.public_key().0;
+        let pq = MlDsaTurnKey::from_ed25519_seed(&seed);
+        let ml = pq.public_bytes();
+        let participant_key = dregg_types::hybrid_id_commitment(&ed_pk, &ml);
         let participants = StaticParticipants::new(vec![participant_key]);
 
         let auth_config = crate::auth::AuthConfig::strict();
@@ -4261,15 +4259,18 @@ mod tests {
             other => panic!("expected PeerChallenge, got {other:?}"),
         };
 
-        // Sign the challenge correctly
+        // Sign the challenge correctly (BOTH halves).
         let signing_msg = peer_auth_signing_message(&nonce, &server_node_id);
         let sig = dregg_types::sign(&sk, &signing_msg);
+        let pq_sig = pq.sign(&signing_msg).expect("ml-dsa sign");
 
         client
             .send(WireMessage::PeerAuthResponse {
                 participant_key,
+                participant_ed25519: ed_pk,
                 signature: sig,
-                pq_signature: None,
+                participant_ml_dsa: Some(ml.clone()),
+                pq_signature: Some(pq_sig),
                 claimed_constitution_version: 0,
             })
             .await
@@ -4334,20 +4335,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hybrid_peer_auth_pins_ml_dsa_to_enrolled_identity() {
+    async fn hybrid_peer_auth_binds_ml_dsa_by_id_commitment() {
         use dregg_turn::pq::MlDsaTurnKey;
 
-        // A participant whose Ed25519 identity has an ENROLLED (pinned) ML-DSA
-        // key, both derived from the same 32-byte seed.
+        // A participant whose HYBRID id COMMITS to both its ed25519 and ML-DSA
+        // keys (both derived from the same 32-byte seed). There is NO out-of-band
+        // ML-DSA roster: the id IS the enrollment.
         let seed = [7u8; 32];
         let sk = dregg_types::SigningKey::from_bytes(&seed);
-        let participant_key = sk.public_key().0;
+        let ed_pk = sk.public_key().0;
         let honest_pq = MlDsaTurnKey::from_ed25519_seed(&seed);
+        let honest_ml = honest_pq.public_bytes();
+        // participant_key = H("dregg-hybrid-id-v1", P_ed ‖ P_ml).
+        let participant_key = dregg_types::hybrid_id_commitment(&ed_pk, &honest_ml);
 
-        // The constitution PINS the honest ML-DSA pubkey to this identity — the
-        // key is NOT self-carried in the response; the server consults only this.
-        let participants = StaticParticipants::new(vec![participant_key])
-            .with_ml_dsa_key(participant_key, honest_pq.public_bytes());
+        // The membership set is over HYBRID ids only — no ml_dsa roster.
+        let participants = StaticParticipants::new(vec![participant_key]);
 
         let config = SiloConfig::new("hybrid-silo").with_verifier(Arc::new(NoopVerifier));
         let server = SiloServer::new("127.0.0.1:0".parse().unwrap(), config)
@@ -4360,14 +4363,17 @@ mod tests {
         });
         let addr = addr_rx.await.unwrap();
 
-        // 1. HONEST: valid Ed25519 half + valid ML-DSA half from the enrolled
-        //    (seed-derived) key → ACCEPTED as Member.
+        // 1. HONEST: hybrid id + carried ed25519 + carried ML-DSA that hash into
+        //    the id, both signatures valid → ACCEPTED as Member (its hybrid id).
         let honest_pq_c = honest_pq.clone();
+        let honest_ml_c = honest_ml.clone();
         let accepted = run_peer_auth_attempt(&addr, move |nonce, sid| {
             let msg = peer_auth_signing_message(&nonce, &sid);
             WireMessage::PeerAuthResponse {
                 participant_key,
+                participant_ed25519: ed_pk,
                 signature: dregg_types::sign(&sk, &msg),
+                participant_ml_dsa: Some(honest_ml_c.clone()),
                 pq_signature: Some(honest_pq_c.sign(&msg).expect("ml-dsa sign")),
                 claimed_constitution_version: 0,
             }
@@ -4382,16 +4388,20 @@ mod tests {
             other => panic!("expected PeerAuthenticated(Member), got {other:?}"),
         }
 
-        // 2. ADVERSARIAL: valid Ed25519 half for `participant_key`, but the
-        //    ML-DSA half is under a FRESH attacker key that is NOT the one
-        //    enrolled for N. The server pins to the enrolled key → REJECTED.
+        // 2. ADVERSARIAL: the attacker keeps the honest P_ed and CLAIMS the honest
+        //    hybrid id, but presents their OWN ML-DSA key with a valid signature
+        //    under it. The id-COMMITMENT recomputes H(P_ed ‖ attacker_ml) ≠ the
+        //    claimed id → REJECTED (not by a roster — by the commitment itself).
         let sk2 = dregg_types::SigningKey::from_bytes(&seed);
         let attacker_pq = MlDsaTurnKey::from_ed25519_seed(&[0xAAu8; 32]);
+        let attacker_ml = attacker_pq.public_bytes();
         let rejected = run_peer_auth_attempt(&addr, move |nonce, sid| {
             let msg = peer_auth_signing_message(&nonce, &sid);
             WireMessage::PeerAuthResponse {
-                participant_key,
-                signature: dregg_types::sign(&sk2, &msg), // Ed25519 half is valid
+                participant_key,                               // claims the HONEST hybrid id
+                participant_ed25519: sk2.public_key().0,       // honest P_ed
+                signature: dregg_types::sign(&sk2, &msg),      // Ed25519 half is valid
+                participant_ml_dsa: Some(attacker_ml.clone()), // attacker's OWN key
                 pq_signature: Some(attacker_pq.sign(&msg).expect("ml-dsa sign")),
                 claimed_constitution_version: 0,
             }
@@ -4401,20 +4411,50 @@ mod tests {
             WireMessage::PeerAuthenticated { role_tag, .. } => assert_eq!(
                 role_tag,
                 PeerRole::Anonymous.tag(),
-                "attacker ML-DSA half under a non-enrolled key must be REJECTED"
+                "attacker ML-DSA key that does not commit into the id must be REJECTED"
             ),
             other => panic!("expected PeerAuthenticated(Anonymous), got {other:?}"),
         }
 
-        // 3. FAIL CLOSED: valid Ed25519 half but the PQ half is MISSING for an
-        //    identity that has an enrolled PQ key → REJECTED.
+        // 3. ADVERSARIAL: the attacker forms a SELF-CONSISTENT hybrid id over
+        //    (honest P_ed, attacker_ml) — the commitment passes — but that id is
+        //    NOT an enrolled participant → REJECTED by `is_participant`.
         let sk3 = dregg_types::SigningKey::from_bytes(&seed);
+        let rogue_pq = MlDsaTurnKey::from_ed25519_seed(&[0xBBu8; 32]);
+        let rogue_ml = rogue_pq.public_bytes();
+        let rogue_id = dregg_types::hybrid_id_commitment(&sk3.public_key().0, &rogue_ml);
+        let rogue = run_peer_auth_attempt(&addr, move |nonce, sid| {
+            let msg = peer_auth_signing_message(&nonce, &sid);
+            WireMessage::PeerAuthResponse {
+                participant_key: rogue_id, // self-consistent but UNENROLLED id
+                participant_ed25519: sk3.public_key().0,
+                signature: dregg_types::sign(&sk3, &msg),
+                participant_ml_dsa: Some(rogue_ml.clone()),
+                pq_signature: Some(rogue_pq.sign(&msg).expect("ml-dsa sign")),
+                claimed_constitution_version: 0,
+            }
+        })
+        .await;
+        match rogue {
+            WireMessage::PeerAuthenticated { role_tag, .. } => assert_eq!(
+                role_tag,
+                PeerRole::Anonymous.tag(),
+                "a self-consistent but unenrolled hybrid id must be REJECTED"
+            ),
+            other => panic!("expected PeerAuthenticated(Anonymous), got {other:?}"),
+        }
+
+        // 4. FAIL CLOSED: valid Ed25519 half but the ML-DSA key / PQ half is
+        //    MISSING → the commitment cannot be checked → REJECTED.
+        let sk4 = dregg_types::SigningKey::from_bytes(&seed);
         let missing = run_peer_auth_attempt(&addr, move |nonce, sid| {
             let msg = peer_auth_signing_message(&nonce, &sid);
             WireMessage::PeerAuthResponse {
                 participant_key,
-                signature: dregg_types::sign(&sk3, &msg),
-                pq_signature: None, // missing PQ half
+                participant_ed25519: sk4.public_key().0,
+                signature: dregg_types::sign(&sk4, &msg),
+                participant_ml_dsa: None, // no ML-DSA key
+                pq_signature: None,       // missing PQ half
                 claimed_constitution_version: 0,
             }
         })
@@ -4423,7 +4463,7 @@ mod tests {
             WireMessage::PeerAuthenticated { role_tag, .. } => assert_eq!(
                 role_tag,
                 PeerRole::Anonymous.tag(),
-                "missing PQ half for an enrolled identity must fail CLOSED"
+                "missing ML-DSA key/half must fail CLOSED"
             ),
             other => panic!("expected PeerAuthenticated(Anonymous), got {other:?}"),
         }
