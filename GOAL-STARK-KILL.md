@@ -522,9 +522,12 @@ STAGES (sequential, Lean under .bin/lean-safe, each verified+committed before ne
      (light-client + aggregation soundness). Both poles non-vacuous, welds to the S1 leaf, NO axioms.
   ✅ S3a DONE (6056abc13): bound_presentation_witness + descriptor_by_name arm — bound descriptor USABLE
      end-to-end (7 round-trip tests, genuine Poseidon2 tag lanes, honest ACCEPT + 4 forge REJECT).
-  S3b (NEXT, target ivc_turn_chain.rs is CLEAN): the dual-expose fold-carrier Rust wiring
-     (prove_descriptor_leaf_dual_expose_at + a presentation carrier arm + carrier_claim_pins_admitted) —
-     deploys S2's proof so the binding rides the fold in the DEPLOYED prover. Delicate hot-file edit.
+  ✅ S3b-i DONE (cfacb2b7f): presentation_leaf_adapter.rs (NEW) — prove_presentation_binding_node_segmented
+     + PRESENTATION_CLAIM_LEN=17; folds a bound-presentation leaf + dual-exposes the authorization claim.
+     6 tests pass (honest folds+binds+exposes; forged claim does NOT fold — both poles). The fold-carrier
+     DEPLOYED as a callable adapter. Built in isolated CARGO_TARGET_DIR (shared target lock-contended).
+  S3b-ii (BLOCKED: ivc_turn_chain.rs actively churned by other terminals — flickers dirty): the ONE
+     dispatch match-arm wiring the adapter into the production turn-chain fold. Wait for a stable window.
   S3c (BLOCKED by other terminals: bridge/present.rs + sdk/cipherclerk.rs currently DIRTY): flip the
      live verify path onto the bound descriptor. Wait for those files to clear.
   S4: finish stark-kill (sdk/verify, cipherclerk) + git rm circuit/src/stark.rs.
