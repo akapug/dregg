@@ -62,7 +62,9 @@ pub struct VerifiedFinality {
     /// (the `AuthorId` the Lean wire used); a block whose `(creator_id, seq)` is in this set is
     /// admitted.
     finalized: std::collections::HashSet<(u64, u64)>,
-    /// creator pubkey -> the small `AuthorId` (participant index) used on the wire.
+    /// creator HYBRID id (`H(ed25519 ‖ ml_dsa)`, == `Block::creator`) -> the small `AuthorId`
+    /// (participant index) used on the wire. Both the interned participant set and the block
+    /// `creator`s are keyed by this hybrid id, so leader-matching is identity-consistent.
     creator_ids: HashMap<[u8; 32], u64>,
 }
 
@@ -193,13 +195,17 @@ impl VerifiedFinality {
         })
     }
 
-    /// Whether the verified rule finalizes a block — by its `(creator pubkey, seq)`. The node calls
-    /// this per Rust-finalized block before slicing it to the executor: `true` ⇒ admit, `false` ⇒
-    /// REFUSE (the verified rule did not finalize it). Mirrors the Lean `gateAdmits` predicate.
+    /// Whether the verified rule finalizes a block — by its `(creator hybrid id, seq)`. `creator` is
+    /// the `Block::creator` hybrid id `H(ed25519 ‖ ml_dsa)`, the same key the participant set interns
+    /// under, so an attacker key that does not match an enrolled hybrid participant is never interned
+    /// and never admitted. The node calls this per Rust-finalized block before slicing it to the
+    /// executor: `true` ⇒ admit, `false` ⇒ REFUSE (the verified rule did not finalize it). Mirrors
+    /// the Lean `gateAdmits` predicate.
     pub fn admits(&self, creator: &[u8; 32], seq: u64) -> bool {
         match self.creator_ids.get(creator) {
             Some(cid) => self.finalized.contains(&(*cid, seq)),
-            // A creator the wire never interned cannot have been finalized.
+            // A creator the wire never interned (e.g. a non-participant / attacker hybrid id) cannot
+            // have been finalized.
             None => false,
         }
     }
@@ -244,6 +250,51 @@ mod tests {
 
     fn key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
+    }
+
+    /// ADVERSARIAL (executor path): the participant projection is keyed by the HYBRID id
+    /// `H(ed25519 ‖ ml_dsa)`. An attacker who keeps an honest node's ed25519 half but SUBSTITUTES its
+    /// own ML-DSA key gets a DIFFERENT hybrid id than the enrolled one (the commitment binds identity
+    /// to BOTH halves — `dregg_types::verify_committed_ml_dsa`). The executor interns only the enrolled
+    /// hybrid participants, so the substituted-key identity is NEVER interned and the gate REFUSES
+    /// every block it creates — a key-substitution participant cannot be admitted on the executor path.
+    #[test]
+    fn attacker_substituted_ml_dsa_key_is_refused_by_gate() {
+        let honest = key(1);
+        let honest_ed: [u8; 32] = honest.verifying_key().to_bytes();
+        // The ENROLLED hybrid id commits to the honest node's from-seed ML-DSA key.
+        let honest_hybrid = Block::hybrid_id(&honest);
+
+        // Attacker keeps the honest ed25519 half but swaps in a DIFFERENT ML-DSA key (from an
+        // unrelated seed). The commitment binds identity to BOTH halves, so the resulting hybrid id
+        // differs from the enrolled one.
+        let attacker_ml = dregg_blocklace::pq::public_from_ed25519_seed(&[42u8; 32]);
+        let attacker_hybrid = Block::hybrid_id_from_parts(&honest_ed, &attacker_ml);
+        assert_ne!(
+            honest_hybrid, attacker_hybrid,
+            "substituting the ML-DSA half must change the hybrid id (the commitment binds both halves)"
+        );
+
+        // The executor projection interns ONLY the enrolled hybrid participant.
+        let mut creator_ids: HashMap<[u8; 32], u64> = HashMap::new();
+        creator_ids.insert(honest_hybrid, 0);
+        let vf = VerifiedFinality {
+            finalized: [(0u64, 0u64)].into_iter().collect(),
+            creator_ids,
+        };
+
+        // The honest hybrid creator at the finalized seq is admitted…
+        assert!(
+            vf.admits(&honest_hybrid, 0),
+            "the enrolled hybrid participant's finalized block is admitted"
+        );
+        // …but the attacker's substituted-ML-DSA-key identity is REFUSED (never interned): the
+        // executor's who-finalized projection is keyed by the commitment, not the raw ed25519 half.
+        assert!(
+            !vf.admits(&attacker_hybrid, 0),
+            "a key-substitution attacker (honest ed25519, foreign ML-DSA) must be refused on the \
+             executor path — its hybrid id is not an enrolled participant"
+        );
     }
 
     /// THE LIVE-GATE DIFFERENTIAL — `VerifiedFinality::compute` (the verified Lean rule

@@ -997,16 +997,56 @@ impl BlocklaceHandle {
         // VERIFIED rule admits. Default ON (`DREGG_STRAND_ADMISSION_GATE`); fail-safe (the gate is
         // the identity on the constitutional members, and `admitted` falls back to its Rust sibling
         // when the Lean archive is absent).
-        let participants = crate::strand_admission_gate::admitted_participants(
+        let admitted = crate::strand_admission_gate::admitted_participants(
             &raw_participants,
             &raw_participants,
         );
-        if participants.len() != raw_participants.len() {
+        if admitted.len() != raw_participants.len() {
             warn!(
-                admitted = participants.len(),
+                admitted = admitted.len(),
                 proposed = raw_participants.len(),
                 "verified strand-admission gate (F-4) filtered un-admitted strands out of the \
                  finality participant set"
+            );
+        }
+
+        // ── HYBRID-ID PARTICIPANT PROJECTION (surface-3: no live path keys identity by raw ed25519) ──
+        // The finality `Block::creator` is the HYBRID id `H(ed25519 ‖ ml_dsa)` (committed surface-3:
+        // `dregg_types::hybrid_id_commitment` / `verify_committed_ml_dsa`), and the roster, tips,
+        // finalization votes, and gossip `NodeId` are all keyed by it. The verified finalizer
+        // (`ordering::tau` / `VerifiedFinality::compute_order` / `compute`) identifies each wave's
+        // leader by MATCHING the participant set against each block's `creator`, so the participant
+        // set the executor projects consensus over MUST be keyed by the SAME hybrid id — NOT the raw
+        // ed25519 identity the constitution stores. (Feeding ed25519 keys here after the creator went
+        // hybrid makes every honest block's creator an unrecognized "extra" — no leader is ever
+        // matched and nothing finalizes.) Map each admitted ed25519 member to its hybrid id via the
+        // enrolled ML-DSA roster — the vote collector's `pq_committee`, the SAME genesis-published +
+        // self key set that pins block ingest (`receive_block_pinned`) and gates finalization quorum.
+        // A member whose ML-DSA key is not enrolled is DROPPED from the projection — fail-closed and
+        // consistent with the ingest pin (its hybrid-creator blocks could never be received, so it can
+        // neither lead nor finalize), never an ed25519-only downgrade. This closes the last live path
+        // that keyed the executor's participant set by raw ed25519; it now keys by the hybrid id the
+        // committed `creator == federation_id` roster does.
+        let participants: Vec<[u8; 32]> = {
+            let votes = self.votes.read().await;
+            admitted
+                .iter()
+                .filter_map(|ed25519| {
+                    votes.pq_key(ed25519).map(|ml_dsa| {
+                        dregg_blocklace::finality::Block::hybrid_id_from_parts(
+                            ed25519,
+                            &dregg_blocklace::pq::MlDsaPublicKey(ml_dsa.0),
+                        )
+                    })
+                })
+                .collect()
+        };
+        if participants.len() != admitted.len() {
+            warn!(
+                projected = participants.len(),
+                admitted = admitted.len(),
+                "hybrid-id participant projection dropped admitted members with no enrolled ML-DSA \
+                 key (fail-closed: their hybrid-creator blocks cannot be ingested or finalized)"
             );
         }
 
