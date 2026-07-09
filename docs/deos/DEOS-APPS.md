@@ -214,6 +214,17 @@ and the app-framework rebuild is BUILT. Kept below with the built items relabele
   per-viewer projection, the no-peek keystone, moves = cap-gated affordances, an AI
   agent-player, and a fog-respecting spectator snapshot. This proves the deos thesis
   end-to-end (the security property IS the game mechanic) on the genuine cap discipline.
+- **ALSO landed (standalone runnable app exemplars, each grounding a named census gap):**
+  `starbridge-apps/` now carries 30 apps, all with READMEs, including three that directly
+  exercise the distributed / multiplayer / durable axes the census named as unbuilt:
+  `starbridge-apps/branch-stitch-multiplayer` (the distributed-Houyhnhnm flagship — two
+  participants fork ONE shared verified object and stitch; the #4 distributed-app gap, also
+  runnable via `cargo run -p starbridge-branch-stitch-multiplayer` per `DEOS-RUNS.md`),
+  `starbridge-apps/tussle` (a verified joint-combat multiplayer match — two figures fight by
+  posing their joints), and `starbridge-apps/vat` (a persistent, durable, forkable rented
+  World — the durable-state / rehydratable-surface axis). These are runnable app crates in
+  their own right; they are NOT yet re-expressed on `dregg-app-framework`'s composition
+  (plan item 4). (`starbridge-apps/shared` is a browser helper library, not an app.)
 - **Since the cutover landed:**
   1. **DONE — the app-framework IS the deos-app composition.** `app-framework/src/deos_app.rs`
      defines `DeosCell`/`DeosApp` wiring affordance surfaces over the `EmbeddedExecutor`,
