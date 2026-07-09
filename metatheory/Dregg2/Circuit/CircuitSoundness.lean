@@ -417,22 +417,38 @@ It establishes NOTHING about whether that transition is **FRESH** (not already a
 its ORDERING relative to other turns. A light client verifying `(pi, π)` learns "this is a REAL
 transition", NOT "this is a fresh, unreplayed transition".
 
-Cross-turn FRESHNESS / NO-REPLAY / ordering is **NOT part of this theorem**. It rests on the DEPLOYED
-machinery, NOT modeled in this apex:
+Cross-turn FRESHNESS / NO-REPLAY / ordering is **NOT part of THIS theorem**. Its LOGIC is now modeled
+and proved in `Dregg2.Circuit.Freshness` — `no_replay`/`deployed_no_replay` PARAMETRIC over a
+`CommitSurface`, with nonce-monotonicity DERIVED from the deployed executor (`nonce_strictly_increases`
+= `CrossTurnFreshness.runTurn_forest_strictly_advances`, not assumed). HONEST RESIDUAL: grounding a
+CONCRETE surface currently pulls in `RestHashIffFrame` (the infinite-domain-state binding — DEBT B in
+docs/reference/CARRIER-CENSUS.md), unrealizable until the function-valued kernel fields are refined to
+finite maps. So: the no-replay LOGIC is proved; its full crypto grounding on `Poseidon2SpongeCR` ALONE
+awaits the finite-map data refinement. The DEPLOYED machinery this
+single-transition apex does not itself model:
   * the **commitment-chain CAS** (`proof_verify.rs`): the live stored commitment must equal the
-    proof's pre-anchor; applying the proof advances the live commitment to the post-anchor;
+    proof's pre-anchor; applying the proof advances the live commitment to the post-anchor — modeled
+    as `LiveCommitMatches` over a `Freshness.CommitChain`;
   * **cell-nonce monotonicity** (`cell_state.rs` "Monotonic"): the agent nonce is bound INTO
-    `recStateCommit` (it lives in the agent cell's leaf) and strictly increases each turn, so the
-    commitment sequence never cycles — a consumed `pre` never recurs.
+    `recStateCommit` (it lives in the agent cell's leaf, hashed through the leaf hash `CH`) and
+    strictly increases each turn, so the commitment sequence never cycles — a consumed `pre` never
+    recurs. This is a THEOREM, not an assumption: `Freshness.commit_binds_nonce` (equal commitment ⟹
+    equal nonce — a nonce difference is a Poseidon collision) and `Freshness.nonce_strictly_increases`
+    (every accepted `Admission.runTurn` over the live `execFullForestA` forest body strictly advances
+    the agent nonce — the never-rolled-back committed prologue's `+1`, with the whole body proved
+    nonce-nondecreasing per-arm and all three nonce-reset vectors closed at the executor).
 
 A light client that wants freshness MUST additionally track the live stored commitment (the CAS) and
-reject any proof whose pre-anchor ≠ the live commitment. The proof `(pi, π)` ALONE does not establish
+reject any proof whose pre-anchor ≠ the live commitment; the proof `(pi, π)` ALONE does not establish
 freshness. The cross-turn close — `commit-chain + nonce-monotone ⟹ each proof applicable at most
-once` — is proved separately in `Dregg2.Circuit.CrossTurnFreshness` (`no_replay`,
-`replay_rejected_after_apply`), over the concrete `recStateCommit` surface where the nonce lives;
-that module names its precise residual (wiring the full `runTurn`-driven accepted sequence into a
-monotone `TurnChain`). Do NOT read "a light client that runs nothing cannot be fooled" as covering
-replay: it covers AUTHENTICITY of a single transition; FRESHNESS is the CAS's job. -/
+once` — is `Freshness.no_replay` / `replay_rejected_after_apply`, lifted onto the LIVE forest executor
+by `Freshness.deployed_no_replay` (the accepted-`runTurn` sequence IS a monotone `CommitChain`; the
+advance is DERIVED, not assumed). Its crypto residual is EXACTLY `Poseidon2SpongeCR` (the four
+sponge-shaped CR fields — root/node/frame/leaf — all reduce to that one hash floor via
+`Freshness.poseidon2CommitSurface`) plus the PROVED nonce-monotone invariant; the sole non-crypto
+carrier is the structural `RestHashIffFrame` (not sponge-reducible — the state carries function-valued
+components). Do NOT read "a light client that runs nothing cannot be fooled" as covering replay: it
+covers AUTHENTICITY of a single transition; FRESHNESS is the CAS's job, discharged in `Freshness`. -/
 
 /-- **`WitnessDecodes hash R S pi` — the witness→kernel-state EXISTENCE rung (NAMED, not faked).**
 
