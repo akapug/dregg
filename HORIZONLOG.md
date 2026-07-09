@@ -8,6 +8,17 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## NOW-STATE addition (2026-07-09, Fable — community-comms gap, ember + community session)
+
+**dregg.net carries NONE of the cloud/forge/apps story.** The newest, most community-legible
+material — forge CI staking/slashing/optimistic security (`docs/operator/forge-operations.md`),
+the Lean-proven storage market (`ClientProtocol.lean`), the ten real starbridge-apps — has zero
+public articulation; the site's build/coin pages predate all of it. CLOSURE = lift
+`docs/COMMUNITY-BRIEF-CLOUD-FORGE-APPS.md` (committed e237c6340, the consolidated plain-language
+brief with honest-status labels) into `~/dev/dregg-site` content (build + coin pages minimally;
+possibly a /cloud page) — outward-facing, so ember reviews before deploy. Community explainer
+series (Geeeeeves) drafts from the same brief; pre-review drafts against `metatheory/CLAIMS.md`.
+
 ## NOW-STATE addition (2026-07-08, Fable — sovereign-state netlayer design, ember design session)
 
 **Sovereign Resurrection / cap-scoped dissemination — DESIGN COMMITTED, closure lanes named.**
