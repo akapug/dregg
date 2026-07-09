@@ -37,10 +37,16 @@ irreducible object left in the masking story is `MLWESearchHard` (the true latti
 `…Hard` carrier is introduced. `HintTranscriptSimulatable` (the old distributional `HintMLWEHard`,
 renamed) is the PROVED statistical core the reduction rides on, grounded in `Smudging.smudge_bound`.
 
-STILL GENUINELY OPEN (NOT closed here — do not read the above as closing it): the full concurrent TS-UF-0
-game — the signing oracle, the t−1 static corruption, and PRODUCING the two SelfTargetMSIS transcripts via
-forking (they remain ASSUMED as hypotheses of `concurrent_unforgeable_reduces`, never extracted from a
-single forger). This reduction closes the masking pillar's carrier only. Also DEFERRED (honest TODO, a
+CLOSED SINCE (2026-07-09) in `Dregg2.Crypto.HermineTSUF` — SEE THERE: the full concurrent TS-UF-0 game is
+now modeled and reduced to `MSISHard ∨ MLWESearchHard ∨ HashCR`. `HermineTSUF.concurrent_ts_uf_0_reduces`
+SUPERSEDES `concurrent_unforgeable_reduces` below: it models the signing oracle (simulated secret-free,
+grounded in MLWE by `hint_mlwe_reduces_to_mlwe`), the t−1 static corruption (challenge-independent by
+`ShamirPrivacy`), and PRODUCES the two SelfTargetMSIS transcripts by an explicit rewind
+(`HermineTSUF.Forger.rewind` + `fork_preserves_commitment` DERIVE the shared commitment; `fork_produces_msis`
+extracts the MSIS witness) — no longer a bare two-transcript hypothesis. The pillars below are REUSED there
+verbatim, not deleted; the only residual is the honestly-named forking PROBABILITY
+(`HermineTSUF.ForkingProbabilityBound`, ≈ε²/q_H — a standard probability lemma, NOT a hardness carrier).
+What the reduction here closes on its own: the masking pillar's carrier (Hint-MLWE → MLWE) only. Also DEFERRED (honest TODO, a
 standard probability lemma — NOT a hardness carrier): the general-`Q` product-hybrid TV subadditivity
 `statDist_pi_le_sum : statDist (⊗Pᵢ) (⊗Qᵢ) ≤ Σᵢ statDist Pᵢ Qᵢ`, which would upgrade the proven
 union-bound loss `Σᵢ TVᵢ ≤ Q·(B/M)` to the JOINT-transcript TV. Until it lands, the `Q·(B/M)` figure is
