@@ -231,6 +231,27 @@ impl FederationId {
     pub fn hex(&self) -> String {
         self.0.iter().map(|b| format!("{b:02x}")).collect()
     }
+
+    /// Derive a HYBRID single-member `FederationId` that commits to BOTH a
+    /// member's ed25519 public key AND its ML-DSA public key
+    /// ([`hybrid_id_commitment`]).
+    ///
+    /// This binds one participant's hybrid keypair — the shape the CapTP
+    /// handoff / peer-authentication surfaces need, where a `FederationId`
+    /// stands for a single peer identity rather than a whole committee. The
+    /// committee-commitment form (`H(sorted(members) ‖ epoch)`,
+    /// `dregg_federation::derive_federation_id_with_epoch`) is unchanged; at
+    /// genesis each committee MEMBER's per-member id becomes this hybrid id so
+    /// the enrolled ML-DSA roster is derivable from the member ids.
+    pub fn derive_hybrid(ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> Self {
+        FederationId(hybrid_id_commitment(ed25519_pk, ml_dsa_pk))
+    }
+
+    /// The cryptographic enroll+pin check for a hybrid member id: does this id
+    /// commit to `ed25519_pk` AND `ml_dsa_pk`? See [`verify_committed_ml_dsa`].
+    pub fn verify_committed_ml_dsa(&self, ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> bool {
+        verify_committed_ml_dsa(&self.0, ed25519_pk, ml_dsa_pk)
+    }
 }
 
 impl fmt::Debug for FederationId {
@@ -793,7 +814,39 @@ pub struct RevocationEvent {
 pub struct CellId(pub [u8; 32]);
 
 impl CellId {
+    /// Derive a HYBRID CellId that cryptographically commits to BOTH the
+    /// holder's ed25519 public key AND its ML-DSA public key
+    /// ([`hybrid_id_commitment`]). This is the post-quantum identity: the
+    /// enrolled ML-DSA key is a derivable function of the id, not an
+    /// out-of-band roster entry.
+    ///
+    /// `ml_dsa_pk` is the serialized ML-DSA public-key bytes
+    /// (`dregg_pq::MlDsaPublicKey.0`).
+    pub fn derive_hybrid(ed25519_pk: &PublicKey, ml_dsa_pk: &[u8]) -> Self {
+        CellId(hybrid_id_commitment(&ed25519_pk.0, ml_dsa_pk))
+    }
+
+    /// Raw-bytes variant of [`CellId::derive_hybrid`]: bind both keys given the
+    /// ed25519 public key as a raw `[u8; 32]` (the shape the cell/agent model
+    /// uses, cf. [`CellId::derive_raw`]).
+    pub fn derive_hybrid_raw(ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> Self {
+        CellId(hybrid_id_commitment(ed25519_pk, ml_dsa_pk))
+    }
+
+    /// The cryptographic enroll+pin check for a hybrid CellId: is this id the
+    /// commitment to `ed25519_pk` AND `ml_dsa_pk`? Rejects a self-supplied
+    /// ML-DSA key that does not hash into the id. See [`verify_committed_ml_dsa`].
+    pub fn verify_committed_ml_dsa(&self, ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> bool {
+        verify_committed_ml_dsa(&self.0, ed25519_pk, ml_dsa_pk)
+    }
+
     /// Derive a CellId by hashing a public key and domain string.
+    ///
+    /// LEGACY (ed25519-only): this id does NOT commit to a post-quantum key.
+    /// New identities on PQ-relevant surfaces should use
+    /// [`CellId::derive_hybrid`] and be checked with
+    /// [`CellId::verify_committed_ml_dsa`]. Retained so the tree compiles
+    /// during the staged flag-day cutover.
     pub fn derive(pubkey: &PublicKey, domain: &str) -> Self {
         let hash = blake3::derive_key("dregg-cell-id-v1", &{
             let mut buf = Vec::with_capacity(32 + domain.len());
@@ -808,6 +861,9 @@ impl CellId {
     ///
     /// Uses domain-separated BLAKE3. This is the derivation method used by the
     /// cell/agent model where both inputs are 32-byte arrays.
+    ///
+    /// LEGACY (ed25519-only): does not commit to a post-quantum key; prefer
+    /// [`CellId::derive_hybrid_raw`] for PQ-relevant identities (staged cutover).
     pub fn derive_raw(public_key: &[u8; 32], token_id: &[u8; 32]) -> Self {
         let hash = blake3::derive_key("dregg-cell-id-v1", &{
             let mut buf = Vec::with_capacity(64);
@@ -862,6 +918,71 @@ impl fmt::Display for CellId {
                 .collect::<String>()
         )
     }
+}
+
+// =============================================================================
+// Hybrid post-quantum identity commitment
+// =============================================================================
+//
+// The pre-quantum audit (2026-07-09) closed every load-bearing SIGNATURE surface
+// to a hybrid `ed25519 ∧ ML-DSA-65`, but the identities those surfaces speak for
+// (`CellId`, `FederationId`, the wire participant node-id) were ed25519-ONLY:
+// they did not cryptographically commit to the ML-DSA key, so the PQ key had to
+// be ENROLLED OUT-OF-BAND (a separate roster table, pinned by the caller). That
+// left a gap — nothing in the identity itself forced a presented ML-DSA key to
+// be the RIGHT one.
+//
+// The fix below makes the identity BE the enrollment: a hybrid id is the
+// domain-separated BLAKE3 hash of BOTH public keys, so the ML-DSA key is a
+// derivable function of the id, not a side table. A verifier recomputes the
+// commitment from the two presented keys and REJECTS any ML-DSA key that does
+// not hash into the claimed id (`verify_committed_ml_dsa`). This is the
+// cryptographic enroll+pin.
+//
+// `dregg-types` deliberately takes NO post-quantum crypto dependency (no
+// `fips204` / `dregg-pq`) — it hashes the ML-DSA public-key BYTES only. The
+// ML-DSA key handling itself lives in `dregg-pq`; callers pass the serialized
+// public key (`MlDsaPublicKey.0`, 1952 bytes for ML-DSA-65) as `ml_dsa_pk`.
+
+/// Domain-separation context for the canonical hybrid identity commitment.
+const HYBRID_ID_CONTEXT: &str = "dregg-hybrid-id-v1";
+
+/// Compute the canonical hybrid-identity commitment binding an ed25519 public
+/// key AND an ML-DSA public key into a single 32-byte identity.
+///
+/// `commit = BLAKE3_derive_key("dregg-hybrid-id-v1", ed25519_pk (32)
+///           ‖ (ml_dsa_pk.len() as u32 LE) ‖ ml_dsa_pk)`.
+///
+/// The ed25519 key is fixed-width (32 bytes) and hashed first, and the ML-DSA
+/// key is length-prefixed, so the encoding is injective in both keys: no pair
+/// `(ed, ml)` collides with a different pair, and no hybrid id can collide with
+/// the legacy ed25519-only [`CellId::derive`] / [`CellId::derive_raw`] domain
+/// (a different context string).
+///
+/// `ml_dsa_pk` is the serialized ML-DSA public key bytes (from
+/// `dregg_pq::MlDsaPublicKey`); `dregg-types` treats them as opaque bytes and
+/// takes no PQ crypto dependency.
+pub fn hybrid_id_commitment(ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(32 + 4 + ml_dsa_pk.len());
+    buf.extend_from_slice(ed25519_pk);
+    buf.extend_from_slice(&(ml_dsa_pk.len() as u32).to_le_bytes());
+    buf.extend_from_slice(ml_dsa_pk);
+    blake3::derive_key(HYBRID_ID_CONTEXT, &buf)
+}
+
+/// The cryptographic enroll+pin check: does `id` commit to BOTH `ed25519_pk`
+/// and `ml_dsa_pk`?
+///
+/// Recomputes [`hybrid_id_commitment`] from the two presented keys and returns
+/// `true` iff it equals `id`. An attacker who presents the honest ed25519 key
+/// but their OWN ML-DSA key gets a commitment that does not equal `id`, so this
+/// returns `false` — the self-supplied PQ key is REJECTED. This is what lets a
+/// surface replace out-of-band roster enrollment: the id IS the enrollment.
+///
+/// The comparison is over 32 hashed bytes (public commitments, not secrets);
+/// a plain equality is appropriate.
+pub fn verify_committed_ml_dsa(id: &[u8; 32], ed25519_pk: &[u8; 32], ml_dsa_pk: &[u8]) -> bool {
+    hybrid_id_commitment(ed25519_pk, ml_dsa_pk) == *id
 }
 
 // =============================================================================
@@ -1282,5 +1403,81 @@ mod tests {
         let sig = sign(&sk, message);
         assert!(pk.verify(message, &sig));
         assert!(!pk.verify(b"wrong message", &sig));
+    }
+
+    // ── Hybrid identity commitment ──────────────────────────────────────────
+
+    #[test]
+    fn hybrid_id_commitment_deterministic_and_binds_both_keys() {
+        let ed = [0x11u8; 32];
+        // ML-DSA-65 public keys are 1952 bytes; the length is irrelevant to the
+        // commitment (it hashes the bytes) but use a realistic width.
+        let ml = vec![0x22u8; 1952];
+
+        // Deterministic in both keys.
+        assert_eq!(
+            hybrid_id_commitment(&ed, &ml),
+            hybrid_id_commitment(&ed, &ml)
+        );
+
+        // Changing EITHER key changes the id.
+        let ed2 = [0x33u8; 32];
+        assert_ne!(
+            hybrid_id_commitment(&ed, &ml),
+            hybrid_id_commitment(&ed2, &ml)
+        );
+        let mut ml2 = ml.clone();
+        ml2[0] ^= 0xFF;
+        assert_ne!(
+            hybrid_id_commitment(&ed, &ml),
+            hybrid_id_commitment(&ed, &ml2)
+        );
+
+        // A hybrid id never collides with the legacy ed25519-only derivations
+        // (distinct domain-separation contexts).
+        let legacy_raw = CellId::derive_raw(&ed, &[0u8; 32]);
+        assert_ne!(legacy_raw.0, hybrid_id_commitment(&ed, &[0u8; 32]));
+    }
+
+    #[test]
+    fn adversarial_committed_ml_dsa_rejects_attacker_key() {
+        // Honest holder: hybrid id H(P_ed ‖ P_ml).
+        let p_ed = [0x42u8; 32];
+        let p_ml = vec![0xA5u8; 1952];
+        let id = CellId::derive_hybrid_raw(&p_ed, &p_ml);
+
+        // The honest (P_ed, P_ml) passes the enroll+pin check.
+        assert!(id.verify_committed_ml_dsa(&p_ed, &p_ml));
+        assert!(verify_committed_ml_dsa(id.as_bytes(), &p_ed, &p_ml));
+
+        // ATTACKER presents the honest ed25519 key but their OWN ML-DSA key
+        // (a valid ML-DSA keypair they control). It does NOT hash into the id,
+        // so the commitment check REJECTS it — the self-carried PQ key cannot
+        // impersonate the enrolled one.
+        let mut attacker_ml = p_ml.clone();
+        attacker_ml[0] ^= 0xFF; // a different (attacker-owned) ML-DSA public key
+        assert!(!id.verify_committed_ml_dsa(&p_ed, &attacker_ml));
+        assert!(!verify_committed_ml_dsa(id.as_bytes(), &p_ed, &attacker_ml));
+
+        // An attacker who also swaps the ed25519 key is likewise rejected.
+        let attacker_ed = [0x99u8; 32];
+        assert!(!id.verify_committed_ml_dsa(&attacker_ed, &p_ml));
+
+        // FederationId shares the same primitive: same adversarial guarantee.
+        let fed = FederationId::derive_hybrid(&p_ed, &p_ml);
+        assert!(fed.verify_committed_ml_dsa(&p_ed, &p_ml));
+        assert!(!fed.verify_committed_ml_dsa(&p_ed, &attacker_ml));
+    }
+
+    #[test]
+    fn legacy_ed25519_only_id_is_not_a_hybrid_commitment() {
+        // The staged flag-day path: a legacy ed25519-only id must NOT pass the
+        // hybrid enroll+pin check for any presented ML-DSA key — it never
+        // committed to one. Surfaces distinguish legacy from hybrid ids by
+        // whether `verify_committed_ml_dsa` holds.
+        let pk = PublicKey([0x42; 32]);
+        let legacy = CellId::derive(&pk, "example.com");
+        let some_ml = vec![0x01u8; 1952];
+        assert!(!legacy.verify_committed_ml_dsa(&pk.0, &some_ml));
     }
 }
