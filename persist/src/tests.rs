@@ -237,6 +237,9 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
     let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=3)
         .map(|s| MlDsaSigningKey::from_seed(&[s; 32]))
         .collect();
+    // The genesis-ENROLLED ML-DSA roster, aligned index-for-index with `committee`.
+    let ml_dsa_committee: Vec<dregg_federation::frost::MlDsaPublicKey> =
+        pqs.iter().map(|(pk, _)| pk.clone()).collect();
 
     let block_id = [0xCD; 32];
     let merkle_root = [0xAB; 32];
@@ -306,7 +309,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         "lone local sig (1 < 3) must NOT satisfy the light-client anchor"
     );
     assert!(
-        !base.verify_finalization_quorum(&committee),
+        !base.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "an empty finalization_quorum must NOT satisfy the restart anchor (the wedge)"
     );
 
@@ -327,7 +330,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
     };
     assert_eq!(reloaded.height, 1);
     assert!(
-        reloaded.verify_finalization_quorum(&committee),
+        reloaded.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "after restart, a genuine >=threshold committee finalization-vote quorum \
          over the finalized root MUST re-anchor — the committee node restarts cleanly"
     );
@@ -338,7 +341,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !sub_quorum.verify_finalization_quorum(&committee),
+        !sub_quorum.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "a sub-threshold finalization quorum must be refused — no weakening"
     );
 
@@ -350,7 +353,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !forged.verify_finalization_quorum(&committee),
+        !forged.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "three sigs over a DIFFERENT merkle_root must NOT anchor THIS root — the \
          quorum binds the committed state, not just a count"
     );
@@ -365,7 +368,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !pq_forged.verify_finalization_quorum(&committee),
+        !pq_forged.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "a corrupted ML-DSA half must refuse the restart anchor even though every \
          ed25519 half still verifies (classical ∧ pq)"
     );
@@ -378,7 +381,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !missing_sig.verify_finalization_quorum(&committee),
+        !missing_sig.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "an empty ML-DSA signature cannot satisfy the hybrid anchor"
     );
     let mut pq_badkey = quorum.clone();
@@ -388,7 +391,7 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !bad_key.verify_finalization_quorum(&committee),
+        !bad_key.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "an undecodable ML-DSA pubkey refuses the whole quorum — no silent skip"
     );
 
@@ -398,16 +401,23 @@ fn committee_node_restarts_cleanly_with_finalization_quorum() {
         ..base.clone()
     };
     assert!(
-        !inflated.verify_finalization_quorum(&committee),
+        !inflated.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "one voter repeated 3x is 1 distinct signer < threshold 3 — refused"
     );
 }
 
 /// Build a 3-member committee, its ed25519+ML-DSA keys, and a persisted attested
 /// root carrying a genuine HYBRID finalization-vote quorum. Returns
-/// `(committee, root, block_id, merkle_root)` for restart tests below.
+/// `(committee, ml_dsa_committee, root, block_id, merkle_root)` for restart tests
+/// below — the ML-DSA roster is the genesis-ENROLLED one, aligned with `committee`.
 #[cfg(test)]
-fn hybrid_quorum_fixture() -> (Vec<PublicKey>, StoredAttestedRoot, [u8; 32], [u8; 32]) {
+fn hybrid_quorum_fixture() -> (
+    Vec<PublicKey>,
+    Vec<dregg_federation::frost::MlDsaPublicKey>,
+    StoredAttestedRoot,
+    [u8; 32],
+    [u8; 32],
+) {
     use crate::federation::QuorumSignature;
     use dregg_federation::frost::MlDsaSigningKey;
     use dregg_types::{SigningKey, sign};
@@ -419,6 +429,8 @@ fn hybrid_quorum_fixture() -> (Vec<PublicKey>, StoredAttestedRoot, [u8; 32], [u8
     let pqs: Vec<(dregg_federation::frost::MlDsaPublicKey, MlDsaSigningKey)> = (1u8..=3)
         .map(|s| MlDsaSigningKey::from_seed(&[s; 32]))
         .collect();
+    let ml_dsa_committee: Vec<dregg_federation::frost::MlDsaPublicKey> =
+        pqs.iter().map(|(pk, _)| pk.clone()).collect();
 
     let block_id = [0xCD; 32];
     let merkle_root = [0xAB; 32];
@@ -449,7 +461,7 @@ fn hybrid_quorum_fixture() -> (Vec<PublicKey>, StoredAttestedRoot, [u8; 32], [u8
         receipt_stream_root: None,
         finalization_quorum: quorum,
     };
-    (committee, root, block_id, merkle_root)
+    (committee, ml_dsa_committee, root, block_id, merkle_root)
 }
 
 /// A persisted HYBRID quorum re-verifies after a store/reload restart iff BOTH
@@ -459,7 +471,7 @@ fn hybrid_quorum_fixture() -> (Vec<PublicKey>, StoredAttestedRoot, [u8; 32], [u8
 fn restart_reverifies_hybrid_quorum() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hybrid_restart.redb");
-    let (committee, root, _block_id, _merkle_root) = hybrid_quorum_fixture();
+    let (committee, ml_dsa_committee, root, _block_id, _merkle_root) = hybrid_quorum_fixture();
 
     {
         let store = PersistentStore::open(&path).unwrap();
@@ -475,7 +487,7 @@ fn restart_reverifies_hybrid_quorum() {
         "the widened hybrid quorum round-trips postcard"
     );
     assert!(
-        reloaded.verify_finalization_quorum(&committee),
+        reloaded.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "a persisted genuine hybrid quorum re-anchors on restart (classical ∧ pq)"
     );
 }
@@ -487,7 +499,7 @@ fn restart_reverifies_hybrid_quorum() {
 fn restart_refuses_missing_pq_half() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("hybrid_restart_bad.redb");
-    let (committee, mut root, _block_id, _merkle_root) = hybrid_quorum_fixture();
+    let (committee, ml_dsa_committee, mut root, _block_id, _merkle_root) = hybrid_quorum_fixture();
 
     // Corrupt one signer's ML-DSA signature; the ed25519 half stays valid.
     root.finalization_quorum[0].pq_signature[0] ^= 0xFF;
@@ -501,17 +513,75 @@ fn restart_refuses_missing_pq_half() {
         store.latest_attested_root().unwrap().unwrap()
     };
     assert!(
-        !reloaded.verify_finalization_quorum(&committee),
+        !reloaded.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "a broken ML-DSA half must make the restart anchor REFUSE — the persisted \
          quorum is hybrid, not ed25519-only"
     );
 
     // And a fully DROPPED pq half (empty signature) is equally refused.
-    let (committee2, mut root2, _b, _m) = hybrid_quorum_fixture();
+    let (committee2, ml_dsa_committee2, mut root2, _b, _m) = hybrid_quorum_fixture();
     root2.finalization_quorum[0].pq_signature = Vec::new();
     assert!(
-        !root2.verify_finalization_quorum(&committee2),
+        !root2.verify_finalization_quorum(&committee2, &ml_dsa_committee2),
         "an empty ML-DSA signature cannot satisfy the hybrid restart anchor"
+    );
+}
+
+/// **THE QUANTUM-FORGERY ADVERSARIAL TEST (persist restart anchor).** The exact
+/// attack the enrolled-roster pin closes: a quantum adversary breaks ed25519 for
+/// enrolled member `P` (we reuse P's real ed25519 key to stand in for the forged
+/// classical half), generates its OWN fresh ML-DSA-65 keypair, and signs the PQ
+/// half with it — carrying that attacker key in `ml_dsa_pubkey`. Before the pin,
+/// the PQ half was checked against the self-carried key, so BOTH halves passed
+/// and the restart re-anchored a FORGED root. With the pin, the self-carried key
+/// ≠ P's enrolled key, so `verify_finalization_quorum` REJECTS the whole quorum.
+/// The honest enrolled-key quorum still re-anchors, and an unconfigured (empty)
+/// enrolled roster fails closed rather than downgrade to ed25519-only.
+#[test]
+fn quantum_forged_pq_key_is_rejected() {
+    use dregg_federation::frost::MlDsaSigningKey;
+
+    let (committee, ml_dsa_committee, root, block_id, merkle_root) = hybrid_quorum_fixture();
+    let vote_msg = dregg_types::finalization_vote_signing_message(&block_id, &merkle_root);
+
+    // The HONEST persisted quorum re-anchors (baseline).
+    assert!(
+        root.verify_finalization_quorum(&committee, &ml_dsa_committee),
+        "the honest enrolled-key quorum re-anchors on restart"
+    );
+
+    // THE ATTACK: replace every signer's ML-DSA key + signature with a FRESH
+    // attacker keypair (a quantum adversary that broke ed25519 keeps the ed25519
+    // halves valid). Each PQ half verifies under the attacker's own key.
+    let mut forged = root.clone();
+    for (i, qs) in forged.finalization_quorum.iter_mut().enumerate() {
+        let attacker = MlDsaSigningKey::from_seed(&[0xA0 + i as u8; 32]);
+        qs.ml_dsa_pubkey = attacker.0.0.to_vec();
+        qs.pq_signature = attacker.1.sign(&vote_msg).expect("ml-dsa sign");
+    }
+    assert!(
+        !forged.verify_finalization_quorum(&committee, &ml_dsa_committee),
+        "a self-carried attacker ML-DSA key (not the enrolled key) must be REJECTED \
+         even though every ed25519 half and every PQ half verifies on its own terms"
+    );
+
+    // NO SILENT DOWNGRADE: an empty (misaligned) enrolled roster fails closed even
+    // for the honest signers — never an ed25519-only re-anchor.
+    assert!(
+        !root.verify_finalization_quorum(&committee, &[]),
+        "an unconfigured (empty) enrolled roster must fail closed"
+    );
+
+    // And the hybrid tamper-floor leg agrees: the forged lone entry is not a
+    // committee binding.
+    let lone_forged = StoredAttestedRoot {
+        finalization_quorum: forged.finalization_quorum[..1].to_vec(),
+        quorum_signatures: Vec::new(),
+        ..root.clone()
+    };
+    assert!(
+        !lone_forged.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
+        "a forged-PQ-key lone vote is not a committee binding"
     );
 }
 
@@ -524,7 +594,7 @@ fn restart_refuses_missing_pq_half() {
 /// `verify_finalization_quorum`'s per-signer bar).
 #[test]
 fn lone_signature_tamper_floor_is_hybrid() {
-    let (committee, root, _block_id, _merkle_root) = hybrid_quorum_fixture();
+    let (committee, ml_dsa_committee, root, _block_id, _merkle_root) = hybrid_quorum_fixture();
 
     // A single GENUINE hybrid vote entry satisfies the floor (it is a
     // lone-signature check, not a quorum).
@@ -533,7 +603,7 @@ fn lone_signature_tamper_floor_is_hybrid() {
         ..root.clone()
     };
     assert!(
-        lone.has_any_valid_committee_signature(&committee),
+        lone.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
         "one genuine hybrid committee vote binds the root (the tamper floor)"
     );
 
@@ -542,7 +612,7 @@ fn lone_signature_tamper_floor_is_hybrid() {
     let mut pq_forged = lone.clone();
     pq_forged.finalization_quorum[0].pq_signature[0] ^= 0xFF;
     assert!(
-        !pq_forged.has_any_valid_committee_signature(&committee),
+        !pq_forged.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
         "a lone signature with a FORGED ML-DSA half must not count — no \
          classical-only acceptance surface"
     );
@@ -551,7 +621,7 @@ fn lone_signature_tamper_floor_is_hybrid() {
     let mut pq_missing = lone.clone();
     pq_missing.finalization_quorum[0].pq_signature = Vec::new();
     assert!(
-        !pq_missing.has_any_valid_committee_signature(&committee),
+        !pq_missing.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
         "an empty ML-DSA signature cannot satisfy the hybrid tamper floor"
     );
 
@@ -559,13 +629,13 @@ fn lone_signature_tamper_floor_is_hybrid() {
     let mut pq_badkey = lone.clone();
     pq_badkey.finalization_quorum[0].ml_dsa_pubkey = vec![0u8; 10];
     assert!(
-        !pq_badkey.has_any_valid_committee_signature(&committee),
+        !pq_badkey.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
         "an undecodable ML-DSA pubkey is not a committee binding"
     );
 
     // A voter outside the committee never counts, hybrid-valid or not.
     assert!(
-        !lone.has_any_valid_committee_signature(&committee[1..]),
+        !lone.has_any_valid_committee_signature(&committee[1..], &ml_dsa_committee[1..]),
         "a non-member's signature is not a committee binding"
     );
 
@@ -582,7 +652,7 @@ fn lone_signature_tamper_floor_is_hybrid() {
     let msg = self_signed.signing_message();
     self_signed.quorum_signatures = vec![(sk.public_key(), sign(&sk, &msg))];
     assert!(
-        self_signed.has_any_valid_committee_signature(&committee),
+        self_signed.has_any_valid_committee_signature(&committee, &ml_dsa_committee),
         "the local light-client self-signature still provides the tamper floor"
     );
 }

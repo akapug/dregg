@@ -235,6 +235,16 @@ pub struct NodeStateInner {
     /// offline-tamper adversary the anchor defends against (it holds no
     /// committee keys of any version).
     pub derived_committee_history: Vec<Vec<dregg_types::PublicKey>>,
+    /// HYBRID-PQ twin of [`Self::derived_committee_history`]: element `i` is the
+    /// ENROLLED ML-DSA-65 roster aligned index-for-index with
+    /// `derived_committee_history[i]`. A committee derived purely from the
+    /// on-chain membership blocklace carries NO ML-DSA key material (amendment
+    /// blocks record only ed25519 keys), so its entry here is EMPTY — and the
+    /// restart hybrid re-verify (`verify_finalization_quorum`) then REFUSES a
+    /// root signed by that historical committee rather than downgrade to
+    /// ed25519-only (fail-closed; the documented bound). The CURRENT committee's
+    /// roster lives in [`Self::known_federation_ml_dsa_keys`], not here.
+    pub derived_committee_ml_dsa_history: Vec<Vec<dregg_federation::frost::MlDsaPublicKey>>,
     /// Boot handoff: the REPLAYED `ConstitutionManager` from
     /// `committee_replay::derive_from_lace` (main sets it right after the
     /// derivation; `run_blocklace_sync` `take()`s it as the consensus
@@ -896,6 +906,7 @@ impl NodeState {
                 federation_id: [0u8; 32],
                 committee_epoch: 0,
                 derived_committee_history: Vec::new(),
+                derived_committee_ml_dsa_history: Vec::new(),
                 boot_constitution: None,
                 max_root_age_secs: 3600,
                 threshold_key_share: None,
@@ -1061,6 +1072,7 @@ impl NodeState {
                 federation_id: [0u8; 32],
                 committee_epoch: 0,
                 derived_committee_history: Vec::new(),
+                derived_committee_ml_dsa_history: Vec::new(),
                 boot_constitution: None,
                 max_root_age_secs: 3600,
                 threshold_key_share: None,
@@ -1260,14 +1272,37 @@ impl NodeState {
         // genesis keys alone would fail-close an honest restart. Accepting any
         // historical committee keeps the anchor's guarantee: the offline
         // store-tamper adversary holds no committee keys of ANY version.
-        let mut quorum_candidates: Vec<&[dregg_types::PublicKey]> = s
+        // Each candidate committee is paired with its ENROLLED ML-DSA roster
+        // (aligned index-for-index): the hybrid restart re-verify pins each
+        // signer's PQ half to the enrolled key at its committee index. A
+        // historical committee derived purely from the on-chain membership
+        // blocklace has NO recorded ML-DSA roster (its twin entry is empty), so
+        // `verify_finalization_quorum` REFUSES a root signed by it — no silent
+        // ed25519-only downgrade. The CURRENT committee pairs with
+        // `known_federation_ml_dsa_keys`.
+        let empty_roster: Vec<dregg_federation::frost::MlDsaPublicKey> = Vec::new();
+        let mut quorum_candidates: Vec<(
+            &[dregg_types::PublicKey],
+            &[dregg_federation::frost::MlDsaPublicKey],
+        )> = s
             .derived_committee_history
             .iter()
+            .enumerate()
             .rev()
-            .map(|c| c.as_slice())
+            .map(|(i, c)| {
+                let roster = s
+                    .derived_committee_ml_dsa_history
+                    .get(i)
+                    .map(|r| r.as_slice())
+                    .unwrap_or(empty_roster.as_slice());
+                (c.as_slice(), roster)
+            })
             .collect();
-        quorum_candidates.push(committee.as_slice());
-        quorum_candidates.retain(|c| !c.is_empty());
+        quorum_candidates.push((
+            committee.as_slice(),
+            s.known_federation_ml_dsa_keys.as_slice(),
+        ));
+        quorum_candidates.retain(|(c, _)| !c.is_empty());
         let head_height = s.store.recovered_head_height().ok().flatten().unwrap_or(0);
 
         // The UNFORGEABLE floor: the height of the latest VALIDLY-SIGNED attested root.
@@ -1300,10 +1335,9 @@ impl NodeState {
                         "recovery signed-anchor: the latest attested root is from a different \
                          federation epoch — signed anchor not enforced this boot (NODE-1)"
                     );
-                } else if quorum_candidates
-                    .iter()
-                    .any(|c| signed.verify_signatures(c) || signed.verify_finalization_quorum(c))
-                {
+                } else if quorum_candidates.iter().any(|(c, pq)| {
+                    signed.verify_signatures(c) || signed.verify_finalization_quorum(c, pq)
+                }) {
                     // A genuine committee quorum over this root: EITHER the
                     // light-client attestation (`verify_signatures`, the local
                     // node's sig over the full preimage — solo / threshold-1) OR
@@ -1368,7 +1402,7 @@ impl NodeState {
                         && recovered_root != signed.merkle_root
                         && quorum_candidates
                             .iter()
-                            .any(|c| signed.has_any_valid_committee_signature(c))
+                            .any(|(c, pq)| signed.has_any_valid_committee_signature(c, pq))
                     {
                         tracing::error!(
                             height = signed.height,
@@ -1392,8 +1426,8 @@ impl NodeState {
                             if r.height < signed.height
                                 && r.federation_id.0 == s.federation_id
                                 && r.threshold_qc.is_none()
-                                && quorum_candidates.iter().any(|c| {
-                                    r.verify_signatures(c) || r.verify_finalization_quorum(c)
+                                && quorum_candidates.iter().any(|(c, pq)| {
+                                    r.verify_signatures(c) || r.verify_finalization_quorum(c, pq)
                                 })
                                 && r.height > best
                             {

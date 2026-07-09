@@ -14,19 +14,30 @@ use crate::{PersistentStore, Result, StoreError};
 
 pub use dregg_types::{FederationId, PublicKey, Signature, ThresholdQC};
 
-use dregg_federation::frost::MlDsaPublicKey;
+pub use dregg_federation::frost::MlDsaPublicKey;
 
 /// One committee member's HYBRID finalization-vote signature over an attested
-/// root — BOTH halves (ed25519 ∧ ML-DSA-65), plus the voter's ML-DSA-65 public
-/// key carried ALONGSIDE the signature.
+/// root — BOTH halves (ed25519 ∧ ML-DSA-65), plus a REDUNDANT copy of the
+/// voter's ML-DSA-65 public key carried ALONGSIDE the signature.
 ///
-/// Option (a) — SELF-CONTAINED persist. The voter's post-quantum public key
-/// rides with the signature so a restarting node re-verifies the PQ half with
-/// NO ML-DSA committee history. That matters because an epoch/committee change
-/// carries no PQ key history otherwise: the persisted quorum is re-verifiable
-/// on its own terms, robust across reconfiguration. Soundness is unaffected —
-/// `verify_finalization_quorum` still requires each `voter` to be in the
-/// committee passed at restart, so a self-carried key cannot admit a non-member.
+/// The `ml_dsa_pubkey` field is a wire convenience (a copy of the voter's key),
+/// NOT a trust root. On re-verify, [`Self::verify_finalization_quorum`] PINS it
+/// to the genesis-ENROLLED ML-DSA roster passed at restart: the self-carried key
+/// must EQUAL `ml_dsa_committee[voter_index]` and the PQ half is checked under
+/// that enrolled key. A restarting node therefore needs the enrolled ML-DSA
+/// roster aligned with the committee it verifies against (the current committee's
+/// via `known_federation_ml_dsa_keys`; historical committees carry an aligned
+/// `derived_committee_ml_dsa_history`, which may be EMPTY for a purely on-chain
+/// amended committee — in which case the hybrid re-verify REFUSES that root
+/// rather than downgrade to ed25519-only).
+///
+/// This closes the quantum-forgery downgrade: without the pin, a quantum
+/// adversary who breaks ed25519 for member `P` could attach its OWN fresh ML-DSA
+/// keypair and a PQ signature valid under it, and BOTH halves would pass (the PQ
+/// half was checked against the attacker's self-carried key). With the pin, the
+/// PQ half must verify under `P`'s enrolled key, which the adversary does not
+/// hold — so a quantum adversary who breaks ed25519 alone still cannot re-anchor
+/// a forged root on restart.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuorumSignature {
     /// The voter's federation Ed25519 public key (the committee identity).
@@ -34,14 +45,17 @@ pub struct QuorumSignature {
     /// The ed25519 (CLASSICAL) signature over
     /// [`dregg_types::finalization_vote_signing_message`].
     pub signature: Signature,
-    /// The voter's ML-DSA-65 (FIPS 204) public key, as its 1952 serialized
-    /// bytes. Stored as `Vec<u8>` because `MlDsaPublicKey`'s 1952-byte array is
-    /// beyond serde's array-derive ceiling; length-checked at verify time.
+    /// A REDUNDANT copy of the voter's ML-DSA-65 (FIPS 204) public key, as its
+    /// 1952 serialized bytes (`Vec<u8>` because the 1952-byte array is beyond
+    /// serde's array-derive ceiling). At verify time this is PINNED equal to the
+    /// enrolled roster key for the voter's committee index — never trusted on its
+    /// own.
     pub ml_dsa_pubkey: Vec<u8>,
     /// The ML-DSA-65 (POST-QUANTUM) signature over the SAME canonical bytes as
-    /// `signature`. The quorum counts a signer only when BOTH halves verify, so
-    /// a quantum adversary who breaks ed25519 alone still cannot re-anchor a
-    /// forged root on restart.
+    /// `signature`, verified under the ENROLLED key. The quorum counts a signer
+    /// only when BOTH halves verify (and the enrolled-key pin holds), so a
+    /// quantum adversary who breaks ed25519 alone still cannot re-anchor a forged
+    /// root on restart.
     pub pq_signature: Vec<u8>,
 }
 
@@ -102,10 +116,12 @@ pub struct StoredAttestedRoot {
     /// legacy roots and for a freshly persisted head whose vote quorum has not
     /// yet assembled (the anchor recovers to the last quorum-carrying root).
     ///
-    /// HYBRID (option (a)): each [`QuorumSignature`] carries BOTH the ed25519 and
-    /// the ML-DSA-65 half PLUS the voter's ML-DSA public key, so the restart
-    /// re-verifier re-checks the FULL hybrid quorum (classical ∧ pq) with no
-    /// committee PQ-key history. Widening this field changes the postcard wire
+    /// HYBRID: each [`QuorumSignature`] carries BOTH the ed25519 and the ML-DSA-65
+    /// half PLUS a redundant copy of the voter's ML-DSA public key, so the restart
+    /// re-verifier re-checks the FULL hybrid quorum (classical ∧ pq) — with the PQ
+    /// half PINNED to the genesis-enrolled ML-DSA roster the restart threads in
+    /// (`verify_finalization_quorum`'s `ml_dsa_committee`), never the self-carried
+    /// key. Widening this field changes the postcard wire
     /// shape of a `StoredAttestedRoot`: postcard is non-self-describing, so
     /// attested roots persisted before this change will NOT decode after upgrade.
     /// That is ACCEPTED (state wipe on upgrade, as prior schema additions were) —
@@ -170,50 +186,68 @@ impl StoredAttestedRoot {
     /// Returns `true` only when ALL of:
     ///   * this root is anchored to a blocklace block (`blocklace_block_id` is
     ///     `Some` — the vote preimage binds it);
-    ///   * every signer is a committee member whose BOTH signature halves —
-    ///     ed25519 AND ML-DSA-65 — verify over
+    ///   * every signer is a committee member (at some index `i`) whose BOTH
+    ///     signature halves — ed25519 AND ML-DSA-65 — verify over
     ///     [`dregg_types::finalization_vote_signing_message`] for THIS root's
-    ///     `(blocklace_block_id, merkle_root)`. A signature over any other root
-    ///     or block, or a valid ed25519 half with a broken/missing PQ half, does
-    ///     not count (fail-closed hybrid: `classical ∧ pq`);
+    ///     `(blocklace_block_id, merkle_root)`, with the PQ half verified under
+    ///     the ENROLLED key `ml_dsa_committee[i]` (the self-carried
+    ///     `ml_dsa_pubkey` must EQUAL it). A signature over any other root or
+    ///     block, a valid ed25519 half with a broken/missing PQ half, or a
+    ///     self-carried PQ key that differs from the enrolled one, does not count
+    ///     (fail-closed hybrid: `classical ∧ pq`, PQ key pinned to genesis);
     ///   * the number of **distinct** fully-valid committee signers is
     ///     `>= threshold` (an equivocating/duplicated voter counts at most once,
     ///     so a single member cannot inflate the quorum).
     ///
-    /// The ML-DSA public key each half verifies against rides ALONGSIDE the
-    /// signature (option (a)), so this is self-contained — no committee PQ-key
-    /// history is needed to re-verify the post-quantum half across an epoch
-    /// change. A quantum adversary who has broken ed25519 alone still cannot
-    /// re-anchor a forged root: the ML-DSA half must independently verify.
+    /// `ml_dsa_committee` is the genesis-ENROLLED ML-DSA-65 roster, aligned
+    /// index-for-index with `committee`. A misaligned/empty roster
+    /// (`ml_dsa_committee.len() != committee.len()`) cannot pin any signer's PQ
+    /// half, so the whole re-verify REFUSES — never a silent ed25519-only
+    /// downgrade. This is what defeats a quantum adversary who breaks ed25519
+    /// alone: the PQ half must verify under the enrolled key it does not hold,
+    /// mirroring the FROST positional pin.
     ///
     /// This never accepts a root without a genuine >=threshold committee quorum
     /// over the exact finalized state — it closes the liveness fail-close
     /// WITHOUT relaxing the soundness bar.
-    pub fn verify_finalization_quorum(&self, committee: &[PublicKey]) -> bool {
+    pub fn verify_finalization_quorum(
+        &self,
+        committee: &[PublicKey],
+        ml_dsa_committee: &[MlDsaPublicKey],
+    ) -> bool {
         let Some(block_id) = self.blocklace_block_id else {
             return false;
         };
         if self.finalization_quorum.len() < self.threshold {
             return false;
         }
+        // The enrolled PQ roster MUST align index-for-index with the ed25519
+        // committee, or there is no enrolled key to pin each signer against —
+        // fail closed (an EMPTY roster is included here: no silent downgrade).
+        if ml_dsa_committee.len() != committee.len() {
+            return false;
+        }
         let message = dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
         let mut distinct: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
         for qs in &self.finalization_quorum {
-            if !committee.contains(&qs.voter) {
+            // Membership — and the voter's ENROLLED index.
+            let Some(idx) = committee.iter().position(|c| c == &qs.voter) else {
                 return false;
-            }
+            };
             // CLASSICAL half.
             if !qs.voter.verify(&message, &qs.signature) {
                 return false;
             }
-            // POST-QUANTUM half (ML-DSA-65). Decode the carried pubkey; an
-            // undecodable key (wrong length) or a failing signature refuses the
+            // POST-QUANTUM half (ML-DSA-65) — PINNED to the enrolled roster. The
+            // self-carried key must be a byte-identical copy of the enrolled key
+            // (never trusted on its own), and the PQ signature is verified under
+            // the ENROLLED key. A mismatch or a failing signature refuses the
             // whole quorum — never a silent ed25519-only downgrade.
-            let Ok(pk_bytes) = <[u8; 1952]>::try_from(qs.ml_dsa_pubkey.as_slice()) else {
+            let enrolled = &ml_dsa_committee[idx];
+            if qs.ml_dsa_pubkey.as_slice() != enrolled.0.as_slice() {
                 return false;
-            };
-            let ml_dsa_pk = MlDsaPublicKey(pk_bytes);
-            if !ml_dsa_pk.verify(&message, &qs.pq_signature) {
+            }
+            if !enrolled.verify(&message, &qs.pq_signature) {
                 return false;
             }
             distinct.insert(qs.voter.0);
@@ -234,14 +268,18 @@ impl StoredAttestedRoot {
     /// provides, without treating that lone signature as a quorum anchor.
     ///
     /// HYBRID BAR on the vote leg. A `finalization_quorum` entry counts here
-    /// only when BOTH its halves — ed25519 AND the carried ML-DSA-65 — verify
-    /// over the finalization-vote message (classical ∧ pq), the SAME bar
+    /// only when BOTH its halves — ed25519 AND ML-DSA-65 under the ENROLLED key
+    /// `ml_dsa_committee[i]` — verify over the finalization-vote message
+    /// (classical ∧ pq, PQ key pinned), the SAME bar
     /// [`verify_finalization_quorum`](Self::verify_finalization_quorum) sets
     /// per signer. Every genuinely emitted vote carries both halves
     /// (`FinalizationVote::sign` is hybrid), so requiring both loses nothing —
-    /// while a valid ed25519 half riding with a forged/absent PQ half is NOT a
-    /// committee binding and must not be treated as one. This closes the last
-    /// classical-only acceptance surface over `QuorumSignature`s.
+    /// while a valid ed25519 half riding with a forged/absent PQ half, or a
+    /// self-carried PQ key that is not the enrolled one, is NOT a committee
+    /// binding and must not be treated as one. When the enrolled roster is not
+    /// aligned with `committee` (e.g. a purely on-chain amended committee with no
+    /// recorded ML-DSA roster) the hybrid vote leg is skipped entirely — never a
+    /// silent ed25519-only pass on that leg.
     ///
     /// The `quorum_signatures` leg (the node's OWN light-client signature over
     /// `signing_message()`) remains ed25519-only BY STRUCTURE: that field is
@@ -249,31 +287,43 @@ impl StoredAttestedRoot {
     /// lone local self-binding, never an anchor — anchoring always goes through
     /// the full hybrid `verify_finalization_quorum` — and a positive result
     /// from THIS check can only REFUSE a mismatched ledger, never accept one.
-    pub fn has_any_valid_committee_signature(&self, committee: &[PublicKey]) -> bool {
+    pub fn has_any_valid_committee_signature(
+        &self,
+        committee: &[PublicKey],
+        ml_dsa_committee: &[MlDsaPublicKey],
+    ) -> bool {
         let full_msg = self.signing_message();
         for (pk, sig) in &self.quorum_signatures {
             if committee.contains(pk) && pk.verify(&full_msg, sig) {
                 return true;
             }
         }
-        if let Some(block_id) = self.blocklace_block_id {
+        // The finalization-vote leg is HYBRID and PINNED — only consult it when
+        // the enrolled roster aligns with the committee (otherwise there is no
+        // enrolled key to pin each signer's PQ half against, and this leg must
+        // NOT fall back to ed25519-only).
+        if ml_dsa_committee.len() == committee.len()
+            && let Some(block_id) = self.blocklace_block_id
+        {
             let vote_msg =
                 dregg_types::finalization_vote_signing_message(&block_id, &self.merkle_root);
             for qs in &self.finalization_quorum {
-                if !committee.contains(&qs.voter) {
+                // Membership — and the voter's enrolled index.
+                let Some(idx) = committee.iter().position(|c| c == &qs.voter) else {
                     continue;
-                }
+                };
                 // CLASSICAL half.
                 if !qs.voter.verify(&vote_msg, &qs.signature) {
                     continue;
                 }
-                // POST-QUANTUM half (ML-DSA-65) against the carried pubkey. An
-                // undecodable key or a failing signature means this entry is NOT
-                // a valid committee binding — never a silent ed25519-only pass.
-                let Ok(pk_bytes) = <[u8; 1952]>::try_from(qs.ml_dsa_pubkey.as_slice()) else {
+                // POST-QUANTUM half — PINNED to the enrolled roster. A
+                // self-carried key differing from the enrolled one, or a failing
+                // signature, means this entry is NOT a valid committee binding.
+                let enrolled = &ml_dsa_committee[idx];
+                if qs.ml_dsa_pubkey.as_slice() != enrolled.0.as_slice() {
                     continue;
-                };
-                if MlDsaPublicKey(pk_bytes).verify(&vote_msg, &qs.pq_signature) {
+                }
+                if enrolled.verify(&vote_msg, &qs.pq_signature) {
                     return true;
                 }
             }

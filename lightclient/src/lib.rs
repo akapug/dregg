@@ -286,13 +286,18 @@ pub fn finality_signing_message(finalized_root: BabyBear, participant_count: usi
 }
 
 /// One validator's HYBRID ratification vote in a [`FinalityCert`] — an Ed25519 (classical) half AND
-/// an ML-DSA-65 (post-quantum) half, BOTH over [`finality_signing_message`]. The light client counts
-/// a vote toward the quorum ONLY when the claimed key verifies the Ed25519 half over the cert's
-/// `(finalized_root, participant_count)` AND the carried `ml_dsa_pubkey` verifies the `pq_signature`
-/// over the same message — the full hybrid `CertValid` binding, not a bare pubkey count and not an
-/// ed25519-only downgrade. The ML-DSA public key rides ALONGSIDE its signature (self-contained,
-/// exactly like [`dregg_persist::QuorumSignature`]), so no committee PQ-key table has to be threaded
-/// to re-verify the quantum-safe half off-node.
+/// an ML-DSA-65 (post-quantum) half, BOTH over [`finality_signing_message`]. The committee-anchored
+/// acceptance path ([`FinalityCert::distinct_committee_signers`] / [`verify_finalized_history`])
+/// counts a vote toward the quorum ONLY when the validator is in the trusted `committee` AND its
+/// Ed25519 half verifies AND its `ml_dsa_pubkey` EQUALS the genesis-ENROLLED ML-DSA key for that
+/// validator (threaded in as `ml_dsa_committee`, aligned index-for-index with `committee`) AND the
+/// `pq_signature` verifies under that enrolled key — the full hybrid `CertValid` binding, not a bare
+/// pubkey count and not an ed25519-only downgrade.
+///
+/// The carried `ml_dsa_pubkey` is a REDUNDANT wire copy, NEVER a trust root: pinning it to the
+/// enrolled roster closes the quantum-forgery downgrade (an adversary who breaks ed25519 for a
+/// validator cannot substitute its OWN ML-DSA key, because the carried key must equal the enrolled
+/// one and the PQ half is checked under the enrolled key it does not hold).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SignedVote {
     /// The validator's Ed25519 verifying-key bytes (the participant id).
@@ -300,9 +305,10 @@ pub struct SignedVote {
     /// The Ed25519 (classical) signature over [`finality_signing_message`] for this cert's root +
     /// committee size.
     pub signature: [u8; 64],
-    /// The voter's ML-DSA-65 public key (FIPS 204, 1952 bytes) — carried SELF-CONTAINED so the
-    /// post-quantum half is re-verifiable off-node with no committee PQ-key history. An
-    /// undecodable/wrong-length key drops the signer (fail-closed).
+    /// A REDUNDANT copy of the voter's ML-DSA-65 public key (FIPS 204, 1952 bytes). On the
+    /// committee-anchored path it is PINNED equal to the enrolled roster key for this validator —
+    /// never trusted on its own. An undecodable/wrong-length key or a mismatch drops the signer
+    /// (fail-closed).
     pub ml_dsa_pubkey: Vec<u8>,
     /// The ML-DSA-65 (post-quantum) signature over the SAME [`finality_signing_message`] the Ed25519
     /// half signs, bound to [`HYBRID_PQ_CTX`]. A missing/forged PQ half drops the signer — never a
@@ -437,34 +443,52 @@ impl FinalityCert {
     /// equivocating prover that mints fresh keypairs to sign a fork cannot raise this count, because
     /// its forged keys are not in the committee. This is the genuine super-ratification evidence the
     /// quorum threshold is taken against.
-    pub fn distinct_committee_signers(&self, committee: &[[u8; 32]]) -> usize {
+    pub fn distinct_committee_signers(
+        &self,
+        committee: &[[u8; 32]],
+        ml_dsa_committee: &[Vec<u8>],
+    ) -> usize {
+        // The ENROLLED ML-DSA roster MUST align index-for-index with the trusted
+        // committee, or there is no enrolled key to pin each signer's PQ half
+        // against — fail closed (an empty/misaligned roster counts NO signer,
+        // never an ed25519-only downgrade).
+        if ml_dsa_committee.len() != committee.len() {
+            return 0;
+        }
         let msg = self.signing_message();
-        // Hoist the trusted committee into a set once per call — the per-vote membership
-        // test below is otherwise O(committee) each, making the whole count O(votes·committee).
-        let committee_set: HashSet<[u8; 32]> = committee.iter().copied().collect();
+        // Map each trusted committee member to its ENROLLED index once per call
+        // (the per-vote membership + roster lookup is then O(1)).
+        let index_of: std::collections::HashMap<[u8; 32], usize> =
+            committee.iter().enumerate().map(|(i, k)| (*k, i)).collect();
         let mut verified: HashSet<[u8; 32]> = HashSet::with_capacity(self.votes.len());
         for vote in &self.votes {
             // Distinct only — a participant listed twice counts once.
             if verified.contains(&vote.validator) {
                 continue;
             }
-            // MUST be a member of the trusted committee (the anchor). A forged/fresh key is rejected
-            // here regardless of how validly it signed.
-            if !committee_set.contains(&vote.validator) {
+            // MUST be a member of the trusted committee (the anchor) — and we take
+            // its ENROLLED index. A forged/fresh key is rejected here regardless
+            // of how validly it signed.
+            let Some(&idx) = index_of.get(&vote.validator) else {
                 continue;
-            }
+            };
             // A malformed verifying key cannot ratify.
             let Ok(vk) = VerifyingKey::from_bytes(&vote.validator) else {
                 continue;
             };
             let sig = Signature::from_bytes(&vote.signature);
-            // HYBRID acceptance gate: a trusted committee member counts ONLY when BOTH the ed25519
-            // (classical) AND the ML-DSA-65 (post-quantum) half verify over this cert's `(root,
-            // count)` message. `verify_ml_dsa_half` fails closed on a missing/forged/undecodable PQ
-            // half, so an off-node light client can no longer be fooled by a quorum that carries only
-            // the classical half — the last verifier-side quantum-safety gap.
+            // HYBRID acceptance gate: a trusted committee member counts ONLY when
+            // the ed25519 (classical) half verifies AND its carried ML-DSA key is
+            // the ENROLLED key `ml_dsa_committee[idx]` (never trusted on its own)
+            // AND the ML-DSA-65 (post-quantum) half verifies UNDER that enrolled
+            // key. `verify_ml_dsa_half` fails closed on a missing/forged/undecodable
+            // PQ half, so a quantum adversary who breaks ed25519 for a validator
+            // still cannot substitute its own PQ key — the last verifier-side
+            // quantum-safety gap.
+            let enrolled = &ml_dsa_committee[idx];
             if vk.verify_strict(&msg, &sig).is_ok()
-                && verify_ml_dsa_half(&vote.ml_dsa_pubkey, &msg, &vote.pq_signature)
+                && vote.ml_dsa_pubkey == *enrolled
+                && verify_ml_dsa_half(enrolled, &msg, &vote.pq_signature)
             {
                 verified.insert(vote.validator);
             }
@@ -477,8 +501,12 @@ impl FinalityCert {
     /// taken over the COMMITTEE SIZE (`committee.len()`) — the client's anchor — NOT the cert-carried
     /// `participant_count`, so an attacker cannot shrink `participant_count` to lower the bar. The
     /// Rust mirror of `FinalizedLightClient.CertValid` against an ANCHORED validator set.
-    pub fn has_committee_quorum(&self, committee: &[[u8; 32]]) -> bool {
-        self.distinct_committee_signers(committee)
+    pub fn has_committee_quorum(
+        &self,
+        committee: &[[u8; 32]],
+        ml_dsa_committee: &[Vec<u8>],
+    ) -> bool {
+        self.distinct_committee_signers(committee, ml_dsa_committee)
             >= dregg_blocklace::ordering::supermajority_threshold(committee.len())
     }
 }
@@ -602,7 +630,12 @@ pub struct FinalizedAttestation {
 /// history.
 ///
 /// `committee` is the client's TRUSTED validator set — the federation committee keys, obtained from
-/// genesis/epoch configuration exactly like the VK anchor and NEVER read from the cert. It closes
+/// genesis/epoch configuration exactly like the VK anchor and NEVER read from the cert. `ml_dsa_committee`
+/// is the client's TRUSTED, genesis-ENROLLED ML-DSA-65 roster, aligned index-for-index with `committee`
+/// (also configuration, never read from the cert): each counted vote's carried ML-DSA key is pinned
+/// equal to the enrolled key for that validator and its PQ half verified under it, so a quantum
+/// adversary who breaks ed25519 for a validator cannot substitute its own ML-DSA key. A misaligned/empty
+/// roster counts NO signer (fail-closed, `NoQuorum`) — never an ed25519-only downgrade. It closes
 /// red-team **LC-2**: an equivocating prover that honestly executes a fork, mints fresh keypairs,
 /// and signs `finality_signing_message(fork_root, n)` can no longer finalize it, because its forged
 /// keys are not in `committee` (so they contribute nothing to the quorum), and the threshold is
@@ -632,6 +665,7 @@ pub fn verify_finalized_history(
     finalized_root: BabyBear,
     cert: &FinalityCert,
     committee: &[[u8; 32]],
+    ml_dsa_committee: &[Vec<u8>],
     expected_genesis: Option<[BabyBear; SEG_ANCHOR_WIDTH]>,
 ) -> Result<FinalizedAttestation, FinalizedError> {
     // Anchor or refuse: a light client with no configured committee cannot verify finality. A
@@ -682,7 +716,7 @@ pub fn verify_finalized_history(
     // TRUSTED committee, threshold taken over `committee.len()` (not the cert-supplied count).
     // Count the committee-anchored signers ONCE (each call re-verifies every vote's signature);
     // the quorum gate, the rejection diagnostic, and the attestation all read this one count.
-    let quorum_signers = cert.distinct_committee_signers(committee);
+    let quorum_signers = cert.distinct_committee_signers(committee, ml_dsa_committee);
     let threshold = dregg_blocklace::ordering::supermajority_threshold(committee.len());
     if quorum_signers < threshold {
         return Err(FinalizedError::NoQuorum {
@@ -846,9 +880,12 @@ mod tests {
             participant_count: n,
             finalized_root: root,
         };
-        assert_eq!(honest.distinct_committee_signers(&trusted), 3);
+        assert_eq!(
+            honest.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
+            3
+        );
         assert!(
-            honest.has_committee_quorum(&trusted),
+            honest.has_committee_quorum(&trusted, &committee_ml_dsa(4)),
             "3 trusted signers is a supermajority of 4"
         );
 
@@ -865,11 +902,11 @@ mod tests {
             "they verify on their own terms"
         );
         assert_eq!(
-            foreign.distinct_committee_signers(&trusted),
+            foreign.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             0,
             "but none are in the trusted committee"
         );
-        assert!(!foreign.has_committee_quorum(&trusted));
+        assert!(!foreign.has_committee_quorum(&trusted, &committee_ml_dsa(4)));
 
         // SHRUNK COUNT defeated by the anchor: an attacker holding only 2 committee signatures
         // claims `participant_count = 1` (hoping the threshold collapses to `2*1/3+1 = 1`). The two
@@ -881,12 +918,12 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            shrunk.distinct_committee_signers(&trusted),
+            shrunk.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             2,
             "the 2 real committee signers verify (over their signed count)"
         );
         assert!(
-            !shrunk.has_committee_quorum(&trusted),
+            !shrunk.has_committee_quorum(&trusted, &committee_ml_dsa(4)),
             "but 2 < the committee supermajority of 3 — the shrunk count cannot lower the bar"
         );
 
@@ -900,15 +937,18 @@ mod tests {
             participant_count: n,
             finalized_root: root,
         };
-        assert_eq!(mixed.distinct_committee_signers(&trusted), 2);
+        assert_eq!(
+            mixed.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
+            2
+        );
         assert!(
-            !mixed.has_committee_quorum(&trusted),
+            !mixed.has_committee_quorum(&trusted, &committee_ml_dsa(4)),
             "2 trusted of 4 is not a supermajority"
         );
 
         // EMPTY committee: nothing is anchored, so nothing is a quorum.
-        assert_eq!(honest.distinct_committee_signers(&[]), 0);
-        assert!(!honest.has_committee_quorum(&[]));
+        assert_eq!(honest.distinct_committee_signers(&[], &[]), 0);
+        assert!(!honest.has_committee_quorum(&[], &[]));
     }
 
     /// **THE HYBRID (POST-QUANTUM) QUORUM TOOTH (fold-free unit).** The off-node light client counts a
@@ -930,11 +970,11 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            honest.distinct_committee_signers(&trusted),
+            honest.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             3,
             "both halves verify → three hybrid-valid signers"
         );
-        assert!(honest.has_committee_quorum(&trusted));
+        assert!(honest.has_committee_quorum(&trusted, &committee_ml_dsa(4)));
 
         // FORGED PQ: keep every ed25519 half genuine, but corrupt each ML-DSA signature. The classical
         // check still passes; the post-quantum half fails, so NO signer counts.
@@ -951,12 +991,12 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            forged_pq.distinct_committee_signers(&trusted),
+            forged_pq.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             0,
             "a forged ML-DSA half drops the signer even though ed25519 is valid"
         );
         assert!(
-            !forged_pq.has_committee_quorum(&trusted),
+            !forged_pq.has_committee_quorum(&trusted, &committee_ml_dsa(4)),
             "all-ed25519-valid + forged PQ is REJECTED — no ed25519-only downgrade"
         );
 
@@ -975,11 +1015,11 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            missing_pq.distinct_committee_signers(&trusted),
+            missing_pq.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             0,
             "a missing ML-DSA half is not an ed25519-only acceptance"
         );
-        assert!(!missing_pq.has_committee_quorum(&trusted));
+        assert!(!missing_pq.has_committee_quorum(&trusted, &committee_ml_dsa(4)));
 
         // WRONG PQ KEY: a valid ML-DSA signature, but the carried pubkey is a DIFFERENT signer's key
         // — the self-contained key must actually verify the carried signature.
@@ -996,16 +1036,77 @@ mod tests {
             finalized_root: root,
         };
         assert_eq!(
-            wrong_key.distinct_committee_signers(&trusted),
+            wrong_key.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             0,
             "the carried ML-DSA pubkey must verify the carried PQ signature"
         );
-        assert!(!wrong_key.has_committee_quorum(&trusted));
+        assert!(!wrong_key.has_committee_quorum(&trusted, &committee_ml_dsa(4)));
 
         // The unanchored diagnostic agrees: the hybrid gate is in `distinct_signers` too.
         assert_eq!(honest.distinct_signers(), 3);
         assert_eq!(forged_pq.distinct_signers(), 0);
         assert_eq!(missing_pq.distinct_signers(), 0);
+    }
+
+    /// **THE QUANTUM-FORGERY ADVERSARIAL TEST (off-node light client).** The exact
+    /// attack the enrolled-roster pin closes: a quantum adversary breaks ed25519
+    /// for enrolled validator `P` (we reuse P's real ed25519 key to stand in for
+    /// the forged classical half), generates its OWN fresh ML-DSA-65 keypair, and
+    /// signs the PQ half with it — carrying that attacker key in `ml_dsa_pubkey`.
+    /// Before the pin, `distinct_committee_signers` verified the PQ half against
+    /// the self-carried key, so BOTH halves passed. With the pin, the carried key
+    /// ≠ P's enrolled roster key, so the signer is DROPPED to sub-quorum. The
+    /// honest enrolled-key quorum still counts, and a misaligned/empty enrolled
+    /// roster counts NO signer (fail-closed, never ed25519-only).
+    #[test]
+    fn quantum_forged_pq_key_is_rejected() {
+        use fips204::traits::{KeyGen as _, SerDes as _, Signer as _};
+
+        let root = BabyBear::new(0xDEAD_BEEF);
+        let n = 4usize; // committee supermajority = 3
+        let trusted = committee(n);
+        let enrolled = committee_ml_dsa(n);
+
+        // HONEST baseline: a 3-of-4 hybrid quorum under the enrolled roster.
+        let honest = FinalityCert {
+            votes: (0..3u8).map(|i| signed_vote(i, root, n)).collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert_eq!(honest.distinct_committee_signers(&trusted, &enrolled), 3);
+        assert!(honest.has_committee_quorum(&trusted, &enrolled));
+
+        // THE ATTACK: keep every ed25519 half genuine (broken-ed25519 stand-in),
+        // but swap each ML-DSA key for a FRESH attacker keypair and re-sign the PQ
+        // half under it. Each PQ half verifies under the attacker's OWN key.
+        let msg = finality_signing_message(root, n);
+        let forged = FinalityCert {
+            votes: (0..3u8)
+                .map(|i| {
+                    let mut v = signed_vote(i, root, n);
+                    let mut xi = [0u8; 32];
+                    xi[0] = 0xF0 + i;
+                    let (pk, sk) = fips204::ml_dsa_65::KG::keygen_from_seed(&xi);
+                    v.ml_dsa_pubkey = pk.into_bytes().to_vec();
+                    v.pq_signature = sk.try_sign(&msg, HYBRID_PQ_CTX).expect("sign").to_vec();
+                    v
+                })
+                .collect(),
+            participant_count: n,
+            finalized_root: root,
+        };
+        assert_eq!(
+            forged.distinct_committee_signers(&trusted, &enrolled),
+            0,
+            "a self-carried attacker ML-DSA key (not the enrolled key) drops the signer \
+             even though the ed25519 half and the PQ half verify on their own terms"
+        );
+        assert!(!forged.has_committee_quorum(&trusted, &enrolled));
+
+        // NO SILENT DOWNGRADE: an empty (misaligned) enrolled roster counts NO
+        // signer even for the honest quorum.
+        assert_eq!(honest.distinct_committee_signers(&trusted, &[]), 0);
+        assert!(!honest.has_committee_quorum(&trusted, &[]));
     }
 
     /// OPEN permissions so the rotated producer-witness path admits the actor cell without auth
@@ -1247,6 +1348,14 @@ mod tests {
             .collect()
     }
 
+    /// The TRUSTED, genesis-ENROLLED ML-DSA-65 roster for validators `0..n`,
+    /// aligned index-for-index with [`committee`] — the client's post-quantum
+    /// anchor. `distinct_committee_signers` pins each counted vote's carried
+    /// ML-DSA key to this roster.
+    fn committee_ml_dsa(n: usize) -> Vec<Vec<u8>> {
+        (0..n).map(|i| validator_ml_dsa_key(i as u8).0).collect()
+    }
+
     /// **THE THREE-LEG HEADLINE (Rust witness).** Fold a real K=2 chain, then verify it AS A FINALIZED
     /// light client: the aggregate verifies (legs 1+2), the root seam holds, AND a genuine 3-of-4
     /// super-ratification quorum certifies the final root (leg 3). The client obtains a
@@ -1266,9 +1375,16 @@ mod tests {
         );
 
         let vk = agg.root_vk_fingerprint();
-        let attestation =
-            verify_finalized_history(&agg, &vk, final_root, &cert, &committee(4), None)
-                .expect("aggregate + quorum cert + seam must all hold");
+        let attestation = verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        )
+        .expect("aggregate + quorum cert + seam must all hold");
 
         assert_eq!(attestation.history.num_turns, 2, "both turns attested");
         assert_eq!(
@@ -1300,12 +1416,28 @@ mod tests {
         let true_genesis = agg_a.genesis_root;
 
         // NONE: the historical behavior — the finalized history verifies from the ATTESTED genesis.
-        verify_finalized_history(&agg_a, &vk, final_a, &cert_a, &com, None)
-            .expect("None preserves the from-attested-genesis behavior");
+        verify_finalized_history(
+            &agg_a,
+            &vk,
+            final_a,
+            &cert_a,
+            &com,
+            &committee_ml_dsa(4),
+            None,
+        )
+        .expect("None preserves the from-attested-genesis behavior");
 
         // SOME(true): the genuine history is accepted under the trusted genesis anchor (positive arm).
-        let att = verify_finalized_history(&agg_a, &vk, final_a, &cert_a, &com, Some(true_genesis))
-            .expect("the true genesis anchor accepts the genuine history");
+        let att = verify_finalized_history(
+            &agg_a,
+            &vk,
+            final_a,
+            &cert_a,
+            &com,
+            &committee_ml_dsa(4),
+            Some(true_genesis),
+        )
+        .expect("the true genesis anchor accepts the genuine history");
         assert_eq!(
             att.history.genesis_root, true_genesis,
             "the accepted history is anchored to the trusted genesis"
@@ -1316,7 +1448,15 @@ mod tests {
         let mut fabricated = true_genesis;
         fabricated[0] += BabyBear::ONE;
         assert_ne!(fabricated, true_genesis);
-        match verify_finalized_history(&agg_a, &vk, final_a, &cert_a, &com, Some(fabricated)) {
+        match verify_finalized_history(
+            &agg_a,
+            &vk,
+            final_a,
+            &cert_a,
+            &com,
+            &committee_ml_dsa(4),
+            Some(fabricated),
+        ) {
             Err(FinalizedError::GenesisMismatch { expected, proven }) => {
                 assert_eq!(expected, fabricated[0].as_u32());
                 assert_eq!(proven, true_genesis[0].as_u32());
@@ -1340,11 +1480,26 @@ mod tests {
         );
         let cert_b = make_cert(3, 4, final_b);
         // Unanchored: B is a perfectly valid finalized history (from ITS OWN genesis) — the residual.
-        verify_finalized_history(&agg_b, &vk, final_b, &cert_b, &com, None).expect(
-            "B is a valid finalized history from its own genesis (the unanchored residual)",
-        );
+        verify_finalized_history(
+            &agg_b,
+            &vk,
+            final_b,
+            &cert_b,
+            &com,
+            &committee_ml_dsa(4),
+            None,
+        )
+        .expect("B is a valid finalized history from its own genesis (the unanchored residual)");
         // Anchored to A's trusted genesis: B is refused — it hides the prefix before its start.
-        match verify_finalized_history(&agg_b, &vk, final_b, &cert_b, &com, Some(true_genesis)) {
+        match verify_finalized_history(
+            &agg_b,
+            &vk,
+            final_b,
+            &cert_b,
+            &com,
+            &committee_ml_dsa(4),
+            Some(true_genesis),
+        ) {
             Err(FinalizedError::GenesisMismatch { .. }) => {}
             other => panic!(
                 "a history that does not start at the trusted genesis must be rejected; got {other:?}"
@@ -1373,7 +1528,15 @@ mod tests {
         // A genuine quorum for the ORIGINAL finalized root — the relabeled aggregate must be
         // refused outright (the carried publics no longer verify against the binding proof).
         let cert = make_cert(3, 4, final_root);
-        match verify_finalized_history(&agg, &vk, final_root, &cert, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::AggregateInvalid(
                 dregg_circuit_prove::ivc_turn_chain::TurnChainError::ClaimedPublicsUnattested {
                     ..
@@ -1390,7 +1553,15 @@ mod tests {
         // aggregate verifies, but its proven endpoint is not the root the client was shown.
         let shown = final_root + BabyBear::ONE;
         let cert_b = make_cert(3, 4, shown);
-        match verify_finalized_history(&agg, &vk, shown, &cert_b, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            shown,
+            &cert_b,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::AggregateRootMismatch { proven, shown: s }) => {
                 assert_eq!(proven, final_root.as_u32());
                 assert_eq!(s, shown.as_u32());
@@ -1417,7 +1588,15 @@ mod tests {
         );
 
         let vk = agg.root_vk_fingerprint();
-        match verify_finalized_history(&agg, &vk, final_root, &weak_cert, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &weak_cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum {
                 distinct_signers,
                 threshold,
@@ -1445,7 +1624,15 @@ mod tests {
         assert!(cert.has_quorum(), "the cert itself carries a real quorum");
 
         let vk = agg.root_vk_fingerprint();
-        match verify_finalized_history(&agg, &vk, final_root, &cert, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::CertRootMismatch { certified, shown }) => {
                 assert_eq!(certified, foreign_root.as_u32());
                 assert_eq!(shown, final_root.as_u32());
@@ -1479,7 +1666,15 @@ mod tests {
         );
 
         let vk = agg.root_vk_fingerprint();
-        match verify_finalized_history(&agg, &vk, final_root, &padded_cert, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &padded_cert,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum {
                 distinct_signers, ..
             }) => {
@@ -1529,13 +1724,21 @@ mod tests {
         );
         // ...but NONE of the forged keys are in the trusted committee, so the anchored count is 0.
         assert_eq!(
-            forged.distinct_committee_signers(&trusted),
+            forged.distinct_committee_signers(&trusted, &committee_ml_dsa(4)),
             0,
             "no forged key is in the trusted committee"
         );
-        assert!(!forged.has_committee_quorum(&trusted));
+        assert!(!forged.has_committee_quorum(&trusted, &committee_ml_dsa(4)));
 
-        match verify_finalized_history(&agg, &vk, final_root, &forged, &trusted, None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &forged,
+            &trusted,
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum {
                 distinct_signers,
                 threshold,
@@ -1555,7 +1758,16 @@ mod tests {
         // foreign keys, not the honest quorum).
         let honest = make_cert(3, 4, final_root);
         assert!(
-            verify_finalized_history(&agg, &vk, final_root, &honest, &trusted, None).is_ok(),
+            verify_finalized_history(
+                &agg,
+                &vk,
+                final_root,
+                &honest,
+                &trusted,
+                &committee_ml_dsa(4),
+                None
+            )
+            .is_ok(),
             "the genuine committee's quorum still finalizes"
         );
     }
@@ -1571,7 +1783,7 @@ mod tests {
 
         // A genuine 3-of-4 quorum — but the client holds NO committee.
         let cert = make_cert(3, 4, final_root);
-        match verify_finalized_history(&agg, &vk, final_root, &cert, &[], None) {
+        match verify_finalized_history(&agg, &vk, final_root, &cert, &[], &[], None) {
             Err(FinalizedError::UnanchoredCommittee) => {}
             other => panic!("an unanchored client must refuse outright; got {other:?}"),
         }
@@ -1615,7 +1827,15 @@ mod tests {
             "but NONE carry a valid signature — the binding leg counts zero"
         );
         assert!(!unsigned.has_quorum(), "an unsigned cert is not a quorum");
-        match verify_finalized_history(&agg, &vk, final_root, &unsigned, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &unsigned,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum {
                 distinct_signers, ..
             }) => assert_eq!(distinct_signers, 0),
@@ -1638,7 +1858,15 @@ mod tests {
             0,
             "signatures bound to a different root do not verify over this cert's root"
         );
-        match verify_finalized_history(&agg, &vk, final_root, &wrong_root, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &wrong_root,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum { .. }) => {}
             other => panic!("a wrong-root-bound finality cert must be rejected; got {other:?}"),
         }
@@ -1648,7 +1876,16 @@ mod tests {
         let honest = make_cert(3, 4, final_root);
         assert_eq!(honest.distinct_signers(), 3);
         assert!(
-            verify_finalized_history(&agg, &vk, final_root, &honest, &committee(4), None).is_ok()
+            verify_finalized_history(
+                &agg,
+                &vk,
+                final_root,
+                &honest,
+                &committee(4),
+                &committee_ml_dsa(4),
+                None
+            )
+            .is_ok()
         );
     }
 
@@ -1677,7 +1914,15 @@ mod tests {
             participant_count: 4,
             finalized_root: final_root,
         };
-        match verify_finalized_history(&agg, &vk, final_root, &forged_pq, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &forged_pq,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum {
                 distinct_signers, ..
             }) => assert_eq!(
@@ -1702,7 +1947,15 @@ mod tests {
             participant_count: 4,
             finalized_root: final_root,
         };
-        match verify_finalized_history(&agg, &vk, final_root, &missing_pq, &committee(4), None) {
+        match verify_finalized_history(
+            &agg,
+            &vk,
+            final_root,
+            &missing_pq,
+            &committee(4),
+            &committee_ml_dsa(4),
+            None,
+        ) {
             Err(FinalizedError::NoQuorum { .. }) => {}
             other => panic!("a finality cert missing the PQ half must be rejected; got {other:?}"),
         }
@@ -1711,7 +1964,16 @@ mod tests {
         // quantum-blind forgery, not the honest hybrid cert.
         let honest = make_cert(3, 4, final_root);
         assert!(
-            verify_finalized_history(&agg, &vk, final_root, &honest, &committee(4), None).is_ok(),
+            verify_finalized_history(
+                &agg,
+                &vk,
+                final_root,
+                &honest,
+                &committee(4),
+                &committee_ml_dsa(4),
+                None
+            )
+            .is_ok(),
             "an intact hybrid quorum finalizes"
         );
     }

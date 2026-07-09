@@ -28,7 +28,9 @@
 //! See `docs/audit/LIVE-BYZANTINE.md` Attack 5b (and Attack 3 — the same weld).
 
 use dregg_persist::StoredAttestedRoot;
-use dregg_persist::federation::{FederationId, PublicKey, QuorumSignature, Signature};
+use dregg_persist::federation::{
+    FederationId, MlDsaPublicKey, PublicKey, QuorumSignature, Signature,
+};
 
 /// A junk HYBRID quorum entry for `pk` — used only in NEGATIVE assertions
 /// (nothing here is expected to verify), so both signature halves are zeroed and
@@ -40,6 +42,14 @@ fn junk_sig(pk: PublicKey) -> QuorumSignature {
         ml_dsa_pubkey: vec![0u8; 1952],
         pq_signature: vec![0u8; 3309],
     }
+}
+
+/// A placeholder ENROLLED ML-DSA roster aligned with a `len`-member committee.
+/// Used only in NEGATIVE assertions: the rejections here fire on the classical
+/// half / membership / count, but a length-aligned roster ensures we exercise
+/// the real pinned path rather than short-circuiting on a roster-length mismatch.
+fn junk_ml_dsa_roster(len: usize) -> Vec<MlDsaPublicKey> {
+    vec![MlDsaPublicKey([0u8; 1952]); len]
 }
 
 /// A full-mode attested root as the deployed commit path FIRST persists it
@@ -121,11 +131,12 @@ fn byzantine_conflicting_state_roots_both_pass_count_only_gate() {
     assert!(!forged.has_finalization_quorum());
 
     let committee = vec![PublicKey([1; 32]), PublicKey([2; 32]), PublicKey([3; 32])];
+    let ml_dsa_committee = junk_ml_dsa_roster(committee.len());
     assert!(
-        !honest.verify_finalization_quorum(&committee),
+        !honest.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "an empty finalization_quorum cannot certify state (nothing to verify)"
     );
-    assert!(!forged.verify_finalization_quorum(&committee));
+    assert!(!forged.verify_finalization_quorum(&committee, &ml_dsa_committee));
 }
 
 /// Pin the Fix-B gate's SOUNDNESS: `verify_finalization_quorum` is crypto-bound,
@@ -135,13 +146,14 @@ fn byzantine_conflicting_state_roots_both_pass_count_only_gate() {
 #[test]
 fn finalization_quorum_rejects_forged_and_noncommittee_signatures() {
     let committee = vec![PublicKey([1; 32]), PublicKey([2; 32]), PublicKey([3; 32])];
+    let ml_dsa_committee = junk_ml_dsa_roster(committee.len());
 
     // A root claiming a 3-of-3 committee quorum, but every signature is junk.
     let mut root = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([1; 32]));
     root.finalization_quorum = committee.iter().map(|pk| junk_sig(*pk)).collect();
     assert!(root.has_finalization_quorum());
     assert!(
-        !root.verify_finalization_quorum(&committee),
+        !root.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "junk signatures over the (block_id, merkle_root) preimage must NOT certify — \
          the gate verifies Ed25519, it does not count entries"
     );
@@ -152,12 +164,12 @@ fn finalization_quorum_rejects_forged_and_noncommittee_signatures() {
     let mut sybil = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([9; 32]));
     sybil.finalization_quorum = outsiders.iter().map(|pk| junk_sig(*pk)).collect();
     assert!(
-        !sybil.verify_finalization_quorum(&committee),
+        !sybil.verify_finalization_quorum(&committee, &ml_dsa_committee),
         "non-committee signers cannot form a finalization quorum (Sybil rejected)"
     );
 
     // A sub-threshold count (below `threshold`) is rejected regardless of validity.
     let mut short = full_mode_root([0xCD; 32], [0xAA; 32], PublicKey([1; 32]));
     short.finalization_quorum = vec![junk_sig(PublicKey([1; 32]))];
-    assert!(!short.verify_finalization_quorum(&committee));
+    assert!(!short.verify_finalization_quorum(&committee, &ml_dsa_committee));
 }

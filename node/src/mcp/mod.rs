@@ -1148,6 +1148,7 @@ mod tests {
             validators: vec![dregg_verifier::cross_fed::ValidatorDescriptor {
                 name: role.to_string(),
                 public_key: hex_encode(&pk.0),
+                ml_dsa_public_key: None,
             }],
         }
     }
@@ -1249,6 +1250,9 @@ mod tests {
                 MlDsaSigningKey::from_seed(&s)
             })
             .collect();
+        // The ENROLLED ML-DSA roster — aligned index-for-index with `members`.
+        let ml_dsa_roster: Vec<dregg_federation::frost::MlDsaPublicKey> =
+            pq.iter().map(|(pk, _)| pk.clone()).collect();
         let fed_id = dregg_federation::derive_federation_id_with_epoch(&members, 0);
 
         let root = AttestedRoot {
@@ -1279,9 +1283,9 @@ mod tests {
                 .collect()
         };
 
-        // Honest 2-of-3 hybrid cross-fed quorum verifies (BOTH halves).
+        // Honest 2-of-3 hybrid cross-fed quorum verifies (BOTH halves, PQ enrolled).
         assert!(
-            verify_hybrid_quorum_sigs(&make(&[0, 1]), &message, &members, 2),
+            verify_hybrid_quorum_sigs(&make(&[0, 1]), &message, &members, &ml_dsa_roster, 2),
             "honest hybrid cross-fed quorum must verify"
         );
 
@@ -1289,7 +1293,7 @@ mod tests {
         let mut forged = make(&[0, 1]);
         forged[0].pq_signature[0] ^= 0xFF;
         assert!(
-            !verify_hybrid_quorum_sigs(&forged, &message, &members, 2),
+            !verify_hybrid_quorum_sigs(&forged, &message, &members, &ml_dsa_roster, 2),
             "forged ML-DSA half must reject even with a valid ed25519 half"
         );
 
@@ -1297,8 +1301,26 @@ mod tests {
         let mut missing = make(&[0, 1]);
         missing[1].pq_signature = Vec::new();
         assert!(
-            !verify_hybrid_quorum_sigs(&missing, &message, &members, 2),
+            !verify_hybrid_quorum_sigs(&missing, &message, &members, &ml_dsa_roster, 2),
             "missing ML-DSA half must reject"
+        );
+
+        // QUANTUM-FORGERY TEETH: enrolled member 0's ed25519 is "broken" (we reuse
+        // its key) but the ML-DSA half carries a FRESH attacker key with a PQ
+        // signature valid under it — REJECTED because it is not the enrolled key.
+        let attacker = MlDsaSigningKey::from_seed(&[0xC3; 32]);
+        let mut quantum = make(&[0, 1]);
+        quantum[0].ml_dsa_pubkey = attacker.0.0.to_vec();
+        quantum[0].pq_signature = attacker.1.sign(&message).expect("ml-dsa sign");
+        assert!(
+            !verify_hybrid_quorum_sigs(&quantum, &message, &members, &ml_dsa_roster, 2),
+            "a self-carried attacker ML-DSA key (not the enrolled key) must reject"
+        );
+
+        // NO SILENT DOWNGRADE: an empty (misaligned) enrolled roster fails closed.
+        assert!(
+            !verify_hybrid_quorum_sigs(&make(&[0, 1]), &message, &members, &[], 2),
+            "an unconfigured (empty) enrolled roster must fail closed"
         );
 
         // Non-member fully-valid hybrid signer → REJECT.
@@ -1313,7 +1335,7 @@ mod tests {
             pq_signature: out_pq_sk.sign(&message).expect("ml-dsa sign"),
         }];
         assert!(
-            !verify_hybrid_quorum_sigs(&outsider, &message, &members, 1),
+            !verify_hybrid_quorum_sigs(&outsider, &message, &members, &ml_dsa_roster, 1),
             "non-member hybrid signer must reject"
         );
     }

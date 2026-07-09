@@ -114,6 +114,14 @@ pub struct Federation {
     /// of). `Some(_)` carries the local Ed25519 signing key and optionally
     /// the BLS member secret.
     local_seat: Option<LocalSeat>,
+
+    /// The ENROLLED ML-DSA-65 roster, aligned index-for-index with the SORTED
+    /// [`Self::members`]. Empty by default: a federation constructed without an
+    /// explicit roster CANNOT pin the post-quantum half of a hybrid receipt, so
+    /// [`Self::verify_receipt`] fails a `HybridVotes` receipt CLOSED rather than
+    /// trust a self-carried ML-DSA key. Populate via [`Self::with_ml_dsa_members`]
+    /// (already permuted to match the sorted committee) to admit hybrid receipts.
+    ml_dsa_members: Vec<crate::frost::MlDsaPublicKey>,
 }
 
 impl Federation {
@@ -151,7 +159,22 @@ impl Federation {
             threshold,
             id,
             local_seat,
+            ml_dsa_members: Vec::new(),
         }
+    }
+
+    /// Attach the ENROLLED ML-DSA-65 roster for the hybrid-receipt path. The
+    /// `ml_dsa_members` slice MUST already be aligned index-for-index with
+    /// [`Self::members`] (the SORTED committee) — callers that hold the roster in
+    /// the pre-sort order must permute it to match. Without this, a `HybridVotes`
+    /// receipt fails closed in [`Self::verify_receipt`] (no self-carried PQ key
+    /// is ever trusted).
+    pub fn with_ml_dsa_members(
+        mut self,
+        ml_dsa_members: Vec<crate::frost::MlDsaPublicKey>,
+    ) -> Self {
+        self.ml_dsa_members = ml_dsa_members;
+        self
     }
 
     /// Convenience constructor for a committee of one (Solo).
@@ -279,6 +302,7 @@ impl Federation {
         receipt.verify(
             self.bls_committee(),
             &self.members,
+            &self.ml_dsa_members,
             self.threshold_usize(),
             self.epoch,
         )
