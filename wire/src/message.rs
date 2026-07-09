@@ -241,6 +241,13 @@ pub enum WireMessage {
     // Revocation
     // -------------------------------------------------------------------------
     /// Submit a revocation to a peer silo for propagation.
+    ///
+    /// HYBRID: the revoking authority proves its identity with BOTH a classical
+    /// Ed25519 signature (`authority_sig`) and a post-quantum ML-DSA-65 (FIPS
+    /// 204) signature (`pq_authority_sig`) over the SAME `revocation_signing_message`
+    /// bytes. Forging a revocation therefore requires breaking Ed25519 discrete-log
+    /// AND module-lattice SIS/LWE simultaneously — a quantum adversary that can
+    /// forge the Ed25519 half alone cannot forge/suppress revocations.
     SubmitRevocation {
         /// The token ID being revoked.
         token_id: String,
@@ -248,6 +255,20 @@ pub enum WireMessage {
         authority: PublicKey,
         /// Signature from the revoking authority (64 bytes, Ed25519).
         authority_sig: Signature,
+        /// The PQ half of the HYBRID authority signature: an ML-DSA-65 (FIPS 204)
+        /// signature over the SAME `revocation_signing_message` bytes the Ed25519
+        /// `authority_sig` covers. The ML-DSA key is derived deterministically
+        /// from the authority's Ed25519 seed.
+        ///
+        /// ENROLL + PIN: the verifier checks this against the authority's ENROLLED
+        /// ML-DSA public key — pinned to `authority` in the silo config via
+        /// `SiloConfig::with_revocation_authority_ml_dsa_key` — NEVER a pubkey
+        /// carried in this message. The ML-DSA pubkey is therefore NOT self-carried,
+        /// so an attacker cannot present a fresh ML-DSA key of their own. `None`
+        /// marks a legacy Ed25519-only authority; a server that has an enrolled PQ
+        /// key for this authority fails CLOSED (rejects a `None` PQ half).
+        #[serde(default)]
+        pq_authority_sig: Option<Vec<u8>>,
         /// Unique nonce to prevent replay attacks on revocation submissions.
         nonce: [u8; 16],
         /// Unix timestamp when the revocation was submitted.
@@ -807,6 +828,7 @@ mod tests {
                 token_id: "tok-123".to_string(),
                 authority: PublicKey([4; 32]),
                 authority_sig: Signature([4; 64]),
+                pq_authority_sig: Some(vec![0x06; 3309]),
                 nonce: [0x05; 16],
                 timestamp: 1700000000,
             },

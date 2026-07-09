@@ -224,6 +224,16 @@ pub struct SiloConfig {
     /// (fail-closed). Callers MUST configure at least one authority for revocations
     /// to be accepted.
     pub revocation_authorities: Vec<PublicKey>,
+    /// Enrolled ML-DSA-65 (FIPS 204) public keys, PINNED to a revocation
+    /// authority's Ed25519 identity — the post-quantum half of the HYBRID
+    /// authority signature on `SubmitRevocation`. An authority present here has an
+    /// enrolled PQ half and MUST satisfy the HYBRID check (fail closed on a
+    /// missing/invalid PQ half); absent authorities are legacy Ed25519-only during
+    /// the staged rollout. The `SubmitRevocation.pq_authority_sig` is verified
+    /// against the key enrolled HERE, never a pubkey carried in the message, so an
+    /// attacker cannot self-supply a fresh ML-DSA key. The map value is the FIPS
+    /// 204 serialized public key.
+    pub revocation_authority_ml_dsa_keys: std::collections::HashMap<[u8; 32], Vec<u8>>,
     /// Maximum age (in seconds) for request timestamps. Requests older than this
     /// are rejected as stale.
     pub max_request_age_secs: i64,
@@ -273,6 +283,7 @@ impl SiloConfig {
             handshake_timeout: Duration::from_secs(10),
             verifier: Arc::new(StarkVerifier),
             revocation_authorities: Vec::new(),
+            revocation_authority_ml_dsa_keys: std::collections::HashMap::new(),
             max_request_age_secs: MAX_REQUEST_AGE_SECS,
             tls: TlsConfig::default(),
             nonce_cache_capacity: MAX_NONCE_CACHE_SIZE,
@@ -314,6 +325,25 @@ impl SiloConfig {
     /// one authority for revocations to be accepted.
     pub fn with_revocation_authorities(mut self, authorities: Vec<PublicKey>) -> Self {
         self.revocation_authorities = authorities;
+        self
+    }
+
+    /// Enroll (PIN) an ML-DSA-65 public key to a revocation authority's Ed25519
+    /// identity — the post-quantum half of the HYBRID `SubmitRevocation`
+    /// signature.
+    ///
+    /// After this, the authority's revocation submissions REQUIRE a valid ML-DSA
+    /// half verified against `ml_dsa_pubkey` — a fresh/attacker-supplied PQ key is
+    /// rejected because the verifier consults only this enrolled key, and a
+    /// missing PQ half fails CLOSED. Authorities without an enrolled key remain
+    /// legacy Ed25519-only during the staged rollout.
+    pub fn with_revocation_authority_ml_dsa_key(
+        mut self,
+        authority: PublicKey,
+        ml_dsa_pubkey: Vec<u8>,
+    ) -> Self {
+        self.revocation_authority_ml_dsa_keys
+            .insert(authority.0, ml_dsa_pubkey);
         self
     }
 
@@ -2443,6 +2473,7 @@ impl SiloServer {
                 token_id,
                 authority,
                 authority_sig,
+                pq_authority_sig,
                 nonce,
                 timestamp,
             } => {
@@ -2502,6 +2533,36 @@ impl SiloServer {
                     return Some(WireMessage::Error {
                         code: crate::message::error_codes::INVALID_SIGNATURE,
                         message: "authority signature verification failed".to_string(),
+                    });
+                }
+
+                // HYBRID: the PQ half — ML-DSA-65 (FIPS 204) over the SAME
+                // `sig_message` bytes the Ed25519 half covers. ENROLL + PIN: verify
+                // against the ML-DSA key ENROLLED for this authority identity in the
+                // config, never a pubkey carried in the message. A quantum adversary
+                // that forges only the Ed25519 half cannot forge/suppress a
+                // revocation. `ml_dsa_verify` is fail-CLOSED on any bad length /
+                // undecodable key / failed check. The revocation signing message is
+                // already domain-separated (blake3 derive-key "dregg-wire
+                // revocation-sig v1"), so reusing the turn PQ context cannot
+                // cross-replay a turn signature as a revocation one.
+                let pq_ok = match config.revocation_authority_ml_dsa_keys.get(&authority.0) {
+                    // An authority with an enrolled PQ key MUST present a valid
+                    // ML-DSA half; a missing half fails CLOSED.
+                    Some(enrolled_pq_pk) => match &pq_authority_sig {
+                        Some(sig) => {
+                            dregg_turn::pq::ml_dsa_verify(enrolled_pq_pk, &sig_message, sig)
+                        }
+                        None => false,
+                    },
+                    // Legacy Ed25519-only authority: no PQ key enrolled, so the PQ
+                    // half is not yet demanded (staged rollout).
+                    None => true,
+                };
+                if !pq_ok {
+                    return Some(WireMessage::Error {
+                        code: crate::message::error_codes::INVALID_SIGNATURE,
+                        message: "authority PQ signature verification failed".to_string(),
                     });
                 }
 
@@ -3248,6 +3309,13 @@ impl SiloServer {
             token_id: token_id.to_string(),
             authority: *authority,
             authority_sig: *authority_sig,
+            // Legacy Ed25519-only convenience path: this helper receives only a
+            // precomputed Ed25519 signature, not the authority seed, so it cannot
+            // produce the ML-DSA half. An authority ENROLLED for the HYBRID check
+            // must construct `SubmitRevocation` with a `pq_authority_sig` directly
+            // (deriving ML-DSA from its seed); against such an enrolled authority
+            // this path fails CLOSED at the server.
+            pq_authority_sig: None,
             nonce,
             timestamp: current_timestamp(),
         };
@@ -3606,6 +3674,7 @@ mod tests {
             token_id: token_id.to_string(),
             authority: pk,
             authority_sig: sig,
+            pq_authority_sig: None,
             nonce,
             timestamp,
         };
@@ -3623,6 +3692,136 @@ mod tests {
         let st = state.read().await;
         assert!(st.is_revoked("tok-revoke-me"));
         assert!(!st.is_revoked("tok-other"));
+    }
+
+    /// Drive one HYBRID revocation attempt: Hello, then send the caller-built
+    /// `SubmitRevocation` (over a fresh nonce/timestamp), and return the server's
+    /// reply (`RevocationAck` on success, `Error` on rejection).
+    #[cfg(test)]
+    async fn run_revocation_attempt(
+        addr: &std::net::SocketAddr,
+        make_response: impl FnOnce([u8; 16], i64) -> WireMessage,
+    ) -> WireMessage {
+        let mut client = PeerConnection::connect(&addr.to_string()).await.unwrap();
+        client
+            .send(WireMessage::Hello {
+                node_id: [0x11; 32],
+                node_name: "revoker".to_string(),
+                protocol_version: PROTOCOL_VERSION,
+                capabilities: vec![],
+            })
+            .await
+            .unwrap();
+        let _welcome = client.recv().await.unwrap();
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).unwrap();
+        let timestamp = current_timestamp();
+        client.send(make_response(nonce, timestamp)).await.unwrap();
+        client.recv().await.unwrap()
+    }
+
+    /// HYBRID revocation authority: the ML-DSA half is PINNED to the authority's
+    /// ENROLLED key, so a valid Ed25519 half with an ML-DSA half under an
+    /// ATTACKER's fresh key is rejected, and a missing PQ half for an enrolled
+    /// authority fails CLOSED.
+    #[tokio::test]
+    async fn hybrid_revocation_pins_ml_dsa_to_enrolled_authority() {
+        use dregg_turn::pq::MlDsaTurnKey;
+
+        // A revocation authority whose Ed25519 identity has an ENROLLED (pinned)
+        // ML-DSA key, both derived from the same 32-byte seed.
+        let seed = [7u8; 32];
+        let sk = dregg_types::SigningKey::from_bytes(&seed);
+        let authority = sk.public_key();
+        let honest_pq = MlDsaTurnKey::from_ed25519_seed(&seed);
+
+        // The config PINS the honest ML-DSA pubkey to this authority — the key is
+        // NOT self-carried in the message; the server consults only this.
+        let config = SiloConfig::new("hybrid-revoker")
+            .with_verifier(Arc::new(NoopVerifier))
+            .with_revocation_authorities(vec![authority])
+            .with_revocation_authority_ml_dsa_key(authority, honest_pq.public_bytes());
+        let server = SiloServer::new("127.0.0.1:0".parse().unwrap(), config);
+
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+        let state = Arc::clone(&server.state);
+        tokio::spawn(async move {
+            server.run_with_addr(addr_tx).await.unwrap();
+        });
+        let addr = addr_rx.await.unwrap();
+
+        // 1. HONEST: valid Ed25519 half + valid ML-DSA half from the enrolled
+        //    (seed-derived) key → ACCEPTED (RevocationAck).
+        let token_id = "tok-hybrid";
+        let honest_pq_c = honest_pq.clone();
+        let sk1 = dregg_types::SigningKey::from_bytes(&seed);
+        let accepted = run_revocation_attempt(&addr, move |nonce, timestamp| {
+            let msg = revocation_signing_message(token_id, &nonce, timestamp);
+            WireMessage::SubmitRevocation {
+                token_id: token_id.to_string(),
+                authority,
+                authority_sig: dregg_types::sign(&sk1, &msg),
+                pq_authority_sig: Some(honest_pq_c.sign(&msg).expect("ml-dsa sign")),
+                nonce,
+                timestamp,
+            }
+        })
+        .await;
+        match accepted {
+            WireMessage::RevocationAck { height, .. } => assert_eq!(height, 1),
+            other => panic!("honest hybrid revocation must be accepted, got {other:?}"),
+        }
+        assert!(state.read().await.is_revoked(token_id));
+
+        // 2. ADVERSARIAL: valid Ed25519 half for `authority`, but the ML-DSA half
+        //    is under a FRESH attacker key that is NOT the one enrolled for the
+        //    authority. The server pins to the enrolled key → REJECTED.
+        let sk2 = dregg_types::SigningKey::from_bytes(&seed);
+        let attacker_pq = MlDsaTurnKey::from_ed25519_seed(&[0xAAu8; 32]);
+        let rejected = run_revocation_attempt(&addr, move |nonce, timestamp| {
+            let msg = revocation_signing_message("tok-attacker", &nonce, timestamp);
+            WireMessage::SubmitRevocation {
+                token_id: "tok-attacker".to_string(),
+                authority,
+                authority_sig: dregg_types::sign(&sk2, &msg), // Ed25519 half is valid
+                pq_authority_sig: Some(attacker_pq.sign(&msg).expect("ml-dsa sign")),
+                nonce,
+                timestamp,
+            }
+        })
+        .await;
+        match rejected {
+            WireMessage::Error { code, .. } => {
+                assert_eq!(code, crate::message::error_codes::INVALID_SIGNATURE)
+            }
+            other => panic!("attacker ML-DSA half must be REJECTED, got {other:?}"),
+        }
+        assert!(!state.read().await.is_revoked("tok-attacker"));
+
+        // 3. FAIL CLOSED: valid Ed25519 half but the PQ half is MISSING for an
+        //    authority that has an enrolled PQ key → REJECTED.
+        let sk3 = dregg_types::SigningKey::from_bytes(&seed);
+        let missing = run_revocation_attempt(&addr, move |nonce, timestamp| {
+            let msg = revocation_signing_message("tok-missing", &nonce, timestamp);
+            WireMessage::SubmitRevocation {
+                token_id: "tok-missing".to_string(),
+                authority,
+                authority_sig: dregg_types::sign(&sk3, &msg),
+                pq_authority_sig: None, // missing PQ half
+                nonce,
+                timestamp,
+            }
+        })
+        .await;
+        match missing {
+            WireMessage::Error { code, .. } => {
+                assert_eq!(code, crate::message::error_codes::INVALID_SIGNATURE)
+            }
+            other => {
+                panic!("missing PQ half for an enrolled authority must fail CLOSED, got {other:?}")
+            }
+        }
+        assert!(!state.read().await.is_revoked("tok-missing"));
     }
 
     #[tokio::test]
@@ -3665,6 +3864,7 @@ mod tests {
             token_id: "tok-forged".to_string(),
             authority: pk,
             authority_sig: Signature([0xcc; 64]),
+            pq_authority_sig: None,
             nonce,
             timestamp: current_timestamp(),
         };
@@ -3714,6 +3914,7 @@ mod tests {
             token_id: "tok-should-fail".to_string(),
             authority: PublicKey([0xdd; 32]),
             authority_sig: Signature([0xcc; 64]),
+            pq_authority_sig: None,
             nonce,
             timestamp: current_timestamp(),
         };
@@ -4247,6 +4448,7 @@ mod tests {
             token_id: "tok".to_string(),
             authority: PublicKey([0; 32]),
             authority_sig: Signature([0; 64]),
+            pq_authority_sig: None,
             nonce: [0; 16],
             timestamp: 0,
         };

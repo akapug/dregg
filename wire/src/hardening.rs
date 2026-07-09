@@ -473,6 +473,7 @@ mod tests {
             token_id: "tok".to_string(),
             authority: crate::message::PublicKey([0; 32]),
             authority_sig: crate::message::Signature([0; 64]),
+            pq_authority_sig: None,
             nonce: [0; 16],
             timestamp: 0,
         };
