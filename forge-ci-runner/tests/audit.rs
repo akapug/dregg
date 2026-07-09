@@ -1,18 +1,26 @@
-//! THE TWO POLES — the confined runner produces a work-bound signed verdict that
+//! THE POLES — the confined runner produces a work-bound signed verdict that
 //! (i) re-verifies HONEST and satisfies the L1 forge `CiRun` gate; (ii) a LYING
-//! host's fabricated verdict is CONVICTED by re-execution.
+//! host's fabricated verdict is CONVICTED by re-execution; and (iii) the
+//! serve-X-commit-Y attack (run over X, commit Y) is refused / convicted.
+//!
+//! Every run MATERIALIZES the PR's committed code (a patch [`History`]) itself —
+//! the command provably runs over the committed bytes, and L3 re-materializes the
+//! SAME committed history rather than trusting a host-supplied dir.
 //!
 //! macOS-only: these drive the real Seatbelt jail. Run:
 //!   cd forge-ci-runner && cargo test
 
 #![cfg(target_os = "macos")]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use dregg_doc::check::CiRunWitness;
-use dregg_doc::{planned_ci_run_hash, CheckRefusal, CheckWitness, CiVerdict, RequiredCheck};
+use dregg_doc::{
+    planned_ci_run_hash, AtomId, Author, CheckRefusal, CheckWitness, CiVerdict, History, Patch,
+    RequiredCheck,
+};
 use forge_ci_runner::{
-    confinement_id, input_root_of_dir, reexecute_and_verify, run_check_confined, AuditVerdict,
+    canonical_input_root, confinement_id, reexecute_and_verify, run_check_confined, AuditVerdict,
 };
 
 // RFC 8032 §7.1 TEST 1 Ed25519 (seed, verifying-key) pair — the SAME real pair
@@ -35,18 +43,33 @@ const COMMAND: [u8; 32] = [0x11; 32];
 
 const CAT: &str = "/bin/cat";
 
+/// The argv that cats the materialized document — the exact committed bytes.
+fn cat_document_argv() -> Vec<String> {
+    vec![format!("{}/document.txt", forge_ci_runner::WORK_TOKEN)]
+}
+
+/// A one-atom document history whose rendered `document.txt` is exactly `text`.
+fn doc_history(text: &str) -> History {
+    let mut h = History::new();
+    let (_a, op) = Patch::add(1, text, AtomId::ROOT);
+    h.commit(Patch::by(Author(2), [op]));
+    h
+}
+
 // ─────────────────────── POLE (i): HONEST re-verifies + satisfies the gate ─────
 
 #[test]
 fn honest_run_reverifies_and_satisfies_the_forge_gate() {
-    // A deterministic check: `/bin/cat {WORK}/input.txt` prints the seeded file's
-    // exact bytes — stable across runs, so its output digest is reproducible.
-    let input = seed_dir("fcr-honest", "the exact bytes CI ran against\n");
-    let argv = vec!["{WORK}/input.txt".to_string()];
+    // A deterministic check: `/bin/cat {WORK}/document.txt` prints the committed
+    // document's exact bytes — stable across runs, so its output digest is
+    // reproducible.
+    let h = doc_history("the exact bytes CI ran against\n");
+    let argv = cat_document_argv();
 
-    // L2 — the confined runner produces a signed, work-bound verdict.
+    // L2 — the confined runner materializes h and produces a signed, work-bound
+    // verdict over exactly those bytes.
     let out = run_check_confined(
-        &input,
+        &h,
         Path::new(CAT),
         &argv,
         COMMAND,
@@ -64,11 +87,11 @@ fn honest_run_reverifies_and_satisfies_the_forge_gate() {
         out.receipt.executor_signature.is_some(),
         "the CI host signed the verdict receipt"
     );
-    // input_root is the REAL substrate_commit of the working tree.
+    // input_root is the REAL substrate_commit of the committed code.
     assert_eq!(
         out.verdict.input_root,
-        input_root_of_dir(&input).unwrap(),
-        "the verdict binds the tree's real substrate commitment"
+        canonical_input_root(&h),
+        "the verdict binds the committed code's real substrate commitment"
     );
 
     // THE L1 IN-TURN BINDING: the signed receipt's turn hash equals the
@@ -79,8 +102,9 @@ fn honest_run_reverifies_and_satisfies_the_forge_gate() {
         "the verdict is bound INSIDE the signed genesis turn"
     );
 
-    // L3 — re-execution reproduces the verdict exactly → Honest.
-    let audit = reexecute_and_verify(&out.verdict, &input, Path::new(CAT), &argv)
+    // L3 — re-execution (re-materializing the SAME committed history) reproduces
+    // the verdict exactly → Honest.
+    let audit = reexecute_and_verify(&out.verdict, &h, Path::new(CAT), &argv)
         .expect("re-execution audit runs");
     assert_eq!(audit, AuditVerdict::Honest, "an honest host re-verifies");
 
@@ -103,20 +127,18 @@ fn honest_run_reverifies_and_satisfies_the_forge_gate() {
         Err(CheckRefusal::InputRootMismatch { .. }) => {}
         other => panic!("expected InputRootMismatch for a different PR's code, got {other:?}"),
     }
-
-    let _ = std::fs::remove_dir_all(&input);
 }
 
 // ─────────────────────── POLE (ii): a LYING host is CONVICTED ──────────────────
 
 #[test]
 fn lying_host_is_caught_by_reexecution() {
-    let input = seed_dir("fcr-liar", "honest input bytes\n");
-    let argv = vec!["{WORK}/input.txt".to_string()];
+    let h = doc_history("honest input bytes\n");
+    let argv = cat_document_argv();
 
     // Honest baseline: what the command REALLY produces confined.
     let honest = run_check_confined(
-        &input,
+        &h,
         Path::new(CAT),
         &argv,
         COMMAND,
@@ -141,7 +163,7 @@ fn lying_host_is_caught_by_reexecution() {
     };
 
     let audit =
-        reexecute_and_verify(&lie, &input, Path::new(CAT), &argv).expect("re-execution audit runs");
+        reexecute_and_verify(&lie, &h, Path::new(CAT), &argv).expect("re-execution audit runs");
     match audit {
         AuditVerdict::HostLied {
             field,
@@ -154,8 +176,6 @@ fn lying_host_is_caught_by_reexecution() {
         }
         AuditVerdict::Honest => panic!("a fabricated output_digest must be CONVICTED"),
     }
-
-    let _ = std::fs::remove_dir_all(&input);
 }
 
 #[test]
@@ -165,11 +185,14 @@ fn lying_about_exit_code_is_caught() {
     // OUTPUT is not reproducible — but the audit checks exit_code before
     // output_digest, and confinement_id is path-agnostic, so the exit-code lie
     // is caught cleanly.)
-    let input = seed_dir("fcr-exitlie", "present\n");
-    let argv = vec!["{WORK}/does-not-exist.txt".to_string()];
+    let h = doc_history("present\n");
+    let argv = vec![format!(
+        "{}/does-not-exist.txt",
+        forge_ci_runner::WORK_TOKEN
+    )];
 
     let honest = run_check_confined(
-        &input,
+        &h,
         Path::new(CAT),
         &argv,
         COMMAND,
@@ -190,7 +213,7 @@ fn lying_about_exit_code_is_caught() {
         ..honest.verdict.clone()
     };
     let audit =
-        reexecute_and_verify(&lie, &input, Path::new(CAT), &argv).expect("re-execution audit runs");
+        reexecute_and_verify(&lie, &h, Path::new(CAT), &argv).expect("re-execution audit runs");
     match audit {
         AuditVerdict::HostLied { field, claimed, .. } => {
             assert_eq!(field, "exit_code");
@@ -198,18 +221,16 @@ fn lying_about_exit_code_is_caught() {
         }
         AuditVerdict::Honest => panic!("claiming success over a failing run must be CONVICTED"),
     }
-
-    let _ = std::fs::remove_dir_all(&input);
 }
 
 #[test]
 fn confinement_id_binds_the_command() {
     // A verdict whose confinement_id does not match the command being audited is
     // convicted on that field first (the audit binds WHICH sandbox/command ran).
-    let input = seed_dir("fcr-cid", "x\n");
-    let argv = vec!["{WORK}/input.txt".to_string()];
+    let h = doc_history("x\n");
+    let argv = cat_document_argv();
     let honest = run_check_confined(
-        &input,
+        &h,
         Path::new(CAT),
         &argv,
         COMMAND,
@@ -225,27 +246,65 @@ fn confinement_id_binds_the_command() {
         confinement_id: wrong_cid,
         ..honest.verdict.clone()
     };
-    match reexecute_and_verify(&lie, &input, Path::new(CAT), &argv).unwrap() {
+    match reexecute_and_verify(&lie, &h, Path::new(CAT), &argv).unwrap() {
         AuditVerdict::HostLied { field, .. } => assert_eq!(field, "confinement_id"),
         AuditVerdict::Honest => panic!("a mismatched confinement id must be caught"),
     }
-    let _ = std::fs::remove_dir_all(&input);
 }
+
+// ── POLE (iii): SERVE-X-COMMIT-Y is CONVICTED end-to-end by L3 ─────────────────
+
+#[test]
+fn serve_x_commit_y_is_convicted_by_l3_rematerialization() {
+    // The real PR code Y renders "the real reviewed code\n"; the attacker's X is
+    // different bytes that also exit 0 under cat.
+    let y = doc_history("the real reviewed code\n");
+    let x = doc_history("attacker-controlled-code\n");
+    let argv = cat_document_argv();
+
+    // THE ATTACK: the host runs the command over X but wants a verdict that reads
+    // as "CI green for Y". It runs an honest confined run over X (which yields the
+    // output/exit over X), then SIGNS a verdict with input_root spoofed to R_Y.
+    let over_x = run_check_confined(
+        &x,
+        Path::new(CAT),
+        &argv,
+        COMMAND,
+        SEED,
+        CI_EDITOR,
+        CI_REGION,
+    )
+    .expect("host runs the command over X");
+    let lie = CiVerdict {
+        input_root: canonical_input_root(&y), // R_Y — what the forge L1 gate binds
+        ..over_x.verdict.clone()              // exit/output/confinement are over X
+    };
+
+    // L3 — re-materialize the TRUSTED committed Y into a fresh dir and re-run: the
+    // true output over Y diverges from the output over X → CONVICTED.
+    let audit = reexecute_and_verify(&lie, &y, Path::new(CAT), &argv).expect("audit runs");
+    match audit {
+        AuditVerdict::HostLied {
+            field: "output_digest",
+            claimed,
+            recomputed,
+        } => {
+            assert_eq!(
+                claimed,
+                hex(&over_x.verdict.output_digest),
+                "claim = output over X"
+            );
+            assert_ne!(claimed, recomputed, "the true output over Y differs from X");
+        }
+        other => panic!("serve-X-commit-Y must be convicted on output_digest, got {other:?}"),
+    }
+}
+
+// ── The forge L1 gate ITSELF refuses a verdict whose materialized tree is not the
+//    committed code: a runner that materializes Y produces input_root == R_Y, so a
+//    verdict over X can never carry R_Y honestly (the input_root_of_dir guard). ──
 
 // ─────────────────────────────── helpers ──────────────────────────────────────
-
-fn seed_dir(tag: &str, contents: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static N: AtomicU64 = AtomicU64::new(0);
-    let p = std::env::temp_dir().join(format!(
-        "{tag}-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&p).unwrap();
-    std::fs::write(p.join("input.txt"), contents).unwrap();
-    p
-}
 
 fn brew() -> String {
     std::env::var("HOMEBREW_PREFIX").unwrap_or_else(|_| "/opt/homebrew".to_string())
