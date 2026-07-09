@@ -102,3 +102,13 @@ Yes — partly. I over-deleted. The honest split, verified:
 - done-log: commit consolidation complete — one real commit, the properties re-homed, tree green.
 
 - done-log: rich-layer v0 MARKS landed (82ca7c39b) — Peritext overlay, separate store, mark∥text-edit-no-conflict proven, 116+192 green. Next: <dregg-doc> element (render+resolve+publish+verify, wrapping the existing DocCollabWorld) — running.
+
+## 🌟 NORTH STAR REACHED (fixture-tested) — a verifiable document in a browser
+<dregg-doc> (c0ce19f98) closes the end-to-end: render → conflict shows BOTH alternatives → resolve →
+publish a REAL verified turn (heap_root resealed = substrate_commit(resolved)) → an INDEPENDENT light-client
+re-verifies that heap_root. Closed shadow, consent-gated publish, conflict never hidden, fail-closed.
+Fixture bites all of it. A person authors/resolves a verifiable document in the tab; a stranger checks the
+whole receipt chain. Wraps the existing DocCollabWorld (fork/stitch/resolve/publish) — no new proof, real turn.
+FOLLOW-ONS (noted): marks-in-render (render_marked so bold/link show), free-text keyed-reconciler editing,
+background dregg:doc wiring (fixture-driven for now). Aggregation into Dregg2.lean still waits on the PQ lane.
+- done-log: <dregg-doc> landed — north star demonstrated end-to-end in fixture; authoring path reaches the tab.
