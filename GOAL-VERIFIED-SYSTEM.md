@@ -1,0 +1,93 @@
+<!-- ⚑ MULTIPLE /goal lanes run here — see GOALS-INDEX.md. This is the VERIFIED-SYSTEM campaign lane ONLY. -->
+
+# CAMPAIGN — THE VERIFIED SYSTEM (kernel → crypto → protocol → code, one connected proof)
+
+The crypto-to-protocol-soundness tree is closed to the lattice/DL/hash floor + the leanc toolchain
+(HORIZONLOG 07-09). This campaign takes it to **completion**: parameter-level security claims, the last
+hypothesis discharged, every deployed primitive extracted, the protocol climbed, the impls widened, and the
+two capability systems welded.
+
+## Completion criteria (the campaign is DONE when ALL hold)
+1. A **parameter-level theorem**: at the deployed params (ML-DSA-65, ML-KEM-768, committee n), the system has
+   ≥ X bits against a quantum adversary making ≤ q queries. (Lattice-estimator input is a labeled NUMERIC
+   assumption, honestly named — the only non-proof input.)
+2. **CircuitSound is a THEOREM**, not a hypothesis → `turn_sound` rests on the floor alone.
+3. **Every deployed crypto primitive is a proved Lean object** (leanc-native): ML-DSA sign+verify, ML-KEM,
+   X25519, HKDF/SHA-256. `Fips203Correct`/`X25519Correct`/`HkdfCorrect`/`DualPRF` all discharged.
+4. **The protocol layer is proven end-to-end**: full BFT liveness (view-change), blocklace equivocation +
+   dissemination safety, light-client whole-history soundness, the effect-VM's real step semantics.
+5. **Every deployed impl is model-connected** (VRF, beacon, threshold signer, wire-AKE) — like dregg-pq.
+6. **The CAP WELD**: one theorem where the capability held in the seL4 kernel IS the capability provable in
+   the protocol (hardware-enforced ↔ cryptographically attenuable).
+7. Whole tree green; nothing laundered; final trusted base = lattice/DL/hash floor + leanc + the labeled
+   lattice-estimate + seL4's own (cited) proofs. NOTHING else.
+
+## Phases + units (deps noted)
+
+### P0 — FOUNDATIONS (unblock P1/P2; do first)
+- **0a** Concrete-security framework: negligible functions, a PPT/step-bound machine model, advantage
+  functions `Adv : params → ℝ`. Upgrade UC's `≈` from Prop-equality to negligible-ensemble-distance,
+  retiring the last modelling note. → unblocks P1.
+- **0b** The `-- PRIMITIVE:` digest-binding seam (`Circuit.lean:256`): prove the prover's CR-hash digest binds
+  to `chainOk` — reduce to `HashCR`. → unblocks P2.
+
+### P1 — CONCRETE SECURITY (needs 0a)  [the claim]
+- **1a** Per-reduction advantage accounting, unified (forking ε²/q_H · FO terms · O2H 2√(q·Pfind) · UC session
+  factor · combiner · protocol games · adaptive's zero loss).
+- **1b** End-to-end composition: one advantage bound from the deployed parameters.
+- **1c** Lattice hardness interface: MSIS/MLWE bit-security at ML-DSA-65 / ML-KEM-768 (estimator input as a
+  LABELED numeric assumption; cite the estimator + params).
+- **1d** THE THEOREM: ≥ X bits vs a q-query quantum adversary at the deployed params.
+
+### P2 — DISCHARGE CircuitSound (needs 0b)  [the last hypothesis]
+- **2a** AIR soundness: the constraint system ⟹ the execution trace is the VM's.
+- **2b** FRI soundness — formalize the literature (BBHR18 / DEEP-FRI / the tight bounds). NOT a frontier.
+- **2c** Compose: the STARK verifier is sound ⟹ `CircuitSound` is a theorem ⟹ `turn_sound` floor-only.
+
+### P3 — EXTRACTIONS (independent)  [shrink the TCB to nothing]
+- **3a** FIPS-204 **sign** (rejection sampling) → leanc-native; `Fips204Correct` fully discharged.
+- **3b** FIPS-203 / ML-KEM → leanc-native; `Fips203Correct` discharged.
+- **3c** X25519 + HKDF/SHA-256 → leanc-native; `X25519Correct`/`HkdfCorrect` discharged, `DualPRF` REDUCED to
+  HKDF's PRF security (not assumed).
+
+### P4 — CLIMBS (protocol; 4d needs P2)
+- **4a** Full BFT liveness: view-change / leader rotation until an honest leader (we proved only the
+  honest-proposer case).
+- **4b** Blocklace equivocation detection + cordial-dissemination safety.
+- **4c** Light-client whole-history soundness (the universal fold).
+- **4d** The effect-VM's real step semantics + the receipt's exact content (abstract `turn_sound` made concrete).
+
+### P5 — WIDENS (code refinement; independent)
+- **5a** crypto-xmvrf VRF → the abstract VRF model (DreggPqRefinement pattern).
+- **5b** crypto-hashrand beacon → the beacon model.
+- **5c** The deployed threshold signer → the Hermine/TS-UF-0 model.
+- **5d** The wire handshake as a proper AKE game (session-key security, channel binding).
+
+### P6 — CAP WELD (the vista; needs CapabilityChain [done] + a seL4 cap model)
+- **6a** Model seL4/firmament's capability system (derivation, revocation, the verified kernel invariants —
+  cite seL4's own proofs as the hardware-enforced base).
+- **6b** Weld: an OS capability ↔ a cryptographic attenuation-chain capability (the same lattice, the same
+  no-amplification law).
+- **6c** THE THEOREM: the capability you hold in the kernel is the capability you can prove in the protocol.
+
+## Discipline (unchanged, non-negotiable)
+CLOSE by formalizing the literature — no smuggling (a labeled hypothesis dressed as closure), NO giving up
+("too hard" for a published result). Load-bearing #guard teeth (both-truth) on every theorem. WHOLE-TREE green
+(`lake build Dregg2`; `cargo build/test`). Main loop wires `Dregg2.lean` imports; lanes never touch it, other
+lanes' files, or Cargo.lock. Scale with ultracode/Workflow. Sign Co-Authored-By: Claude Opus 4.8.
+
+## Next 3 moves
+1. Fire wave 1: **0a** (concrete-security framework), **0b** (digest-binding → HashCR), **3a** (ML-DSA sign
+   extraction), **5a** (VRF refinement) — the independent/unblocking units.
+2. Integrate each (wire imports, whole-tree green, commit); then wave 2: P1 (needs 0a), P2 (needs 0b), 3b/3c.
+3. Then P4 climbs + P5 widens + P6 cap weld; HORIZONLOG + memory the final trusted base.
+
+## Done-log (newest last)
+- (start) campaign planned; wave 1 firing.
+- ✅ WAVE 1 (all 4, whole-tree green 4500 jobs): 0a 71b25c1d4 concrete-security framework (Negl/PPT/Adv) +
+  UC's two modelling notes RETIRED · 0b b533bef74 the last `-- PRIMITIVE:` digest-binding seam → THEOREM on
+  HashCR · 3a a52eea5f1 FIPS-204 SIGN extracted to leanc-native, Fips204Correct now a THEOREM (both
+  directions; 591 C facets via leanc, dregg-pq 9/9) · 5a 7f2cd66c3 deployed XM-VRF refines the abstract VRF,
+  uniqueness reduced to HashCR.
+- ▶ WAVE 2 firing: P1 parameter-level theorem · 2a AIR soundness · 2b FRI soundness (BBHR18/DEEP-FRI) ·
+  3b ML-KEM extraction · 3c X25519+HKDF extraction (DualPRF reduced) · 5b beacon refinement.
