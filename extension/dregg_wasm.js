@@ -341,6 +341,193 @@ let wasm_bindgen = (function(exports) {
     exports.DocCollabWorld = DocCollabWorld;
 
     /**
+     * The wasm-side engine for **free-text document editing**: a person types/edits prose and each
+     * edit becomes a real [`dregg_doc::Patch`] against the current document (via [`Doc::edit`]'s
+     * token-LCS diff → the MINIMAL `Add`/`Delete` patch, never a full rewrite — kept tokens reuse
+     * their existing atom ids), applied to the patch-[`History`], then published as a real cap-gated
+     * verified turn resealing the doc-cell's umem boundary. This is the wasm realization of the
+     * goal's "keyed reconciler / DOM-schema editing": a `<dregg-doc>`'s buffer text is diffed into a
+     * patch here, exactly as a conflict resolution is — a stranger can check the receipt.
+     *
+     * It reuses `dregg-doc`'s diff/commit/merge WHOLESALE (no new patch logic): [`Doc::edit`] for the
+     * edit → patch step, [`dregg_doc::merge`] for concurrent reconciliation (disjoint edits commute
+     * clean; a genuine same-span edit surfaces a first-class [`ConflictRegion`]), and the same
+     * [`publish_doc_graph`] verified-turn path [`DocCollabWorld`] uses. Word [`Granularity`] is the
+     * default so prose edits produce fine-grained, minimal patches.
+     */
+    class DocTextWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            DocTextWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_doctextworld_free(ptr, 0);
+        }
+        /**
+         * **APPLY A FREE-TEXT EDIT** — the person edited the prose to `new_text`. Diff it against the
+         * current document ([`Doc::edit`]'s token-LCS at word granularity), produce the MINIMAL
+         * `Add`/`Delete` [`Patch`], and commit it to the history. The inserted atoms carry the
+         * editing author's provenance. Returns a JSON summary
+         * `{ "atoms_added", "atoms_tombstoned", "text" }` — the counts prove the edit is a minimal
+         * patch (a word replaced ⇒ one atom added + one tombstoned, the surrounding words KEPT by
+         * their existing atom ids), NOT a full rewrite. The boundary does NOT move until
+         * [`Self::publish_edit`].
+         * @param {string} new_text
+         * @returns {string}
+         */
+        applyTextEdit(new_text) {
+            let deferred2_0;
+            let deferred2_1;
+            try {
+                const ptr0 = passStringToWasm0(new_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                const len0 = WASM_VECTOR_LEN;
+                const ret = wasm.doctextworld_applyTextEdit(this.__wbg_ptr, ptr0, len0);
+                deferred2_0 = ret[0];
+                deferred2_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+            }
+        }
+        /**
+         * **The invariant: the doc-cell's committed umem boundary EQUALS `substrate_commit` of the
+         * last PUBLISHED document.** True right after a [`Self::publish_edit`]; an unpublished edit
+         * leaves the boundary lagging the working document (correctly — it is not yet a verified turn).
+         * @returns {boolean}
+         */
+        boundaryMatchesProjection() {
+            const ret = wasm.doctextworld_boundaryMatchesProjection(this.__wbg_ptr);
+            return ret !== 0;
+        }
+        /**
+         * The doc-cell's id (hex) — the document's sovereignty boundary.
+         * @returns {string}
+         */
+        cellId() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doctextworld_cellId(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The document's commitment: the doc-cell's committed umem-heap boundary `heap_root` (hex).
+         * After a [`Self::publish_edit`] this equals `substrate_commit(published)`.
+         * @returns {string}
+         */
+        commitmentHex() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doctextworld_commitmentHex(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The current document's rendered text (the post-edit state the JS reconciler reads).
+         * @returns {string}
+         */
+        currentText() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doctextworld_currentText(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * Mint a fresh doc-cell on its own embedded executor, seed the document with `initial_text`
+         * (authored by `author_id`, at word [`Granularity`]), and **publish it to the umem-heap** as
+         * a real verified turn (the genesis boundary). Subsequent [`Self::apply_text_edit`]s diff
+         * against this and [`Self::publish_edit`] reseals the boundary.
+         * @param {string} initial_text
+         * @param {number} author_id
+         */
+        constructor(initial_text, author_id) {
+            const ptr0 = passStringToWasm0(initial_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.doctextworld_new(ptr0, len0, author_id);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            DocTextWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * **PUBLISH THE EDIT** — reseal the doc-cell's umem boundary `heap_root =
+         * substrate_commit(current document)` and commit a real cap-gated verified turn (the SAME
+         * publish path a conflict resolution uses). A free-text edit thus lands as a verified turn a
+         * stranger can check. Returns a JSON receipt `{ "receiptCount", "commitmentHex" }`.
+         * FAIL-CLOSED: a rejected publish turn returns an error, never a silent success.
+         * @returns {string}
+         */
+        publishEdit() {
+            let deferred2_0;
+            let deferred2_1;
+            try {
+                const ret = wasm.doctextworld_publishEdit(this.__wbg_ptr);
+                var ptr1 = ret[0];
+                var len1 = ret[1];
+                if (ret[3]) {
+                    ptr1 = 0; len1 = 0;
+                    throw takeFromExternrefTable0(ret[2]);
+                }
+                deferred2_0 = ptr1;
+                deferred2_1 = len1;
+                return getStringFromWasm0(ptr1, len1);
+            } finally {
+                wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+            }
+        }
+        /**
+         * The committed-receipt count — one per published boundary (incl. the genesis seed publish).
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.doctextworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **THE RENDERED HTML FRAGMENT** — the current document walked through the gpui-free web
+         * renderer (`deos-view::render_html`), the same renderer the cockpit's web projection bakes.
+         * The live `<dregg-doc>` sets this as its container's `innerHTML` after each edit/publish so
+         * the reconciler can paint the post-edit state.
+         * @returns {string}
+         */
+        render() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.doctextworld_render(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+    }
+    if (Symbol.dispose) DocTextWorld.prototype[Symbol.dispose] = DocTextWorld.prototype.free;
+    exports.DocTextWorld = DocTextWorld;
+
+    /**
      * The reflective-inspector card, driven from the browser tab over its own embedded verified
      * executor. One `InspectorWorld` owns one runtime with one focused card-cell (agent 0); its
      * view-tree is generated from that cell's REAL faces ([`Self::view_tree_json`]) and its
@@ -5407,6 +5594,9 @@ let wasm_bindgen = (function(exports) {
     const DocCollabWorldFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_doccollabworld_free(ptr, 1));
+    const DocTextWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_doctextworld_free(ptr, 1));
     const InspectorWorldFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_inspectorworld_free(ptr, 1));

@@ -928,3 +928,359 @@ export class DocEngine {
     };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FREE-TEXT AUTHORING PORT — `<dregg-doc editable>` (a person types PROSE).
+// DREGG-DOCUMENT-FOUNDATION.md, wasm/src/bindings_doc.rs (`DocTextWorld`). This
+// closes the goal's "a person authors a verifiable document a STRANGER can check"
+// for FREE TEXT — not only picking a conflict alternative. A keystroke becomes a
+// real `dregg_doc::Patch` (via `Doc::edit`'s token-LCS diff → the MINIMAL
+// Add/Delete patch — kept words reuse their atom ids; NOT a rewrite), and a
+// publish reseals the doc-cell's umem boundary as a real cap-gated verified turn.
+//
+// The SAME split as every other port: the ENGINE (background, wasm-side) owns the
+// `DocTextWorld`, the diff→patch, the render, and the verified-turn publish — and
+// routes the publish through the un-overlayable confirm-intent consent BEFORE any
+// commit. The element is a thin, closed-shadow VIEW over a contenteditable: no
+// wasm, no keys, no doc graph reach the page — only these tiered responses.
+//
+// The load-bearing difference from `DocEngine`: an unpublished edit legitimately
+// leaves the WORKING document ahead of the last published boundary. That is a
+// first-class `dirty` state (surfaced, never hidden) — NOT an unverified one:
+// `boundaryMatchesProjection()` still holds (it binds the last *published* doc,
+// which only advances on `publishEdit`). So editing never fails the render closed;
+// only an unresolvable/unverifiable doc-cell does.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The `DocTextWorld` wasm surface this engine needs (a structural subset of
+ *  `wasm/src/bindings_doc.rs`'s `#[wasm_bindgen]` methods). */
+export interface DocTextWorldLike {
+  /** The doc-cell's id (hex). */
+  cellId(): string;
+  /** The committed umem-heap boundary `heap_root` (hex). */
+  commitmentHex(): string;
+  /** The audit-tape length (one receipt per published boundary, incl. genesis seed). */
+  receiptCount(): number;
+  /** The invariant a stranger re-checks: committed `heap_root == substrate_commit(published)`. */
+  boundaryMatchesProjection(): boolean;
+  /** The current WORKING document's rendered text (post-edit, pre-publish). */
+  currentText(): string;
+  /** The rendered HTML fragment (the free-text reading through the web renderer). */
+  render(): string;
+  /** Diff `newText` into the doc (token-LCS → the minimal patch) + commit it to the
+   *  history. Returns a JSON summary `{ atoms_added, atoms_tombstoned, text }` — the
+   *  counts prove minimality (a word replaced ⇒ 1 add + 1 tombstone, NOT a rewrite). */
+  applyTextEdit(newText: string): string;
+  /** Reseal `heap_root = substrate_commit(working)` + commit a real cap-gated verified
+   *  turn. Returns a JSON receipt `{ receiptCount, commitmentHex }`. Throws (fail-closed)
+   *  if the publish turn is rejected. */
+  publishEdit(): string;
+}
+export interface DocTextWorldCtor {
+  // `initialText` seeds the document; `authorId` (a wasm `u32`) stamps inserted atoms.
+  new (initialText: string, authorId: number): DocTextWorldLike;
+}
+
+// ── the free-text request/response protocol ─────────────────────────────────
+export type DocTextPortRequest =
+  | { op: "resolveText"; uri: string }
+  | { op: "renderText"; uri: string }
+  | { op: "applyEdit"; uri: string; text: string }
+  | { op: "publishText"; uri: string }
+  | { op: "verifyText"; uri: string };
+
+export interface DocTextResolveResponse {
+  ok: boolean;
+  verified: boolean;
+  tier: TrustTier;
+  object?: { kind: string; addr: string; cellId: string };
+  /** The current working text (the seed at resolve time). */
+  text?: string;
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export interface DocTextRenderResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** The engine's `render()` HTML (the rendered reading). */
+  html?: string;
+  /** The plain working text the contenteditable region edits. */
+  text?: string;
+  /** True when there are edits not yet published (the working doc leads the boundary). */
+  dirty?: boolean;
+  error?: string;
+}
+
+export interface DocTextEditResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** Fresh atoms the edit inserted (new ids). */
+  atomsAdded?: number;
+  /** Previously-alive atoms the edit tombstoned. Together with `atomsAdded` these
+   *  prove the patch is MINIMAL (a replaced word ⇒ 1 + 1), never a full rewrite. */
+  atomsTombstoned?: number;
+  /** The document's canonical text after the edit (what the reconciler repaints). */
+  text?: string;
+  dirty?: boolean;
+  error?: string;
+}
+
+export interface DocTextPublishResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the publish turn was refused (consent denied / rejected turn). */
+  refused?: boolean;
+  reason?: string;
+  verified?: boolean;
+  receiptCount?: number;
+  /** The NEW committed umem boundary `heap_root` (hex) after the publish turn. */
+  commitment?: string;
+  /** The light-client witness: committed `heap_root` == recompute of
+   *  `substrate_commit(published)` — a stranger can re-check it. */
+  substrateMatches?: boolean;
+  dirty?: boolean;
+  error?: string;
+}
+
+export interface DocTextVerifyResponse {
+  ok: boolean;
+  tier: TrustTier;
+  verified: boolean;
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export type DocTextPortResponse =
+  | DocTextResolveResponse
+  | DocTextRenderResponse
+  | DocTextEditResponse
+  | DocTextPublishResponse
+  | DocTextVerifyResponse;
+
+/** The transport `<dregg-doc editable>` holds — a channel to the DocTextEngine. */
+export interface DocTextPort {
+  request(req: DocTextPortRequest): Promise<DocTextPortResponse>;
+}
+
+/** The public free-text document spec a resolve yields (netlayer stand-in): the
+ *  seed prose + the editing author. The REAL netlayer fetches the content-addressed
+ *  document and checks `addr == blake3(document)`; this is the standalone analogue
+ *  (exactly as `defaultResolveObject`/`defaultResolveDoc` are). */
+export interface DocTextSpec {
+  kind: string;
+  addr: string;
+  /** The seed prose the doc-cell is minted with. */
+  initialText: string;
+  /** The editing author id (stamped onto inserted atoms). */
+  authorId: number;
+}
+/** Resolve a canonical `dregg://doctext/<addr>` uri to a spec, or `null` (fail-closed). */
+export type ResolveDocTextFn = (uri: string) => DocTextSpec | null | Promise<DocTextSpec | null>;
+
+/** The default (test/stand-in) free-text resolver: validate the `dregg://doctext/<addr>`
+ *  content-address and yield a fresh, seeded document. A malformed addr fails closed. */
+export function defaultResolveDocText(uri: string): DocTextSpec | null {
+  const parsed = parseDreggUri(uri);
+  if (!parsed) return null;
+  if (parsed.kind !== "doctext") return null;
+  if (!VALID_ADDR_RE.test(parsed.addr)) return null; // fail-closed on a bad addr
+  return { kind: "doctext", addr: parsed.addr, initialText: "the quick brown fox", authorId: 1 };
+}
+
+export interface DocTextEngineDeps {
+  DocTextWorld: DocTextWorldCtor;
+  /** The netlayer resolve (content-addr → seeded free-text document). */
+  resolveDocText: ResolveDocTextFn;
+  /** Custody consent — opens `confirm-intent` chrome in the extension for a publish. */
+  consent: ConsentFn;
+}
+
+/**
+ * THE FREE-TEXT DOCUMENT ENGINE. Owns one `DocTextWorld` per resolved uri; every
+ * response is tiered. Runs only in the extension (background) context. It diffs a
+ * keystroke into the minimal patch (`applyEdit`), renders the working reading, and
+ * PUBLISHES (a real cap-gated verified turn resealing the umem `heap_root`) ONLY
+ * after the injected consent approves the faithful reading. It tracks a `dirty`
+ * flag per doc — edits not yet published — surfaced (never hidden). Never returns
+ * the doc graph itself.
+ */
+export class DocTextEngine {
+  private worlds = new Map<string, DocTextWorldLike>();
+  private specs = new Map<string, DocTextSpec>();
+  /** Docs with edits applied but not yet published (working doc leads the boundary). */
+  private dirty = new Set<string>();
+
+  constructor(private deps: DocTextEngineDeps) {}
+
+  async handle(req: DocTextPortRequest, origin?: string): Promise<DocTextPortResponse> {
+    try {
+      switch (req.op) {
+        case "resolveText":
+          return await this.resolve(req.uri);
+        case "renderText":
+          return this.render(req.uri);
+        case "applyEdit":
+          return await this.applyEdit(req.uri, req.text);
+        case "publishText":
+          return await this.publish(req.uri, origin);
+        case "verifyText":
+          return this.verify(req.uri);
+        default:
+          return { ok: false, tier: "none", verified: false, error: "unknown op" } as DocTextResolveResponse;
+      }
+    } catch (e) {
+      return { ok: false, tier: "none", verified: false, error: String((e as Error)?.message ?? e) };
+    }
+  }
+
+  private async world(uri: string): Promise<DocTextWorldLike | null> {
+    const key = canonicalUri(uri);
+    if (!key) return null;
+    const existing = this.worlds.get(key);
+    if (existing) return existing;
+    const spec = await this.deps.resolveDocText(key);
+    if (!spec) return null;
+    // Minting the doc-cell publishes the seed to the umem-heap as a real verified
+    // turn (the genesis boundary) — see `DocTextWorld::new`.
+    const w = new this.deps.DocTextWorld(spec.initialText, spec.authorId);
+    this.worlds.set(key, w);
+    this.specs.set(key, spec);
+    return w;
+  }
+
+  private async resolve(uri: string): Promise<DocTextResolveResponse> {
+    const key = canonicalUri(uri);
+    if (!key) return { ok: false, verified: false, tier: "none", error: "not a dregg-thing" };
+    const w = await this.world(key);
+    if (!w) return { ok: false, verified: false, tier: "none", error: "could not resolve document" };
+    const spec = this.specs.get(key)!;
+    // The light-client invariant over the last PUBLISHED boundary (the seed is
+    // published at mint, so this holds at load — fail-closed otherwise).
+    const verified = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      verified,
+      tier: verified ? "extension" : "none",
+      object: { kind: spec.kind, addr: spec.addr, cellId: w.cellId() },
+      text: w.currentText(),
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+
+  private render(uri: string): DocTextRenderResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    // A doc-cell whose PUBLISHED boundary does not match its projection fails closed
+    // (§6). An unpublished EDIT is NOT this case — the published boundary still holds.
+    if (!w.boundaryMatchesProjection()) return { ok: false, tier: "none", error: "unverified" };
+    return { ok: true, tier: "extension", html: w.render(), text: w.currentText(), dirty: this.dirty.has(key) };
+  }
+
+  /** APPLY-EDIT — diff the new text into the minimal patch and commit it to the
+   *  history (the working doc advances; the published boundary does NOT until a
+   *  consented publish). Marks the doc dirty. */
+  private async applyEdit(uri: string, text: string): Promise<DocTextEditResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    let summary: { atoms_added?: number; atoms_tombstoned?: number; text?: string };
+    try {
+      summary = JSON.parse(w.applyTextEdit(text));
+    } catch (e) {
+      return { ok: false, tier: "none", error: String((e as Error)?.message ?? e) };
+    }
+    this.dirty.add(key);
+    return {
+      ok: true,
+      tier: "extension",
+      atomsAdded: Number(summary.atoms_added ?? 0),
+      atomsTombstoned: Number(summary.atoms_tombstoned ?? 0),
+      text: String(summary.text ?? w.currentText()),
+      dirty: true,
+    };
+  }
+
+  /** PUBLISH-TEXT — the real cap-gated verified turn. Consent BEFORE any commit (the
+   *  faithful reading, in un-overlayable chrome). On approval, `publishEdit` reseals
+   *  `heap_root = substrate_commit(working)` and commits `SetField(PUBLISH_SLOT) +
+   *  IncrementNonce`; the receipt witnesses the new boundary. */
+  private async publish(uri: string, origin?: string): Promise<DocTextPublishResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+    const spec = this.specs.get(key)!;
+
+    // Custody consent (the load-bearing property): the faithful reading the page
+    // cannot overlay or clickjack. Every publish is a real turn, so every publish asks.
+    const approved = await this.deps.consent({
+      explanation:
+        `Publish your free-text edits to document ${spec.addr} to the umem-heap. ` +
+        `This commits ONE verified turn that reseals the document commitment (heap_root) ` +
+        `into a new receipt a stranger can re-check.`,
+      turnId: `${key}#publishText`,
+      origin,
+    });
+    if (!approved) {
+      return {
+        ok: true,
+        tier: "extension",
+        refused: true,
+        reason: "consent denied",
+        verified: w.boundaryMatchesProjection(),
+        commitment: w.commitmentHex(),
+        receiptCount: w.receiptCount(),
+        dirty: this.dirty.has(key),
+      };
+    }
+
+    // The real verified turn: reseal the boundary + commit. Fail-closed on a rejected turn.
+    let receipt: { receiptCount?: number; commitmentHex?: string };
+    try {
+      receipt = JSON.parse(w.publishEdit());
+    } catch (e) {
+      return {
+        ok: true,
+        tier: "extension",
+        refused: true,
+        reason: String((e as Error)?.message ?? e),
+        verified: w.boundaryMatchesProjection(),
+        commitment: w.commitmentHex(),
+        receiptCount: w.receiptCount(),
+        dirty: this.dirty.has(key),
+      };
+    }
+    this.dirty.delete(key);
+    const substrateMatches = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      tier: "extension",
+      refused: false,
+      verified: substrateMatches,
+      receiptCount: Number(receipt.receiptCount ?? w.receiptCount()),
+      commitment: String(receipt.commitmentHex ?? w.commitmentHex()),
+      substrateMatches,
+      dirty: false,
+    };
+  }
+
+  /** VERIFY-TEXT — the LIGHT-CLIENT check a stranger runs: independently recompute
+   *  `substrate_commit(published)` and confirm it equals the committed `heap_root`. */
+  private verify(uri: string): DocTextVerifyResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", verified: false, error: "not resolved" };
+    const verified = w.boundaryMatchesProjection();
+    return {
+      ok: true,
+      tier: verified ? "extension" : "none",
+      verified,
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+}

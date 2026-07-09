@@ -176,6 +176,8 @@ export type MessageType =
   | "dregg:cell"
   // Verifiable-document authoring port — <dregg-doc> (resolve/render/stitch/resolveConflict/publish/verify)
   | "dregg:doc"
+  // Free-text authoring port — <dregg-doc editable> (resolveText/renderText/applyEdit/publishText/verifyText)
+  | "dregg:doctext"
   // Node configuration
   | "dregg:getNodeConfig"
   | "dregg:setNodeConfig"

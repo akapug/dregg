@@ -10,6 +10,7 @@
     "test:quiet-upgrade": "node --test tests/quiet-upgrade/run.mjs",
     "test:compose": "node --test tests/compose/run.mjs",
     "test:dregg-doc": "node --test tests/dregg-doc/run.mjs",
+    "test:dregg-doc-editable": "node --test tests/dregg-doc-editable/run.mjs",
     "test:netlayer": "node --test tests/netlayer/run.mjs",
     "clean": "rm -rf dist test/.build"
   },

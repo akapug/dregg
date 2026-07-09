@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-doc editable fixture</title></head>
+<body>
+  <h1>dregg-doc editable — a person authors a verifiable document a stranger can check</h1>
+
+  <!-- A verifiable FREE-TEXT document: a person types prose; each edit becomes a
+       real patch → verified turn. The editable region lives inside the CLOSED
+       shadow; the caret survives every repaint (the keyed reconciler). -->
+  <p id="prose">Author here: <dregg-doc id="doc" editable src="dregg://doctext/b3_ed17ab1e"></dregg-doc></p>
+
+  <!-- Malformed addr: the engine fails closed — no editable render, link + warning. -->
+  <p id="badprose">A broken one: <dregg-doc id="baddoc" editable src="dregg://doctext/notahash">
+    <a href="https://dregg.net/d/doc/notahash">the doc</a>
+  </dregg-doc></p>
+
+  <script src="/dregg_wasm.js"></script>
+  <script>window.wasm_bindgen = wasm_bindgen;</script>
+  <script src="/harness.js"></script>
+</body>
+</html>
