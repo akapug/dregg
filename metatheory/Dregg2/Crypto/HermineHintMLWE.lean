@@ -46,11 +46,13 @@ grounded in MLWE by `hint_mlwe_reduces_to_mlwe`), the t−1 static corruption (c
 extracts the MSIS witness) — no longer a bare two-transcript hypothesis. The pillars below are REUSED there
 verbatim, not deleted; the only residual is the honestly-named forking PROBABILITY
 (`HermineTSUF.ForkingProbabilityBound`, ≈ε²/q_H — a standard probability lemma, NOT a hardness carrier).
-What the reduction here closes on its own: the masking pillar's carrier (Hint-MLWE → MLWE) only. Also DEFERRED (honest TODO, a
-standard probability lemma — NOT a hardness carrier): the general-`Q` product-hybrid TV subadditivity
-`statDist_pi_le_sum : statDist (⊗Pᵢ) (⊗Qᵢ) ≤ Σᵢ statDist Pᵢ Qᵢ`, which would upgrade the proven
-union-bound loss `Σᵢ TVᵢ ≤ Q·(B/M)` to the JOINT-transcript TV. Until it lands, the `Q·(B/M)` figure is
-the union/hybrid bound (a valid upper bound on the joint TV, standard), not the joint TV itself.
+What the reduction here closes on its own: the masking pillar's carrier (Hint-MLWE → MLWE) only. The
+general-`Q` product-hybrid TV subadditivity `statDist_pi_le_sum : statDist (⊗Pᵢ) (⊗Qᵢ) ≤ Σᵢ statDist Pᵢ Qᵢ`
+is now PROVED (in `Dregg2.Crypto.HermineHiding` — standard probability, NOT a hardness carrier; hybrid +
+telescope, single-coordinate step an equality), and WIRED here as `joint_transcript_hiding_bound`: the FULL
+`Q`-session product transcript `⊗ᵢ unif (S.image (shift i))` (real) versus the secret-free product simulator
+`⊗ᵢ unif S` is within JOINT statistical distance `Σᵢ TVᵢ ≤ Q·(B/M)`. So `Q·(B/M)` is now a proven bound on
+the JOINT transcript TV, not merely the per-session union bound.
 
 ## What the three pillars ARE (each individually valid; the composition is what's incomplete)
 
@@ -159,6 +161,72 @@ theorem leakage_exceeds_budget_breaks_hint_mlwe (S : Finset α) (sessions : Fins
   fun h => absurd (h i hi) (not_le.mpr hleak)
 
 end HintMLWE
+
+/-! ## Pillar 1 (joint transcript) — the JOINT-transcript TV, via product-hybrid subadditivity.
+
+`hint_mlwe_hybrid_leakage` bounds the SUM of per-session distances by `Q·(B/M)`. That sum is a valid
+upper bound on the joint (product) transcript's TV by the standard product-hybrid argument, now PROVED as
+`HermineHiding.statDist_pi_le_sum`. Here we discharge it: the FULL `Q`-session product transcript
+`⊗ᵢ unif (S.image (shift i))` (real) versus the secret-free product simulator `⊗ᵢ unif S` is within joint
+statistical distance `Σᵢ TVᵢ ≤ Q·(B/M)` — the JOINT-transcript hiding bound, no longer a union-bound TODO. -/
+
+section JointTranscript
+
+variable {α : Type*} [DecidableEq α]
+
+/-- `unif` is pointwise nonnegative — a genuine mass function. -/
+theorem unif_nonneg (S : Finset α) (x : α) : 0 ≤ unif S x := by
+  unfold unif; split
+  · positivity
+  · rfl
+
+/-- `unif S` sums to `1` over any superset of its support `S` (mass `0` outside `S`). -/
+theorem sum_unif_of_subset {S T : Finset α} (hsub : S ⊆ T) (hpos : 0 < S.card) :
+    ∑ j ∈ T, unif S j = 1 := by
+  have hcard : (S.card : ℚ) ≠ 0 := by exact_mod_cast hpos.ne'
+  rw [← Finset.sum_subset hsub (fun x _ hxS => by simp [unif, hxS])]
+  have hval : ∑ j ∈ S, unif S j = ∑ _j ∈ S, (S.card : ℚ)⁻¹ :=
+    Finset.sum_congr rfl (fun j hj => by simp [unif, hj])
+  rw [hval, Finset.sum_const, nsmul_eq_mul, mul_inv_cancel₀ hcard]
+
+/-- **JOINT-TRANSCRIPT HIDING BOUND (`joint_transcript_hiding_bound`).** Over `Q` concurrent signing
+sessions — session `i` a genuine translate `shift i` of the wide mask support `S`, moving at most `B` of
+the `M = |S|` support points — the FULL product transcript `⊗ᵢ unif (S.image (shift i))` (the real masked
+responses) and the secret-free product simulator `⊗ᵢ unif S` are within JOINT statistical distance
+`Q·(B/M)`. This is the multi-session masking hiding upgraded from the per-session UNION bound to the
+genuine JOINT TV: `statDist_pi_le_sum` bounds the joint distance by `Σᵢ (per-session TV)`, and each
+per-session TV is `≤ B/M` by `signature_hides_secret`. No hardness carrier — pure probability. -/
+theorem joint_transcript_hiding_bound {Q : ℕ} (S : Finset α) (shift : Fin Q → α → α)
+    (hinj : ∀ i, Function.Injective (shift i)) (hpos : 0 < S.card)
+    (B : ℕ) (hB : ∀ i, (S \ S.image (shift i)).card ≤ B) :
+    statDist (Fintype.piFinset (fun i => S ∪ S.image (shift i)))
+        (fun x => ∏ i, unif (S.image (shift i)) (x i))
+        (fun x => ∏ i, unif S (x i))
+      ≤ (Q : ℚ) * ((B : ℚ) / (S.card : ℚ)) := by
+  -- per-session card facts: the image has the same width, and both marginals sit inside the union.
+  have himgcard : ∀ i, 0 < (S.image (shift i)).card := fun i => by
+    rw [Finset.card_image_of_injective S (hinj i)]; exact hpos
+  calc statDist (Fintype.piFinset (fun i => S ∪ S.image (shift i)))
+          (fun x => ∏ i, unif (S.image (shift i)) (x i)) (fun x => ∏ i, unif S (x i))
+      ≤ ∑ i, statDist (S ∪ S.image (shift i)) (unif (S.image (shift i))) (unif S) :=
+        statDist_pi_le_sum (fun i => S ∪ S.image (shift i))
+          (fun i => unif (S.image (shift i))) (fun i => unif S)
+          (fun i j _ => unif_nonneg _ j) (fun i j _ => unif_nonneg _ j)
+          (fun i => sum_unif_of_subset Finset.subset_union_right (himgcard i))
+          (fun i => sum_unif_of_subset Finset.subset_union_left hpos)
+    _ ≤ ∑ _i : Fin Q, (B : ℚ) / (S.card : ℚ) := by
+        apply Finset.sum_le_sum
+        intro i _
+        rw [statDist_comm]
+        exact signature_hides_secret S (shift i) (hinj i) hpos B (hB i)
+    _ = (Q : ℚ) * ((B : ℚ) / (S.card : ℚ)) := by
+        rw [Finset.sum_const, Finset.card_univ, Fintype.card_fin, nsmul_eq_mul]
+
+end JointTranscript
+
+#assert_axioms unif_nonneg
+#assert_axioms sum_unif_of_subset
+#assert_axioms joint_transcript_hiding_bound
 
 /-! ## Pillar 1 (reduction) — the Hint-MLWE key-recovery assumption REDUCES to MLWE (KLSS23).
 
@@ -447,9 +515,9 @@ theorem concrete_hints_simulatable :
 
 /-- **Explicit reduction loss — the `Q·(B/M)` statistical term, concretely.** Two sessions, each shifting a
 width-10 uniform mask by `+1`: the union-bound (hybrid) transcript distance from the secret-free simulator
-is `≤ ({0,1}).card • (1/10) = Q·(B/M)` at `Q = 2, B = 1, M = 10`. (The true JOINT TV is `≤` this union
-bound by the standard product-hybrid argument; formalizing general-`Q` product-hybrid subadditivity
-`statDist_pi_le_sum` is the single deferred probability lemma — see header, NOT a hardness carrier.) -/
+is `≤ ({0,1}).card • (1/10) = Q·(B/M)` at `Q = 2, B = 1, M = 10`. The true JOINT TV is `≤` this union
+bound by the (now PROVED) product-hybrid subadditivity `HermineHiding.statDist_pi_le_sum`, wired as
+`joint_transcript_hiding_bound` and instantiated concretely in `concrete_joint_transcript_loss` below. -/
 theorem concrete_transcript_union_loss :
     (∑ _i ∈ ({0, 1} : Finset ℕ),
         statDist ((Finset.Ico (0:ℤ) 10) ∪ ((Finset.Ico (0:ℤ) 10).image (· + 1)))
@@ -467,6 +535,54 @@ theorem concrete_transcript_union_loss :
 theorem concrete_loss_value : (({0, 1} : Finset ℕ).card • ((1 : ℚ) / 10)) = 1 / 5 := by
   rw [show ({0, 1} : Finset ℕ).card = 2 from by decide, nsmul_eq_mul]
   norm_num
+
+/-- **JOINT-transcript loss, concretely — the wiring FIRES.** `Q = 2` sessions, each a width-10 uniform
+mask shifted by `+1` (`B = 1`, `M = 10`): the FULL product transcript `⊗ᵢ unif (image (·+1))` (real) and
+the secret-free product simulator `⊗ᵢ unif S` are within JOINT statistical distance `Q·(B/M) = 1/5` — by
+`joint_transcript_hiding_bound` on the PROVED `statDist_pi_le_sum`. This is the joint TV itself, not the
+per-session union bound `concrete_transcript_union_loss` — the union→joint upgrade, on real data. -/
+theorem concrete_joint_transcript_loss :
+    statDist (Fintype.piFinset
+        (fun _ : Fin 2 => (Finset.Ico (0:ℤ) 10) ∪ ((Finset.Ico (0:ℤ) 10).image (· + 1))))
+        (fun x => ∏ i, unif ((Finset.Ico (0:ℤ) 10).image (· + 1)) (x i))
+        (fun x => ∏ i, unif (Finset.Ico (0:ℤ) 10) (x i))
+      ≤ (1 : ℚ) / 5 := by
+  have hinj : ∀ _ : Fin 2, Function.Injective (fun y : ℤ => y + 1) :=
+    fun _ a b h => by simpa using h
+  have hB : ∀ _ : Fin 2,
+      ((Finset.Ico (0:ℤ) 10) \ (Finset.Ico (0:ℤ) 10).image (· + 1)).card ≤ 1 := fun _ => by decide
+  have h := joint_transcript_hiding_bound (Finset.Ico (0:ℤ) 10) (fun _ : Fin 2 => (· + 1))
+    hinj (by decide) 1 hB
+  have hc : (Finset.Ico (0:ℤ) 10).card = 10 := by decide
+  rw [hc] at h
+  refine le_trans h ?_
+  norm_num
+
+/-! ### (d) The product-hybrid subadditivity FIRES on a concrete 2-component product (tight-ish). -/
+
+/-- A 2-coordinate product over `S i = {0,1} ⊂ ℤ`: `P i = (½,½)` (fair), `Q i = (1,0)` (point mass). -/
+def exS2 : Fin 2 → Finset ℤ := fun _ => {0, 1}
+def exP2 : Fin 2 → ℤ → ℚ := fun _ j => if j = 0 then 1/2 else if j = 1 then 1/2 else 0
+def exQ2 : Fin 2 → ℤ → ℚ := fun _ j => if j = 0 then 1 else 0
+
+/-- **`statDist_pi_le_sum` FIRES (non-vacuous, tight-ish).** Both `exP2 i`, `exQ2 i` are genuine
+distributions; the joint product statDist is bounded by the sum of the per-coordinate distances. -/
+theorem ex_pi_le_sum :
+    statDist (Fintype.piFinset exS2) (fun x => ∏ i, exP2 i (x i)) (fun x => ∏ i, exQ2 i (x i))
+      ≤ ∑ i, statDist (exS2 i) (exP2 i) (exQ2 i) := by
+  refine statDist_pi_le_sum exS2 exP2 exQ2 ?_ ?_ ?_ ?_
+  · intro i j hj; simp only [exS2, Finset.mem_insert, Finset.mem_singleton] at hj
+    rcases hj with rfl | rfl <;> norm_num [exP2]
+  · intro i j hj; simp only [exS2, Finset.mem_insert, Finset.mem_singleton] at hj
+    rcases hj with rfl | rfl <;> norm_num [exQ2]
+  · intro i; rw [exS2, Finset.sum_pair (by norm_num)]; norm_num [exP2]
+  · intro i; rw [exS2, Finset.sum_pair (by norm_num)]; norm_num [exQ2]
+
+-- Per-coordinate distances sum to `1` (each `½`); the JOINT product statDist is only `3/4` — strictly
+-- BELOW the union sum, so the bound is genuine (not the trivial `≤ ∞`) and tight-ish on this instance.
+#guard (∑ i, statDist (exS2 i) (exP2 i) (exQ2 i)) = 1
+#guard statDist (Fintype.piFinset exS2)
+          (fun x => ∏ i, exP2 i (x i)) (fun x => ∏ i, exQ2 i (x i)) = 3/4
 
 /-- **Reduction non-vacuity (the predicate has content).** Over `ZMod 5` (zero seminorm — every element is
 `0`-short) the short secret `s = 3` explains the public key `t = 3 = id·3`, so `HintRecoverable` is
@@ -496,6 +612,8 @@ end Teeth
 #assert_axioms concrete_hints_simulatable
 #assert_axioms concrete_transcript_union_loss
 #assert_axioms concrete_loss_value
+#assert_axioms concrete_joint_transcript_loss
+#assert_axioms ex_pi_le_sum
 #assert_axioms exHintRecoverable
 #assert_axioms exHint_not_hard
 #assert_axioms exHint_yields_mlwe_witness
