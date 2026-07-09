@@ -639,6 +639,12 @@ import Dregg2.Circuit.AirSoundness
 import Dregg2.Circuit.FriSoundness
 import Dregg2.Circuit.CircuitSoundCompose
 import Dregg2.Crypto.HashRandRefinement
+import Dregg2.Crypto.ConsensusViewChange
+import Dregg2.Crypto.BlocklaceSafety
+import Dregg2.Crypto.LightClientSoundness
+import Dregg2.Crypto.ThresholdSignerRefinement
+import Dregg2.Crypto.WireAke
+import Dregg2.Crypto.CapWeld
 import Dregg2.Crypto.Fips203Kem
 import Dregg2.Crypto.X25519HkdfExtract -- lifts the abstract VRF (Dregg2.Crypto.VRF) to the protocol-level LEADER-SORTITION guarantee: electing by `VRF(sk, epoch) < thr` is UNIQUE, FAIR, UNPREDICTABLE, each reducing to VRF.lean (NO new carrier). Model: elected := (eval sk epoch).1 < thr; ElectionProof (y,π) = verify ∧ y<thr. sortition_unique (← uniqueness_at_most_one): two verifying claims force the SAME output — no grind/double-claim; double_claim_refutes_uniqueness = the X-VRF break as a refutation. FAIRNESS: electionDensity thr = |{y<thr}|/|Output| (nonneg, ≤1); sortition_fair (← Pseudorandom): real election bit = uniform sample's below-thr bit ⟹ honest validator elected at density thr/|Output|. sortition_unpredictable (← Pseudorandom): any sk-free predictor's verdict on the real output = on a uniform surrogate — no edge over the base rate. #guards: electionDensity(1:Fin4)=1/4 & (3)=3/4 fire non-vacuously; toyVRF elects a UNIQUE winner (only 0 verifies); doubleClaimVRF accepts TWO distinct winning tickets 0,1 (<3) — the X-VRF double-claim tooth. #assert_axioms-clean.
 import Dregg2.Crypto.HybridCombiner
