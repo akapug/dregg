@@ -6831,3 +6831,29 @@ HONESTLY OPEN (not overclaimed):
   Lean framework + cited papers, async/Gaussian/DKG/deployment layers flagged not faked). Commits 6da5262f0 /
   4ccfbef73 / a91d171e7 / 06bad30ea. The self-argued Hermine 2-round now has cited-proven benchmarks
   (Tanuki/TRaccoon) to migrate toward; the sortition VRF + randomness beacon have PQ replacements to build on.
+
+## 2026-07-09 — the crypto metatheory became a CONNECTED, quantum-aware proof (+ code refinement + protocol soundness)
+What began as GAP #0 (the no-pq campaign) climbed into an end-to-end formalization. The Dregg2/Crypto tree now
+runs with NO islands (whole-tree `lake build Dregg2` green, 4485 jobs):
+  FLOOR: MSIS · MLWESearchHard · SchnorrDLHard · HashCR  — plus a MODELED QUANTUM ADVERSARY
+    (QuantumOracle.lean: QState=EuclideanSpace ℂ, the oracle a proved LinearIsometryEquiv permutation;
+     OneWayToHiding.lean: O2H |Adv_H−Adv_H'|≤2√(q·Pfind) proved via the SAME Cauchy-Schwarz as the forking lemma).
+  PRIMITIVE GAMES: ML-DSA EUF-CMA→MSIS (SelfTargetMSIS) · ed25519 EUF-CMA→DL (SchnorrEufCma, REUSES the proved
+    forking lemma) · ML-KEM IND-CCA→MLWE (MlKemIndCca + FoBookkeeping classical FO bound + FoQrom: the QROM
+    proxy DISCHARGED, security vs the modeled quantum adversary) · VRF uniqueness/pseudorandomness.
+  KEYSTONE: HybridCombiner — hybrid secure ⟺ EITHER component (both legs grounded: classical→DL, pq→MSIS,
+    KEM→MLWE); the formal "hybrid, not PQ-only".
+  PROTOCOL GAMES: IdentityCommitment (H(ed‖ml) binds → hash-CR) · SortitionGame (fair+unpredictable+unique) ·
+    CapabilityChain (attenuation soundness) · RevocationSoundness (can't-hide-a-revocation) · Downgrade
+    Resistance (can't-strip-the-PQ) — all anchored in HashCR ∧ (DL ∨ MSIS).
+  CONSENSUS SAFETY (ConsensusSafety.lean): no two conflicting finalized under (n>3f) ∧ (DL ∨ MSIS) — QUANTUM-
+    SAFE FINALITY, the protocol-level payoff. (Crypto sibling of the blocklace-algebra Consensus/Safety.lean.)
+  Hermine TS-UF-0 game CLOSED (forking PRODUCED not assumed; ForkingProbabilityBound + statDist_pi_le_sum both
+    PROVED — zero probability TODOs); de-laundering done (Hint-MLWE→MLWE, DKG→lossiness+Shamir, beacon→hash-CR).
+  ↓ CODE REFINEMENT (DreggPqRefinement.lean): the deployed dregg-pq API ≅ the proved SigScheme; the Rust GLUE
+    (from-seed, ctx-separation, fail-closed verify, concat-KDF combiner) is now a Lean object; the WHOLE code-gap
+    = one labeled hypothesis per primitive (Fips204Correct/Fips203Correct) — a verified-fips204 effort discharges it.
+IN-BAND IDENTITY (rebuild): dregg-types verify_committed_ml_dsa + cell-crypto/captp/wire + federation_id (commits
+to the ML-DSA roster). REMAINING: finality::Block.creator=hybrid-id (~300-callsite unit); consensus LIVENESS;
+turn/effect-VM soundness; deeper refinement. Method throughout: reduce to the true floor, NO named-carrier
+laundering, load-bearing teeth on every theorem, honest boundaries named not hidden.
