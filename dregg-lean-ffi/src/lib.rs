@@ -223,6 +223,56 @@ pub fn shadow_fips204_sign(wire: &str) -> Result<String, String> {
     ffi::lean_fips204_sign(wire)
 }
 
+/// Whether the linked archive exports the extracted, Lean-verified ML-KEM (FIPS 203) encaps core
+/// (`dregg_fips203_encaps`, the C-ABI entry over `Dregg2.Crypto.Fips203Kem.encapsFFI`). When false, a
+/// caller must fall back to the `ml-kem` crate encaps. Distinct from [`lean_available`]: a stale archive
+/// can lack this export.
+pub fn fips203_encaps_core_available() -> bool {
+    ffi::fips203_encaps_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted ML-KEM encaps core `@[export] dregg_fips203_encaps` (the executable
+/// `Dregg2.Crypto.Fips203Kem.encapsCore`, proved equal to `MlKemIndCca.foEncaps` and — with the decaps
+/// core — to discharge `DreggKemRefinement.Fips203Correct`).
+///
+/// Wire grammar the export reads:
+///   * in:  `"A t m"` (three decimal ints — the deployed-parameter public key `(A,t)` and message bit `m`).
+///   * out: `"u v K"` (the ciphertext `(u,v)` and the encapsulated shared secret `K = H(m)`);
+///     `"ERR"` for a malformed wire.
+///
+/// `dregg-pq` routes its ML-KEM encaps through this entry when [`fips203_encaps_core_available`]. Returns
+/// `Err` if the archive lacks the export.
+pub fn shadow_fips203_encaps(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_fips203_encaps(wire)
+}
+
+/// Whether the linked archive exports the extracted, Lean-verified ML-KEM (FIPS 203) decaps core
+/// (`dregg_fips203_decaps`, the C-ABI entry over `Dregg2.Crypto.Fips203Kem.decapsFFI`). When false, a
+/// caller must fall back to the `ml-kem` crate decaps. Distinct from [`lean_available`]: a stale archive
+/// can lack this export.
+pub fn fips203_decaps_core_available() -> bool {
+    ffi::fips203_decaps_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted ML-KEM decaps core `@[export] dregg_fips203_decaps` (the executable
+/// `Dregg2.Crypto.Fips203Kem.decapsCore`, proved equal to `MlKemIndCca.foDecaps` — the re-encryption
+/// check + implicit reject). This runs the SECURITY-CRITICAL decaps as a Lean-verified object: a
+/// tampered ciphertext implicit-rejects to a DIFFERENT (message-independent) secret, it does not leak.
+///
+/// Wire grammar the export reads:
+///   * in:  `"A t s z u v"` (six decimal ints — the encapsulation key `(A,t)`, secret `s`, implicit-reject
+///     seed `z`, ciphertext `(u,v)`).
+///   * out: the recovered shared secret `K` as a decimal string (`H(m′)` on a matching re-encryption, else
+///     the implicit-reject secret `J(z‖c)`); `"ERR"` for a malformed wire.
+///
+/// `dregg-pq` routes its ML-KEM decaps through this entry when [`fips203_decaps_core_available`]. Returns
+/// `Err` if the archive lacks the export.
+pub fn shadow_fips203_decaps(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_fips203_decaps(wire)
+}
+
 /// Parse a shadow output wire into a [`ShadowVerdict`], surfacing marshal/parse errors.
 pub fn decode_shadow_verdict(output: &str) -> Result<ShadowVerdict, String> {
     match marshal::unmarshal_result(output) {
@@ -346,6 +396,18 @@ mod ffi {
         ) -> usize;
         #[cfg(dregg_fips204_sign_present)]
         fn dregg_fips204_sign_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+        #[cfg(dregg_fips203_encaps_present)]
+        fn dregg_fips203_encaps_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+        #[cfg(dregg_fips203_decaps_present)]
+        fn dregg_fips203_decaps_str(
             in_utf8: *const c_char,
             out: *mut c_char,
             out_cap: usize,
@@ -549,6 +611,53 @@ mod ffi {
         false
     }
 
+    /// FIPS-203-ENCAPS EXTRACTION — run the VERIFIED Lean ML-KEM encaps core (leanc-native).
+    /// Input: `"A t m"` (three decimal ints); output: `"u v K"` (ciphertext + encapsulated secret).
+    #[cfg(dregg_fips203_encaps_present)]
+    pub fn lean_fips203_encaps(wire: &str) -> Result<String, String> {
+        lean_string_bridge(wire, dregg_fips203_encaps_str, "dregg_fips203_encaps_str")
+    }
+
+    #[cfg(not(dregg_fips203_encaps_present))]
+    pub fn lean_fips203_encaps(_wire: &str) -> Result<String, String> {
+        Err("dregg_fips203_encaps not exported by the linked archive (rebuild to enable)".into())
+    }
+
+    /// `true` iff the linked archive carries the extracted ML-KEM encaps core.
+    #[cfg(dregg_fips203_encaps_present)]
+    pub fn fips203_encaps_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_fips203_encaps_present))]
+    pub fn fips203_encaps_present() -> bool {
+        false
+    }
+
+    /// FIPS-203-DECAPS EXTRACTION — run the VERIFIED Lean ML-KEM decaps core (leanc-native).
+    /// Input: `"A t s z u v"`; output: the recovered shared secret K (implicit reject folded in;
+    /// "ERR" only on a malformed wire). The SECURITY-CRITICAL direction as a Lean-verified object.
+    #[cfg(dregg_fips203_decaps_present)]
+    pub fn lean_fips203_decaps(wire: &str) -> Result<String, String> {
+        lean_string_bridge(wire, dregg_fips203_decaps_str, "dregg_fips203_decaps_str")
+    }
+
+    #[cfg(not(dregg_fips203_decaps_present))]
+    pub fn lean_fips203_decaps(_wire: &str) -> Result<String, String> {
+        Err("dregg_fips203_decaps not exported by the linked archive (rebuild to enable)".into())
+    }
+
+    /// `true` iff the linked archive carries the extracted ML-KEM decaps core.
+    #[cfg(dregg_fips203_decaps_present)]
+    pub fn fips203_decaps_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_fips203_decaps_present))]
+    pub fn fips203_decaps_present() -> bool {
+        false
+    }
+
     #[cfg(all(test, dregg_fips204_verify_present))]
     mod fips204_verify_extraction {
         use super::*;
@@ -595,6 +704,47 @@ mod ffi {
             assert_eq!(lean_fips204_sign("5 1 3 7 1000000").unwrap(), "REJECT");
             // Malformed wire fails CLOSED.
             assert_eq!(lean_fips204_sign("garbage").unwrap(), "REJECT");
+        }
+    }
+
+    #[cfg(all(test, dregg_fips203_encaps_present, dregg_fips203_decaps_present))]
+    mod fips203_kem_extraction {
+        use super::*;
+        /// THE ENCAPS → DECAPS ROUND-TRIP: the verified Lean ML-KEM cores run (leanc-compiled native).
+        /// The honest deployed data `(A,t,s)=(1,2,1)`, message bit `m=1` ENCAPS to `"1 1667 3"` (ct=(1,1667),
+        /// K=3); DECAPS of that ciphertext recovers `"3"` — the extracted encaps→decaps round trip that
+        /// discharges `Fips203Correct`. A TAMPERED ciphertext implicit-rejects to a DIFFERENT
+        /// (message-independent) secret (`"3536"` ≠ `"3"`) — the re-encryption check is the real gate,
+        /// not `fun _ => K`. A malformed wire fails closed.
+        #[test]
+        fn verified_ml_kem_encaps_decaps_roundtrips_in_lean() {
+            lean_init_once().expect("init the Lean runtime");
+            // Honest encaps ⇒ the ciphertext + secret wire.
+            let enc = lean_fips203_encaps("1 2 1").expect("encaps round-trip");
+            assert_eq!(
+                enc, "1 1667 3",
+                "honest encaps emits the ciphertext + secret"
+            );
+            // ROUND-TRIP: decaps of the honest ciphertext recovers the encapsulated secret K=3.
+            assert_eq!(
+                lean_fips203_decaps("1 2 1 0 1 1667").expect("decaps"),
+                "3",
+                "the extracted encaps output round-trips through decapsCore"
+            );
+            // TAMPERED ciphertext: implicit reject to a DIFFERENT secret (the parties diverge).
+            assert_eq!(
+                lean_fips203_decaps("1 2 1 0 1 1767").unwrap(),
+                "3536",
+                "a tampered ciphertext implicit-rejects to a different secret"
+            );
+            assert_ne!(
+                lean_fips203_decaps("1 2 1 0 1 1767").unwrap(),
+                lean_fips203_decaps("1 2 1 0 1 1667").unwrap(),
+                "tampering the ML-KEM ciphertext breaks key agreement"
+            );
+            // Malformed wires fail CLOSED.
+            assert_eq!(lean_fips203_encaps("garbage").unwrap(), "ERR");
+            assert_eq!(lean_fips203_decaps("garbage").unwrap(), "ERR");
         }
     }
 
@@ -677,6 +827,22 @@ mod ffi {
     }
 
     pub fn lean_fips204_sign(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    pub fn fips203_encaps_present() -> bool {
+        false
+    }
+
+    pub fn lean_fips203_encaps(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    pub fn fips203_decaps_present() -> bool {
+        false
+    }
+
+    pub fn lean_fips203_decaps(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
 }

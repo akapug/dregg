@@ -34,6 +34,10 @@
 pub mod hybrid_kem;
 mod mldsa;
 
+pub use hybrid_kem::{
+    install_lean_decaps_core, install_lean_encaps_core, ml_kem_decaps_core, ml_kem_encaps_core,
+};
+
 pub use mldsa::{
     ML_DSA_PK_LEN, ML_DSA_SIG_LEN, MlDsaKey, install_lean_sign_core, install_lean_verify_core,
     ml_dsa_public_from_seed, ml_dsa_sign_core, ml_dsa_sign_from_seed, ml_dsa_verify,
