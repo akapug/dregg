@@ -341,6 +341,9 @@ impl Federation {
             // not yet attested a receipt-stream root advertise `None`,
             // which the verifier treats as v3-legacy.
             receipt_stream_root: None,
+            // No hybrid quorum on a freshly-built (unsigned) root; the
+            // cross-fed export path fills it once the committee has signed.
+            hybrid_quorum: Vec::new(),
         }
     }
 }

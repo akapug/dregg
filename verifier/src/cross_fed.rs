@@ -10,8 +10,10 @@
 //! 2. (Soft) Effect-VM STARK proof checks pass on every receipt in the
 //!    chain.
 //! 3. Scope-2 replay of the chain (re-derive trace + verify).
-//! 4. Verify F1's `AttestedRoot` quorum signatures under F1's known keys.
-//! 5. Verify F2's `AttestedRoot` quorum signatures under F2's known keys.
+//! 4. Verify F1's `AttestedRoot` HYBRID quorum (ed25519 ∧ ML-DSA-65) under
+//!    F1's known keys — a classical-only root fails closed.
+//! 5. Verify F2's `AttestedRoot` HYBRID quorum (ed25519 ∧ ML-DSA-65) under
+//!    F2's known keys — a classical-only root fails closed.
 //! 6. Verify F2's `FederationReceipt` (if present) under F2's BLS / Ed25519
 //!    committee.
 //! 7. Cross-link: `cert.target_federation == F2`,
@@ -457,46 +459,52 @@ fn verify_attested_root_against_descriptor(
             hex::encode(expected_federation_id)
         ));
     }
-    if root.threshold_qc.is_some() && root.quorum_signatures.is_empty() {
+    if root.threshold_qc.is_some() && root.hybrid_quorum.is_empty() {
         return Err(format!(
-            "{role}: threshold_qc is present but this verifier was not given a BLS committee; Ed25519 quorum_signatures are required"
+            "{role}: threshold_qc is present but this verifier was not given a BLS committee; a hybrid (ed25519 ∧ ML-DSA-65) quorum is required"
         ));
     }
-    if !verify_attested_root_ed25519(root, keys) {
+    // POST-QUANTUM CLOSURE (the last classical-only finality wire). The cross-fed
+    // attested-root quorum is HYBRID: every counted signer must present BOTH a
+    // valid ed25519 signature AND a valid ML-DSA-65 (FIPS 204) signature over the
+    // SAME canonical `signing_message()` bytes, with committee membership and a
+    // distinct-signer count `>= threshold`. A classical-only root (empty
+    // `hybrid_quorum`) fails closed — an adversary who breaks ed25519 alone can
+    // no longer forge a cross-federation finality attestation.
+    if root.hybrid_quorum.is_empty() {
         return Err(format!(
-            "{role}: Ed25519 quorum signatures did not verify under descriptor committee"
+            "{role}: no hybrid (ed25519 ∧ ML-DSA-65) quorum present; a classical-only attested root fails closed on the cross-federation finality wire"
+        ));
+    }
+    if !verify_attested_root_hybrid(root, descriptor.threshold, keys) {
+        return Err(format!(
+            "{role}: hybrid (ed25519 ∧ ML-DSA-65) quorum did not verify under descriptor committee (classical ∧ pq required per signer)"
         ));
     }
     Ok(())
 }
 
-fn verify_attested_root_ed25519(root: &AttestedRoot, known_keys: &[PublicKey]) -> bool {
-    if root.threshold == 0 || root.threshold > known_keys.len() {
+/// Verify the attested root's HYBRID quorum — the single `classical ∧ pq` rule,
+/// delegated to `dregg_federation::receipt::verify_hybrid_quorum_sigs` (which
+/// owns the FIPS 204 ML-DSA-65 primitive). Accepts iff at least `threshold`
+/// DISTINCT committee members each present a valid ed25519 signature AND a valid
+/// self-contained ML-DSA-65 signature over `root.signing_message()`. Fail-closed
+/// on any non-member signer, any bad half, or a missing/undecodable PQ key.
+fn verify_attested_root_hybrid(
+    root: &AttestedRoot,
+    threshold: usize,
+    known_keys: &[PublicKey],
+) -> bool {
+    if threshold == 0 || threshold > known_keys.len() {
         return false;
     }
-    if root.quorum_signatures.len() < root.threshold {
-        return false;
-    }
-
-    // Build the known-key membership set once (O(committee)) rather than a linear
-    // `known_keys.contains` per signature (O(committee²)). Same membership test — the
-    // set holds the exact 32-byte keys `contains` compared.
-    let known: std::collections::HashSet<[u8; 32]> = known_keys.iter().map(|k| k.0).collect();
     let message = root.signing_message();
-    let mut seen = std::collections::HashSet::new();
-    let mut valid = 0usize;
-    for (pubkey, signature) in &root.quorum_signatures {
-        if !known.contains(&pubkey.0) {
-            return false;
-        }
-        if !pubkey.verify(&message, signature) {
-            return false;
-        }
-        if seen.insert(pubkey.0) {
-            valid += 1;
-        }
-    }
-    valid >= root.threshold
+    dregg_federation::receipt::verify_hybrid_quorum_sigs(
+        &root.hybrid_quorum,
+        &message,
+        known_keys,
+        threshold,
+    )
 }
 
 fn federation_receipt_matches_tail(
@@ -668,6 +676,145 @@ mod tests {
             .expect_err("opaque threshold QC alone must not be accepted as crypto proof");
 
         assert!(err.contains("BLS committee"), "{err}");
+    }
+
+    // ---------------------------------------------------------------------
+    // HYBRID (ed25519 ∧ ML-DSA-65) attested-root quorum — the post-quantum
+    // closure of the cross-federation finality wire (steps 4/5).
+    // ---------------------------------------------------------------------
+
+    /// Build a 3-member committee (ed25519 + per-member ML-DSA-65) and an
+    /// `AttestedRoot` whose `hybrid_quorum` is signed over its own
+    /// `signing_message()` by the members in `signers`. Returns the descriptor,
+    /// the decoded committee keys, the deterministic federation id, and the root.
+    fn hybrid_committee_and_root(
+        signers: &[usize],
+        threshold: usize,
+    ) -> (CommitteeDescriptor, Vec<PublicKey>, [u8; 32], AttestedRoot) {
+        use dregg_federation::frost::MlDsaSigningKey;
+        use dregg_types::HybridQuorumSig;
+
+        let kps: Vec<(dregg_types::SigningKey, PublicKey)> = (0..3)
+            .map(|i| {
+                let mut s = [0u8; 32];
+                s[0] = 0x71;
+                s[1] = i as u8;
+                let sk = dregg_types::SigningKey::from_bytes(&s);
+                let pk = sk.public_key();
+                (sk, pk)
+            })
+            .collect();
+        let members: Vec<PublicKey> = kps.iter().map(|(_, pk)| *pk).collect();
+        let pq: Vec<_> = (0..3)
+            .map(|i| {
+                let mut s = [0u8; 32];
+                s[0] = 0x72;
+                s[1] = i as u8;
+                MlDsaSigningKey::from_seed(&s)
+            })
+            .collect();
+        let fed_id = dregg_federation::derive_federation_id_with_epoch(&members, 0);
+
+        let desc = CommitteeDescriptor {
+            federation_id: hex::encode(fed_id),
+            committee_epoch: 0,
+            threshold,
+            validators: members
+                .iter()
+                .enumerate()
+                .map(|(i, pk)| ValidatorDescriptor {
+                    name: format!("n{i}"),
+                    public_key: hex::encode(pk.0),
+                })
+                .collect(),
+        };
+
+        let mut root =
+            AttestedRoot::new_legacy([0x7C; 32], 5, 1_700_000_000, vec![], None, threshold);
+        root.federation_id = dregg_types::FederationId(fed_id);
+        root.blocklace_block_id = Some([0x9A; 32]);
+        root.finality_round = Some(5);
+        let message = root.signing_message();
+        root.hybrid_quorum = signers
+            .iter()
+            .map(|&i| HybridQuorumSig {
+                pubkey: kps[i].1,
+                signature: dregg_types::sign(&kps[i].0, &message),
+                ml_dsa_pubkey: pq[i].0.0.to_vec(),
+                pq_signature: pq[i].1.sign(&message).expect("ml-dsa sign"),
+            })
+            .collect();
+
+        (desc, members, fed_id, root)
+    }
+
+    #[test]
+    fn attested_root_hybrid_quorum_verifies_both_halves() {
+        let (desc, keys, fed_id, root) = hybrid_committee_and_root(&[0, 1], 2);
+        verify_attested_root_against_descriptor("root", &root, &desc, &keys, fed_id)
+            .expect("honest 2-of-3 hybrid quorum (ed25519 ∧ ML-DSA-65) must verify");
+    }
+
+    #[test]
+    fn attested_root_forged_pq_half_rejected_even_with_valid_ed25519() {
+        let (desc, keys, fed_id, mut root) = hybrid_committee_and_root(&[0, 1], 2);
+        // Keep both ed25519 halves VALID; corrupt one ML-DSA-65 half.
+        root.hybrid_quorum[0].pq_signature[0] ^= 0xFF;
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, fed_id)
+            .expect_err("a forged ML-DSA half must reject even with a valid ed25519 half");
+        assert!(err.contains("hybrid"), "{err}");
+    }
+
+    #[test]
+    fn attested_root_missing_pq_half_rejected() {
+        let (desc, keys, fed_id, mut root) = hybrid_committee_and_root(&[0, 1], 2);
+        // Drop one signer's ML-DSA-65 half entirely (classical-only downgrade).
+        root.hybrid_quorum[1].pq_signature = Vec::new();
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, fed_id)
+            .expect_err("a missing ML-DSA half must reject");
+        assert!(err.contains("hybrid"), "{err}");
+    }
+
+    #[test]
+    fn attested_root_classical_only_fails_closed() {
+        let (desc, keys, fed_id, mut root) = hybrid_committee_and_root(&[0, 1], 2);
+        // A legacy classical-only root: carry the ed25519 quorum but NO hybrid
+        // quorum. It must fail closed on the cross-fed finality wire.
+        root.quorum_signatures = root
+            .hybrid_quorum
+            .iter()
+            .map(|qs| (qs.pubkey, qs.signature))
+            .collect();
+        root.hybrid_quorum.clear();
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, fed_id)
+            .expect_err("a classical-only attested root must fail closed");
+        assert!(err.contains("classical-only"), "{err}");
+    }
+
+    #[test]
+    fn attested_root_non_member_hybrid_signer_rejected() {
+        use dregg_federation::frost::MlDsaSigningKey;
+        use dregg_types::HybridQuorumSig;
+
+        let (desc, keys, fed_id, mut root) = hybrid_committee_and_root(&[0], 1);
+        // Replace the lone signer with a fully-valid hybrid signer who is NOT a
+        // committee member: both halves verify, but membership fails closed.
+        let message = root.signing_message();
+        let outsider_sk = dregg_types::SigningKey::from_bytes(&[0xEE; 32]);
+        let (out_pq_pk, out_pq_sk) = MlDsaSigningKey::from_seed(&[0xEF; 32]);
+        root.hybrid_quorum = vec![HybridQuorumSig {
+            pubkey: outsider_sk.public_key(),
+            signature: dregg_types::sign(&outsider_sk, &message),
+            ml_dsa_pubkey: out_pq_pk.0.to_vec(),
+            pq_signature: out_pq_sk.sign(&message).expect("ml-dsa sign"),
+        }];
+
+        let err = verify_attested_root_against_descriptor("root", &root, &desc, &keys, fed_id)
+            .expect_err("a non-member hybrid signer must reject");
+        assert!(err.contains("hybrid"), "{err}");
     }
 
     #[test]

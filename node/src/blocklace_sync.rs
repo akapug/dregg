@@ -4988,6 +4988,9 @@ async fn execute_finalized_turn(
                 threshold: federation_threshold,
                 federation_id: dregg_types::FederationId(s.federation_id),
                 receipt_stream_root,
+                // Classical local attestation; the wire hybrid quorum is
+                // populated by the cross-fed export path, not this signer.
+                hybrid_quorum: Vec::new(),
             };
             let signing_msg = attested.signing_message();
             let local_pk = s.cclerk.public_key();

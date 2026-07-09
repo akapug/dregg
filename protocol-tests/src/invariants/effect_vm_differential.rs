@@ -501,6 +501,7 @@ fn differential_bridge_mint() {
             threshold: 0,
             federation_id: dregg_types::FederationId::PLACEHOLDER,
             receipt_stream_root: None,
+            hybrid_quorum: Vec::new(),
         },
         destination_federation: [0u8; 32],
         spending_proof: vec![],

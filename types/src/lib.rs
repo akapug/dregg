@@ -332,6 +332,29 @@ pub struct AttestedRoot {
     /// in this attestation's block / period / epoch.
     #[serde(default)]
     pub receipt_stream_root: Option<[u8; 32]>,
+    /// **HYBRID quorum (post-quantum closure of the cross-federation finality
+    /// wire).** Per-signer [`HybridQuorumSig`] over the SAME canonical bytes as
+    /// `quorum_signatures` sign ([`signing_message`](Self::signing_message)):
+    /// each entry carries the voter's ed25519 signature AND its ML-DSA-65
+    /// (FIPS 204) signature plus the SELF-CONTAINED ML-DSA public key. A
+    /// verifier counts a signer only when BOTH halves verify (classical ∧ pq),
+    /// so an adversary who breaks ed25519 alone cannot forge the quorum.
+    ///
+    /// This is the wire twin of the persist layer's
+    /// `StoredAttestedRoot::finalization_quorum` and the light-client
+    /// `SignedVote` hybrid record. The ML-DSA verification itself lives in
+    /// `dregg_federation` (which owns the FIPS 204 primitive); this crate is
+    /// the leaf and carries only the wire DATA. The cross-fed verifier
+    /// (`dregg_verifier::cross_fed`) requires this quorum: a classical-only
+    /// root (empty `hybrid_quorum`) fails closed.
+    ///
+    /// **Wire note (postcard flag-day).** Adding this field changes the
+    /// non-self-describing postcard bytes of an `AttestedRoot`. A hybrid
+    /// deployment is a big-bang flag day (state wipe) — accepted, exactly as
+    /// the `StoredAttestedRoot`/`Checkpoint`/`ReceiptQc::HybridVotes` hybrid
+    /// widenings were. Empty for legacy roots and classical-only builders.
+    #[serde(default)]
+    pub hybrid_quorum: Vec<HybridQuorumSig>,
 }
 
 /// Compute the canonical Merkle root over a slice of 32-byte receipt
@@ -480,6 +503,9 @@ impl AttestedRoot {
             federation_id: FederationId::PLACEHOLDER,
             // Legacy roots predate the v4 receipt-stream binding (#80).
             receipt_stream_root: None,
+            // Legacy/classical-only roots carry no post-quantum quorum; the
+            // cross-fed verifier fails such a root closed.
+            hybrid_quorum: Vec::new(),
         }
     }
 
@@ -901,6 +927,7 @@ mod tests {
             threshold: 2,
             federation_id: FederationId::PLACEHOLDER,
             receipt_stream_root: None,
+            hybrid_quorum: Vec::new(),
         };
         assert!(root.has_quorum()); // 3 sigs >= threshold 2
 
@@ -957,6 +984,7 @@ mod tests {
             threshold: 2,
             federation_id: FederationId::PLACEHOLDER,
             receipt_stream_root: None,
+            hybrid_quorum: Vec::new(),
         };
 
         // Sign with real keys.
@@ -998,6 +1026,7 @@ mod tests {
             threshold: 1,
             federation_id: FederationId::PLACEHOLDER,
             receipt_stream_root: Some([0x05; 32]),
+            hybrid_quorum: Vec::new(),
         };
         let bytes = postcard::to_stdvec(&root).unwrap();
         let decoded: AttestedRoot = postcard::from_bytes(&bytes).unwrap();
@@ -1024,6 +1053,7 @@ mod tests {
             threshold: 1,
             federation_id: FederationId::PLACEHOLDER,
             receipt_stream_root: Some(merkle_root_of_receipt_hashes(receipts)),
+            hybrid_quorum: Vec::new(),
         }
     }
 

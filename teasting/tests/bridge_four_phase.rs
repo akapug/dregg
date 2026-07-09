@@ -65,6 +65,7 @@ fn fed_a_attested_root() -> AttestedRoot {
         threshold: 0,
         federation_id: FederationId::PLACEHOLDER,
         receipt_stream_root: None,
+        hybrid_quorum: Vec::new(),
     }
 }
 

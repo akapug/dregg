@@ -320,6 +320,9 @@ async fn single_process_node_binds_consensus_executor_and_finalizes_a_verifiable
             threshold: stored.threshold,
             federation_id: stored.federation_id,
             receipt_stream_root: stored.receipt_stream_root,
+            // Local light-client re-verify of the ed25519 half only; the wire
+            // hybrid quorum is not reconstructed from persisted state here.
+            hybrid_quorum: Vec::new(),
         };
         let msg = to_verify.signing_message();
         let (pk, sig) = &stored.quorum_signatures[0];
