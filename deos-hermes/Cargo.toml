@@ -45,6 +45,16 @@ dregg-sdk = { path = "../sdk" }
 dregg-turn = { path = "../turn" }
 dregg-cell = { path = "../cell" }
 
+# THE CONFINED-BODY SEAM — grain-jail's `BodyChannel` (`Proposal`/`Verdict` line
+# protocol) + `ConfinedBrain`, the CANONICAL confined-body primitive a rented
+# grain's OS-jailed body rides. `crate::confined_body` welds Hermes's ACP tool-call
+# stream onto this seam: the confined Hermes body IS a grain-jail confined body,
+# while every proposal stays a cap-gated receipted turn through the proven
+# `ToolGateway`. Deps are deliberately light (dregg-agent + serde), so this adds no
+# heavy surface; grain-jail is a repo-root workspace member resolved by path the
+# same way `dregg-agent` (a dev-dep) already is.
+grain-jail = { path = "../grain-jail" }
+
 # THE SANDBOXED-FIRMAMENT HOST-PD (the ambient-authority confinement face). A
 # confined Hermes runs INSIDE a forked, OS-sandboxed host-PD whose ONLY channel
 # is its firmament Endpoint: `spawn_pd_confined` (macOS Seatbelt / Linux

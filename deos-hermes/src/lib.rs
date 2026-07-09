@@ -89,6 +89,7 @@ pub mod card_authoring;
 pub mod cockpit_surface;
 #[cfg(unix)]
 pub mod confined;
+pub mod confined_body;
 #[cfg(unix)]
 pub mod egress;
 pub mod grant_registry;
@@ -124,6 +125,15 @@ pub use brain::{
     OpenAICompatCaller, ToolObservation,
 };
 pub use bridge::{HermesGateway, ToolMarket};
+// THE WELD — Hermes as a grain-jail CONFINED BODY: its ACP tool-call stream rides
+// a `grain_jail::BodyChannel`, every proposal still a cap-gated receipted turn
+// through the proven `ToolGateway`.
+pub use confined_body::{
+    AcpBodyChannel, ConfinedHermesReport, acp_call_of_proposal, confined_hermes_channel,
+    drive_confined_hermes, proposal_of_acp_call,
+};
+#[cfg(unix)]
+pub use confined_body::{drive_confined_hermes_in_jail, model_egress_policy};
 pub use dregg_zkoracle_prove::{
     AnthropicConfig, ProveError, VerifiedZkOracle, ZkOracleAttestation, ZkOracleError,
     verify_zkoracle,
