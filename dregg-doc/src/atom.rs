@@ -225,8 +225,8 @@ impl AtomContent {
     }
 
     /// A canonical, **type-tagged**, self-delimiting byte encoding that binds the
-    /// atom's KIND *and* content. Fed verbatim into the commitment preimage
-    /// ([`crate::commit`]) and the substrate heap-leaf / history serializations,
+    /// atom's KIND *and* content. Fed verbatim into the substrate commitment
+    /// heap-leaf preimage and the history serializations,
     /// so the commitment binds an atom's type — a structural node and a text run
     /// with the same rendered bytes commit differently, and a forged/retagged
     /// atom cannot hide under an equal render (the anti-forge tooth, on a typed

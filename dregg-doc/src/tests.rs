@@ -518,137 +518,11 @@ fn concurrent_resolutions_yield_a_state_still() {
     assert_eq!(merge(&both, &both), both);
 }
 
-// ── conflict-as-state soundness: the commitment binds provenance ─────────────
-
-/// A title-clash document used by the commitment tests.
-fn title_clash() -> DocGraph {
-    let base = DocGraph::new();
-    let a = Patch::by(
-        Author(1),
-        [Op::SetField {
-            name: "title".into(),
-            value: "Cats".into(),
-            superseding: false,
-        }],
-    )
-    .apply_to(&base);
-    let b = Patch::by(
-        Author(2),
-        [Op::SetField {
-            name: "title".into(),
-            value: "Dogs".into(),
-            superseding: false,
-        }],
-    )
-    .apply_to(&base);
-    merge(&a, &b)
-}
-
-#[test]
-fn commit_is_canonical_construction_order_independent() {
-    // Building the SAME document two ways (merge order swapped) commits equal:
-    // the BTree canonical ordering makes the commitment construction-independent.
-    let base = DocGraph::new();
-    let a = Patch::by(Author(1), [Patch::add(1, "Hello ", AtomId::ROOT).1]).apply_to(&base);
-    let h = Patch::add(1, "Hello ", AtomId::ROOT).0;
-    let b = Patch::by(Author(2), [Patch::add(2, "world", h).1]).apply_to(&base);
-    let ab = merge(&a, &b);
-    let ba = merge(&b, &a);
-    assert_eq!(ab, ba, "fully equal (incl. provenance)");
-    assert_eq!(commit(&ab), commit(&ba), "equal docs commit equal");
-}
-
-#[test]
-fn commit_anti_forge_provenance() {
-    // THE ANTI-FORGE TOOTH: a conflict whose alternatives render IDENTICALLY but
-    // whose authorship is forged MUST change the commitment. A light client
-    // cannot be shown a conflict that lies about who authored an alternative.
-    let m = title_clash();
-    let c0 = commit(&m);
-
-    let mut forged = m.clone();
-    forged.forge_field_provenance("title", "Dogs", Author(7)); // was Author(2)
-
-    // The RENDER is byte-identical: same two values, same field.
-    let render_eq = {
-        let r0 = content(&m);
-        let rf = content(&forged);
-        let vals = |r: &Rendered| -> Vec<String> {
-            r.field_conflicts()
-                .flat_map(|c| c.alternatives.iter().map(|a| a.text.clone()))
-                .collect()
-        };
-        // values render the same even though the author differs
-        let mut a = vals(&r0);
-        let mut b = vals(&rf);
-        a.sort();
-        b.sort();
-        a == b
-    };
-    assert!(
-        render_eq,
-        "the forged conflict renders the same alternative values"
-    );
-
-    // ...but the commitment DIFFERS — the forge cannot hide under an equal render.
-    assert_ne!(
-        commit(&forged),
-        c0,
-        "forging an alternative's author changes the commitment"
-    );
-}
-
-#[test]
-fn commit_anti_forge_dropped_alternative() {
-    // Hiding an alternative (dropping one side of the clash) also changes the
-    // commitment — you cannot show a light client a "resolved" doc that secretly
-    // dropped a co-author's value while claiming to be the same document.
-    let m = title_clash();
-    let c0 = commit(&m);
-
-    let mut hidden = m.clone();
-    hidden.drop_field_assignment("title", "Dogs");
-    assert_eq!(hidden.field("title").len(), 1, "one alternative hidden");
-
-    assert_ne!(
-        commit(&hidden),
-        c0,
-        "dropping an alternative changes the commitment"
-    );
-}
-
-#[test]
-fn commit_binds_prose_alternative_provenance() {
-    // The prose-conflict analogue: two concurrent inserts by different authors.
-    // The commitment binds each atom's provenance, so swapping which author
-    // wrote an alternative changes the commitment even at equal rendered text.
-    let (m, _w, _a, _b) = conflicting_merge();
-    let c0 = commit(&m);
-    // Re-author the SAME document with the conflict alternatives' authors swapped
-    // by rebuilding from the other side: a structurally-equal doc with different
-    // provenance must NOT commit equal.
-    let (base, _h, w) = hello_world();
-    let a = Patch::by(Author(2), [Patch::add(30, " ALPHA", w).1]).apply_to(&base); // swapped author
-    let b = Patch::by(Author(1), [Patch::add(31, " BETA", w).1]).apply_to(&base);
-    let swapped = merge(&a, &b);
-    assert!(
-        swapped.structural_eq(&m),
-        "same content/edges (structural), only provenance differs"
-    );
-    assert_ne!(
-        commit(&swapped),
-        c0,
-        "provenance is bound: swapped authors -> different commitment"
-    );
-}
-
-#[test]
-fn commit_stable_under_remerge() {
-    // The commitment of a conflicted doc is stable under idempotent re-merge
-    // (the conflict is a STATE with a fixed commitment, not a transient).
-    let m = title_clash();
-    assert_eq!(commit(&merge(&m, &m)), commit(&m));
-}
+// ── conflict-as-state soundness ──────────────────────────────────────────────
+// The commitment binds provenance so a light client cannot be shown a forged or
+// dropped conflict alternative. This property is now proven on the REAL
+// `substrate_commit` (the sorted-Poseidon2 heap root), NOT the former in-crate
+// `DefaultHasher` toy — see the `substrate` anti-forge tests in `substrate.rs`.
 
 // ── blame / annotate (authorship that survives moves + merges) ───────────────
 
@@ -886,7 +760,7 @@ fn render_three_way_clean_merge_yields_no_conflicts() {
 // the string atom rode (diff/merge/commit) plus the anti-forge tooth.
 
 #[test]
-fn a_structural_block_with_text_children_round_trips_through_merge_and_commit() {
+fn a_structural_block_with_text_children_round_trips_through_merge() {
     // A paragraph Element whose children are two Text runs (children are atoms in
     // the same graph; the Element records their ids — a block+inline tree).
     let mut g = DocGraph::new();
@@ -912,15 +786,9 @@ fn a_structural_block_with_text_children_round_trips_through_merge_and_commit() 
     // Its text children still render as text (the Element emits no text of its own).
     assert_eq!(content(&g).to_marked_string(), "hello world");
 
-    // The typed doc rides merge (idempotent pushout) and commit stably.
-    let c0 = commit(&g);
+    // The typed doc rides merge (idempotent pushout) stably.
     let m = merge(&g, &g);
     assert_eq!(m, g, "idempotent merge preserves the typed doc");
-    assert_eq!(
-        commit(&m),
-        c0,
-        "the typed doc commits stably under re-merge"
-    );
     assert_eq!(
         m.atom(bid).unwrap().content,
         block,
@@ -985,67 +853,13 @@ fn two_authors_add_disjoint_blocks_merge_without_conflict() {
     assert_eq!(merge(&m, &m), m, "idempotent on typed atoms");
 }
 
-#[test]
-fn anti_forge_tooth_bites_on_a_typed_atom() {
-    // A structural Element renders no text of its own, so a forged author is
-    // INVISIBLE in the render — but must still change the commitment.
-    let mut g = DocGraph::new();
-    let block = AtomContent::Element {
-        tag: "p".into(),
-        attrs: vec![],
-        children: vec![],
-    };
-    let (bid, ob) = Patch::add_content(1, block, AtomId::ROOT);
-    Patch::by(Author(5), [ob]).apply(&mut g);
-    let c0 = commit(&g);
-
-    let mut forged = g.clone();
-    forged.forge_atom_provenance(bid, Author(9)); // was Author(5)
-
-    assert_eq!(
-        content(&forged).to_marked_string(),
-        content(&g).to_marked_string(),
-        "the forged doc renders byte-identically (the Element emits no text)"
-    );
-    assert_ne!(
-        commit(&forged),
-        c0,
-        "forging a typed atom's author changes the commitment (the tooth bites)"
-    );
-}
-
-#[test]
-fn the_commitment_binds_the_atom_type_not_just_its_render() {
-    // A Text run and an Element node with the SAME id, provenance, and (empty)
-    // render must commit DIFFERENTLY — the preimage binds the KIND, per design §6
-    // / the DOM-shape constraint (a structural node cannot alias a text run).
-    let id = AtomId::derive(1, "x");
-    let prov = Provenance {
-        author: Author(1),
-        patch: PatchId(7),
-    };
-    let mk = |content: AtomContent| {
-        let mut g = DocGraph::new();
-        g.insert_atom(Atom {
-            id,
-            content,
-            status: Status::Alive,
-            provenance: prov,
-        });
-        g
-    };
-    let text = mk(AtomContent::Text(String::new()));
-    let elem = mk(AtomContent::Element {
-        tag: String::new(),
-        attrs: vec![],
-        children: vec![],
-    });
-    assert_ne!(
-        commit(&text),
-        commit(&elem),
-        "same id/provenance/render but different KIND -> different commitment"
-    );
-}
+// NOTE: the typed-atom anti-forge properties — a forged author on a
+// render-invisible structural Element still moves the commitment, and a Text run
+// vs an Element with equal id/provenance/render commit DIFFERENTLY (the preimage
+// binds the KIND) — are proven on the REAL `substrate_commit` in `substrate.rs`
+// (`substrate_anti_forge_tooth_bites_on_a_typed_atom` /
+// `substrate_commit_binds_the_atom_type_not_just_its_render`), not on the former
+// in-crate `DefaultHasher` toy.
 
 #[test]
 fn atom_content_canonical_bytes_round_trip() {

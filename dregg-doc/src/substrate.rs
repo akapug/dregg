@@ -1,6 +1,6 @@
 //! The REAL cell-substrate ride — a [`DocGraph`] committed via the production
-//! sorted-Poseidon2 heap root of the dregg cell substrate (NOT the in-crate
-//! `DefaultHasher` stand-in of [`crate::commit`]).
+//! sorted-Poseidon2 heap root of the dregg cell substrate (NOT a
+//! non-cryptographic `DefaultHasher` stand-in).
 //!
 //! `DOCUMENT-LANGUAGE.md` §4.1 (the weld): a dreggverse document rides the cell
 //! substrate as a **content-addressed heap** — atoms, order-edges, and field
@@ -70,9 +70,9 @@ pub const COLL_EMBEDS: u32 = 3;
 /// other hash in the system.
 const LEAF_DOMAIN: &[u8] = b"dregg-doc/substrate/leaf/v1";
 
-/// A canonical, length-prefixed leaf-preimage builder. Mirrors the discipline of
-/// [`crate::commit`]'s `Encoder`: every variable-length run is length-prefixed so
-/// sections cannot be confused (no concatenation-ambiguity collision), and a
+/// A canonical, length-prefixed leaf-preimage builder: every variable-length run
+/// is length-prefixed so sections cannot be confused (no concatenation-ambiguity
+/// collision), and a
 /// per-section tag domain-separates atom / edge / field leaves.
 struct Leaf {
     bytes: Vec<u8>,
@@ -209,8 +209,8 @@ pub fn to_heap_map(g: &DocGraph) -> BTreeMap<(u32, u32), FieldElement> {
 
 /// The REAL document commitment: the production sorted-Poseidon2 heap root over
 /// the projected cell heap. This is `compute_heap_root(&to_heap_map(g))` — the
-/// faithful commitment a light client trusts, replacing the `DefaultHasher`
-/// stand-in of [`crate::commit::commit`].
+/// faithful commitment a light client trusts (replacing any non-cryptographic
+/// `DefaultHasher` stand-in).
 pub fn substrate_commit(g: &DocGraph) -> [u8; 32] {
     compute_heap_root(&to_heap_map(g))
 }
@@ -514,6 +514,69 @@ mod tests {
         // re-merge (the conflict is a STATE with a fixed real root).
         let m = title_clash();
         assert_eq!(substrate_commit(&merge(&m, &m)), substrate_commit(&m));
+    }
+
+    #[test]
+    fn substrate_anti_forge_tooth_bites_on_a_typed_atom() {
+        // A structural Element renders no text of its own, so a forged author is
+        // INVISIBLE in the render — but must still change the REAL commitment.
+        let mut g = DocGraph::new();
+        let block = AtomContent::Element {
+            tag: "p".into(),
+            attrs: vec![],
+            children: vec![],
+        };
+        let (bid, ob) = Patch::add_content(1, block, AtomId::ROOT);
+        Patch::by(Author(5), [ob]).apply(&mut g);
+        let c0 = substrate_commit(&g);
+
+        let mut forged = g.clone();
+        forged.forge_atom_provenance(bid, Author(9)); // was Author(5)
+
+        assert_eq!(
+            content(&forged).to_marked_string(),
+            content(&g).to_marked_string(),
+            "the forged doc renders byte-identically (the Element emits no text)"
+        );
+        assert_ne!(
+            substrate_commit(&forged),
+            c0,
+            "forging a typed atom's author changes the REAL root (the tooth bites)"
+        );
+    }
+
+    #[test]
+    fn substrate_commit_binds_the_atom_type_not_just_its_render() {
+        // A Text run and an Element node with the SAME id, provenance, and (empty)
+        // render must commit DIFFERENTLY against the REAL root — the leaf preimage
+        // binds the KIND (design §6 / the DOM-shape constraint: a structural node
+        // cannot alias a text run).
+        let id = AtomId::derive(1, "x");
+        let prov = Provenance {
+            author: Author(1),
+            patch: crate::atom::PatchId(7),
+        };
+        let mk = |content: AtomContent| {
+            let mut g = DocGraph::new();
+            g.insert_atom(Atom {
+                id,
+                content,
+                status: Status::Alive,
+                provenance: prov,
+            });
+            g
+        };
+        let text = mk(AtomContent::Text(String::new()));
+        let elem = mk(AtomContent::Element {
+            tag: String::new(),
+            attrs: vec![],
+            children: vec![],
+        });
+        assert_ne!(
+            substrate_commit(&text),
+            substrate_commit(&elem),
+            "same id/provenance/render but different KIND -> different REAL root"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────
