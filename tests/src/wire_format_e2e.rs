@@ -332,15 +332,21 @@ fn wire_format_roundtrip_postcard_decodable() {
             );
 
             let real = wire_proof.real_stark_proof.as_ref().unwrap();
+            // The two committed descriptor wires (the flip off the hand-STARK issuer proof) must
+            // carry real postcard(Ir2BatchProof) blobs + their [leaf/summary, root] vks.
             assert!(
-                !real.issuer_membership_stark_proof.query_proofs.is_empty(),
-                "STARK proof should have query proofs (not synthetic)"
+                !real.blinded_membership.blob.is_empty() && !real.blinded_membership.vk.is_empty(),
+                "blinded ring-membership wire should carry a real proof blob + vk (not synthetic)"
             );
             assert!(
-                real.issuer_membership_stark_proof.public_inputs.len()
-                    >= 2 + dregg_circuit::ACTION_BINDING_WIDTH,
-                "STARK proof should have enough public inputs for root + action binding, got {}",
-                real.issuer_membership_stark_proof.public_inputs.len()
+                dregg_circuit::presentation::verify_descriptor_wire(&real.blinded_membership)
+                    .is_some(),
+                "blinded ring-membership descriptor should verify"
+            );
+            assert!(
+                dregg_circuit::presentation::verify_descriptor_wire(&real.bound_presentation)
+                    .is_some(),
+                "bound-presentation descriptor should verify"
             );
         }
         Err(e) => {

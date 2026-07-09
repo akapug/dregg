@@ -29,6 +29,78 @@ use crate::poseidon2::hash_fact;
 use crate::stark::{self, StarkProof};
 use crate::temporal_predicate_dsl::{TemporalPredicateProof, verify_temporal_predicate};
 
+use crate::descriptor_by_name::descriptor_by_name;
+use crate::descriptor_ir2::{
+    DreggStarkConfig, EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
+    verify_vm_descriptor2,
+};
+
+/// A committed-descriptor proof in wire form: the two descriptors the presentation
+/// family flips onto (bound-presentation auth + blinded ring-membership).
+///
+/// * `predicate` — the descriptor identity the CONSUMER dispatches on via
+///   [`descriptor_by_name`]; NO air-name rides the blob.
+/// * `blob` — `postcard(Ir2BatchProof)` produced by [`prove_vm_descriptor2`].
+/// * `vk` — the expected public inputs, one canonical little-endian `u32` per 4 bytes.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DescriptorProofWire {
+    /// Descriptor identity the consumer dispatches on (never rides the blob).
+    pub predicate: String,
+    /// `postcard(Ir2BatchProof)` — the committed-descriptor proof.
+    pub blob: Vec<u8>,
+    /// Expected public inputs, one canonical LE `u32` per 4 bytes.
+    pub vk: Vec<u8>,
+}
+
+/// Build a [`DescriptorProofWire`] from a descriptor + honest witness: prove through the
+/// real IR-v2 prover, postcard-encode the batch proof, and encode the public inputs into `vk`.
+fn build_descriptor_wire(
+    desc: &EffectVmDescriptor2,
+    trace: &[Vec<BabyBear>],
+    pis: &[BabyBear],
+) -> Option<DescriptorProofWire> {
+    let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[]).ok()?;
+    let blob = postcard::to_allocvec(&proof).ok()?;
+    let mut vk = Vec::with_capacity(pis.len() * 4);
+    for p in pis {
+        vk.extend_from_slice(&p.0.to_le_bytes());
+    }
+    Some(DescriptorProofWire {
+        predicate: desc.name.clone(),
+        blob,
+        vk,
+    })
+}
+
+/// Decode a `vk` byte string into public inputs: one canonical `BabyBear` per little-endian
+/// 4-byte group. Returns `None` for a length that is not a positive multiple of 4.
+pub fn descriptor_wire_pis(vk: &[u8]) -> Option<Vec<BabyBear>> {
+    if vk.is_empty() || vk.len() % 4 != 0 {
+        return None;
+    }
+    Some(
+        vk.chunks_exact(4)
+            .map(|c| BabyBear::new_canonical(u32::from_le_bytes([c[0], c[1], c[2], c[3]])))
+            .collect(),
+    )
+}
+
+/// Verify one [`DescriptorProofWire`] end-to-end: `descriptor_by_name(predicate)` → decode
+/// `postcard(Ir2BatchProof)` → `verify_vm_descriptor2` against the `vk` public inputs. Returns
+/// the verified public inputs on success (so the caller can bind them), `None` on any failure.
+/// Fail-closed: an unknown predicate, a malformed vk, a bad blob, or a failed/paniced verify
+/// all return `None` — never a silent accept.
+pub fn verify_descriptor_wire(wire: &DescriptorProofWire) -> Option<Vec<BabyBear>> {
+    let desc = descriptor_by_name(&wire.predicate)?;
+    let pis = descriptor_wire_pis(&wire.vk)?;
+    let batch: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(&wire.blob).ok()?;
+    let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        verify_vm_descriptor2(&desc, &batch, &pis).is_ok()
+    }))
+    .unwrap_or(false);
+    ok.then_some(pis)
+}
+
 /// The complete presentation witness (all private data).
 #[derive(Clone, Debug)]
 pub struct PresentationWitness {
@@ -651,48 +723,76 @@ impl PresentationAir {
         // Generate real STARK proof for the derivation step
         let derivation_stark_proof = derivation_air::prove_derivation_stark(&w.derivation);
 
-        // 3. Prove issuer membership with REAL STARK + Poseidon2 hashing.
-        //    The proof is bound to the request_predicate (action commitment) to
-        //    prevent replay across different authorization requests.
-        //
-        //    When blinding_factor is non-zero, use the blinded (ring membership) path:
-        //    public inputs become [blinded_leaf, root, action] instead of [leaf_hash, root, action].
-        //    This makes presentations unlinkable (same issuer, different blinded_leaf each time).
-        let composition_opt = if !w.composition_commitment.is_zero() {
-            Some(w.composition_commitment)
-        } else {
-            None
-        };
-
-        let revealed_facts_opt = if !w.revealed_facts_commitment.is_zero() {
-            Some(w.revealed_facts_commitment)
-        } else {
-            None
-        };
-
-        let merkle_stark_proof = if w.blinding_factor != BabyBear::ZERO {
-            generate_blinded_merkle_poseidon2_stark_proof(
-                &w.issuer_membership,
-                w.blinding_factor,
-                &w.request_predicate,
-                composition_opt,
-                revealed_facts_opt,
-            )?
-        } else {
-            generate_merkle_poseidon2_stark_proof_bound(
-                &w.issuer_membership,
-                &w.request_predicate,
-                composition_opt,
-                revealed_facts_opt,
-            )?
-        };
-
         // Compute public inputs — roots stay private, tag is public.
         let final_root = if let Some(last_fold) = w.fold_chain.last() {
             last_fold.new_root
         } else {
             w.derivation.state_root
         };
+
+        // 3. Prove issuer membership on the TWO committed in-circuit descriptors — the flip off
+        //    the legacy hand-StarkProof. Both are proven through the real IR-v2 prover and carried
+        //    in wire form (predicate + postcard(Ir2BatchProof) + vk), verified by the consumer via
+        //    descriptor_by_name → verify_vm_descriptor2.
+        //
+        //    (a) RING/UNLINKABILITY — the depth-general 4-ary BLINDED ring-membership descriptor.
+        //        PIs are [blinded_leaf, root]; the member leaf_hash + blinding factor stay hidden,
+        //        so the same issuer produces a different blinded_leaf every presentation. The path
+        //        is exactly the (siblings, positions) the witness already carries, so the committed
+        //        root is byte-equal to the deployed federation root.
+        let siblings: Vec<[BabyBear; 3]> = w
+            .issuer_membership
+            .levels
+            .iter()
+            .map(|l| l.siblings)
+            .collect();
+        let positions: Vec<u8> = w
+            .issuer_membership
+            .levels
+            .iter()
+            .map(|l| l.position)
+            .collect();
+        let depth = siblings.len();
+        let (blinded_trace, blinded_pis) =
+            crate::blinded_membership_witness::blinded_membership_witness_4ary(
+                w.issuer_membership.leaf_hash,
+                w.blinding_factor,
+                &siblings,
+                &positions,
+            )
+            .ok()?;
+        // The committed root MUST be the federation root, else the proof would not bind the issuer
+        // to this federation (fail-closed).
+        if blinded_pis
+            .get(crate::blinded_membership_witness::PI_ROOT_4ARY)
+            .copied()
+            != Some(w.issuer_membership.expected_root)
+        {
+            return None;
+        }
+        let blinded_desc =
+            crate::blinded_membership_witness::blinded_membership_descriptor_of_depth_4ary(depth);
+        let blinded_membership =
+            build_descriptor_wire(&blinded_desc, &blinded_trace, &blinded_pis)?;
+
+        //    (b) AUTH — the bound-presentation descriptor: action_binding + revealed_facts + the
+        //        presentation_tag internalized in-circuit (tag = Poseidon2(final_root, randomness,
+        //        nonce, DSK)). PIs are [summary(19), verifier_nonce]. Depth-independent.
+        let revealed_facts: [BabyBear; 8] = *w.revealed_facts_commitment.as_slice();
+        let (bound_trace, bound_pis) =
+            crate::bound_presentation_witness::bound_presentation_witness_h4(
+                w.federation_root,
+                w.request_predicate,
+                w.timestamp,
+                revealed_facts,
+                final_root,
+                w.presentation_randomness,
+                w.verifier_nonce,
+            )
+            .ok()?;
+        let bound_desc =
+            descriptor_by_name(crate::bound_presentation_witness::BOUND_PRESENTATION_NAME)?;
+        let bound_presentation = build_descriptor_wire(&bound_desc, &bound_trace, &bound_pis)?;
 
         let presentation_tag = crate::binding::compute_presentation_tag_narrow(
             final_root,
@@ -715,7 +815,8 @@ impl PresentationAir {
             public_inputs,
             fold_proofs,
             derivation_proof,
-            issuer_membership_stark_proof: merkle_stark_proof,
+            bound_presentation,
+            blinded_membership,
             fold_stark_proofs,
             derivation_stark_proof,
             temporal_proofs: Vec::new(),
@@ -1010,8 +1111,14 @@ pub struct RealPresentationProof {
     /// Legacy constraint-checked proof of the derivation.
     /// Retained for backward compatibility; verifiers SHOULD prefer `derivation_stark_proof`.
     pub derivation_proof: ConstraintProof,
-    /// Real STARK proof of issuer membership in the federation.
-    pub issuer_membership_stark_proof: StarkProof,
+    /// AUTH descriptor wire: the bound-presentation proof (`dregg-bound-presentation::v1`) —
+    /// action_binding + revealed_facts + the in-circuit presentation-tag binding. Verified via
+    /// `descriptor_by_name` → `verify_vm_descriptor2`; PIs `[summary(19), verifier_nonce]`.
+    pub bound_presentation: DescriptorProofWire,
+    /// RING/UNLINKABILITY descriptor wire: the depth-general 4-ary blinded ring-membership proof
+    /// (`dregg-blinded-membership-4ary-general-depth{N}`) — issuer ∈ federation, unlinkable.
+    /// PIs `[blinded_leaf, root]`.
+    pub blinded_membership: DescriptorProofWire,
     /// Real STARK proofs for each fold step (cryptographically sound).
     /// When present, these supersede `fold_proofs` for verification.
     #[serde(default)]
@@ -1080,23 +1187,44 @@ impl RealPresentationProof {
         // 3. Presentation tag validity: proven by the STARK internally.
         //    final_root is private; no explicit comparison against public inputs needed.
 
-        // 4. Verify issuer membership with real STARK verifier
-        let issuer_public_inputs: Vec<BabyBear> = self
-            .issuer_membership_stark_proof
-            .public_inputs
-            .iter()
-            .map(|&v| BabyBear::new_canonical(v))
-            .collect();
-
-        // The STARK proof's public inputs are [leaf_hash, root]
-        if issuer_public_inputs.len() < 2 {
-            return PresentationVerification::InvalidIssuerProof;
+        // 4. Verify issuer membership + auth on the TWO committed descriptors (the flip off the
+        //    legacy hand-StarkProof). Each is checked via descriptor_by_name → verify_vm_descriptor2.
+        //
+        //    (a) RING/UNLINKABILITY: the blinded ring-membership proof; PIs [blinded_leaf, root].
+        let blinded_pis = match verify_descriptor_wire(&self.blinded_membership) {
+            Some(pis) if pis.len() >= 2 => pis,
+            _ => return PresentationVerification::InvalidIssuerProof,
+        };
+        // The committed root must be this presentation's federation root.
+        if blinded_pis[crate::blinded_membership_witness::PI_ROOT_4ARY]
+            != self.public_inputs.federation_root
+        {
+            return PresentationVerification::IssuerNotInFederation;
         }
 
-        // Check that the root in the STARK proof matches the federation root
-        let issuer_federation_root = issuer_public_inputs[1];
-        if issuer_federation_root != self.public_inputs.federation_root {
-            return PresentationVerification::IssuerNotInFederation;
+        //    (b) AUTH: the bound-presentation proof; PIs [summary(19), verifier_nonce]. Bind its
+        //        summary action_binding + federation_root to this presentation's public inputs.
+        let bound_pis = match verify_descriptor_wire(&self.bound_presentation) {
+            Some(pis)
+                if pis.len()
+                    >= crate::bound_presentation_witness::REQUEST_PREDICATE_BASE
+                        + crate::binding::ACTION_BINDING_WIDTH =>
+            {
+                pis
+            }
+            _ => return PresentationVerification::InvalidIssuerProof,
+        };
+        {
+            use crate::bound_presentation_witness::{FEDERATION_ROOT, REQUEST_PREDICATE_BASE};
+            if bound_pis[FEDERATION_ROOT] != self.public_inputs.federation_root {
+                return PresentationVerification::IssuerNotInFederation;
+            }
+            for i in 0..crate::binding::ACTION_BINDING_WIDTH {
+                if bound_pis[REQUEST_PREDICATE_BASE + i] != self.public_inputs.request_predicate[i]
+                {
+                    return PresentationVerification::InvalidIssuerProof;
+                }
+            }
         }
 
         // 4a. Verify fold STARK proofs if present (cryptographically sound path).
@@ -1121,33 +1249,6 @@ impl RealPresentationProof {
             if derivation_air::verify_derivation_stark(deriv_stark, &deriv_pi).is_err() {
                 return PresentationVerification::InvalidDerivation;
             }
-        }
-
-        // 5. Verify issuer membership with the appropriate DSL circuit based on proof type.
-        // Blinded (ring membership) proofs use blinded_merkle_poseidon2_circuit();
-        // standard proofs use merkle_poseidon2_circuit().
-        use crate::dsl::descriptors::{
-            BLINDED_MERKLE_AIR_NAME, blinded_merkle_poseidon2_circuit, merkle_poseidon2_circuit,
-        };
-        let air_name = &self.issuer_membership_stark_proof.air_name;
-        let verify_result = if air_name == BLINDED_MERKLE_AIR_NAME {
-            let circuit = blinded_merkle_poseidon2_circuit();
-            stark::verify(
-                &circuit,
-                &self.issuer_membership_stark_proof,
-                &issuer_public_inputs,
-            )
-        } else {
-            let circuit = merkle_poseidon2_circuit();
-            stark::verify(
-                &circuit,
-                &self.issuer_membership_stark_proof,
-                &issuer_public_inputs,
-            )
-        };
-        match verify_result {
-            Ok(()) => {}
-            Err(_) => return PresentationVerification::InvalidIssuerProof,
         }
 
         // 6. Verify temporal predicate proofs (if any).
@@ -1218,7 +1319,7 @@ impl RealPresentationProof {
 
     /// Get the total proof size in bytes.
     pub fn total_proof_size_bytes(&self) -> usize {
-        let stark_bytes = stark::proof_to_bytes(&self.issuer_membership_stark_proof).len();
+        let stark_bytes = self.bound_presentation.blob.len() + self.blinded_membership.blob.len();
         let mock_bytes: usize = self
             .fold_proofs
             .iter()
@@ -1283,167 +1384,6 @@ pub fn generate_merkle_poseidon2_stark_proof(witness: &MerkleWitness) -> Option<
             );
             None
         }
-    }
-}
-
-/// Generate a real STARK proof for Merkle membership with Poseidon2 hashing,
-/// binding the proof to a specific action via an action commitment.
-///
-/// The action commitment is appended as an additional public input, producing
-/// public inputs of the form `[leaf_hash, root, action_commitment]`. This
-/// prevents the proof from being replayed against a different action.
-///
-/// The `action_commitment` should be computed as:
-/// `poseidon2::hash_many(&BabyBear::encode_hash(&blake3_hash_of_action))`
-pub fn generate_merkle_poseidon2_stark_proof_bound(
-    witness: &MerkleWitness,
-    action_commitment: &crate::binding::ActionBinding,
-    composition_commitment: Option<crate::binding::WideHash>,
-    revealed_facts_commitment: Option<crate::binding::WideHash>,
-) -> Option<StarkProof> {
-    use crate::dsl::descriptors::merkle_poseidon2_circuit;
-    use crate::dsl::membership::generate_merkle_poseidon2_trace;
-
-    let depth = witness.levels.len();
-    if depth < 2 {
-        return None;
-    }
-
-    let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
-    let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
-
-    let (trace, mut public_inputs) =
-        generate_merkle_poseidon2_trace(witness.leaf_hash, &siblings, &positions);
-
-    // The trace's computed root must match the witness's expected_root
-    if public_inputs.len() < 2 || public_inputs[1] != witness.expected_root {
-        return None;
-    }
-
-    if trace.len() < 2 {
-        return None;
-    }
-
-    // Append the action binding commitment as 4 additional public inputs.
-    // This binds the proof to a specific (action, resource) pair with 124-bit
-    // collision resistance (birthday bound ~2^62), preventing replay.
-    for &elem in action_commitment.iter() {
-        public_inputs.push(elem);
-    }
-
-    // Append the composition commitment if provided (sub-proof binding, 4 elements).
-    if let Some(cc) = composition_commitment
-        && !cc.is_zero()
-    {
-        for &elem in cc.as_slice() {
-            public_inputs.push(elem);
-        }
-    }
-
-    // Append the revealed facts commitment if provided (selective disclosure, 4 elements).
-    // SECURITY: This cryptographically binds the revealed facts to the STARK proof.
-    // The verifier recomputes the commitment from the plaintext facts and checks it
-    // matches this value, ensuring the prover cannot lie about which facts were revealed.
-    if let Some(rfc) = revealed_facts_commitment
-        && !rfc.is_zero()
-    {
-        for &elem in rfc.as_slice() {
-            public_inputs.push(elem);
-        }
-    }
-
-    // Generate the STARK proof with DSL Poseidon2 constraints
-    let circuit = merkle_poseidon2_circuit();
-    let proof = stark::prove(&circuit, &trace, &public_inputs);
-
-    // Sanity check: verify our own proof
-    match stark::verify(&circuit, &proof, &public_inputs) {
-        Ok(()) => Some(proof),
-        Err(_) => None,
-    }
-}
-
-/// Generate a real STARK proof for blinded (ring) Merkle membership with Poseidon2.
-///
-/// This is the production function for unlinkable issuer membership proofs.
-/// The public inputs are `[blinded_leaf, root, action_commitment]` where:
-///   `blinded_leaf = hash_2_to_1(leaf_hash, blinding_factor)`
-///
-/// The verifier sees only the blinded_leaf (different each presentation) and the
-/// federation root. They CANNOT determine which issuer produced the proof.
-///
-/// The `action_commitment` is appended as an additional public input to prevent
-/// replay across different authorization requests.
-pub fn generate_blinded_merkle_poseidon2_stark_proof(
-    witness: &MerkleWitness,
-    blinding_factor: BabyBear,
-    action_commitment: &crate::binding::ActionBinding,
-    composition_commitment: Option<crate::binding::WideHash>,
-    revealed_facts_commitment: Option<crate::binding::WideHash>,
-) -> Option<StarkProof> {
-    use crate::dsl::descriptors::blinded_merkle_poseidon2_circuit;
-    use crate::dsl::membership::generate_blinded_merkle_poseidon2_trace;
-
-    let depth = witness.levels.len();
-    if depth < 2 {
-        return None;
-    }
-
-    let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
-    let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
-
-    let (trace, mut public_inputs) = generate_blinded_merkle_poseidon2_trace(
-        witness.leaf_hash,
-        &siblings,
-        &positions,
-        blinding_factor,
-    );
-
-    // The trace's computed root must match the witness's expected_root
-    if public_inputs.len() < 2 || public_inputs[1] != witness.expected_root {
-        return None;
-    }
-
-    if trace.len() < 2 {
-        return None;
-    }
-
-    // Append the action binding commitment as 4 additional public inputs.
-    // This binds the proof to a specific (action, resource) pair with 124-bit
-    // collision resistance (birthday bound ~2^62), preventing replay.
-    for &elem in action_commitment.iter() {
-        public_inputs.push(elem);
-    }
-
-    // Append the composition commitment if provided (sub-proof binding, 4 elements).
-    if let Some(cc) = composition_commitment
-        && !cc.is_zero()
-    {
-        for &elem in cc.as_slice() {
-            public_inputs.push(elem);
-        }
-    }
-
-    // Append the revealed facts commitment if provided (selective disclosure, 4 elements).
-    // SECURITY: This cryptographically binds the revealed facts to the STARK proof.
-    // The verifier recomputes the commitment from the plaintext facts and checks it
-    // matches this value, ensuring the prover cannot lie about which facts were revealed.
-    if let Some(rfc) = revealed_facts_commitment
-        && !rfc.is_zero()
-    {
-        for &elem in rfc.as_slice() {
-            public_inputs.push(elem);
-        }
-    }
-
-    // Generate the STARK proof with DSL blinded Poseidon2 constraints
-    let circuit = blinded_merkle_poseidon2_circuit();
-    let proof = stark::prove(&circuit, &trace, &public_inputs);
-
-    // Sanity check: verify our own proof
-    match stark::verify(&circuit, &proof, &public_inputs) {
-        Ok(()) => Some(proof),
-        Err(_) => None,
     }
 }
 
