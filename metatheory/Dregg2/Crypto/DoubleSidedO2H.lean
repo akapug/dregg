@@ -324,10 +324,10 @@ def o2hBitsN (E : LatticeEstimate) (log2q : ℕ) : ℕ :=
 `kemBitsTight = min 181 154 − 2 = 152` STRICTLY exceeds the old O2H floor `o2hBitsR = 256/2 − 20 − 1 = 107`
 — a **45-bit** gain, exactly the `msgEntropyBits/2` halving the double-sided lemma removes. -/
 theorem deployed_tightness_gain :
-    o2hBitsR deployedEstimate 20 < kemBitsTight deployedEstimate 20 := by
-  have e1 : (deployedEstimate.mlweBits : ℝ) = 181 := by norm_num [deployedEstimate]
-  have e2 : (deployedEstimate.foCorrectnessBits : ℝ) = 174 := by norm_num [deployedEstimate]
-  have e3 : (deployedEstimate.msgEntropyBits : ℝ) = 256 := by norm_num [deployedEstimate]
+    o2hBitsR illustrativeEstimate 20 < kemBitsTight illustrativeEstimate 20 := by
+  have e1 : (illustrativeEstimate.mlweBits : ℝ) = 181 := by norm_num [illustrativeEstimate]
+  have e2 : (illustrativeEstimate.foCorrectnessBits : ℝ) = 174 := by norm_num [illustrativeEstimate]
+  have e3 : (illustrativeEstimate.msgEntropyBits : ℝ) = 256 := by norm_num [illustrativeEstimate]
   unfold o2hBitsR kemBitsTight
   rw [e1, e2, e3]
   push_cast
@@ -335,11 +335,11 @@ theorem deployed_tightness_gain :
   norm_num
 
 -- The ℕ shadows compute (conservative lower bounds), and the gain is `decide`-checkable.
-example : o2hBitsN deployedEstimate 20 = 107 := by decide
-example : kemBitsTightN deployedEstimate 20 = 152 := by decide
-example : o2hBitsN deployedEstimate 20 < kemBitsTightN deployedEstimate 20 := by decide
-#guard kemBitsTightN deployedEstimate 20 = 152
-#guard o2hBitsN deployedEstimate 20 = 107
+example : o2hBitsN illustrativeEstimate 20 = 107 := by decide
+example : kemBitsTightN illustrativeEstimate 20 = 152 := by decide
+example : o2hBitsN illustrativeEstimate 20 < kemBitsTightN illustrativeEstimate 20 := by decide
+#guard kemBitsTightN illustrativeEstimate 20 = 152
+#guard o2hBitsN illustrativeEstimate 20 = 107
 
 /-- **THE LOAD-BEARING TELL — the tight bound TRACKS the MLWE floor.** On the degraded estimate (halved
 lattice bits: `mlweBits 181→90`), the tight KEM floor DROPS to `min 90 154 − 2 = 88` — it moves with
