@@ -131,3 +131,5 @@ Honest status of the 6 gaps:
    schema = the next follow-on after the engine.
 6. BACKGROUND WIRING — FIRING NOW (a5cb36b8f9cf64364, getDocEngine/getCellEngine + dregg:doc/dregg:cell
    handlers in background.ts + real Netlayer + consent) → the elements work in production, not just fixtures.
+
+- done-log: BACKGROUND WIRING landed (ff53271bd) — getDocEngine/getCellEngine + dregg:doc/dregg:cell handlers over the real Netlayer + consent; dist/background.js dispatches all three; the elements ship beyond fixtures (hook gap #6 closed).
