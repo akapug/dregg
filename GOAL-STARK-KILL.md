@@ -554,3 +554,18 @@ test_ring_membership_unlinkable depend on it). ember chose: BUILD the blinded-me
     the anonymity tests onto them. → 0 true-live stark in presentation → S4 git rm.
 This makes the presentation family FULLY in-circuit: authorization + ring membership + unlinkability, all
 constrained, all fold-carried to the root. The comprehensive close ember chose over the fast delete.
+
+## ⚑ S3d-DIM: generalize blinded-membership to PRODUCTION dimension (2026-07-09) — no residual
+The S3c flip attempt found the real gap: S3d-1/3 built blindedMembershipDesc at DEPTH-2/leftmost-child,
+but production presentations use DEPTH-8, 4-ARY, GENERAL-POSITION paths (bridge/present.rs:1871 depth=8
+position=i%4; :1790/:1834 federation-tree general positions). Flipping onto the depth-2 desc would Err
+every real caller → all presentations fail. NOT a residual — FIX the dimension (ember: no little deaths).
+The depth-general 4-ary machinery EXISTS (membership_descriptor_of_depth_4ary, MEMBERSHIP_4ARY_NAME_PREFIX
+"merkle-membership::poseidon2-4ary-general-depthN") but publishes [leaf,root] = LINKABLE. So: build the
+DEPTH-GENERAL, 4-ARY, GENERAL-POSITION BLINDED variant = 4ary-general path + the arity-2 blind tooth
+(blinded_leaf=hash_2_to_1(leaf,blinding), leaf+blinding hidden) publishing [blinded_leaf, root]. That is
+the missing depth-general-unlinkable descriptor. Then the flip is capability-preserving.
+STAGES: (a) blindedMembershipDesc → depth-general 4-ary + general-position (Lean Emit + Rung-1/2, reuse
+membership_descriptor_of_depth_4ary + the blind tooth); (b) blinded_membership_witness → general
+depth/positions; (c) the fold proof/adapter generalize trivially (claim shape unchanged [blinded_leaf,root]);
+(d) THEN S3c flip. Bound-presentation (auth half) is depth-independent — already flip-ready.
