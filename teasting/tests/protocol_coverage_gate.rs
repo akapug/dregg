@@ -130,8 +130,12 @@ fn authorization_executor_coverage(a: &Authorization) -> bool {
     match a {
         // Covered.
         Authorization::Signature(..) => true, // every signed turn (composition, app tests)
-        Authorization::Unchecked => true,     // bare_turn helpers across suites
-        Authorization::Bearer(..) => true,    // bearer-cap exercise tests
+        // The DEFAULT `sign_action` output since the client-turn hybrid flip:
+        // every framework-signed action driven through `TurnExecutor::execute`
+        // (coverage_state_constraints + the app suites) now carries it.
+        Authorization::HybridSignature { .. } => true,
+        Authorization::Unchecked => true, // bare_turn helpers across suites
+        Authorization::Bearer(..) => true, // bearer-cap exercise tests
         Authorization::CapTpDelivered { .. } => true, // wire captp_delivery_tests + #122
         // Not yet confirmed covered by an executor-invoking test (#142 work-list).
         Authorization::Proof { .. } => false,

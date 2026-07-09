@@ -180,13 +180,15 @@ fn different_federation_ids_produce_different_signatures() {
     let action_a = fed_a.make_action(target, "ping", vec![]);
     let action_b = fed_b.make_action(target, "ping", vec![]);
 
+    // The ed25519 half is deterministic, so it carries the federation-binding
+    // pin (the ML-DSA half is hedged/randomized per signing).
     let sig_a = match action_a.authorization {
-        Authorization::Signature(a, b) => (a, b),
-        other => panic!("expected Signature, got {other:?}"),
+        Authorization::HybridSignature { ed25519, .. } => ed25519,
+        other => panic!("expected HybridSignature, got {other:?}"),
     };
     let sig_b = match action_b.authorization {
-        Authorization::Signature(a, b) => (a, b),
-        other => panic!("expected Signature, got {other:?}"),
+        Authorization::HybridSignature { ed25519, .. } => ed25519,
+        other => panic!("expected HybridSignature, got {other:?}"),
     };
 
     // Signatures must differ (different federation_id → different signing message).
@@ -206,15 +208,12 @@ fn make_self_action_targets_cclerk_own_cell() {
         cclerk.cell_id(),
         "make_self_action must target the cclerk's own cell"
     );
-    // Must carry a real signature.
+    // Must carry a real (hybrid) signature.
     match action.authorization {
-        Authorization::Signature(a, b) => {
-            assert!(
-                a != [0u8; 32] || b != [0u8; 32],
-                "signature must be non-zero"
-            );
+        Authorization::HybridSignature { ed25519, .. } => {
+            assert!(ed25519 != [0u8; 64], "ed25519 half must be non-zero");
         }
-        other => panic!("expected Signature, got {other:?}"),
+        other => panic!("expected HybridSignature, got {other:?}"),
     }
 }
 

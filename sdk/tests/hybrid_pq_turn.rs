@@ -28,7 +28,9 @@ fn sign_action_produces_verifiable_hybrid() {
     let cclerk = AgentCipherclerk::new();
     let fed = [7u8; 32];
     let target = cclerk.cell_id("default");
-    let signed = cclerk.sign_action_hybrid(empty_action(target, 1), &fed);
+    // `sign_action` (the DEFAULT signing path) now emits the hybrid variant —
+    // this pins the client-turn hybrid perimeter flip.
+    let signed = cclerk.sign_action(empty_action(target, 1), &fed);
 
     let (ed25519, ml_dsa, ml_dsa_pk) = match &signed.authorization {
         Authorization::HybridSignature {

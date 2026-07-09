@@ -180,7 +180,6 @@ fn witness(
     FullTurnWitness {
         initial_cell_state: initial.clone(),
         effects: effects.to_vec(),
-        authorization: None,
         membership: None,
         conservation: None,
         non_revocation: None,

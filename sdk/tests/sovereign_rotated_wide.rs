@@ -557,7 +557,6 @@ fn flagday_transfer_witness(
     let witness = FullTurnWitness {
         initial_cell_state: initial_vm_state.clone(),
         effects: vm_effects.clone(),
-        authorization: None,
         membership: None,
         conservation: None,
         non_revocation: None,

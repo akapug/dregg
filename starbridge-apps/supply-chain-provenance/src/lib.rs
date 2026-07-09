@@ -1599,8 +1599,8 @@ mod tests {
         let cclerk = test_cipherclerk();
         let action = build_handoff_action(&cclerk, test_item(), "a", "b", &GENESIS_PREV, 2, 1);
         match action.authorization {
-            Authorization::Signature(a, b) => assert!(a != [0u8; 32] || b != [0u8; 32]),
-            other => panic!("expected Signature, got {other:?}"),
+            Authorization::HybridSignature { ed25519, .. } => assert!(ed25519 != [0u8; 64]),
+            other => panic!("expected HybridSignature, got {other:?}"),
         }
     }
 

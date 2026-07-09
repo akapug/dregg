@@ -2961,8 +2961,28 @@ impl AgentCipherclerk {
     /// # Returns
     ///
     /// A clone of `action` with `authorization` set to
-    /// `Authorization::Signature(sig)` over the canonical message bytes.
+    /// `Authorization::HybridSignature { ed25519, ml_dsa, ml_dsa_pk }` over the
+    /// canonical message bytes — since the client-turn hybrid perimeter closed,
+    /// the default signing path carries the PQ half. The executor verifies the
+    /// ed25519 half exactly as it did for classical `Signature`, so existing
+    /// verifiers accept it; the ML-DSA half is checked fail-closed when present
+    /// and required only under the staged `require_pq` gate. Callers that need
+    /// the legacy classical-only shape can use
+    /// [`sign_action_classical`](Self::sign_action_classical).
     pub fn sign_action(
+        &self,
+        action: dregg_turn::action::Action,
+        federation_id: &[u8; 32],
+    ) -> dregg_turn::action::Action {
+        self.sign_action_hybrid(action, federation_id)
+    }
+
+    /// Sign an action with the legacy CLASSICAL (ed25519-only)
+    /// [`Authorization::Signature`] shape. [`sign_action`](Self::sign_action)
+    /// now emits the hybrid variant by default; this remains for consumers
+    /// that must produce the pre-hybrid wire shape (e.g. talking to a verifier
+    /// that predates `Authorization::HybridSignature`).
+    pub fn sign_action_classical(
         &self,
         action: dregg_turn::action::Action,
         federation_id: &[u8; 32],
@@ -7186,7 +7206,8 @@ impl AgentCipherclerk {
     ///
     /// # Returns
     ///
-    /// A [`Turn`] carrying a real `Authorization::Signature(..)` action, ready for submission.
+    /// A [`Turn`] carrying a real hybrid-signed
+    /// (`Authorization::HybridSignature { .. }`) action, ready for submission.
     pub fn create_from_factory(
         &self,
         issuer_cell: CellId,
@@ -9088,25 +9109,45 @@ mod tests {
     // ed25519 signature half against the supplied federation_id.
     // -----------------------------------------------------------------
 
-    /// Adversarial pin: a Signature with both halves zero is not a real
-    /// signature; if a queue method ever regressed to `Authorization::Unchecked`
-    /// the variant would not be `Signature(..)` at all, but if some future
-    /// "lazy sign" path produced `Signature([0;32], [0;32])` we want to catch
-    /// it too. (See `app-framework/tests/cipherclerk_sign_action.rs` for the
-    /// matching pin on the AppCipherclerk path.)
+    /// Adversarial pin: a signature with the ed25519 half all-zero is not a
+    /// real signature; if a signing method ever regressed to
+    /// `Authorization::Unchecked` the variant would not be a signature at all,
+    /// but if some future "lazy sign" path produced an all-zero half we want
+    /// to catch it too. Since the hybrid flip, `sign_action` emits
+    /// `HybridSignature` (ed25519 + ML-DSA), so that is the expected variant —
+    /// and the PQ half must be present. (See
+    /// `app-framework/tests/cipherclerk_sign_action.rs` for the matching pin
+    /// on the AppCipherclerk path.)
     fn assert_real_signature(action: &dregg_turn::action::Action) {
         use dregg_turn::action::Authorization;
         match &action.authorization {
-            Authorization::Signature(a, b) => {
+            Authorization::HybridSignature {
+                ed25519, ml_dsa, ..
+            } => {
                 assert!(
-                    *a != [0u8; 32] || *b != [0u8; 32],
-                    "queue action signature must be non-zero (got both halves zero)"
+                    *ed25519 != [0u8; 64],
+                    "action signature ed25519 half must be non-zero"
+                );
+                assert!(
+                    !ml_dsa.is_empty(),
+                    "hybrid signature must carry the PQ half"
                 );
             }
             other => panic!(
-                "queue action must carry Authorization::Signature(..), got {:?}",
+                "action must carry Authorization::HybridSignature {{ .. }}, got {:?}",
                 other
             ),
+        }
+    }
+
+    /// Extract the (deterministic) ed25519 half of a signed action's
+    /// authorization — the half tests compare for identity/federation binding
+    /// (the ML-DSA half is hedged, so its bytes differ per signing).
+    fn ed25519_half(action: &dregg_turn::action::Action) -> [u8; 64] {
+        use dregg_turn::action::Authorization;
+        match &action.authorization {
+            Authorization::HybridSignature { ed25519, .. } => *ed25519,
+            other => panic!("expected HybridSignature, got {:?}", other),
         }
     }
 
@@ -9153,7 +9194,6 @@ mod tests {
 
     #[test]
     fn create_from_factory_signature_binds_to_federation_id() {
-        use dregg_turn::action::Authorization;
         let cclerk = AgentCipherclerk::new();
         let issuer = cclerk.cell_id("default");
         let fed_a = [0x11u8; 32];
@@ -9170,14 +9210,8 @@ mod tests {
             .create_from_factory(issuer, [0xAA; 32], [0xBB; 32], [0xCC; 32], params_a, &fed_a);
         let t_b = cclerk
             .create_from_factory(issuer, [0xAA; 32], [0xBB; 32], [0xCC; 32], params_b, &fed_b);
-        let sig_a = match root_action(&t_a).authorization {
-            Authorization::Signature(a, b) => (a, b),
-            _ => panic!("expected Signature"),
-        };
-        let sig_b = match root_action(&t_b).authorization {
-            Authorization::Signature(a, b) => (a, b),
-            _ => panic!("expected Signature"),
-        };
+        let sig_a = ed25519_half(root_action(&t_a));
+        let sig_b = ed25519_half(root_action(&t_b));
         assert_ne!(
             sig_a, sig_b,
             "create_from_factory signatures must bind to federation_id"
@@ -9222,13 +9256,7 @@ mod tests {
         };
         let msg = TurnExecutor::compute_signing_message(&unsigned, &fed);
 
-        let (a, b) = match action.authorization {
-            Authorization::Signature(a, b) => (a, b),
-            _ => panic!("expected Signature"),
-        };
-        let mut sig_bytes = [0u8; 64];
-        sig_bytes[..32].copy_from_slice(&a);
-        sig_bytes[32..].copy_from_slice(&b);
+        let sig_bytes = ed25519_half(action);
         let sig = Signature::from_bytes(&sig_bytes);
 
         let vk_bytes = cclerk.public_key().0;
@@ -9358,10 +9386,24 @@ mod tests {
         );
         let explained = cclerk.explain_and_sign_action(unsigned.clone(), &fed);
         let signed = cclerk.sign_action(unsigned, &fed);
+        // Signing semantics identical: same unsigned content and the same
+        // (deterministic) ed25519 half. The full action hashes differ because
+        // the ML-DSA half of the hybrid authorization is hedged (randomized
+        // per signing) — that is a property of the PQ scheme, not a semantic
+        // divergence.
+        let strip = |a: &dregg_turn::action::Action| dregg_turn::action::Action {
+            authorization: dregg_turn::action::Authorization::Unchecked,
+            ..a.clone()
+        };
         assert_eq!(
-            explained.action.hash(),
-            signed.hash(),
+            strip(&explained.action).hash(),
+            strip(&signed).hash(),
             "explain_and_sign_action must not change signing semantics"
+        );
+        assert_eq!(
+            ed25519_half(&explained.action),
+            ed25519_half(&signed),
+            "explain_and_sign_action must produce the same ed25519 half as sign_action"
         );
         assert_eq!(
             explained.explanation,

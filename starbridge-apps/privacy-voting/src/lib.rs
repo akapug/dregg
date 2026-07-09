@@ -1117,8 +1117,8 @@ mod tests {
         ));
         // real signature, not a placeholder
         match action.authorization {
-            Authorization::Signature(a, b) => assert!(a != [0u8; 32] || b != [0u8; 32]),
-            other => panic!("expected Signature, got {other:?}"),
+            Authorization::HybridSignature { ed25519, .. } => assert!(ed25519 != [0u8; 64]),
+            other => panic!("expected HybridSignature, got {other:?}"),
         }
     }
 

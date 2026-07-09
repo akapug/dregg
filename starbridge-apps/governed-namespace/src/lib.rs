@@ -2493,13 +2493,10 @@ mod tests {
         let table = dummy_route_table(&[("/x", "y")]);
         let action = build_propose_table_update_action(&cipherclerk, cell, &table, 1, "d");
         match action.authorization {
-            Authorization::Signature(a, b) => {
-                assert!(
-                    a != [0u8; 32] || b != [0u8; 32],
-                    "signature must be non-zero"
-                );
+            Authorization::HybridSignature { ed25519, .. } => {
+                assert!(ed25519 != [0u8; 64], "signature must be non-zero");
             }
-            other => panic!("expected Signature variant, got {other:?}"),
+            other => panic!("expected HybridSignature variant, got {other:?}"),
         }
     }
 
@@ -2512,10 +2509,12 @@ mod tests {
         let a1 = build_vote_on_proposal_action(&cc1, cell, prior, VoteKind::Approve, 1);
         let a2 = build_vote_on_proposal_action(&cc2, cell, prior, VoteKind::Approve, 1);
         // Signatures differ even though logical input is identical.
-        let (Authorization::Signature(r1, _), Authorization::Signature(r2, _)) =
-            (&a1.authorization, &a2.authorization)
+        let (
+            Authorization::HybridSignature { ed25519: r1, .. },
+            Authorization::HybridSignature { ed25519: r2, .. },
+        ) = (&a1.authorization, &a2.authorization)
         else {
-            panic!("expected Signature variants");
+            panic!("expected HybridSignature variants");
         };
         assert_ne!(
             r1, r2,

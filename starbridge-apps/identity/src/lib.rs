@@ -1465,13 +1465,13 @@ mod tests {
         let cred = test_credential();
         let action = build_issue_credential_action(&cipherclerk, test_cell(), &cred, 1, [0u8; 32]);
         match action.authorization {
-            Authorization::Signature(a, b) => {
+            Authorization::HybridSignature { ed25519, .. } => {
                 assert!(
-                    a != [0u8; 32] || b != [0u8; 32],
+                    ed25519 != [0u8; 64],
                     "signature must be non-zero (no [0u8; 64] placeholders!)"
                 );
             }
-            other => panic!("expected Signature, got {other:?}"),
+            other => panic!("expected HybridSignature, got {other:?}"),
         }
     }
 
