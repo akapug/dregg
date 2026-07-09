@@ -147,7 +147,7 @@ fn ancestor_text_after(base: &DocGraph, fork: AtomId, heads: &[AtomId]) -> Strin
             return out;
         }
         if let Some(a) = base.atom(step) {
-            out.push_str(&a.content);
+            out.push_str(&a.content.render_text());
         }
         cursor = step;
     }

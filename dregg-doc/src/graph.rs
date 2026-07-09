@@ -19,7 +19,7 @@
 //! [`crate::Regime`] classifier draws*. Each field assignment is recorded with
 //! its provenance so the conflict can attribute the clashing values.
 
-use crate::atom::{Atom, AtomId, Provenance, Status};
+use crate::atom::{Atom, AtomContent, AtomId, Provenance, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One assignment to a single-valued field, retained for conflict detection +
@@ -69,7 +69,7 @@ impl DocGraph {
             AtomId::ROOT,
             Atom {
                 id: AtomId::ROOT,
-                content: String::new(),
+                content: AtomContent::Text(String::new()),
                 status: Status::Alive,
                 provenance: Provenance::GENESIS,
             },
@@ -227,6 +227,17 @@ impl DocGraph {
         if let Some(slot) = self.fields.get_mut(name)
             && let Some(a) = slot.iter_mut().find(|a| a.value == value)
         {
+            a.provenance.author = new_author;
+        }
+    }
+
+    /// TEST-ONLY forge hook: rewrite one *atom's* provenance to a new author,
+    /// leaving its content/status/edges unchanged. Proves the anti-forge tooth on
+    /// a TYPED atom (a forged structural node renders identically — it emits no
+    /// text of its own — but changes the commitment). Gated `#[cfg(test)]`.
+    #[cfg(test)]
+    pub(crate) fn forge_atom_provenance(&mut self, id: AtomId, new_author: crate::atom::Author) {
+        if let Some(a) = self.atoms.get_mut(&id) {
             a.provenance.author = new_author;
         }
     }

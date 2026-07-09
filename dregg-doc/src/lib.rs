@@ -192,7 +192,7 @@ mod doc_heap;
 #[cfg(feature = "cell-heap")]
 pub mod desktop;
 
-pub use atom::{Atom, AtomId, Author, PatchId, Provenance, Status};
+pub use atom::{Atom, AtomContent, AtomId, Author, PatchId, Provenance, Run, Status};
 pub use blame::{BlameLine, blame, blame_summary};
 #[cfg(feature = "substrate")]
 pub use check::{CheckId, CheckRefusal, CheckRequirement, CheckWitness, RequiredCheck};

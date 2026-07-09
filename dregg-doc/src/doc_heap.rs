@@ -59,7 +59,7 @@
 //!   receipt chain there are two witnesses of the same edit that are not yet
 //!   cross-checked against each other (patch-id ↔ receipt correspondence).
 
-use crate::atom::{AtomId, Author};
+use crate::atom::{AtomContent, AtomId, Author};
 use crate::graph::DocGraph;
 use crate::history::History;
 use crate::patch::{Op, Patch};
@@ -187,7 +187,8 @@ fn enc_op(out: &mut Vec<u8>, op: &Op) {
         Op::Add { id, content, after } => {
             out.push(0);
             out.extend_from_slice(&id.0.to_le_bytes());
-            enc_run(out, content.as_bytes());
+            // The typed content's self-delimiting, type-tagged canonical bytes.
+            enc_run(out, &content.canonical_bytes());
             out.extend_from_slice(&after.0.to_le_bytes());
         }
         Op::Delete { id } => {
@@ -294,7 +295,7 @@ fn history_from_bytes(bytes: &[u8]) -> Option<History> {
             ops.push(match d.u8()? {
                 0 => Op::Add {
                     id: d.atom_id()?,
-                    content: d.string()?,
+                    content: AtomContent::from_canonical_bytes(d.run()?)?,
                     after: d.atom_id()?,
                 },
                 1 => Op::Delete { id: d.atom_id()? },

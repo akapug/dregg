@@ -123,7 +123,10 @@ impl Leaf {
 pub(crate) fn leaf_for_atom(a: &Atom) -> FieldElement {
     let mut leaf = Leaf::new(b"atom");
     leaf.u128(a.id.0);
-    leaf.run(a.content.as_bytes());
+    // The TYPE-tagged canonical bytes bind the atom's KIND into the heap leaf, so
+    // the real Poseidon2 root binds the typed atom exactly as the in-crate commit
+    // does (a structural node and a text run cannot alias).
+    leaf.run(&a.content.canonical_bytes());
     leaf.status(a.status);
     leaf.provenance(a.provenance);
     leaf.finish()

@@ -19,7 +19,7 @@
 //! ([`Patch::invert`], §4.1) — the inverse undoes the patch on the graph the
 //! patch acted on (`Resurrect`/`Disconnect`/`RetractField` are the inverse ops).
 
-use crate::atom::{Atom, AtomId, Author, PatchId, Provenance, Status};
+use crate::atom::{Atom, AtomContent, AtomId, Author, PatchId, Provenance, Status};
 use crate::graph::DocGraph;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -33,8 +33,8 @@ pub enum Op {
     Add {
         /// The new atom's content-addressed id.
         id: AtomId,
-        /// Its content span.
-        content: String,
+        /// Its typed content ([`AtomContent`]): a text run or a structural node.
+        content: AtomContent,
         /// The existing atom this new atom is ordered after.
         after: AtomId,
     },
@@ -170,10 +170,26 @@ impl Patch {
             id,
             Op::Add {
                 id,
-                content: content.to_string(),
+                content: AtomContent::Text(content.to_string()),
                 after,
             },
         )
+    }
+
+    /// Convenience: an `Add` op inserting an arbitrary typed [`AtomContent`] after
+    /// `after`. The id is content-addressed over `seed` + a canonical key derived
+    /// from the content's kind (so a structural node and a text run seeded the
+    /// same never collide). Returns the new atom's id alongside the op.
+    pub fn add_content(seed: u64, content: AtomContent, after: AtomId) -> (AtomId, Op) {
+        // Derive over a hex of the type-tagged canonical bytes so the id binds the
+        // kind, not just a rendered projection.
+        let key: String = content
+            .canonical_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let id = AtomId::derive(seed, &key);
+        (id, Op::Add { id, content, after })
     }
 
     /// Push an op onto the patch (builder style).
