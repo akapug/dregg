@@ -246,6 +246,18 @@ pub struct AttestedRevocationRoot {
     /// Ed25519 signature over `signing_message()`.
     #[serde(with = "sig_bytes")]
     pub signature: [u8; 64],
+    /// The ML-DSA-65 (FIPS 204) half of the HYBRID attestation, over the SAME
+    /// `signing_message()` bytes as the ed25519 half. A quantum adversary who
+    /// breaks ed25519 discrete-log still cannot forge a revocation-root
+    /// attestation without also breaking module-lattice SIS.
+    ///
+    /// `None` marks a legacy ed25519-only attestation; the hybrid verifier
+    /// [`AttestedRevocationRoot::verify_hybrid`] treats that as a MISSING PQ
+    /// half and fails CLOSED. The ML-DSA *public* key is NOT carried here — it
+    /// is PINNED via the enrolled [`HybridAuthorityKey`] (see GAP #0: a
+    /// self-carried PQ key adds zero quantum security).
+    #[serde(default)]
+    pub pq_signature: Option<Vec<u8>>,
 }
 
 /// Serde helper for `[u8; 64]` since serde's derive doesn't support arrays > 32.
@@ -296,6 +308,128 @@ impl AttestedRevocationRoot {
         hasher.update(&count.to_le_bytes());
         hasher.update(&timestamp.to_le_bytes());
         *hasher.finalize().as_bytes()
+    }
+
+    /// Verify this attestation HYBRIDLY against the revocation authority's
+    /// ENROLLED + PINNED [`HybridAuthorityKey`] — the known/trusted authority
+    /// identity, NOT any key carried in the attestation itself.
+    ///
+    /// Returns `true` only when BOTH halves verify against the enrolled
+    /// authority: the ed25519 signature under `authority.ed25519`, AND the
+    /// ML-DSA-65 signature under `authority.ml_dsa`, both over
+    /// [`Self::signing_message`]. A quantum adversary who forges the ed25519
+    /// half but signs the PQ half under its OWN fresh ML-DSA key is rejected,
+    /// because that key is not the enrolled one.
+    ///
+    /// Fails CLOSED: a `None` `pq_signature` (legacy ed25519-only attestation)
+    /// is rejected, as is a mismatched pinned `signer`, a malformed PQ key, or
+    /// a failed cryptographic check.
+    pub fn verify_hybrid(&self, authority: &HybridAuthorityKey) -> bool {
+        // Pin the classical identity: the attestation's self-declared signer
+        // must be the enrolled authority (defense in depth alongside the sig).
+        if self.signer != authority.ed25519 {
+            return false;
+        }
+
+        let msg = Self::signing_message(&self.merkle_root, self.count, self.timestamp);
+
+        // Classical half: ed25519 under the enrolled key.
+        use ed25519_dalek::Verifier;
+        let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&authority.ed25519) else {
+            return false;
+        };
+        let sig = ed25519_dalek::Signature::from_bytes(&self.signature);
+        if vk.verify(&msg, &sig).is_err() {
+            return false;
+        }
+
+        // PQ half: ML-DSA-65 under the ENROLLED ml_dsa key. Missing → fail closed.
+        let Some(pq_sig) = self.pq_signature.as_deref() else {
+            return false;
+        };
+        pq::ml_dsa_verify(&authority.ml_dsa, &msg, pq_sig)
+    }
+}
+
+/// The revocation authority's ENROLLED, PINNED hybrid identity: the trusted
+/// ed25519 public key paired with its ML-DSA-65 public key.
+///
+/// This is the pin that closes the quantum downgrade. The verifier checks the
+/// ML-DSA half of an [`AttestedRevocationRoot`] against `ml_dsa` HERE — the
+/// known authority identity — never against a key carried in the attestation.
+/// Enroll this pair wherever the revocation authority's ed25519 identity is
+/// already trusted/configured (mirrors the finality-quorum enrolled roster).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HybridAuthorityKey {
+    /// The authority's ed25519 public key (classical half of the identity).
+    pub ed25519: [u8; 32],
+    /// The authority's ML-DSA-65 public key (FIPS 204, 1952 bytes) — the PQ
+    /// half of the identity, PINNED here so it can never be self-carried.
+    pub ml_dsa: Vec<u8>,
+}
+
+impl HybridAuthorityKey {
+    /// Enroll a hybrid authority identity from the authority's 32-byte ed25519
+    /// seed. The ML-DSA-65 key is derived DETERMINISTICALLY from the same seed
+    /// (`ML-DSA.KeyGen(ξ = seed)`), so no separate PQ ceremony is needed: the
+    /// pinned key here matches the one the authority signs with in
+    /// [`RevocationRegistry::publish_root`].
+    pub fn from_ed25519_seed(seed: &[u8; 32]) -> Self {
+        let ed25519 = ed25519_dalek::SigningKey::from_bytes(seed)
+            .verifying_key()
+            .to_bytes();
+        Self {
+            ed25519,
+            ml_dsa: pq::ml_dsa_public_from_seed(seed),
+        }
+    }
+}
+
+/// ML-DSA-65 (FIPS 204) half of the HYBRID revocation-root attestation.
+///
+/// The authority's ML-DSA keypair is derived deterministically from the SAME
+/// 32-byte ed25519 seed its classical identity uses, so a single mnemonic
+/// yields both halves with no separate ceremony (mirrors
+/// `dregg_turn::pq::MlDsaTurnKey`).
+mod pq {
+    use fips204::ml_dsa_65;
+    use fips204::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
+
+    /// Domain-separation context (FIPS 204 `ctx`) for the revocation-root
+    /// attestation PQ half. Distinct from the turn-path (`dregg-hybrid-turn-v1`)
+    /// and quorum (`dregg-hybrid-qc-v1`) contexts so a revocation-root PQ
+    /// signature can never be replayed as either, and vice versa.
+    const REVOCATION_ROOT_PQ_CTX: &[u8] = b"dregg-token attested-revocation-root-pq v1";
+
+    /// Derive the authority's ML-DSA-65 public key from its 32-byte ed25519 seed.
+    pub fn ml_dsa_public_from_seed(seed: &[u8; 32]) -> Vec<u8> {
+        let (pk, _sk) = ml_dsa_65::KG::keygen_from_seed(seed);
+        pk.into_bytes().to_vec()
+    }
+
+    /// Sign `message` with the ML-DSA-65 key derived from `seed`, under the
+    /// revocation-root context. `None` only on the vanishingly rare RNG failure.
+    pub fn ml_dsa_sign_from_seed(seed: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
+        let (_pk, sk) = ml_dsa_65::KG::keygen_from_seed(seed);
+        sk.try_sign(message, REVOCATION_ROOT_PQ_CTX)
+            .ok()
+            .map(|s| s.to_vec())
+    }
+
+    /// Verify an ML-DSA-65 signature over `message` under the enrolled public
+    /// key. Returns `false` — never panics — on any malformed input or failed
+    /// check (the fail-CLOSED primitive).
+    pub fn ml_dsa_verify(public_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
+        let Ok(pk_arr) = <[u8; ml_dsa_65::PK_LEN]>::try_from(public_bytes) else {
+            return false;
+        };
+        let Ok(sig) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig_bytes) else {
+            return false;
+        };
+        let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(pk_arr) else {
+            return false;
+        };
+        vk.verify(message, &sig, REVOCATION_ROOT_PQ_CTX)
     }
 }
 
@@ -628,10 +762,15 @@ impl RevocationRegistry {
 
         let msg = AttestedRevocationRoot::signing_message(&merkle_root, count, timestamp);
 
-        // Sign using ed25519-dalek compatible signing.
+        // Classical half: ed25519-dalek. `signing_key` is the 32-byte ed25519
+        // seed, so the SAME bytes deterministically derive the ML-DSA key.
         let sk = ed25519_dalek::SigningKey::from_bytes(signing_key);
         use ed25519_dalek::Signer;
         let sig = sk.sign(&msg);
+
+        // PQ half: ML-DSA-65 over the SAME message, derived from the same seed.
+        // The verifier pins the corresponding public key via HybridAuthorityKey.
+        let pq_signature = pq::ml_dsa_sign_from_seed(signing_key, &msg);
 
         self.attested_root = Some(AttestedRevocationRoot {
             merkle_root,
@@ -639,6 +778,7 @@ impl RevocationRegistry {
             timestamp,
             signer: *signer_public_key,
             signature: sig.to_bytes(),
+            pq_signature,
         });
     }
 
@@ -992,6 +1132,135 @@ mod tests {
                 Err(RevocationError::TokenRevoked)
             );
         }
+    }
+
+    // =========================================================================
+    // Hybrid (ed25519 ∧ ML-DSA-65) attestation tests
+    // =========================================================================
+
+    #[test]
+    fn hybrid_honest_authority_verifies() {
+        let mut reg = RevocationRegistry::new();
+        reg.revoke("tok-1");
+
+        let seed = [42u8; 32];
+        let pk_bytes = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        reg.publish_root(&seed, &pk_bytes);
+
+        let attested = reg.attested_root().unwrap();
+        assert!(attested.pq_signature.is_some(), "PQ half must be present");
+
+        // Enrolled/pinned hybrid authority key (derived from the same seed).
+        let authority = HybridAuthorityKey::from_ed25519_seed(&seed);
+        assert_eq!(authority.ed25519, pk_bytes);
+        assert!(
+            attested.verify_hybrid(&authority),
+            "honest hybrid attestation must verify"
+        );
+    }
+
+    #[test]
+    fn hybrid_attacker_pq_key_is_rejected() {
+        // The core adversarial case: a valid ed25519 half from the real
+        // authority, but the ML-DSA half signed under an ATTACKER's fresh key
+        // (≠ the authority's enrolled ML-DSA key) → verify_hybrid REJECTS.
+        let mut reg = RevocationRegistry::new();
+        reg.revoke("tok-1");
+
+        let seed = [42u8; 32];
+        let pk_bytes = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        reg.publish_root(&seed, &pk_bytes);
+        let mut attested = reg.attested_root().unwrap().clone();
+
+        // Attacker forges the PQ half under its OWN ML-DSA key, over the SAME
+        // (honest) message. The ed25519 half is left intact/valid.
+        let attacker_seed = [0xABu8; 32];
+        let msg = AttestedRevocationRoot::signing_message(
+            &attested.merkle_root,
+            attested.count,
+            attested.timestamp,
+        );
+        attested.pq_signature = pq::ml_dsa_sign_from_seed(&attacker_seed, &msg);
+
+        // Verified against the ENROLLED authority (whose ML-DSA key ≠ attacker's).
+        let authority = HybridAuthorityKey::from_ed25519_seed(&seed);
+        assert!(
+            !attested.verify_hybrid(&authority),
+            "PQ half under attacker's fresh key must be REJECTED"
+        );
+
+        // Sanity: it would only pass if the attacker were somehow enrolled.
+        let attacker_authority = HybridAuthorityKey {
+            ed25519: pk_bytes,
+            ml_dsa: pq::ml_dsa_public_from_seed(&attacker_seed),
+        };
+        assert!(attested.verify_hybrid(&attacker_authority));
+    }
+
+    #[test]
+    fn hybrid_missing_pq_half_fails_closed() {
+        let mut reg = RevocationRegistry::new();
+        reg.revoke("tok-1");
+        let seed = [42u8; 32];
+        let pk_bytes = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        reg.publish_root(&seed, &pk_bytes);
+
+        // Strip the PQ half (legacy ed25519-only attestation).
+        let mut attested = reg.attested_root().unwrap().clone();
+        attested.pq_signature = None;
+
+        let authority = HybridAuthorityKey::from_ed25519_seed(&seed);
+        assert!(
+            !attested.verify_hybrid(&authority),
+            "missing PQ half must fail CLOSED"
+        );
+    }
+
+    #[test]
+    fn hybrid_forged_ed25519_signer_rejected() {
+        // A different authority's ed25519 identity pinned → reject even with a
+        // structurally valid attestation from the real authority.
+        let mut reg = RevocationRegistry::new();
+        reg.revoke("tok-1");
+        let seed = [42u8; 32];
+        let pk_bytes = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        reg.publish_root(&seed, &pk_bytes);
+        let attested = reg.attested_root().unwrap();
+
+        let wrong_authority = HybridAuthorityKey::from_ed25519_seed(&[7u8; 32]);
+        assert!(
+            !attested.verify_hybrid(&wrong_authority),
+            "attestation pinned to the wrong authority must reject"
+        );
+    }
+
+    #[test]
+    fn hybrid_tampered_root_rejected() {
+        // Both halves cover (root‖count‖timestamp); mutating the root after
+        // signing breaks both, so verify_hybrid rejects.
+        let mut reg = RevocationRegistry::new();
+        reg.revoke("tok-1");
+        let seed = [42u8; 32];
+        let pk_bytes = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        reg.publish_root(&seed, &pk_bytes);
+        let mut attested = reg.attested_root().unwrap().clone();
+
+        attested.merkle_root[0] ^= 0xff;
+        let authority = HybridAuthorityKey::from_ed25519_seed(&seed);
+        assert!(
+            !attested.verify_hybrid(&authority),
+            "tampered merkle_root must reject"
+        );
     }
 
     #[test]
