@@ -319,8 +319,8 @@ pub struct SignedVote {
 /// The domain-separation context every hybrid-quorum ML-DSA-65 signature binds — byte-identical to
 /// `dregg_federation::frost::HYBRID_PQ_CTX` (`b"dregg-hybrid-qc-v1"`), the tag the committee's
 /// finalization signers use when they produce the PQ half. Re-declared here so the light client can
-/// re-verify the post-quantum half on `fips204` ALONE (a light client must stay minimal / WASM-
-/// buildable and not pull the heavy `dregg-federation` crate). A mismatch would fail EVERY PQ half
+/// re-verify the post-quantum half on the shared `dregg-pq` leaf ALONE (a light client must stay
+/// minimal / WASM-buildable and not pull the heavy `dregg-federation` crate). A mismatch would fail EVERY PQ half
 /// closed, so it is exercised end-to-end by the `hybrid_*` teeth tests below.
 pub const HYBRID_PQ_CTX: &[u8] = b"dregg-hybrid-qc-v1";
 
@@ -328,20 +328,9 @@ pub const HYBRID_PQ_CTX: &[u8] = b"dregg-hybrid-qc-v1";
 /// under [`HYBRID_PQ_CTX`], for the self-contained `pubkey` bytes the vote carries. Returns `false`
 /// (fail-closed) on a wrong-length / undecodable key or signature, or a failing verify — so a missing
 /// or forged PQ half never counts. Mirrors `dregg_federation::frost::MlDsaPublicKey::verify` on the
-/// light-client side, on `fips204` alone.
+/// light-client side, on the shared `dregg-pq` leaf alone.
 fn verify_ml_dsa_half(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {
-    use fips204::ml_dsa_65;
-    use fips204::traits::{SerDes as _, Verifier as _};
-    let Ok(pk_bytes) = <[u8; ml_dsa_65::PK_LEN]>::try_from(pubkey) else {
-        return false;
-    };
-    let Ok(sig_bytes) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig) else {
-        return false;
-    };
-    let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(pk_bytes) else {
-        return false;
-    };
-    vk.verify(message, &sig_bytes, HYBRID_PQ_CTX)
+    dregg_pq::ml_dsa_verify(pubkey, HYBRID_PQ_CTX, message, sig)
 }
 
 /// The Rust mirror of `FinalizedLightClient.FinalityCert` + `CertValid`: `votes` are the ratifying
@@ -751,28 +740,24 @@ mod tests {
 
     /// A deterministic ML-DSA-65 keypair for validator `i` (test fixtures only) — the post-quantum
     /// half of validator `i`'s hybrid vote, keyed off the same index as [`validator_key`].
-    fn validator_ml_dsa_key(i: u8) -> (Vec<u8>, fips204::ml_dsa_65::PrivateKey) {
-        use fips204::ml_dsa_65;
-        use fips204::traits::{KeyGen as _, SerDes as _};
+    fn validator_ml_dsa_key(i: u8) -> (Vec<u8>, dregg_pq::MlDsaKey) {
         let mut xi = [0u8; 32];
         xi[0] = i;
         xi[31] = 0xD5; // a distinct domain byte from the ed25519 seed
-        let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(&xi);
-        (pk.into_bytes().to_vec(), sk)
+        let key = dregg_pq::MlDsaKey::from_ed25519_seed(&xi);
+        (key.public_bytes(), key)
     }
 
     /// A genuine HYBRID vote: validator `i` signs THIS cert's `(root, participant_count)` message with
     /// BOTH its ed25519 key and its ML-DSA-65 key (over [`HYBRID_PQ_CTX`]).
     fn signed_vote(i: u8, root: BabyBear, participant_count: usize) -> SignedVote {
-        use fips204::traits::Signer as _;
         let sk = validator_key(i);
         let msg = finality_signing_message(root, participant_count);
         let sig = sk.sign(&msg);
         let (ml_dsa_pubkey, ml_sk) = validator_ml_dsa_key(i);
         let pq_signature = ml_sk
-            .try_sign(&msg, HYBRID_PQ_CTX)
-            .expect("ml-dsa-65 sign cannot fail on a valid key")
-            .to_vec();
+            .try_sign(HYBRID_PQ_CTX, &msg)
+            .expect("ml-dsa-65 sign cannot fail on a valid key");
         SignedVote {
             validator: sk.verifying_key().to_bytes(),
             signature: sig.to_bytes(),
@@ -1060,8 +1045,6 @@ mod tests {
     /// roster counts NO signer (fail-closed, never ed25519-only).
     #[test]
     fn quantum_forged_pq_key_is_rejected() {
-        use fips204::traits::{KeyGen as _, SerDes as _, Signer as _};
-
         let root = BabyBear::new(0xDEAD_BEEF);
         let n = 4usize; // committee supermajority = 3
         let trusted = committee(n);
@@ -1086,9 +1069,9 @@ mod tests {
                     let mut v = signed_vote(i, root, n);
                     let mut xi = [0u8; 32];
                     xi[0] = 0xF0 + i;
-                    let (pk, sk) = fips204::ml_dsa_65::KG::keygen_from_seed(&xi);
-                    v.ml_dsa_pubkey = pk.into_bytes().to_vec();
-                    v.pq_signature = sk.try_sign(&msg, HYBRID_PQ_CTX).expect("sign").to_vec();
+                    let attacker = dregg_pq::MlDsaKey::from_ed25519_seed(&xi);
+                    v.ml_dsa_pubkey = attacker.public_bytes();
+                    v.pq_signature = attacker.try_sign(HYBRID_PQ_CTX, &msg).expect("sign");
                     v
                 })
                 .collect(),

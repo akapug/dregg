@@ -29,9 +29,6 @@
 //! `TurnExecutor::require_pq` (default off), matching the consensus HybridPq
 //! default-off rollout.
 
-use fips204::ml_dsa_65;
-use fips204::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
-
 /// Domain-separation context for the ML-DSA half of a HYBRID *turn*
 /// authorization (FIPS 204 `ctx`, bound into every signature). Distinct from
 /// the consensus quorum context (`dregg-hybrid-qc-v1`) so a turn-path PQ
@@ -40,19 +37,19 @@ use fips204::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
 pub const HYBRID_TURN_PQ_CTX: &[u8] = b"dregg-hybrid-turn-v1";
 
 /// Serialized length of an ML-DSA-65 public key (FIPS 204 = 1952 bytes).
-pub const ML_DSA_PK_LEN: usize = ml_dsa_65::PK_LEN;
+pub const ML_DSA_PK_LEN: usize = dregg_pq::ML_DSA_PK_LEN;
 
 /// Serialized length of an ML-DSA-65 signature (FIPS 204).
-pub const ML_DSA_SIG_LEN: usize = ml_dsa_65::SIG_LEN;
+pub const ML_DSA_SIG_LEN: usize = dregg_pq::ML_DSA_SIG_LEN;
 
 /// The PQ half of a hybrid identity: an ML-DSA-65 signing key plus its
 /// serialized public key. Held alongside the classical `ed25519_dalek::SigningKey`
 /// and derived from the SAME seed.
+///
+/// A thin newtype over the shared [`dregg_pq::MlDsaKey`] primitive that pins the
+/// turn domain-separation context ([`HYBRID_TURN_PQ_CTX`]).
 #[derive(Clone)]
-pub struct MlDsaTurnKey {
-    secret: ml_dsa_65::PrivateKey,
-    public_bytes: [u8; ml_dsa_65::PK_LEN],
-}
+pub struct MlDsaTurnKey(dregg_pq::MlDsaKey);
 
 impl core::fmt::Debug for MlDsaTurnKey {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -66,26 +63,19 @@ impl MlDsaTurnKey {
     /// PQ public key matches across cipherclerk / node / genesis without a
     /// separate ceremony.
     pub fn from_ed25519_seed(seed: &[u8; 32]) -> Self {
-        let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(seed);
-        Self {
-            secret: sk,
-            public_bytes: pk.into_bytes(),
-        }
+        Self(dregg_pq::MlDsaKey::from_ed25519_seed(seed))
     }
 
     /// The serialized ML-DSA-65 public key (carried in the hybrid envelope so
     /// the verifier is self-contained during the staged rollout).
     pub fn public_bytes(&self) -> Vec<u8> {
-        self.public_bytes.to_vec()
+        self.0.public_bytes()
     }
 
     /// Sign `message` under [`HYBRID_TURN_PQ_CTX`] (hedged from OS entropy).
     /// `None` only on the vanishingly rare internal RNG failure.
     pub fn sign(&self, message: &[u8]) -> Option<Vec<u8>> {
-        self.secret
-            .try_sign(message, HYBRID_TURN_PQ_CTX)
-            .ok()
-            .map(|s| s.to_vec())
+        self.0.try_sign(HYBRID_TURN_PQ_CTX, message)
     }
 }
 
@@ -96,16 +86,7 @@ impl MlDsaTurnKey {
 /// This is the fail-CLOSED primitive: a present-but-invalid PQ half must make
 /// the whole hybrid authorization reject, regardless of `require_pq`.
 pub fn ml_dsa_verify(public_bytes: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
-    let Ok(pk_arr) = <[u8; ml_dsa_65::PK_LEN]>::try_from(public_bytes) else {
-        return false;
-    };
-    let Ok(sig) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig_bytes) else {
-        return false;
-    };
-    let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(pk_arr) else {
-        return false;
-    };
-    vk.verify(message, &sig, HYBRID_TURN_PQ_CTX)
+    dregg_pq::ml_dsa_verify(public_bytes, HYBRID_TURN_PQ_CTX, message, sig_bytes)
 }
 
 #[cfg(test)]

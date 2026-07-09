@@ -57,8 +57,6 @@
 
 use curve25519_dalek::edwards::EdwardsPoint;
 use curve25519_dalek::scalar::Scalar;
-use fips204::ml_dsa_65;
-use fips204::traits::{KeyGen as _, SerDes as _, Signer as _, Verifier as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha512};
 
@@ -447,10 +445,10 @@ pub fn frost_sign_random(
 pub const HYBRID_PQ_CTX: &[u8] = b"dregg-hybrid-qc-v1";
 
 /// An ML-DSA-65 public key, as its FIPS 204 serialized bytes
-/// ([`ml_dsa_65::PK_LEN`] = 1952). Validated (`try_from_bytes`) at verify
+/// ([`dregg_pq::ML_DSA_PK_LEN`] = 1952). Validated (`try_from_bytes`) at verify
 /// time; an undecodable key rejects any certificate that names it.
 #[derive(Clone, PartialEq, Eq)]
-pub struct MlDsaPublicKey(pub [u8; ml_dsa_65::PK_LEN]);
+pub struct MlDsaPublicKey(pub [u8; dregg_pq::ML_DSA_PK_LEN]);
 
 impl std::fmt::Debug for MlDsaPublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -465,21 +463,16 @@ impl MlDsaPublicKey {
     ///
     /// `false` on wrong-length signature bytes or an undecodable key.
     pub fn verify(&self, message: &[u8], sig_bytes: &[u8]) -> bool {
-        let Ok(sig) = <[u8; ml_dsa_65::SIG_LEN]>::try_from(sig_bytes) else {
-            return false;
-        };
-        let Ok(vk) = ml_dsa_65::PublicKey::try_from_bytes(self.0) else {
-            return false;
-        };
-        vk.verify(message, &sig, HYBRID_PQ_CTX)
+        dregg_pq::ml_dsa_verify(&self.0, HYBRID_PQ_CTX, message, sig_bytes)
     }
 }
 
 /// An ML-DSA-65 signing key held by one committee member, for producing the
-/// PQ half of a hybrid quorum. Wraps the FIPS 204 private key; every
-/// signature it produces is bound to [`HYBRID_PQ_CTX`].
+/// PQ half of a hybrid quorum. A thin newtype over the shared
+/// [`dregg_pq::MlDsaKey`] primitive; every signature it produces is bound to
+/// [`HYBRID_PQ_CTX`].
 #[derive(Clone)]
-pub struct MlDsaSigningKey(ml_dsa_65::PrivateKey);
+pub struct MlDsaSigningKey(dregg_pq::MlDsaKey);
 
 impl std::fmt::Debug for MlDsaSigningKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -488,25 +481,21 @@ impl std::fmt::Debug for MlDsaSigningKey {
 }
 
 impl MlDsaSigningKey {
-    /// Generate a fresh keypair from OS entropy (FIPS 204 `ML-DSA.KeyGen`).
-    pub fn generate() -> Option<(MlDsaPublicKey, Self)> {
-        let (pk, sk) = ml_dsa_65::try_keygen().ok()?;
-        Some((MlDsaPublicKey(pk.into_bytes()), Self(sk)))
-    }
-
     /// Deterministic keypair from a 32-byte seed `ξ` (`keygen_from_seed`) —
     /// for reproducible fixtures, exactly like [`HybridTestDealer::deal`].
     pub fn from_seed(xi: &[u8; 32]) -> (MlDsaPublicKey, Self) {
-        let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(xi);
-        (MlDsaPublicKey(pk.into_bytes()), Self(sk))
+        let key = dregg_pq::MlDsaKey::from_ed25519_seed(xi);
+        let pk = MlDsaPublicKey(
+            key.public_bytes()
+                .try_into()
+                .expect("ML-DSA-65 public key is ML_DSA_PK_LEN bytes"),
+        );
+        (pk, Self(key))
     }
 
     /// Sign `message` under [`HYBRID_PQ_CTX`] (hedged from OS entropy).
     pub fn sign(&self, message: &[u8]) -> Option<Vec<u8>> {
-        self.0
-            .try_sign(message, HYBRID_PQ_CTX)
-            .ok()
-            .map(|s| s.to_vec())
+        self.0.try_sign(HYBRID_PQ_CTX, message)
     }
 }
 
@@ -652,7 +641,7 @@ pub struct HybridTestDealer {
     /// exactly the slice [`verify_hybrid_quorum`] takes.
     pub ml_dsa_pubkeys: Vec<MlDsaPublicKey>,
     /// Each member's ML-DSA-65 signing key (dealer-held; test-only).
-    ml_dsa_keys: Vec<ml_dsa_65::PrivateKey>,
+    ml_dsa_keys: Vec<MlDsaSigningKey>,
 }
 
 impl HybridTestDealer {
@@ -668,8 +657,8 @@ impl HybridTestDealer {
         let mut ml_dsa_pubkeys = Vec::with_capacity(n as usize);
         let mut ml_dsa_keys = Vec::with_capacity(n as usize);
         for xi in &pq_seed[..n as usize] {
-            let (pk, sk) = ml_dsa_65::KG::keygen_from_seed(xi);
-            ml_dsa_pubkeys.push(MlDsaPublicKey(pk.into_bytes()));
+            let (pk, sk) = MlDsaSigningKey::from_seed(xi);
+            ml_dsa_pubkeys.push(pk);
             ml_dsa_keys.push(sk);
         }
         Some(Self {
@@ -714,12 +703,8 @@ pub fn hybrid_sign(
     let frost = frost_sign(&dealer.frost.group_key, &signers, nonce_seed, message)?;
     let mut pq_sigs = Vec::with_capacity(signer_positions.len());
     for &p in signer_positions {
-        let sig = dealer
-            .ml_dsa_keys
-            .get(p)?
-            .try_sign(message, HYBRID_PQ_CTX)
-            .ok()?;
-        pq_sigs.push((p, sig.to_vec()));
+        let sig = dealer.ml_dsa_keys.get(p)?.sign(message)?;
+        pq_sigs.push((p, sig));
     }
     Some(HybridQC { frost, pq_sigs })
 }
@@ -1232,7 +1217,9 @@ mod tests {
 
         // Wrong-length signature bytes.
         let mut truncated = qc;
-        truncated.pq_sigs[0].1.truncate(ml_dsa_65::SIG_LEN - 1);
+        truncated.pq_sigs[0]
+            .1
+            .truncate(dregg_pq::ML_DSA_SIG_LEN - 1);
         assert!(!verify_hybrid_quorum(
             &d.frost.group_key,
             &d.ml_dsa_pubkeys,
@@ -1305,7 +1292,7 @@ mod tests {
         ));
         // Nor can an out-of-range index.
         let mut oob = sub;
-        oob.pq_sigs.push((7, vec![0u8; ml_dsa_65::SIG_LEN]));
+        oob.pq_sigs.push((7, vec![0u8; dregg_pq::ML_DSA_SIG_LEN]));
         assert!(!verify_hybrid_quorum(
             &d.frost.group_key,
             &d.ml_dsa_pubkeys,
