@@ -598,8 +598,13 @@ impl Disseminator {
     /// verified [`Blocklace::insert`] accepts.
     pub fn with_signing_key(signing_key: SigningKey) -> Self {
         let self_key = signing_key.verifying_key().to_bytes();
+        let mut blocklace = Blocklace::new();
+        // Self-enroll our own ML-DSA key so blocks we AUTHOR pass the hybrid,
+        // roster-pinned `insert`. Peers are enrolled by the node from the
+        // committee roster (see `enroll_pq`).
+        blocklace.enroll_pq(self_key, crate::Block::pq_public_key(&signing_key));
         Self {
-            blocklace: Blocklace::new(),
+            blocklace,
             peer_knowledge: PeerKnowledge::new(),
             self_key,
             signing_key: Some(signing_key),
@@ -681,7 +686,22 @@ impl Disseminator {
     /// calls author signed blocks under that identity.
     pub fn set_signing_key(&mut self, signing_key: SigningKey) {
         self.self_key = signing_key.verifying_key().to_bytes();
+        // Self-enroll our own ML-DSA key so authored blocks pass the hybrid,
+        // roster-pinned `insert`.
+        self.blocklace
+            .enroll_pq(self.self_key, crate::Block::pq_public_key(&signing_key));
         self.signing_key = Some(signing_key);
+    }
+
+    /// Enroll a committee member's ML-DSA-65 public key into the local roster.
+    ///
+    /// The node calls this from the trusted committee roster (genesis) for every
+    /// member whose authored blocks this disseminator will receive: the hybrid
+    /// [`Blocklace::insert`] PINS each received block's post-quantum half to the
+    /// enrolled key for its creator. A creator with no enrolled key is rejected
+    /// fail-closed. The enrollable key is [`crate::Block::pq_public_key`].
+    pub fn enroll_pq(&mut self, creator: NodeKey, pubkey: crate::pq::MlDsaPublicKey) {
+        self.blocklace.enroll_pq(creator, pubkey);
     }
 
     /// Create a new block and insert it into our local blocklace.
@@ -1235,9 +1255,28 @@ mod tests {
         Block::new_signed(&signing_for(creator), seq, preds, payload.to_vec())
     }
 
-    /// An authoring disseminator for identity `id` (holds the signing key).
+    /// Enroll the deterministic test committee (`signing_for(0..=32)`) into a
+    /// blocklace's ML-DSA roster, so hybrid `insert` can PIN their post-quantum
+    /// halves. Every test block/creator uses an id `<= 32`.
+    fn enroll_test_committee(lace: &mut Blocklace) {
+        for c in 0u8..=32 {
+            lace.enroll_pq(make_key(c), Block::pq_public_key(&signing_for(c)));
+        }
+    }
+
+    /// A blocklace with the test committee pre-enrolled.
+    fn test_lace() -> Blocklace {
+        let mut lace = Blocklace::new();
+        enroll_test_committee(&mut lace);
+        lace
+    }
+
+    /// An authoring disseminator for identity `id` (holds the signing key), with
+    /// the whole test committee enrolled so it accepts blocks by any test peer.
     fn make_disseminator(id: u8) -> Disseminator {
-        Disseminator::with_signing_key(signing_for(id))
+        let mut d = Disseminator::with_signing_key(signing_for(id));
+        enroll_test_committee(d.blocklace_mut());
+        d
     }
 
     /// Differential: the successor-index `is_referenced_by_subscribed` must
@@ -1258,7 +1297,7 @@ mod tests {
             })
         }
 
-        let mut lace = Blocklace::new();
+        let mut lace = test_lace();
         // Strand 1 genesis, strand 2 + 3 reference it; strand 2 is subscribed.
         let g1 = make_block(1, 0, vec![], b"g1");
         let g1_id = lace.insert(g1).unwrap();
@@ -1565,6 +1604,11 @@ mod tests {
 
         let mut node_a = make_disseminator(1);
         let mut node_b = make_disseminator(2);
+        // The equivocator (creator 99) is outside the default test committee
+        // (0..=32); enroll its PQ key on both nodes so the fork blocks are
+        // hybrid-verifiable (equivocation is still detected AFTER auth).
+        node_a.enroll_pq(make_key(99), Block::pq_public_key(&signing_for(99)));
+        node_b.enroll_pq(make_key(99), Block::pq_public_key(&signing_for(99)));
 
         // Create two conflicting blocks from the same creator at the same
         // sequence (equivocation). Both should be propagated as evidence.
