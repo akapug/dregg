@@ -7099,7 +7099,10 @@ impl AgentCipherclerk {
 
         // Generate the IVC STARK proof over the hash chain.
         let (proof, _public_inputs) = dregg_circuit::prove_ivc_stark(genesis_root, &transitions);
-        Ok(dregg_circuit::stark::proof_to_bytes(&proof))
+        // WIRE (flip): postcard-encode the StateTransition StarkProof, mirroring the non-stark
+        // codec `verify_validated_ivc_proof` uses — replaces the removed hand-STARK `proof_to_bytes`.
+        postcard::to_allocvec(&proof)
+            .map_err(|e| SdkError::IvcError(format!("failed to serialize IVC proof: {e}")))
     }
 
     /// Verify a compressed history proof.
@@ -7128,7 +7131,9 @@ impl AgentCipherclerk {
         _current: [u8; 32],
         step_count: u64,
     ) -> Result<bool, SdkError> {
-        let proof = dregg_circuit::stark::proof_from_bytes(proof_bytes)
+        // WIRE (flip): postcard-decode the StateTransition StarkProof — replaces the removed
+        // the removed hand-STARK `proof_from_bytes`; the verify below stays `verify_ivc_stark`.
+        let proof: dregg_circuit::stark::StarkProof = postcard::from_bytes(proof_bytes)
             .map_err(|e| SdkError::IvcError(format!("failed to deserialize IVC proof: {}", e)))?;
 
         // Reconstruct the public inputs expected by verify_ivc_stark.
@@ -8084,7 +8089,7 @@ mod tests {
     /// can decode and verify.
     ///
     /// This is the P0 regression test for the format mismatch where the cipherclerk serialized
-    /// raw STARK bytes via `stark::proof_to_bytes` but the verifier expected a postcard-encoded
+    /// raw hand-STARK bytes but the verifier expected a postcard-encoded
     /// `WirePresentationProof`. Both sides now use the same format.
     #[test]
     fn test_cclerk_authorize_engine_verify_roundtrip() {

@@ -5,6 +5,32 @@
 //! the verifier side of a presentation exchange.
 
 use crate::error::SdkError;
+use dregg_circuit::presentation::{DescriptorProofWire, verify_descriptor_wire};
+
+/// The descriptor-wire bundle the SDK verifier consumes after the `StarkProof` → IR-v2
+/// wire flip (Golden Lift S3c): the two committed descriptor proofs a presentation reduces
+/// to, each verified via `descriptor_by_name` → decode `postcard(Ir2BatchProof)` →
+/// `verify_vm_descriptor2` (the [`verify_descriptor_wire`] helper).
+///
+/// This replaces the opaque single hand-STARK `proof_to_bytes(StarkProof)` blob (a merkle-membership
+/// STARK that baked leaf/root + action-binding into one AIR). That combined statement is now
+/// split across two committed descriptors, mirroring
+/// [`dregg_circuit::presentation::RealPresentationProof::verify`]:
+///
+/// * `blinded_membership` — the depth-general 4-ary blinded ring-membership proof
+///   (`dregg-blinded-membership-4ary-general-depth{N}`); PIs `[blinded_leaf, root]`. Proves the
+///   issuer is a member of the federation rooted at `root` (unlinkably).
+/// * `bound_presentation` — the bound-presentation proof (`dregg-bound-presentation::v1`); PIs
+///   `[federation_root, action_binding(8), timestamp, presentation_tag, revealed_facts(8),
+///   verifier_nonce]`. Binds the action/resource and (for selective disclosure) the revealed-facts
+///   commitment in-circuit.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct AuthorizationDescriptorProof {
+    /// AUTH: the bound-presentation descriptor wire (action binding + revealed facts + tag).
+    pub bound_presentation: DescriptorProofWire,
+    /// RING/UNLINKABILITY: the blinded ring-membership descriptor wire (issuer ∈ federation).
+    pub blinded_membership: DescriptorProofWire,
+}
 
 /// Categorised outcome of a verification call.
 ///
@@ -59,8 +85,8 @@ impl VerifyOutcome {
 /// [`AgentCipherclerk::prove_authorization`](crate::AgentCipherclerk::prove_authorization))
 /// and the federation root of trust, check whether the proof is valid.
 ///
-/// The proof bytes should be a serialized `BridgePresentationProof` (via postcard)
-/// or raw STARK proof bytes (from `BridgePresentationProof::issuer_proof_bytes()`).
+/// The proof bytes are a postcard-encoded [`AuthorizationDescriptorProof`] (the two committed
+/// descriptor wires — blinded ring-membership + bound-presentation).
 ///
 /// # Arguments
 ///
@@ -97,31 +123,20 @@ pub fn verify_authorization_proof(
     expected_action: &str,
     expected_resource: &str,
 ) -> Result<bool, SdkError> {
-    use dregg_circuit::BabyBear;
-    use dregg_circuit::stark;
-
-    // Interpret as raw STARK proof bytes (the standard wire format produced by
-    // BridgePresentationProof::issuer_proof_bytes()).
-    let stark_proof = stark::proof_from_bytes(proof_bytes).map_err(|_| {
-        SdkError::Wire("proof bytes could not be deserialized as a STARK proof".into())
+    let bundle: AuthorizationDescriptorProof = postcard::from_bytes(proof_bytes).map_err(|_| {
+        SdkError::Wire(
+            "proof bytes could not be deserialized as an AuthorizationDescriptorProof".into(),
+        )
     })?;
+    verify_authorization_bundle(&bundle, federation_root, expected_action, expected_resource)
+}
 
-    // SECURITY: Use new_canonical() for values from external (potentially adversarial)
-    // proof data. This ensures modular reduction is applied, preventing non-canonical
-    // representations that could cause malleability (same field element with different
-    // byte encodings comparing as unequal).
-    let pi: Vec<BabyBear> = stark_proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new_canonical(v))
-        .collect();
-
-    if pi.len() < 2 {
-        return Ok(false);
-    }
-
-    // Check federation root matches.
-    let expected_root = if federation_root[4..].iter().all(|&b| b == 0) {
+/// The expected federation root as a canonical `BabyBear`, using the same 32-byte decode the
+/// legacy hand-STARK path used: a value that fits in the low 4 bytes is read as an LE `u32`;
+/// otherwise the full-width Poseidon2 compression (`bytes_to_babybear`) is applied.
+fn expected_federation_root(federation_root: &[u8; 32]) -> dregg_circuit::BabyBear {
+    use dregg_circuit::BabyBear;
+    if federation_root[4..].iter().all(|&b| b == 0) {
         BabyBear::new(u32::from_le_bytes([
             federation_root[0],
             federation_root[1],
@@ -130,71 +145,102 @@ pub fn verify_authorization_proof(
         ]))
     } else {
         dregg_bridge::present::bytes_to_babybear(federation_root)
-    };
+    }
+}
 
-    if pi[1] != expected_root {
-        return Ok(false);
+/// Fail-closed descriptor-identity gate: the two wires MUST name the exact expected descriptors
+/// (bound-presentation + a depth-general 4-ary blinded-membership). A wire naming any other
+/// descriptor is refused with the typed [`SdkError::UnknownAir`] — never checked against the
+/// wrong constraint semantics (the flip's analog of the removed air-name dispatch guard).
+fn check_bundle_predicates(bundle: &AuthorizationDescriptorProof) -> Result<(), SdkError> {
+    use dregg_circuit::blinded_membership_witness::BLINDED_4ARY_NAME_PREFIX;
+    use dregg_circuit::bound_presentation_witness::BOUND_PRESENTATION_NAME;
+
+    if bundle.bound_presentation.predicate != BOUND_PRESENTATION_NAME {
+        return Err(SdkError::UnknownAir {
+            air_name: bundle.bound_presentation.predicate.clone(),
+        });
+    }
+    if !bundle
+        .blinded_membership
+        .predicate
+        .starts_with(BLINDED_4ARY_NAME_PREFIX)
+    {
+        return Err(SdkError::UnknownAir {
+            air_name: bundle.blinded_membership.predicate.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// Verify both committed descriptor wires and return the bound-presentation public inputs on
+/// success (so a caller like [`verify_selective_disclosure`] can additionally bind the
+/// revealed-facts commitment). Mirrors
+/// [`dregg_circuit::presentation::RealPresentationProof::verify`] steps 4(a)/4(b):
+///   (a) MEMBERSHIP: the blinded ring-membership proof's committed root must be `federation_root`.
+///   (b) AUTH: the bound-presentation proof's federation-root PI must match, and its action-binding
+///       PIs must equal the binding recomputed from `(expected_action, expected_resource)`.
+/// Fail-closed: any decode/verify/PI-length/root/action mismatch is `Ok(None)`; an unknown
+/// descriptor identity is `Err(SdkError::UnknownAir)`.
+fn verify_authorization_wires(
+    bundle: &AuthorizationDescriptorProof,
+    federation_root: &[u8; 32],
+    expected_action: &str,
+    expected_resource: &str,
+) -> Result<Option<Vec<dregg_circuit::BabyBear>>, SdkError> {
+    use dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY;
+    use dregg_circuit::bound_presentation_witness::{FEDERATION_ROOT, REQUEST_PREDICATE_BASE};
+
+    check_bundle_predicates(bundle)?;
+    let expected_root = expected_federation_root(federation_root);
+
+    // (a) MEMBERSHIP: verify the blinded ring-membership proof; PIs [blinded_leaf, root].
+    let blinded_pis = match verify_descriptor_wire(&bundle.blinded_membership) {
+        Some(pis) if pis.len() > PI_ROOT_4ARY => pis,
+        _ => return Ok(None),
+    };
+    if blinded_pis[PI_ROOT_4ARY] != expected_root {
+        // Issuer is not a member of the federation rooted at `federation_root`.
+        return Ok(None);
     }
 
-    // SECURITY: Verify action/resource binding.
-    // The action binding occupies pi[2..2+ACTION_BINDING_WIDTH] (8 elements, ~124-bit birthday).
-    // Recompute the expected binding from the caller-supplied action and resource strings,
-    // then compare against the proof's committed binding. This ensures a proof generated
-    // for action A cannot be accepted when action B is requested.
-    if pi.len() < 2 + dregg_circuit::ACTION_BINDING_WIDTH {
-        return Ok(false);
+    // (b) AUTH: verify the bound-presentation proof; bind federation_root + action binding.
+    let bound_pis = match verify_descriptor_wire(&bundle.bound_presentation) {
+        Some(pis) if pis.len() >= REQUEST_PREDICATE_BASE + dregg_circuit::ACTION_BINDING_WIDTH => {
+            pis
+        }
+        _ => return Ok(None),
+    };
+    if bound_pis[FEDERATION_ROOT] != expected_root {
+        return Ok(None);
     }
     let expected_binding =
         dregg_circuit::compute_action_binding(expected_action, expected_resource);
     for i in 0..dregg_circuit::ACTION_BINDING_WIDTH {
-        if pi[2 + i] != expected_binding[i] {
-            return Ok(false); // Proof not bound to this (action, resource)
+        if bound_pis[REQUEST_PREDICATE_BASE + i] != expected_binding[i] {
+            return Ok(None); // proof not bound to this (action, resource)
         }
     }
 
-    // SECURITY: All membership proofs verified via DSL circuits (DSL cutover).
-    // Dispatch to the correct DSL circuit based on the proof's air_name.
-    // FAIL-CLOSED: an AIR name that does not resolve to a registered descriptor
-    // is REFUSED. Falling back to a default circuit would let the prover pick
-    // the constraint semantics the verifier checks against.
-    let circuit = dregg_dsl_runtime::descriptors::circuit_for_air_name(&stark_proof.air_name)
-        .ok_or_else(|| SdkError::UnknownAir {
-            air_name: stark_proof.air_name.clone(),
-        })?;
-    if stark::verify(&circuit, &stark_proof, &pi).is_err() {
-        return Ok(false);
-    }
+    Ok(Some(bound_pis))
+}
 
-    // SECURITY: A valid Merkle STARK proof only proves federation membership — it does NOT
-    // prove the authorization concluded "Allow". The composition commitment binds the issuer
-    // membership proof to the multi-step derivation proof which enforces that the Datalog
-    // evaluation derived the ALLOW_PREDICATE. Without this binding, a federation member could
-    // present a valid membership proof even when their authorization was DENIED.
-    //
-    // The public inputs layout is:
-    //   pi[0]                   = leaf_hash (issuer identity)
-    //   pi[1]                   = federation_root
-    //   pi[2..2+ABW]            = action_binding (ACTION_BINDING_WIDTH = 8 elements, ~124-bit)
-    //   pi[2+ABW..2+ABW+WHW]    = composition_commitment (WideHash::WIDTH = 8, binds derivation)
-    //
-    // If there is no composition commitment present or it is all zeros, the proof only
-    // demonstrates membership — not authorization. Reject it.
-    const COMP_PI_START: usize = 2 + dregg_circuit::ACTION_BINDING_WIDTH;
-    const COMP_PI_END: usize = COMP_PI_START + dregg_circuit::binding::WideHash::WIDTH;
-    if pi.len() <= COMP_PI_START {
-        // No composition commitment present — proof does not bind an authorization conclusion.
-        return Ok(false);
-    }
-
-    // Check that the composition commitment is non-zero.
-    // A zeroed commitment means no derivation proof is bound to this membership proof.
-    let composition_slice = &pi[COMP_PI_START..pi.len().min(COMP_PI_END)];
-    let has_nonzero_composition = composition_slice.iter().any(|&v| v != BabyBear::ZERO);
-    if !has_nonzero_composition {
-        return Ok(false);
-    }
-
-    Ok(true)
+/// Verify an [`AuthorizationDescriptorProof`] against a federation root and expected action/resource.
+///
+/// This is the descriptor-verify body [`verify_authorization_proof`] dispatches to after decoding
+/// the wire bundle. It accepts only when BOTH committed descriptors verify AND bind this
+/// federation root + action, preserving the legacy accept/reject semantics (membership + action)
+/// against the IR-v2 descriptor prover instead of the removed hand-STARK path.
+pub fn verify_authorization_bundle(
+    bundle: &AuthorizationDescriptorProof,
+    federation_root: &[u8; 32],
+    expected_action: &str,
+    expected_resource: &str,
+) -> Result<bool, SdkError> {
+    Ok(
+        verify_authorization_wires(bundle, federation_root, expected_action, expected_resource)?
+            .is_some(),
+    )
 }
 
 /// Verify a selective disclosure presentation: STARK proof + revealed facts integrity.
@@ -225,75 +271,35 @@ pub fn verify_selective_disclosure(
     expected_resource: &str,
     revealed_facts: &[dregg_trace::Fact],
 ) -> Result<bool, SdkError> {
-    use dregg_circuit::BabyBear;
-    use dregg_circuit::stark;
+    use dregg_circuit::binding::WideHash;
+    use dregg_circuit::bound_presentation_witness::REVEALED_FACTS_BASE;
 
-    // 1. Deserialize the STARK proof.
-    let stark_proof = stark::proof_from_bytes(proof_bytes).map_err(|_| {
-        SdkError::Wire("proof bytes could not be deserialized as a STARK proof".into())
+    // 1. Decode the descriptor-wire bundle (replaces the removed hand-STARK proof_from_bytes).
+    let bundle: AuthorizationDescriptorProof = postcard::from_bytes(proof_bytes).map_err(|_| {
+        SdkError::Wire(
+            "proof bytes could not be deserialized as an AuthorizationDescriptorProof".into(),
+        )
     })?;
 
-    let pi: Vec<BabyBear> = stark_proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new_canonical(v))
-        .collect();
-
-    if pi.len() < 2 {
-        return Ok(false);
-    }
-
-    // 2. Check federation root matches.
-    let expected_root = if federation_root[4..].iter().all(|&b| b == 0) {
-        BabyBear::new(u32::from_le_bytes([
-            federation_root[0],
-            federation_root[1],
-            federation_root[2],
-            federation_root[3],
-        ]))
-    } else {
-        dregg_bridge::present::bytes_to_babybear(federation_root)
+    // 2. Verify membership + federation-root + action binding on the two committed descriptors
+    //    (same as verify_authorization_proof); recover the bound-presentation public inputs.
+    let bound_pis = match verify_authorization_wires(
+        &bundle,
+        federation_root,
+        expected_action,
+        expected_resource,
+    )? {
+        Some(pis) => pis,
+        None => return Ok(false),
     };
 
-    if pi[1] != expected_root {
-        return Ok(false);
-    }
-
-    // 2b. Verify action/resource binding (pi[2..2+ACTION_BINDING_WIDTH]).
-    if pi.len() < 2 + dregg_circuit::ACTION_BINDING_WIDTH {
-        return Ok(false);
-    }
-    let expected_binding =
-        dregg_circuit::compute_action_binding(expected_action, expected_resource);
-    for i in 0..dregg_circuit::ACTION_BINDING_WIDTH {
-        if pi[2 + i] != expected_binding[i] {
-            return Ok(false); // Proof not bound to this (action, resource)
-        }
-    }
-
-    // 3. Verify the STARK proof cryptographically using DSL circuit.
-    // FAIL-CLOSED: unknown AIR names are refused (see verify_authorization_proof).
-    let circuit = dregg_dsl_runtime::descriptors::circuit_for_air_name(&stark_proof.air_name)
-        .ok_or_else(|| SdkError::UnknownAir {
-            air_name: stark_proof.air_name.clone(),
-        })?;
-    if stark::verify(&circuit, &stark_proof, &pi).is_err() {
-        return Ok(false);
-    }
-
-    // 4. Verify the revealed facts commitment.
-    // The revealed_facts_commitment is a WideHash (8 BabyBear elements) embedded in the
-    // STARK proof's public inputs after the leaf, root, action binding, and composition
-    // commitment:
-    //   PI layout: [leaf/blinded_leaf, root, action[8], composition[8], revealed_facts[8]]
-    // We recompute the commitment from the plaintext revealed_facts and compare it to the
-    // value cryptographically bound in the proof. If they don't match, the prover lied
-    // about which facts were revealed (presented different facts than what the circuit proved).
+    // 3. Verify the revealed-facts commitment against the bound-presentation descriptor's
+    //    revealed_facts PIs (cols REVEALED_FACTS_BASE..+8, constrained in-circuit). Recompute
+    //    the commitment from the plaintext revealed_facts and compare to the committed value.
     let recomputed_commitment = dregg_bridge::compute_revealed_facts_commitment(revealed_facts);
 
     if revealed_facts.is_empty() {
-        // No facts revealed — this is effectively a fully private proof.
-        // The recomputed commitment should be zero (fully private mode).
+        // No facts revealed — effectively fully private; the recomputed commitment must be zero.
         return Ok(recomputed_commitment.is_zero());
     }
 
@@ -302,28 +308,16 @@ pub fn verify_selective_disclosure(
         return Ok(false);
     }
 
-    // SECURITY: Extract the revealed_facts_commitment from the proof's public inputs
-    // and compare to the recomputed value. The commitment is a `WideHash::WIDTH`-felt
-    // (~124-bit birthday) digest sitting after the leaf, root, action binding, and
-    // composition commitment. If the proof doesn't contain the commitment at these
-    // indices, it was not generated in selective disclosure mode and MUST be rejected.
-    //   leaf(1) + root(1) + action_binding(ACTION_BINDING_WIDTH) + composition(WideHash::WIDTH)
-    const RFC_PI_START: usize =
-        2 + dregg_circuit::ACTION_BINDING_WIDTH + dregg_circuit::binding::WideHash::WIDTH;
-    const RFC_PI_END: usize = RFC_PI_START + dregg_circuit::binding::WideHash::WIDTH;
-
-    if pi.len() < RFC_PI_END {
-        // Proof public inputs are too short — no revealed_facts_commitment is bound.
-        // Reject: a valid selective disclosure proof MUST embed the commitment.
+    // The bound-presentation PIs carry the revealed_facts commitment as a WideHash::WIDTH-felt
+    // slice. If the PI vector is too short, it was not a selective-disclosure proof — reject.
+    if bound_pis.len() < REVEALED_FACTS_BASE + WideHash::WIDTH {
         return Ok(false);
     }
+    let proof_commitment = WideHash::from_felts(
+        &bound_pis[REVEALED_FACTS_BASE..REVEALED_FACTS_BASE + WideHash::WIDTH],
+    )
+    .expect("RFC slice is exactly WideHash::WIDTH felts by construction");
 
-    let proof_commitment =
-        dregg_circuit::binding::WideHash::from_felts(&pi[RFC_PI_START..RFC_PI_END])
-            .expect("RFC slice is exactly WideHash::WIDTH felts by construction");
-
-    // Compare the recomputed commitment to what's in the proof's public inputs.
-    // If they don't match, the caller passed different facts than what the prover committed to.
     Ok(recomputed_commitment == proof_commitment)
 }
 
@@ -637,22 +631,204 @@ pub fn build_federation_tree(member_keys: &[[u8; 32]]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dregg_circuit::BabyBear;
+    use dregg_circuit::blinded_membership_witness::{
+        PI_ROOT_4ARY, blinded_membership_descriptor_of_depth_4ary, blinded_membership_witness_4ary,
+    };
+    use dregg_circuit::bound_presentation_witness::{
+        BOUND_PRESENTATION_NAME, bound_presentation_witness_h4,
+    };
+    use dregg_circuit::compute_action_binding;
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{
+        EffectVmDescriptor2, MemBoundaryWitness, prove_vm_descriptor2,
+    };
 
-    /// Regression test for P0 security bug: verify_selective_disclosure must reject
-    /// proofs where the revealed facts do not match the commitment in the proof's
-    /// public inputs. Previously, it only checked that the recomputed commitment was
-    /// non-zero, allowing any non-empty revealed_facts to pass alongside any valid proof.
+    /// Build a [`DescriptorProofWire`] from a descriptor + honest witness: prove through the REAL
+    /// IR-v2 prover, postcard-encode the batch proof, and encode the public inputs into `vk`.
+    fn wire_from(
+        desc: &EffectVmDescriptor2,
+        trace: Vec<Vec<BabyBear>>,
+        pis: Vec<BabyBear>,
+    ) -> DescriptorProofWire {
+        let proof = prove_vm_descriptor2(desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("honest witness must prove through the dispatched descriptor");
+        let blob = postcard::to_allocvec(&proof).expect("encode batch proof");
+        let mut vk = Vec::with_capacity(pis.len() * 4);
+        for p in &pis {
+            vk.extend_from_slice(&p.0.to_le_bytes());
+        }
+        DescriptorProofWire {
+            predicate: desc.name.clone(),
+            blob,
+            vk,
+        }
+    }
+
+    /// Build an honest [`AuthorizationDescriptorProof`] bundle bound to `(action, resource)` with the
+    /// given `revealed_facts` commitment felts, plus the matching 32-byte federation root. The blinded
+    /// ring-membership proof's committed root becomes the federation root (so the two wires agree).
+    fn honest_bundle(
+        action: &str,
+        resource: &str,
+        revealed: [BabyBear; 8],
+    ) -> (AuthorizationDescriptorProof, [u8; 32]) {
+        // (a) blinded ring-membership (depth-2, 4-ary) — its committed root is the federation root.
+        let leaf = BabyBear::new(0xABCD);
+        let blinding = BabyBear::new(0xB11D);
+        let sibs = [
+            [
+                BabyBear::new(2002),
+                BabyBear::new(3003),
+                BabyBear::new(4004),
+            ],
+            [
+                BabyBear::new(5005),
+                BabyBear::new(6006),
+                BabyBear::new(7007),
+            ],
+        ];
+        let pos = [0u8, 0u8];
+        let (bl_trace, bl_pis) =
+            blinded_membership_witness_4ary(leaf, blinding, &sibs, &pos).expect("blinded witness");
+        let root = bl_pis[PI_ROOT_4ARY];
+        let desc_bl = blinded_membership_descriptor_of_depth_4ary(2);
+        let blinded_membership = wire_from(&desc_bl, bl_trace, bl_pis);
+
+        // The federation root the caller passes: root's canonical u32 in the low 4 bytes.
+        let mut fed = [0u8; 32];
+        fed[0..4].copy_from_slice(&root.as_u32().to_le_bytes());
+
+        // (b) bound-presentation — action binding + federation_root + revealed_facts commitment.
+        let action_binding = compute_action_binding(action, resource);
+        let (bp_trace, bp_pis) = bound_presentation_witness_h4(
+            root,
+            action_binding,
+            BabyBear::new(300),
+            revealed,
+            BabyBear::new(0xF1A1),
+            BabyBear::new(0xBEEF),
+            BabyBear::new(0xC0FFEE),
+        )
+        .expect("bound-presentation witness");
+        let desc_bp =
+            descriptor_by_name(BOUND_PRESENTATION_NAME).expect("bound-presentation dispatch");
+        let bound_presentation = wire_from(&desc_bp, bp_trace, bp_pis);
+
+        (
+            AuthorizationDescriptorProof {
+                bound_presentation,
+                blinded_membership,
+            },
+            fed,
+        )
+    }
+
+    /// THE POSITIVE POLE: an honest bundle (both committed descriptors proven by the REAL IR-v2
+    /// prover) is ACCEPTED when the federation root + action/resource match.
     #[test]
-    fn verify_selective_disclosure_rejects_wrong_revealed_facts() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
+    fn verify_authorization_proof_accepts_honest_bundle() {
+        let zero = [BabyBear::ZERO; 8];
+        let (bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_authorization_proof(&bytes, &fed, "read", "api/v1/users").unwrap(),
+            true,
+            "an honest bundle bound to (read, api/v1/users) must verify"
+        );
+    }
 
-        // Build a valid STARK proof with a specific revealed_facts_commitment in its PI.
-        // We use a synthetic proof structure: the key point is that the PI contains
-        // a revealed_facts_commitment at indices [10..13] that does NOT match the
-        // commitment we'll compute from the "wrong" revealed facts.
+    /// A wrong federation root is REJECTED (membership root no longer matches).
+    #[test]
+    fn verify_authorization_proof_rejects_wrong_root() {
+        let zero = [BabyBear::ZERO; 8];
+        let (bundle, mut fed) = honest_bundle("read", "api/v1/users", zero);
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        fed[0] ^= 0xFF; // perturb the federation root
+        assert_eq!(
+            verify_authorization_proof(&bytes, &fed, "read", "api/v1/users").unwrap(),
+            false,
+            "a bundle whose committed root != the caller's federation root must be rejected"
+        );
+    }
 
-        // Create a "real" commitment from some facts.
+    /// A wrong (action, resource) is REJECTED (the bound-presentation action binding no longer matches).
+    #[test]
+    fn verify_authorization_proof_rejects_wrong_action() {
+        let zero = [BabyBear::ZERO; 8];
+        let (bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_authorization_proof(&bytes, &fed, "write", "api/v1/users").unwrap(),
+            false,
+            "a bundle bound to 'read' must be rejected when 'write' is requested"
+        );
+    }
+
+    /// FAIL-CLOSED: a wire naming a descriptor other than the expected bound-presentation refuses
+    /// with the typed `SdkError::UnknownAir` — never checked against the wrong constraint semantics.
+    #[test]
+    fn verify_authorization_proof_refuses_unknown_predicate_typed() {
+        let zero = [BabyBear::ZERO; 8];
+        let (mut bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        bundle.bound_presentation.predicate = "totally-unknown-descriptor-v0".to_string();
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        match verify_authorization_proof(&bytes, &fed, "read", "api/v1/users") {
+            Err(SdkError::UnknownAir { air_name }) => {
+                assert_eq!(air_name, "totally-unknown-descriptor-v0");
+            }
+            other => panic!("expected typed SdkError::UnknownAir, got {:?}", other),
+        }
+    }
+
+    /// A blinded wire whose predicate is not a 4-ary blinded-membership name refuses (typed).
+    #[test]
+    fn verify_authorization_proof_refuses_wrong_membership_predicate_typed() {
+        let zero = [BabyBear::ZERO; 8];
+        let (mut bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        bundle.blinded_membership.predicate = "dfa-routing-toggle-2state::poseidon2-v1".to_string();
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert!(
+            matches!(
+                verify_authorization_proof(&bytes, &fed, "read", "api/v1/users"),
+                Err(SdkError::UnknownAir { .. })
+            ),
+            "a non-blinded-membership predicate must refuse with the typed error"
+        );
+    }
+
+    /// A tampered proof blob is REJECTED (the IR-v2 verify fails → fail-closed Ok(false)).
+    #[test]
+    fn verify_authorization_proof_rejects_tampered_blob() {
+        let zero = [BabyBear::ZERO; 8];
+        let (mut bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        if let Some(b) = bundle.blinded_membership.blob.last_mut() {
+            *b ^= 0xFF;
+        }
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_authorization_proof(&bytes, &fed, "read", "api/v1/users").unwrap(),
+            false,
+            "a tampered membership proof blob must fail verification"
+        );
+    }
+
+    /// Non-bundle bytes are a typed decode error, not a silent accept.
+    #[test]
+    fn verify_authorization_proof_rejects_garbage_bytes() {
+        let fed = [0u8; 32];
+        assert!(
+            matches!(
+                verify_authorization_proof(&[1, 2, 3, 4, 5], &fed, "read", "res"),
+                Err(SdkError::Wire(_))
+            ),
+            "garbage bytes must be a typed Wire decode error"
+        );
+    }
+
+    /// Selective disclosure ACCEPTS when the revealed facts match the committed revealed-facts PIs.
+    #[test]
+    fn verify_selective_disclosure_accepts_matching_facts() {
         let real_facts = vec![dregg_trace::Fact {
             predicate: dregg_trace::symbol_from_str("role"),
             terms: vec![
@@ -660,9 +836,27 @@ mod tests {
                 dregg_trace::Term::Const(dregg_trace::symbol_from_str("admin")),
             ],
         }];
-        let real_commitment = dregg_bridge::compute_revealed_facts_commitment(&real_facts);
+        let commitment = dregg_bridge::compute_revealed_facts_commitment(&real_facts);
+        let (bundle, fed) = honest_bundle("read", "api/v1/users", *commitment.as_slice());
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_selective_disclosure(&bytes, &fed, "read", "api/v1/users", &real_facts).unwrap(),
+            true,
+            "revealed facts matching the committed PIs must verify"
+        );
+    }
 
-        // Create wrong facts that produce a different commitment.
+    /// P0 security regression: selective disclosure must REJECT revealed facts that do not match the
+    /// commitment bound in the bound-presentation descriptor's revealed_facts public inputs.
+    #[test]
+    fn verify_selective_disclosure_rejects_wrong_revealed_facts() {
+        let real_facts = vec![dregg_trace::Fact {
+            predicate: dregg_trace::symbol_from_str("role"),
+            terms: vec![
+                dregg_trace::Term::Const(dregg_trace::symbol_from_str("alice")),
+                dregg_trace::Term::Const(dregg_trace::symbol_from_str("admin")),
+            ],
+        }];
         let wrong_facts = vec![dregg_trace::Fact {
             predicate: dregg_trace::symbol_from_str("role"),
             terms: vec![
@@ -670,243 +864,36 @@ mod tests {
                 dregg_trace::Term::Const(dregg_trace::symbol_from_str("superadmin")),
             ],
         }];
+        let real_commitment = dregg_bridge::compute_revealed_facts_commitment(&real_facts);
         let wrong_commitment = dregg_bridge::compute_revealed_facts_commitment(&wrong_facts);
-
-        // Sanity: the two commitments must differ.
         assert_ne!(real_commitment, wrong_commitment);
 
-        // Build a synthetic STARK proof with the REAL commitment in its PI.
-        // PI layout: [leaf, root, action[4], composition[4], revealed_facts[4]]
-        let federation_root = BabyBear::new(12345);
-        let mut public_inputs: Vec<u32> = vec![
-            42,                       // [0] leaf (arbitrary)
-            federation_root.as_u32(), // [1] root (federation root)
-            1,
-            2,
-            3,
-            4, // [2..5] action commitment
-            5,
-            6,
-            7,
-            8, // [6..9] composition commitment
-        ];
-        // Append the REAL revealed_facts_commitment at [10..13]
-        for &elem in real_commitment.as_slice() {
-            public_inputs.push(elem.as_u32());
-        }
-
-        // Create a minimal StarkProof structure with these public inputs.
-        let proof = dregg_circuit::stark::StarkProof {
-            trace_commitment: [0u8; 32],
-            constraint_commitment: [0u8; 32],
-            fri_commitments: vec![],
-            fri_final_poly: vec![],
-            query_proofs: vec![],
-            public_inputs,
-            trace_len: 4,
-            num_cols: 6,
-            air_name: "MerklePoseidon2StarkAir".to_string(),
-            nonce: None,
-            boundary_commitment: None,
-            boundary_query_values: vec![],
-            boundary_query_paths: vec![],
-            pow_nonce: 0,
-            pow_bits: 0,
-        };
-
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        // Attempt verification with WRONG facts.
-        // The STARK verification itself will fail (synthetic proof), but we want to
-        // test the commitment comparison logic. Since STARK verification happens at
-        // step 3 (before commitment check), we need to test the logic differently.
-        //
-        // Instead, let's directly test the commitment comparison by checking that
-        // with correct facts, the function would pass the commitment check, and with
-        // wrong facts it would not. We can test this by checking the early-return
-        // behavior: if the proof is too short, it returns Ok(false).
-        //
-        // For a full end-to-end test, we test that the function rejects wrong facts
-        // even when the proof has the right structure.
-        let result =
-            verify_selective_disclosure(&proof_bytes, &federation_root_bytes, "", "", &wrong_facts);
-
-        // The function should return Ok(false) because either:
-        // 1. STARK verification fails (synthetic proof), OR
-        // 2. The commitment comparison fails (wrong facts != real commitment in PI)
-        // Either way, verification must NOT pass with wrong facts.
-        match result {
-            Ok(true) => {
-                panic!("SECURITY BUG: verify_selective_disclosure accepted wrong revealed facts!")
-            }
-            Ok(false) => { /* Expected: verification correctly rejected */ }
-            Err(_) => { /* Also acceptable: deserialization failure for synthetic proof */ }
-        }
+        // Bundle commits the REAL facts commitment; verifying with WRONG facts must not pass.
+        let (bundle, fed) = honest_bundle("read", "api/v1/users", *real_commitment.as_slice());
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_selective_disclosure(&bytes, &fed, "read", "api/v1/users", &wrong_facts)
+                .unwrap(),
+            false,
+            "SECURITY: wrong revealed facts must be rejected"
+        );
     }
 
-    /// P1-1 regression test: verify_authorization_proof must reject a valid Merkle
-    /// membership proof that lacks a composition commitment binding the authorization
-    /// conclusion. A proof with only [leaf_hash, root] public inputs proves federation
-    /// membership but NOT that authorization concluded "Allow".
+    /// Empty revealed facts is a fully-private proof: accepted iff the recomputed commitment is zero.
     #[test]
-    fn verify_authorization_proof_rejects_membership_only_proof() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let federation_root = BabyBear::new(77777);
-
-        // Build a proof with only 2 public inputs (leaf + root) — no composition commitment.
-        // This represents a federation membership proof without authorization binding.
-        let proof = dregg_circuit::stark::StarkProof {
-            trace_commitment: [0u8; 32],
-            constraint_commitment: [0u8; 32],
-            fri_commitments: vec![],
-            fri_final_poly: vec![],
-            query_proofs: vec![],
-            public_inputs: vec![42, federation_root.as_u32()],
-            trace_len: 4,
-            num_cols: 6,
-            air_name: "MerklePoseidon2StarkAir".to_string(),
-            nonce: None,
-            boundary_commitment: None,
-            boundary_query_values: vec![],
-            boundary_query_paths: vec![],
-            pow_nonce: 0,
-            pow_bits: 0,
-        };
-
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result = verify_authorization_proof(&proof_bytes, &federation_root_bytes, "", "");
-
-        // Must return Ok(false): membership-only proof without composition commitment
-        // does not prove authorization concluded "Allow".
-        match result {
-            Ok(true) => panic!(
-                "SECURITY BUG: verify_authorization_proof accepted membership-only proof \
-                 without composition commitment binding the authorization conclusion!"
-            ),
-            Ok(false) => { /* Correct: rejected because no composition commitment */ }
-            Err(_) => { /* Also acceptable: STARK verification fails for synthetic proof */ }
-        }
+    fn verify_selective_disclosure_empty_facts_is_private() {
+        let zero = [BabyBear::ZERO; 8];
+        let (bundle, fed) = honest_bundle("read", "api/v1/users", zero);
+        let bytes = postcard::to_allocvec(&bundle).expect("encode bundle");
+        assert_eq!(
+            verify_selective_disclosure(&bytes, &fed, "read", "api/v1/users", &[]).unwrap(),
+            true,
+            "no revealed facts (empty) is the fully-private case"
+        );
     }
 
-    /// P1-1 regression test: verify_authorization_proof must reject a proof where
-    /// the composition commitment is all zeros (no derivation proof bound).
-    #[test]
-    fn verify_authorization_proof_rejects_zero_composition() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let federation_root = BabyBear::new(88888);
-
-        // Build a proof with enough public inputs but zeroed composition commitment.
-        // PI layout: [leaf, root, action[4], composition[4]]
-        let proof = dregg_circuit::stark::StarkProof {
-            trace_commitment: [0u8; 32],
-            constraint_commitment: [0u8; 32],
-            fri_commitments: vec![],
-            fri_final_poly: vec![],
-            query_proofs: vec![],
-            public_inputs: vec![
-                42,                       // [0] leaf_hash
-                federation_root.as_u32(), // [1] root
-                1,
-                2,
-                3,
-                4, // [2..5] action binding
-                0,
-                0,
-                0,
-                0, // [6..9] composition commitment = ZERO
-            ],
-            trace_len: 4,
-            num_cols: 6,
-            air_name: "MerklePoseidon2StarkAir".to_string(),
-            nonce: None,
-            boundary_commitment: None,
-            boundary_query_values: vec![],
-            boundary_query_paths: vec![],
-            pow_nonce: 0,
-            pow_bits: 0,
-        };
-
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result = verify_authorization_proof(&proof_bytes, &federation_root_bytes, "", "");
-
-        // Must return Ok(false): zeroed composition commitment means no derivation binding.
-        match result {
-            Ok(true) => panic!(
-                "SECURITY BUG: verify_authorization_proof accepted proof with zeroed \
-                 composition commitment (no authorization conclusion binding)!"
-            ),
-            Ok(false) => { /* Correct: rejected because composition commitment is zero */ }
-            Err(_) => { /* Also acceptable */ }
-        }
-    }
-
-    /// Test that verify_selective_disclosure rejects proofs whose PI vector is too
-    /// short to contain a revealed_facts_commitment (i.e., proofs not generated in
-    /// selective disclosure mode).
-    #[test]
-    fn verify_selective_disclosure_rejects_short_pi() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let facts = vec![dregg_trace::Fact {
-            predicate: dregg_trace::symbol_from_str("has_access"),
-            terms: vec![dregg_trace::Term::Const(dregg_trace::symbol_from_str(
-                "resource_x",
-            ))],
-        }];
-
-        // Build a proof with only 2 public inputs (leaf + root) — no commitment bound.
-        let federation_root = BabyBear::new(99999);
-        let proof = dregg_circuit::stark::StarkProof {
-            trace_commitment: [0u8; 32],
-            constraint_commitment: [0u8; 32],
-            fri_commitments: vec![],
-            fri_final_poly: vec![],
-            query_proofs: vec![],
-            public_inputs: vec![42, federation_root.as_u32()],
-            trace_len: 4,
-            num_cols: 6,
-            air_name: "MerklePoseidon2StarkAir".to_string(),
-            nonce: None,
-            boundary_commitment: None,
-            boundary_query_values: vec![],
-            boundary_query_paths: vec![],
-            pow_nonce: 0,
-            pow_bits: 0,
-        };
-
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result =
-            verify_selective_disclosure(&proof_bytes, &federation_root_bytes, "", "", &facts);
-
-        // Must NOT return Ok(true): the proof has no commitment bound.
-        match result {
-            Ok(true) => {
-                panic!("SECURITY BUG: accepted proof with no revealed_facts_commitment in PI!")
-            }
-            Ok(false) => { /* Correct: rejected because PI too short or STARK failed */ }
-            Err(_) => { /* Also acceptable */ }
-        }
-    }
-
-    /// P2-3: `VerifyOutcome` exposes failure categories so callers can
-    /// distinguish decode failure from STARK rejection. This test pins the
-    /// shape so future migrations to bool-shim wrappers keep the variants.
+    /// P2-3: `VerifyOutcome` exposes failure categories so callers can distinguish decode failure
+    /// from STARK rejection. This test pins the shape so future migrations keep the variants.
     #[test]
     fn verify_outcome_shape_smoke() {
         let ok = VerifyOutcome::Ok;
@@ -941,131 +928,5 @@ mod tests {
 
         let pred = VerifyOutcome::PredicateProofInvalid;
         assert!(!pred.is_ok());
-    }
-
-    /// Build a synthetic StarkProof that reaches the circuit-dispatch step of
-    /// `verify_authorization_proof` / `verify_selective_disclosure`: correct
-    /// federation root at pi[1] and the ("","") action binding at pi[2..2+ACTION_BINDING_WIDTH].
-    fn dispatch_reaching_proof(
-        air_name: &str,
-        federation_root: dregg_circuit::BabyBear,
-    ) -> dregg_circuit::stark::StarkProof {
-        let binding = dregg_circuit::compute_action_binding("", "");
-        let mut public_inputs = vec![42, federation_root.as_u32()];
-        public_inputs.extend(binding.iter().map(|b| b.as_u32()));
-
-        dregg_circuit::stark::StarkProof {
-            trace_commitment: [0u8; 32],
-            constraint_commitment: [0u8; 32],
-            fri_commitments: vec![],
-            fri_final_poly: vec![],
-            query_proofs: vec![],
-            public_inputs,
-            trace_len: 4,
-            num_cols: 6,
-            air_name: air_name.to_string(),
-            nonce: None,
-            boundary_commitment: None,
-            boundary_query_values: vec![],
-            boundary_query_paths: vec![],
-            pow_nonce: 0,
-            pow_bits: 0,
-        }
-    }
-
-    /// Task #163 fail-closed: an AIR name that does not resolve to a registered
-    /// circuit descriptor must REFUSE with the typed `SdkError::UnknownAir` —
-    /// never fall through to a default circuit, never a silent `Ok(false)`.
-    #[test]
-    fn verify_authorization_proof_refuses_unknown_air_typed() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let federation_root = BabyBear::new(31337);
-        let proof = dispatch_reaching_proof("totally-unknown-air-v0", federation_root);
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result = verify_authorization_proof(&proof_bytes, &federation_root_bytes, "", "");
-        match result {
-            Err(SdkError::UnknownAir { air_name }) => {
-                assert_eq!(air_name, "totally-unknown-air-v0");
-            }
-            other => panic!(
-                "unknown AIR must refuse with typed SdkError::UnknownAir, got {:?}",
-                other
-            ),
-        }
-    }
-
-    /// Malformed (empty) AIR identifier refuses the same way.
-    #[test]
-    fn verify_authorization_proof_refuses_empty_air_name() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let federation_root = BabyBear::new(31338);
-        let proof = dispatch_reaching_proof("", federation_root);
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result = verify_authorization_proof(&proof_bytes, &federation_root_bytes, "", "");
-        assert!(
-            matches!(result, Err(SdkError::UnknownAir { .. })),
-            "empty AIR name must refuse with typed SdkError::UnknownAir, got {:?}",
-            result
-        );
-    }
-
-    /// Known AIR names must NOT be refused as unknown: they proceed to STARK
-    /// verification (which rejects this synthetic proof with Ok(false), the
-    /// pre-existing behavior).
-    #[test]
-    fn verify_authorization_proof_known_air_not_refused() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let federation_root = BabyBear::new(31339);
-        let proof = dispatch_reaching_proof("dregg-merkle-poseidon2-v1", federation_root);
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result = verify_authorization_proof(&proof_bytes, &federation_root_bytes, "", "");
-        assert!(
-            matches!(result, Ok(false)),
-            "known AIR must reach STARK verification (Ok(false) for synthetic proof), got {:?}",
-            result
-        );
-    }
-
-    /// The selective-disclosure path refuses unknown AIRs with the same typed error.
-    #[test]
-    fn verify_selective_disclosure_refuses_unknown_air_typed() {
-        use dregg_circuit::BabyBear;
-        use dregg_circuit::stark;
-
-        let facts = vec![dregg_trace::Fact {
-            predicate: dregg_trace::symbol_from_str("has_access"),
-            terms: vec![dregg_trace::Term::Const(dregg_trace::symbol_from_str(
-                "resource_x",
-            ))],
-        }];
-
-        let federation_root = BabyBear::new(31340);
-        let proof = dispatch_reaching_proof("totally-unknown-air-v0", federation_root);
-        let proof_bytes = stark::proof_to_bytes(&proof);
-        let mut federation_root_bytes = [0u8; 32];
-        federation_root_bytes[0..4].copy_from_slice(&federation_root.as_u32().to_le_bytes());
-
-        let result =
-            verify_selective_disclosure(&proof_bytes, &federation_root_bytes, "", "", &facts);
-        assert!(
-            matches!(result, Err(SdkError::UnknownAir { .. })),
-            "unknown AIR must refuse with typed SdkError::UnknownAir, got {:?}",
-            result
-        );
     }
 }
