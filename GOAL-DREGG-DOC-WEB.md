@@ -86,3 +86,5 @@ Yes — partly. I over-deleted. The honest split, verified:
   heap-root — NO re-introduced linear sponge. This captures the over-deleted VALUE without the duplication.
 - Rust toy deletion lane (af1274775c63b4360): delete commit.rs, re-point anti-forge tests to substrate_commit.
 - done-log: over-deletion caught + owned; gap-fillers redirected onto the ONE real commit (substrate_commit).
+
+- done-log: FINISH landed (bd541b9bc) — DocSubstrateSound.lean re-homes Element-structure + conflict-as-state onto substrate_commit, thin over root_binds_get, [propext]-clean. Over-deletion fully corrected.
